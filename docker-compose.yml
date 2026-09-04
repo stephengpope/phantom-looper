@@ -1,0 +1,168 @@
+# The compose project name — the group every container, network and volume
+# sits under (phantom-looper-api-1, phantom-looper_default, ...), whatever
+# directory the file runs from. Service containers keep compose's own
+# generated names on purpose: hardcoded container_name breaks recreation
+# ordering and uniqueness.
+name: phantom-looper
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: phantom
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: phantom
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U phantom -d phantom"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    # Published by .github/workflows/release.yml on every version tag. Both
+    # `image:` and `build:` with pull_policy `missing`: plain `docker compose
+    # up -d` PULLS (the install path — no repo on the box); `up -d --build`
+    # builds from source (dev). PHANTOM_BACKEND_TAG is pinned in .env by
+    # updater/apply.sh so the compose file on disk and the image are always the
+    # same release; a fresh install runs `latest` until its first upgrade.
+    # PHANTOM_BACKEND_IMAGE is a test hook (point it at a locally built name).
+    image: ${PHANTOM_BACKEND_IMAGE:-ghcr.io/stephengpope/phantom-backend}:${PHANTOM_BACKEND_TAG:-latest}
+    pull_policy: missing
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      docker-proxy:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgres://phantom:${POSTGRES_PASSWORD:?}@postgres:5432/phantom
+      WORKSPACE_ROOT_PATH: /workspaces
+      PORT: 8080
+      API_KEY: ${API_KEY:?set in .env}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set in .env — openssl rand -base64 32}
+      # Workspace containers are created through the socket proxy below — the
+      # API never holds the socket and runs non-root.
+      DOCKER_HOST: tcp://docker-proxy:2375
+      # The named volume, by NAME: workspace containers mount per-session
+      # subpaths of it. dockerd resolves mounts host-side, so an API-internal
+      # path would come up empty.
+      WORKSPACE_VOLUME: phantom-looper-workspaces
+      # Where POST /update drops the requested release tag for the updater
+      # sidecar (shared volume; the sidecar polls it).
+      UPDATE_TRIGGER_DIR: /trigger
+      # The bot's public address — the Telegram webhook registers at
+      # https://<this>/telegram/webhook. Empty = telegram stays off.
+      PHANTOM_BACKEND_ADDRESS: ${PHANTOM_BACKEND_ADDRESS:-}
+    volumes:
+      # Named volume, not a host bind: one filesystem under one kernel, so the
+      # pool's atomic rename holds and inotify propagates between containers.
+      # Workspace containers mount per-session subpaths of the same volume.
+      - phantom-looper-workspaces:/workspaces
+      - updater-trigger:/trigger
+    # NOT a public surface: localhost only. Public traffic goes through caddy
+    # (the `https` profile), which reaches this container as api:8080.
+    ports:
+      - "127.0.0.1:${PHANTOM_BACKEND_PORT:-8080}:8080"
+    # autoheal (below) restarts this container when its HEALTHCHECK (in the
+    # Dockerfile) flips to unhealthy — Docker's restart policy alone only
+    # covers a crashed process, not a wedged one.
+    labels:
+      - autoheal=true
+
+  # Docker socket proxy: the only thing the API can reach. Exposes just the
+  # endpoints the API needs (containers, exec, images) on the internal network;
+  # everything else (volumes, networks, swarm, system) is refused. This is the
+  # blast-radius boundary for an API compromise — the socket itself is
+  # host-root-equivalent, and the API never touches it.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      EXEC: 1
+      IMAGES: 1
+      POST: 1
+      INFO: 1
+      VOLUMES: 0
+      NETWORKS: 0
+      SERVICES: 0
+      SWARM: 0
+      SYSTEM: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  # HTTPS terminator + reverse proxy — the ONLY public surface, and only with
+  # the `https` profile (install.sh turns it on via COMPOSE_PROFILES in .env;
+  # local dev is plain http://127.0.0.1:8080 with no proxy at all).
+  #
+  # Caddy owns certificates end to end — nothing in the API writes TLS config.
+  # PHANTOM_BACKEND_ADDRESS is a domain OR a bare public IP: Let's Encrypt issues real
+  # certificates for both (IP certificates since 2026, 6-day lifetime, renewed
+  # automatically — they need ports 80 and 443 reachable from the internet).
+  # PHANTOM_BACKEND_TLS=internal swaps in Caddy's own CA for a private address; its
+  # root certificate is the one file a client then trusts (`phantom ca`).
+  caddy:
+    image: caddy:2.11
+    profiles: ["https"]
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      PHANTOM_BACKEND_ADDRESS: ${PHANTOM_BACKEND_ADDRESS:-}
+      PHANTOM_BACKEND_CERT_EMAIL: ${PHANTOM_BACKEND_CERT_EMAIL:-}
+      PHANTOM_BACKEND_TLS: ${PHANTOM_BACKEND_TLS:-public}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and the internal CA live here. Losing this volume means
+      # re-issuing (rate limits) and, in internal mode, a new root to trust.
+      - caddy-data:/data
+      - caddy-config:/config
+
+  # Remote-upgrade sidecar. Polls the updater-trigger volume for a release tag
+  # written by the api's POST /update, then spawns a detached one-shot helper
+  # (updater/apply.sh) that pulls that tag's images, copies this file and the
+  # rest of the host files OUT of the api image, pins PHANTOM_BACKEND_TAG in .env, and
+  # `up -d`s the stack. It holds the raw docker socket — the API never does
+  # (it only sees the proxy) — and deliberately has NO network surface: the
+  # trigger is a file. PHANTOM_BACKEND_DIR must be the install dir's HOST path (the
+  # helper bind-mounts it, and dockerd resolves bind paths on the host);
+  # install.sh writes it to .env.
+  updater:
+    image: docker:27-cli
+    restart: unless-stopped
+    environment:
+      PHANTOM_BACKEND_DIR: ${PHANTOM_BACKEND_DIR:-/opt/phantom-looper}
+      # Test hooks — override which images apply.sh pulls. Empty in production.
+      PHANTOM_BACKEND_IMAGE: ${PHANTOM_BACKEND_IMAGE:-}
+      PHANTOM_BACKEND_FS_IMAGE: ${PHANTOM_BACKEND_FS_IMAGE:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./updater:/updater:ro
+      - updater-trigger:/trigger
+    entrypoint: ["sh", "/updater/watch.sh"]
+
+  # Restarts any container labeled autoheal=true when Docker marks it
+  # unhealthy. Needs the docker socket to do so.
+  autoheal:
+    image: willfarrell/autoheal:latest
+    restart: unless-stopped
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  pg-data:
+  phantom-looper-workspaces:
+    name: phantom-looper-workspaces   # fixed name — the API references it by name for subpath mounts
+  caddy-data:
+  caddy-config:
+  updater-trigger:

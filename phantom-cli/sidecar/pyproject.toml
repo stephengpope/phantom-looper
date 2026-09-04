@@ -1,0 +1,17 @@
+[project]
+name = "phantom-voice-sidecar"
+version = "0.1.0"
+description = "phantom-cli voice sidecar (pipecat): ears and mouth only — spawned by the TUI, talks JSON lines over stdin/stdout; the agent itself runs in the TUI."
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    # Pinned to the one pipecat line the code was written against; every minor
+    # release of pipecat renames or removes something, so this moves on purpose.
+    "pipecat-ai[deepgram,silero,local]==1.4.0",
+]
+
+[tool.uv]
+# The venv lives in sidecar/.venv so the TUI can find it regardless of cwd.
+package = false
+
+[dependency-groups]
+dev = []

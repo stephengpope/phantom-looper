@@ -1,0 +1,50 @@
+# Caddy — the only public surface (compose profile `https`). It terminates TLS
+# and proxies to the API over the compose network. Certificates are Caddy's job
+# end to end; nothing in the API writes TLS config.
+#
+# PHANTOM_BACKEND_ADDRESS   a domain name, or this server's public IP. Let's Encrypt
+#                   issues real certificates for either — IP certificates use
+#                   the `shortlived` profile (6-day lifetime, renewed every ~2
+#                   days by Caddy), which is also fine for domains, so one
+#                   issuer config covers both. Needs 80 + 443 reachable.
+# PHANTOM_BACKEND_TLS       `public` (default, above) or `internal`: Caddy's own CA, for
+#                   a private address Let's Encrypt cannot reach. Its root
+#                   certificate (/data/caddy/pki/authorities/local/root.crt,
+#                   `phantom ca`) is the one file a client then trusts. The root
+#                   is stable across restarts; leaves rotate underneath it.
+# PHANTOM_BACKEND_CERT_EMAIL where Let's Encrypt sends expiry warnings (optional).
+{
+	# Clients that connect by IP send no server name, and behind Docker's NAT
+	# Caddy sees its container address rather than the one typed — so name the
+	# certificate to present when no name is sent. Verified: without this the
+	# handshake to a bare IP fails with "tlsv1 alert internal error".
+	default_sni {$PHANTOM_BACKEND_ADDRESS}
+	email "{$PHANTOM_BACKEND_CERT_EMAIL}"
+}
+
+(public) {
+	tls {
+		issuer acme {
+			profile shortlived
+		}
+	}
+}
+
+(internal) {
+	tls internal
+}
+
+https://{$PHANTOM_BACKEND_ADDRESS} {
+	import {$PHANTOM_BACKEND_TLS:public}
+
+	# /docs is the one route the API answers without a key, so it never goes
+	# out to the public address. The API's own port is already bound to
+	# 127.0.0.1, so refusing to proxy it here is the whole of "localhost only":
+	# on the box, or over an SSH tunnel, /docs works exactly as before.
+	# Two paths rather than /docs*, matching the server's own check, so a
+	# future /docs-admin is not caught by accident.
+	@docs path /docs /docs/*
+	respond @docs 404
+
+	reverse_proxy api:8080
+}

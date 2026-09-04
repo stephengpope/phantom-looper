@@ -1,0 +1,138 @@
+name: Release
+
+# Fires on a version tag:  git tag v0.2.0 && git push --tags
+#
+# One tag → two images, both multi-arch (amd64 + arm64), pushed to ghcr.io:
+#   ghcr.io/stephengpope/phantom-backend            the API server (Dockerfile)
+#   ghcr.io/stephengpope/phantom-backend-fs  the agent's container (build/workspace)
+#
+# Each is tagged <tag> and — for a plain release — :latest. A tag containing a
+# hyphen (v0.2.0-rc1) is a prerelease by semver's own rule and leaves :latest
+# alone: fresh installs pull :latest, so an rc must never move it.
+#
+# The API image gets the tag baked in as APP_VERSION (served by GET /health);
+# the API's default workspace_image setting is the workspace image at that SAME
+# tag, so the two images are one release by construction. install.sh and
+# updater/apply.sh copy the host files out of the API image, so everything a
+# box needs for a release is these two images and nothing else.
+# The cli job builds the four self-contained phantom-cli tarballs into a DRAFT
+# release; publish (needs: images + cli) flips it public once every artifact
+# exists. The draft gate is what makes a release atomic: install-cli.sh and a
+# future self-update read `releases/latest`, and must never see a release
+# whose tarball for their platform is still uploading. A failure anywhere
+# leaves an inspectable draft, never a half-published release.
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Job-level permissions REPLACE this block, so each job states its own.
+permissions:
+  contents: read
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: phantom-backend
+            context: .
+            dockerfile: Dockerfile
+          - name: phantom-backend-fs
+            context: build/workspace
+            dockerfile: build/workspace/Dockerfile
+    steps:
+      - uses: actions/checkout@v7
+
+      # arm64 emulation for the multi-arch build (amd64 VPSes + arm boxes).
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Work out the image tags
+        id: imagetags
+        run: |
+          # printf builds the two-line list rather than an embedded literal
+          # newline: inside a YAML block scalar a column-0 continuation line
+          # would end the block.
+          IMAGE="ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}"
+          TAGS="${IMAGE}:${GITHUB_REF_NAME}"
+          case "$GITHUB_REF_NAME" in
+            *-*) echo "prerelease $GITHUB_REF_NAME — leaving :latest alone" ;;
+              *) TAGS="$(printf '%s\n%s' "$TAGS" "${IMAGE}:latest")" ;;
+          esac
+          {
+            echo 'value<<TAGS_EOF'
+            echo "$TAGS"
+            echo 'TAGS_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ github.ref_name }}
+          tags: ${{ steps.imagetags.outputs.value }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  cli:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Build the four platform tarballs
+        run: ./scripts/build-cli.sh "$GITHUB_REF_NAME"
+      - name: Create the draft release and upload the artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --title "$GITHUB_REF_NAME" || true
+          gh release upload "$GITHUB_REF_NAME" --clobber \
+            dist-cli/phantom-cli-*.tar.gz dist-cli/checksums.txt
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [images, cli]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # the previous tag, for the notes range
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Notes are commit subjects since the previous tag — best-effort:
+          # a hiccup writing notes must never strand a built release as a
+          # draft. Shipping beats annotating.
+          PREV=$(git tag --sort=-v:refname | grep -v "^$GITHUB_REF_NAME\$" | head -1 || true)
+          RANGE="${PREV:+$PREV..}$GITHUB_REF_NAME"
+          git log --format='- %s' "$RANGE" 2>/dev/null | grep -vi '^- release v' > notes.txt || true
+          if [ -s notes.txt ]; then NOTES=(--notes-file notes.txt); else NOTES=(); fi
+          # semver's own rule: a hyphen in the tag is a prerelease — it must
+          # never become `latest`, or every install-cli.sh run would get it.
+          case "$GITHUB_REF_NAME" in
+            *-*) FLAGS=(--draft=false --prerelease --latest=false) ;;
+              *) FLAGS=(--draft=false --latest) ;;
+          esac
+          gh release edit "$GITHUB_REF_NAME" "${FLAGS[@]}" "${NOTES[@]}"

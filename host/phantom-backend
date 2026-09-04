@@ -1,0 +1,139 @@
+#!/bin/sh
+# ============================================================================
+# The ONE command installed on a phantom-looper server.
+#
+# Everything you can run on the box is a subcommand here, and this file ships
+# with the release like any other host file (it rides in the api image under
+# /host-files) — so a new subcommand arrives with a normal upgrade and NOTHING
+# new is ever installed on the box. /usr/local/bin/phantom-backend is a symlink to this
+# file, created once by install.sh; the path never changes, so an upgrade never
+# needs to write outside the install directory (and cannot: updater/watch.sh
+# mounts only that directory into the helper that runs apply.sh).
+#
+# So: add commands HERE. Never add another file under /usr/local/bin.
+# ============================================================================
+set -eu
+
+DIR="${PHANTOM_BACKEND_DIR:-/opt/phantom-looper}"
+ENV_FILE="$DIR/.env"
+ROOT_CRT=/data/caddy/pki/authorities/local/root.crt
+
+# Subshell: this must not change the caller's working directory.
+compose() { (cd "$DIR" && docker compose "$@"); }
+
+env_get() { grep "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true; }
+
+# curl with the bearer key over stdin (-K -): /health needs the token like
+# every route, and the key must never appear in `ps`.
+authed_curl() { printf 'header = "authorization: Bearer %s"\n' "$KEY" | curl -K - "$@"; }
+
+load_env() {
+  [ -f "$ENV_FILE" ] || { echo "no $ENV_FILE — is phantom-looper installed here? (PHANTOM_BACKEND_DIR=$DIR)" >&2; exit 1; }
+  PORT=$(env_get PHANTOM_BACKEND_PORT); PORT="${PORT:-8080}"
+  ADDRESS=$(env_get PHANTOM_BACKEND_ADDRESS)
+  TLS=$(env_get PHANTOM_BACKEND_TLS); TLS="${TLS:-public}"
+  KEY=$(env_get API_KEY)
+  LOCAL="http://127.0.0.1:$PORT"
+}
+
+ok()   { printf '\033[0;32m✓\033[0m %s\n' "$1"; }
+bad()  { printf '\033[0;31m✗\033[0m %s\n' "$1"; FAILED=1; }
+note() { printf '  %s\n' "$1"; }
+
+# ── check ───────────────────────────────────────────────────────────────────
+# Tests the things the installer prints and you put in your client: the
+# address, the certificate, and the API key. The installer's own wait loop
+# only probes 127.0.0.1:PORT — the api talking to itself — which proves none
+# of those. With HTTPS on, Let's Encrypt issues AFTER `up -d` returns, so a
+# failed issuance would otherwise reach you as "install complete" followed by
+# "couldn't connect" in the client.
+#
+# Every https request is pinned to loopback with --resolve: the address is
+# still what is presented for SNI and checked against the certificate, so the
+# TLS half is verified exactly as a client will verify it, but the connection
+# never has to leave the box (AWS/GCP NAT a public address and don't hairpin
+# it, so a direct probe fails on a healthy server). Internal mode passes
+# Caddy's root as --cacert, never -k: skipping verification would pass while
+# Caddy served some other certificate, which is the failure worth catching.
+# The API key goes in over stdin (-K -), so it never appears in `ps`.
+cmd_check() {
+  load_env
+  FAILED=0
+  for svc in api postgres; do
+    if [ -n "$(compose ps -q --status running "$svc" 2>/dev/null)" ]; then ok "$svc container running"
+    else bad "$svc container not running (phantom-backend logs $svc)"; fi
+  done
+  if authed_curl -fsS --max-time 5 "$LOCAL/health" >/dev/null 2>&1; then ok "api answers on $LOCAL"
+  else bad "api does not answer on $LOCAL (phantom-backend logs api)"; fi
+
+  BASE="$LOCAL"
+  if [ -n "$ADDRESS" ]; then
+    if [ -n "$(compose ps -q --status running caddy 2>/dev/null)" ]; then ok "caddy container running"
+    else bad "caddy container not running (phantom-backend logs caddy)"; fi
+    CA_ARGS=""
+    if [ "$TLS" = internal ]; then
+      TMP=$(mktemp); trap 'rm -f "$TMP"' EXIT
+      if compose exec -T caddy cat "$ROOT_CRT" > "$TMP" 2>/dev/null && [ -s "$TMP" ]; then
+        CA_ARGS="--cacert $TMP"
+      else bad "could not read Caddy's root certificate (phantom-backend ca)"; fi
+    fi
+    # shellcheck disable=SC2086
+    if authed_curl -fsS --max-time 10 $CA_ARGS --resolve "$ADDRESS:443:127.0.0.1" "https://$ADDRESS/health" >/dev/null 2>&1; then
+      ok "https://$ADDRESS serves a valid certificate"
+      BASE="https://$ADDRESS"
+    else
+      bad "https://$ADDRESS is not serving a valid certificate for that address yet"
+      note "with Let's Encrypt, ports 80 and 443 must be reachable from the internet (cloud firewall); phantom-backend logs caddy"
+    fi
+    # Advisory only: a direct probe from the box cannot speak for the path
+    # from your laptop, and NAT makes it fail on healthy servers.
+    # shellcheck disable=SC2086
+    if authed_curl -fsS --max-time 10 $CA_ARGS "https://$ADDRESS/health" >/dev/null 2>&1; then note "(direct probe of https://$ADDRESS from this box: reachable)"
+    else note "(direct probe of https://$ADDRESS from this box failed — usually NAT; test from your own machine)"; fi
+  fi
+
+  # shellcheck disable=SC2086
+  if [ -n "$KEY" ] && printf 'header = "authorization: Bearer %s"\n' "$KEY" \
+       | curl -fsS --max-time 10 ${CA_ARGS:-} -K - $( [ "$BASE" != "$LOCAL" ] && printf -- '--resolve %s:443:127.0.0.1' "$ADDRESS" ) "$BASE/settings" >/dev/null 2>&1; then
+    ok "API key accepted (GET /settings)"
+  else bad "API key rejected or /settings unreachable"; fi
+
+  [ "$FAILED" -eq 0 ] || exit 1
+}
+
+# ── update ──────────────────────────────────────────────────────────────────
+# The same path a remote client uses: POST /update, which hands the tag to the
+# updater sidecar. Progress is in the helper container's log.
+cmd_update() {
+  load_env
+  TAG="${1:-}"
+  echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "usage: phantom-backend update vX.Y.Z" >&2; exit 1; }
+  printf 'header = "authorization: Bearer %s"\n' "$KEY" \
+    | curl -fsS -K - -X POST -H 'content-type: application/json' -d "{\"tag\":\"$TAG\"}" "$LOCAL/update" \
+    && printf '\nrequested %s — follow with: docker logs -f phantom-update-run\n' "$TAG"
+}
+
+usage() {
+  cat <<EOF
+phantom-backend — manage this phantom-looper server (install dir: $DIR)
+
+  phantom-backend status            are the containers up
+  phantom-backend logs [service]    follow a service's log (default: api)
+  phantom-backend check             test the address, certificate and API key a client uses
+  phantom-backend version           the release this server is running
+  phantom-backend update vX.Y.Z     upgrade to a release (same path as POST /update)
+  phantom-backend key               print the API key
+  phantom-backend ca                print Caddy's root certificate (PHANTOM_BACKEND_TLS=internal)
+EOF
+}
+
+case "${1:-}" in
+  status)  compose ps ;;
+  logs)    compose logs -f --tail 200 "${2:-api}" ;;
+  check)   cmd_check ;;
+  version) load_env; authed_curl -fsS "$LOCAL/health"; echo ;;
+  update)  cmd_update "${2:-}" ;;
+  key)     load_env; echo "$KEY" ;;
+  ca)      compose exec -T caddy cat "$ROOT_CRT" ;;
+  *)       usage; [ "${1:-}" = "" ] || exit 1 ;;
+esac
