@@ -66,7 +66,7 @@ export async function handleCommand(
         const id = ids[n - 1];
         const s = await sessionRow(engine, id);
         await engine.store.setMode(engine.db, 'code', id, reply);
-        await reply(`🔀 Active session: ${s?.name ?? id}`);
+        await reply(`🔀 Active session: ${s?.name ?? 'untitled'}`);
         return;
       }
       // Bare: list them.
@@ -116,11 +116,16 @@ export async function handleCommand(
       if (acc.mode === 'code' && acc.activeSessionId) {
         const s = await sessionRow(engine, acc.activeSessionId);
         const t = await (await engine.call(`/sessions/${acc.activeSessionId}/tasks`)).json().catch(() => null);
-        const running = t?.ok ? (t.data.tasks ?? []).length : 0;
+        const tasks = t?.ok ? (t.data.tasks ?? []).length : 0;
+        const where = [s?.branch ? `Branch: ${s.branch}` : null, s?.card != null ? `card #${s.card}` : null]
+          .filter(Boolean).join(' · ');
         await reply(['🤖 Coding agent',
-          `Active session: ${s?.name ?? acc.activeSessionId}`,
+          `Active session: ${s?.name ?? 'untitled'}`,
+          where || null,
+          `Running: ${s?.locked ? `yes${s.lockedLabel ? ` (${s.lockedLabel})` : ''}` : 'no'}`,
+          `Last request: ${s?.lastUserMessage ? oneLine(s.lastUserMessage) : '(none yet)'}`,
           `Plan mode: ${s?.planMode ? 'on' : 'off'}`,
-          `Running tasks: ${running}`].join('\n'));
+          `Background tasks: ${tasks}`].filter(Boolean).join('\n'));
       } else {
         const w = acc.activeWorkspaceId ? await workspaceRow(engine, acc.activeWorkspaceId) : null;
         await reply(['🏠 Assistant',
@@ -169,8 +174,16 @@ async function workspaceRow(engine: TelegramEngine, id: string): Promise<{ name?
   return j.ok ? j.data : null;
 }
 
-async function sessionRow(engine: TelegramEngine, id: string):
-Promise<{ name?: string; planMode?: boolean } | null> {
+/** The first line of a message, clipped — enough to recognise a request. */
+function oneLine(text: string, max = 120): string {
+  const line = text.trim().split('\n')[0] ?? '';
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
+
+async function sessionRow(engine: TelegramEngine, id: string): Promise<{
+  name?: string | null; planMode?: boolean; branch?: string | null; card?: number | null;
+  locked?: boolean; lockedLabel?: string | null; lastUserMessage?: string | null;
+} | null> {
   const j = await (await engine.call(`/sessions/${id}`)).json();
   return j.ok ? j.data : null;
 }

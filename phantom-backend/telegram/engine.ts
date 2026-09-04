@@ -236,7 +236,7 @@ export class TelegramEngine {
         const s = await getSession(db, id);
         if (!s) return { error: `no session ${id}` };
         await store.setMode(db, 'code', id, (t) => client.sendMessage(dm, t));
-        await client.sendMessage(dm, `🔀 Active session: ${s.name ?? id}`);
+        await client.sendMessage(dm, `🔀 Active session: ${s.name ?? 'untitled'}`);
         return { entered: id, title: s.name ?? null };
       };
       replyText = await runAssistantTurn(deps, this.assistantHistory, message, sink, {
@@ -400,7 +400,7 @@ export class TelegramEngine {
       const s = await getSession(this.deps.db, stored.origin.sessionId);
       if (!s) { await client.sendMessage(dm, '⚠️ That session no longer exists.'); return; }
       await store.setMode(this.deps.db, 'code', stored.origin.sessionId, (t) => client.sendMessage(dm, t));
-      await client.sendMessage(dm, `🔀 Active session: ${s.name ?? stored.origin.sessionId}`);
+      await client.sendMessage(dm, `🔀 Active session: ${s.name ?? 'untitled'}`);
     } else {
       if (acc.mode === 'assistant') return;
       // The switch line is the whole message here.
