@@ -23,17 +23,18 @@
 // (injectFetch): sessions, locks, transcripts, tools, card writes all go
 // through the same routes the cli uses. The database is touched directly only
 // to DISCOVER (scan cards, find the card's sessions, read the revision
-// clock), to STAMP sessions.agent/card — the loop path is the only writer of
-// those columns, which is what makes them trustworthy — and to CREATE the
-// supervisor's conversation-only session rows (no checkout; the loop is
-// their sole creator).
+// clock), to STAMP sessions.agent — the loop marks its coder seat at every
+// turn START; the transcript save re-derives the column from the writer at
+// turn END (sessions.ts agentAfterSave), which is what makes it trustworthy —
+// and to CREATE the supervisor's conversation-only session rows (no checkout;
+// the loop is their sole creator).
 import type { FastifyInstance } from 'fastify';
 import { eq } from 'drizzle-orm';
 import type pg from 'pg';
 import type { ModelMessage } from 'ai';
 import type { Db } from '../db/client.js';
 import { workspaces as workspacesTable, type WorkspaceRow } from '../db/schema.js';
-import { currentLoop, loopOf, stampAgent, createSupervisorSession, createLoop } from '../sessions.js';
+import { currentLoop, loopOf, stampAgent, createSupervisorSession, createLoop, LOOP_CLIENT_ID } from '../sessions.js';
 import { resolveMany } from '../settings.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
 import { memoryRecorder, serializeTranscript, type TranscriptHeader } from '../../core/llm/transcript.js';
@@ -53,7 +54,7 @@ import type { SessionEvents } from '../api/sessionEvents.js';
 import { logger, errStr } from '../log.js';
 
 const log = logger('looper');
-const CLIENT_ID = 'supervisor';
+const CLIENT_ID = LOOP_CLIENT_ID;
 const BASE = 'http://looper';
 
 export interface LooperDeps {
@@ -246,7 +247,6 @@ export class LooperEngine {
           baseUrl: BASE, apiKey, clientId: CLIENT_ID, label: heldBy('coding', card.status),
           fetch: this.f, lock: true, workspaceId: workspace.id,
         });
-        await stampAgent(db, opened.session.id, 'coding');
         const sup = await createSupervisorSession(db, workspace.id,
           String(opened.session.folderId ?? opened.session.id));
         await createLoop(db, workspace.id, card.seq, opened.session.id, sup.id);
@@ -262,6 +262,12 @@ export class LooperEngine {
     }
     let supOpened: OpenedSession | undefined;
     try {
+      // The loop drives this seat now: say so on the row BEFORE the turn
+      // runs, so a window watching it reads `coding agent ⠹ building` and
+      // /resume reads `coder` while it lasts — not only once the save lands.
+      // A person who typed into it since (agent null) handed it back by
+      // moving the card.
+      await stampAgent(db, opened.session.id, 'coding');
       // ── the token budget — seeded once per loop, checked before every
       // turn, each turn's own numbers added as they land. Breach is a card
       // state a human can see, like every other loop exit. ─────────────────

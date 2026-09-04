@@ -289,6 +289,26 @@ test('a card with both switches on walks plan → in_progress → done: a dialog
     'the card never repeats — it rode the plan briefing alone');
   assert.equal((await db.select().from(sessions).where(eq(sessions.id, srow.id)))[0].lockedBy, null,
     'the lock is released between turns');
+
+  // ── the loop is over; a PERSON types into the coder's session (the /turn
+  // route, saving as its own client) — the row says it is theirs now.
+  const agentOf = async () => (await db.select().from(sessions).where(eq(sessions.id, srow.id)))[0].agent;
+  script.coding.push({ text: 'Sure — here is what I did.' });
+  const manual = await app.inject({ method: 'POST', url: `/sessions/${srow.id}/turn`,
+    headers: { ...H, 'x-phantom-looper-client': 'macbook' }, payload: { message: 'walk me through it' } });
+  assert.equal(manual.statusCode, 200, manual.body);
+  assert.equal(await agentOf(), null, "a person's turn takes the session over — who = manual");
+  // ── the card comes back; the loop drives the same session again and says
+  // so on the row at turn START (the seat is stamped before the supervisor
+  // even runs), so a watching window reads `coding agent ⠹ …` and /resume
+  // reads `coder` while the turn lasts.
+  await app.inject({ method: 'PATCH', url: `/workspaces/${wsId}/cards/${created.id}`, headers: H,
+    payload: { status: 'in_progress' } });
+  script.supervisor.push({ text: 'Noted.' });
+  await engine.runTurn(workspace, await cardRow(seq), budget);
+  assert.equal(await agentOf(), 'coding', 'the loop took the seat back');
+  await app.inject({ method: 'PATCH', url: `/workspaces/${wsId}/cards/${created.id}`, headers: H,
+    payload: { status: 'done' } });
 });
 
 test('the coder blocks: its one board power ends the run; the return message carries the human back in', async () => {

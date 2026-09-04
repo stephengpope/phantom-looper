@@ -49,7 +49,7 @@ import { Prompt } from './components/Prompt.js';
 import { StatusLine } from './components/StatusLine.js';
 import { Toolbar } from './components/Toolbar.js';
 import { Settings, type Api } from './components/Settings.js';
-import { Launcher, lastWorkspaceId, isRunning, ago, type SessionInfo, type WorkspaceInfo } from './components/Launcher.js';
+import { Launcher, lastWorkspaceId, isRunning, whoDrives, ago, type SessionInfo, type WorkspaceInfo } from './components/Launcher.js';
 import { NewWorkspace, type NewWorkspaceRequest } from './components/NewWorkspace.js';
 import { WorkspaceSettings } from './components/WorkspaceSettings.js';
 import { SessionSwitcher } from './components/SessionSwitcher.js';
@@ -730,7 +730,7 @@ export function App({
           // Who drives it — the launcher's own three-way. Supervisor rows are
           // MARKED, not hidden: the looper mints one per card, and a list that
           // silently drops half of itself is a list that lies.
-          kind: s.agent === 'supervisor' ? 'supervisor' : s.card != null ? 'looper' : 'manual',
+          kind: whoDrives(s),
           status: s.status === 'active' ? 'active' : 'ended',
           running: isRunning(s, { busy, clientId }),
           on_screen: s.id === store.activeId,

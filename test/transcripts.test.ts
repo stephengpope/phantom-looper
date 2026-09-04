@@ -22,6 +22,7 @@ import { workspaces, sessions } from '../phantom-backend/db/schema.js';
 import { makePaths, repoDir, type Paths } from '../phantom-backend/pool/paths.js';
 import { bootCleanup } from '../phantom-backend/pool/pool.js';
 import { buildApp } from '../phantom-backend/api/app.js';
+import { stampAgent, agentAfterSave, LOOP_CLIENT_ID } from '../phantom-backend/sessions.js';
 import { newId } from '../core/ids.js';
 
 let db: ReturnType<typeof makeDb>['db'];
@@ -333,6 +334,42 @@ test('rename: a manual name sticks, turns the titler off, travels on duplicate; 
     payload: { name: null } }));
   assert.equal(r3.data.name, null);
   assert.equal(r3.data.nameManual, false);
+});
+
+test('who drives: a person\'s save takes the loop\'s coding seat over; the loop\'s save takes it back; the supervisor record never changes hands', async () => {
+  const { id, branch } = await mkSession();
+  const agentOf = async (sid: string) =>
+    (await db.select({ agent: sessions.agent }).from(sessions).where(eq(sessions.id, sid)))[0].agent;
+  const save = (sid: string, client: string) => app.inject({ method: 'PUT',
+    url: `/sessions/${sid}/transcript`, headers: asClient(client), payload: { data: jsonl(sid, branch) } });
+
+  // A session nobody stamped is a person's, and stays so under their saves.
+  assert.equal(await agentOf(id), null);
+  await save(id, 'macbook');
+  assert.equal(await agentOf(id), null);
+
+  // The loop's coder seat: stamped 'coding' the way the engine does it.
+  await stampAgent(db, id, 'coding');
+  // Typing into it lands as a save by the window's client id → theirs.
+  await save(id, 'macbook');
+  assert.equal(await agentOf(id), null, 'a person\'s turn takes the session over');
+  // The list says so: the card link is the loop row's business, not this.
+  const list = json(await app.inject({ method: 'GET', url: '/sessions', headers: H })).data as Array<Record<string, unknown>>;
+  assert.equal(list.find((x) => x.id === id)!.agent, null);
+  // The loop drives again (the card came back) → its save reclaims the seat.
+  await save(id, LOOP_CLIENT_ID);
+  assert.equal(await agentOf(id), 'coding', 'the loop\'s own save takes it back');
+  // The /turn route saves as ITS caller, never as the loop: a person's ask.
+  // (Scripted models live in looper.test.ts; here the rule alone is pinned.)
+  assert.equal(agentAfterSave('coding', 'turn-a1b2c3'), null);
+  assert.equal(agentAfterSave(null, LOOP_CLIENT_ID), 'coding');
+
+  // The supervisor's record is read-only everywhere; whoever writes, it stays.
+  await stampAgent(db, id, 'supervisor');
+  await save(id, 'macbook');
+  assert.equal(await agentOf(id), 'supervisor');
+  await save(id, LOOP_CLIENT_ID);
+  assert.equal(await agentOf(id), 'supervisor');
 });
 
 test('plan mode lives on the row: false at birth, PATCH flips it, a duplicate keeps planning', async () => {

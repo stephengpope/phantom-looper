@@ -26,7 +26,8 @@ export interface SessionInfo {
   lastUserMessage?: string | null;
   /** The model-written title — what the session is building (server-computed). */
   name?: string | null;
-  /** Who drives the session: 'supervisor' for looper-run card sessions. */
+  /** Who drove the last turn: 'coding'/'supervisor' for the loop's seats,
+   *  null = a person's (server-derived from the writer at every save). */
   agent?: string | null;
   card?: number | null;
   /** Where the session's work stands (server-computed from its checkout,
@@ -65,6 +66,16 @@ export function lastWorkspaceId(workspaces: WorkspaceInfo[], sessions: SessionIn
   return sessions
     .filter((s) => !s.agent && known.has(s.workspaceId))
     .sort((a, b) => Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt))[0]?.workspaceId;
+}
+
+/** WHO DRIVES THE SESSION — the one three-way, shared by the /resume table's
+ *  `who` column and the Assistant's session_list `kind`. Off the row's `agent`
+ *  alone, never the card: the card link is permanent, but who is driving is
+ *  not — a person who types into a card's coding session takes it over, and
+ *  the row says so from the next save. `coder` names the seat, not the loop. */
+export type Driver = 'supervisor' | 'coder' | 'manual';
+export function whoDrives(s: Pick<SessionInfo, 'agent'>): Driver {
+  return s.agent === 'supervisor' ? 'supervisor' : s.agent === 'coding' ? 'coder' : 'manual';
 }
 
 /** IS A TURN LIVE IN THIS SESSION — the one definition, shared by the /resume
@@ -159,9 +170,7 @@ export function sessionChoices(
     // per turn) — same spinner as a local turn. One fact, one place.
     const held = !dead && !!s.locked && s.lockedBy !== clientId;
     const running = isRunning(s, { busy, clientId });   // === working || held
-    // Who drives the session: the looper's coding agent, the looper's
-    // supervisor record, or you.
-    const kind = sup ? 'supervisor' : s.card != null ? 'looper' : 'manual';
+    const kind = whoDrives(s);
     // The card this session works on — the BARE number, because the ws
     // column beside it already shows the prefix (the board's own shape:
     // prefix in the header, number on the row). Either seat of a loop

@@ -278,7 +278,24 @@ export async function renewLock(db: Db, id: string, client: string, ttlMs: numbe
   return expires;
 }
 
-// ── The loop's operations — the ONLY writers of loops and agent tags ────────
+// ── The loop's operations — the ONLY writers of loops; agent's two writers ──
+
+/** The looper's client id — the one holder whose saves are the loop's own
+ *  turns. The engine locks with it, the release hook ignores it, and the
+ *  transcript save reads who drove the turn off it. */
+export const LOOP_CLIENT_ID = 'supervisor';
+
+/** `sessions.agent` after `client` saved a turn: WHO DROVE THE LAST TURN.
+ *  The supervisor's record is the supervisor's for life (read-only in every
+ *  client). The coder's seat is 'coding' while the loop's turns land in it and
+ *  a PERSON's (null) the moment anyone else's does — typing into a card's
+ *  session takes it over; the loop takes it back the next time it drives.
+ *  Read off the writer's identity at the record's one door, never off a
+ *  client's claim, which is what keeps the column trustworthy. */
+export function agentAfterSave(current: string | null, client: string): 'coding' | 'supervisor' | null {
+  if (current === 'supervisor') return 'supervisor';
+  return client === LOOP_CLIENT_ID ? 'coding' : null;
+}
 
 /** The current loop for a card: the newest row. Old rows are history. */
 export async function currentLoop(db: Db, workspaceId: string, card: number): Promise<LoopRow | undefined> {
@@ -288,7 +305,9 @@ export async function currentLoop(db: Db, workspaceId: string, card: number): Pr
   return rows[0];
 }
 
-/** Tag a conversation with who drives it. Loop-path only. */
+/** Tag a conversation with who drives it. The loop stamps its coder seat at
+ *  every turn START (so the row is right while the turn runs); the transcript
+ *  save re-derives it from the writer at turn END (agentAfterSave). */
 export async function stampAgent(db: Db, id: string, agent: 'coding' | 'supervisor'): Promise<void> {
   await db.update(sessions).set({ agent }).where(eq(sessions.id, id));
 }

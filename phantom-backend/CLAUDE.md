@@ -72,7 +72,13 @@ content-type when there is no body.
   live on the folder row; a loop row is `(workspace, card, coding_session,
   supervisor_session)`, written ONCE when a card enters the loop. Sessions
   carry no card and no branch — they cannot lie. `sessions.agent`
-  ('coding'/'supervisor') is stamped only by the loop path.
+  ('coding'/'supervisor'/null) is WHO DROVE THE LAST TURN: the loop stamps
+  its coder seat at every turn start (`stampAgent`), and every transcript
+  PUT re-derives it from the writer's client id (`agentAfterSave`:
+  `LOOP_CLIENT_ID` → 'coding', anyone else → null; a supervisor record
+  never changes hands). So a person typing into a card's coding session
+  takes it over — /resume reads `manual` — and the loop takes it back when
+  the card comes round again. Never a client's claim.
 - **One branch, start to finish**: the folder's own `{prefix}/{id}`, cut
   from base; restart by id re-clones and checks the same branch out. Destroy
   deletes FILES, not the session. Never `--depth` on a fetch; a session
