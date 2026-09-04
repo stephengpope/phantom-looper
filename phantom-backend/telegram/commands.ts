@@ -16,11 +16,11 @@ interface Cmd { command: string; description: string }
 export const MENU: Cmd[] = [
   { command: 'sessions', description: 'List sessions, or open one by number' },
   { command: 'new', description: 'Start a new session' },
-  { command: 'workspaces', description: 'List projects, or switch by number' },
+  { command: 'workspaces', description: 'List workspaces, or switch by number' },
   { command: 'assistant', description: 'Back to the assistant' },
   { command: 'status', description: "Show what's running" },
   { command: 'plan', description: 'Turn plan mode on or off' },
-  { command: 'autopush', description: 'Push your work' },
+  { command: 'autopush', description: 'Run auto-push' },
   { command: 'stop', description: 'Stop the current task' },
   { command: 'help', description: 'Show what I can do' },
 ];
@@ -44,12 +44,14 @@ export async function handleCommand(
   switch (cmd) {
     case 'start':
     case 'help':
-      await reply(HELP);
+      await reply(`ℹ️ ${HELP}`);
       return;
 
     case 'assistant':
-      await engine.store.setMode(engine.db, 'assistant');
-      await reply('🏠 Assistant. Ask me about the board, cards, workspaces, or sessions.');
+      // The switch line IS the reply; repeat it when there was nothing to switch.
+      if (!await engine.store.setMode(engine.db, 'assistant', undefined, reply)) {
+        await reply(engine.store.MODE_MESSAGE.assistant);
+      }
       return;
 
     case 'sessions': {
@@ -58,53 +60,54 @@ export async function handleCommand(
         const ids = sessionList.get(dm);
         const n = Number.parseInt(arg, 10);
         if (!ids || !Number.isInteger(n) || n < 1 || n > ids.length) {
-          await reply('Send /sessions first to see the list, then /sessions <number>.');
+          await reply('⚠️ Send /sessions first to see the list, then /sessions <number>.');
           return;
         }
         const id = ids[n - 1];
         const s = await sessionRow(engine, id);
-        await engine.store.setMode(engine.db, 'code', id);
-        await reply(`🔀 In session: ${s?.name ?? id}. Your messages now run coding turns on it.`);
+        await engine.store.setMode(engine.db, 'code', id, reply);
+        await reply(`🔀 Active session: ${s?.name ?? id}`);
         return;
       }
       // Bare: list them.
       const j = await (await engine.call('/sessions?typed=true&supervisor=false&limit=10')).json();
-      if (!j.ok || !j.data.sessions.length) { await reply('No sessions yet. /new starts one.'); return; }
+      if (!j.ok || !j.data.sessions.length) { await reply('ℹ️ No sessions yet. /new starts one.'); return; }
       sessionList.set(dm, j.data.sessions.map((s: any) => s.id));
       const rows = j.data.sessions.map((s: any, i: number) =>
         `${i + 1}. ${s.name ?? 'untitled'}${s.locked ? ' (busy)' : ''}`);
-      await reply(['Sessions:', ...rows, '', 'Open one with /sessions <number>'].join('\n'));
+      await reply(['📋 Sessions:', ...rows, '', 'Open one with /sessions <number>'].join('\n'));
       return;
     }
 
     case 'workspaces': {
       const j = await (await engine.call('/workspaces')).json();
       const list: any[] = j.ok ? (j.data.workspaces ?? j.data) : [];
-      if (!Array.isArray(list) || !list.length) { await reply('No projects yet — add one in the cli.'); return; }
+      if (!Array.isArray(list) || !list.length) { await reply('ℹ️ No workspaces yet — add one in phantom-cli.'); return; }
       // With a number: switch.
       if (arg !== undefined) {
         const ids = workspaceList.get(dm);
         const n = Number.parseInt(arg, 10);
         if (!ids || !Number.isInteger(n) || n < 1 || n > ids.length) {
-          await reply('Send /workspaces first to see the list, then /workspaces <number>.');
+          await reply('⚠️ Send /workspaces first to see the list, then /workspaces <number>.');
           return;
         }
+        const w = list.find((x) => x.id === ids[n - 1]);
         await engine.store.setActiveWorkspace(engine.db, ids[n - 1]);
-        await reply('Switched project. The assistant now works on that board.');
+        await reply(`📁 Active workspace: ${w?.name ?? ids[n - 1]}`);
         return;
       }
       workspaceList.set(dm, list.map((w) => w.id));
-      const rows = list.map((w, i) => `${i + 1}. ${w.name}${w.id === acc.activeWorkspaceId ? ' (current)' : ''}`);
-      await reply(['Projects:', ...rows, '', 'Switch with /workspaces <number>'].join('\n'));
+      const rows = list.map((w, i) => `${i + 1}. ${w.name}${w.id === acc.activeWorkspaceId ? ' (active)' : ''}`);
+      await reply(['📋 Workspaces:', ...rows, '', 'Switch with /workspaces <number>'].join('\n'));
       return;
     }
 
     case 'new': {
       const ws = acc.activeWorkspaceId;
-      if (!ws) { await reply('No project selected — /workspaces to pick one first.'); return; }
+      if (!ws) { await reply('⚠️ No active workspace — /workspaces to pick one first.'); return; }
       const j = await (await engine.call('/sessions', { method: 'POST', body: { workspace_id: ws } })).json();
-      if (!j.ok) { await reply(`Couldn't start a session: ${j.error?.message}`); return; }
-      await engine.store.setMode(engine.db, 'code', j.data.id);
+      if (!j.ok) { await reply(`⚠️ Couldn't start a session: ${j.error?.message}`); return; }
+      await engine.store.setMode(engine.db, 'code', j.data.id, reply);
       await reply('🆕 New session. Send your first message to begin.');
       return;
     }
@@ -114,64 +117,75 @@ export async function handleCommand(
         const s = await sessionRow(engine, acc.activeSessionId);
         const t = await (await engine.call(`/sessions/${acc.activeSessionId}/tasks`)).json().catch(() => null);
         const running = t?.ok ? (t.data.tasks ?? []).length : 0;
-        await reply(['In a session',
-          `Session: ${s?.name ?? acc.activeSessionId}`,
-          `Plan mode: ${s?.plan_mode ? 'on' : 'off'}`,
+        await reply(['🤖 Coding agent',
+          `Active session: ${s?.name ?? acc.activeSessionId}`,
+          `Plan mode: ${s?.planMode ? 'on' : 'off'}`,
           `Running tasks: ${running}`].join('\n'));
       } else {
-        await reply(['Assistant (home)',
-          `Project: ${acc.activeWorkspaceId ?? '(none — /workspaces)'}`].join('\n'));
+        const w = acc.activeWorkspaceId ? await workspaceRow(engine, acc.activeWorkspaceId) : null;
+        await reply(['🏠 Assistant',
+          `Active workspace: ${w?.name ?? acc.activeWorkspaceId ?? '(none — /workspaces)'}`].join('\n'));
       }
       return;
     }
 
     case 'plan': {
-      if (acc.mode !== 'code' || !acc.activeSessionId) { await reply('Enter a session first — /sessions.'); return; }
+      if (acc.mode !== 'code' || !acc.activeSessionId) { await reply('⚠️ Enter a session first — /sessions.'); return; }
       const s = await sessionRow(engine, acc.activeSessionId);
-      const next = !s?.plan_mode;
+      const next = !s?.planMode;
       await engine.call(`/sessions/${acc.activeSessionId}`, { method: 'PATCH', body: { plan_mode: next } });
-      await reply(next ? '📝 Plan mode on — file tools are read-only.' : '🔧 Code mode — full tools.');
+      await reply(next ? '📝 Plan mode on — file tools are read-only.' : '🔧 Plan mode off — full tools.');
       return;
     }
 
     case 'autopush': {
-      if (acc.mode !== 'code' || !acc.activeSessionId) { await reply('Enter a session first — /sessions.'); return; }
+      if (acc.mode !== 'code' || !acc.activeSessionId) { await reply('⚠️ Enter a session first — /sessions.'); return; }
       await reply('🚀 Pushing your work…');
       const body = await (await engine.call('/git/auto-push',
         { method: 'POST', body: {}, session: acc.activeSessionId })).text();
       const last = body.trim().split('\n').filter(Boolean).pop();
       let msg = 'done';
-      try { const o = JSON.parse(last ?? '{}'); msg = o.result ?? o.step ?? o.error ?? 'done'; } catch { /* stream tail */ }
-      await reply(`Auto-push: ${msg}`);
+      let failed = false;
+      try {
+        const o = JSON.parse(last ?? '{}');
+        failed = o.error !== undefined;
+        msg = o.result ?? o.step ?? o.error ?? 'done';
+      } catch { /* stream tail */ }
+      await reply(`${failed ? '⚠️' : '✅'} Auto-push: ${msg}`);
       return;
     }
 
     case 'stop':
-      await reply(engine.stop(dm) ? '🛑 Stopping.' : 'Nothing is running.');
+      await reply(engine.stop(dm) ? '🛑 Stopping.' : 'ℹ️ Nothing is running.');
       return;
 
     default:
-      await reply(`I don't know /${cmd}.\n\n${HELP}`);
+      await reply(`⚠️ I don't know /${cmd}.\n\nℹ️ ${HELP}`);
   }
 }
 
+async function workspaceRow(engine: TelegramEngine, id: string): Promise<{ name?: string } | null> {
+  const j = await (await engine.call(`/workspaces/${id}`)).json();
+  return j.ok ? j.data : null;
+}
+
 async function sessionRow(engine: TelegramEngine, id: string):
-Promise<{ name?: string; plan_mode?: boolean } | null> {
+Promise<{ name?: string; planMode?: boolean } | null> {
   const j = await (await engine.call(`/sessions/${id}`)).json();
   return j.ok ? j.data : null;
 }
 
 const HELP = [
   "I'm your phantom-looper assistant. Talk to me and I'll manage your work — the board, cards,",
-  'sessions, projects. Open a session and your messages go to its coding agent.',
+  'sessions, workspaces. Open a session and your messages go to its coding agent.',
   '',
   '/sessions [n]     list sessions, or open number n',
   '/new              start a new session',
-  '/workspaces [n]   list projects, or switch to number n',
+  '/workspaces [n]   list workspaces, or switch to number n',
   '/assistant        back to the assistant',
   '/status           show what\'s running',
   '/plan             turn plan mode on or off',
-  '/autopush         push your work',
+  '/autopush         run auto-push',
   '/stop             stop the current task',
   '/help             this',
 ].join('\n');

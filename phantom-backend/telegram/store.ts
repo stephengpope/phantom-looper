@@ -44,11 +44,26 @@ async function patch(db: Db, values: Partial<typeof telegramAccount.$inferInsert
     .onConflictDoUpdate({ target: telegramAccount.id, set: values });
 }
 
-/** Where a plain message goes. Entering code mode names the session. */
-export async function setMode(db: Db, mode: TelegramMode, sessionId?: string): Promise<void> {
+/** The transition announcements — ONE fixed line per direction, sent only
+ *  when the mode actually changes. Command replies are separate. */
+export const MODE_MESSAGE: Record<TelegramMode, string> = {
+  code: "🤖 You're now talking to the coding agent.",
+  assistant: "🏠 You're now talking to the assistant.",
+};
+
+/** Where a plain message goes. Entering code mode names the session.
+ *  `announce` receives the transition line iff the mode changed; returns
+ *  whether it did. */
+export async function setMode(db: Db, mode: TelegramMode, sessionId: string | undefined,
+  announce: (text: string) => Promise<unknown>): Promise<boolean> {
+  const rows = await db.select({ mode: telegramAccount.mode }).from(telegramAccount)
+    .where(eq(telegramAccount.id, 1));
+  const before: TelegramMode = rows[0]?.mode === 'code' ? 'code' : 'assistant';
   await patch(db, mode === 'code'
     ? { mode, activeSessionId: sessionId }
     : { mode });
+  if (before !== mode) await announce(MODE_MESSAGE[mode]);
+  return before !== mode;
 }
 
 export async function setActiveWorkspace(db: Db, workspaceId: string | null): Promise<void> {

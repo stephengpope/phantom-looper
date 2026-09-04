@@ -235,8 +235,8 @@ export class TelegramEngine {
       const onSwitch = async (id: string) => {
         const s = await getSession(db, id);
         if (!s) return { error: `no session ${id}` };
-        await store.setMode(db, 'code', id);
-        await client.sendMessage(dm, `🔀 In session: ${s.name ?? id}`);
+        await store.setMode(db, 'code', id, (t) => client.sendMessage(dm, t));
+        await client.sendMessage(dm, `🔀 Active session: ${s.name ?? id}`);
         return { entered: id, title: s.name ?? null };
       };
       replyText = await runAssistantTurn(deps, this.assistantHistory, message, sink, {
@@ -343,7 +343,7 @@ export class TelegramEngine {
     if (voice && !typed) {
       const react = (emoji?: string) => client.setMessageReaction(dm, msg.message_id, emoji).catch(() => {});
       if (voice.file_size && voice.file_size > MAX_INBOUND_BYTES) {
-        await client.sendMessage(dm, "That voice note is over Telegram's 20 MB limit for bots.");
+        await client.sendMessage(dm, "⚠️ That voice note is over Telegram's 20 MB limit for bots.");
         return null;
       }
       await react(REACT_TRANSCRIBING);
@@ -364,14 +364,14 @@ export class TelegramEngine {
     const files = collectFiles(msg);
     if (files.length) {
       if (acc.mode !== 'code' || !acc.activeSessionId) {
-        await client.sendMessage(dm, "Enter a session first (/sessions) — files go into the session you're working in.");
+        await client.sendMessage(dm, "⚠️ Enter a session first (/sessions) — files go into the session you're working in.");
         return typed || null;
       }
       const scratch = sessionDir(this.deps.paths, acc.activeSessionId) + '/scratch';
       const stored: StoredAttachment[] = [];
       for (const { file, kind } of files) {
         if (file.file_size && file.file_size > MAX_INBOUND_BYTES) {
-          await client.sendMessage(dm, `"${file.file_name ?? 'that file'}" is over Telegram's 20 MB limit.`);
+          await client.sendMessage(dm, `⚠️ "${file.file_name ?? 'that file'}" is over Telegram's 20 MB limit.`);
           continue;
         }
         const a = await writeAttachment(scratch, await client.downloadFile(file.file_id),
@@ -383,7 +383,7 @@ export class TelegramEngine {
     }
 
     if (typed) return typed;
-    await client.sendMessage(dm, "Send me a message, a voice note, or a file and I'll get to work.");
+    await client.sendMessage(dm, "ℹ️ Send me a message, a voice note, or a file and I'll get to work.");
     return null;
   }
 
@@ -398,13 +398,13 @@ export class TelegramEngine {
     if (stored.origin.kind === 'session' && stored.origin.sessionId) {
       if (acc.activeSessionId === stored.origin.sessionId && acc.mode === 'code') return;
       const s = await getSession(this.deps.db, stored.origin.sessionId);
-      if (!s) { await client.sendMessage(dm, 'That session no longer exists.'); return; }
-      await store.setMode(this.deps.db, 'code', stored.origin.sessionId);
-      await client.sendMessage(dm, `🔀 In session: ${s.name ?? stored.origin.sessionId}`);
+      if (!s) { await client.sendMessage(dm, '⚠️ That session no longer exists.'); return; }
+      await store.setMode(this.deps.db, 'code', stored.origin.sessionId, (t) => client.sendMessage(dm, t));
+      await client.sendMessage(dm, `🔀 Active session: ${s.name ?? stored.origin.sessionId}`);
     } else {
       if (acc.mode === 'assistant') return;
-      await store.setMode(this.deps.db, 'assistant');
-      await client.sendMessage(dm, '🔀 Back to the assistant.');
+      // The switch line is the whole message here.
+      await store.setMode(this.deps.db, 'assistant', undefined, (t) => client.sendMessage(dm, t));
     }
   }
 
