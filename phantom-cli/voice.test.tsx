@@ -315,19 +315,6 @@ test('a warn line is a note in the pane and leaves the status alone', async () =
   assert.equal(v.running, true);
 });
 
-test('the engine reports the Deepgram address it uses and the app is told', async () => {
-  const f = fakeSidecar();
-  const v = new VoiceClient(f.spawner, null);
-  const seen: string[] = [];
-  v.onAddress = (a) => seen.push(a);
-  await v.start({});
-  f.emit(ready());
-  f.emit({ type: 'status', deepgram: '4.20.80.213' });
-  f.emit({ type: 'status', deepgram: '' });
-  assert.deepEqual(seen, ['4.20.80.213', '']);
-  assert.equal(v.snapshot().status, 'listening');
-});
-
 test('refreshDevices re-scans every time: asks a running agent, runs the lister when off', async () => {
   const f = fakeSidecar();
   const v = new VoiceClient(f.spawner, null);
@@ -353,15 +340,17 @@ test('sidecarEnv: the audio side only — no provider, no model, no model key', 
     voice_headphones: true, voice_wake_word: true, voice_wake_words: 'hey, you' });
   assert.equal(env.DEEPGRAM_API_KEY, 'dg');
   assert.equal(env.PHANTOM_CLI_VOICE_MIC, 'RODE');
-  assert.equal(env.PHANTOM_CLI_VOICE_DEEPGRAM, '', 'no saved address yet: the engine asks DNS');
-  assert.equal(sidecarEnv({ ...base, voice_deepgram_address: '4.20.80.213' }).PHANTOM_CLI_VOICE_DEEPGRAM, '4.20.80.213');
+  assert.equal(env.PHANTOM_CLI_VOICE_STT_MODEL, 'nova-3', 'the hearing model is the shared server setting, defaulting to nova-3');
+  assert.equal(sidecarEnv({ ...base, voice_stt_model: 'nova-2' }).PHANTOM_CLI_VOICE_STT_MODEL, 'nova-2');
   assert.equal(env.PHANTOM_CLI_VOICE_MIC_MUTED, '1');
   assert.equal(env.PHANTOM_CLI_VOICE_SPEAKER_MUTED, '1');
   assert.equal(env.PHANTOM_CLI_VOICE_HEADPHONES, '1');
   assert.equal(env.PHANTOM_CLI_VOICE_WAKE, '1');
   assert.equal(env.PHANTOM_CLI_VOICE_WAKE_WORDS, 'hey, you');
   assert.ok(!Object.values(env).includes('sk-o'), 'the model key never reaches the sidecar');
-  assert.ok(!Object.keys(env).some((k) => /PROVIDER|MODEL|API_KEY|BASE_URL/.test(k) && k !== 'DEEPGRAM_API_KEY'), Object.keys(env).join());
+  // The two Deepgram facts are the sidecar's own; the brain's model and key are not.
+  const audioOwn = new Set(['DEEPGRAM_API_KEY', 'PHANTOM_CLI_VOICE_STT_MODEL']);
+  assert.ok(!Object.keys(env).some((k) => /PROVIDER|MODEL|API_KEY|BASE_URL/.test(k) && !audioOwn.has(k)), Object.keys(env).join());
 });
 
 test('nthAssistantIndex and truncateAssistant: the step-th reply of a turn, text swapped, tool calls kept', () => {

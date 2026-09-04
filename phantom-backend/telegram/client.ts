@@ -8,6 +8,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { Entity } from './entities.js';
+import { connectFetch } from './connect.js';
 
 /** Telegram's ceiling for anything a bot uploads. Checked before the read, so
  *  an oversize send is reported as itself, not as a generic API failure. */
@@ -148,11 +149,13 @@ export class TelegramClient {
   }
 
   /** Fetch an inbound file. Telegram's getFile caps at 20 MB — callers check
-   *  the declared size first so an oversize file is declined readably. */
+   *  the declared size first so an oversize file is declined readably. The
+   *  byte fetch rides the connection policy (connect.ts): a voice note is
+   *  the message itself, so a hung connection here is a message lost. */
   async downloadFile(fileId: string): Promise<Buffer> {
     const file = await this.call('getFile', { file_id: fileId });
     if (!file?.file_path) throw new Error('Telegram did not return a file path.');
-    const res = await fetch(`https://api.telegram.org/file/bot${this.token}/${file.file_path}`);
+    const res = await connectFetch(`https://api.telegram.org/file/bot${this.token}/${file.file_path}`);
     if (!res.ok) throw new Error(`downloading the file failed (HTTP ${res.status}).`);
     return Buffer.from(await res.arrayBuffer());
   }

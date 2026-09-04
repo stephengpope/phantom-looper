@@ -2,28 +2,37 @@
 // cli's voice pane runs Deepgram too, through the Python sidecar; the server
 // has no sidecar, so these are the two REST calls). Deepgram sniffs the
 // container itself, so Telegram's OGG/Opus goes up byte-for-byte — no ffmpeg,
-// no format conversion, nothing to warm. Neither function throws: a missing
-// key or a vendor failure comes back null and the caller says so readably.
+// no format conversion, nothing to warm. Both calls ride connect.ts (the
+// connection policy shared with the sidecar). Neither function throws: a
+// missing key or a vendor failure comes back as a reason the caller can say.
+
+import { connectFetch, isConnectFailure } from './connect.js';
 
 const API = process.env.DEEPGRAM_API_BASE ?? 'https://api.deepgram.com';
 
-/** A voice note's words. One person, seconds long — no diarization. Null =
- *  couldn't transcribe (no key, vendor error); '' = heard no speech. */
-export async function transcribeVoice(apiKey: string, audio: Buffer): Promise<string | null> {
-  if (!apiKey) return null;
+/** What a voice note came back as. `text` '' = heard no speech. The three
+ *  reasons are three different sentences for the user. */
+export type Transcription =
+  | { text: string }
+  | { error: 'no_key' | 'unreachable' | 'vendor' };
+
+/** A voice note's words. One person, seconds long — no diarization. `model`
+ *  is the voice_stt_model setting — the same model the voice pane hears with. */
+export async function transcribeVoice(apiKey: string, audio: Buffer, model: string): Promise<Transcription> {
+  if (!apiKey) return { error: 'no_key' };
   try {
-    const res = await fetch(`${API}/v1/listen?model=nova-2&smart_format=true`, {
+    const res = await connectFetch(`${API}/v1/listen?model=${encodeURIComponent(model)}&smart_format=true`, {
       method: 'POST',
       headers: { Authorization: `Token ${apiKey}`, 'Content-Type': 'audio/ogg' },
       body: new Uint8Array(audio),
     });
-    if (!res.ok) return null;
+    if (!res.ok) return { error: 'vendor' };
     const json = await res.json() as {
       results?: { channels?: Array<{ alternatives?: Array<{ transcript?: string }> }> };
     };
-    return json.results?.channels?.[0]?.alternatives?.[0]?.transcript?.trim() ?? '';
-  } catch {
-    return null;
+    return { text: json.results?.channels?.[0]?.alternatives?.[0]?.transcript?.trim() ?? '' };
+  } catch (e) {
+    return { error: isConnectFailure(e) ? 'unreachable' : 'vendor' };
   }
 }
 
@@ -36,12 +45,13 @@ export const SPEAK_MAX_CHARS = 2000;
 
 /** Speak `text` as an OGG/Opus voice note — the container Telegram's voice
  *  bubbles want. `voice` is the Aura model (the voice_spoken_voice setting,
- *  e.g. aura-2-thalia-en). Null on any failure. */
+ *  e.g. aura-2-thalia-en). Null on any failure: the text already went out,
+ *  so there is nothing to tell the user. */
 export async function speakVoice(apiKey: string, voice: string, text: string): Promise<Buffer | null> {
   if (!apiKey || !text.trim()) return null;
   try {
     const model = encodeURIComponent(voice || 'aura-2-thalia-en');
-    const res = await fetch(`${API}/v1/speak?model=${model}&encoding=opus&container=ogg`, {
+    const res = await connectFetch(`${API}/v1/speak?model=${model}&encoding=opus&container=ogg`, {
       method: 'POST',
       headers: { Authorization: `Token ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: text.slice(0, SPEAK_MAX_CHARS) }),

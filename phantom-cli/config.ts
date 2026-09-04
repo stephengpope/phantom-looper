@@ -37,9 +37,9 @@ export const DEFAULTS = {
   assistant_model: null as string | null,
   assistant_base_url: null as string | null,
   voice_spoken_voice: 'aura-2-thalia-en' as string,
+  voice_stt_model: 'nova-3' as string,
   voice_mic_device: null as string | null,
   voice_speaker_device: null as string | null,
-  voice_deepgram_address: null as string | null,
   voice_mic_muted: false as boolean,
   voice_speaker_muted: false as boolean,
   voice_headphones: false as boolean,
@@ -60,7 +60,7 @@ export const DEFAULTS = {
 export const LOCAL_KEYS = [
   'server_url', 'server_key',
   'voice_mic_device', 'voice_speaker_device', 'voice_headphones',
-  'voice_mic_muted', 'voice_speaker_muted', 'voice_deepgram_address',
+  'voice_mic_muted', 'voice_speaker_muted',
 ] as const;
 export type LocalKey = (typeof LOCAL_KEYS)[number];
 export const isLocalKey = (k: string): k is LocalKey => (LOCAL_KEYS as readonly string[]).includes(k);
@@ -94,9 +94,9 @@ export const DESCRIPTIONS: Record<ConfigKey, string> = {
   assistant_model: 'Model the Assistant answers with. Empty = the coding agent\'s model; required when the provider differs from the coding agent\'s. A small fast model keeps replies quick.',
   assistant_base_url: 'Endpoint when the Assistant\'s provider is openai-compatible. Empty inherits the coding agent\'s only while the provider matches.',
   voice_spoken_voice: 'Deepgram Aura voice the Assistant speaks with, e.g. aura-2-thalia-en, aura-2-orion-en.',
+  voice_stt_model: 'Deepgram model that hears you — the voice pane and Telegram voice notes alike. nova-3 is the current general model; nova-2 for languages it lacks.',
   voice_mic_device: 'Microphone, by device name. Empty = the system default.',
   voice_speaker_device: 'Speaker, by device name. Empty = the system default.',
-  voice_deepgram_address: 'The Deepgram address that last answered from this machine. Found by the engine and saved here, so a restart starts on it. Empty = ask DNS.',
   voice_mic_muted: 'Stop listening. What /mic and a click on the pane toggle — saved, so it holds across restarts.',
   voice_speaker_muted: 'Stop speaking out loud; the text still streams. What /speaker and a click on the pane toggle — saved, so it holds across restarts.',
   voice_headphones: 'On = you wear headphones, so the mic stays open while the Assistant speaks and you can talk over it. Off = the mic is muted while it speaks (speakers would feed its own voice back).',
@@ -139,9 +139,9 @@ export const META: Record<ConfigKey, ConfigMeta> = {
   assistant_base_url: { type: 'string', label: 'assistant endpoint', group: 'voice',
     appliesWhen: (c) => usesBaseUrl(c.assistant_provider || c.provider) },
   voice_spoken_voice: { type: 'string', group: 'voice' },
+  voice_stt_model: { type: 'string', label: 'hearing model', group: 'voice' },
   voice_mic_device: { type: 'string', label: 'microphone', group: 'voice' },
   voice_speaker_device: { type: 'string', label: 'speaker', group: 'voice' },
-  voice_deepgram_address: { type: 'string', label: 'deepgram address', group: 'voice' },
   voice_mic_muted: { type: 'boolean', label: 'mic muted', group: 'voice' },
   voice_speaker_muted: { type: 'boolean', label: 'speaker muted', group: 'voice' },
   voice_headphones: { type: 'boolean', group: 'voice' },
@@ -154,7 +154,7 @@ export const META: Record<ConfigKey, ConfigMeta> = {
  *  these while it runs means a restart; the rest — the spoken voice, the
  *  headphones switch, the wake word — are pushed to it live (`set`). */
 export const VOICE_BOOT_KEYS: string[] = [
-  'deepgram_api_key', 'voice_mic_device', 'voice_speaker_device',
+  'deepgram_api_key', 'voice_mic_device', 'voice_speaker_device', 'voice_stt_model',
 ];
 
 /** The settings the Assistant's model is built from. Changing one rebuilds

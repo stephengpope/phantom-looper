@@ -20,12 +20,11 @@ phantom-cli --version | update | update --server     # headless subcommands (ind
 ## Settings — two homes, and a row says which
 
 - **Local** (`~/.phantom-cli/settings.json`, `local.ts`, sync, 0600 chmod'd
-  after every write; a corrupt file is REPORTED, never rewritten): the eight
+  after every write; a corrupt file is REPORTED, never rewritten): the seven
   `LOCAL_KEYS` — `server_url server_key voice_mic_device voice_speaker_device
-  voice_headphones voice_mic_muted voice_speaker_muted voice_deepgram_address`
-  — because they are how you REACH the store or facts about this machine
-  (the Deepgram address is found by the engine and saved by the app; see
-  `sidecar/CLAUDE.md`). Env reaches exactly two: `PHANTOM_BACKEND_URL`
+  voice_headphones voice_mic_muted voice_speaker_muted`
+  — because they are how you REACH the store or facts about this machine.
+  Env reaches exactly two: `PHANTOM_BACKEND_URL`
   (server_url), `PHANTOM_BACKEND_KEY`/`API_KEY` (server_key) — the only
   `env` entries in `config.ts` META; the repo's `.env` loads at launch,
   shell env winning. Local screens (`/server`) must never need the network.

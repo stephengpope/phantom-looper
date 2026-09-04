@@ -68,7 +68,7 @@ import { BoardStore, type Card, type Stream } from './board.js';
 import { SessionFeed } from './sessionFeed.js';
 import { Board } from './components/Board.js';
 import { VOICE_BOOT_KEYS, ASSISTANT_MODEL_KEYS, REMOTE_DEFAULTS, isLocalKey, type ConfigKey, type ConfigValue } from './config.js';
-import { clearLocal, localValues, setLocal } from './local.js';
+import { localValues, setLocal } from './local.js';
 import { makeSettings, type Settings as SettingsClient } from './settings.js';
 import { copyToClipboard, isMouseInput, parseMouse, selectionRanges, type Selection } from './mouse.js';
 import type { Screen } from './screen.js';
@@ -939,17 +939,6 @@ export function App({
     if (store.active()) store.note(store.activeId, text);
     else setWindowNotes((l) => [...l, { kind: 'note', id: nextId('note'), text } as Part]);
   }, [store]);
-  // The Deepgram address the engine is on is a fact about this machine's
-  // network: saved with the other local facts, handed back at the next spawn
-  // so a fresh engine does not start on whatever DNS says that minute.
-  useEffect(() => {
-    voice.onAddress = (addr: string) => {
-      const err = addr ? setLocal('voice_deepgram_address', addr, configPath) : clearLocal('voice_deepgram_address', configPath);
-      if (err) note(err);
-    };
-    return () => { voice.onAddress = null; };
-  }, [voice, configPath, note]);
-
   /** The Assistant's whole kit: the two TUI tools plus read-only workspace
    *  tools scoped to the session ON SCREEN. Rebuilt (setAgent — history kept)
    *  when that session changes; a failed fetch just means no file tools. */
