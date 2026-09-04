@@ -14,14 +14,14 @@ interface Cmd { command: string; description: string }
 
 /** THE menu — one list, both modes, plain descriptions. */
 export const MENU: Cmd[] = [
-  { command: 'sessions', description: 'List sessions, or open one by number' },
-  { command: 'new', description: 'Start a new session' },
-  { command: 'workspaces', description: 'List workspaces, or switch by number' },
   { command: 'assistant', description: 'Back to the assistant' },
-  { command: 'status', description: "Show what's running" },
+  { command: 'new', description: 'Start a new session' },
+  { command: 'sessions', description: 'List sessions or open one' },
   { command: 'plan', description: 'Turn plan mode on or off' },
   { command: 'autopush', description: 'Run auto-push' },
   { command: 'stop', description: 'Stop the current task' },
+  { command: 'workspaces', description: 'List workspaces or switch' },
+  { command: 'status', description: "Show what's running" },
   { command: 'help', description: 'Show what I can do' },
 ];
 
