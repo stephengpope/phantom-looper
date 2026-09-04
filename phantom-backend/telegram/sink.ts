@@ -109,10 +109,16 @@ export function makeTelegramSink(
     }).catch(() => { /* best-effort */ });
   }
 
+  // One call arrives as TWO parts — tool-input-start while the arguments
+  // stream (its id is `id`), tool-call once they are complete (`toolCallId`; a provider that does not
+  // stream input sends only the second). One marker per call id.
+  const marked = new Set<string>();
   function part(p: Record<string, unknown>) {
     const type = p.type;
     if (type === 'text-delta' && typeof p.text === 'string') { text += p.text; dirty = true; }
     else if (type === 'tool-input-start' || type === 'tool-call') {
+      const id = typeof p.toolCallId === 'string' ? p.toolCallId : typeof p.id === 'string' ? p.id : null;
+      if (id != null) { if (marked.has(id)) return; marked.add(id); }
       const name = typeof p.toolName === 'string' ? p.toolName : 'tool';
       toolLine(name);
     }
