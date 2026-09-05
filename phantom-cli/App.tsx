@@ -63,7 +63,7 @@ import { Boundary } from './components/Boundary.js';
 import { Banner } from './components/Banner.js';
 import { VoicePanel } from './components/VoicePanel.js';
 import { Divider } from './components/Divider.js';
-import { VoiceClient, sessionsTool, assistantKanbanTool, codingKanbanTool, workspaceCreateTool, gitAutoPushTool, screenModeTools, kebabName, renderRead, sidecarEnv, type KanbanArgs, type SessionsArgs, type WorkspaceCreateArgs, type GitAutoPushArgs, type ScreenModeHandler } from './voice.js';
+import { VoiceClient, sessionsTool, assistantKanbanTool, codingKanbanTool, workspaceCreateTool, gitAutoPushTool, gitAutoPullTool, screenModeTools, kebabName, renderRead, sidecarEnv, type KanbanArgs, type SessionsArgs, type WorkspaceCreateArgs, type GitAutoPushArgs, type GitAutoPullArgs, type ScreenModeHandler } from './voice.js';
 import { BoardStore, type Card, type Stream } from './board.js';
 import { SessionFeed } from './sessionFeed.js';
 import { Board } from './components/Board.js';
@@ -271,6 +271,7 @@ const oneLine = (s: string | null | undefined, max = 80): string | null => {
 export function App({
   api, stream, initial, boot, newTools, configPath, onSession, bootConfig,
   autoPush,
+  autoPull,
   clientId = '',
   pollMs = 10_000,
   taskPollMs = 60_000,
@@ -295,6 +296,10 @@ export function App({
    *  index.tsx wires the real one; absent in tests, /auto-push says so. */
   autoPush?: (sessionId: string, onStep?: (label: string) => void) =>
     Promise<{ result: string; reason?: string; sha?: string }>;
+  /** POST /git/auto-pull for one session, the same shape — the Assistant's
+   *  `git_auto_pull`. index.tsx wires core's client; absent in tests. */
+  autoPull?: (sessionId: string, onStep?: (label: string) => void) =>
+    Promise<{ result: string; reason?: string; arrived?: string[]; files?: string[]; sha?: string; pushed?: boolean }>;
   /** This window's session-lock id (index.tsx mints one per process and sends
    *  it as x-phantom-looper-client). The launcher uses it so this window's own held
    *  sessions do not read "in use". Empty in tests. */
@@ -918,6 +923,38 @@ export function App({
     return { session: id, ...r };
   }, [store, runAutoPush]);
 
+  // AUTO-PULL, the Assistant's `git_auto_pull`: base INTO the session's branch.
+  // Same shape as auto-push — steps and outcome as notes in that session's
+  // pane, the outcome returned; never throws.
+  const runAutoPull = useCallback(async (id: string) => {
+    const say = (t: string) => store.note(id, t);
+    if (!autoPull) {
+      say('auto-pull is unavailable in this build');
+      return { result: 'error', reason: 'auto-pull is unavailable in this build' };
+    }
+    say('auto-pull: starting');
+    try {
+      const r = await autoPull(id, (label) => say(`auto-pull: ${label}`));
+      if (r.result === 'merged') {
+        say(`auto-pull: ${r.arrived?.length ?? 0} commit${r.arrived?.length === 1 ? '' : 's'} from the base branch merged in` +
+          `${r.files?.length ? ` — ${r.files.length} file${r.files.length === 1 ? '' : 's'} changed` : ''}` +
+          `${r.pushed === false ? ` (${r.reason ?? 'branch push failed'})` : ''}`);
+      } else if (r.result === 'clean') say('auto-pull: nothing to pull — the branch already has all of base');
+      else say(`auto-pull: ${r.result}${r.reason ? ` — ${r.reason}` : ''}`);
+      return r;
+    } catch (e) {
+      say(`auto-pull failed: ${(e as Error).message}`);
+      return { result: 'error', reason: (e as Error).message };
+    }
+  }, [store, autoPull]);
+
+  const gitAutoPullHandler = useCallback(async (args: GitAutoPullArgs) => {
+    const id = args.id ?? store.activeId;
+    if (!id) return { error: 'no session is open — nothing to pull into' };
+    const r = await runAutoPull(id);
+    return { session: id, ...r };
+  }, [store, runAutoPull]);
+
   // The Assistant's agent is built ONCE (voice start / model change), so the
   // handler must not close over the workspace of that moment: it reads the
   // CURRENT one through a ref, and stays a stable function. Empty while no
@@ -979,9 +1016,10 @@ export function App({
     ...sessionsTool(assistantTool), ...assistantKanbanTool(assistantKanbanHandler),
     ...workspaceCreateTool(workspaceCreateHandler),
     ...gitAutoPushTool(gitAutoPushHandler),
+    ...gitAutoPullTool(gitAutoPullHandler),
     ...screenModeTools(screenOps(store)),
     ...(sessionId ? await newAssistantTools(sessionId).catch(() => ({} as Record<string, Tool>)) : {}),
-  }), [assistantTool, assistantKanbanHandler, workspaceCreateHandler, gitAutoPushHandler, newAssistantTools, sessionId, screenOps, store]);
+  }), [assistantTool, assistantKanbanHandler, workspaceCreateHandler, gitAutoPushHandler, gitAutoPullHandler, newAssistantTools, sessionId, screenOps, store]);
 
   // Voice follows the setting: on at launch when enabled, stopped with the
   // window. Restarted by onConfigChange when a boot-time setting moves.

@@ -1,7 +1,7 @@
 # phantom-backend/ — the service
 
 Fastify API + Postgres + Docker: owns sessions (a git checkout and a
-container each), the kanban board, the looper, the Telegram bot, auto-push,
+container each), the kanban board, the looper, the Telegram bot, auto-push/auto-pull,
 and the ONE flat settings store. Imports `/core`; never imported by
 `/phantom-cli`. Runs from `dist/phantom-backend/index.js` in the api image
 (`npm run phantom-backend` from source).
@@ -29,7 +29,7 @@ telegram/           the bot as a client of this server (below): engine.ts (recon
                     (server-side Assistant turn) · sink.ts (streaming bubble + file delivery) · client.ts · entities.ts · bubble.ts · deepgram.ts ·
                     connect.ts (the outbound connection policy, shared with the cli sidecar) · attachments.ts · sendMessageTool.ts (`send_message`) ·
                     mediaTags.ts (paths named in a reply) · approvals.ts (the approval gate) · store.ts (the migration-012 rows)
-git/                git.ts (guarded exec, classifyGitFailure, primitives) · engine.ts (manual push/pull/status) · autoPush.ts ·
+git/                git.ts (guarded exec, classifyGitFailure, primitives) · engine.ts (manual push/pull/status) · autoPush.ts · autoPull.ts ·
                     gitFixer.ts (+verifyResolved) · commitMessage.ts · github.ts (REST on GitHub's real paths) · remote.ts (pure URL policy)
 pool/               pool.ts (warm clones: claim by rename) · paths.ts
 workspace/          container.ts (per-session container lifecycle; buildContainerSpec is its pure createContainer spec) · sandbox.ts (the ONLY container-SDK caller)
@@ -58,7 +58,7 @@ content-type when there is no body.
 | tools | `GET /tools` (`{name, summary, description, input, mutates, streaming}`), `POST /tools/{bash,read,write,edit,ls,find,grep}` |
 | tasks | `GET /sessions/:id/tasks`, `DELETE /sessions/:id/tasks/:sid` |
 | skills | `GET /skills`, `GET /skills/:name` (`?file=`), `POST /skills` (repo tier only) |
-| git | `POST /git/push`, `POST /git/pull`, `GET /git/status`, `POST /git/auto-push` (ND-JSON stream) |
+| git | `POST /git/push`, `POST /git/pull`, `GET /git/status`, `POST /git/auto-push`, `POST /git/auto-pull` (both ND-JSON streams through one `streamRun`: `step` records, `heartbeat`, one `result`) |
 | commands | `GET /commands/:cmdId/logs` — detached bash ND-JSON replay + follow |
 | cards | `GET/POST /workspaces/:id/cards` (the GET's modes: default = the board, unarchived; `?seq=` = that one card, archived or not; `?archived=only` = the archive, newest `updated_at` first, keyset-paged `limit/before/before_id`, `total` = the whole archive; `?archived=true` = everything), `PATCH/DELETE /workspaces/:id/cards/:cardId`, `GET /workspaces/:id/revisions?card=<seq>`, `GET /workspaces/:id/events` (the board's live feed — ND-JSON, open until the client hangs up) |
 | web | `POST /web/search`, `POST /web/fetch` (session header) |
@@ -241,7 +241,8 @@ coder's bubble → its session in code mode; an Assistant bubble → home).
 ASSISTANT (home, default) — a plain message is an Assistant turn
 (`assistant.ts`: the SAME core `assistantAgent`, headless handlers over the
 card/session routes, ONE in-memory conversation reset on restart; file tools
-+ web bind read-only to the active session). CODE — a plain message is a
++ web bind read-only to the active session; `git_auto_pull` over core
+`autoPullSession` — the active session or an id). CODE — a plain message is a
 real `runCodingTurn` on the active session, lock per turn, `send_message` (a
 deliberate DM outside the streamed reply; delivery mode from
 `telegram_reply_mode`) injected via `extraTools`. The command menu
@@ -323,6 +324,27 @@ construction, deliberately NOT a squash (a squash the branch does not
 contain makes every later auto-push a false self-conflict) → (7) base moved?
 back to 2, three rounds, then give up with the branch intact. Merge, never
 rebase; no push is ever forced.
+
+## Git — AUTO-PULL (git/autoPull.ts)
+
+The mirror: base INTO the session branch, on demand, nothing lands on base.
+(1) fetch + `rev-list --count HEAD..origin/<base>`; 0 → `clean`, nothing
+committed (a no-op pull never mints a commit or spends a model call — this
+fetch is repeated inside `mergeBase`, a deliberate no-op round trip so that
+primitive stays whole) → (2) dirty tree? commit everything, same message
+model + trailer as auto-push (commit-first, never `--autostash`: a stash
+re-applied after the fixer is a second conflict surface the fixer never sees)
+→ (3) `mergeBase` → conflict? the Git Fixer, same hook → (4) verify
+(`verifyResolved`) → (5) push the branch (the backup; a failed push keeps
+`merged` with `pushed:false` + reason — the sync happened). No rounds:
+nothing races a pull. Result `merged | clean | blocked | error` with
+`arrived` (the base commits) and `files` (what the merge changed).
+
+Callers: the CODING agent's `git_auto_pull` (core `codingGitTools`, both
+coding kits — cli and server; a plan-mode kit drops it), the cli Assistant's
+`git_auto_pull` (App's `autoPull` prop), the Telegram Assistant's
+`git_auto_pull` (`telegram/assistant.ts`, over `injectFetch`). No slash
+command, no setting.
 
 Triggers: `POST /git/auto-push` (the cli's `/auto-push` — always pushes)
 and `PATCH archived=true` on a card that is in `done` AND was unarchived,

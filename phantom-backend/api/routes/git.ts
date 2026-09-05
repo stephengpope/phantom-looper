@@ -1,7 +1,7 @@
 // Git + exec surface. Exec is the one streamable tool; everything else stays
 // unary. Detached logs are ND-JSON on the volume at work/<id>/logs/ — NEVER
 // under workspace/, where the next push's add -A would commit them.
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import fsp from 'node:fs/promises';
 import { eq } from 'drizzle-orm';
 import { workspaces, commands, type SessionRow, type WorkspaceRow } from '../../db/schema.js';
@@ -72,11 +72,36 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
     } catch (e) { return send(reply, e); }
   });
 
+  // The streamed git operations (auto-push, auto-pull) share ONE wire: ND-JSON
+  // because neither has a time limit — headers go out at once and every step
+  // (plus a heartbeat) keeps the client's body timeout fed. Records are
+  // {event:'step', step, detail?}, {event:'heartbeat'}, and exactly one
+  // terminal {event:'result', ...} — the operation's own result, or
+  // {result:'busy'} / {result:'error', reason} when it threw.
+  async function streamRun<Step extends object, Result extends object>(reply: FastifyReply, name: string, sessionId: string,
+    run: (onStep: (e: Step) => void) => Promise<Result>): Promise<FastifyReply> {
+    reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
+    const write = (o: unknown) => { reply.raw.write(`${JSON.stringify(o)}\n`); };
+    const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
+    try {
+      const result = await run((e) => write({ event: 'step', ...e }));
+      write({ event: 'result', ...result });
+    } catch (e) {
+      if (e instanceof ToolError && e.code === 'busy') {
+        write({ event: 'result', result: 'busy', reason: e.message });
+      } else {
+        log.error({ session: sessionId, err: errStr(e) }, `${name} threw`);
+        write({ event: 'result', result: 'error', reason: e instanceof Error ? e.message : String(e) });
+      }
+    } finally {
+      clearInterval(heartbeat);
+      reply.raw.end();
+    }
+    return reply;
+  }
+
   // AUTO-PUSH: the whole path to base in one call, streamed as it runs.
-  // ND-JSON because an auto-push has no time limit: headers go out at once and
-  // every step (plus a heartbeat) keeps the client's body timeout fed. Records
-  // are {event:'step', step, detail?}, {event:'heartbeat'}, and exactly one
-  // terminal {event:'result', result, reason?, rounds?, sha?}.
+  // Result: pushed | nothing | blocked | error | busy (+ reason?, rounds?, sha?).
   app.post('/git/auto-push', { schema: { tags: ['git'], headers: sessionHeader,
     summary: 'Auto-push the session to base',
     description: 'Commit everything, merge origin/<base> in (the Git Fixer resolves conflicts), verify against the repo, ' +
@@ -87,25 +112,26 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
     let session: SessionRow; let workspace: WorkspaceRow;
     try { ({ session, workspace } = await resolveSession(req)); }
     catch (e) { return send(reply, e); }
-    if (!ctx.autoPush) return reply.code(503).send(err('unavailable', 'auto-push is not wired on this server', true));
-    reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
-    const write = (o: unknown) => { reply.raw.write(`${JSON.stringify(o)}\n`); };
-    const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
-    try {
-      const result = await ctx.autoPush(session, workspace, (e) => write({ event: 'step', ...e }));
-      write({ event: 'result', ...result });
-    } catch (e) {
-      if (e instanceof ToolError && e.code === 'busy') {
-        write({ event: 'result', result: 'busy', reason: e.message });
-      } else {
-        log.error({ session: session.id, err: errStr(e) }, 'auto-push threw');
-        write({ event: 'result', result: 'error', reason: e instanceof Error ? e.message : String(e) });
-      }
-    } finally {
-      clearInterval(heartbeat);
-      reply.raw.end();
-    }
-    return reply;
+    const autoPush = ctx.autoPush;
+    if (!autoPush) return reply.code(503).send(err('unavailable', 'auto-push is not wired on this server', true));
+    return streamRun(reply, 'auto-push', session.id, (onStep) => autoPush(session, workspace, onStep));
+  });
+
+  // AUTO-PULL: base INTO the session branch in one call, streamed the same way.
+  // Result: merged | clean | blocked | error | busy (+ reason?, arrived?, files?, sha?, pushed?).
+  app.post('/git/auto-pull', { schema: { tags: ['git'], headers: sessionHeader,
+    summary: 'Auto-pull base into the session',
+    description: 'Fetch origin/<base>; nothing behind -> clean. Otherwise commit everything on the branch, merge base in ' +
+      '(the Git Fixer resolves conflicts), verify against the repo, push the branch as the backup. Nothing lands on base. ' +
+      'ND-JSON stream: step records, then one result record (merged | clean | blocked | error | busy).',
+    body: { type: 'object', additionalProperties: false } } },
+  async (req, reply) => {
+    let session: SessionRow; let workspace: WorkspaceRow;
+    try { ({ session, workspace } = await resolveSession(req)); }
+    catch (e) { return send(reply, e); }
+    const autoPull = ctx.autoPull;
+    if (!autoPull) return reply.code(503).send(err('unavailable', 'auto-pull is not wired on this server', true));
+    return streamRun(reply, 'auto-pull', session.id, (onStep) => autoPull(session, workspace, onStep));
   });
 
   // ── exec ───────────────────────────────────────────────────────────────────

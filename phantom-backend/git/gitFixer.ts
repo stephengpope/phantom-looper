@@ -1,4 +1,4 @@
-// The Git Fixer — the conflict resolver for auto-push and manual pulls. When a
+// The Git Fixer — the conflict resolver for auto-push, auto-pull and manual pulls. When a
 // merge leaves markers, this model-driven
 // loop resolves them. The model is provider-agnostic (AI SDK core, provider
 // packages only — no gateway) and chosen at runtime from settings

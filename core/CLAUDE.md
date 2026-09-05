@@ -7,6 +7,7 @@ lives here, so the cli and the looper build the same agent from the same
 parts.
 
 ```
+ndjson.ts             ND-JSON records off a response body — the server's stream shape, read by the cli and the headless kits alike
 ids.ts                newId() lowercased ULID · idTime(id) decodes its mint time (the pool ages slots by name)
 kanban.ts             DEFAULT_COLUMNS (backlog plan in_progress blocked done — the one source for routes AND tool enums) ·
                       requirement keys: newKey() 4 chars [a-z0-9], server-assigned, frozen for the item's life;
@@ -21,7 +22,7 @@ llm/agents/           coding · assistant · gitFixer · supervisor — one file
 llm/prompts/          template.ts (fill) · shared blocks (stakeholders values communication environment git sending) ·
                       <name>/<name>.ts the DOCUMENT + wiring.ts the code that fills it — one folder per agent,
                       plus helpers/ (one-shot helpers, no agent: sessionTitle.ts + wiring.ts)
-llm/tools/            presets.ts (pickKit) · workspace skills web secrets kanban tui server
+llm/tools/            presets.ts (pickKit) · workspace skills web secrets kanban git tui server
 ```
 
 ## Agents (llm/agents/)
@@ -123,7 +124,7 @@ a tool's DESCRIPTION, which reaches every turn.
 `VALUES` (the six values) — coding, supervisor, Assistant; `COMMUNICATION`
 (the written register) — coding and supervisor; `ENVIRONMENT` (`{{facts}}`
 — the container line; empty drops only that line) — coding only; `GIT` (how
-code moves: one branch per session, auto-push, no PRs) — Assistant only;
+code moves: one branch per session, auto-push, auto-pull, no PRs) — Assistant only;
 `SENDING_FILES` (`sending.ts` — deliver a file by naming its path, the
 `MEDIA:` form; its text scopes itself to Telegram because the same frozen
 prompt serves the cli) — coding and Assistant. The Git Fixer carries none.
@@ -260,8 +261,17 @@ dropped.
   `codingKanbanTool` (the read only); `screenModeTools`
   (`session_get_mode`, `screen_enter_plan_mode` — one-way);
   `workspaceCreateTool` (`workspace_create_repo`, gated by the client — the app's pane, Telegram's `approvals.ts`;
-  `kebabName` is the deterministic final name). `statusEnum` makes
+  `kebabName` is the deterministic final name); `gitAutoPushTool` / `gitAutoPullTool` (`git_auto_push` /
+  `git_auto_pull`, `{id?}` = the session on screen / the account's active session; the host's handler runs the
+  operation — App over its `autoPush`/`autoPull` props, Telegram over core `autoPullSession`). `statusEnum` makes
   `status` a real enum of the workspace's columns.
+- `git.ts` — `autoPullSession(cfg, onStep?)`, the ONE client of `POST
+  /git/auto-pull` (reads the stream to its result; a refusal envelope
+  throws; `AUTO_PULL_STEPS` puts step names in words); `codingGitTools(cfg)`
+  → `git_auto_pull` for the CODING agent, bound to its own session at build
+  (no session input), declared mutating so plan mode drops it, never throws
+  (a failure is `{result:'error', reason}`). Wired in both coding kits
+  (`phantom-backend/looper/turn.ts`, `phantom-cli/index.tsx newTools`).
 - `server.ts` `fixerBashTool(exec)` — the Git Fixer's `bash`; stdout
   truncated to 8KB, stderr 4KB.
 

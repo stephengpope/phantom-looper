@@ -23,13 +23,14 @@ import { phantomTools } from '../core/llm/tools/workspace.js';
 import { skillTools } from '../core/llm/tools/skills.js';
 import { webTools } from '../core/llm/tools/web.js';
 import { secretTools } from '../core/llm/tools/secrets.js';
+import { codingGitTools, autoPullSession as corePull } from '../core/llm/tools/git.js';
 import { newId } from '../core/ids.js';
 import { App } from './App.js';
 import { createScreen } from './screen.js';
 import { MOUSE_OFF, MOUSE_ON } from './mouse.js';
 import { CONFIG_DIR, type ConfigValue } from './config.js';
 import { resolveLocal, localValues } from './local.js';
-import { ndjson } from './ndjson.js';
+import { ndjson } from '../core/ndjson.js';
 import { apiFor, savedCaFor } from './provision.js';
 import { APP_VERSION, checkLatest, isBehind, selfUpdate } from './selfUpdate.js';
 import { makeSettings } from './settings.js';
@@ -157,6 +158,15 @@ export async function autoPushSession(sessionId: string, onStep?: (label: string
   return result;
 }
 
+/** POST /git/auto-pull for one session — core's client over the same stream
+ *  shape as auto-push; the cli adds only its connection, its lock identity and
+ *  the saved CA (a self-signed backend must work for pull as it does for push). */
+export async function autoPullSession(sessionId: string, onStep?: (label: string) => void) {
+  const { base, key } = connection();
+  await trustSavedCa(base);
+  return corePull({ baseUrl: base, apiKey: key, sessionId, clientId: CLIENT_ID }, onStep);
+}
+
 /** GET a server stream (ND-JSON) as records — the board's live feed. Open
  *  until the signal aborts or the server hangs up; a refusal (the plain JSON
  *  envelope) throws with the server's message. */
@@ -227,6 +237,10 @@ const webKit = (id: string) => webTools({ baseUrl: connection().base, apiKey: co
 // Workspace-bound, not session-bound: the workspace's secrets shadow global
 // ones by name, and only App knows which workspace a session is in.
 const secretKit = (ws: string) => secretTools({ baseUrl: connection().base, apiKey: connection().key, workspaceId: ws });
+// The coding agent's git_auto_pull, bound to its own session; a mutator, so
+// plan mode drops it like the file tools' writers.
+const gitKit = (id: string, plan?: boolean) =>
+  codingGitTools({ baseUrl: connection().base, apiKey: connection().key, sessionId: id, clientId: CLIENT_ID, ...(plan ? { pick: 'readonly' as const } : {}) });
 // Settings for the chrome's first frame (voice pane on/off, width). Best
 // effort: unreachable just means defaults for one frame — the app is where an
 // unreachable server gets fixed, so it must not die here.
@@ -307,10 +321,11 @@ const app = render(
     api={api}
     stream={stream}
     autoPush={autoPushSession}
+    autoPull={autoPullSession}
     bootConfig={cfg}
     boot={{ ...(resumeId ? { resumeId } : {}) }}
     newTools={(id, plan, ws) => phantomTools({ baseUrl: connection().base, apiKey: connection().key, sessionId: id, ...(plan ? { pick: 'readonly' as const } : {}) })
-      .then((t) => ({ ...t, ...skillKit(id, plan), ...webKit(id), ...(ws ? secretKit(ws) : {}) }))}
+      .then((t) => ({ ...t, ...skillKit(id, plan), ...webKit(id), ...(ws ? secretKit(ws) : {}), ...gitKit(id, plan) }))}
     newAssistantTools={(id) => phantomTools({ baseUrl: connection().base, apiKey: connection().key, sessionId: id, pick: 'readonly' })
       .then((t) => ({ ...t, ...webKit(id) }))}
     onSession={(s) => { currentId = s.id; openedIds.add(s.id); }}

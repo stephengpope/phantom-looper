@@ -10,7 +10,7 @@ map, loaded when you work there:
 | map | covers |
 |---|---|
 | `core/CLAUDE.md` | the four agents, createAgent (retries, thinking, cache marks), the config→agent cascade, prompts (documents + wiring, `fill`, the supervisor's whole message set), openSession, the transcript format, every tool kit, the skills scanner |
-| `phantom-backend/CLAUDE.md` | the HTTP surface, the session feed, sessions/folders/loops and the lock, the looper's rounds and step rule, the Telegram bot, auto-push, the board, the settings + secrets store, tools/containers/tasks, migrations, docker gotchas |
+| `phantom-backend/CLAUDE.md` | the HTTP surface, the session feed, sessions/folders/loops and the lock, the looper's rounds and step rule, the Telegram bot, auto-push/auto-pull, the board, the settings + secrets store, tools/containers/tasks, migrations, docker gotchas |
 | `phantom-cli/CLAUDE.md` | the app: commands and keys, files, the conventions each screen and the voice pane obey |
 | `phantom-cli/sidecar/CLAUDE.md` | the Python voice sidecar: pipeline, wire protocol, pins, test seam |
 | `test/CLAUDE.md` | the server suites and the harness rules |
@@ -84,7 +84,7 @@ must reach existing sessions goes in a tool's description.
   web kit, and the read-only workspace tools (read ls find grep) scoped to
   the session on screen / the account's active session. maxSteps 10,
   reasoning pinned `none`.
-- **the Git Fixer** — auto-push's and manual pull's conflict resolver,
+- **the Git Fixer** — auto-push's, auto-pull's and manual pull's conflict resolver,
   server-side, `bash` in the workspace container, verified against the
   repo. maxSteps 40.
 - **the supervisor** — the looper's judge, in direct conversation with the
