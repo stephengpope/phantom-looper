@@ -396,6 +396,32 @@ export function workspaceCreateTool(
   };
 }
 
+export interface GitAutoPushArgs { id?: string }
+
+/** `git_auto_push`, the Assistant's land-the-work verb — the same path as
+ *  the cli's `/auto-push`: the session's branch (the one on screen unless an
+ *  id is given) commits, merges base in, and fast-forwards base. The handler
+ *  AWAITS the whole run so the result is the tool's answer; the steps land
+ *  as notes in the session's conversation pane meanwhile, exactly as the
+ *  command's do. Not gated: nothing is named or destroyed, and the branch
+ *  stays on origin whatever happens to base. */
+export function gitAutoPushTool(handler: (args: GitAutoPushArgs) => Promise<unknown>): Record<string, Tool> {
+  return {
+    git_auto_push: tool({
+      description: "Land a session's work on the base branch — the same thing the cli's /auto-push does: " +
+        'commit everything on the branch, merge the base branch in (the Git Fixer resolves conflicts), ' +
+        'push the branch, then fast-forward base. Defaults to the session on screen. Runs to the end before ' +
+        "answering — a conflict can take minutes — and the steps show as notes in the session's pane. " +
+        'The answer is one of: pushed (with the commit), nothing (base already has it all), blocked, or error — ' +
+        'report it in a sentence. Nothing pushes in the background; if the user has not asked to push, do not.',
+      inputSchema: z.object({
+        id: z.string().optional().describe('session id from session_list; omit for the session on screen'),
+      }),
+      execute: async (args) => handler(args),
+    }),
+  };
+}
+
 /** `kanban_card_*` for the CODING agent — one tool: reading the card it was
  *  pointed at ("do card 7" — also called an issue, task, todo, or ticket).
  *  User-directed: a task needs no card, so it does not go looking for one.

@@ -380,7 +380,8 @@ const fakeAgent = {
   }),
 } as never;
 
-function appWithVoice(cfg: Record<string, ConfigValue>, brain: Agent = scriptedAgent(), api = noApi, newAssistantTools?: (id: string) => Promise<Record<string, Tool>>) {
+function appWithVoice(cfg: Record<string, ConfigValue>, brain: Agent = scriptedAgent(), api = noApi, newAssistantTools?: (id: string) => Promise<Record<string, Tool>>,
+  autoPush?: React.ComponentProps<typeof App>['autoPush']) {
   const dir = tmp();
   const configPath = join(dir, 'settings.json');
   // The split, exercised: only the eight machine-local keys go in the file;
@@ -408,7 +409,7 @@ function appWithVoice(cfg: Record<string, ConfigValue>, brain: Agent = scriptedA
   const voice = new VoiceClient(f.spawner, null);
   let voiceTools: Record<string, Tool> = {};
   const r = render(
-    <App api={withSettings as never} newTools={async () => ({} as Record<string, Tool>)} configPath={configPath} newAssistantTools={newAssistantTools}
+    <App api={withSettings as never} newTools={async () => ({} as Record<string, Tool>)} configPath={configPath} newAssistantTools={newAssistantTools} autoPush={autoPush}
       bootConfig={remoteCfg as Record<string, ConfigValue>}
       initial={{ sessionId: 's1', branch: 'agent/s1', workspaceId: 'w1', tools: {}, resumed: [] as ModelMessage[] }}
       makeAgent={() => ({ agent: fakeAgent, summary: { provider: 'test', model: 'fake', reasoning: 'none', maxSteps: 1 } }) as never}
@@ -428,7 +429,7 @@ test('with voice enabled the pane is there from the first frames and the sidecar
   assert.doesNotMatch(frame, /[●⊘] mic/);
   assert.equal(f.env().DEEPGRAM_API_KEY, 'dg');
   assert.equal(f.env().PHANTOM_CLI_VOICE_API_KEY, undefined, 'the model key stays here');
-  assert.deepEqual(Object.keys(tools()), [...['session_list', 'session_get_active', 'session_switch', 'session_read', 'session_close'], ...['kanban_screen', 'kanban_card_list', 'kanban_card_read', 'kanban_card_create', 'kanban_card_update', 'kanban_card_items', 'kanban_card_auto_plan', 'kanban_card_auto_build', 'kanban_card_pin', 'kanban_card_move', 'kanban_card_history'], 'workspace_create_repo', 'session_get_mode', 'screen_enter_plan_mode'], 'the brain was built with the TUI kit');
+  assert.deepEqual(Object.keys(tools()), [...['session_list', 'session_get_active', 'session_switch', 'session_read', 'session_close'], ...['kanban_screen', 'kanban_card_list', 'kanban_card_read', 'kanban_card_create', 'kanban_card_update', 'kanban_card_items', 'kanban_card_auto_plan', 'kanban_card_auto_build', 'kanban_card_pin', 'kanban_card_move', 'kanban_card_history'], 'workspace_create_repo', 'git_auto_push', 'session_get_mode', 'screen_enter_plan_mode'], 'the brain was built with the TUI kit');
 });
 
 test('voice off: no pane, ctrl+g shows it anyway, /mic says voice is off', async () => {
@@ -863,7 +864,7 @@ test('the Assistant carries read-only workspace tools for the session on screen'
     { voice_enabled: true, sidebar_width: 30, deepgram_api_key: 'dg', anthropic_api_key: 'k' },
     scriptedAgent(), noApi, async (id) => { asked.push(id); return { read: fakeRead }; });
   await sleep(80);
-  assert.deepEqual(Object.keys(tools()), [...['session_list', 'session_get_active', 'session_switch', 'session_read', 'session_close'], ...['kanban_screen', 'kanban_card_list', 'kanban_card_read', 'kanban_card_create', 'kanban_card_update', 'kanban_card_items', 'kanban_card_auto_plan', 'kanban_card_auto_build', 'kanban_card_pin', 'kanban_card_move', 'kanban_card_history'], 'workspace_create_repo', 'session_get_mode', 'screen_enter_plan_mode', 'read'], 'the kit is TUI tools + the readonly set');
+  assert.deepEqual(Object.keys(tools()), [...['session_list', 'session_get_active', 'session_switch', 'session_read', 'session_close'], ...['kanban_screen', 'kanban_card_list', 'kanban_card_read', 'kanban_card_create', 'kanban_card_update', 'kanban_card_items', 'kanban_card_auto_plan', 'kanban_card_auto_build', 'kanban_card_pin', 'kanban_card_move', 'kanban_card_history'], 'workspace_create_repo', 'git_auto_push', 'session_get_mode', 'screen_enter_plan_mode', 'read'], 'the kit is TUI tools + the readonly set');
   assert.deepEqual(asked, ['s1'], 'scoped to the session on screen');
 });
 

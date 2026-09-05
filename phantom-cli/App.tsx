@@ -63,7 +63,7 @@ import { Boundary } from './components/Boundary.js';
 import { Banner } from './components/Banner.js';
 import { VoicePanel } from './components/VoicePanel.js';
 import { Divider } from './components/Divider.js';
-import { VoiceClient, sessionsTool, assistantKanbanTool, codingKanbanTool, workspaceCreateTool, screenModeTools, kebabName, renderRead, sidecarEnv, type KanbanArgs, type SessionsArgs, type WorkspaceCreateArgs, type ScreenModeHandler } from './voice.js';
+import { VoiceClient, sessionsTool, assistantKanbanTool, codingKanbanTool, workspaceCreateTool, gitAutoPushTool, screenModeTools, kebabName, renderRead, sidecarEnv, type KanbanArgs, type SessionsArgs, type WorkspaceCreateArgs, type GitAutoPushArgs, type ScreenModeHandler } from './voice.js';
 import { BoardStore, type Card, type Stream } from './board.js';
 import { SessionFeed } from './sessionFeed.js';
 import { Board } from './components/Board.js';
@@ -885,6 +885,39 @@ export function App({
     } catch (e) { return { error: (e as Error).message }; }
   }, [api, requestApproval]);
 
+  // AUTO-PUSH, one path for both doors — `/auto-push` and the Assistant's
+  // `git_auto_push`. Every step and the outcome land as notes in the pushed
+  // session's pane (where the builder watches a push); the outcome is also
+  // returned, for the door that can say it. Never throws: a failure is a
+  // result too.
+  const runAutoPush = useCallback(async (id: string): Promise<{ result: string; reason?: string; sha?: string }> => {
+    const say = (t: string) => store.note(id, t);
+    if (!autoPush) {
+      say('auto-push is unavailable in this build');
+      return { result: 'error', reason: 'auto-push is unavailable in this build' };
+    }
+    say('auto-push: starting');
+    try {
+      const r = await autoPush(id, (label) => say(`auto-push: ${label}`));
+      if (r.result === 'pushed') say(`auto-push: landed on the base branch (${(r.sha ?? '').slice(0, 10)})`);
+      else if (r.result === 'nothing') say('auto-push: nothing to push — the base branch already has it all');
+      else say(`auto-push: ${r.result}${r.reason ? ` — ${r.reason}` : ''}`);
+      return r;
+    } catch (e) {
+      say(`auto-push failed: ${(e as Error).message}`);
+      return { result: 'error', reason: (e as Error).message };
+    }
+  }, [store, autoPush]);
+
+  // `git_auto_push`: the session on screen unless an id was given, awaited
+  // to the end so the Assistant can say how it went.
+  const gitAutoPushHandler = useCallback(async (args: GitAutoPushArgs) => {
+    const id = args.id ?? store.activeId;
+    if (!id) return { error: 'no session is open — nothing to push' };
+    const r = await runAutoPush(id);
+    return { session: id, ...r };
+  }, [store, runAutoPush]);
+
   // The Assistant's agent is built ONCE (voice start / model change), so the
   // handler must not close over the workspace of that moment: it reads the
   // CURRENT one through a ref, and stays a stable function. Empty while no
@@ -945,9 +978,10 @@ export function App({
   const assistantKit = useCallback(async () => ({
     ...sessionsTool(assistantTool), ...assistantKanbanTool(assistantKanbanHandler),
     ...workspaceCreateTool(workspaceCreateHandler),
+    ...gitAutoPushTool(gitAutoPushHandler),
     ...screenModeTools(screenOps(store)),
     ...(sessionId ? await newAssistantTools(sessionId).catch(() => ({} as Record<string, Tool>)) : {}),
-  }), [assistantTool, assistantKanbanHandler, workspaceCreateHandler, newAssistantTools, sessionId, screenOps, store]);
+  }), [assistantTool, assistantKanbanHandler, workspaceCreateHandler, gitAutoPushHandler, newAssistantTools, sessionId, screenOps, store]);
 
   // Voice follows the setting: on at launch when enabled, stopped with the
   // window. Restarted by onConfigChange when a boot-time setting moves.
@@ -1675,20 +1709,10 @@ export function App({
         return;
       }
       case 'auto-push': {
-        if (!autoPush) { note('auto-push is unavailable in this build'); return; }
         if (!session) { note('no session is open — nothing to push'); return; }
-        const pushId = session.id;
-        note('auto-push: starting');
         // Detached from the command handler: an auto-push can run for minutes
         // and the prompt never locks. Steps and the result land as notes.
-        void (async () => {
-          try {
-            const r = await autoPush(pushId, (label) => note(`auto-push: ${label}`));
-            if (r.result === 'pushed') note(`auto-push: landed on the base branch (${(r.sha ?? '').slice(0, 10)})`);
-            else if (r.result === 'nothing') note('auto-push: nothing to push — the base branch already has it all');
-            else note(`auto-push: ${r.result}${r.reason ? ` — ${r.reason}` : ''}`);
-          } catch (e) { note(`auto-push failed: ${(e as Error).message}`); }
-        })();
+        void runAutoPush(session.id);
         return;
       }
       case 'settings': setMenu('settings'); return;
@@ -1715,7 +1739,7 @@ export function App({
         return;
       case 'exit': quit(); return;
     }
-  }, [api, quit, openPicker, openSession, openSwitcher, session, autoPush, closeSession, note, voice, toggleDevice, applyPlanMode, openArchived]);
+  }, [api, quit, openPicker, openSession, openSwitcher, session, runAutoPush, closeSession, note, voice, toggleDevice, applyPlanMode, openArchived]);
 
   const submit = useCallback(async (text: string) => {
     const msg = text.trim();
