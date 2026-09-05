@@ -221,6 +221,12 @@ test('workState: the /resume ladder — not_pushed, not_merged, merged, null', a
   await fs.writeFile(path.join(seed, 'b.txt'), 'b');
   sh(seed, ['add', '-A']); sh(seed, ['commit', '-qm', 'other']); sh(seed, ['push', '-q', 'origin', 'main']);
   assert.equal(await workState(dir, 'agent/w', 'main'), 'merged', 'others landing on base changes nothing');
+  // Pulling base in (archive's auto-push, manual pull) fast-forwards the
+  // checkout past origin/agent/w without a branch push. Those commits came
+  // from origin: still merged, never "not pushed" (the PHA-29 misread).
+  await git(dir, ['fetch', '-q', 'origin', 'main'], { url });
+  await git(dir, ['merge', '-q', '--ff-only', 'origin/main']);
+  assert.equal(await workState(dir, 'agent/w', 'main'), 'merged', 'caught up with base, branch ref stale');
   // Not knowing is null, never a state.
   const empty = path.join(root, 'empty');
   await fs.mkdir(empty);

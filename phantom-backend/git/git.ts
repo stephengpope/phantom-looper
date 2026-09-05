@@ -221,9 +221,18 @@ export type WorkState = 'not_pushed' | 'not_merged' | 'merged';
 export async function workState(
   dir: string, branch: string, baseBranch: string,
 ): Promise<WorkState | null> {
-  const state = await localState(dir, branch);
-  if (state === 'unknown') return null;
-  if (state !== 'clean') return 'not_pushed'; // dirty, unpushed, no_upstream: only this disk has it
+  // "Only this disk has it" is measured against EVERY origin ref, never the
+  // session's own branch alone: a pull of base fast-forwards the checkout past
+  // origin/<branch> (auto-push skips the branch push when nothing is beyond
+  // base), and those commits came FROM origin — they are not unpushed work.
+  try {
+    const { stdout: dirty } = await git(dir, ['status', '--porcelain']);
+    if (dirty.trim()) return 'not_pushed';
+    const { stdout: local } = await git(dir, ['rev-list', '--count', 'HEAD', '--not', '--remotes=origin']);
+    if (Number(local.trim()) > 0) return 'not_pushed';
+  } catch {
+    return null;
+  }
   try {
     await git(dir, ['merge-base', '--is-ancestor', 'HEAD', `origin/${baseBranch}`]);
     return 'merged';
