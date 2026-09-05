@@ -1,9 +1,9 @@
 # The compose project name — the group every container, network and volume
-# sits under (phantom-looper-api-1, phantom-looper_default, ...), whatever
+# sits under (phantom-backend-api-1, phantom-backend_default, ...), whatever
 # directory the file runs from. Service containers keep compose's own
 # generated names on purpose: hardcoded container_name breaks recreation
 # ordering and uniqueness.
-name: phantom-looper
+name: phantom-backend
 
 services:
   postgres:
