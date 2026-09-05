@@ -72,6 +72,8 @@ phantom-cli setup-backend   # install a server over SSH and connect this machine
 phantom-cli                 # then open the app
 ```
 
+The wizard hands your terminal to ssh: answer its host-key question and type the box's password once. Prefer to do it yourself? On the box, run the one-liner the wizard prints (`install.sh` from the release), then put the address and key it prints under `/server` in the app.
+
 The wizard asks two questions: the box's address (`root@203.0.113.7`) and one model key. It installs Docker and the server, saves the address and key on this machine, stores the model key on the server, and ends with `run phantom-cli`.
 
 **Already have one — reconnect**

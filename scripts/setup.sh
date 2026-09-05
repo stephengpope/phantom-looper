@@ -28,7 +28,7 @@ source .env
 
 # The default container_image setting names this tag; building it locally makes
 # the default work with no registry involved.
-docker build -q -t ghcr.io/stephengpope/phantom-backend-fs:latest build/workspace
+docker build -q -t ghcr.io/stephengpope/phantom-backend-session:latest build/workspace
 
 docker compose up -d --build
 

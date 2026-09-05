@@ -135,7 +135,7 @@ commands.ts        the table + matches/parse/complete
 config.ts local.ts settings.ts settingLabels.ts   above
 modelCatalog.ts    /model picker: models.dev, bundled models-snapshot.json fallback, 24h cache; sync, never throws, never a fence
 mouse.ts screen.ts trim.ts   the mouse parser + selection model · the screen mirror (@xterm/headless) · cell-level row trimming
-provision.ts setup.tsx selfUpdate.ts   the setup-backend engine (no Ink, injectable runner) · its screens driver (install only) · APP_VERSION + self-update
+provision.ts setup.ts selfUpdate.ts   the setup-backend engine (ssh argv, control master, injectable runner) · the wizard (@clack/prompts, no Ink, install only) · APP_VERSION + self-update
 keys.tsx           npm run keys
 components/        Text (THE one Text — every drawn character is cleaned here) · Screen (THE page frame) · Boundary (the error boundary — see Conventions) · SelectList · table.ts · TextInput · ValueInput · Prompt · Toolbar · StatusLine · Pane ·
                    Parts · Markdown · Shimmer · Divider · Banner · Board · CardEditor · Archived · Tasks · Launcher · SessionSwitcher ·
@@ -166,7 +166,7 @@ exact).
 Env read here: `PHANTOM_BACKEND_URL`, `PHANTOM_BACKEND_KEY`/`API_KEY`,
 `_VERSION` (→ APP_VERSION, 'dev' from a checkout: never nags, never
 updates), `_TRACE_FRAMES` (screen.ts flight recorder), and the rig hooks
-`_INSTALL_FLAGS`, `_SSH_ACCEPT_NEW`, `_SSH_IDENTITY` (setup.tsx).
+`_INSTALL_FLAGS`, `_SSH_ACCEPT_NEW`, `_SSH_IDENTITY` (setup.ts).
 
 ## Conventions — each one was paid for
 
@@ -425,14 +425,20 @@ updates), `_TRACE_FRAMES` (screen.ts flight recorder), and the rig hooks
   Always private.
 
 **setup-backend and update**
-- `setup.tsx` (`phantom-cli setup-backend`) installs a NEW server and exits;
-  pairing an existing one is /server in the app. It runs one screen per
-  answer with provisioning BETWEEN screens outside Ink — system ssh owns
-  the tty, our code never sees a password, host-key checking is never
-  disabled (`accept-new` only via the rig env). `provision.ts` pipes
-  `scripts/install.sh` over stdin (script version = cli version), reads the
-  pairing back over the same channel, verifies `/health` FROM THE LAPTOP,
-  then pushes the model key.
+- `setup.ts` (`phantom-cli setup-backend`) installs a NEW server and exits;
+  pairing an existing one is /server in the app. It is a plain
+  step-by-step script on `@clack/prompts`, NOT Ink: node keeps consuming
+  terminal input once anything has read `process.stdin` (paused or not),
+  so a resident screen swallows the "yes" ssh is waiting for — the
+  2026-09-05 hang. Every question opens its OWN `/dev/tty` handle and
+  closes it (`ttyAsker`); the install runs with stdio inherited so ssh has
+  the terminal outright; our code never sees a password; host-key checking
+  is never disabled (`accept-new` only via the rig env). The BOX downloads
+  `install.sh` from this cli's release tag (`installScriptUrl`; stdin must
+  stay free for the password), one ssh control master serves the run (one
+  password), the pairing is read back over it, `/health` is verified FROM
+  THE LAPTOP, then the model key is pushed. Questions go through `Asker`
+  so tests script them (`setup.test.ts`).
 - `selfUpdate.ts`: launch checks run in the background and print at QUIT
   only; `update` = download → checksum verify → unpack beside → move the
   ONE symlink; the running process is never touched.

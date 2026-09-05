@@ -44,9 +44,9 @@
 set -eu
 
 # The image is the whole release: the server, and the host files this script
-# unpacks into $DIR. Overridable for testing (point IMAGE at a locally built
+# unpacks into $DIR. Overridable for testing (point API_IMAGE at a locally built
 # name, DIR at a temp dir).
-IMAGE="${PHANTOM_BACKEND_IMAGE:-ghcr.io/stephengpope/phantom-backend}"
+API_IMAGE="${PHANTOM_BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend-api}"
 DIR="${PHANTOM_BACKEND_DIR:-/opt/phantom-looper}"
 
 # Empty = not passed. A re-run only overwrites what was actually given, so
@@ -145,7 +145,7 @@ if [ "$NO_FIREWALL" -ne 1 ]; then
 fi
 
 # ── Runtime files ───────────────────────────────────────────────────────────
-# They come OUT OF THE IMAGE, not off GitHub. A release is one artifact, so the
+# They come OUT OF THE API_IMAGE, not off GitHub. A release is one artifact, so the
 # compose file, Caddyfile, updater scripts and `phantom-backend` command are always the
 # ones built alongside the server they configure — and there is no file list
 # anywhere for a release to outgrow. See the Dockerfile.
@@ -157,26 +157,26 @@ say "Pulling phantom-looper image..."
 # `docker pull` of a local-only image fails — tolerated when the image is
 # already present (apply.sh has the same rule), which is what lets a test rig
 # preload a locally built image and run this script unchanged.
-$SUDO docker pull "$IMAGE:latest" \
-  || $SUDO docker image inspect "$IMAGE:latest" >/dev/null 2>&1 \
-  || fail "could not pull $IMAGE:latest"
+$SUDO docker pull "$API_IMAGE:latest" \
+  || $SUDO docker image inspect "$API_IMAGE:latest" >/dev/null 2>&1 \
+  || fail "could not pull $API_IMAGE:latest"
 
 say "Extracting host files into $DIR ..."
 $SUDO mkdir -p "$DIR"
-CID=$($SUDO docker create "$IMAGE:latest") || fail "could not create a container from $IMAGE:latest"
+CID=$($SUDO docker create "$API_IMAGE:latest") || fail "could not create a container from $API_IMAGE:latest"
 $SUDO docker cp "$CID:/host-files/." "$DIR/" || {
   $SUDO docker rm "$CID" >/dev/null 2>&1 || true
-  fail "image has no /host-files — is $IMAGE:latest older than this installer?"
+  fail "image has no /host-files — is $API_IMAGE:latest older than this installer?"
 }
 $SUDO docker rm "$CID" >/dev/null 2>&1 || true
-ok "Files installed from $IMAGE:latest"
+ok "Files installed from $API_IMAGE:latest"
 
 # Warm the workspace image at the SAME version as the api, so the first session
 # does not wait on a pull. Best-effort: the api pulls it on demand otherwise.
-API_VERSION=$($SUDO docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$IMAGE:latest" 2>/dev/null | sed -n 's/^APP_VERSION=//p' | head -1)
+API_VERSION=$($SUDO docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$API_IMAGE:latest" 2>/dev/null | sed -n 's/^APP_VERSION=//p' | head -1)
 if [ -n "$API_VERSION" ] && [ "$API_VERSION" != dev ]; then
-  FS_IMAGE="${PHANTOM_BACKEND_FS_IMAGE:-ghcr.io/stephengpope/phantom-backend-fs}"
-  $SUDO docker pull "$FS_IMAGE:$API_VERSION" >/dev/null 2>&1 && ok "Workspace image $API_VERSION present" \
+  SESSION_IMAGE="${PHANTOM_BACKEND_SESSION_IMAGE:-ghcr.io/stephengpope/phantom-backend-session}"
+  $SUDO docker pull "$SESSION_IMAGE:$API_VERSION" >/dev/null 2>&1 && ok "Workspace image $API_VERSION present" \
     || say "workspace image pull failed — the api will pull it when the first session starts"
 fi
 

@@ -28,8 +28,8 @@ services:
     # builds from source (dev). PHANTOM_BACKEND_TAG is pinned in .env by
     # updater/apply.sh so the compose file on disk and the image are always the
     # same release; a fresh install runs `latest` until its first upgrade.
-    # PHANTOM_BACKEND_IMAGE is a test hook (point it at a locally built name).
-    image: ${PHANTOM_BACKEND_IMAGE:-ghcr.io/stephengpope/phantom-backend}:${PHANTOM_BACKEND_TAG:-latest}
+    # PHANTOM_BACKEND_API_IMAGE is a test hook (point it at a locally built name).
+    image: ${PHANTOM_BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend-api}:${PHANTOM_BACKEND_TAG:-latest}
     pull_policy: missing
     build: .
     restart: unless-stopped
@@ -141,8 +141,8 @@ services:
     environment:
       PHANTOM_BACKEND_DIR: ${PHANTOM_BACKEND_DIR:-/opt/phantom-looper}
       # Test hooks — override which images apply.sh pulls. Empty in production.
-      PHANTOM_BACKEND_IMAGE: ${PHANTOM_BACKEND_IMAGE:-}
-      PHANTOM_BACKEND_FS_IMAGE: ${PHANTOM_BACKEND_FS_IMAGE:-}
+      PHANTOM_BACKEND_API_IMAGE: ${PHANTOM_BACKEND_API_IMAGE:-}
+      PHANTOM_BACKEND_SESSION_IMAGE: ${PHANTOM_BACKEND_SESSION_IMAGE:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./updater:/updater:ro

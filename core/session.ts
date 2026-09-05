@@ -59,7 +59,7 @@ export interface SessionInfo {
   agent?: string | null; card?: number | null;
   /** Present on create/restart responses only. */
   skills?: SkillMeta[]; secrets?: SecretIndexEntry[]; agent_git_credentials?: boolean;
-  /** The fs image's probed facts line ("Debian …, arm64 · Node …"). */
+  /** The session image's probed facts line ("Debian …, arm64 · Node …"). */
   environment?: string;
   [k: string]: unknown;
 }

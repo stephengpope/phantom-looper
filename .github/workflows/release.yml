@@ -3,8 +3,8 @@ name: Release
 # Fires on a version tag:  git tag v0.2.0 && git push --tags
 #
 # One tag → two images, both multi-arch (amd64 + arm64), pushed to ghcr.io:
-#   ghcr.io/stephengpope/phantom-backend            the API server (Dockerfile)
-#   ghcr.io/stephengpope/phantom-backend-fs  the agent's container (build/workspace)
+#   ghcr.io/stephengpope/phantom-backend-api       the API server (Dockerfile)
+#   ghcr.io/stephengpope/phantom-backend-session   every session's container (build/workspace)
 #
 # Each is tagged <tag> and — for a plain release — :latest. A tag containing a
 # hyphen (v0.2.0-rc1) is a prerelease by semver's own rule and leaves :latest
@@ -40,10 +40,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: phantom-backend
+          - name: phantom-backend-api
             context: .
             dockerfile: Dockerfile
-          - name: phantom-backend-fs
+          - name: phantom-backend-session
             context: build/workspace
             dockerfile: build/workspace/Dockerfile
     steps:

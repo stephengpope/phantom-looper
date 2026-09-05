@@ -18,7 +18,7 @@ import { readStore, GLOBAL, workspaceScope, sessionScope } from './store.js';
 // the release workflow), a dev build names :latest (scripts/setup.sh builds
 // it locally under that tag). Pulled on first use — see container.ts.
 const APP_VERSION = process.env.APP_VERSION ?? 'dev';
-const FS_IMAGE_TAG = /^v\d+\.\d+\.\d+/.test(APP_VERSION) ? APP_VERSION : 'latest';
+const SESSION_IMAGE_TAG = /^v\d+\.\d+\.\d+/.test(APP_VERSION) ? APP_VERSION : 'latest';
 
 export const DEFAULTS = {
   spare_clones: 2,
@@ -31,7 +31,7 @@ export const DEFAULTS = {
   container_cpus: null as number | null,      // unset => no cap (Docker default)
   container_pids_limit: null as number | null, // unset => no cap (Docker default)
   initial_history_depth: '7.days',   // 'full' disables shallow
-  container_image: `ghcr.io/stephengpope/phantom-backend-fs:${FS_IMAGE_TAG}` as string,
+  container_image: `ghcr.io/stephengpope/phantom-backend-session:${SESSION_IMAGE_TAG}` as string,
   container_docker: true as boolean, // privileged + a graph-storage volume so the agent can run its OWN dockerd inside
   bash_timeout_ms: 120_000 as number | null,   // two minutes, as OpenCode; the agent passes a longer one per command
   bash_timeout_max_ms: null as number | null,

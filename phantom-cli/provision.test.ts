@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  parseTarget, sshArgs, runInstall, readServerFacts, readServerCa,
+  parseTarget, sshArgs, runInstall, readServerFacts, readServerCa, installScriptUrl,
   caPathFor, savedCaFor, type SshRun, type Target,
 } from './provision.js';
 
@@ -45,23 +45,44 @@ function fake(result: { code: number; out: string }) {
   return { calls, run };
 }
 
-test('runInstall: pipes OUR script over stdin, --yes always, env and flags on the line', async () => {
+test('runInstall: the box fetches install.sh from THIS cli\'s release; nothing rides stdin; --yes always; env and flags on the line', async () => {
   const { calls, run } = fake({ code: 0, out: 'done' });
   await runInstall(T, {
-    run, script: '#!/bin/sh\necho hi\n',
-    env: { PHANTOM_BACKEND_IMAGE: 'localhost/api:test' },
+    run, scriptUrl: 'https://example.com/install.sh',
+    env: { PHANTOM_BACKEND_API_IMAGE: 'localhost/api:test' },
     flags: ['--tls=internal', '--address=localhost'],
   });
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].stdin, '#!/bin/sh\necho hi\n');
+  assert.equal(calls[0].stdin, undefined, 'stdin stays free for the password prompt');
   const cmd = calls[0].args.at(-1)!;
-  assert.equal(cmd, "PHANTOM_BACKEND_IMAGE=localhost/api:test sh -s -- --yes --tls=internal --address=localhost");
+  assert.equal(cmd, "sh -c 'if command -v curl >/dev/null 2>&1; then curl -fsSL https://example.com/install.sh; else wget -qO- https://example.com/install.sh; fi' | PHANTOM_BACKEND_API_IMAGE=localhost/api:test sh -s -- --yes --tls=internal --address=localhost");
+});
+
+test('runInstall: a script TEXT (the rig) rides the command line base64, never stdin', async () => {
+  const { calls, run } = fake({ code: 0, out: '' });
+  await runInstall(T, { run, script: '#!/bin/sh\necho hi\n' });
+  assert.equal(calls[0].stdin, undefined);
+  const b64 = Buffer.from('#!/bin/sh\necho hi\n').toString('base64');
+  assert.equal(calls[0].args.at(-1), `echo ${b64} | base64 -d | sh -s -- --yes`);
+});
+
+test('installScriptUrl: a release pins its tag, a checkout reads main', () => {
+  assert.equal(installScriptUrl('0.1.0'), 'https://raw.githubusercontent.com/stephengpope/phantom-looper/v0.1.0/scripts/install.sh');
+  assert.equal(installScriptUrl('dev'), 'https://raw.githubusercontent.com/stephengpope/phantom-looper/main/scripts/install.sh');
+});
+
+test('sshArgs: every call shares one control socket (one password per run); -t only when asked', () => {
+  const a = sshArgs(T, 'true');
+  assert.ok(a.includes('ControlMaster=auto'));
+  assert.ok(a.some((x) => x.startsWith('ControlPath=')));
+  assert.ok(!a.includes('-t'));
+  assert.ok(sshArgs(T, 'true', { tty: true }).includes('-t'));
 });
 
 test('runInstall: a shell-active env value or flag is refused, never quoted around', async () => {
   const { run } = fake({ code: 0, out: '' });
   await assert.rejects(
-    () => runInstall(T, { run, script: 'x', env: { PHANTOM_BACKEND_IMAGE: 'img; rm -rf /' } }),
+    () => runInstall(T, { run, script: 'x', env: { PHANTOM_BACKEND_API_IMAGE: 'img; rm -rf /' } }),
     /cannot ride a shell line/);
   await assert.rejects(
     () => runInstall(T, { run, script: 'x', flags: ['--address=$(curl evil)'] }),

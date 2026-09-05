@@ -47,7 +47,7 @@ llm/tools/            presets.ts (pickKit) · workspace skills web secrets kanba
 - The coding prompt takes FOUR frozen inputs, all carried by the
   `POST /sessions` response: the skills index, git facts
   (`agent_git_credentials`), the secrets index (names + descriptions, never
-  values), and the environment facts line probed from the fs image.
+  values), and the environment facts line probed from the session image.
 
 ## createAgent.ts
 
@@ -284,7 +284,7 @@ dropped.
   BOM and CRLF; `description` supports `|`/`>` block scalars, flattened to
   one line. `mergeSkills` is first-list-wins.
 - Two tiers exist, both server-side: the repo's `.agents/skills/` and the
-  system skills baked into the fs image at `/opt/skills/`
+  system skills baked into the session image at `/opt/skills/`
   (`phantom-backend/systemSkills.ts`); repo wins a collision. There is NO
   personal/laptop tier — sessions must not depend on the machine that
   created them.

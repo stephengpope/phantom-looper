@@ -39,8 +39,8 @@ while :; do
         -v /var/run/docker.sock:/var/run/docker.sock \
         -v "$PHANTOM_BACKEND_DIR:$PHANTOM_BACKEND_DIR" \
         -e PHANTOM_BACKEND_DIR="$PHANTOM_BACKEND_DIR" \
-        -e PHANTOM_BACKEND_IMAGE="${PHANTOM_BACKEND_IMAGE:-}" \
-        -e PHANTOM_BACKEND_FS_IMAGE="${PHANTOM_BACKEND_FS_IMAGE:-}" \
+        -e PHANTOM_BACKEND_API_IMAGE="${PHANTOM_BACKEND_API_IMAGE:-}" \
+        -e PHANTOM_BACKEND_SESSION_IMAGE="${PHANTOM_BACKEND_SESSION_IMAGE:-}" \
         docker:27-cli sh "$PHANTOM_BACKEND_DIR/updater/apply.sh" "$tag" \
         || echo "updater: failed to spawn helper"
     else

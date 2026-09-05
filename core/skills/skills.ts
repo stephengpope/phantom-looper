@@ -2,7 +2,7 @@
 // <name>/SKILL.md`, one level deep, plus optional bundled files under
 // references/ templates/ scripts/ assets/. Two tiers exist, both
 // server-side: the repo's (scanned here, host-side — reads are safe host-side,
-// writes never are) and the system skills baked into the fs image at
+// writes never are) and the system skills baked into the session image at
 // /opt/skills/ (phantom-backend/systemSkills.ts); repo wins a collision.
 // There is no personal/laptop tier. A skill's identity is its FOLDER name; the frontmatter `name`
 // must match on create (validate.ts) but discovery is lenient — pi's rule —

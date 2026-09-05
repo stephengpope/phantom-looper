@@ -18,8 +18,8 @@ cd "$(dirname "$0")/.."
 
 NAME=phantom-rig
 RIG_DIR=/tmp/phantom-rig
-API_IMAGE=ghcr.io/stephengpope/phantom-backend
-FS_IMAGE=ghcr.io/stephengpope/phantom-backend-fs
+API_IMAGE=ghcr.io/stephengpope/phantom-backend-api
+SESSION_IMAGE=ghcr.io/stephengpope/phantom-backend-session
 SSH_PORT=2222
 
 if [ "${1:-}" = down ]; then
@@ -34,7 +34,7 @@ docker build -q -t phantom-rig:latest build/testrig
 
 echo "→ building the api + workspace images the installer will find preloaded"
 docker build -q -t "$API_IMAGE:latest" .
-docker build -q -t "$FS_IMAGE:latest" build/workspace
+docker build -q -t "$SESSION_IMAGE:latest" build/workspace
 
 # A keypair for the rig alone, never a password: root login is key-only.
 mkdir -p "$RIG_DIR"
@@ -63,7 +63,7 @@ docker exec "$NAME" docker info >/dev/null 2>&1 || { echo; echo "inner dockerd n
 
 echo "→ preloading the images into the rig (docker save | load — a minute or two)"
 docker save "$API_IMAGE:latest" | docker exec -i "$NAME" docker load >/dev/null
-docker save "$FS_IMAGE:latest" | docker exec -i "$NAME" docker load >/dev/null
+docker save "$SESSION_IMAGE:latest" | docker exec -i "$NAME" docker load >/dev/null
 
 cat <<DONE
 

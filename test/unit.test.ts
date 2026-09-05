@@ -326,7 +326,7 @@ test('recentMessages: last 20 messages, tool traffic clipped, usage lines skippe
 });
 
 // ---- tasks: ps parsing and grouping ----------------------------------------
-// Both userlands the fs image family ships: procps (the real workspace image)
+// Both userlands the session image family ships: procps (the real workspace image)
 // and busybox (the alpine test image). Same invocation, slightly different
 // column headers — the parser locates columns by title, never by position.
 

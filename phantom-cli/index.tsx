@@ -71,9 +71,9 @@ if (firstArg === 'update') {
 if (!process.stdin.isTTY) die('needs a TTY');
 
 // `setup-backend` is the ONE way a new server gets installed: the wizard
-// (setup.tsx) runs here, before the app, because ssh must own the tty. It
-// pairs this machine and exits; the next plain launch is the app. A server
-// that already exists is paired from inside the app, on /server.
+// (setup.ts — plain prompts, no Ink) runs here, before the app, because ssh
+// must own the terminal. It pairs this machine and exits; the next plain
+// launch is the app. A server that already exists is paired on /server.
 if (firstArg === 'setup-backend') {
   const { runSetup } = await import('./setup.js');
   await runSetup();

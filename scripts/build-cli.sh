@@ -52,17 +52,28 @@ npx esbuild phantom-cli/index.tsx --bundle --platform=node --format=esm --target
 mkdir -p "$OUT/stage/lib/sidecar"
 tar -C phantom-cli/sidecar --exclude .venv --exclude __pycache__ -cf - . | tar -C "$OUT/stage/lib/sidecar" -xf -
 
-# The server installer the wizard pipes over ssh — ../scripts/install.sh from
-# the bundle's directory, the same relative shape as the repo.
+# The server installer, shipped beside the cli for the rig and for reading
+# offline — the wizard has the BOX download the release copy (provision.ts).
 mkdir -p "$OUT/stage/scripts"
 cp scripts/install.sh "$OUT/stage/scripts/install.sh"
 
 printf '%s\n' "$VERSION" > "$OUT/stage/VERSION"
 
 mkdir -p "$OUT/stage/bin"
+# The installer reaches this shim through ~/.local/bin/phantom-cli, a symlink,
+# so $0 is the link, not the file. Follow links first (macOS /bin/sh has no
+# readlink -f) or DIR lands in ~/.local and the bundled node is never found.
 cat > "$OUT/stage/bin/phantom-cli" <<'SHIM'
 #!/bin/sh
-DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+SELF="$0"
+while [ -L "$SELF" ]; do
+  LINK="$(readlink -- "$SELF")"
+  case "$LINK" in
+    /*) SELF="$LINK" ;;
+    *)  SELF="$(dirname -- "$SELF")/$LINK" ;;
+  esac
+done
+DIR="$(CDPATH= cd -- "$(dirname -- "$SELF")/.." && pwd)"
 exec "$DIR/node/bin/node" "$DIR/lib/phantom-cli.mjs" "$@"
 SHIM
 chmod 755 "$OUT/stage/bin/phantom-cli"

@@ -18,8 +18,8 @@ store.ts            the settings table: read/put/drop by (scope, namespace, key)
 crypto.ts           AES-256-GCM, layout [iv 12][tag 16][ct] — credentials and secrets at rest
 sessions.ts         create / restart / destroy / sweep, the session lock, loop + agent stamps
 sessionTitle.ts     the auto-titler (never throws, no setting)
-systemSkills.ts     /opt/skills out of the fs image via a created-never-started container's archive; cached by image ID; fail-open []
-environment.ts      probes the fs image ONCE (os-release/uname/node/python, no network, 30s) → one prompt line; cached by image ID; '' on failure
+systemSkills.ts     /opt/skills out of the session image via a created-never-started container's archive; cached by image ID; fail-open []
+environment.ts      probes the session image ONCE (os-release/uname/node/python, no network, 30s) → one prompt line; cached by image ID; '' on failure
 docker.ts           dockerode over DOCKER_HOST or a known socket — the ONE docker client
 log.ts              pino root at LOG_LEVEL; `const log = logger('<component>')`; errors as {err: errStr(e)} — message only, never a stack
 api/app.ts          envelope helpers, bearer hook, error/404 handlers, route registration, AppCtx (ctx.looper set after listen)
