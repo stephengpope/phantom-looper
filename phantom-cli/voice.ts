@@ -52,9 +52,7 @@ export type VoiceOut =
 /** What the sidecar sends. */
 export type VoiceIn =
   | { type: 'ready'; devices: { mics: string[]; speakers: string[] }; mic: string; speaker: string; voice: string; mic_muted?: boolean; speaker_muted?: boolean; headphones?: boolean; wake?: boolean }
-  | { type: 'status'; speaking?: boolean; hearing?: boolean; mic_muted?: boolean; speaker_muted?: boolean; headphones?: boolean; wake?: boolean; awake?: boolean; awake_secs?: number;
-      /** The Deepgram address the engine is using ('' = none, asking DNS) — the app saves it (voice_deepgram_address) for the next spawn. */
-      deepgram?: string }
+  | { type: 'status'; speaking?: boolean; hearing?: boolean; mic_muted?: boolean; speaker_muted?: boolean; headphones?: boolean; wake?: boolean; awake?: boolean; awake_secs?: number }
   /** The transcript as it forms — for the pane, not the brain. */
   | { type: 'user'; text: string; final: boolean }
   /** You finished talking: this is what you said, as one turn. The brain runs. */
@@ -206,7 +204,7 @@ export function sidecarEnv(cfg: Record<string, ConfigValue>): Record<string, str
     PHANTOM_CLI_VOICE_VOICE: s(cfg.voice_spoken_voice),
     PHANTOM_CLI_VOICE_MIC: s(cfg.voice_mic_device),
     PHANTOM_CLI_VOICE_SPEAKER: s(cfg.voice_speaker_device),
-    PHANTOM_CLI_VOICE_DEEPGRAM: s(cfg.voice_deepgram_address),
+    PHANTOM_CLI_VOICE_STT_MODEL: s(cfg.voice_stt_model),
     PHANTOM_CLI_VOICE_MIC_MUTED: cfg.voice_mic_muted ? '1' : '0',
     PHANTOM_CLI_VOICE_SPEAKER_MUTED: cfg.voice_speaker_muted ? '1' : '0',
     PHANTOM_CLI_VOICE_HEADPHONES: cfg.voice_headphones ? '1' : '0',
@@ -328,8 +326,6 @@ export class VoiceClient {
    *  (the prompt on screen says the two words). Return true = consumed: the
    *  text still shows in the pane as yours, but the brain does not run. */
   intercept: ((text: string) => boolean) | null = null;
-  /** The engine found (or lost) the Deepgram address it uses; App saves it. */
-  onAddress: ((addr: string) => void) | null = null;
 
   constructor(
     private spawner: Spawner = spawnSidecar,
@@ -576,7 +572,6 @@ export class VoiceClient {
       case 'status':
         if (msg.speaking !== undefined) this.set({ status: msg.speaking ? 'speaking' : this.cur ? 'thinking' : 'listening' });
         if (msg.hearing !== undefined && this.snap.status !== 'speaking' && !this.cur) this.set({ status: msg.hearing ? 'hearing' : 'listening' });
-        if (msg.deepgram !== undefined) this.onAddress?.(msg.deepgram);
         if (msg.mic_muted !== undefined) this.set({ micMuted: msg.mic_muted });
         if (msg.speaker_muted !== undefined) this.set({ speakerMuted: msg.speaker_muted });
         if (msg.headphones !== undefined) this.set({ headphones: msg.headphones });

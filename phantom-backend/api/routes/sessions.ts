@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { eq, ne, desc, and, or, isNull, isNotNull, lt, sql, count } from 'drizzle-orm';
 import { sessions, sessionColumns, workspaces, folders, loops, settings as settingsRows, type SessionRow } from '../../db/schema.js';
 import { createSession, getSession, destroySession, touchSession, SessionError,
-  heldByOther, acquireLock, releaseLock, renewLock, assertDuplicable, conversationOnly,
+  heldByOther, acquireLock, releaseLock, renewLock, assertDuplicable, conversationOnly, agentAfterSave,
   turnStarted, LAST_MESSAGE_CHARS } from '../../sessions.js';
 import { repoDir } from '../../pool/paths.js';
 import { workState, type WorkState } from '../../git/git.js';
@@ -315,9 +315,11 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       // The moved stamp is also what invalidates the cached token totals —
       // tokens_as_of stops matching, and the next token-usage read recomputes.
       // Every save is one turn: the counter that paces session naming.
+      // Who drove it is read off the writer: a person's turn into the loop's
+      // coding session takes the session over (sessions.ts agentAfterSave).
       const [saved] = await ctx.db.update(sessions)
         .set({ transcript: data, lastUserMessage, transcriptUpdatedAt: stamp,
-          turnCount: sql`${sessions.turnCount} + 1` })
+          turnCount: sql`${sessions.turnCount} + 1`, agent: agentAfterSave(s.agent, client) })
         .where(eq(sessions.id, s.id))
         .returning({ name: sessions.name, turnCount: sessions.turnCount, nameManual: sessions.nameManual });
       // Saving a turn is activity: the session stays off the idle sweep and

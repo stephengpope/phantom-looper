@@ -89,10 +89,17 @@ test('/resume rows: prefix, name AND last message, and dead sessions marked', ()
   // The card column: the BARE number beside the prefix the ws column already
   // shows (the board's own shape — prefix in the header, number on the row),
   // for either seat of a loop; a session with no card is the blank-fact dot.
-  const carded = sessionChoices(W, [{ ...S[0], card: 7 }, { ...S[0], id: 's3', card: 7, agent: 'supervisor' }],
+  const carded = sessionChoices(W, [{ ...S[0], card: 7, agent: 'coding' }, { ...S[0], id: 's3', card: 7, agent: 'supervisor' }],
     () => 'q', NOW, () => false, () => false, '', true).slice(1);
   assert.deepEqual(carded.map((r) => texts(r)[0]), ['7', '7'], 'coding and supervisor seats both name the card');
-  assert.equal(texts(carded[0])[4], 'looper');
+  // who = the seat the looper drives it from, by name.
+  assert.equal(texts(carded[0])[4], 'coder');
+  assert.equal(texts(carded[1])[4], 'supervisor');
+  // A card session a person typed into (the server clears `agent` on their
+  // save) is theirs: `manual`, card number kept — the card link is permanent,
+  // who drives it is not.
+  const taken = sessionChoices(W, [{ ...S[0], card: 7, agent: null }], () => 'q', NOW).slice(1);
+  assert.deepEqual([texts(taken[0])[0], texts(taken[0])[4]], ['7', 'manual']);
   assert.equal(texts(rows[0])[0], '·', 'a manual session has no card');
   // A server without cardPrefix falls back to the workspace label.
   const bare = sessionChoices([{ id: 'w1', owner: 'sg', name: 'phantom-looper-e2e' }], [S[0]],

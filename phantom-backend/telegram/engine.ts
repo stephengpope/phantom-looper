@@ -28,7 +28,7 @@ import { TelegramClient, ALLOWED_UPDATES } from './client.js';
 import { makeTelegramSink, type DeliverConfig } from './sink.js';
 import { sendMessageTool } from './sendMessageTool.js';
 import { toTelegram, splitFormatted } from './entities.js';
-import { transcribeVoice, speakVoice, SPEAK_MAX_CHARS } from './deepgram.js';
+import { transcribeVoice, speakVoice, SPEAK_MAX_CHARS, type Transcription } from './deepgram.js';
 import { writeAttachment, composeMessage, MAX_INBOUND_BYTES, type StoredAttachment } from './attachments.js';
 import { runAssistantTurn, type AssistantDeps } from './assistant.js';
 import { Approvals } from './approvals.js';
@@ -44,6 +44,13 @@ const CLIENT_ID = 'telegram';
 // yielding REACTION_INVALID.
 const REACT_TRANSCRIBING = '\u{270D}';   // ✍ writing hand, no U+FE0F — cleared when heard
 const REACT_SPEAK = '\u{1F92C}';         // 🤬 — the user's "read this back" gesture
+
+// What the user reads when a voice note could not be heard, by reason.
+const NOT_HEARD: Record<Extract<Transcription, { error: string }>['error'], string> = {
+  no_key: '🎤 Voice transcription needs a Deepgram key — add one in /keys.',
+  unreachable: "🎤 Couldn't reach Deepgram — send that again in a moment.",
+  vendor: "🎤 Deepgram couldn't transcribe that — send it again.",
+};
 
 function timingSafeEqualStr(a: string, b: string): boolean {
   const ab = Buffer.from(a); const bb = Buffer.from(b);
@@ -376,17 +383,22 @@ export class TelegramEngine {
         await client.sendMessage(dm, "⚠️ That voice note is over Telegram's 20 MB limit for bots.");
         return null;
       }
-      await react(REACT_TRANSCRIBING);
+      // The key first (a millisecond, read at point of use like every
+      // credential): without one there is nothing to download for.
       const apiKey = (await resolveCredential(this.deps.db, this.deps.encryptionKey, 'deepgram_api_key').catch(() => '')) ?? '';
-      const audio = await client.downloadFile(voice.file_id);
-      const transcript = await transcribeVoice(apiKey, audio);
-      if (transcript === null) { await react(); await client.sendMessage(dm, '🎤 Voice transcription needs a Deepgram key — add one in /keys.'); return null; }
-      if (!transcript) { await react(); await client.sendMessage(dm, "🎤 I couldn't make out any speech in that."); return null; }
-      // Heard: just clear the ✍ rather than swapping to a 👍 — the turn
-      // starting is the acknowledgement, and a lingering reaction is noise.
+      if (!apiKey) { await client.sendMessage(dm, NOT_HEARD.no_key); return null; }
+      // The ✍ and the download are independent — one round-trip each, so
+      // they run together rather than the reaction gating the download.
+      const [, audio] = await Promise.all([react(REACT_TRANSCRIBING), client.downloadFile(voice.file_id)])
+        .catch(async (e) => { await react(); throw e; });   // run() reports it; the ✍ must not outlive it
+      const heard = await transcribeVoice(apiKey, audio, String(values.voice_stt_model ?? ''));
+      // Whatever happened, the ✍ comes off: on a hit, the turn starting is
+      // the acknowledgement and a lingering reaction is noise.
       await react();
-      if (values.telegram_transcript_echo === true) await client.sendMessage(dm, `🎤 "${transcript}"`);
-      return transcript;
+      if ('error' in heard) { await client.sendMessage(dm, NOT_HEARD[heard.error]); return null; }
+      if (!heard.text) { await client.sendMessage(dm, "🎤 I couldn't make out any speech in that."); return null; }
+      if (values.telegram_transcript_echo === true) await client.sendMessage(dm, `🎤 "${heard.text}"`);
+      return heard.text;
     }
 
     // Everything else file-bearing: save to the session's scratch, describe it.
