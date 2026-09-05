@@ -8,6 +8,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { Entity } from './entities.js';
+import { connectFetch } from './connect.js';
 
 /** Telegram's ceiling for anything a bot uploads. Checked before the read, so
  *  an oversize send is reported as itself, not as a generic API failure. */
@@ -26,8 +27,9 @@ const KIND_METHOD: Record<SendKind, { method: string; field: string }> = {
 
 // What the webhook subscribes to. Telegram sends ONLY the listed kinds and
 // keeps the list until the next setWebhook — the boot reconcile re-registers
-// when a kind is missing. `message_reaction` is the speak-it-back gesture.
-export const ALLOWED_UPDATES = ['message', 'message_reaction'];
+// when a kind is missing. `message_reaction` is the speak-it-back gesture;
+// `callback_query` is a tap on an approval bubble's button (approvals.ts).
+export const ALLOWED_UPDATES = ['message', 'message_reaction', 'callback_query'];
 
 type TgResponse = {
   ok?: boolean;
@@ -101,11 +103,14 @@ export class TelegramClient {
     });
   }
 
+  /** `replyMarkup` is a Telegram reply_markup object (an inline keyboard for
+   *  the approval gate). */
   async sendMessage(chatId: number, text: string,
-    opts: { replyToMessageId?: number; entities?: Entity[] } = {}) {
+    opts: { replyToMessageId?: number; entities?: Entity[]; replyMarkup?: unknown } = {}) {
     const m = await this.call('sendMessage', {
       chat_id: chatId, text,
       ...(opts.entities?.length ? { entities: opts.entities } : {}),
+      ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
       ...(opts.replyToMessageId
         ? { reply_parameters: { message_id: opts.replyToMessageId, allow_sending_without_reply: true } }
         : {}),
@@ -114,9 +119,17 @@ export class TelegramClient {
     return m;
   }
 
+  /** Every button tap MUST be answered or the user's client spins on it;
+   *  `text` shows as a small notification. */
+  answerCallbackQuery(callbackQueryId: string, text?: string) {
+    return this.call('answerCallbackQuery', { callback_query_id: callbackQueryId, ...(text ? { text } : {}) });
+  }
+
   // An edit records too, so the streamed bubble ends up stored as what it
   // finally says. An unchanged body throws ("message is not modified") and
-  // never reaches the hook — right, since the record already matches.
+  // never reaches the hook — right, since the record already matches. An edit
+  // without a reply_markup drops the message's keyboard — how an answered
+  // approval loses its buttons.
   async editMessageText(chatId: number, messageId: number, text: string, entities?: Entity[]) {
     const r = await this.call('editMessageText', {
       chat_id: chatId, message_id: messageId, text,
@@ -148,11 +161,13 @@ export class TelegramClient {
   }
 
   /** Fetch an inbound file. Telegram's getFile caps at 20 MB — callers check
-   *  the declared size first so an oversize file is declined readably. */
+   *  the declared size first so an oversize file is declined readably. The
+   *  byte fetch rides the connection policy (connect.ts): a voice note is
+   *  the message itself, so a hung connection here is a message lost. */
   async downloadFile(fileId: string): Promise<Buffer> {
     const file = await this.call('getFile', { file_id: fileId });
     if (!file?.file_path) throw new Error('Telegram did not return a file path.');
-    const res = await fetch(`https://api.telegram.org/file/bot${this.token}/${file.file_path}`);
+    const res = await connectFetch(`https://api.telegram.org/file/bot${this.token}/${file.file_path}`);
     if (!res.ok) throw new Error(`downloading the file failed (HTTP ${res.status}).`);
     return Buffer.from(await res.arrayBuffer());
   }

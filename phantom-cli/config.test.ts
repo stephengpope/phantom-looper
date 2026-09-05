@@ -30,12 +30,12 @@ test('the split is exhaustive and has no overlap: every key has exactly one home
 });
 
 test('local holds only what cannot be right anywhere else', () => {
-  // Two are how you REACH the server; six are facts about this machine. A
+  // Two are how you REACH the server; five are facts about this machine. A
   // model choice is not either, so it is not here — every TUI is the same one.
   assert.deepEqual([...LOCAL_KEYS], [
     'server_url', 'server_key',
     'voice_mic_device', 'voice_speaker_device', 'voice_headphones',
-    'voice_mic_muted', 'voice_speaker_muted', 'voice_deepgram_address',
+    'voice_mic_muted', 'voice_speaker_muted',
   ]);
   for (const k of ['provider', 'model', 'reasoning', 'assistant_model', 'voice_wake_word']) {
     assert.equal(isLocalKey(k), false, `${k} belongs on the server`);

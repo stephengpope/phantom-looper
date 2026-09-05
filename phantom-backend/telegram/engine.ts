@@ -24,13 +24,14 @@ import { getSession } from '../sessions.js';
 import { resolveCredential } from '../settings.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
 import { logger, errStr } from '../log.js';
-import { TelegramClient } from './client.js';
+import { TelegramClient, ALLOWED_UPDATES } from './client.js';
 import { makeTelegramSink, type DeliverConfig } from './sink.js';
 import { sendMessageTool } from './sendMessageTool.js';
 import { toTelegram, splitFormatted } from './entities.js';
-import { transcribeVoice, speakVoice, SPEAK_MAX_CHARS } from './deepgram.js';
+import { transcribeVoice, speakVoice, SPEAK_MAX_CHARS, type Transcription } from './deepgram.js';
 import { writeAttachment, composeMessage, MAX_INBOUND_BYTES, type StoredAttachment } from './attachments.js';
 import { runAssistantTurn, type AssistantDeps } from './assistant.js';
+import { Approvals } from './approvals.js';
 import * as store from './store.js';
 import { menuFor, handleCommand } from './commands.js';
 
@@ -43,6 +44,13 @@ const CLIENT_ID = 'telegram';
 // yielding REACTION_INVALID.
 const REACT_TRANSCRIBING = '\u{270D}';   // ✍ writing hand, no U+FE0F — cleared when heard
 const REACT_SPEAK = '\u{1F92C}';         // 🤬 — the user's "read this back" gesture
+
+// What the user reads when a voice note could not be heard, by reason.
+const NOT_HEARD: Record<Extract<Transcription, { error: string }>['error'], string> = {
+  no_key: '🎤 Voice transcription needs a Deepgram key — add one in /keys.',
+  unreachable: "🎤 Couldn't reach Deepgram — send that again in a moment.",
+  vendor: "🎤 Deepgram couldn't transcribe that — send it again.",
+};
 
 function timingSafeEqualStr(a: string, b: string): boolean {
   const ab = Buffer.from(a); const bb = Buffer.from(b);
@@ -72,6 +80,8 @@ export class TelegramEngine {
   private busy = new Map<number, Busy>();
   /** The Assistant's ONE in-memory conversation (reset on restart). */
   private assistantHistory: ModelMessage[] = [];
+  /** The approval gate — gated tools ask the user here (approvals.ts). */
+  private approvals = new Approvals();
 
   constructor(private deps: TelegramEngineDeps) {
     this.f = injectFetch(deps.app);
@@ -119,7 +129,7 @@ export class TelegramEngine {
       // the subscription drifted (dropPending:false keeps queued messages).
       const info = await client.getWebhookInfo().catch(() => null);
       const registered = info?.url === url
-        && ['message', 'message_reaction'].every((u) => (info?.allowed_updates ?? []).includes(u));
+        && ALLOWED_UPDATES.every((u) => (info?.allowed_updates ?? []).includes(u));
       if (!registered || acc.webhookSecret !== secret) {
         await client.setWebhook(url, secret, { dropPending: false });
         await store.saveRegistration(this.deps.db, this.deps.encryptionKey, secret, url, me?.username ?? null);
@@ -163,6 +173,17 @@ export class TelegramEngine {
       return 200;
     }
 
+    // A tap on an approval bubble's button.
+    const tap = update.callback_query;
+    if (tap) {
+      if (String(tap.from?.id) !== authorized) return 200;
+      if (!(await store.markUpdate(db, update.update_id))) return 200;
+      const client = new TelegramClient(await this.token());
+      this.approvals.handleCallback(client, dm, { id: String(tap.id), data: tap.data })
+        .catch((e) => log.warn({ err: errStr(e) }, 'approval tap failed'));
+      return 200;
+    }
+
     const msg = update.message;
     if (!msg || String(msg.from?.id) !== authorized) return 200;
     if (!(await store.markUpdate(db, update.update_id))) return 200;
@@ -201,6 +222,10 @@ export class TelegramEngine {
 
       const input = await this.resolveInput(client, dm, msg, values, acc);
       if (input === null) return;
+
+      // A question standing: the exact word answers it and is nothing else;
+      // any other message declines it and goes on to queue as the follow-up.
+      if (this.approvals.handleText(dm, input)) return;
 
       // Busy: queue the message into the running turn's follow-up and stop.
       const running = this.busy.get(dm);
@@ -248,12 +273,24 @@ export class TelegramEngine {
           note: "You are still the assistant — this session's files are now what your read tools see. " +
             'The user sends /code to talk to its coding agent; you never enter it.' };
       };
+      // A new workspace: make it active and open a session in it — what /new
+      // does, so the user lands talking to the coder like the cli's "on screen".
+      const onWorkspaceCreated = async (workspaceId: string) => {
+        await store.setActiveWorkspace(db, workspaceId);
+        const j = await (await this.call('/sessions', { method: 'POST', body: { workspace_id: workspaceId } })).json();
+        if (!j.ok) return { error: j.error?.message as string };
+        await store.setMode(db, 'code', j.data.id, (t) => client.sendMessage(dm, t));
+        await client.sendMessage(dm, '🆕 New session in the new workspace. Send your first message to begin.');
+        return { session: j.data.id as string };
+      };
       replyText = await runAssistantTurn(deps, this.assistantHistory, message, sink, {
         settings: values,
         workspaceId: () => acc.activeWorkspaceId ?? null,
         activeSession: () => active,
         onSwitch,
-      });
+        approve: (ask, signal) => this.approvals.request(client, dm, ask, signal),
+        onWorkspaceCreated,
+      }, abort.signal);
       // Any messages queued while we ran go out as one follow-up turn.
       const queued = this.busy.get(dm)?.queue ?? [];
       this.busy.delete(dm);
@@ -355,17 +392,22 @@ export class TelegramEngine {
         await client.sendMessage(dm, "⚠️ That voice note is over Telegram's 20 MB limit for bots.");
         return null;
       }
-      await react(REACT_TRANSCRIBING);
+      // The key first (a millisecond, read at point of use like every
+      // credential): without one there is nothing to download for.
       const apiKey = (await resolveCredential(this.deps.db, this.deps.encryptionKey, 'deepgram_api_key').catch(() => '')) ?? '';
-      const audio = await client.downloadFile(voice.file_id);
-      const transcript = await transcribeVoice(apiKey, audio);
-      if (transcript === null) { await react(); await client.sendMessage(dm, '🎤 Voice transcription needs a Deepgram key — add one in /keys.'); return null; }
-      if (!transcript) { await react(); await client.sendMessage(dm, "🎤 I couldn't make out any speech in that."); return null; }
-      // Heard: just clear the ✍ rather than swapping to a 👍 — the turn
-      // starting is the acknowledgement, and a lingering reaction is noise.
+      if (!apiKey) { await client.sendMessage(dm, NOT_HEARD.no_key); return null; }
+      // The ✍ and the download are independent — one round-trip each, so
+      // they run together rather than the reaction gating the download.
+      const [, audio] = await Promise.all([react(REACT_TRANSCRIBING), client.downloadFile(voice.file_id)])
+        .catch(async (e) => { await react(); throw e; });   // run() reports it; the ✍ must not outlive it
+      const heard = await transcribeVoice(apiKey, audio, String(values.voice_stt_model ?? ''));
+      // Whatever happened, the ✍ comes off: on a hit, the turn starting is
+      // the acknowledgement and a lingering reaction is noise.
       await react();
-      if (values.telegram_transcript_echo === true) await client.sendMessage(dm, `🎤 "${transcript}"`);
-      return transcript;
+      if ('error' in heard) { await client.sendMessage(dm, NOT_HEARD[heard.error]); return null; }
+      if (!heard.text) { await client.sendMessage(dm, "🎤 I couldn't make out any speech in that."); return null; }
+      if (values.telegram_transcript_echo === true) await client.sendMessage(dm, `🎤 "${heard.text}"`);
+      return heard.text;
     }
 
     // Everything else file-bearing: save to the session's scratch, describe it.

@@ -80,7 +80,7 @@ must reach existing sessions goes in a tool's description.
 - **the Assistant** — the cli's side pane, and Telegram's home mode
   (server-side, same agent, headless handlers); voice is how you reach it,
   not its name. Kit: `session_*`, the full board kit, `screen_*`,
-  `workspace_create_repo` (gated behind an accept/decline in the pane), the
+  `workspace_create_repo` (gated behind an accept/decline — the pane's rows, Telegram's buttons), the
   web kit, and the read-only workspace tools (read ls find grep) scoped to
   the session on screen / the account's active session. maxSteps 10,
   reasoning pinned `none`.

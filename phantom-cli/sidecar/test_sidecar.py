@@ -74,7 +74,6 @@ class Config(unittest.TestCase):
         env = {
             "DEEPGRAM_API_KEY": "d", "PHANTOM_CLI_VOICE_VOICE": "aura-2-orion-en",
             "PHANTOM_CLI_VOICE_MIC": "RODE", "PHANTOM_CLI_VOICE_SPEAKER": "", "PHANTOM_CLI_VOICE_HEADPHONES": "1",
-            "PHANTOM_CLI_VOICE_DEEPGRAM": "4.20.80.213",
             "PHANTOM_CLI_VOICE_MIC_MUTED": "1", "PHANTOM_CLI_VOICE_SPEAKER_MUTED": "1",
             "PHANTOM_CLI_VOICE_WAKE": "true", "PHANTOM_CLI_VOICE_WAKE_WORDS": "hey phantom, computer ,",
             "PHANTOM_CLI_VOICE_WAKE_TIMEOUT": "15", "PHANTOM_CLI_VOICE_VAD_STOP": "0.3",
@@ -82,7 +81,6 @@ class Config(unittest.TestCase):
         with mock.patch.dict(os.environ, env, clear=False):
             c = bot.config_from_env()
         self.assertEqual((c.deepgram_key, c.voice, c.mic, c.speaker), ("d", "aura-2-orion-en", "RODE", ""))
-        self.assertEqual(c.deepgram_addr, "4.20.80.213", "the saved address comes back at start")
         self.assertTrue(c.headphones and c.wake)
         self.assertTrue(c.mic_muted and c.speaker_muted, "the saved mutes come back at start")
         self.assertEqual(c.wake_words, ["hey phantom", "computer"])
@@ -97,7 +95,6 @@ class Config(unittest.TestCase):
         self.assertFalse(hasattr(c, "provider"), "no model, no key: the brain is the TUI's")
         self.assertEqual(c.wake_words, ["computer"])
         self.assertAlmostEqual(c.wake_timeout, 8.0)
-        self.assertEqual(c.deepgram_addr, "", "nothing saved: DNS decides")
 
 
 class Devices(unittest.TestCase):
@@ -472,89 +469,35 @@ class BrainInPipeline(unittest.TestCase):
         self.assertEqual(spoken, [(1, "Let me look.", False), (2, "Two are open.", False)])
 
 
-class DeepgramAddressBook(unittest.TestCase):
-    """One address book for STT and TTS: whatever site either link reaches,
-    both use; a dead connect fails at 2 s and is retried once; the pane hears
-    about it once when the link stays down and once when it is back.
-    Background: api.deepgram.com rotates between sites and two of them (on
-    Cogent) never answer from this network (2026-09-02) — aiohttp's 30 s
-    connect default queued every reply behind the hang."""
+class DeepgramConnection(unittest.TestCase):
+    """The connection policy, the same one the server's Telegram bot runs
+    (phantom-backend/telegram/connect.ts): a dead connect fails at 2 s and is
+    retried once with fresh DNS; a slow answer is never cut; an idle socket
+    is dropped before Deepgram's 5 s idle close; the pane hears about a link
+    that stays down once, and once when it is back."""
 
     def test_session_fails_a_dead_connect_at_two_seconds_and_caps_nothing_else(self):
         async def go():
-            s = bot.tts_session(bot.AddressBook(inner=mock.Mock()))
+            s = bot.tts_session(bot.TtsLink())
             try:
-                self.assertEqual(s.timeout.sock_connect, bot.TTS_CONNECT_S)
+                self.assertEqual(s.timeout.sock_connect, bot.CONNECT_TIMEOUT_S)
                 self.assertIsNone(s.timeout.total, "a request that connected is never cut short")
-                self.assertFalse(s.connector.use_dns_cache, "the book must be asked every time")
+                self.assertFalse(s.connector.use_dns_cache, "every connect asks DNS: the retry can land on another site")
+                self.assertEqual(s.connector._keepalive_timeout, bot.KEEP_ALIVE_S)
             finally:
                 await s.close()
         asyncio.run(go())
-        self.assertEqual(bot.TTS_CONNECT_S, 2.0, "normal connect is 18–49 ms, the slow live site ~1 s; 0.5 s dropped that site")
-
-    def test_book_answers_with_the_working_address_else_dns(self):
-        class DNS:
-            calls = 0
-            async def resolve(self, host, port=0, family=0):
-                self.calls += 1
-                return [{"hostname": host, "host": "216.200.21.203", "port": port, "family": 2, "proto": 0, "flags": 0}]
-            async def close(self): pass
-
-        dns = DNS()
-        book = bot.AddressBook(inner=dns)
-        told: list[str] = []
-        book.on_change = told.append
-        self.assertEqual(asyncio.run(book.resolve("api.deepgram.com", 443))[0]["host"], "216.200.21.203")
-        self.assertEqual(dns.calls, 1)
-        book.worked("api.deepgram.com", "4.20.80.213")
-        self.assertEqual(asyncio.run(book.resolve("api.deepgram.com", 443))[0]["host"], "4.20.80.213")
-        self.assertEqual(dns.calls, 1, "a working address is reused without asking DNS")
-        self.assertEqual(book.failed("api.deepgram.com"), "4.20.80.213")
-        asyncio.run(book.resolve("api.deepgram.com", 443))
-        self.assertEqual(dns.calls, 2, "after a failure DNS is asked again")
-        self.assertEqual(told, ["4.20.80.213", ""], "the app hears the address found and the address dropped")
-
-    def test_the_event_loop_resolves_through_the_book_too(self):
-        """STT's websocket resolves through asyncio, not aiohttp — the book
-        hooks the loop so STT follows a site TTS found (and vice versa)."""
-        async def go():
-            loop = asyncio.get_running_loop()
-            book = bot.AddressBook(inner=mock.Mock())
-            book.install(loop)
-            book.worked("api.deepgram.com", "4.20.80.213")
-            infos = await loop.getaddrinfo("api.deepgram.com", 443)
-            self.assertEqual(infos[0][4], ("4.20.80.213", 443))
-            infos = await loop.getaddrinfo("localhost", 80)          # anything else: real DNS
-            self.assertIn(infos[0][4][0], ("127.0.0.1", "::1"))
-        asyncio.run(go())
-
-    def test_a_fresh_connect_records_the_address_it_reached(self):
-        from aiohttp import web
-
-        async def go():
-            app = web.Application()
-            app.router.add_get("/", lambda _r: web.Response(text="ok"))
-            runner = web.AppRunner(app); await runner.setup()
-            site = web.TCPSite(runner, "127.0.0.1", 0); await site.start()
-            port = site._server.sockets[0].getsockname()[1]
-            book = bot.AddressBook()
-            import aiohttp
-            async with aiohttp.ClientSession(connector=bot.sticky_connector(book)) as s:
-                async with s.get(f"http://localhost:{port}/") as r:
-                    self.assertEqual(r.status, 200)
-                self.assertEqual(book.good, {"localhost": "127.0.0.1"})
-            await runner.cleanup()
-        asyncio.run(go())
+        self.assertEqual(bot.CONNECT_TIMEOUT_S, 2.0, "normal connect is 18–49 ms, the slow live site ~1 s; 0.5 s dropped that site")
+        self.assertLess(bot.KEEP_ALIVE_S, 5.0, "Deepgram closes an idle connection at 5 s (measured 2026-09-04)")
 
     def _req(self):
         req = mock.Mock(); req.url.host = "api.deepgram.com"
         return req
 
-    def test_a_dead_connect_drops_the_address_retries_once_and_marks_tts(self):
+    def test_a_dead_connect_retries_once_and_marks_the_link(self):
         import aiohttp
-        book = bot.AddressBook(inner=mock.Mock())
-        book.worked("api.deepgram.com", "38.68.64.132")      # DNS gave the dead site last time
-        mw = bot.tts_retry_middleware(book)
+        link = bot.TtsLink()
+        mw = bot.tts_retry_middleware(link)
         calls: list[int] = []
 
         async def handler(_req):
@@ -565,8 +508,7 @@ class DeepgramAddressBook(unittest.TestCase):
 
         self.assertEqual(asyncio.run(mw(self._req(), handler)), "audio")
         self.assertEqual(len(calls), 2)
-        self.assertEqual(book.good, {}, "the dead address is forgotten; the retry asked DNS")
-        self.assertTrue(book.tts_ok)
+        self.assertTrue(link.ok)
 
         async def always_down(_req):
             calls.append(1)
@@ -574,7 +516,7 @@ class DeepgramAddressBook(unittest.TestCase):
         with self.assertRaises(aiohttp.ClientConnectorError):
             asyncio.run(mw(self._req(), always_down))
         self.assertEqual(len(calls), 4, "one retry, then the error stands")
-        self.assertFalse(book.tts_ok, "the health line knows TTS cannot reach Deepgram")
+        self.assertFalse(link.ok, "the health line knows TTS cannot reach Deepgram")
 
         async def slow(_req):
             calls.append(1)
@@ -583,52 +525,38 @@ class DeepgramAddressBook(unittest.TestCase):
             asyncio.run(mw(self._req(), slow))
         self.assertEqual(len(calls), 5, "a slow response is not retried")
 
-    def test_health_speaks_once_when_down_once_when_back_and_shares_stt_address(self):
+    def test_health_speaks_once_when_down_and_once_when_back(self):
         out = io.StringIO()
         ch = protocol.Channel(out=out)
 
-        class FakeWS:
-            remote_address = ("4.20.80.213", 443)
-        class FakeConn:
-            _websocket = FakeWS()
         class FakeSTT:
             def __init__(self):
                 self._connection_ready = asyncio.Event()
-                self._connection = FakeConn()
 
         async def go():
             stt = FakeSTT(); stt._connection_ready.set()
-            book = bot.AddressBook(inner=mock.Mock())
-            task = asyncio.create_task(bot.health(stt, book, ch, down_after=0.3, tick=0.05))
+            link = bot.TtsLink()
+            task = asyncio.create_task(bot.health(stt, link, ch, down_after=0.3, tick=0.05))
             await asyncio.sleep(0.15)
-            self.assertEqual(book.good, {"api.deepgram.com": "4.20.80.213"}, "TTS follows the site STT reached")
             stt._connection_ready.clear(); await asyncio.sleep(0.15); stt._connection_ready.set()   # a blip
             await asyncio.sleep(0.2)
             self.assertEqual(out.getvalue(), "", "a reconnect within the window is nobody's business")
-            book.tts_ok = False; await asyncio.sleep(0.5)                                            # TTS down, STT still up
+            link.ok = False; await asyncio.sleep(0.5)                                               # TTS down, STT still up
             self.assertIn("can't reach Deepgram", out.getvalue())
             self.assertEqual(out.getvalue().count("\n"), 1, "one line, however long it stays down")
-            self.assertEqual(book.good, {"api.deepgram.com": "4.20.80.213"}, "STT is up on that address, so it stays")
             await asyncio.sleep(0.4)
             self.assertEqual(out.getvalue().count("\n"), 1)
-            book.tts_ok = True; await asyncio.sleep(0.15)
+            link.ok = True; await asyncio.sleep(0.15)
             self.assertIn("back", out.getvalue())
             self.assertEqual(out.getvalue().count("\n"), 2)
-            stt._connection_ready.clear(); book.tts_ok = False; await asyncio.sleep(0.5)                 # both down
+            stt._connection_ready.clear(); link.ok = False; await asyncio.sleep(0.5)                # both down
             self.assertEqual(out.getvalue().count("\n"), 3)
-            self.assertEqual(book.good, {}, "nothing reaches that address any more: dropped, the next attempt asks DNS")
-            stt._connection_ready.set(); book.tts_ok = True; await asyncio.sleep(0.15)
+            stt._connection_ready.set(); link.ok = True; await asyncio.sleep(0.15)
             self.assertEqual(out.getvalue().count("\n"), 4)
-            self.assertEqual(book.good, {"api.deepgram.com": "4.20.80.213"}, "back, and STT's address is recorded again")
             task.cancel()
         asyncio.run(go())
 
-    def test_the_fields_health_reads_still_exist_in_the_installed_libraries(self):
+    def test_the_field_health_reads_still_exists_in_pipecat(self):
         from pipecat.services.deepgram.stt import DeepgramSTTService
-        from deepgram.listen.v1.socket_client import AsyncV1SocketClient
-        from websockets.legacy.client import WebSocketClientProtocol
         stt = DeepgramSTTService(api_key="x")
         self.assertTrue(isinstance(stt._connection_ready, asyncio.Event), "pipecat moved the STT connection state — fix health()")
-        self.assertTrue(hasattr(stt, "_connection"), "pipecat renamed the SDK client field — fix stt_peer()")
-        self.assertIn("_websocket", vars(AsyncV1SocketClient(websocket=mock.Mock())), "the Deepgram SDK moved its websocket — fix stt_peer()")
-        self.assertTrue(hasattr(WebSocketClientProtocol, "remote_address"))

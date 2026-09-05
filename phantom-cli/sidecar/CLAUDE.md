@@ -27,9 +27,7 @@ wake?, wake_words?, wake_timeout?, headphones?}` · `cancel` · `devices` ·
 
 Sidecar → app: `ready {devices, mic, speaker, voice, mic_muted, speaker_muted,
 headphones, wake, turn}` · `status {speaking?, hearing?, mic_muted?,
-speaker_muted?, headphones?, wake?, awake?, awake_secs?, deepgram?}` (the
-address in use, `""` when dropped — the app saves it as
-`voice_deepgram_address`) · `user {text, final}` (for the eye) · `turn
+speaker_muted?, headphones?, wake?, awake?, awake_secs?}` · `user {text, final}` (for the eye) · `turn
 {text}` (the aggregated turn — what the app answers) · `interrupted
 {turn?}` · `spoken {turn, step, text, interrupted}` · `metrics {processor,
 ttfb_ms}` · `devices {devices}` · `warn {message}` (Deepgram unreachable for
@@ -49,12 +47,12 @@ engine giving up).
   turn ends at the silence ceiling because no audio follows.
 
 Spawn env (written by `voice.ts`): `DEEPGRAM_API_KEY`,
-`PHANTOM_CLI_VOICE_VOICE / _MIC / _SPEAKER / _DEEPGRAM (the address that
-answered last time — the app saves what `status {deepgram}` reports) /
-_MIC_MUTED / _SPEAKER_MUTED / _HEADPHONES / _WAKE / _WAKE_WORDS /
-_WAKE_TIMEOUT`. Operator-only knobs the app never sets:
-`PHANTOM_CLI_VOICE_VAD_STOP` (0.4), `_SMART_TURN` (on), `_STT_MODEL`
-(nova-3), `_LANGUAGE` (en), `_LOG_LEVEL` (INFO).
+`PHANTOM_CLI_VOICE_VOICE / _MIC / _SPEAKER / _STT_MODEL (the
+`voice_stt_model` server setting — the same model Telegram voice notes are
+heard with) / _MIC_MUTED / _SPEAKER_MUTED / _HEADPHONES / _WAKE /
+_WAKE_WORDS / _WAKE_TIMEOUT`. Operator-only knobs the app never sets:
+`PHANTOM_CLI_VOICE_VAD_STOP` (0.4), `_SMART_TURN` (on), `_LANGUAGE` (en),
+`_LOG_LEVEL` (INFO).
 
 ## Behaviour that was paid for
 
@@ -66,27 +64,23 @@ _WAKE_TIMEOUT`. Operator-only knobs the app never sets:
   interruption broadcast from BELOW the user aggregator: a frame queued at
   the top is swallowed by the mute strategy while the Assistant speaks over
   speakers, which is exactly when you cancel.
-- **One address book for Deepgram, shared by STT and TTS** (`AddressBook`,
-  `sticky_connector`, `tts_retry_middleware`, `tts_session`, `health`).
-  `api.deepgram.com` is a short-TTL CNAME rotated between sites and DNS
-  hands out ONE at a time; some sites (Cogent-peered) never answer from
-  this network. So: whatever site either link reaches is recorded (the
-  connector sees TTS's fresh connect; `health` reads the STT websocket's
-  peer) and both links use it — aiohttp through the book as its resolver,
-  the websocket through the event loop's `getaddrinfo`, which the book
-  installs. DNS is asked only with no working address or after it fails.
-  The address is reported to the app (`status {deepgram}`), saved in
-  settings.json, and handed back at the next spawn
-  (`PHANTOM_CLI_VOICE_DEEPGRAM`), so a fresh engine starts where it worked
-  last time. A connect with no answer fails at `TTS_CONNECT_S` (2 s — the
-  slow live site needs ~1 s, so 0.5 s is too short) and is retried once.
-  The pane: one line after `DOWN_AFTER_S` (5 s) unreachable, which also
-  drops the address so the next attempt asks DNS; one line when back.
-  pipecat reconnects STT by itself, raising an ErrorFrame per attempt ("no
-  close frame received or sent", 1011) — none of that reaches the pane.
-  Fields read across libraries are pinned by a test: pipecat's
-  `_connection_ready`/`_connection`, the SDK's `_websocket`, websockets'
-  `remote_address`.
+- **The Deepgram connection policy** (`tts_retry_middleware`, `tts_session`,
+  `health`) — the same one the server's Telegram bot runs
+  (`phantom-backend/telegram/connect.ts`); change one, change the other.
+  `api.deepgram.com` is a short-TTL CNAME rotated between sites, and a site
+  can go dead from a given network. So: a connect with no answer fails at
+  `CONNECT_TIMEOUT_S` (2 s — the slow live site needs ~1 s, so 0.5 s is too
+  short) and is retried once with fresh DNS (`use_dns_cache=False`, so the
+  retry can land on another site); a SLOW ANSWER is never cut; an idle
+  socket is dropped at `KEEP_ALIVE_S` (4 s) because Deepgram closes idle
+  connections at 5 s (measured 2026-09-04) and a sentence must never go
+  out on one the far end already closed. No address is remembered or
+  pinned: that bypassed Deepgram's own routing and carried state
+  (tried and removed). The pane: one line after `DOWN_AFTER_S` (5 s)
+  unreachable, one line when back. pipecat reconnects STT by itself,
+  raising an ErrorFrame per attempt ("no close frame received or sent",
+  1011) — none of that reaches the pane. pipecat's `_connection_ready` is
+  pinned by a test.
 - **TTS is Deepgram over HTTP, not the websocket, because of `spoken`.**
   The websocket service emits a sentence's text the instant it is SENT, so
   a cut-off would report everything generated. `DeepgramHttpTTSService`

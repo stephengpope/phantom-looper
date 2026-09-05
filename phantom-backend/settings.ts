@@ -65,6 +65,9 @@ export const DEFAULTS = {
   voice_enabled: false as boolean,
   sidebar_width: 20,
   voice_spoken_voice: 'aura-2-thalia-en' as string,
+  // The ONE transcription model, for both ears: the cli's voice pane (the
+  // sidecar's live stream) and Telegram voice notes (deepgram.ts).
+  voice_stt_model: 'nova-3' as string,
   voice_wake_word: false as boolean,
   voice_wake_words: 'computer' as string,
   voice_wake_timeout: 8,
@@ -161,6 +164,7 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   voice_enabled: 'Start the Assistant with the cli. It listens on the mic, answers out loud and in the voice pane (ctrl+g), and can act on the cli through its tools.',
   sidebar_width: 'Width of the voice pane as a percent of the terminal.',
   voice_spoken_voice: 'Deepgram Aura voice the Assistant speaks with, e.g. aura-2-thalia-en, aura-2-orion-en.',
+  voice_stt_model: 'Deepgram model that hears you — the voice pane and Telegram voice notes alike. nova-3 is the current general model; nova-2 for languages it lacks.',
   voice_wake_word: 'On = the Assistant only answers when it hears one of the wake words (and for a few seconds after). Off = it answers everything it hears.',
   voice_wake_words: 'Words that address the Assistant when wake is on, comma-separated.',
   voice_wake_timeout: 'Seconds of silence after the wake word before it is needed again. Any speech — yours or the Assistant\'s — restarts the clock.',
@@ -255,6 +259,7 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
   voice_enabled: { type: 'boolean', label: 'assistant', group: 'voice' },
   sidebar_width: { type: 'number', label: 'voice pane width', group: 'voice', unit: 'count', min: 10 },
   voice_spoken_voice: { type: 'string', label: 'spoken voice', group: 'voice' },
+  voice_stt_model: { type: 'string', label: 'hearing model', group: 'voice' },
   voice_wake_word: { type: 'boolean', label: 'wake word only', group: 'voice' },
   voice_wake_words: { type: 'string', label: 'wake words', group: 'voice' },
   voice_wake_timeout: { type: 'number', label: 'wake timeout', group: 'voice', unit: 'count', min: 1 },

@@ -78,8 +78,12 @@ export const sessions = phantomLooper.table('sessions', {
   id: text('id').primaryKey(),
   workspaceId: text('workspace_id').notNull(),
   status: text('status').notNull(),
-  // Who drives the conversation: 'coding'/'supervisor' for the loop's,
-  // null = a person's. Written only by the loop path.
+  // Who drove the last turn: 'coding'/'supervisor' for the loop's seats,
+  // null = a person's. The loop stamps its coder seat at turn start; every
+  // transcript save re-derives it from the writer's client id (sessions.ts
+  // agentAfterSave) — so a person typing into a card's coding session takes
+  // it over, and the loop takes it back when it next drives. A supervisor
+  // record never changes hands.
   agent: text('agent'),
   // The model-written title — what the session is building, best-effort,
   // written AFTER a transcript save (sessionTitle.ts), never in it. turnCount

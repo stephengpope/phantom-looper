@@ -89,192 +89,92 @@ from protocol import Channel
 
 
 # --------------------------------------------------------------------------- #
-# Deepgram: one address book for the whole process.                            #
+# Deepgram: the connection policy.                                             #
 # --------------------------------------------------------------------------- #
-# api.deepgram.com is one hostname that Deepgram moves between several sites
-# (a 60 s CNAME: sac1, va1, md1, sv1 seen in one afternoon on 2026-09-02),
-# and from a given network some of those sites never answer (md1 and sv1 sit
-# on Cogent; Deepgram staff have named Cogent peering as the cause of exactly
-# this — github.com/orgs/deepgram/discussions/764). DNS hands out ONE address
-# at a time, so a client that only ever asks DNS is deaf or mute for as long
-# as the answer is a dead site; aiohttp's 30 s connect default then queued
-# every sentence behind the hang and played them minutes late.
+# The same policy the server's Telegram bot runs (phantom-backend/telegram/
+# connect.ts); a change here is a change there:
+#  - a connect that gets no answer fails at CONNECT_TIMEOUT_S. api.deepgram.com
+#    rotates between sites and a site can go dead from a given network
+#    (github.com/orgs/deepgram/discussions/764); a normal connect is 20–50 ms.
+#  - a FAILED CONNECTION is retried once, fresh DNS (`use_dns_cache=False`:
+#    Deepgram rotates the name within the minute, so the retry can land
+#    elsewhere). A SLOW ANSWER is never cut: that would double the wait.
+#  - keep-alive: Deepgram closes an idle connection at 5 s (measured
+#    2026-09-04: reused at 4.8 s, new socket at 5 s). KEEP_ALIVE_S sits under
+#    that so a sentence never goes out on a socket the far end already closed.
 #
-# So the sidecar keeps ONE address book (`AddressBook`) shared by both links:
-# whatever site the STT websocket or a TTS request reaches is recorded, and
-# from then on every connection — aiohttp's (TTS) through its resolver hook,
-# the websocket's (STT) through the event loop's `getaddrinfo` — goes there.
-# DNS is asked only with no working address, or after the working one has
-# just failed; a failed address is dropped so the next attempt asks DNS,
-# and Deepgram rotates within the minute, so a good site is found again.
-# A connect that gets no answer fails at TTS_CONNECT_S (normal here is
-# 18–49 ms; the slow-but-alive site takes ~1 s) and is retried once.
-#
-# The pane hears about it ONCE: after the link has been down
-# DOWN_AFTER_S, "can't reach Deepgram — retrying"; when it is back, "back".
-# Never a line per attempt or per sentence.
-TTS_CONNECT_S = 2.0
+# The pane hears about it ONCE: after a link has been down DOWN_AFTER_S,
+# "can't reach Deepgram — retrying"; when it is back, "back". Never a line
+# per attempt or per sentence.
+CONNECT_TIMEOUT_S = 2.0
+CONNECT_RETRIES = 1
+KEEP_ALIVE_S = 4.0
 DOWN_AFTER_S = 5.0
 
 
-class AddressBook:
-    """The address that reaches Deepgram, shared by STT and TTS. Also the
-    aiohttp resolver (`resolve`) and the event loop's `getaddrinfo`
-    (`install`) so both links look it up here first."""
+class TtsLink:
+    """Whether the last TTS request reached Deepgram — the health line's
+    view of the HTTP link (the STT websocket reports for itself)."""
 
-    def __init__(self, inner=None) -> None:  # noqa: ANN001 — aiohttp.abc.AbstractResolver
-        import aiohttp
-
-        self._inner = inner or aiohttp.ThreadedResolver()
-        self.good: dict[str, str] = {}      # host → address that last answered
-        self.tts_ok = True                  # the last TTS request reached Deepgram
-        self.on_change = None               # called with the address ('' when dropped) — the app saves it
-        self._loop_getaddrinfo = None
-
-    # --- aiohttp resolver -----------------------------------------------------
-    async def resolve(self, host: str, port: int = 0, family=0):  # noqa: ANN001, ANN201
-        import socket
-
-        addr = self.good.get(host)
-        if addr:
-            return [{"hostname": host, "host": addr, "port": port, "family": socket.AF_INET,
-                     "proto": 0, "flags": socket.AI_NUMERICHOST}]
-        return await self._inner.resolve(host, port, family=family)
-
-    async def close(self) -> None:
-        await self._inner.close()
-
-    # --- the event loop's resolver (websockets → asyncio.create_connection) ---------
-    def install(self, loop: asyncio.AbstractEventLoop) -> None:
-        """Every `create_connection` on this loop asks the book first."""
-        import socket
-
-        original = loop.getaddrinfo
-        self._loop_getaddrinfo = original
-
-        async def getaddrinfo(host, port, *, family=0, type=0, proto=0, flags=0):  # noqa: ANN001, ANN202, A002
-            addr = self.good.get(host) if isinstance(host, str) else None
-            if addr:
-                return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (addr, port))]
-            return await original(host, port, family=family, type=type, proto=proto, flags=flags)
-
-        loop.getaddrinfo = getaddrinfo  # type: ignore[method-assign]
-
-    # --- what the links report ------------------------------------------------------
-    def worked(self, host: str, addr: str) -> None:
-        if self.good.get(host) != addr:
-            logger.info(f"{host}: using {addr}")
-            self.good[host] = addr
-            if self.on_change:
-                self.on_change(addr)
-
-    def failed(self, host: str) -> str | None:
-        """Forget the working address; the next lookup asks DNS."""
-        dropped = self.good.pop(host, None)
-        if dropped:
-            logger.warning(f"{host}: dropping {dropped}")
-            if self.on_change:
-                self.on_change("")
-        return dropped
+    def __init__(self) -> None:
+        self.ok = True
 
 
-def tts_retry_middleware(book: AddressBook):  # noqa: ANN201 — aiohttp middleware
-    """aiohttp client middleware: a connect failure drops the address in use
-    and retries ONCE (the retry asks DNS). Whether the request reached
-    Deepgram lands in `book.tts_ok` for the health line. Not on a slow
-    response: that would double the wait. Recording the address that
-    answered is the connector's job (`sticky_connector`) — by the time a
-    middleware sees the response, aiohttp has detached it from its
-    connection."""
+def tts_retry_middleware(link: TtsLink):  # noqa: ANN201 — aiohttp middleware
+    """aiohttp client middleware: a connect failure is retried once (fresh
+    DNS — the connector caches none). Not on a slow response: that would
+    double the wait. Whether the request reached Deepgram lands in `link.ok`
+    for the health line."""
     import aiohttp
 
     retry_on = (aiohttp.ClientConnectorError, aiohttp.ConnectionTimeoutError, aiohttp.ServerDisconnectedError)
 
     async def middleware(req, handler):  # noqa: ANN001, ANN202
-        host = req.url.host
-        try:
-            resp = await handler(req)
-        except retry_on as e:
-            book.failed(host)
-            logger.warning(f"{host}: {e!r} — retrying once")
+        for attempt in range(CONNECT_RETRIES + 1):
             try:
                 resp = await handler(req)
-            except retry_on:
-                book.tts_ok = False
+            except retry_on as e:
+                if attempt < CONNECT_RETRIES:
+                    logger.warning(f"{req.url.host}: {e!r} — retrying once")
+                    continue
+                link.ok = False
                 raise
-        book.tts_ok = True
-        return resp
+            link.ok = True
+            return resp
 
     return middleware
 
 
-def sticky_connector(book: AddressBook):  # noqa: ANN201 — aiohttp.TCPConnector
-    """A TCPConnector that tells the book which address a FRESH connect
-    reached. `_create_connection` is aiohttp's one seam that sees the
-    transport (3.14 — the lock pins it); a reused kept-alive connection never
-    comes through here, which is right: it is to the recorded address."""
-    import aiohttp
-
-    class StickyConnector(aiohttp.TCPConnector):
-        async def _create_connection(self, req, traces, timeout):  # noqa: ANN001, ANN202
-            proto = await super()._create_connection(req, traces, timeout)
-            peer = proto.transport.get_extra_info("peername") if proto.transport else None
-            if peer:
-                book.worked(req.url.host, peer[0])
-            return proto
-
-    return StickyConnector(resolver=book, use_dns_cache=False)
-
-
-def tts_session(book: AddressBook):  # noqa: ANN201 — aiohttp.ClientSession
+def tts_session(link: TtsLink):  # noqa: ANN201 — aiohttp.ClientSession
     import aiohttp
 
     return aiohttp.ClientSession(
-        connector=sticky_connector(book),
-        timeout=aiohttp.ClientTimeout(sock_connect=TTS_CONNECT_S),
-        middlewares=(tts_retry_middleware(book),),
+        connector=aiohttp.TCPConnector(use_dns_cache=False, keepalive_timeout=KEEP_ALIVE_S),
+        timeout=aiohttp.ClientTimeout(sock_connect=CONNECT_TIMEOUT_S),
+        middlewares=(tts_retry_middleware(link),),
     )
 
 
-def stt_peer(stt) -> str | None:  # noqa: ANN001
-    """The address the STT websocket is connected to, if it is (pipecat 1.4.0
-    holds the Deepgram SDK client in `_connection`, the SDK its websocket in
-    `_websocket` — a test pins both)."""
-    try:
-        addr = stt._connection._websocket.remote_address
-        return addr[0] if addr else None
-    except AttributeError:
-        return None
-
-
-async def health(stt, book: AddressBook, ch: Channel, host: str = "api.deepgram.com",
+async def health(stt, link: TtsLink, ch: Channel,
                  down_after: float = DOWN_AFTER_S, tick: float = 0.5) -> None:  # noqa: ANN001
-    """Ties the two links to the book and to the pane. Every tick: an STT
-    websocket that is up records its address (so TTS follows it); a link
-    that has been down `down_after` seconds drops the address (the next
-    attempt asks DNS) and puts ONE line in the pane; when both links are
-    back, one more. pipecat reconnects STT by itself, raising an ErrorFrame
-    per attempt ("no close frame received or sent", 1011) — none of that is
-    news, so none of it is shown."""
+    """Ties the two links to the pane. A link that has been down `down_after`
+    seconds puts ONE line in the pane; when both links are back, one more.
+    pipecat reconnects STT by itself, raising an ErrorFrame per attempt ("no
+    close frame received or sent", 1011) — none of that is news, so none of
+    it is shown."""
     ready = stt._connection_ready
     down_since: float | None = None
     told = False
     while True:
         await asyncio.sleep(tick)
         now = time.monotonic()
-        stt_ok = ready.is_set()
-        if stt_ok:
-            peer = stt_peer(stt)
-            if peer:
-                book.worked(host, peer)
-        if stt_ok and book.tts_ok:
+        if ready.is_set() and link.ok:
             if told:
                 ch.send({"type": "warn", "message": "back — can reach Deepgram again"})
             down_since, told = None, False
             continue
         down_since = down_since if down_since is not None else now
         if not told and now - down_since >= down_after:
-            book.failed(host)          # whatever we were using is not working; ask DNS
             ch.send({"type": "warn", "message": "can't reach Deepgram — retrying"})
             told = True
 
@@ -303,7 +203,6 @@ class Config:
     voice: str = "aura-2-thalia-en"
     mic: str = ""                        # device name; "" = system default
     speaker: str = ""
-    deepgram_addr: str = ""              # the address that answered last time (the app saves it); "" = ask DNS
     mic_muted: bool = False              # the saved mutes — restored at start
     speaker_muted: bool = False
     headphones: bool = False             # True: mic stays open while we speak
@@ -323,7 +222,6 @@ def config_from_env() -> Config:
         voice=_env("PHANTOM_CLI_VOICE_VOICE", "aura-2-thalia-en"),
         mic=_env("PHANTOM_CLI_VOICE_MIC"),
         speaker=_env("PHANTOM_CLI_VOICE_SPEAKER"),
-        deepgram_addr=_env("PHANTOM_CLI_VOICE_DEEPGRAM").strip(),
         mic_muted=_envb("PHANTOM_CLI_VOICE_MIC_MUTED"),
         speaker_muted=_envb("PHANTOM_CLI_VOICE_SPEAKER_MUTED"),
         headphones=_envb("PHANTOM_CLI_VOICE_HEADPHONES"),
@@ -758,12 +656,8 @@ async def main() -> None:
     # 1 that had finished. Cost: ~0.15–0.3 s more to the first audio of a
     # reply (one request per sentence, keep-alive). Timeouts and the one
     # retry: `tts_session` at the top of the file.
-    book = AddressBook()
-    book.on_change = lambda addr: ch.send({"type": "status", "deepgram": addr})
-    if cfg.deepgram_addr:
-        book.worked("api.deepgram.com", cfg.deepgram_addr)   # start where it worked last time
-    book.install(asyncio.get_running_loop())     # STT's websocket resolves through the book too
-    http = tts_session(book)
+    link = TtsLink()
+    http = tts_session(link)
     tts = DeepgramHttpTTSService(api_key=cfg.deepgram_key, voice=cfg.voice, aiohttp_session=http)
 
     # pipecat's own context: only the aggregators read it (the user aggregator
@@ -926,7 +820,7 @@ async def main() -> None:
                 ch.send({"type": "error", "message": f"{t}: {e}"})
 
     inbox_task = asyncio.create_task(inbox_loop())
-    health_task = asyncio.create_task(health(stt, book, ch))
+    health_task = asyncio.create_task(health(stt, link, ch))
 
     # `ready` only once the pipeline is actually running: a speak_* that
     # arrives before the StartFrame has reached Brain is refused by pipecat

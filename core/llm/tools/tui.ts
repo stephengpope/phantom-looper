@@ -383,10 +383,10 @@ export function workspaceCreateTool(
       description: 'Start a NEW project: create a brand-new PRIVATE GitHub repository, register it as a ' +
         'workspace, and open a session in it, on screen. The repo name is the kebab-cased project name ' +
         '("phantom viewer" → phantom-viewer). Calling this shows the USER an accept/decline prompt with the ' +
-        'final name — nothing is created until they accept ([a], or saying "accept") — so tell them the ' +
-        'prompt is up, then report the result. Declined usually means the name was misheard: ask what to ' +
-        'change, then call again. Use the name the user gave — never invent one. Only for repos that do not ' +
-        'exist yet; an existing repo is added on the /workspace screen.',
+        'final name — nothing is created until they accept (a click, a button, or saying "accept") — so tell ' +
+        'them the prompt is up, then report the result. Declined usually means the name was misheard: ask what ' +
+        'to change, then call again. Use the name the user gave — never invent one. Only for repos that do not ' +
+        'exist yet; an existing repo is added in phantom-cli on the /workspace screen.',
       inputSchema: z.object({
         name: z.string().describe('the project name as the user said it — kebab-cased into the repo name'),
         description: z.string().optional().describe('one-line GitHub repo description, only when the user gave one'),

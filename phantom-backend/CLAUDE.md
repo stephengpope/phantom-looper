@@ -27,7 +27,8 @@ api/routes/         settings secrets workspaces sessions(+lock, transcript, turn
 looper/             engine.ts (events → runLoop → runTurn) · logic.ts (pure rules) · turn.ts (the shared coding-turn runner) · injectFetch.ts
 telegram/           the bot as a client of this server (below): engine.ts (reconcile + webhook + the two modes) · commands.ts · assistant.ts
                     (server-side Assistant turn) · sink.ts (streaming bubble + file delivery) · client.ts · entities.ts · bubble.ts · deepgram.ts ·
-                    attachments.ts · sendMessageTool.ts (`send_message`) · mediaTags.ts (paths named in a reply) · store.ts (the migration-012 rows)
+                    connect.ts (the outbound connection policy, shared with the cli sidecar) · attachments.ts · sendMessageTool.ts (`send_message`) ·
+                    mediaTags.ts (paths named in a reply) · approvals.ts (the approval gate) · store.ts (the migration-012 rows)
 git/                git.ts (guarded exec, classifyGitFailure, primitives) · engine.ts (manual push/pull/status) · autoPush.ts ·
                     gitFixer.ts (+verifyResolved) · commitMessage.ts · github.ts (REST on GitHub's real paths) · remote.ts (pure URL policy)
 pool/               pool.ts (warm clones: claim by rename) · paths.ts
@@ -72,7 +73,13 @@ content-type when there is no body.
   live on the folder row; a loop row is `(workspace, card, coding_session,
   supervisor_session)`, written ONCE when a card enters the loop. Sessions
   carry no card and no branch — they cannot lie. `sessions.agent`
-  ('coding'/'supervisor') is stamped only by the loop path.
+  ('coding'/'supervisor'/null) is WHO DROVE THE LAST TURN: the loop stamps
+  its coder seat at every turn start (`stampAgent`), and every transcript
+  PUT re-derives it from the writer's client id (`agentAfterSave`:
+  `LOOP_CLIENT_ID` → 'coding', anyone else → null; a supervisor record
+  never changes hands). So a person typing into a card's coding session
+  takes it over — /resume reads `manual` — and the loop takes it back when
+  the card comes round again. Never a client's claim.
 - **One branch, start to finish**: the folder's own `{prefix}/{id}`, cut
   from base; restart by id re-clones and checks the same branch out. Destroy
   deletes FILES, not the session. Never `--depth` on a fetch; a session
@@ -245,6 +252,22 @@ every handler answers in either mode. A busy turn queues the next message
 into one follow-up (the cli's queue shape); `/stop` drops the queue and
 aborts.
 
+**The approval gate (`approvals.ts`).** The cli's gate, server-side: a gated
+tool (`workspace_create_repo`, the Assistant's) calls `Approvals.request` and
+waits; the user gets ONE bubble — kind, the exact subject, `[✅ Accept]
+[✖️ Decline]` inline buttons — and answers by tapping (a `callback_query`
+update, routed in `handleUpdate`; every tap is `answerCallbackQuery`'d) or by
+saying the exact word as text or voice (`handleText`, exact match like the
+wake word). Rules: ONE ask per chat (a second resolves false at once); the
+tool's abort (`/stop`) declines; ANY other message declines and is not
+consumed — it queues as the follow-up, so "no, call it foo" reaches the
+Assistant. Answered, the bubble is edited to the verdict and loses its
+buttons. In-memory; a tap on a forgotten bubble gets "expired". Accepted
+`workspace_create_repo` → `POST /workspaces create=true`, then the engine
+sets the active workspace, opens a session and enters code mode (what `/new`
+does). To gate another tool: take `ctx.approve` in its handler — nothing
+else changes.
+
 **Files.** The agent delivers a file by NAMING a `/workspace/...` path in
 its reply — bare, or `MEDIA:/workspace/...` for a path that does not read
 as prose. `mediaTags.ts` finds them (code spans and blockquotes are shown,
@@ -258,9 +281,17 @@ delivery needs nothing in the prompt, so old sessions have it; the prompt's
 `mediaTags.ts` and `entities.ts` are UTF-16 code units — never
 `Array.from` a string there.
 
-**Voice.** Deepgram-only (`deepgram.ts`: two REST calls, no ffmpeg). A
-voice note carries a ✍ reaction while it transcribes, cleared when heard;
-reactions are spelled as escapes (a picker-pasted glyph carries a variation
+**Voice.** Deepgram-only (`deepgram.ts`: two REST calls, no ffmpeg), heard
+with the `voice_stt_model` setting — the same model the cli's voice pane
+uses. The key is read first (no key → no download); the ✍ reaction and the
+Telegram download run together; the ✍ comes off on every exit. Failures are
+three sentences (`NOT_HEARD`: no key / unreachable / vendor). Deepgram and
+the Telegram byte fetch ride `connect.ts` — 2 s connect cut, a failed
+connection retried once, a slow answer never cut, keep-alive under
+Deepgram's 5 s idle close — the SAME policy the sidecar runs (`bot.py`);
+change one, change the other. `connect.ts` uses undici's own `fetch`: Node's
+bundled undici is a different major and refuses the package's Agent.
+Reactions are spelled as escapes (a picker-pasted glyph carries a variation
 selector Telegram rejects). `telegram_transcript_echo` posts the transcript
 back before the turn.
 
@@ -374,7 +405,7 @@ Global-only unless marked (w = +workspace, s = +session):
 `git_fixer_provider/_model/_base_url` `card_prefix`(WORKSPACE ONLY)
 `provider` `model` `base_url` `reasoning` `max_steps`
 `assistant_provider/_model/_base_url` `voice_enabled` `sidebar_width`
-`voice_spoken_voice` `voice_wake_word` `voice_wake_words`
+`voice_spoken_voice` `voice_stt_model` `voice_wake_word` `voice_wake_words`
 `voice_wake_timeout` `auto_plan`(w) `auto_build`(w) `loop_budget_tokens`(w)
 `supervisor_provider/_model/_base_url` `boot_last_workspace`
 `telegram_enabled` `telegram_authorized_user` `telegram_reply_mode`

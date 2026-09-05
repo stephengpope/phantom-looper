@@ -19,8 +19,8 @@ import type { ModelMessage, Tool } from 'ai';
 import { assistantAgent } from '../../core/llm/agents/assistant.js';
 import { agentModelConfig } from '../../core/llm/agentConfig.js';
 import { withCacheBreakpoints } from '../../core/llm/createAgent.js';
-import { assistantKanbanTool, sessionsTool, renderRead,
-  type KanbanArgs, type SessionsArgs } from '../../core/llm/tools/tui.js';
+import { assistantKanbanTool, sessionsTool, workspaceCreateTool, renderRead, kebabName,
+  type KanbanArgs, type SessionsArgs, type WorkspaceCreateArgs } from '../../core/llm/tools/tui.js';
 import { phantomTools } from '../../core/llm/tools/workspace.js';
 import { webTools } from '../../core/llm/tools/web.js';
 import { parseTranscript } from '../../core/llm/transcript.js';
@@ -160,15 +160,57 @@ function sessionsHandler(
   };
 }
 
+/** What the engine supplies for a turn: where it is, and the two things only
+ *  the engine can do — enter a session, and ask the user a yes/no question. */
+export interface AssistantCtx {
+  settings: Record<string, unknown>;
+  workspaceId: () => string | null;
+  activeSession: () => string | null;
+  /** session_switch fired — the caller enters code mode. */
+  onSwitch: (id: string) => Promise<unknown>;
+  /** The approval gate: show the ask, resolve with the user's answer; the
+   *  tool's abort declines. */
+  approve: (ask: { label: string; subject: string }, signal?: AbortSignal) => Promise<boolean>;
+  /** A workspace was just created — make it the active one and open a session
+   *  in it (the telegram meaning of the cli's "on screen"). */
+  onWorkspaceCreated: (workspaceId: string) => Promise<{ session?: string; error?: string }>;
+}
+
+/** `workspace_create_repo`, gated: kebab the name, get the user's accept on
+ *  the FINAL name (the point of the gate), then the backend does the whole flow
+ *  (POST /workspaces create=true: repo, seed, register; always private) and
+ *  the engine opens the new workspace. The same steps as the cli's handler. */
+function workspaceCreateHandler(deps: AssistantDeps, ctx: AssistantCtx) {
+  return async (args: WorkspaceCreateArgs, opts: { abortSignal?: AbortSignal }): Promise<unknown> => {
+    const name = kebabName(args.name ?? '');
+    if (!name) return { error: 'no usable name — ask for the project name again' };
+    const ok = await ctx.approve({ label: 'new private repo', subject: name }, opts.abortSignal);
+    if (!ok) {
+      return { declined: true, note: 'nothing was created — the user declined (or the turn was cut off). ' +
+        'Often the name was misheard: ask what to change before calling again.' };
+    }
+    const j = await api(deps, '/workspaces', { method: 'POST', body: {
+      url: name, create: true, private: true,
+      ...(args.description ? { description: args.description } : {}),
+    } });
+    if (!j.ok) return { error: j.error?.message };
+    const w = j.data as { id: string; owner: string; name: string };
+    const opened = await ctx.onWorkspaceCreated(w.id);
+    return { ok: true, repo: `${w.owner}/${w.name}`, private: true, workspace_id: w.id,
+      ...(opened.session ? { entered: 'a new session in the new workspace — the user is now talking to its coding agent' }
+        : { note: `workspace created, but no session could be opened: ${opened.error ?? 'unknown'}` }) };
+  };
+}
+
 /** The Assistant's whole kit for a telegram turn. File tools + web bind to the
- *  active session when there is one (read-only); board + sessions always. */
-async function assistantKit(
-  deps: AssistantDeps, workspaceId: () => string | null,
-  activeSession: () => string | null, onSwitch: (id: string) => Promise<unknown>,
-): Promise<Record<string, Tool>> {
+ *  active session when there is one (read-only); board + sessions + the gated
+ *  workspace_create_repo always. */
+async function assistantKit(deps: AssistantDeps, ctx: AssistantCtx): Promise<Record<string, Tool>> {
+  const { workspaceId, activeSession, onSwitch } = ctx;
   const kit: Record<string, Tool> = {
     ...assistantKanbanTool(boardHandler(deps, workspaceId)),
     ...sessionsTool(sessionsHandler(deps, activeSession, onSwitch)),
+    ...workspaceCreateTool(workspaceCreateHandler(deps, ctx)),
   };
   const session = activeSession();
   if (session) {
@@ -186,15 +228,10 @@ async function assistantKit(
  *  caller moves the active-session pointer. */
 export async function runAssistantTurn(
   deps: AssistantDeps, history: ModelMessage[], message: string, sink: TelegramSink,
-  ctx: {
-    settings: Record<string, unknown>;
-    workspaceId: () => string | null;
-    activeSession: () => string | null;
-    onSwitch: (id: string) => Promise<unknown>;
-  },
+  ctx: AssistantCtx, abortSignal?: AbortSignal,
 ): Promise<string> {
   const model = agentModelConfig(ctx.settings, 'assistant');
-  const tools = await assistantKit(deps, ctx.workspaceId, ctx.activeSession, ctx.onSwitch);
+  const tools = await assistantKit(deps, ctx);
   const agent = assistantAgent({ ...model, fetch: deps.modelFetch }, tools);
 
   // The user message joins the history now; the turn's produced messages
@@ -204,7 +241,7 @@ export async function runAssistantTurn(
   const marked = withCacheBreakpoints(history);
   let text = '';
   try {
-    const r = await agent.stream({ messages: marked });
+    const r = await agent.stream({ messages: marked, abortSignal });
     for await (const part of r.stream) {
       const p = part as Record<string, unknown>;
       if (p.type === 'text-delta' && typeof p.text === 'string') text += p.text;
