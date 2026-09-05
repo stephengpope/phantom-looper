@@ -52,7 +52,7 @@ updater/apply.sh              one upgrade: pull $IMAGE:$TAG (tolerates a failed 
 caddy/Caddyfile               profile https only: `default_sni {$PHANTOM_BACKEND_ADDRESS}`, `email "{$PHANTOM_BACKEND_CERT_EMAIL}"`
                               (quoted), (public) = ACME `profile shortlived` — bare IPs need it and it is applied to every
                               public cert on purpose — / (internal) = `tls internal`; /docs → 404; reverse_proxy api:8080
-docker-compose.yml            project phantom-looper: postgres (16, pg-data) · api (127.0.0.1:${PHANTOM_BACKEND_PORT:-8080},
+docker-compose.yml            project phantom-backend: postgres (16, pg-data) · api (127.0.0.1:${PHANTOM_BACKEND_PORT:-8080},
                               DOCKER_HOST=tcp://docker-proxy:2375, WORKSPACE_VOLUME, UPDATE_TRIGGER_DIR=/trigger,
                               PHANTOM_BACKEND_ADDRESS, autoheal label) · docker-proxy (tecnativa 0.3.0:
                               CONTAINERS/EXEC/IMAGES/POST/INFO on) · updater · autoheal · caddy (the ONLY profile, `https`;

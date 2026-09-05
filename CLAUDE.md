@@ -29,7 +29,7 @@ Derived and fixed: headers `x-phantom-looper-session` /
 `x-phantom-looper-client` · env `PHANTOM_CLI_*` / `PHANTOM_BACKEND_*` ·
 images `ghcr.io/…/phantom-backend-api` + `…-session` (every session's
 container) · dirs `~/.phantom-cli`, `/opt/phantom-looper` · Postgres schema
-`phantom_looper` · compose project `phantom-looper`, workspace containers
+`phantom_looper` · compose project `phantom-backend`, workspace containers
 `phantom-looper-ws-<session>`, volume `phantom-looper-workspaces` · test
 Postgres `phantom-test-pg`.
 
