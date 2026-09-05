@@ -105,6 +105,9 @@ export class LooperEngine {
   stop(): void {
     this.stopped = true;
   }
+  /** Cards with a round in flight right now — what an api restart would cut
+   *  off (and block). GET /health carries it so `phantom-cli update` can warn. */
+  runningCount(): number { return this.running.size; }
 
   /** Run the loop on every card in a loop column, for one workspace (a
    *  supervision setting changed) or all of them (boot). `canTurn` is

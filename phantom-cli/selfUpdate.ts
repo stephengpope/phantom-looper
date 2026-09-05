@@ -13,10 +13,10 @@
 //     CONFIG_DIR/app/<version>, and move the ONE symlink. The running
 //     process is never touched: the new version is next launch's.
 //
-// The update is offered, never automatic: a line at quit (index.tsx), applied
-// by `phantom-cli update`. Server upgrades ride the server's own updater
-// (POST /update) — `phantom-cli update --server` posts this cli's version as
-// the tag, because same-tag IS the pairing rule.
+// The update is offered, never automatic: a notice at quit, applied by
+// `phantom-cli update` — both halves, or `--client` / `--server`. The command,
+// its messages and the server wait live in update.ts; this file is the
+// client half's mechanics plus the version compare both halves use.
 import { createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync, symlinkSync, unlinkSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';

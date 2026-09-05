@@ -84,6 +84,8 @@ export interface AppCtx {
     runLoopOfSession(sessionId: string, releasedBy: string): void;
     /** auto_plan/auto_build changed — run every loop in a workspace (or all). */
     runAllLoops(workspaceId?: string): void;
+    /** Cards with a round in flight — GET /health's `loops_running`. */
+    runningCount(): number;
   };
   /** The Telegram engine — set by index.ts AFTER listen (a client of this app
    *  like the looper). The webhook route calls handleUpdate; the settings
@@ -115,8 +117,9 @@ export async function buildApp(ctx: AppCtx) {
   // (that is how you see the upgrade land). The container's own HEALTHCHECK
   // sends the key — it runs beside the API and reads the same API_KEY.
   app.get('/health', { schema: { tags: ['meta'], summary: 'Liveness',
-    description: 'Requires the bearer token. Returns the running version — watch it change after POST /update.' } },
-  async () => ({ ok: true, version: ctx.version }));
+    description: 'Requires the bearer token. Returns the running version — watch it change after POST /update — ' +
+      'and `loops_running`, the cards with a round in flight (a restart cuts those rounds off and blocks the cards).' } },
+  async () => ({ ok: true, version: ctx.version, loops_running: ctx.looper?.runningCount() ?? 0 }));
 
   app.addHook('onRequest', async (req, reply) => {
     // The Telegram webhook is public: Telegram cannot send our bearer, and its

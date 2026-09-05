@@ -68,8 +68,11 @@ Dockerfile (root)             the api image: two-stage node:22-bookworm-slim, `n
 ## Rules
 
 - **Script version = cli version.** `install.sh` travels inside the cli
-  tarball; `phantom-cli update --server` POSTs the cli's own tag to
-  `/update` — same-tag IS the pairing rule. `APP_VERSION` is baked by
+  tarball. `phantom-cli update` brings this machine and the server to the
+  LATEST published release (each half alone with `--client` / `--server`),
+  POSTing that tag to `/update` and waiting for `/health` to report it —
+  same-tag is the pairing rule, kept visible by the quit notice rather than
+  enforced. `APP_VERSION` is baked by
   esbuild (`PHANTOM_CLI_VERSION`), as is `NODE_ENV=production` so the
   tarball carries React's production build (`npm run phantom-cli` sets it
   too — the development build's render timings leak under node); `'dev'`

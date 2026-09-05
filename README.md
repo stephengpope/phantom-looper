@@ -125,9 +125,8 @@ The full product: voice, web, and the looper on autopilot. Row names are the one
 | `phantom-cli` | open the app |
 | `phantom-cli --resume <id>` | open straight into a session (`-r` for short) |
 | `phantom-cli setup-backend` | install a new server over SSH and pair this machine |
-| `phantom-cli update` | update the app |
-| `phantom-cli update --server` | update the server |
-| `phantom-cli --version` | print the version (`-v` for short) |
+| `phantom-cli update` | update this machine and the server to the latest release (`--client` or `--server` for one half) |
+| `phantom-cli --version` | print this machine's and the server's version (`-v` for short) |
 
 Environment variables, if you need them:
 

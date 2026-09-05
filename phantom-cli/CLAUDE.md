@@ -14,7 +14,7 @@ npm run phantom-cli -- --resume <id>    # back into a session
 npm run test:phantom-cli                # headless (ink-testing-library + scripted agent/sidecar/brain); a new test file must be added to the script
 npm run typecheck                       # tsc --noEmit && tsc -p phantom-cli (this tsconfig includes ../phantom-backend for test assertions)
 npm run keys                            # press keys, see what the terminal sends
-phantom-cli --version | update | update --server     # headless subcommands (index.tsx)
+phantom-cli --version | update [--client|--server]  # headless subcommands (index.tsx → update.ts)
 ```
 
 ## Settings — two homes, and a row says which
@@ -101,7 +101,7 @@ open-session list is ctrl+n and ONLY ctrl+n) and swallows ctrl+x.
 ## Files
 
 ```
-index.tsx          launch: config chain, headless subcommands (--version, update, update --server), `setup-backend`
+index.tsx          launch: config chain, headless subcommands (--version, update [--client|--server]), `setup-backend`
                    (the install wizard, then exit — NO first-run gate: unpaired opens the app, the boot note says
                    /server or setup-backend), the connection read from the file per request (`connection()`),
                    saved-CA trust re-applied when the address changes (`trustSavedCa`), mouse on/off, patchConsole OFF (console → CONFIG_DIR/cli.log),
@@ -135,7 +135,7 @@ commands.ts        the table + matches/parse/complete
 config.ts local.ts settings.ts settingLabels.ts   above
 modelCatalog.ts    /model picker: models.dev, bundled models-snapshot.json fallback, 24h cache; sync, never throws, never a fence
 mouse.ts screen.ts trim.ts   the mouse parser + selection model · the screen mirror (@xterm/headless) · cell-level row trimming
-provision.ts setup.ts selfUpdate.ts   the setup-backend engine (ssh argv, control master, injectable runner) · the wizard (@clack/prompts, no Ink, install only) · APP_VERSION + self-update
+provision.ts setup.ts selfUpdate.ts update.ts   the setup-backend engine (ssh argv, control master, injectable runner) · the wizard (@clack/prompts, no Ink, install only) · APP_VERSION + the client half's mechanics · the update command, --version, the quit notice
 keys.tsx           npm run keys
 components/        Text (THE one Text — every drawn character is cleaned here) · Screen (THE page frame) · Boundary (the error boundary — see Conventions) · SelectList · table.ts · TextInput · ValueInput · Prompt · Toolbar · StatusLine · Pane ·
                    Parts · Markdown · Shimmer · Divider · Banner · Board · CardEditor · Archived · Tasks · Launcher · SessionSwitcher ·
@@ -441,6 +441,18 @@ updates), `_TRACE_FRAMES` (screen.ts flight recorder), and the rig hooks
   password), the pairing is read back over it, `/health` is verified FROM
   THE LAPTOP, then the model key is pushed. Questions go through `Asker`
   so tests script them (`setup.test.ts`).
-- `selfUpdate.ts`: launch checks run in the background and print at QUIT
-  only; `update` = download → checksum verify → unpack beside → move the
-  ONE symlink; the running process is never touched.
+- `update.ts` (`phantom-cli update`): both halves to the LATEST published
+  release, client first — `--client` / `--server` take one. The target is
+  always latest, never APP_VERSION: a checkout has no tag, and after the
+  client half the process is still the old build. The server half POSTs
+  `/update` and WAITS — polls `/health` every 3s until the version flips
+  (up to 3 minutes; a miss during the restart is expected), then prints the
+  outcome; a timeout names `docker logs phantom-update-run`. `/health`'s
+  `loops_running` gates a `Continue? [y/N]` first (a restart blocks those
+  cards). Every line is pinned in update.test.ts; deps are injected, so
+  nothing there touches a network or a terminal. `--version` prints this
+  machine AND the server. `quitNotice` is the launch-time background check
+  printed at QUIT only, both halves against latest, in either direction
+  ('dev' is never behind, so a checkout is only ever told about the server).
+- `selfUpdate.ts`: the client half — download → checksum verify → unpack
+  beside → move the ONE symlink; the running process is never touched.
