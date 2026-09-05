@@ -122,7 +122,7 @@ board.ts           BoardStore — one workspace's board, outside React; optimist
                    store's own edits (card written → replace, deleted → drop, session → the Session row); a dropped link reconnects
                    with ONE `load()` to fill the gap; `create()` seats the POST's answer through `adoptCard` (replace by id) because
                    the stream delivers the row first
-ndjson.ts          ND-JSON records off a response body — auto-push's stream and the board's events (`stream()` in index.tsx)
+(core/ndjson.ts)   ND-JSON records off a response body — auto-push's and auto-pull's streams and the board's events (`stream()` in index.tsx); lives in core so the headless kits read the same way
 commands.ts        the table + matches/parse/complete
 config.ts local.ts settings.ts settingLabels.ts   above
 modelCatalog.ts    /model picker: models.dev, bundled models-snapshot.json fallback, 24h cache; sync, never throws, never a fence

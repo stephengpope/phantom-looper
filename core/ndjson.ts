@@ -1,6 +1,7 @@
 // ND-JSON off a response body, one parsed record at a time — the server's
-// stream shape (auto-push, command logs, the board's events). A line that is
-// not JSON is skipped; the generator ends when the body does.
+// stream shape (auto-push, auto-pull, command logs, the board's events). Read
+// by the cli and by the headless kits alike. A line that is not JSON is
+// skipped; the generator ends when the body does.
 export async function* ndjson(body: ReadableStream<Uint8Array>): AsyncGenerator<Record<string, unknown>> {
   const reader = body.getReader();
   const dec = new TextDecoder();

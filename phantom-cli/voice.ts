@@ -652,6 +652,6 @@ export const inertVoice = (): VoiceClient =>
 // (core/llm/tools/tui.ts); the App
 // supplies the handler body (it reads the session store directly). Re-exported
 // here because this file is the Assistant's client-side home.
-export { sessionsTool, assistantKanbanTool, codingKanbanTool, workspaceCreateTool, gitAutoPushTool, screenModeTools, kebabName, renderRead, type SessionsArgs, type KanbanArgs, type WorkspaceCreateArgs, type GitAutoPushArgs, type ScreenModeHandler } from '../core/llm/tools/tui.js';
+export { sessionsTool, assistantKanbanTool, codingKanbanTool, workspaceCreateTool, gitAutoPushTool, gitAutoPullTool, screenModeTools, kebabName, renderRead, type SessionsArgs, type KanbanArgs, type WorkspaceCreateArgs, type GitAutoPushArgs, type GitAutoPullArgs, type ScreenModeHandler } from '../core/llm/tools/tui.js';
 
 export function sidecarDirExists(): boolean { return existsSync(dirname(join(SIDECAR_DIR, 'bot.py'))); }

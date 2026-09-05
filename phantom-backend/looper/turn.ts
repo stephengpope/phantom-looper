@@ -13,6 +13,7 @@ import { skillTools } from '../../core/llm/tools/skills.js';
 import { webTools } from '../../core/llm/tools/web.js';
 import { secretTools } from '../../core/llm/tools/secrets.js';
 import { kanbanReadTool } from '../../core/llm/tools/kanban.js';
+import { codingGitTools } from '../../core/llm/tools/git.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
 
 export interface TurnDeps {
@@ -67,6 +68,7 @@ export async function runCodingTurn(
     ...webTools(common),
     ...secretTools({ baseUrl: deps.base, apiKey: deps.apiKey, workspaceId, fetch: deps.f }),
     ...kanbanReadTool({ baseUrl: deps.base, apiKey: deps.apiKey, workspaceId, fetch: deps.f }),
+    ...codingGitTools({ ...common, pick, clientId: deps.client }),
     ...deps.extraTools,
   };
   const model = modelConfigFrom(values);

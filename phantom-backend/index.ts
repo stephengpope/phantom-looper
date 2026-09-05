@@ -12,6 +12,7 @@ import { migrateAllWorkspaceSchemas } from './db/workspaceSchema.js';
 import { ContainerManager } from './workspace/container.js';
 import { GitEngine } from './git/engine.js';
 import { autoPush, type AutoPushEvent } from './git/autoPush.js';
+import { autoPull, type AutoPullEvent } from './git/autoPull.js';
 import { Sandbox } from './workspace/sandbox.js';
 import { AiSdkGitFixerDriver, runGitFixer } from './git/gitFixer.js';
 import { isProvider } from '../core/llm/createAgent.js';
@@ -49,7 +50,7 @@ async function main() {
     return { ...c, apiKey: await resolveCredential(db, env.encryptionKey, credentialForProvider(c.provider)) };
   };
   const gitFixerDriver = new AiSdkGitFixerDriver(gitFixerConfig);
-  // The Git Fixer hook, shared by auto-push and manual /git/pull. Its shell runs in
+  // The Git Fixer hook, shared by auto-push, auto-pull and manual /git/pull. Its shell runs in
   // the workspace container: model-driven commands over conflicted content
   // belong in the most-contained place. Unconditional — auto-push resolves
   // conflicts whenever it runs; it always fixes when it runs.
@@ -81,6 +82,11 @@ async function main() {
   const autoPushFn = (session: SessionRow, workspace: WorkspaceRow, onEvent?: (e: AutoPushEvent) => void | Promise<void>) =>
     autoPush({ db, paths, encryptionKey: env.encryptionKey, fixer: fixerHook, messageConfig, onEvent },
       session, workspace);
+  // Auto-pull rides the same fixer and the same message model — one
+  // configuration for every git operation that commits or resolves.
+  const autoPullFn = (session: SessionRow, workspace: WorkspaceRow, onEvent?: (e: AutoPullEvent) => void | Promise<void>) =>
+    autoPull({ db, paths, encryptionKey: env.encryptionKey, fixer: fixerHook, messageConfig, onEvent },
+      session, workspace);
 
   // One loop drives both the pool tick and the session sweep. The interval is a
   // SETTING read per tick, so a change takes effect without a restart.
@@ -104,6 +110,7 @@ async function main() {
     fs: { docker, containers, engine },
     engine,
     autoPush: autoPushFn,
+    autoPull: autoPullFn,
     pgPool,
     events: new BoardEvents(),
     updateTriggerDir: process.env.UPDATE_TRIGGER_DIR || undefined,

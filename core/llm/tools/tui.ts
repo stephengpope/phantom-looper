@@ -422,6 +422,32 @@ export function gitAutoPushTool(handler: (args: GitAutoPushArgs) => Promise<unkn
   };
 }
 
+export interface GitAutoPullArgs { id?: string }
+
+/** `git_auto_pull`, the Assistant's catch-up verb — the mirror of
+ *  `git_auto_push`: the session's branch (the one on screen unless an id is
+ *  given) takes the base branch IN. The handler AWAITS the whole run so the
+ *  result is the tool's answer; in the cli the steps land as notes in the
+ *  session's pane meanwhile. Not gated: nothing is named or destroyed, and
+ *  nothing reaches base. */
+export function gitAutoPullTool(handler: (args: GitAutoPullArgs) => Promise<unknown>): Record<string, Tool> {
+  return {
+    git_auto_pull: tool({
+      description: "Bring the base branch into a session's branch — the reverse of git_auto_push: fetch origin, " +
+        "commit the session's in-flight work, merge the base branch in (the Git Fixer resolves conflicts), " +
+        'push the branch as a backup. Nothing reaches the base branch. Defaults to the session on screen. Runs ' +
+        'to the end before answering — a conflict can take minutes. The answer is one of: merged (with the ' +
+        'commits that arrived and the files they touched), clean (nothing to pull), blocked (a conflict left ' +
+        'unresolved — the branch is as it was), or error — report it in a sentence. If the user has not asked ' +
+        'to pull or sync, do not.',
+      inputSchema: z.object({
+        id: z.string().optional().describe('session id from session_list; omit for the session on screen'),
+      }),
+      execute: async (args) => handler(args),
+    }),
+  };
+}
+
 /** `kanban_card_*` for the CODING agent — one tool: reading the card it was
  *  pointed at ("do card 7" — also called an issue, task, todo, or ticket).
  *  User-directed: a task needs no card, so it does not go looking for one.

@@ -24,6 +24,7 @@ import type { GitEngine } from '../git/engine.js';
 import { BoardEvents } from './boardEvents.js';
 import { SessionEvents } from './sessionEvents.js';
 import type { AutoPushResult, AutoPushEvent } from '../git/autoPush.js';
+import type { AutoPullResult, AutoPullEvent } from '../git/autoPull.js';
 import type { WorkspaceRow, SessionRow } from '../db/schema.js';
 import type pg from 'pg';
 import { workspaceRoutes } from './routes/workspaces.js';
@@ -46,6 +47,10 @@ export interface AppCtx {
    *  and the archive trigger no-ops. */
   autoPush?: (session: SessionRow, workspace: WorkspaceRow,
     onEvent?: (e: AutoPushEvent) => void | Promise<void>) => Promise<AutoPushResult>;
+  /** Auto-pull (git/autoPull.ts) — base INTO the branch, same fixer. Absent
+   *  in DB-only tests: the auto-pull route answers 503. */
+  autoPull?: (session: SessionRow, workspace: WorkspaceRow,
+    onEvent?: (e: AutoPullEvent) => void | Promise<void>) => Promise<AutoPullResult>;
   pgPool: pg.Pool;
   /** The board's event bus (boardEvents.ts) — the card routes publish, the
    *  events route streams, the looper engine publishes its pairings. index.ts

@@ -12,6 +12,7 @@ import path from 'node:path';
 import Fastify from 'fastify';
 import { runGitFixer, verifyResolved, type GitFixerDriver, type GitFixerExec } from '../phantom-backend/git/gitFixer.js';
 import { autoPush, type AutoPushEvent } from '../phantom-backend/git/autoPush.js';
+import { autoPull, type AutoPullEvent } from '../phantom-backend/git/autoPull.js';
 import { commitMessageFor } from '../phantom-backend/git/commitMessage.js';
 import { testDb, ensureWorkspaceImage, testRoot, setWorkspaceSetting } from './harness.js';
 import { makeDb } from '../phantom-backend/db/client.js';
@@ -470,6 +471,154 @@ test('auto-push: nothing to push says so and pushes nothing', async () => {
   const r = await autoPush(t.deps(), t.session, t.workspace);
   assert.equal(r.result, 'nothing', JSON.stringify(r));
   assert.equal(t.originSha('refs/heads/main'), mainBefore);
+  await t.done();
+});
+
+// ── AUTO-PULL: base INTO the branch, on the same real origins ─────────────────
+
+test('auto-pull: dirty tree is committed, a moved base merges in, the branch is pushed, arrivals named', async () => {
+  const t = await autoPushRoot();
+  await fs.writeFile(path.join(t.dir, 'work.txt'), 'in flight\n');   // uncommitted, as a mid-task agent leaves it
+  t.pushMain('other.txt', 'someone else\n', 'other work');
+  const mainBefore = t.originSha('refs/heads/main');
+  const events: AutoPullEvent[] = [];
+  const r = await autoPull({ db, paths: t.paths, encryptionKey: t.key, onEvent: (e) => { events.push(e); } }, t.session, t.workspace);
+  assert.equal(r.result, 'merged', JSON.stringify(r));
+  assert.deepEqual(events.map((e) => e.step), ['fetch', 'commit', 'merge', 'verify', 'push_branch']);
+  assert.equal(r.arrived?.length, 1, 'one base commit came in');
+  assert.match(r.arrived![0], /other work/);
+  assert.deepEqual(r.files, ['other.txt'], 'the files the merge touched');
+  assert.equal(r.pushed, true);
+  // the tree is clean, holds both sides, and base is an ancestor of HEAD
+  const { stdout: status } = await git(t.dir, ['status', '--porcelain']);
+  assert.equal(status.trim(), '');
+  assert.equal(fsSync.readFileSync(path.join(t.dir, 'other.txt'), 'utf8'), 'someone else\n');
+  await git(t.dir, ['merge-base', '--is-ancestor', 'origin/main', 'HEAD']);
+  // base untouched — a pull never lands on base; the branch backup is on origin
+  assert.equal(t.originSha('refs/heads/main'), mainBefore);
+  assert.equal(t.originSha(`refs/heads/${t.session.branch}`), r.sha);
+  // the in-flight work was committed with the session trailer
+  const msg = execFileSync('git', ['-C', t.dir, 'log', '--format=%B', '-3'], { encoding: 'utf8' });
+  assert.match(msg, /Update work\.txt/);
+  assert.match(msg, new RegExp(`Phantom-Session: ${t.session.id}`));
+  await t.done();
+});
+
+test('auto-pull: nothing behind -> clean, and a dirty tree is NOT committed', async () => {
+  const t = await autoPushRoot();
+  await fs.writeFile(path.join(t.dir, 'work.txt'), 'in flight\n');
+  const { stdout: headBefore } = await git(t.dir, ['rev-parse', 'HEAD']);
+  const events: AutoPullEvent[] = [];
+  const r = await autoPull({ db, paths: t.paths, encryptionKey: t.key, onEvent: (e) => { events.push(e); } }, t.session, t.workspace);
+  assert.equal(r.result, 'clean', JSON.stringify(r));
+  assert.deepEqual(events.map((e) => e.step), ['fetch'], 'no commit step on a no-op pull');
+  const { stdout: headAfter } = await git(t.dir, ['rev-parse', 'HEAD']);
+  assert.equal(headAfter, headBefore, 'no commit minted');
+  const { stdout: status } = await git(t.dir, ['status', '--porcelain']);
+  assert.match(status, /work\.txt/, 'the in-flight edit is still uncommitted');
+  await t.done();
+});
+
+test('auto-pull: a conflict goes to the fixer; the resolution is on the branch, base untouched', async () => {
+  const t = await autoPushRoot();
+  await fs.writeFile(path.join(t.dir, 'f.txt'), 'session line\n');
+  t.pushMain('f.txt', 'base line\n', 'base edits the same file');
+  const mainBefore = t.originSha('refs/heads/main');
+  const r = await autoPull({ db, paths: t.paths, encryptionKey: t.key,
+    fixer: async (_s, _w, d) => {
+      const exec = hostExec(d);
+      await exec('printf "both lines\\n" > f.txt && git add f.txt && git -c user.email=f@f -c user.name=git-fixer commit -q --no-verify -m "git fixer: merge"');
+      return true;
+    },
+  }, t.session, t.workspace);
+  assert.equal(r.result, 'merged', JSON.stringify(r));
+  assert.equal(fsSync.readFileSync(path.join(t.dir, 'f.txt'), 'utf8').trim(), 'both lines');
+  assert.equal(t.originSha('refs/heads/main'), mainBefore, 'nothing on base');
+  const branch = execFileSync('git', ['-C', t.bare, 'show', `refs/heads/${t.session.branch}:f.txt`], { encoding: 'utf8' });
+  assert.equal(branch.trim(), 'both lines', 'the resolution is backed up on the branch');
+  await t.done();
+});
+
+test('auto-pull: fixer fails -> blocked, merge aborted, the pre-pull commit survives', async () => {
+  const t = await autoPushRoot();
+  await fs.writeFile(path.join(t.dir, 'f.txt'), 'session line\n');
+  t.pushMain('f.txt', 'base line\n', 'conflicting base work');
+  const r = await autoPull({ db, paths: t.paths, encryptionKey: t.key, fixer: async () => false }, t.session, t.workspace);
+  assert.equal(r.result, 'blocked', JSON.stringify(r));
+  const { stdout: status } = await git(t.dir, ['status', '--porcelain']);
+  assert.equal(status.trim(), '', 'no half-merged tree left behind');
+  const { stdout: subject } = await git(t.dir, ['log', '--format=%s', '-1']);
+  assert.match(subject, /Update f\.txt/, 'the session work is committed and kept');
+  assert.equal(fsSync.readFileSync(path.join(t.dir, 'f.txt'), 'utf8'), 'session line\n', 'the session side is untouched');
+  await t.done();
+});
+
+// The wire: the route streams, core's ONE client reads it, and the two headless
+// kits (the coding agent's bound tool, the Assistant's) answer through it.
+test('auto-pull over the route: 503 unwired; wired -> the coding kit and the Assistant kit both pull, plan mode drops the coder\'s', async () => {
+  const { buildApp } = await import('../phantom-backend/api/app.js');
+  const { injectFetch } = await import('../phantom-backend/looper/injectFetch.js');
+  const { codingGitTools, autoPullSession } = await import('../core/llm/tools/git.js');
+  const { GitEngine } = await import('../phantom-backend/git/engine.js');
+  const { makeDocker } = await import('../phantom-backend/docker.js');
+  const { ContainerManager } = await import('../phantom-backend/workspace/container.js');
+  const t = await autoPushRoot();
+  const H = { authorization: 'Bearer k', 'content-type': 'application/json', 'x-phantom-looper-session': t.session.id };
+  // The git routes register behind fs + engine (app.ts); neither constructor
+  // touches a daemon, and nothing here runs a container.
+  const docker = makeDocker();
+  const engine = new GitEngine(db, t.paths, t.key);
+  const fsDeps = { docker, containers: new ContainerManager(docker, t.paths), engine };
+
+  // Unwired: a refusal envelope, which the client turns into a thrown message.
+  const bare = await buildApp({ db, paths: t.paths, apiKey: 'k', encryptionKey: t.key, version: 'test', pgPool, fs: fsDeps, engine });
+  let r = await bare.inject({ method: 'POST', url: '/git/auto-pull', headers: H, payload: {} });
+  assert.equal(r.statusCode, 503, r.body);
+  await assert.rejects(
+    autoPullSession({ baseUrl: 'http://x', apiKey: 'k', sessionId: t.session.id, fetch: injectFetch(bare) }),
+    /auto-pull is not wired/);
+
+  // Wired: the real flow behind the route.
+  const app = await buildApp({ db, paths: t.paths, apiKey: 'k', encryptionKey: t.key, version: 'test', pgPool, fs: fsDeps, engine,
+    autoPull: (s, w, onEvent) => autoPull({ db, paths: t.paths, encryptionKey: t.key, onEvent }, s, w) });
+  const f = injectFetch(app);
+  const cfg = { baseUrl: 'http://x', apiKey: 'k', sessionId: t.session.id, fetch: f };
+
+  // Plan mode: the coder's kit has no git_auto_pull (it commits and merges).
+  assert.deepEqual(Object.keys(codingGitTools({ ...cfg, pick: 'readonly' })), []);
+  const tool = codingGitTools(cfg).git_auto_pull!;
+  assert.ok(tool, 'the full kit carries it');
+
+  // Nothing behind -> clean, through the tool.
+  let out = await (tool.execute as (a: unknown, o: unknown) => Promise<any>)({}, {});
+  assert.equal(out.result, 'clean', JSON.stringify(out));
+
+  // Base moves; the coder is mid-edit; the tool pulls, the steps were streamed in words.
+  t.pushMain('other.txt', 'landed elsewhere\n', 'landed elsewhere');
+  await fs.writeFile(path.join(t.dir, 'work.txt'), 'in flight\n');
+  const steps: string[] = [];
+  out = await autoPullSession(cfg, (label) => steps.push(label));
+  assert.equal(out.result, 'merged', JSON.stringify(out));
+  assert.deepEqual(out.files, ['other.txt']);
+  assert.deepEqual(steps, ['fetching the base branch', 'committing this session\'s work',
+    'merging the base branch in', 'verifying against the repo', 'pushing the branch']);
+
+  // The Telegram Assistant's kit carries git_auto_pull and it answers over the
+  // same wire — bound to the account's active session, or an explicit id.
+  const { assistantKit } = await import('../phantom-backend/telegram/assistant.js');
+  const kit = await assistantKit({ f, apiKey: 'k' }, {
+    settings: {}, workspaceId: () => t.workspace.id, activeSession: () => null,
+    onSwitch: async () => ({}), approve: async () => false, onWorkspaceCreated: async () => ({}),
+  });
+  assert.ok(kit.git_auto_pull, 'the Telegram Assistant has git_auto_pull');
+  const run = kit.git_auto_pull!.execute as (a: unknown, o: unknown) => Promise<any>;
+  let tg = await run({}, {});
+  assert.match(tg.error, /no active session/, 'no pointer, no id -> says so');
+  t.pushMain('third.txt', 'more\n', 'more on base');
+  tg = await run({ id: t.session.id }, {});
+  assert.equal(tg.result, 'merged', JSON.stringify(tg));
+  assert.equal(tg.session, t.session.id);
+  assert.deepEqual(tg.files, ['third.txt']);
   await t.done();
 });
 
