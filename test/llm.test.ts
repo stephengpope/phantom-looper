@@ -266,7 +266,7 @@ test('assistant prompt: spoken register, tools; no clock time', () => {
   const p = assistantInstructions();
   assert.match(p, /the Assistant inside phantom-looper/);
   assert.match(p, /replies are read aloud/);
-  assert.match(p, /no lists, no markdown/);
+  assert.match(p, /Never use markdown of any kind/);
   assert.match(p, /No pleasantries, no preamble/);
   assert.match(p, /Never assume you know the state of the UI/);
   assert.match(p, /Stakeholders involved/, 'who is who');
