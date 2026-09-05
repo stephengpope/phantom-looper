@@ -13,7 +13,9 @@
 // server setup.sh brought up (it seats the url + key there), installed talks to
 // yours. Beyond that there is no per-directory config: a phantom-looper
 // workspace is remote, so the directory you launched from says nothing about
-// which one you want.
+// which one you want. PHANTOM_CLI_DIR is the test seam: the suite points it at
+// a fresh temp dir so App's own file writes (the seating rule, the sidecar
+// log) never land in a real home.
 //
 // Precedence (resolved in local.ts, and only for the machine-local keys):
 // code defaults -> settings.json -> env vars. Env still wins so scripts and CI
@@ -23,9 +25,10 @@
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-export const CONFIG_DIR = (process.env.PHANTOM_CLI_VERSION ?? 'dev') === 'dev'
-  ? resolve(import.meta.dirname, '..', '.phantom-cli')
-  : join(homedir(), '.phantom-cli');
+export const CONFIG_DIR = process.env.PHANTOM_CLI_DIR
+  || ((process.env.PHANTOM_CLI_VERSION ?? 'dev') === 'dev'
+    ? resolve(import.meta.dirname, '..', '.phantom-cli')
+    : join(homedir(), '.phantom-cli'));
 export const CONFIG_PATH = join(CONFIG_DIR, 'settings.json');
 
 export const PROVIDERS = ['anthropic', 'openai', 'google', 'openai-compatible'] as const;

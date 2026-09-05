@@ -33,7 +33,9 @@ phantom-cli --version | update | update --server     # headless subcommands (ind
   `~/.phantom-cli` installed, `<repo>/.phantom-cli` (gitignored) from source
   (`APP_VERSION === 'dev'`). Dev and installed never share a byte; setup.sh
   seats the dev server's url + key in the repo one. Never build a
-  `~/.phantom-cli` path by hand — import `CONFIG_DIR`.
+  `~/.phantom-cli` path by hand — import `CONFIG_DIR`. `PHANTOM_CLI_DIR`
+  overrides it; `npm run test:phantom-cli` sets it to a fresh temp dir so
+  App's own writes (adoptServerCopy, sidecar.log) never touch a real home.
 - **Server** (`settings.ts`, async): everything else — the model config,
   the Assistant's trio, the voice keys, `sidebar_width`, `boot_last_workspace`
   (server-only, not in config.ts), the credentials — ordinary keys of the

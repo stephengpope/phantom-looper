@@ -1442,7 +1442,7 @@ export function App({
       setMenu(which);
       // The work column, a beat behind the instant open (see refreshPicker).
       if (which === 'resume') void refreshPicker(true).catch(() => {});
-    } catch (e) { note(`could not list: ${(e as Error).message}`); }
+    } catch (e) { note(`phantom-backend: could not list sessions: ${(e as Error).message}`); }
   }, [refreshPicker, note]);
 
   // What is running in the session's container — the /tasks screen's rows and
@@ -1506,7 +1506,7 @@ export function App({
       setArchivedTotal(d.total);
       setArchivedNotice(undefined);
       setMenu('archived');
-    } catch (e) { note(`could not list archived cards: ${(e as Error).message}`); }
+    } catch (e) { note(`phantom-backend: could not list archived cards: ${(e as Error).message}`); }
   }, [api, note]);
   // The next page, appended in place — morePicker's shape: the cursor is the
   // last loaded row, failure keeps what is loaded, scrolling again retries.
@@ -1561,9 +1561,17 @@ export function App({
       let ws: WorkspaceInfo[];
       try { ws = await api('GET', '/workspaces') as unknown as WorkspaceInfo[]; }
       catch (e) {
-        note(`could not reach the server: ${(e as Error).message}`);
-        note('have a server? its address and key go under /server, then /workspace starts a session');
-        note('need one? quit and run `phantom-cli setup-backend`');
+        // Two different failures, two different fixes: the server answered and
+        // refused the key (401), or nothing answered at that address at all.
+        const url = String(localValues(configPath).server_url);
+        if ((e as { status?: number }).status === 401) {
+          note(`phantom-backend at ${url} rejected the key: ${(e as Error).message}`);
+          note('fix the key under /server — a server box prints its key with `phantom-backend key`; a dev checkout gets it from ./scripts/setup.sh');
+        } else {
+          note(`phantom-backend at ${url} could not be reached: ${(e as Error).message}`);
+          note('have a server? its address and key go under /server, then /workspace starts a session');
+          note('need one? quit and run `phantom-cli setup-backend`');
+        }
         return;
       }
       // Nothing registered yet: go straight to adding one. An empty install
@@ -1729,7 +1737,7 @@ export function App({
           setTasksNotice(undefined);
           killArmed.current = null;
           setMenu('tasks');
-        } catch (e) { note(`could not list tasks: ${(e as Error).message}`); }
+        } catch (e) { note(`phantom-backend: could not list tasks: ${(e as Error).message}`); }
         return;
       }
       case 'plan': {

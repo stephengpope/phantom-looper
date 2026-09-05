@@ -202,9 +202,11 @@ export function apiFor(base: string, key: string, ca?: string) {
         res.on('end', () => {
           try {
             const j = JSON.parse(text) as { ok: boolean; data?: unknown; error?: { message?: string; code?: string } };
-            if (!j.ok) return reject(new Error(j.error?.message ?? j.error?.code ?? `${method} ${path}: HTTP ${res.statusCode}`));
+            // The status rides on the error: a 401 means the server answered
+            // and refused the key, which is a different fix from "nothing there".
+            if (!j.ok) return reject(Object.assign(new Error(j.error?.message ?? j.error?.code ?? `${method} ${path}: HTTP ${res.statusCode}`), { status: res.statusCode }));
             resolvePromise(j.data ?? j);   // /health answers flat, without a data envelope
-          } catch { reject(new Error(`${method} ${path}: HTTP ${res.statusCode}`)); }
+          } catch { reject(Object.assign(new Error(`${method} ${path}: HTTP ${res.statusCode}`), { status: res.statusCode })); }
         });
       });
       req.on('timeout', () => req.destroy(new Error('timeout')));
