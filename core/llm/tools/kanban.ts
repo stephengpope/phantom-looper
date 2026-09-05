@@ -33,6 +33,10 @@ export interface LoopCardConfig extends KanbanToolsConfig {
   cardId: number;
   /** The card's number — what the descriptions call it. */
   seq: number;
+  /** Sent as x-phantom-looper-client on every write, so the server knows the
+   *  LOOP moved the card (the looper passes its own id). Without it a
+   *  supervisor's move is indistinguishable from a person's. */
+  clientId?: string;
 }
 
 /** The run-ending tools. A turn that calls one is terminal: the loop breaks
@@ -71,7 +75,9 @@ const headers = (cfg: KanbanToolsConfig, body?: boolean) => ({
 async function patchCard(cfg: LoopCardConfig, body: unknown): Promise<unknown> {
   const f = cfg.fetch ?? fetch;
   const r = await f(`${cfg.baseUrl}/workspaces/${cfg.workspaceId}/cards/${cfg.cardId}`, {
-    method: 'PATCH', headers: headers(cfg, true), body: JSON.stringify(body),
+    method: 'PATCH',
+    headers: { ...headers(cfg, true), ...(cfg.clientId ? { 'x-phantom-looper-client': cfg.clientId } : {}) },
+    body: JSON.stringify(body),
   });
   const j = await r.json() as { ok: boolean; data?: unknown; error?: unknown };
   return j.ok ? j.data : { error: j.error };

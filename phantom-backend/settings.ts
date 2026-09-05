@@ -8,6 +8,7 @@
 import type { Db } from './db/client.js';
 import type { WorkspaceRow, SessionRow } from './db/schema.js';
 import { readStore, GLOBAL, workspaceScope, sessionScope } from './store.js';
+import { latestModel } from './models.js';
 
 // Plain settings are never encrypted, so resolving one asks for plain values
 // only (null key) — a credential is read by resolveCredential, which is handed
@@ -50,9 +51,12 @@ export const DEFAULTS = {
   card_prefix: null as string | null,   // unset => derived from the repo name
   // The coding agent's model config. ONE store now: the cli and the server's
   // looper read the same rows, which is what makes "the experience is the
-  // same" literal.
-  provider: 'anthropic' as string,
-  model: 'claude-opus-5' as string,
+  // same" literal. NO default provider: nothing runs until a person picks one
+  // (the wizard, /model). The model's default is not a constant either — unset,
+  // it resolves to the newest model the catalog lists for the provider
+  // (models.ts, applied in computeLayersFor), so it follows releases.
+  provider: null as string | null,
+  model: null as string | null,
   base_url: null as string | null,
   reasoning: 'medium' as string,
   max_steps: null as number | null,
@@ -89,6 +93,9 @@ export const DEFAULTS = {
   telegram_authorized_user: null as string | null,
   telegram_reply_mode: 'text' as string,
   telegram_transcript_echo: false as boolean,
+  // A DM when the LOOP moves a card into in_progress / blocked / done — the
+  // automated work, seen from the phone. Workspace-overridable.
+  telegram_auto_build_notifications: true as boolean,
 } as const;
 
 /** The credentials the SERVER holds, declared here so nothing can store one in
@@ -153,8 +160,8 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   git_fixer_model: 'The model that resolves merge conflicts and writes auto-push commit messages — not the model you chat with. Empty = the coding agent\'s model; required when the provider differs from the coding agent\'s.',
   git_fixer_base_url: 'Endpoint when the Git Fixer\'s provider is openai-compatible (Ollama, vLLM, OpenRouter). Empty inherits the coding agent\'s only while the provider matches.',
   card_prefix: 'The letters in front of every card number on this board — "PHA" gives PHA-7. Unset means the first three letters of the repo name.',
-  provider: 'The coding agent\'s LLM provider. Its key is set on /keys.',
-  model: 'Model id for the chosen provider.',
+  provider: 'The coding agent\'s LLM provider. Its key is set on /keys. Nothing runs until one is chosen.',
+  model: 'Model id for the chosen provider. Empty = the newest model the catalog lists for it, so it follows releases.',
   base_url: 'Endpoint for openai / openai-compatible. Required by openai-compatible.',
   reasoning: 'How much the model thinks before answering. Providers map this to their own setting.',
   max_steps: 'Tool calls allowed per turn before the agent must stop and answer. Empty = unlimited.',
@@ -179,6 +186,7 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   telegram_authorized_user: 'Your numeric Telegram user id — the ONE sender the bot answers; everyone else is silently ignored. Get it from @userinfobot.',
   telegram_reply_mode: 'How the bot answers: text, voice (a spoken note, on the Assistant\'s Deepgram voice), or both. Read at the start of each turn.',
   telegram_transcript_echo: 'On, a voice note\'s transcript is posted back as 🎤 "…" before the turn runs, so a misheard word is distinguishable from a misunderstood instruction.',
+  telegram_auto_build_notifications: 'A message when the loop moves a card to in progress, blocked, or done. Moves made by people are never announced. Reply to one to enter the card\'s coding session. Per workspace: override on the workspace.',
 };
 
 /** Type metadata, one entry per setting — TypeScript forces completeness the
@@ -245,9 +253,9 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
   git_fixer_model: { type: 'string', label: 'git fixer: model', group: 'git', nullable: true },
   git_fixer_base_url: { type: 'string', label: 'git fixer: endpoint', group: 'git', nullable: true },
   card_prefix: { type: 'string', label: 'card number prefix', group: 'board', nullable: true },
-  provider: { type: 'string', label: 'provider', group: 'model',
+  provider: { type: 'string', label: 'provider', group: 'model', nullable: true,
     choices: ['anthropic', 'openai', 'google', 'openai-compatible'] },
-  model: { type: 'string', label: 'model', group: 'model' },
+  model: { type: 'string', label: 'model', group: 'model', nullable: true },
   base_url: { type: 'string', label: 'endpoint', group: 'model', nullable: true },
   reasoning: { type: 'string', label: 'reasoning', group: 'model',
     choices: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
@@ -276,6 +284,7 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
   telegram_reply_mode: { type: 'string', label: 'reply mode', group: 'telegram',
     choices: ['text', 'voice', 'both'] },
   telegram_transcript_echo: { type: 'boolean', label: 'transcript echo', group: 'telegram' },
+  telegram_auto_build_notifications: { type: 'boolean', label: 'auto build alerts', group: 'telegram' },
 };
 
 // ONE rule at every layer: null in a PATCH clears the key; null is never
@@ -353,6 +362,7 @@ const SCOPED: Partial<Record<SettingKey, Array<'workspace' | 'session'>>> = {
   auto_plan: ['workspace'],
   auto_build: ['workspace'],
   loop_budget_tokens: ['workspace'],
+  telegram_auto_build_notifications: ['workspace'],
 };
 
 /** Which settings a single workspace can differ on. Derived from the same
@@ -433,11 +443,26 @@ function layersFrom(byScope: Map<string, Map<string, { value: unknown }>>, ctx: 
   };
 }
 
+type ByScope = Awaited<ReturnType<typeof readStore>>;
+
+/** computeLayers plus the one default that is not a constant: `model` unset
+ *  resolves to the newest model the catalog lists for the resolved provider
+ *  (models.ts), reported as the `default` layer so a client can say so. Every
+ *  reader below goes through here, so GET /settings, resolveMany and the
+ *  looper's cfg all see the same id. */
+function computeLayersFor(key: SettingKey, byScope: ByScope, ctx: ResolveCtx): SettingLayers {
+  const l = computeLayers(key, layersFrom(byScope, ctx, key));
+  if (key !== 'model' || l.value != null) return l;
+  const provider = computeLayers('provider', layersFrom(byScope, ctx, 'provider')).value;
+  const d = latestModel(typeof provider === 'string' ? provider : null);
+  return { ...l, default: d, value: d };
+}
+
 export async function resolveWithSource<K extends SettingKey>(
   db: Db, key: K, ctx: ResolveCtx = {},
 ): Promise<{ value: unknown; source: Source }> {
   const byScope = await readStore(db, null, scopesFor(ctx));
-  const { value, source } = computeLayers(key, layersFrom(byScope, ctx, key));
+  const { value, source } = computeLayersFor(key, byScope, ctx);
   return { value, source };
 }
 
@@ -455,7 +480,7 @@ export async function resolveMany<K extends SettingKey>(
 ): Promise<{ [P in K]: (typeof DEFAULTS)[P] }> {
   const byScope = await readStore(db, null, scopesFor(ctx));
   const out = {} as { [P in K]: (typeof DEFAULTS)[P] };
-  for (const k of keys) out[k] = computeLayers(k, layersFrom(byScope, ctx, k)).value as (typeof DEFAULTS)[K] as never;
+  for (const k of keys) out[k] = computeLayersFor(k, byScope, ctx).value as (typeof DEFAULTS)[K] as never;
   return out;
 }
 
@@ -478,7 +503,7 @@ export async function settingsLayers(
   const byScope = await readStore(db, null, scopesFor(ctx));
   const out = {} as Record<SettingKey, SettingLayers>;
   for (const key of Object.keys(DEFAULTS) as SettingKey[]) {
-    out[key] = computeLayers(key, layersFrom(byScope, ctx, key));
+    out[key] = computeLayersFor(key, byScope, ctx);
   }
   return out;
 }

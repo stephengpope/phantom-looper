@@ -134,6 +134,7 @@ async function main() {
   // re-registers a stale webhook and pushes the command menu.
   const telegram = new TelegramEngine({
     db, paths, app, apiKey: env.apiKey, encryptionKey: env.encryptionKey,
+    events: ctx.events,
     sessionEvents: ctx.sessionEvents, publicAddress: process.env.PHANTOM_BACKEND_ADDRESS,
   });
   ctx.telegram = telegram;

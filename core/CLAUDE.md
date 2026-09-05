@@ -16,7 +16,9 @@ session.ts            openSession — THE session path (below) · SessionLockedE
 skills/skills.ts      scanner: SKILLS_DIR '.agents/skills', scanSkills, mergeSkills, frontmatter parsing
 skills/validate.ts    write-side rules: name regex, SKILL.md, file paths, size limits, lintSkillMd (advisory)
 llm/createAgent.ts    provider switch · OAuth disguise · thinking rule · withRetry · withCacheBreakpoints · createAgent
-llm/agentConfig.ts    settings → ModelConfig: PROVIDER_KEY, cascade, agentModelConfig, modelConfigFrom, buildCodingAgent
+llm/agentConfig.ts    settings → ModelConfig: PROVIDER_KEY, cascade, agentModelConfig, modelConfigFrom, buildCodingAgent. No default
+                      provider: unset passes through as '' and languageModel hands back a handle whose first call fails with
+                      `NO_PROVIDER` (the fix in the words); cascade throws it at build for the other agents
 llm/transcript.ts     the ONE transcript format: Transcript (file-backed), parse/serialize, usage events, memoryRecorder
 llm/agents/           coding · assistant · gitFixer · supervisor — one file each: instructions + agent builder
 llm/prompts/          template.ts (fill) · shared blocks (stakeholders values communication environment git sending) ·
@@ -237,7 +239,9 @@ dropped.
   `resolution`). `ENDING_TOOLS` = `['kanban_card_move',
   'kanban_card_block']` — the looper reads these names off the transcript
   to know a turn was terminal. All three are bound to THE card at build (no
-  card input) and their DESCRIPTIONS carry "THIS ENDS THE RUN".
+  card input) and their DESCRIPTIONS carry "THIS ENDS THE RUN". `LoopCardConfig.clientId`
+  rides every write as `x-phantom-looper-client` (the looper passes
+  `LOOP_CLIENT_ID`) — how the server tells the loop's move from a person's.
   `renderCard` makes cli-served and server-served reads identical.
 - `tui.ts` — the Assistant's kits (static descriptions; the host supplies
   the handlers — App in the cli, `telegram/assistant.ts` headless):

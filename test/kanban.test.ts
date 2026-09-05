@@ -554,6 +554,18 @@ test('GET /workspaces/:id/events streams every card write as it happens, this wo
     assert.equal((ev.card as { title: string }).title, 'renamed');
     assert.equal((ev.card as { requirements: { text: string }[] }).requirements[0].text, 'a step');
 
+    // The record names the WRITER and the status BEFORE the write, so a
+    // listener (the Telegram alerts) can tell the loop's move from an edit
+    // without remembering anything. Create has no `from`.
+    assert.equal(ev.from, 'backlog');
+    assert.equal(ev.client, undefined, 'no header, no client');
+    await app.inject({ method: 'PATCH', url: `/workspaces/${wsId}/cards/${created.id}`,
+      headers: { ...H, 'x-phantom-looper-client': 'supervisor' }, payload: { status: 'in_progress' } });
+    ev = await next();
+    assert.equal((ev.card as { status: string }).status, 'in_progress');
+    assert.equal(ev.from, 'backlog');
+    assert.equal(ev.client, 'supervisor');
+
     await app.inject({ method: 'DELETE', url: `/workspaces/${wsId}/cards/${created.id}`, headers: H });
     ev = await next();
     assert.deepEqual(ev, { event: 'deleted', id: Number(created.id) });

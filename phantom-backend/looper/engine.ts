@@ -298,7 +298,7 @@ export class LooperEngine {
       // move + items. Bound at build time — no card input, so neither agent
       // can ever act on a card other than the one it is running.
       const cardCfg: LoopCardConfig = { baseUrl: BASE, apiKey, workspaceId: workspace.id,
-        cardId: card.id, seq: card.seq, fetch: this.f };
+        cardId: card.id, seq: card.seq, fetch: this.f, clientId: CLIENT_ID };
       const coderDeps = { ...this.turnDeps(card.seq), extraTools: loopBlockTool(cardCfg) };
 
       const opener = unsentKickoff(card, opened.messages);

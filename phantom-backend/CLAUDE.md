@@ -14,6 +14,9 @@ env.ts              REQUIRED: ENCRYPTION_KEY (base64, exactly 32 bytes — check
                     LOG_LEVEL, APP_VERSION, PHANTOM_BACKEND_ADDRESS (index.ts → the Telegram webhook host);
                     test seams GITHUB_API_BASE, FIRECRAWL_API_BASE
 settings.ts         DEFAULTS / DESCRIPTIONS / META / CREDENTIALS / SCOPED — every general key, declared in code
+models.ts           the model catalog: models.dev, an hour in memory, the last good copy, then models-snapshot.json beside it
+                    (fresh per image build; the committed one for a source run); sync reads, never throws; `latestModel` is
+                    the `model` default. MODELS_DEV_API_BASE is the test seam
 store.ts            the settings table: read/put/drop by (scope, namespace, key); computeLayers
 crypto.ts           AES-256-GCM, layout [iv 12][tag 16][ct] — credentials and secrets at rest
 sessions.ts         create / restart / destroy / sweep, the session lock, loop + agent stamps
@@ -62,7 +65,7 @@ content-type when there is no body.
 | commands | `GET /commands/:cmdId/logs` — detached bash ND-JSON replay + follow |
 | cards | `GET/POST /workspaces/:id/cards` (the GET's modes: default = the board, unarchived; `?seq=` = that one card, archived or not; `?archived=only` = the archive, newest `updated_at` first, keyset-paged `limit/before/before_id`, `total` = the whole archive; `?archived=true` = everything), `PATCH/DELETE /workspaces/:id/cards/:cardId`, `GET /workspaces/:id/revisions?card=<seq>`, `GET /workspaces/:id/events` (the board's live feed — ND-JSON, open until the client hangs up) |
 | web | `POST /web/search`, `POST /web/fetch` (session header) |
-| system | `GET /health` (token required; version), `POST /update {tag}` |
+| system | `GET /health` (token required; version), `POST /update {tag}`, `GET /models?provider=` (the catalog for one provider, newest first, `source` live/snapshot; [] for openai-compatible; a convenience, never a fence) |
 | telegram | `POST /telegram/webhook` — the ONE unauthenticated route; its secret-token header, timing-safe-checked, is the auth |
 
 ## Sessions, folders, loops, the lock
@@ -226,8 +229,22 @@ DM-only, WEBHOOK (never polling). Its migration-012 rows are STATE, not
 settings: the account (one row, mode + active session + webhook secret
 encrypted), `telegram_sent` (every bubble → its origin, so a reply switches
 into its conversation), update dedup. Settings are ordinary declared keys
-(`telegram_enabled/_authorized_user/_reply_mode/_transcript_echo`) + the
-`telegram_bot_token` credential.
+(`telegram_enabled/_authorized_user/_reply_mode/_transcript_echo/
+_auto_build_notifications`) + the `telegram_bot_token` credential.
+
+**Auto build alerts (`alerts.ts`).** The bot's ONE unprompted message: a DM
+when the LOOP moves a card into in_progress / blocked / done (blocked shows
+the reason). The engine listens on the board bus (`events.subscribeAll`,
+every workspace); `autoBuildAlert` is the pure decision: `event === card`,
+`client === LOOP_CLIENT_ID` (the loop's card tools send it — `LoopCardConfig.clientId`;
+a person's move from the cli, the pane or Telegram's own Assistant is never
+announced), `from !== status`, status in the three. Nothing is remembered:
+`from` is the row's status before the write, so a restart loses nothing and
+never double-sends. Gated per workspace by `telegram_auto_build_notifications`
+(workspace-overridable, default on) plus the bot's own `telegram_enabled` +
+authorized user, all read off `GET /workspaces/:id` in one call. The bubble is
+recorded with the card's coding session as origin, so a reply to it enters
+that session in code mode. A failed send is logged, never retried.
 
 **Two independent knobs on the account row** — WHICH session
 (`activeSessionId`, `store.setActiveSession`) and WHO answers (`mode`,
@@ -387,8 +404,11 @@ name).
   tick, the coder's block, the engine's own PATCHes — all HTTP clients of
   this one process), and each handler publishes on `api/boardEvents.ts`
   (`ctx.events`; index.ts makes one, app.ts guarantees one). `GET
-  /workspaces/:id/events` streams it as ND-JSON: `{event: card, card}` on
-  create/update (the full row — the auto-push-failure un-archive too),
+  /workspaces/:id/events` streams it as ND-JSON: `{event: card, card, from?,
+  client?}` on create/update (the full row — the auto-push-failure
+  un-archive too; `from` = the status before an update, `client` = the
+  writer's `x-phantom-looper-client` — read by `telegram/alerts.ts`, ignored
+  by the cli),
   `{event: deleted, id}`, `{event: session, card, id, name}` when the
   engine writes a loop row (the one write only it knows about), a
   heartbeat every 15s. No replay: the cli loads on connect and again on
@@ -411,6 +431,14 @@ A row is `(scope, namespace, key)`, plain `value` or encrypted `value_enc`
 general read. Resolution: code default → global → workspace → session, most
 specific wins, one read (`computeLayers`). Null clears at every layer and
 is never stored; a nullable key MUST default to null (boot-enforced).
+**No default provider**: `provider` defaults to null and nothing runs until
+a person picks one (the wizard, /model); an agent still BUILDS on a bare
+server (core's `languageModel` hands back a handle whose first call says
+`no provider set — pick one on /model…`), so a session opens and the first
+turn carries the fix. `model` unset resolves to the newest model the catalog
+lists for the provider (`computeLayersFor` → models.ts `latestModel`),
+reported as the `default` layer, so every reader — GET /settings, the
+looper's cfg, resolveMany — sees the same id and it follows releases.
 Adding a key = `DEFAULTS` + `DESCRIPTIONS` + `META` (TypeScript-enforced;
 `META.group` ∈ sessions | containers | limits | git | model | voice |
 board | telegram) + `SCOPED` if not global-only. Defaults live in code; the

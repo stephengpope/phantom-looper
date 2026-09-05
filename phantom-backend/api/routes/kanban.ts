@@ -2,7 +2,7 @@
 // (workspaceSchema.ts) and are written ONLY through these routes — the API
 // owns the writes. The column list and the card prefix are workspace fields
 // (PATCH /workspaces/:id); defaults live here in code, the DB stores overrides.
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { eq } from 'drizzle-orm';
 import type pg from 'pg';
 import { workspaces, type WorkspaceRow } from '../../db/schema.js';
@@ -29,6 +29,13 @@ export const prefixOf = async (db: Db, w: WorkspaceRow): Promise<string> =>
   (await resolve(db, 'card_prefix', { workspace: w })) ?? defaultPrefix(w.name);
 
 const TAG = { tags: ['kanban'] };
+// Who wrote: the x-phantom-looper-client header every client sends (the
+// session routes' lock reads the same one). Rides each card event so a
+// listener can tell the loop's moves from a person's.
+const writerOf = (req: FastifyRequest): string | undefined => {
+  const h = req.headers['x-phantom-looper-client'];
+  return typeof h === 'string' && h ? h : undefined;
+};
 // THE card field list — create, update, and the schema all derive from it.
 // It was three hand-kept lists once; create's copy silently lacked
 // `supervised`, so a card born armed landed unarmed. Never again: one list.
@@ -235,7 +242,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
       // The looper runs on card writes, not on a clock: a card born straight
       // into a loop column starts here. Eligibility is the engine's to judge.
       ctx.looper?.runLoop(w.id, Number(rows[0].seq));
-      events.publish(w.id, { event: 'card', card: rows[0] });
+      events.publish(w.id, { event: 'card', card: rows[0], client: writerOf(req) });
       return ok({ ...await board(w), card: rows[0] });
     });
 
@@ -271,15 +278,14 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
       }
       if (!sets.length && !ops) return reply.code(400).send(err('invalid_args', 'no fields to update'));
 
-      // The auto-push trigger needs the TRANSITION, not the value: only a card
-      // going false -> true archived pushes (re-saving an archived card must
-      // not re-fire).
-      let wasArchived: boolean | undefined;
-      if (req.body.archived === true) {
-        const prior = await pool.query(
-          `select archived from ${cardsTable(w)} where id = $1`, [Number(req.params.cardId)]);
-        wasArchived = prior.rows.length ? Boolean(prior.rows[0].archived) : undefined;
-      }
+      // Two triggers need the TRANSITION, not the value: auto-push fires only
+      // on archived false -> true (re-saving an archived card must not
+      // re-fire), and the card event carries the status BEFORE the write so
+      // a listener can tell a move from an edit. One read serves both.
+      const prior = await pool.query(
+        `select archived, status from ${cardsTable(w)} where id = $1`, [Number(req.params.cardId)]);
+      const wasArchived: boolean | undefined = prior.rows.length ? Boolean(prior.rows[0].archived) : undefined;
+      const wasStatus: string | undefined = prior.rows.length ? String(prior.rows[0].status) : undefined;
 
       // Item ops read the list under the row lock and change named items
       // only, so two agents working different items both land — nothing is
@@ -332,7 +338,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
         // auto_plan/auto_build flip, an unblock. The engine re-reads the row
         // and checks canTurn itself, so an irrelevant edit is a cheap no-op.
         ctx.looper?.runLoop(w.id, Number(rows[0].seq));
-        events.publish(w.id, { event: 'card', card: rows[0] });
+        events.publish(w.id, { event: 'card', card: rows[0], from: wasStatus, client: writerOf(req) });
         return ok({ ...await board(w), card: rows[0] });
       } catch (e) {
         if (client) await client.query('rollback').catch(() => {});
@@ -381,7 +387,8 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
   // replay: the client loads the board on connect and again on reconnect.
   app.get<{ Params: { id: string } }>(
     '/workspaces/:id/events', { schema: { ...TAG, summary: 'Board events stream',
-      description: 'ND-JSON, open until the client hangs up: {event: card, card} on every create/update (the full row), ' +
+      description: 'ND-JSON, open until the client hangs up: {event: card, card, from?, client?} on every create/update ' +
+        '(the full row; from = the status before an update, client = the writer\'s x-phantom-looper-client), ' +
         '{event: deleted, id} on a hard delete, {event: session, card, id, name} when a loop pairs a card with its ' +
         'coding session, {event: heartbeat} every 15 s. No replay — load the board on connect.',
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } } },
