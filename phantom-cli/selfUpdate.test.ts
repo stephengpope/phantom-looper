@@ -78,11 +78,12 @@ test('selfUpdate: download, verify, unpack, re-link (release build simulated)', 
   const tmp = mkdtempSync('/tmp/phantom-update-');
   const { tarball, checksums } = makeRelease(tmp);
   const home = join(tmp, 'home');
+  const dir = join(home, '.phantom-cli');
   const binDir = join(home, '.local', 'bin');
 
   const line = await mod.selfUpdate('v9.9.9', {
     fetchFn: fetchFor({ [platformAsset()]: tarball, 'checksums.txt': checksums }),
-    home, binDir,
+    dir, binDir,
   });
   assert.match(line, /9\.9\.9 installed/);
   const link = join(binDir, 'phantom-cli');
@@ -92,7 +93,7 @@ test('selfUpdate: download, verify, unpack, re-link (release build simulated)', 
   // a corrupted download is refused whole — nothing on disk changes
   await assert.rejects(() => mod.selfUpdate('v9.9.10', {
     fetchFn: fetchFor({ [platformAsset()]: Buffer.concat([tarball, Buffer.from('tampered')]), 'checksums.txt': checksums }),
-    home, binDir,
+    dir, binDir,
   }), /checksum mismatch/);
   assert.equal(existsSync(join(home, '.phantom-cli', 'app', '9.9.10')), false);
   assert.equal(readlinkSync(link), join(home, '.phantom-cli', 'app', '9.9.9', 'bin', 'phantom-cli'));

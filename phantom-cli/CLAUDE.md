@@ -19,15 +19,21 @@ phantom-cli --version | update | update --server     # headless subcommands (ind
 
 ## Settings — two homes, and a row says which
 
-- **Local** (`~/.phantom-cli/settings.json`, `local.ts`, sync, 0600 chmod'd
+- **Local** (`CONFIG_DIR/settings.json`, `local.ts`, sync, 0600 chmod'd
   after every write; a corrupt file is REPORTED, never rewritten): the seven
   `LOCAL_KEYS` — `server_url server_key voice_mic_device voice_speaker_device
   voice_headphones voice_mic_muted voice_speaker_muted`
   — because they are how you REACH the store or facts about this machine.
   Env reaches exactly two: `PHANTOM_BACKEND_URL`
   (server_url), `PHANTOM_BACKEND_KEY`/`API_KEY` (server_key) — the only
-  `env` entries in `config.ts` META; the repo's `.env` loads at launch,
-  shell env winning. Local screens (`/server`) must never need the network.
+  `env` entries in `config.ts` META; nothing loads a file into env (the
+  repo's `.env` is compose's, the cli never reads it). Local screens
+  (`/server`) must never need the network.
+- **`CONFIG_DIR` is the one root** every file the cli owns hangs off:
+  `~/.phantom-cli` installed, `<repo>/.phantom-cli` (gitignored) from source
+  (`APP_VERSION === 'dev'`). Dev and installed never share a byte; setup.sh
+  seats the dev server's url + key in the repo one. Never build a
+  `~/.phantom-cli` path by hand — import `CONFIG_DIR`.
 - **Server** (`settings.ts`, async): everything else — the model config,
   the Assistant's trio, the voice keys, `sidebar_width`, `boot_last_workspace`
   (server-only, not in config.ts), the credentials — ordinary keys of the
@@ -93,10 +99,10 @@ open-session list is ctrl+n and ONLY ctrl+n) and swallows ctrl+x.
 ## Files
 
 ```
-index.tsx          launch: .env, config chain, headless subcommands (--version, update, update --server), `setup-backend`
+index.tsx          launch: config chain, headless subcommands (--version, update, update --server), `setup-backend`
                    (the install wizard, then exit — NO first-run gate: unpaired opens the app, the boot note says
                    /server or setup-backend), the connection read from the file per request (`connection()`),
-                   saved-CA trust re-applied when the address changes (`trustSavedCa`), mouse on/off, patchConsole OFF (console → ~/.phantom-cli/cli.log),
+                   saved-CA trust re-applied when the address changes (`trustSavedCa`), mouse on/off, patchConsole OFF (console → CONFIG_DIR/cli.log),
                    crash handlers (uncaughtException + unhandledRejection → cli.log, screen down, the error on the real terminal, exit 1 —
                    Node's own print lands on the alternate screen and is discarded; out of memory aborts from C++ and no handler sees it),
                    render <App boot> at once with incrementalRendering; resume line + quit-time version notices on exit
@@ -106,7 +112,7 @@ App.tsx            the whole screen: two Panes, the in-flight block/prompt/toolb
                    workspaceSettings|sessions|tasks); useInput gated on `menu === null && view === 'chat'`
 sessions.ts        SessionStore — every open session and the one turn each may run; OUTSIDE React; ordered by last message SENT;
                    `close(id)` removes one (refused mid-turn) and clears activeId — App picks what comes next
-session.ts         transcript wrapper over core: ~/.phantom-cli/sessions/<id>.jsonl, adoptServerCopy (the seating rule, below),
+session.ts         transcript wrapper over core: CONFIG_DIR/sessions/<id>.jsonl, adoptServerCopy (the seating rule, below),
                    syncTranscriptUp, lastUserMessage
 state.ts           stream-part reducer, block splitting, finalize, token estimate (applyTokens), messagesToParts
 agent.ts           runTurn (delta batching 150ms screen / 0 speech, onStepEnd); re-exports core/llm + oauth helpers
@@ -184,7 +190,7 @@ updates), `_TRACE_FRAMES` (screen.ts flight recorder), and the rig hooks
 - Opening NEVER locks (opening is reading). The lock is per TURN: POST at
   turn start, DELETE after the turn-end sync, every id released on quit;
   client id minted per window, label = hostname.
-- **The seating rule** (`adoptServerCopy`): `~/.phantom-cli/sessions/` is
+- **The seating rule** (`adoptServerCopy`): `CONFIG_DIR/sessions/` is
   working memory; the server copy replaces the local file on open and on
   every elsewhere-pull, with ONE exception — a local file that is the
   server's text plus more lines is this machine's unsaved steps (a window
@@ -388,7 +394,7 @@ updates), `_TRACE_FRAMES` (screen.ts flight recorder), and the rig hooks
   `phantomTools(pick:'readonly')`: read ls find grep) bound to the session
   on screen and rebuilt when the screen switches — it reads that session's
   checkout, never writes it. Its own `ModelMessage[]` lives in
-  `VoiceClient.history`, appended to `~/.phantom-cli/voice/<engine
+  `VoiceClient.history`, appended to `CONFIG_DIR/voice/<engine
   start>.jsonl` on the shared format, never loaded back — a restart is a
   fresh conversation.
 - The sidecar never sees the model; the app never touches audio. `turn`

@@ -12,8 +12,8 @@
 // terminal only — the emulator keeps the true content.
 import { EventEmitter } from 'node:events';
 import { appendFileSync, mkdirSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { CONFIG_DIR } from './config.js';
 import xterm from '@xterm/headless';
 import { createTrim } from './trim.js';
 import type { Range } from './mouse.js';
@@ -28,7 +28,7 @@ const { Terminal } = xterm;
 function makeTracer(): ((e: Record<string, unknown>) => void) | null {
   const want = process.env.PHANTOM_CLI_TRACE_FRAMES;
   if (!want) return null;
-  const path = want === '1' ? join(homedir(), '.phantom-cli', 'frames.log') : want;
+  const path = want === '1' ? join(CONFIG_DIR, 'frames.log') : want;
   try { mkdirSync(join(path, '..'), { recursive: true }); } catch { /* exists */ }
   return (e) => {
     try { appendFileSync(path, `${JSON.stringify({ t: Date.now(), ...e })}\n`); }

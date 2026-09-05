@@ -10,7 +10,7 @@
 //     `latest` excludes prereleases by itself.
 //   - selfUpdate — download the tarball for THIS platform, verify it against
 //     the release's checksums.txt, unpack beside the running version under
-//     ~/.phantom-cli/app/<version>, and move the ONE symlink. The running
+//     CONFIG_DIR/app/<version>, and move the ONE symlink. The running
 //     process is never touched: the new version is next launch's.
 //
 // The update is offered, never automatic: a line at quit (index.tsx), applied
@@ -22,6 +22,7 @@ import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync, symlinkSync, u
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { CONFIG_DIR } from './config.js';
 
 export const REPO = 'stephengpope/phantom-looper';
 
@@ -81,12 +82,13 @@ export function checksumFor(checksums: string, asset: string): string | null {
  *  the human line to print. The symlink move is the whole switch — the old
  *  version stays on disk until an update replaces its directory. */
 export async function selfUpdate(tag: string, opts: {
-  fetchFn?: typeof fetch; repo?: string; home?: string; binDir?: string;
+  fetchFn?: typeof fetch; repo?: string; dir?: string; home?: string; binDir?: string;
 } = {}): Promise<string> {
   if (APP_VERSION === 'dev') throw new Error('a checkout updates with git pull — self-update is for installed builds');
   const fetchFn = opts.fetchFn ?? fetch;
   const repo = opts.repo ?? REPO;
   const home = opts.home ?? homedir();
+  const dir = opts.dir ?? CONFIG_DIR;
   const asset = platformAsset();
   const base = `https://github.com/${repo}/releases/download/${tag}`;
 
@@ -102,7 +104,7 @@ export async function selfUpdate(tag: string, opts: {
   if (got !== want) throw new Error(`checksum mismatch for ${asset} — refusing to install it`);
 
   const version = tag.replace(/^v/, '');
-  const appDir = join(home, '.phantom-cli', 'app', version);
+  const appDir = join(dir, 'app', version);
   const work = join(tmpdir(), `phantom-cli-update-${process.pid}`);
   rmSync(work, { recursive: true, force: true });
   mkdirSync(work, { recursive: true });
@@ -112,7 +114,7 @@ export async function selfUpdate(tag: string, opts: {
     const untar = spawnSync('tar', ['-C', work, '-xzf', tarPath], { stdio: 'pipe' });
     if (untar.status !== 0) throw new Error(`could not unpack ${asset}: ${untar.stderr}`);
     rmSync(appDir, { recursive: true, force: true });
-    mkdirSync(join(home, '.phantom-cli', 'app'), { recursive: true });
+    mkdirSync(join(dir, 'app'), { recursive: true });
     renameSync(join(work, 'phantom-cli'), appDir);
     chmodSync(join(appDir, 'bin', 'phantom-cli'), 0o755);
   } finally {

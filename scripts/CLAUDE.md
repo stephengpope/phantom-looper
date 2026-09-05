@@ -10,7 +10,8 @@ one release. This map also covers `build/`, `host/`, `updater/`, `caddy/`,
 
 ```
 setup.sh           dev first boot: .env with fresh secrets (free-port scan), the workspace image under the
-                   default tag, `compose up -d --build`, wait for /health, print the API key
+                   default tag, `compose up -d --build`, wait for /health, then seat url + key in
+                   <repo>/.phantom-cli/settings.json (the source run's CONFIG_DIR) so the cli connects untouched
 install.sh         the SERVER one-liner (Linux): docker via get.docker.com, ufw, pull the api image and copy
                    /host-files → /opt/phantom-looper, generate .env once, `up -d`, /health + `phantom-backend check`,
                    ONE symlink /usr/local/bin/phantom-backend. Re-running is update + recovery. setup-backend pipes THIS

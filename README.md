@@ -56,14 +56,23 @@ curl -fsSL https://bit.ly/4qR8smm | sh
 
 `phantom-cli` is the app; `phantom-backend` is its server. Every session, board and setting lives on the server, so the app does nothing until it has one. Pick the path that fits you:
 
-**No server yet — create one**
+**No server yet — get a box, then create one**
+
+Any cloud provider works; the server needs a fresh Ubuntu box you can SSH into as root. On DigitalOcean:
+
+1. Create a Droplet: **Ubuntu 24.04**, the **2 GB** plan or bigger, in the region nearest you.
+2. Authentication: **SSH key**. Add your public key (`cat ~/.ssh/id_ed25519.pub`) if it is not there already.
+3. Create it and copy the IP address from the Droplet page.
+4. Check it answers: `ssh root@<ip>`. Then run the wizard below with that same address.
+
+Ports 80 and 443 must be reachable; a new Droplet has no cloud firewall, so nothing to change. Other providers (Hetzner, Linode, AWS Lightsail, a home box): same recipe — Ubuntu or Debian, root SSH, 80 and 443 open.
 
 ```bash
 phantom-cli setup-backend   # install a server over SSH and connect this machine to it
 phantom-cli                 # then open the app
 ```
 
-The wizard asks two questions: a fresh Ubuntu/Debian box you can SSH into (`root@203.0.113.7` — any cheap VPS) and one model key. It installs Docker and the server, saves the address and key on this machine, stores the model key on the server, and ends with `run phantom-cli`.
+The wizard asks two questions: the box's address (`root@203.0.113.7`) and one model key. It installs Docker and the server, saves the address and key on this machine, stores the model key on the server, and ends with `run phantom-cli`.
 
 **Already have one — reconnect**
 
@@ -130,7 +139,7 @@ Environment variables, if you need them:
 ## Develop
 
 ```bash
-./scripts/setup.sh     # first boot: .env + secrets, local workspace image, compose up
+./scripts/setup.sh     # first boot: .env + secrets, local workspace image, compose up, cli connected
 npm run phantom-cli    # the app from source; `-- --resume <id>` to reopen a session
 ```
 

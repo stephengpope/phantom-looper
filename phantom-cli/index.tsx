@@ -15,9 +15,9 @@
 // still override the file, and reach ONLY the local keys (PHANTOM_BACKEND_URL,
 // PHANTOM_BACKEND_KEY) — the settings screen shows which source each value
 // came from.
-import { appendFileSync, existsSync } from 'node:fs';
+import { appendFileSync } from 'node:fs';
 import { format } from 'node:util';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { render } from 'ink';
 import { phantomTools } from '../core/llm/tools/workspace.js';
 import { skillTools } from '../core/llm/tools/skills.js';
@@ -33,15 +33,6 @@ import { ndjson } from './ndjson.js';
 import { apiFor, savedCaFor } from './provision.js';
 import { APP_VERSION, checkLatest, isBehind, selfUpdate } from './selfUpdate.js';
 import { makeSettings } from './settings.js';
-
-// Load the repo's .env (the same file the server and compose read) so a local
-// dev run needs nothing exported by hand. Shell env still wins over it.
-const ENV_FILE = resolve(import.meta.dirname, '../.env');
-if (existsSync(ENV_FILE)) {
-  const before = { ...process.env };
-  process.loadEnvFile(ENV_FILE);
-  for (const k of Object.keys(before)) process.env[k] = before[k];
-}
 
 // The connection comes from the file, synchronously: it is how we REACH the
 // settings store, so it cannot come from it — and you edit it precisely when
@@ -265,7 +256,7 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 // stderr line is to ERASE THE WHOLE SCREEN, write the line, and repaint every
 // row — measured on a live session: ~1,900 full repaints in 93 seconds, the
 // "flicker all over". So while the screen is up, console.* and stderr go to a
-// file instead (~/.phantom-cli/cli.log — React warnings land there with their
+// file instead (CONFIG_DIR/cli.log — React warnings land there with their
 // component stacks), Ink's console patching stays OFF, and nothing may draw
 // over the screen. Restored on the way out for the resume line.
 const CLI_LOG = join(CONFIG_DIR, 'cli.log');

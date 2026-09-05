@@ -5,7 +5,8 @@
 #   - builds the workspace image locally under the name the default setting
 #     expects (a published registry image will replace this seamlessly)
 #   - brings the stack up and waits for /health
-#   - prints the API key
+#   - seats the url + key in .phantom-cli/settings.json, the cli's home for a
+#     source run (phantom-cli/config.ts), so `npm run phantom-cli` connects
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -40,12 +41,24 @@ done
 BASE="http://127.0.0.1:${PHANTOM_BACKEND_PORT:-8080}"
 curl -sf -H "authorization: Bearer $API_KEY" "$BASE/health" >/dev/null || { echo "api did not come up — docker compose logs api"; exit 1; }
 
+# The cli running from source keeps everything under <repo>/.phantom-cli
+# (gitignored) — never ~/.phantom-cli, which belongs to an installed build.
+# Merge the connection into its settings.json; other local keys survive.
+mkdir -p .phantom-cli
+node -e '
+  const fs = require("node:fs"); const p = ".phantom-cli/settings.json";
+  let cur = {}; try { cur = JSON.parse(fs.readFileSync(p, "utf8")); } catch {}
+  cur.server_url = process.argv[1]; cur.server_key = process.argv[2];
+  fs.writeFileSync(p, JSON.stringify(cur, null, 2) + "\n", { mode: 0o600 });
+  fs.chmodSync(p, 0o600);
+' "http://localhost:${PHANTOM_BACKEND_PORT:-8080}" "$API_KEY"
+
 cat <<DONE
 
-  phantom-looper is up.
+  phantom-looper is up on $BASE.
 
-  api key (click Authorize):    $API_KEY
+  api key:    $API_KEY   (also written to .phantom-cli/settings.json)
 
-  next: npm run phantom-cli — add a workspace, paste keys on /keys, and drop a
-  supervised card into plan to watch the looper.
+  next: npm run phantom-cli — already connected; add a workspace, paste model
+  keys on /keys, and drop a supervised card into plan to watch the looper.
 DONE

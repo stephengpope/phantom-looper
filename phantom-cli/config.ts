@@ -4,9 +4,16 @@
 // explicit one is pinned — which is why "reset" is a real action, distinct from
 // typing today's default back in.
 //
-// One file, ~/.phantom-cli/settings.json. There is no per-directory config: a
-// phantom-looper workspace is remote, so the directory you launched from says
-// nothing about which one you want.
+// One file, CONFIG_DIR/settings.json. CONFIG_DIR is the ONE root every file the
+// cli owns hangs off (settings.json, sessions/, voice/, bin/, ca/, cli.log,
+// models-cache.json): ~/.phantom-cli for an installed build, <repo>/.phantom-cli
+// (gitignored) when running from source. build-cli.sh bakes the release string
+// into process.env.PHANTOM_CLI_VERSION; a checkout reads nothing and is 'dev'.
+// So a dev run and the installed app never share a byte — dev talks to the
+// server setup.sh brought up (it seats the url + key there), installed talks to
+// yours. Beyond that there is no per-directory config: a phantom-looper
+// workspace is remote, so the directory you launched from says nothing about
+// which one you want.
 //
 // Precedence (resolved in local.ts, and only for the machine-local keys):
 // code defaults -> settings.json -> env vars. Env still wins so scripts and CI
@@ -14,9 +21,11 @@
 // changed it and nothing happened" is the single worst thing a settings screen
 // can do to you.
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
-export const CONFIG_DIR = join(homedir(), '.phantom-cli');
+export const CONFIG_DIR = (process.env.PHANTOM_CLI_VERSION ?? 'dev') === 'dev'
+  ? resolve(import.meta.dirname, '..', '.phantom-cli')
+  : join(homedir(), '.phantom-cli');
 export const CONFIG_PATH = join(CONFIG_DIR, 'settings.json');
 
 export const PROVIDERS = ['anthropic', 'openai', 'google', 'openai-compatible'] as const;
