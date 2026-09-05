@@ -27,7 +27,8 @@ api/routes/         settings secrets workspaces sessions(+lock, transcript, turn
 looper/             engine.ts (events → runLoop → runTurn) · logic.ts (pure rules) · turn.ts (the shared coding-turn runner) · injectFetch.ts
 telegram/           the bot as a client of this server (below): engine.ts (reconcile + webhook + the two modes) · commands.ts · assistant.ts
                     (server-side Assistant turn) · sink.ts (streaming bubble + file delivery) · client.ts · entities.ts · bubble.ts · deepgram.ts ·
-                    attachments.ts · sendMessageTool.ts (`send_message`) · mediaTags.ts (paths named in a reply) · store.ts (the migration-012 rows)
+                    attachments.ts · sendMessageTool.ts (`send_message`) · mediaTags.ts (paths named in a reply) · approvals.ts (the approval gate) ·
+                    store.ts (the migration-012 rows)
 git/                git.ts (guarded exec, classifyGitFailure, primitives) · engine.ts (manual push/pull/status) · autoPush.ts ·
                     gitFixer.ts (+verifyResolved) · commitMessage.ts · github.ts (REST on GitHub's real paths) · remote.ts (pure URL policy)
 pool/               pool.ts (warm clones: claim by rename) · paths.ts
@@ -237,6 +238,22 @@ assistant mode shows `/help` only; code mode `/assistant /plan /autopush
 /workspaces /workspace n /new /status` included) answers in either mode. A
 busy turn queues the next message into one follow-up (the cli's queue
 shape); `/stop` drops the queue and aborts.
+
+**The approval gate (`approvals.ts`).** The cli's gate, server-side: a gated
+tool (`workspace_create_repo`, the Assistant's) calls `Approvals.request` and
+waits; the user gets ONE bubble — kind, the exact subject, `[✅ Accept]
+[✖️ Decline]` inline buttons — and answers by tapping (a `callback_query`
+update, routed in `handleUpdate`; every tap is `answerCallbackQuery`'d) or by
+saying the exact word as text or voice (`handleText`, exact match like the
+wake word). Rules: ONE ask per chat (a second resolves false at once); the
+tool's abort (`/stop`) declines; ANY other message declines and is not
+consumed — it queues as the follow-up, so "no, call it foo" reaches the
+Assistant. Answered, the bubble is edited to the verdict and loses its
+buttons. In-memory; a tap on a forgotten bubble gets "expired". Accepted
+`workspace_create_repo` → `POST /workspaces create=true`, then the engine
+sets the active workspace, opens a session and enters code mode (what `/new`
+does). To gate another tool: take `ctx.approve` in its handler — nothing
+else changes.
 
 **Files.** The agent delivers a file by NAMING a `/workspace/...` path in
 its reply — bare, or `MEDIA:/workspace/...` for a path that does not read

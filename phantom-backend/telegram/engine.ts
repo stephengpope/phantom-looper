@@ -24,13 +24,14 @@ import { getSession } from '../sessions.js';
 import { resolveCredential } from '../settings.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
 import { logger, errStr } from '../log.js';
-import { TelegramClient } from './client.js';
+import { TelegramClient, ALLOWED_UPDATES } from './client.js';
 import { makeTelegramSink, type DeliverConfig } from './sink.js';
 import { sendMessageTool } from './sendMessageTool.js';
 import { toTelegram, splitFormatted } from './entities.js';
 import { transcribeVoice, speakVoice, SPEAK_MAX_CHARS } from './deepgram.js';
 import { writeAttachment, composeMessage, MAX_INBOUND_BYTES, type StoredAttachment } from './attachments.js';
 import { runAssistantTurn, type AssistantDeps } from './assistant.js';
+import { Approvals } from './approvals.js';
 import * as store from './store.js';
 import { MENU, handleCommand } from './commands.js';
 
@@ -72,6 +73,8 @@ export class TelegramEngine {
   private busy = new Map<number, Busy>();
   /** The Assistant's ONE in-memory conversation (reset on restart). */
   private assistantHistory: ModelMessage[] = [];
+  /** The approval gate — gated tools ask the user here (approvals.ts). */
+  private approvals = new Approvals();
 
   constructor(private deps: TelegramEngineDeps) {
     this.f = injectFetch(deps.app);
@@ -119,7 +122,7 @@ export class TelegramEngine {
       // the subscription drifted (dropPending:false keeps queued messages).
       const info = await client.getWebhookInfo().catch(() => null);
       const registered = info?.url === url
-        && ['message', 'message_reaction'].every((u) => (info?.allowed_updates ?? []).includes(u));
+        && ALLOWED_UPDATES.every((u) => (info?.allowed_updates ?? []).includes(u));
       if (!registered || acc.webhookSecret !== secret) {
         await client.setWebhook(url, secret, { dropPending: false });
         await store.saveRegistration(this.deps.db, this.deps.encryptionKey, secret, url, me?.username ?? null);
@@ -155,6 +158,17 @@ export class TelegramEngine {
       if (hasEmoji(reaction.new_reaction, REACT_SPEAK) && !hasEmoji(reaction.old_reaction, REACT_SPEAK)) {
         this.speakReacted(reaction, dm).catch((e) => log.warn({ err: errStr(e) }, 'speak-reacted failed'));
       }
+      return 200;
+    }
+
+    // A tap on an approval bubble's button.
+    const tap = update.callback_query;
+    if (tap) {
+      if (String(tap.from?.id) !== authorized) return 200;
+      if (!(await store.markUpdate(db, update.update_id))) return 200;
+      const client = new TelegramClient(await this.token());
+      this.approvals.handleCallback(client, dm, { id: String(tap.id), data: tap.data })
+        .catch((e) => log.warn({ err: errStr(e) }, 'approval tap failed'));
       return 200;
     }
 
@@ -196,6 +210,10 @@ export class TelegramEngine {
 
       const input = await this.resolveInput(client, dm, msg, values, acc);
       if (input === null) return;
+
+      // A question standing: the exact word answers it and is nothing else;
+      // any other message declines it and goes on to queue as the follow-up.
+      if (this.approvals.handleText(dm, input)) return;
 
       // Busy: queue the message into the running turn's follow-up and stop.
       const running = this.busy.get(dm);
@@ -239,12 +257,24 @@ export class TelegramEngine {
         await client.sendMessage(dm, `🔀 Active session: ${s.name ?? 'untitled'}`);
         return { entered: id, title: s.name ?? null };
       };
+      // A new workspace: make it active and open a session in it — what /new
+      // does, so the user lands talking to the coder like the cli's "on screen".
+      const onWorkspaceCreated = async (workspaceId: string) => {
+        await store.setActiveWorkspace(db, workspaceId);
+        const j = await (await this.call('/sessions', { method: 'POST', body: { workspace_id: workspaceId } })).json();
+        if (!j.ok) return { error: j.error?.message as string };
+        await store.setMode(db, 'code', j.data.id, (t) => client.sendMessage(dm, t));
+        await client.sendMessage(dm, '🆕 New session in the new workspace. Send your first message to begin.');
+        return { session: j.data.id as string };
+      };
       replyText = await runAssistantTurn(deps, this.assistantHistory, message, sink, {
         settings: values,
         workspaceId: () => acc.activeWorkspaceId ?? null,
         activeSession: () => acc.activeSessionId ?? null,
         onSwitch,
-      });
+        approve: (ask, signal) => this.approvals.request(client, dm, ask, signal),
+        onWorkspaceCreated,
+      }, abort.signal);
       // Any messages queued while we ran go out as one follow-up turn.
       const queued = this.busy.get(dm)?.queue ?? [];
       this.busy.delete(dm);

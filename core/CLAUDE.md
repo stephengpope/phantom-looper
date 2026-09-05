@@ -259,7 +259,7 @@ dropped.
   list rides only on create, everything after goes by key through items);
   `codingKanbanTool` (the read only); `screenModeTools`
   (`session_get_mode`, `screen_enter_plan_mode` — one-way);
-  `workspaceCreateTool` (`workspace_create_repo`, gated in the app;
+  `workspaceCreateTool` (`workspace_create_repo`, gated by the client — the app's pane, Telegram's `approvals.ts`;
   `kebabName` is the deterministic final name). `statusEnum` makes
   `status` a real enum of the workspace's columns.
 - `server.ts` `fixerBashTool(exec)` — the Git Fixer's `bash`; stdout
