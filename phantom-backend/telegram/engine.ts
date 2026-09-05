@@ -279,7 +279,8 @@ export class TelegramEngine {
         await store.setActiveWorkspace(db, workspaceId);
         const j = await (await this.call('/sessions', { method: 'POST', body: { workspace_id: workspaceId } })).json();
         if (!j.ok) return { error: j.error?.message as string };
-        await store.setMode(db, 'code', j.data.id, (t) => client.sendMessage(dm, t));
+        await store.setActiveSession(db, j.data.id);
+        await this.enterMode(client, dm, 'code');
         await client.sendMessage(dm, '🆕 New session in the new workspace. Send your first message to begin.');
         return { session: j.data.id as string };
       };
