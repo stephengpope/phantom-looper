@@ -32,7 +32,7 @@ import { transcribeVoice, speakVoice, SPEAK_MAX_CHARS } from './deepgram.js';
 import { writeAttachment, composeMessage, MAX_INBOUND_BYTES, type StoredAttachment } from './attachments.js';
 import { runAssistantTurn, type AssistantDeps } from './assistant.js';
 import * as store from './store.js';
-import { MENU, handleCommand } from './commands.js';
+import { menuFor, handleCommand } from './commands.js';
 
 const log = logger('telegram');
 const BASE = 'http://looper';
@@ -125,10 +125,15 @@ export class TelegramEngine {
         await store.saveRegistration(this.deps.db, this.deps.encryptionKey, secret, url, me?.username ?? null);
         log.info({ url }, 'telegram webhook registered');
       }
-      // ONE fixed menu for both modes, set once here (never swapped per chat),
-      // so nothing goes stale in a client's cache. The menu lives in code, so a
-      // bot connected before a command existed still gets it.
-      await client.setMyCommands(MENU).catch(() => {});
+      // The menu follows the mode: the global default is home's, and the
+      // authorized chat gets its current mode's list (chat scope — Telegram
+      // pushes a private-chat menu change to the user at once; enterMode swaps
+      // it on every transition). Set here too so a restart never leaves a
+      // stale one. The menu lives in code, so a bot connected before a
+      // command existed still gets it.
+      await client.setMyCommands(menuFor('assistant')).catch(() => {});
+      const dm = Number(values.telegram_authorized_user ?? '');
+      if (Number.isFinite(dm) && dm) await client.setMyCommands(menuFor(acc.mode), dm).catch(() => {});
     } catch (e) {
       log.warn({ err: errStr(e) }, 'telegram reconcile failed');
     }
@@ -217,7 +222,8 @@ export class TelegramEngine {
   }
 
   /** An assistant-mode turn: the in-memory Assistant conversation, streamed to
-   *  the bubble. session_switch enters code mode. */
+   *  the bubble. session_switch moves the active-session POINTER only — the
+   *  assistant keeps the conversation; /code is how the user hands it over. */
   private async assistantTurn(client: TelegramClient, dm: number, message: string,
     values: Record<string, unknown>): Promise<void> {
     const { db } = this.deps;
@@ -231,18 +237,21 @@ export class TelegramEngine {
       acc.activeSessionId ? this.deliverConfig(acc.activeSessionId) : undefined);
     const deps: AssistantDeps = { f: this.f, apiKey: this.deps.apiKey, modelFetch: this.deps.modelFetch };
     let replyText = '';
+    // The pointer as this turn sees it — live across a switch within the turn.
+    let active = acc.activeSessionId ?? null;
     try {
       const onSwitch = async (id: string) => {
-        const s = await getSession(db, id);
-        if (!s) return { error: `no session ${id}` };
-        await store.setMode(db, 'code', id, (t) => client.sendMessage(dm, t));
-        await client.sendMessage(dm, `🔀 Active session: ${s.name ?? 'untitled'}`);
-        return { entered: id, title: s.name ?? null };
+        const r = await this.switchSession(client, dm, id);
+        if ('error' in r) return r;
+        active = r.id;
+        return { active: r.id, title: r.title,
+          note: "You are still the assistant — this session's files are now what your read tools see. " +
+            'The user sends /code to talk to its coding agent; you never enter it.' };
       };
       replyText = await runAssistantTurn(deps, this.assistantHistory, message, sink, {
         settings: values,
         workspaceId: () => acc.activeWorkspaceId ?? null,
-        activeSession: () => acc.activeSessionId ?? null,
+        activeSession: () => active,
         onSwitch,
       });
       // Any messages queued while we ran go out as one follow-up turn.
@@ -364,7 +373,7 @@ export class TelegramEngine {
     const files = collectFiles(msg);
     if (files.length) {
       if (acc.mode !== 'code' || !acc.activeSessionId) {
-        await client.sendMessage(dm, "⚠️ Enter a session first (/sessions) — files go into the session you're working in.");
+        await client.sendMessage(dm, "⚠️ Files go into the session you're coding in — /code to enter one first.");
         return typed || null;
       }
       const scratch = sessionDir(this.deps.paths, acc.activeSessionId) + '/scratch';
@@ -397,15 +406,40 @@ export class TelegramEngine {
     const acc = await store.getAccount(this.deps.db, this.deps.encryptionKey);
     if (stored.origin.kind === 'session' && stored.origin.sessionId) {
       if (acc.activeSessionId === stored.origin.sessionId && acc.mode === 'code') return;
-      const s = await getSession(this.deps.db, stored.origin.sessionId);
-      if (!s) { await client.sendMessage(dm, '⚠️ That session no longer exists.'); return; }
-      await store.setMode(this.deps.db, 'code', stored.origin.sessionId, (t) => client.sendMessage(dm, t));
-      await client.sendMessage(dm, `🔀 Active session: ${s.name ?? 'untitled'}`);
+      if (acc.activeSessionId !== stored.origin.sessionId) {
+        const r = await this.switchSession(client, dm, stored.origin.sessionId);
+        if ('error' in r) { await client.sendMessage(dm, '⚠️ That session no longer exists.'); return; }
+      }
+      await this.enterMode(client, dm, 'code');
     } else {
       if (acc.mode === 'assistant') return;
       // The switch line is the whole message here.
-      await store.setMode(this.deps.db, 'assistant', undefined, (t) => client.sendMessage(dm, t));
+      await this.enterMode(client, dm, 'assistant');
     }
+  }
+
+  // ── the two transitions: WHICH session, WHO answers ──────────────────────
+
+  /** Point the account at a session. The pointer only — the mode is untouched,
+   *  so the assistant keeps the conversation and a coder is never entered by
+   *  accident. Announces the switch; the ONE place the 🔀 line is sent. */
+  async switchSession(client: TelegramClient, dm: number, id: string):
+  Promise<{ id: string; title: string | null } | { error: string }> {
+    const s = await getSession(this.deps.db, id);
+    if (!s) return { error: `no session ${id}` };
+    await store.setActiveSession(this.deps.db, id);
+    await client.sendMessage(dm, `🔀 Active session: ${s.name ?? 'untitled'}`);
+    return { id, title: s.name ?? null };
+  }
+
+  /** Change who answers a plain message. Announces the transition iff the mode
+   *  changed and swaps the chat's command menu to the mode's list. Returns
+   *  whether the mode changed. Code mode presumes an active session — the
+   *  caller checks (/code) or has just switched (a reply to a coder's bubble). */
+  async enterMode(client: TelegramClient, dm: number, mode: store.TelegramMode): Promise<boolean> {
+    const changed = await store.setMode(this.deps.db, mode, (t) => client.sendMessage(dm, t));
+    await client.setMyCommands(menuFor(mode), dm).catch(() => {});
+    return changed;
   }
 
   private async speakReacted(reaction: any, dm: number): Promise<void> {

@@ -222,21 +222,28 @@ into its conversation), update dedup. Settings are ordinary declared keys
 (`telegram_enabled/_authorized_user/_reply_mode/_transcript_echo`) + the
 `telegram_bot_token` credential.
 
-**Two modes on the account row.** ASSISTANT (home, default) — a plain
-message is an Assistant turn (`assistant.ts`: the SAME core
-`assistantAgent`, headless handlers over the card/session routes, ONE
-in-memory conversation reset on restart; file tools + web bind read-only to
-the active session). CODE (inside a session) — a plain message is a real
-`runCodingTurn` on it, lock per turn, `send_message` (a deliberate DM
-outside the streamed reply; delivery mode from `telegram_reply_mode`)
-injected via `extraTools`. Enter a session: `/session n`, the Assistant's
-`session_switch`, or reply to its bubble; `/assistant` goes home. The
-command menu (`setMyCommands`, chat scope) is set per mode and is a HINT:
-assistant mode shows `/help` only; code mode `/assistant /plan /autopush
-/stop /status /sessions /help`; every handler (`/sessions /session n
-/workspaces /workspace n /new /status` included) answers in either mode. A
-busy turn queues the next message into one follow-up (the cli's queue
-shape); `/stop` drops the queue and aborts.
+**Two independent knobs on the account row** — WHICH session
+(`activeSessionId`, `store.setActiveSession`) and WHO answers (`mode`,
+`store.setMode`); never written together. The engine's `switchSession` and
+`enterMode` are the only transitions (the 🔀 line, the mode line and the
+menu swap live there). Pointer movers: `/sessions n`, `/new`, the
+Assistant's `session_switch` — the mode stays, so the Assistant keeps the
+conversation. Mode doors: `/code [n]` (the ONE slash command into a coding
+agent; `n` points first), `/assistant` home, and a reply to a bubble (a
+coder's bubble → its session in code mode; an Assistant bubble → home).
+ASSISTANT (home, default) — a plain message is an Assistant turn
+(`assistant.ts`: the SAME core `assistantAgent`, headless handlers over the
+card/session routes, ONE in-memory conversation reset on restart; file tools
++ web bind read-only to the active session). CODE — a plain message is a
+real `runCodingTurn` on the active session, lock per turn, `send_message` (a
+deliberate DM outside the streamed reply; delivery mode from
+`telegram_reply_mode`) injected via `extraTools`. The command menu
+(`setMyCommands`) is per mode — the global default is home's, the
+authorized chat's is swapped by `enterMode` (chat scope; Telegram pushes a
+private-chat change at once) and re-set at `reconcile` — and is a HINT:
+every handler answers in either mode. A busy turn queues the next message
+into one follow-up (the cli's queue shape); `/stop` drops the queue and
+aborts.
 
 **Files.** The agent delivers a file by NAMING a `/workspace/...` path in
 its reply — bare, or `MEDIA:/workspace/...` for a path that does not read

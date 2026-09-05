@@ -51,19 +51,25 @@ export const MODE_MESSAGE: Record<TelegramMode, string> = {
   assistant: "🏠 You're now talking to the assistant.",
 };
 
-/** Where a plain message goes. Entering code mode names the session.
- *  `announce` receives the transition line iff the mode changed; returns
- *  whether it did. */
-export async function setMode(db: Db, mode: TelegramMode, sessionId: string | undefined,
+/** WHO answers a plain message — the mode, and only the mode. WHICH session
+ *  is `setActiveSession`; the two are independent knobs, never written
+ *  together. `announce` receives the transition line iff the mode changed;
+ *  returns whether it did. */
+export async function setMode(db: Db, mode: TelegramMode,
   announce: (text: string) => Promise<unknown>): Promise<boolean> {
   const rows = await db.select({ mode: telegramAccount.mode }).from(telegramAccount)
     .where(eq(telegramAccount.id, 1));
   const before: TelegramMode = rows[0]?.mode === 'code' ? 'code' : 'assistant';
-  await patch(db, mode === 'code'
-    ? { mode, activeSessionId: sessionId }
-    : { mode });
+  await patch(db, { mode });
   if (before !== mode) await announce(MODE_MESSAGE[mode]);
   return before !== mode;
+}
+
+/** WHICH session the account points at — read by the Assistant's file tools
+ *  in assistant mode and by the coding turn in code mode. Changes the pointer
+ *  only; the mode is untouched. */
+export async function setActiveSession(db: Db, sessionId: string): Promise<void> {
+  await patch(db, { activeSessionId: sessionId });
 }
 
 export async function setActiveWorkspace(db: Db, workspaceId: string | null): Promise<void> {

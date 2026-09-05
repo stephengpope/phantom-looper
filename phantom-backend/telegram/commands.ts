@@ -1,29 +1,47 @@
 // Telegram slash commands. Answered from the database — a command runs NO
-// agent turn. ONE fixed menu for both modes (set once at reconcile, never
-// swapped), so there is nothing to go stale in a client's cache. The commands
-// are the door between modes and the actions on a session; each answers
-// correctly whichever mode you are in.
+// agent turn. Two independent knobs, each with its own commands: WHICH session
+// the account points at (`/sessions n`, `/new` — pointer only) and WHO answers
+// a plain message (`/code`, `/assistant` — the only two doors between modes).
+// The menu is per mode (chat scope, swapped by enterMode) and is a HINT: every
+// handler answers correctly whichever mode you are in.
 //
-// Merged pairs: `/sessions` lists, `/sessions 2` enters number 2; `/workspaces`
-// lists, `/workspaces 2` switches. No singular /session or /workspace.
+// Merged pairs: `/sessions` lists, `/sessions 2` points at number 2;
+// `/workspaces` lists, `/workspaces 2` switches. No singular /session or
+// /workspace.
 
 import type { TelegramClient } from './client.js';
 import type { TelegramEngine } from './engine.js';
+import type { TelegramMode } from './store.js';
 
 interface Cmd { command: string; description: string }
 
-/** THE menu — one list, both modes, plain descriptions. */
-export const MENU: Cmd[] = [
-  { command: 'assistant', description: 'Back to the assistant' },
+const COMMON: Cmd[] = [
+  { command: 'sessions', description: 'List sessions or pick one' },
   { command: 'new', description: 'Start a new session' },
-  { command: 'sessions', description: 'List sessions or open one' },
-  { command: 'plan', description: 'Turn plan mode on or off' },
-  { command: 'autopush', description: 'Run auto-push' },
   { command: 'stop', description: 'Stop the current task' },
-  { command: 'workspaces', description: 'List workspaces or switch' },
   { command: 'status', description: "Show what's running" },
   { command: 'help', description: 'Show what I can do' },
 ];
+
+/** The menus — one per mode. Home shows the door INTO a session's coding
+ *  agent; code mode shows the door home plus the coder's own actions. */
+export const MENU: Record<TelegramMode, Cmd[]> = {
+  assistant: [
+    { command: 'code', description: 'Talk to the active session\'s coding agent' },
+    { command: 'workspaces', description: 'List workspaces or switch' },
+    ...COMMON,
+  ],
+  code: [
+    { command: 'assistant', description: 'Back to the assistant' },
+    { command: 'plan', description: 'Turn plan mode on or off' },
+    { command: 'autopush', description: 'Run auto-push' },
+    ...COMMON,
+  ],
+};
+
+/** The menu for a mode (test/telegram.test.ts pins that every entry in each
+ *  is a command handleCommand answers, so a menu entry never goes unanswered). */
+export function menuFor(mode: TelegramMode): Cmd[] { return MENU[mode]; }
 
 // Per-chat numbered lists — /sessions n and /workspaces n read positions off
 // the list the same command last printed. In-memory; a stale index misses and
@@ -49,24 +67,37 @@ export async function handleCommand(
 
     case 'assistant':
       // The switch line IS the reply; repeat it when there was nothing to switch.
-      if (!await engine.store.setMode(engine.db, 'assistant', undefined, reply)) {
+      if (!await engine.enterMode(client, dm, 'assistant')) {
         await reply(engine.store.MODE_MESSAGE.assistant);
       }
       return;
 
-    case 'sessions': {
-      // With a number: enter that session (code mode).
+    case 'code': {
+      // Hand the conversation to the active session's coding agent — the ONE
+      // slash command that routes there. `/code n` points at n first.
       if (arg !== undefined) {
-        const ids = sessionList.get(dm);
-        const n = Number.parseInt(arg, 10);
-        if (!ids || !Number.isInteger(n) || n < 1 || n > ids.length) {
-          await reply('⚠️ Send /sessions first to see the list, then /sessions <number>.');
-          return;
-        }
-        const id = ids[n - 1];
-        const s = await sessionRow(engine, id);
-        await engine.store.setMode(engine.db, 'code', id, reply);
-        await reply(`🔀 Active session: ${s?.name ?? 'untitled'}`);
+        const id = listedSession(dm, arg);
+        if (!id) { await reply('⚠️ Send /sessions first to see the list, then /code <number>.'); return; }
+        const r = await engine.switchSession(client, dm, id);
+        if ('error' in r) { await reply('⚠️ That session no longer exists — /sessions for a fresh list.'); return; }
+      } else if (!acc.activeSessionId) {
+        await reply('⚠️ Pick a session first — /sessions or /new.');
+        return;
+      }
+      if (!await engine.enterMode(client, dm, 'code')) {
+        await reply(engine.store.MODE_MESSAGE.code);
+      }
+      return;
+    }
+
+    case 'sessions': {
+      // With a number: point at that session. The pointer only — whoever is
+      // answering keeps answering; /code is the door to the coding agent.
+      if (arg !== undefined) {
+        const id = listedSession(dm, arg);
+        if (!id) { await reply('⚠️ Send /sessions first to see the list, then /sessions <number>.'); return; }
+        const r = await engine.switchSession(client, dm, id);
+        if ('error' in r) { await reply('⚠️ That session no longer exists — /sessions for a fresh list.'); return; }
         return;
       }
       // Bare: list them.
@@ -74,8 +105,9 @@ export async function handleCommand(
       if (!j.ok || !j.data.sessions.length) { await reply('ℹ️ No sessions yet. /new starts one.'); return; }
       sessionList.set(dm, j.data.sessions.map((s: any) => s.id));
       const rows = j.data.sessions.map((s: any, i: number) =>
-        `${i + 1}. ${s.name ?? 'untitled'}${s.locked ? ' (busy)' : ''}`);
-      await reply(['📋 Sessions:', ...rows, '', 'Open one with /sessions <number>'].join('\n'));
+        `${i + 1}. ${s.name ?? 'untitled'}${s.id === acc.activeSessionId ? ' (active)' : ''}${s.locked ? ' (busy)' : ''}`);
+      await reply(['📋 Sessions:', ...rows, '',
+        'Pick one with /sessions <number>; /code <number> talks to its coding agent'].join('\n'));
       return;
     }
 
@@ -107,8 +139,12 @@ export async function handleCommand(
       if (!ws) { await reply('⚠️ No active workspace — /workspaces to pick one first.'); return; }
       const j = await (await engine.call('/sessions', { method: 'POST', body: { workspace_id: ws } })).json();
       if (!j.ok) { await reply(`⚠️ Couldn't start a session: ${j.error?.message}`); return; }
-      await engine.store.setMode(engine.db, 'code', j.data.id, reply);
-      await reply('🆕 New session. Send your first message to begin.');
+      // Create + point at it. The mode is untouched: from home the assistant
+      // keeps the conversation; in code mode the next message starts the coder.
+      await engine.store.setActiveSession(engine.db, j.data.id);
+      await reply(acc.mode === 'code'
+        ? '🆕 New session. Send your first message to begin.'
+        : '🆕 New session is active — /code to start coding in it.');
       return;
     }
 
@@ -128,14 +164,16 @@ export async function handleCommand(
           `Background tasks: ${tasks}`].filter(Boolean).join('\n'));
       } else {
         const w = acc.activeWorkspaceId ? await workspaceRow(engine, acc.activeWorkspaceId) : null;
+        const s = acc.activeSessionId ? await sessionRow(engine, acc.activeSessionId) : null;
         await reply(['🏠 Assistant',
-          `Active workspace: ${w?.name ?? acc.activeWorkspaceId ?? '(none — /workspaces)'}`].join('\n'));
+          `Active workspace: ${w?.name ?? acc.activeWorkspaceId ?? '(none — /workspaces)'}`,
+          `Active session: ${s ? `${s.name ?? 'untitled'} (/code to talk to it)` : '(none — /sessions or /new)'}`].join('\n'));
       }
       return;
     }
 
     case 'plan': {
-      if (acc.mode !== 'code' || !acc.activeSessionId) { await reply('⚠️ Enter a session first — /sessions.'); return; }
+      if (acc.mode !== 'code' || !acc.activeSessionId) { await reply('⚠️ Plan mode belongs to the coding agent — /code first.'); return; }
       const s = await sessionRow(engine, acc.activeSessionId);
       const next = !s?.planMode;
       await engine.call(`/sessions/${acc.activeSessionId}`, { method: 'PATCH', body: { plan_mode: next } });
@@ -144,7 +182,7 @@ export async function handleCommand(
     }
 
     case 'autopush': {
-      if (acc.mode !== 'code' || !acc.activeSessionId) { await reply('⚠️ Enter a session first — /sessions.'); return; }
+      if (acc.mode !== 'code' || !acc.activeSessionId) { await reply('⚠️ Auto-push runs from the coding agent — /code first.'); return; }
       await reply('🚀 Pushing your work…');
       const body = await (await engine.call('/git/auto-push',
         { method: 'POST', body: {}, session: acc.activeSessionId })).text();
@@ -169,6 +207,15 @@ export async function handleCommand(
   }
 }
 
+/** The id at position `arg` of the list /sessions last printed to this chat,
+ *  or null when there is no list or the number is off it. */
+function listedSession(dm: number, arg: string): string | null {
+  const ids = sessionList.get(dm);
+  const n = Number.parseInt(arg, 10);
+  if (!ids || !Number.isInteger(n) || n < 1 || n > ids.length) return null;
+  return ids[n - 1];
+}
+
 async function workspaceRow(engine: TelegramEngine, id: string): Promise<{ name?: string } | null> {
   const j = await (await engine.call(`/workspaces/${id}`)).json();
   return j.ok ? j.data : null;
@@ -190,12 +237,14 @@ async function sessionRow(engine: TelegramEngine, id: string): Promise<{
 
 const HELP = [
   "I'm your phantom-looper assistant. Talk to me and I'll manage your work — the board, cards,",
-  'sessions, workspaces. Open a session and your messages go to its coding agent.',
+  'sessions, workspaces. /code and your messages go to the active session\'s coding agent;',
+  '/assistant brings you back to me.',
   '',
-  '/sessions [n]     list sessions, or open number n',
-  '/new              start a new session',
-  '/workspaces [n]   list workspaces, or switch to number n',
+  '/sessions [n]     list sessions, or make number n the active one',
+  '/new              start a new session (and make it active)',
+  '/code [n]         talk to the active session\'s coding agent (or session n)',
   '/assistant        back to the assistant',
+  '/workspaces [n]   list workspaces, or switch to number n',
   '/status           show what\'s running',
   '/plan             turn plan mode on or off',
   '/autopush         run auto-push',

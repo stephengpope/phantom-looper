@@ -11,8 +11,9 @@
 //
 // Board and sessions are the Assistant's job (create/move cards, list/read
 // sessions); the file tools + web are bound to the account's active session,
-// so "what does the auth code look like?" works from home. It never SENDS into
-// a session — code mode is how you talk to a coder.
+// so "what does the auth code look like?" works from home. session_switch
+// moves that pointer and nothing else — the Assistant keeps the conversation.
+// It never SENDS into a session — /code (code mode) is how you talk to a coder.
 
 import type { ModelMessage, Tool } from 'ai';
 import { assistantAgent } from '../../core/llm/agents/assistant.js';
@@ -117,7 +118,8 @@ function boardHandler(deps: AssistantDeps, workspaceId: () => string | null) {
 
 /** The sessions handler. LIST is the server's list (typed, no supervisor
  *  seats); READ pulls a transcript and renders it; SWITCH is what the caller
- *  wires to "enter code mode"; get_active/close have no telegram job here. */
+ *  wires to "point the account at this session" (the pointer only — never a
+ *  mode change); GET_ACTIVE is that pointer; close has no telegram job here. */
 function sessionsHandler(
   deps: AssistantDeps, activeSession: () => string | null,
   onSwitch: (id: string) => Promise<unknown>,
@@ -140,7 +142,7 @@ function sessionsHandler(
       }
       case 'get_active': {
         const id = activeSession();
-        return id ? { id } : { note: 'not in a session (assistant mode)' };
+        return id ? { id } : { note: 'no active session — session_switch sets one' };
       }
       case 'read': {
         const id = args.id ?? activeSession();
@@ -181,7 +183,7 @@ async function assistantKit(
 /** Run ONE Assistant turn on the in-memory conversation, streaming to the
  *  telegram sink. Appends the user + reply to `history` and returns the reply
  *  text. `onSwitch` is called if the Assistant's session_switch fires — the
- *  caller enters code mode. */
+ *  caller moves the active-session pointer. */
 export async function runAssistantTurn(
   deps: AssistantDeps, history: ModelMessage[], message: string, sink: TelegramSink,
   ctx: {
