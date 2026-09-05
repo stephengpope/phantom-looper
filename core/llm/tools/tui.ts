@@ -297,8 +297,7 @@ export function assistantKanbanTool(handler: (args: KanbanArgs) => Promise<unkno
       'Reading is yours alone; kanban_screen is for showing the card to the USER.'),
     kanban_card_create: tool({
       description: 'Make a new card from title; status picks the column (defaults to the first); the requirements ' +
-        'list may ride along whole here — after creation it changes through kanban_card_items only. ' +
-        'When asked to define a card, ask about what is unclear; never invent user_story or requirements.',
+        'list may ride along whole here — after creation it changes through kanban_card_items only.',
       inputSchema: z.object({ ...fields, ...createLists }),
       execute: async (args) => handler({ action: 'create', ...args } as KanbanArgs),
     }),
