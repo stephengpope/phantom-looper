@@ -117,7 +117,7 @@ function uvTarget(): string {
 export async function installUv(onProgress: (t: string) => void): Promise<string> {
   const target = uvTarget();
   const base = `https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${target}.tar.gz`;
-  onProgress(`downloading uv ${UV_VERSION}…`);
+  onProgress('downloading uv…');
   const [tgz, sha] = await Promise.all([
     fetch(base).then(async (r) => { if (!r.ok) throw new Error(`uv download: HTTP ${r.status}`); return Buffer.from(await r.arrayBuffer()); }),
     fetch(`${base}.sha256`).then(async (r) => { if (!r.ok) throw new Error(`uv checksum: HTTP ${r.status}`); return (await r.text()).trim().split(/\s+/)[0]; }),
@@ -132,8 +132,22 @@ export async function installUv(onProgress: (t: string) => void): Promise<string
   if (r.status !== 0) throw new Error(`uv unpack failed: ${r.stderr?.toString() ?? r.status}`);
   const uv = join(dir, 'uv');
   chmodSync(uv, 0o755);
-  onProgress(`uv ${UV_VERSION} installed`);
+  onProgress('uv installed');
   return uv;
+}
+
+/** `uv sync --frozen`, async: it runs a minute or two the first time, and a
+ *  spawnSync here froze Ink for the whole of it — the pane's spinner stood
+ *  still exactly when it had something to say. Output to the log; the exit
+ *  code back. */
+function uvSync(uv: string): Promise<number | null> {
+  return new Promise((resolve) => {
+    const child = spawn(uv, ['sync', '--frozen'], { cwd: SIDECAR_DIR, stdio: ['ignore', 'pipe', 'pipe'] });
+    createInterface({ input: child.stdout! }).on('line', (l) => log(l));
+    createInterface({ input: child.stderr! }).on('line', (l) => log(l));
+    child.on('error', (e) => { log(`--- uv sync error ${e.message}`); resolve(null); });
+    child.on('exit', (code) => resolve(code));
+  });
 }
 
 /** The real spawner: uv → venv → `uv run bot.py`, process group of its own. */
@@ -143,10 +157,10 @@ export const spawnSidecar: Spawner = async (env, onLine, onExit, onProgress) => 
   // `uv sync --frozen` every start: the first time it builds the venv (slow,
   // says so); after that it is a ~100ms check that the venv still matches
   // uv.lock, so an updated lock is picked up without anyone knowing to re-sync.
-  if (!existsSync(join(SIDECAR_DIR, '.venv'))) onProgress('installing the voice engine (first time only)…');
-  const sync = spawnSync(uv, ['sync', '--frozen'], { cwd: SIDECAR_DIR, stdio: 'pipe' });
-  log(sync.stdout?.toString() ?? ''); log(sync.stderr?.toString() ?? '');
-  if (sync.status !== 0) throw new Error(`uv sync failed — see ${join(VOICE_DIR, 'sidecar.log')}`);
+  // Progress strings are short on purpose: the pane is ~20 columns.
+  if (!existsSync(join(SIDECAR_DIR, '.venv'))) onProgress('installing engine (first run)…');
+  const code = await uvSync(uv);
+  if (code !== 0) throw new Error(`install failed — see ${join(VOICE_DIR, 'sidecar.log')}`);
   log(`--- sidecar start ${new Date().toISOString()}`);
   const child: ChildProcess = spawn(uv, ['run', '--no-sync', 'bot.py'], {
     cwd: SIDECAR_DIR, env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'], detached: true,

@@ -1,6 +1,6 @@
 // The typing area: two solid rules (heavy, matching the divider) with a `>` prompt between them, pinned at
 // the bottom. The bottom rule carries the app's name at its right end —
-// `━━━━━ phantom-looper ∞ ━━`, BBS-blue, with the Shimmer's glide running out
+// `━━━━━ phantom-looper ━━`, BBS-blue, with the Shimmer's glide running out
 // and back every few seconds, each direction at its own random speed
 // (Glint in Shimmer.tsx) — drawn as our own row (Ink borders cannot
 // hold text): a flexGrow Box whose only border is its top fills the left of
@@ -60,7 +60,7 @@ export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure }: {
             many terminals and made this corner glow beside the divider's ┫. */}
         <Box flexGrow={1} borderStyle="bold" borderTop borderBottom={false} borderLeft={false} borderRight={false} borderDimColor />
         <Text dimColor>{' '}</Text>
-        <Glint text="phantom-looper ∞" color="#5f87ff" shimmerColor="#b3ecff" bold
+        <Glint text="phantom-looper" color="#5f87ff" shimmerColor="#b3ecff" bold
           active={process.stdout.isTTY === true} />
         <Text dimColor>{' ━━'}</Text>
       </Box>

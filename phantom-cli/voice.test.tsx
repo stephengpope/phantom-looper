@@ -1,7 +1,7 @@
 // The voice client against a scripted sidecar and a scripted brain, and the
 // App with the voice pane on. No Python, no audio, no model: the spawner seam
 // hands in a fake process; the agent seam hands in a fake agent.
-import test from 'node:test';
+import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { render } from 'ink-testing-library';
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
@@ -29,8 +29,9 @@ function fakeSidecar() {
   const sent: Record<string, unknown>[] = [];
   let envSeen: Record<string, string> = {};
   let spawns = 0;
-  const spawner: Spawner = async (env, line, exit) => {
-    envSeen = env; onLine = line; onExit = exit; spawns++;
+  let onProgress: (t: string) => void = () => {};
+  const spawner: Spawner = async (env, line, exit, progress) => {
+    envSeen = env; onLine = line; onExit = exit; onProgress = progress; spawns++;
     return { send: (l) => { for (const x of l.split('\n')) if (x.trim()) sent.push(JSON.parse(x)); }, kill: () => {} };
   };
   return {
@@ -38,6 +39,7 @@ function fakeSidecar() {
     env: () => envSeen,
     spawns: () => spawns,
     emit: (m: VoiceIn) => onLine(JSON.stringify(m)),
+    progress: (t: string) => onProgress(t),
     raw: (l: string) => onLine(l),
     exit: (c: number | null) => onExit(c),
     ofType: (t: string) => sent.filter((m) => m.type === t),
@@ -417,8 +419,15 @@ function appWithVoice(cfg: Record<string, ConfigValue>, brain: Agent = scriptedA
       makeTranscript={(h) => new Transcript(h, join(dir, 'x.jsonl'))}
       makeVoice={() => voice} />,
   );
+  mounted.push(r);
   return { ...r, f, voice, configPath, tools: () => voiceTools };
 }
+// Every app this file renders is unmounted after its test. Left mounted, an
+// app that never got `ready` keeps the pane's starting spinner ticking — a
+// full-screen re-render every 80ms per leaked app — and by the twentieth test
+// the live one's repaint no longer lands inside a 60ms sleep.
+const mounted: Array<{ unmount(): void }> = [];
+afterEach(() => { for (const r of mounted.splice(0)) r.unmount(); });
 
 test('with voice enabled the pane is there from the first frames and the sidecar is started with the audio env', async () => {
   const { lastFrame, f, tools } = appWithVoice({ voice_enabled: true, sidebar_width: 30, deepgram_api_key: 'dg', anthropic_api_key: 'k' });
@@ -594,6 +603,26 @@ test('session_close closes by id or the session on screen, through the same path
   // is an error that says so — nothing on the server is touched.
   assert.match(String((await run('session_close', { id: 's1' })).error), /not open in this window/);
   assert.match(String((await run('session_read', { id: 's1' })).error), /not open in this window/);
+});
+
+test('while starting, the detail line wraps to the pane and carries a spinner; on ready both go', async () => {
+  // A 20-column pane: `installing engine (first run)…` is 30 cells — it must
+  // reach line 3, not stop at the pane's edge.
+  const { lastFrame, f } = appWithVoice({ voice_enabled: true, sidebar_width: 22, deepgram_api_key: 'dg', anthropic_api_key: 'k' });
+  await sleep(80);
+  f.progress('installing engine (first run)…');
+  await sleep(120);
+  const lines = strip(lastFrame() ?? '').split('\n').map((l) => l.slice(l.indexOf('┃') + 1).trim());
+  const at = lines.findIndex((l) => /installing engine/.test(l));
+  assert.ok(at > 0, `the detail line is there: ${JSON.stringify(lines.slice(0, 4))}`);
+  assert.match(lines[at]!, /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] installing engine/, 'the spinner leads it');
+  assert.match(lines[at + 1]!, /^\(first run\)…$/, 'the rest wrapped onto the next row, not cut');
+  assert.doesNotMatch(lines.join('\n'), /[●⊘] mic/, 'no switch rows while detail stands');
+  f.emit(ready());
+  await sleep(40);
+  const after = strip(lastFrame() ?? '');
+  assert.doesNotMatch(after, /installing engine|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/, 'detail and spinner gone');
+  assert.match(after, /● mic · ● speaker/);
 });
 
 test('/speaker toggles; the devices row shows it and the header keeps the state', async () => {

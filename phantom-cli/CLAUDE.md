@@ -250,7 +250,7 @@ updates), `_TRACE_FRAMES` (screen.ts flight recorder), and the rig hooks
   skips the picker into the workspace of the newest session the USER drove
   (`lastWorkspaceId` ignores looper-run sessions — `agent` set — and deleted
   workspaces; a card session you took over counts, its `agent` is null).
-  The launch splash (`Banner`, the wordmark under the session header) fills
+  The launch splash (`Banner`, the ghost and wordmark under the session header) fills
   any session with nothing said yet — boot's first and every /new; the
   first interaction clears it; a resume shows its history instead.
 - Transcript appended per STEP (`onStepEnd`); a torn last line is skipped
@@ -327,7 +327,9 @@ updates), `_TRACE_FRAMES` (screen.ts flight recorder), and the rig hooks
 - Voice pane header is three lines: `voice · listening` / `● mic · ●
   speaker` / `● wake · ● headphones` (off = dim `⊘`; the wake window shows
   yellow `● active 6s` counting down); single-cell glyphs only (~20 columns,
-  floor 16); while `detail` stands both switch rows hide together; clicking
+  floor 16); while `detail` stands both switch rows hide together, it
+  wraps (never truncates — the header may grow), and while starting it
+  carries the dots spinner; clicking
   a glyph is its slash command (measureElement hit-test, release without
   drag). Per-stage ttfb lives behind ctrl+o.
 

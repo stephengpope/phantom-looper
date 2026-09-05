@@ -11,10 +11,15 @@
 // has them): the pane is ~20 columns on a normal terminal and a hint cost more
 // than it said. While `detail` stands (starting…, an error) it takes line 2
 // and BOTH rows are hidden — the switches appear together, never one row
-// ahead of the other. The per-stage ttfb (`dg stt 210ms · llm 480ms`) is
+// ahead of the other. Detail WRAPS (nothing clickable sits under it while it
+// stands, so the header may grow) — `installing engine (first run)…` and
+// `install failed — see …/sidecar.log` cut to the pane's width said nothing;
+// while starting it carries the dots spinner, because a first-run install is
+// minutes of an otherwise still line. The per-stage ttfb (`dg stt 210ms · llm 480ms`) is
 // tuning output, not day-to-day state, so it is one more line behind ctrl+o,
 // the same key that reveals thinking.
 import { Box, measureElement, useInput, type DOMElement } from 'ink';
+import Spinner from 'ink-spinner';
 import { Text } from './Text.js';
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { isMouseInput, parseMouse } from '../mouse.js';
@@ -185,7 +190,10 @@ export function VoicePanel({ width, voice, expanded, offset = 0, onMeasure, onDe
         <Text color={COLOR[voice.status]}>{LABEL[voice.status]}</Text>
       </Text>
       {voice.detail
-        ? <Text dimColor wrap="truncate-end">{voice.detail}</Text>
+        ? <Box>
+            {voice.status === 'starting' ? <Box flexShrink={0}><Text color="yellow"><Spinner type="dots" /></Text><Text> </Text></Box> : null}
+            <Text dimColor>{voice.detail}</Text>
+          </Box>
         : !on
           ? <Text dimColor>{'/voice to set up and turn on'}</Text>
           : <SwitchRow items={devices} rowRef={devicesRef} />}
