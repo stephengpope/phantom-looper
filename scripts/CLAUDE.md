@@ -57,10 +57,12 @@ Dockerfile (root)             the api image: two-stage node:22-bookworm-slim, `n
                               ca-certificates, openssl, ripgrep; dist + migrations; /workspaces + /trigger owned by node;
                               deploy files copied to /host-files/ (compose, Caddyfile, updater/, host/); ARG VERSION →
                               APP_VERSION; HEALTHCHECK hits /health with the bearer key
-.github/workflows/release.yml on `v*`: `images` (matrix phantom-backend / phantom-backend-session, amd64 + arm64, :tag and
-                              :latest unless the tag has a hyphen) · `cli` (npm ci → build-cli.sh → DRAFT release with the
-                              four tarballs + checksums.txt) · `publish` (needs both; notes from git log; flips the draft
-                              public, --latest, or --prerelease for hyphenated tags). NO test or typecheck gate in CI.
+.github/workflows/release.yml on `v*`: `images` (phantom-backend-api / phantom-backend-session × amd64 / arm64, each on
+                              a NATIVE runner — arm64 on ubuntu-24.04-arm, no QEMU — pushed by digest) · `manifests` (per image:
+                              the two digests → one multi-arch :tag, and :latest unless the tag has a hyphen) · `cli` (npm ci →
+                              build-cli.sh → DRAFT release with the four tarballs + checksums.txt) · `publish` (needs manifests +
+                              cli; notes from git log; flips the draft public, --latest, or --prerelease for hyphenated tags).
+                              NO test or typecheck gate in CI.
 ```
 
 ## Rules
