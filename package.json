@@ -1,6 +1,6 @@
 {
   "name": "phantom-looper",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "phantom-looper — a terminal coding agent with a kanban-driven supervisor loop",
   "type": "module",
   "license": "MIT",
