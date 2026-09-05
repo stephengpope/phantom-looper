@@ -653,3 +653,34 @@ test('agentModelConfig: the key follows whichever provider WON, from the same se
   assert.equal(agentModelConfig({ ...CODING, supervisor_provider: 'google',
     supervisor_model: 'gemini-3-pro' }, 'supervisor').apiKey, 'sk-goog');
 });
+
+// ── no default provider ─────────────────────────────────────────────────────
+// Nothing is chosen until a person chooses it (phantom-backend/settings.ts).
+// A build still succeeds — a session opens on a bare server — and the FIRST
+// CALL fails with the fix in the message; the cascade for the other agents
+// throws at build, which is a blocked card or a notice with the same words.
+import { cascade as cascade2, modelConfigFrom as modelConfigFrom2, buildCodingAgent as buildCodingAgent2 } from '../core/llm/agentConfig.js';
+import { languageModel as languageModel2, NO_PROVIDER } from '../core/llm/createAgent.js';
+
+test('no provider: the coding agent builds, says "unset", and its first call names /model', async () => {
+  const cfg = { provider: null, model: null, base_url: null, reasoning: 'medium', max_steps: null };
+  const c = modelConfigFrom2(cfg);
+  assert.equal(c.provider, '');
+  assert.equal(c.model, '');
+  const { summary } = buildCodingAgent2(cfg, {});
+  assert.deepEqual([summary.provider, summary.model], ['unset', 'unset']);
+  const m = languageModel2(c) as { doGenerate: () => Promise<unknown> };
+  await assert.rejects(m.doGenerate(), (e: Error) => e.message === NO_PROVIDER && /\/model/.test(e.message));
+});
+
+test('provider set, model empty: the call names the provider and /model', async () => {
+  const m = languageModel2(modelConfigFrom2({ provider: 'anthropic', model: '' })) as { doStream: () => Promise<unknown> };
+  await assert.rejects(m.doStream(), /no model set for anthropic — pick one on \/model/);
+});
+
+test('cascade with no provider anywhere throws the same message; an agent-level provider stands on its own', () => {
+  assert.throws(() => cascade2({ provider: null, model: null }, 'supervisor'), (e: Error) => e.message === NO_PROVIDER);
+  assert.deepEqual(cascade2({ provider: null, model: null, supervisor_provider: 'openai', supervisor_model: 'gpt-x' }, 'supervisor'),
+    { provider: 'openai', model: 'gpt-x', baseUrl: null });
+  assert.throws(() => cascade2({ provider: 'anthropic', model: null }, 'supervisor'), /no model set for anthropic/);
+});

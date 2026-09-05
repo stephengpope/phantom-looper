@@ -1,5 +1,6 @@
 // `phantom-cli setup-backend` — installs a phantom-backend server over ssh,
-// pairs this machine with it, saves one model credential, exits. A server
+// pairs this machine with it, and collects everything the app cannot run
+// without: a provider, its model, its key, and the GitHub token. A server
 // that already exists is paired from inside the app, on /server; this path
 // is INSTALL only.
 //
@@ -13,7 +14,12 @@
 // stdin, for the same reason; ssh's connection master means one password
 // for the whole run.
 //
-// Two questions end to end: where the server goes, and one model credential.
+// The questions, in order: where the server goes · the provider (no default —
+// nothing runs until one is chosen) · its endpoint, for openai-compatible ·
+// the model, a combobox over the server's catalog (GET /models) · the key ·
+// the GitHub token, verified against GitHub before it is accepted. None is
+// skippable: without any one of them the app cannot run a card. Backing out
+// after the pairing keeps it and names the screens that finish the job.
 // Every server-side question is a default passed as --yes; re-running against
 // the same box is the installer's own documented update/recovery path.
 import * as clack from '@clack/prompts';
@@ -34,6 +40,9 @@ export interface Asker {
   text(message: string, validate?: (v: string) => string | undefined): Promise<string | undefined>;
   select(message: string, options: { value: string; label: string; hint?: string }[]): Promise<string | undefined>;
   password(message: string): Promise<string | undefined>;
+  /** A combobox: typing filters `options`, and text that matches none of them
+   *  is offered as itself — a model the catalog does not list is one field away. */
+  autocomplete(message: string, options: { value: string; label: string; hint?: string }[]): Promise<string | undefined>;
 }
 
 /** One question, one private terminal handle, closed after. */
@@ -51,9 +60,34 @@ export const ttyAsker: Asker = {
   text: (message, validate) => onTty((input) => clack.text({ message, input, validate: validate ? (v) => validate(v ?? '') : undefined })),
   select: (message, options) => onTty((input) => clack.select({ message, input, options })),
   password: (message) => onTty((input) => clack.password({ message, input })),
+  autocomplete: (message, options) => onTty((input) => clack.autocomplete<string>({
+    message, input, maxItems: 8, placeholder: 'type to filter, or type any id',
+    // The options are a getter so the typed text can join the list: what you
+    // typed, when it is not already a row, is the last row.
+    options() {
+      const typed = this.userInput.trim();
+      const q = typed.toLowerCase();
+      const rows = options.filter((o) => !q || o.value.toLowerCase().includes(q) || o.label.toLowerCase().includes(q));
+      if (typed && !options.some((o) => o.value === typed)) rows.push({ value: typed, label: `use "${typed}"` });
+      return rows;
+    },
+    filter: () => true,   // the getter already filtered
+  })),
 };
 
 interface Paired { url: string; key: string; ca?: string }
+
+/** The server's catalog for one provider (GET /models), newest first; [] when
+ *  the provider has none (openai-compatible) or the call fails — the question
+ *  falls back to a typed id. */
+async function catalogFor(settings: ReturnType<typeof makeSettings>, provider: string):
+Promise<{ id: string; name: string }[]> {
+  try {
+    const r = await settings.api('GET', `/models?provider=${encodeURIComponent(provider)}`) as
+      { models?: { id: string; name: string }[] };
+    return Array.isArray(r?.models) ? r.models : [];
+  } catch { return []; }
+}
 
 function savePairing(p: Paired, configPath?: string): void {
   if (p.ca) {
@@ -77,9 +111,10 @@ export interface SetupDeps {
 }
 
 /** The whole setup-backend flow. Resolves once this machine is paired
- *  (local settings written) and the model key is saved or skipped; exits
- *  when the person backs out, or when the pairing is saved but the server
- *  is not yet reachable from here — with the reason and the fix on screen. */
+ *  (local settings written) and the provider, model, key and GitHub token
+ *  are saved on the server; exits when the person backs out, or when the
+ *  pairing is saved but the server is not yet reachable from here — with the
+ *  reason and the fix on screen. */
 export async function runSetup(deps: SetupDeps = {}): Promise<void> {
   const ask = deps.ask ?? ttyAsker;
   const verify = deps.verify ?? verifyFromHere;
@@ -141,24 +176,70 @@ export async function runSetup(deps: SetupDeps = {}): Promise<void> {
     return exit(0);
   }
 
-  // One model credential, into the server's encrypted store — the same row
-  // /keys edits later. Skippable; the first turn's error points at /keys.
+  // What the app cannot run without, into the server's store — the same
+  // rows /model and /keys edit later. Backing out here keeps the pairing.
   const settings = makeSettings(api(paired.url, paired.key, paired.ca));
+  const bail = async (): Promise<never> => {
+    clack.cancel('paired, but not set up — finish on /model and /keys in phantom-cli');
+    if (target) await closeSshMaster(target, sshOpts);
+    return exit(0);
+  };
+
+  // 1. the provider — no default, no preselection.
+  const provider = await ask.select('which AI provider?', PROVIDERS.map((p) => ({
+    value: p as string, label: p as string,
+    hint: p === 'anthropic' ? 'API key or Claude subscription token'
+      : p === 'openai-compatible' ? 'Ollama, vLLM, OpenRouter — any OpenAI-shaped endpoint' : undefined,
+  })));
+  if (!provider) return bail();
+
+  // 2. its endpoint, only where the provider IS an endpoint.
+  let baseUrl: string | undefined;
+  if (provider === 'openai-compatible') {
+    baseUrl = await ask.text('the endpoint (base URL)', (v) => {
+      try { new URL(v); return undefined; } catch { return 'a URL, like http://localhost:11434/v1'; }
+    });
+    if (baseUrl === undefined) return bail();
+  }
+
+  // 3. the model — the server's catalog, newest first, or any id typed.
+  const models = await catalogFor(settings, provider);
+  const model = models.length
+    ? await ask.autocomplete(`${provider} model — newest first`, models.map((m) => ({
+      value: m.id, label: m.name, hint: m.id === m.name ? undefined : m.id })))
+    : await ask.text(`${provider} model id`, (v) => (v.trim() ? undefined : 'a model id is needed'));
+  if (!model?.trim()) return bail();
+
+  // 4. the key. A failed save is reported and asked again.
   for (;;) {
-    const provider = await ask.select('model access — one credential, stored encrypted on the server', [
-      { value: 'anthropic', label: 'anthropic', hint: 'API key or Claude subscription token' },
-      ...PROVIDERS.filter((p) => p !== 'anthropic').map((p) => ({ value: p as string, label: p as string })),
-      { value: '', label: 'skip for now', hint: 'paste one later on /keys' },
-    ]);
-    if (!provider) break;
     const key = await ask.password(`${provider} — paste the key`);
-    if (!key?.trim()) continue;
+    if (key === undefined) return bail();
+    if (!key.trim()) continue;
     try {
-      await settings.patch({ [PROVIDER_KEY[provider as keyof typeof PROVIDER_KEY]]: key.trim(), provider });
-      clack.log.success(`${provider} key saved on the server`);
+      await settings.patch({
+        provider, model: model.trim(), ...(baseUrl ? { base_url: baseUrl.trim() } : {}),
+        [PROVIDER_KEY[provider as keyof typeof PROVIDER_KEY]]: key.trim(),
+      });
+      clack.log.success(`${provider} · ${model.trim()} — key saved on the server`);
       break;
     } catch (e) {
       clack.log.error((e as Error).message);
+    }
+  }
+
+  // 5. the GitHub token, checked against GitHub the moment it is saved — a
+  // mistyped or expired one is caught HERE, not at the first clone.
+  for (;;) {
+    const token = await ask.password('GitHub token — a classic token with repo scope: clones, pushes, lands work');
+    if (token === undefined) return bail();
+    if (!token.trim()) continue;
+    try {
+      await settings.patch({ github_token: token.trim() });
+      const who = await settings.api('GET', '/github/whoami') as { login?: string };
+      clack.log.success(`github token saved — authenticated as ${String(who?.login ?? 'unknown')}`);
+      break;
+    } catch (e) {
+      clack.log.error(`${(e as Error).message} — paste it again`);
     }
   }
   if (target) await closeSshMaster(target, sshOpts);

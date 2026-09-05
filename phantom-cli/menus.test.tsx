@@ -1902,3 +1902,27 @@ test('tableChoices: a marked cell carries its mark to the Column and counts the 
   const plain = tableChoices('n', [{ title: 's' }], [{ value: 1, cells: ['x', 'y'] }])[1].columns![0];
   assert.ok(!('mark' in plain));
 });
+
+// ── the provider and model rows, every screen ────────────────────────────────
+// A provider row offers only providers with a key on /keys; a model row's
+// catalog follows its own provider, else the coding agent's — and with no
+// provider set anywhere there is no catalog to fetch.
+import { providerChoices, providerForModelRow } from './components/Settings.js';
+
+test('provider rows list the keyed providers only, and all four with a note while none has a key', () => {
+  const keyed = providerChoices('provider', undefined, { anthropic_api_key: 'a', google_api_key: 'g' });
+  assert.deepEqual(keyed?.choices, ['anthropic', 'google']);
+  assert.deepEqual(providerChoices('supervisor_provider', ['anthropic', 'openai'], { openai_api_key: 'o' })?.choices, ['openai']);
+  const none = providerChoices('assistant_provider', undefined, {});
+  assert.deepEqual(none?.choices, ['anthropic', 'openai', 'google', 'openai-compatible']);
+  assert.match(none?.note ?? '', /no provider key on \/keys yet/);
+  assert.equal(providerChoices('model', undefined, {}), null, 'not a provider row');
+});
+
+test('a model row follows its own provider, then the coding agent\'s, then none', () => {
+  assert.equal(providerForModelRow('model', { provider: 'anthropic' }), 'anthropic');
+  assert.equal(providerForModelRow('assistant_model', { provider: 'anthropic', assistant_provider: 'google' }), 'google');
+  assert.equal(providerForModelRow('git_fixer_model', { provider: 'openai', git_fixer_provider: '' }), 'openai');
+  assert.equal(providerForModelRow('supervisor_model', { provider: null }), null);
+  assert.equal(providerForModelRow('reasoning', { provider: 'anthropic' }), null, 'not a model row');
+});

@@ -158,3 +158,8 @@ test('openai-compatible reveals base_url', () => {
   const cfg = { provider: 'openai-compatible', base_url: 'http://x' } as never;
   assert.equal(visibleKeys(cfg).includes('base_url'), true);
 });
+
+test('no provider yet: no key is in use, so every stored one counts as hidden', () => {
+  const cfg = { provider: null, anthropic_api_key: 'a', openai_api_key: 'b', google_api_key: null } as never;
+  assert.equal(hiddenKeyCount(cfg), 2);
+});

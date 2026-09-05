@@ -3,7 +3,7 @@
 // resolver that turns them into a ModelConfig and a coding agent. The cli's
 // agentFromConfig delegates here; the looper calls it directly.
 import type { Tool } from 'ai';
-import { type Agent, type ModelConfig, type Provider, type Reasoning } from './createAgent.js';
+import { NO_PROVIDER, type Agent, type ModelConfig, type Provider, type Reasoning } from './createAgent.js';
 import { codingAgent } from './agents/coding.js';
 
 /** One API key per provider, named the way each vendor names it — the same
@@ -32,13 +32,16 @@ const set = (v: unknown): string | null =>
  *  notice, an auto-push step). */
 export function cascade(cfg: SettingsValues, prefix: string):
 { provider: string; model: string; baseUrl: string | null } {
-  const provider = set(cfg[`${prefix}_provider`]) ?? String(cfg.provider);
-  const inherits = provider === String(cfg.provider);
+  const coding = set(cfg.provider);
+  const provider = set(cfg[`${prefix}_provider`]) ?? coding;
+  if (!provider) throw new Error(NO_PROVIDER);
+  const inherits = provider === coding;
   const model = set(cfg[`${prefix}_model`]) ?? (inherits ? set(cfg.model) : null);
   if (!model) {
-    throw new Error(
-      `${prefix}_provider is ${provider} but ${prefix}_model is not set — ` +
-      `a model from the coding agent's provider (${String(cfg.provider)}) cannot carry over`);
+    throw new Error(inherits
+      ? `no model set for ${provider} — pick one on /model (phantom-cli), or PATCH /settings {model}`
+      : `${prefix}_provider is ${provider} but ${prefix}_model is not set — ` +
+        `a model from the coding agent's provider (${coding}) cannot carry over`);
   }
   return { provider, model, baseUrl: set(cfg[`${prefix}_base_url`]) ?? (inherits ? set(cfg.base_url) : null) };
 }
@@ -61,11 +64,13 @@ export function agentModelConfig(cfg: SettingsValues, prefix: string): ModelConf
  *  `model` may be overridden (kept for the coding agent itself; the other
  *  agents resolve through agentModelConfig's cascade). */
 export function modelConfigFrom(cfg: SettingsValues, modelOverride?: string | null): ModelConfig {
-  const provider = String(cfg.provider) as Provider;
+  // Unset stays '' here: languageModel builds a handle that fails with the
+  // fix on its first call, so a session still opens on a bare server.
+  const provider = (set(cfg.provider) ?? '') as Provider;
   const keyField = PROVIDER_KEY[provider as keyof typeof PROVIDER_KEY];
   return {
     provider,
-    model: (modelOverride ?? '') !== '' && modelOverride != null ? String(modelOverride) : String(cfg.model),
+    model: set(modelOverride) ?? set(cfg.model) ?? '',
     baseUrl: (cfg.base_url as string | null) ?? undefined,
     apiKey: keyField ? (cfg[keyField] as string | null) ?? undefined : undefined,
     reasoning: cfg.reasoning != null ? (String(cfg.reasoning) as Reasoning) : undefined,
@@ -86,7 +91,7 @@ export function buildCodingAgent(
   const maxSteps = n != null && Number.isFinite(n) && n > 0 ? n : null;
   return {
     agent: codingAgent(model, tools, { maxSteps, instructions }),
-    summary: { provider: model.provider, model: model.model,
+    summary: { provider: model.provider || 'unset', model: model.model || 'unset',
       reasoning: String(cfg.reasoning ?? ''), maxSteps },
   };
 }

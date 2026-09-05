@@ -1,9 +1,10 @@
 # scripts/ — install, pairing, release, self-update
 
-One flow, two questions. `curl … install-cli.sh | sh` installs the app;
-`phantom-cli setup-backend` asks where the server goes and for one model
-credential and has the box download and run the release's `install.sh`
-over ssh (an existing server is paired on /server, in the app); one `v*`
+One flow. `curl … install-cli.sh | sh` installs the app; `phantom-cli
+setup-backend` asks where the server goes, has the box download and run the
+release's `install.sh` over ssh, then asks for what the app cannot run
+without — provider, model, key, GitHub token, none skippable (an existing
+server is paired on /server, in the app); one `v*`
 tag cuts the images and the cli tarballs together, so script and cli are
 one release. This map also covers `build/`, `host/`, `updater/`, `caddy/`,
 `docker-compose.yml`, the root `Dockerfile` and the release workflow.
@@ -23,6 +24,10 @@ build-cli.sh       the four tarballs (darwin-arm64 darwin-x64 linux-x64 linux-ar
                    (version-less asset names — install-cli.sh and self-update read `latest`)
 provision-rig.sh   build/boot/preload the privileged Ubuntu rig (`phantom-rig`, ssh 2222) with locally built api + fs
                    images in its inner dockerd; `down` tears it down
+models-snapshot.ts the model catalog snapshot from models.dev (phantom-backend/models.ts `writeSnapshot`): the api image
+                   build writes a fresh one into dist/phantom-backend/ (Dockerfile — dies if models.dev is down, a release
+                   never ships a stale list by accident); `npm run models:snapshot` refreshes the committed
+                   phantom-backend/models-snapshot.json a source run falls back on
 provision-e2e.ts   setup-backend's real path headless against the rig: runInstall over ssh, this checkout's install.sh inline (--tls=internal
                    --address=localhost --no-firewall) → readServerFacts → readServerCa → verifyFromHere; prints PASS
 shims/react-devtools-core.js   the one esbuild stub (Ink hoists a DEV-only import)
@@ -53,7 +58,7 @@ docker-compose.yml            project phantom-looper: postgres (16, pg-data) · 
                               CONTAINERS/EXEC/IMAGES/POST/INFO on) · updater · autoheal · caddy (the ONLY profile, `https`;
                               ports 80/443). Volumes pg-data, phantom-looper-workspaces (fixed name), caddy-data,
                               caddy-config, updater-trigger
-Dockerfile (root)             the api image: two-stage node:22-bookworm-slim, `npm run build` + prune; runtime git,
+Dockerfile (root)             the api image: two-stage node:22-bookworm-slim, `npm run build` + a fresh models snapshot + prune; runtime git,
                               ca-certificates, openssl, ripgrep; dist + migrations; /workspaces + /trigger owned by node;
                               deploy files copied to /host-files/ (compose, Caddyfile, updater/, host/); ARG VERSION →
                               APP_VERSION; HEALTHCHECK hits /health with the bearer key

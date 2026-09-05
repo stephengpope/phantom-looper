@@ -73,7 +73,7 @@ async function titleConfig(db: Db, encryptionKey: Buffer): Promise<ModelConfig |
   try {
     c = cascade(cfg, 'assistant');
   } catch {
-    c = { provider: String(cfg.provider), model: cfg.model == null ? null : String(cfg.model),
+    c = { provider: cfg.provider == null ? '' : String(cfg.provider), model: cfg.model == null ? null : String(cfg.model),
       baseUrl: (cfg.base_url as string | null) ?? null };
   }
   if (!isProvider(c.provider) || !c.model) return null;

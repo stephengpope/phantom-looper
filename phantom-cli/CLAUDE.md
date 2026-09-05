@@ -76,7 +76,7 @@ always rendered, blank when unused. Everyday commands come first in
 | `/close` | close the session on screen — out of local memory: it leaves the tab ring, the ctrl+n list and its `•` on /resume, and the session you spoke to most recently takes the screen (through `switchTo`, like any switch). Nothing on the server changes — /resume opens it again unchanged; [t] trash is the destructive one. Close the LAST session and a new one opens in the same workspace: /close means "done with this", never "leave me looking at nothing". Refused while a turn runs there (the stream's `onParts` closes over that entry). ONE path for every door — `/close`, `[x]` on /resume, the Assistant's `session_close` (by id, or the one on screen) — App's `closeSession(id?)` returns the facts (`closed`, `on_screen`, `opened_new`, or `error`) and each door renders them where its user is looking; `SessionStore.close` removes the entry and, if it was the active one, leaves `activeId` EMPTY so the store never becomes a second way to change what is on screen |
 | `/rename <name>` | `PATCH {name}` marks the session manual (the titler never overwrites); blank clears back to auto-titles |
 | `/auto-push` | this session's work onto base, streamed as notes; always pushes, ignores `auto_push_on_archive` |
-| `/model` | provider, model, reasoning, steps per turn (server-wide) |
+| `/model` | provider, model, reasoning, steps per turn (server-wide). No default provider: the row lists only providers with a key on /keys (all four, with a note, while none is stored). The model row is a combobox over the SERVER's catalog (`GET /models?provider=`, newest first) or any typed id; empty = the newest listed, which GET /settings reports. The same two shapes serve every provider/model pair on /voice and /settings (`providerChoices`, `providerForModelRow` in Settings.tsx) |
 | `/server` | api url + key on THIS machine — offline by design, it's where you pair an existing server or fix the address; the save is LIVE (index.tsx reads the file per request), no relaunch |
 | `/settings` | the server's settings; overridable ones marked ↯ pointing at the workspace screen |
 | `/keys` | the server's credentials, ONE place each, read from its credential namespace (a key declared server-side appears by itself): `github_token` (checked against GitHub on save via `/github/whoami`), the four provider keys, `deepgram_api_key`, `firecrawl_api_key`, `telegram_bot_token` |
@@ -133,7 +133,6 @@ board.ts           BoardStore — one workspace's board, outside React; optimist
 (core/ndjson.ts)   ND-JSON records off a response body — auto-push's and auto-pull's streams and the board's events (`stream()` in index.tsx); lives in core so the headless kits read the same way
 commands.ts        the table + matches/parse/complete
 config.ts local.ts settings.ts settingLabels.ts   above
-modelCatalog.ts    /model picker: models.dev, bundled models-snapshot.json fallback, 24h cache; sync, never throws, never a fence
 mouse.ts screen.ts trim.ts   the mouse parser + selection model · the screen mirror (@xterm/headless) · cell-level row trimming
 provision.ts setup.ts selfUpdate.ts update.ts   the setup-backend engine (ssh argv, control master, injectable runner) · the wizard (@clack/prompts, no Ink, install only) · APP_VERSION + the client half's mechanics · the update command, --version, the quit notice
 keys.tsx           npm run keys
@@ -154,7 +153,7 @@ the spinner off the feed's lock records, the working line from a mid-turn
 join, the relay, the live feed · `voice` VoiceClient against a scripted
 sidecar AND brain, the approval gate · `mouse` · `screen` · `trim` (streams
 replayed into two emulators, cell-equal) · `config` · `settings` (the tree
-scan) · `oauth` · `modelCatalog` · `provision` · `setup` · `selfUpdate` ·
+scan) · `oauth` · `provision` · `setup` · `selfUpdate` ·
 `components/SelectList` (fixed hint height, cursor normalisation, ctrl/meta
 filtered) · `TextInput` · `ValueInput` · `SecretEditor` (never auto-saves)
 · `Parts` (summarizeOutput, clipRows) · `Markdown` (inline markdown inside
@@ -439,8 +438,15 @@ updates), `_TRACE_FRAMES` (screen.ts flight recorder), and the rig hooks
   `install.sh` from this cli's release tag (`installScriptUrl`; stdin must
   stay free for the password), one ssh control master serves the run (one
   password), the pairing is read back over it, `/health` is verified FROM
-  THE LAPTOP, then the model key is pushed. Questions go through `Asker`
-  so tests script them (`setup.test.ts`).
+  THE LAPTOP, then the questions the app cannot run without, none
+  skippable: the provider (no preselection), its endpoint for
+  openai-compatible, the model (`autocomplete` — a combobox over `GET
+  /models`, the typed text offered as its own row when it matches nothing;
+  a typed id where there is no catalog), the key (provider + model + key
+  land in ONE patch), and the GitHub token, verified through
+  `/github/whoami` and asked again until GitHub accepts one. Backing out
+  after the pairing keeps it and names /model and /keys. Questions go
+  through `Asker` so tests script them (`setup.test.ts`).
 - `update.ts` (`phantom-cli update`): both halves to the LATEST published
   release, client first — `--client` / `--server` take one. The target is
   always latest, never APP_VERSION: a checkout has no tag, and after the

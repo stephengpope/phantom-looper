@@ -35,8 +35,11 @@ export const PROVIDERS = ['anthropic', 'openai', 'google', 'openai-compatible'] 
 export const REASONINGS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 
 export const DEFAULTS = {
-  provider: 'anthropic' as string,
-  model: 'claude-opus-5' as string,
+  // No default provider — nothing runs until a person picks one (the wizard,
+  // /model). The model's default is the server's: unset, it resolves to the
+  // newest model the catalog lists for the provider (GET /settings reports it).
+  provider: null as string | null,
+  model: null as string | null,
   base_url: null as string | null,
   reasoning: 'medium' as string,
   max_steps: null as number | null,
@@ -93,8 +96,8 @@ export type ConfigKey = keyof typeof DEFAULTS;
 export type ConfigValue = string | number | boolean | null;
 
 export const DESCRIPTIONS: Record<ConfigKey, string> = {
-  provider: 'The coding agent\'s LLM provider. Its key is set on /keys.',
-  model: 'Model id for the chosen provider.',
+  provider: 'The coding agent\'s LLM provider. Its key is set on /keys. Nothing runs until one is chosen.',
+  model: 'Model id for the chosen provider. Empty = the newest model the catalog lists for it, so it follows releases.',
   base_url: 'Endpoint for openai / openai-compatible. Required by openai-compatible.',
   reasoning: 'How much the model thinks before answering. Providers map this to their own setting.',
   max_steps: 'Tool calls allowed per turn before the agent must stop and answer. Empty = unlimited (esc still interrupts).',
@@ -212,7 +215,8 @@ export function visibleKeys(cfg: Record<ConfigKey, ConfigValue>): ConfigKey[] {
  *  keys live on the server now, so this takes the resolved set rather than
  *  reading a file. */
 export function hiddenKeyCount(cfg: Record<string, ConfigValue>): number {
-  const active = PROVIDER_KEY[String(cfg.provider) as keyof typeof PROVIDER_KEY];
+  // No provider yet: no key is in use, so every stored one is "other".
+  const active = cfg.provider ? PROVIDER_KEY[String(cfg.provider) as keyof typeof PROVIDER_KEY] : undefined;
   return Object.values(PROVIDER_KEY)
     .filter((k) => k !== active && cfg[k] !== null && cfg[k] !== undefined && cfg[k] !== '').length;
 }

@@ -74,7 +74,7 @@ phantom-cli                 # then open the app
 
 The wizard hands your terminal to ssh: answer its host-key question and type the box's password once. Prefer to do it yourself? On the box, run the one-liner the wizard prints (`install.sh` from the release), then put the address and key it prints under `/server` in the app.
 
-The wizard asks two questions: the box's address (`root@203.0.113.7`) and one model key. It installs Docker and the server, saves the address and key on this machine, stores the model key on the server, and ends with `run phantom-cli`.
+The wizard asks for the box's address (`root@203.0.113.7`), then everything the app cannot run without: the AI provider, its model (a list, newest first, or type any id), its key, and a GitHub token (checked against GitHub on the spot). It installs Docker and the server, saves the address and key on this machine, stores the rest on the server, and ends with `run phantom-cli`.
 
 **Already have one — reconnect**
 
@@ -96,10 +96,10 @@ The two credentials that turn a card into merged code, both on `/keys`:
 
 | key | why |
 |---|---|
-| one model key — `anthropic key`, `openai key`, `google key` or `openai-compatible key` | the agents think with it. `anthropic key` also takes a Claude subscription token. The wizard already saved one if you gave it one. |
-| `github token` | clones, pushes and lands work on the base branch. A classic token with `repo` scope is the simplest. Skip it and the app can read public repos but never push. |
+| one model key — `anthropic key`, `openai key`, `google key` or `openai-compatible key` | the agents think with it. `anthropic key` also takes a Claude subscription token. The wizard saved it. |
+| `github token` | clones, pushes and lands work on the base branch. A classic token with `repo` scope is the simplest. The wizard saved it. Without one the app can read public repos but never push. |
 
-Everything else has a working default.
+Plus the provider and model on `/model` — there is no default provider; the wizard set both. Leave the model empty and it is the newest one listed for the provider. Everything else has a working default.
 
 #### Ideal setup
 

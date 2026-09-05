@@ -51,6 +51,9 @@ const q = (s: Scope = {}) => {
  *  its own. */
 export function makeSettings(api: Api) {
   return {
+    /** The call the client is built on, for the one-off reads beside the
+     *  settings (the catalog, the GitHub check). */
+    api,
     /** GET /settings — every setting resolved, with layers/meta/description. */
     all: (scope?: Scope) =>
       api('GET', `/settings${q(scope)}`) as Promise<Record<string, Entry>>,

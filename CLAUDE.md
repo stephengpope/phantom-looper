@@ -92,8 +92,10 @@ must reach existing sessions goes in a tool's description.
   bound to THE card: the run-ending `kanban_card_move` and
   `kanban_card_items`. maxSteps 12.
 
-The coding agent's `provider model base_url reasoning` is the base; each
-other agent has an optional trio (`supervisor_*`, `assistant_*`,
+The coding agent's `provider model base_url reasoning` is the base — NO
+default provider (a person picks one: the wizard, /model), and an empty
+model is the newest the server's catalog lists (`phantom-backend/models.ts`);
+each other agent has an optional trio (`supervisor_*`, `assistant_*`,
 `git_fixer_*`) resolved by core's cascade — inherit only while the provider
 matches, a cross-provider override requires a model, checked at agent
 BUILD.

@@ -10,14 +10,15 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/phantom-backend/index.js",
-    "test": "tsx --test --test-reporter=spec --test-timeout=60000 test/unit.test.ts test/llm.test.ts test/skills.test.ts test/deploy.test.ts test/session.test.ts test/looper-logic.test.ts test/telegram.test.ts",
+    "test": "tsx --test --test-reporter=spec --test-timeout=60000 test/unit.test.ts test/llm.test.ts test/skills.test.ts test/deploy.test.ts test/session.test.ts test/looper-logic.test.ts test/telegram.test.ts test/models.test.ts",
     "keys": "tsx --tsconfig phantom-cli/tsconfig.json phantom-cli/keys.tsx",
     "typecheck": "tsc --noEmit && tsc -p phantom-cli",
+    "models:snapshot": "tsx scripts/models-snapshot.ts",
     "test:all": "tsx --test --test-reporter=spec --test-concurrency=1 --test-timeout=60000 test/*.test.ts",
     "test:down": "docker rm -f phantom-test-pg 2>/dev/null || true",
     "phantom-cli": "NODE_ENV=production tsx --tsconfig phantom-cli/tsconfig.json phantom-cli/index.tsx",
     "phantom-backend": "tsx phantom-backend/index.ts",
-    "test:phantom-cli": "PHANTOM_CLI_DIR=$(mktemp -d) FORCE_COLOR=3 tsx --tsconfig phantom-cli/tsconfig.json --test --test-force-exit phantom-cli/tui.test.tsx phantom-cli/board.test.tsx phantom-cli/menus.test.tsx phantom-cli/sessions.test.tsx phantom-cli/components/Pane.test.tsx phantom-cli/components/Boundary.test.tsx phantom-cli/components/SelectList.test.tsx phantom-cli/components/TextInput.test.tsx phantom-cli/components/Text.test.tsx phantom-cli/config.test.ts phantom-cli/session.test.ts phantom-cli/settings.test.ts phantom-cli/oauth.test.ts phantom-cli/modelCatalog.test.ts phantom-cli/components/ValueInput.test.tsx phantom-cli/components/SecretEditor.test.tsx phantom-cli/components/Parts.test.ts phantom-cli/components/Markdown.test.ts phantom-cli/voice.test.tsx phantom-cli/mouse.test.tsx phantom-cli/screen.test.ts phantom-cli/trim.test.ts phantom-cli/provision.test.ts phantom-cli/setup.test.ts phantom-cli/selfUpdate.test.ts phantom-cli/update.test.ts"
+    "test:phantom-cli": "PHANTOM_CLI_DIR=$(mktemp -d) FORCE_COLOR=3 tsx --tsconfig phantom-cli/tsconfig.json --test --test-force-exit phantom-cli/tui.test.tsx phantom-cli/board.test.tsx phantom-cli/menus.test.tsx phantom-cli/sessions.test.tsx phantom-cli/components/Pane.test.tsx phantom-cli/components/Boundary.test.tsx phantom-cli/components/SelectList.test.tsx phantom-cli/components/TextInput.test.tsx phantom-cli/components/Text.test.tsx phantom-cli/config.test.ts phantom-cli/session.test.ts phantom-cli/settings.test.ts phantom-cli/oauth.test.ts phantom-cli/components/ValueInput.test.tsx phantom-cli/components/SecretEditor.test.tsx phantom-cli/components/Parts.test.ts phantom-cli/components/Markdown.test.ts phantom-cli/voice.test.tsx phantom-cli/mouse.test.tsx phantom-cli/screen.test.ts phantom-cli/trim.test.ts phantom-cli/provision.test.ts phantom-cli/setup.test.ts phantom-cli/selfUpdate.test.ts phantom-cli/update.test.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.40",

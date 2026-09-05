@@ -15,12 +15,34 @@ import path from 'node:path';
 import type { AppCtx } from '../app.js';
 import { err, ok } from '../app.js';
 import { logger, errStr } from '../../log.js';
+import { catalog, modelsFor } from '../../models.js';
+import { PROVIDERS, isProvider } from '../../../core/llm/createAgent.js';
 
 const log = logger('system');
 
 export const RELEASE_TAG = /^v\d+\.\d+\.\d+$/;
 
 export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
+  // The model catalog, served by the server so every client and the `model`
+  // default read ONE list (models.ts: models.dev, an hour in memory, the
+  // release's snapshot when it cannot be reached).
+  app.get<{ Querystring: { provider?: string } }>('/models', {
+    schema: {
+      tags: ['meta'],
+      summary: 'The model catalog for one provider',
+      description: 'Models the catalog (models.dev) lists for a provider, newest first — each with `id`, `name`, ' +
+        '`reasoning` and `releaseDate`. The first is what an unset `model` setting resolves to. `source` says ' +
+        'whether the list is live or this release\'s snapshot. openai-compatible has no catalog and returns []; ' +
+        'the list is a convenience, never a fence — any model id may be stored.',
+      querystring: { type: 'object', required: ['provider'], properties: {
+        provider: { type: 'string', enum: [...PROVIDERS] } } },
+    },
+  }, async (req, reply) => {
+    const p = req.query.provider ?? '';
+    if (!isProvider(p)) return reply.code(400).send(err('invalid_args', `provider must be one of: ${PROVIDERS.join(', ')}`));
+    return ok({ provider: p, source: catalog().source, models: modelsFor(p) });
+  });
+
   app.post('/update', {
     schema: {
       tags: ['meta'],
