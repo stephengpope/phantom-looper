@@ -179,12 +179,17 @@ export function sessionChoices(
     // Two facts, two columns: the session's NAME (what is being built) and
     // the last thing typed. A blank fact is a dot — never the branch, which
     // is just the session id wearing a prefix and says nothing to a person.
-    const msg = s.lastUserMessage ?? lastMessage(s.id);
+    // One row is ONE line: a newline in the stored text (the loop's kickoff
+    // opens "Plan card 9.\n\n…") would break the cell into extra lines —
+    // truncate-end clips width, not line breaks — so whitespace flattens here.
+    const msg = (s.lastUserMessage ?? lastMessage(s.id))?.replace(/\s+/g, ' ').trim();
     const nameCol = s.name ?? '·';
     const msgCol = sup ? 'verdicts · read-only'
       : msg ? `"${msg}"`
       : '·';
-    const when = dead ? 'ended' : ago(s.lastUsedAt, now);
+    // A session open here that nothing was typed into carries no activity
+    // time (App's merge fills epoch 0 so it sorts last) — the dot, not "2957w".
+    const when = dead ? 'ended' : Date.parse(s.lastUsedAt) > 0 ? ago(s.lastUsedAt, now) : '·';
     // A blank work fact is the dot, UNMARKED — a color would claim a state
     // the server did not give: the list may not have been fetched with
     // git=true yet (the instant first paint), or there is nothing to measure.
