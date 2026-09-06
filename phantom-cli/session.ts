@@ -1,12 +1,12 @@
 // The coding session's transcript, on the shared format (core/llm/transcript.ts):
-// one JSONL file per phantom session under ~/.phantom-cli/sessions/. This file
+// one JSONL file per phantom session under CONFIG_DIR/sessions/. This file
 // keeps only what is TUI-specific — where the files live, the coding header
 // shape, and the resume-list helpers; the format itself (header line + one
 // ModelMessage per line, torn-line tolerance, dangling-tool-call trim) lives
 // with the other agents' transcript code.
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { CONFIG_DIR } from './config.js';
 import {
   Transcript as BaseTranscript, loadTranscriptFile, dropDanglingToolCall, lastUserFromJsonl,
   type LoadedTranscript, type TranscriptHeader as BaseHeader,
@@ -21,7 +21,7 @@ export interface TranscriptHeader extends BaseHeader {
   branch: string;
 }
 
-export const SESSIONS_DIR = join(homedir(), '.phantom-cli', 'sessions');
+export const SESSIONS_DIR = join(CONFIG_DIR, 'sessions');
 export const transcriptPath = (sessionId: string) => join(SESSIONS_DIR, `${sessionId}.jsonl`);
 
 export class Transcript extends BaseTranscript {

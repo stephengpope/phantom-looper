@@ -85,7 +85,7 @@ function boardHandler(deps: AssistantDeps, workspaceId: () => string | null) {
       }
       case 'create': {
         const body: Record<string, unknown> = { title: args.title };
-        for (const k of ['details', 'user_story', 'status'] as const) if (args[k] !== undefined) body[k] = args[k];
+        for (const k of ['details', 'status'] as const) if (args[k] !== undefined) body[k] = args[k];
         if (args.requirements) body.requirements = args.requirements;
         const j = await api(deps, `/workspaces/${ws}/cards`, { method: 'POST', body });
         return j.ok ? j.data.card : { error: j.error?.message };
@@ -94,7 +94,7 @@ function boardHandler(deps: AssistantDeps, workspaceId: () => string | null) {
         const id = await cardIdOf(deps, ws, args.card!);
         if (id == null) return { error: `no card ${args.card}` };
         const body: Record<string, unknown> = {};
-        for (const k of ['title', 'details', 'user_story', 'status', 'blocked_reason',
+        for (const k of ['title', 'details', 'status', 'blocked_reason',
           'archived', 'auto_plan', 'auto_build', 'pinned'] as const) {
           if (args[k] !== undefined) body[k] = args[k];
         }

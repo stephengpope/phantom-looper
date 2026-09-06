@@ -16,7 +16,7 @@ import {
 } from '../core/llm/tools/kanban.js';
 
 const card = (o: Partial<CardRow> = {}): CardRow => ({
-  id: 1, seq: 7, title: 'add uptime', status: 'plan', user_story: 'as a dev',
+  id: 1, seq: 7, title: 'add uptime', status: 'plan',
   details: 'd', requirements: [{ key: 'ab12', text: 'works', done: false }],
   blocked_reason: null, auto_plan: null, auto_build: null, archived: false, ...o,
 });

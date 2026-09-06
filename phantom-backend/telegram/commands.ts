@@ -16,25 +16,25 @@ import type { TelegramMode } from './store.js';
 interface Cmd { command: string; description: string }
 
 const COMMON: Cmd[] = [
-  { command: 'sessions', description: 'List sessions or pick one' },
+  { command: 'sessions', description: 'List or switch sessions' },
   { command: 'new', description: 'Start a new session' },
-  { command: 'stop', description: 'Stop the current task' },
+  { command: 'stop', description: 'Stop the running task' },
   { command: 'status', description: "Show what's running" },
-  { command: 'help', description: 'Show what I can do' },
+  { command: 'help', description: 'List commands' },
 ];
 
 /** The menus — one per mode. Home shows the door INTO a session's coding
  *  agent; code mode shows the door home plus the coder's own actions. */
 export const MENU: Record<TelegramMode, Cmd[]> = {
   assistant: [
-    { command: 'code', description: 'Talk to the active session\'s coding agent' },
-    { command: 'workspaces', description: 'List workspaces or switch' },
+    { command: 'code', description: 'Talk to the coding agent' },
+    { command: 'workspaces', description: 'List or switch workspaces' },
     ...COMMON,
   ],
   code: [
-    { command: 'assistant', description: 'Back to the assistant' },
-    { command: 'plan', description: 'Turn plan mode on or off' },
-    { command: 'autopush', description: 'Run auto-push' },
+    { command: 'assistant', description: 'Talk to the assistant' },
+    { command: 'plan', description: 'Toggle plan mode' },
+    { command: 'autopush', description: 'Push this session\'s work' },
     ...COMMON,
   ],
 };
@@ -235,19 +235,34 @@ async function sessionRow(engine: TelegramEngine, id: string): Promise<{
   return j.ok ? j.data : null;
 }
 
+// /help — the same sentence-case phrases as the menu, one command per line
+// with a dash (Telegram's proportional font collapses padded columns), the
+// numbered forms as real examples. Two agents, neither the default.
 const HELP = [
-  "I'm your phantom-looper assistant. Talk to me and I'll manage your work — the board, cards,",
-  'sessions, workspaces. /code and your messages go to the active session\'s coding agent;',
-  '/assistant brings you back to me.',
+  'phantom-looper',
   '',
-  '/sessions [n]     list sessions, or make number n the active one',
-  '/new              start a new session (and make it active)',
-  '/code [n]         talk to the active session\'s coding agent (or session n)',
-  '/assistant        back to the assistant',
-  '/workspaces [n]   list workspaces, or switch to number n',
-  '/status           show what\'s running',
-  '/plan             turn plan mode on or off',
-  '/autopush         run auto-push',
-  '/stop             stop the current task',
-  '/help             this',
+  'Two agents answer here: the assistant, which manages the board, sessions and workspaces, '
+  + 'and the active session\'s coding agent. /assistant and /code choose which one your messages go to.',
+  '',
+  'Sessions',
+  '/sessions — List sessions',
+  '/sessions 2 — Make session 2 active',
+  '/new — Start a new session',
+  '',
+  'Who answers',
+  '/code — Talk to the coding agent',
+  '/code 2 — Make session 2 active and talk to its coding agent',
+  '/assistant — Talk to the assistant',
+  '',
+  'Workspaces',
+  '/workspaces — List workspaces',
+  '/workspaces 2 — Switch to workspace 2',
+  '',
+  'Coding agent',
+  '/plan — Toggle plan mode',
+  '/autopush — Push this session\'s work',
+  '',
+  '/status — Show what\'s running',
+  '/stop — Stop the running task',
+  '/help — List commands',
 ].join('\n');

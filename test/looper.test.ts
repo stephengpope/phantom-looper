@@ -189,7 +189,7 @@ test('a card with both switches on walks plan → in_progress → done: a dialog
   const budget = ledger();
 
   const created = json(await app.inject({ method: 'POST', url: `/workspaces/${wsId}/cards`, headers: H,
-    payload: { title: 'add uptime', status: 'plan', user_story: 'as a dev', details: 'do it',
+    payload: { title: 'add uptime', status: 'plan', details: 'do it',
       requirements: [{ text: 'works' }] } })).data.card;
   const seq: number = created.seq;
   const key: string = created.requirements[0].key;
@@ -254,8 +254,15 @@ test('a card with both switches on walks plan → in_progress → done: a dialog
     input: { status: 'in_progress', reason: 'plan verified' } }, text: 'The plan holds.' });
   script.supervisor.push({ text: 'Approved and moved.' });   // the SDK's post-tool step
   const codingCallsBefore = wire.filter((w) => w.kind === 'coding').length;
+  // The move's board event names the LOOP as writer and the status it left —
+  // what the Telegram alerts key off (a person's move carries another client).
+  const moves: Array<{ from?: string; client?: string }> = [];
+  const unsub = ctx.events!.subscribeAll((_w, e) => { if (e.event === 'card') moves.push({ from: e.from, client: e.client }); });
   await engine.runTurn(workspace, await cardRow(seq), budget);
+  unsub();
   assert.equal((await cardRow(seq)).status, 'in_progress', 'the tool moved the card');
+  assert.deepEqual(moves.filter((m) => m.client === 'supervisor' && m.from === 'plan').length, 1,
+    "the supervisor's move rode the wire as the loop's, from plan");
   assert.equal(wire.filter((w) => w.kind === 'coding').length, codingCallsBefore,
     'a terminal turn is silence — nothing crossed to the coding agent');
 

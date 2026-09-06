@@ -1,8 +1,8 @@
 // End-to-end provisioning against the local rig — the setup wizard's exact
-// path (provision.ts), minus the screens: install over ssh with the repo's
-// own install.sh piped over stdin, read the pairing back, pull the internal
-// root certificate, and verify https from THIS side, CA pinned. Prints PASS
-// or dies where it broke.
+// path (provision.ts), minus the questions: install over ssh with the repo's
+// own install.sh carried inline (the wizard has the box download the release
+// copy), read the pairing back, pull the internal root certificate, and
+// verify https from THIS side, CA pinned. Prints PASS or dies where it broke.
 //
 //   ./scripts/provision-rig.sh                                      # once
 //   npx tsx --tsconfig phantom-cli/tsconfig.json scripts/provision-e2e.ts
@@ -10,8 +10,9 @@
 // Deliberately touches nothing under ~/.phantom-cli: this proves the path,
 // pairing a real machine is the wizard's job.
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import {
-  parseTarget, runInstall, readServerFacts, readServerCa, verifyFromHere,
+  parseTarget, runInstall, readServerFacts, readServerCa, verifyFromHere, closeSshMaster, INSTALL_SCRIPT_PATH,
 } from '../phantom-cli/provision.js';
 
 const target = parseTarget(process.env.RIG_TARGET ?? 'root@localhost:2222');
@@ -28,9 +29,9 @@ try {
   throw new Error('the rig does not answer — boot it first: ./scripts/provision-rig.sh');
 }
 
-step('install.sh over ssh (piped from this checkout, --yes)');
+step('install.sh over ssh (this checkout\'s copy, inline, --yes)');
 await runInstall(target, {
-  ...ssh,
+  ...ssh, script: readFileSync(INSTALL_SCRIPT_PATH, 'utf8'),
   flags: ['--tls=internal', '--address=localhost', '--no-firewall'],
   onData: (c) => process.stdout.write(c),
 });
@@ -49,5 +50,6 @@ step('verify from THIS machine: https://localhost, CA pinned, bearer key');
 const v = await verifyFromHere(`https://${facts.address}`, facts.key, ca, 30_000);
 if (!v.ok) throw new Error(`verify failed: ${v.reason}`);
 console.log(`server version: ${v.version}`);
+await closeSshMaster(target, ssh);
 
 console.log('\nPASS — install, pairing read-back, CA trust and client-side verify all hold\n');

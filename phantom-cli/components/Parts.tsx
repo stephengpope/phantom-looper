@@ -260,8 +260,7 @@ function summarizeInput(name: string, input: unknown, inputText: string): string
         if (a.title !== undefined) c.push(`= "${a.title}"`);
         if (a.blocked_reason !== undefined) c.push(a.blocked_reason === null ? 'unblocked' : 'blocked');
         if (a.archived !== undefined) c.push(a.archived ? 'archived' : 'restored');
-        for (const f of ['details', 'user_story'])
-          if (a[f] !== undefined) c.push(f.replace(/_/g, ' '));
+        if (a.details !== undefined) c.push('details');
         return `${card} ${c.join(', ') || 'edit'}`.slice(0, 80);
       }
       default: return card;

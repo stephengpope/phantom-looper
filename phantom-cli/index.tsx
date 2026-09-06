@@ -15,9 +15,9 @@
 // still override the file, and reach ONLY the local keys (PHANTOM_BACKEND_URL,
 // PHANTOM_BACKEND_KEY) — the settings screen shows which source each value
 // came from.
-import { appendFileSync, existsSync } from 'node:fs';
+import { appendFileSync, openSync } from 'node:fs';
 import { format } from 'node:util';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { render } from 'ink';
 import { phantomTools } from '../core/llm/tools/workspace.js';
 import { skillTools } from '../core/llm/tools/skills.js';
@@ -32,17 +32,10 @@ import { CONFIG_DIR, type ConfigValue } from './config.js';
 import { resolveLocal, localValues } from './local.js';
 import { ndjson } from '../core/ndjson.js';
 import { apiFor, savedCaFor } from './provision.js';
-import { APP_VERSION, checkLatest, isBehind, selfUpdate } from './selfUpdate.js';
+import { APP_VERSION, checkLatest, selfUpdate } from './selfUpdate.js';
+import { quitNotice, runUpdate, versionLines } from './update.js';
+import type { ServerLink, Target } from './update.js';
 import { makeSettings } from './settings.js';
-
-// Load the repo's .env (the same file the server and compose read) so a local
-// dev run needs nothing exported by hand. Shell env still wins over it.
-const ENV_FILE = resolve(import.meta.dirname, '../.env');
-if (existsSync(ENV_FILE)) {
-  const before = { ...process.env };
-  process.loadEnvFile(ENV_FILE);
-  for (const k of Object.keys(before)) process.env[k] = before[k];
-}
 
 // The connection comes from the file, synchronously: it is how we REACH the
 // settings store, so it cannot come from it — and you edit it precisely when
@@ -52,37 +45,70 @@ function die(msg: string): never { console.error(msg); process.exit(1); }
 if (configError) console.error(configError);
 
 // Subcommands run headless, ahead of the TTY gate: the version, and the
-// update pair — this cli's own, and the server's. One tag cuts both halves
-// (release.yml), so the server's upgrade tag IS this cli's version, handed to
-// the server's own updater over POST /update.
+// update. One tag cuts both halves (release.yml), so `update` brings this
+// machine AND the server to the latest release; `--client` / `--server` take
+// one half. The messages, the wait and the loop guard live in update.ts.
 const firstArg = process.argv[2];
-if (firstArg === '--version' || firstArg === '-v') { console.log(APP_VERSION); process.exit(0); }
-if (firstArg === 'update') {
-  if (process.argv.includes('--server')) {
-    const l = localValues();
-    if (!l.server_key) die('no server paired — run phantom-cli once first');
-    const call = apiFor(String(l.server_url), String(l.server_key), savedCaFor(String(l.server_url)));
-    const health = await call('GET', '/health') as { version?: string };
-    const server = String(health?.version ?? 'unknown');
-    if (APP_VERSION === 'dev') die(`the server runs ${server}; a dev checkout has no release tag to send — on the box: phantom-backend update vX.Y.Z`);
-    if (!isBehind(server, APP_VERSION)) { console.log(`server is current (${server})`); process.exit(0); }
-    await call('POST', '/update', { tag: `v${APP_VERSION}` });
-    console.log(`requested v${APP_VERSION} — the server's updater applies it in the background`);
-    process.exit(0);
-  }
-  const latest = await checkLatest();
-  if (!latest) die('could not read the latest release from GitHub');
-  if (!isBehind(APP_VERSION, latest)) { console.log(`already current (${APP_VERSION})`); process.exit(0); }
-  console.log(await selfUpdate(latest));
+
+/** The paired server as update.ts sees it — null when nothing is paired. */
+function pairedServer(): ServerLink | null {
+  const l = localValues();
+  if (!l.server_key || !l.server_url) return null;
+  const url = String(l.server_url);
+  return { url, call: apiFor(url, String(l.server_key), savedCaFor(url)) };
+}
+
+if (firstArg === '--version' || firstArg === '-v') {
+  const server = pairedServer();
+  const version = server
+    ? await server.call('GET', '/health').then((h) => String((h as { version?: string }).version ?? '') || null, () => null)
+    : null;
+  for (const line of versionLines(APP_VERSION, server ? { url: server.url, version } : null)) console.log(line);
   process.exit(0);
+}
+if (firstArg === 'update') {
+  const flags = process.argv.slice(3);
+  const bad = flags.find((f) => f !== '--client' && f !== '--server');
+  if (bad) die(`unknown option ${bad}\nusage: phantom-cli update [--client] [--server]`);
+  const target: Target = flags.includes('--client') && !flags.includes('--server') ? 'client'
+    : flags.includes('--server') && !flags.includes('--client') ? 'server' : 'both';
+  // The ticking wait rewrites its line; every real line clears it first.
+  const clear = process.stdout.isTTY ? '\r\x1b[2K' : '';
+  const code = await runUpdate(target, {
+    appVersion: APP_VERSION,
+    latest: checkLatest,
+    server: pairedServer(),
+    installClient: selfUpdate,
+    confirm: askYesNo,
+    out: (line) => { process.stdout.write(clear + line + '\n'); },
+    tick: process.stdout.isTTY ? (line) => { process.stdout.write(clear + line); } : undefined,
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    now: Date.now,
+  });
+  process.exit(code);
+}
+
+/** One yes/no question on the terminal itself. No terminal — the answer is no. */
+async function askYesNo(question: string): Promise<boolean> {
+  let fd: number;
+  try { fd = openSync('/dev/tty', 'r+'); } catch { return false; }
+  const { ReadStream } = await import('node:tty');
+  const { createInterface } = await import('node:readline');
+  const input = new ReadStream(fd);
+  try {
+    const rl = createInterface({ input, output: process.stdout });
+    const answer = await new Promise<string>((r) => rl.question(question, r));
+    rl.close();
+    return /^y(es)?$/i.test(answer.trim());
+  } finally { input.destroy(); }
 }
 
 if (!process.stdin.isTTY) die('needs a TTY');
 
 // `setup-backend` is the ONE way a new server gets installed: the wizard
-// (setup.tsx) runs here, before the app, because ssh must own the tty. It
-// pairs this machine and exits; the next plain launch is the app. A server
-// that already exists is paired from inside the app, on /server.
+// (setup.ts — plain prompts, no Ink) runs here, before the app, because ssh
+// must own the terminal. It pairs this machine and exits; the next plain
+// launch is the app. A server that already exists is paired on /server.
 if (firstArg === 'setup-backend') {
   const { runSetup } = await import('./setup.js');
   await runSetup();
@@ -279,7 +305,7 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 // stderr line is to ERASE THE WHOLE SCREEN, write the line, and repaint every
 // row — measured on a live session: ~1,900 full repaints in 93 seconds, the
 // "flicker all over". So while the screen is up, console.* and stderr go to a
-// file instead (~/.phantom-cli/cli.log — React warnings land there with their
+// file instead (CONFIG_DIR/cli.log — React warnings land there with their
 // component stacks), Ink's console patching stays OFF, and nothing may draw
 // over the screen. Restored on the way out for the resume line.
 const CLI_LOG = join(CONFIG_DIR, 'cli.log');
@@ -372,11 +398,8 @@ if (currentId) {
   console.log(`\nResume this session with:\n${launch} --resume ${currentId}\n`);
 }
 
-// The version notices wait for this quiet moment too — offered, never
-// automatic, and only between release builds (isBehind refuses 'dev').
-if (latestRelease && isBehind(APP_VERSION, latestRelease)) {
-  console.log(`phantom-cli ${latestRelease} is out — update with:\nphantom-cli update\n`);
-}
-if (serverVersion && isBehind(serverVersion, APP_VERSION)) {
-  console.log(`the server runs ${serverVersion}, this cli ${APP_VERSION} — update it with:\nphantom-cli update --server\n`);
-}
+// The version notice waits for this quiet moment too — offered, never
+// automatic. Both halves against the latest release, in either direction; a
+// dev checkout is never behind, so from a checkout only the server is named.
+const notice = quitNotice(APP_VERSION, serverVersion || null, latestRelease);
+if (notice) console.log(`${notice}\n`);

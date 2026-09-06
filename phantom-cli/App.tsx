@@ -192,7 +192,7 @@ export async function kanbanOps(board: BoardStore, args: KanbanArgs): Promise<un
     if (!args.title) return { error: 'create needs a title' };
     try {
       const made = await board.create({ title: args.title, status,
-        details: args.details, user_story: args.user_story,
+        details: args.details,
         requirements: args.requirements?.map((c) => ({ ...c, done: c.done ?? false })) });
       return { ok: true, ...cardWithLists(made) };
     } catch (e) { return { error: (e as Error).message }; }
@@ -211,9 +211,9 @@ export async function kanbanOps(board: BoardStore, args: KanbanArgs): Promise<un
   if (!t && args.card !== undefined) t = await board.fetchCard(args.card).catch(() => undefined);
   if (!t) return { error: `no card ${args.card ?? '(none given)'} — pass the card number` };
   if (args.action === 'read') {
-    return { card: t.seq, title: t.title, status: t.status, user_story: t.user_story,
-      details: t.details, requirements: t.requirements,
-      blocked_reason: t.blocked_reason, archived: t.archived };
+    return { card: t.seq, title: t.title, status: t.status,
+    details: t.details, requirements: t.requirements,
+    blocked_reason: t.blocked_reason, archived: t.archived };
   }
   if (args.action === 'move') {
     if (!status) return { error: 'move needs a status (column name)' };
@@ -225,7 +225,7 @@ export async function kanbanOps(board: BoardStore, args: KanbanArgs): Promise<un
     if (failed) return { error: failed };
   } else {
     const patch: Record<string, unknown> = {};
-    for (const f of ['title', 'details', 'user_story', 'blocked_reason', 'auto_plan', 'auto_build', 'pinned', 'archived'] as const)
+    for (const f of ['title', 'details', 'blocked_reason', 'auto_plan', 'auto_build', 'pinned', 'archived'] as const)
       if (args[f] !== undefined) patch[f] = args[f];
     if (status !== undefined) patch.status = status;
     if (args.requirements !== undefined)
@@ -1446,7 +1446,7 @@ export function App({
       setMenu(which);
       // The work column, a beat behind the instant open (see refreshPicker).
       if (which === 'resume') void refreshPicker(true).catch(() => {});
-    } catch (e) { note(`could not list: ${(e as Error).message}`); }
+    } catch (e) { note(`phantom-backend: could not list sessions: ${(e as Error).message}`); }
   }, [refreshPicker, note]);
 
   // What is running in the session's container — the /tasks screen's rows and
@@ -1510,7 +1510,7 @@ export function App({
       setArchivedTotal(d.total);
       setArchivedNotice(undefined);
       setMenu('archived');
-    } catch (e) { note(`could not list archived cards: ${(e as Error).message}`); }
+    } catch (e) { note(`phantom-backend: could not list archived cards: ${(e as Error).message}`); }
   }, [api, note]);
   // The next page, appended in place — morePicker's shape: the cursor is the
   // last loaded row, failure keeps what is loaded, scrolling again retries.
@@ -1565,9 +1565,17 @@ export function App({
       let ws: WorkspaceInfo[];
       try { ws = await api('GET', '/workspaces') as unknown as WorkspaceInfo[]; }
       catch (e) {
-        note(`could not reach the server: ${(e as Error).message}`);
-        note('have a server? its address and key go under /server, then /workspace starts a session');
-        note('need one? quit and run `phantom-cli setup-backend`');
+        // Two different failures, two different fixes: the server answered and
+        // refused the key (401), or nothing answered at that address at all.
+        const url = String(localValues(configPath).server_url);
+        if ((e as { status?: number }).status === 401) {
+          note(`phantom-backend at ${url} rejected the key: ${(e as Error).message}`);
+          note('fix the key under /server — a server box prints its key with `phantom-backend key`; a dev checkout gets it from ./scripts/setup.sh');
+        } else {
+          note(`phantom-backend at ${url} could not be reached: ${(e as Error).message}`);
+          note('have a server? its address and key go under /server, then /workspace starts a session');
+          note('need one? quit and run `phantom-cli setup-backend`');
+        }
         return;
       }
       // Nothing registered yet: go straight to adding one. An empty install
@@ -1733,7 +1741,7 @@ export function App({
           setTasksNotice(undefined);
           killArmed.current = null;
           setMenu('tasks');
-        } catch (e) { note(`could not list tasks: ${(e as Error).message}`); }
+        } catch (e) { note(`phantom-backend: could not list tasks: ${(e as Error).message}`); }
         return;
       }
       case 'plan': {

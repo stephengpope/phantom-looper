@@ -4,7 +4,7 @@
 // ═══ SYSTEM PROMPT — the coding agent itself ═══════════════════════════════
 // Blanks: {{stakeholders}} who is who · {{values}} the shared six values · {{communication}} the shared
 // communication style · {{environment}} the container the file tools run in
-// (its facts line probed from the fs image at session creation) · {{skills}}
+// (its facts line probed from the session image at session creation) · {{skills}}
 // the session's scanned skills index (or nothing) · {{secrets}} the stored
 // secrets index (or nothing) · {{credentials}} the git credential fact (or
 // nothing). Assembled once at session creation, frozen with it.

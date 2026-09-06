@@ -15,7 +15,8 @@ test_sidecar.py  offline tests, Brain inside a real pipeline included
 
 `uv` is the only requirement: the app finds it (`~/.phantom-cli/bin`,
 `~/.local/bin`, brew, PATH) or downloads the pinned release after a sha256
-check; `uv sync --frozen` runs on every start (~100ms after the first).
+check; `uv sync --frozen` runs on every start (~100ms after the first),
+async — a spawnSync froze the app for the whole first-run install.
 PyAudio's wheel ships PortAudio — no brew.
 
 ## The wire

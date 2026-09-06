@@ -60,7 +60,7 @@ test('empty board: code-default columns and repo-derived prefix', async () => {
 
 test('create: seq counts up, status defaults to first column, pos appends per column', async () => {
   const a = json(await app.inject({ method: 'POST', url: `/workspaces/${wsId}/cards`, headers: H,
-    payload: { title: 'first card', details: 'body', user_story: 'as a dev',
+    payload: { title: 'first card', details: 'body',
       requirements: [{ text: 'works' }, { text: 'step 1' }, { text: 'step 2', done: true }] } })).data.card;
   const b = json(await app.inject({ method: 'POST', url: `/workspaces/${wsId}/cards`, headers: H,
     payload: { title: 'second card' } })).data.card;
@@ -553,6 +553,18 @@ test('GET /workspaces/:id/events streams every card write as it happens, this wo
     assert.equal(ev.event, 'card');
     assert.equal((ev.card as { title: string }).title, 'renamed');
     assert.equal((ev.card as { requirements: { text: string }[] }).requirements[0].text, 'a step');
+
+    // The record names the WRITER and the status BEFORE the write, so a
+    // listener (the Telegram alerts) can tell the loop's move from an edit
+    // without remembering anything. Create has no `from`.
+    assert.equal(ev.from, 'backlog');
+    assert.equal(ev.client, undefined, 'no header, no client');
+    await app.inject({ method: 'PATCH', url: `/workspaces/${wsId}/cards/${created.id}`,
+      headers: { ...H, 'x-phantom-looper-client': 'supervisor' }, payload: { status: 'in_progress' } });
+    ev = await next();
+    assert.equal((ev.card as { status: string }).status, 'in_progress');
+    assert.equal(ev.from, 'backlog');
+    assert.equal(ev.client, 'supervisor');
 
     await app.inject({ method: 'DELETE', url: `/workspaces/${wsId}/cards/${created.id}`, headers: H });
     ev = await next();

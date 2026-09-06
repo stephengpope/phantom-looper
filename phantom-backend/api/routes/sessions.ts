@@ -113,7 +113,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         byName.set(sec.name, { name: sec.name, description: sec.description });
       }
       const secrets = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
-      // The environment facts line, probed from the fs image (cached by
+      // The environment facts line, probed from the session image (cached by
       // image ID) — the dynamic half of the prompt's environment block.
       const environment = ctx.fs ? await environmentFacts(ctx.fs.docker, String(image)) : '';
       return reply.code(201).send(ok({ ...s, skills, secrets, environment, agent_git_credentials }));

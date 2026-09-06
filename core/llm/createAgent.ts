@@ -137,6 +137,11 @@ export function effectiveReasoning(provider: Provider, model: string, want: Reas
  *  every SDK call sets maxRetries: 0 so nothing stacks a second loop on top. */
 export function languageModel(cfg: ModelConfig): LanguageModel {
   const c: ModelConfig = { ...cfg, fetch: withRetry(cfg.fetch, cfg.onRetry) };
+  // Nothing chosen yet: the agent still BUILDS (a session opens, the banner
+  // draws), and the first call fails with the fix in the message. There is no
+  // default provider — see phantom-backend/settings.ts.
+  if (!c.provider) return unsetModel(NO_PROVIDER);
+  if (!c.model) return unsetModel(`no model set for ${c.provider} — ${PICK_MODEL}`);
   switch (c.provider) {
     case 'anthropic': return anthropicProvider(c)(c.model);
     case 'openai': return createOpenAI({ apiKey: c.apiKey ?? undefined, baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
@@ -146,6 +151,15 @@ export function languageModel(cfg: ModelConfig): LanguageModel {
       return createOpenAICompatible({ name: 'phantom-looper', baseURL: c.baseUrl, apiKey: c.apiKey ?? 'none', fetch: c.fetch })(c.model);
     default: throw new Error(`unknown provider "${String((c as { provider: string }).provider)}"`);
   }
+}
+
+const PICK_MODEL = 'pick one on /model (phantom-cli), or PATCH /settings {provider, model}';
+export const NO_PROVIDER = `no provider set — ${PICK_MODEL}`;
+
+/** A model handle that fails every call with `reason`. */
+function unsetModel(reason: string): Exclude<LanguageModel, string> {
+  const fail = async (): Promise<never> => { throw new Error(reason); };
+  return { specificationVersion: 'v3', provider: 'none', modelId: '', supportedUrls: {}, doGenerate: fail, doStream: fail };
 }
 
 // --- retries ----------------------------------------------------------------------

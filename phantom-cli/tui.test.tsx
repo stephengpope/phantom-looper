@@ -425,9 +425,25 @@ test('an unreachable server still opens the window, pointing at the screen that 
   try {
     await sleep(80);
     const frame = strip(r.lastFrame()!);
-    assert.match(frame, /could not reach the server: fetch failed/);
+    assert.match(frame, /phantom-backend at http:\/\/localhost:8080 could not be reached: fetch failed/);
     assert.match(frame, /\/server/, 'points at the offline screen where the address lives');
     assert.match(frame, /type a message/, 'the app opened anyway');
+  } finally { r.unmount(); }
+});
+
+test('a server that refuses the key says so, and where the key is fixed — not "unreachable"', async () => {
+  const api = async (method: string, path: string) => {
+    if (method === 'GET' && path === '/workspaces') throw Object.assign(new Error('missing or invalid bearer token'), { status: 401 });
+    return {};
+  };
+  const r = render(<App api={api as never} boot={{}} newTools={noTools} makeVoice={inertVoice}
+    makeAgent={seam(10)} makeTranscript={throwaway} loadHistory={() => []} />);
+  try {
+    await sleep(80);
+    const frame = strip(r.lastFrame()!);
+    assert.match(frame, /phantom-backend at http:\/\/localhost:8080 rejected the key: missing or invalid bearer token/);
+    assert.doesNotMatch(frame, /could not be reached/);
+    assert.match(frame, /fix the key under \/server/);
   } finally { r.unmount(); }
 });
 

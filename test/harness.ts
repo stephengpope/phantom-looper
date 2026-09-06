@@ -15,6 +15,10 @@ import { migrate } from '../phantom-backend/db/migrate.js';
 
 const PG_NAME = 'phantom-test-pg';
 const PG_PORT = 55432;
+// The model catalog never reaches models.dev from a test: an address nothing
+// listens on fails fast, and the committed snapshot answers (models.ts).
+process.env.MODELS_DEV_API_BASE ??= 'http://127.0.0.1:9';
+
 export const FS_IMAGE = 'phantom-test-fs';
 
 function sh(cmd: string, args: string[], opts: { ignore?: boolean } = {}) {

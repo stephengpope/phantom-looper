@@ -1,6 +1,6 @@
 // The environment — the machine the file tools run in. This file IS the
 // source; edit the text here. A prompt adopts it with an {environment}
-// blank; {facts} is the one dynamic line, probed from the fs image at
+// blank; {facts} is the one dynamic line, probed from the session image at
 // session creation ("Debian GNU/Linux 13 (trixie), arm64 · Node v24.5.0 ·
 // Python 3.13.5") — a failed probe drops the line and the static text
 // stands alone. Today the coding agent carries it.

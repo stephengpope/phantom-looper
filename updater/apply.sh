@@ -28,15 +28,15 @@
 # INSTALLED, nothing on the server can be stale, the host files can never
 # disagree with the image they configure, and upgrading needs no GitHub.
 #
-# PHANTOM_BACKEND_IMAGE / PHANTOM_BACKEND_FS_IMAGE override the image names for testing
+# PHANTOM_BACKEND_API_IMAGE / PHANTOM_BACKEND_SESSION_IMAGE override the image names for testing
 # (e.g. locally built tags).
 # ============================================================================
 set -eu
 
 TAG="${1:?usage: apply.sh <tag>}"
 PHANTOM_BACKEND_DIR="${PHANTOM_BACKEND_DIR:-/opt/phantom-looper}"
-IMAGE="${PHANTOM_BACKEND_IMAGE:-ghcr.io/stephengpope/phantom-backend}"
-FS_IMAGE="${PHANTOM_BACKEND_FS_IMAGE:-ghcr.io/stephengpope/phantom-backend-fs}"
+API_IMAGE="${PHANTOM_BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend-api}"
+SESSION_IMAGE="${PHANTOM_BACKEND_SESSION_IMAGE:-ghcr.io/stephengpope/phantom-backend-session}"
 # Where the image keeps the host files (Dockerfile). Mirrors the install
 # directory's layout, so extraction is a straight copy.
 IMAGE_HOST_DIR=/host-files
@@ -48,20 +48,20 @@ echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "apply: invalid tag
 ENV_FILE="$PHANTOM_BACKEND_DIR/.env"
 [ -f "$ENV_FILE" ] || { echo "apply: no .env at $ENV_FILE — aborting"; exit 1; }
 
-echo "apply: upgrading to $TAG (image: $IMAGE:$TAG)"
+echo "apply: upgrading to $TAG (image: $API_IMAGE:$TAG)"
 
 # ── 1. Pull the new images (disk still untouched) ───────────────────────────
 # A failed pull is tolerated only when the image is ALREADY on the box (pulled
 # by hand, or a registry blip on a re-run); otherwise nothing has changed and
 # nothing will.
-if docker pull "$IMAGE:$TAG"; then
+if docker pull "$API_IMAGE:$TAG"; then
   echo "apply: api image pulled"
-elif docker image inspect "$IMAGE:$TAG" >/dev/null 2>&1; then
-  echo "apply: pull failed but $IMAGE:$TAG is already present — using it"
+elif docker image inspect "$API_IMAGE:$TAG" >/dev/null 2>&1; then
+  echo "apply: pull failed but $API_IMAGE:$TAG is already present — using it"
 else
-  echo "apply: image pull failed and $IMAGE:$TAG is not on this machine — aborting, nothing changed"; exit 1
+  echo "apply: image pull failed and $API_IMAGE:$TAG is not on this machine — aborting, nothing changed"; exit 1
 fi
-docker pull "$FS_IMAGE:$TAG" \
+docker pull "$SESSION_IMAGE:$TAG" \
   && echo "apply: workspace image pulled" \
   || echo "apply: workspace image pull failed — the api will pull it on first use"
 
@@ -79,7 +79,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-CID=$(docker create "$IMAGE:$TAG") \
+CID=$(docker create "$API_IMAGE:$TAG") \
   || { echo "apply: could not create a container from the image — aborting, nothing changed"; exit 1; }
 docker cp "$CID:$IMAGE_HOST_DIR/." "$STAGE/" \
   || { echo "apply: image has no $IMAGE_HOST_DIR (released before this mechanism?) — aborting, nothing changed"; exit 1; }

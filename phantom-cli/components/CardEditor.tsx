@@ -38,7 +38,7 @@ const SECTIONS: { list: ListName; label: string; hint: string }[] = [
 export type AutoField = 'auto_plan' | 'auto_build';
 
 interface Draft {
-  title: string; user_story: string; blocked: string; resolution: string;
+  title: string; blocked: string; resolution: string;
   pinned: boolean; archived: boolean;
   auto_plan: boolean | null;
   auto_build: boolean | null;
@@ -63,7 +63,7 @@ export function autoLabel(v: boolean | null, fallback: boolean, source?: string)
 const tickable = (list: ListName) => list === 'requirements';
 
 type Row =
-  | { kind: 'field'; field: 'title' | 'user_story' | 'blocked' | 'resolution' }
+  | { kind: 'field'; field: 'title' | 'blocked' | 'resolution' }
   | { kind: 'item'; list: ListName; index: number }
   | { kind: 'empty'; list: ListName }
   | { kind: 'pinned' }
@@ -83,7 +83,7 @@ const rowKey = (r: Row) =>
 const showBlocked = (_d: Draft, status: string) => status === 'blocked';
 
 function buildRows(d: Draft, status: string): Row[] {
-  const rows: Row[] = [{ kind: 'field', field: 'title' }, { kind: 'field', field: 'user_story' }];
+  const rows: Row[] = [{ kind: 'field', field: 'title' }];
   for (const { list } of SECTIONS) {
     const n = d[list].length;
     if (n === 0) rows.push({ kind: 'empty', list });
@@ -102,7 +102,7 @@ function buildRows(d: Draft, status: string): Row[] {
 const itemText = (v: string | CardStep): string => typeof v === 'string' ? v : v.text;
 
 const toDraft = (t: Card): Draft => ({
-  title: t.title, user_story: t.user_story, blocked: t.blocked_reason ?? '', resolution: t.resolution ?? '',
+  title: t.title, blocked: t.blocked_reason ?? '', resolution: t.resolution ?? '',
   pinned: t.pinned, archived: t.archived, auto_plan: t.auto_plan ?? null, auto_build: t.auto_build ?? null,
   details: t.details ? t.details.split('\n') : [],
   requirements: t.requirements.map((c) => ({ ...c })),
@@ -117,7 +117,7 @@ function diffPatch(d: Draft, c: Card): CardPatch {
   const patch: CardPatch = {};
   const title = d.title.trim();
   if (title && title !== c.title) patch.title = title;
-  if (d.user_story !== c.user_story) patch.user_story = d.user_story;
+
   const details = d.details.join('\n').replace(/\n+$/, '');
   if (details !== c.details) patch.details = details;
   const blocked = d.blocked.trim() || null;
@@ -349,7 +349,7 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
     </Box>
   );
 
-  const fieldRow = (field: 'title' | 'user_story' | 'blocked' | 'resolution', name: string, placeholder: string, next: () => void) => (
+  const fieldRow = (field: 'title' | 'blocked' | 'resolution', name: string, placeholder: string, next: () => void) => (
     <Box ref={ref({ kind: 'field', field })}>
       {label(name, field)}
       {field === 'blocked' && draft.blocked && focusedKey !== field
@@ -370,9 +370,7 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
       <Box marginTop={1} flexDirection="column">
         {fieldRow('title', 'Title', 'the card, in a line', () => move(1))}
       </Box>
-      <Box marginTop={1} flexDirection="column">
-        {fieldRow('user_story', 'Story', 'as a …, I want …, so that …', () => move(1))}
-      </Box>
+
       {SECTIONS.map(({ list, label: name, hint }) => {
         const items = draft[list] as (string | CardStep)[];
         return (
