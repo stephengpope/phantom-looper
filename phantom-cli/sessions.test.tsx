@@ -1162,3 +1162,33 @@ test('the skill index freezes into the prompt: launch from initial.skills, /new 
   assert.match(p, /- playwright-cli: system tier, merged by the server/, 'system entries ride the same list');
   r2.unmount();
 });
+
+// ── draft save/restore ──────────────────────────────────────────────────────
+
+test('draft field initialises to empty string', () => {
+  const store = new SessionStore(scriptedRun());
+  const e = seed(store, 'a');
+  assert.equal(e.draft, '', 'draft starts empty');
+});
+
+test('tab saves the unsent text and restores it on return', async () => {
+  const r = await twoSessions();
+  try {
+    // Type something in s2 (the session on screen after twoSessions).
+    r.stdin.write('half typed message'); await sleep(60);
+    const before = strip(r.lastFrame() ?? '');
+    assert.match(before, /half typed message/, 'the text is on screen');
+
+    // Tab away to s1 — the prompt must be empty (no draft there yet).
+    r.stdin.write(TAB); await sleep(120);
+    assert.equal(r.active.id, 's1', 'switched to s1');
+    const onS1 = strip(r.lastFrame() ?? '');
+    assert.match(onS1, /type a message/, 's1 shows an empty prompt (no previous draft)');
+
+    // Tab back to s2 — the draft must be restored.
+    r.stdin.write(TAB); await sleep(120);
+    assert.equal(r.active.id, 's2', 'back on s2');
+    const after = strip(r.lastFrame() ?? '');
+    assert.match(after, /half typed message/, 'the draft was restored');
+  } finally { r.unmount(); }
+});

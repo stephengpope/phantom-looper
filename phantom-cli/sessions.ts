@@ -84,6 +84,9 @@ export interface LoadedSession {
   /** Where this session's code stands: not_pushed, not_merged, merged. Null
    *  before the first poll lands or when the server could not read it. */
   work: 'not_pushed' | 'not_merged' | 'merged' | null;
+  /** The unsent text in the prompt when the user switched away from this
+   *  session. Restored into the input box when returning. */
+  draft: string;
 }
 
 export interface NewSession {
@@ -175,7 +178,7 @@ export class SessionStore {
       syncStamp: s.syncStamp ?? null,
       live: [], turn: [],
       busy: false, remoteBusy: false, held: null, startedAt: 0, tokens: NO_TOKENS, abort: null, queue: [],
-      unseen: false, lastMessageAt: 0, addedAt: ++this.seq, work: null,
+      unseen: false, lastMessageAt: 0, addedAt: ++this.seq, work: null, draft: '',
     };
     this.entries.push(entry);
     this.activeId = entry.id;

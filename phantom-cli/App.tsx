@@ -1083,6 +1083,11 @@ export function App({
 
   const [expanded, setExpanded] = useState(false);   // ctrl+o toggles it
   const [input, setInput] = useState('');
+  // The prompt's text as a ref — read by switchTo and openSession to save the
+  // draft without adding `input` to their dependency arrays (which would
+  // recreate the callbacks on every keystroke). Same rule as heldRef/workspaceRef.
+  const inputRef = useRef(input);
+  inputRef.current = input;
   const [ctrlC, setCtrlC] = useState(false);
   const [menu, setMenu] = useState<Menu>(null);
   // The launch splash: the big PHANTOM LOOPER where the conversation will be.
@@ -1140,11 +1145,19 @@ export function App({
 
   // Switching shows that session's conversation in the pane, tail first.
   const switchTo = useCallback((id: string) => {
+    // Save the unsent text to the session being left, so it is waiting when
+    // the user comes back. Read from the ref — never from `input` state,
+    // which would add it to the dependency array and recreate this callback
+    // on every keystroke.
+    const prev = store.active();
+    if (prev) prev.draft = inputRef.current;
     if (!store.activate(id)) return;
+    // Restore the draft the target session was left with (empty on first visit).
+    const e = store.get(id);
+    setInput(e?.draft ?? '');
     setSplash(false);
     setScroll(0);
     setHistAt(0);
-    const e = store.get(id);
     if (e) onSession?.({ id: e.id, branch: e.branch, workspaceId: e.workspaceId });
     // Cheap staleness check in the background: compare the server's transcript
     // stamp with what memory matches; pull only when it actually moved.
@@ -1344,6 +1357,9 @@ export function App({
       const ws = await wsFacts(row.workspaceId);
       const card = row.card != null
         ? `${ws.cardPrefix ? `${ws.cardPrefix}-` : 'card '}${row.card}` : undefined;
+      // Save the current session's draft before the new one takes over.
+      const prev = store.active();
+      if (prev) prev.draft = inputRef.current;
       store.add({
         id: row.id, branch: row.branch, workspaceId: row.workspaceId,
         tools, agent, summary, transcript, instructions,
@@ -1363,6 +1379,8 @@ export function App({
           ...messagesToParts(resumed),
         ],
       });
+      // A new session starts with an empty prompt.
+      setInput('');
       setScroll(0);
       setHistAt(0);
       // An empty conversation opens on the splash, exactly as boot's does —
