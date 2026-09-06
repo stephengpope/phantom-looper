@@ -147,3 +147,18 @@ test('runSetup: a failed install is reported and the target is asked again', asy
     configPath: join(mkdtempSync('/tmp/phantom-setup-'), 'settings.json'), exit: exitThrows });
   assert.equal(ask.asked.filter((a) => a.startsWith('text')).length, 2);
 });
+
+test('runSetup: a server that does not answer yet (certificate still being issued) is re-probed, and the questions follow once it does', async () => {
+  const { api, patched } = serverApi();
+  const ask = scripted({ text: ['root@203.0.113.7'], select: ['anthropic'], autocomplete: ['claude-fable-5-1'],
+    password: ['sk-ant-xyz', 'ghp_abc'] });
+  let probes = 0;
+  const verify = async () => (++probes < 3
+    ? { ok: false as const, reason: 'tlsv1 alert internal error' }
+    : { ok: true as const, version: 'x' });
+  await runSetup({ run: okSsh, ask, api: api as never, verify, verifyWaitMs: 5_000, exit: exitThrows,
+    configPath: join(mkdtempSync('/tmp/phantom-setup-'), 'settings.json') });
+  assert.equal(probes, 3);
+  assert.deepEqual(ask.asked.map((a) => a.split(':')[0]), ['text', 'select', 'autocomplete', 'password', 'password']);
+  assert.equal(patched.length, 2);
+});

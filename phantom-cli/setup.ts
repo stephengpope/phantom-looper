@@ -104,6 +104,9 @@ export interface SetupDeps {
   run?: SshRun; acceptNew?: boolean; identity?: string;
   ask?: Asker;
   verify?: typeof verifyFromHere;
+  /** How long to keep re-probing a server that does not answer yet (the
+   *  certificate is still being issued); default 5s, tests pass 0. */
+  verifyWaitMs?: number;
   api?: typeof apiFor;
   exit?: (code: number) => never;
   /** The local settings file the pairing lands in (tests). */
@@ -165,8 +168,21 @@ export async function runSetup(deps: SetupDeps = {}): Promise<void> {
     }
   }
   // Verify FROM HERE — the path the app will actually use. The box's own
-  // checks cannot speak for it (cloud firewalls, NAT).
-  const v = await verify(paired.url, paired.key, paired.ca);
+  // checks cannot speak for it (cloud firewalls, NAT). Caddy fetches its
+  // certificate AFTER it starts, and Let's Encrypt takes some seconds to
+  // issue one, so a fresh server refuses the handshake at first ("tlsv1
+  // alert internal error"): probe every second for up to 5s and go on the
+  // moment it answers.
+  const waitMs = deps.verifyWaitMs ?? 5_000;
+  const spin = clack.spinner();
+  spin.start(`checking ${paired.url} from this machine`);
+  const deadline = Date.now() + waitMs;
+  let v = await verify(paired.url, paired.key, paired.ca);
+  while (!v.ok && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1_000));
+    v = await verify(paired.url, paired.key, paired.ca);
+  }
+  spin.stop(v.ok ? `${paired.url} answers` : `${paired.url} does not answer yet`);
   if (v.ok) {
     clack.log.success(`paired with ${paired.url} (server ${v.version})`);
   } else {

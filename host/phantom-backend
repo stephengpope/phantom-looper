@@ -77,8 +77,20 @@ cmd_check() {
         CA_ARGS="--cacert $TMP"
       else bad "could not read Caddy's root certificate (phantom-backend ca)"; fi
     fi
-    # shellcheck disable=SC2086
-    if authed_curl -fsS --max-time 10 $CA_ARGS --resolve "$ADDRESS:443:127.0.0.1" "https://$ADDRESS/health" >/dev/null 2>&1; then
+    # Caddy fetches the certificate AFTER it starts, and Let's Encrypt takes
+    # some seconds to issue one — a probe the instant the api is up sees no
+    # certificate yet ("tlsv1 alert internal error"). Poll every second for
+    # up to 5s and stop the moment it answers.
+    CERT_OK=0; CERT_DEADLINE=$(( $(date +%s) + 5 ))
+    while :; do
+      # shellcheck disable=SC2086
+      if authed_curl -fsS --max-time 10 $CA_ARGS --resolve "$ADDRESS:443:127.0.0.1" "https://$ADDRESS/health" >/dev/null 2>&1; then
+        CERT_OK=1; break
+      fi
+      [ "$(date +%s)" -ge "$CERT_DEADLINE" ] && break
+      sleep 1
+    done
+    if [ "$CERT_OK" = 1 ]; then
       ok "https://$ADDRESS serves a valid certificate"
       BASE="https://$ADDRESS"
     else
