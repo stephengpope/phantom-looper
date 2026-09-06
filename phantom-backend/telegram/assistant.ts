@@ -19,9 +19,9 @@ import type { ModelMessage, Tool } from 'ai';
 import { assistantAgent } from '../../core/llm/agents/assistant.js';
 import { agentModelConfig } from '../../core/llm/agentConfig.js';
 import { withCacheBreakpoints } from '../../core/llm/createAgent.js';
-import { assistantKanbanTool, sessionsTool, workspaceCreateTool, gitAutoPullTool, renderRead, kebabName,
-  type KanbanArgs, type SessionsArgs, type WorkspaceCreateArgs, type GitAutoPullArgs } from '../../core/llm/tools/tui.js';
-import { autoPullSession } from '../../core/llm/tools/git.js';
+import { assistantKanbanTool, sessionsTool, workspaceCreateTool, gitAutoPushTool, gitAutoPullTool, renderRead, kebabName,
+  type KanbanArgs, type SessionsArgs, type WorkspaceCreateArgs, type GitAutoPushArgs, type GitAutoPullArgs } from '../../core/llm/tools/tui.js';
+import { autoPushSession, autoPullSession } from '../../core/llm/tools/git.js';
 import { phantomTools } from '../../core/llm/tools/workspace.js';
 import { webTools } from '../../core/llm/tools/web.js';
 import { parseTranscript } from '../../core/llm/transcript.js';
@@ -203,10 +203,20 @@ function workspaceCreateHandler(deps: AssistantDeps, ctx: AssistantCtx) {
   };
 }
 
-/** `git_auto_pull`, headless: the active session unless an id was given,
- *  through core's one client of the auto-pull route (this server's own
- *  surface over `deps.f`). Awaited to the end; a refusal is the answer, never
- *  a throw — the Assistant reports it in a sentence. */
+/** `git_auto_push` / `git_auto_pull`, headless: the active session unless an
+ *  id was given, through core's one client of each git route (this server's
+ *  own surface over `deps.f`). Awaited to the end; a refusal is the answer,
+ *  never a throw — the Assistant reports it in a sentence. The steps are not
+ *  shown here: the Assistant's answer is the one line the person reads (the
+ *  slash commands are the door that shows steps). */
+function gitAutoPushHandler(deps: AssistantDeps, activeSession: () => string | null) {
+  return async (args: GitAutoPushArgs): Promise<unknown> => {
+    const id = args.id ?? activeSession();
+    if (!id) return { error: 'no active session — /sessions or /new to pick one, or pass an id' };
+    try { return { session: id, ...await autoPushSession({ baseUrl: BASE, apiKey: deps.apiKey, sessionId: id, fetch: deps.f }) }; }
+    catch (e) { return { session: id, result: 'error', reason: (e as Error).message }; }
+  };
+}
 function gitAutoPullHandler(deps: AssistantDeps, activeSession: () => string | null) {
   return async (args: GitAutoPullArgs): Promise<unknown> => {
     const id = args.id ?? activeSession();
@@ -218,13 +228,14 @@ function gitAutoPullHandler(deps: AssistantDeps, activeSession: () => string | n
 
 /** The Assistant's whole kit for a telegram turn. File tools + web bind to the
  *  active session when there is one (read-only); board + sessions + the gated
- *  workspace_create_repo + git_auto_pull always. */
+ *  workspace_create_repo + git_auto_push + git_auto_pull always. */
 export async function assistantKit(deps: AssistantDeps, ctx: AssistantCtx): Promise<Record<string, Tool>> {
   const { workspaceId, activeSession, onSwitch } = ctx;
   const kit: Record<string, Tool> = {
     ...assistantKanbanTool(boardHandler(deps, workspaceId)),
     ...sessionsTool(sessionsHandler(deps, activeSession, onSwitch)),
     ...workspaceCreateTool(workspaceCreateHandler(deps, ctx)),
+    ...gitAutoPushTool(gitAutoPushHandler(deps, activeSession)),
     ...gitAutoPullTool(gitAutoPullHandler(deps, activeSession)),
   };
   const session = activeSession();
