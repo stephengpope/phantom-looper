@@ -732,6 +732,52 @@ test('the feed repaints from the record when this window did NOT see the whole t
   } finally { r.unmount(); }
 });
 
+test('a remote turn clears the splash screen cleanly instead of degrading it', async () => {
+  const sid = 'feed-splash';
+  const header = JSON.stringify({ type: 'session', session_id: sid, provider: 'test', model: 'fake', created_at: '2026-08-27T00:00:00.000Z' });
+  const api = async (method: string, path: string) => {
+    if (path === '/workspaces' || (path.split('?')[0] === '/sessions' && method === 'GET')) return { sessions: [], total: ([]).length };
+    if (path === `/sessions/${sid}` && method === 'GET') return { id: sid, locked: true, transcript_updated_at: null };
+    if (path === `/sessions/${sid}/transcript`) return { data: header, updated_at: 't1' };
+    return {};
+  };
+  const queue: Record<string, unknown>[] = [];
+  let deliver: (() => void) | null = null;
+  const push = (rec: Record<string, unknown>) => { queue.push(rec); deliver?.(); };
+  const stream = async (_path: string, signal: AbortSignal) => ({
+    async *[Symbol.asyncIterator]() {
+      for (;;) {
+        while (queue.length) yield queue.shift()!;
+        if (signal.aborted) return;
+        await new Promise<void>((res) => {
+          deliver = res;
+          signal.addEventListener('abort', () => res(), { once: true });
+        });
+        deliver = null;
+      }
+    },
+  });
+  // Empty session = splash shows (resumed is []).
+  const r = render(<App api={api as never} stream={stream as never}
+    initial={{ ...INITIAL, sessionId: sid, branch: `agent/${sid}`, resumed: [] }}
+    newTools={async () => ({})} makeVoice={inertVoice} makeAgent={stubAgent}
+    makeTranscript={(h) => new Transcript(h, tmp())} loadHistory={() => []}
+    run={scriptedRun()} pollMs={5000} clientId="me" />);
+  try {
+    await sleep(60);
+    assert.match(strip(r.lastFrame()!), /█████/, 'the splash is visible before any remote turn');
+
+    // A remote turn starts — the splash must vanish instantly.
+    push({ event: 'turn-start', agent: 'coding', message: 'auto build' });
+    push({ event: 'part', part: { type: 'text-start', id: '0' } });
+    push({ event: 'part', part: { type: 'text-delta', id: '0', text: 'building now' } });
+    await sleep(250);
+    const f = strip(r.lastFrame()!);
+    assert.doesNotMatch(f, /█████/, 'the splash is gone once a remote turn arrives');
+    assert.match(f, /auto build/, 'the remote turn message is on screen');
+  } finally { r.unmount(); }
+});
+
 test('session_get_mode answers from the sessions table: a background session whose row moved is reported, and this window follows it', async () => {
   // The ROWS, as the server holds them. s1 is launched into, s2 goes on screen;
   // the elsewhere-watch polls only what is ON SCREEN, so once s1 is in the

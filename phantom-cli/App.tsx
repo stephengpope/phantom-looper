@@ -1086,9 +1086,11 @@ export function App({
   // history to show. Cleared by the first interaction that wants the screen
   // back: a submitted line (message or command — /help's answer lands in the
   // pane the splash covers), a session switch, a note, a menu or the board
-  // opening. Set back only where openSession seats an empty session.
+  // opening, or a remote turn arriving. Set back only where openSession
+  // seats an empty session.
   const [splash, setSplash] = useState(initial ? initial.resumed.length === 0 : true);
   useEffect(() => { if (menu !== null || view !== 'chat') setSplash(false); }, [menu, view]);
+  useEffect(() => { if (session?.remoteBusy) setSplash(false); }, [session?.remoteBusy]);
   const [picker, setPicker] = useState<{ workspaces: WorkspaceInfo[]; sessions: SessionInfo[]; total: number; end: boolean } | null>(null);
   // [s] on /resume: the looper's supervisor seats in the list or not. Held
   // here, not in the screen, because it is a fetch parameter — the server
