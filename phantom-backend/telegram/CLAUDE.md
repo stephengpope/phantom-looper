@@ -36,7 +36,9 @@ switches conversation if the message replies to one of the bot's bubbles
 (`telegram_sent` says which), then handles a slash command, then resolves
 the input (voice note through Deepgram, files into scratch with a note,
 or text). A standing approval consumes the exact word and declines on
-anything else. A busy chat queues the message as one follow-up turn.
+anything else. A message while a turn runs is queued as one follow-up
+turn; the busy key is the active session id in code mode and `assistant`
+at home, so a coding turn and an Assistant turn never block each other.
 Then the mode picks `assistantTurn` or `codeTurn`.
 
 `codeTurn` opens the session with `lock: true` as client `telegram`,
