@@ -267,11 +267,15 @@ dropped.
   `workspaceCreateTool` (`workspace_create_repo`, gated by the client — the app's pane, Telegram's `approvals.ts`;
   `kebabName` is the deterministic final name); `gitAutoPushTool` / `gitAutoPullTool` (`git_auto_push` /
   `git_auto_pull`, `{id?}` = the session on screen / the account's active session; the host's handler runs the
-  operation — App over its `autoPush`/`autoPull` props, Telegram over core `autoPullSession`). `statusEnum` makes
+  operation — App over its `autoPush`/`autoPull` props, Telegram over core `autoPushSession`/`autoPullSession`). `statusEnum` makes
   `status` a real enum of the workspace's columns.
-- `git.ts` — `autoPullSession(cfg, onStep?)`, the ONE client of `POST
-  /git/auto-pull` (reads the stream to its result; a refusal envelope
-  throws; `AUTO_PULL_STEPS` puts step names in words); `codingGitTools(cfg)`
+- `git.ts` — `autoPushSession(cfg, onStep?)` / `autoPullSession(cfg, onStep?)`,
+  the ONE client of each of `POST /git/auto-push` / `POST /git/auto-pull`
+  (one stream reader for both: steps → `onStep` in words via
+  `AUTO_PUSH_STEPS` / `AUTO_PULL_STEPS`, the single result record is the
+  answer; a refusal envelope throws). Callers: the cli (`index.tsx`, adds its
+  connection + CA + client id), the Telegram engine (`/auto_push`,
+  `/auto_pull`), the Telegram Assistant, the coding kit. `codingGitTools(cfg)`
   → `git_auto_pull` for the CODING agent, bound to its own session at build
   (no session input), declared mutating so plan mode drops it, never throws
   (a failure is `{result:'error', reason}`). Wired in both coding kits

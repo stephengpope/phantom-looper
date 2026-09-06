@@ -8,6 +8,12 @@
 // Merged pairs: `/sessions` lists, `/sessions 2` points at number 2;
 // `/workspaces` lists, `/workspaces 2` switches. No singular /session or
 // /workspace.
+//
+// `/auto_push` and `/auto_pull` are the project's `/auto-push` / `/auto-pull`
+// under Telegram's command law (lowercase letters, digits, underscores — a
+// hyphen fails the whole setMyCommands call). Code mode only, like /plan: they
+// act on the coding session the account points at. Each runs as ONE bubble
+// edited in place — a line per step as it happens, the result on the last line.
 
 import type { TelegramClient } from './client.js';
 import type { TelegramEngine } from './engine.js';
@@ -34,7 +40,8 @@ export const MENU: Record<TelegramMode, Cmd[]> = {
   code: [
     { command: 'assistant', description: 'Talk to the assistant' },
     { command: 'plan', description: 'Toggle plan mode' },
-    { command: 'autopush', description: 'Push this session\'s work' },
+    { command: 'auto_push', description: 'Land this session\'s work on the base branch' },
+    { command: 'auto_pull', description: 'Bring the base branch into this session' },
     ...COMMON,
   ],
 };
@@ -181,20 +188,19 @@ export async function handleCommand(
       return;
     }
 
-    case 'autopush': {
-      if (acc.mode !== 'code' || !acc.activeSessionId) { await reply('⚠️ Auto-push runs from the coding agent — /code first.'); return; }
-      await reply('🚀 Pushing your work…');
-      const body = await (await engine.call('/git/auto-push',
-        { method: 'POST', body: {}, session: acc.activeSessionId })).text();
-      const last = body.trim().split('\n').filter(Boolean).pop();
-      let msg = 'done';
-      let failed = false;
-      try {
-        const o = JSON.parse(last ?? '{}');
-        failed = o.error !== undefined;
-        msg = o.result ?? o.step ?? o.error ?? 'done';
-      } catch { /* stream tail */ }
-      await reply(`${failed ? '⚠️' : '✅'} Auto-push: ${msg}`);
+    case 'auto_push':
+    case 'auto_pull': {
+      const pull = cmd === 'auto_pull';
+      const name = pull ? 'Auto-pull' : 'Auto-push';
+      if (acc.mode !== 'code' || !acc.activeSessionId) {
+        await reply(`⚠️ ${name} runs on the coding session — /code first.`);
+        return;
+      }
+      const bubble = await stepBubble(client, dm, `${pull ? '⬇️' : '🚀'} ${name}`);
+      const r = pull
+        ? await engine.autoPull(acc.activeSessionId, bubble.step)
+        : await engine.autoPush(acc.activeSessionId, bubble.step);
+      await bubble.end(outcomeLine(pull, r));
       return;
     }
 
@@ -205,6 +211,47 @@ export async function handleCommand(
     default:
       await reply(`⚠️ I don't know /${cmd}.\n\nℹ️ ${HELP}`);
   }
+}
+
+/** One bubble for a multi-step run: sent with its title, then EDITED as each
+ *  step arrives (a `·` line per step) and once more with the result line. A
+ *  client that hands back no message id (or an edit that fails — an unchanged
+ *  body, a deleted message) falls back to a fresh message for the result, so
+ *  the outcome is never lost. */
+async function stepBubble(client: TelegramClient, dm: number, title: string) {
+  const lines = [title];
+  const m = await client.sendMessage(dm, title).catch(() => null);
+  const id: number | null = m?.message_id ?? null;
+  const edit = async () => {
+    if (id == null) return false;
+    try { await client.editMessageText(dm, id, lines.join('\n')); return true; } catch { return false; }
+  };
+  return {
+    step(label: string) { lines.push(`· ${label}`); void edit(); },
+    async end(result: string) {
+      lines.push(result);
+      if (!await edit()) await client.sendMessage(dm, result);
+    },
+  };
+}
+
+/** The result of a push or a pull as one line. */
+export function outcomeLine(pull: boolean, r: { result: string; reason?: string; sha?: string;
+  arrived?: string[]; files?: string[]; pushed?: boolean }): string {
+  const why = r.reason ? ` — ${r.reason}` : '';
+  if (pull) {
+    if (r.result === 'merged') {
+      const n = r.arrived?.length ?? 0;
+      const files = r.files?.length ? `, ${r.files.length} file${r.files.length === 1 ? '' : 's'} changed` : '';
+      const backup = r.pushed === false ? ` (branch push failed${why})` : '';
+      return `✅ merged ${n} commit${n === 1 ? '' : 's'} from the base branch${files}${backup}`;
+    }
+    if (r.result === 'clean') return '✅ nothing to pull — the branch already has all of base';
+    return `⚠️ ${r.result}${why}`;
+  }
+  if (r.result === 'pushed') return `✅ landed on the base branch (${(r.sha ?? '').slice(0, 10)})`;
+  if (r.result === 'nothing') return '✅ nothing to push — the base branch already has it all';
+  return `⚠️ ${r.result}${why}`;
 }
 
 /** The id at position `arg` of the list /sessions last printed to this chat,
@@ -260,7 +307,8 @@ const HELP = [
   '',
   'Coding agent',
   '/plan — Toggle plan mode',
-  '/autopush — Push this session\'s work',
+  '/auto_push — Land this session\'s work on the base branch',
+  '/auto_pull — Bring the base branch into this session',
   '',
   '/status — Show what\'s running',
   '/stop — Stop the running task',

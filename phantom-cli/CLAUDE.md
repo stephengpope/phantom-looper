@@ -130,7 +130,7 @@ board.ts           BoardStore — one workspace's board, outside React; optimist
                    store's own edits (card written → replace, deleted → drop, session → the Session row); a dropped link reconnects
                    with ONE `load()` to fill the gap; `create()` seats the POST's answer through `adoptCard` (replace by id) because
                    the stream delivers the row first
-(core/ndjson.ts)   ND-JSON records off a response body — auto-push's and auto-pull's streams and the board's events (`stream()` in index.tsx); lives in core so the headless kits read the same way
+(core/ndjson.ts)   ND-JSON records off a response body — the board's events (`stream()` in index.tsx); auto-push's and auto-pull's streams are read by core's `autoPushSession`/`autoPullSession` (index.tsx wraps them with the connection, the saved CA and the client id)
 commands.ts        the table + matches/parse/complete
 config.ts local.ts settings.ts settingLabels.ts   above
 mouse.ts screen.ts trim.ts   the mouse parser + selection model · the screen mirror (@xterm/headless) · cell-level row trimming
