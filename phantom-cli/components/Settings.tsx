@@ -119,7 +119,12 @@ export function Settings({ api, onClose, onLocalChange, configPath = CONFIG_PATH
     try {
       const r = await api('GET', `/models?provider=${encodeURIComponent(provider)}`) as { models?: CatalogModel[] };
       return Array.isArray(r?.models) ? r.models : [];
-    } catch { return []; }
+    } catch (e) {
+      // The row stays free-text, and the notice says why the list is missing
+      // — an empty picker must not read as "this provider has no models".
+      setNotice(`could not load the model list: ${(e as Error).message}`);
+      return [];
+    }
   }, [api]);
   /** The spec, plus the catalog for a model row and the keyed providers for a
    *  provider row — the two shapes every model-ish row takes, on both screens. */

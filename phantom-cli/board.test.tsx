@@ -228,7 +228,7 @@ test('tab / shift+tab move the focused card right / left, focus following', asyn
   r.unmount();
 });
 
-test('n creates in the focused column; a archives', async () => {
+test('n creates in the focused column; a archives with confirmation', async () => {
   const { api, calls } = fakeApi(seed());
   const store = new BoardStore(api, 'w1');
   const r = mount(store);
@@ -238,10 +238,38 @@ test('n creates in the focused column; a archives', async () => {
   r.stdin.write('\r'); await sleep(30);
   assert.ok(calls.some((c) => c.method === 'POST'));
   assert.match(strip(r.lastFrame()!), /brand new/);
-  r.stdin.write('a'); await sleep(30); // archives the focused (first) card
+  // First [a] arms — no PATCH yet, the confirmation prompt appears.
+  r.stdin.write('a'); await sleep(30);
+  assert.ok(!calls.some((c) => c.method === 'PATCH' && (c.body as { archived?: boolean }).archived), 'the first [a] only arms');
+  assert.match(strip(r.lastFrame()!), /archive #1-first card\?/, 'the confirmation prompt names the card');
+  assert.match(strip(r.lastFrame()!), /\[a\] again to archive/, 'the prompt tells the user what to do');
+  // Second [a] confirms — the PATCH fires.
+  r.stdin.write('a'); await sleep(30);
   const patch = calls.find((c) => c.method === 'PATCH' && (c.body as { archived?: boolean }).archived);
   assert.ok(patch, 'archive is a PATCH, not a delete');
   assert.ok(!strip(r.lastFrame()!).includes('first card'));
+  r.unmount();
+});
+
+test('[a] archive confirmation is disarmed by esc or any other key', async () => {
+  const { api, calls } = fakeApi(seed());
+  const store = new BoardStore(api, 'w1');
+  const r = mount(store);
+  await sleep(50);
+  // Arm with [a], then disarm with esc — should not archive.
+  r.stdin.write('a'); await sleep(30);
+  assert.match(strip(r.lastFrame()!), /\[a\] again to archive/, 'armed');
+  r.stdin.write('\x1b'); await sleep(30);
+  assert.doesNotMatch(strip(r.lastFrame()!), /again to archive/, 'esc disarmed');
+  assert.ok(!calls.some((c) => c.method === 'PATCH' && (c.body as { archived?: boolean }).archived), 'no archive after esc');
+  // Esc while armed should NOT leave the board (esc's normal action).
+  assert.match(strip(r.lastFrame()!), /first card/, 'still on the board');
+  // Arm with [a], then press a different key (arrow) — should disarm.
+  r.stdin.write('a'); await sleep(30);
+  assert.match(strip(r.lastFrame()!), /again to archive/, 're-armed');
+  r.stdin.write('\x1b[B'); await sleep(30); // down arrow
+  assert.doesNotMatch(strip(r.lastFrame()!), /again to archive/, 'arrow key disarmed');
+  assert.ok(!calls.some((c) => c.method === 'PATCH' && (c.body as { archived?: boolean }).archived), 'still no archive');
   r.unmount();
 });
 

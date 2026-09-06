@@ -23,7 +23,7 @@ import { phantomTools } from '../core/llm/tools/workspace.js';
 import { skillTools } from '../core/llm/tools/skills.js';
 import { webTools } from '../core/llm/tools/web.js';
 import { secretTools } from '../core/llm/tools/secrets.js';
-import { codingGitTools, autoPullSession as corePull } from '../core/llm/tools/git.js';
+import { autoPushSession as corePush, autoPullSession as corePull } from '../core/llm/tools/git.js';
 import { newId } from '../core/ids.js';
 import { App } from './App.js';
 import { createScreen } from './screen.js';
@@ -36,6 +36,7 @@ import { APP_VERSION, checkLatest, selfUpdate } from './selfUpdate.js';
 import { quitNotice, runUpdate, versionLines } from './update.js';
 import type { ServerLink, Target } from './update.js';
 import { makeSettings } from './settings.js';
+import { requestError } from './request.js';
 
 // The connection comes from the file, synchronously: it is how we REACH the
 // settings store, so it cannot come from it — and you edit it precisely when
@@ -153,44 +154,14 @@ let latestRelease: string | null = null;
 if (APP_VERSION !== 'dev') void checkLatest().then((t) => { latestRelease = t; });
 let serverVersion: string | null = null;
 
-// /auto-push's step names, in words. Anything the server adds later shows raw.
-const AUTO_PUSH_STEPS: Record<string, string> = {
-  commit: 'committing',
-  merge: 'merging the base branch in',
-  fix: 'resolving conflicts',
-  verify: 'verifying against the repo',
-  push_branch: 'pushing the branch',
-  push_base: 'pushing to the base branch',
-  retry: 'base moved — merging again',
-};
-
-/** POST /git/auto-push and consume its ND-JSON stream. An auto-push has no time limit,
- *  so the route streams: heartbeats keep the connection alive, step records
- *  become notes, and exactly one result record ends it. */
-export async function autoPushSession(sessionId: string, onStep?: (label: string) => void):
-  Promise<{ result: string; reason?: string; sha?: string }> {
+/** POST /git/auto-push for one session — core's client over the ND-JSON
+ *  stream (heartbeats keep the connection alive, step records become notes,
+ *  exactly one result record ends it); the cli adds only its connection, its
+ *  lock identity and the saved CA. */
+export async function autoPushSession(sessionId: string, onStep?: (label: string) => void) {
   const { base, key } = connection();
   await trustSavedCa(base);
-  const r = await fetch(`${base}/git/auto-push`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json',
-      'x-phantom-looper-session': sessionId, 'x-phantom-looper-client': CLIENT_ID },
-    body: '{}',
-  });
-  // A refusal (unknown session, auto-push unwired) is the plain envelope, sent
-  // before the stream would have started.
-  if ((r.headers.get('content-type') ?? '').includes('application/json')) {
-    const j = await r.json() as { ok: boolean; error?: { code?: string; message?: string } };
-    throw new Error(j.error?.message ?? j.error?.code ?? `auto-push: HTTP ${r.status}`);
-  }
-  if (!r.body) throw new Error(`auto-push: HTTP ${r.status}`);
-  let result: { result: string; reason?: string; sha?: string } | undefined;
-  for await (const rec of ndjson(r.body) as AsyncIterable<{ event?: string; step?: string; result?: string; reason?: string; sha?: string }>) {
-    if (rec.event === 'step' && rec.step) onStep?.(AUTO_PUSH_STEPS[rec.step] ?? rec.step);
-    else if (rec.event === 'result') result = { result: rec.result ?? 'error', reason: rec.reason, sha: rec.sha };
-  }
-  if (!result) throw new Error('auto-push: the stream ended without a result');
-  return result;
+  return corePush({ baseUrl: base, apiKey: key, sessionId, clientId: CLIENT_ID }, onStep);
 }
 
 /** POST /git/auto-pull for one session — core's client over the same stream
@@ -208,13 +179,16 @@ export async function autoPullSession(sessionId: string, onStep?: (label: string
 export async function stream(path: string, signal: AbortSignal): Promise<AsyncIterable<Record<string, unknown>>> {
   const { base, key } = connection();
   await trustSavedCa(base);
-  const r = await fetch(`${base}${path}`, {
-    headers: { authorization: `Bearer ${key}`, 'x-phantom-looper-client': CLIENT_ID }, signal });
+  let r: Response;
+  try {
+    r = await fetch(`${base}${path}`, {
+      headers: { authorization: `Bearer ${key}`, 'x-phantom-looper-client': CLIENT_ID }, signal });
+  } catch (e) { throw requestError('GET', path, base, e); }
   if ((r.headers.get('content-type') ?? '').includes('application/json')) {
     const j = await r.json() as { error?: { code?: string; message?: string } };
-    throw new Error(j.error?.message ?? j.error?.code ?? `GET ${path}: HTTP ${r.status}`);
+    throw requestError('GET', path, base, undefined, { status: r.status, ...j.error });
   }
-  if (!r.body) throw new Error(`GET ${path}: HTTP ${r.status}`);
+  if (!r.body) throw requestError('GET', path, base, undefined, { status: r.status });
   return ndjson(r.body);
 }
 
@@ -224,20 +198,18 @@ export async function api(method: string, path: string, body?: unknown) {
   // opened session "in use" for the whole TTL.
   const { base, key } = connection();
   await trustSavedCa(base);
-  const r = await fetch(`${base}${path}`, {
-    method,
-    headers: { authorization: `Bearer ${key}`, 'x-phantom-looper-client': CLIENT_ID,
-      ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const j = await r.json() as { ok: boolean; data?: unknown; error?: { code?: string; message?: string } };
-  if (!j.ok) {
-    // The server's message IS the error people read — never the envelope's
-    // JSON. The code rides as a property for callers that branch on it.
-    const failed = new Error(j.error?.message || `${method} ${path}: HTTP ${r.status}`) as Error & { code?: string };
-    failed.code = j.error?.code;
-    throw failed;
-  }
+  let r: Response;
+  let j: { ok: boolean; data?: unknown; error?: { code?: string; message?: string } };
+  try {
+    r = await fetch(`${base}${path}`, {
+      method,
+      headers: { authorization: `Bearer ${key}`, 'x-phantom-looper-client': CLIENT_ID,
+        ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    j = await r.json() as typeof j;
+  } catch (e) { throw requestError(method, path, base, e); }
+  if (!j.ok) throw requestError(method, path, base, undefined, { status: r.status, ...j.error });
   return j.data as Record<string, unknown>;
 }
 
@@ -272,13 +244,11 @@ const webKit = (id: string) => webTools({ baseUrl: connection().base, apiKey: co
 // Workspace-bound, not session-bound: the workspace's secrets shadow global
 // ones by name, and only App knows which workspace a session is in.
 const secretKit = (ws: string) => secretTools({ baseUrl: connection().base, apiKey: connection().key, workspaceId: ws });
-// The coding agent's git_auto_pull, bound to its own session; a mutator, so
-// plan mode drops it like the file tools' writers.
-const gitKit = (id: string, plan?: boolean) =>
-  codingGitTools({ baseUrl: connection().base, apiKey: connection().key, sessionId: id, clientId: CLIENT_ID, ...(plan ? { pick: 'readonly' as const } : {}) });
-// Settings for the chrome's first frame (voice pane on/off, width). Best
-// effort: unreachable just means defaults for one frame — the app is where an
-// unreachable server gets fixed, so it must not die here.
+// Settings for the chrome's first frame (voice pane on/off, width) and the
+// launch session's agent. No settings = no agent and no first-frame values,
+// NOT the code defaults standing in for them: the app opens anyway, because
+// it is where an unreachable server gets fixed (/server), and its boot
+// effect prints the failure — the same sentence every request produces.
 const cfg: Record<string, ConfigValue> | undefined =
   await makeSettings(api).read().then((r) => ({ ...r, ...localValues() })).catch(() => undefined);
 
@@ -360,7 +330,7 @@ const app = render(
     bootConfig={cfg}
     boot={{ ...(resumeId ? { resumeId } : {}) }}
     newTools={(id, plan, ws) => phantomTools({ baseUrl: connection().base, apiKey: connection().key, sessionId: id, ...(plan ? { pick: 'readonly' as const } : {}) })
-      .then((t) => ({ ...t, ...skillKit(id, plan), ...webKit(id), ...(ws ? secretKit(ws) : {}), ...gitKit(id, plan) }))}
+      .then((t) => ({ ...t, ...skillKit(id, plan), ...webKit(id), ...(ws ? secretKit(ws) : {}) }))}
     newAssistantTools={(id) => phantomTools({ baseUrl: connection().base, apiKey: connection().key, sessionId: id, pick: 'readonly' })
       .then((t) => ({ ...t, ...webKit(id) }))}
     onSession={(s) => { currentId = s.id; openedIds.add(s.id); }}

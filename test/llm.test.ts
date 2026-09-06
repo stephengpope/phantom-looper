@@ -100,7 +100,7 @@ test('openai and openai-compatible: bearer key, the base url is honoured; compat
   assert.equal(o.headers['authorization'], 'Bearer sk-o');
   const c = await request({ provider: 'openai-compatible', model: 'local', apiKey: null, baseUrl: 'http://localhost:11434/v1' });
   assert.match(c.url, /^http:\/\/localhost:11434\/v1\//);
-  assert.throws(() => languageModel({ provider: 'openai-compatible', model: 'x' }), /base url/);
+  assert.throws(() => languageModel({ provider: 'openai-compatible', model: 'x' }), /base_url is not set/);
 });
 
 test('google: the key rides as a header, not in the url', async () => {
@@ -268,13 +268,28 @@ test('assistant prompt: spoken register, tools; no clock time', () => {
   assert.match(p, /replies are read aloud/);
   assert.match(p, /Never use markdown of any kind/);
   assert.match(p, /No pleasantries, no preamble/);
-  assert.match(p, /Never assume you know the state of the UI/);
+  assert.match(p, /You cannot see the screen/);
   assert.match(p, /Stakeholders involved/, 'who is who');
   assert.match(p, /Simplicity is the wall/, 'the shared values');
   assert.match(p, /auto-push/, 'the git workflow, so it can point at the action');
   assert.doesNotMatch(p, /the user can open/, 'one name per stakeholder — the person talking is the builder');
   assert.match(p, /Cards go by number/);
   assert.doesNotMatch(p, /session started|AM|PM/);
+});
+
+test('assistant prompt: card creation names the tool and forbids phantom claims', () => {
+  const p = assistantInstructions();
+  // The positive instruction: call kanban_card_create immediately.
+  assert.match(p, /immediately call kanban_card_create/,
+    'the prompt must name the tool and say to call it immediately');
+  // The negative guard: never claim a card was created without the tool call.
+  assert.match(p, /Never say a card was created.*without having called kanban_card_create/,
+    'the prompt must forbid claiming creation without the tool call');
+  // The old problematic phrases must be gone.
+  assert.doesNotMatch(p, /permission to create the card/,
+    'no asking permission — that caused the model to delay the tool call');
+  assert.doesNotMatch(p, /create or update the card with the full information/,
+    '"full information" caused the model to wait — cards can be created with a title alone');
 });
 
 test('git fixer prompt: branch pinned, no aborting, the trailer, the tool named as it exists', () => {

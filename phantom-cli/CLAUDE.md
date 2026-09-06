@@ -92,7 +92,8 @@ running command; the cut step still lands in history and the transcript —
 its calls ran) · tab / shift+tab next / previous open session · ctrl+n the
 open-session list · ↑/↓ history, or the command list on a `/` line ·
 ctrl+o show more (thinking, and a tool's whole command and output) · ctrl+g
-the voice pane · pageUp/Down scroll · ctrl+c twice quits. Mouse: wheel
+the voice pane · pageUp/Down scroll · ctrl+c clears a typed line; on an
+empty line twice quits. Mouse: wheel
 scrolls the pane under the cursor; click-drag selects and copies on
 release. Free ctrl keys on paper: `e f g k l n p r t u v w x y`; verify
 with `npm run keys` — Apple Terminal sends shift+↑ as ↑ (which is why the
@@ -130,7 +131,8 @@ board.ts           BoardStore — one workspace's board, outside React; optimist
                    store's own edits (card written → replace, deleted → drop, session → the Session row); a dropped link reconnects
                    with ONE `load()` to fill the gap; `create()` seats the POST's answer through `adoptCard` (replace by id) because
                    the stream delivers the row first
-(core/ndjson.ts)   ND-JSON records off a response body — auto-push's and auto-pull's streams and the board's events (`stream()` in index.tsx); lives in core so the headless kits read the same way
+(core/ndjson.ts)   ND-JSON records off a response body — the board's events (`stream()` in index.tsx); auto-push's and auto-pull's streams are read by core's `autoPushSession`/`autoPullSession` (index.tsx wraps them with the connection, the saved CA and the client id)
+request.ts         `requestError` — THE one place a failed request becomes a sentence (see Conventions: errors)
 commands.ts        the table + matches/parse/complete
 config.ts local.ts settings.ts settingLabels.ts   above
 mouse.ts screen.ts trim.ts   the mouse parser + selection model · the screen mirror (@xterm/headless) · cell-level row trimming
@@ -168,6 +170,19 @@ updates), `_TRACE_FRAMES` (screen.ts flight recorder), and the rig hooks
 `_INSTALL_FLAGS`, `_SSH_ACCEPT_NEW`, `_SSH_IDENTITY` (setup.ts).
 
 ## Conventions — each one was paid for
+
+- **Errors: one sentence, one maker, no invented values.** `api()`/`stream()`
+  in index.tsx throw only what `request.ts` builds: "phantom-backend at <url>
+  is not reachable (<cause>)" · "… rejected the key — /server to fix it" · the
+  server's own sentence (`.code` attached — the server names the id: `no
+  session <id>`). A screen adds only what it was doing and where:
+  `could not start a session in <workspace>: …`, `could not kill "<cmd>": …`.
+  A failed call FAILS the thing asked for — never defaults for settings, an id
+  for a name (the banner shows the id AND a note says the lookup failed), `[]`
+  for a list that did not load. The ONE quiet failure allowed is background
+  work that runs again on its own (list refreshes, the lock release at quit):
+  `quiet('refresh tasks')` → cli.log with what it was doing. `.catch(() => {})`
+  on anything a person asked for is a bug.
 
 - **A throw while drawing costs one region, never the app.** React unmounts
   the whole tree on a render throw and Ink exits — a label with no length in
@@ -293,8 +308,10 @@ updates), `_TRACE_FRAMES` (screen.ts flight recorder), and the rig hooks
   in it (Ink applies the parent Text's dim over the child's color).
 - A menu gates App's `useInput` (`menu === null && view === 'chat'`) — Ink
   delivers a key to every active handler. ctrl+c, ctrl+r, ctrl+l ride their
-  own always-on handler (`exitOnCtrlC: false`; first ctrl+c interrupts and
-  closes menus, second quits).
+  own always-on handler (`exitOnCtrlC: false`; with text on the prompt
+  ctrl+c only blanks it — no interrupt, no arming (Claude Code's rule,
+  anthropics/claude-code#17754); otherwise the first press interrupts and
+  closes menus, the second quits).
 - Key hints are bracketed: `[enter] change · [d] undo`. A row names its
   subject (`delete Widgets`, never "this"). Two levels are two screens,
   never two rows in one list (`/settings` vs `e` on `/workspace`). Helper

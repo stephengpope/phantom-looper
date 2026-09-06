@@ -27,7 +27,7 @@
 // (thinking, and a tool's whole command and output) · ctrl+g the voice pane ·
 // ctrl+r mic · ctrl+l speaker (both work
 // anywhere, the board included) · pageUp/pageDown scroll the conversation ·
-// ctrl+c twice to quit.
+// ctrl+c clears the line; on an empty line twice to quit.
 import { Box, useApp, useBoxMetrics, useInput, useWindowSize } from 'ink';
 import { Text } from './components/Text.js';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
@@ -78,7 +78,7 @@ import type { GitFacts } from '../core/llm/prompts/coding/wiring.js';
 
 /** What the window remembers about a workspace: the banner's display name and
  *  the prefix its cards are named with (`PHA` → `PHA-7`). */
-interface WsFacts { label: string; cardPrefix?: string }
+interface WsFacts { label: string; cardPrefix?: string; error?: string }
 
 export interface Initial {
   sessionId: string; branch: string; workspaceId: string;
@@ -141,6 +141,14 @@ class WorkspaceDirectory {
  *  the branch is agent/<session-id>, so it names the session too), then the
  *  model line. The blank row above it is the pane's (`topGap`), not a part
  *  here: every way the pane can be filled needs it, not just this one. */
+/** The ONLY quiet failure the app allows: background work that runs again on
+ *  its own (a list refresh, a lock release at quit) goes to cli.log with what
+ *  it was doing — never to the pane, never nowhere. Everything a person asked
+ *  for fails out loud with `could not <do what>: <why>`. */
+const quiet = (doing: string) => (e: unknown): void => {
+  console.warn(`background: could not ${doing}: ${(e as Error).message ?? String(e)}`);
+};
+
 function bannerParts(s: { workspace: string; branch: string }, summary: { provider: string; model: string; reasoning: string }): Part[] {
   return [
     `${s.workspace} · ${s.branch}`,
@@ -208,7 +216,10 @@ export async function kanbanOps(board: BoardStore, args: KanbanArgs): Promise<un
   // for that number directly — "read card 7" / "restore card 7" must work on
   // a card that is off the board. The fetch adopts the card into the store.
   let t = args.card !== undefined ? board.bySeq(args.card) : undefined;
-  if (!t && args.card !== undefined) t = await board.fetchCard(args.card).catch(() => undefined);
+  if (!t && args.card !== undefined) {
+    try { t = await board.fetchCard(args.card); }
+    catch (e) { return { error: `could not read card ${args.card}: ${(e as Error).message}` }; }
+  }
   if (!t) return { error: `no card ${args.card ?? '(none given)'} — pass the card number` };
   if (args.action === 'read') {
     return { card: t.seq, title: t.title, status: t.status,
@@ -530,10 +541,10 @@ export function App({
         },
       // The turn's lock is released once the record landed (or failed —
       // holding it helps nobody; the file is kept locally either way).
-      ).finally(() => { void api('DELETE', `/sessions/${e.id}/lock`).catch(() => {}); }));
+      ).finally(() => { void api('DELETE', `/sessions/${e.id}/lock`).catch(quiet(`release session ${e.id}`)); }));
       // The toolbar's task count follows every turn — a turn is when tasks
-      // start and stop. Best effort, like everything in this callback.
-      void refreshTasksRef.current?.().catch(() => {});
+      // start and stop. Background: a failure goes to cli.log, not the pane.
+      void refreshTasksRef.current?.().catch(quiet('refresh tasks'));
     });
     // Lock per TURN: taken as a send starts, released above. Opening a
     // session never locks — reading is free for everyone. The lock response
@@ -626,7 +637,7 @@ export function App({
         // is the record, so this window follows it — a no-op while they agree.
         if (typeof r.planMode === 'boolean') await applyPlanRef.current?.(sessionId, r.planMode);
         await reseatIfMoved(api, store, sessionId, r.transcript_updated_at ?? null);
-      } catch { /* an unreachable server must not brick the prompt */ }
+      } catch (e) { quiet(`re-read session ${sessionId}`)(e); }
     };
     void look();
     const t = setInterval(() => { void look(); }, pollMs);
@@ -711,7 +722,7 @@ export function App({
         const list = (got as { sessions?: unknown })?.sessions;
         rows = Array.isArray(list) ? list as SessionInfo[] : [];
       } catch (e) {
-        return { error: `could not reach the server: ${(e as Error).message}`, on_screen: store.activeId };
+        return { error: `could not list sessions: ${(e as Error).message}`, on_screen: store.activeId };
       }
       const page = rows.slice(offset, offset + limit);
       const busy = (id: string) => store.get(id)?.busy ?? false;
@@ -1029,12 +1040,11 @@ export function App({
       // it is started with, so reading it here — not at app boot — is what lets
       // you save the key and turn the Assistant on and have it work the first
       // time, instead of switching it off and on to get a second attempt.
-      const cfg = await readCfg().catch(() => null);
-      if (!cfg) return;   // index.tsx refuses to start without the server
       // A bad agent trio (assistant_provider overridden, no model) throws at
       // build — say so instead of dying in a floating promise.
       let built;
-      try { built = makeAssistantAgent(await assistantKit(), cfg); }
+      let cfg: Record<string, ConfigValue>;
+      try { cfg = await readCfg(); built = makeAssistantAgent(await assistantKit(), cfg); }
       catch (e) { note(`assistant not started: ${(e as Error).message}`); return; }
       voice.setAgent(built.agent, built.summary);
       void voice.start(sidecarEnv(cfg));
@@ -1046,11 +1056,12 @@ export function App({
     if (!voice.running) return;
     let stale = false;
     void (async () => {
-      const cfg = await readCfg().catch(() => null);
-      const kit = await assistantKit();
-      if (stale || !cfg) return;
-      try { voice.setAgent(makeAssistantAgent(kit, cfg).agent); }
-      catch { /* a bad trio was already reported where it was written */ }
+      try {
+        const cfg = await readCfg();
+        const kit = await assistantKit();
+        if (stale) return;
+        voice.setAgent(makeAssistantAgent(kit, cfg).agent);
+      } catch (e) { if (!stale) note(`assistant not rebuilt for this session: ${(e as Error).message}`); }
     })();
     return () => { stale = true; };
   }, [sessionId]);  // eslint-disable-line react-hooks/exhaustive-deps -- only the session switch triggers it
@@ -1110,6 +1121,10 @@ export function App({
   // hand back: ↓ off the end of the list lands on the empty line it started on.
   const [histAt, setHistAt] = useState(0);
 
+  // Blank the prompt — the one rule for it: the text, the history cursor and
+  // the slash-menu highlight go together (submit and ctrl+c both use it).
+  const clearInput = useCallback(() => { setInput(''); setHistAt(0); setSuggestAt(0); }, []);
+
   // A note lands in the pane, so it also retires the splash — a message the
   // banner covers is a message lost ("tab: this is the only session open").
 
@@ -1132,7 +1147,7 @@ export function App({
         try {
           const row = await api('GET', `/sessions/${id}`) as { transcript_updated_at?: string | null };
           await reseatIfMoved(api, store, id, row?.transcript_updated_at ?? null);
-        } catch { /* stale view is not worth an error line */ }
+        } catch (e) { quiet(`check session ${id} for changes`)(e); }
       })();
     }
   }, [store, onSession, api]);
@@ -1141,8 +1156,11 @@ export function App({
     setMenu('sessions');
     if (names.length) return;
     void (async () => {
-      try { setNames(await api('GET', '/workspaces') as unknown as WorkspaceInfo[]); }
-      catch { /* rows keep the workspace id, which still identifies the row */ }
+      try {
+        const list = await api('GET', '/workspaces') as unknown as WorkspaceInfo[];
+        seedWsFacts(list);
+        setNames(list);
+      } catch (e) { note(`could not list workspaces: ${(e as Error).message}`); }
     })();
   }, [api, names.length]);
 
@@ -1159,8 +1177,9 @@ export function App({
   const onConfigChange = useCallback((key?: ConfigKey) => {
     setCfgTick((t) => t + 1);
     void (async () => {
-      const cfg = await readCfg().catch(() => null);
-      if (!cfg) { note('could not read settings from the server'); return; }
+      let cfg: Record<string, ConfigValue>;
+      try { cfg = await readCfg(); }
+      catch (e) { note(`could not read settings: ${(e as Error).message}`); return; }
       setChrome({ voice: Boolean(cfg.voice_enabled), width: Number(cfg.sidebar_width) || sidebarPercent });
 
       if (session) {
@@ -1186,7 +1205,7 @@ export function App({
         startVoice();
       } else if (voice.running && key && ASSISTANT_MODEL_KEYS.includes(key)) {
         try { voice.setAgent(makeAssistantAgent(await assistantKit(), cfg).agent); }
-        catch (e) { note((e as Error).message); }
+        catch (e) { note(`assistant not rebuilt: ${(e as Error).message}`); }
       } else if (voice.running && key === 'voice_spoken_voice') {
         voice.update({ voice: String(cfg.voice_spoken_voice) });
       } else if (voice.running && key === 'voice_mic_muted') {
@@ -1212,6 +1231,15 @@ export function App({
   // costs no request of its own.
   const wsNames = useRef(new Map<string, WsFacts>(
     initial?.workspace ? [[initial.workspaceId, { label: initial.workspace }]] : []));
+  // The workspace LIST carries the same two facts per row: whoever reads it
+  // fills the cache, so a later open needs no lookup and a failed one can
+  // name the workspace rather than its id.
+  const seedWsFacts = useCallback((list: { id: string; name?: string; displayName?: string | null; cardPrefix?: string }[]) => {
+    for (const w of list) {
+      const label = w.displayName || w.name;
+      if (label && !wsNames.current.has(w.id)) wsNames.current.set(w.id, { label, ...(w.cardPrefix ? { cardPrefix: w.cardPrefix } : {}) });
+    }
+  }, []);
   const wsFacts = useCallback(async (id: string): Promise<WsFacts> => {
     const hit = wsNames.current.get(id);
     if (hit) return hit;
@@ -1219,13 +1247,16 @@ export function App({
       const w = await api('GET', `/workspaces/${id}`) as
         { name?: string; displayName?: string | null; cardPrefix?: string };
       const found = w.displayName || w.name;
-      if (found) {
-        const facts: WsFacts = { label: found, ...(w.cardPrefix ? { cardPrefix: w.cardPrefix } : {}) };
-        wsNames.current.set(id, facts);
-        return facts;
-      }
-    } catch { /* the id below still identifies it */ }
-    return { label: id };
+      if (!found) throw new Error(`the server sent no name for it`);
+      const facts: WsFacts = { label: found, ...(w.cardPrefix ? { cardPrefix: w.cardPrefix } : {}) };
+      wsNames.current.set(id, facts);
+      return facts;
+    } catch (e) {
+      // The session is open regardless — the lookup is for the banner. The
+      // id stands in for the name AND the session's first note says why, so
+      // an id on the banner never passes for a workspace called that.
+      return { label: id, error: `could not read workspace ${id}'s name: ${(e as Error).message}` };
+    }
   }, [api]);
 
   // Opening a session: it JOINS the window rather than replacing what is here.
@@ -1317,6 +1348,7 @@ export function App({
         ...(row.agent === 'supervisor' ? { readonly: true } : {}),
         done: [
           ...bannerParts({ workspace: ws.label, branch: row.branch }, summary),
+          ...(ws.error ? [{ kind: 'note', id: nextId('note'), text: ws.error } as Part] : []),
           ...(row.agent === 'supervisor'
             ? [{ kind: 'note', id: nextId('note'),
                 text: `the supervisor's record${row.card != null ? ` · card ${row.card}` : ''} — read-only` } as Part]
@@ -1332,7 +1364,14 @@ export function App({
       setSplash(resumed.length === 0);
       onSession?.({ id: row.id, branch: row.branch, workspaceId: row.workspaceId });
       return true;
-    } catch (e) { note(`could not open: ${(e as Error).message}`); return false; }
+    } catch (e) {
+      const what = target.kind === 'new'
+        ? `could not start a session in ${wsNames.current.get(target.workspaceId)?.label ?? `workspace ${target.workspaceId}`}`
+        : target.kind === 'duplicate' ? `could not duplicate session ${target.id}`
+          : `could not open session ${target.id}`;
+      note(`${what}: ${(e as Error).message}`);
+      return false;
+    }
   }, [store, newTools, codingKanbanHandler, makeAgent, makeTranscript, loadHistory, loadPrompt, configPath, switchTo, onSession, note, wsFacts]);
   openSessionRef.current = openSession;
 
@@ -1417,7 +1456,7 @@ export function App({
         return { ...prev, ...withOpenHere(rows.filter((r) => r.lastUserMessage !== null), got.total),
           end: got.sessions.length < PICKER_PAGE };
       });
-    } catch { /* keep what is loaded */ }
+    } catch (e) { quiet('load more sessions')(e); }
     finally { moreInFlight.current = false; }
   }, [api]);
 
@@ -1429,7 +1468,7 @@ export function App({
   // unreachable server must not nag every 10s while old rows still serve.
   useEffect(() => {
     if (menu !== 'resume') return;
-    const t = setInterval(() => { void refreshPicker(true).catch(() => {}); }, pollMs);
+    const t = setInterval(() => { void refreshPicker(true).catch(quiet('refresh the session list')); }, pollMs);
     t.unref?.();
     return () => clearInterval(t);
   }, [menu, refreshPicker, pollMs]);
@@ -1441,8 +1480,8 @@ export function App({
       trashArmed.current = null;
       setMenu(which);
       // The work column, a beat behind the instant open (see refreshPicker).
-      if (which === 'resume') void refreshPicker(true).catch(() => {});
-    } catch (e) { note(`phantom-backend: could not list sessions: ${(e as Error).message}`); }
+      if (which === 'resume') void refreshPicker(true).catch(quiet('refresh the session list'));
+    } catch (e) { note(`could not list ${which === 'resume' ? 'sessions' : 'workspaces'}: ${(e as Error).message}`); }
   }, [refreshPicker, note]);
 
   // What is running in the session's container — the /tasks screen's rows and
@@ -1466,8 +1505,8 @@ export function App({
   // count; an unreachable server must not blank the toolbar.
   useEffect(() => {
     if (!sessionId) { setTaskCount(null); setTasksView(null); return; }
-    void refreshTasks().catch(() => {});
-    const t = setInterval(() => { void refreshTasks().catch(() => {}); }, taskPollMs);
+    void refreshTasks().catch(quiet('refresh tasks'));
+    const t = setInterval(() => { void refreshTasks().catch(quiet('refresh tasks')); }, taskPollMs);
     t.unref?.();
     return () => clearInterval(t);
   }, [sessionId, refreshTasks, taskPollMs]);
@@ -1477,7 +1516,7 @@ export function App({
   // notice and an armed kill stay put; a failed tick is silent.
   useEffect(() => {
     if (menu !== 'tasks') return;
-    const t = setInterval(() => { void refreshTasks().catch(() => {}); }, pollMs);
+    const t = setInterval(() => { void refreshTasks().catch(quiet('refresh tasks')); }, pollMs);
     t.unref?.();
     return () => clearInterval(t);
   }, [menu, refreshTasks, pollMs]);
@@ -1506,7 +1545,7 @@ export function App({
       setArchivedTotal(d.total);
       setArchivedNotice(undefined);
       setMenu('archived');
-    } catch (e) { note(`phantom-backend: could not list archived cards: ${(e as Error).message}`); }
+    } catch (e) { note(`could not list archived cards: ${(e as Error).message}`); }
   }, [api, note]);
   // The next page, appended in place — morePicker's shape: the cursor is the
   // last loaded row, failure keeps what is loaded, scrolling again retries.
@@ -1523,7 +1562,7 @@ export function App({
         const seen = new Set(prev.map((t) => t.id));
         return [...prev, ...d.cards.filter((t) => !seen.has(t.id))];
       });
-    } catch { /* keep what is loaded */ }
+    } catch (e) { quiet('load more archived cards')(e); }
     finally { moreArchivedInFlight.current = false; }
   }, [api]);
 
@@ -1541,9 +1580,9 @@ export function App({
       await api('DELETE', `/sessions/${sessionId}/tasks/${sid}`);
       setTasksNotice(undefined);
       // The kill landed; a failed re-read must not report "could not kill".
-      await refreshTasks().catch(() => {});
+      await refreshTasks().catch(quiet('refresh tasks'));
     } catch (e) {
-      setTasksNotice(`could not kill: ${(e as Error).message}`);
+      setTasksNotice(`could not kill "${command}": ${(e as Error).message}`);
     }
   }, [api, sessionId, refreshTasks]);
 
@@ -1561,19 +1600,19 @@ export function App({
       let ws: WorkspaceInfo[];
       try { ws = await api('GET', '/workspaces') as unknown as WorkspaceInfo[]; }
       catch (e) {
-        // Two different failures, two different fixes: the server answered and
-        // refused the key (401), or nothing answered at that address at all.
-        const url = String(localValues(configPath).server_url);
-        if ((e as { status?: number }).status === 401) {
-          note(`phantom-backend at ${url} rejected the key: ${(e as Error).message}`);
+        // The request function already named the server and the failure;
+        // what goes under it is the fix — two different ones: the server
+        // answered and refused the key, or nothing answered at that address.
+        note((e as Error).message);
+        if ((e as { code?: string }).code === 'unauthorized') {
           note('fix the key under /server — a server box prints its key with `phantom-backend key`; a dev checkout gets it from ./scripts/setup.sh');
         } else {
-          note(`phantom-backend at ${url} could not be reached: ${(e as Error).message}`);
           note('have a server? its address and key go under /server, then /workspace starts a session');
           note('need one? quit and run `phantom-cli setup-backend`');
         }
         return;
       }
+      seedWsFacts(ws);
       // Nothing registered yet: go straight to adding one. An empty install
       // has to be able to start from here, not from curl.
       if (!ws.length) { setMenu('addWorkspace'); return; }
@@ -1587,7 +1626,7 @@ export function App({
           const last = lastWorkspaceId(ws, ss);
           if (last) { await openSession({ kind: 'new', workspaceId: last }); return; }
         }
-      } catch { /* the picker still answers */ }
+      } catch (e) { note(`could not reopen your last workspace: ${(e as Error).message}`); }
       await openPicker('workspace');
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- launch only
@@ -1643,13 +1682,13 @@ export function App({
       trashArmed.current = null;
       setPickerNotice(undefined);
       // The trash landed; a failed re-read must not report "could not trash".
-      await refreshPicker().catch(() => {});
+      await refreshPicker().catch(quiet('refresh the session list'));
     } catch (e) {
       const m = (e as Error).message;
       const code = (e as { code?: string }).code ?? '';
       if (code === 'unpushed_work' || m.includes('unpushed_work')) { trashArmed.current = id; setPickerNotice('unpushed work — [t] again to discard it'); }
       else if (code === 'session_locked' || m.includes('session_locked')) setPickerNotice('in use elsewhere — a held session cannot be trashed');
-      else setPickerNotice(`could not trash: ${m}`);
+      else setPickerNotice(`could not trash session ${id}: ${m}`);
     }
   }, [api, store, refreshPicker]);
 
@@ -1666,8 +1705,9 @@ export function App({
     void (async () => {
       // Read the switch, flip it, write it, then let onConfigChange read
       // everything again. A toggle is a read-modify-write, so it reads.
-      const cfg = await readCfg().catch(() => null);
-      if (!cfg) { note('could not read settings from the server'); return; }
+      let cfg: Record<string, ConfigValue>;
+      try { cfg = await readCfg(); }
+      catch (e) { note(`could not read settings: ${(e as Error).message}`); return; }
       const now = !cfg[key];
       // Where a switch is saved follows where the setting lives: the mic and
       // speaker mutes and the headphones switch are facts about this machine,
@@ -1717,7 +1757,7 @@ export function App({
         try {
           await api('PATCH', `/sessions/${session.id}`, { name: args || null });
           note(args ? `renamed: ${args}` : 'name cleared — auto-titles are back on');
-        } catch (e) { note(`rename failed: ${(e as Error).message}`); }
+        } catch (e) { note(`could not rename session ${session.id}: ${(e as Error).message}`); }
         return;
       }
       case 'kanban':
@@ -1737,7 +1777,7 @@ export function App({
           setTasksNotice(undefined);
           killArmed.current = null;
           setMenu('tasks');
-        } catch (e) { note(`phantom-backend: could not list tasks: ${(e as Error).message}`); }
+        } catch (e) { note(`could not list tasks: ${(e as Error).message}`); }
         return;
       }
       case 'plan': {
@@ -1751,7 +1791,7 @@ export function App({
         try {
           await api('PATCH', `/sessions/${session.id}`, { plan_mode: on });
           await applyPlanMode(session.id, on);
-        } catch (e) { note(`could not switch: ${(e as Error).message}`); }
+        } catch (e) { note(`could not switch plan mode ${on ? 'on' : 'off'}: ${(e as Error).message}`); }
         return;
       }
       case 'auto-push': {
@@ -1797,8 +1837,7 @@ export function App({
       note(`not sent — a turn is running (${heldRef.current.label})`);
       return;
     }
-    setInput('');
-    setHistAt(0);
+    clearInput();
     setScroll(0);
     setSplash(false);   // commands too: /help answers into the pane the splash covers
     if (msg === 'exit' || msg === 'quit') { quit(); return; }
@@ -1863,6 +1902,12 @@ export function App({
   // It interrupts the session you are LOOKING at. A turn running in another
   // one is not something this key can see, and stopping work you cannot see is
   // not what "cancel" means here.
+  //
+  // With text on the prompt it does one thing only: blank the line. Typing is
+  // editing, not cancelling — the turn keeps running (esc is its key) and
+  // nothing arms. Claude Code's rule, and the one its users asked back for
+  // when a release broke it (anthropics/claude-code#17754). Only while the
+  // prompt is on screen: under a menu or the board, ctrl+c still means "out".
   // The mouse (mouse.ts). Never gated — it works over menus too. Wheel scrolls
   // the pane under the cursor; press/drag/release is a selection in the pane
   // it started in, highlighted through the screen mirror and copied to the
@@ -1915,6 +1960,7 @@ export function App({
 
   useInput((ch, key) => {
     if (!(key.ctrl && ch === 'c')) return;
+    if (menu === null && view === 'chat' && input) { clearInput(); return; }
     if (ctrlC) { quit(); return; }
     if (session?.busy) store.abortTurn(session.id);
     // Break out of whatever is on screen first: the second press then lands on
@@ -2087,7 +2133,7 @@ export function App({
             // Back to the list it was opened from, refreshed — a rename there
             // has to show up here.
             onClose={() => { setEditing(null); void openPicker('workspace'); }}
-            onChanged={() => { void refreshPicker().catch(() => {}); }}
+            onChanged={() => { void refreshPicker().catch(quiet('refresh the session list')); }}
           />
         ) : menu === 'voice' ? (
           // The Assistant's settings — local, offline. Device rows offer
@@ -2146,7 +2192,7 @@ export function App({
                   setArchivedCards((prev) => prev.filter((x) => x.id !== t.id));
                   setArchivedNotice(`restored ${t.seq}-${t.title} → ${t.status.replace(/_/g, ' ')}`);
                   void boardFor(session.workspaceId).load(); // the card is back on the board
-                } catch (e) { setArchivedNotice(`restore failed: ${(e as Error).message}`); }
+                } catch (e) { setArchivedNotice(`could not restore card ${t.seq}: ${(e as Error).message}`); }
               })();
             }}
             onCancel={() => setMenu(null)} />
@@ -2162,7 +2208,7 @@ export function App({
               onToggleSupervised={() => {
                 setShowSupervised((x) => !x);
                 showSupervisedRef.current = !showSupervised;
-                void refreshPicker(true).catch(() => {});
+                void refreshPicker(true).catch(quiet('refresh the session list'));
               }}
               lastMessage={lastUserMessage}
               busy={(id) => store.get(id)?.busy ?? false}

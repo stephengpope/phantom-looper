@@ -258,8 +258,9 @@ coder's bubble → its session in code mode; an Assistant bubble → home).
 ASSISTANT (home, default) — a plain message is an Assistant turn
 (`assistant.ts`: the SAME core `assistantAgent`, headless handlers over the
 card/session routes, ONE in-memory conversation reset on restart; file tools
-+ web bind read-only to the active session; `git_auto_pull` over core
-`autoPullSession` — the active session or an id). CODE — a plain message is a
++ web bind read-only to the active session; `git_auto_push` / `git_auto_pull`
+over core `autoPushSession` / `autoPullSession` — the active session or an
+id; result only, no steps). CODE — a plain message is a
 real `runCodingTurn` on the active session, lock per turn, `send_message` (a
 deliberate DM outside the streamed reply; delivery mode from
 `telegram_reply_mode`) injected via `extraTools`. The command menu
@@ -357,13 +358,17 @@ re-applied after the fixer is a second conflict surface the fixer never sees)
 nothing races a pull. Result `merged | clean | blocked | error` with
 `arrived` (the base commits) and `files` (what the merge changed).
 
-Callers: the CODING agent's `git_auto_pull` (core `codingGitTools`, both
-coding kits — cli and server; a plan-mode kit drops it), the cli Assistant's
+Callers: the cli Assistant's
 `git_auto_pull` (App's `autoPull` prop), the Telegram Assistant's
-`git_auto_pull` (`telegram/assistant.ts`, over `injectFetch`). No slash
-command, no setting.
+`git_auto_pull` (`telegram/assistant.ts`, over `injectFetch`), and Telegram's
+`/auto_pull` (code mode; `engine.autoPull` over the same core client — ONE
+bubble edited in place, a `·` line per step, the result on the last line).
+No cli slash command, no setting, and NO coding-agent tool (push or pull) —
+a person moves code, through the slash commands or the Assistant.
 
-Triggers: `POST /git/auto-push` (the cli's `/auto-push` — always pushes)
+Triggers: `POST /git/auto-push` (the cli's `/auto-push`, Telegram's
+`/auto_push` (code mode, the same step bubble as `/auto_pull`), and both
+Assistants' `git_auto_push` — all through core `autoPushSession`; always pushes)
 and `PATCH archived=true` on a card that is in `done` AND was unarchived,
 when `auto_push_on_archive` is on: the card's newest loop row names the
 coding session that pushes (a card with no loop just archives); a held lock

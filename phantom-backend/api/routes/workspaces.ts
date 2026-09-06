@@ -282,7 +282,7 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
     async (req, reply) => {
       const live = await ctx.db.select(sessionColumns).from(sessions)
         .where(and(eq(sessions.workspaceId, req.params.id), eq(sessions.status, 'active')));
-      if (live.length) return reply.code(409).send(err('sessions_exist', `${live.length} active session(s)`));
+      if (live.length) return reply.code(409).send(err('sessions_exist', `workspace ${req.params.id} still has ${live.length} active session(s) — close them first`));
       const rows = await ctx.db.select().from(workspaces).where(eq(workspaces.id, req.params.id));
       if (rows.length && req.query.confirm === 'true') {
         await dropWorkspaceSchema(ctx.pgPool, rows[0].schemaName);

@@ -86,7 +86,10 @@ Promise<{ id: string; name: string }[]> {
     const r = await settings.api('GET', `/models?provider=${encodeURIComponent(provider)}`) as
       { models?: { id: string; name: string }[] };
     return Array.isArray(r?.models) ? r.models : [];
-  } catch { return []; }
+  } catch (e) {
+    clack.log.warn(`could not load the model list: ${(e as Error).message} — type a model id instead`);
+    return [];
+  }
 }
 
 function savePairing(p: Paired, configPath?: string): void {

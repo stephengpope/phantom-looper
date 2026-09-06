@@ -160,7 +160,7 @@ export function webRoutes(app: FastifyInstance, ctx: AppCtx) {
     const sessionId = String(req.headers[SESSION_HEADER] ?? '');
     if (!sessionId) return reply.code(400).send(err('session_not_found', `missing ${SESSION_HEADER} header`));
     const session = await getSession(ctx.db, sessionId);
-    if (!session) return reply.code(404).send(err('session_not_found', sessionId));
+    if (!session) return reply.code(404).send(err('session_not_found', `no session ${sessionId}`));
     if (session.status !== 'active') return reply.code(410).send(err('session_destroyed', `session is ${session.status}`));
     const key = await resolveCredential(ctx.db, ctx.encryptionKey, 'firecrawl_api_key');
     if (!key) return reply.code(400).send(err('credential_required', NO_KEY));

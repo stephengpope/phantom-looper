@@ -195,13 +195,13 @@ export async function listDevices(): Promise<{ mics: string[]; speakers: string[
     let out = '';
     child.stdout.on('data', (b: Buffer) => { out += b.toString(); });
     child.stderr.on('data', (b: Buffer) => log(b.toString()));
-    child.on('error', () => resolve(none));
+    child.on('error', (e) => { log(`could not list audio devices: ${e.message}`); resolve(none); });
     child.on('exit', () => {
       try {
         const line = out.split('\n').find((l) => l.trim().startsWith('{'));
         const d = line ? JSON.parse(line) as { mics?: unknown; speakers?: unknown } : {};
         resolve({ mics: Array.isArray(d.mics) ? d.mics.map(String) : [], speakers: Array.isArray(d.speakers) ? d.speakers.map(String) : [] });
-      } catch { resolve(none); }
+      } catch (e) { log(`could not read the audio device list: ${(e as Error).message}`); resolve(none); }
     });
   });
 }

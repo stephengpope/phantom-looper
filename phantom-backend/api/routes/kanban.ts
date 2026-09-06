@@ -178,7 +178,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
         before_id: { type: 'integer', description: "that row's id, breaking updated_at ties" } } } } },
     async (req, reply) => {
       const w = await workspaceOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', 'no such workspace'));
+      if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
       if (req.query.seq !== undefined) {
         const { rows } = await pool.query(
           `select * from ${cardsTable(w)} where seq = $1`, [req.query.seq]);
@@ -220,7 +220,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
       body: { type: 'object', additionalProperties: false, required: ['title'], properties: cardBodyProps } } },
     async (req, reply) => {
       const w = await workspaceOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', 'no such workspace'));
+      if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
       const cols = columnsOf(w);
       const status = String(req.body.status ?? cols[0]);
       if (!cols.includes(status)) return reply.code(400).send(err('invalid_args', `status must be one of: ${cols.join(', ')}`));
@@ -255,7 +255,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
       body: { type: 'object', additionalProperties: false, properties: { ...cardBodyProps, items: itemsSchema } } } },
     async (req, reply) => {
       const w = await workspaceOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', 'no such workspace'));
+      if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
       const cols = columnsOf(w);
       if ('status' in req.body && !cols.includes(String(req.body.status)))
         return reply.code(400).send(err('invalid_args', `status must be one of: ${cols.join(', ')}`));
@@ -296,7 +296,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
           const cur = await client.query(
             `select requirements from ${cardsTable(w)} where id = $1 for update`,
             [Number(req.params.cardId)]);
-          if (!cur.rows.length) { await client.query('rollback'); return reply.code(404).send(err('not_found', 'no such card')); }
+          if (!cur.rows.length) { await client.query('rollback'); return reply.code(404).send(err('not_found', `no card ${req.params.cardId} in workspace ${req.params.id}`)); }
           let list: { key: string; text: string; done: boolean }[] = [...cur.rows[0].requirements];
           // Both sides normalized: a model echoes a key cased — that must
           // land, not retry.
@@ -328,7 +328,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
           `update ${cardsTable(w)} set ${sets.join(', ')}, updated_at = now()
            where id = $${values.length} returning *`, values);
         if (client) await client.query('commit');
-        if (!rows.length) return reply.code(404).send(err('not_found', 'no such card'));
+        if (!rows.length) return reply.code(404).send(err('not_found', `no card ${req.params.cardId} in workspace ${req.params.id}`));
         if (req.body.archived === true && wasArchived === false && rows[0].status === 'done') {
           void autoPushArchivedCard(w, Number(rows[0].seq)).catch((e) =>
             log.error({ card: rows[0].seq, err: errStr(e) }, 'auto-push on archive threw'));
@@ -358,7 +358,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
         limit: { type: 'integer', default: 20 } } } } },
     async (req, reply) => {
       const w = await workspaceOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', 'no such workspace'));
+      if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
       const { rows } = await pool.query(
         `select op, changed, changed_at from "${w.schemaName}".card_revisions
          where seq = $1 order by id desc limit $2`, [req.query.card, req.query.limit]);
@@ -371,10 +371,10 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
       params: { type: 'object', properties: { id: { type: 'string' }, cardId: { type: 'integer' } }, required: ['id', 'cardId'] } } },
     async (req, reply) => {
       const w = await workspaceOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', 'no such workspace'));
+      if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
       const { rowCount } = await pool.query(
         `delete from ${cardsTable(w)} where id = $1`, [Number(req.params.cardId)]);
-      if (!rowCount) return reply.code(404).send(err('not_found', 'no such card'));
+      if (!rowCount) return reply.code(404).send(err('not_found', `no card ${req.params.cardId} in workspace ${req.params.id}`));
       events.publish(w.id, { event: 'deleted', id: Number(req.params.cardId) });
       return ok({ deleted: true });
     });
@@ -393,7 +393,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } } },
     async (req, reply) => {
       const w = await workspaceOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', 'no such workspace'));
+      if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
       reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
       const write = (o: unknown) => { reply.raw.write(`${JSON.stringify(o)}\n`); };
       const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);

@@ -72,9 +72,11 @@ async function titleConfig(db: Db, encryptionKey: Buffer): Promise<ModelConfig |
   let c: { provider: string; model: string | null; baseUrl: string | null };
   try {
     c = cascade(cfg, 'assistant');
-  } catch {
-    c = { provider: cfg.provider == null ? '' : String(cfg.provider), model: cfg.model == null ? null : String(cfg.model),
-      baseUrl: (cfg.base_url as string | null) ?? null };
+  } catch (e) {
+    // No guessing a different model: an unbuildable assistant config means
+    // no auto-title, said once in the log.
+    log.warn({ err: (e as Error).message }, 'assistant model config cannot build — sessions are not auto-titled');
+    return null;
   }
   if (!isProvider(c.provider) || !c.model) return null;
   const apiKey = await resolveCredential(db, encryptionKey, credentialForProvider(c.provider));

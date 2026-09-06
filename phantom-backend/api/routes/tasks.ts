@@ -109,7 +109,11 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
    *  never boot a container just to answer "nothing". */
   const probe = async (folderId: string) => {
     const c = deps.docker.getContainer(deps.containers.name(folderId));
-    const info = await c.inspect().catch(() => null);
+    const info = await c.inspect().catch((e: { statusCode?: number; message?: string }) => {
+      // 404 IS "absent"; anything else is docker failing to answer.
+      if (e.statusCode !== 404) log.warn({ folder: folderId, err: e.message }, 'container inspect failed — listed as absent');
+      return null;
+    });
     if (!info) return { state: 'absent' as const, container: null };
     if (!info.State.Running) return { state: 'stopped' as const, container: null };
     return { state: 'running' as const, container: c };
@@ -123,7 +127,7 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
     params: idParam } },
   async (req, reply) => {
     const session = await getSession(ctx.db, req.params.id);
-    if (!session) return reply.code(404).send(err('session_not_found', req.params.id));
+    if (!session) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
 
     const { state, container } = await probe(session.folderId ?? session.id);
     let groups: LiveGroup[] = [];
@@ -200,7 +204,7 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
       required: ['id', 'sid'] } } },
   async (req, reply) => {
     const session = await getSession(ctx.db, req.params.id);
-    if (!session) return reply.code(404).send(err('session_not_found', req.params.id));
+    if (!session) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
     const { container } = await probe(session.folderId ?? session.id);
     if (!container) return reply.code(404).send(err('no_such_task', 'nothing is running — the container is not up'));
 
