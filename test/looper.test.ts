@@ -189,7 +189,7 @@ test('a card with both switches on walks plan → in_progress → done: a dialog
   const budget = ledger();
 
   const created = json(await app.inject({ method: 'POST', url: `/workspaces/${wsId}/cards`, headers: H,
-    payload: { title: 'add uptime', status: 'plan', user_story: 'as a dev', details: 'do it',
+    payload: { title: 'add uptime', status: 'plan', details: 'do it',
       requirements: [{ text: 'works' }] } })).data.card;
   const seq: number = created.seq;
   const key: string = created.requirements[0].key;

@@ -21,7 +21,7 @@ export function archivedChoices(cards: Card[], now = Date.now()): Choice<Card | 
   const rows = cards.map((t): TableRow<Card> => ({
     value: t,
     cells: [`${t.seq}-${t.title}`, t.status.replace(/_/g, ' '), ago(t.updated_at, now)],
-    hint: t.user_story || t.details || undefined,
+    hint: t.details || undefined,
   }));
   return tableChoices('card', [{ title: 'was in' }, { title: 'when' }], rows);
 }

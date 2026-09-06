@@ -141,7 +141,7 @@ test('fill: whitespace at the edges of a template or a value never reaches the p
 });
 
 test("every fixed loop message starts with its own frozen first line — the looper's marker can never miss", () => {
-  const card = { seq: 7, title: 't', status: 'plan', user_story: 'u', details: 'd',
+  const card = { seq: 7, title: 't', status: 'plan', details: 'd',
     requirements: [{ key: 'k1', text: 'r', done: false }], resolution: 'because' };
   const pairs: [string, string][] = [
     [toCodingAgent.planCard(card), firstLine.planCard(7)],

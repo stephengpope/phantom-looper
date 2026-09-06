@@ -36,7 +36,6 @@ const MIGRATIONS: { version: number; sql: string }[] = [
         pos            real not null,
         title          text not null,
         details        text not null default '',
-        user_story     text not null default '',
         requirements   jsonb not null default '[]'::jsonb,
         blocked_reason text,
         supervised     boolean,

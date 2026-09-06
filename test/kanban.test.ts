@@ -60,7 +60,7 @@ test('empty board: code-default columns and repo-derived prefix', async () => {
 
 test('create: seq counts up, status defaults to first column, pos appends per column', async () => {
   const a = json(await app.inject({ method: 'POST', url: `/workspaces/${wsId}/cards`, headers: H,
-    payload: { title: 'first card', details: 'body', user_story: 'as a dev',
+    payload: { title: 'first card', details: 'body',
       requirements: [{ text: 'works' }, { text: 'step 1' }, { text: 'step 2', done: true }] } })).data.card;
   const b = json(await app.inject({ method: 'POST', url: `/workspaces/${wsId}/cards`, headers: H,
     payload: { title: 'second card' } })).data.card;

@@ -39,7 +39,7 @@ const writerOf = (req: FastifyRequest): string | undefined => {
 // THE card field list — create, update, and the schema all derive from it.
 // It was three hand-kept lists once; create's copy silently lacked
 // `supervised`, so a card born armed landed unarmed. Never again: one list.
-const FIELDS = ['title', 'details', 'user_story', 'status', 'pos', 'blocked_reason', 'resolution', 'auto_plan', 'auto_build', 'pinned', 'archived'] as const;
+const FIELDS = ['title', 'details', 'status', 'pos', 'blocked_reason', 'resolution', 'auto_plan', 'auto_build', 'pinned', 'archived'] as const;
 const JSON_FIELDS = ['requirements'] as const;
 
 // A whole-list write replaces the list: send it back with each item's key so
@@ -52,7 +52,6 @@ const itemSchema = { type: 'object', additionalProperties: false, required: ['te
 const cardBodyProps = {
   title: { type: 'string' },
   details: { type: 'string' },
-  user_story: { type: 'string' },
   status: { type: 'string', description: 'One of the workspace\'s columns.' },
   pos: { type: 'number', description: 'Sort position within the column (fractional inserts).' },
   blocked_reason: { type: ['string', 'null'], description: 'Set to mark the card blocked; null clears it.' },

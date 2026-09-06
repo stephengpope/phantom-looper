@@ -192,7 +192,7 @@ export async function kanbanOps(board: BoardStore, args: KanbanArgs): Promise<un
     if (!args.title) return { error: 'create needs a title' };
     try {
       const made = await board.create({ title: args.title, status,
-        details: args.details, user_story: args.user_story,
+        details: args.details,
         requirements: args.requirements?.map((c) => ({ ...c, done: c.done ?? false })) });
       return { ok: true, ...cardWithLists(made) };
     } catch (e) { return { error: (e as Error).message }; }
@@ -211,9 +211,9 @@ export async function kanbanOps(board: BoardStore, args: KanbanArgs): Promise<un
   if (!t && args.card !== undefined) t = await board.fetchCard(args.card).catch(() => undefined);
   if (!t) return { error: `no card ${args.card ?? '(none given)'} — pass the card number` };
   if (args.action === 'read') {
-    return { card: t.seq, title: t.title, status: t.status, user_story: t.user_story,
-      details: t.details, requirements: t.requirements,
-      blocked_reason: t.blocked_reason, archived: t.archived };
+    return { card: t.seq, title: t.title, status: t.status,
+    details: t.details, requirements: t.requirements,
+    blocked_reason: t.blocked_reason, archived: t.archived };
   }
   if (args.action === 'move') {
     if (!status) return { error: 'move needs a status (column name)' };
@@ -225,7 +225,7 @@ export async function kanbanOps(board: BoardStore, args: KanbanArgs): Promise<un
     if (failed) return { error: failed };
   } else {
     const patch: Record<string, unknown> = {};
-    for (const f of ['title', 'details', 'user_story', 'blocked_reason', 'auto_plan', 'auto_build', 'pinned', 'archived'] as const)
+    for (const f of ['title', 'details', 'blocked_reason', 'auto_plan', 'auto_build', 'pinned', 'archived'] as const)
       if (args[f] !== undefined) patch[f] = args[f];
     if (status !== undefined) patch.status = status;
     if (args.requirements !== undefined)

@@ -817,7 +817,7 @@ test('the divider is one heavy bar with junctions where the prompt rules meet it
 });
 
 test('the kanban tool drives the UI: open puts the board on screen, an edit repaints it, close returns to chat', async () => {
-  const cards = [{ id: 1, seq: 1, status: 'backlog', pos: 1, title: 'voice card', details: '', user_story: '',
+  const cards = [{ id: 1, seq: 1, status: 'backlog', pos: 1, title: 'voice card', details: '',
     requirements: [], blocked_reason: null, archived: false,
     created_at: 'x', updated_at: 'x' }];
   const api = async (method: string, path: string, body?: unknown) => {

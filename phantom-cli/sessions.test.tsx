@@ -774,7 +774,7 @@ test('session_get_mode answers from the sessions table: a background session who
 test("a coding session carries the board tool, bound to ITS workspace and not the screen's", async () => {
   const calls: { method: string; path: string; body?: unknown }[] = [];
   const cards = [{ id: 11, seq: 1, status: 'backlog', pos: 1, title: 'a card', details: 'd',
-    user_story: 'as a user', requirements: [{ text: 'works', done: false }, { text: 'step', done: false }],
+    requirements: [{ text: 'works', done: false }, { text: 'step', done: false }],
     blocked_reason: null, archived: false,
     created_at: '2026-08-23', updated_at: '2026-08-23' }];
   const api = async (method: string, path: string, body?: unknown) => {
@@ -801,7 +801,7 @@ test("a coding session carries the board tool, bound to ITS workspace and not th
     assert.equal(active.id, 's2');
     const t = (name: string) => kits[0][name] as { execute: (a: unknown, o: unknown) => Promise<Record<string, unknown>> };
     const got = await t('kanban_card_read').execute({ card: 1 }, { toolCallId: 't', messages: [] });
-    assert.equal(got.user_story, 'as a user', 'get returns the whole card, for planning');
+
     assert.deepEqual(got.requirements, [{ text: 'works', done: false }, { text: 'step', done: false }]);
     // Bound to s1's OWN workspace, not the one on screen: the read above hit
     // w1's board even while s2 (another workspace) is active.

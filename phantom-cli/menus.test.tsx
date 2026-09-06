@@ -1799,27 +1799,27 @@ import { archivedChoices } from './components/Archived.js';
 import type { Card } from './board.js';
 
 const archCard = (over: Partial<Card> & { id: number; seq: number; title: string }): Card => ({
-  status: 'done', pos: 1, details: '', user_story: '', requirements: [],
+  status: 'done', pos: 1, details: '', requirements: [],
   blocked_reason: null, auto_plan: null, auto_build: null, pinned: false, archived: true,
   created_at: '2026-08-20T00:00:00Z', updated_at: '2026-08-30T00:00:00Z', ...over });
 
 test('archivedChoices: board-shaped rows under card · was in · when, the story as the hint, empty state', () => {
   const now = Date.parse('2026-08-31T00:00:00Z');
   const [header, row] = archivedChoices([
-    archCard({ id: 5, seq: 5, title: 'old card', status: 'in_progress', user_story: 'the story' })], now);
+    archCard({ id: 5, seq: 5, title: 'old card', status: 'in_progress', details: 'the details' })], now);
   assert.ok(header.heading);
   assert.equal(header.label, 'card');
   assert.deepEqual(header.columns?.map((c) => c.text), ['was in', 'when']);
   assert.equal(row.label, '5-old card');
   assert.equal(row.columns?.[0].text, 'in progress');
   assert.equal(row.columns?.[1].text, '24h');
-  assert.equal(row.hint, 'the story');
+  assert.equal(row.hint, 'the details');
   assert.match(archivedChoices([])[0].label, /nothing archived/);
 });
 
 test('/archived lists archived cards newest first; [r] restores with a notice; enter opens the card', async () => {
   const cards = [
-    archCard({ id: 5, seq: 5, title: 'old card', user_story: 'the story of five' }),
+    archCard({ id: 5, seq: 5, title: 'old card', details: 'the story of five' }),
     archCard({ id: 6, seq: 6, title: 'older card', status: 'doing', updated_at: '2026-08-25T00:00:00Z' })];
   const calls: string[] = [];
   const rest = async (m: string, path: string, body?: unknown) => {
