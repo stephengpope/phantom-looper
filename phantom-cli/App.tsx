@@ -1803,6 +1803,12 @@ export function App({
         void runAutoPush(session.id);
         return;
       }
+      case 'auto-pull': {
+        if (!session) { note('no session is open — nothing to pull into'); return; }
+        // Same detached shape as auto-push: steps and the result as notes.
+        void runAutoPull(session.id);
+        return;
+      }
       case 'settings': setMenu('settings'); return;
       case 'keys': setMenu('keys'); return;
       case 'secrets': setMenu('secrets'); return;
@@ -1827,7 +1833,7 @@ export function App({
         return;
       case 'exit': quit(); return;
     }
-  }, [api, quit, openPicker, openSession, openSwitcher, session, runAutoPush, closeSession, note, voice, toggleDevice, applyPlanMode, openArchived]);
+  }, [api, quit, openPicker, openSession, openSwitcher, session, runAutoPush, runAutoPull, closeSession, note, voice, toggleDevice, applyPlanMode, openArchived]);
 
   const submit = useCallback(async (text: string) => {
     const msg = text.trim();
