@@ -1741,7 +1741,9 @@ export function App({
     switch (name) {
       case 'new':
         // No session yet = no workspace to mean "here": the picker chooses.
-        if (session) await openSession({ kind: 'new', workspaceId: session.workspaceId });
+        // The splash goes up BEFORE the session is built, so the ghost appears
+        // on the next frame and the network calls run behind it.
+        if (session) { setSplash(true); await openSession({ kind: 'new', workspaceId: session.workspaceId }); }
         else await openPicker('workspace');
         return;
       case 'resume': await openPicker('resume'); return;
