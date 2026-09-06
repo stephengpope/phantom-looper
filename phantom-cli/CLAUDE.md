@@ -84,7 +84,8 @@ running command; the cut step still lands in history and the transcript —
 its calls ran) · tab / shift+tab next / previous open session · ctrl+n the
 open-session list · ↑/↓ history, or the command list on a `/` line ·
 ctrl+o show more (thinking, and a tool's whole command and output) · ctrl+g
-the voice pane · pageUp/Down scroll · ctrl+c twice quits. Mouse: wheel
+the voice pane · pageUp/Down scroll · ctrl+c clears a typed line; on an
+empty line twice quits. Mouse: wheel
 scrolls the pane under the cursor; click-drag selects and copies on
 release. Free ctrl keys on paper: `e f g k l n p r t u v w x y`; verify
 with `npm run keys` — Apple Terminal sends shift+↑ as ↑ (which is why the
@@ -286,8 +287,10 @@ updates), `_TRACE_FRAMES` (screen.ts flight recorder), and the rig hooks
   in it (Ink applies the parent Text's dim over the child's color).
 - A menu gates App's `useInput` (`menu === null && view === 'chat'`) — Ink
   delivers a key to every active handler. ctrl+c, ctrl+r, ctrl+l ride their
-  own always-on handler (`exitOnCtrlC: false`; first ctrl+c interrupts and
-  closes menus, second quits).
+  own always-on handler (`exitOnCtrlC: false`; with text on the prompt
+  ctrl+c only blanks it — no interrupt, no arming (Claude Code's rule,
+  anthropics/claude-code#17754); otherwise the first press interrupts and
+  closes menus, the second quits).
 - Key hints are bracketed: `[enter] change · [d] undo`. A row names its
   subject (`delete Widgets`, never "this"). Two levels are two screens,
   never two rows in one list (`/settings` vs `e` on `/workspace`). Helper
