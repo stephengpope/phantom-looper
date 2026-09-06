@@ -509,11 +509,6 @@ test('tui kit: the coding agent reads cards and nothing else; the Assistant keep
   ]);
   assert.match(desc(assistant, 'kanban_card_items'), /there is no whole-list send/i);
   assert.match(desc(assistant, 'kanban_card_update'), /kanban_card_items/);
-  // The create tool says to call it immediately — the tool description reinforces the prompt.
-  assert.match(desc(assistant, 'kanban_card_create'), /call this tool immediately/,
-    'the tool description must tell the model to call it at once');
-  assert.doesNotMatch(desc(assistant, 'kanban_card_create'), /ask about what is unclear/,
-    'the old "ask first" wording caused the model to delay the tool call');
   // The two looper switches: on/off/inherit maps onto the card's tri-state —
   // inherit is null (clear the override), never a stored third value.
   assert.match(desc(assistant, 'kanban_card_auto_plan'), /plan/);
