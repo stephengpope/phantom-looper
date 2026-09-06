@@ -1586,13 +1586,13 @@ export function App({
     finally { moreArchivedInFlight.current = false; }
   }, [api]);
 
-  // [k] on /tasks — armed like /resume's [t]: the first press is the warning,
-  // the same [k] again kills (TERM, a second, then KILL — the whole tree).
+  // [k] on /tasks arms the kill confirmation; [c] confirms — the universal
+  // destructive-confirm pattern (TERM, a second, then KILL — the whole tree).
   const killTask = useCallback(async (sid: string, command: string) => {
     if (!sessionId) return;
     if (killArmed.current !== sid) {
       killArmed.current = sid;
-      setTasksNotice(`kill "${command}"? — [k] again to kill`);
+      setTasksNotice(`kill "${command}"? — [c] to confirm`);
       return;
     }
     killArmed.current = null;
@@ -1706,7 +1706,7 @@ export function App({
     } catch (e) {
       const m = (e as Error).message;
       const code = (e as { code?: string }).code ?? '';
-      if (code === 'unpushed_work' || m.includes('unpushed_work')) { trashArmed.current = id; setPickerNotice('unpushed work — [t] again to discard it'); }
+      if (code === 'unpushed_work' || m.includes('unpushed_work')) { trashArmed.current = id; setPickerNotice('unpushed work — [c] to confirm discard'); }
       else if (code === 'session_locked' || m.includes('session_locked')) setPickerNotice('in use elsewhere — a held session cannot be trashed');
       else setPickerNotice(`could not trash session ${id}: ${m}`);
     }

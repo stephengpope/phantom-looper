@@ -315,7 +315,7 @@ export function Launcher({ mode, workspaces, sessions, total, lastMessage, busy,
           if (v?.kind !== 'resume') return;
           if (ch === 'd') onDuplicate?.(v.sessionId);
           else if (ch === 'x') onClose?.(v.sessionId);
-          else if (ch === 't') onTrash?.(v.sessionId);
+          else if (ch === 't' || ch === 'c') onTrash?.(v.sessionId);
         } : undefined}
         onCancel={onCancel}
       />

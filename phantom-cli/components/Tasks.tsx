@@ -92,7 +92,7 @@ export function Tasks({ view, notice, onKill, onCancel }: {
         choices={taskChoices(view)}
         onSelect={() => {}}
         onCancel={onCancel}
-        onKey={(ch, v) => { if (ch === 'k' && v?.kind === 'live') onKill(v.sid, v.command); }}
+        onKey={(ch, v) => { if ((ch === 'k' || ch === 'c') && v?.kind === 'live') onKill(v.sid, v.command); }}
       />
     </Screen>
   );
