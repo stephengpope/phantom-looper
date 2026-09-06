@@ -300,14 +300,35 @@ export function Settings({ api, onClose, onLocalChange, configPath = CONFIG_PATH
       spec={spec}
       onCancel={() => setView(view.scope === 'local' ? { at: 'local' } : { at: 'api' })}
       onSubmit={async (v) => {
+        // A provider change invalidates its model — the old id belongs to the
+        // old provider's catalog.  Clear it in the same write so the row shows
+        // "—" (= newest for the new provider) rather than a stale, wrong id.
+        const modelKey = MODEL_FOR_PROVIDER[view.key];
+        const providerChanged = modelKey && v !== view.spec.current;
+
         if (view.scope === 'local') {
-          writeLocal(view.key as ConfigKey, v);
+          if (providerChanged) {
+            // Batch provider + model-clear into one PATCH so the two are atomic.
+            void (async () => {
+              try {
+                await settings.patch({ [view.key]: v, [modelKey]: null });
+                setNotice(undefined);
+                setTick((t) => t + 1);
+                onLocalChange?.(view.key as ConfigKey);
+                onLocalChange?.(modelKey as ConfigKey);
+              } catch (e) { setNotice(`could not save: ${(e as Error).message}`); }
+            })();
+          } else {
+            writeLocal(view.key as ConfigKey, v);
+          }
           setView({ at: 'local' });
           return;
         }
         setBusy(true);
         try {
-          await settings.patch({ [view.key]: v });
+          const patch: Record<string, ConfigValue> = { [view.key]: v as ConfigValue };
+          if (providerChanged) patch[modelKey] = null;
+          await settings.patch(patch);
           await loadServer();
           setNotice(undefined);
         } catch (e) { setNotice((e as Error).message); }
@@ -407,6 +428,10 @@ const MODEL_ROWS: Record<string, string> = {
 };
 
 const PROVIDER_ROWS = new Set(Object.values(MODEL_ROWS));
+
+/** The model key to clear when a provider key changes. */
+const MODEL_FOR_PROVIDER: Record<string, string> = Object.fromEntries(
+  Object.entries(MODEL_ROWS).map(([m, p]) => [p, m]));
 
 /** The provider a model row's catalog is for; null when it is not a model row
  *  or no provider is set yet. */
