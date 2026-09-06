@@ -128,6 +128,10 @@ export const sessions = phantomLooper.table('sessions', {
   tokensCacheRead: bigint('tokens_cache_read', { mode: 'number' }),
   tokensCacheWrite: bigint('tokens_cache_write', { mode: 'number' }),
   tokensAsOf: timestamp('tokens_as_of', { withTimezone: true }),
+  // Where the session's code stands: not_pushed, not_merged, merged.
+  // Updated by the server's periodic git-state refresh for sessions with
+  // an active container. Null = never checked or no checkout. (013)
+  work: text('work'),
 });
 
 // Every sessions read selects THESE, never the bare table: the one column

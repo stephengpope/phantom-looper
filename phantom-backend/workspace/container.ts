@@ -101,6 +101,8 @@ export class ContainerManager {
   name(sessionId: string): string { return `phantom-looper-ws-${sessionId}`; }
 
   touch(sessionId: string): void { this.lastUsed.set(sessionId, Date.now()); }
+  /** Session ids that have a container (tracked by ensure/remove). */
+  activeSessions(): string[] { return [...this.lastUsed.keys()]; }
   commandStarted(sessionId: string): void {
     this.running.set(sessionId, (this.running.get(sessionId) ?? 0) + 1);
   }
