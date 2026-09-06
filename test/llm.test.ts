@@ -268,7 +268,7 @@ test('assistant prompt: spoken register, tools; no clock time', () => {
   assert.match(p, /replies are read aloud/);
   assert.match(p, /Never use markdown of any kind/);
   assert.match(p, /No pleasantries, no preamble/);
-  assert.match(p, /Never assume you know the state of the UI/);
+  assert.match(p, /You cannot see the screen/);
   assert.match(p, /Stakeholders involved/, 'who is who');
   assert.match(p, /Simplicity is the wall/, 'the shared values');
   assert.match(p, /auto-push/, 'the git workflow, so it can point at the action');
