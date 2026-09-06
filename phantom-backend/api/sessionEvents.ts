@@ -44,7 +44,13 @@ export type SessionEvent =
    *  own if the holder dies — a watcher clears the spinner then without
    *  being told. */
   | { event: 'lock'; locked: boolean; by: string | null; label: string | null;
-    agent: string | null; expires_at: string | null };
+    agent: string | null; expires_at: string | null }
+  /** Session state changed — agent seat, plan mode, or git work state.
+   *  Only the changed field(s) are present. Published on change AND as the
+   *  initial state of every new feed (after the lock). The transcript stamp
+   *  repairs saves missed during a disconnect without a polling backstop. */
+  | { event: 'session'; agent?: string | null; planMode?: boolean; work?: string | null;
+    transcript_updated_at?: string | null };
 
 /** How much of a tool result rides the live feed. The screen shows a 5-row
  *  tail of an output and the whole thing arrives with the turn-end transcript

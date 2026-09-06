@@ -20,7 +20,7 @@ export const STREAM_STALL_MS = 45_000;
 
 export interface FollowHooks {
   /** One record off the feed. */
-  onRecord: (rec: Record<string, unknown>) => void;
+  onRecord: (rec: Record<string, unknown>) => Promise<void> | void;
   /** A link came back after one dropped — records were missed. Awaited before
    *  the new link's records are delivered, so the refill lands first. Never
    *  called for the FIRST connect (there is no gap to fill). */
@@ -48,9 +48,18 @@ export async function followStream(
       connected = true;
       backoff = 1000;
       armStall();
-      for await (const rec of records) { armStall(); hooks.onRecord(rec); }
-    } catch { /* dropped or refused — retry below */ }
-    finally { clearTimeout(stall); signal.removeEventListener('abort', onAbort); }
+      for await (const rec of records) {
+        if (signal.aborted) return;
+        armStall();
+        await hooks.onRecord(rec);
+      }
+    } catch { /* dropped, refused, or refill failed — retry below */ }
+    finally {
+      // A failed refill must close the old socket before opening another.
+      link.abort();
+      clearTimeout(stall);
+      signal.removeEventListener('abort', onAbort);
+    }
     if (signal.aborted) return;
     await new Promise((r) => setTimeout(r, backoff));
     backoff = Math.min(backoff * 2, 10_000);

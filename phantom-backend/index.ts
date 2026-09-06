@@ -7,6 +7,7 @@ import { bootCleanup, tick } from './pool/pool.js';
 import { sweepSessions } from './sessions.js';
 import { buildApp, type AppCtx } from './api/app.js';
 import { BoardEvents } from './api/boardEvents.js';
+import { SessionEvents } from './api/sessionEvents.js';
 import { makeDocker } from './docker.js';
 import { migrateAllWorkspaceSchemas } from './db/workspaceSchema.js';
 import { ContainerManager } from './workspace/container.js';
@@ -106,10 +107,11 @@ async function main() {
     }
   })();
 
-  // Board events, created here so the work-state loop below can reference it
-  // before ctx is assigned (the loop sleeps 10s first, but the reference is
-  // captured at definition time).
+  // Board and session events, created here so the work-state loop below can
+  // reference them before ctx is assigned (the loop sleeps 10s first, but
+  // the references are captured at definition time).
   const events = new BoardEvents();
+  const sessionEvents = new SessionEvents();
 
   // Work-state refresh: every 10s, recompute `work` for sessions with an
   // active container. A change writes the row and publishes on the board
@@ -117,7 +119,7 @@ async function main() {
   (async () => {
     while (!stopped) {
       await new Promise((r) => setTimeout(r, 10_000));
-      await refreshWorkState({ db, paths, containers, events })
+      await refreshWorkState({ db, paths, containers, events, sessionEvents })
         .catch((e) => log.error({ err: errStr(e) }, 'work-state refresh threw'));
     }
   })();
@@ -133,6 +135,7 @@ async function main() {
     autoPull: autoPullFn,
     pgPool,
     events,
+    sessionEvents,
     updateTriggerDir: process.env.UPDATE_TRIGGER_DIR || undefined,
   };
   const app = await buildApp(ctx);

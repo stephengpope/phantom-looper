@@ -304,9 +304,10 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       // Every save is one turn: the counter that paces session naming.
       // Who drove it is read off the writer: a person's turn into the loop's
       // coding session takes the session over (sessions.ts agentAfterSave).
+      const agent = agentAfterSave(s.agent, client);
       const [saved] = await ctx.db.update(sessions)
         .set({ transcript: data, lastUserMessage, transcriptUpdatedAt: stamp,
-          turnCount: sql`${sessions.turnCount} + 1`, agent: agentAfterSave(s.agent, client) })
+          turnCount: sql`${sessions.turnCount} + 1`, agent })
         .where(eq(sessions.id, s.id))
         .returning({ name: sessions.name, turnCount: sessions.turnCount, nameManual: sessions.nameManual });
       // Saving a turn is activity: the session stays off the idle sweep and
@@ -317,10 +318,11 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       // so the window that just uploaded its OWN turn ignores the echo instead
       // of re-pulling and repainting the reply it already drew.
       ctx.sessionEvents?.publish(s.id, client, { event: 'transcript', updated_at: stamp.toISOString(), by: client });
+      if (agent !== s.agent) ctx.sessionEvents?.publish(s.id, client, { event: 'session', agent });
       if (client && s.lockedBy === client) {
         const ttl = await resolve(ctx.db, 'session_lock_ttl_ms');
         const expires = await renewLock(ctx.db, s.id, client, Number(ttl));
-        ctx.sessionEvents?.publish(s.id, client, lockEvent(s, { locked: true, expires }));
+        ctx.sessionEvents?.publish(s.id, client, lockEvent({ ...s, agent }, { locked: true, expires }));
       }
       // Naming rides the save but never blocks it — fire-and-forget; any
       // failure leaves the old name (or null) standing. A manual name
@@ -348,29 +350,48 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         'results over 16KB are clipped and marked `capped`), {event:"turn-end"}, {event:"error",message}, ' +
         '{event:"transcript",updated_at,by} when the record is saved (by ANY client — this is the signal to ' +
         're-read it), {event:"lock",locked,by,label,agent,expires_at} first thing on connect and on every take / ' +
-        'renew / release, {event:"heartbeat"} every 15 s. Every turn streams here whoever runs it — the server ' +
+        'renew / release, {event:"session",agent?,planMode?,work?,transcript_updated_at?} on state changes ' +
+        'and as a snapshot on every connect, {event:"heartbeat"} every 15 s. Every turn streams here whoever runs it — the server ' +
         'publishes its own, a cli window relays the one it runs through POST /sessions/:id/events. ' +
         'Events published under the reader\'s own x-phantom-looper-client are not sent back to it.',
       params: idParam } },
     async (req, reply) => {
       const client = clientOf(req);
-      const s = await getSession(ctx.db, req.params.id);
-      if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
-      reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
-      const write = (o: unknown) => { reply.raw.write(`${JSON.stringify(o)}\n`); };
-      const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
-      const send = (e: SessionEvent, by: string) => { if (by !== client) write(e); };
-      const unsubscribe = ctx.sessionEvents!.subscribe(s.id, send);
-      write({ event: 'heartbeat' });
-      // The one piece of state a feed opens with: who holds the session now.
-      // Everything else is a turn in progress (no replay) or the record (the
-      // client pulls it); the hold is what the spinner needs before any of
-      // that arrives — and after a reconnect.
-      send(lockEvent(s), s.lockedBy ?? '');
-      await new Promise<void>((resolve) => reply.raw.on('close', resolve));
-      clearInterval(heartbeat);
-      unsubscribe();
-      return reply;
+      const write = (o: unknown) => { if (!reply.raw.destroyed) reply.raw.write(`${JSON.stringify(o)}\n`); };
+      // Subscribe BEFORE reading: a takeover during the snapshot query must
+      // not disappear into the gap between reading and listening.
+      let pending: SessionEvent[] | null = [];
+      const unsubscribe = ctx.sessionEvents!.subscribe(req.params.id, (e, by) => {
+        if (by && by === client) return;
+        if (pending) {
+          // State writes must survive the read. Live parts are not replayed:
+          // the snapshot may already include their saved transcript, and
+          // replaying them would draw that turn twice. Mid-turn joins refill
+          // from the next transcript event as usual.
+          if (e.event === 'lock' || e.event === 'session' || e.event === 'transcript') pending.push(e);
+        } else write(e);
+      });
+      let heartbeat: ReturnType<typeof setInterval> | undefined;
+      try {
+        const s = await getSession(ctx.db, req.params.id);
+        if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
+        if (reply.raw.destroyed) return reply;
+        reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
+        heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
+        write({ event: 'heartbeat' });
+        // Opening state always arrives, including when this reader owns the
+        // lock: clear any previous remote holder rather than suppressing it.
+        write(lockEvent(s, s.lockedBy === client ? { locked: false } : {}));
+        write({ event: 'session', agent: s.agent ?? null, planMode: s.planMode, work: s.work ?? null,
+          transcript_updated_at: s.transcriptUpdatedAt?.toISOString() ?? null });
+        for (const e of pending) write(e);
+        pending = null;
+        await new Promise<void>((resolve) => reply.raw.on('close', resolve));
+        return reply;
+      } finally {
+        clearInterval(heartbeat);
+        unsubscribe();
+      }
     });
 
   // The feed's door for a turn the SERVER does not run: a cli window drives
@@ -626,6 +647,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         await ctx.db.update(sessions)
           .set({ planMode: req.body.plan_mode })
           .where(eq(sessions.id, s.id));
+        ctx.sessionEvents?.publish(s.id, clientOf(req),
+          { event: 'session', planMode: req.body.plan_mode });
       }
       return ok(await getSession(ctx.db, s.id));
     });
