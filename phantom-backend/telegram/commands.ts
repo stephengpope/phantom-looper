@@ -106,7 +106,7 @@ export async function handleCommand(
       sessionList.set(dm, j.data.sessions.map((s: any) => s.id));
       const rows = j.data.sessions.map((s: any, i: number) =>
         `${i + 1}. ${s.name ?? 'untitled'}${s.id === acc.activeSessionId ? ' (active)' : ''}${s.locked ? ' (busy)' : ''}`);
-      await reply(['📋 Sessions:', ...rows, '',
+      await reply(['📋 Sessions:', '', ...rows, '',
         'Pick one with /sessions <number>; /code <number> talks to its coding agent'].join('\n'));
       return;
     }
@@ -130,7 +130,7 @@ export async function handleCommand(
       }
       workspaceList.set(dm, list.map((w) => w.id));
       const rows = list.map((w, i) => `${i + 1}. ${w.name}${w.id === acc.activeWorkspaceId ? ' (active)' : ''}`);
-      await reply(['📋 Workspaces:', ...rows, '', 'Switch with /workspaces <number>'].join('\n'));
+      await reply(['📋 Workspaces:', '', ...rows, '', 'Switch with /workspaces <number>'].join('\n'));
       return;
     }
 
@@ -155,17 +155,17 @@ export async function handleCommand(
         const tasks = t?.ok ? (t.data.tasks ?? []).length : 0;
         const where = [s?.branch ? `Branch: ${s.branch}` : null, s?.card != null ? `card #${s.card}` : null]
           .filter(Boolean).join(' · ');
-        await reply(['🤖 Coding agent',
+        await reply(['🤖 Coding agent', '',
           `Active session: ${s?.name ?? 'untitled'}`,
           where || null,
           `Running: ${s?.locked ? `yes${s.lockedLabel ? ` (${s.lockedLabel})` : ''}` : 'no'}`,
           `Last request: ${s?.lastUserMessage ? oneLine(s.lastUserMessage) : '(none yet)'}`,
           `Plan mode: ${s?.planMode ? 'on' : 'off'}`,
-          `Background tasks: ${tasks}`].filter(Boolean).join('\n'));
+          `Background tasks: ${tasks}`].filter((v) => v != null).join('\n'));
       } else {
         const w = acc.activeWorkspaceId ? await workspaceRow(engine, acc.activeWorkspaceId) : null;
         const s = acc.activeSessionId ? await sessionRow(engine, acc.activeSessionId) : null;
-        await reply(['🏠 Assistant',
+        await reply(['🏠 Assistant', '',
           `Active workspace: ${w?.name ?? acc.activeWorkspaceId ?? '(none — /workspaces)'}`,
           `Active session: ${s ? `${s.name ?? 'untitled'} (/code to talk to it)` : '(none — /sessions or /new)'}`].join('\n'));
       }
