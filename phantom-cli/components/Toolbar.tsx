@@ -17,13 +17,24 @@ import { Box } from 'ink';
 import Spinner from 'ink-spinner';
 import { Text } from './Text.js';
 
-export function Toolbar({ notice, spin, spinWho }: { notice?: string; spin?: string; spinWho?: string }) {
-  if (!notice && !spin) return null;
+/** One item on the line: plain text, or text with a severity mark — the
+ *  colored • the /resume table and the board draw ahead of the git work state.
+ *  The same shape as table.ts's Cell, so the three places cannot disagree. */
+export type ToolbarPart = string | { text: string; mark: string };
+
+export function Toolbar({ parts = [], spin, spinWho }: { parts?: ToolbarPart[]; spin?: string; spinWho?: string }) {
+  const shown = parts.filter((p) => (typeof p === 'string' ? p : p.text));
+  if (!shown.length && !spin) return null;
   return (
     <Box paddingLeft={2}>
-      {notice ? <Text color="yellow">{notice}</Text> : null}
+      {shown.map((p, i) => (
+        <Text key={i} color="yellow">
+          {i > 0 ? ' · ' : ''}
+          {typeof p === 'string' ? p : <><Text color={p.mark}>•</Text>{` ${p.text}`}</>}
+        </Text>
+      ))}
       {spin ? (<>
-        {notice ? <Text color="yellow"> · </Text> : null}
+        {shown.length ? <Text color="yellow"> · </Text> : null}
         {spinWho ? <Text color="yellow">{`${spinWho} `}</Text> : null}
         <Text color="magenta"><Spinner type="dots" /></Text>
         <Text color="yellow">{` ${spin}`}</Text>

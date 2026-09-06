@@ -42,7 +42,7 @@ export interface SessionInfo {
  *  work that exists ONLY on the server's disk (a trash or a sweep loses it),
  *  yellow is safe on origin but not yet in base, green is done. One map, so
  *  the words and the color cannot disagree. */
-const WORK = {
+export const WORK = {
   not_pushed: { text: 'not pushed', mark: 'red' },
   not_merged: { text: 'not merged', mark: 'yellow' },
   merged: { text: 'merged', mark: 'green' },

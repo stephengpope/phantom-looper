@@ -47,9 +47,9 @@ const MENU_ROWS = 8;
 import { PartView } from './components/Parts.js';
 import { Prompt } from './components/Prompt.js';
 import { StatusLine } from './components/StatusLine.js';
-import { Toolbar } from './components/Toolbar.js';
+import { Toolbar, type ToolbarPart } from './components/Toolbar.js';
 import { Settings, type Api } from './components/Settings.js';
-import { Launcher, lastWorkspaceId, isRunning, whoDrives, ago, type SessionInfo, type WorkspaceInfo } from './components/Launcher.js';
+import { Launcher, lastWorkspaceId, isRunning, whoDrives, ago, WORK, type SessionInfo, type WorkspaceInfo } from './components/Launcher.js';
 import { NewWorkspace, type NewWorkspaceRequest } from './components/NewWorkspace.js';
 import { WorkspaceSettings } from './components/WorkspaceSettings.js';
 import { SessionSwitcher } from './components/SessionSwitcher.js';
@@ -2059,19 +2059,19 @@ export function App({
   // answers "what am I working on" without opening anything. Nothing shows
   // for a session you started yourself: no card is a state, not a warning.
   const cardMark = session?.card;
-  // The git work dot — where the session's code stands, colored by severity:
-  // red = not pushed, yellow = not merged, green = merged. The same WORK map
-  // the /resume list uses (Launcher.tsx), one source for the words and colors.
-  const WORK_LABEL: Record<string, string> = { not_pushed: 'not pushed', not_merged: 'not merged', merged: 'merged' };
-  const workMark = session?.work ? `${WORK_LABEL[session.work] ?? session.work}` : undefined;
+  // The git work dot — where the session's code stands, the colored • ahead
+  // of the words: red = not pushed, yellow = not merged, green = merged. The
+  // same WORK map the /resume table draws from (Launcher.tsx), so the three
+  // places the state shows — /resume, this line, the board — cannot disagree.
+  const workMark: ToolbarPart | undefined = session?.work ? WORK[session.work] : undefined;
   // The bg task count — shown only when > 0. A zero is not news; it appearing
   // and vanishing is the signal that something started or stopped.
   const taskMark = session && taskCount != null && taskCount > 0
     ? `${taskCount} bg task${taskCount === 1 ? '' : 's'}`
     : undefined;
   // Order: mode, card, git dot, bg tasks, notice pinned last.
-  const withMode = (rest?: string) =>
-    [modeMark, cardMark, workMark, taskMark, rest].filter(Boolean).join(' · ') || undefined;
+  const withMode = (rest?: string): ToolbarPart[] =>
+    [modeMark, cardMark, workMark, taskMark, rest].filter((p): p is ToolbarPart => Boolean(p));
 
   return (
     <SizeContext.Provider value={{ rows: screenRows, cols: screenCols }}>
@@ -2295,10 +2295,10 @@ export function App({
               // is running, and typing says the rest.
               spin={session && !session.busy && heldNow ? heldNow.label : undefined}
               spinWho={session && !session.busy && heldNow ? heldNow.who : undefined}
-              notice={
+              parts={
               ctrlC ? withMode('press ctrl+c again to quit')
               : !session
-                ? 'no session open — [/workspace] starts one · [/resume] reopens an earlier one'
+                ? ['no session open — [/workspace] starts one · [/resume] reopens an earlier one']
                 : withMode()} />
           </>
         )}
