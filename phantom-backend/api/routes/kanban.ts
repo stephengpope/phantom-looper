@@ -3,9 +3,9 @@
 // owns the writes. The column list and the card prefix are workspace fields
 // (PATCH /workspaces/:id); defaults live here in code, the DB stores overrides.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import type pg from 'pg';
-import { workspaces, type WorkspaceRow } from '../../db/schema.js';
+import { workspaces, sessions, type WorkspaceRow } from '../../db/schema.js';
 import { currentLoop, getSession } from '../../sessions.js';
 import { logger, errStr } from '../../log.js';
 import { ok, err, type AppCtx } from '../app.js';
@@ -209,7 +209,18 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
       const where = req.query.archived === 'true' ? '' : 'where not archived';
       const { rows } = await pool.query(
         `select * from ${cardsTable(w)} ${where} order by status, pinned desc, pos, id`);
-      return ok({ ...await board(w), cards: rows, card_sessions: await cardSessions(w) });
+      const cs = await cardSessions(w);
+      // card_work: the git work state per card, read from the card's coding
+      // session row — the stored column the 10s refresh job maintains.
+      const cardWork: Record<number, string | null> = {};
+      if (cs.length) {
+        const sIds = cs.map((c) => c.id);
+        const sRows = await ctx.db.select({ id: sessions.id, work: sessions.work })
+          .from(sessions).where(inArray(sessions.id, sIds));
+        const workOf = new Map(sRows.map((s) => [s.id, s.work]));
+        for (const c of cs) { const w = workOf.get(c.id); if (w) cardWork[c.card] = w; }
+      }
+      return ok({ ...await board(w), cards: rows, card_sessions: cs, card_work: cardWork });
     });
 
   app.post<{ Params: { id: string }; Body: Record<string, unknown> }>(

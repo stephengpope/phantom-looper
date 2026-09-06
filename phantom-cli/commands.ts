@@ -15,6 +15,7 @@ export const COMMANDS: Command[] = [
   { name: 'tasks', summary: "what's running in this session's container" },
   { name: 'plan', summary: 'plan mode on/off — the coding agent reads, nothing is written' },
   { name: 'auto-push', summary: "push this session's work to the base branch" },
+  { name: 'auto-pull', summary: "bring the base branch into this session's branch" },
   { name: 'model', summary: 'provider, model, reasoning, steps per turn' },
   // First row under the fold (the live menu shows MENU_ROWS = 8): closing a
   // session is a real everyday act, but not more everyday than the eight above

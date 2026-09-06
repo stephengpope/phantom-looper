@@ -631,11 +631,15 @@ export function App({
       if (!cur || cur.busy || cur.readonly) return;
       try {
         const r = await api('GET', `/sessions/${sessionId}`) as {
-          planMode?: boolean; transcript_updated_at?: string | null };
+          planMode?: boolean; transcript_updated_at?: string | null;
+          work?: 'not_pushed' | 'not_merged' | 'merged' | null };
         if (gone) return;
         // Plan mode flipped somewhere else (another window's /plan): the row
         // is the record, so this window follows it — a no-op while they agree.
         if (typeof r.planMode === 'boolean') await applyPlanRef.current?.(sessionId, r.planMode);
+        // The git work state rides every response — three local git commands,
+        // one session, cheap. The toolbar's dot follows it.
+        store.setWork(sessionId, r.work ?? null);
         await reseatIfMoved(api, store, sessionId, r.transcript_updated_at ?? null);
       } catch (e) { quiet(`re-read session ${sessionId}`)(e); }
     };
@@ -1425,10 +1429,10 @@ export function App({
     }));
     return { sessions: [...rows, ...extras], total: total + extras.length };
   };
-  const refreshPicker = useCallback(async (git = false) => {
+  const refreshPicker = useCallback(async () => {
     const want = Math.max(pickerRef.current?.sessions.length ?? 0, PICKER_PAGE);
     const [ws, got] = await Promise.all([api('GET', '/workspaces'),
-      api('GET', `/sessions?${listQuery()}&limit=${want}${git ? '&git=true' : ''}`)]);
+      api('GET', `/sessions?${listQuery()}&limit=${want}`)]);
     const { sessions: ss, total } = got as { sessions: SessionInfo[]; total: number };
     setPicker({ workspaces: ws as WorkspaceInfo[], ...withOpenHere(ss, total), end: ss.length < want });
     setNames(ws as WorkspaceInfo[]);
@@ -1470,7 +1474,7 @@ export function App({
   // unreachable server must not nag every 10s while old rows still serve.
   useEffect(() => {
     if (menu !== 'resume') return;
-    const t = setInterval(() => { void refreshPicker(true).catch(quiet('refresh the session list')); }, pollMs);
+    const t = setInterval(() => { void refreshPicker().catch(quiet('refresh the session list')); }, pollMs);
     t.unref?.();
     return () => clearInterval(t);
   }, [menu, refreshPicker, pollMs]);
@@ -1482,7 +1486,7 @@ export function App({
       trashArmed.current = null;
       setMenu(which);
       // The work column, a beat behind the instant open (see refreshPicker).
-      if (which === 'resume') void refreshPicker(true).catch(quiet('refresh the session list'));
+      if (which === 'resume') void refreshPicker().catch(quiet('refresh the session list'));
     } catch (e) { note(`could not list ${which === 'resume' ? 'sessions' : 'workspaces'}: ${(e as Error).message}`); }
   }, [refreshPicker, note]);
 
@@ -1805,6 +1809,12 @@ export function App({
         void runAutoPush(session.id);
         return;
       }
+      case 'auto-pull': {
+        if (!session) { note('no session is open — nothing to pull into'); return; }
+        // Same detached shape as auto-push: steps and the result as notes.
+        void runAutoPull(session.id);
+        return;
+      }
       case 'settings': setMenu('settings'); return;
       case 'keys': setMenu('keys'); return;
       case 'secrets': setMenu('secrets'); return;
@@ -1829,7 +1839,7 @@ export function App({
         return;
       case 'exit': quit(); return;
     }
-  }, [api, quit, openPicker, openSession, openSwitcher, session, runAutoPush, closeSession, note, voice, toggleDevice, applyPlanMode, openArchived]);
+  }, [api, quit, openPicker, openSession, openSwitcher, session, runAutoPush, runAutoPull, closeSession, note, voice, toggleDevice, applyPlanMode, openArchived]);
 
   const submit = useCallback(async (text: string) => {
     const msg = text.trim();
@@ -2044,19 +2054,24 @@ export function App({
   const modeMark = session && !session.readonly
     ? (session.planMode ? '» plan mode on' : '» code mode on')
     : undefined;
-  // The task count rides beside the mode on EVERY session branch — always
-  // visible, `0 tasks` included (a status that appears only when non-zero
-  // reads as a notice, not a state). Null only before the first fetch lands.
-  const taskMark = session && taskCount != null
-    ? `${taskCount} task${taskCount === 1 ? '' : 's'}`
-    : undefined;
   // Which card this session is building, when it is building one — the
   // board's own name for it (`PHA-7`), so the line you read while typing
   // answers "what am I working on" without opening anything. Nothing shows
   // for a session you started yourself: no card is a state, not a warning.
   const cardMark = session?.card;
+  // The git work dot — where the session's code stands, colored by severity:
+  // red = not pushed, yellow = not merged, green = merged. The same WORK map
+  // the /resume list uses (Launcher.tsx), one source for the words and colors.
+  const WORK_LABEL: Record<string, string> = { not_pushed: 'not pushed', not_merged: 'not merged', merged: 'merged' };
+  const workMark = session?.work ? `${WORK_LABEL[session.work] ?? session.work}` : undefined;
+  // The bg task count — shown only when > 0. A zero is not news; it appearing
+  // and vanishing is the signal that something started or stopped.
+  const taskMark = session && taskCount != null && taskCount > 0
+    ? `${taskCount} bg task${taskCount === 1 ? '' : 's'}`
+    : undefined;
+  // Order: mode, card, git dot, bg tasks, notice pinned last.
   const withMode = (rest?: string) =>
-    [modeMark, taskMark, cardMark, rest].filter(Boolean).join(' · ') || undefined;
+    [modeMark, cardMark, workMark, taskMark, rest].filter(Boolean).join(' · ') || undefined;
 
   return (
     <SizeContext.Provider value={{ rows: screenRows, cols: screenCols }}>
@@ -2212,7 +2227,7 @@ export function App({
               onToggleSupervised={() => {
                 setShowSupervised((x) => !x);
                 showSupervisedRef.current = !showSupervised;
-                void refreshPicker(true).catch(quiet('refresh the session list'));
+                void refreshPicker().catch(quiet('refresh the session list'));
               }}
               lastMessage={lastUserMessage}
               busy={(id) => store.get(id)?.busy ?? false}
