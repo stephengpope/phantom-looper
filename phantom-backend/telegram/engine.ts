@@ -74,14 +74,16 @@ export interface TelegramEngineDeps {
   publicAddress?: string;
 }
 
-/** A turn in flight on THIS server, by chat. A second message while busy is
- *  queued and sent as one follow-up turn (the cli's queue shape); it never
- *  starts a second turn. The AbortController is what /stop reaches. */
+/** A turn in flight on THIS server, keyed per session (code mode) or
+ *  'assistant'. A second message to the SAME key is queued and sent as one
+ *  follow-up turn (the cli's queue shape); a message to a DIFFERENT key
+ *  starts its own turn — so multiple sessions can run concurrently. The
+ *  AbortController is what /stop reaches. */
 interface Busy { queue: string[]; abort: AbortController }
 
 export class TelegramEngine {
   private f: typeof fetch;
-  private busy = new Map<number, Busy>();
+  private busy = new Map<string, Busy>();
   /** The Assistant's ONE in-memory conversation (reset on restart). */
   private assistantHistory: ModelMessage[] = [];
   /** The approval gate — gated tools ask the user here (approvals.ts). */
@@ -269,8 +271,12 @@ export class TelegramEngine {
       // any other message declines it and goes on to queue as the follow-up.
       if (this.approvals.handleText(dm, input)) return;
 
-      // Busy: queue the message into the running turn's follow-up and stop.
-      const running = this.busy.get(dm);
+      // Busy: queue the message into the SAME key's running turn. Code-mode
+      // turns key by sessionId, so switching sessions starts independently;
+      // the assistant is one conversation, so it stays one key.
+      const busyKey = acc.mode === 'code' && acc.activeSessionId
+        ? acc.activeSessionId : 'assistant';
+      const running = this.busy.get(busyKey);
       if (running) {
         running.queue.push(input);
         await client.sendMessage(dm, '⌛ Got it — after this turn.', { replyToMessageId: msg.message_id });
@@ -296,7 +302,8 @@ export class TelegramEngine {
     const { db } = this.deps;
     const typing = startTyping(client, dm);
     const abort = new AbortController();
-    this.busy.set(dm, { queue: [], abort });
+    const busyKey = 'assistant';
+    this.busy.set(busyKey, { queue: [], abort });
     const acc = await store.getAccount(db, this.deps.encryptionKey);
     // The assistant can deliver a file it names from the active session's work
     // dir (its file tools are read-only, but it can point at one the coder made).
@@ -335,13 +342,13 @@ export class TelegramEngine {
         onWorkspaceCreated,
       }, abort.signal);
       // Any messages queued while we ran go out as one follow-up turn.
-      const queued = this.busy.get(dm)?.queue ?? [];
-      this.busy.delete(dm);
+      const queued = this.busy.get(busyKey)?.queue ?? [];
+      this.busy.delete(busyKey);
       typing.stop();
       await this.maybeSpeak(client, dm, values, replyText);
       if (queued.length) await this.assistantTurn(client, dm, queued.join('\n\n'), values);
     } catch (e) {
-      this.busy.delete(dm);
+      this.busy.delete(busyKey);
       typing.stop();
       await client.sendMessage(dm, `⚠️ ${(e as Error).message}`).catch(() => {});
     }
@@ -367,7 +374,7 @@ export class TelegramEngine {
 
     const typing = startTyping(client, dm);
     const abort = new AbortController();
-    this.busy.set(dm, { queue: [], abort });
+    this.busy.set(sessionId, { queue: [], abort });
     // Files the agent names in its reply are delivered from this session's work
     // dir; the agent writes /workspace/... container paths, which map there.
     const sink = makeTelegramSink(client, dm, this.deliverConfig(sessionId));
@@ -389,8 +396,8 @@ export class TelegramEngine {
       const r = await runCodingTurn(deps, opened, workspaceId, message, planMode, values);
       unsubscribe?.();
       await sink.done(r.text);
-      const queued = this.busy.get(dm)?.queue ?? [];
-      this.busy.delete(dm);
+      const queued = this.busy.get(sessionId)?.queue ?? [];
+      this.busy.delete(sessionId);
       await opened.close();
       typing.stop();
       await this.maybeSpeak(client, dm, values, r.text);
@@ -399,7 +406,7 @@ export class TelegramEngine {
     } catch (e) {
       unsubscribe?.();
       await sink.dispose();
-      this.busy.delete(dm);
+      this.busy.delete(sessionId);
       await opened.close().catch(() => {});
       typing.stop();
       await client.sendMessage(dm, `⚠️ ${(e as Error).message}`).catch(() => {});
@@ -547,9 +554,10 @@ export class TelegramEngine {
 
   // ── /stop and command support (used by commands.ts) ──────────────────────
 
-  /** Stop the in-flight turn for this chat, if any. Returns whether one ran. */
-  stop(dm: number): boolean {
-    const b = this.busy.get(dm);
+  /** Stop the in-flight turn for the given busy key (a sessionId in code mode,
+   *  'assistant' in assistant mode). Returns whether one was running. */
+  stop(key: string): boolean {
+    const b = this.busy.get(key);
     if (!b) return false;
     b.queue.length = 0;
     b.abort.abort();
