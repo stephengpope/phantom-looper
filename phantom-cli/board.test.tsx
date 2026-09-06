@@ -331,7 +331,7 @@ test('p toggles pin on the focused card, both ways', async () => {
   r.stdin.write('p'); await sleep(30);
   const on = calls.find((c) => c.method === 'PATCH' && (c.body as { pinned?: boolean }).pinned === true);
   assert.ok(on, 'p PATCHes pinned: true on the focused card');
-  assert.match(strip(r.lastFrame()!), /• 1-first card/, 'the pinned card shows the gutter mark');
+  assert.match(strip(r.lastFrame()!), /1-first card 📌/, 'the pinned card carries the pin after its title');
   r.stdin.write('p'); await sleep(30);
   const off = calls.find((c) => c.method === 'PATCH' && (c.body as { pinned?: boolean }).pinned === false);
   assert.ok(off, 'p again PATCHes pinned: false');
@@ -585,14 +585,14 @@ test('pinned: the group sits at the top of its column, pos still sorts inside ea
   assert.deepEqual(store.cardsIn('backlog').map((t) => t.seq), [1, 3, 4, 2],
     'the newly pinned card joins the group at its own pos rank');
 
-  // On the board a pinned row carries • in the left gutter; unpinned rows
-  // keep the two blank cells.
+  // On the board a pinned row carries 📌 after its title; the left gutter
+  // belongs to the git work dot and stays blank without one.
   const r = mount(store);
   await sleep(50);
   const f = strip(r.lastFrame()!);
-  assert.match(f, /• 1-first/);
-  assert.match(f, /• 3-third/);
-  assert.match(f, / {2}2-second/, 'unpinned rows keep the blank gutter');
+  assert.match(f, /1-first 📌/);
+  assert.match(f, /3-third 📌/);
+  assert.match(f, /2-second(?! 📌)/, 'unpinned rows carry no pin');
   r.unmount();
 });
 

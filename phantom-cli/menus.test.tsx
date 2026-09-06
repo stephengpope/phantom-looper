@@ -454,8 +454,10 @@ test('typing / shows the command list above the prompt', async () => {
   await sleep(60);
   const f = strip(lastFrame() ?? '');
   assert.match(f, /\/plan/);
-  assert.match(f, /\/model/);
+  assert.match(f, /\/auto-pull/);
   assert.match(f, /\/workspace/);
+  // /model sits below the fold now (the eight everyday rows end at /auto-pull).
+  assert.match(f, /↓ \d+ more/);
 });
 
 test('/help lists the commands and never reaches the model', async () => {
@@ -793,11 +795,9 @@ test('/resume lazy-loads: one page at open, the next as the cursor nears the bot
   stdin.write('/resume'); await sleep(40);
   stdin.write(ENTER); await sleep(140);
   assert.match(listCalls[0], /limit=30/, 'the open fetches ONE page, never the whole list');
-  assert.ok(!listCalls[0].includes('git=true'), 'the opening fetch never waits on git');
-  // The open is TWO fetches by design: the instant plain page, then the
-  // git-inclusive refresh right behind it filling the work column in place.
-  assert.equal(listCalls.length, 2);
-  assert.match(listCalls[1], /git=true/, 'the follow-up carries the work column');
+  // `work` is a stored column the server refreshes; the list never asks
+  // for it, so no fetch carries git=true.
+  for (const c of listCalls) assert.ok(!c.includes('git=true'), 'the list never asks for git');
   assert.match(strip(lastFrame() ?? ''), /"task 0"/, 'newest on top');
   // Header + 30 rows = 31 choices; the near-end zone starts NEAR_END (10)
   // from the bottom, so the 20th step down asks for the next page.
@@ -1273,6 +1273,7 @@ test('enter runs the highlighted command, not the half-typed text', async () => 
   stdin.write(DOWN); await sleep(50);            // -> /tasks
   stdin.write(DOWN); await sleep(50);            // -> /plan
   stdin.write(DOWN); await sleep(50);            // -> /auto-push
+  stdin.write(DOWN); await sleep(50);            // -> /auto-pull
   stdin.write(DOWN); await sleep(50);            // -> /model
   assert.match(strip(lastFrame() ?? ''), /❯ \/model/);
   stdin.write(ENTER); await sleep(140);
@@ -1762,19 +1763,19 @@ test('taskChoices: live rows first, untracked hint, recent with exit codes, empt
   assert.match(taskChoices(emptyTasks('absent'))[0].label, /container not running/);
 });
 
-test('the toolbar counts tasks beside the mode — 0 included — and /tasks lists them', async () => {
+test('the toolbar shows the task count beside the mode once something runs, and /tasks lists them', async () => {
   let view: TasksView = emptyTasks();
   const rest = async (_m: string, path: string) =>
     path === '/sessions/s1/tasks' ? view as unknown as Record<string, unknown> : {};
   const { stdin, lastFrame } = app({ api: settingsApi({}, [], rest), taskPollMs: 120 });
   await sleep(100);
-  assert.match(strip(lastFrame() ?? ''), /» code mode on · 0 tasks/,
-    'zero is a state, not silence — the count always rides beside the mode');
+  assert.doesNotMatch(strip(lastFrame() ?? ''), /bg task/,
+    'nothing running = no count; the count appearing is the signal');
   // A dev server starts elsewhere (the agent's turn, another window): the
   // minute clock picks it up without a keypress.
   view = { container: 'running', tasks: [liveTask(), liveTask({ sid: '9', command: 'sleep 300', cmd_id: null, logs: null })], recent: [] };
   await sleep(300);
-  assert.match(strip(lastFrame() ?? ''), /2 tasks/);
+  assert.match(strip(lastFrame() ?? ''), /2 bg tasks/);
   stdin.write('/tasks'); await sleep(40);
   stdin.write(ENTER); await sleep(140);
   const f = strip(lastFrame() ?? '');

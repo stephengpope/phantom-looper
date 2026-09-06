@@ -244,13 +244,18 @@ const webKit = (id: string) => webTools({ baseUrl: connection().base, apiKey: co
 // Workspace-bound, not session-bound: the workspace's secrets shadow global
 // ones by name, and only App knows which workspace a session is in.
 const secretKit = (ws: string) => secretTools({ baseUrl: connection().base, apiKey: connection().key, workspaceId: ws });
-// Settings for the chrome's first frame (voice pane on/off, width) and the
-// launch session's agent. No settings = no agent and no first-frame values,
-// NOT the code defaults standing in for them: the app opens anyway, because
-// it is where an unreachable server gets fixed (/server), and its boot
-// effect prints the failure — the same sentence every request produces.
-const cfg: Record<string, ConfigValue> | undefined =
-  await makeSettings(api).read().then((r) => ({ ...r, ...localValues() })).catch(() => undefined);
+// Settings for the chrome's first frame (voice pane on/off, sidebar width).
+// Started here, not awaited: the app renders immediately with defaults and
+// the mount effect (readCfg → setChrome) corrects them as soon as the read
+// lands — one frame of default chrome at most. The old await blocked the
+// entire render on a network call, delaying the splash screen.
+const cfgPromise = makeSettings(api).read().then((r) => ({ ...r, ...localValues() })).catch(() => undefined);
+const cfg: Record<string, ConfigValue> | undefined = await Promise.race([
+  cfgPromise,
+  // Yield immediately if the settings haven't arrived yet — the app opens
+  // on defaults and the mount effect corrects them when the read lands.
+  new Promise<undefined>((r) => setTimeout(() => r(undefined), 0)),
+]);
 
 // The session you quit from is not necessarily the one you started in — /new,
 // /resume, /workspace and tab all move it — so track the live one and print
