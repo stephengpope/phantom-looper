@@ -132,6 +132,7 @@ board.ts           BoardStore — one workspace's board, outside React; optimist
                    with ONE `load()` to fill the gap; `create()` seats the POST's answer through `adoptCard` (replace by id) because
                    the stream delivers the row first
 (core/ndjson.ts)   ND-JSON records off a response body — the board's events (`stream()` in index.tsx); auto-push's and auto-pull's streams are read by core's `autoPushSession`/`autoPullSession` (index.tsx wraps them with the connection, the saved CA and the client id)
+request.ts         `requestError` — THE one place a failed request becomes a sentence (see Conventions: errors)
 commands.ts        the table + matches/parse/complete
 config.ts local.ts settings.ts settingLabels.ts   above
 mouse.ts screen.ts trim.ts   the mouse parser + selection model · the screen mirror (@xterm/headless) · cell-level row trimming
@@ -169,6 +170,19 @@ updates), `_TRACE_FRAMES` (screen.ts flight recorder), and the rig hooks
 `_INSTALL_FLAGS`, `_SSH_ACCEPT_NEW`, `_SSH_IDENTITY` (setup.ts).
 
 ## Conventions — each one was paid for
+
+- **Errors: one sentence, one maker, no invented values.** `api()`/`stream()`
+  in index.tsx throw only what `request.ts` builds: "phantom-backend at <url>
+  is not reachable (<cause>)" · "… rejected the key — /server to fix it" · the
+  server's own sentence (`.code` attached — the server names the id: `no
+  session <id>`). A screen adds only what it was doing and where:
+  `could not start a session in <workspace>: …`, `could not kill "<cmd>": …`.
+  A failed call FAILS the thing asked for — never defaults for settings, an id
+  for a name (the banner shows the id AND a note says the lookup failed), `[]`
+  for a list that did not load. The ONE quiet failure allowed is background
+  work that runs again on its own (list refreshes, the lock release at quit):
+  `quiet('refresh tasks')` → cli.log with what it was doing. `.catch(() => {})`
+  on anything a person asked for is a bug.
 
 - **A throw while drawing costs one region, never the app.** React unmounts
   the whole tree on a render throw and Ink exits — a label with no length in

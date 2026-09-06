@@ -100,7 +100,7 @@ test('openai and openai-compatible: bearer key, the base url is honoured; compat
   assert.equal(o.headers['authorization'], 'Bearer sk-o');
   const c = await request({ provider: 'openai-compatible', model: 'local', apiKey: null, baseUrl: 'http://localhost:11434/v1' });
   assert.match(c.url, /^http:\/\/localhost:11434\/v1\//);
-  assert.throws(() => languageModel({ provider: 'openai-compatible', model: 'x' }), /base url/);
+  assert.throws(() => languageModel({ provider: 'openai-compatible', model: 'x' }), /base_url is not set/);
 });
 
 test('google: the key rides as a header, not in the url', async () => {

@@ -357,7 +357,7 @@ test('boot failure lands in the pane: the app is up, typing is refused with a hi
     await sleep(80);
     const frame = strip(r.lastFrame()!);
     assert.equal(topRow(r.lastFrame()!).trim(), '', 'a blank row above the first line in the pane');
-    assert.match(frame, /could not open: cannot check out acme\/acme-app/, "the server's words, in the pane");
+    assert.match(frame, /could not start a session in acme-app: cannot check out acme\/acme-app/, "what it was doing, where, and the server's words, in the pane");
     assert.match(frame, /\/keys/, 'the error names where the fix is');
     assert.match(frame, /no session open — \[\/workspace\] starts one/, 'the toolbar says the state');
     assert.match(frame, /type a message/, 'the prompt is alive — the app opened');
@@ -417,7 +417,8 @@ test('boot with one workspace opens a session through the same path /new uses', 
 
 test('an unreachable server still opens the window, pointing at the screen that fixes the address', async () => {
   const api = async (method: string, path: string) => {
-    if (method === 'GET' && path === '/workspaces') throw new Error('fetch failed');
+    // What index.tsx's request function throws for a network failure (request.test.ts covers the wording).
+    if (method === 'GET' && path === '/workspaces') throw Object.assign(new Error('phantom-backend at http://localhost:8080 is not reachable (ECONNREFUSED)'), { code: 'unreachable' });
     return {};
   };
   const r = render(<App api={api as never} boot={{}} newTools={noTools} makeVoice={inertVoice}
@@ -425,7 +426,7 @@ test('an unreachable server still opens the window, pointing at the screen that 
   try {
     await sleep(80);
     const frame = strip(r.lastFrame()!);
-    assert.match(frame, /phantom-backend at http:\/\/localhost:8080 could not be reached: fetch failed/);
+    assert.match(frame, /phantom-backend at http:\/\/localhost:8080 is not reachable \(ECONNREFUSED\)/);
     assert.match(frame, /\/server/, 'points at the offline screen where the address lives');
     assert.match(frame, /type a message/, 'the app opened anyway');
   } finally { r.unmount(); }
@@ -433,7 +434,8 @@ test('an unreachable server still opens the window, pointing at the screen that 
 
 test('a server that refuses the key says so, and where the key is fixed — not "unreachable"', async () => {
   const api = async (method: string, path: string) => {
-    if (method === 'GET' && path === '/workspaces') throw Object.assign(new Error('missing or invalid bearer token'), { status: 401 });
+    // What the request function throws for a 401 — the code is what the boot effect branches on.
+    if (method === 'GET' && path === '/workspaces') throw Object.assign(new Error('phantom-backend at http://localhost:8080 rejected the key — /server to fix it'), { code: 'unauthorized' });
     return {};
   };
   const r = render(<App api={api as never} boot={{}} newTools={noTools} makeVoice={inertVoice}
@@ -441,8 +443,8 @@ test('a server that refuses the key says so, and where the key is fixed — not 
   try {
     await sleep(80);
     const frame = strip(r.lastFrame()!);
-    assert.match(frame, /phantom-backend at http:\/\/localhost:8080 rejected the key: missing or invalid bearer token/);
-    assert.doesNotMatch(frame, /could not be reached/);
+    assert.match(frame, /phantom-backend at http:\/\/localhost:8080 rejected the key — \/server to fix it/);
+    assert.doesNotMatch(frame, /not reachable/);
     assert.match(frame, /fix the key under \/server/);
   } finally { r.unmount(); }
 });

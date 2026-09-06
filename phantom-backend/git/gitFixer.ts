@@ -55,7 +55,14 @@ export async function verifyResolved(dir: string, baseBranch?: string): Promise<
     if (!baseBranch) return true;
     await git(dir, ['merge-base', '--is-ancestor', `origin/${baseBranch}`, 'HEAD']);
     return true;
-  } catch { return false; }
+  } catch (e) {
+    // merge-base exits 1 when base is NOT an ancestor — that is a verdict, not
+    // a failure; anything else (no repo, no origin ref) is logged.
+    if (!/is-ancestor/.test(String((e as { cmd?: string }).cmd ?? ''))) {
+      log.warn({ dir, err: (e as Error).message }, 'verification could not run — counted as not fixed');
+    }
+    return false;
+  }
 }
 
 export async function runGitFixer(

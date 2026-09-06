@@ -358,13 +358,13 @@ re-applied after the fixer is a second conflict surface the fixer never sees)
 nothing races a pull. Result `merged | clean | blocked | error` with
 `arrived` (the base commits) and `files` (what the merge changed).
 
-Callers: the CODING agent's `git_auto_pull` (core `codingGitTools`, both
-coding kits — cli and server; a plan-mode kit drops it), the cli Assistant's
+Callers: the cli Assistant's
 `git_auto_pull` (App's `autoPull` prop), the Telegram Assistant's
 `git_auto_pull` (`telegram/assistant.ts`, over `injectFetch`), and Telegram's
 `/auto_pull` (code mode; `engine.autoPull` over the same core client — ONE
 bubble edited in place, a `·` line per step, the result on the last line).
-No cli slash command, no setting.
+No cli slash command, no setting, and NO coding-agent tool (push or pull) —
+a person moves code, through the slash commands or the Assistant.
 
 Triggers: `POST /git/auto-push` (the cli's `/auto-push`, Telegram's
 `/auto_push` (code mode, the same step bubble as `/auto_pull`), and both
