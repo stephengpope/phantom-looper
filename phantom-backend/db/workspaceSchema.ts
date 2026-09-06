@@ -121,6 +121,17 @@ const MIGRATIONS: { version: number; sql: string }[] = [
       alter table "%SCHEMA%".cards add column if not exists pinned boolean not null default false;
     `,
   },
+  {
+    // `user_story` is gone — the card is title + details + requirements.
+    // Per-schema, like every cards change: a file in migrations/ runs against
+    // phantom_looper at boot and cannot see a workspace schema (the %SCHEMA%
+    // placeholder there took the api down at boot). The revision trigger
+    // diffs whole rows, so old revisions keep their user_story as history.
+    version: 5,
+    sql: `
+      alter table "%SCHEMA%".cards drop column if exists user_story;
+    `,
+  },
 ];
 
 export async function ensureWorkspaceSchema(pool: pg.Pool, workspaceId: string, schemaName: string): Promise<void> {

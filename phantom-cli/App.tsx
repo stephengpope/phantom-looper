@@ -27,7 +27,7 @@
 // (thinking, and a tool's whole command and output) · ctrl+g the voice pane ·
 // ctrl+r mic · ctrl+l speaker (both work
 // anywhere, the board included) · pageUp/pageDown scroll the conversation ·
-// ctrl+c twice to quit.
+// ctrl+c clears the line; on an empty line twice to quit.
 import { Box, useApp, useBoxMetrics, useInput, useWindowSize } from 'ink';
 import { Text } from './components/Text.js';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
@@ -1110,6 +1110,10 @@ export function App({
   // hand back: ↓ off the end of the list lands on the empty line it started on.
   const [histAt, setHistAt] = useState(0);
 
+  // Blank the prompt — the one rule for it: the text, the history cursor and
+  // the slash-menu highlight go together (submit and ctrl+c both use it).
+  const clearInput = useCallback(() => { setInput(''); setHistAt(0); setSuggestAt(0); }, []);
+
   // A note lands in the pane, so it also retires the splash — a message the
   // banner covers is a message lost ("tab: this is the only session open").
 
@@ -1797,8 +1801,7 @@ export function App({
       note(`not sent — a turn is running (${heldRef.current.label})`);
       return;
     }
-    setInput('');
-    setHistAt(0);
+    clearInput();
     setScroll(0);
     setSplash(false);   // commands too: /help answers into the pane the splash covers
     if (msg === 'exit' || msg === 'quit') { quit(); return; }
@@ -1863,6 +1866,12 @@ export function App({
   // It interrupts the session you are LOOKING at. A turn running in another
   // one is not something this key can see, and stopping work you cannot see is
   // not what "cancel" means here.
+  //
+  // With text on the prompt it does one thing only: blank the line. Typing is
+  // editing, not cancelling — the turn keeps running (esc is its key) and
+  // nothing arms. Claude Code's rule, and the one its users asked back for
+  // when a release broke it (anthropics/claude-code#17754). Only while the
+  // prompt is on screen: under a menu or the board, ctrl+c still means "out".
   // The mouse (mouse.ts). Never gated — it works over menus too. Wheel scrolls
   // the pane under the cursor; press/drag/release is a selection in the pane
   // it started in, highlighted through the screen mirror and copied to the
@@ -1915,6 +1924,7 @@ export function App({
 
   useInput((ch, key) => {
     if (!(key.ctrl && ch === 'c')) return;
+    if (menu === null && view === 'chat' && input) { clearInput(); return; }
     if (ctrlC) { quit(); return; }
     if (session?.busy) store.abortTurn(session.id);
     // Break out of whatever is on screen first: the second press then lands on

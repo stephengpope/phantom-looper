@@ -324,6 +324,14 @@ export async function createSupervisorSession(
   return (await db.select(sessionColumns).from(sessions).where(eq(sessions.id, id)))[0];
 }
 
+/** Name a still-unnamed session. The loop's coder seat takes its CARD's
+ *  title the moment the pair is written — deterministic, instant, no model
+ *  call; the titler's every-tenth-turn rename may refine it later. A name
+ *  already there (a person's /rename included) stands. */
+export async function nameIfUnnamed(db: Db, id: string, name: string): Promise<void> {
+  await db.update(sessions).set({ name }).where(and(eq(sessions.id, id), isNull(sessions.name)));
+}
+
 /** The pairing, written ONCE when a card enters the loop. Immutable — this
  *  row is the permanent record of who reviews what. */
 export async function createLoop(

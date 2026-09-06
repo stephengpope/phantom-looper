@@ -1590,6 +1590,37 @@ test('ctrl+c works inside a menu, not only at the prompt', async () => {
   assert.match(f, /press ctrl\+c again to quit/, 'and says what a second press does');
 });
 
+test('ctrl+c with text on the prompt clears the line and nothing else', async () => {
+  // Typing is editing, not cancelling: the first press blanks the line without
+  // arming quit. On the now-empty line the same key arms as it always did.
+  const { stdin, lastFrame } = app();
+  await sleep(50);
+  stdin.write('hello there'); await sleep(40);
+  assert.match(strip(lastFrame() ?? ''), /hello there/, 'the text is on the prompt');
+
+  stdin.write(CTRL_C); await sleep(120);
+  let f = strip(lastFrame() ?? '');
+  assert.ok(!/hello there/.test(f), 'the line is blank');
+  assert.ok(!/press ctrl\+c again to quit/.test(f), 'clearing does not arm quit');
+
+  stdin.write(CTRL_C); await sleep(120);
+  f = strip(lastFrame() ?? '');
+  assert.match(f, /press ctrl\+c again to quit/, 'on an empty line ctrl+c arms as before');
+});
+
+test('ctrl+c on a half-typed slash command clears it and drops the suggestion list', async () => {
+  const { stdin, lastFrame } = app();
+  await sleep(50);
+  stdin.write('/set'); await sleep(40);
+  assert.match(strip(lastFrame() ?? ''), /\/settings/, 'the command list is up');
+
+  stdin.write(CTRL_C); await sleep(120);
+  const f = strip(lastFrame() ?? '');
+  assert.ok(!/\/set\b/.test(f), 'the typed text is gone');
+  assert.ok(!/\/settings /.test(f), 'and the list with it');
+  assert.ok(!/press ctrl\+c again to quit/.test(f), 'nothing armed');
+});
+
 test('ctrl+c on a list does not fire the list\'s letter shortcuts', async () => {
   // Ink reports ctrl+c as the letter `c`. A list that forwards every character
   // to onKey would run the `c` shortcut on the way past — and ctrl+e on the
