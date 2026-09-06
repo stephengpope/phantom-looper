@@ -315,7 +315,7 @@ test('the footer shows the arrows bare, no brackets', async () => {
   // The selection hint shows the keys themselves — one space apart, no
   // brackets: shorter than the word, and it reads as the key it names.
   const footer = strip(r.lastFrame()!);
-  assert.match(footer, /↑ ↓ ← →  \[enter\]/, 'the arrows open the footer, bare, two spaces between items');
+  assert.match(footer, /↑ ↓ ← →  \[esc\]  \[enter\]/, '[esc] sits right after the arrows, before the action keys');
   assert.ok(!/\[arrows\]|\[↑\]|\[↓\]/.test(footer), 'no brackets around the arrows');
   // Both move keys are live (tab right, shift+tab left) and both are named in
   // full: `s+tab` was shorthand for a key no keyboard calls that.
@@ -356,7 +356,7 @@ test('e expands the focused column to the full width — a long title reads whol
   assert.ok(!f.includes('doing ('), 'the other columns are gone');
   assert.ok(!f.includes('done ('));
   assert.ok(f.includes(long), 'the title reads in full across the width');
-  assert.match(f, /\[e\] collapse/, 'the footer names the way back');
+  assert.match(f, /\[e\]\s+collapse/, 'the footer names the way back');
   // → while expanded walks to the next column, still expanded
   r.stdin.write('\x1b[C'); await sleep(30);
   f = strip(r.lastFrame()!);
@@ -370,7 +370,7 @@ test('e expands the focused column to the full width — a long title reads whol
   assert.match(f, /backlog \(3\)/); assert.match(f, /doing \(1\)/);
   assert.equal(closed, 0, 'esc collapsed the column; the board stayed');
   r.stdin.write('e'); await sleep(30);
-  assert.match(strip(r.lastFrame()!), /\[e\] collapse/, 'e expands again');
+  assert.match(strip(r.lastFrame()!), /\[e\]\s+collapse/, 'e expands again');
   r.stdin.write('e'); await sleep(30);
   assert.match(strip(r.lastFrame()!), /\[e\]xpand/, 'e a second time collapses — a toggle');
   r.unmount();
@@ -387,7 +387,7 @@ test('a store request (the Assistant\'s "expand plan") expands that column; "boa
   let f = strip(r.lastFrame()!);
   assert.match(f, /doing \(1\)/, 'the asked-for column is up');
   assert.ok(!f.includes('backlog ('), 'alone');
-  assert.match(f, /\[e\] collapse/);
+  assert.match(f, /\[e\]\s+collapse/);
   store.requestBoard(); await sleep(80);
   f = strip(r.lastFrame()!);
   assert.match(f, /backlog \(2\)/); assert.match(f, /doing \(1\)/);
