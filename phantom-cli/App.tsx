@@ -1082,12 +1082,13 @@ export function App({
   const [menu, setMenu] = useState<Menu>(null);
   // The launch splash: the big PHANTOM LOOPER where the conversation will be.
   // Sessions with nothing said yet — boot's first, every /new — a resume has
-  // history to show. Cleared by the first interaction that wants the screen
-  // back: a submitted line (message or command — /help's answer lands in the
-  // pane the splash covers), a session switch, a note, a menu or the board
-  // opening, or a remote turn arriving. Set back only where openSession
-  // seats an empty session.
-  const [splash, setSplash] = useState(initial ? initial.resumed.length === 0 : true);
+  // history to show. Off at boot when resuming (boot.resumeId), so the
+  // ghost never flashes before the transcript arrives. Cleared by the first
+  // interaction that wants the screen back: a submitted line (message or
+  // command — /help's answer lands in the pane the splash covers), a session
+  // switch, a note, a menu or the board opening, or a remote turn arriving.
+  // Set back only where openSession seats an empty session.
+  const [splash, setSplash] = useState(initial ? initial.resumed.length === 0 : !boot?.resumeId);
   useEffect(() => { if (menu !== null || view !== 'chat') setSplash(false); }, [menu, view]);
   useEffect(() => { if (session?.remoteBusy) setSplash(false); }, [session?.remoteBusy]);
   const [picker, setPicker] = useState<{ workspaces: WorkspaceInfo[]; sessions: SessionInfo[]; total: number; end: boolean } | null>(null);
@@ -1282,6 +1283,11 @@ export function App({
       if (target.kind === 'open') {
         if (target.id === store.activeId) { note('already here'); return true; }
         if (store.has(target.id)) { switchTo(target.id); return true; }
+        // Opening an existing session: clear the splash immediately so it
+        // never flashes during the network calls that follow. The final
+        // setSplash(resumed.length === 0) at the end of this function sets
+        // it back for the rare empty session.
+        setSplash(false);
       }
       const sessionId = target.kind === 'duplicate'
         ? ((await api('POST', `/sessions/${target.id}/duplicate`, {}) as { id: string }).id)
