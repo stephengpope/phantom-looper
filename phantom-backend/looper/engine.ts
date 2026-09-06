@@ -71,6 +71,9 @@ export interface LooperDeps {
    *  turn this engine runs: that is how a builder watching a card's session
    *  sees the round happen instead of waiting for the record. */
   sessionEvents?: SessionEvents;
+  /** Active turns by session id — the interrupt route aborts these. The engine
+   *  registers on entry and deregisters on exit. */
+  activeTurns?: Map<string, AbortController>;
   /** Test seam: the fetch every MODEL call uses (createAgent's own seam).
    *  Production never sets it. */
   modelFetch?: typeof fetch;
@@ -80,7 +83,7 @@ export interface LooperDeps {
  *  turn ran and the next step is owed NOW; `moved`/`idle` mean the card was
  *  acted on or nothing was owed; `skipped` means a seat was held elsewhere —
  *  the lock's release re-runs the loop. */
-export type TurnOutcome = 'turn' | 'moved' | 'idle' | 'skipped';
+export type TurnOutcome = 'turn' | 'moved' | 'idle' | 'skipped' | 'interrupted';
 
 /** The chain's token ledger: seeded once from the token API when the loop
  *  picks the card up, each turn's own numbers added as they land. Lives only
@@ -317,13 +320,17 @@ export class LooperEngine {
       // can ever act on a card other than the one it is running.
       const cardCfg: LoopCardConfig = { baseUrl: BASE, apiKey, workspaceId: workspace.id,
         cardId: card.id, seq: card.seq, fetch: this.f, clientId: CLIENT_ID };
-      const coderDeps = { ...this.turnDeps(card.seq), extraTools: loopBlockTool(cardCfg) };
+      // The interrupt controller: registered so POST /sessions/:id/interrupt
+      // can abort this turn. Deregistered in finally (below the close calls).
+      const ac = new AbortController();
+      this.deps.activeTurns?.set(opened.session.id, ac);
+      const coderDeps = { ...this.turnDeps(card.seq, ac.signal), extraTools: loopBlockTool(cardCfg) };
 
       const opener = unsentKickoff(card, opened.messages);
       if (opener) {
         const t = await runCodingTurn(coderDeps, opened, workspace.id, opener.text, opener.planMode, cfg);
         budget.spent += t.tokens;
-        return 'turn';
+        return t.interrupted ? 'interrupted' : 'turn';
       }
 
       try {
@@ -403,11 +410,13 @@ export class LooperEngine {
       const t = await runCodingTurn(coderDeps, opened, workspace.id,
         step.text, card.status === 'plan', cfg);
       budget.spent += t.tokens;
+      if (t.interrupted) return 'interrupted';
       if (step.kind === 'return' && (card.blocked_reason || card.resolution)) {
         await this.patchCard(workspace.id, card.id, { blocked_reason: null, resolution: null });
       }
       return 'turn';
     } finally {
+      this.deps.activeTurns?.delete(opened.session.id);
       // close() surfaces a failed background save (the record did not land)
       // — a throw here is a turn failure like any other. The nested finally
       // keeps one throwing close from leaking the other seat's lock.
@@ -438,10 +447,11 @@ export class LooperEngine {
     if (!j.ok) throw new Error(`card patch failed: ${j.error?.message}`);
   }
 
-  private turnDeps(card?: number) {
+  private turnDeps(card?: number, signal?: AbortSignal) {
     return { f: this.f, apiKey: this.deps.apiKey, base: BASE,
       modelFetch: this.deps.modelFetch, sessionEvents: this.deps.sessionEvents, client: CLIENT_ID,
-      onRetry: (t: string) => log.warn({ card, agent: 'coding' }, t) };
+      onRetry: (t: string) => log.warn({ card, agent: 'coding' }, t),
+      signal };
   }
 
   private settings(): Promise<Record<string, unknown>> {

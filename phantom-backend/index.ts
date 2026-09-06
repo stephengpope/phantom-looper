@@ -147,7 +147,7 @@ async function main() {
   // are answering. Event-driven: routes poke it through ctx.looper; start()
   // is ONE recovery sweep, not a poll.
   const looper = new LooperEngine({ db, pgPool, app, apiKey: env.apiKey, events: ctx.events,
-    sessionEvents: ctx.sessionEvents });
+    sessionEvents: ctx.sessionEvents, activeTurns: ctx.activeTurns });
   ctx.looper = looper;
   looper.start();
 

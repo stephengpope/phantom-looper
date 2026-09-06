@@ -254,6 +254,24 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       return ok({ released });
     });
 
+  // ---- interrupt a running turn ---------------------------------------------
+  // Any viewer may stop a server-side turn (a looper round or the /turn route).
+  // The abort controller stops the model stream; killing the container's
+  // foreground processes stops a running bash command. The looper treats this
+  // as an interruption, not a failure — the card is NOT blocked.
+  app.post<{ Params: { id: string } }>(
+    '/sessions/:id/interrupt', { schema: { ...TAG,
+      summary: 'Interrupt a running turn',
+      description: 'Aborts the server-side turn on this session (if one is running) and kills any ' +
+        'foreground processes in its container. The turn saves what it recorded and ends cleanly — ' +
+        'the card is not blocked. 200 whether or not a turn was running (idempotent).',
+      params: idParam } },
+    async (req) => {
+      const ac = ctx.activeTurns?.get(req.params.id);
+      if (ac) ac.abort();
+      return ok({ interrupted: !!ac });
+    });
+
   // ---- the transcript ------------------------------------------------------
   // The conversation, whole — the same JSONL the client keeps locally. SQL is
   // the record: the client uploads the file when a turn ends and rewrites its

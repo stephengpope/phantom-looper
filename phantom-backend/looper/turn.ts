@@ -34,6 +34,10 @@ export interface TurnDeps {
    *  bound to the run's card. A manual turn (the /turn route) passes none:
    *  the block tool's description talks about a run it is not in. */
   extraTools?: Record<string, import('ai').Tool>;
+  /** Abort signal — the interrupt route fires this to stop the turn
+   *  mid-stream. The SDK stops between steps; running tool calls end when
+   *  the process in the container is killed (the interrupt route does both). */
+  signal?: AbortSignal;
 }
 
 /** The resolved settings as plain values — the same rows every client reads,
@@ -57,7 +61,7 @@ export async function settingsValues(deps: TurnDeps): Promise<Record<string, unk
 export async function runCodingTurn(
   deps: TurnDeps, opened: OpenedSession, workspaceId: string,
   message: string, planMode: boolean, cfg?: Record<string, unknown>,
-): Promise<{ text: string; tokens: number }> {
+): Promise<{ text: string; tokens: number; interrupted?: boolean }> {
   const values = cfg ?? await settingsValues(deps);
   const pick = planMode ? ('readonly' as const) : undefined;
   const common = { baseUrl: deps.base, apiKey: deps.apiKey, sessionId: opened.session.id, fetch: deps.f };
@@ -83,19 +87,26 @@ export async function runCodingTurn(
   const feed = deps.sessionEvents;
   const id = opened.session.id;
   let text = '';
+  let interrupted = false;
   feed?.publish(id, deps.client, { event: 'turn-start', agent: 'coding', message });
   try {
-    const r = await agent.stream({ messages: marked, record });
+    const r = await agent.stream({ messages: marked, record, abortSignal: deps.signal });
     await drain(r, (part) => {
       const p = part as { type: string; text?: string };
       if (p.type === 'text-delta' && p.text) text += p.text;
       feed?.publishPart(id, deps.client, part);
     });
   } catch (e) {
-    // A watcher must see a turn fail, not just stop. The throw still travels:
-    // the route answers with its error line, the looper blocks the card.
-    feed?.publish(id, deps.client, { event: 'error', message: (e as Error).message });
-    throw e;
+    // An abort signal means a viewer interrupted the turn — not a failure.
+    // Save what was recorded and return; the looper must NOT block the card.
+    if (deps.signal?.aborted) {
+      interrupted = true;
+    } else {
+      // A real failure: a watcher must see it, and the throw still travels
+      // so the route answers with its error line and the looper blocks the card.
+      feed?.publish(id, deps.client, { event: 'error', message: (e as Error).message });
+      throw e;
+    }
   } finally {
     feed?.publish(id, deps.client, { event: 'turn-end' });
   }
@@ -107,8 +118,9 @@ export async function runCodingTurn(
   };
   await opened.saveTranscript(serializeTranscript(header,
     [...messages, ...turnMessages],
-    [...opened.events, ...turnEvents]));
-  return { text, tokens: sumTokens(turnEvents) };
+    [...opened.events, ...turnEvents,
+      ...(interrupted ? [{ at: messages.length + turnMessages.length, event: { type: 'interrupted' } }] : [])]));
+  return { text, tokens: sumTokens(turnEvents), interrupted };
 }
 
 /** Read a turn's stream to the end, handing every part to `onPart`, and

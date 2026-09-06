@@ -63,6 +63,10 @@ export interface AppCtx {
    *  at registration like the board's, so it is never absent: the turn
    *  route's own ND-JSON reply is built off it. */
   sessionEvents?: SessionEvents;
+  /** Active server-side turns, keyed by session id. The interrupt route aborts
+   *  the controller; the turn runner registers on entry and removes on exit.
+   *  Absent only in tests that never run a turn. */
+  activeTurns?: Map<string, AbortController>;
   /** Where POST /update drops a release tag for the updater sidecar
    *  (UPDATE_TRIGGER_DIR). Absent: the route answers `updater_unavailable`. */
   updateTriggerDir?: string;
@@ -148,6 +152,7 @@ export async function buildApp(ctx: AppCtx) {
   });
 
   ctx.sessionEvents ??= new SessionEvents();
+  ctx.activeTurns ??= new Map();
   settingsRoutes(app, ctx);
   secretsRoutes(app, ctx);
   workspaceRoutes(app, ctx);

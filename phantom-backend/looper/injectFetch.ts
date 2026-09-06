@@ -7,6 +7,9 @@ import type { FastifyInstance } from 'fastify';
 
 export function injectFetch(app: FastifyInstance): typeof fetch {
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    // An aborted signal means the turn was interrupted — refuse the call
+    // so queued tool calls after the abort do not fire into the container.
+    if (init?.signal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError');
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     const u = new URL(url, 'http://looper');
     const headers: Record<string, string> = {};

@@ -1990,6 +1990,17 @@ export function App({
     setCtrlC(true); setTimeout(() => setCtrlC(false), 1500);
   });
 
+  // Remote interrupt: esc arms, [c] confirms. Armed per session, auto-disarms
+  // after 3 s. The interrupt route aborts the server-side turn.
+  const [interruptArmed, setInterruptArmed] = useState(false);
+  useEffect(() => {
+    if (!interruptArmed) return;
+    const t = setTimeout(() => setInterruptArmed(false), 3000);
+    return () => clearTimeout(t);
+  }, [interruptArmed]);
+  // Clear the armed state when the hold drops (the turn ended on its own).
+  useEffect(() => { if (!heldNow) setInterruptArmed(false); }, [heldNow]);
+
   // Off while a menu owns the keyboard — see the note at the top of the file.
   useInput((ch, key) => {
     // esc while a turn runs: with something queued, the first press drops the
@@ -1998,6 +2009,17 @@ export function App({
     if (key.escape && session?.busy) {
       if (session.queue.length) store.clearQueue(session.id);
       else store.abortTurn(session.id);
+      return;
+    }
+    // esc on a remote turn: arm the interrupt confirmation.
+    if (key.escape && !session?.busy && heldNow && sessionId) {
+      setInterruptArmed(true);
+      return;
+    }
+    // [c] confirms the interrupt — fire the route, the turn stops.
+    if (ch === 'c' && interruptArmed && sessionId) {
+      setInterruptArmed(false);
+      void api('POST', `/sessions/${sessionId}/interrupt`).catch(quiet('interrupt'));
       return;
     }
     if (key.ctrl && ch === 'o') { setExpanded((e) => !e); return; }
@@ -2119,8 +2141,9 @@ export function App({
             would be a lie. */}
         {(session?.busy || session?.remoteBusy) && <StatusLine phase={phaseLabel(session.live)}
           startedAt={session.startedAt} tokens={tokenCount(session.tokens)}
-          escHint={!session.busy ? undefined
-            : session.queue.length ? '[esc] clears the queue, then interrupts' : '[esc] to interrupt'} />}
+          escHint={session.busy
+            ? (session.queue.length ? '[esc] clears the queue, then interrupts' : '[esc] to interrupt')
+            : interruptArmed ? '[c] to confirm interrupt' : '[esc] to interrupt'} />}
         {session && session.queue.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
             <Text dimColor>{`  queued · sent together, in one turn, when this one ends`}</Text>
