@@ -1,6 +1,5 @@
 // The launch splash: a Pac-Man ghost in block art, royal blue dithering
-// down to aqua the way pixel art does, the wordmark beneath it — the
-// prompt's own Glint label, so it glimmers exactly as that one does.
+// down to aqua the way pixel art does, the infinity mark beneath it.
 // Sessions with nothing said yet — boot's first and every /new — App drops
 // it on the first interaction; a resume shows its history instead. It
 // renders as the Pane's `fill`, centered in the empty space UNDER the
@@ -15,7 +14,7 @@
 import chalk from 'chalk';
 import { Box } from 'ink';
 import { Text } from './Text.js';
-import { Glint } from './Shimmer.js';
+import { GlintRows } from './Shimmer.js';
 
 // The ghost as a cell grid, one letter per cell class, traced from a
 // 22×27-pixel arcade ghost: a terminal cell is ~2:1 tall, so each pixel is
@@ -114,6 +113,28 @@ function ghostRow(row: string, [shade, from, to]: [string, string, string]): str
   return out;
 }
 
+// The emblem's row tints, ice down to blue — the Glint label's two colors
+// with the stops between them, continuing from the ghost's aqua skirt.
+// GlintRows asserts colors[i] per row: five, one per row of the mark.
+const MARK_TINTS = ['#b3ecff', '#9cd3ff', '#85baff', '#70a0ff', '#5f87ff'];
+
+// The looper's emblem: an infinity sign, hand-drawn ANSI art — half-block
+// arcs (▄▀) round the loops off, the inner walls lean in to a real crossing
+// at the waist. Its own shape, so it reads as the mark under the ghost. Each
+// lobe is ~11 cells wide at the waist against 5 rows: a terminal cell is
+// ~2:1 tall, so anything narrower reads as a vertical oval, not a loop. The
+// outer walls step out one column at the waist and back in at the shoulders
+// — that taper is what rounds the left and right ends. It glimmers with the
+// label's own sweep (GlintRows — one band of light, the Glint's motion and
+// colors), TTY-gated exactly as the Prompt's Glint is.
+const INFINITY = [
+  '  ▄██████▄   ▄██████▄  ',
+  ' ██      ██ ██      ██ ',
+  '██        ███        ██',
+  ' ██      ██ ██      ██ ',
+  '  ▀██████▀   ▀██████▀  ',
+];
+
 export function Banner({ width }: { width: number }) {
   const fits = width >= GHOST[0]!.length + 2;
   return (
@@ -122,7 +143,7 @@ export function Banner({ width }: { width: number }) {
         <>
           {GHOST.map((row, i) => <Text key={`g${i}`}>{ghostRow(row, BANDS[i]!)}</Text>)}
           <Text> </Text>
-          <Glint text="phantom-looper" color="#5f87ff" shimmerColor="#b3ecff" bold
+          <GlintRows rows={INFINITY} colors={MARK_TINTS} shimmerColor="#b3ecff" bold
             active={process.stdout.isTTY === true} />
         </>
       ) : (
