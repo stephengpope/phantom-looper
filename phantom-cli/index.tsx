@@ -23,7 +23,7 @@ import { phantomTools } from '../core/llm/tools/workspace.js';
 import { skillTools } from '../core/llm/tools/skills.js';
 import { webTools } from '../core/llm/tools/web.js';
 import { secretTools } from '../core/llm/tools/secrets.js';
-import { codingGitTools, autoPullSession as corePull } from '../core/llm/tools/git.js';
+import { codingGitTools, autoPushSession as corePush, autoPullSession as corePull } from '../core/llm/tools/git.js';
 import { newId } from '../core/ids.js';
 import { App } from './App.js';
 import { createScreen } from './screen.js';
@@ -153,44 +153,14 @@ let latestRelease: string | null = null;
 if (APP_VERSION !== 'dev') void checkLatest().then((t) => { latestRelease = t; });
 let serverVersion: string | null = null;
 
-// /auto-push's step names, in words. Anything the server adds later shows raw.
-const AUTO_PUSH_STEPS: Record<string, string> = {
-  commit: 'committing',
-  merge: 'merging the base branch in',
-  fix: 'resolving conflicts',
-  verify: 'verifying against the repo',
-  push_branch: 'pushing the branch',
-  push_base: 'pushing to the base branch',
-  retry: 'base moved — merging again',
-};
-
-/** POST /git/auto-push and consume its ND-JSON stream. An auto-push has no time limit,
- *  so the route streams: heartbeats keep the connection alive, step records
- *  become notes, and exactly one result record ends it. */
-export async function autoPushSession(sessionId: string, onStep?: (label: string) => void):
-  Promise<{ result: string; reason?: string; sha?: string }> {
+/** POST /git/auto-push for one session — core's client over the ND-JSON
+ *  stream (heartbeats keep the connection alive, step records become notes,
+ *  exactly one result record ends it); the cli adds only its connection, its
+ *  lock identity and the saved CA. */
+export async function autoPushSession(sessionId: string, onStep?: (label: string) => void) {
   const { base, key } = connection();
   await trustSavedCa(base);
-  const r = await fetch(`${base}/git/auto-push`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json',
-      'x-phantom-looper-session': sessionId, 'x-phantom-looper-client': CLIENT_ID },
-    body: '{}',
-  });
-  // A refusal (unknown session, auto-push unwired) is the plain envelope, sent
-  // before the stream would have started.
-  if ((r.headers.get('content-type') ?? '').includes('application/json')) {
-    const j = await r.json() as { ok: boolean; error?: { code?: string; message?: string } };
-    throw new Error(j.error?.message ?? j.error?.code ?? `auto-push: HTTP ${r.status}`);
-  }
-  if (!r.body) throw new Error(`auto-push: HTTP ${r.status}`);
-  let result: { result: string; reason?: string; sha?: string } | undefined;
-  for await (const rec of ndjson(r.body) as AsyncIterable<{ event?: string; step?: string; result?: string; reason?: string; sha?: string }>) {
-    if (rec.event === 'step' && rec.step) onStep?.(AUTO_PUSH_STEPS[rec.step] ?? rec.step);
-    else if (rec.event === 'result') result = { result: rec.result ?? 'error', reason: rec.reason, sha: rec.sha };
-  }
-  if (!result) throw new Error('auto-push: the stream ended without a result');
-  return result;
+  return corePush({ baseUrl: base, apiKey: key, sessionId, clientId: CLIENT_ID }, onStep);
 }
 
 /** POST /git/auto-pull for one session — core's client over the same stream

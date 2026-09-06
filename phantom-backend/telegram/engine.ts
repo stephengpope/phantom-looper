@@ -6,7 +6,7 @@
 //
 // Design is phantom-looper's, not shockwave's: sessions are explicit and
 // long-lived (no lazy chat minting, no per-message checkout prep), the
-// Assistant is the primary agent, work lands only through /autopush, and voice
+// Assistant is the primary agent, work lands only through /auto_push, and voice
 // is Deepgram-only. Mechanisms (the streaming bubble, entities, telegram_sent,
 // attachments, the escape-spelled reactions) are ported from ../shockwave.
 
@@ -36,6 +36,7 @@ import { runAssistantTurn, type AssistantDeps } from './assistant.js';
 import { Approvals } from './approvals.js';
 import * as store from './store.js';
 import { menuFor, handleCommand } from './commands.js';
+import { autoPushSession, autoPullSession, type AutoPushOutcome, type AutoPullOutcome } from '../../core/llm/tools/git.js';
 
 const log = logger('telegram');
 const BASE = 'http://looper';
@@ -572,8 +573,19 @@ export class TelegramEngine {
       method: init?.method ?? 'GET', headers,
       ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
     });
-    // auto-push streams ND-JSON, not a JSON object — the caller reads .raw then.
     return { json: () => r.json(), text: () => r.text() };
+  }
+
+  /** `/auto_push` and `/auto_pull` — core's one client of each git route, as
+   *  the telegram client; every step reaches `onStep` in words, so the command
+   *  can show them. Never throws: a refusal is a result too. */
+  async autoPush(session: string, onStep?: (label: string) => void): Promise<AutoPushOutcome> {
+    try { return await autoPushSession({ baseUrl: BASE, apiKey: this.deps.apiKey, sessionId: session, fetch: this.f, clientId: CLIENT_ID }, onStep); }
+    catch (e) { return { result: 'error', reason: (e as Error).message }; }
+  }
+  async autoPull(session: string, onStep?: (label: string) => void): Promise<AutoPullOutcome> {
+    try { return await autoPullSession({ baseUrl: BASE, apiKey: this.deps.apiKey, sessionId: session, fetch: this.f, clientId: CLIENT_ID }, onStep); }
+    catch (e) { return { result: 'error', reason: (e as Error).message }; }
   }
 
   private turnDeps(): TurnDeps {
