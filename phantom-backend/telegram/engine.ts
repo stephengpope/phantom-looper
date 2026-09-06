@@ -44,7 +44,8 @@ const CLIENT_ID = 'telegram';
 // Progress on a voice message itself. WRITTEN AS ESCAPES — Telegram's reaction
 // set carries no variation selectors, and a picker-pasted glyph brings one,
 // yielding REACTION_INVALID.
-const REACT_TRANSCRIBING = '\u{270D}';   // ✍ writing hand, no U+FE0F — cleared when heard
+const REACT_TRANSCRIBING = '\u{270D}';   // ✍ writing hand, no U+FE0F — replaced by 👍 when heard
+const REACT_HEARD = '\u{1F44D}';         // 👍 — transcription done
 const REACT_SPEAK = '\u{1F92C}';         // 🤬 — the user's "read this back" gesture
 
 // What the user reads when a voice note could not be heard, by reason.
@@ -444,11 +445,10 @@ export class TelegramEngine {
       const [, audio] = await Promise.all([react(REACT_TRANSCRIBING), client.downloadFile(voice.file_id)])
         .catch(async (e) => { await react(); throw e; });   // run() reports it; the ✍ must not outlive it
       const heard = await transcribeVoice(apiKey, audio, String(values.voice_stt_model ?? ''));
-      // Whatever happened, the ✍ comes off: on a hit, the turn starting is
-      // the acknowledgement and a lingering reaction is noise.
-      await react();
-      if ('error' in heard) { await client.sendMessage(dm, NOT_HEARD[heard.error]); return null; }
-      if (!heard.text) { await client.sendMessage(dm, "🎤 I couldn't make out any speech in that."); return null; }
+      if ('error' in heard) { await react(); await client.sendMessage(dm, NOT_HEARD[heard.error]); return null; }
+      if (!heard.text) { await react(); await client.sendMessage(dm, "🎤 I couldn't make out any speech in that."); return null; }
+      // Transcription succeeded — the 👍 replaces the ✍ as immediate feedback.
+      await react(REACT_HEARD);
       if (values.telegram_transcript_echo === true) await client.sendMessage(dm, `🎤 "${heard.text}"`);
       return heard.text;
     }
