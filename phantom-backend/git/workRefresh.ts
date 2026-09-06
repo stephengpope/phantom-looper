@@ -10,6 +10,7 @@ import { workState, type WorkState } from './git.js';
 import { repoDir, type Paths } from '../pool/paths.js';
 import type { ContainerManager } from '../workspace/container.js';
 import type { BoardEvents } from '../api/boardEvents.js';
+import type { SessionEvents } from '../api/sessionEvents.js';
 import { logger, errStr } from '../log.js';
 
 const log = logger('work-refresh');
@@ -18,9 +19,11 @@ export interface WorkRefreshDeps {
   db: Db; paths: Paths;
   containers: ContainerManager;
   events: BoardEvents;
+  /** The same feed used by lock and turn publishers; absent for board-only callers. */
+  sessionEvents?: SessionEvents;
 }
 
-export async function refreshWorkState({ db, paths, containers, events }: WorkRefreshDeps): Promise<void> {
+export async function refreshWorkState({ db, paths, containers, events, sessionEvents }: WorkRefreshDeps): Promise<void> {
   const active = containers.activeSessions();
   if (!active.length) return;
 
@@ -75,5 +78,8 @@ export async function refreshWorkState({ db, paths, containers, events }: WorkRe
     // Publish on the board stream so the kanban board picks it up.
     const card = cardOf.get(r.id) ?? 0;
     events.publish(r.workspaceId, { event: 'session', card, id: r.id, name: null, work });
+    // Publish on the session stream so a window watching this session
+    // sees the work-state dot update without polling.
+    sessionEvents?.publish(r.id, '', { event: 'session', work });
   }));
 }

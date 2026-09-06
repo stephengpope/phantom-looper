@@ -17,6 +17,7 @@ import { App } from './App.js';
 import { inertVoice } from "./voice.js";
 import { SessionStore, type RunTurn } from './sessions.js';
 import { Transcript } from './session.js';
+import { SessionFeed } from './sessionFeed.js';
 import { switcherChoices, lastSaid } from './components/SessionSwitcher.js';
 import type { StreamPart } from './state.js';
 
@@ -542,7 +543,8 @@ test('a session locked elsewhere is watched: read-only prompt, a spinner off the
     makeTranscript={(h) => new Transcript(h, tmp())} loadHistory={() => []}
     run={scriptedRun()} pollMs={120} clientId="me" />);
   try {
-    // The feed's first record: who holds it. No poll, no delay.
+    // The feed opens with the record stamp and who holds it. No poll.
+    push({ event: 'session', transcript_updated_at: stamp });
     const far = new Date(Date.now() + 60_000).toISOString();
     push({ event: 'lock', locked: true, by: 'looper-round', label: 'building', agent: 'coding', expires_at: far });
     await sleep(80);
@@ -558,11 +560,12 @@ test('a session locked elsewhere is watched: read-only prompt, a spinner off the
     f = strip(r.lastFrame()!);
     assert.match(f, /not sent — a turn is running \(building\)/, 'refused, with why');
     assert.match(f, /hey/, 'the typed line is still in the prompt');
-    // The transcript moves; the next look repaints the new lump.
+    // The transcript moves; its feed record repaints without a poll.
     lines = [...lines, JSON.stringify({ role: 'assistant', content: 'round two landed' })];
     stamp = 't2';
+    push({ event: 'transcript', updated_at: stamp, by: 'looper-round' });
     await sleep(250);
-    assert.match(strip(r.lastFrame()!), /round two landed/, 'the next look re-rendered it');
+    assert.match(strip(r.lastFrame()!), /round two landed/, 'the feed re-rendered it');
     // The holder lets go: the feed says so, the toolbar line goes at once.
     push({ event: 'lock', locked: false, by: null, label: null, agent: 'coding', expires_at: null });
     await sleep(60);
@@ -576,6 +579,136 @@ test('a session locked elsewhere is watched: read-only prompt, a spinner off the
     await sleep(1200);   // past the expiry and the once-a-second tick
     assert.ok(!/macbook/.test(strip(r.lastFrame()!)), 'lapsed on this clock — no spinner for a dead holder');
   } finally { r.unmount(); }
+});
+
+test('session state: remote takeover updates the agent label in place and preserves unsent input', async () => {
+  const sid = 'state-takeover';
+  let sends = 0;
+  const api = async (method: string, path: string) => {
+    if (path.endsWith('/tasks')) return { tasks: [] };
+    if (path.endsWith('/lock') && method === 'POST') sends++;
+    return {};
+  };
+  const { push, stream } = fakeFeed();
+  const r = render(<App api={api as never} stream={stream} initial={{ ...INITIAL, sessionId: sid }}
+    newTools={async () => ({})} makeVoice={inertVoice} makeAgent={stubAgent}
+    makeTranscript={(h) => new Transcript(h, tmp())} run={scriptedRun()} pollMs={60_000} />);
+  try {
+    await sleep(80);
+    assert.doesNotMatch(strip(r.lastFrame()!), /coding agent|Working…/);
+    r.stdin.write('keep this draft'); await sleep(30);
+    // The real loop acquires with the old seat, then stamps coding.
+    push({ event: 'lock', locked: true, agent: null, label: 'building', expires_at: new Date(Date.now() + 60_000).toISOString() });
+    push({ event: 'session', agent: 'coding' });
+    await sleep(80);
+    assert.match(strip(r.lastFrame()!), /coding agent [\u2800-\u28ff] building/);
+    r.stdin.write(ENTER); await sleep(50);
+    assert.equal(sends, 0, 'a remote hold refuses before attempting a local turn');
+    assert.match(strip(r.lastFrame()!), /> keep this draft/);
+    push({ event: 'turn-start', agent: 'coding', message: 'remote task' });
+    await sleep(80);
+    assert.match(strip(r.lastFrame()!), /Working…/);
+    assert.doesNotMatch(strip(r.lastFrame()!), /\[esc\] to interrupt/);
+    push({ event: 'session', agent: null }); await sleep(50);
+    assert.doesNotMatch(strip(r.lastFrame()!), /coding agent/, 'null clears the previous agent label');
+    push({ event: 'turn-end' });
+    push({ event: 'lock', locked: false }); await sleep(50);
+    r.stdin.write(ENTER); await sleep(100);
+    assert.equal(sends, 1, 'release makes the preserved draft sendable again');
+  } finally { r.unmount(); }
+});
+
+test('session state: mode and git update on the feed with no recurring session GET', async () => {
+  const sid = 'state-mode-work';
+  let reads = 0;
+  const kits: boolean[] = [];
+  const api = async (method: string, path: string) => {
+    if (path === `/sessions/${sid}` && method === 'GET') { reads++; return { planMode: false, work: null }; }
+    if (path.endsWith('/tasks')) return { tasks: [] };
+    return {};
+  };
+  const { push, stream } = fakeFeed();
+  const r = render(<App api={api as never} stream={stream} initial={{ ...INITIAL, sessionId: sid }}
+    newTools={async (_id, plan) => { kits.push(!!plan); return {}; }} makeVoice={inertVoice} makeAgent={stubAgent}
+    makeTranscript={(h) => new Transcript(h, tmp())} pollMs={40} />);
+  try {
+    await sleep(80);
+    push({ event: 'session', planMode: true, work: 'not_pushed' }); await sleep(100);
+    assert.match(strip(r.lastFrame()!), /plan mode on.*not pushed/);
+    assert.deepEqual(kits, [true], 'the tool kit follows the mode, not just the label');
+    push({ event: 'session', planMode: false, work: 'merged' }); await sleep(100);
+    assert.match(strip(r.lastFrame()!), /code mode on.*merged/);
+    assert.deepEqual(kits, [true, false]);
+    push({ event: 'session', work: null }); await sleep(80);
+    assert.doesNotMatch(strip(r.lastFrame()!), /merged/);
+    assert.equal(reads, 0, 'the snapshot is the only state source; no GET can overwrite it');
+  } finally { r.unmount(); }
+});
+
+test('session state: reconnect repairs a missed save, retries a failed read, and clears a missed turn-end', async () => {
+  const sid = 'state-reconnect';
+  let connections = 0, pulls = 0;
+  const header = JSON.stringify({ type: 'session', session_id: sid, provider: 'test', model: 'fake' });
+  const stream = async (_path: string, signal: AbortSignal) => {
+    const attempt = ++connections;
+    return { async *[Symbol.asyncIterator]() {
+      if (attempt === 1) {
+        yield { event: 'turn-start', agent: 'coding', message: 'started before the disconnect' };
+        return; // the turn ends and is saved while disconnected
+      }
+      yield { event: 'lock', locked: false };
+      yield { event: 'session', planMode: false, work: 'merged', transcript_updated_at: 'saved-offline' };
+      if (!signal.aborted) await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+    } };
+  };
+  const api = async (_method: string, path: string) => {
+    if (path.endsWith('/tasks')) return { tasks: [] };
+    if (path.endsWith('/transcript')) {
+      if (++pulls === 1) throw new Error('temporary read failure');
+      return { data: `${header}\n${JSON.stringify({ role: 'assistant', content: 'saved while offline' })}\n`, updated_at: 'saved-offline' };
+    }
+    return {};
+  };
+  const r = render(<App api={api as never} stream={stream} initial={{ ...INITIAL, sessionId: sid }}
+    newTools={async () => ({})} makeVoice={inertVoice} makeAgent={stubAgent}
+    makeTranscript={(h) => new Transcript(h, tmp())} pollMs={60_000} />);
+  try {
+    await sleep(2600);
+    assert.equal(connections, 3, 'the failed refresh reconnects rather than waiting for navigation');
+    assert.equal(pulls, 2);
+    assert.match(strip(r.lastFrame()!), /saved while offline/);
+    assert.doesNotMatch(strip(r.lastFrame()!), /Working…/);
+  } finally { r.unmount(); }
+});
+
+test('session state: asynchronous mode failures reconnect and later changes stay ordered', async () => {
+  const store = new SessionStore();
+  const entry = seed(store, 'state-retry-mode');
+  let links = 0, attempts = 0;
+  const signals: AbortSignal[] = [];
+  const feed = new SessionFeed(async (_path, signal) => {
+    signals.push(signal); links++;
+    return { async *[Symbol.asyncIterator]() {
+      yield { event: 'session', planMode: true };
+      yield { event: 'session', planMode: false, work: 'merged' };
+      if (!signal.aborted) await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+    } };
+  }, entry.id, store, {
+    onRecordLanded: () => {},
+    onPlanModeChanged: async (on) => {
+      await sleep(on ? 40 : 0);
+      if (++attempts === 1) throw new Error('temporary kit failure');
+      store.setPlanMode(entry.id, on, {}, entry.agent, entry.summary);
+    },
+  });
+  feed.start();
+  try {
+    await sleep(1300);
+    assert.equal(links, 2);
+    assert.equal(signals[0].aborted, true, 'a failed refill closes the old socket');
+    assert.equal(entry.planMode, false, 'the last mode wins even with a slower first rebuild');
+    assert.equal(entry.work, 'merged');
+  } finally { feed.stop(); }
 });
 
 test('joining a turn already running: the parts alone start the working line — no turn-start needed', async () => {

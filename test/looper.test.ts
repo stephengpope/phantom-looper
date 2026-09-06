@@ -25,6 +25,9 @@ import { stampAgent } from '../phantom-backend/sessions.js';
 import { LooperEngine } from '../phantom-backend/looper/engine.js';
 import type { CardRow } from '../phantom-backend/looper/logic.js';
 import { firstLine } from '../core/llm/prompts/supervisor/wiring.js';
+import { ndjson } from '../core/ndjson.js';
+import { refreshWorkState } from '../phantom-backend/git/workRefresh.js';
+import type { SessionEvent } from '../phantom-backend/api/sessionEvents.js';
 
 let db: Awaited<ReturnType<typeof testDb>>['db'];
 let pgPool: Awaited<ReturnType<typeof testDb>>['pool'];
@@ -557,6 +560,7 @@ test('GET /sessions/:id/events streams a server-side turn as it happens, this se
     const free = await next();
     assert.equal(free.event, 'lock');
     assert.equal(free.locked, false);
+    assert.deepEqual(await next(), { event: 'session', agent: null, planMode: false, work: null, transcript_updated_at: null });
     // The turn takes the hold: the spinner's record, before any part.
     const held = await next();
     assert.equal(held.event, 'lock');
@@ -643,6 +647,7 @@ test('a cli-run turn is relayed: the holder publishes, a watcher sees it verbati
     const a = await open(A);
     const b = await open(B);
     assert.equal((await b.next()).locked, false, 'the feed opens with the hold: nobody');
+    assert.equal((await b.next()).event, 'session', 'followed by its opening state');
     const publish = (headers: Record<string, string>, events: unknown[]) =>
       app.inject({ method: 'POST', url: `/sessions/${made.id}/events`, headers, payload: { events } });
 
@@ -722,7 +727,7 @@ test('a cli-run turn is relayed: the holder publishes, a watcher sees it verbati
     // A heard NONE of it — not its lock, not its turn, not its parts, not
     // its own save. Only the feed's opening record, from before it held.
     await new Promise((res) => setTimeout(res, 100));
-    assert.deepEqual(a.got.map((e) => [e.event, e.locked]), [['lock', false]],
+    assert.deepEqual(a.got.map((e) => [e.event, e.locked]), [['lock', false], ['session', undefined]],
       'the feed never hands a client its own events back');
   } finally {
     ac.abort();
@@ -741,6 +746,137 @@ test('a turn with nobody watching saves the same record — the stream is the on
   assert.match(t, /nobody is looking/, 'the user message is in the record');
   assert.match(t, /unwatched but recorded/, 'and the whole reply');
   assert.match(t, /"type":"usage"/, 'with its usage line — the record is complete without a subscriber');
+});
+
+/** The production ND-JSON parser over a real socket; bounded waits make a
+ *  missing publication an assertion failure rather than a hung suite. */
+async function watchSession(id: string, client = 'state-watcher') {
+  if (!app.server.listening) await app.listen({ port: 0, host: '127.0.0.1' });
+  const port = (app.server.address() as { port: number }).port;
+  const ac = new AbortController();
+  const records: Record<string, unknown>[] = [];
+  const response = await fetch(`http://127.0.0.1:${port}/sessions/${id}/events`, {
+    headers: { ...H, 'x-phantom-looper-client': client }, signal: ac.signal,
+  });
+  assert.equal(response.status, 200);
+  const reading = (async () => {
+    try { for await (const record of ndjson(response.body!)) records.push(record); }
+    catch (e) { if (!ac.signal.aborted) throw e; }
+  })();
+  return {
+    records,
+    async until(predicate: (r: Record<string, unknown>) => boolean) {
+      const deadline = Date.now() + 2000;
+      while (!records.some(predicate) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+      const found = records.find(predicate);
+      assert.ok(found, `missing event; received ${JSON.stringify(records)}`);
+      return found;
+    },
+    async close() { ac.abort(); await reading; },
+  };
+}
+
+test('session state: one socket carries mode and real git changes; reconnect includes a missed transcript stamp', async () => {
+  const made = json(await app.inject({ method: 'POST', url: '/sessions', headers: H,
+    payload: { workspace_id: wsId } })).data;
+  const watcher = await watchSession(made.id, ''); // server-owned events must reach readers without an id too
+  try {
+    assert.equal((await watcher.until((r) => r.event === 'session')).transcript_updated_at, null);
+    await app.inject({ method: 'PATCH', url: `/sessions/${made.id}`, headers: H, payload: { plan_mode: true } });
+    await watcher.until((r) => r.event === 'session' && r.planMode === true);
+    // Real checkout + real git computation; only container discovery is a seam.
+    const containers = { activeSessions: () => [made.id] } as ContainerManager;
+    const deps = { db, paths: ctx.paths, containers, events: ctx.events!, sessionEvents: ctx.sessionEvents };
+    await refreshWorkState(deps);
+    await watcher.until((r) => r.event === 'session' && r.work === 'merged');
+    await fs.writeFile(path.join(ctx.paths.work, made.id, 'repo', 'state.txt'), 'new work\n');
+    await refreshWorkState(deps);
+    await watcher.until((r) => r.event === 'session' && r.work === 'not_pushed');
+    const count = watcher.records.filter((r) => r.event === 'session' && 'work' in r).length;
+    await refreshWorkState(deps);
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(watcher.records.filter((r) => r.event === 'session' && 'work' in r).length, count, 'unchanged git state is not republished');
+  } finally { await watcher.close(); }
+  const saved = json(await app.inject({ method: 'PUT', url: `/sessions/${made.id}/transcript`, headers: H,
+    payload: { data: `${JSON.stringify({ role: 'assistant', content: 'saved with no watcher' })}\n` } })).data;
+  const reconnected = await watchSession(made.id);
+  try {
+    assert.deepEqual(await reconnected.until((r) => r.event === 'session'), {
+      event: 'session', agent: null, planMode: true, work: 'not_pushed', transcript_updated_at: saved.updated_at,
+    });
+  } finally { await reconnected.close(); }
+});
+
+test('session state: writes during the opening read survive, without replaying already recorded turn parts', async () => {
+  const made = json(await app.inject({ method: 'POST', url: '/sessions', headers: H,
+    payload: { workspace_id: wsId } })).data;
+  const [oldRow] = await db.select().from(sessions).where(eq(sessions.id, made.id));
+  let release!: (rows: typeof oldRow[]) => void;
+  let reading!: () => void;
+  const started = new Promise<void>((resolve) => { reading = resolve; });
+  const snapshot = new Promise<typeof oldRow[]>((resolve) => { release = resolve; });
+  const originalDb = ctx.db;
+  // Freeze only the opening read; mutations below still use the real DB.
+  ctx.db = { select: () => ({ from: () => ({ where: () => { reading(); return snapshot; } }) }) } as unknown as typeof db;
+  const opening = watchSession(made.id);
+  try {
+    await started;
+    ctx.db = originalDb;
+    const stamp = new Date();
+    await db.update(sessions).set({ agent: 'coding', planMode: true, transcriptUpdatedAt: stamp })
+      .where(eq(sessions.id, made.id));
+    ctx.sessionEvents!.publish(made.id, 'remote', { event: 'turn-start', agent: 'coding', message: 'during read' });
+    ctx.sessionEvents!.publishPart(made.id, 'remote', { type: 'text-delta', id: '0', text: 'already recorded' });
+    ctx.sessionEvents!.publish(made.id, 'remote', { event: 'session', agent: 'coding', planMode: true });
+    ctx.sessionEvents!.publish(made.id, 'remote', { event: 'transcript', updated_at: stamp.toISOString(), by: 'remote' });
+    release([oldRow]);
+    const watcher = await opening;
+    try {
+      await watcher.until((r) => r.event === 'transcript' && r.updated_at === stamp.toISOString());
+      assert.ok(watcher.records.some((r) => r.event === 'session' && r.agent === 'coding' && r.planMode === true));
+      assert.ok(!watcher.records.some((r) => r.event === 'part' || r.event === 'turn-start'));
+    } finally { await watcher.close(); }
+  } finally { ctx.db = originalDb; release([oldRow]); }
+});
+
+test('session state: the looper publishes its corrected agent seat immediately after locking', async () => {
+  const card = json(await app.inject({ method: 'POST', url: `/workspaces/${wsId}/cards`, headers: H,
+    payload: { title: 'state publication', status: 'plan' } })).data.card;
+  const engine = new LooperEngine({ db, pgPool, app, apiKey: 'test-key', modelFetch, sessionEvents: ctx.sessionEvents });
+  const seen: { id: string; e: SessionEvent }[] = [];
+  const unsubscribe = ctx.sessionEvents!.subscribeAll((id, e) => seen.push({ id, e }));
+  try {
+    script.coding.push({ text: 'a streamed plan' });
+    await engine.runTurn(workspace, await cardRow(card.seq), ledger());
+    const locked = seen.findIndex(({ e }) => e.event === 'lock' && e.locked);
+    const stamped = seen.findIndex(({ e }) => e.event === 'session' && e.agent === 'coding');
+    const started = seen.findIndex(({ e }) => e.event === 'turn-start');
+    assert.ok(locked >= 0 && stamped > locked && started > stamped, JSON.stringify(seen));
+    assert.equal((seen[locked].e as { agent: unknown }).agent, null, 'reproduces the original stale lock event');
+    assert.equal(seen[stamped].id, seen[locked].id);
+    const reopened = await watchSession(seen[locked].id);
+    try { assert.equal((await reopened.until((r) => r.event === 'session')).agent, 'coding'); }
+    finally { await reopened.close(); }
+  } finally { unsubscribe(); }
+});
+
+test('session state: a manual save clears the agent label and lock renewal does not restore stale identity', async () => {
+  const made = json(await app.inject({ method: 'POST', url: '/sessions', headers: H,
+    payload: { workspace_id: wsId } })).data;
+  await stampAgent(db, made.id, 'coding');
+  const owner = { ...H, 'x-phantom-looper-client': 'manual-owner' };
+  await app.inject({ method: 'POST', url: `/sessions/${made.id}/lock`, headers: owner, payload: { label: 'laptop' } });
+  const watcher = await watchSession(made.id);
+  try {
+    await watcher.until((r) => r.event === 'lock' && r.agent === 'coding');
+    await app.inject({ method: 'PUT', url: `/sessions/${made.id}/transcript`, headers: owner,
+      payload: { data: `${JSON.stringify({ role: 'user', content: 'my turn' })}\n` } });
+    await watcher.until((r) => r.event === 'session' && r.agent === null);
+    await watcher.until((r) => r.event === 'lock' && r.locked === true && r.agent === null);
+    const own = await watchSession(made.id, 'manual-owner');
+    try { assert.equal((await own.until((r) => r.event === 'lock')).locked, false, 'initial snapshot never labels our own lock remote'); }
+    finally { await own.close(); }
+  } finally { await watcher.close(); }
 });
 
 test('the turn route respects the session lock: 409 while someone else holds it', async () => {

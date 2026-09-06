@@ -64,10 +64,16 @@ the writer; `telegram/alerts.ts` reads both. No replay; clients load on
 connect.
 
 The session feed streams turn-start, every AI SDK part, turn-end, error,
-the `transcript` save, and the lock state (first record on connect, then
-every take, renew, release). A subscriber never receives its own events.
-A cli window relays the turn it runs through POST /sessions/:id/events,
-which only the lock holder may call.
+the `transcript` save, lock state (connect, take, renew, release), and
+`session` state changes (agent, planMode, work). Every connect sends a state
+snapshot including transcript_updated_at, so missed saves can be recovered
+without client polling. Subscribe-before-read retains state writes during
+the opening query; live parts start after the snapshot, with no replay.
+A subscriber never receives its own published events, but always receives
+opening state (its own lock reads as not held remotely). Server-owned
+changes also reach readers without a client id. A cli window relays the
+turn it runs through POST /sessions/:id/events, which only the lock holder
+may call.
 
 ## Cards
 

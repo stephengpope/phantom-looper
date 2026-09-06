@@ -315,10 +315,8 @@ export function App({
    *  it as x-phantom-looper-client). The launcher uses it so this window's own held
    *  sessions do not read "in use". Empty in tests. */
   clientId?: string;
-  /** How often the session on screen, while idle in this window, is checked
-   *  against the server — lock state and transcript stamp in one GET. What
-   *  makes a session someone else is running watchable here. The open /resume
-   *  list refreshes on the same clock. Test seam. */
+  /** How often the open /resume and /tasks lists refresh. Session state on
+   *  screen follows the live feed, not this clock. Test seam. */
   pollMs?: number;
   /** The toolbar's task count — how often the session's container is asked
    *  what is running while this window idles. Turn ends and opening /tasks
@@ -474,12 +472,12 @@ export function App({
 
   // The mode handlers — a session's plan/code mode, carried by both in-window
   // agents. getMode reads the SESSIONS TABLE (GET /sessions/:id), not this
-  // window's mirror: the mirror is refreshed by the watch below for the
+  // window's mirror: the mirror is refreshed by the feed below for the
   // session on screen only, so a session open in the background could answer
   // from a copy the looper or another window has since changed. Having read
-  // the row it FOLLOWS it (applyPlanMode — the elsewhere-watch's move, a no-op
+  // the row it FOLLOWS it (applyPlanMode — the feed's move, a no-op
   // while they agree), so the answer and this window's kit converge instead of
-  // drifting until the next poll. A turn already streaming keeps the agent it
+  // drifting until it returns to the screen. A running turn keeps the agent it
   // started with, so a mid-turn follow lands on the NEXT turn (/model's rule).
   // enterPlan is /plan's on-switch (the row
   // PATCHed first, then this window's kit) — ONE WAY from an agent: no path
@@ -613,20 +611,21 @@ export function App({
   // here. WHO holds it comes off the feed (`session.held`, the feed's `lock`
   // records: first thing on connect, then every change) and lapses on this
   // window's clock at the hold's expiry, so a holder that died without
-  // releasing does not spin here for ever. The watch below is the backstop
-  // for the record and plan mode: every pollMs one GET carries the transcript
-  // stamp; a moved stamp pulls and reseats. The send-time lock refusal in the
-  // store is the backstop for everything.
+  // releasing does not spin here for ever. The feed also carries mode, git
+  // state and transcript stamps; reconnecting refills anything missed. The
+  // send-time server lock refusal is the backstop for concurrent writers.
   const heldNow = session?.held && session.held.expiresAt > Date.now() ? session.held : null;
   const heldRef = useRef(heldNow);
   heldRef.current = heldNow;
-  // The watch's door to applyPlanMode, which is defined further down (it needs
+  // The feed's door to applyPlanMode, which is defined further down (it needs
   // the tool factories) — the openSessionRef pattern.
   const applyPlanRef = useRef<((id: string, on: boolean) => Promise<void>) | null>(null);
+  // Streamless callers get a one-shot fill. With a feed, its initial snapshot
+  // does this job: a parallel GET could land late and overwrite newer state.
   useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId || stream) return;
     let gone = false;
-    const look = async () => {
+    (async () => {
       const cur = store.get(sessionId);
       if (!cur || cur.busy || cur.readonly) return;
       try {
@@ -634,33 +633,24 @@ export function App({
           planMode?: boolean; transcript_updated_at?: string | null;
           work?: 'not_pushed' | 'not_merged' | 'merged' | null };
         if (gone) return;
-        // Plan mode flipped somewhere else (another window's /plan): the row
-        // is the record, so this window follows it — a no-op while they agree.
         if (typeof r.planMode === 'boolean') await applyPlanRef.current?.(sessionId, r.planMode);
-        // The git work state rides every response — three local git commands,
-        // one session, cheap. The toolbar's dot follows it.
         store.setWork(sessionId, r.work ?? null);
         await reseatIfMoved(api, store, sessionId, r.transcript_updated_at ?? null);
       } catch (e) { quiet(`re-read session ${sessionId}`)(e); }
-    };
-    void look();
-    const t = setInterval(() => { void look(); }, pollMs);
-    t.unref?.();
-    return () => { gone = true; clearInterval(t); };
-  }, [api, store, sessionId, pollMs]);
-  // The session on screen, streamed live. The watch above says WHO is working
-  // and pulls the record; this shows the work itself — every part of a turn
-  // the server runs (a looper round, the turn route), folded through the same
-  // reducer a local turn uses. Only the session on screen is followed: nobody
-  // is looking at the others. No stream wired (tests) = the poll alone, as
-  // before.
+    })();
+    return () => { gone = true; };
+  }, [api, store, sessionId, stream]);
+  // One ongoing source for the session on screen: lock, agent, mode, git and
+  // transcript state alongside live turn parts. Failed refills reject into
+  // followStream, which reconnects and reads a fresh snapshot — no poll.
   useEffect(() => {
     if (!stream || !sessionId) return;
     const feed = new SessionFeed(stream, sessionId, store, {
-      onRecordLanded: (updatedAt, keepScreen) => {
-        void reseatIfMoved(api, store, sessionId, updatedAt || null, keepScreen)
-          .catch(() => { /* the watch poll is the backstop */ });
-      },
+      onRecordLanded: (updatedAt, keepScreen) =>
+        reseatIfMoved(api, store, sessionId, updatedAt || null, keepScreen)
+          .catch(quiet(`refresh session ${sessionId}`)),
+      onPlanModeChanged: (on) => applyPlanRef.current?.(sessionId, on)
+        .catch(quiet(`refresh mode for ${sessionId}`)),
     });
     feed.start();
     return () => feed.stop();
@@ -1408,7 +1398,7 @@ export function App({
   // Flip a loaded session's plan mode: rebuild the kit (readonly preset on,
   // full set off) and the agent over it, then move mode and tools together
   // (store.setPlanMode). /plan calls this after its PATCH lands; the
-  // elsewhere-watch calls it when the row says another window flipped it. A
+  // feed calls it when the server says another window flipped it. A
   // turn already streaming keeps the agent it started with — the switch lands
   // on the next turn, /model's rule. No-op while nothing changed, and a
   // supervisor record (read-only, no chatting) never flips.
@@ -1491,8 +1481,8 @@ export function App({
   }, [api]);
 
   // /resume is a status list — rows spin, locks appear and lapse, turns end on
-  // other machines — so while it is open it re-reads the server on the same
-  // clock as the elsewhere-watch (pollMs, 10s). The refresh swaps the rows in
+  // other machines — so while it is open it re-reads the server every
+  // pollMs (10s). The refresh swaps the rows in
   // place: the cursor, the notice line and an armed trash all stay put
   // (refreshPicker touches none of them). A failed tick is silent — an
   // unreachable server must not nag every 10s while old rows still serve.
@@ -1814,9 +1804,8 @@ export function App({
       }
       case 'plan': {
         // The switch: the server row first (the record every window reads),
-        // then this window's kit. A PATCH that lands with a rebuild that
-        // fails self-heals — the elsewhere-watch reads the row each poll and
-        // applies it again.
+        // then this window's kit. A failed rebuild reports the error; the
+        // next feed snapshot reads the saved mode again.
         if (!session) { note('no session is open — nothing to switch'); return; }
         if (session.readonly) { note("this is the supervisor's record — read-only"); return; }
         const on = !session.planMode;
@@ -2344,13 +2333,15 @@ export function App({
 /** Compare the server's transcript stamp with what memory matches; when it
  *  moved, pull the transcript and reseat — the ONE way work done elsewhere
  *  (another window, a looper round) reaches this screen. Used at turn start
- *  (off the lock response), on switch, and by the elsewhere-watch poll.
+ *  (off the lock response), on switch, and by the session feed.
  *  `server` is the stamp the caller already holds; null means don't look. */
 async function reseatIfMoved(api: Api, store: SessionStore, id: string, server: string | null,
   keepScreen = false): Promise<void> {
   const cur = store.get(id);
   if (!cur || cur.busy || !server || server === cur.syncStamp) return;
   const t = await api('GET', `/sessions/${id}/transcript`) as { data: string | null; updated_at?: string | null };
+  // A local turn may have started (or the session closed) during the read.
+  if (store.get(id) !== cur || cur.busy) return;
   // Same seating rule as open: a local file that is the server's text plus
   // unsaved steps is kept and shipped; the screen shows the fuller copy.
   const seated = adoptServerCopy(id, t.data);

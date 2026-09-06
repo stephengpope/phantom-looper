@@ -12,7 +12,7 @@
 // parts no one will read is cost without a reader.
 import { FLUSH_MS } from './agent.js';
 import { followStream, type Stream } from './follow.js';
-import type { SessionStore } from './sessions.js';
+import type { SessionStore, LoadedSession } from './sessions.js';
 import type { StreamPart } from './state.js';
 
 export interface FeedHooks {
@@ -22,8 +22,14 @@ export interface FeedHooks {
    *  that turn, drawn from the same stream the server recorded, with the
    *  thinking and the tool timings a transcript replay cannot carry.
    *  False = we missed something; repaint from the record. */
-  onRecordLanded: (updatedAt: string, keepScreen: boolean) => void;
+  onRecordLanded: (updatedAt: string, keepScreen: boolean) => Promise<void> | void;
+  /** Plan mode changed on the server (another window's /plan, or a looper
+   *  round flipping it). The App rebuilds the agent kit around this. */
+  onPlanModeChanged?: (on: boolean) => Promise<void> | void;
 }
+
+const agentName = (agent: string): string | undefined =>
+  agent === 'coding' ? 'coding agent' : agent === 'supervisor' ? 'supervisor' : undefined;
 
 export class SessionFeed {
   private ac = new AbortController();
@@ -53,21 +59,26 @@ export class SessionFeed {
       onRecord: (rec) => this.apply(rec),
       // A reconnect means records were missed: whatever is on screen may have
       // a hole in it, so the next record landing repaints from the transcript.
-      onReconnect: () => { this.whole = false; },
+      onReconnect: () => {
+        this.whole = false;
+        this.ended = false;
+        this.flush();
+        this.store.remoteEnd(this.sessionId);
+      },
     });
   }
 
   /** Stop watching (the session left the screen, or the window is closing).
    *  Whatever we drew is committed — a half-open block must not be left
    *  hanging under the pane — and the record still reaches this session the
-   *  ordinary way: the watch poll, and the reseat on switching back. */
+   *  ordinary way: the snapshot and reseat on switching back. */
   stop(): void {
     this.flush();
     this.store.remoteEnd(this.sessionId);
     this.ac.abort();
   }
 
-  private apply(rec: Record<string, unknown>): void {
+  private async apply(rec: Record<string, unknown>): Promise<void> {
     switch (rec.event) {
       case 'turn-start':
         this.flush();
@@ -105,7 +116,7 @@ export class SessionFeed {
         // else's work.
         const keep = this.whole && this.ended;
         this.whole = false;          // the next turn earns it again
-        this.hooks.onRecordLanded(String(rec.updated_at ?? ''), keep);
+        await this.hooks.onRecordLanded(String(rec.updated_at ?? ''), keep);
         return;
       }
       case 'lock': {
@@ -115,10 +126,34 @@ export class SessionFeed {
         if (!rec.locked) { this.store.setHeld(this.sessionId, null); return; }
         const agent = String(rec.agent ?? '');
         this.store.setHeld(this.sessionId, {
-          ...(agent === 'coding' ? { who: 'coding agent' } : agent === 'supervisor' ? { who: 'supervisor' } : {}),
+          who: agentName(agent),
           label: String(rec.label || 'another machine'),
           expiresAt: Date.parse(String(rec.expires_at ?? '')) || Number.MAX_SAFE_INTEGER,
         });
+        return;
+      }
+      case 'session': {
+        // Session state: agent seat, plan mode, work state. Published on
+        // change AND on connect, so reconnects refill even if a save was missed.
+        if (rec.agent !== undefined) {
+          const a = String(rec.agent ?? '');
+          const entry = this.store.get(this.sessionId);
+          if (entry?.held) {
+            this.store.setHeld(this.sessionId, {
+              ...entry.held,
+              who: agentName(a),
+            });
+          }
+        }
+        if (typeof rec.planMode === 'boolean') {
+          await this.hooks.onPlanModeChanged?.(rec.planMode);
+        }
+        if (rec.work !== undefined) {
+          this.store.setWork(this.sessionId, rec.work as LoadedSession['work']);
+        }
+        if (typeof rec.transcript_updated_at === 'string') {
+          await this.hooks.onRecordLanded(rec.transcript_updated_at, false);
+        }
         return;
       }
       default: return;               // heartbeat, and anything a newer server adds
