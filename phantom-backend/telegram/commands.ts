@@ -204,9 +204,12 @@ export async function handleCommand(
       return;
     }
 
-    case 'stop':
-      await reply(engine.stop(dm) ? '🛑 Stopping.' : 'ℹ️ Nothing is running.');
+    case 'stop': {
+      const key = acc.mode === 'code' && acc.activeSessionId
+        ? acc.activeSessionId : 'assistant';
+      await reply(engine.stop(key) ? '🛑 Stopping.' : 'ℹ️ Nothing is running.');
       return;
+    }
 
     default:
       await reply(`⚠️ I don't know /${cmd}.\n\nℹ️ ${HELP}`);

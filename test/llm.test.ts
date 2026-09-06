@@ -277,6 +277,21 @@ test('assistant prompt: spoken register, tools; no clock time', () => {
   assert.doesNotMatch(p, /session started|AM|PM/);
 });
 
+test('assistant prompt: card creation names the tool and forbids phantom claims', () => {
+  const p = assistantInstructions();
+  // The positive instruction: call kanban_card_create immediately.
+  assert.match(p, /immediately call kanban_card_create/,
+    'the prompt must name the tool and say to call it immediately');
+  // The negative guard: never claim a card was created without the tool call.
+  assert.match(p, /Never say a card was created.*without having called kanban_card_create/,
+    'the prompt must forbid claiming creation without the tool call');
+  // The old problematic phrases must be gone.
+  assert.doesNotMatch(p, /permission to create the card/,
+    'no asking permission — that caused the model to delay the tool call');
+  assert.doesNotMatch(p, /create or update the card with the full information/,
+    '"full information" caused the model to wait — cards can be created with a title alone');
+});
+
 test('git fixer prompt: branch pinned, no aborting, the trailer, the tool named as it exists', () => {
   const p = gitFixerInstructions('agent/s1', 's1');
   assert.match(p, /checked out on branch "agent\/s1"/);
