@@ -36,7 +36,6 @@ const MIGRATIONS: { version: number; sql: string }[] = [
         pos            real not null,
         title          text not null,
         details        text not null default '',
-        user_story     text not null default '',
         requirements   jsonb not null default '[]'::jsonb,
         blocked_reason text,
         supervised     boolean,
@@ -120,6 +119,17 @@ const MIGRATIONS: { version: number; sql: string }[] = [
     version: 4,
     sql: `
       alter table "%SCHEMA%".cards add column if not exists pinned boolean not null default false;
+    `,
+  },
+  {
+    // `user_story` is gone — the card is title + details + requirements.
+    // Per-schema, like every cards change: a file in migrations/ runs against
+    // phantom_looper at boot and cannot see a workspace schema (the %SCHEMA%
+    // placeholder there took the api down at boot). The revision trigger
+    // diffs whole rows, so old revisions keep their user_story as history.
+    version: 5,
+    sql: `
+      alter table "%SCHEMA%".cards drop column if exists user_story;
     `,
   },
 ];

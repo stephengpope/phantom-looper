@@ -16,7 +16,9 @@ session.ts            openSession — THE session path (below) · SessionLockedE
 skills/skills.ts      scanner: SKILLS_DIR '.agents/skills', scanSkills, mergeSkills, frontmatter parsing
 skills/validate.ts    write-side rules: name regex, SKILL.md, file paths, size limits, lintSkillMd (advisory)
 llm/createAgent.ts    provider switch · OAuth disguise · thinking rule · withRetry · withCacheBreakpoints · createAgent
-llm/agentConfig.ts    settings → ModelConfig: PROVIDER_KEY, cascade, agentModelConfig, modelConfigFrom, buildCodingAgent
+llm/agentConfig.ts    settings → ModelConfig: PROVIDER_KEY, cascade, agentModelConfig, modelConfigFrom, buildCodingAgent. No default
+                      provider: unset passes through as '' and languageModel hands back a handle whose first call fails with
+                      `NO_PROVIDER` (the fix in the words); cascade throws it at build for the other agents
 llm/transcript.ts     the ONE transcript format: Transcript (file-backed), parse/serialize, usage events, memoryRecorder
 llm/agents/           coding · assistant · gitFixer · supervisor — one file each: instructions + agent builder
 llm/prompts/          template.ts (fill) · shared blocks (stakeholders values communication environment git sending) ·
@@ -47,7 +49,7 @@ llm/tools/            presets.ts (pickKit) · workspace skills web secrets kanba
 - The coding prompt takes FOUR frozen inputs, all carried by the
   `POST /sessions` response: the skills index, git facts
   (`agent_git_credentials`), the secrets index (names + descriptions, never
-  values), and the environment facts line probed from the fs image.
+  values), and the environment facts line probed from the session image.
 
 ## createAgent.ts
 
@@ -237,7 +239,9 @@ dropped.
   `resolution`). `ENDING_TOOLS` = `['kanban_card_move',
   'kanban_card_block']` — the looper reads these names off the transcript
   to know a turn was terminal. All three are bound to THE card at build (no
-  card input) and their DESCRIPTIONS carry "THIS ENDS THE RUN".
+  card input) and their DESCRIPTIONS carry "THIS ENDS THE RUN". `LoopCardConfig.clientId`
+  rides every write as `x-phantom-looper-client` (the looper passes
+  `LOOP_CLIENT_ID`) — how the server tells the loop's move from a person's.
   `renderCard` makes cli-served and server-served reads identical.
 - `tui.ts` — the Assistant's kits (static descriptions; the host supplies
   the handlers — App in the cli, `telegram/assistant.ts` headless):
@@ -263,11 +267,15 @@ dropped.
   `workspaceCreateTool` (`workspace_create_repo`, gated by the client — the app's pane, Telegram's `approvals.ts`;
   `kebabName` is the deterministic final name); `gitAutoPushTool` / `gitAutoPullTool` (`git_auto_push` /
   `git_auto_pull`, `{id?}` = the session on screen / the account's active session; the host's handler runs the
-  operation — App over its `autoPush`/`autoPull` props, Telegram over core `autoPullSession`). `statusEnum` makes
+  operation — App over its `autoPush`/`autoPull` props, Telegram over core `autoPushSession`/`autoPullSession`). `statusEnum` makes
   `status` a real enum of the workspace's columns.
-- `git.ts` — `autoPullSession(cfg, onStep?)`, the ONE client of `POST
-  /git/auto-pull` (reads the stream to its result; a refusal envelope
-  throws; `AUTO_PULL_STEPS` puts step names in words); `codingGitTools(cfg)`
+- `git.ts` — `autoPushSession(cfg, onStep?)` / `autoPullSession(cfg, onStep?)`,
+  the ONE client of each of `POST /git/auto-push` / `POST /git/auto-pull`
+  (one stream reader for both: steps → `onStep` in words via
+  `AUTO_PUSH_STEPS` / `AUTO_PULL_STEPS`, the single result record is the
+  answer; a refusal envelope throws). Callers: the cli (`index.tsx`, adds its
+  connection + CA + client id), the Telegram engine (`/auto_push`,
+  `/auto_pull`), the Telegram Assistant, the coding kit. `codingGitTools(cfg)`
   → `git_auto_pull` for the CODING agent, bound to its own session at build
   (no session input), declared mutating so plan mode drops it, never throws
   (a failure is `{result:'error', reason}`). Wired in both coding kits
@@ -284,7 +292,7 @@ dropped.
   BOM and CRLF; `description` supports `|`/`>` block scalars, flattened to
   one line. `mergeSkills` is first-list-wins.
 - Two tiers exist, both server-side: the repo's `.agents/skills/` and the
-  system skills baked into the fs image at `/opt/skills/`
+  system skills baked into the session image at `/opt/skills/`
   (`phantom-backend/systemSkills.ts`); repo wins a collision. There is NO
   personal/laptop tier — sessions must not depend on the machine that
   created them.

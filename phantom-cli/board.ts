@@ -17,7 +17,7 @@ export interface CardStep { key?: string; text: string; done: boolean }
 export interface ItemOp { op: 'add' | 'edit' | 'remove' | 'tick'; key?: string; text?: string; done?: boolean }
 export interface Card {
   id: number; seq: number; status: string; pos: number;
-  title: string; details: string; user_story: string;
+  title: string; details: string;
   requirements: CardStep[];
   blocked_reason: string | null; resolution?: string | null;
   auto_plan: boolean | null; auto_build: boolean | null;
@@ -28,7 +28,7 @@ export interface Card {
  *  takes it and the card editor's diff RETURNS it, so a field the editor
  *  sends but the store cannot carry is a compile error, not a silent drop
  *  (the editor's status corner would otherwise pin on "saving…" forever). */
-export type CardPatch = Partial<Pick<Card, 'title' | 'details' | 'user_story' | 'status' | 'pos'
+export type CardPatch = Partial<Pick<Card, 'title' | 'details' | 'status' | 'pos'
   | 'requirements' | 'blocked_reason' | 'resolution' | 'auto_plan' | 'auto_build' | 'pinned' | 'archived'>>;
 
 /** A card's current loop's coding session — who is (or was) building it. */
@@ -170,7 +170,7 @@ export class BoardStore {
   }
 
   async create(fields: { title: string } & Partial<Pick<Card,
-    'status' | 'details' | 'user_story' | 'requirements'>>): Promise<Card> {
+    'status' | 'details' | 'requirements'>>): Promise<Card> {
     // Server-first: it assigns seq and pos. One round-trip, then on screen.
     // The server publishes the new row on the event stream BEFORE it answers
     // this POST, so the card is usually already here by the time the answer

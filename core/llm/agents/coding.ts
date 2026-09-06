@@ -20,7 +20,7 @@ import type { SkillMeta } from '../../skills/skills.js';
 /** The frozen string: skills are scanned before the session's first build and
  *  FROZEN with the rest; `git` is the workspace's resolved facts, `secrets`
  *  the stored secrets index (names + descriptions, never values), and
- *  `environment` the fs image's probed facts line — POST /sessions carries
+ *  `environment` the session image's probed facts line — POST /sessions carries
  *  all four, frozen the same way. */
 export function codingInstructions(
   skills: SkillMeta[] = [], git?: GitFacts, secrets: SecretIndexEntry[] = [],

@@ -33,6 +33,10 @@ export interface LoopCardConfig extends KanbanToolsConfig {
   cardId: number;
   /** The card's number — what the descriptions call it. */
   seq: number;
+  /** Sent as x-phantom-looper-client on every write, so the server knows the
+   *  LOOP moved the card (the looper passes its own id). Without it a
+   *  supervisor's move is indistinguishable from a person's. */
+  clientId?: string;
 }
 
 /** The run-ending tools. A turn that calls one is terminal: the loop breaks
@@ -49,7 +53,7 @@ export const SUPERVISOR_MOVES = {
 export type LoopColumn = keyof typeof SUPERVISOR_MOVES;
 
 interface CardRow {
-  seq: number; title: string; status: string; user_story: string; details: string;
+  seq: number; title: string; status: string; details: string;
   requirements: { key: string; text: string; done: boolean }[];
   blocked_reason: string | null; archived: boolean;
 }
@@ -57,7 +61,7 @@ interface CardRow {
 /** The same read shape the cli's handler returns, so a transcript reads the
  *  same whichever side served the tool. */
 export function renderCard(t: CardRow) {
-  return { card: t.seq, title: t.title, status: t.status, user_story: t.user_story,
+  return { card: t.seq, title: t.title, status: t.status,
     details: t.details, requirements: t.requirements,
     blocked_reason: t.blocked_reason, archived: t.archived };
 }
@@ -71,7 +75,9 @@ const headers = (cfg: KanbanToolsConfig, body?: boolean) => ({
 async function patchCard(cfg: LoopCardConfig, body: unknown): Promise<unknown> {
   const f = cfg.fetch ?? fetch;
   const r = await f(`${cfg.baseUrl}/workspaces/${cfg.workspaceId}/cards/${cfg.cardId}`, {
-    method: 'PATCH', headers: headers(cfg, true), body: JSON.stringify(body),
+    method: 'PATCH',
+    headers: { ...headers(cfg, true), ...(cfg.clientId ? { 'x-phantom-looper-client': cfg.clientId } : {}) },
+    body: JSON.stringify(body),
   });
   const j = await r.json() as { ok: boolean; data?: unknown; error?: unknown };
   return j.ok ? j.data : { error: j.error };
@@ -81,7 +87,7 @@ export function kanbanReadTool(cfg: KanbanToolsConfig): Record<string, Tool> {
   const f = cfg.fetch ?? fetch;
   return {
     kanban_card_read: tool({
-      description: 'One whole card — user story, details, and the requirements list, each item with its key. ' +
+      description: 'One whole card — details and the requirements list, each item with its key. ' +
         'Read it before planning, and RE-read it when retrying or resuming — the card is the source of ' +
         'truth, not your memory of it. Cards are numbered: PHA-7 is card 7.',
       inputSchema: z.object({ card: z.number().int().describe('card number — PHA-7 is card 7') }),

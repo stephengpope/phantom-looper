@@ -14,20 +14,28 @@ npm run phantom-cli -- --resume <id>    # back into a session
 npm run test:phantom-cli                # headless (ink-testing-library + scripted agent/sidecar/brain); a new test file must be added to the script
 npm run typecheck                       # tsc --noEmit && tsc -p phantom-cli (this tsconfig includes ../phantom-backend for test assertions)
 npm run keys                            # press keys, see what the terminal sends
-phantom-cli --version | update | update --server     # headless subcommands (index.tsx)
+phantom-cli --version | update [--client|--server]  # headless subcommands (index.tsx → update.ts)
 ```
 
 ## Settings — two homes, and a row says which
 
-- **Local** (`~/.phantom-cli/settings.json`, `local.ts`, sync, 0600 chmod'd
+- **Local** (`CONFIG_DIR/settings.json`, `local.ts`, sync, 0600 chmod'd
   after every write; a corrupt file is REPORTED, never rewritten): the seven
   `LOCAL_KEYS` — `server_url server_key voice_mic_device voice_speaker_device
   voice_headphones voice_mic_muted voice_speaker_muted`
   — because they are how you REACH the store or facts about this machine.
   Env reaches exactly two: `PHANTOM_BACKEND_URL`
   (server_url), `PHANTOM_BACKEND_KEY`/`API_KEY` (server_key) — the only
-  `env` entries in `config.ts` META; the repo's `.env` loads at launch,
-  shell env winning. Local screens (`/server`) must never need the network.
+  `env` entries in `config.ts` META; nothing loads a file into env (the
+  repo's `.env` is compose's, the cli never reads it). Local screens
+  (`/server`) must never need the network.
+- **`CONFIG_DIR` is the one root** every file the cli owns hangs off:
+  `~/.phantom-cli` installed, `<repo>/.phantom-cli` (gitignored) from source
+  (`APP_VERSION === 'dev'`). Dev and installed never share a byte; setup.sh
+  seats the dev server's url + key in the repo one. Never build a
+  `~/.phantom-cli` path by hand — import `CONFIG_DIR`. `PHANTOM_CLI_DIR`
+  overrides it; `npm run test:phantom-cli` sets it to a fresh temp dir so
+  App's own writes (adoptServerCopy, sidecar.log) never touch a real home.
 - **Server** (`settings.ts`, async): everything else — the model config,
   the Assistant's trio, the voice keys, `sidebar_width`, `boot_last_workspace`
   (server-only, not in config.ts), the credentials — ordinary keys of the
@@ -68,7 +76,7 @@ always rendered, blank when unused. Everyday commands come first in
 | `/close` | close the session on screen — out of local memory: it leaves the tab ring, the ctrl+n list and its `•` on /resume, and the session you spoke to most recently takes the screen (through `switchTo`, like any switch). Nothing on the server changes — /resume opens it again unchanged; [t] trash is the destructive one. Close the LAST session and a new one opens in the same workspace: /close means "done with this", never "leave me looking at nothing". Refused while a turn runs there (the stream's `onParts` closes over that entry). ONE path for every door — `/close`, `[x]` on /resume, the Assistant's `session_close` (by id, or the one on screen) — App's `closeSession(id?)` returns the facts (`closed`, `on_screen`, `opened_new`, or `error`) and each door renders them where its user is looking; `SessionStore.close` removes the entry and, if it was the active one, leaves `activeId` EMPTY so the store never becomes a second way to change what is on screen |
 | `/rename <name>` | `PATCH {name}` marks the session manual (the titler never overwrites); blank clears back to auto-titles |
 | `/auto-push` | this session's work onto base, streamed as notes; always pushes, ignores `auto_push_on_archive` |
-| `/model` | provider, model, reasoning, steps per turn (server-wide) |
+| `/model` | provider, model, reasoning, steps per turn (server-wide). No default provider: the row lists only providers with a key on /keys (all four, with a note, while none is stored). The model row is a combobox over the SERVER's catalog (`GET /models?provider=`, newest first) or any typed id; empty = the newest listed, which GET /settings reports. The same two shapes serve every provider/model pair on /voice and /settings (`providerChoices`, `providerForModelRow` in Settings.tsx) |
 | `/server` | api url + key on THIS machine — offline by design, it's where you pair an existing server or fix the address; the save is LIVE (index.tsx reads the file per request), no relaunch |
 | `/settings` | the server's settings; overridable ones marked ↯ pointing at the workspace screen |
 | `/keys` | the server's credentials, ONE place each, read from its credential namespace (a key declared server-side appears by itself): `github_token` (checked against GitHub on save via `/github/whoami`), the four provider keys, `deepgram_api_key`, `firecrawl_api_key`, `telegram_bot_token` |
@@ -84,7 +92,8 @@ running command; the cut step still lands in history and the transcript —
 its calls ran) · tab / shift+tab next / previous open session · ctrl+n the
 open-session list · ↑/↓ history, or the command list on a `/` line ·
 ctrl+o show more (thinking, and a tool's whole command and output) · ctrl+g
-the voice pane · pageUp/Down scroll · ctrl+c twice quits. Mouse: wheel
+the voice pane · pageUp/Down scroll · ctrl+c clears a typed line; on an
+empty line twice quits. Mouse: wheel
 scrolls the pane under the cursor; click-drag selects and copies on
 release. Free ctrl keys on paper: `e f g k l n p r t u v w x y`; verify
 with `npm run keys` — Apple Terminal sends shift+↑ as ↑ (which is why the
@@ -93,10 +102,10 @@ open-session list is ctrl+n and ONLY ctrl+n) and swallows ctrl+x.
 ## Files
 
 ```
-index.tsx          launch: .env, config chain, headless subcommands (--version, update, update --server), `setup-backend`
+index.tsx          launch: config chain, headless subcommands (--version, update [--client|--server]), `setup-backend`
                    (the install wizard, then exit — NO first-run gate: unpaired opens the app, the boot note says
                    /server or setup-backend), the connection read from the file per request (`connection()`),
-                   saved-CA trust re-applied when the address changes (`trustSavedCa`), mouse on/off, patchConsole OFF (console → ~/.phantom-cli/cli.log),
+                   saved-CA trust re-applied when the address changes (`trustSavedCa`), mouse on/off, patchConsole OFF (console → CONFIG_DIR/cli.log),
                    crash handlers (uncaughtException + unhandledRejection → cli.log, screen down, the error on the real terminal, exit 1 —
                    Node's own print lands on the alternate screen and is discarded; out of memory aborts from C++ and no handler sees it),
                    render <App boot> at once with incrementalRendering; resume line + quit-time version notices on exit
@@ -106,7 +115,7 @@ App.tsx            the whole screen: two Panes, the in-flight block/prompt/toolb
                    workspaceSettings|sessions|tasks); useInput gated on `menu === null && view === 'chat'`
 sessions.ts        SessionStore — every open session and the one turn each may run; OUTSIDE React; ordered by last message SENT;
                    `close(id)` removes one (refused mid-turn) and clears activeId — App picks what comes next
-session.ts         transcript wrapper over core: ~/.phantom-cli/sessions/<id>.jsonl, adoptServerCopy (the seating rule, below),
+session.ts         transcript wrapper over core: CONFIG_DIR/sessions/<id>.jsonl, adoptServerCopy (the seating rule, below),
                    syncTranscriptUp, lastUserMessage
 state.ts           stream-part reducer, block splitting, finalize, token estimate (applyTokens), messagesToParts
 agent.ts           runTurn (delta batching 150ms screen / 0 speech, onStepEnd); re-exports core/llm + oauth helpers
@@ -122,12 +131,11 @@ board.ts           BoardStore — one workspace's board, outside React; optimist
                    store's own edits (card written → replace, deleted → drop, session → the Session row); a dropped link reconnects
                    with ONE `load()` to fill the gap; `create()` seats the POST's answer through `adoptCard` (replace by id) because
                    the stream delivers the row first
-(core/ndjson.ts)   ND-JSON records off a response body — auto-push's and auto-pull's streams and the board's events (`stream()` in index.tsx); lives in core so the headless kits read the same way
+(core/ndjson.ts)   ND-JSON records off a response body — the board's events (`stream()` in index.tsx); auto-push's and auto-pull's streams are read by core's `autoPushSession`/`autoPullSession` (index.tsx wraps them with the connection, the saved CA and the client id)
 commands.ts        the table + matches/parse/complete
 config.ts local.ts settings.ts settingLabels.ts   above
-modelCatalog.ts    /model picker: models.dev, bundled models-snapshot.json fallback, 24h cache; sync, never throws, never a fence
 mouse.ts screen.ts trim.ts   the mouse parser + selection model · the screen mirror (@xterm/headless) · cell-level row trimming
-provision.ts setup.tsx selfUpdate.ts   the setup-backend engine (no Ink, injectable runner) · its screens driver (install only) · APP_VERSION + self-update
+provision.ts setup.ts selfUpdate.ts update.ts   the setup-backend engine (ssh argv, control master, injectable runner) · the wizard (@clack/prompts, no Ink, install only) · APP_VERSION + the client half's mechanics · the update command, --version, the quit notice
 keys.tsx           npm run keys
 components/        Text (THE one Text — every drawn character is cleaned here) · Screen (THE page frame) · Boundary (the error boundary — see Conventions) · SelectList · table.ts · TextInput · ValueInput · Prompt · Toolbar · StatusLine · Pane ·
                    Parts · Markdown · Shimmer · Divider · Banner · Board · CardEditor · Archived · Tasks · Launcher · SessionSwitcher ·
@@ -146,7 +154,7 @@ the spinner off the feed's lock records, the working line from a mid-turn
 join, the relay, the live feed · `voice` VoiceClient against a scripted
 sidecar AND brain, the approval gate · `mouse` · `screen` · `trim` (streams
 replayed into two emulators, cell-equal) · `config` · `settings` (the tree
-scan) · `oauth` · `modelCatalog` · `provision` · `setup` · `selfUpdate` ·
+scan) · `oauth` · `provision` · `setup` · `selfUpdate` ·
 `components/SelectList` (fixed hint height, cursor normalisation, ctrl/meta
 filtered) · `TextInput` · `ValueInput` · `SecretEditor` (never auto-saves)
 · `Parts` (summarizeOutput, clipRows) · `Markdown` (inline markdown inside
@@ -158,7 +166,7 @@ exact).
 Env read here: `PHANTOM_BACKEND_URL`, `PHANTOM_BACKEND_KEY`/`API_KEY`,
 `_VERSION` (→ APP_VERSION, 'dev' from a checkout: never nags, never
 updates), `_TRACE_FRAMES` (screen.ts flight recorder), and the rig hooks
-`_INSTALL_FLAGS`, `_SSH_ACCEPT_NEW`, `_SSH_IDENTITY` (setup.tsx).
+`_INSTALL_FLAGS`, `_SSH_ACCEPT_NEW`, `_SSH_IDENTITY` (setup.ts).
 
 ## Conventions — each one was paid for
 
@@ -184,7 +192,7 @@ updates), `_TRACE_FRAMES` (screen.ts flight recorder), and the rig hooks
 - Opening NEVER locks (opening is reading). The lock is per TURN: POST at
   turn start, DELETE after the turn-end sync, every id released on quit;
   client id minted per window, label = hostname.
-- **The seating rule** (`adoptServerCopy`): `~/.phantom-cli/sessions/` is
+- **The seating rule** (`adoptServerCopy`): `CONFIG_DIR/sessions/` is
   working memory; the server copy replaces the local file on open and on
   every elsewhere-pull, with ONE exception — a local file that is the
   server's text plus more lines is this machine's unsaved steps (a window
@@ -242,7 +250,7 @@ updates), `_TRACE_FRAMES` (screen.ts flight recorder), and the rig hooks
   skips the picker into the workspace of the newest session the USER drove
   (`lastWorkspaceId` ignores looper-run sessions — `agent` set — and deleted
   workspaces; a card session you took over counts, its `agent` is null).
-  The launch splash (`Banner`, the wordmark under the session header) fills
+  The launch splash (`Banner`, the ghost and infinity mark under the session header) fills
   any session with nothing said yet — boot's first and every /new; the
   first interaction clears it; a resume shows its history instead.
 - Transcript appended per STEP (`onStepEnd`); a torn last line is skipped
@@ -286,8 +294,10 @@ updates), `_TRACE_FRAMES` (screen.ts flight recorder), and the rig hooks
   in it (Ink applies the parent Text's dim over the child's color).
 - A menu gates App's `useInput` (`menu === null && view === 'chat'`) — Ink
   delivers a key to every active handler. ctrl+c, ctrl+r, ctrl+l ride their
-  own always-on handler (`exitOnCtrlC: false`; first ctrl+c interrupts and
-  closes menus, second quits).
+  own always-on handler (`exitOnCtrlC: false`; with text on the prompt
+  ctrl+c only blanks it — no interrupt, no arming (Claude Code's rule,
+  anthropics/claude-code#17754); otherwise the first press interrupts and
+  closes menus, the second quits).
 - Key hints are bracketed: `[enter] change · [d] undo`. A row names its
   subject (`delete Widgets`, never "this"). Two levels are two screens,
   never two rows in one list (`/settings` vs `e` on `/workspace`). Helper
@@ -319,7 +329,9 @@ updates), `_TRACE_FRAMES` (screen.ts flight recorder), and the rig hooks
 - Voice pane header is three lines: `voice · listening` / `● mic · ●
   speaker` / `● wake · ● headphones` (off = dim `⊘`; the wake window shows
   yellow `● active 6s` counting down); single-cell glyphs only (~20 columns,
-  floor 16); while `detail` stands both switch rows hide together; clicking
+  floor 16); while `detail` stands both switch rows hide together, it
+  wraps (never truncates — the header may grow), and while starting it
+  carries the dots spinner; clicking
   a glyph is its slash command (measureElement hit-test, release without
   drag). Per-stage ttfb lives behind ctrl+o.
 
@@ -388,7 +400,7 @@ updates), `_TRACE_FRAMES` (screen.ts flight recorder), and the rig hooks
   `phantomTools(pick:'readonly')`: read ls find grep) bound to the session
   on screen and rebuilt when the screen switches — it reads that session's
   checkout, never writes it. Its own `ModelMessage[]` lives in
-  `VoiceClient.history`, appended to `~/.phantom-cli/voice/<engine
+  `VoiceClient.history`, appended to `CONFIG_DIR/voice/<engine
   start>.jsonl` on the shared format, never loaded back — a restart is a
   fresh conversation.
 - The sidecar never sees the model; the app never touches audio. `turn`
@@ -417,14 +429,39 @@ updates), `_TRACE_FRAMES` (screen.ts flight recorder), and the rig hooks
   Always private.
 
 **setup-backend and update**
-- `setup.tsx` (`phantom-cli setup-backend`) installs a NEW server and exits;
-  pairing an existing one is /server in the app. It runs one screen per
-  answer with provisioning BETWEEN screens outside Ink — system ssh owns
-  the tty, our code never sees a password, host-key checking is never
-  disabled (`accept-new` only via the rig env). `provision.ts` pipes
-  `scripts/install.sh` over stdin (script version = cli version), reads the
-  pairing back over the same channel, verifies `/health` FROM THE LAPTOP,
-  then pushes the model key.
-- `selfUpdate.ts`: launch checks run in the background and print at QUIT
-  only; `update` = download → checksum verify → unpack beside → move the
-  ONE symlink; the running process is never touched.
+- `setup.ts` (`phantom-cli setup-backend`) installs a NEW server and exits;
+  pairing an existing one is /server in the app. It is a plain
+  step-by-step script on `@clack/prompts`, NOT Ink: node keeps consuming
+  terminal input once anything has read `process.stdin` (paused or not),
+  so a resident screen swallows the "yes" ssh is waiting for — the
+  2026-09-05 hang. Every question opens its OWN `/dev/tty` handle and
+  closes it (`ttyAsker`); the install runs with stdio inherited so ssh has
+  the terminal outright; our code never sees a password; host-key checking
+  is never disabled (`accept-new` only via the rig env). The BOX downloads
+  `install.sh` from this cli's release tag (`installScriptUrl`; stdin must
+  stay free for the password), one ssh control master serves the run (one
+  password), the pairing is read back over it, `/health` is verified FROM
+  THE LAPTOP, then the questions the app cannot run without, none
+  skippable: the provider (no preselection), its endpoint for
+  openai-compatible, the model (`autocomplete` — a combobox over `GET
+  /models`, the typed text offered as its own row when it matches nothing;
+  a typed id where there is no catalog), the key (provider + model + key
+  land in ONE patch), and the GitHub token, verified through
+  `/github/whoami` and asked again until GitHub accepts one. Backing out
+  after the pairing keeps it and names /model and /keys. Questions go
+  through `Asker` so tests script them (`setup.test.ts`).
+- `update.ts` (`phantom-cli update`): both halves to the LATEST published
+  release, client first — `--client` / `--server` take one. The target is
+  always latest, never APP_VERSION: a checkout has no tag, and after the
+  client half the process is still the old build. The server half POSTs
+  `/update` and WAITS — polls `/health` every 3s until the version flips
+  (up to 3 minutes; a miss during the restart is expected), then prints the
+  outcome; a timeout names `docker logs phantom-update-run`. `/health`'s
+  `loops_running` gates a `Continue? [y/N]` first (a restart blocks those
+  cards). Every line is pinned in update.test.ts; deps are injected, so
+  nothing there touches a network or a terminal. `--version` prints this
+  machine AND the server. `quitNotice` is the launch-time background check
+  printed at QUIT only, both halves against latest, in either direction
+  ('dev' is never behind, so a checkout is only ever told about the server).
+- `selfUpdate.ts`: the client half — download → checksum verify → unpack
+  beside → move the ONE symlink; the running process is never touched.

@@ -182,7 +182,7 @@ export interface ItemOpArg { op: 'add' | 'edit' | 'remove' | 'tick'; key?: strin
 export interface KanbanArgs {
   action: 'screen' | 'list' | 'read' | 'create' | 'update' | 'move' | 'history' | 'items';
   card?: number; limit?: number; show?: 'board' | 'column' | 'card' | 'off'; column?: string;
-  title?: string; details?: string; user_story?: string;
+  title?: string; details?: string;
   status?: string; blocked_reason?: string | null; archived?: boolean;
   auto_plan?: boolean | null; auto_build?: boolean | null; pinned?: boolean;
   requirements?: { key?: string; text: string; done?: boolean }[];
@@ -200,7 +200,6 @@ const itemSchema = z.object({ text: z.string(), done: z.boolean().optional() });
 const cardFields = (columns: string[]) => ({
   title: z.string().optional(),
   details: z.string().optional(),
-  user_story: z.string().optional(),
   status: statusEnum(columns).optional().describe('the column'),
   blocked_reason: z.string().nullable().optional(),
 });
@@ -214,7 +213,7 @@ const cardNo = z.number().int().describe('card number — PHA-7 is card 7');
  *  their keys — where an agent gets the keys for a card it did not just
  *  write. `extra` is the kit's own workflow line. */
 const readTool = (handler: (args: KanbanArgs) => Promise<unknown>, extra: string) => tool({
-  description: 'One whole card — user story, details, and the requirements list, each item with its key ' +
+  description: 'One whole card — details and the requirements list, each item with its key ' +
     '(the handle kanban_card_items takes). ' + extra,
   inputSchema: z.object({ card: cardNo }),
   execute: async ({ card }) => handler({ action: 'read', card }),
@@ -302,7 +301,7 @@ export function assistantKanbanTool(handler: (args: KanbanArgs) => Promise<unkno
       execute: async (args) => handler({ action: 'create', ...args } as KanbanArgs),
     }),
     kanban_card_update: tool({
-      description: 'Change the card\'s FIELDS: title, story, details, column, blocked_reason (blocked means status ' +
+      description: 'Change the card\'s FIELDS: title, details, column, blocked_reason (blocked means status ' +
         '"blocked"), archived true takes it off the board. Requirements are not fields — change those with kanban_card_items.',
       inputSchema: z.object({ card: cardNo, archived: z.boolean().optional(), ...fields }),
       execute: async (args) => handler({ action: 'update', ...args } as KanbanArgs),

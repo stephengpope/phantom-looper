@@ -56,14 +56,25 @@ curl -fsSL https://bit.ly/4qR8smm | sh
 
 `phantom-cli` is the app; `phantom-backend` is its server. Every session, board and setting lives on the server, so the app does nothing until it has one. Pick the path that fits you:
 
-**No server yet — create one**
+**No server yet — get a box, then create one**
+
+Any cloud provider works; the server needs a fresh Ubuntu box you can SSH into as root. On DigitalOcean:
+
+1. Create a Droplet: **Ubuntu 24.04**, the **2 GB** plan or bigger, in the region nearest you.
+2. Authentication: **SSH key**. Add your public key (`cat ~/.ssh/id_ed25519.pub`) if it is not there already.
+3. Create it and copy the IP address from the Droplet page.
+4. Check it answers: `ssh root@<ip>`. Then run the wizard below with that same address.
+
+Ports 80 and 443 must be reachable; a new Droplet has no cloud firewall, so nothing to change. Other providers (Hetzner, Linode, AWS Lightsail, a home box): same recipe — Ubuntu or Debian, root SSH, 80 and 443 open.
 
 ```bash
 phantom-cli setup-backend   # install a server over SSH and connect this machine to it
 phantom-cli                 # then open the app
 ```
 
-The wizard asks two questions: a fresh Ubuntu/Debian box you can SSH into (`root@203.0.113.7` — any cheap VPS) and one model key. It installs Docker and the server, saves the address and key on this machine, stores the model key on the server, and ends with `run phantom-cli`.
+The wizard hands your terminal to ssh: answer its host-key question and type the box's password once. Prefer to do it yourself? On the box, run the one-liner the wizard prints (`install.sh` from the release), then put the address and key it prints under `/server` in the app.
+
+The wizard asks for the box's address (`root@203.0.113.7`), then everything the app cannot run without: the AI provider, its model (a list, newest first, or type any id), its key, and a GitHub token (checked against GitHub on the spot). It installs Docker and the server, saves the address and key on this machine, stores the rest on the server, and ends with `run phantom-cli`.
 
 **Already have one — reconnect**
 
@@ -85,10 +96,10 @@ The two credentials that turn a card into merged code, both on `/keys`:
 
 | key | why |
 |---|---|
-| one model key — `anthropic key`, `openai key`, `google key` or `openai-compatible key` | the agents think with it. `anthropic key` also takes a Claude subscription token. The wizard already saved one if you gave it one. |
-| `github token` | clones, pushes and lands work on the base branch. A classic token with `repo` scope is the simplest. Skip it and the app can read public repos but never push. |
+| one model key — `anthropic key`, `openai key`, `google key` or `openai-compatible key` | the agents think with it. `anthropic key` also takes a Claude subscription token. The wizard saved it. |
+| `github token` | clones, pushes and lands work on the base branch. A classic token with `repo` scope is the simplest. The wizard saved it. Without one the app can read public repos but never push. |
 
-Everything else has a working default.
+Plus the provider and model on `/model` — there is no default provider; the wizard set both. Leave the model empty and it is the newest one listed for the provider. Everything else has a working default.
 
 #### Ideal setup
 
@@ -114,9 +125,8 @@ The full product: voice, web, and the looper on autopilot. Row names are the one
 | `phantom-cli` | open the app |
 | `phantom-cli --resume <id>` | open straight into a session (`-r` for short) |
 | `phantom-cli setup-backend` | install a new server over SSH and pair this machine |
-| `phantom-cli update` | update the app |
-| `phantom-cli update --server` | update the server |
-| `phantom-cli --version` | print the version (`-v` for short) |
+| `phantom-cli update` | update this machine and the server to the latest release (`--client` or `--server` for one half) |
+| `phantom-cli --version` | print this machine's and the server's version (`-v` for short) |
 
 Environment variables, if you need them:
 
@@ -130,7 +140,7 @@ Environment variables, if you need them:
 ## Develop
 
 ```bash
-./scripts/setup.sh     # first boot: .env + secrets, local workspace image, compose up
+./scripts/setup.sh     # first boot: .env + secrets, local workspace image, compose up, cli connected
 npm run phantom-cli    # the app from source; `-- --resume <id>` to reopen a session
 ```
 

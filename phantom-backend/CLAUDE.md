@@ -14,12 +14,15 @@ env.ts              REQUIRED: ENCRYPTION_KEY (base64, exactly 32 bytes — check
                     LOG_LEVEL, APP_VERSION, PHANTOM_BACKEND_ADDRESS (index.ts → the Telegram webhook host);
                     test seams GITHUB_API_BASE, FIRECRAWL_API_BASE
 settings.ts         DEFAULTS / DESCRIPTIONS / META / CREDENTIALS / SCOPED — every general key, declared in code
+models.ts           the model catalog: models.dev, an hour in memory, the last good copy, then models-snapshot.json beside it
+                    (fresh per image build; the committed one for a source run); sync reads, never throws; `latestModel` is
+                    the `model` default. MODELS_DEV_API_BASE is the test seam
 store.ts            the settings table: read/put/drop by (scope, namespace, key); computeLayers
 crypto.ts           AES-256-GCM, layout [iv 12][tag 16][ct] — credentials and secrets at rest
 sessions.ts         create / restart / destroy / sweep, the session lock, loop + agent stamps
 sessionTitle.ts     the auto-titler (never throws, no setting)
-systemSkills.ts     /opt/skills out of the fs image via a created-never-started container's archive; cached by image ID; fail-open []
-environment.ts      probes the fs image ONCE (os-release/uname/node/python, no network, 30s) → one prompt line; cached by image ID; '' on failure
+systemSkills.ts     /opt/skills out of the session image via a created-never-started container's archive; cached by image ID; fail-open []
+environment.ts      probes the session image ONCE (os-release/uname/node/python, no network, 30s) → one prompt line; cached by image ID; '' on failure
 docker.ts           dockerode over DOCKER_HOST or a known socket — the ONE docker client
 log.ts              pino root at LOG_LEVEL; `const log = logger('<component>')`; errors as {err: errStr(e)} — message only, never a stack
 api/app.ts          envelope helpers, bearer hook, error/404 handlers, route registration, AppCtx (ctx.looper set after listen)
@@ -62,7 +65,7 @@ content-type when there is no body.
 | commands | `GET /commands/:cmdId/logs` — detached bash ND-JSON replay + follow |
 | cards | `GET/POST /workspaces/:id/cards` (the GET's modes: default = the board, unarchived; `?seq=` = that one card, archived or not; `?archived=only` = the archive, newest `updated_at` first, keyset-paged `limit/before/before_id`, `total` = the whole archive; `?archived=true` = everything), `PATCH/DELETE /workspaces/:id/cards/:cardId`, `GET /workspaces/:id/revisions?card=<seq>`, `GET /workspaces/:id/events` (the board's live feed — ND-JSON, open until the client hangs up) |
 | web | `POST /web/search`, `POST /web/fetch` (session header) |
-| system | `GET /health` (token required; version), `POST /update {tag}` |
+| system | `GET /health` (token required; version), `POST /update {tag}`, `GET /models?provider=` (the catalog for one provider, newest first, `source` live/snapshot; [] for openai-compatible; a convenience, never a fence) |
 | telegram | `POST /telegram/webhook` — the ONE unauthenticated route; its secret-token header, timing-safe-checked, is the auth |
 
 ## Sessions, folders, loops, the lock
@@ -226,8 +229,22 @@ DM-only, WEBHOOK (never polling). Its migration-012 rows are STATE, not
 settings: the account (one row, mode + active session + webhook secret
 encrypted), `telegram_sent` (every bubble → its origin, so a reply switches
 into its conversation), update dedup. Settings are ordinary declared keys
-(`telegram_enabled/_authorized_user/_reply_mode/_transcript_echo`) + the
-`telegram_bot_token` credential.
+(`telegram_enabled/_authorized_user/_reply_mode/_transcript_echo/
+_auto_build_notifications`) + the `telegram_bot_token` credential.
+
+**Auto build alerts (`alerts.ts`).** The bot's ONE unprompted message: a DM
+when the LOOP moves a card into in_progress / blocked / done (blocked shows
+the reason). The engine listens on the board bus (`events.subscribeAll`,
+every workspace); `autoBuildAlert` is the pure decision: `event === card`,
+`client === LOOP_CLIENT_ID` (the loop's card tools send it — `LoopCardConfig.clientId`;
+a person's move from the cli, the pane or Telegram's own Assistant is never
+announced), `from !== status`, status in the three. Nothing is remembered:
+`from` is the row's status before the write, so a restart loses nothing and
+never double-sends. Gated per workspace by `telegram_auto_build_notifications`
+(workspace-overridable, default on) plus the bot's own `telegram_enabled` +
+authorized user, all read off `GET /workspaces/:id` in one call. The bubble is
+recorded with the card's coding session as origin, so a reply to it enters
+that session in code mode. A failed send is logged, never retried.
 
 **Two independent knobs on the account row** — WHICH session
 (`activeSessionId`, `store.setActiveSession`) and WHO answers (`mode`,
@@ -241,8 +258,9 @@ coder's bubble → its session in code mode; an Assistant bubble → home).
 ASSISTANT (home, default) — a plain message is an Assistant turn
 (`assistant.ts`: the SAME core `assistantAgent`, headless handlers over the
 card/session routes, ONE in-memory conversation reset on restart; file tools
-+ web bind read-only to the active session; `git_auto_pull` over core
-`autoPullSession` — the active session or an id). CODE — a plain message is a
++ web bind read-only to the active session; `git_auto_push` / `git_auto_pull`
+over core `autoPushSession` / `autoPullSession` — the active session or an
+id; result only, no steps). CODE — a plain message is a
 real `runCodingTurn` on the active session, lock per turn, `send_message` (a
 deliberate DM outside the streamed reply; delivery mode from
 `telegram_reply_mode`) injected via `extraTools`. The command menu
@@ -343,10 +361,14 @@ nothing races a pull. Result `merged | clean | blocked | error` with
 Callers: the CODING agent's `git_auto_pull` (core `codingGitTools`, both
 coding kits — cli and server; a plan-mode kit drops it), the cli Assistant's
 `git_auto_pull` (App's `autoPull` prop), the Telegram Assistant's
-`git_auto_pull` (`telegram/assistant.ts`, over `injectFetch`). No slash
-command, no setting.
+`git_auto_pull` (`telegram/assistant.ts`, over `injectFetch`), and Telegram's
+`/auto_pull` (code mode; `engine.autoPull` over the same core client — ONE
+bubble edited in place, a `·` line per step, the result on the last line).
+No cli slash command, no setting.
 
-Triggers: `POST /git/auto-push` (the cli's `/auto-push` — always pushes)
+Triggers: `POST /git/auto-push` (the cli's `/auto-push`, Telegram's
+`/auto_push` (code mode, the same step bubble as `/auto_pull`), and both
+Assistants' `git_auto_push` — all through core `autoPushSession`; always pushes)
 and `PATCH archived=true` on a card that is in `done` AND was unarchived,
 when `auto_push_on_archive` is on: the card's newest loop row names the
 coding session that pushes (a card with no loop just archives); a held lock
@@ -387,8 +409,11 @@ name).
   tick, the coder's block, the engine's own PATCHes — all HTTP clients of
   this one process), and each handler publishes on `api/boardEvents.ts`
   (`ctx.events`; index.ts makes one, app.ts guarantees one). `GET
-  /workspaces/:id/events` streams it as ND-JSON: `{event: card, card}` on
-  create/update (the full row — the auto-push-failure un-archive too),
+  /workspaces/:id/events` streams it as ND-JSON: `{event: card, card, from?,
+  client?}` on create/update (the full row — the auto-push-failure
+  un-archive too; `from` = the status before an update, `client` = the
+  writer's `x-phantom-looper-client` — read by `telegram/alerts.ts`, ignored
+  by the cli),
   `{event: deleted, id}`, `{event: session, card, id, name}` when the
   engine writes a loop row (the one write only it knows about), a
   heartbeat every 15s. No replay: the cli loads on connect and again on
@@ -411,6 +436,14 @@ A row is `(scope, namespace, key)`, plain `value` or encrypted `value_enc`
 general read. Resolution: code default → global → workspace → session, most
 specific wins, one read (`computeLayers`). Null clears at every layer and
 is never stored; a nullable key MUST default to null (boot-enforced).
+**No default provider**: `provider` defaults to null and nothing runs until
+a person picks one (the wizard, /model); an agent still BUILDS on a bare
+server (core's `languageModel` hands back a handle whose first call says
+`no provider set — pick one on /model…`), so a session opens and the first
+turn carries the fix. `model` unset resolves to the newest model the catalog
+lists for the provider (`computeLayersFor` → models.ts `latestModel`),
+reported as the `default` layer, so every reader — GET /settings, the
+looper's cfg, resolveMany — sees the same id and it follows releases.
 Adding a key = `DEFAULTS` + `DESCRIPTIONS` + `META` (TypeScript-enforced;
 `META.group` ∈ sessions | containers | limits | git | model | voice |
 board | telegram) + `SCOPED` if not global-only. Defaults live in code; the

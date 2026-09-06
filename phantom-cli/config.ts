@@ -4,9 +4,18 @@
 // explicit one is pinned — which is why "reset" is a real action, distinct from
 // typing today's default back in.
 //
-// One file, ~/.phantom-cli/settings.json. There is no per-directory config: a
-// phantom-looper workspace is remote, so the directory you launched from says
-// nothing about which one you want.
+// One file, CONFIG_DIR/settings.json. CONFIG_DIR is the ONE root every file the
+// cli owns hangs off (settings.json, sessions/, voice/, bin/, ca/, cli.log,
+// models-cache.json): ~/.phantom-cli for an installed build, <repo>/.phantom-cli
+// (gitignored) when running from source. build-cli.sh bakes the release string
+// into process.env.PHANTOM_CLI_VERSION; a checkout reads nothing and is 'dev'.
+// So a dev run and the installed app never share a byte — dev talks to the
+// server setup.sh brought up (it seats the url + key there), installed talks to
+// yours. Beyond that there is no per-directory config: a phantom-looper
+// workspace is remote, so the directory you launched from says nothing about
+// which one you want. PHANTOM_CLI_DIR is the test seam: the suite points it at
+// a fresh temp dir so App's own file writes (the seating rule, the sidecar
+// log) never land in a real home.
 //
 // Precedence (resolved in local.ts, and only for the machine-local keys):
 // code defaults -> settings.json -> env vars. Env still wins so scripts and CI
@@ -14,17 +23,23 @@
 // changed it and nothing happened" is the single worst thing a settings screen
 // can do to you.
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
-export const CONFIG_DIR = join(homedir(), '.phantom-cli');
+export const CONFIG_DIR = process.env.PHANTOM_CLI_DIR
+  || ((process.env.PHANTOM_CLI_VERSION ?? 'dev') === 'dev'
+    ? resolve(import.meta.dirname, '..', '.phantom-cli')
+    : join(homedir(), '.phantom-cli'));
 export const CONFIG_PATH = join(CONFIG_DIR, 'settings.json');
 
 export const PROVIDERS = ['anthropic', 'openai', 'google', 'openai-compatible'] as const;
 export const REASONINGS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 
 export const DEFAULTS = {
-  provider: 'anthropic' as string,
-  model: 'claude-opus-5' as string,
+  // No default provider — nothing runs until a person picks one (the wizard,
+  // /model). The model's default is the server's: unset, it resolves to the
+  // newest model the catalog lists for the provider (GET /settings reports it).
+  provider: null as string | null,
+  model: null as string | null,
   base_url: null as string | null,
   reasoning: 'medium' as string,
   max_steps: null as number | null,
@@ -81,8 +96,8 @@ export type ConfigKey = keyof typeof DEFAULTS;
 export type ConfigValue = string | number | boolean | null;
 
 export const DESCRIPTIONS: Record<ConfigKey, string> = {
-  provider: 'The coding agent\'s LLM provider. Its key is set on /keys.',
-  model: 'Model id for the chosen provider.',
+  provider: 'The coding agent\'s LLM provider. Its key is set on /keys. Nothing runs until one is chosen.',
+  model: 'Model id for the chosen provider. Empty = the newest model the catalog lists for it, so it follows releases.',
   base_url: 'Endpoint for openai / openai-compatible. Required by openai-compatible.',
   reasoning: 'How much the model thinks before answering. Providers map this to their own setting.',
   max_steps: 'Tool calls allowed per turn before the agent must stop and answer. Empty = unlimited (esc still interrupts).',
@@ -200,7 +215,8 @@ export function visibleKeys(cfg: Record<ConfigKey, ConfigValue>): ConfigKey[] {
  *  keys live on the server now, so this takes the resolved set rather than
  *  reading a file. */
 export function hiddenKeyCount(cfg: Record<string, ConfigValue>): number {
-  const active = PROVIDER_KEY[String(cfg.provider) as keyof typeof PROVIDER_KEY];
+  // No provider yet: no key is in use, so every stored one is "other".
+  const active = cfg.provider ? PROVIDER_KEY[String(cfg.provider) as keyof typeof PROVIDER_KEY] : undefined;
   return Object.values(PROVIDER_KEY)
     .filter((k) => k !== active && cfg[k] !== null && cfg[k] !== undefined && cfg[k] !== '').length;
 }

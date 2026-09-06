@@ -27,9 +27,9 @@ suffix. Nothing else is permitted in code or docs.
 
 Derived and fixed: headers `x-phantom-looper-session` /
 `x-phantom-looper-client` · env `PHANTOM_CLI_*` / `PHANTOM_BACKEND_*` ·
-images `ghcr.io/…/phantom-backend` + `…-fs` (the agent container's root
-filesystem) · dirs `~/.phantom-cli`, `/opt/phantom-looper` · Postgres schema
-`phantom_looper` · compose project `phantom-looper`, workspace containers
+images `ghcr.io/…/phantom-backend-api` + `…-session` (every session's
+container) · dirs `~/.phantom-cli`, `/opt/phantom-looper` · Postgres schema
+`phantom_looper` · compose project `phantom-backend`, workspace containers
 `phantom-looper-ws-<session>`, volume `phantom-looper-workspaces` · test
 Postgres `phantom-test-pg`.
 
@@ -55,7 +55,7 @@ phantom-cli/       see phantom-cli/CLAUDE.md (sidecar/ = the Python voice proces
 test/              the server suites — see test/CLAUDE.md
 migrations/        001–012, forward-only, applied at boot (listed in phantom-backend/CLAUDE.md)
 scripts/           install / release / rig scripts — see scripts/CLAUDE.md
-build/             workspace/ the fs image · testrig/ the blank Ubuntu box
+build/             workspace/ the session image · testrig/ the blank Ubuntu box
 host/ updater/ caddy/   the server box's one command · the update sidecar · TLS
 docker-compose.yml postgres · api · docker-proxy · updater · autoheal · caddy (profile https)
 Dockerfile         the api image; ships the deploy files at /host-files
@@ -92,8 +92,10 @@ must reach existing sessions goes in a tool's description.
   bound to THE card: the run-ending `kanban_card_move` and
   `kanban_card_items`. maxSteps 12.
 
-The coding agent's `provider model base_url reasoning` is the base; each
-other agent has an optional trio (`supervisor_*`, `assistant_*`,
+The coding agent's `provider model base_url reasoning` is the base — NO
+default provider (a person picks one: the wizard, /model), and an empty
+model is the newest the server's catalog lists (`phantom-backend/models.ts`);
+each other agent has an optional trio (`supervisor_*`, `assistant_*`,
 `git_fixer_*`) resolved by core's cascade — inherit only while the provider
 matches, a cross-provider override requires a model, checked at agent
 BUILD.

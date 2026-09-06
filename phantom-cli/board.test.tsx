@@ -25,7 +25,7 @@ const sgr = (code: number, x: number, y: number, release = false) =>
 const asJsonb = (r: CardStep[]): CardStep[] => r.map((s) => ({ key: s.key, done: s.done, text: s.text }));
 
 function makeCard(o: Partial<Card> & { id: number; seq: number; title: string; status: string }): Card {
-  const card = { pos: o.seq, details: '', user_story: '', requirements: [],
+  const card = { pos: o.seq, details: '', requirements: [],
     blocked_reason: null, auto_plan: null, auto_build: null, pinned: false, archived: false,
     created_at: '2026-08-23', updated_at: '2026-08-23', ...o };
   return { ...card, requirements: asJsonb(card.requirements) };
@@ -161,7 +161,7 @@ test('a new requirement saves ONCE and the corner settles on saved', async () =>
   r.stdin.write(sgr(0, x, y)); await sleep(20);
   r.stdin.write(sgr(0, x, y, true)); await sleep(30);
   // one tab per write: a single chunk of three is one key event, not three
-  for (let i = 0; i < 3; i++) { r.stdin.write('\t'); await sleep(20); }  // Title → Story → Details → Requires
+  for (let i = 0; i < 2; i++) { r.stdin.write('\t'); await sleep(20); }  // Title → Details → Requires
   r.stdin.write('it works'); await sleep(20);
   const patches = () => calls.filter((c) => c.method === 'PATCH' && c.path.endsWith('/cards/2'));
   await sleep(800);                                  // past the 600ms debounce
@@ -186,7 +186,7 @@ test('a save the server does not take stops at one PATCH and says so', async () 
       // A server that answers 200 and silently drops a field — the shape of
       // any future client/server mismatch.
       const rest = { ...(body as Record<string, unknown>) };
-      delete rest.user_story;
+      delete rest.details;
       Object.assign(cards[0], rest);
       return { prefix: 'PHA', columns: ['backlog', 'doing'], card: { ...cards[0] } };
     }
@@ -200,7 +200,7 @@ test('a save the server does not take stops at one PATCH and says so', async () 
   r.stdin.write(sgr(0, x, y)); await sleep(20);
   r.stdin.write(sgr(0, x, y, true)); await sleep(30);
   assert.match(strip(r.lastFrame()!), /PHA-1/, 'the editor is open');
-  r.stdin.write('\t'); await sleep(30);               // Title → Story
+  r.stdin.write('\t'); await sleep(30);               // Title → Details
   r.stdin.write('as a builder'); await sleep(20);
   await sleep(2000);                                  // three debounce windows
   assert.equal(bodies.length, 1, 'the patch that did not land is never re-sent by itself');
@@ -228,7 +228,7 @@ test('tab / shift+tab move the focused card right / left, focus following', asyn
   r.unmount();
 });
 
-test('n creates in the focused column; a archives', async () => {
+test('n creates in the focused column; a archives with confirmation', async () => {
   const { api, calls } = fakeApi(seed());
   const store = new BoardStore(api, 'w1');
   const r = mount(store);
@@ -238,10 +238,38 @@ test('n creates in the focused column; a archives', async () => {
   r.stdin.write('\r'); await sleep(30);
   assert.ok(calls.some((c) => c.method === 'POST'));
   assert.match(strip(r.lastFrame()!), /brand new/);
-  r.stdin.write('a'); await sleep(30); // archives the focused (first) card
+  // First [a] arms — no PATCH yet, the confirmation prompt appears.
+  r.stdin.write('a'); await sleep(30);
+  assert.ok(!calls.some((c) => c.method === 'PATCH' && (c.body as { archived?: boolean }).archived), 'the first [a] only arms');
+  assert.match(strip(r.lastFrame()!), /archive #1-first card\?/, 'the confirmation prompt names the card');
+  assert.match(strip(r.lastFrame()!), /\[a\] again to archive/, 'the prompt tells the user what to do');
+  // Second [a] confirms — the PATCH fires.
+  r.stdin.write('a'); await sleep(30);
   const patch = calls.find((c) => c.method === 'PATCH' && (c.body as { archived?: boolean }).archived);
   assert.ok(patch, 'archive is a PATCH, not a delete');
   assert.ok(!strip(r.lastFrame()!).includes('first card'));
+  r.unmount();
+});
+
+test('[a] archive confirmation is disarmed by esc or any other key', async () => {
+  const { api, calls } = fakeApi(seed());
+  const store = new BoardStore(api, 'w1');
+  const r = mount(store);
+  await sleep(50);
+  // Arm with [a], then disarm with esc — should not archive.
+  r.stdin.write('a'); await sleep(30);
+  assert.match(strip(r.lastFrame()!), /\[a\] again to archive/, 'armed');
+  r.stdin.write('\x1b'); await sleep(30);
+  assert.doesNotMatch(strip(r.lastFrame()!), /again to archive/, 'esc disarmed');
+  assert.ok(!calls.some((c) => c.method === 'PATCH' && (c.body as { archived?: boolean }).archived), 'no archive after esc');
+  // Esc while armed should NOT leave the board (esc's normal action).
+  assert.match(strip(r.lastFrame()!), /first card/, 'still on the board');
+  // Arm with [a], then press a different key (arrow) — should disarm.
+  r.stdin.write('a'); await sleep(30);
+  assert.match(strip(r.lastFrame()!), /again to archive/, 're-armed');
+  r.stdin.write('\x1b[B'); await sleep(30); // down arrow
+  assert.doesNotMatch(strip(r.lastFrame()!), /again to archive/, 'arrow key disarmed');
+  assert.ok(!calls.some((c) => c.method === 'PATCH' && (c.body as { archived?: boolean }).archived), 'still no archive');
   r.unmount();
 });
 
@@ -392,10 +420,9 @@ test('a store edit while a card is OPEN rebases the edit screen live, keeping th
   r.stdin.write(sgr(0, x, y)); await sleep(20);
   r.stdin.write(sgr(0, x, y, true)); await sleep(30);
   r.stdin.write(' v2'); await sleep(20); // the user is mid-edit on Title
-  await store.update(2, { user_story: 'as a voice user', details: 'said aloud' }); // the kanban tool path
+  await store.update(2, { details: 'said aloud' }); // the kanban tool path
   await sleep(30);
   const f = strip(r.lastFrame()!);
-  assert.match(f, /as a voice user/, 'the outside edit shows without reopening');
   assert.match(f, /said aloud/);
   assert.match(f, /second card v2/, 'the title mid-edit keeps the user text');
   r.unmount();
@@ -489,7 +516,7 @@ test('the edit page shows every field, hides Blocked until it applies, and toggl
   r.stdin.write(sgr(0, x, y)); await sleep(20);
   r.stdin.write(sgr(0, x, y, true)); await sleep(30);
   let f = strip(r.lastFrame()!);
-  for (const label of ['Title', 'Story', 'Details', 'Requires', 'Archived'])
+  for (const label of ['Title', 'Details', 'Requires', 'Archived'])
     assert.match(f, new RegExp(label), `${label} is visible on an empty card`);
   assert.ok(!f.includes('Blocked'), 'Blocked hidden while it does not apply');
   // Toggle archived — the debounce flushes it without any Save.

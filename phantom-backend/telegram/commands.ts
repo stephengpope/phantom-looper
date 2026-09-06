@@ -8,6 +8,12 @@
 // Merged pairs: `/sessions` lists, `/sessions 2` points at number 2;
 // `/workspaces` lists, `/workspaces 2` switches. No singular /session or
 // /workspace.
+//
+// `/auto_push` and `/auto_pull` are the project's `/auto-push` / `/auto-pull`
+// under Telegram's command law (lowercase letters, digits, underscores — a
+// hyphen fails the whole setMyCommands call). Code mode only, like /plan: they
+// act on the coding session the account points at. Each runs as ONE bubble
+// edited in place — a line per step as it happens, the result on the last line.
 
 import type { TelegramClient } from './client.js';
 import type { TelegramEngine } from './engine.js';
@@ -16,25 +22,26 @@ import type { TelegramMode } from './store.js';
 interface Cmd { command: string; description: string }
 
 const COMMON: Cmd[] = [
-  { command: 'sessions', description: 'List sessions or pick one' },
+  { command: 'sessions', description: 'List or switch sessions' },
   { command: 'new', description: 'Start a new session' },
-  { command: 'stop', description: 'Stop the current task' },
+  { command: 'stop', description: 'Stop the running task' },
   { command: 'status', description: "Show what's running" },
-  { command: 'help', description: 'Show what I can do' },
+  { command: 'help', description: 'List commands' },
 ];
 
 /** The menus — one per mode. Home shows the door INTO a session's coding
  *  agent; code mode shows the door home plus the coder's own actions. */
 export const MENU: Record<TelegramMode, Cmd[]> = {
   assistant: [
-    { command: 'code', description: 'Talk to the active session\'s coding agent' },
-    { command: 'workspaces', description: 'List workspaces or switch' },
+    { command: 'code', description: 'Talk to the coding agent' },
+    { command: 'workspaces', description: 'List or switch workspaces' },
     ...COMMON,
   ],
   code: [
-    { command: 'assistant', description: 'Back to the assistant' },
-    { command: 'plan', description: 'Turn plan mode on or off' },
-    { command: 'autopush', description: 'Run auto-push' },
+    { command: 'assistant', description: 'Talk to the assistant' },
+    { command: 'plan', description: 'Toggle plan mode' },
+    { command: 'auto_push', description: 'Land this session\'s work on the base branch' },
+    { command: 'auto_pull', description: 'Bring the base branch into this session' },
     ...COMMON,
   ],
 };
@@ -106,7 +113,7 @@ export async function handleCommand(
       sessionList.set(dm, j.data.sessions.map((s: any) => s.id));
       const rows = j.data.sessions.map((s: any, i: number) =>
         `${i + 1}. ${s.name ?? 'untitled'}${s.id === acc.activeSessionId ? ' (active)' : ''}${s.locked ? ' (busy)' : ''}`);
-      await reply(['📋 Sessions:', ...rows, '',
+      await reply(['📋 Sessions:', '', ...rows, '',
         'Pick one with /sessions <number>; /code <number> talks to its coding agent'].join('\n'));
       return;
     }
@@ -130,7 +137,7 @@ export async function handleCommand(
       }
       workspaceList.set(dm, list.map((w) => w.id));
       const rows = list.map((w, i) => `${i + 1}. ${w.name}${w.id === acc.activeWorkspaceId ? ' (active)' : ''}`);
-      await reply(['📋 Workspaces:', ...rows, '', 'Switch with /workspaces <number>'].join('\n'));
+      await reply(['📋 Workspaces:', '', ...rows, '', 'Switch with /workspaces <number>'].join('\n'));
       return;
     }
 
@@ -155,17 +162,17 @@ export async function handleCommand(
         const tasks = t?.ok ? (t.data.tasks ?? []).length : 0;
         const where = [s?.branch ? `Branch: ${s.branch}` : null, s?.card != null ? `card #${s.card}` : null]
           .filter(Boolean).join(' · ');
-        await reply(['🤖 Coding agent',
+        await reply(['🤖 Coding agent', '',
           `Active session: ${s?.name ?? 'untitled'}`,
           where || null,
           `Running: ${s?.locked ? `yes${s.lockedLabel ? ` (${s.lockedLabel})` : ''}` : 'no'}`,
           `Last request: ${s?.lastUserMessage ? oneLine(s.lastUserMessage) : '(none yet)'}`,
           `Plan mode: ${s?.planMode ? 'on' : 'off'}`,
-          `Background tasks: ${tasks}`].filter(Boolean).join('\n'));
+          `Background tasks: ${tasks}`].filter((v) => v != null).join('\n'));
       } else {
         const w = acc.activeWorkspaceId ? await workspaceRow(engine, acc.activeWorkspaceId) : null;
         const s = acc.activeSessionId ? await sessionRow(engine, acc.activeSessionId) : null;
-        await reply(['🏠 Assistant',
+        await reply(['🏠 Assistant', '',
           `Active workspace: ${w?.name ?? acc.activeWorkspaceId ?? '(none — /workspaces)'}`,
           `Active session: ${s ? `${s.name ?? 'untitled'} (/code to talk to it)` : '(none — /sessions or /new)'}`].join('\n'));
       }
@@ -181,20 +188,19 @@ export async function handleCommand(
       return;
     }
 
-    case 'autopush': {
-      if (acc.mode !== 'code' || !acc.activeSessionId) { await reply('⚠️ Auto-push runs from the coding agent — /code first.'); return; }
-      await reply('🚀 Pushing your work…');
-      const body = await (await engine.call('/git/auto-push',
-        { method: 'POST', body: {}, session: acc.activeSessionId })).text();
-      const last = body.trim().split('\n').filter(Boolean).pop();
-      let msg = 'done';
-      let failed = false;
-      try {
-        const o = JSON.parse(last ?? '{}');
-        failed = o.error !== undefined;
-        msg = o.result ?? o.step ?? o.error ?? 'done';
-      } catch { /* stream tail */ }
-      await reply(`${failed ? '⚠️' : '✅'} Auto-push: ${msg}`);
+    case 'auto_push':
+    case 'auto_pull': {
+      const pull = cmd === 'auto_pull';
+      const name = pull ? 'Auto-pull' : 'Auto-push';
+      if (acc.mode !== 'code' || !acc.activeSessionId) {
+        await reply(`⚠️ ${name} runs on the coding session — /code first.`);
+        return;
+      }
+      const bubble = await stepBubble(client, dm, `${pull ? '⬇️' : '🚀'} ${name}`);
+      const r = pull
+        ? await engine.autoPull(acc.activeSessionId, bubble.step)
+        : await engine.autoPush(acc.activeSessionId, bubble.step);
+      await bubble.end(outcomeLine(pull, r));
       return;
     }
 
@@ -205,6 +211,47 @@ export async function handleCommand(
     default:
       await reply(`⚠️ I don't know /${cmd}.\n\nℹ️ ${HELP}`);
   }
+}
+
+/** One bubble for a multi-step run: sent with its title, then EDITED as each
+ *  step arrives (a `·` line per step) and once more with the result line. A
+ *  client that hands back no message id (or an edit that fails — an unchanged
+ *  body, a deleted message) falls back to a fresh message for the result, so
+ *  the outcome is never lost. */
+async function stepBubble(client: TelegramClient, dm: number, title: string) {
+  const lines = [title];
+  const m = await client.sendMessage(dm, title).catch(() => null);
+  const id: number | null = m?.message_id ?? null;
+  const edit = async () => {
+    if (id == null) return false;
+    try { await client.editMessageText(dm, id, lines.join('\n')); return true; } catch { return false; }
+  };
+  return {
+    step(label: string) { lines.push(`· ${label}`); void edit(); },
+    async end(result: string) {
+      lines.push(result);
+      if (!await edit()) await client.sendMessage(dm, result);
+    },
+  };
+}
+
+/** The result of a push or a pull as one line. */
+export function outcomeLine(pull: boolean, r: { result: string; reason?: string; sha?: string;
+  arrived?: string[]; files?: string[]; pushed?: boolean }): string {
+  const why = r.reason ? ` — ${r.reason}` : '';
+  if (pull) {
+    if (r.result === 'merged') {
+      const n = r.arrived?.length ?? 0;
+      const files = r.files?.length ? `, ${r.files.length} file${r.files.length === 1 ? '' : 's'} changed` : '';
+      const backup = r.pushed === false ? ` (branch push failed${why})` : '';
+      return `✅ merged ${n} commit${n === 1 ? '' : 's'} from the base branch${files}${backup}`;
+    }
+    if (r.result === 'clean') return '✅ nothing to pull — the branch already has all of base';
+    return `⚠️ ${r.result}${why}`;
+  }
+  if (r.result === 'pushed') return `✅ landed on the base branch (${(r.sha ?? '').slice(0, 10)})`;
+  if (r.result === 'nothing') return '✅ nothing to push — the base branch already has it all';
+  return `⚠️ ${r.result}${why}`;
 }
 
 /** The id at position `arg` of the list /sessions last printed to this chat,
@@ -235,19 +282,35 @@ async function sessionRow(engine: TelegramEngine, id: string): Promise<{
   return j.ok ? j.data : null;
 }
 
+// /help — the same sentence-case phrases as the menu, one command per line
+// with a dash (Telegram's proportional font collapses padded columns), the
+// numbered forms as real examples. Two agents, neither the default.
 const HELP = [
-  "I'm your phantom-looper assistant. Talk to me and I'll manage your work — the board, cards,",
-  'sessions, workspaces. /code and your messages go to the active session\'s coding agent;',
-  '/assistant brings you back to me.',
+  'phantom-looper',
   '',
-  '/sessions [n]     list sessions, or make number n the active one',
-  '/new              start a new session (and make it active)',
-  '/code [n]         talk to the active session\'s coding agent (or session n)',
-  '/assistant        back to the assistant',
-  '/workspaces [n]   list workspaces, or switch to number n',
-  '/status           show what\'s running',
-  '/plan             turn plan mode on or off',
-  '/autopush         run auto-push',
-  '/stop             stop the current task',
-  '/help             this',
+  'Two agents answer here: the assistant, which manages the board, sessions and workspaces, '
+  + 'and the active session\'s coding agent. /assistant and /code choose which one your messages go to.',
+  '',
+  'Sessions',
+  '/sessions — List sessions',
+  '/sessions 2 — Make session 2 active',
+  '/new — Start a new session',
+  '',
+  'Who answers',
+  '/code — Talk to the coding agent',
+  '/code 2 — Make session 2 active and talk to its coding agent',
+  '/assistant — Talk to the assistant',
+  '',
+  'Workspaces',
+  '/workspaces — List workspaces',
+  '/workspaces 2 — Switch to workspace 2',
+  '',
+  'Coding agent',
+  '/plan — Toggle plan mode',
+  '/auto_push — Land this session\'s work on the base branch',
+  '/auto_pull — Bring the base branch into this session',
+  '',
+  '/status — Show what\'s running',
+  '/stop — Stop the running task',
+  '/help — List commands',
 ].join('\n');

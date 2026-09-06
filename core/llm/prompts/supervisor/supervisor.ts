@@ -131,7 +131,7 @@ export const BUILD_FROM_CARD = `Build card {{seq}}.
 # Build the card
 
 You are building now. The card at the end of this message is the contract:
-its user story, details, and requirements define what must become true. Your job is to make it true — exactly it — and prove it works.
+its details and requirements define what must become true. Your job is to make it true — exactly it — and prove it works.
 
 ## Hard rules while you build
 

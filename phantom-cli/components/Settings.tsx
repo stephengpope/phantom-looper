@@ -29,7 +29,7 @@ import { SelectList, type Choice } from './SelectList.js';
 import { human, labelFor, type WireMeta } from '../settingLabels.js';
 import { ValueInput, type EditSpec } from './ValueInput.js';
 import { Screen } from './Screen.js';
-import { modelsFor, refreshCatalog } from '../modelCatalog.js';
+import { PROVIDERS } from '../config.js';
 
 export type Api = (method: string, path: string, body?: unknown) => Promise<unknown>;
 
@@ -112,10 +112,29 @@ export function Settings({ api, onClose, onLocalChange, configPath = CONFIG_PATH
 
   useEffect(() => { if (view.at === 'api' && !server) void loadServer(); }, [view, server, loadServer]);
 
-  // Refresh the model catalog behind /model in the background — the picker
-  // reads the cache/snapshot synchronously, so this only benefits the next open
-  // and never blocks or fails the screen when models.dev is unreachable.
-  useEffect(() => { if (groups?.includes('model')) void refreshCatalog(); }, [groups]);
+  // The model catalog is the SERVER's (GET /models): one list for every
+  // client and for the "newest model" default. Read when a model row's editor
+  // opens; a server that cannot answer leaves the row free-text.
+  const loadModels = useCallback(async (provider: string): Promise<CatalogModel[]> => {
+    try {
+      const r = await api('GET', `/models?provider=${encodeURIComponent(provider)}`) as { models?: CatalogModel[] };
+      return Array.isArray(r?.models) ? r.models : [];
+    } catch { return []; }
+  }, [api]);
+  /** The spec, plus the catalog for a model row and the keyed providers for a
+   *  provider row — the two shapes every model-ish row takes, on both screens. */
+  const finishSpec = async (key: string, spec: EditSpec, values: Record<string, unknown>): Promise<EditSpec> => {
+    const providerRow = providerChoices(key, spec.choices, values);
+    if (providerRow) return { ...spec, ...providerRow };
+    const provider = providerForModelRow(key, values);
+    if (!provider) return spec;
+    const models = await loadModels(provider);
+    if (!models.length) return spec;
+    return { ...spec,
+      suggestions: models.map((m) => m.id),
+      suggestionLabels: Object.fromEntries(models.map((m) => [m.id, m.name])),
+      note: spec.note ?? `${provider} models, newest first · or type any model id · empty = the newest` };
+  };
 
   // ONE writer, routing on where the key LIVES — not on which screen you are
   // looking at. Local is a file and answers immediately; everything else is a
@@ -184,7 +203,8 @@ export function Settings({ api, onClose, onLocalChange, configPath = CONFIG_PATH
             const key = k as ConfigKey;
             setLast(key);
             onOpenRow?.(key);
-            setView({ at: 'edit', scope: 'local', key, spec: localSpec(key, plain, config[key].envVar, suggestions?.[key]) });
+            void finishSpec(key, localSpec(key, plain, config[key].envVar, suggestions?.[key]), plain)
+              .then((spec) => setView({ at: 'edit', scope: 'local', key, spec }));
           }}
           onCancel={onClose}
           onKey={(ch: string, cursorValue?: string) => {
@@ -239,7 +259,8 @@ export function Settings({ api, onClose, onLocalChange, configPath = CONFIG_PATH
             onSelect={(k) => {
               const s = (server ?? {})[k as string];
               setLast(k as string);
-              setView({ at: 'edit', scope: 'api', key: k as string, spec: {
+              const values = Object.fromEntries(Object.entries(server ?? {}).map(([kk, v]) => [kk, v.value]));
+              void finishSpec(k as string, {
                 title: `${labelFor(k as string, s.meta)} · every workspace`,
                 choices: s.meta?.choices,
                 choiceLabels: s.meta?.choiceLabels,
@@ -248,7 +269,7 @@ export function Settings({ api, onClose, onLocalChange, configPath = CONFIG_PATH
                 note: s.meta?.unit === 'ms'
                   ? 'in milliseconds · applies to every workspace'
                   : 'applies to every workspace',
-              } });
+              }, values).then((spec) => setView({ at: 'edit', scope: 'api', key: k as string, spec }));
             }}
             onCancel={onClose}
             onKey={async (ch: string, cursorValue?: string) => {
@@ -364,22 +385,40 @@ function localSpec(key: ConfigKey, cfg: Record<ConfigKey, ConfigValue>, envVar?:
     spec.suggestions = suggest;
     spec.note = spec.note ?? 'devices found now · or type any device name';
   }
-  // The model field is picked from the models.dev catalog for the current
-  // provider, but never fenced to it — ValueInput keeps a custom-id row.
-  // openai-compatible has no catalog, so this is empty and it stays free-text.
-  // The Assistant's model is picked from the same catalog for the same
-  // provider — it is the same kind of row, so it is the same picker.
-  if (key === 'model' || key === 'assistant_model') {
-    // The Assistant's picker follows ITS provider — its own when overridden,
-    // else the coding agent's it cascades to.
-    const provider = String((key === 'assistant_model' && cfg.assistant_provider) || cfg.provider);
-    const catalog = modelsFor(provider);
-    if (catalog.length) {
-      spec.suggestions = catalog.map((c) => c.id);
-      spec.suggestionLabels = Object.fromEntries(catalog.map((c) => [c.id, c.label]));
-      spec.note = spec.note
-        ?? `${provider} models from models.dev · or type any model id`;
-    }
-  }
   return spec;
+}
+
+/** One row of GET /models. */
+interface CatalogModel { id: string; name: string }
+
+const set = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
+
+/** Every model row and the provider row it follows — its own when overridden,
+ *  else the coding agent's it cascades to. The same picker on every screen:
+ *  the four are the same kind of row. */
+const MODEL_ROWS: Record<string, string> = {
+  model: 'provider', assistant_model: 'assistant_provider',
+  supervisor_model: 'supervisor_provider', git_fixer_model: 'git_fixer_provider',
+};
+
+const PROVIDER_ROWS = new Set(Object.values(MODEL_ROWS));
+
+/** The provider a model row's catalog is for; null when it is not a model row
+ *  or no provider is set yet. */
+export function providerForModelRow(key: string, values: Record<string, unknown>): string | null {
+  const p = MODEL_ROWS[key];
+  return p ? set(values[p]) ?? set(values.provider) : null;
+}
+
+/** A provider row lists only the providers with a key on /keys — a provider
+ *  you cannot call is not a choice. With no key stored yet, every provider
+ *  and a note saying where the key goes. null for any other row. */
+export function providerChoices(key: string, choices: readonly string[] | undefined,
+  values: Record<string, unknown>): Pick<EditSpec, 'choices' | 'note'> | null {
+  if (!PROVIDER_ROWS.has(key)) return null;
+  const all = choices ?? PROVIDERS;
+  const keyed = all.filter((p) => set(values[PROVIDER_KEY[p as keyof typeof PROVIDER_KEY]]));
+  return keyed.length
+    ? { choices: keyed, note: 'providers with a key on /keys' }
+    : { choices: all, note: 'no provider key on /keys yet — save one there first' };
 }

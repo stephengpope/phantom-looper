@@ -12,7 +12,7 @@ import {
 } from './supervisor.js';
 
 export interface CardShape {
-  seq: number; title: string; status: string; user_story: string; details: string;
+  seq: number; title: string; status: string; details: string;
   requirements: { key: string; text: string; done: boolean }[];
   blocked_reason?: string | null;
   /** The human's reply to a block — why the card came back. */
@@ -21,7 +21,7 @@ export interface CardShape {
 
 /** The {card} blank: the card as JSON, requirement keys included (ticks go by key). */
 const cardJson = (card: CardShape) =>
-  JSON.stringify({ card: card.seq, title: card.title, user_story: card.user_story,
+  JSON.stringify({ card: card.seq, title: card.title,
     details: card.details, requirements: card.requirements }, null, 1);
 
 export function systemPrompt(): string {
