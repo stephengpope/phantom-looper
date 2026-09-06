@@ -22,6 +22,7 @@ import { TelegramEngine } from './telegram/engine.js';
 import { resolve, resolveMany, resolveCredential, credentialForProvider } from './settings.js';
 import { cascade } from '../core/llm/agentConfig.js';
 import { getFolder } from './sessions.js';
+import { refreshWorkState } from './git/workRefresh.js';
 import { logger, errStr } from './log.js';
 
 const log = logger('boot');
@@ -105,6 +106,22 @@ async function main() {
     }
   })();
 
+  // Board events, created here so the work-state loop below can reference it
+  // before ctx is assigned (the loop sleeps 10s first, but the reference is
+  // captured at definition time).
+  const events = new BoardEvents();
+
+  // Work-state refresh: every 10s, recompute `work` for sessions with an
+  // active container. A change writes the row and publishes on the board
+  // event stream so the kanban board and the toolbar hear it live.
+  (async () => {
+    while (!stopped) {
+      await new Promise((r) => setTimeout(r, 10_000));
+      await refreshWorkState({ db, paths, containers, events })
+        .catch((e) => log.error({ err: errStr(e) }, 'work-state refresh threw'));
+    }
+  })();
+
   // `ctx` is a named object because the looper is wired into it AFTER the
   // app exists — the engine is a headless client of this app, so it is built
   // second; routes read ctx.looper per request, so the late set is seen.
@@ -115,7 +132,7 @@ async function main() {
     autoPush: autoPushFn,
     autoPull: autoPullFn,
     pgPool,
-    events: new BoardEvents(),
+    events,
     updateTriggerDir: process.env.UPDATE_TRIGGER_DIR || undefined,
   };
   const app = await buildApp(ctx);

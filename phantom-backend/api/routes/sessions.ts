@@ -5,7 +5,7 @@ import { createSession, getSession, destroySession, touchSession, SessionError,
   heldByOther, acquireLock, releaseLock, renewLock, assertDuplicable, conversationOnly, agentAfterSave,
   turnStarted, LAST_MESSAGE_CHARS } from '../../sessions.js';
 import { repoDir } from '../../pool/paths.js';
-import { workState, type WorkState } from '../../git/git.js';
+
 import { scanSkills, mergeSkills } from '../../../core/skills/skills.js';
 import { systemSkills } from '../../systemSkills.js';
 import { environmentFacts } from '../../environment.js';
@@ -193,29 +193,13 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       ctx.db.select({ total: count() }).from(sessions).where(filters.length ? and(...filters) : undefined),
     ]);
     const now = Date.now();
-    // `work` on request only: it reads every checkout on disk (local git,
-    // no network), which is real time the plain list must not pay. Only a
-    // session that OWNS its folder has files to measure; everything else —
-    // destroyed, conversation-only, the supervisor's seat — is null, a
-    // blank cell. Never an error: a row that cannot be read is null too.
-    const work = new Map<string, WorkState | null>();
-    if (req.query.git === 'true') {
-      const baseOf = new Map((await ctx.db.select().from(workspaces))
-        .map((w) => [w.id, w.baseBranch]));
-      await Promise.all(rows.map(async (r) => {
-        const base = baseOf.get(r.workspaceId);
-        if (r.status !== 'active' || r.folderId !== r.id || !r.branch || !base) return;
-        work.set(r.id, await workState(repoDir(ctx.paths, r.id), r.branch, base).catch((e: Error) => {
-          log.warn({ session: r.id, err: e.message }, 'could not read the checkout\'s git state — listed without one');
-          return null;
-        }));
-      }));
-    }
+    // `work` is a stored column on the session row, updated by the server's
+    // periodic git-state refresh (workRefresh.ts). It rides every response
+    // in the ...r spread — no on-read computation, no git=true flag.
     // `locked` is computed HERE so no client has to compare clocks with the
     // server; a client only compares locked_by with its own id.
     return ok({ total, sessions: rows.map((r) => ({
       ...r, locked: !!r.lockedBy && !!r.lockExpiresAt && r.lockExpiresAt.getTime() > now,
-      ...(req.query.git === 'true' ? { work: work.get(r.id) ?? null } : {}),
     })) });
   });
 

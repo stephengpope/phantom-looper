@@ -81,6 +81,9 @@ export interface LoadedSession {
   lastMessageAt: number;
   /** Insertion counter — the tie-break while nothing has been said yet. */
   addedAt: number;
+  /** Where this session's code stands: not_pushed, not_merged, merged. Null
+   *  before the first poll lands or when the server could not read it. */
+  work: 'not_pushed' | 'not_merged' | 'merged' | null;
 }
 
 export interface NewSession {
@@ -172,7 +175,7 @@ export class SessionStore {
       syncStamp: s.syncStamp ?? null,
       live: [], turn: [],
       busy: false, remoteBusy: false, held: null, startedAt: 0, tokens: NO_TOKENS, abort: null, queue: [],
-      unseen: false, lastMessageAt: 0, addedAt: ++this.seq,
+      unseen: false, lastMessageAt: 0, addedAt: ++this.seq, work: null,
     };
     this.entries.push(entry);
     this.activeId = entry.id;
@@ -223,6 +226,11 @@ export class SessionStore {
   setStamp(id: string, stamp: string | null): void {
     const e = this.get(id);
     if (e) e.syncStamp = stamp;
+  }
+
+  setWork(id: string, work: LoadedSession['work']): void {
+    const e = this.get(id);
+    if (e && e.work !== work) { e.work = work; this.notify(); }
   }
 
   /** Take the server's copy of a session that moved elsewhere. History and

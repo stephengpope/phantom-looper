@@ -209,15 +209,20 @@ export function Board({ store, width, height, isActive, onClose, solo, onOpenSes
                 const ghostHere = isTarget && ri === Math.min(drag!.toRow, cards.length - 1) && t.id !== dragging.id;
                 // The whole row is the title: a blocked card is just red, card
                 // progress lives on the edit page — no suffixes eating width.
-                // The two-cell gutter marks state: the drag ghost's ▸ first,
-                // else • for a pinned card (single-cell — the pin emoji is
-                // two cells and unreliable against the divider).
+                // The two-cell gutter: the drag ghost's ▸ first, else a
+                // colored • for the git work state (red/yellow/green).
+                const work = store.state.cardWork?.[t.seq];
+                const WORK_COLOR: Record<string, string> = { not_pushed: 'red', not_merged: 'yellow', merged: 'green' };
+                const dotColor = work ? WORK_COLOR[work] : undefined;
+                const selected = ci === focus.col && ri === focus.row && !dragging;
                 return (
                   <Text key={t.id} wrap="truncate"
-                    inverse={ci === focus.col && ri === focus.row && !dragging}
+                    inverse={selected}
                     dimColor={dragging?.id === t.id}
                     color={ghostHere ? 'green' : t.blocked_reason ? 'red' : undefined}>
-                    {ghostHere ? '▸ ' : t.pinned ? '• ' : '  '}{t.seq}-{t.title}
+                    {ghostHere ? '▸ ' : dotColor
+                      ? <><Text color={dotColor} inverse={selected}>{'•'}</Text>{' '}</>
+                      : '  '}{t.seq}-{t.title}{t.pinned ? ' 📌' : ''}
                   </Text>
                 );
               })}
