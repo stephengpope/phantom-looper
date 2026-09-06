@@ -6,7 +6,7 @@
 //
 // Design is phantom-looper's, not shockwave's: sessions are explicit and
 // long-lived (no lazy chat minting, no per-message checkout prep), the
-// Assistant is the primary agent, work lands only through /autopush, and voice
+// Assistant is the primary agent, work lands only through /auto_push, and voice
 // is Deepgram-only. Mechanisms (the streaming bubble, entities, telegram_sent,
 // attachments, the escape-spelled reactions) are ported from ../shockwave.
 
@@ -36,6 +36,7 @@ import { runAssistantTurn, type AssistantDeps } from './assistant.js';
 import { Approvals } from './approvals.js';
 import * as store from './store.js';
 import { menuFor, handleCommand } from './commands.js';
+import { autoPushSession, autoPullSession, type AutoPushOutcome, type AutoPullOutcome } from '../../core/llm/tools/git.js';
 
 const log = logger('telegram');
 const BASE = 'http://looper';
@@ -44,7 +45,8 @@ const CLIENT_ID = 'telegram';
 // Progress on a voice message itself. WRITTEN AS ESCAPES — Telegram's reaction
 // set carries no variation selectors, and a picker-pasted glyph brings one,
 // yielding REACTION_INVALID.
-const REACT_TRANSCRIBING = '\u{270D}';   // ✍ writing hand, no U+FE0F — cleared when heard
+const REACT_TRANSCRIBING = '\u{270D}';   // ✍ writing hand, no U+FE0F — replaced by 👍 when heard
+const REACT_HEARD = '\u{1F44D}';         // 👍 — transcription done
 const REACT_SPEAK = '\u{1F92C}';         // 🤬 — the user's "read this back" gesture
 
 // What the user reads when a voice note could not be heard, by reason.
@@ -444,11 +446,10 @@ export class TelegramEngine {
       const [, audio] = await Promise.all([react(REACT_TRANSCRIBING), client.downloadFile(voice.file_id)])
         .catch(async (e) => { await react(); throw e; });   // run() reports it; the ✍ must not outlive it
       const heard = await transcribeVoice(apiKey, audio, String(values.voice_stt_model ?? ''));
-      // Whatever happened, the ✍ comes off: on a hit, the turn starting is
-      // the acknowledgement and a lingering reaction is noise.
-      await react();
-      if ('error' in heard) { await client.sendMessage(dm, NOT_HEARD[heard.error]); return null; }
-      if (!heard.text) { await client.sendMessage(dm, "🎤 I couldn't make out any speech in that."); return null; }
+      if ('error' in heard) { await react(); await client.sendMessage(dm, NOT_HEARD[heard.error]); return null; }
+      if (!heard.text) { await react(); await client.sendMessage(dm, "🎤 I couldn't make out any speech in that."); return null; }
+      // Transcription succeeded — the 👍 replaces the ✍ as immediate feedback.
+      await react(REACT_HEARD);
       if (values.telegram_transcript_echo === true) await client.sendMessage(dm, `🎤 "${heard.text}"`);
       return heard.text;
     }
@@ -572,8 +573,19 @@ export class TelegramEngine {
       method: init?.method ?? 'GET', headers,
       ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
     });
-    // auto-push streams ND-JSON, not a JSON object — the caller reads .raw then.
     return { json: () => r.json(), text: () => r.text() };
+  }
+
+  /** `/auto_push` and `/auto_pull` — core's one client of each git route, as
+   *  the telegram client; every step reaches `onStep` in words, so the command
+   *  can show them. Never throws: a refusal is a result too. */
+  async autoPush(session: string, onStep?: (label: string) => void): Promise<AutoPushOutcome> {
+    try { return await autoPushSession({ baseUrl: BASE, apiKey: this.deps.apiKey, sessionId: session, fetch: this.f, clientId: CLIENT_ID }, onStep); }
+    catch (e) { return { result: 'error', reason: (e as Error).message }; }
+  }
+  async autoPull(session: string, onStep?: (label: string) => void): Promise<AutoPullOutcome> {
+    try { return await autoPullSession({ baseUrl: BASE, apiKey: this.deps.apiKey, sessionId: session, fetch: this.f, clientId: CLIENT_ID }, onStep); }
+    catch (e) { return { result: 'error', reason: (e as Error).message }; }
   }
 
   private turnDeps(): TurnDeps {

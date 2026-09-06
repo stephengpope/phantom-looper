@@ -622,6 +622,67 @@ test('auto-pull over the route: 503 unwired; wired -> the coding kit and the Ass
   await t.done();
 });
 
+test('auto-push over the route: 503 unwired; wired -> core\'s client streams the steps in words and the Telegram Assistant pushes through it', async () => {
+  const { buildApp } = await import('../phantom-backend/api/app.js');
+  const { injectFetch } = await import('../phantom-backend/looper/injectFetch.js');
+  const { autoPushSession } = await import('../core/llm/tools/git.js');
+  const { GitEngine } = await import('../phantom-backend/git/engine.js');
+  const { makeDocker } = await import('../phantom-backend/docker.js');
+  const { ContainerManager } = await import('../phantom-backend/workspace/container.js');
+  const t = await autoPushRoot();
+  const H = { authorization: 'Bearer k', 'content-type': 'application/json', 'x-phantom-looper-session': t.session.id };
+  const docker = makeDocker();
+  const engine = new GitEngine(db, t.paths, t.key);
+  const fsDeps = { docker, containers: new ContainerManager(docker, t.paths), engine };
+
+  // Unwired: a refusal envelope, which the client turns into a thrown message.
+  const bare = await buildApp({ db, paths: t.paths, apiKey: 'k', encryptionKey: t.key, version: 'test', pgPool, fs: fsDeps, engine });
+  const r = await bare.inject({ method: 'POST', url: '/git/auto-push', headers: H, payload: {} });
+  assert.equal(r.statusCode, 503, r.body);
+  await assert.rejects(
+    autoPushSession({ baseUrl: 'http://x', apiKey: 'k', sessionId: t.session.id, fetch: injectFetch(bare) }),
+    /auto-push is not wired/);
+
+  // Wired: the real flow behind the route.
+  const app = await buildApp({ db, paths: t.paths, apiKey: 'k', encryptionKey: t.key, version: 'test', pgPool, fs: fsDeps, engine,
+    autoPush: (s, w, onEvent) => autoPush({ db, paths: t.paths, encryptionKey: t.key, onEvent }, s, w) });
+  const f = injectFetch(app);
+  const cfg = { baseUrl: 'http://x', apiKey: 'k', sessionId: t.session.id, fetch: f };
+
+  // Nothing to push -> nothing; the merge + verify still ran (that IS how it knows).
+  let steps: string[] = [];
+  let out = await autoPushSession(cfg, (label) => steps.push(label));
+  assert.equal(out.result, 'nothing', JSON.stringify(out));
+  assert.deepEqual(steps, ['merging the base branch in', 'verifying against the repo']);
+
+  // Work on the branch -> pushed; the steps arrived in words, the sha is base's tip.
+  await fs.writeFile(path.join(t.dir, 'work.txt'), 'in flight\n');
+  steps = [];
+  out = await autoPushSession(cfg, (label) => steps.push(label));
+  assert.equal(out.result, 'pushed', JSON.stringify(out));
+  assert.equal(out.sha, t.originSha('main'));
+  assert.deepEqual(steps, ['committing', 'merging the base branch in', 'verifying against the repo',
+    'pushing the branch', 'pushing to the base branch']);
+
+  // The Telegram Assistant's kit carries git_auto_push and answers over the
+  // same wire — bound to the account's active session, or an explicit id.
+  const { assistantKit } = await import('../phantom-backend/telegram/assistant.js');
+  const kit = await assistantKit({ f, apiKey: 'k' }, {
+    settings: {}, workspaceId: () => t.workspace.id, activeSession: () => null,
+    onSwitch: async () => ({}), approve: async () => false, onWorkspaceCreated: async () => ({}),
+  });
+  assert.ok(kit.git_auto_push, 'the Telegram Assistant has git_auto_push');
+  const run = kit.git_auto_push!.execute as (a: unknown, o: unknown) => Promise<any>;
+  let tg = await run({}, {});
+  assert.match(tg.error, /no active session/, 'no pointer, no id -> says so');
+  await fs.writeFile(path.join(t.dir, 'work.txt'), 'more\n');
+  tg = await run({ id: t.session.id }, {});
+  assert.equal(tg.result, 'pushed', JSON.stringify(tg));
+  assert.equal(tg.session, t.session.id);
+  assert.equal(tg.sha, t.originSha('main'));
+  await t.done();
+});
+
 test('commit message: a failing model is retried 3 times, then file names', async () => {
   const t = await autoPushRoot();
   await fs.writeFile(path.join(t.dir, 'a.txt'), 'x\n');
