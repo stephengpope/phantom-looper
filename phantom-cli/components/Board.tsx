@@ -237,7 +237,7 @@ export function Board({ store, width, height, isActive, onClose, solo, onOpenSes
         ) : archiveArmed.current != null && focusCard ? (
           <Text color="yellow">archive #{focusCard.seq}-{focusCard.title}? — [a] again to archive, [esc] to cancel</Text>
         ) : (
-          <Text dimColor>↑ ↓ ← →  [enter] open  [tab/shift+tab] move  [j/k] sort  [n]ew  [p]in  [a]rchive  {zoom ? '[e] collapse' : '[e]xpand'}  [v]iew archived  [esc]</Text>
+          <Text dimColor>↑ ↓ ← →  [esc]  [enter] open  [tab/shift+tab] move  [j/k] sort  [n]ew  [p]in  [a]rchive  {zoom ? '[e] collapse' : '[e]xpand'}  [v]iew archived</Text>
         )}
       </Box>
     </Box>
