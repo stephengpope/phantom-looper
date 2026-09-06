@@ -7,6 +7,9 @@
 // missing key or a vendor failure comes back as a reason the caller can say.
 
 import { connectFetch, isConnectFailure } from './connect.js';
+import { logger } from '../log.js';
+
+const log = logger('deepgram');
 
 const API = process.env.DEEPGRAM_API_BASE ?? 'https://api.deepgram.com';
 
@@ -56,9 +59,10 @@ export async function speakVoice(apiKey: string, voice: string, text: string): P
       headers: { Authorization: `Token ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: text.slice(0, SPEAK_MAX_CHARS) }),
     });
-    if (!res.ok) return null;
+    if (!res.ok) { log.warn({ status: res.status }, 'text-to-speech refused — the reply went as text'); return null; }
     return Buffer.from(await res.arrayBuffer());
-  } catch {
+  } catch (e) {
+    log.warn({ err: (e as Error).message }, 'text-to-speech failed — the reply went as text');
     return null;
   }
 }

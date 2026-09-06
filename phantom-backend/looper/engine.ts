@@ -124,7 +124,12 @@ export class LooperEngine {
           `select * from "${workspace.schemaName}".cards
            where status = any($1) and not archived`, [[...LOOP_COLUMNS]]);
         cards = r.rows as CardRow[];
-      } catch { continue; }
+      } catch (e) {
+        // Its loops never start this sweep — a card sitting in plan or
+        // in_progress with nothing happening; the log is the only trace.
+        log.error({ workspace: workspace.id, err: (e as Error).message }, 'could not read the workspace\'s cards — its loops did not run');
+        continue;
+      }
       for (const card of cards) void this.runLoop(workspace.id, card.seq);
     }
   }
@@ -135,7 +140,12 @@ export class LooperEngine {
    *  turn's cleanup would refire the turn it just finished. */
   async runLoopOfSession(sessionId: string, releasedBy: string): Promise<void> {
     if (releasedBy === CLIENT_ID) return;
-    const loop = await loopOf(this.deps.db, sessionId).catch(() => undefined);
+    let loop;
+    try { loop = await loopOf(this.deps.db, sessionId); }
+    catch (e) {
+      log.error({ session: sessionId, err: (e as Error).message }, 'could not look up the session\'s loop — its round did not run');
+      return;
+    }
     if (loop) void this.runLoop(loop.workspaceId, loop.card);
   }
 

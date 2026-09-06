@@ -50,7 +50,7 @@ export async function phantomTools(cfg: PhantomConfig): Promise<Record<string, T
   const res = await f(`${cfg.baseUrl}/tools`, {
     headers: { authorization: `Bearer ${cfg.apiKey}` },
   });
-  if (!res.ok) throw new Error(`GET /tools failed: ${res.status}`);
+  if (!res.ok) throw new Error(`could not read the tool list from phantom-backend at ${cfg.baseUrl}: HTTP ${res.status}`);
   const listing = (await res.json() as { data: ToolListing }).data;
 
   const out: Record<string, Tool> = {};

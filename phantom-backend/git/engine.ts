@@ -114,7 +114,9 @@ export class GitEngine {
   }> {
     const folder = await this.folderOf(s);
     const dir = repoDir(this.paths, folder.id);
-    await git(dir, ['fetch', 'origin', workspace.baseBranch], await this.auth(workspace)).catch(() => {});
+    await git(dir, ['fetch', 'origin', workspace.baseBranch], await this.auth(workspace)).catch((e: Error) => {
+      log.warn({ dir, base: workspace.baseBranch, err: e.message }, 'fetch of base failed — arrivals are measured against the last copy');
+    });
     const { stdout: commits } = await git(dir, ['log', '--format=%h %s', `HEAD..origin/${workspace.baseBranch}`]).catch(() => ({ stdout: '' }));
     const { stdout: files } = await git(dir, ['diff', '--name-only', `HEAD...origin/${workspace.baseBranch}`]).catch(() => ({ stdout: '' }));
     const { stdout: since } = await git(dir, ['rev-list', '--count', `${folder.claimSha}..origin/${workspace.baseBranch}`]).catch(() => ({ stdout: '0' }));

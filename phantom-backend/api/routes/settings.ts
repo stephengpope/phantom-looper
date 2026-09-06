@@ -113,7 +113,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
 
       const entries = Object.entries(body).map(([k, value]) => ({ key: k, value }));
       const bad = entries.filter((e) => !isSettingKey(e.key) && !isCredential(e.key)).map((e) => e.key);
-      if (bad.length) return reply.code(400).send(err('unknown_setting', `not settings: ${bad.join(', ')}`));
+      if (bad.length) return reply.code(400).send(err('unknown_setting', `unknown settings: ${bad.join(', ')}`));
       const invalid = validatePatch(entries.filter((e) => !isCredential(e.key)).map((e) => [e.key, e.value] as [string, unknown]));
       if (invalid.length) return reply.code(400).send(err('invalid_setting', invalid.join('; ')));
       // A key may only be written at a layer it declares. Otherwise a typo'd

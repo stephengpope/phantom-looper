@@ -147,9 +147,9 @@ export function languageModel(cfg: ModelConfig): LanguageModel {
     case 'openai': return createOpenAI({ apiKey: c.apiKey ?? undefined, baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
     case 'google': return createGoogleGenerativeAI({ apiKey: c.apiKey ?? undefined, fetch: c.fetch })(c.model);
     case 'openai-compatible':
-      if (!c.baseUrl) throw new Error('openai-compatible needs a base url');
+      if (!c.baseUrl) throw new Error(`provider is openai-compatible but base_url is not set — set the endpoint on /model (phantom-cli), or PATCH /settings {base_url}`);
       return createOpenAICompatible({ name: 'phantom-looper', baseURL: c.baseUrl, apiKey: c.apiKey ?? 'none', fetch: c.fetch })(c.model);
-    default: throw new Error(`unknown provider "${String((c as { provider: string }).provider)}"`);
+    default: throw new Error(`provider "${String((c as { provider: string }).provider)}" is not one of anthropic, openai, google, openai-compatible — ${PICK_MODEL}`);
   }
 }
 

@@ -275,11 +275,9 @@ dropped.
   `AUTO_PUSH_STEPS` / `AUTO_PULL_STEPS`, the single result record is the
   answer; a refusal envelope throws). Callers: the cli (`index.tsx`, adds its
   connection + CA + client id), the Telegram engine (`/auto_push`,
-  `/auto_pull`), the Telegram Assistant, the coding kit. `codingGitTools(cfg)`
-  → `git_auto_pull` for the CODING agent, bound to its own session at build
-  (no session input), declared mutating so plan mode drops it, never throws
-  (a failure is `{result:'error', reason}`). Wired in both coding kits
-  (`phantom-backend/looper/turn.ts`, `phantom-cli/index.tsx newTools`).
+  `/auto_pull`), the Telegram Assistant. The CODING agent has NO git tool,
+  push or pull — moving code is a person's call, through the slash commands
+  or the Assistant.
 - `server.ts` `fixerBashTool(exec)` — the Git Fixer's `bash`; stdout
   truncated to 8KB, stderr 4KB.
 

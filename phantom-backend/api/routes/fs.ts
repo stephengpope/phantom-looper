@@ -236,7 +236,7 @@ export function fsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
       const sessionId = String(req.headers[SESSION_HEADER] ?? '');
       if (!sessionId) return reply.code(400).send(err('session_not_found', `missing ${SESSION_HEADER} header`));
       const session = await getSession(ctx.db, sessionId);
-      if (!session) return reply.code(404).send(err('session_not_found', sessionId));
+      if (!session) return reply.code(404).send(err('session_not_found', `no session ${sessionId}`));
       if (session.status !== 'active') return reply.code(410).send(err('session_destroyed', `session is ${session.status}`));
 
       const workspaceRows = await ctx.db.select().from(workspaces).where(eq(workspaces.id, session.workspaceId));

@@ -77,7 +77,10 @@ async function main() {
       const c = await gitFixerConfig();
       if (!isProvider(c.provider)) return null;
       return { ...c, provider: c.provider };
-    } catch { return null; }
+    } catch (e) {
+      log.warn({ err: (e as Error).message }, 'git fixer config cannot build — commit messages fall back to file names');
+      return null;
+    }
   };
   const autoPushFn = (session: SessionRow, workspace: WorkspaceRow, onEvent?: (e: AutoPushEvent) => void | Promise<void>) =>
     autoPush({ db, paths, encryptionKey: env.encryptionKey, fixer: fixerHook, messageConfig, onEvent },

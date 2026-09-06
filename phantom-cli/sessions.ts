@@ -494,7 +494,8 @@ export class SessionStore {
       this.notify();
       // The turn is on disk already (appended per step); the hook ships the
       // whole file to the server in the background.
-      try { this.onTurnEnd?.(e); } catch { /* sync is best effort */ }
+      try { this.onTurnEnd?.(e); }
+      catch (err) { this.note(e.id, `transcript sync failed (kept locally): ${(err as Error).message}`); }
       // Whatever was typed while this ran goes next — ALL of it, as one turn
       // — but not after an interrupt: esc stops the session, and firing the
       // queue straight into it would be the opposite of stopping.

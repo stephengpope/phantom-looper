@@ -184,7 +184,8 @@ export async function localState(dir: string, branch: string): Promise<LocalStat
   try {
     const { stdout: dirty } = await git(dir, ['status', '--porcelain']);
     if (dirty.trim()) return 'dirty';
-  } catch {
+  } catch (e) {
+    log.warn({ dir, err: errStr(e) }, 'git status failed — state is unknown, nothing will be wiped');
     return 'unknown'; // could not tell -> never license a wipe
   }
   try {
@@ -197,7 +198,8 @@ export async function localState(dir: string, branch: string): Promise<LocalStat
     try {
       const { stdout } = await git(dir, ['rev-list', '--count', 'HEAD', '--not', '--remotes=origin']);
       return Number(stdout.trim()) === 0 ? 'clean' : 'no_upstream';
-    } catch {
+    } catch (e) {
+      log.warn({ dir, branch, err: errStr(e) }, 'rev-list failed — counted as unpushed work');
       return 'no_upstream';
     }
   }
@@ -230,7 +232,8 @@ export async function workState(
     if (dirty.trim()) return 'not_pushed';
     const { stdout: local } = await git(dir, ['rev-list', '--count', 'HEAD', '--not', '--remotes=origin']);
     if (Number(local.trim()) > 0) return 'not_pushed';
-  } catch {
+  } catch (e) {
+    log.warn({ dir, branch, err: errStr(e) }, 'git status/rev-list failed — no work state for this session');
     return null;
   }
   try {

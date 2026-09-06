@@ -110,7 +110,7 @@ export class TelegramEngine {
     if (e.event !== 'card' || !e.from || e.from === e.card.status) return;   // the cheap test first — no I/O
     // One read: prefix + the setting resolved at this workspace's layer.
     const ws = await (await this.call(`/workspaces/${workspaceId}`)).json()
-      .catch(() => null) as { ok: boolean; data?: { cardPrefix: string;
+      .catch((err: Error) => { log.warn({ workspace: workspaceId, err: err.message }, 'workspace read failed — no board alert'); return null; }) as { ok: boolean; data?: { cardPrefix: string;
         settings: Record<string, { value: unknown }> } } | null;
     if (!ws?.ok || !ws.data) return;
     const alert = autoBuildAlert(e, ws.data.cardPrefix);
@@ -167,11 +167,11 @@ export class TelegramEngine {
       }
 
       const client = new TelegramClient(token);
-      const me = await client.getMe().catch(() => null);
+      const me = await client.getMe().catch((e: Error) => { log.warn({ err: e.message }, 'getMe failed — the bot has no name this boot'); return null; });
       const secret = acc.webhookSecret ?? crypto.randomBytes(32).toString('hex');
       // A read on every boot after the first: only re-register when the URL or
       // the subscription drifted (dropPending:false keeps queued messages).
-      const info = await client.getWebhookInfo().catch(() => null);
+      const info = await client.getWebhookInfo().catch((e: Error) => { log.warn({ err: e.message }, 'getWebhookInfo failed — re-registering'); return null; });
       const registered = info?.url === url
         && ALLOWED_UPDATES.every((u) => (info?.allowed_updates ?? []).includes(u));
       if (!registered || acc.webhookSecret !== secret) {

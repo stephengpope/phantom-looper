@@ -71,8 +71,11 @@ export async function scanSkills(root: string): Promise<SkillMeta[]> {
   try {
     entries = (await fsp.readdir(dir, { withFileTypes: true }))
       .filter((e) => e.isDirectory() || e.isSymbolicLink()).map((e) => e.name);
-  } catch {
-    return [];
+  } catch (e) {
+    // No directory is the normal case (a repo without skills); anything else
+    // is a real read failure and must not read as "no skills".
+    if ((e as { code?: string }).code === 'ENOENT') return [];
+    throw new Error(`could not read the skills directory ${dir}: ${(e as Error).message}`);
   }
   const out: SkillMeta[] = [];
   for (const name of entries) {

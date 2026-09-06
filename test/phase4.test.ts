@@ -553,12 +553,12 @@ test('auto-pull: fixer fails -> blocked, merge aborted, the pre-pull commit surv
   await t.done();
 });
 
-// The wire: the route streams, core's ONE client reads it, and the two headless
-// kits (the coding agent's bound tool, the Assistant's) answer through it.
-test('auto-pull over the route: 503 unwired; wired -> the coding kit and the Assistant kit both pull, plan mode drops the coder\'s', async () => {
+// The wire: the route streams, core's ONE client reads it, and the Telegram
+// Assistant's kit answers through it. The coding agent has no git tool.
+test('auto-pull over the route: 503 unwired; wired -> core\'s client pulls and the Assistant kit pulls through it', async () => {
   const { buildApp } = await import('../phantom-backend/api/app.js');
   const { injectFetch } = await import('../phantom-backend/looper/injectFetch.js');
-  const { codingGitTools, autoPullSession } = await import('../core/llm/tools/git.js');
+  const { autoPullSession } = await import('../core/llm/tools/git.js');
   const { GitEngine } = await import('../phantom-backend/git/engine.js');
   const { makeDocker } = await import('../phantom-backend/docker.js');
   const { ContainerManager } = await import('../phantom-backend/workspace/container.js');
@@ -584,16 +584,11 @@ test('auto-pull over the route: 503 unwired; wired -> the coding kit and the Ass
   const f = injectFetch(app);
   const cfg = { baseUrl: 'http://x', apiKey: 'k', sessionId: t.session.id, fetch: f };
 
-  // Plan mode: the coder's kit has no git_auto_pull (it commits and merges).
-  assert.deepEqual(Object.keys(codingGitTools({ ...cfg, pick: 'readonly' })), []);
-  const tool = codingGitTools(cfg).git_auto_pull!;
-  assert.ok(tool, 'the full kit carries it');
-
-  // Nothing behind -> clean, through the tool.
-  let out = await (tool.execute as (a: unknown, o: unknown) => Promise<any>)({}, {});
+  // Nothing behind -> clean.
+  let out = await autoPullSession(cfg);
   assert.equal(out.result, 'clean', JSON.stringify(out));
 
-  // Base moves; the coder is mid-edit; the tool pulls, the steps were streamed in words.
+  // Base moves; the session is mid-edit; the client pulls, the steps were streamed in words.
   t.pushMain('other.txt', 'landed elsewhere\n', 'landed elsewhere');
   await fs.writeFile(path.join(t.dir, 'work.txt'), 'in flight\n');
   const steps: string[] = [];

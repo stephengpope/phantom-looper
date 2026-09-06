@@ -205,7 +205,10 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       await Promise.all(rows.map(async (r) => {
         const base = baseOf.get(r.workspaceId);
         if (r.status !== 'active' || r.folderId !== r.id || !r.branch || !base) return;
-        work.set(r.id, await workState(repoDir(ctx.paths, r.id), r.branch, base).catch(() => null));
+        work.set(r.id, await workState(repoDir(ctx.paths, r.id), r.branch, base).catch((e: Error) => {
+          log.warn({ session: r.id, err: e.message }, 'could not read the checkout\'s git state — listed without one');
+          return null;
+        }));
       }));
     }
     // `locked` is computed HERE so no client has to compare clocks with the
@@ -235,7 +238,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       const client = clientOf(req);
       if (!client) return reply.code(400).send(err('missing_client', 'x-phantom-looper-client header required'));
       const s = await getSession(ctx.db, req.params.id);
-      if (!s) return reply.code(404).send(err('session_not_found', req.params.id));
+      if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       const ttl = await resolve(ctx.db, 'session_lock_ttl_ms');
       const expires = await acquireLock(ctx.db, s, client, Number(ttl), req.body?.label);
       if (!expires) return reply.code(409).send(lockedErr(s));
@@ -281,7 +284,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       params: idParam } },
     async (req, reply) => {
       const s = await getSession(ctx.db, req.params.id);
-      if (!s) return reply.code(404).send(err('session_not_found', req.params.id));
+      if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       // The one read that names the blob on purpose.
       const rows = await ctx.db.select({ data: sessions.transcript })
         .from(sessions).where(eq(sessions.id, s.id));
@@ -304,7 +307,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     async (req, reply) => {
       const client = clientOf(req);
       const s = await getSession(ctx.db, req.params.id);
-      if (!s) return reply.code(404).send(err('session_not_found', req.params.id));
+      if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (heldByOther(s, client)) return reply.code(409).send(lockedErr(s));
       const data = req.body.data;
       // A list preview, not the record: the UI shows a few dozen characters,
@@ -368,7 +371,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     async (req, reply) => {
       const client = clientOf(req);
       const s = await getSession(ctx.db, req.params.id);
-      if (!s) return reply.code(404).send(err('session_not_found', req.params.id));
+      if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
       const write = (o: unknown) => { reply.raw.write(`${JSON.stringify(o)}\n`); };
       const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
@@ -408,7 +411,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       const client = clientOf(req);
       if (!client) return reply.code(400).send(err('missing_client', 'x-phantom-looper-client header required'));
       const s = await getSession(ctx.db, req.params.id);
-      if (!s) return reply.code(404).send(err('session_not_found', req.params.id));
+      if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (s.lockedBy !== client) {
         return reply.code(409).send(s.lockedBy ? lockedErr(s)
           : err('session_not_held', 'hold the session (POST /sessions/:id/lock) before publishing on it'));
@@ -463,10 +466,10 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       } catch (e) {
         if (e instanceof SessionLockedError) {
           const s = await getSession(ctx.db, req.params.id);
-          return reply.code(409).send(s ? lockedErr(s) : err('session_locked', 'held', true));
+          return reply.code(409).send(s ? lockedErr(s) : err('session_locked', `session ${req.params.id} is in use`, true));
         }
         if ((e as Error).message.includes('session_not_found') || (e as Error).message.includes('not_found')) {
-          return reply.code(404).send(err('session_not_found', req.params.id));
+          return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
         }
         throw e;
       }
@@ -510,7 +513,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       params: idParam } },
     async (req, reply) => {
       const src = await getSession(ctx.db, req.params.id);
-      if (!src) return reply.code(404).send(err('session_not_found', req.params.id));
+      if (!src) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       try {
         assertDuplicable(src);
         const copy = await createSession(ctx.db, ctx.paths, ctx.encryptionKey, src.workspaceId);
@@ -544,7 +547,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       'The workspace container is runtime state and has no field here.',
     params: idParam } }, async (req, reply) => {
     const s = await getSession(ctx.db, req.params.id);
-    if (!s) return reply.code(404).send(err('session_not_found', req.params.id));
+    if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
     const wsRows = await ctx.db.select().from(workspaces).where(eq(workspaces.id, s.workspaceId));
     const settingsOut = await settingsBlock(ctx.db, { workspace: wsRows[0], session: s });
     const folder = s.folderId
@@ -578,7 +581,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       params: idParam } },
     async (req, reply) => {
       const s = await getSession(ctx.db, req.params.id);
-      if (!s) return reply.code(404).send(err('session_not_found', req.params.id));
+      if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (!s.transcriptUpdatedAt) {
         return ok({ input: 0, output: 0, cache_read: 0, cache_write: 0, as_of: null, cached: false });
       }
@@ -616,7 +619,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
           name: { type: ['string', 'null'], maxLength: 80 },
           plan_mode: { type: 'boolean' } } } } }, async (req, reply) => {
       const s = await getSession(ctx.db, req.params.id);
-      if (!s) return reply.code(404).send(err('session_not_found', req.params.id));
+      if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       // A session override is a row at session scope, like every other layer —
       // null clears it, same as everywhere.
       if (req.body?.idle_destroy_ms !== undefined) {
@@ -657,14 +660,18 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         force: { type: 'string', enum: ['true'] }, purge: { type: 'string', enum: ['true'] } } } } },
     async (req, reply) => {
       const s = await getSession(ctx.db, req.params.id);
-      if (!s) return reply.code(404).send(err('session_not_found', req.params.id));
+      if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       const purge = req.query.purge === 'true';
       if (purge && heldByOther(s, clientOf(req))) return reply.code(409).send(lockedErr(s));
       if (!purge && s.status !== 'active') return ok({ already: s.status });
       // A conversation-only session has no checkout: nothing to push first.
       if (s.status === 'active' && ctx.engine && !conversationOnly(s)) {
         const workspaceRows = await ctx.db.select().from(workspaces).where(eq(workspaces.id, s.workspaceId));
-        if (workspaceRows.length) await ctx.engine.push(s, workspaceRows[0]).catch(() => {});
+        if (workspaceRows.length) {
+          await ctx.engine.push(s, workspaceRows[0]).catch((e: Error) => {
+            log.warn({ session: s.id, err: e.message }, 'push before delete failed — deleting anyway');
+          });
+        }
       }
       try {
         if (s.status === 'active') {
