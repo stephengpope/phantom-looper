@@ -27,6 +27,7 @@ import { Screen } from './Screen.js';
 import type { Api } from './Settings.js';
 import type { WorkspaceInfo } from './Launcher.js';
 import { fit, human, labelFor, type WireMeta } from '../settingLabels.js';
+import { makeSettings } from '../settings.js';
 
 interface Effective {
   value: unknown; source: 'default' | 'override' | 'workspace' | 'session';
@@ -127,7 +128,8 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
         onSubmit={(v) => {
           if (view.kind === 'credential') {
             if (v === null) { setView({ at: 'list' }); return; }   // empty = changed my mind
-            void write(() => api('PUT', `/workspaces/${workspace.id}/credential`, { token: String(v) }),
+            // github_token at this workspace's layer — the same key /keys writes globally.
+            void write(() => makeSettings(api).patch({ github_token: String(v) }, { workspace: workspace.id }),
               'this workspace now uses its own GitHub token');
             return;
           }
@@ -245,7 +247,8 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
           if (ch !== 'd' || !k) return;
           if (k === 'credential') {
             if (!row.hasCredential) { setNotice(`${label} is already using the shared token`); return; }
-            void write(() => api('DELETE', `/workspaces/${workspace.id}/credential`),
+            // null clears the workspace layer; the global token applies again.
+            void write(() => makeSettings(api).patch({ github_token: null }, { workspace: workspace.id }),
               `${label} is back on the shared token from /keys`);
             return;
           }
