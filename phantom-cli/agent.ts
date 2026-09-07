@@ -12,7 +12,6 @@ export {
   type Agent, type Provider, type Reasoning, type ModelConfig,
 } from '../core/llm/createAgent.js';
 export { codingInstructions } from '../core/llm/agents/coding.js';
-import { withCacheBreakpoints } from '../core/llm/createAgent.js';
 
 
 // Deltas arrive many times per second; a setState per token is the classic
@@ -39,7 +38,7 @@ export async function runTurn(
   record?: StepRecord,
 ): Promise<ModelMessage[]> {
   const result = await agent.stream({
-    messages: withCacheBreakpoints(messages),
+    messages,
     abortSignal: signal,
     record,
     onStepEnd: (step) => onStep?.(step.response.messages as ModelMessage[]),

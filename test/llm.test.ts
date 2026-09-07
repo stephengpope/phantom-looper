@@ -4,6 +4,8 @@
 // the thinking rule, the provider switch.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { tool } from 'ai';
+import { z } from 'zod';
 import {
   createAgent, effectiveReasoning, isAnthropicOAuth, withClaudeCodeIdentity, CLAUDE_CODE_SYSTEM,
   languageModel, thinkingAlwaysOn, type ModelConfig,
@@ -101,6 +103,45 @@ test('openai and openai-compatible: bearer key, the base url is honoured; compat
   const c = await request({ provider: 'openai-compatible', model: 'local', apiKey: null, baseUrl: 'http://localhost:11434/v1' });
   assert.match(c.url, /^http:\/\/localhost:11434\/v1\//);
   assert.throws(() => languageModel({ provider: 'openai-compatible', model: 'x' }), /base_url is not set/);
+});
+
+test('cache breakpoints reach the wire on every step, not just the first', async () => {
+  // The bug this guards: the marks used to be placed once, before the turn.
+  // Anthropic looks only ~20 content blocks back from a breakpoint, so a mark
+  // left where the turn started stops being reachable the moment the tool loop
+  // runs past it — the rest of the turn caches nothing and the NEXT turn
+  // re-writes the whole prefix. So: drive a real two-step turn and read the
+  // second request off the wire.
+  const bodies: Array<Record<string, unknown>> = [];
+  const reply = (content: unknown, stop: string) => new Response(JSON.stringify({
+    id: 'm', type: 'message', role: 'assistant', model: 'claude-haiku-4-5',
+    content, stop_reason: stop, usage: { input_tokens: 1, output_tokens: 1 },
+  }), { status: 200, headers: { 'content-type': 'application/json' } });
+  const f: typeof fetch = async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return bodies.length === 1
+      ? reply([{ type: 'tool_use', id: 't1', name: 'ping', input: {} }], 'tool_use')
+      : reply([{ type: 'text', text: 'done' }], 'end_turn');
+  };
+  const agent = createAgent(
+    { provider: 'anthropic', model: 'claude-haiku-4-5', apiKey: 'sk-ant-api03-k', fetch: f },
+    { instructions: 'be brief', maxSteps: 2,
+      tools: { ping: tool({ description: 'ping', inputSchema: z.object({}), execute: async () => 'pong' }) } },
+  );
+  await agent.generate({ prompt: 'hi' });
+
+  assert.equal(bodies.length, 2, 'the tool call made a second request');
+  const marks = (b: Record<string, unknown>) => (b.messages as Array<{ content: Array<{ cache_control?: unknown }> }>)
+    .map((m) => m.content.some((c) => c.cache_control));
+  // Step one: one message, so both marks land on it.
+  assert.deepEqual(marks(bodies[0]), [true]);
+  // Step two: the tool call and its result have been appended, and the rolling
+  // mark has MOVED to the end. Two marks, never more (Anthropic caps at four).
+  const second = marks(bodies[1]);
+  assert.ok(second.length > 1, 'the turn grew');
+  assert.equal(second[0], true, 'the anchor stays on the first message');
+  assert.equal(second.at(-1), true, 'the rolling mark is at the end');
+  assert.equal(second.filter(Boolean).length, 2, 'no stale marks left behind');
 });
 
 test('google: the key rides as a header, not in the url', async () => {

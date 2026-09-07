@@ -39,7 +39,6 @@ import { resolveMany } from '../settings.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
 import { memoryRecorder, serializeTranscript, type TranscriptHeader } from '../../core/llm/transcript.js';
 import { agentModelConfig } from '../../core/llm/agentConfig.js';
-import { withCacheBreakpoints } from '../../core/llm/createAgent.js';
 import { phantomTools } from '../../core/llm/tools/workspace.js';
 import { webTools } from '../../core/llm/tools/web.js';
 import {
@@ -385,7 +384,7 @@ export class LooperEngine {
         const supId = supOpened.session.id;
         feed?.publish(supId, CLIENT_ID, { event: 'turn-start', agent: 'supervisor', message: step.append.join('\n\n') });
         try {
-          const r = await agent.stream({ messages: withCacheBreakpoints(messages), record });
+          const r = await agent.stream({ messages, record });
           await drain(r, (part) => feed?.publishPart(supId, CLIENT_ID, part));
         } catch (e) {
           feed?.publish(supId, CLIENT_ID, { event: 'error', message: (e as Error).message });

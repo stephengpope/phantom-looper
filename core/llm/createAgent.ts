@@ -255,14 +255,50 @@ export function withRetry(
  * providers cache automatically and ignore the anthropic options block. The
  * marks go on copies: history is what we persist and replay, and it stays
  * clean.
+ *
+ * This runs before EVERY step (createAgent's prepareStep), not once per turn.
+ * Anthropic only looks ~20 content blocks back from a breakpoint for a usable
+ * prefix, so a mark left where the turn STARTED goes stale the moment the tool
+ * loop appends more than that: the steps in between cache nothing, and the
+ * next turn misses everything past tools + system and re-writes the whole
+ * prefix at the write rate. Measured on a real session: turns of 8 steps or
+ * fewer read the full prefix back, turns of 9 or more read 8,208 tokens and
+ * re-wrote up to 982,860. Re-marking each step keeps the rolling breakpoint
+ * within a block or two of the end, so the chain never breaks.
+ *
+ * Re-marking means the messages arriving here may already carry a mark this
+ * function made (an override carries forward into later steps), and Anthropic
+ * caps a request at four breakpoints — so every stale mark comes off first.
  */
+const unmark = (m: ModelMessage): ModelMessage => {
+  // Nothing else in the tree writes a message's anthropic provider options,
+  // so the whole block is ours to drop.
+  if (!m.providerOptions?.anthropic) return m;
+  const { anthropic: _stale, ...rest } = m.providerOptions;
+  return Object.keys(rest).length ? { ...m, providerOptions: rest }
+    : (({ providerOptions: _drop, ...bare }) => bare as ModelMessage)(m);
+};
+
+/** How long Anthropic keeps a cached prefix alive. The default is 5 minutes,
+ *  which a person driving the cli outlasts every time they step away — six
+ *  full expiries in the session measured above, each one re-writing ~1M tokens
+ *  from scratch. An hour costs 2x the write rate instead of 1.25x, but a write
+ *  is only ever the delta past the last breakpoint (a few hundred tokens once
+ *  the prefix is warm), so the premium is paid on scraps and the saved
+ *  re-writes are the whole conversation. */
+const CACHE_TTL = '1h';
+
+const mark = (m: ModelMessage): ModelMessage => ({
+  ...m,
+  providerOptions: {
+    ...m.providerOptions,
+    anthropic: { cacheControl: { type: 'ephemeral', ttl: CACHE_TTL } },
+  },
+});
+
 export function withCacheBreakpoints(messages: ModelMessage[]): ModelMessage[] {
-  const mark = (m: ModelMessage): ModelMessage => ({
-    ...m,
-    providerOptions: { ...m.providerOptions, anthropic: { cacheControl: { type: 'ephemeral' } } },
-  });
   if (messages.length === 0) return messages;
-  const out = [...messages];
+  const out = messages.map(unmark);
   out[0] = mark(out[0]);
   out[out.length - 1] = mark(out[out.length - 1]);
   return out;
@@ -318,6 +354,10 @@ export function createAgent(c: ModelConfig, spec: AgentSpec) {
     instructions: spec.instructions,
     tools: spec.tools,
     stopWhen: spec.maxSteps == null ? (() => false) : isStepCount(spec.maxSteps),
+    // The cache marks, re-placed before every step — see withCacheBreakpoints
+    // for why once per turn is not enough. This is the only place they are
+    // applied; callers hand `stream`/`generate` their clean history.
+    prepareStep: ({ messages }) => ({ messages: withCacheBreakpoints(messages) }),
     // Retries are the fetch wrapper's (languageModel/withRetry) — never the
     // SDK's fixed-doubling loop, and never both.
     maxRetries: 0,

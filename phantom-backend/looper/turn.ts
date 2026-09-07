@@ -7,7 +7,6 @@ import type { ModelMessage } from 'ai';
 import type { OpenedSession } from '../../core/session.js';
 import { memoryRecorder, serializeTranscript, type TranscriptHeader } from '../../core/llm/transcript.js';
 import { buildCodingAgent, modelConfigFrom } from '../../core/llm/agentConfig.js';
-import { withCacheBreakpoints } from '../../core/llm/createAgent.js';
 import { phantomTools } from '../../core/llm/tools/workspace.js';
 import { skillTools } from '../../core/llm/tools/skills.js';
 import { webTools } from '../../core/llm/tools/web.js';
@@ -77,12 +76,11 @@ export async function runCodingTurn(
   const { agent } = buildCodingAgent(values, tools, opened.instructions, deps.modelFetch, deps.onRetry);
   const messages: ModelMessage[] = [...opened.messages, { role: 'user', content: message }];
 
-  // The cache marks ride copies (withCacheBreakpoints); `messages` itself is
-  // what the transcript records and must stay clean. `record` is createAgent's
-  // step seam: each step's messages and usage line collect here for the
-  // turn-end save — the WHOLE turn, where the SDK's turn-end response
-  // carries only the final step.
-  const marked = withCacheBreakpoints(messages);
+  // The cache marks are createAgent's, placed on copies before every step;
+  // `messages` itself is what the transcript records and must stay clean.
+  // `record` is createAgent's step seam: each step's messages and usage line
+  // collect here for the turn-end save — the WHOLE turn, where the SDK's
+  // turn-end response carries only the final step.
   const { record, events: turnEvents, messages: turnMessages } = memoryRecorder(messages.length);
   const feed = deps.sessionEvents;
   const id = opened.session.id;
@@ -90,7 +88,7 @@ export async function runCodingTurn(
   let interrupted = false;
   feed?.publish(id, deps.client, { event: 'turn-start', agent: 'coding', message });
   try {
-    const r = await agent.stream({ messages: marked, record, abortSignal: deps.signal });
+    const r = await agent.stream({ messages, record, abortSignal: deps.signal });
     await drain(r, (part) => {
       const p = part as { type: string; text?: string };
       if (p.type === 'text-delta' && p.text) text += p.text;

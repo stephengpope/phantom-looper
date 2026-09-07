@@ -572,6 +572,26 @@ test('cache breakpoints mark the first and last message only', () => {
   assert.deepEqual(marked.map((m) => Boolean(cached(m))), [true, false, true]);
   assert.equal(msgs.some((m) => m.providerOptions), false, 'history itself stays clean');
   assert.deepEqual(withCacheBreakpoints([]), []);
+  // The prefix must outlive a person stepping away — 5 minutes does not.
+  assert.deepEqual(cached(marked[0]), { type: 'ephemeral', ttl: '1h' });
+});
+
+test('re-marking moves the rolling breakpoint instead of stacking them', () => {
+  // What every step after the first sees: an already-marked history with the
+  // step's own messages appended. Anthropic caps a request at four marks, and
+  // a mark left mid-history is a wasted one — the stale ones must come off.
+  const turn = withCacheBreakpoints([
+    { role: 'user', content: 'a' }, { role: 'assistant', content: 'b' },
+  ]);
+  const nextStep = withCacheBreakpoints([
+    ...turn, { role: 'assistant', content: 'c' }, { role: 'user', content: 'd' },
+  ]);
+  const cached = (m: ModelMessage) =>
+    (m.providerOptions?.anthropic as { cacheControl?: unknown } | undefined)?.cacheControl;
+  assert.deepEqual(nextStep.map((m) => Boolean(cached(m))), [true, false, false, true]);
+  // And the message that carried the old mark comes back clean, not with an
+  // empty options bag the provider would still serialize.
+  assert.equal(nextStep[1].providerOptions, undefined);
 });
 
 test('a resumed session repaints its history and keeps writing to the same file', async () => {

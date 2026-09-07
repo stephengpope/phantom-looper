@@ -18,7 +18,6 @@
 import type { ModelMessage, Tool } from 'ai';
 import { assistantAgent } from '../../core/llm/agents/assistant.js';
 import { agentModelConfig } from '../../core/llm/agentConfig.js';
-import { withCacheBreakpoints } from '../../core/llm/createAgent.js';
 import { assistantKanbanTool, sessionsTool, workspaceCreateTool, gitAutoPushTool, gitAutoPullTool, renderRead, kebabName,
   type KanbanArgs, type SessionsArgs, type WorkspaceCreateArgs, type GitAutoPushArgs, type GitAutoPullArgs } from '../../core/llm/tools/tui.js';
 import { autoPushSession, autoPullSession } from '../../core/llm/tools/git.js';
@@ -261,13 +260,13 @@ export async function runAssistantTurn(
   const agent = assistantAgent({ ...model, fetch: deps.modelFetch }, tools);
 
   // The user message joins the history now; the turn's produced messages
-  // (assistant + tool) append after it. Cache marks ride a COPY — the stored
-  // history stays clean, the same rule the coding turn follows.
+  // (assistant + tool) append after it. Cache marks are createAgent's and ride
+  // COPIES — the stored history stays clean, the same rule the coding turn
+  // follows.
   history.push({ role: 'user', content: message });
-  const marked = withCacheBreakpoints(history);
   let text = '';
   try {
-    const r = await agent.stream({ messages: marked, abortSignal });
+    const r = await agent.stream({ messages: history, abortSignal });
     for await (const part of r.stream) {
       const p = part as Record<string, unknown>;
       if (p.type === 'text-delta' && typeof p.text === 'string') text += p.text;
