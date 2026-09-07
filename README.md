@@ -34,7 +34,7 @@ Each session gets its own container on its own clone of the repo. The agent can'
 
 ### 🔀 Git handled for you — Branching, conflicts and pushing, done.
 
-Every session works on its own branch. When you archive a finished card the work is committed with a written message, merged with the latest main, pushed, and fast-forwarded onto main. If the merge conflicts, an AI fixer resolves it inside the container and verifies the result before anything is pushed. No rebase, no force push, no git commands from you.
+Every session works on its own branch. When you archive a finished card the branch is backed up, the work is collapsed into one commit with a written message, replayed on top of the latest main, and fast-forwarded onto main. If the replay conflicts, the agent that wrote the code resolves it — in its own conversation, so it knows what changed — and the result is verified against the repository before anything is pushed. No pull requests, no git commands from you.
 
 ### ⚖️ A shared value system — Every agent builds and reviews by the same six rules.
 

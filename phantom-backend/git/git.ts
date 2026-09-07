@@ -315,13 +315,141 @@ export async function pushToBase(dir: string, baseBranch: string, auth: GitAuth)
   }
 }
 
-/** Merge origin/<base> into the session branch. MERGE, never rebase: rebase
- *  rewrites pushed commits and forces the next push (verified T4); merge keeps
- *  the branch append-only so no push is ever forced.
+export type RebaseResult = 'clean' | 'conflict' | 'error';
+
+/** Fetch origin/<base> and report what is on it that HEAD does not have. The
+ *  log lines are the ONLY briefing the coding agent gets about why a conflict
+ *  exists, so they are collected here and carried to the turn. */
+export async function fetchBase(
+  dir: string, baseBranch: string, auth: GitAuth,
+): Promise<string[]> {
+  await git(dir, ['fetch', 'origin', baseBranch], auth);
+  const { stdout } = await git(dir, ['log', '--format=%h %s', `HEAD..origin/${baseBranch}`]);
+  return stdout.trim().split('\n').filter(Boolean);
+}
+
+/** Stage everything and collapse the session's work back to ONE commit's worth
+ *  of staged content — `add -A`, then `reset --soft` to the merge base. Nothing
+ *  is committed here: the caller writes the message from the staged diff, which
+ *  is why the squash has to come first.
+ *
+ *  ONE commit is what keeps the rebase to a single conflict stop. Replaying N
+ *  commits stops N times, over intermediate trees that never existed as a
+ *  working state, re-resolving the same hunks — the cost the squash buys out.
+ *
+ *  False means there is nothing to land, and HEAD has not moved. */
+export async function stageAndSquash(dir: string, baseBranch: string): Promise<boolean> {
+  await git(dir, ['add', '-A']);
+  const { stdout: mb } = await git(dir, ['merge-base', 'HEAD', `origin/${baseBranch}`]);
+  const mergeBaseSha = mb.trim();
+  const { stdout: staged } = await git(dir, ['diff', '--cached', '--name-only']);
+  const { stdout: ahead } = await git(dir, ['rev-list', '--count', `${mergeBaseSha}..HEAD`]);
+  if (!staged.trim() && Number(ahead.trim()) === 0) return false;
+  await git(dir, ['reset', '--soft', mergeBaseSha]);
+  return true;
+}
+
+/** Commit whatever `stageAndSquash` left staged. */
+export async function commitStaged(dir: string, message: string): Promise<void> {
+  await git(dir, ['commit', '--no-verify', '-m', message]);
+}
+
+/** Replay the branch onto origin/<base>. The caller has already fetched and
+ *  squashed, so this stops at most once.
+ *
+ *  `conflict` and `error` are distinct on purpose: conflict markers give the
+ *  coding agent real work; a rebase that could not START leaves a clean tree
+ *  where verification would read as success while the same failure repeats. */
+export async function rebaseOntoBase(dir: string, baseBranch: string): Promise<RebaseResult> {
+  try {
+    await git(dir, ['rebase', `origin/${baseBranch}`]);
+    return 'clean';
+  } catch (e) {
+    const { stdout: unmerged } = await git(dir, ['diff', '--name-only', '--diff-filter=U']);
+    if (unmerged.trim()) return 'conflict';
+    log.error({ dir, baseBranch, err: errStr(e) }, 'rebase could not start');
+    return 'error';
+  }
+}
+
+/** Is a rebase halted mid-flight? Git keeps one of two state directories while
+ *  it is; their absence is the only honest statement that the replay finished.
+ *  A tree can be clean with a rebase still stopped, so this is not implied by
+ *  the other checks. */
+export async function rebaseInProgress(dir: string): Promise<boolean> {
+  for (const d of ['rebase-merge', 'rebase-apply']) {
+    try { await fs.access(path.join(dir, '.git', d)); return true; } catch { /* absent */ }
+  }
+  return false;
+}
+
+/** Put the branch back the way it was. The ONE place the system aborts: when it
+ *  gives up, so the session is not left mid-rebase and unable to work. The
+ *  coding agent must never do this — an abort leaves a clean tree with no
+ *  markers, which is why verifyResolved also demands origin/<base> in the
+ *  history. */
+export async function rebaseAbort(dir: string): Promise<void> {
+  await git(dir, ['rebase', '--abort']).catch(() => {});
+}
+
+/** Push the rebased branch. A rebase rewrites the branch, so this must force —
+ *  and it is the BARE `--force-with-lease`, never the `=<ref>:<expected>` form:
+ *  bare implies --force-if-includes, which is what closes the lease's real hole
+ *  (a fetch between your read and your push refreshes the tracking ref, so the
+ *  lease passes on commits you never saw).
+ *
+ *  Deliberately without pushSession's fold-the-remote-in backstop: merging the
+ *  remote branch back over a rebase undoes the rebase. */
+export async function pushSessionForced(
+  dir: string, branch: string, auth: GitAuth,
+): Promise<PushResult> {
+  try {
+    await git(dir, ['push', '--no-verify', '--force-with-lease', 'origin', `HEAD:${branch}`], auth);
+    return 'pushed';
+  } catch (e) {
+    log.error({ dir, branch, err: errStr(e) }, 'forced branch push failed');
+    return 'error';
+  }
+}
+
+/** Clean tree AND no unmerged entries AND no rebase still in flight AND
+ *  origin/<base> in HEAD's history. Run against the directory, never against
+ *  what the agent said it did.
+ *
+ *  The last two are not decoration. `git rebase --abort` leaves a clean tree
+ *  with no unmerged entries, so the first checks alone call a give-up a
+ *  success: the caller then logs "resolved", pushes, and the same conflict
+ *  returns forever. Requiring origin/<base> to be an ancestor of HEAD is the
+ *  only statement of "the replay is in". */
+export async function verifyLanded(dir: string, baseBranch?: string): Promise<boolean> {
+  try {
+    const { stdout: status } = await git(dir, ['status', '--porcelain']);
+    if (status.trim()) return false;
+    const { stdout: unmerged } = await git(dir, ['diff', '--name-only', '--diff-filter=U']);
+    if (unmerged.trim()) return false;
+    if (await rebaseInProgress(dir)) return false;
+    if (!baseBranch) return true;
+    await git(dir, ['merge-base', '--is-ancestor', `origin/${baseBranch}`, 'HEAD']);
+    return true;
+  } catch (e) {
+    // merge-base exits 1 when base is NOT an ancestor — a verdict, not a
+    // failure; anything else (no repo, no origin ref) is logged.
+    if (!/is-ancestor/.test(String((e as { cmd?: string }).cmd ?? ''))) {
+      log.warn({ dir, err: (e as Error).message }, 'verification could not run — counted as not landed');
+    }
+    return false;
+  }
+}
+
+/** Merge origin/<base> into the session branch — AUTO-PULL's primitive, and
+ *  only auto-pull's. Auto-push rebases (rebaseOntoBase): it rewrites the branch
+ *  so the landing is one readable commit on base, and it force-pushes with a
+ *  lease. Auto-pull does not land anything, so it has no reason to rewrite.
+ *  See docs/auto-pull.md for the conversion.
  *
  *  `conflict` and `diverged` are distinct on purpose: markers in the tree give
- *  the Git Fixer real work; a merge that could not START leaves a clean tree
- *  where the Git Fixer verifies success while the same failure repeats (verified T9). */
+ *  the resolver real work; a merge that could not START leaves a clean tree
+ *  where verification reads as success while the same failure repeats (verified T9). */
 export async function mergeBase(
   dir: string, baseBranch: string, auth: GitAuth, message?: string,
 ): Promise<{ result: PullResult; arrived?: string[] }> {

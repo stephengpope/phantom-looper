@@ -1,10 +1,18 @@
-// The auto-push commit's message: a model writes it from the staged diff, 3 tries;
-// if all three fail (no key, provider down, empty answer) the changed file
-// names are used instead. The model config is the Git Fixer's — no settings of
-// its own.
+// The auto-push commit's message: a model writes it from the SQUASHED staged
+// diff plus the card, 3 tries; if all three fail (no key, provider down, empty
+// answer) the changed file names are used instead. A bad message must never
+// stop work from landing, so this never throws.
+//
+// The model is the ASSISTANT's (settings assistant_provider/assistant_model,
+// cascading to the coding agent's) — the small-fast slot. Writing one subject
+// line from a diff is not work for the model doing the engineering.
+//
+// The card rides along because a diff says what changed and never why. It is
+// the same intent the coding agent had; this call is the only place auto-push
+// spends a model when nothing conflicts.
 import { generateText } from 'ai';
 import { languageModel, type ModelConfig } from '../../core/llm/createAgent.js';
-import { commitMessagePrompt } from '../../core/llm/prompts/gitFixer/wiring.js';
+import { commitMessagePrompt } from '../../core/llm/prompts/autoPush/wiring.js';
 import { git } from './git.js';
 import { logger, errStr } from '../log.js';
 
@@ -13,9 +21,11 @@ const log = logger('auto-push');
 const MAX_DIFF_BYTES = 60_000;
 const TRIES = 3;
 
-/** A subject line from the STAGED diff (the caller has already run add -A).
- *  Never throws — the file-name fallback is the floor. */
-export async function commitMessageFor(dir: string, config: ModelConfig | null): Promise<string> {
+/** A subject line from the STAGED diff (the caller has already staged and
+ *  squashed). Never throws — the file-name fallback is the floor. */
+export async function commitMessageFor(
+  dir: string, config: ModelConfig | null, card = '',
+): Promise<string> {
   const { stdout: names } = await git(dir, ['diff', '--cached', '--name-only']);
   const files = names.trim().split('\n').filter(Boolean);
   const fallback = () => {
@@ -31,15 +41,15 @@ export async function commitMessageFor(dir: string, config: ModelConfig | null):
       const { text } = await generateText({
         model: languageModel(config),
         maxRetries: 0, // transport retries live in languageModel's fetch wrapper
-        prompt: commitMessagePrompt(stat, diff),
+        prompt: commitMessagePrompt(stat, diff, card),
       });
       const msg = text.trim();
       if (msg && msg.length <= 2000) return msg;
     } catch (e) {
       log.warn({ dir, attempt, err: errStr(e) }, 'commit message attempt failed');
       // An HTTP failure was already retried on the full schedule inside the
-      // fetch — looping it again here would stack minutes under the git
-      // lock. These 3 tries are for a model that ANSWERED nonsense.
+      // fetch — looping it again here would stack minutes under the lock.
+      // These 3 tries are for a model that ANSWERED nonsense.
       if ((e as { statusCode?: number }).statusCode !== undefined) break;
     }
   }

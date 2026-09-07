@@ -1,6 +1,7 @@
-// Phase 4: the Git Fixer's loop over a real conflicted workspace (scripted
-// driver — no LLM in tests), verification semantics, auto-push end to end on real
-// git, and workspace creation against a fake GitHub API.
+// Phase 4: verification semantics over a real conflicted workspace (no LLM in
+// tests — the resolver is a scripted callback), the rebase primitives,
+// auto-push end to end on real git, and workspace creation against a fake
+// GitHub API.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, execFile } from 'node:child_process';
@@ -10,8 +11,10 @@ import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import Fastify from 'fastify';
-import { runGitFixer, verifyResolved, type GitFixerDriver, type GitFixerExec } from '../phantom-backend/git/gitFixer.js';
-import { autoPush, type AutoPushEvent } from '../phantom-backend/git/autoPush.js';
+import {
+  verifyLanded, rebaseInProgress, rebaseOntoBase, stageAndSquash, commitStaged,
+} from '../phantom-backend/git/git.js';
+import { autoPush, AUTOPUSH_CLIENT_ID, type AutoPushEvent } from '../phantom-backend/git/autoPush.js';
 import { autoPull, type AutoPullEvent } from '../phantom-backend/git/autoPull.js';
 import { commitMessageFor } from '../phantom-backend/git/commitMessage.js';
 import { testDb, ensureWorkspaceImage, testRoot, setWorkspaceSetting } from './harness.js';
@@ -28,6 +31,18 @@ function sh(cwd: string, args: string[]): string {
   return execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t',
     '-c', 'init.defaultBranch=main', '-c', 'commit.gpgsign=false',
     '-c', 'protocol.file.allow=always', ...args], { cwd, encoding: 'utf8' });
+}
+
+/** A plain repo on `main` with one commit — the starting point for the rebase
+ *  tests, which build their own divergence. */
+async function plainRepo(): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'phantom-p4-'));
+  const w = path.join(root, 'w');
+  execFileSync('git', ['init', '-q', w]);
+  sh(w, ['checkout', '-qb', 'main']);
+  await fs.writeFile(path.join(w, 'seed.txt'), 'seed\n');
+  sh(w, ['add', '-A']); sh(w, ['commit', '-qm', 'seed']);
+  return w;
 }
 
 /** A workspace mid-merge with real conflict markers in the named files. */
@@ -50,7 +65,9 @@ async function conflictedRepo(files: string[]): Promise<string> {
   return w;
 }
 
-const hostExec = (dir: string): GitFixerExec => async (cmd) => {
+/** Run one shell command in `dir` — how the scripted resolvers below act on the
+ *  tree, standing in for the coding agent's container. */
+const hostExec = (dir: string) => async (cmd: string) => {
   try {
     const r = await execP('/bin/sh', ['-c', cmd], { cwd: dir });
     return { stdout: r.stdout, stderr: r.stderr, exitCode: 0 };
@@ -60,81 +77,121 @@ const hostExec = (dir: string): GitFixerExec => async (cmd) => {
   }
 };
 
-test('git fixer: resolves across attempts on the same directory; verify is authoritative', async () => {
-  const dir = await conflictedRepo(['a.txt', 'b.txt']);
-  let calls = 0;
-  const driver: GitFixerDriver = {
-    available: async () => true,
-    async runSession(exec) {
-      calls++;
-      if (calls === 1) {
-        // First attempt resolves only a.txt and commits nothing — the model
-        // "thought it was done". Verify must catch it.
-        await exec('printf "resolved a\\n" > a.txt && git add a.txt');
-      } else {
-        await exec('printf "resolved b\\n" > b.txt && git add b.txt && git -c user.email=f@f -c user.name=git-fixer commit -q --no-verify -m "git fixer: resolve"');
-      }
-    },
-  };
-  const ok1 = await runGitFixer(dir, hostExec(dir), 'main', driver, { attempts: 3 });
-  assert.equal(ok1, true);
-  assert.equal(calls, 2, 'attempt 2 must inherit attempt 1 resolutions');
-  // Setext heading survived and verify still passes — diff-filter=U, not grep
-  const readme = await fs.readFile(path.join(dir, 'README.md'), 'utf8');
-  assert.match(readme, /=======/);
-  assert.equal(await verifyResolved(dir), true);
-  await fs.rm(path.dirname(dir), { recursive: true, force: true });
-});
-
-test('git fixer: unavailable driver refuses loudly, resolves nothing', async () => {
-  const dir = await conflictedRepo(['x.txt']);
-  const driver: GitFixerDriver = { available: async () => false, async runSession() { throw new Error('never'); } };
-  assert.equal(await runGitFixer(dir, hostExec(dir), 'main', driver, { attempts: 3 }), false);
-  assert.equal(await verifyResolved(dir), false, 'tree must still show the conflict');
-  await fs.rm(path.dirname(dir), { recursive: true, force: true });
-});
-
-test('git fixer: exhausts attempts on an unresolvable tree and reports failure', async () => {
-  const dir = await conflictedRepo(['x.txt']);
-  let calls = 0;
-  const driver: GitFixerDriver = {
-    available: async () => true,
-    async runSession() { calls++; /* does nothing useful */ },
-  };
-  assert.equal(await runGitFixer(dir, hostExec(dir), 'main', driver, { attempts: 2 }), false);
-  assert.equal(calls, 2);
-  await fs.rm(path.dirname(dir), { recursive: true, force: true });
-});
-
-test('verifyResolved: an aborted merge is NOT a resolution', async () => {
+test('verifyLanded: an aborted merge is NOT a resolution', async () => {
   const dir = await conflictedRepo(['x.txt']);
   // The merge in flight is `other` into `main`; give it the remote-tracking ref
   // the engine would have, so verify can ask whether the merge is actually in.
   sh(dir, ['update-ref', 'refs/remotes/origin/other', 'other']);
 
   sh(dir, ['merge', '--abort']);
-  // Clean tree, no unmerged entries: both of the old conditions pass...
-  assert.equal(await verifyResolved(dir), true);
+  // Clean tree, no unmerged entries, no rebase: every OTHER condition passes...
+  assert.equal(await verifyLanded(dir), true);
   // ...and nothing merged, which is the only thing that actually matters.
-  assert.equal(await verifyResolved(dir, 'other'), false, 'give-up must not read as resolved');
+  assert.equal(await verifyLanded(dir, 'other'), false, 'give-up must not read as resolved');
 
   try { sh(dir, ['merge', 'other']); } catch { /* conflict expected */ }
   await fs.writeFile(path.join(dir, 'x.txt'), 'resolved\n');
   sh(dir, ['add', '-A']); sh(dir, ['commit', '-qm', 'resolve']);
-  assert.equal(await verifyResolved(dir, 'other'), true, 'a real resolution passes');
+  assert.equal(await verifyLanded(dir, 'other'), true, 'a real resolution passes');
   await fs.rm(path.dirname(dir), { recursive: true, force: true });
 });
 
-test('git fixer: a driver that gives up by aborting reports failure', async () => {
-  const dir = await conflictedRepo(['x.txt']);
+test('verifyLanded: a Setext heading is not a conflict — unmerged entries, never a grep for =======', async () => {
+  const dir = await conflictedRepo(['a.txt']);
   sh(dir, ['update-ref', 'refs/remotes/origin/other', 'other']);
-  const driver: GitFixerDriver = {
-    available: async () => true,
-    async runSession(exec) { await exec('git merge --abort'); },
-  };
-  const ok = await runGitFixer(dir, hostExec(dir), 'main', driver,
-    { attempts: 1 }, 'sid', 'other');
-  assert.equal(ok, false);
+  await fs.writeFile(path.join(dir, 'a.txt'), 'resolved\n');
+  sh(dir, ['add', '-A']); sh(dir, ['commit', '-qm', 'resolve']);
+  const readme = await fs.readFile(path.join(dir, 'README.md'), 'utf8');
+  assert.match(readme, /=======/, 'the heading is still in the tree');
+  assert.equal(await verifyLanded(dir, 'other'), true, 'and it is not mistaken for a conflict');
+  await fs.rm(path.dirname(dir), { recursive: true, force: true });
+});
+
+test('verifyLanded: a rebase stopped mid-flight fails even though the tree looks clean', async () => {
+  const dir = await plainRepo();
+  // conflictedRepo([]) leaves no conflict; build a rebase that stops instead.
+  await fs.writeFile(path.join(dir, 'c.txt'), 'theirs\n');
+  sh(dir, ['add', '-A']); sh(dir, ['commit', '-qm', 'theirs on main']);
+  sh(dir, ['checkout', '-qb', 'work', 'HEAD~1']);
+  await fs.writeFile(path.join(dir, 'c.txt'), 'ours\n');
+  sh(dir, ['add', '-A']); sh(dir, ['commit', '-qm', 'ours on work']);
+  sh(dir, ['update-ref', 'refs/remotes/origin/main', 'main']);
+
+  assert.equal(await rebaseOntoBase(dir, 'main'), 'conflict');
+  assert.equal(await rebaseInProgress(dir), true);
+  // Stage the resolution but DO NOT continue: the tree is clean and there are
+  // no unmerged entries, so only the in-progress check can still say no.
+  await fs.writeFile(path.join(dir, 'c.txt'), 'both\n');
+  sh(dir, ['add', 'c.txt']);
+  assert.equal(await verifyLanded(dir, 'main'), false, 'a halted rebase is not a landing');
+  sh(dir, ['-c', 'core.editor=true', 'rebase', '--continue']);
+  assert.equal(await rebaseInProgress(dir), false);
+  assert.equal(await verifyLanded(dir, 'main'), true, 'a finished replay is');
+  await fs.rm(path.dirname(dir), { recursive: true, force: true });
+});
+
+test('verifyLanded: an aborted REBASE is not a resolution either', async () => {
+  const dir = await plainRepo();
+  await fs.writeFile(path.join(dir, 'c.txt'), 'theirs\n');
+  sh(dir, ['add', '-A']); sh(dir, ['commit', '-qm', 'theirs on main']);
+  sh(dir, ['checkout', '-qb', 'work', 'HEAD~1']);
+  await fs.writeFile(path.join(dir, 'c.txt'), 'ours\n');
+  sh(dir, ['add', '-A']); sh(dir, ['commit', '-qm', 'ours on work']);
+  sh(dir, ['update-ref', 'refs/remotes/origin/main', 'main']);
+
+  assert.equal(await rebaseOntoBase(dir, 'main'), 'conflict');
+  sh(dir, ['rebase', '--abort']);
+  assert.equal(await rebaseInProgress(dir), false, 'nothing in flight after an abort');
+  assert.equal(await verifyLanded(dir), true, 'the tree alone says yes — which is the trap');
+  assert.equal(await verifyLanded(dir, 'main'), false, 'origin/main not in HEAD is what catches it');
+  await fs.rm(path.dirname(dir), { recursive: true, force: true });
+});
+
+test('stageAndSquash: many commits plus a dirty tree collapse to ONE commit; nothing to land says so', async () => {
+  const dir = await plainRepo();
+  sh(dir, ['update-ref', 'refs/remotes/origin/main', 'main']);
+  sh(dir, ['checkout', '-qb', 'work']);
+
+  // nothing to land at all
+  assert.equal(await stageAndSquash(dir, 'main'), false, 'no work, no commit');
+  const headBefore = sh(dir, ['rev-parse', 'HEAD']).trim();
+
+  // three commits and an uncommitted edit
+  for (const n of ['1', '2', '3']) {
+    await fs.writeFile(path.join(dir, `f${n}.txt`), `${n}\n`);
+    sh(dir, ['add', '-A']); sh(dir, ['commit', '-qm', `step ${n}`]);
+  }
+  await fs.writeFile(path.join(dir, 'f4.txt'), '4\n');
+  assert.equal(sh(dir, ['rev-list', '--count', 'origin/main..HEAD']).trim(), '3');
+
+  assert.equal(await stageAndSquash(dir, 'main'), true);
+  await commitStaged(dir, 'one commit');
+  assert.equal(sh(dir, ['rev-list', '--count', 'origin/main..HEAD']).trim(), '1',
+    'ONE commit is what keeps the rebase to a single conflict stop');
+  assert.notEqual(sh(dir, ['rev-parse', 'HEAD']).trim(), headBefore);
+  for (const n of ['1', '2', '3', '4']) {
+    assert.ok(fsSync.existsSync(path.join(dir, `f${n}.txt`)), `f${n} survived the squash`);
+  }
+  assert.equal(sh(dir, ['status', '--porcelain']).trim(), '', 'the uncommitted edit went in too');
+  await fs.rm(path.dirname(dir), { recursive: true, force: true });
+});
+
+test('rebaseOntoBase: a clean replay puts base in the history and leaves one commit on top', async () => {
+  const dir = await plainRepo();
+  await fs.writeFile(path.join(dir, 'theirs.txt'), 'theirs\n');
+  sh(dir, ['add', '-A']); sh(dir, ['commit', '-qm', 'theirs on main']);
+  sh(dir, ['checkout', '-qb', 'work', 'HEAD~1']);
+  await fs.writeFile(path.join(dir, 'ours.txt'), 'ours\n');
+  sh(dir, ['add', '-A']); sh(dir, ['commit', '-qm', 'ours on work']);
+  sh(dir, ['update-ref', 'refs/remotes/origin/main', 'main']);
+
+  assert.equal(await rebaseOntoBase(dir, 'main'), 'clean');
+  assert.equal(await verifyLanded(dir, 'main'), true);
+  assert.equal(sh(dir, ['rev-list', '--count', 'origin/main..HEAD']).trim(), '1');
+  assert.equal(sh(dir, ['rev-list', '--count', '--merges', 'origin/main..HEAD']).trim(), '0',
+    'a rebase landing is a plain commit — no merge commit for a review to skip');
+  assert.ok(fsSync.existsSync(path.join(dir, 'theirs.txt')), 'what arrived on base survived');
+  assert.ok(fsSync.existsSync(path.join(dir, 'ours.txt')), 'and so did the session work');
   await fs.rm(path.dirname(dir), { recursive: true, force: true });
 });
 
@@ -278,7 +335,7 @@ test('GET /github/repos: what the stored token sees, paged, marked when already 
 // resolution is on origin before the lock releases. Also pins the hardened
 // verify — the scripted Git Fixer concludes the merge, so origin/main really is an
 // ancestor of HEAD.
-test('engine + git fixer: pull conflict is resolved inside the lock and pushed', async () => {
+test('engine + the coding agent: pull conflict is resolved inside the lock and pushed', async () => {
   const { GitEngine } = await import('../phantom-backend/git/engine.js');
   const { makePaths, repoDir } = await import('../phantom-backend/pool/paths.js');
   const { createSession } = await import('../phantom-backend/sessions.js');
@@ -307,10 +364,12 @@ test('engine + git fixer: pull conflict is resolved inside the lock and pushed',
 
   // session edits f.txt and pushes; base edits f.txt differently
   await fs.writeFile(path.join(dir, 'f.txt'), 'session\n');
-  const engine = new GitEngine(db, paths, key, async (_s, _r, d) => {
-    // scripted Git Fixer: keep both intents, conclude the merge
+  const engine = new GitEngine(db, paths, key, async (_s, _r, d, ctx) => {
+    // the scripted stand-in for the coding agent's turn: keep both intents,
+    // conclude the merge. A manual pull merges, so the mode says so.
+    assert.equal(ctx.mode, 'merge');
     const exec = hostExec(d);
-    await exec('printf "session+base\\n" > f.txt && git add f.txt && git -c user.email=f@f -c user.name=git-fixer commit -q --no-verify -m "git fixer: merge"');
+    await exec('printf "session+base\\n" > f.txt && git add f.txt && git -c user.email=f@f -c user.name=agent commit -q --no-verify -m "resolve"');
     return true;
   });
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId));
@@ -321,7 +380,7 @@ test('engine + git fixer: pull conflict is resolved inside the lock and pushed',
   sh(seed, ['add', '-A']); sh(seed, ['commit', '-qm', 'base move']); sh(seed, ['push', '-q', 'origin', 'main']);
 
   const result = await engine.pull(session, workspace);
-  assert.equal(result, 'merged', 'the git fixer inside the lock must convert conflict to merged');
+  assert.equal(result, 'merged', 'the resolver inside the lock must convert conflict to merged');
   // resolution reached origin before the lock released
   const remote = execFileSync('git', ['-C', bare, 'show', `refs/heads/${session.branch}:f.txt`], { encoding: 'utf8' });
   assert.equal(remote.trim(), 'session+base');
@@ -366,7 +425,7 @@ async function autoPushRoot() {
   return { root, paths, key, bare, seed, session, workspace,
     dir: repoDir(paths, session.id), originSha, pushMain,
     deps: (extra: Partial<Parameters<typeof autoPush>[0]> = {}) => ({
-      db, paths, encryptionKey: key, ...extra }),
+      db, paths, encryptionKey: key, client: AUTOPUSH_CLIENT_ID, ...extra }),
     done: () => fs.rm(root, { recursive: true, force: true }) };
 }
 
@@ -408,32 +467,43 @@ test('auto-push: a second auto-push after re-editing the same line does not conf
   await t.done();
 });
 
-test('auto-push: a conflict goes to the fixer and the resolution lands on base', async () => {
+test('auto-push: a stopped rebase goes to the coding agent, briefed, and the resolution lands on base', async () => {
   const t = await autoPushRoot();
   await fs.writeFile(path.join(t.dir, 'f.txt'), 'session line\n');
   t.pushMain('f.txt', 'base line\n', 'base edits the same file');
+  let seen: { mode: string; files: string[]; arrived: string[] } | undefined;
   const r = await autoPush(t.deps({
-    fixer: async (_s, _w, d) => {
+    resolve: async (_s, _w, d, ctx) => {
+      seen = { mode: ctx.mode, files: ctx.files, arrived: ctx.arrived };
+      // The agent resolves and CONTINUES the replay — it never commits itself.
       const exec = hostExec(d);
-      await exec('printf "both lines\\n" > f.txt && git add f.txt && git -c user.email=f@f -c user.name=git-fixer commit -q --no-verify -m "git fixer: merge"');
+      await exec('printf "both lines\\n" > f.txt && git add f.txt && git -c core.editor=true -c user.email=f@f -c user.name=agent rebase --continue');
       return true;
     },
   }), t.session, t.workspace);
   assert.equal(r.result, 'pushed', JSON.stringify(r));
   const now = execFileSync('git', ['-C', t.bare, 'show', 'main:f.txt'], { encoding: 'utf8' });
   assert.equal(now.trim(), 'both lines');
+  assert.equal(seen?.mode, 'rebase');
+  assert.deepEqual(seen?.files, ['f.txt'], 'the agent is told which files');
+  assert.match(seen?.arrived.join('\n') ?? '', /base edits the same file/,
+    'and what landed on base — the briefing a separate fixer never had');
+  // The landing is a plain commit, not a merge commit a review would skip.
+  const merges = execFileSync('git', ['-C', t.bare, 'rev-list', '--count', '--merges', 'main'],
+    { encoding: 'utf8' }).trim();
+  assert.equal(merges, '0', 'a rebase landing leaves nothing for review to miss');
   await t.done();
 });
 
-test('auto-push: fixer fails -> blocked, base untouched, branch left as it was', async () => {
+test('auto-push: the agent cannot resolve -> blocked, base untouched, branch left as it was', async () => {
   const t = await autoPushRoot();
   await fs.writeFile(path.join(t.dir, 'f.txt'), 'session line\n');
   t.pushMain('f.txt', 'base line\n', 'conflicting base work');
   const mainBefore = t.originSha('refs/heads/main');
-  const r = await autoPush(t.deps({ fixer: async () => false }), t.session, t.workspace);
+  const r = await autoPush(t.deps({ resolve: async () => false }), t.session, t.workspace);
   assert.equal(r.result, 'blocked', JSON.stringify(r));
   assert.equal(t.originSha('refs/heads/main'), mainBefore, 'nothing on base');
-  // the merge was aborted — clean tree, the session commit still in place
+  // the rebase was aborted — clean tree, the session commit still in place
   const { stdout: status } = await git(t.dir, ['status', '--porcelain']);
   assert.equal(status.trim(), '', 'no half-merged tree left behind');
   const { stdout: subject } = await git(t.dir, ['log', '--format=%s', '-1']);
@@ -519,18 +589,21 @@ test('auto-pull: nothing behind -> clean, and a dirty tree is NOT committed', as
   await t.done();
 });
 
-test('auto-pull: a conflict goes to the fixer; the resolution is on the branch, base untouched', async () => {
+test('auto-pull: a conflict goes to the coding agent in MERGE mode; the resolution is on the branch, base untouched', async () => {
   const t = await autoPushRoot();
   await fs.writeFile(path.join(t.dir, 'f.txt'), 'session line\n');
   t.pushMain('f.txt', 'base line\n', 'base edits the same file');
   const mainBefore = t.originSha('refs/heads/main');
+  let mode: string | undefined;
   const r = await autoPull({ db, paths: t.paths, encryptionKey: t.key,
-    fixer: async (_s, _w, d) => {
+    resolve: async (_s, _w, d, ctx) => {
+      mode = ctx.mode;
       const exec = hostExec(d);
-      await exec('printf "both lines\\n" > f.txt && git add f.txt && git -c user.email=f@f -c user.name=git-fixer commit -q --no-verify -m "git fixer: merge"');
+      await exec('printf "both lines\\n" > f.txt && git add f.txt && git -c user.email=f@f -c user.name=agent commit -q --no-verify -m "resolve"');
       return true;
     },
   }, t.session, t.workspace);
+  assert.equal(mode, 'merge', 'a pull lands nothing, so it has no reason to rewrite the branch');
   assert.equal(r.result, 'merged', JSON.stringify(r));
   assert.equal(fsSync.readFileSync(path.join(t.dir, 'f.txt'), 'utf8').trim(), 'both lines');
   assert.equal(t.originSha('refs/heads/main'), mainBefore, 'nothing on base');
@@ -539,11 +612,11 @@ test('auto-pull: a conflict goes to the fixer; the resolution is on the branch, 
   await t.done();
 });
 
-test('auto-pull: fixer fails -> blocked, merge aborted, the pre-pull commit survives', async () => {
+test('auto-pull: the agent cannot resolve -> blocked, merge aborted, the pre-pull commit survives', async () => {
   const t = await autoPushRoot();
   await fs.writeFile(path.join(t.dir, 'f.txt'), 'session line\n');
   t.pushMain('f.txt', 'base line\n', 'conflicting base work');
-  const r = await autoPull({ db, paths: t.paths, encryptionKey: t.key, fixer: async () => false }, t.session, t.workspace);
+  const r = await autoPull({ db, paths: t.paths, encryptionKey: t.key, resolve: async () => false }, t.session, t.workspace);
   assert.equal(r.result, 'blocked', JSON.stringify(r));
   const { stdout: status } = await git(t.dir, ['status', '--porcelain']);
   assert.equal(status.trim(), '', 'no half-merged tree left behind');
@@ -640,15 +713,17 @@ test('auto-push over the route: 503 unwired; wired -> core\'s client streams the
 
   // Wired: the real flow behind the route.
   const app = await buildApp({ db, paths: t.paths, apiKey: 'k', encryptionKey: t.key, version: 'test', pgPool, fs: fsDeps, engine,
-    autoPush: (s, w, onEvent) => autoPush({ db, paths: t.paths, encryptionKey: t.key, onEvent }, s, w) });
+    autoPush: (s, w, onEvent) => autoPush({ db, paths: t.paths, encryptionKey: t.key, onEvent,
+      client: AUTOPUSH_CLIENT_ID }, s, w) });
   const f = injectFetch(app);
   const cfg = { baseUrl: 'http://x', apiKey: 'k', sessionId: t.session.id, fetch: f };
 
-  // Nothing to push -> nothing; the merge + verify still ran (that IS how it knows).
+  // Nothing to push -> nothing, and it stops at the squash: there is no commit
+  // to replay, so no rebase and no model call for a message.
   let steps: string[] = [];
   let out = await autoPushSession(cfg, (label) => steps.push(label));
   assert.equal(out.result, 'nothing', JSON.stringify(out));
-  assert.deepEqual(steps, ['merging the base branch in', 'verifying against the repo']);
+  assert.deepEqual(steps, ['taking the session', 'backing the branch up']);
 
   // Work on the branch -> pushed; the steps arrived in words, the sha is base's tip.
   await fs.writeFile(path.join(t.dir, 'work.txt'), 'in flight\n');
@@ -656,7 +731,8 @@ test('auto-push over the route: 503 unwired; wired -> core\'s client streams the
   out = await autoPushSession(cfg, (label) => steps.push(label));
   assert.equal(out.result, 'pushed', JSON.stringify(out));
   assert.equal(out.sha, t.originSha('main'));
-  assert.deepEqual(steps, ['committing', 'merging the base branch in', 'verifying against the repo',
+  assert.deepEqual(steps, ['taking the session', 'backing the branch up', 'committing',
+    'replaying the work on the base branch', 'verifying against the repo',
     'pushing the branch', 'pushing to the base branch']);
 
   // The Telegram Assistant's kit carries git_auto_push and answers over the

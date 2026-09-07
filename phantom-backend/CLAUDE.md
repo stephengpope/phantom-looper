@@ -9,7 +9,7 @@ in the api image, `npm run phantom-backend` from source.
 ```
 index.ts          boot: env → db + migrations → paths → docker → app → listen → looper → telegram.
                   Also the maintenance loop (pool tick, session sweep, container reap) and the wiring
-                  of the Git Fixer hook + auto-push/auto-pull into AppCtx
+                  of the conflict-resolver hook + auto-push/auto-pull into AppCtx
 env.ts            the four required env vars and PORT. Everything behavioral is a setting, not env
 settings.ts       DEFAULTS, DESCRIPTIONS, META, CREDENTIALS, SCOPED; resolve / resolveMany / resolveCredential /
                   settingsLayers / settingsBlock; validateSetting / validatePatch
@@ -26,7 +26,7 @@ log.ts            pino; logger(component); errStr(e) = message only
 api/              routes, the two event buses, AppCtx — own map
 looper/           the supervisor loop and the shared coding-turn runner — own map
 telegram/         the bot — own map
-git/              guarded git, auto-push, auto-pull, the Git Fixer, GitHub REST — own map
+git/              guarded git, auto-push's rebase, auto-pull, GitHub REST — own map
 pool/             paths.ts (the on-disk layout) · pool.ts (warm clones, claim by rename, tick)
 workspace/        container.ts (per-folder container lifecycle, buildContainerSpec) · sandbox.ts (the only dockerode exec caller)
 tools/            registry.ts (the seven tool definitions) · fuzzy.ts (the edit match chain) · diff.ts · envelope.ts (ToolError)
@@ -54,8 +54,11 @@ over and the loop takes it back next round.
 
 One lock in the system. Holder-named by `x-phantom-looper-client`, TTL
 `session_lock_ttl_ms`, renewed by the transcript PUT, no takeover;
-duplicate is the way past a holder. Tools and git operations take no lock.
-Do not add an operation mutex anywhere.
+duplicate is the way past a holder. Tools take no lock. Auto-push takes it
+(client `auto-push`, renewed on a beat) because it drives a coding turn to
+resolve conflicts and rewrites the checkout; failing to get it IS its
+busy test — it never inspects what is running. Do not add an operation
+mutex anywhere.
 
 ## On disk
 

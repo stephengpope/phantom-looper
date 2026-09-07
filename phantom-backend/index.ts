@@ -14,9 +14,12 @@ import { ContainerManager } from './workspace/container.js';
 import { GitEngine } from './git/engine.js';
 import { autoPush, type AutoPushEvent } from './git/autoPush.js';
 import { autoPull, type AutoPullEvent } from './git/autoPull.js';
-import { Sandbox } from './workspace/sandbox.js';
-import { AiSdkGitFixerDriver, runGitFixer } from './git/gitFixer.js';
+import { AUTOPUSH_CLIENT_ID, type ConflictContext } from './git/autoPush.js';
 import { isProvider } from '../core/llm/createAgent.js';
+import { openSession, SessionLockedError, type OpenedSession } from '../core/session.js';
+import { runCodingTurn, settingsValues } from './looper/turn.js';
+import { injectFetch } from './looper/injectFetch.js';
+import { toCodingAgent } from '../core/llm/prompts/autoPush/wiring.js';
 import type { WorkspaceRow, SessionRow } from './db/schema.js';
 import { LooperEngine } from './looper/engine.js';
 import { TelegramEngine } from './telegram/engine.js';
@@ -28,6 +31,9 @@ import { logger, errStr } from './log.js';
 
 const log = logger('boot');
 const VERSION = process.env.APP_VERSION ?? 'dev';
+/** Host part of the in-process fetch shim's URLs — injectFetch ignores it, the
+ *  same way the looper's 'http://looper' is ignored. */
+const TURN_BASE = 'http://auto-push';
 
 async function main() {
   const env = readEnv();
@@ -41,56 +47,78 @@ async function main() {
     volume: process.env.WORKSPACE_VOLUME, encryptionKey: env.encryptionKey,
   });
   await containers.bootCleanup();
-  // The Git Fixer's trio cascades to the coding agent's (core agentModelConfig
-  // rule: a field inherits only while the provider matches). A bad pair —
-  // provider overridden, no model — throws HERE, and the auto-push/pull that
-  // needed the fixer reports it; the key is the row for whichever provider won.
-  const gitFixerConfig = async () => {
-    const cfg = await resolveMany(db,
-      ['provider', 'model', 'base_url', 'git_fixer_provider', 'git_fixer_model', 'git_fixer_base_url']);
-    const c = cascade(cfg, 'git_fixer');
-    return { ...c, apiKey: await resolveCredential(db, env.encryptionKey, credentialForProvider(c.provider)) };
+  // THE CONFLICT RESOLVER — the session's own coding agent, not a separate
+  // fixer. Shared by auto-push, auto-pull and the manual /git/pull.
+  //
+  // Why the agent that wrote the code: it is the author. It already carries the
+  // card, the work and its own reasoning, so it needs no briefing a stranger
+  // would have to be given and could only be given badly; the resolution lands
+  // in the SESSION'S transcript rather than a side file nothing reads; and the
+  // agent learns its files moved under it, which a side process could never
+  // tell it. It holds no credentials — resolving a conflict is editing files;
+  // the fetch before and the push after stay in this process.
+  //
+  // `app` is captured lazily: the hook is built before buildApp and only ever
+  // runs long after boot.
+  const resolveConflict = async (
+    session: SessionRow, workspace: WorkspaceRow, _dir: string, ctx: ConflictContext,
+  ): Promise<boolean> => {
+    const f = injectFetch(app);
+    // The SAME client id auto-push locks under — a holder may re-take its own
+    // hold, and any other id would find the session locked by us.
+    let opened: OpenedSession;
+    try {
+      opened = await openSession({ baseUrl: TURN_BASE, apiKey: env.apiKey, clientId: AUTOPUSH_CLIENT_ID,
+        label: 'resolving a conflict', fetch: f, lock: true, sessionId: session.id });
+    } catch (e) {
+      if (e instanceof SessionLockedError) {
+        log.warn({ session: session.id }, 'conflict turn could not open the session — it is busy');
+        return false;
+      }
+      throw e;
+    }
+    const deps = { f, apiKey: env.apiKey, base: TURN_BASE, sessionEvents: sessionEvents,
+      client: AUTOPUSH_CLIENT_ID, onRetry: (t: string) => log.warn({ session: session.id }, t) };
+    try {
+      const message = toCodingAgent.resolveConflict(
+        ctx.mode, ctx.branch, ctx.baseBranch, ctx.files, ctx.arrived);
+      // planMode false: resolving means writing files.
+      await runCodingTurn(deps, opened, workspace.id, message, false, await settingsValues(deps));
+      return true;
+    } catch (e) {
+      log.error({ session: session.id, err: errStr(e) }, 'conflict turn failed');
+      return false;
+    } finally {
+      await opened.close().catch(() => {});
+    }
   };
-  const gitFixerDriver = new AiSdkGitFixerDriver(gitFixerConfig);
-  // The Git Fixer hook, shared by auto-push, auto-pull and manual /git/pull. Its shell runs in
-  // the workspace container: model-driven commands over conflicted content
-  // belong in the most-contained place. Unconditional — auto-push resolves
-  // conflicts whenever it runs; it always fixes when it runs.
-  const fixerHook = async (session: SessionRow, workspace: WorkspaceRow, dir: string) => {
-    const container = await containers.ensure(db, session, workspace);
-    const ws = new Sandbox(docker, container);
-    const exec = async (cmd: string) => {
-      const r = await ws.run(['/bin/sh', '-c', cmd], { timeoutMs: 120_000 });
-      return { stdout: r.stdout.toString('utf8'), stderr: r.stderr.toString('utf8'), exitCode: r.exitCode };
-    };
-    const folder = session.folderId ? await getFolder(db, session.folderId) : undefined;
-    if (!folder) return false;
-    return runGitFixer(dir, exec, folder.branch, gitFixerDriver, {
-      attempts: Number(await resolve(db, 'auto_push_fix_attempts')),
-    }, session.id, workspace.baseBranch);
-  };
-  const engine = new GitEngine(db, paths, env.encryptionKey, fixerHook);
+  const engine = new GitEngine(db, paths, env.encryptionKey, resolveConflict);
 
-  // The auto-push commit message rides the Git Fixer's model config; a config
-  // that cannot build (bad cascade pair, unknown provider) just means the
-  // file-name fallback — a commit message degrades, conflict fixing does not.
+  // The auto-push commit message rides the ASSISTANT's model — the small-fast
+  // slot; writing one subject line from a diff is not work for the model doing
+  // the engineering. A config that cannot build (bad cascade pair, unknown
+  // provider) just means the file-name fallback: a commit message degrades,
+  // conflict resolution does not.
   const messageConfig = async () => {
     try {
-      const c = await gitFixerConfig();
+      const cfg = await resolveMany(db,
+        ['provider', 'model', 'base_url', 'assistant_provider', 'assistant_model', 'assistant_base_url']);
+      const c = cascade(cfg, 'assistant');
       if (!isProvider(c.provider)) return null;
-      return { ...c, provider: c.provider };
+      const apiKey = await resolveCredential(db, env.encryptionKey, credentialForProvider(c.provider));
+      return { ...c, provider: c.provider, apiKey };
     } catch (e) {
-      log.warn({ err: (e as Error).message }, 'git fixer config cannot build — commit messages fall back to file names');
+      log.warn({ err: (e as Error).message }, 'assistant config cannot build — commit messages fall back to file names');
       return null;
     }
   };
   const autoPushFn = (session: SessionRow, workspace: WorkspaceRow, onEvent?: (e: AutoPushEvent) => void | Promise<void>) =>
-    autoPush({ db, paths, encryptionKey: env.encryptionKey, fixer: fixerHook, messageConfig, onEvent },
-      session, workspace);
-  // Auto-pull rides the same fixer and the same message model — one
+    autoPush({ db, paths, encryptionKey: env.encryptionKey, resolve: resolveConflict, messageConfig,
+      onEvent, client: AUTOPUSH_CLIENT_ID }, session, workspace);
+  // Auto-pull rides the same resolver and the same message model — one
   // configuration for every git operation that commits or resolves.
   const autoPullFn = (session: SessionRow, workspace: WorkspaceRow, onEvent?: (e: AutoPullEvent) => void | Promise<void>) =>
-    autoPull({ db, paths, encryptionKey: env.encryptionKey, fixer: fixerHook, messageConfig, onEvent },
+    autoPull({ db, paths, encryptionKey: env.encryptionKey, resolve: resolveConflict, messageConfig, onEvent },
       session, workspace);
 
   // One loop drives both the pool tick and the session sweep. The interval is a

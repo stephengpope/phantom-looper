@@ -42,12 +42,8 @@ export const DEFAULTS = {
   session_lock_ttl_ms: 600_000,
   auto_push_on_archive: false as boolean,
   agent_git_credentials: false as boolean,
-  // The Git Fixer's model config: an agent trio (provider/model/base_url),
+  // The Assistant's model config: an agent trio (provider/model/base_url),
   // null = the coding agent's, per the cascade rule (core agentModelConfig).
-  auto_push_fix_attempts: 3,
-  git_fixer_provider: null as string | null,
-  git_fixer_model: null as string | null,
-  git_fixer_base_url: null as string | null,   // openai-compatible endpoints (Ollama, vLLM, OpenRouter, ...)
   card_prefix: null as string | null,   // unset => derived from the repo name
   // The coding agent's model config. ONE store now: the cli and the server's
   // looper read the same rows, which is what makes "the experience is the
@@ -102,8 +98,8 @@ export const DEFAULTS = {
  *  the clear by forgetting a flag. Named the way each vendor names it: GitHub
  *  says token, everyone else says API key.
  *
- *  There is no `auto_push_api_key`. The Git Fixer holds a key FOR a provider,
- *  and which provider is `auto_push_fix_provider` — so it reads the key for
+ *  There is no per-agent api key. An agent holds a key FOR a provider, and
+ *  which provider is its own `*_provider` setting — so it reads the key for
  *  whatever that says, the same row the TUI's own agent reads. One key per
  *  provider, one place to set it. */
 export const CREDENTIALS = {
@@ -122,9 +118,9 @@ export const CREDENTIAL_NAMES = Object.keys(CREDENTIALS) as CredentialName[];
 export const isCredential = (k: string): k is CredentialName =>
   Object.prototype.hasOwnProperty.call(CREDENTIALS, k);
 
-/** The key holding the API key for one provider. `auto_push_fix_provider` and
- *  the TUI's own `provider` both name a provider; this turns either into the
- *  one row that holds its key. */
+/** The key holding the API key for one provider. `assistant_provider` and the
+ *  TUI's own `provider` both name a provider; this turns either into the one
+ *  row that holds its key. */
 export const credentialForProvider = (p: string): CredentialName =>
   (`${p.replace(/-/g, '_')}_api_key`) as CredentialName;
 
@@ -155,10 +151,6 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   session_lock_ttl_ms: 'How long a crashed turn keeps its session locked before the hold expires. Locks live per TURN — reading a session never takes one — so this is crash recovery, sized to the longest turn.',
   auto_push_on_archive: 'Archiving a done card auto-pushes its session\'s work to the base branch; a failed push un-archives the card into blocked. Archiving from any other column never pushes.',
   agent_git_credentials: 'Puts the GitHub token inside the container so the agent can run git and gh itself — the agent can then read it. Applies when the container restarts; off does not reclaim it from a running one.',
-  auto_push_fix_attempts: 'How many times the AI may retry one merge conflict, each try keeping the last one\'s progress. More tries cost more tokens.',
-  git_fixer_provider: 'The AI provider that resolves merge conflicts and writes auto-push commit messages, on its key from /keys. Empty = the coding agent\'s provider.',
-  git_fixer_model: 'The model that resolves merge conflicts and writes auto-push commit messages — not the model you chat with. Empty = the coding agent\'s model; required when the provider differs from the coding agent\'s.',
-  git_fixer_base_url: 'Endpoint when the Git Fixer\'s provider is openai-compatible (Ollama, vLLM, OpenRouter). Empty inherits the coding agent\'s only while the provider matches.',
   card_prefix: 'The letters in front of every card number on this board — "PHA" gives PHA-7. Unset means the first three letters of the repo name.',
   provider: 'The coding agent\'s LLM provider. Its key is set on /keys. Nothing runs until one is chosen.',
   model: 'Model id for the chosen provider. Empty = the newest model the catalog lists for it, so it follows releases.',
@@ -247,11 +239,6 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
   session_lock_ttl_ms: ms('session lock timeout', 'sessions', 1000),
   auto_push_on_archive: { type: 'boolean', label: 'auto-push on archive', group: 'git' },
   agent_git_credentials: { type: 'boolean', label: 'agent github access', group: 'git' },
-  auto_push_fix_attempts: count('git fixer: fix attempts', 'git', 1),
-  git_fixer_provider: { type: 'string', label: 'git fixer: provider', group: 'git', nullable: true,
-    choices: ['anthropic', 'openai', 'google', 'openai-compatible'] },
-  git_fixer_model: { type: 'string', label: 'git fixer: model', group: 'git', nullable: true },
-  git_fixer_base_url: { type: 'string', label: 'git fixer: endpoint', group: 'git', nullable: true },
   card_prefix: { type: 'string', label: 'card number prefix', group: 'board', nullable: true },
   provider: { type: 'string', label: 'provider', group: 'model', nullable: true,
     choices: ['anthropic', 'openai', 'google', 'openai-compatible'] },

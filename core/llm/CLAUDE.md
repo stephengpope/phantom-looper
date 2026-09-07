@@ -9,21 +9,21 @@ createAgent.ts   languageModel(cfg) — the provider switch, the OAuth disguise,
                  createAgent(cfg, spec) — a ToolLoopAgent whose stream/generate take a `record` sink
                  withCacheBreakpoints(messages) — Anthropic cache marks on a copy of first + last message
 agentConfig.ts   settings rows → ModelConfig: modelConfigFrom (coding), agentModelConfig (the cascade for
-                 supervisor_* / assistant_* / git_fixer_*), buildCodingAgent, PROVIDER_KEY
+                 supervisor_* / assistant_*), buildCodingAgent, PROVIDER_KEY
 transcript.ts    the JSONL format: Transcript (file-backed), parseTranscript / serializeTranscript,
                  memoryRecorder, usage events, dropDanglingToolCall, lastUserFromJsonl, sumUsageFromJsonl
-agents/          coding · assistant · supervisor · gitFixer — one file each: <name>Instructions() + <name>Agent()
+agents/          coding · assistant · supervisor — one file each: <name>Instructions() + <name>Agent()
 prompts/         the documents and their wiring — own map
 tools/           the kits — own map
 ```
 
 ## Building an agent
 
-`createAgent(ModelConfig, {instructions, tools, maxSteps})`. Only the Git
-Fixer builds its own kit; the other three take `tools` from the caller.
+`createAgent(ModelConfig, {instructions, tools, maxSteps})`. All three take
+`tools` from the caller.
 `maxSteps` null means unlimited, spelled out because the SDK default is 20.
 The Assistant pins reasoning to `none`; the others inherit the setting.
-Every agent except the Git Fixer gets `withCurrentDate` appended at build,
+Every agent gets `withCurrentDate` appended at build,
 so the date is never in a frozen prompt.
 
 Who calls the builders:
@@ -33,7 +33,6 @@ Who calls the builders:
 | `buildCodingAgent` | `phantom-backend/looper/turn.ts`, `phantom-cli/agentFromConfig.ts` |
 | `assistantAgent` | `phantom-cli/agentFromConfig.ts`, `phantom-backend/telegram/assistant.ts` |
 | `supervisorAgent` | `phantom-backend/looper/engine.ts` |
-| `gitFixerAgent` | `phantom-backend/git/gitFixer.ts` |
 | `languageModel` alone | `phantom-backend/sessionTitle.ts`, `phantom-backend/git/commitMessage.ts` (one-shot generateText) |
 
 ## Model config

@@ -14,7 +14,7 @@
 //
 // Who writes one: the TUI's coding sessions (~/.phantom-cli/sessions/<id>.jsonl,
 // resumed from), the Assistant (~/.phantom-cli/voice/, one per engine
-// start), and the server's Git Fixer (work/<session>/logs/, one per run —
+// start), and the server's one-shot helpers (work/<session>/logs/ —
 // outside repo/ so auto-push never commits it).
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -23,10 +23,10 @@ import type { ModelMessage } from 'ai';
 /** Line 1. Written once; resume reads the messages and ignores the rest —
  *  provider/model record what wrote the transcript, not what will replay it.
  *  Extra fields are welcome (the coding header carries session/workspace/
- *  branch; the Git Fixer's carries the branch it recovered). */
+ *  branch). */
 export interface TranscriptHeader {
   type: 'session';
-  /** Which agent wrote this ('coding' | 'assistant' | 'gitFixer'). Absent on
+  /** Which agent wrote this ('coding' | 'assistant' | 'supervisor'). Absent on
    *  coding transcripts from before the field existed. */
   agent?: string;
   provider: string;
@@ -62,7 +62,7 @@ export class Transcript {
 
   /** One agent step, whole: its messages and its usage line. THE per-step
    *  write — every file-backed agent (the cli's coding sessions, the
-   *  Assistant, the Git Fixer) records a step through this one method, so
+   *  Assistant, the supervisor) records a step through this one method, so
    *  usage tracking is the turn machinery's, never re-implemented per agent. */
   appendStep(messages: ModelMessage[], usage?: Parameters<typeof usageEvent>[0]): void {
     this.appendAll(messages);

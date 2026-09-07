@@ -27,7 +27,6 @@ git.ts         autoPushSession / autoPullSession — the only readers of the /gi
 tui.ts         host-handled: sessionsTool (session_*), assistantKanbanTool (kanban_* + kanban_screen),
                codingKanbanTool (kanban_card_read only), screenModeTools, workspaceCreateTool,
                gitAutoPushTool, gitAutoPullTool, renderRead (session_read's text)
-server.ts      fixerBashTool — the Git Fixer's bash over a ContainerExec. stdout 8KB, stderr 4KB
 ```
 
 ## Who carries which kit

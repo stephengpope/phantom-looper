@@ -16,7 +16,7 @@ carries its own map, loaded when you work there.
 | `phantom-backend/api/CLAUDE.md` | every route, the two event feeds, the cards |
 | `phantom-backend/looper/CLAUDE.md` | the supervisor loop and the shared coding-turn runner |
 | `phantom-backend/telegram/CLAUDE.md` | the bot |
-| `phantom-backend/git/CLAUDE.md` | guarded git, auto-push, auto-pull, the Git Fixer |
+| `phantom-backend/git/CLAUDE.md` | guarded git, auto-push's rebase, auto-pull, conflict resolution |
 | `phantom-cli/CLAUDE.md` | the app: sessions in a window, the watch and feed, the Assistant, drawing |
 | `phantom-cli/components/CLAUDE.md` | the screens and the pieces they share |
 | `phantom-cli/sidecar/CLAUDE.md` | the Python voice process and its wire |
@@ -72,14 +72,18 @@ the live server.
 - Everything the agent touches goes through its container. Credential
   git runs in the api process behind the guard set. `agent_git_credentials`
   is the one exception, off by default, env only.
-- One branch per session, start to finish. Merge, never rebase. No push is
-  forced. Never `--depth` on a fetch.
+- One branch per session, start to finish. Auto-push REBASES: squash to one
+  commit, replay onto base, fast-forward. The branch is backed up before any
+  rewrite, then force-pushed with a lease. Auto-pull merges — it lands nothing.
+  Never `--depth` on a fetch.
 - One lock in the system: the session/turn lock. Tools and git take none.
   Never add an operation mutex.
 - Everything is a session, one session one transcript. The server
   transcript is the record; local copies are working memory.
 - Defaults live in code; the DB stores only overrides. Null clears and is
   never stored. Stocking fails open; deletion fails closed.
+- Conflicts are resolved by the coding agent that wrote the code, as a turn in
+  its own conversation. There is no separate fixer.
 - Loop state is card status. The looper polls nothing and never retries a
   failed round. Every loop exit is a card state a person can see. Agents
   never run loop mechanics. The coding agent may block its own card and

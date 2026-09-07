@@ -6,7 +6,7 @@
 // branch is always the session's own {prefix}/{id}, cut from the base branch,
 // and is recorded on the row, so it is decided once and never re-derived.
 import fs from 'node:fs/promises';
-import { and, desc, eq, isNull, lt, or } from 'drizzle-orm';
+import { and, desc, eq, isNull, lt, or, sql as sqlRaw } from 'drizzle-orm';
 import type { Db } from './db/client.js';
 import { workspaces, sessions, sessionColumns, folders, loops, type WorkspaceRow, type SessionRow, type FolderRow, type LoopRow } from './db/schema.js';
 import { resolve } from './settings.js';
@@ -303,6 +303,34 @@ export async function currentLoop(db: Db, workspaceId: string, card: number): Pr
     .where(and(eq(loops.workspaceId, workspaceId), eq(loops.card, card)))
     .orderBy(desc(loops.createdAt)).limit(1);
   return rows[0];
+}
+
+/** The card a coding session is building, as one line for the auto-push commit
+ *  message: "title — description". A diff says what changed and never why, and
+ *  this is the cheapest statement of why the system already holds.
+ *
+ *  Fails open to '' — a manual session has no loop row, a workspace schema can
+ *  be missing, and NONE of that may stop work from landing. The commit message
+ *  simply loses its intent line (fill drops the line whole when it is empty). */
+export async function cardIntentFor(
+  db: Db, session: SessionRow, workspace: WorkspaceRow,
+): Promise<string> {
+  try {
+    const rows = await db.select().from(loops)
+      .where(and(eq(loops.workspaceId, session.workspaceId), eq(loops.codingSessionId, session.id)))
+      .orderBy(desc(loops.createdAt)).limit(1);
+    const seq: number | undefined = rows[0]?.card;
+    if (seq === undefined) return session.name ?? '';
+    const r = await db.execute(
+      sqlRaw.raw(`select title, description from "${workspace.schemaName}".cards where seq = ${Number(seq)}`));
+    const card = (r as unknown as { rows: { title?: string; description?: string }[] }).rows?.[0];
+    if (!card?.title) return session.name ?? '';
+    const firstLine = (card.description ?? '').trim().split('\n')[0] ?? '';
+    return firstLine ? `${card.title} — ${firstLine}` : card.title;
+  } catch (e) {
+    log.debug({ session: session.id, err: errStr(e) }, 'card intent unavailable — commit message goes without it');
+    return session.name ?? '';
+  }
 }
 
 /** Tag a conversation with who drives it. The loop stamps its coder seat at

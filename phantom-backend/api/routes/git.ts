@@ -53,7 +53,7 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
 
   app.post('/git/pull', { schema: { tags: ['git'], headers: sessionHeader,
     summary: 'Pull base now',
-    description: 'Merge origin/<base> into the session branch (requires a clean tree; conflicts go to the Git Fixer). Merge, never rebase — no push in this system is ever forced.',
+    description: 'Merge origin/<base> into the session branch (requires a clean tree; a conflict goes to the session\'s own coding agent). A pull merges rather than replays: it lands nothing on base.',
     body: { type: 'object', additionalProperties: false } } }, async (req, reply) => {
     try {
       const { session, workspace } = await resolveSession(req);
@@ -104,8 +104,9 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
   // Result: pushed | nothing | blocked | error | busy (+ reason?, rounds?, sha?).
   app.post('/git/auto-push', { schema: { tags: ['git'], headers: sessionHeader,
     summary: 'Auto-push the session to base',
-    description: 'Commit everything, merge origin/<base> in (the Git Fixer resolves conflicts), verify against the repo, ' +
-      'push the branch, then fast-forward base to it. Base moved meanwhile: merge again, up to 3 rounds. ' +
+    description: 'Take the session (busy if a turn holds it), back the branch up, collapse the work into one commit, ' +
+      'replay it on origin/<base> (a conflict goes to the session\'s own coding agent), verify against the repo, ' +
+      'force-push the branch with a lease, then fast-forward base to it. Base moved meanwhile: replay again, up to 3 rounds. ' +
       'ND-JSON stream: step records, then one result record (pushed | nothing | blocked | error | busy).',
     body: { type: 'object', additionalProperties: false } } },
   async (req, reply) => {
@@ -122,7 +123,8 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
   app.post('/git/auto-pull', { schema: { tags: ['git'], headers: sessionHeader,
     summary: 'Auto-pull base into the session',
     description: 'Fetch origin/<base>; nothing behind -> clean. Otherwise commit everything on the branch, merge base in ' +
-      '(the Git Fixer resolves conflicts), verify against the repo, push the branch as the backup. Nothing lands on base. ' +
+      '(a conflict goes to the session\'s own coding agent), verify against the repo, push the branch as the backup. ' +
+      'A pull merges rather than replays, because nothing lands on base. ' +
       'ND-JSON stream: step records, then one result record (merged | clean | blocked | error | busy).',
     body: { type: 'object', additionalProperties: false } } },
   async (req, reply) => {

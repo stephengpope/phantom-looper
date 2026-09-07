@@ -407,7 +407,7 @@ export function gitAutoPushTool(handler: (args: GitAutoPushArgs) => Promise<unkn
   return {
     git_auto_push: tool({
       description: "Land a session's work on the base branch — the same thing the cli's /auto-push does: " +
-        'commit everything on the branch, merge the base branch in (the Git Fixer resolves conflicts), ' +
+        'collapse the branch into one commit, replay it on the base branch (the coding agent resolves any conflict), ' +
         'push the branch, then fast-forward base. Defaults to the session on screen. Runs to the end before ' +
         "answering — a conflict can take minutes — and the steps show as notes in the session's pane. " +
         'The answer is one of: pushed (with the commit), nothing (base already has it all), blocked, or error — ' +

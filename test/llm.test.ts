@@ -154,12 +154,11 @@ test('google: the key rides as a header, not in the url', async () => {
 
 import { fill, firstLineOf } from '../core/llm/prompts/template.js';
 import { firstLine, toCodingAgent, toSupervisor } from '../core/llm/prompts/supervisor/wiring.js';
+import { toCodingAgent as toResolver, commitMessagePrompt } from '../core/llm/prompts/autoPush/wiring.js';
 import { codingInstructions } from '../core/llm/agents/coding.js';
 import { withCurrentDate } from '../core/llm/prompts/template.js';
 import { assistantInstructions } from '../core/llm/agents/assistant.js';
-import { gitFixerInstructions, toGitFixer } from '../core/llm/agents/gitFixer.js';
 import { pickTools, phantomTools } from '../core/llm/tools/workspace.js';
-import { fixerBashTool } from '../core/llm/tools/server.js';
 import { sessionsTool, assistantKanbanTool, codingKanbanTool, renderRead } from '../core/llm/tools/tui.js';
 import type { Tool } from 'ai';
 
@@ -333,14 +332,33 @@ test('assistant prompt: card creation names the tool and forbids phantom claims'
     '"full information" caused the model to wait — cards can be created with a title alone');
 });
 
-test('git fixer prompt: branch pinned, no aborting, the trailer, the tool named as it exists', () => {
-  const p = gitFixerInstructions('agent/s1', 's1');
-  assert.match(p, /checked out on branch "agent\/s1"/);
-  assert.match(p, /never run checkout, switch, branch, or reset --hard/);
-  assert.match(p, /Do NOT run `git merge --abort`/);
-  assert.match(p, /Phantom-Session: s1/);
-  assert.match(p, /Use bash to inspect/, 'the prompt names the tool the agent actually has');
-  assert.match(toGitFixer.recover('agent/s1'), /Recover branch "agent\/s1"/);
+test('conflict message (rebase): branch pinned, no aborting, the files and what arrived, a way out', () => {
+  const m = toResolver.resolveConflict('rebase', 'agent/s1', 'main', ['a.ts', 'b.ts'], ['abc1 did a thing']);
+  assert.match(m, /replayed on top of "main"/);
+  assert.match(m, /- a\.ts\n- b\.ts/, 'the conflicted files are listed');
+  assert.match(m, /- abc1 did a thing/, 'what landed on base is the briefing — the thing a stranger never had');
+  assert.match(m, /git rebase --continue/);
+  assert.match(m, /Do NOT run `git rebase --abort`/);
+  assert.match(m, /never run checkout, switch, branch, or reset --hard|Do NOT run checkout, switch, branch, or reset --hard/);
+  assert.match(m, /Block the card/, 'it can refuse instead of guessing');
+  assert.doesNotMatch(m, /git merge --abort/, 'a rebase is not a merge');
+});
+
+test('conflict message (merge): auto-pull finishes with a commit, not a rebase --continue', () => {
+  const m = toResolver.resolveConflict('merge', 'agent/s1', 'main', ['a.ts'], []);
+  assert.match(m, /merged into your branch "agent\/s1"/);
+  assert.match(m, /git commit --no-edit/);
+  assert.match(m, /Do NOT run `git merge --abort`/);
+  assert.doesNotMatch(m, /rebase --continue/, 'a merge is not a rebase');
+  assert.match(m, /- \(nothing new/, 'an empty arrival list still says something');
+});
+
+test('commit message prompt: the card is an optional line that vanishes whole', () => {
+  const withCard = commitMessagePrompt('1 file changed', 'diff --git a b', 'Card 7 — do the thing');
+  assert.match(withCard, /The work was done for this card: Card 7 — do the thing/);
+  const without = commitMessagePrompt('1 file changed', 'diff --git a b');
+  assert.doesNotMatch(without, /The work was done for this card/, 'no card, no label');
+  assert.doesNotMatch(without, /\n{3,}/, 'and no hole where the line was');
 });
 
 const LISTING = [
@@ -384,17 +402,6 @@ test('workspace kit: the SDK abort signal rides into the tool fetch — esc reac
   await (kit.bash as { execute: (a: unknown, o: unknown) => Promise<unknown> })
     .execute({ cmd: 'sleep 1' }, { toolCallId: 't', messages: [], abortSignal: ac.signal });
   assert.equal(seen[0], ac.signal, 'the tool POST carries the signal the SDK handed execute');
-});
-
-test('server kit: the fixer bash tool runs one command and truncates its output', async () => {
-  const seen: string[] = [];
-  const kit = fixerBashTool(async (cmd) => { seen.push(cmd); return { stdout: 'y'.repeat(9000), stderr: '', exitCode: 0 }; });
-  assert.deepEqual(Object.keys(kit), ['bash']);
-  const r = await (kit.bash as { execute: (a: unknown, o: unknown) => Promise<{ stdout: string; exitCode: number }> })
-    .execute({ cmd: 'git status' }, { toolCallId: 't', messages: [] });
-  assert.deepEqual(seen, ['git status']);
-  assert.equal(r.stdout.length, 8000, 'stdout truncated');
-  assert.equal(r.exitCode, 0);
 });
 
 test('skills kit: list rides /skills (tiers merge server-side), load dedups an unchanged repeat, manage POSTs the body', async () => {
@@ -573,19 +580,18 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Transcript, loadTranscriptFile } from '../core/llm/transcript.js';
-import { runGitFixer, type GitFixerDriver } from '../phantom-backend/git/gitFixer.js';
 
 test('transcript: one format for every agent — header, messages, events invisible to replay, torn line tolerated', () => {
   const file = join(mkdtempSync(join(tmpdir(), 'phantom-llm-')), 'run.jsonl');
   const t = new Transcript({
-    type: 'session', agent: 'gitFixer', provider: 'anthropic', model: 'm',
+    type: 'session', agent: 'coding', provider: 'anthropic', model: 'm',
     created_at: 'now', system_prompt: 'SYS', branch: 'agent/s1',
   }, file);
   t.append({ role: 'user', content: 'go' });
   t.appendAll([{ role: 'assistant', content: 'done' }]);
   t.appendEvent({ type: 'interrupted', step: 1, spoken: 'do' });
   const back = loadTranscriptFile(file);
-  assert.equal(back.header?.agent, 'gitFixer');
+  assert.equal(back.header?.agent, 'coding');
   assert.equal(back.header?.system_prompt, 'SYS');
   assert.equal(back.header?.branch, 'agent/s1', 'extra header fields survive');
   assert.deepEqual(back.messages.map((m) => m.role), ['user', 'assistant'], 'the event is not a message');
@@ -637,23 +643,6 @@ test('transcript: an assistant tool call with no result is cut, so a resumed cha
   t.append({ role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'x', input: {} }] });
   // killed before the tool result landed
   assert.deepEqual(loadTranscriptFile(file).messages.map((m) => m.role), ['user']);
-});
-
-test('runGitFixer hands every attempt its own transcript path, in the session logs dir (outside repo/)', async () => {
-  const paths: (string | undefined)[] = [];
-  const driver: GitFixerDriver = {
-    available: async () => true,
-    async runSession(_exec, _branch, _sid, transcriptPath) { paths.push(transcriptPath); },
-  };
-  const dir = join(mkdtempSync(join(tmpdir(), 'phantom-llm-')), 'repo');
-  await runGitFixer(dir, async () => ({ stdout: '', stderr: '', exitCode: 1 }), 'agent/s1', driver,
-    { attempts: 2 }, 's1');
-  assert.equal(paths.length, 2, 'one per attempt');
-  assert.notEqual(paths[0], paths[1], 'each attempt is its own conversation');
-  for (const p of paths) {
-    assert.match(String(p), /\/logs\/git-fixer-.*a\d\.jsonl$/);
-    assert.ok(!String(p).includes('/repo/'), 'never inside repo/ — auto-push must not commit it');
-  }
 });
 
 // ── the per-agent cascade (core/llm/agentConfig.ts) ─────────────────────────

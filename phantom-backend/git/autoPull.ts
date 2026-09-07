@@ -1,10 +1,14 @@
 // AUTO-PULL — bring origin/<base> INTO the session branch, on demand, in one
 // operation: fetch, commit the session's work if the tree is dirty, merge base
-// in, fix conflicts, verify against the repo, push the branch (the backup).
+// in, resolve conflicts, verify against the repo, push the branch (the backup).
 // Nothing lands on base — that is auto-push's job (autoPush.ts); this is its
 // mirror in the other direction, and it is the ONE way an agent or the
 // Assistant pulls (the agent's own git in the container carries no
-// credentials and has no fixer).
+// credentials and has no resolver).
+//
+// Auto-pull still MERGES while auto-push rebases: it lands nothing on base, so
+// it has no reason to rewrite the branch. Its resolver is the same coding-agent
+// turn. docs/auto-pull.md is the plan for the rest.
 //
 // Commit first, never stash: `merge --autostash` keeps the stash unapplied
 // while a conflicted merge is open, and re-applying it after the fixer has
@@ -21,8 +25,8 @@ import { sessions, type WorkspaceRow, type SessionRow } from '../db/schema.js';
 import { resolveAuth } from '../pool/pool.js';
 import { repoDir, type Paths } from '../pool/paths.js';
 import { getFolder } from '../sessions.js';
-import { git, mergeBase, pushSession } from './git.js';
-import { verifyResolved } from './gitFixer.js';
+import { git, mergeBase, pushSession, verifyLanded } from './git.js';
+import type { ConflictContext } from './autoPush.js';
 import { commitMessageFor } from './commitMessage.js';
 import type { ModelConfig } from '../../core/llm/createAgent.js';
 import { logger, errStr } from '../log.js';
@@ -51,11 +55,16 @@ export interface AutoPullDeps {
   db: Db;
   paths: Paths;
   encryptionKey: Buffer;
-  /** Conflict agent hook — the same hook auto-push and manual pull use.
-   *  Resolves + commits in the workspace container, no credentials; auto-pull
-   *  verifies against the repo afterward. Absent -> a conflict blocks. */
-  fixer?: (session: SessionRow, workspace: WorkspaceRow, dir: string) => Promise<boolean>;
-  /** Model for the commit message (the Git Fixer's config). null / absent ->
+  /** Hand the stopped merge to the session's own coding agent — the same hook
+   *  auto-push and manual pull use, with `mode: 'merge'`. It resolves and
+   *  commits in the workspace container, holding no credentials; auto-pull
+   *  verifies against the repo afterward. Absent -> a conflict blocks.
+   *
+   *  Auto-pull takes NO lock of its own, so this hook's own openSession is what
+   *  takes it — a turn already running makes the resolve fail and the pull
+   *  block, rather than two writers in one checkout. See docs/auto-pull.md. */
+  resolve?: (session: SessionRow, workspace: WorkspaceRow, dir: string, ctx: ConflictContext) => Promise<boolean>;
+  /** Model for the commit message (the assistant's). null / absent ->
    *  the file-name fallback. */
   messageConfig?: () => Promise<ModelConfig | null>;
   /** Progress, one event per step — awaited, so a streaming route can write
@@ -98,14 +107,21 @@ export async function autoPull(deps: AutoPullDeps, session: SessionRow, workspac
     const { result: merged, arrived } = await mergeBase(dir, base, auth,
       `Merge origin/${base} into ${folder.branch}\n\nPhantom-Session: ${session.id}`);
     if (merged === 'conflict') {
-      // 4 — the Git Fixer, on this directory.
+      // 4 — the session's own coding agent, on this directory, in its own
+      // transcript. It merges rather than rebases here: a pull lands nothing,
+      // so it has no reason to rewrite the branch.
       await ev('fix');
-      const fixed = deps.fixer
-        ? await deps.fixer(session, workspace, dir).catch((e) => {
-            log.error({ session: session.id, err: errStr(e) }, 'git fixer threw'); return false;
+      const { stdout: conflicted } = await git(dir, ['diff', '--name-only', '--diff-filter=U']);
+      const ctx: ConflictContext = {
+        mode: 'merge', branch: folder.branch, baseBranch: base,
+        files: conflicted.trim().split('\n').filter(Boolean), arrived: arrived ?? [],
+      };
+      const fixed = deps.resolve
+        ? await deps.resolve(session, workspace, dir, ctx).catch((e) => {
+            log.error({ session: session.id, err: errStr(e) }, 'conflict turn threw'); return false;
           })
         : false;
-      if (!fixed || !(await verifyResolved(dir, base))) {
+      if (!fixed || !(await verifyLanded(dir, base))) {
         await git(dir, ['merge', '--abort']).catch(() => {});
         log.warn({ session: session.id }, 'auto-pull: conflict unresolved — branch left as it was');
         return { result: 'blocked', reason: 'merge conflict left unresolved — the branch is as it was before the pull' };
@@ -118,14 +134,14 @@ export async function autoPull(deps: AutoPullDeps, session: SessionRow, workspac
 
     // 5 — verify against the repo, never against any claim.
     await ev('verify');
-    if (!(await verifyResolved(dir, base))) {
+    if (!(await verifyLanded(dir, base))) {
       await git(dir, ['merge', '--abort']).catch(() => {});
       return { result: 'blocked', reason: 'verification failed after merge' };
     }
     const { stdout: sha } = await git(dir, ['rev-parse', 'HEAD']);
     const { stdout: files } = await git(dir, ['diff', '--name-only', `${before.trim()}..HEAD`]);
 
-    // 6 — push the branch: the backup, so the fixer's work never lives on one
+    // 6 — push the branch: the backup, so the resolution never lives on one
     // disk only. The merge is the result; a failed push does not undo it.
     await ev('push_branch');
     const pushed = await pushSession(dir, folder.branch, auth);

@@ -6,12 +6,12 @@
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { sessions, type WorkspaceRow, type SessionRow } from '../db/schema.js';
-import { git, commitAll, pushSession, mergeBase, type PushResult, type PullResult, type GitAuth } from './git.js';
+import { git, commitAll, pushSession, mergeBase, verifyLanded, type PushResult, type PullResult, type GitAuth } from './git.js';
 import { getFolder } from '../sessions.js';
 import type { FolderRow } from '../db/schema.js';
 import { resolveAuth } from '../pool/pool.js';
 import { repoDir, type Paths } from '../pool/paths.js';
-import { verifyResolved } from './gitFixer.js';
+import type { ConflictContext } from './autoPush.js';
 import { logger, errStr } from '../log.js';
 
 const log = logger('git');
@@ -28,10 +28,13 @@ export class GitEngine {
     private db: Db,
     private paths: Paths,
     private encryptionKey: Buffer,
-    /** Conflict agent hook. Runs over a tree whose merge is still in
-     *  progress. Resolves + commits, no credentials; the engine verifies and
-     *  pushes afterward. Absent -> conflicts abort. */
-    private gitFixer?: (session: SessionRow, workspace: WorkspaceRow, dir: string) => Promise<boolean>,
+    /** Hand a stopped merge to the session's own coding agent — the same hook
+     *  auto-push and auto-pull use. Runs over a tree whose merge is still in
+     *  progress; resolves + commits, holding no credentials, and the engine
+     *  verifies and pushes afterward. Absent -> conflicts abort. */
+    private resolveConflict?: (
+      session: SessionRow, workspace: WorkspaceRow, dir: string, ctx: ConflictContext,
+    ) => Promise<boolean>,
   ) {}
 
   async detach(sessionId: string): Promise<void> {
@@ -88,14 +91,19 @@ export class GitEngine {
       await pushSession(dir, folder.branch, await this.auth(workspace));
       log.info({ session: s.id, commits: arrived?.length }, 'pulled base');
     } else if (result === 'conflict') {
-      if (this.gitFixer) {
-        const fixed = await this.gitFixer(s, workspace, dir).catch((e) => {
-          log.error({ session: s.id, err: errStr(e) }, 'git fixer threw'); return false;
+      if (this.resolveConflict) {
+        const { stdout: conflicted } = await git(dir, ['diff', '--name-only', '--diff-filter=U']);
+        const ctx: ConflictContext = {
+          mode: 'merge', branch: folder.branch, baseBranch: workspace.baseBranch,
+          files: conflicted.trim().split('\n').filter(Boolean), arrived: arrived ?? [],
+        };
+        const fixed = await this.resolveConflict(s, workspace, dir, ctx).catch((e) => {
+          log.error({ session: s.id, err: errStr(e) }, 'conflict turn threw'); return false;
         });
-        // Verify against the REPO, never the Git Fixer's claim.
-        if (fixed && await verifyResolved(dir, workspace.baseBranch)) {
+        // Verify against the REPO, never against what the agent said it did.
+        if (fixed && await verifyLanded(dir, workspace.baseBranch)) {
           await pushSession(dir, folder.branch, await this.auth(workspace));
-          log.info({ session: s.id }, 'conflict resolved by the git fixer and pushed');
+          log.info({ session: s.id }, 'conflict resolved by the coding agent and pushed');
           return 'merged';
         }
       }

@@ -54,13 +54,15 @@ export interface AutoPullOutcome {
 /** The push's step names, in words — for a client that shows progress. Anything
  *  the server adds later shows raw. */
 export const AUTO_PUSH_STEPS: Record<string, string> = {
+  lock: 'taking the session',
+  backup: 'backing the branch up',
   commit: 'committing',
-  merge: 'merging the base branch in',
-  fix: 'resolving conflicts',
+  rebase: 'replaying the work on the base branch',
+  resolve: 'resolving conflicts',
   verify: 'verifying against the repo',
   push_branch: 'pushing the branch',
   push_base: 'pushing to the base branch',
-  retry: 'base moved — merging again',
+  retry: 'base moved — replaying again',
 };
 
 /** The pull's step names, in words. */

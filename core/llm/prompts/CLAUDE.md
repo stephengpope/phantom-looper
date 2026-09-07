@@ -16,14 +16,15 @@ sending.ts             SENDING_FILES — deliver a file by naming its path (the 
 coding/                SYSTEM, SKILLS, SECRETS, CREDENTIALS_FACT · wiring: systemPrompt(skills, git, secrets, facts)
 assistant/             SYSTEM · wiring: systemPrompt()
 supervisor/            SYSTEM + every message the looper sends (below) · wiring: firstLine, toCodingAgent, toSupervisor
-gitFixer/              SYSTEM, FIRST_MESSAGE_RECOVER, COMMIT_MESSAGE · wiring: systemPrompt, toGitFixer, commitMessagePrompt
+autoPush/              RESOLVE_REBASE_CONFLICT, RESOLVE_MERGE_CONFLICT, COMMIT_MESSAGE · wiring: toCodingAgent.resolveConflict, commitMessagePrompt
 helpers/               sessionTitle.ts — the auto-titler's one-shot pair, not an agent · wiring: titleRequest
 ```
 
 Which document uses which block: coding takes stakeholders, values,
 communication, environment, sending. Supervisor takes stakeholders, values,
 communication. Assistant takes stakeholders, values, git, sending (spoken
-register, so no communication block). Git Fixer takes none.
+register, so no communication block). autoPush/ has no system prompt at all:
+its messages go into a conversation that already exists.
 
 ## fill()
 
@@ -39,9 +40,9 @@ register, so no communication block). Git Fixer takes none.
 
 A prompt is assembled once when its conversation begins and stays with it:
 the coding prompt in the transcript header, the Assistant's for the sidecar's
-life, a Git Fixer run is one conversation. Editing a document changes new
-conversations only. Anything that must reach a running session goes in a
-tool's description instead. The date is not in the frozen text;
+life. Editing a document changes new conversations only. Anything that must
+reach a running session goes in a tool's description — or, like autoPush/'s
+conflict message, in a user message sent into the conversation. The date is not in the frozen text;
 `withCurrentDate` appends it at every agent build.
 
 ## The supervisor document is the loop's script
