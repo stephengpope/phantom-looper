@@ -12,9 +12,9 @@ import os from 'node:os';
 import path from 'node:path';
 import Fastify from 'fastify';
 import {
-  verifyLanded, rebaseInProgress, rebaseOntoBase, stageAndSquash, commitStaged,
+  verifyLanded, rebaseInProgress, rebaseOntoBase, stageAndSquash, commitStaged, GIT_CLIENT_ID,
 } from '../phantom-backend/git/git.js';
-import { autoPush, AUTOPUSH_CLIENT_ID, type AutoPushEvent } from '../phantom-backend/git/autoPush.js';
+import { autoPush, type AutoPushEvent } from '../phantom-backend/git/autoPush.js';
 import { autoPull, type AutoPullEvent } from '../phantom-backend/git/autoPull.js';
 import { commitMessageFor } from '../phantom-backend/git/commitMessage.js';
 import { testDb, ensureWorkspaceImage, testRoot, setWorkspaceSetting } from './harness.js';
@@ -24,6 +24,7 @@ import { workspaces, sessions } from '../phantom-backend/db/schema.js';
 import { encrypt } from '../phantom-backend/crypto.js';
 import { newId } from '../core/ids.js';
 import { git } from '../phantom-backend/git/git.js';
+import { acquireLock, releaseLock } from '../phantom-backend/sessions.js';
 
 const execP = promisify(execFile);
 
@@ -425,7 +426,7 @@ async function autoPushRoot() {
   return { root, paths, key, bare, seed, session, workspace,
     dir: repoDir(paths, session.id), originSha, pushMain,
     deps: (extra: Partial<Parameters<typeof autoPush>[0]> = {}) => ({
-      db, paths, encryptionKey: key, client: AUTOPUSH_CLIENT_ID, ...extra }),
+      db, paths, encryptionKey: key, client: GIT_CLIENT_ID, ...extra }),
     done: () => fs.rm(root, { recursive: true, force: true }) };
 }
 
@@ -554,7 +555,8 @@ test('auto-pull: dirty tree is committed, a moved base merges in, the branch is 
   const events: AutoPullEvent[] = [];
   const r = await autoPull({ db, paths: t.paths, encryptionKey: t.key, onEvent: (e) => { events.push(e); } }, t.session, t.workspace);
   assert.equal(r.result, 'merged', JSON.stringify(r));
-  assert.deepEqual(events.map((e) => e.step), ['fetch', 'commit', 'merge', 'verify', 'push_branch']);
+  assert.deepEqual(events.map((e) => e.step),
+    ['lock', 'fetch', 'commit', 'merge', 'verify', 'push_branch']);
   assert.equal(r.arrived?.length, 1, 'one base commit came in');
   assert.match(r.arrived![0], /other work/);
   assert.deepEqual(r.files, ['other.txt'], 'the files the merge touched');
@@ -581,7 +583,8 @@ test('auto-pull: nothing behind -> clean, and a dirty tree is NOT committed', as
   const events: AutoPullEvent[] = [];
   const r = await autoPull({ db, paths: t.paths, encryptionKey: t.key, onEvent: (e) => { events.push(e); } }, t.session, t.workspace);
   assert.equal(r.result, 'clean', JSON.stringify(r));
-  assert.deepEqual(events.map((e) => e.step), ['fetch'], 'no commit step on a no-op pull');
+  assert.deepEqual(events.map((e) => e.step), ['lock', 'fetch'],
+    'the lock comes first — it is the busy test — and a no-op pull has no commit step');
   const { stdout: headAfter } = await git(t.dir, ['rev-parse', 'HEAD']);
   assert.equal(headAfter, headBefore, 'no commit minted');
   const { stdout: status } = await git(t.dir, ['status', '--porcelain']);
@@ -623,6 +626,35 @@ test('auto-pull: the agent cannot resolve -> blocked, merge aborted, the pre-pul
   const { stdout: subject } = await git(t.dir, ['log', '--format=%s', '-1']);
   assert.match(subject, /Update f\.txt/, 'the session work is committed and kept');
   assert.equal(fsSync.readFileSync(path.join(t.dir, 'f.txt'), 'utf8'), 'session line\n', 'the session side is untouched');
+  await t.done();
+});
+
+test('the lock IS the busy test: a hold by anyone else refuses both, and nothing is touched', async () => {
+  const t = await autoPushRoot();
+  await fs.writeFile(path.join(t.dir, 'work.txt'), 'in flight\n');
+  const mainBefore = t.originSha('refs/heads/main');
+  const headBefore = (await git(t.dir, ['rev-parse', 'HEAD'])).stdout.trim();
+
+  // someone else is mid-turn on this session
+  assert.ok(await acquireLock(db, t.session, 'somebody-else', 60_000, 'a turn'));
+
+  const push = await autoPush(t.deps(), t.session, t.workspace);
+  assert.equal(push.result, 'busy', JSON.stringify(push));
+  const pull = await autoPull({ db, paths: t.paths, encryptionKey: t.key }, t.session, t.workspace);
+  assert.equal(pull.result, 'busy', JSON.stringify(pull));
+
+  // refused means refused: no commit, no rewrite, nothing on base
+  assert.equal((await git(t.dir, ['rev-parse', 'HEAD'])).stdout.trim(), headBefore);
+  assert.equal(t.originSha('refs/heads/main'), mainBefore);
+  assert.match((await git(t.dir, ['status', '--porcelain'])).stdout, /work\.txt/,
+    'the work is still uncommitted, exactly as it was');
+
+  // released, the same call goes through and releases the hold again after
+  await releaseLock(db, t.session.id, 'somebody-else');
+  assert.equal((await autoPush(t.deps(), t.session, t.workspace)).result, 'pushed');
+  const { eq } = await import('drizzle-orm');
+  const [after] = await db.select().from(sessions).where(eq(sessions.id, t.session.id));
+  assert.equal(after.lockedBy, null, 'auto-push releases what it took');
   await t.done();
 });
 
@@ -668,8 +700,9 @@ test('auto-pull over the route: 503 unwired; wired -> core\'s client pulls and t
   out = await autoPullSession(cfg, (label) => steps.push(label));
   assert.equal(out.result, 'merged', JSON.stringify(out));
   assert.deepEqual(out.files, ['other.txt']);
-  assert.deepEqual(steps, ['fetching the base branch', 'committing this session\'s work',
-    'merging the base branch in', 'verifying against the repo', 'pushing the branch']);
+  assert.deepEqual(steps, ['taking the session', 'fetching the base branch',
+    'committing this session\'s work', 'merging the base branch in',
+    'verifying against the repo', 'pushing the branch']);
 
   // The Telegram Assistant's kit carries git_auto_pull and it answers over the
   // same wire — bound to the account's active session, or an explicit id.
@@ -714,7 +747,7 @@ test('auto-push over the route: 503 unwired; wired -> core\'s client streams the
   // Wired: the real flow behind the route.
   const app = await buildApp({ db, paths: t.paths, apiKey: 'k', encryptionKey: t.key, version: 'test', pgPool, fs: fsDeps, engine,
     autoPush: (s, w, onEvent) => autoPush({ db, paths: t.paths, encryptionKey: t.key, onEvent,
-      client: AUTOPUSH_CLIENT_ID }, s, w) });
+      client: GIT_CLIENT_ID }, s, w) });
   const f = injectFetch(app);
   const cfg = { baseUrl: 'http://x', apiKey: 'k', sessionId: t.session.id, fetch: f };
 

@@ -18,27 +18,35 @@
 // would have made it anyway.
 //
 // No rounds: nothing races a pull — base moving after our merge is simply the
-// next pull. No lock, no time limit — the same rules as auto-push.
+// next pull. No time limit.
+//
+// THE LOCK, same as auto-push: a pull commits the session's in-flight work and
+// merges into the checkout, so a coding turn writing at the same moment is two
+// writers in one tree. Failing to take it IS the busy test — nothing inspects
+// what is running. It is held under the SAME client id every git operation
+// uses, so the conflict turn's own openSession re-takes our hold rather than
+// finding the session locked by us.
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { sessions, type WorkspaceRow, type SessionRow } from '../db/schema.js';
 import { resolveAuth } from '../pool/pool.js';
 import { repoDir, type Paths } from '../pool/paths.js';
-import { getFolder } from '../sessions.js';
-import { git, mergeBase, pushSession, verifyLanded } from './git.js';
-import type { ConflictContext } from './autoPush.js';
+import { getFolder, acquireLock, releaseLock, renewLock } from '../sessions.js';
+import { git, mergeBase, pushSession, verifyLanded, GIT_CLIENT_ID } from './git.js';
+import { LOCK_TTL_MS, RENEW_MS, type ConflictContext } from './autoPush.js';
 import { commitMessageFor } from './commitMessage.js';
 import type { ModelConfig } from '../../core/llm/createAgent.js';
 import { logger, errStr } from '../log.js';
 
 const log = logger('auto-pull');
 
-export interface AutoPullEvent { step: 'fetch' | 'commit' | 'merge' | 'fix' | 'verify' | 'push_branch'; detail?: string }
+export interface AutoPullEvent { step: 'lock' | 'fetch' | 'commit' | 'merge' | 'fix' | 'verify' | 'push_branch'; detail?: string }
 
 export interface AutoPullResult {
-  /** merged = base came in · clean = nothing to pull · blocked = a conflict
-   *  the fixer could not resolve (tree left as it was) · error = git failed. */
-  result: 'merged' | 'clean' | 'blocked' | 'error';
+  /** merged = base came in · clean = nothing to pull · blocked = a conflict the
+   *  agent could not resolve (tree left as it was) · busy = someone else holds
+   *  the session · error = git failed. */
+  result: 'merged' | 'clean' | 'blocked' | 'busy' | 'error';
   reason?: string;
   /** `<short sha> <subject>` of every base commit that came in (merged only). */
   arrived?: string[];
@@ -79,6 +87,18 @@ export async function autoPull(deps: AutoPullDeps, session: SessionRow, workspac
   const base = workspace.baseBranch;
   const auth = await resolveAuth(deps.db, workspace, deps.encryptionKey);
   const ev = async (step: AutoPullEvent['step'], detail?: string) => { await deps.onEvent?.({ step, detail }); };
+
+  // 0 — the lock IS the concurrency test: a pull commits and merges into the
+  // checkout, so it cannot run under a turn that is writing it.
+  await ev('lock');
+  if (!(await acquireLock(deps.db, session, GIT_CLIENT_ID, LOCK_TTL_MS, 'auto-pull'))) {
+    return { result: 'busy', reason: 'the session is busy — try again when its turn finishes' };
+  }
+  // A conflict turn is a full coding turn and outlives any fixed TTL.
+  const heartbeat = setInterval(() => {
+    void renewLock(deps.db, session.id, GIT_CLIENT_ID, LOCK_TTL_MS)
+      .catch((e) => log.warn({ session: session.id, err: errStr(e) }, 'lock renewal failed'));
+  }, RENEW_MS);
 
   try {
     // 1 — is there anything to pull? Asked BEFORE committing, so a no-op pull
@@ -159,5 +179,8 @@ export async function autoPull(deps: AutoPullDeps, session: SessionRow, workspac
   } catch (e) {
     log.error({ session: session.id, err: errStr(e) }, 'auto-pull failed');
     return { result: 'error', reason: e instanceof Error ? e.message : String(e) };
+  } finally {
+    clearInterval(heartbeat);
+    await releaseLock(deps.db, session.id, GIT_CLIENT_ID);
   }
 }

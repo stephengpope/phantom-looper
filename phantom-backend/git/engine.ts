@@ -6,12 +6,12 @@
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { sessions, type WorkspaceRow, type SessionRow } from '../db/schema.js';
-import { git, commitAll, pushSession, mergeBase, verifyLanded, type PushResult, type PullResult, type GitAuth } from './git.js';
-import { getFolder } from '../sessions.js';
+import { git, commitAll, pushSession, mergeBase, verifyLanded, GIT_CLIENT_ID, type PushResult, type PullResult, type GitAuth } from './git.js';
+import { getFolder, acquireLock, releaseLock, renewLock } from '../sessions.js';
 import type { FolderRow } from '../db/schema.js';
 import { resolveAuth } from '../pool/pool.js';
 import { repoDir, type Paths } from '../pool/paths.js';
-import type { ConflictContext } from './autoPush.js';
+import { LOCK_TTL_MS, RENEW_MS, type ConflictContext } from './autoPush.js';
 import { logger, errStr } from '../log.js';
 
 const log = logger('git');
@@ -76,10 +76,30 @@ export class GitEngine {
    *  the remote copy is always complete. When the session IS on base this is
    *  the ordinary catch-up merge; when it is on its own branch it is what keeps
    *  the branch mergeable. Either way the push goes to s.branch and nowhere
-   *  else. */
-  async pull(s: SessionRow, workspace: WorkspaceRow): Promise<PullResult> {
+   *  else.
+   *
+   *  Takes the session for the same reason auto-pull does: it merges into the
+   *  checkout and may drive a coding turn to resolve. Held under GIT_CLIENT_ID,
+   *  so the resolver's own openSession re-takes this hold. */
+  async pull(s: SessionRow, workspace: WorkspaceRow): Promise<PullResult | 'busy'> {
     const folder = await this.folderOf(s);
     const dir = repoDir(this.paths, folder.id);
+    if (!(await acquireLock(this.db, s, GIT_CLIENT_ID, LOCK_TTL_MS, 'pull'))) return 'busy';
+    const heartbeat = setInterval(() => {
+      void renewLock(this.db, s.id, GIT_CLIENT_ID, LOCK_TTL_MS)
+        .catch((e) => log.warn({ session: s.id, err: errStr(e) }, 'lock renewal failed'));
+    }, RENEW_MS);
+    try {
+      return await this.pullLocked(s, workspace, folder, dir);
+    } finally {
+      clearInterval(heartbeat);
+      await releaseLock(this.db, s.id, GIT_CLIENT_ID);
+    }
+  }
+
+  private async pullLocked(
+    s: SessionRow, workspace: WorkspaceRow, folder: FolderRow, dir: string,
+  ): Promise<PullResult> {
     const { result, arrived } = await mergeBase(dir, workspace.baseBranch, await this.auth(workspace),
       `Merge origin/${workspace.baseBranch} into ${folder.branch}\n\nPhantom-Session: ${s.id}`);
     if (result === 'merged') {

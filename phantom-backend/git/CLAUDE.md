@@ -7,9 +7,9 @@ agent's container has no token unless `agent_git_credentials` is on.
 git.ts            git(cwd, args, auth?) with the guard set; classifyGitFailure; cloneFresh; refreshPristine;
                   checkoutBranch; localState; workState; the primitives commitAll, pushSession, pushSessionForced,
                   pushToBase, fetchBase, stageAndSquash, commitStaged, rebaseOntoBase, rebaseInProgress,
-                  rebaseAbort, verifyLanded, mergeBase (auto-pull's), initializeRemote
+                  rebaseAbort, verifyLanded, mergeBase (auto-pull's), initializeRemote, GIT_CLIENT_ID
 engine.ts         GitEngine: the manual push, pull and status behind /git/*
-autoPush.ts       autoPush — the one way work reaches base; AUTOPUSH_CLIENT_ID, ConflictContext
+autoPush.ts       autoPush — the one way work reaches base; ConflictContext, LOCK_TTL_MS/RENEW_MS
 autoPull.ts       autoPull — base into the session branch
 commitMessage.ts  commitMessageFor — a model writes the subject from the squashed staged diff plus the card,
                   file names as the floor
@@ -61,12 +61,21 @@ most once, over finished work. It costs the step-by-step history on base.
 
 ## Auto-pull merges
 
-Fetch and count first, so a no-op pull mints no commit. Commit the
-session's work (never stash), merge base in, resolve, verify, push the
-branch. Nothing lands on base, so there is no reason to rewrite the
-branch. `merged` with `pushed: false` is still a sync. Auto-pull takes no
-lock of its own — the resolver's `openSession` takes it. `docs/auto-pull.md`
-is the plan for the rest.
+Take the lock, fetch and count first so a no-op pull mints no commit,
+commit the session's work (never stash), merge base in, resolve, verify,
+push the branch. Nothing lands on base, so there is no reason to rewrite
+the branch. `merged` with `pushed: false` is still a sync.
+`docs/auto-pull.md` records why it stays a merge.
+
+## The lock
+
+`GIT_CLIENT_ID` is the one id auto-push, auto-pull and the manual
+`/git/pull` hold the session under, renewed on a beat for as long as they
+run. Failing to take it IS the busy test — nothing inspects what is
+running. One id, because the conflict turn opens the session from inside
+an operation that already holds the lock and `acquireLock` only lets a
+holder re-take its OWN hold; the per-call label says which operation it
+is. `engine.push` still takes none.
 
 ## Resolving a conflict
 
@@ -93,4 +102,5 @@ not left mid-rebase. The agent is told never to.
 `test/unit.test.ts` (remote.ts, classifyGitFailure, localState, clone
 depth), `test/phase3.test.ts` (manual push and pull), `test/phase4.test.ts`
 (verifyLanded's four checks, the rebase primitives, stageAndSquash,
-auto-push, auto-pull, GitHub against a fake), `test/e2e-auto-push.test.ts`.
+auto-push, auto-pull, the lock refusing both, GitHub against a fake),
+`test/e2e-auto-push.test.ts`.

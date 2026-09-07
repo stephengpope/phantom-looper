@@ -29,6 +29,13 @@ const CREDENTIAL_HELPER = '!f() { echo username=x-access-token; echo password=$G
  *  directory there is nothing to keep empty. */
 const NO_HOOKS = '/dev/null';
 
+/** The client id EVERY git operation holds the session under — auto-push,
+ *  auto-pull and the manual pull alike. One id, because a conflict turn opens
+ *  the session from inside an operation that already holds the lock, and
+ *  acquireLock only lets a holder re-take its OWN hold. The per-call `label` is
+ *  what tells a person which operation is holding it. */
+export const GIT_CLIENT_ID = 'phantom-git';
+
 export interface GitAuth {
   url: string;   // plain remote URL, pinned on the command line every call
   pat?: string;  // absent for public repos; helper answers empty and https succeeds unauthenticated

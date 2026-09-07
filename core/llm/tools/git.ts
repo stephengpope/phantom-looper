@@ -67,6 +67,7 @@ export const AUTO_PUSH_STEPS: Record<string, string> = {
 
 /** The pull's step names, in words. */
 export const AUTO_PULL_STEPS: Record<string, string> = {
+  lock: 'taking the session',
   fetch: 'fetching the base branch',
   commit: 'committing this session\'s work',
   merge: 'merging the base branch in',

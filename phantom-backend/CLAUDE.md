@@ -54,11 +54,11 @@ over and the loop takes it back next round.
 
 One lock in the system. Holder-named by `x-phantom-looper-client`, TTL
 `session_lock_ttl_ms`, renewed by the transcript PUT, no takeover;
-duplicate is the way past a holder. Tools take no lock. Auto-push takes it
-(client `auto-push`, renewed on a beat) because it drives a coding turn to
-resolve conflicts and rewrites the checkout; failing to get it IS its
-busy test — it never inspects what is running. Do not add an operation
-mutex anywhere.
+duplicate is the way past a holder. Tools take no lock. Auto-push,
+auto-pull and the manual pull take it (client `GIT_CLIENT_ID`, renewed on
+a beat) because they write the checkout and drive a coding turn to resolve
+conflicts; failing to get it IS their busy test — they never inspect what
+is running. Do not add an operation mutex anywhere.
 
 ## On disk
 

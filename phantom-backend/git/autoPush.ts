@@ -43,7 +43,7 @@ import { repoDir, type Paths } from '../pool/paths.js';
 import { getFolder, acquireLock, releaseLock, renewLock, cardIntentFor } from '../sessions.js';
 import {
   git, fetchBase, stageAndSquash, commitStaged, rebaseOntoBase, rebaseAbort,
-  verifyLanded, pushSession, pushSessionForced, pushToBase,
+  verifyLanded, pushSession, pushSessionForced, pushToBase, GIT_CLIENT_ID,
 } from './git.js';
 import { commitMessageFor } from './commitMessage.js';
 import type { ModelConfig } from '../../core/llm/createAgent.js';
@@ -51,17 +51,12 @@ import { logger, errStr } from '../log.js';
 
 const log = logger('auto-push');
 
-/** The client id auto-push holds the session under. The conflict turn MUST open
- *  the session under this same id — acquireLock lets a holder re-take its own
- *  hold, and anything else would find the session locked by us. */
-export const AUTOPUSH_CLIENT_ID = 'auto-push';
-
 const ROUNDS = 3;
 /** The hold auto-push takes, and the beat it renews on. A conflict turn is a
  *  full coding turn — it outlives any fixed TTL, so the hold must be renewed
  *  or another writer walks in mid-rebase. */
-const LOCK_TTL_MS = 120_000;
-const RENEW_MS = 45_000;
+export const LOCK_TTL_MS = 120_000;
+export const RENEW_MS = 45_000;
 
 export interface AutoPushEvent {
   step: 'lock' | 'backup' | 'commit' | 'rebase' | 'resolve' | 'verify' | 'push_branch' | 'push_base' | 'retry';

@@ -14,7 +14,8 @@ import { ContainerManager } from './workspace/container.js';
 import { GitEngine } from './git/engine.js';
 import { autoPush, type AutoPushEvent } from './git/autoPush.js';
 import { autoPull, type AutoPullEvent } from './git/autoPull.js';
-import { AUTOPUSH_CLIENT_ID, type ConflictContext } from './git/autoPush.js';
+import type { ConflictContext } from './git/autoPush.js';
+import { GIT_CLIENT_ID } from './git/git.js';
 import { isProvider } from '../core/llm/createAgent.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../core/session.js';
 import { runCodingTurn, settingsValues } from './looper/turn.js';
@@ -68,7 +69,7 @@ async function main() {
     // hold, and any other id would find the session locked by us.
     let opened: OpenedSession;
     try {
-      opened = await openSession({ baseUrl: TURN_BASE, apiKey: env.apiKey, clientId: AUTOPUSH_CLIENT_ID,
+      opened = await openSession({ baseUrl: TURN_BASE, apiKey: env.apiKey, clientId: GIT_CLIENT_ID,
         label: 'resolving a conflict', fetch: f, lock: true, sessionId: session.id });
     } catch (e) {
       if (e instanceof SessionLockedError) {
@@ -78,7 +79,7 @@ async function main() {
       throw e;
     }
     const deps = { f, apiKey: env.apiKey, base: TURN_BASE, sessionEvents: sessionEvents,
-      client: AUTOPUSH_CLIENT_ID, onRetry: (t: string) => log.warn({ session: session.id }, t) };
+      client: GIT_CLIENT_ID, onRetry: (t: string) => log.warn({ session: session.id }, t) };
     try {
       const message = toCodingAgent.resolveConflict(
         ctx.mode, ctx.branch, ctx.baseBranch, ctx.files, ctx.arrived);
@@ -114,7 +115,7 @@ async function main() {
   };
   const autoPushFn = (session: SessionRow, workspace: WorkspaceRow, onEvent?: (e: AutoPushEvent) => void | Promise<void>) =>
     autoPush({ db, paths, encryptionKey: env.encryptionKey, resolve: resolveConflict, messageConfig,
-      onEvent, client: AUTOPUSH_CLIENT_ID }, session, workspace);
+      onEvent, client: GIT_CLIENT_ID }, session, workspace);
   // Auto-pull rides the same resolver and the same message model — one
   // configuration for every git operation that commits or resolves.
   const autoPullFn = (session: SessionRow, workspace: WorkspaceRow, onEvent?: (e: AutoPullEvent) => void | Promise<void>) =>
