@@ -1,0 +1,57 @@
+// The window, driven with no React at all. That is the whole point of the
+// file it tests: opening, closing, switching and noting are things the
+// Assistant and the boot path do while nothing is rendering. If this suite
+// ever needs a component to run, the logic has leaked back into App.tsx.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { WindowStore } from './window.js';
+import type { Api } from './request.js';
+
+const nothing: Api = async () => ({});
+const noTools = async () => ({});
+
+test('a note with no session open lands in the window and retires the splash', () => {
+  const w = new WindowStore({ api: nothing, newTools: noTools });
+  assert.equal(w.splash, true, 'a window with no session opens on the splash');
+  assert.equal(w.sessions.list().length, 0, 'and with no sessions');
+  w.note('phantom-backend could not be reached');
+  assert.equal(w.splash, false, 'a message the banner would cover retires it');
+  assert.deepEqual(w.notes.map((p) => (p as { text: string }).text),
+    ['phantom-backend could not be reached']);
+  w.close();
+});
+
+test('subscribers hear the window without a render', () => {
+  const w = new WindowStore({ api: nothing, newTools: noTools });
+  let heard = 0;
+  const stop = w.subscribe(() => { heard++; });
+  w.note('one');
+  w.setSplash(true);
+  assert.ok(heard >= 2, `the view was told (${heard} times)`);
+  stop();
+  w.note('two');
+  assert.equal(w.notes.length, 2, 'the note still landed after unsubscribing');
+  w.close();
+});
+
+test('a failed open says which workspace it was, and opens nothing', async () => {
+  const w = new WindowStore({
+    api: async (_m, path) => { throw new Error(`no route ${path}`); },
+    newTools: noTools,
+  });
+  w.seedWsFacts([{ id: 'w1', name: 'acme-app' }]);
+  const ok = await w.openSession({ kind: 'new', workspaceId: 'w1' });
+  assert.equal(ok, false);
+  assert.equal(w.sessions.list().length, 0, 'nothing was seated');
+  const said = (w.notes.at(-1) as { text: string }).text;
+  assert.match(said, /could not start a session in acme-app/, 'the workspace by name, not its id');
+  assert.match(said, /no route/, "and the server's own words");
+  w.close();
+});
+
+test('one board per workspace, handed to every caller', () => {
+  const w = new WindowStore({ api: nothing, newTools: noTools });
+  assert.equal(w.boardFor('w1'), w.boardFor('w1'), 'the same store both times');
+  assert.notEqual(w.boardFor('w1'), w.boardFor('w2'), 'one per workspace');
+  w.close();
+});

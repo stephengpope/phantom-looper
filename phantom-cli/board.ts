@@ -47,7 +47,8 @@ export interface BoardState {
   autoBuildDefault?: boolean; autoBuildSource?: string;
 }
 
-export type Api = (method: string, path: string, body?: unknown) => Promise<unknown>;
+export type { Api } from './request.js';
+import type { Api } from './request.js';
 // The follow policy (reconnect, backoff, the stall watchdog) is follow.ts —
 // shared with the session feed, so there is one copy of it.
 export { STREAM_STALL_MS, type Stream } from './follow.js';
@@ -135,18 +136,14 @@ export class BoardStore {
    *  data — open that card's edit screen; expand that one column to the full
    *  width; or 'board' = every column, no editor, nothing expanded. One
    *  mailbox, one consumer: the latest request wins. */
-  requested: { card: number } | { column: string } | 'board' | null = null;
-  requestCard(seq: number): void { this.requested = { card: seq }; this.notify(); }
+  requested: { column: string } | 'board' | null = null;
   requestColumn(column: string): void { this.requested = { column }; this.notify(); }
   requestBoard(): void { this.requested = 'board'; this.notify(); }
-  consumeRequested(): { card: Card } | { column: string } | 'board' | undefined {
+  consumeRequested(): { column: string } | 'board' | undefined {
     if (this.requested == null) return undefined;
     const req = this.requested;
     this.requested = null;
-    if (req === 'board') return 'board';
-    if ('column' in req) return req;
-    const card = this.bySeq(req.card);
-    return card ? { card } : undefined;
+    return req;
   }
 
   async load(): Promise<void> {

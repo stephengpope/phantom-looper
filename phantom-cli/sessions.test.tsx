@@ -432,8 +432,7 @@ async function twoSessions(over: Partial<Parameters<typeof App>[0]> = {}) {
   };
   const active = { id: 's1', branch: 'agent/s1' };
   const r = render(<App api={api as never} initial={INITIAL} newTools={async () => ({})} makeVoice={inertVoice}
-    makeAgent={stubAgent} makeTranscript={(h) => new Transcript(h, tmp())}
-    loadHistory={() => []} run={scriptedRun({ text: 'hello' })}
+    makeAgent={stubAgent} makeTranscript={(h) => new Transcript(h, tmp())} run={scriptedRun({ text: 'hello' })}
     onSession={(s) => { active.id = s.id; active.branch = s.branch; }} {...over} />);
   await sleep(50);
   r.stdin.write('/new'); await sleep(40);
@@ -451,8 +450,7 @@ test('a turn that ends ships the transcript file to the server, whole', async ()
   };
   const file = tmp();
   const r = render(<App api={api as never} initial={INITIAL} newTools={async () => ({})} makeVoice={inertVoice}
-    makeAgent={stubAgent} makeTranscript={(h) => new Transcript(h, file)}
-    loadHistory={() => []} run={scriptedRun({ text: 'answer' })} />);
+    makeAgent={stubAgent} makeTranscript={(h) => new Transcript(h, file)} run={scriptedRun({ text: 'answer' })} />);
   await sleep(50);
   r.stdin.write('hello'); await sleep(30);
   r.stdin.write('\r'); await sleep(250);
@@ -540,7 +538,7 @@ test('a session locked elsewhere is watched: read-only prompt, a spinner off the
   const r = render(<App api={api as never} stream={stream as never}
     initial={{ ...INITIAL, sessionId: sid, branch: `agent/${sid}` }}
     newTools={async () => ({})} makeVoice={inertVoice} makeAgent={stubAgent}
-    makeTranscript={(h) => new Transcript(h, tmp())} loadHistory={() => []}
+    makeTranscript={(h) => new Transcript(h, tmp())}
     run={scriptedRun()} pollMs={120} clientId="me" />);
   try {
     // The feed opens with the record stamp and who holds it. No poll.
@@ -608,7 +606,8 @@ test('session state: remote takeover updates the agent label in place and preser
     push({ event: 'turn-start', agent: 'coding', message: 'remote task' });
     await sleep(80);
     assert.match(strip(r.lastFrame()!), /Working…/);
-    assert.doesNotMatch(strip(r.lastFrame()!), /\[esc\] to interrupt/);
+    // esc IS offered: POST /sessions/:id/interrupt can stop a server-side turn.
+    assert.match(strip(r.lastFrame()!), /\[esc\] to interrupt/);
     push({ event: 'session', agent: null }); await sleep(50);
     assert.doesNotMatch(strip(r.lastFrame()!), /coding agent/, 'null clears the previous agent label');
     push({ event: 'turn-end' });
@@ -722,7 +721,7 @@ test('joining a turn already running: the parts alone start the working line —
   const r = render(<App api={api as never} stream={stream as never}
     initial={{ ...INITIAL, sessionId: sid, branch: `agent/${sid}` }}
     newTools={async () => ({})} makeVoice={inertVoice} makeAgent={stubAgent}
-    makeTranscript={(h) => new Transcript(h, tmp())} loadHistory={() => []}
+    makeTranscript={(h) => new Transcript(h, tmp())}
     run={scriptedRun()} pollMs={5000} clientId="me" />);
   try {
     await sleep(60);
@@ -779,7 +778,7 @@ test('a remote turn streams into the pane as it happens, and the record lands wi
   const r = render(<App api={api as never} stream={stream as never}
     initial={{ ...INITIAL, sessionId: sid, branch: `agent/${sid}` }}
     newTools={async () => ({})} makeVoice={inertVoice} makeAgent={stubAgent}
-    makeTranscript={(h) => new Transcript(h, tmp())} loadHistory={() => []}
+    makeTranscript={(h) => new Transcript(h, tmp())}
     run={scriptedRun()} pollMs={5000} clientId="me" />);
   try {
     await sleep(60);
@@ -791,7 +790,7 @@ test('a remote turn streams into the pane as it happens, and the record lands wi
     assert.match(f, /build the thing/, 'the message the agent is answering is on screen');
     assert.match(f, /working on it/, 'the reply is drawn as it streams — no waiting for the turn to end');
     assert.match(f, /Working…/, 'the working line runs, so a long silent tool call is not a frozen screen');
-    assert.doesNotMatch(f, /to interrupt/, 'but esc is not offered: it cannot stop someone else\'s turn');
+    assert.match(f, /\[esc\] to interrupt/, 'esc is offered: the interrupt route stops a server-side turn');
 
     // The turn ends and the record lands. The screen keeps what it drew.
     part({ type: 'text-end', id: '0' });
@@ -838,7 +837,7 @@ test('the feed repaints from the record when this window did NOT see the whole t
   const r = render(<App api={api as never} stream={stream as never}
     initial={{ ...INITIAL, sessionId: sid, branch: `agent/${sid}` }}
     newTools={async () => ({})} makeVoice={inertVoice} makeAgent={stubAgent}
-    makeTranscript={(h) => new Transcript(h, tmp())} loadHistory={() => []}
+    makeTranscript={(h) => new Transcript(h, tmp())}
     run={scriptedRun()} pollMs={5000} clientId="me" />);
   try {
     await sleep(60);
@@ -894,7 +893,7 @@ test('a remote turn clears the splash screen cleanly instead of degrading it', a
   const r = render(<App api={api as never} stream={stream as never}
     initial={{ ...INITIAL, sessionId: sid, branch: `agent/${sid}`, resumed: [] }}
     newTools={async () => ({})} makeVoice={inertVoice} makeAgent={stubAgent}
-    makeTranscript={(h) => new Transcript(h, tmp())} loadHistory={() => []}
+    makeTranscript={(h) => new Transcript(h, tmp())}
     run={scriptedRun()} pollMs={5000} clientId="me" />);
   try {
     await sleep(60);
@@ -928,8 +927,7 @@ test('session_get_mode answers from the sessions table: a background session who
   const capture = (tools?: unknown) => { kits.push(tools as Record<string, Tool>); return stubAgent(); };
   const active = { id: 's1' };
   const r = render(<App api={api as never} initial={INITIAL} newTools={async () => ({})}
-    makeVoice={inertVoice} makeAgent={capture} makeTranscript={(h) => new Transcript(h, tmp())}
-    loadHistory={() => []} run={scriptedRun()} onSession={(s) => { active.id = s.id; }} />);
+    makeVoice={inertVoice} makeAgent={capture} makeTranscript={(h) => new Transcript(h, tmp())} run={scriptedRun()} onSession={(s) => { active.id = s.id; }} />);
   try {
     await sleep(50);
     const t = kits[0]['session_get_mode'] as unknown as
@@ -967,8 +965,7 @@ test("a coding session carries the board tool, bound to ITS workspace and not th
   const capture = (tools?: unknown) => { kits.push(tools as Record<string, Tool>); return stubAgent(); };
   const active = { id: 's1' };
   const r = render(<App api={api as never} initial={INITIAL} newTools={async () => ({})}
-    makeVoice={inertVoice} makeAgent={capture} makeTranscript={(h) => new Transcript(h, tmp())}
-    loadHistory={() => []} run={scriptedRun()} onSession={(s) => { active.id = s.id; }} />);
+    makeVoice={inertVoice} makeAgent={capture} makeTranscript={(h) => new Transcript(h, tmp())} run={scriptedRun()} onSession={(s) => { active.id = s.id; }} />);
   try {
     await sleep(50);
     // s1 (workspace w1) launched with the board tool and the screen pair.
@@ -1013,7 +1010,7 @@ test('tab completes a slash command instead of switching while one is typed', as
 test('with one session open, tab says so rather than doing nothing', async () => {
   const r = render(<App api={(async () => ({})) as never} initial={INITIAL}
     newTools={async () => ({})} makeVoice={inertVoice} makeAgent={stubAgent}
-    makeTranscript={(h) => new Transcript(h, tmp())} loadHistory={() => []}
+    makeTranscript={(h) => new Transcript(h, tmp())}
     run={scriptedRun()} />);
   try {
     await sleep(50);
@@ -1078,8 +1075,7 @@ test('/close on the last session opens a new one rather than an empty window', a
     return {};
   };
   const r = render(<App api={api as never} initial={INITIAL} newTools={async () => ({})}
-    makeVoice={inertVoice} makeAgent={stubAgent} makeTranscript={(h) => new Transcript(h, tmp())}
-    loadHistory={() => []} run={scriptedRun()} onSession={(s) => opened.push(s.id)} />);
+    makeVoice={inertVoice} makeAgent={stubAgent} makeTranscript={(h) => new Transcript(h, tmp())} run={scriptedRun()} onSession={(s) => opened.push(s.id)} />);
   try {
     await sleep(60);                       // setup: launched into s1, alone
     r.stdin.write('/close'); await sleep(40);
@@ -1239,8 +1235,7 @@ test('a new session freezes its prompt into the header; resume replays it; rebui
   };
   // Launch: no stored prompt → a fresh stack, written into the header.
   const r = render(<App api={(async () => ({})) as never} initial={INITIAL} newTools={async () => ({})}
-    makeVoice={inertVoice} makeAgent={seeingAgent} makeTranscript={(h) => new Transcript(h, file)}
-    loadHistory={() => []} run={scriptedRun({ text: 'hello' })} />);
+    makeVoice={inertVoice} makeAgent={seeingAgent} makeTranscript={(h) => new Transcript(h, file)} run={scriptedRun({ text: 'hello' })} />);
   await sleep(50);
   assert.match(String(got[0]), /value-based coding agent/, 'fresh stack assembled');
   r.stdin.write('hi'); await sleep(30); r.stdin.write(ENTER); await sleep(160);
@@ -1252,7 +1247,7 @@ test('a new session freezes its prompt into the header; resume replays it; rebui
   const r2 = render(<App api={(async () => ({})) as never}
     initial={{ ...INITIAL, resumed: [{ role: 'user', content: 'hi' }] as ModelMessage[], instructions: 'FROZEN PROMPT' }}
     newTools={async () => ({})} makeVoice={inertVoice} makeAgent={seeingAgent}
-    makeTranscript={(h) => new Transcript(h, tmp())} loadHistory={() => []} run={scriptedRun({ text: 'x' })} />);
+    makeTranscript={(h) => new Transcript(h, tmp())} run={scriptedRun({ text: 'x' })} />);
   await sleep(50);
   assert.equal(got.at(-1), 'FROZEN PROMPT');
   r2.unmount();
@@ -1268,7 +1263,7 @@ test('the skill index freezes into the prompt: launch from initial.skills, /new 
   const r = render(<App api={(async () => ({})) as never}
     initial={{ ...INITIAL, skills: [{ name: 'deploy-checks', description: 'Use when deploying.' }] }}
     newTools={async () => ({})} makeVoice={inertVoice} makeAgent={seeingAgent}
-    makeTranscript={(h) => new Transcript(h, tmp())} loadHistory={() => []} run={scriptedRun()} />);
+    makeTranscript={(h) => new Transcript(h, tmp())} run={scriptedRun()} />);
   await sleep(50);
   assert.match(String(got[0]), /- deploy-checks: Use when deploying\./, 'launch freezes the index');
   r.unmount();
@@ -1285,8 +1280,7 @@ test('the skill index freezes into the prompt: launch from initial.skills, /new 
       ] };
   };
   const r2 = render(<App api={api as never} initial={INITIAL} newTools={async () => ({})}
-    makeVoice={inertVoice} makeAgent={seeingAgent} makeTranscript={(h) => new Transcript(h, tmp())}
-    loadHistory={() => []} run={scriptedRun()} />);
+    makeVoice={inertVoice} makeAgent={seeingAgent} makeTranscript={(h) => new Transcript(h, tmp())} run={scriptedRun()} />);
   await sleep(50);
   r2.stdin.write('/new'); await sleep(40);
   r2.stdin.write(ENTER); await sleep(160);
@@ -1323,5 +1317,37 @@ test('tab saves the unsent text and restores it on return', async () => {
     assert.equal(r.active.id, 's2', 'back on s2');
     const after = strip(r.lastFrame() ?? '');
     assert.match(after, /half typed message/, 'the draft was restored');
+  } finally { r.unmount(); }
+});
+
+// /new clears the pane BEFORE the ghost goes up. The old conversation used
+// to stay on screen for the create call, squeezing the ghost into the rows
+// under it, then jumping to full size when the new session landed.
+test('/new blanks the old conversation for the whole open, with the splash alone on screen', async () => {
+  let release: () => void = () => {};
+  const held = new Promise<void>((r) => { release = r; });
+  const api = async (method: string, path: string) => {
+    if (path === '/workspaces') return [{ id: 'w1', owner: 'sg', name: 'widgets' }];
+    if (path.split('?')[0] === '/sessions' && method === 'GET') return { sessions: [], total: 0 };
+    if (method === 'POST' && path === '/sessions') await held;   // the create hangs: mid-/new
+    return { id: 's2', branch: 'agent/s2', workspaceId: 'w1', status: 'active' };
+  };
+  const r = render(<App api={api as never} initial={INITIAL} newTools={async () => ({})} makeVoice={inertVoice}
+    makeAgent={stubAgent} makeTranscript={(h) => new Transcript(h, tmp())} run={scriptedRun({ text: 'the old answer' })} />);
+  try {
+    await sleep(50);
+    r.stdin.write('hello'); await sleep(30);
+    r.stdin.write(ENTER); await sleep(200);
+    assert.match(strip(r.lastFrame()!), /the old answer/, 'setup: s1 has a conversation on screen');
+    r.stdin.write('/new'); await sleep(40);
+    r.stdin.write(ENTER); await sleep(100);
+    const mid = strip(r.lastFrame()!);
+    assert.doesNotMatch(mid, /the old answer/, 'mid-/new: the old conversation is off screen');
+    assert.doesNotMatch(mid, /agent\/s1/, 'mid-/new: the old header is off screen');
+    assert.match(mid, /█████/, 'mid-/new: the splash is up, alone');
+    release(); await sleep(150);
+    const after = strip(r.lastFrame()!);
+    assert.match(after, /agent\/s2/, 'the new session landed');
+    assert.match(after, /█████/, 'and opens on the splash');
   } finally { r.unmount(); }
 });

@@ -43,7 +43,8 @@ export function lastUserMessage(sessionId: string): string | undefined {
   return lastUserFromJsonl(readFileSync(file, 'utf8'));
 }
 
-export type Api = (method: string, path: string, body?: unknown) => Promise<unknown>;
+export type { Api } from './request.js';
+import type { Api } from './request.js';
 
 /** What seating a session's transcript decided: the text the conversation
  *  opens from, and whether the LOCAL file was kept (server-text-plus-more) —

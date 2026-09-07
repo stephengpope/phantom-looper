@@ -26,7 +26,8 @@ export const CREDENTIAL_KEYS = [
 export const isCredential = (k: string): boolean =>
   (CREDENTIAL_KEYS as readonly string[]).includes(k);
 
-export type Api = (method: string, path: string, body?: unknown) => Promise<unknown>;
+export type { Api } from './request.js';
+import type { Api } from './request.js';
 
 /** One entry as the API returns it: the layers, the winner, and whether it is
  *  stored encrypted. */
