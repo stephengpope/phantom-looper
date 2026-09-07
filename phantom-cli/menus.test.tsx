@@ -541,8 +541,8 @@ test('the toolbar names the card a session is building, the board\'s way, and sa
     r.stdin.write('/resume'); await sleep(40);
     r.stdin.write(ENTER); await sleep(160);       // the list opens
     r.stdin.write(ENTER); await sleep(200);       // open the card's session
-    assert.match(strip(r.lastFrame() ?? ''), /» code mode on · PHA-7/,
-      'the card rides beside the mode, named as the board names it');
+    assert.match(strip(r.lastFrame() ?? ''), /PHA-7 · » code mode on/,
+      'the card rides ahead of the mode, named as the board names it');
   } finally { r.unmount(); }
 
   // A session with no card still shows the workspace prefix — you always know

@@ -589,9 +589,9 @@ export function App({
   const taskMark = session && windowStore.taskCount != null && windowStore.taskCount > 0
     ? `${windowStore.taskCount} bg task${windowStore.taskCount === 1 ? '' : 's'}`
     : undefined;
-  // Order: mode, card, git dot, bg tasks, notice pinned last.
+  // Order: card, mode, git dot, bg tasks, notice pinned last.
   const withMode = (rest?: string): ToolbarPart[] =>
-    [modeMark, cardMark, workMark, taskMark, rest].filter((p): p is ToolbarPart => Boolean(p));
+    [cardMark, modeMark, workMark, taskMark, rest].filter((p): p is ToolbarPart => Boolean(p));
 
   return (
     <SizeContext.Provider value={{ rows: screenRows, cols: screenCols }}>
