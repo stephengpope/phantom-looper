@@ -24,18 +24,22 @@ Nothing survived. One operation, one answer.
 ## The difference, in full
 
 ```
-syncBranch(deps, session, workspace, { landOnBase, label, onlyWhenBaseMoved })
+syncBranch(deps, session, workspace, { landOnBase, label })
 ```
 
-- **`landOnBase`** — the fast-forward push to base. True for auto-push, false
-  for auto-pull and the manual pull.
-- **`onlyWhenBaseMoved`** — the pull's early exit. Nothing behind means nothing
-  to do, asked before anything is written, so a no-op pull mints no commit and
-  spends no model call. A push has to proceed on local work whether or not
-  base moved.
+`landOnBase` is the whole difference. One bit, three consequences:
+
+- **The fast-forward push to base** happens only when landing.
+- **"Nothing to do" reads from the matching direction.** A push has nothing to
+  do when the session has no work (`hasWorkToLand`); a pull has nothing to do
+  when base has not moved. Asked once, before anything is written, so an idle
+  run mints no commit and spends no model call.
 - **Rounds** — three when landing, one otherwise. Base can move between the
   rebase and the fast-forward; nothing races a pull, because base moving after
   it is simply the next pull.
+
+There was briefly a second knob, `onlyWhenBaseMoved`. Every caller passed it
+as the exact inverse of `landOnBase` — two names for one bit — so it is gone.
 
 Everything else is shared: the lock, the backup push, the squash, the commit
 message, the replay, the conflict handoff, the verification, the forced branch

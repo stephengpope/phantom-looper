@@ -338,6 +338,19 @@ export async function fetchBase(
   return stdout.trim().split('\n').filter(Boolean);
 }
 
+/** Is there anything for a sync to do on this side — uncommitted changes, or
+ *  commits the base branch does not have? Asked before anything is written, so
+ *  an idle run mints no commit and spends no model call on its message. Reads
+ *  only; `status --porcelain` counts untracked files, which `add -A` would
+ *  stage. */
+export async function hasWorkToLand(dir: string, baseBranch: string): Promise<boolean> {
+  const { stdout: dirty } = await git(dir, ['status', '--porcelain']);
+  if (dirty.trim()) return true;
+  const { stdout: mb } = await git(dir, ['merge-base', 'HEAD', `origin/${baseBranch}`]);
+  const { stdout: ahead } = await git(dir, ['rev-list', '--count', `${mb.trim()}..HEAD`]);
+  return Number(ahead.trim()) > 0;
+}
+
 /** Stage everything and collapse the session's work back to ONE commit's worth
  *  of staged content — `add -A`, then `reset --soft` to the merge base. Nothing
  *  is committed here: the caller writes the message from the staged diff, which

@@ -33,7 +33,7 @@ export async function autoPush(
   deps: AutoPushDeps, session: SessionRow, workspace: WorkspaceRow,
 ): Promise<AutoPushResult> {
   const r = await syncBranch(deps, session, workspace,
-    { landOnBase: true, label: 'auto-push', onlyWhenBaseMoved: false });
+    { landOnBase: true, label: 'auto-push' });
   const { reason, rounds, sha } = r;
   if (r.outcome === 'ok') return { result: 'pushed', rounds, sha };
   return { result: r.outcome === 'nothing' ? 'nothing' : r.outcome, reason, rounds };

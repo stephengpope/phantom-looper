@@ -43,7 +43,7 @@ import { repoDir, type Paths } from '../pool/paths.js';
 import { getFolder, acquireLock, releaseLock, renewLock, cardIntentFor } from '../sessions.js';
 import {
   git, fetchBase, stageAndSquash, commitStaged, rebaseOntoBase, rebaseAbort,
-  verifyLanded, pushSession, pushSessionForced, pushToBase, GIT_CLIENT_ID,
+  verifyLanded, pushSession, pushSessionForced, pushToBase, hasWorkToLand, GIT_CLIENT_ID,
 } from './git.js';
 import { commitMessageFor } from './commitMessage.js';
 import type { ModelConfig } from '../../core/llm/createAgent.js';
@@ -116,14 +116,15 @@ export interface SyncDeps {
 
 export interface SyncOptions {
   /** Fast-forward base to the result. False is a pull: the branch catches up
-   *  and nothing reaches base. */
+   *  and nothing reaches base.
+   *
+   *  This one bit is the whole difference between the two directions, and it
+   *  answers three questions at once — whether to push to base, what "nothing
+   *  to do" means (a push has nothing to LAND, a pull has nothing to CATCH UP
+   *  to), and whether rounds are worth running. */
   landOnBase: boolean;
   /** What a person sees while the session is held. */
   label: string;
-  /** Stop with `nothing` when base has not moved, even if the session has work.
-   *  True for a pull — a no-op pull must mint no commit and spend no model
-   *  call. False for a push, which lands local work whether or not base moved. */
-  onlyWhenBaseMoved: boolean;
 }
 
 export async function syncBranch(
@@ -152,7 +153,13 @@ export async function syncBranch(
     // 1 — what is on base that we do not have. Collected before anything is
     // rewritten, and carried into the conflict turn as the briefing.
     let arrived = await fetchBase(dir, base, auth);
-    if (opts.onlyWhenBaseMoved && arrived.length === 0) return { outcome: 'nothing', arrived: [] };
+
+    // Is there anything to do? Asked ONCE, before anything is written, so an
+    // idle run mints no commit and spends no model call. A push has nothing to
+    // do when the session has no work; a pull has nothing to do when base has
+    // not moved — the same question, read from each direction.
+    const idle = opts.landOnBase ? !(await hasWorkToLand(dir, base)) : arrived.length === 0;
+    if (idle) return { outcome: 'nothing', arrived };
 
     // 2 — the backup, BEFORE any rewrite. A rebase rewrites the branch and the
     // push that follows forces; this plain push is the copy that force cannot
@@ -165,17 +172,15 @@ export async function syncBranch(
     // The message is written AFTER the squash: it is built from the staged
     // diff, which only shows the whole session's work once HEAD is back at the
     // merge base.
+    // False here means a pull with nothing of its own — base moved but the
+    // session has not touched anything. The replay below is then a plain
+    // fast-forward, which is exactly what that pull wants.
     if (await stageAndSquash(dir, base)) {
       await ev('commit');
       const config = deps.messageConfig ? await deps.messageConfig().catch(() => null) : null;
       const card = await cardIntentFor(deps.db, session, workspace);
       const msg = await commitMessageFor(dir, config, card);
       await commitStaged(dir, `${msg}\n\nPhantom-Session: ${session.id}`);
-    } else if (!opts.onlyWhenBaseMoved) {
-      // A push with no work of its own and nothing behind has nothing to do. A
-      // pull reaching here HAS something to do: base moved (step 1 said so).
-      const { stdout: behind } = await git(dir, ['rev-list', '--count', `HEAD..origin/${base}`]);
-      if (Number(behind.trim()) === 0) return { outcome: 'nothing', arrived };
     }
     const before = (await git(dir, ['rev-parse', 'HEAD'])).stdout.trim();
 

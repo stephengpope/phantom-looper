@@ -47,7 +47,7 @@ export async function autoPull(
   deps: AutoPullDeps, session: SessionRow, workspace: WorkspaceRow,
 ): Promise<AutoPullResult> {
   const r = await syncBranch(deps, session, workspace,
-    { landOnBase: false, label: 'auto-pull', onlyWhenBaseMoved: true });
+    { landOnBase: false, label: 'auto-pull' });
   const { reason, arrived, files, sha, pushed } = r;
   if (r.outcome === 'ok') return { result: 'merged', arrived, files, sha, pushed, ...(reason ? { reason } : {}) };
   if (r.outcome === 'nothing') return { result: 'clean' };

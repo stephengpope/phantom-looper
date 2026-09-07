@@ -6,7 +6,7 @@ agent's container has no token unless `agent_git_credentials` is on.
 ```
 git.ts            git(cwd, args, auth?) with the guard set; classifyGitFailure; cloneFresh; refreshPristine;
                   checkoutBranch; localState; workState; the primitives commitAll, pushSession, pushSessionForced,
-                  pushToBase, fetchBase, stageAndSquash, commitStaged, rebaseOntoBase, rebaseInProgress,
+                  pushToBase, fetchBase, hasWorkToLand, stageAndSquash, commitStaged, rebaseOntoBase, rebaseInProgress,
                   rebaseAbort, verifyLanded, initializeRemote, GIT_CLIENT_ID
 engine.ts         GitEngine: the manual push, pull and status behind /git/*
 sync.ts           syncBranch — THE flow, and the argument for it; ConflictContext, SyncEvent, the lock constants
@@ -41,7 +41,9 @@ regrafts the branch and inverts every ancestry check.
 Auto-push, auto-pull and the manual `/git/pull` are the SAME operation asking
 the same question — how do I get base's new commits under my work — so they
 run one function, `syncBranch`. Auto-pull is auto-push without the last step.
-The only real difference is `landOnBase`.
+`landOnBase` is the ONLY difference — one bit answering three questions:
+whether to push to base, what "nothing to do" means, and whether rounds are
+worth running.
 
 Take the lock, fetch (what arrived on base is collected here and becomes the
 conflict briefing), push the branch as the backup BEFORE anything rewrites it,
@@ -52,10 +54,11 @@ agent, verify, force-push the branch with a lease — and then, only when
 landing, a plain fast-forward push to base. Base moved: rebase again, three
 rounds, then give up with the branch intact.
 
-`onlyWhenBaseMoved` is the pull's early exit: nothing behind means nothing to
-do, asked before anything is written so a no-op pull mints no commit and
-spends no model call. Rounds are the landing's: nothing races a pull, so a
-sync that does not land runs one round.
+"Is there anything to do" is asked once, before anything is written, so an
+idle run mints no commit and spends no model call: a push has nothing to do
+when the session has no work (`hasWorkToLand`), a pull when base has not moved
+— the same question read from each direction. Rounds are the landing's:
+nothing races a pull, so a sync that does not land runs one round.
 
 Rebase, not merge: the landing is a plain commit rather than a merge commit
 whose resolution normal review skips, and a rebase stands on base instead of

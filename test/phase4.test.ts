@@ -747,12 +747,12 @@ test('auto-push over the route: 503 unwired; wired -> core\'s client streams the
   const f = injectFetch(app);
   const cfg = { baseUrl: 'http://x', apiKey: 'k', sessionId: t.session.id, fetch: f };
 
-  // Nothing to push -> nothing, and it stops at the squash: there is no commit
-  // to replay, so no rebase and no model call for a message.
+  // Nothing to push -> nothing, decided before anything is written: no backup,
+  // no commit, no rebase, no model call for a message.
   let steps: string[] = [];
   let out = await autoPushSession(cfg, (label) => steps.push(label));
   assert.equal(out.result, 'nothing', JSON.stringify(out));
-  assert.deepEqual(steps, ['taking the session', 'backing the branch up']);
+  assert.deepEqual(steps, ['taking the session']);
 
   // Work on the branch -> pushed; the steps arrived in words, the sha is base's tip.
   await fs.writeFile(path.join(t.dir, 'work.txt'), 'in flight\n');

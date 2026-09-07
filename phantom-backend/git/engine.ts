@@ -81,7 +81,7 @@ export class GitEngine {
   async pull(s: SessionRow, workspace: WorkspaceRow): Promise<PullResult | 'busy'> {
     const r = await syncBranch(
       { db: this.db, paths: this.paths, encryptionKey: this.encryptionKey, resolve: this.resolveConflict },
-      s, workspace, { landOnBase: false, label: 'pull', onlyWhenBaseMoved: true });
+      s, workspace, { landOnBase: false, label: 'pull' });
     if (r.outcome === 'ok') {
       const list = this.arrivals.get(s.id) ?? [];
       list.push({ at: Date.now(), commits: r.arrived ?? [] });
