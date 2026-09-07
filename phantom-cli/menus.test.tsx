@@ -529,13 +529,16 @@ test('the toolbar names the card a session is building, the board\'s way, and sa
       'the card rides beside the mode, named as the board names it');
   } finally { r.unmount(); }
 
-  // A session you started yourself belongs to no card: no mark, no chatter.
-  const plain = app({ api: noApi, newTools: noTools });
+  // A session with no card still shows the workspace prefix — you always know
+  // which project. The initial seeds the prefix into the workspace facts cache.
+  const plain = app({ api: noApi, newTools: noTools,
+    initial: { ...INITIAL, workspace: 'widgets', cardPrefix: 'PHA' } });
   try {
     await sleep(50);
     const f = strip(plain.lastFrame() ?? '');
     assert.match(f, /» code mode on/);
-    assert.ok(!/PHA-/.test(f), 'nothing about cards on a session that has none');
+    assert.ok(!/PHA-\d/.test(f), 'no card number — just the prefix');
+    assert.match(f, /PHA/, 'the workspace prefix shows so you know which project');
   } finally { plain.unmount(); }
 });
 

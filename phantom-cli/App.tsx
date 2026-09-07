@@ -85,6 +85,9 @@ export interface Initial {
   /** The workspace's display name for the banner; the id stands in when the
    *  lookup failed — it still identifies the workspace. */
   workspace?: string;
+  /** The workspace's card number prefix (`PHA`). The toolbar shows it when
+   *  no card is attached so you always know which project. */
+  cardPrefix?: string;
   tools: Record<string, Tool>; resumed: ModelMessage[];
   card?: number | null;
   /** True when this is a supervisor session — a read-only record. */
@@ -1240,7 +1243,7 @@ export function App({
   // workspace names its cards) for the toolbar's card mark — so the mark
   // costs no request of its own.
   const wsNames = useRef(new Map<string, WsFacts>(
-    initial?.workspace ? [[initial.workspaceId, { label: initial.workspace }]] : []));
+    initial?.workspace ? [[initial.workspaceId, { label: initial.workspace, ...(initial.cardPrefix ? { cardPrefix: initial.cardPrefix } : {}) }]] : []));
   // The workspace LIST carries the same two facts per row: whoever reads it
   // fills the cache, so a later open needs no lookup and a failed one can
   // name the workspace rather than its id.
@@ -2089,11 +2092,12 @@ export function App({
   const modeMark = session && !session.readonly
     ? (session.planMode ? '» plan mode on' : '» code mode on')
     : undefined;
-  // Which card this session is building, when it is building one — the
-  // board's own name for it (`PHA-7`), so the line you read while typing
-  // answers "what am I working on" without opening anything. Nothing shows
-  // for a session you started yourself: no card is a state, not a warning.
-  const cardMark = session?.card;
+  // Which card this session is building — the board's own name for it
+  // (`PHA-7`), so the line you read while typing answers "what am I working
+  // on" without opening anything. When no card is attached, the workspace
+  // prefix alone (`PHA`) still shows — you always know which project.
+  const cardMark = session?.card
+    ?? (session ? wsNames.current.get(session.workspaceId)?.cardPrefix : undefined);
   // The git work dot — where the session's code stands, the colored • ahead
   // of the words: red = not pushed, yellow = not merged, green = merged. The
   // same WORK map the /resume table draws from (Launcher.tsx), so the three
