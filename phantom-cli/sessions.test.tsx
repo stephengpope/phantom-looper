@@ -1319,3 +1319,35 @@ test('tab saves the unsent text and restores it on return', async () => {
     assert.match(after, /half typed message/, 'the draft was restored');
   } finally { r.unmount(); }
 });
+
+// /new clears the pane BEFORE the ghost goes up. The old conversation used
+// to stay on screen for the create call, squeezing the ghost into the rows
+// under it, then jumping to full size when the new session landed.
+test('/new blanks the old conversation for the whole open, with the splash alone on screen', async () => {
+  let release: () => void = () => {};
+  const held = new Promise<void>((r) => { release = r; });
+  const api = async (method: string, path: string) => {
+    if (path === '/workspaces') return [{ id: 'w1', owner: 'sg', name: 'widgets' }];
+    if (path.split('?')[0] === '/sessions' && method === 'GET') return { sessions: [], total: 0 };
+    if (method === 'POST' && path === '/sessions') await held;   // the create hangs: mid-/new
+    return { id: 's2', branch: 'agent/s2', workspaceId: 'w1', status: 'active' };
+  };
+  const r = render(<App api={api as never} initial={INITIAL} newTools={async () => ({})} makeVoice={inertVoice}
+    makeAgent={stubAgent} makeTranscript={(h) => new Transcript(h, tmp())} run={scriptedRun({ text: 'the old answer' })} />);
+  try {
+    await sleep(50);
+    r.stdin.write('hello'); await sleep(30);
+    r.stdin.write(ENTER); await sleep(200);
+    assert.match(strip(r.lastFrame()!), /the old answer/, 'setup: s1 has a conversation on screen');
+    r.stdin.write('/new'); await sleep(40);
+    r.stdin.write(ENTER); await sleep(100);
+    const mid = strip(r.lastFrame()!);
+    assert.doesNotMatch(mid, /the old answer/, 'mid-/new: the old conversation is off screen');
+    assert.doesNotMatch(mid, /agent\/s1/, 'mid-/new: the old header is off screen');
+    assert.match(mid, /█████/, 'mid-/new: the splash is up, alone');
+    release(); await sleep(150);
+    const after = strip(r.lastFrame()!);
+    assert.match(after, /agent\/s2/, 'the new session landed');
+    assert.match(after, /█████/, 'and opens on the splash');
+  } finally { r.unmount(); }
+});

@@ -17,7 +17,8 @@ index.tsx          launch: subcommands, the per-request connection (`api`, `stre
 App.tsx            the view: the two-pane layout, the screens, the keys and the mouse, and the state only a
                    keypress moves (the typed line, scroll, ctrl+o, ctrl+c arming). Builds the window and draws it
 window.ts          WindowStore — the window itself, outside React: the sessions, the boards, the Assistant's voice
-                   client, and what is on screen (view, menu, splash, the approval, the window's own notes).
+                   client, and what is on screen (view, menu, splash, `opening` — a /new in flight blanks the
+                   pane so the ghost draws alone — the approval, the window's own notes).
                    `view` carries a card's back destination, so esc has one owner and one answer.
                    Opening, closing and switching sessions; plan mode; the slash commands and submit; boot; the
                    settings every change re-reads; auto-push and auto-pull; the data and re-read clocks behind

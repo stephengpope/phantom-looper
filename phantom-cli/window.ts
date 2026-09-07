@@ -166,6 +166,12 @@ export class WindowStore {
   /** The launch splash, where the conversation will be. Cleared by the first
    *  thing that wants the screen back. */
   splash: boolean;
+  /** A new session is being built for this window. The pane draws NOTHING
+   *  but the splash until it lands — the old conversation would otherwise
+   *  stay on screen for the network calls, squeezing the ghost into the
+   *  rows under it and then jumping to full size when the new session
+   *  arrives (2026-09-07). */
+  opening = false;
   /** Notes with no session to land in — a failed boot open, a refused
    *  command. Rendered where the conversation would be. */
   notes: Part[] = [];
@@ -576,6 +582,13 @@ export class WindowStore {
         this.splash = false;
         this.notify();
       }
+      if (target.kind === 'new') {
+        // The conversation will be empty: clear the pane and put the splash
+        // up NOW, so the ghost has the whole pane while the calls run.
+        this.opening = true;
+        this.splash = true;
+        this.notify();
+      }
       const sessionId = target.kind === 'duplicate'
         ? ((await this.api('POST', `/sessions/${target.id}/duplicate`, {}) as { id: string }).id)
         : target.kind === 'open' ? target.id : undefined;
@@ -652,6 +665,7 @@ export class WindowStore {
       });
       // An empty conversation opens on the splash, exactly as boot's does.
       this.splash = resumed.length === 0;
+      this.opening = false;
       this.watchTasks();
       this.notify();
       this.opts.onSession?.({ id: row.id, branch: row.branch, workspaceId: row.workspaceId });
@@ -661,6 +675,7 @@ export class WindowStore {
         ? `could not start a session in ${this.wsLabel(target.workspaceId)}`
         : target.kind === 'duplicate' ? `could not duplicate session ${target.id}`
           : `could not open session ${target.id}`;
+      this.opening = false;
       this.note(`${what}: ${(e as Error).message}`);
       return false;
     }
@@ -1282,9 +1297,9 @@ export class WindowStore {
     switch (name) {
       case 'new':
         // No session yet = no workspace to mean "here": the picker chooses.
-        // The splash goes up BEFORE the session is built, so the ghost appears
-        // on the next frame and the network calls run behind it.
-        if (session) { this.setSplash(true); await this.openSession({ kind: 'new', workspaceId: session.workspaceId }); }
+        // openSession clears the pane and puts the splash up before the
+        // network calls run.
+        if (session) await this.openSession({ kind: 'new', workspaceId: session.workspaceId });
         else await this.openPicker('workspace');
         return;
       case 'resume': await this.openPicker('resume'); return;

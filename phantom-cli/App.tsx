@@ -618,7 +618,10 @@ export function App({
           survives the list being rebuilt (a refresh reseats the whole
           conversation) and switching between sessions. */}
       <Boundary name="conversation" resetKey={session?.id} onError={(m) => windowStore.note(`${m} — the conversation stopped drawing; /resume it to redraw; the stack is in ~/.phantom-cli/cli.log`)}>
-      <Pane items={session ? session.done : windowStore.notes} offset={scroll} width={mainCols} onMeasure={setScrollMax} topGap
+      {/* While a new session is being built (window.opening) the pane is
+          cleared and the splash alone is drawn, so the ghost gets the whole
+          pane instead of the space left under the old conversation. */}
+      <Pane items={windowStore.opening ? [] : session ? session.done : windowStore.notes} offset={scroll} width={mainCols} onMeasure={setScrollMax} topGap
         keyFor={(p) => p.id}
         render={(p) => <PartView key={p.id} part={p} width={width} expanded={expanded} />}
         // The splash rides the pane's empty space so the header stays put:
@@ -627,7 +630,7 @@ export function App({
         fill={windowStore.splash ? <Banner width={mainCols} /> : undefined} />
       </Boundary>
       <Box ref={bottomRef} flexDirection="column" flexShrink={0}>
-        {session?.live.map((p) => (
+        {!windowStore.opening && session?.live.map((p) => (
           <PartView key={p.id} part={p} width={width} expanded={expanded} maxRows={liveRows} />
         ))}
         {/* The working line, for OUR turn and for one we are watching. A tool
@@ -635,7 +638,7 @@ export function App({
             remote `bash` looks like a frozen screen. Watching it carries no
             esc hint: esc cannot stop someone else's turn, and offering it
             would be a lie. */}
-        {(session?.busy || session?.remoteBusy) && <StatusLine phase={phaseLabel(session.live)}
+        {!windowStore.opening && (session?.busy || session?.remoteBusy) && <StatusLine phase={phaseLabel(session.live)}
           startedAt={session.startedAt} tokens={tokenCount(session.tokens)}
           escHint={session.busy
             ? (session.queue.length ? '[esc] clears the queue, then interrupts' : '[esc] to interrupt')
