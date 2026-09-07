@@ -31,7 +31,8 @@ import { ValueInput, type EditSpec } from './ValueInput.js';
 import { Screen } from './Screen.js';
 import { PROVIDERS } from '../config.js';
 
-export type Api = (method: string, path: string, body?: unknown) => Promise<unknown>;
+export type { Api } from '../request.js';
+import type { Api } from '../request.js';
 
 interface ServerSetting { value: unknown; source: string; description: string;
   /** Whether one workspace can differ on it — see WorkspaceSettings.tsx. */

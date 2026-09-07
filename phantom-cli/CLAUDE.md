@@ -14,9 +14,17 @@ phantom-cli --version | update [--client|--server] | setup-backend
 ```
 index.tsx          launch: subcommands, the per-request connection (`api`, `stream`), saved-CA trust, console → cli.log,
                    crash handlers, mouse on/off, render App, the resume line and version notice at quit
-App.tsx            the window: session store wiring, opening/closing/switching sessions, the elsewhere-watch, the
-                   session feed, the Assistant's tool handlers (kanbanOps, the session_* handler, the approval gate),
-                   slash commands, keys and mouse, the two-pane layout
+App.tsx            the view: the two-pane layout, the screens, the keys and the mouse, and the state only a
+                   keypress moves (the typed line, scroll, ctrl+o, ctrl+c arming). Builds the window and draws it
+window.ts          WindowStore — the window itself, outside React: the sessions, the boards, the Assistant's voice
+                   client, and what is on screen (view, menu, splash, the approval, the window's own notes).
+                   `view` carries a card's back destination, so esc has one owner and one answer.
+                   Opening, closing and switching sessions; plan mode; the slash commands and submit; boot; the
+                   settings every change re-reads; auto-push and auto-pull; the data and re-read clocks behind
+                   /resume, /tasks and /archived; refreshIfMoved, the one reseat path
+assistantKit.ts    the handlers behind the Assistant's tools (session_*, the board and screen, the gated
+                   workspace_create_repo, the two git ones) over the WindowStore, and the kit they compose into
+kanban.ts          kanbanOps — the card work both kanban tools do, against one BoardStore
 sessions.ts        SessionStore — every open session and the one turn each may run; outside React
 session.ts         the local transcript file under CONFIG_DIR/sessions/; adoptServerCopy (the seating rule); syncTranscriptUp
 sessionFeed.ts     SessionFeed — the session on screen's live feed, folded into the store as remote turns
@@ -31,7 +39,7 @@ config.ts          CONFIG_DIR, the local DEFAULTS/META, LOCAL_KEYS, VOICE_BOOT_K
 local.ts           the seven machine-local settings in CONFIG_DIR/settings.json; env overrides; 0600
 settings.ts        the server settings client: all / patch / clear / read / write
 settingLabels.ts   rendering a setting's value (30d, yes); names and meaning come from the server
-request.ts         requestError — the one sentence a failed request becomes
+request.ts         the Api type, requestError (the one sentence a failed request becomes), and quiet()
 mouse.ts           the SGR mouse parser, selection ranges, clipboard
 screen.ts          the screen mirror (@xterm/headless) behind Ink's stdout; selection highlight; frame tracing
 trim.ts            drops the unchanged left part of Ink's row rewrites before they reach the terminal
@@ -57,7 +65,21 @@ source; `PHANTOM_CLI_DIR` overrides it and the test script sets it.
 
 ## A session in this window
 
-`App.openSession` calls core's `openSession` with the window's `api`, then
+App.tsx is a view over `WindowStore`. The rule that splits them: anything with
+a caller that is not a React event lives in the window, because the Assistant
+opens and closes sessions and the boot path runs while nothing is rendering.
+App keeps only what a keypress moves — the typed line, the scroll offsets, the
+ctrl+o and ctrl+c state. The window notifies; App subscribes once and redraws.
+Every field the view renders is set through a method that notifies, so no
+screen can be left showing a value the window has already changed.
+
+/resume, /tasks and /archived are fed rather than self-fetching, because each
+opens fetch-FIRST: a server that cannot answer leaves you on the chat with a
+note instead of on an empty screen. Two of them also need facts only this
+window has — which sessions are open here, which is mid-turn, this window's
+lock id.
+
+`WindowStore.openSession` calls core's `openSession` with the window's `api`, then
 seats the transcript file, builds the kit (`newTools` from index.tsx plus
 `codingKanbanTool` and `screenModeTools`), takes the frozen prompt from the
 header or assembles one, builds the agent, and adds the entry to the store.
@@ -97,17 +119,18 @@ events.
 
 ## The Assistant
 
-`buildAssistantAgent` uses core's cascade. Its kit is the tui kits from
-core with App's handlers (`assistantTool` for `session_*`,
-`assistantKanbanHandler`, `workspaceCreateHandler`, the two git handlers,
-`screenOps`) plus `newAssistantTools` (workspace read-only and web) bound to
-the session on screen and rebuilt when it changes. The conversation lives
+`buildAssistantAgent` uses core's cascade. Its kit is `buildAssistantKit`
+(`assistantKit.ts`): the tui kits from core over the WindowStore, plus
+`newAssistantTools` (workspace read-only and web) bound to the session on
+screen and rebuilt when it changes. Every handler reads the window live, never
+a captured value — the agent is built once and must not answer with the
+session that was on screen when it was built. The conversation lives
 in `VoiceClient.history` and is appended to `CONFIG_DIR/voice/`, never
 replayed. A boot-time audio key (`VOICE_BOOT_KEYS`) restarts the sidecar; a
 model key (`ASSISTANT_MODEL_KEYS`) rebuilds the brain in place.
 
-`workspace_create_repo` is gated: `requestApproval` puts the ask in the
-voice pane, `voice.intercept` claims spoken or typed words while it stands,
+`workspace_create_repo` is gated: `WindowStore.requestApproval` puts the ask
+in the voice pane, `voice.intercept` claims spoken words while it stands,
 the exact word accept or decline answers, the tool's abort declines.
 
 ## Drawing
@@ -136,7 +159,8 @@ fails out loud.
 
 `npm run test:phantom-cli` runs the files listed in package.json; a new
 test file must be added there. Suites: `tui` (reducer, a full turn,
-seating), `sessions` (the store, queue, lock, relay, feed), `board`,
+seating), `sessions` (the store, queue, lock, relay, feed), `window` (the window
+driven with no React at all), `board`,
 `menus` (commands and every screen), `voice` (VoiceClient against a
 scripted sidecar), `mouse`, `screen`, `trim`, `config`, `settings`,
 `session`, `oauth`, `provision`, `setup`, `selfUpdate`, `update`,

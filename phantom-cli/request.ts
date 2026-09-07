@@ -32,3 +32,16 @@ export function requestError(method: string, path: string, base: string, cause: 
   return failed;
 }
 
+/** The window's one call into phantom-backend. index.tsx builds the real one
+ *  (it reads the connection per request); every screen and store takes it as
+ *  `api`. Declared here, beside the error it throws, so the type and the
+ *  sentence have one home. */
+export type Api = (method: string, path: string, body?: unknown) => Promise<unknown>;
+
+/** The ONLY quiet failure the app allows: background work that runs again on
+ *  its own (a list refresh, a lock release at quit) goes to cli.log with what
+ *  it was doing — never to the pane, never nowhere. Everything a person asked
+ *  for fails out loud with `could not <do what>: <why>`. */
+export const quiet = (doing: string) => (e: unknown): void => {
+  console.warn(`background: could not ${doing}: ${(e as Error).message ?? String(e)}`);
+};

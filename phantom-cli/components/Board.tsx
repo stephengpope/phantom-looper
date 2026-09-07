@@ -16,11 +16,18 @@ const HEADER_ROWS = 3; // column top border + header line + blank line, above th
 
 interface Drag { cardId: number; toCol: string; toRow: number; moved: boolean }
 
-export function Board({ store, width, height, isActive, onClose, solo, onOpenSession, onArchived }: {
+export function Board({ store, width, height, isActive, onClose, card, onOpenCard, onCloseCard,
+  onOpenSession, onArchived }: {
   store: BoardStore; width: number; height: number; isActive: boolean; onClose: () => void;
-  /** Card-only mode: a card asked for from chat shows its editor directly —
-   *  no column view first, and closing it means onClose (chat), not columns. */
-  solo?: number;
+  /** The card whose editor is open, by seq. The window owns this: it also
+   *  knows where esc leaves the editor, which is the only thing that ever
+   *  differed between a card opened here and one opened from the chat. */
+  card?: number;
+  /** enter or a click on a card. The window opens it, marked as coming from
+   *  the board, so esc comes back to these columns. */
+  onOpenCard: (seq: number) => void;
+  /** esc out of the editor — the window sends it back where it came from. */
+  onCloseCard: () => void;
   /** The card editor's Session row — open that session in the chat view. */
   onOpenSession?: (id: string) => void;
   /** [a] — the /archived screen (a menu, so App leaves the board first). */
@@ -33,7 +40,6 @@ export function Board({ store, width, height, isActive, onClose, solo, onOpenSes
 
   const [focus, setFocus] = useState({ col: 0, row: 0 });
   const [drag, setDrag] = useState<Drag | null>(null);
-  const [edit, setEdit] = useState<{ cardId: number } | null>(null);
   const [adding, setAdding] = useState<string | null>(null);
   // [e]: the FOCUSED column alone, across the whole width — for reading
   // titles the narrow columns cut. A flag on the focus, not a column of its
@@ -65,7 +71,7 @@ export function Board({ store, width, height, isActive, onClose, solo, onOpenSes
     return null;
   };
 
-  const openEdit = (t: Card) => setEdit({ cardId: t.id });
+  const openEdit = (t: Card) => onOpenCard(t.seq);
   const clampRow = (ci: number, row: number) =>
     Math.max(0, Math.min(store.cardsIn(columns[ci]).length - 1, row));
   // A screen asked for from outside (the Assistant's "open card 7" / "expand
@@ -75,13 +81,11 @@ export function Board({ store, width, height, isActive, onClose, solo, onOpenSes
     if (!store.state.loaded || store.requested == null) return;
     const req = store.consumeRequested();
     if (!req) return;
-    if (req === 'board') { setEdit(null); setZoom(false); }
-    else if ('column' in req) {
-      const ci = columns.indexOf(req.column);
-      if (ci < 0) return;
-      setEdit(null); setZoom(true);
-      setFocus((f) => ({ col: ci, row: clampRow(ci, f.row) }));
-    } else openEdit(req.card);
+    if (req === 'board') { setZoom(false); return; }
+    const ci = columns.indexOf(req.column);
+    if (ci < 0) return;
+    setZoom(true);
+    setFocus((f) => ({ col: ci, row: clampRow(ci, f.row) }));
   });
   useInput((ch, key) => {
     // --- new-card title entry ---
@@ -162,25 +166,19 @@ export function Board({ store, width, height, isActive, onClose, solo, onOpenSes
     }
     else if (ch === 'e' && focusColName) setZoom((z) => !z);
     else if (ch === 'v') onArchived?.();
-  }, { isActive: isActive && !edit && solo === undefined });
+  }, { isActive: isActive && card === undefined });
 
   const dragging = drag?.moved ? store.state.cards.find((t) => t.id === drag.cardId) : undefined;
 
-  if (solo !== undefined) {
-    const card = store.bySeq(solo);
-    if (!loaded) return null; // no column flash while the data loads
-    if (!card) { onClose(); return null; }
+  // ONE card-editor path, however the card was opened. esc is onCloseCard,
+  // and the window decides where that lands.
+  if (card !== undefined) {
+    if (!loaded) return null;   // no column flash while the data loads
+    const open = store.bySeq(card);
+    if (!open) { onCloseCard(); return null; }
     return (
-      <CardEditor key={card.id} store={store} card={card} width={width} height={height}
-        prefix={prefix} isActive={isActive} onClose={onClose} onOpenSession={onOpenSession} />
-    );
-  }
-  if (edit) {
-    const card = store.state.cards.find((t) => t.id === edit.cardId);
-    if (!card) { setEdit(null); return null; }
-    return (
-      <CardEditor key={card.id} store={store} card={card} width={width} height={height}
-        prefix={prefix} isActive={isActive} onClose={() => setEdit(null)} onOpenSession={onOpenSession} />
+      <CardEditor key={open.id} store={store} card={open} width={width} height={height}
+        prefix={prefix} isActive={isActive} onClose={onCloseCard} onOpenSession={onOpenSession} />
     );
   }
 

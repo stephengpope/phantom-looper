@@ -4,11 +4,11 @@
 // Assistant's kanban tool calls) repaints an open board by itself.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import React from 'react';
+import React, { useState } from 'react';
 import { render } from 'ink-testing-library';
 import { Board } from './components/Board.js';
 import { BoardStore, type Card, type CardStep, type Stream } from './board.js';
-import { kanbanOps } from './App.js';
+import { kanbanOps } from './kanban.js';
 import { keyedItems } from '../core/kanban.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -80,8 +80,18 @@ const seed = () => [
   makeCard({ id: 4, seq: 4, title: 'stuck card', status: 'blocked', blocked_reason: 'stuck' }),
 ];
 
-function mount(store: BoardStore) {
-  return render(<Board store={store} width={100} height={24} isActive onClose={() => {}} />);
+/** The board is a view: the window owns which card is open and where esc
+ *  leaves it. This harness plays that part, so the tests drive the board the
+ *  way the app does. */
+function mount(store: BoardStore, over: Partial<Parameters<typeof Board>[0]> = {}) {
+  function Host() {
+    const [card, setCard] = useState<number | undefined>(undefined);
+    return (
+      <Board store={store} width={100} height={24} isActive onClose={() => {}}
+        card={card} onOpenCard={setCard} onCloseCard={() => setCard(undefined)} {...over} />
+    );
+  }
+  return render(<Host />);
 }
 
 test('renders columns, numbers and titles from the store', async () => {
@@ -242,9 +252,9 @@ test('n creates in the focused column; a archives with confirmation', async () =
   r.stdin.write('a'); await sleep(30);
   assert.ok(!calls.some((c) => c.method === 'PATCH' && (c.body as { archived?: boolean }).archived), 'the first [a] only arms');
   assert.match(strip(r.lastFrame()!), /archive #1-first card\?/, 'the confirmation prompt names the card');
-  assert.match(strip(r.lastFrame()!), /\[a\] again to archive/, 'the prompt tells the user what to do');
-  // Second [a] confirms — the PATCH fires.
-  r.stdin.write('a'); await sleep(30);
+  assert.match(strip(r.lastFrame()!), /\[c\] to confirm/, 'the prompt tells the user what to do');
+  // [c] confirms — the PATCH fires.
+  r.stdin.write('c'); await sleep(30);
   const patch = calls.find((c) => c.method === 'PATCH' && (c.body as { archived?: boolean }).archived);
   assert.ok(patch, 'archive is a PATCH, not a delete');
   assert.ok(!strip(r.lastFrame()!).includes('first card'));
@@ -258,17 +268,17 @@ test('[a] archive confirmation is disarmed by esc or any other key', async () =>
   await sleep(50);
   // Arm with [a], then disarm with esc — should not archive.
   r.stdin.write('a'); await sleep(30);
-  assert.match(strip(r.lastFrame()!), /\[a\] again to archive/, 'armed');
+  assert.match(strip(r.lastFrame()!), /\[c\] to confirm/, 'armed');
   r.stdin.write('\x1b'); await sleep(30);
-  assert.doesNotMatch(strip(r.lastFrame()!), /again to archive/, 'esc disarmed');
+  assert.doesNotMatch(strip(r.lastFrame()!), /to confirm/, 'esc disarmed');
   assert.ok(!calls.some((c) => c.method === 'PATCH' && (c.body as { archived?: boolean }).archived), 'no archive after esc');
   // Esc while armed should NOT leave the board (esc's normal action).
   assert.match(strip(r.lastFrame()!), /first card/, 'still on the board');
   // Arm with [a], then press a different key (arrow) — should disarm.
   r.stdin.write('a'); await sleep(30);
-  assert.match(strip(r.lastFrame()!), /again to archive/, 're-armed');
+  assert.match(strip(r.lastFrame()!), /to confirm/, 're-armed');
   r.stdin.write('\x1b[B'); await sleep(30); // down arrow
-  assert.doesNotMatch(strip(r.lastFrame()!), /again to archive/, 'arrow key disarmed');
+  assert.doesNotMatch(strip(r.lastFrame()!), /to confirm/, 'arrow key disarmed');
   assert.ok(!calls.some((c) => c.method === 'PATCH' && (c.body as { archived?: boolean }).archived), 'still no archive');
   r.unmount();
 });
@@ -297,7 +307,8 @@ test('v hands off to /archived (the App owns the menu); archived cards stay off 
   let opened = 0;
   // 140 wide: the footer fits one row here (it wraps below ~106 cells).
   const r = render(<Board store={store} width={140} height={24} isActive
-    onClose={() => {}} onArchived={() => { opened++; }} />);
+    onClose={() => {}} card={undefined} onOpenCard={() => {}} onCloseCard={() => {}}
+    onArchived={() => { opened++; }} />);
   await sleep(50);
   assert.ok(!strip(r.lastFrame()!).includes('old card'), 'archived cards are not on the board');
   assert.match(strip(r.lastFrame()!), /\[v\]iew archived/, 'the footer offers the key');
@@ -310,7 +321,8 @@ test('the footer shows the arrows bare, no brackets', async () => {
   const { api } = fakeApi(seed());
   const store = new BoardStore(api, 'w1');
   // 140 wide: the footer fits one row here (it wraps below ~106 cells).
-  const r = render(<Board store={store} width={140} height={24} isActive onClose={() => {}} />);
+  const r = render(<Board store={store} width={140} height={24} isActive onClose={() => {}}
+    card={undefined} onOpenCard={() => {}} onCloseCard={() => {}} />);
   await sleep(50);
   // The selection hint shows the keys themselves — one space apart, no
   // brackets: shorter than the word, and it reads as the key it names.
@@ -345,7 +357,10 @@ test('e expands the focused column to the full width — a long title reads whol
   const cards = [...seed(), makeCard({ id: 5, seq: 5, title: long, status: 'backlog' })];
   const { api } = fakeApi(cards);
   const store = new BoardStore(api, 'w1');
-  const r = mount(store);
+  // Counted from the start: esc while a column is expanded must collapse it
+  // and NOT leave the board, so this stays at 0 through the esc below.
+  let closed = 0;
+  const r = mount(store, { onClose: () => { closed++; } });
   await sleep(50);
   let f = strip(r.lastFrame()!);
   assert.ok(!f.includes(long), 'setup: the narrow column truncates the title');
@@ -363,8 +378,6 @@ test('e expands the focused column to the full width — a long title reads whol
   assert.match(f, /doing \(1\)/, 'the next column is now the expanded one');
   assert.ok(!f.includes('backlog ('), 'and backlog left the screen');
   // esc is one level back: expanded → all columns, NOT chat
-  let closed = 0;
-  r.rerender(<Board store={store} width={100} height={24} isActive onClose={() => { closed++; }} />);
   r.stdin.write('\x1b'); await sleep(30);
   f = strip(r.lastFrame()!);
   assert.match(f, /backlog \(3\)/); assert.match(f, /doing \(1\)/);
@@ -605,8 +618,8 @@ test('the Session row names the card\'s coding session and a click opens it; no 
     return d;
   };
   const opened: string[] = [];
-  const r = render(<Board store={new BoardStore(withSessions, 'w1')} width={100} height={30}
-    isActive onClose={() => {}} onOpenSession={(id) => opened.push(id)} />);
+  const r = mount(new BoardStore(withSessions, 'w1'),
+    { width: 100, height: 30, onOpenSession: (id: string) => opened.push(id) });
   await sleep(50);
 
   // Card 1 has a loop: the row names its coding session.

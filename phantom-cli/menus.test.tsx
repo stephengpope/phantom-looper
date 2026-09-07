@@ -443,7 +443,7 @@ const stubAgent = () => ({
 
 function app(over: Partial<Parameters<typeof App>[0]> = {}) {
   return render(<App api={noApi} initial={INITIAL} newTools={noTools}
-    makeAgent={stubAgent} makeTranscript={throwaway} loadHistory={() => []}
+    makeAgent={stubAgent} makeTranscript={throwaway}
     configPath={cfgFile()} {...over} />);
 }
 
@@ -636,7 +636,7 @@ test('a model change is recorded in the transcript as a non-message event', asyn
     summary: { provider: 'test', model: call++ === 0 ? 'fake' : 'fake-2', reasoning: 'none', maxSteps: 40 },
   });
   const { stdin, frames } = render(<App api={noApi} initial={INITIAL} newTools={noTools}
-    makeAgent={swap} makeTranscript={() => t} loadHistory={() => []} configPath={f} />);
+    makeAgent={swap} makeTranscript={() => t} configPath={f} />);
   await sleep(50);
   stdin.write('/model'); await sleep(50);
   stdin.write(ENTER); await sleep(100);   // submit /model -> the menu opens
@@ -816,7 +816,7 @@ test('/resume lazy-loads: one page at open, the next as the cursor nears the bot
   assert.equal(listCalls.length, asked, 'the end is the end — no re-fetch at the bottom');
 });
 
-test('[t] trashes a session; unpushed work refuses once and the same [t] again forces', async () => {
+test('[t] trashes a session; unpushed work refuses once and [c] confirms the discard', async () => {
   const calls: string[] = [];
   let sessions = [
     { id: 's9', workspaceId: 'w1', branch: 'agent/s9', status: 'active', lastUsedAt: '2026-08-21T10:00:00Z',
@@ -836,7 +836,7 @@ test('[t] trashes a session; unpushed work refuses once and the same [t] again f
   stdin.write(ENTER); await sleep(140);
   stdin.write('t'); await sleep(140);
   assert.ok(calls.includes('DELETE /sessions/s9?purge=true'), 'the first [t] tries without force');
-  assert.match(strip(lastFrame() ?? ''), /unpushed work — \[t\] again to discard it/,
+  assert.match(strip(lastFrame() ?? ''), /unpushed work — \[c\] to confirm discard/,
     'the refusal speaks on the picker, not into the covered conversation');
   stdin.write('t'); await sleep(140);
   assert.ok(calls.includes('DELETE /sessions/s9?purge=true&force=true'), 'the second [t] discards');
@@ -1784,7 +1784,7 @@ test('the toolbar shows the task count beside the mode once something runs, and 
   assert.match(f, /\[k\] kill/, 'the kill key is offered while something runs');
 });
 
-test('[k] on /tasks warns once; the same [k] again kills and the list refreshes', async () => {
+test('[k] on /tasks warns once; [c] confirms the kill and the list refreshes', async () => {
   const calls: string[] = [];
   let view: TasksView = { container: 'running', tasks: [liveTask()], recent: [] };
   const rest = async (m: string, path: string) => {
@@ -1798,7 +1798,7 @@ test('[k] on /tasks warns once; the same [k] again kills and the list refreshes'
   stdin.write(ENTER); await sleep(140);
   stdin.write('k'); await sleep(120);
   assert.ok(!calls.some((c) => c.startsWith('DELETE /sessions/s1/tasks/')), 'the first [k] only warns');
-  assert.match(strip(lastFrame() ?? ''), /kill "npm run dev"\? — \[k\] again to kill/);
+  assert.match(strip(lastFrame() ?? ''), /kill "npm run dev"\? — \[c\] to confirm/);
   stdin.write('k'); await sleep(200);
   assert.ok(calls.includes('DELETE /sessions/s1/tasks/142'), 'the second [k] kills');
   assert.match(strip(lastFrame() ?? ''), /nothing running/, 'the list refreshed in place');

@@ -304,7 +304,7 @@ test('runTurn does not write a step the SDK already closed, and writes nothing w
 
 test('App renders a full turn', async () => {
   const r = render(<App api={noApi} initial={INITIAL} newTools={noTools} makeVoice={inertVoice} makeAgent={seam(10)}
-    makeTranscript={throwaway} loadHistory={() => []} />);
+    makeTranscript={throwaway} />);
   try {
     await sleep(50);
     assert.match(strip(r.lastFrame()!), /test\/fake · reasoning none/, 'the header is readable from the first frame');
@@ -352,7 +352,7 @@ test('boot failure lands in the pane: the app is up, typing is refused with a hi
     return {};
   };
   const r = render(<App api={api as never} boot={{}} newTools={noTools} makeVoice={inertVoice}
-    makeAgent={seam(10)} makeTranscript={throwaway} loadHistory={() => []} />);
+    makeAgent={seam(10)} makeTranscript={throwaway} />);
   try {
     await sleep(80);
     const frame = strip(r.lastFrame()!);
@@ -392,7 +392,7 @@ test('boot with one workspace opens a session through the same path /new uses', 
     return {};
   };
   const r = render(<App api={api as never} boot={{}} newTools={noTools} makeVoice={inertVoice}
-    makeAgent={seam(10)} makeTranscript={throwaway} loadHistory={() => []} />);
+    makeAgent={seam(10)} makeTranscript={throwaway} />);
   try {
     await sleep(120);
     assert.match(strip(r.lastFrame()!), /acme-app · agent\/s9/, 'the session banner is on screen');
@@ -422,7 +422,7 @@ test('an unreachable server still opens the window, pointing at the screen that 
     return {};
   };
   const r = render(<App api={api as never} boot={{}} newTools={noTools} makeVoice={inertVoice}
-    makeAgent={seam(10)} makeTranscript={throwaway} loadHistory={() => []} />);
+    makeAgent={seam(10)} makeTranscript={throwaway} />);
   try {
     await sleep(80);
     const frame = strip(r.lastFrame()!);
@@ -439,7 +439,7 @@ test('a server that refuses the key says so, and where the key is fixed — not 
     return {};
   };
   const r = render(<App api={api as never} boot={{}} newTools={noTools} makeVoice={inertVoice}
-    makeAgent={seam(10)} makeTranscript={throwaway} loadHistory={() => []} />);
+    makeAgent={seam(10)} makeTranscript={throwaway} />);
   try {
     await sleep(80);
     const frame = strip(r.lastFrame()!);
@@ -468,7 +468,7 @@ test('resume with unsaved steps on this machine: the local file opens and goes u
     return {};
   };
   const r = render(<App api={api as never} boot={{ resumeId: 'sKEPT' }} newTools={noTools} makeVoice={inertVoice}
-    makeAgent={seam(10)} makeTranscript={throwaway} loadHistory={() => []} />);
+    makeAgent={seam(10)} makeTranscript={throwaway} />);
   try {
     await sleep(150);
     const frame = strip(r.lastFrame()!);
@@ -493,7 +493,7 @@ test('resume when the server moved on without this machine: the server copy wins
     return {};
   };
   const r = render(<App api={api as never} boot={{ resumeId: 'sSTALE' }} newTools={noTools} makeVoice={inertVoice}
-    makeAgent={seam(10)} makeTranscript={throwaway} loadHistory={() => []} />);
+    makeAgent={seam(10)} makeTranscript={throwaway} />);
   try {
     await sleep(150);
     const frame = strip(r.lastFrame()!);
@@ -580,7 +580,7 @@ test('a resumed session repaints its history and keeps writing to the same file'
   const resumed: ModelMessage[] = [{ role: 'user', content: 'earlier question' }, ...STEP_MESSAGES];
   const r = render(
     <App api={noApi} initial={{ ...INITIAL, resumed }} newTools={noTools} makeVoice={inertVoice}
-      makeAgent={seam(2)} makeTranscript={() => transcript} loadHistory={() => []} />,
+      makeAgent={seam(2)} makeTranscript={() => transcript} />,
   );
   try {
     await sleep(50);

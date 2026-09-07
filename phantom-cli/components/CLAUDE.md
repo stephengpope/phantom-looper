@@ -20,7 +20,9 @@ Prompt.tsx          the typing area between two rules; the bottom rule carries t
 Toolbar.tsx         the line under the prompt: the notice, and the spinner for a session held elsewhere
 StatusLine.tsx      "⠹ Working… (44s · ↓ 1.7k tokens · thinking) · [esc] to interrupt"
 Divider.tsx         the vertical rule between the panes, with junctions where the prompt's rules meet it
-Board.tsx           /kanban: columns from the BoardStore, keys and mouse drag, the archive arm, solo card mode
+Board.tsx           /kanban: columns from the BoardStore, keys and mouse drag, the archive arm. Which card's
+                    editor is open is the WINDOW's (`card` + onOpenCard/onCloseCard), not the board's, because
+                    the window also knows where esc leaves it
 CardEditor.tsx      the card page: every field, one live TextInput on the focused row, debounced auto-save
 Archived.tsx        /archived: a table of archived cards, restore and open
 Tasks.tsx           /tasks: live process groups and recent commands, kill by sid

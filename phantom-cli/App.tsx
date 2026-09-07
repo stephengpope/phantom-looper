@@ -33,28 +33,28 @@ import { Text } from './components/Text.js';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { ModelMessage, Tool } from 'ai';
 import { runTurn } from './agent.js';
-import { buildAgent, buildAssistantAgent, codingInstructions } from './agentFromConfig.js';
-import { messagesToParts, nextId, phaseLabel, tokenCount, type Part } from './state.js';
-import { hostname } from 'node:os';
-import { Transcript, loadTranscript, lastUserMessage, adoptServerCopy, syncTranscriptUp, type TranscriptHeader } from './session.js';
-import { parseTranscript } from '../core/llm/transcript.js';
-import { openSession as coreOpenSession } from '../core/session.js';
-import { SessionStore, type LoadedSession } from './sessions.js';
-import { COMMANDS, complete, matches, parse } from './commands.js';
+import { buildAgent, buildAssistantAgent } from './agentFromConfig.js';
+import { phaseLabel, tokenCount } from './state.js';
+import { Transcript, lastUserMessage, type TranscriptHeader } from './session.js';
+import { complete, matches } from './commands.js';
+import { quiet, type Api } from './request.js';
+import { WindowStore, type Initial } from './window.js';
 
-/** Rows the slash menu shows at once; the window slides to follow the cursor. */
+export type { Initial };
+
+/** Rows the slash windowStore.menu shows at once; the window slides to follow the cursor. */
 const MENU_ROWS = 8;
 import { PartView } from './components/Parts.js';
 import { Prompt } from './components/Prompt.js';
 import { StatusLine } from './components/StatusLine.js';
 import { Toolbar, type ToolbarPart } from './components/Toolbar.js';
-import { Settings, type Api } from './components/Settings.js';
-import { Launcher, lastWorkspaceId, isRunning, whoDrives, ago, WORK, type SessionInfo, type WorkspaceInfo } from './components/Launcher.js';
+import { Settings } from './components/Settings.js';
+import { Launcher, ago, WORK } from './components/Launcher.js';
 import { NewWorkspace, type NewWorkspaceRequest } from './components/NewWorkspace.js';
 import { WorkspaceSettings } from './components/WorkspaceSettings.js';
 import { SessionSwitcher } from './components/SessionSwitcher.js';
 import { Keys } from './components/Keys.js';
-import { Tasks, type TasksView } from './components/Tasks.js';
+import { Tasks } from './components/Tasks.js';
 import { Archived } from './components/Archived.js';
 import { Secrets } from './components/Secrets.js';
 import { SizeContext, keyLine } from './components/Screen.js';
@@ -63,221 +63,36 @@ import { Boundary } from './components/Boundary.js';
 import { Banner } from './components/Banner.js';
 import { VoicePanel } from './components/VoicePanel.js';
 import { Divider } from './components/Divider.js';
-import { VoiceClient, sessionsTool, assistantKanbanTool, codingKanbanTool, workspaceCreateTool, gitAutoPushTool, gitAutoPullTool, screenModeTools, kebabName, renderRead, sidecarEnv, type KanbanArgs, type SessionsArgs, type WorkspaceCreateArgs, type GitAutoPushArgs, type GitAutoPullArgs, type ScreenModeHandler } from './voice.js';
-import { BoardStore, type Card, type Stream } from './board.js';
+import { VoiceClient } from './voice.js';
+import { BoardStore, type Stream } from './board.js';
 import { SessionFeed } from './sessionFeed.js';
 import { Board } from './components/Board.js';
-import { VOICE_BOOT_KEYS, ASSISTANT_MODEL_KEYS, REMOTE_DEFAULTS, isLocalKey, type ConfigKey, type ConfigValue } from './config.js';
-import { localValues, setLocal } from './local.js';
-import { makeSettings, type Settings as SettingsClient } from './settings.js';
+import { type ConfigKey, type ConfigValue } from './config.js';
+
 import { copyToClipboard, isMouseInput, parseMouse, selectionRanges, type Selection } from './mouse.js';
 import type { Screen } from './screen.js';
-import { type SkillMeta } from '../core/skills/skills.js';
-import { type SecretIndexEntry } from '../core/llm/prompts/coding/wiring.js';
 import type { GitFacts } from '../core/llm/prompts/coding/wiring.js';
 
 /** What the window remembers about a workspace: the banner's display name and
  *  the prefix its cards are named with (`PHA` → `PHA-7`). */
 interface WsFacts { label: string; cardPrefix?: string; error?: string }
 
-export interface Initial {
-  sessionId: string; branch: string; workspaceId: string;
-  /** The workspace's display name for the banner; the id stands in when the
-   *  lookup failed — it still identifies the workspace. */
-  workspace?: string;
-  tools: Record<string, Tool>; resumed: ModelMessage[];
-  card?: number | null;
-  /** True when this is a supervisor session — a read-only record. */
-  readonly?: boolean;
-  /** The stored system prompt when resuming (transcript header). Absent — a
-   *  new session, or an old transcript — a fresh stack is assembled. */
-  instructions?: string;
-  /** The skill index for a NEW session's prompt — the create response's repo
-   *  scan merged with the personal tier (index.tsx does the merge). Unused on
-   *  resume: the frozen prompt wins. */
-  skills?: SkillMeta[];
-  /** The workspace's git facts for a NEW session's prompt (create response:
-   *  agent_git_credentials). Unused on resume, like skills. */
-  git?: GitFacts;
-}
 type Menu = null | 'settings' | 'keys' | 'secrets' | 'model' | 'server' | 'voice' | 'workspace' | 'resume'
   | 'addWorkspace' | 'workspaceSettings' | 'sessions' | 'tasks' | 'archived';
 
 const offline: Api = async () => ({});
 
-/** Each voice switch is a setting — the toggle writes it and onConfigChange
+/** Each voice switch is a setting — the toggle writes it and windowStore.settingChanged
  *  pushes it to the engine, so the state holds across restarts. */
 const TOGGLE_KEY: Record<'mic' | 'speaker' | 'headphones' | 'wake', ConfigKey> = {
   mic: 'voice_mic_muted', speaker: 'voice_speaker_muted',
   headphones: 'voice_headphones', wake: 'voice_wake_word',
 };
 
-/** The workspace names the session tools speak with: a 26-character id cannot
- *  be read aloud. Fetched ONCE, lazily — a window that never opened the
- *  switcher has none — and held here so every caller (session_list,
- *  session_get_active) reads the same cache instead of keeping its own. */
-class WorkspaceDirectory {
-  private rows: WorkspaceInfo[] = [];
-  constructor(private api: Api) {}
-  /** Fill the cache if it is empty. Safe to await beside another request —
-   *  session_list runs it in parallel with its own fetch. */
-  async ensure(): Promise<void> {
-    if (this.rows.length) return;
-    const ws = await this.api('GET', '/workspaces');
-    if (Array.isArray(ws) && ws.length) this.rows = ws as WorkspaceInfo[];
-  }
-  /** A list another screen already fetched (the switcher's). Only a NON-empty
-   *  list is taken: an empty render must not wipe what we have. */
-  offer(rows: WorkspaceInfo[]): void { if (rows.length) this.rows = rows; }
-  /** The name to say for a workspace id — the id itself when unknown, which
-   *  is still an answer rather than a blank. */
-  name(id: string): string {
-    const w = this.rows.find((n) => n.id === id);
-    return w?.displayName || w?.name || id;
-  }
-}
-
-/** The header for a session, as parts: where you are (workspace · branch —
- *  the branch is agent/<session-id>, so it names the session too), then the
- *  model line. The blank row above it is the pane's (`topGap`), not a part
- *  here: every way the pane can be filled needs it, not just this one. */
-/** The ONLY quiet failure the app allows: background work that runs again on
- *  its own (a list refresh, a lock release at quit) goes to cli.log with what
- *  it was doing — never to the pane, never nowhere. Everything a person asked
- *  for fails out loud with `could not <do what>: <why>`. */
-const quiet = (doing: string) => (e: unknown): void => {
-  console.warn(`background: could not ${doing}: ${(e as Error).message ?? String(e)}`);
-};
-
-function bannerParts(s: { workspace: string; branch: string }, summary: { provider: string; model: string; reasoning: string }): Part[] {
-  return [
-    `${s.workspace} · ${s.branch}`,
-    `${summary.provider}/${summary.model} · reasoning ${summary.reasoning}`,
-  ].map((text) => ({ kind: 'note', id: nextId('note'), text }) as Part);
-}
-
-/** What a card looks like in a tool result: the line you would read off the
- *  board. `get` returns the whole card instead. */
-const cardSummary = (t: Card) =>
-  ({ card: t.seq, title: t.title, status: t.status,
-    ...(t.pinned ? { pinned: true } : {}),
-    ...(t.blocked_reason ? { blocked: t.blocked_reason } : {}) });
-
-/** The summary plus the checklists WITH their keys — what create/update/tick
- *  answer, so the agent copies keys from the result instead of guessing them
- *  from the text (the Assistant has no card read; this is where it sees them). */
-const cardWithLists = (t: Card) => ({ ...cardSummary(t),
-  ...(t.requirements.length ? { requirements: t.requirements } : {}) });
-
-/** A column name as the agent said it → the board's real column. A voice
- *  transcript says "in progress", never "in_progress", so spaces/hyphens and
- *  case are forgiven; anything else is not a column. */
-const resolveColumn = (board: BoardStore, name: string): string | undefined => {
-  const want = name.trim().toLowerCase().replace(/[\s_-]+/g, '_');
-  return board.state.columns.find((c) => c.toLowerCase() === want);
-};
-
-/** The card work both kanban tools do — the Assistant's and the coding
- *  agent's — against one board store. Screen actions (open/close) belong to
- *  the Assistant alone and stay in App; everything that touches a card is
- *  here, once, so the two tools cannot drift apart. Every failure comes back
- *  as { error } — the store reverts a rejected write, so an `ok` here without
- *  checking would report a move that did not happen. */
-export async function kanbanOps(board: BoardStore, args: KanbanArgs): Promise<unknown> {
-  if (!board.state.loaded) await board.load();
-  if (!board.state.columns.length) return { error: `board unavailable: ${board.state.error ?? 'no columns'}` };
-  let status = args.status;
-  if (status !== undefined) {
-    const col = resolveColumn(board, status);
-    if (!col) return { error: `no column "${status}" — the columns are: ${board.state.columns.join(', ')}` };
-    status = col;
-  }
-  if (args.action === 'list') {
-    return { prefix: board.state.prefix, columns: board.state.columns,
-      cards: board.state.columns.flatMap((c) => board.cardsIn(c).map(cardSummary)) };
-  }
-  if (args.action === 'create') {
-    if (!args.title) return { error: 'create needs a title' };
-    try {
-      const made = await board.create({ title: args.title, status,
-        details: args.details,
-        requirements: args.requirements?.map((c) => ({ ...c, done: c.done ?? false })) });
-      return { ok: true, ...cardWithLists(made) };
-    } catch (e) { return { error: (e as Error).message }; }
-  }
-  if (args.action === 'history') {
-    // By seq straight to the server, not bySeq: a deleted card is not on the
-    // board, and reading one that is gone is what history is for.
-    if (args.card === undefined) return { error: 'history needs the card number' };
-    try { return { card: args.card, revisions: await board.revisions(args.card, args.limit) }; }
-    catch (e) { return { error: (e as Error).message }; }
-  }
-  // The board GET excludes archived cards, so a bySeq miss asks the server
-  // for that number directly — "read card 7" / "restore card 7" must work on
-  // a card that is off the board. The fetch adopts the card into the store.
-  let t = args.card !== undefined ? board.bySeq(args.card) : undefined;
-  if (!t && args.card !== undefined) {
-    try { t = await board.fetchCard(args.card); }
-    catch (e) { return { error: `could not read card ${args.card}: ${(e as Error).message}` }; }
-  }
-  if (!t) return { error: `no card ${args.card ?? '(none given)'} — pass the card number` };
-  if (args.action === 'read') {
-    return { card: t.seq, title: t.title, status: t.status,
-    details: t.details, requirements: t.requirements,
-    blocked_reason: t.blocked_reason, archived: t.archived };
-  }
-  if (args.action === 'move') {
-    if (!status) return { error: 'move needs a status (column name)' };
-    const failed = await board.move(t.id, status, 1e9);
-    if (failed) return { error: failed };
-  } else if (args.action === 'items') {
-    if (!args.ops?.length) return { error: 'items needs ops: [{op, list, key?, text?, done?}]' };
-    const failed = await board.items(t.id, args.ops);
-    if (failed) return { error: failed };
-  } else {
-    const patch: Record<string, unknown> = {};
-    for (const f of ['title', 'details', 'blocked_reason', 'auto_plan', 'auto_build', 'pinned', 'archived'] as const)
-      if (args[f] !== undefined) patch[f] = args[f];
-    if (status !== undefined) patch.status = status;
-    if (args.requirements !== undefined)
-      patch.requirements = args.requirements.map((c) => ({ ...c, done: c.done ?? false }));
-    if (!Object.keys(patch).length) return { error: 'nothing to update' };
-    const failed = await board.update(t.id, patch as Parameters<typeof board.update>[1]);
-    if (failed) return { error: failed };
-  }
-  const fresh = board.state.cards.find((x) => x.id === t.id);
-  const shape = args.action === 'move' ? cardSummary : cardWithLists;
-  // A switch flip answers with the switch as it now stands — the effective
-  // value, inherit spelled out — so the tool never has to guess what null means.
-  const switchState = (v: boolean | null | undefined, fallback: boolean | undefined) =>
-    v == null ? `inherit (workspace ${fallback ? 'on' : 'off'})` : v ? 'on' : 'off';
-  const switches = args.auto_plan !== undefined || args.auto_build !== undefined
-    ? { auto_plan: switchState(fresh?.auto_plan, board.state.autoPlanDefault),
-      auto_build: switchState(fresh?.auto_build, board.state.autoBuildDefault) } : {};
-  return { ok: true, ...(fresh ? shape(fresh) : {}), ...switches };
-}
-
-/** /resume's page size: what the picker fetches at open and appends per
- *  scroll-to-the-bottom. Comfortably more than a screenful, small enough
- *  that a list of thousands never rides one response. */
+/** /resume's page size: what the windowStore.picker fetches at open and appends per
+ *  scroll-to-the-bottom. Comfortably more than a screenful, small enough that
+ *  a list of thousands never rides one response. */
 export const PICKER_PAGE = 30;
-
-/** `session_list`'s page, for the ASSISTANT rather than the screen. 20 is a
- *  spoken answer's worth ("you have four running, and…"); 50 is the ceiling on
- *  one reply. REACH is how far back offset may go: GET /sessions caps `limit`
- *  at 500 and rejects more outright, and the page is taken by asking for
- *  offset+limit rows and dropping the first offset — so offset+limit is the
- *  number that must stay inside the server's cap. */
-export const SESSION_PAGE = 50, SESSION_MAX = 100, SESSION_REACH = 500;
-
-/** One line, capped — a session's last message identifies it; the rest of a
- *  pasted essay is noise in a list of twenty. */
-const oneLine = (s: string | null | undefined, max = 80): string | null => {
-  if (!s) return null;
-  const flat = s.replace(/\s+/g, ' ').trim();
-  if (!flat) return null;
-  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
-};
 
 export function App({
   api, stream, initial, boot, newTools, configPath, onSession, bootConfig,
@@ -288,11 +103,9 @@ export function App({
   taskPollMs = 60_000,
   makeAgent = buildAgent,
   makeTranscript = (h: TranscriptHeader) => new Transcript(h),
-  loadHistory = (id: string) => loadTranscript(id).messages,
-  loadPrompt = (id: string) => loadTranscript(id).header?.system_prompt,
   run = runTurn,
   sidebarPercent = 20,
-  makeVoice = () => new VoiceClient(undefined, undefined, run),
+  makeVoice,
   makeAssistantAgent = buildAssistantAgent,
   newAssistantTools = async () => ({}),
   screen,
@@ -361,10 +174,6 @@ export function App({
   makeAgent?: typeof buildAgent;
   /** Test seam. A factory, not an instance — there is one per open session. */
   makeTranscript?: (header: TranscriptHeader) => Transcript;
-  /** Test seam: replay for a session as it joins. Empty when it has no file. */
-  loadHistory?: (sessionId: string) => ModelMessage[];
-  /** Test seam: the stored system prompt for a session as it joins. */
-  loadPrompt?: (sessionId: string) => string | undefined;
   /** Test seam: the turn runner the store drives. */
   run?: typeof runTurn;
   /** Fired whenever the live session changes — /new, /resume, /workspace and
@@ -389,29 +198,29 @@ export function App({
     if (!repaint) setRepaint(true);   // state-during-render: re-renders before anything draws
   }
   useEffect(() => { if (repaint) setRepaint(false); }, [repaint]);
-  // Settings are READ WHERE THEY ARE USED — when a sidecar spawns, when an
-  // agent is built, when a screen opens. There is no resolved object held here
-  // and none passed down: that is a cache, and it went stale the moment
-  // anything wrote through another door (save a key on /keys and the Assistant
-  // still spawned with the env it was born with).
-  const settings = useMemo(() => makeSettings(api), [api]);
-  const readCfg = useCallback(async (): Promise<Record<string, ConfigValue>> =>
-    ({ ...await settings.read(), ...localValues(configPath) }), [settings, configPath]);
-  const [cfgTick, setCfgTick] = useState(0);
-  // The two values the CHROME needs every frame. Read once when they change,
-  // passed down as numbers — never a settings object, so there is nothing to
-  // go stale beyond these two.
-  const [chrome, setChrome] = useState<{ voice: boolean; width: number }>(
-    { voice: Boolean(bootConfig?.voice_enabled), width: Number(bootConfig?.sidebar_width) || sidebarPercent });
-  // The Assistant's voice client, over the Python sidecar — outside React like
-  // the session store; `bump` below is its re-render signal too.
-  const [voice] = useState(() => makeVoice());
+
+  // THE WINDOW (window.ts): the sessions, the boards, the Assistant, and what
+  // is on screen — everything with a caller that is not a React event. Built
+  // in the initialiser, like the session store it replaces, so the banner is
+  // on screen for the first frame. This component is a view over it.
+  const [windowStore] = useState(() => new WindowStore({
+    api, stream, newTools, configPath, bootConfig, initial, boot,
+    makeAgent, makeTranscript, run, makeVoice, onSession, exit,
+    autoPush, autoPull, clientId, pollMs, taskPollMs,
+    makeAssistantAgent, newAssistantTools, sidebarPercent,
+  }));
+  const store = windowStore.sessions;
+  const voice = windowStore.voice;
+  // The window is mutable and lives outside React; this is the re-render
+  // signal. One subscription: the window forwards what its parts say.
+  const [, bump] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => windowStore.subscribe(bump), [windowStore]);
+  useEffect(() => () => windowStore.close(), [windowStore]);
   const vs = voice.snapshot();
   // The voice pane, on the right. Shown when voice is on; ctrl+g overrides
   // that either way. Its share of the width is a setting (percent).
-  const [sidebar, setSidebar] = useState<boolean | null>(null);
-  const showSidebar = sidebar ?? chrome.voice;
-  const sidePercent = chrome.width || sidebarPercent;
+  const showSidebar = windowStore.showSidebar;
+  const sidePercent = windowStore.sidebarWidth;
   const sideCols = showSidebar ? Math.max(16, Math.floor((screenCols * sidePercent) / 100)) : 0;
   const mainCols = screenCols - sideCols;
   const width = Math.max(20, mainCols - 2);
@@ -450,161 +259,12 @@ export function App({
   // events arrive faster than a render.
   const selection = useRef<Selection | null>(null);
 
-  // The kanban board, one store per workspace, shared by everything: the
-  // /kanban view renders from it, the Assistant's `kanban` tool edits it, and
-  // so does every coding session's — so a tool edit repaints an open board
-  // with no extra wiring. Declared above the session store because the store's
-  // initialiser needs the coding kit on the first frame.
-  const boards = useRef(new Map<string, BoardStore>());
-  const boardFor = useCallback((workspaceId: string): BoardStore => {
-    let b = boards.current.get(workspaceId);
-    if (!b) { b = new BoardStore(api, workspaceId, stream); b.follow(); boards.current.set(workspaceId, b); }
-    return b;
-  }, [api, stream]);
-  useEffect(() => () => { for (const b of boards.current.values()) b.close(); }, []);
-
-  // The coding agent's board handler, bound to the session's OWN workspace —
-  // not the one on screen: a turn keeps running while you switch away. Same
-  // ops as the Assistant's handler, minus the screen: reading a card and
-  // reporting on it is the whole job.
-  const codingKanbanHandler = useCallback((workspaceId: string) =>
-    (args: KanbanArgs) => kanbanOps(boardFor(workspaceId), args), [boardFor]);
-
-  // The mode handlers — a session's plan/code mode, carried by both in-window
-  // agents. getMode reads the SESSIONS TABLE (GET /sessions/:id), not this
-  // window's mirror: the mirror is refreshed by the feed below for the
-  // session on screen only, so a session open in the background could answer
-  // from a copy the looper or another window has since changed. Having read
-  // the row it FOLLOWS it (applyPlanMode — the feed's move, a no-op
-  // while they agree), so the answer and this window's kit converge instead of
-  // drifting until it returns to the screen. A running turn keeps the agent it
-  // started with, so a mid-turn follow lands on the NEXT turn (/model's rule).
-  // enterPlan is /plan's on-switch (the row
-  // PATCHed first, then this window's kit) — ONE WAY from an agent: no path
-  // back to code mode exists here, only the user's /plan. Bound to a session
-  // id for the coding agent; unbound = the session on screen, for the
-  // Assistant. Takes the store as an argument because the seed path runs
-  // inside the store's own initialiser; applyPlanRef is filled further down,
-  // before any tool runs.
-  const screenOps = useCallback((st: SessionStore, sessionId?: string): ScreenModeHandler => ({
-    getMode: async () => {
-      const e = sessionId ? st.get(sessionId) : st.active();
-      if (!e) return { error: 'no session is open' };
-      try {
-        const r = await api('GET', `/sessions/${e.id}`) as { planMode?: boolean };
-        if (typeof r?.planMode !== 'boolean') throw new Error('the row carried no plan_mode');
-        await applyPlanRef.current?.(e.id, r.planMode);
-        return { mode: r.planMode ? 'plan' : 'code' };
-      } catch (err) {
-        // The record is out of reach: answer with what this window holds and
-        // SAY so — a mode the agent cannot check is worse than a noted one.
-        return { mode: e.planMode ? 'plan' : 'code',
-          note: `could not read the session row (${(err as Error).message}) — this is what this window holds` };
-      }
-    },
-    enterPlan: async () => {
-      const e = sessionId ? st.get(sessionId) : st.active();
-      if (!e) return { ok: false, error: 'no session is open' };
-      if (e.readonly) return { ok: false, error: 'a supervisor record has no modes' };
-      if (e.planMode) return { ok: false, error: 'already in plan mode' };
-      await api('PATCH', `/sessions/${e.id}`, { plan_mode: true });
-      await applyPlanRef.current?.(e.id, true);
-      return { ok: true };
-    },
-  }), [api]);
-
-  // The task-count refresh, by ref: the store's onTurnEnd callback below is
-  // created once, before refreshTasks can exist (it needs state declared
-  // later), so it reads the CURRENT one at call time — applyPlanRef's rule.
-  const refreshTasksRef = useRef<(() => Promise<void>) | null>(null);
-
-  // One store for the window, seeded with the session it launched into. Built
-  // in the initialiser so the banner is on screen for the first frame.
-  const [store] = useState(() => {
-    // When a turn ends, the whole local file goes to the server — SQL is the
-    // record. Chained per session: two turns ending close together must land
-    // in order, or a stale upload could overwrite the newer one. A failure is
-    // noted ONCE per streak — the next successful sync says so too — so a
-    // server that cannot store transcripts is one line, not one per turn.
-    const chains = new Map<string, Promise<void>>();
-    const failing = new Set<string>();
-    const s: SessionStore = new SessionStore(run, (e) => {
-      const prev = chains.get(e.id) ?? Promise.resolve();
-      chains.set(e.id, prev.then(() => syncTranscriptUp(api, e.id, e.transcript.path)).then(
-        (stamp) => { s.setStamp(e.id, stamp); if (failing.delete(e.id)) s.note(e.id, 'transcript sync recovered'); },
-        (err) => {
-          if (failing.has(e.id)) return;
-          failing.add(e.id);
-          s.note(e.id, `transcript sync failed (kept locally): ${(err as Error).message}`);
-        },
-      // The turn's lock is released once the record landed (or failed —
-      // holding it helps nobody; the file is kept locally either way).
-      ).finally(() => { void api('DELETE', `/sessions/${e.id}/lock`).catch(quiet(`release session ${e.id}`)); }));
-      // The toolbar's task count follows every turn — a turn is when tasks
-      // start and stop. Background: a failure goes to cli.log, not the pane.
-      void refreshTasksRef.current?.().catch(quiet('refresh tasks'));
-    });
-    // Lock per TURN: taken as a send starts, released above. Opening a
-    // session never locks — reading is free for everyone. The lock response
-    // carries the transcript's stamp: unchanged = memory is current, run on
-    // it; moved = another machine advanced this session — pull ONCE, reseat,
-    // then run. This is what makes whole-file saves safe with many writers.
-    s.onTurnStart = async (id) => {
-      const r = await api('POST', `/sessions/${id}/lock`, { label: hostname() }) as
-        { transcript_updated_at?: string | null };
-      await reseatIfMoved(api, s, id, r?.transcript_updated_at ?? null);
-    };
-    // This window's own turn, relayed to the server as it runs, so any
-    // watcher sees it stream exactly like a turn the server runs. The lock
-    // taken above is what entitles this window to publish.
-    s.relay = async (id, events) => { await api('POST', `/sessions/${id}/events`, { events }); };
-    // Seeding is the test seam's path: a session on the first frame. The real
-    // launch starts EMPTY and the boot effect below opens the first session
-    // through the same openSession every /new and /workspace uses.
-    if (initial) {
-      // The system prompt: the stored one on resume, a fresh stack otherwise —
-      // assembled ONCE here and frozen into the transcript header, so this
-      // session keeps these instructions for life (prompt-file edits reach new
-      // sessions only). The current date is appended at agent build, unstored.
-      const instructions = initial.instructions ?? codingInstructions(initial.skills ?? [], initial.git);
-      // The file tools came in from the caller; the board tool is built here,
-      // because only the window has the board.
-      const tools = { ...initial.tools, ...codingKanbanTool(codingKanbanHandler(initial.workspaceId)),
-        ...screenModeTools(screenOps(s, initial.sessionId)) };
-      const { agent, summary } = makeAgent(tools, bootConfig ?? REMOTE_DEFAULTS, instructions,
-        (t) => s.note(initial.sessionId, t));
-      const transcript = makeTranscript({
-        type: 'session', session_id: initial.sessionId, workspace: initial.workspaceId,
-        branch: initial.branch, provider: summary.provider, model: summary.model,
-        created_at: new Date().toISOString(), system_prompt: instructions,
-      });
-      s.add({
-        id: initial.sessionId, branch: initial.branch, workspaceId: initial.workspaceId,
-        tools, agent, summary, transcript, instructions,
-        history: initial.resumed,
-        ...(initial.readonly ? { readonly: true } : {}),
-        done: [
-          ...bannerParts({ workspace: initial.workspace ?? initial.workspaceId, branch: initial.branch }, summary),
-          ...messagesToParts(initial.resumed),
-        ],
-      });
-    }
-    return s;
-  });
-  // The store is mutable and lives outside React; this is the re-render signal.
-  const [, bump] = useReducer((n: number) => n + 1, 0);
-  useEffect(() => store.subscribe(bump), [store]);
-  useEffect(() => voice.subscribe(bump), [voice]);
-
   // The session on screen — or NONE. The window opens whatever is wrong (that
   // is the point: the screens that fix a dead token or a bad address are all
   // in here), so every consumer below tolerates the empty state and the pane
   // shows the window's own notes until the first session joins.
   const session = store.active();
   const sessionId = session?.id;
-  // Notes with no session to land in — a failed boot open, a refused command.
-  // Rendered where the conversation would be; superseded once a session joins.
-  const [windowNotes, setWindowNotes] = useState<Part[]>([]);
 
   // A session someone else is RUNNING — the lock is per turn, so locked =
   // a turn is live there (a looper round, another window) — is read-only
@@ -617,9 +277,6 @@ export function App({
   const heldNow = session?.held && session.held.expiresAt > Date.now() ? session.held : null;
   const heldRef = useRef(heldNow);
   heldRef.current = heldNow;
-  // The feed's door to applyPlanMode, which is defined further down (it needs
-  // the tool factories) — the openSessionRef pattern.
-  const applyPlanRef = useRef<((id: string, on: boolean) => Promise<void>) | null>(null);
   // Streamless callers get a one-shot fill. With a feed, its initial snapshot
   // does this job: a parallel GET could land late and overwrite newer state.
   useEffect(() => {
@@ -633,9 +290,9 @@ export function App({
           planMode?: boolean; transcript_updated_at?: string | null;
           work?: 'not_pushed' | 'not_merged' | 'merged' | null };
         if (gone) return;
-        if (typeof r.planMode === 'boolean') await applyPlanRef.current?.(sessionId, r.planMode);
+        if (typeof r.planMode === 'boolean') await windowStore.applyPlanMode(sessionId, r.planMode);
         store.setWork(sessionId, r.work ?? null);
-        await reseatIfMoved(api, store, sessionId, r.transcript_updated_at ?? null);
+        await windowStore.refreshIfMoved(sessionId, r.transcript_updated_at ?? null);
       } catch (e) { quiet(`re-read session ${sessionId}`)(e); }
     })();
     return () => { gone = true; };
@@ -646,11 +303,13 @@ export function App({
   useEffect(() => {
     if (!stream || !sessionId) return;
     const feed = new SessionFeed(stream, sessionId, store, {
+      // Neither hook catches: a failed refill must REJECT into followStream,
+      // which closes the link and reconnects onto a fresh snapshot. Swallowing
+      // it here left the window on stale state for ever once the poll that used
+      // to be the backstop was removed.
       onRecordLanded: (updatedAt, keepScreen) =>
-        reseatIfMoved(api, store, sessionId, updatedAt || null, keepScreen)
-          .catch(quiet(`refresh session ${sessionId}`)),
-      onPlanModeChanged: (on) => applyPlanRef.current?.(sessionId, on)
-        .catch(quiet(`refresh mode for ${sessionId}`)),
+        windowStore.refreshIfMoved(sessionId, updatedAt || null, keepScreen),
+      onPlanModeChanged: (on) => windowStore.applyPlanMode(sessionId, on),
     });
     feed.start();
     return () => feed.stop();
@@ -665,411 +324,12 @@ export function App({
     return () => clearInterval(t);
   }, [heldNow !== null]);
 
-  // Window facts the session handler reads at CALL time, never at build time.
-  // The Assistant's agent is built once (voice start / model change), so a
-  // handler that closed over today's values would answer with them forever —
-  // the same ref rule workspaceRef and viewRef follow further down.
-  // openSession itself is defined below (it needs the pickers' plumbing).
-  const openSessionRef = useRef<((t: OpenTarget) => Promise<boolean>) | null>(null);
-  // Same rule for closing: the Assistant's handler is built before closeSession
-  // exists, so it reads the current one at call time.
-  const closeSessionRef = useRef<((id?: string) => Promise<unknown>) | null>(null);
-  const [wsDirectory] = useState(() => new WorkspaceDirectory(api));
+  // The Assistant's read tools follow the session on screen.
+  useEffect(() => { void windowStore.rebuildAssistant(); }, [windowStore, sessionId]);
 
-  // What the Assistant may do to the TUI: the `session_*` family, one handler.
-  //
-  // LIST is the SERVER's answer, not this window's. The store only holds the
-  // sessions you opened here — listing from it made the Assistant say "just
-  // one" while the workspace held fifty, and made "which are running" mean
-  // "which are running in front of me". The window still supplies the two
-  // facts the server cannot know: which session is on screen, and which is
-  // mid-turn locally.
-  //
-  // Paging is offset/limit, matching session_read and kanban_card_history
-  // rather than the cursor /resume uses: the caller is a model, and an offset
-  // is something it can reason about, while a two-field cursor is something it
-  // must copy back perfectly. The page is ONE request — ask for the rows up to
-  // the end of the window (plus the lookahead), drop the first offset, and
-  // never re-sort: the ordering has exactly one home, on the server.
-  const assistantTool = useCallback(async (args: SessionsArgs) => {
-    if (args.action === 'list') {
-      const limit = Math.min(Math.max(1, Math.trunc(args.limit ?? SESSION_PAGE)), SESSION_MAX);
-      const offset = Math.max(0, Math.trunc(args.offset ?? 0));
-      // One row past the window is the LOOKAHEAD: it is the difference
-      // between "the page came back full" (which cannot tell a full list from
-      // one with more behind it) and knowing. It is fetched, never shown.
-      const want = offset + limit + 1;
-      if (want > SESSION_REACH) {
-        return { error: `the list reaches ${SESSION_REACH} sessions back; offset + limit must stay inside that`,
-          on_screen: store.activeId };
-      }
-      let rows: SessionInfo[];
-      try {
-        // The workspace names ride along on the first list, in parallel, and
-        // stay in the cache after that (WorkspaceDirectory).
-        const [got] = await Promise.all([
-          api('GET', `/sessions?limit=${want}`),
-          wsDirectory.ensure(),
-        ]);
-        // A server that answers something other than a list is a broken
-        // server, not a crashed tool: say so and keep the window usable.
-        const list = (got as { sessions?: unknown })?.sessions;
-        rows = Array.isArray(list) ? list as SessionInfo[] : [];
-      } catch (e) {
-        return { error: `could not list sessions: ${(e as Error).message}`, on_screen: store.activeId };
-      }
-      const page = rows.slice(offset, offset + limit);
-      const busy = (id: string) => store.get(id)?.busy ?? false;
-      const wsName = (id: string) => wsDirectory.name(id);
-      return {
-        // The header states the slice the way renderRead's does — the model
-        // reports where it is instead of implying it saw everything.
-        showing: `${page.length} session${page.length === 1 ? '' : 's'}, newest activity first`
-          + (offset ? ` (skipping the ${offset} most recent)` : ''),
-        // The lookahead row came back, so there is genuinely more behind this
-        // page — not "the page was full, who knows".
-        more: rows.length > offset + limit,
-        // Stated even when that session falls outside the page.
-        on_screen: store.activeId,
-        sessions: page.map((s) => ({
-          id: s.id,
-          name: s.name ?? null,
-          // The workspace by NAME: a 26-character id cannot be spoken.
-          workspace: wsName(s.workspaceId),
-          card: s.card ?? null,
-          // Who drives it — the launcher's own three-way. Supervisor rows are
-          // MARKED, not hidden: the looper mints one per card, and a list that
-          // silently drops half of itself is a list that lies.
-          kind: whoDrives(s),
-          status: s.status === 'active' ? 'active' : 'ended',
-          running: isRunning(s, { busy, clientId }),
-          on_screen: s.id === store.activeId,
-          last_message: oneLine(s.lastUserMessage),
-          when: ago(s.lastUsedAt),
-          // No branch: it is the session id wearing a prefix and says nothing
-          // to a person (the same reason /resume's table leaves it out).
-        })),
-      };
-    }
-    if (args.action === 'get_active') {
-      // The window knows WHICH session is on screen — nothing else can. What
-      // identifies it to a person (title, card) lives on the row, so this is
-      // one GET for that session alone, where the same answer used to cost a
-      // whole session_list page. Mode is deliberately absent: session_get_mode
-      // answers that, and one field with two homes is a field that drifts.
-      const id = store.activeId;
-      const e = id ? store.get(id) : undefined;
-      if (!e) return { error: 'no session is on screen' };
-      try {
-        const [row] = await Promise.all([
-          api('GET', `/sessions/${id}`) as Promise<{ name?: string | null; card?: number | null; status?: string }>,
-          wsDirectory.ensure(),
-        ]);
-        return { id, title: row?.name ?? null, workspace: wsDirectory.name(e.workspaceId),
-          card: row?.card ?? null, status: row?.status === 'active' ? 'active' : 'ended',
-          running: e.busy };
-      } catch (err) {
-        // The server is out of reach; which session is on screen is still this
-        // window's own fact, so answer it and say what is missing.
-        return { id, workspace: wsDirectory.name(e.workspaceId), running: e.busy,
-          note: `could not read the session row (${(err as Error).message}) — title and card unavailable` };
-      }
-    }
-    if (args.action === 'switch') {
-      // ONE open path, always — openSession decides whether the session is
-      // already here, needs attaching, or (having been swept) needs
-      // restarting. No local-vs-remote branch, and no partial-id matching:
-      // that took the FIRST session whose id started with the argument, so an
-      // ambiguous prefix silently landed on the wrong conversation. Ids come
-      // from session_list in the same breath; exact is the whole story.
-      const id = String(args.id ?? '').trim();
-      if (!id) return { error: 'session_switch needs an id — session_list has them' };
-      const ok = await openSessionRef.current?.({ kind: 'open', id });
-      if (!ok) {
-        return { error: `could not open session ${id} — check the id against session_list; ` +
-          'the conversation pane says what went wrong' };
-      }
-      return { ok: true, on_screen: store.activeId };
-    }
-    if (args.action === 'close') {
-      // The app's one close path; its result is already the answer — what
-      // closed, what is on screen now, whether a fresh session had to open.
-      const id = args.id ? String(args.id).trim() : undefined;
-      return closeSessionRef.current?.(id) ?? { error: 'the window is not ready to close a session yet' };
-    }
-    if (args.action === 'read') {
-      // No id = the session on screen; the store's history is the transcript.
-      // Only what is OPEN here can be read — switch is what opens one, and the
-      // error names that step rather than implying the id was wrong.
-      const id = args.id ? String(args.id) : store.activeId;
-      const e = id ? store.get(id) : undefined;
-      if (!e) {
-        return { error: `session ${id || '(none on screen)'} is not open in this window — ` +
-          'session_switch opens it, then read it' };
-      }
-      return renderRead(e.id, e.history, args);
-    }
-    return { error: `unknown action ${String(args.action)}` };
-  }, [store, api, clientId, wsDirectory]);
-
-  // What the LEFT PANE is showing — one state, one answer: the chat, the
-  // kanban board (/kanban or the Assistant), or ONE card alone (asked for
-  // from chat: no board first, and closing it goes back to chat). A card
-  // opened from the BOARD is the Board's own edit sub-state, not a view.
-  // One variable means the impossible states (board AND solo card) cannot
-  // exist, and every "is the pane mine?" check asks the same question.
-  const [view, setView] = useState<'chat' | 'board' | { card: number }>('chat');
-
-  // ── the approval gate ──────────────────────────────────────────────────────
-  // The Assistant's gated tool (workspace_create_repo) waits here until the
-  // user answers. It is the ASSISTANT asking, so the ask lives in ITS pane —
-  // three condensed rows under the header: what kind, the subject (the exact
-  // name about to exist), `accept · decline`. Answered by clicking either
-  // word or by SAYING it: voice.intercept claims everything that reaches
-  // turn() while one stands — the exact word "accept" or "decline" acts,
-  // anything else is swallowed (exact match like the wake word, never
-  // interpretation). No keyboard chord: the chat prompt stays live, and a
-  // letter key would collide with typing. ONE approval at a time; the tool
-  // call's abort — the user cut the Assistant off — declines, so a dead turn
-  // cannot leave the ask up waiting for an answer nothing would receive.
-  type Approval = { label: string; subject: string; resolve: (ok: boolean) => void };
-  const [approval, setApproval] = useState<Approval | null>(null);
-  // The live answer to "is one pending?" — updated synchronously, because the
-  // next tool call can arrive before React re-renders the state above (a
-  // render-synced ref briefly said an already-answered approval still stood).
-  const approvalRef = useRef<Approval | null>(null);
-  const requestApproval = useCallback((ask: { label: string; subject: string }, signal?: AbortSignal): Promise<boolean> => {
-    return new Promise<boolean>((resolve) => {
-      if (signal?.aborted) { resolve(false); return; }
-      const done = (ok: boolean) => {
-        signal?.removeEventListener('abort', onAbort);
-        approvalRef.current = null;
-        setApproval(null);
-        resolve(ok);
-      };
-      const onAbort = () => done(false);
-      signal?.addEventListener('abort', onAbort);
-      const entry = { ...ask, resolve: done };
-      approvalRef.current = entry;
-      setApproval(entry);
-      // The ask is in the voice pane — make sure the pane is on screen (the
-      // same nudge /assistant gives; an explicit ctrl+g hide is respected no more).
-      setSidebar((s) => (s === false ? null : s));
-    });
-  }, []);
-  useEffect(() => {
-    voice.intercept = (text: string) => {
-      const a = approvalRef.current;
-      if (!a) return false;
-      const word = text.toLowerCase().replace(/[^a-z]/g, '');
-      if (word === 'accept') a.resolve(true);
-      else if (word === 'decline') a.resolve(false);
-      return true;
-    };
-    return () => { voice.intercept = null; };
-  }, [voice]);
-
-  // `workspace_create_repo`: kebab the name, get the user's accept (the
-  // prompt shows the FINAL name — the point of the gate), then the backend
-  // does the whole flow (POST /workspaces create=true: repo, seed, register;
-  // always private — not the model's call) and the new workspace opens as a
-  // session on screen, the same join+switch every open uses.
-  const workspaceCreateHandler = useCallback(async (args: WorkspaceCreateArgs, opts: { abortSignal?: AbortSignal }) => {
-    const name = kebabName(args.name ?? '');
-    if (!name) return { error: 'no usable name — ask for the project name again' };
-    if (approvalRef.current) return { error: 'another approval is already waiting on screen' };
-    const ok = await requestApproval({ label: 'new private repo', subject: name }, opts.abortSignal);
-    if (!ok) {
-      return { declined: true, note: 'nothing was created — the user declined (or the turn was cut off). ' +
-        'Often the name was misheard: ask what to change before calling again.' };
-    }
-    try {
-      const w = await api('POST', '/workspaces', {
-        url: name, create: true, private: true,
-        ...(args.description ? { description: args.description } : {}),
-      }) as { id: string; owner: string; name: string };
-      const opened = await (openSessionRef.current?.({ kind: 'new', workspaceId: w.id }) ?? false);
-      return { ok: true, repo: `${w.owner}/${w.name}`, private: true, workspace_id: w.id,
-        on_screen: opened ? 'a new session in the new workspace'
-          : 'workspace created, but the session could not be opened — the conversation pane says why' };
-    } catch (e) { return { error: (e as Error).message }; }
-  }, [api, requestApproval]);
-
-  // AUTO-PUSH, one path for both doors — `/auto-push` and the Assistant's
-  // `git_auto_push`. Every step and the outcome land as notes in the pushed
-  // session's pane (where the builder watches a push); the outcome is also
-  // returned, for the door that can say it. Never throws: a failure is a
-  // result too.
-  const runAutoPush = useCallback(async (id: string): Promise<{ result: string; reason?: string; sha?: string }> => {
-    const say = (t: string) => store.note(id, t);
-    if (!autoPush) {
-      say('auto-push is unavailable in this build');
-      return { result: 'error', reason: 'auto-push is unavailable in this build' };
-    }
-    say('auto-push: starting');
-    try {
-      const r = await autoPush(id, (label) => say(`auto-push: ${label}`));
-      if (r.result === 'pushed') say(`auto-push: landed on the base branch (${(r.sha ?? '').slice(0, 10)})`);
-      else if (r.result === 'nothing') say('auto-push: nothing to push — the base branch already has it all');
-      else say(`auto-push: ${r.result}${r.reason ? ` — ${r.reason}` : ''}`);
-      return r;
-    } catch (e) {
-      say(`auto-push failed: ${(e as Error).message}`);
-      return { result: 'error', reason: (e as Error).message };
-    }
-  }, [store, autoPush]);
-
-  // `git_auto_push`: the session on screen unless an id was given, awaited
-  // to the end so the Assistant can say how it went.
-  const gitAutoPushHandler = useCallback(async (args: GitAutoPushArgs) => {
-    const id = args.id ?? store.activeId;
-    if (!id) return { error: 'no session is open — nothing to push' };
-    const r = await runAutoPush(id);
-    return { session: id, ...r };
-  }, [store, runAutoPush]);
-
-  // AUTO-PULL, the Assistant's `git_auto_pull`: base INTO the session's branch.
-  // Same shape as auto-push — steps and outcome as notes in that session's
-  // pane, the outcome returned; never throws.
-  const runAutoPull = useCallback(async (id: string) => {
-    const say = (t: string) => store.note(id, t);
-    if (!autoPull) {
-      say('auto-pull is unavailable in this build');
-      return { result: 'error', reason: 'auto-pull is unavailable in this build' };
-    }
-    say('auto-pull: starting');
-    try {
-      const r = await autoPull(id, (label) => say(`auto-pull: ${label}`));
-      if (r.result === 'merged') {
-        say(`auto-pull: ${r.arrived?.length ?? 0} commit${r.arrived?.length === 1 ? '' : 's'} from the base branch merged in` +
-          `${r.files?.length ? ` — ${r.files.length} file${r.files.length === 1 ? '' : 's'} changed` : ''}` +
-          `${r.pushed === false ? ` (${r.reason ?? 'branch push failed'})` : ''}`);
-      } else if (r.result === 'clean') say('auto-pull: nothing to pull — the branch already has all of base');
-      else say(`auto-pull: ${r.result}${r.reason ? ` — ${r.reason}` : ''}`);
-      return r;
-    } catch (e) {
-      say(`auto-pull failed: ${(e as Error).message}`);
-      return { result: 'error', reason: (e as Error).message };
-    }
-  }, [store, autoPull]);
-
-  const gitAutoPullHandler = useCallback(async (args: GitAutoPullArgs) => {
-    const id = args.id ?? store.activeId;
-    if (!id) return { error: 'no session is open — nothing to pull into' };
-    const r = await runAutoPull(id);
-    return { session: id, ...r };
-  }, [store, runAutoPull]);
-
-  // The Assistant's agent is built ONCE (voice start / model change), so the
-  // handler must not close over the workspace of that moment: it reads the
-  // CURRENT one through a ref, and stays a stable function. Empty while no
-  // session is on screen — there is no workspace to point a board at yet.
-  const workspaceRef = useRef(session?.workspaceId ?? '');
-  workspaceRef.current = session?.workspaceId ?? '';
-  // Same ref rule as the workspace: the handler is built once, the view moves.
-  const viewRef = useRef(view);
-  viewRef.current = view;
-  const assistantKanbanHandler = useCallback(async (args: KanbanArgs) => {
-    if (!workspaceRef.current) return { error: 'no session is on screen yet, so there is no workspace or board' };
-    // kanban_screen moves between chat → board → column / card, and the
-    // result names the level now on screen — the Assistant reports it
-    // instead of guessing.
-    if (args.action === 'screen') {
-      if (args.show === 'off') { setView('chat'); return { ok: true, screen: 'chat' }; }
-      const b = boardFor(workspaceRef.current);
-      if (!b.state.loaded) await b.load();
-      if (args.show === 'column') {
-        // One column across the whole width — the board's [e]. Spoken names
-        // are forgiven the way a move's are; the Board consumes the request
-        // once it is up (from chat it comes up first).
-        if (args.column === undefined) return { error: 'show column needs the column name' };
-        const col = resolveColumn(b, args.column);
-        if (!col) return { error: `no column "${args.column}" — the columns are: ${b.state.columns.join(', ')}` };
-        setView('board');
-        b.requestColumn(col);
-        return { ok: true, screen: `column ${col}, expanded` };
-      }
-      if (args.show === 'card') {
-        const up = viewRef.current === 'board';
-        if (args.card === undefined) return { error: 'show card needs the card number', screen: up ? 'board' : 'chat' };
-        if (!b.bySeq(args.card)) return { error: `no card ${args.card}`, screen: up ? 'board' : 'chat' };
-        // Board already up → the card opens on it (esc goes back to columns).
-        // From chat → the card alone; esc goes back to chat, no board first.
-        if (up) { b.requestCard(args.card); return { ok: true, screen: `card ${args.card}, on the board` }; }
-        setView({ card: args.card });
-        return { ok: true, screen: `card ${args.card}` };
-      }
-      setView('board');
-      b.requestBoard(); // "show the board" means every column: an open editor drops, an expanded column collapses
-      return { ok: true, screen: 'board' };
-    }
-    return kanbanOps(boardFor(workspaceRef.current), args);
-  }, [boardFor]);
-
-  // Declared before startVoice, which notes a failed Assistant build. With no
-  // session on screen the note is the WINDOW's and renders where the
-  // conversation would be — a boot that failed must say so on screen.
-  const note = useCallback((text: string) => {
-    setSplash(false);
-    if (store.active()) store.note(store.activeId, text);
-    else setWindowNotes((l) => [...l, { kind: 'note', id: nextId('note'), text } as Part]);
-  }, [store]);
-  /** The Assistant's whole kit: the two TUI tools plus read-only workspace
-   *  tools scoped to the session ON SCREEN. Rebuilt (setAgent — history kept)
-   *  when that session changes; a failed fetch just means no file tools. */
-  const assistantKit = useCallback(async () => ({
-    ...sessionsTool(assistantTool), ...assistantKanbanTool(assistantKanbanHandler),
-    ...workspaceCreateTool(workspaceCreateHandler),
-    ...gitAutoPushTool(gitAutoPushHandler),
-    ...gitAutoPullTool(gitAutoPullHandler),
-    ...screenModeTools(screenOps(store)),
-    ...(sessionId ? await newAssistantTools(sessionId).catch(() => ({} as Record<string, Tool>)) : {}),
-  }), [assistantTool, assistantKanbanHandler, workspaceCreateHandler, gitAutoPushHandler, gitAutoPullHandler, newAssistantTools, sessionId, screenOps, store]);
-
-  // Voice follows the setting: on at launch when enabled, stopped with the
-  // window. Restarted by onConfigChange when a boot-time setting moves.
-  const startVoice = useCallback(() => {
-    void (async () => {
-      // READ AT SPAWN. The sidecar takes its Deepgram key from the environment
-      // it is started with, so reading it here — not at app boot — is what lets
-      // you save the key and turn the Assistant on and have it work the first
-      // time, instead of switching it off and on to get a second attempt.
-      // A bad agent trio (assistant_provider overridden, no model) throws at
-      // build — say so instead of dying in a floating promise.
-      let built;
-      let cfg: Record<string, ConfigValue>;
-      try { cfg = await readCfg(); built = makeAssistantAgent(await assistantKit(), cfg); }
-      catch (e) { note(`assistant not started: ${(e as Error).message}`); return; }
-      voice.setAgent(built.agent, built.summary);
-      void voice.start(sidecarEnv(cfg));
-    })();
-  }, [voice, readCfg, assistantKit, makeAssistantAgent, note]);
-  // The read tools follow the session on screen: switching sessions rebuilds
-  // the Assistant's kit in place (same conversation, new session's files).
-  useEffect(() => {
-    if (!voice.running) return;
-    let stale = false;
-    void (async () => {
-      try {
-        const cfg = await readCfg();
-        const kit = await assistantKit();
-        if (stale) return;
-        voice.setAgent(makeAssistantAgent(kit, cfg).agent);
-      } catch (e) { if (!stale) note(`assistant not rebuilt for this session: ${(e as Error).message}`); }
-    })();
-    return () => { stale = true; };
-  }, [sessionId]);  // eslint-disable-line react-hooks/exhaustive-deps -- only the session switch triggers it
-
-  useEffect(() => {
-    // The chrome's two values, and the launch decision, from one read.
-    void readCfg().then((c) => {
-      setChrome({ voice: Boolean(c.voice_enabled), width: Number(c.sidebar_width) || sidebarPercent });
-      if (c.voice_enabled) startVoice();
-    }).catch(() => { /* index.tsx already refused to start without the server */ });
-    return () => voice.stop();
-    // Launch only: later changes go through onConfigChange.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // The chrome's two values and the voice decision, from one read at launch.
+  // Nothing is torn down here: windowStore.close() owns every shutdown.
+  useEffect(() => { void windowStore.readChrome(); }, [windowStore]);
 
   const [expanded, setExpanded] = useState(false);   // ctrl+o toggles it
   const [input, setInput] = useState('');
@@ -1078,8 +338,21 @@ export function App({
   // recreate the callbacks on every keystroke). Same rule as heldRef/workspaceRef.
   const inputRef = useRef(input);
   inputRef.current = input;
+  // What the window asks for when it parks the unsent text on a session it is
+  // leaving. Set once: the ref is stable, so the window always reads the
+  // current line without this component re-registering anything.
+  useEffect(() => { windowStore.draftOnScreen = () => inputRef.current; }, [windowStore]);
+  // The session on screen changed (a switch, an open, a close). The window
+  // parked the outgoing session's unsent text on its entry; this brings the
+  // incoming one's back and puts the view at the tail of its conversation.
+  // Both belong here rather than in the window: they are what the VIEW does
+  // when the conversation under it is replaced.
+  useEffect(() => {
+    setInput(store.get(store.activeId)?.draft ?? '');
+    setScroll(0);
+    setHistAt(0);
+  }, [store, store.activeId]);
   const [ctrlC, setCtrlC] = useState(false);
-  const [menu, setMenu] = useState<Menu>(null);
   // The launch splash: the big PHANTOM LOOPER where the conversation will be.
   // Sessions with nothing said yet — boot's first, every /new — a resume has
   // history to show. Off at boot when resuming (boot.resumeId), so the
@@ -1088,36 +361,8 @@ export function App({
   // command — /help's answer lands in the pane the splash covers), a session
   // switch, a note, a menu or the board opening, or a remote turn arriving.
   // Set back only where openSession seats an empty session.
-  const [splash, setSplash] = useState(initial ? initial.resumed.length === 0 : !boot?.resumeId);
-  useEffect(() => { if (menu !== null || view !== 'chat') setSplash(false); }, [menu, view]);
-  useEffect(() => { if (session?.remoteBusy) setSplash(false); }, [session?.remoteBusy]);
-  const [picker, setPicker] = useState<{ workspaces: WorkspaceInfo[]; sessions: SessionInfo[]; total: number; end: boolean } | null>(null);
-  // [s] on /resume: the looper's supervisor seats in the list or not. Held
-  // here, not in the screen, because it is a fetch parameter — the server
-  // decides what the list is.
-  const [showSupervised, setShowSupervised] = useState(false);
-  const showSupervisedRef = useRef(showSupervised);
-  showSupervisedRef.current = showSupervised;
-  // Trash refusals speak on the picker itself (Screen's notice line) — a
-  // note() would land in the conversation the menu is covering, unread.
-  const [pickerNotice, setPickerNotice] = useState<string | undefined>();
-  // [t] on a session with unpushed work refuses once and arms; the same [t]
-  // again discards. Armed per session id, dropped when the picker reopens.
-  const trashArmed = useRef<string | null>(null);
+  useEffect(() => { if (session?.remoteBusy) windowStore.setSplash(false); }, [session?.remoteBusy]);
   const [suggestAt, setSuggestAt] = useState(0);
-  const [addError, setAddError] = useState<string | undefined>();
-  // Which workspace the settings screen is showing. Held apart from `menu` so
-  // closing that screen can land back on the list it was opened from.
-  const [editing, setEditing] = useState<WorkspaceInfo | null>(null);
-  // Names for the switcher's rows, fetched the first time that screen is
-  // opened and never at launch: a request for a screen you may never look at
-  // is a request too many, and the row reads fine as a workspace id until it
-  // lands. Nothing here waits on it — ctrl+n opens on the keystroke.
-  const [names, setNames] = useState<WorkspaceInfo[]>([]);
-  // The session handler reads these at call time: a list this screen fetched
-  // saves the handler its own request (it fetches for itself when it needs
-  // names before any screen has).
-  wsDirectory.offer(names);
   // ↑/↓ through what you said before. 0 is "not browsing" — and browsing only
   // ever starts from an empty line, so there is no half-typed line to save and
   // hand back: ↓ off the end of the list lands on the empty line it started on.
@@ -1127,770 +372,9 @@ export function App({
   // the slash-menu highlight go together (submit and ctrl+c both use it).
   const clearInput = useCallback(() => { setInput(''); setHistAt(0); setSuggestAt(0); }, []);
 
-  // A note lands in the pane, so it also retires the splash — a message the
-  // banner covers is a message lost ("tab: this is the only session open").
-
-  // Quitting stops every session, not just the one on screen: a turn still
-  // streaming somewhere else holds an open request, and node waits for it.
-  const quit = useCallback(() => { store.abortAll(); voice.stop(); exit(); }, [store, voice, exit]);
-
-  // Switching shows that session's conversation in the pane, tail first.
-  const switchTo = useCallback((id: string) => {
-    // Save the unsent text to the session being left, so it is waiting when
-    // the user comes back. Read from the ref — never from `input` state,
-    // which would add it to the dependency array and recreate this callback
-    // on every keystroke.
-    const prev = store.active();
-    if (prev) prev.draft = inputRef.current;
-    if (!store.activate(id)) return;
-    // Restore the draft the target session was left with (empty on first visit).
-    const e = store.get(id);
-    setInput(e?.draft ?? '');
-    setSplash(false);
-    setScroll(0);
-    setHistAt(0);
-    if (e) onSession?.({ id: e.id, branch: e.branch, workspaceId: e.workspaceId });
-    // Cheap staleness check in the background: compare the server's transcript
-    // stamp with what memory matches; pull only when it actually moved.
-    if (e && !e.busy) {
-      void (async () => {
-        try {
-          const row = await api('GET', `/sessions/${id}`) as { transcript_updated_at?: string | null };
-          await reseatIfMoved(api, store, id, row?.transcript_updated_at ?? null);
-        } catch (e) { quiet(`check session ${id} for changes`)(e); }
-      })();
-    }
-  }, [store, onSession, api]);
-
-  const openSwitcher = useCallback(() => {
-    setMenu('sessions');
-    if (names.length) return;
-    void (async () => {
-      try {
-        const list = await api('GET', '/workspaces') as unknown as WorkspaceInfo[];
-        seedWsFacts(list);
-        setNames(list);
-      } catch (e) { note(`could not list workspaces: ${(e as Error).message}`); }
-    })();
-  }, [api, names.length]);
-
-  const cycle = useCallback((dir: 1 | -1) => {
-    const target = store.next(dir);
-    if (!target) { note('this is the only session open — /new or /resume opens another'); return; }
-    switchTo(target.id);
-  }, [store, switchTo, note]);
-
-  // A setting changed. Everything that consumes one READS IT AGAIN here —
-  // rebuilding an agent, restarting the sidecar, pushing a live switch. Nothing
-  // is recomputed from a copy taken earlier, which is what used to leave the
-  // Assistant running on the settings it was born with.
-  const onConfigChange = useCallback((key?: ConfigKey) => {
-    setCfgTick((t) => t + 1);
-    void (async () => {
-      let cfg: Record<string, ConfigValue>;
-      try { cfg = await readCfg(); }
-      catch (e) { note(`could not read settings: ${(e as Error).message}`); return; }
-      setChrome({ voice: Boolean(cfg.voice_enabled), width: Number(cfg.sidebar_width) || sidebarPercent });
-
-      if (session) {
-        const before = session.summary;
-        const next = makeAgent(session.tools, cfg, session.instructions).summary;
-        if (next.provider !== before.provider || next.model !== before.model) {
-          session.transcript.appendEvent({ type: 'model', provider: next.provider, model: next.model, at: new Date().toISOString() });
-          note(`model → ${next.provider}/${next.model}`);
-        }
-      }
-      store.rebuildAgents((tools, instructions, id) => makeAgent(tools, cfg, instructions,
-        (t) => { if (id) store.note(id, t); }));
-
-      // The Assistant follows its settings: on/off starts and stops it; an
-      // audio value (the Deepgram key, the devices) restarts the sidecar, which
-      // reads them again as it spawns; a model value rebuilds the brain in
-      // place — the history stays, the next turn uses the new model; the spoken
-      // voice, the mutes, headphones and the wake word are pushed live.
-      if (key === 'voice_enabled') {
-        if (cfg.voice_enabled) startVoice(); else voice.stop();
-        setSidebar(null);
-      } else if (voice.running && key && VOICE_BOOT_KEYS.includes(key)) {
-        startVoice();
-      } else if (voice.running && key && ASSISTANT_MODEL_KEYS.includes(key)) {
-        try { voice.setAgent(makeAssistantAgent(await assistantKit(), cfg).agent); }
-        catch (e) { note(`assistant not rebuilt: ${(e as Error).message}`); }
-      } else if (voice.running && key === 'voice_spoken_voice') {
-        voice.update({ voice: String(cfg.voice_spoken_voice) });
-      } else if (voice.running && key === 'voice_mic_muted') {
-        voice.setMic(Boolean(cfg.voice_mic_muted));
-      } else if (voice.running && key === 'voice_speaker_muted') {
-        voice.setSpeaker(Boolean(cfg.voice_speaker_muted));
-      } else if (voice.running && key === 'voice_headphones') {
-        voice.setHeadphones(Boolean(cfg.voice_headphones));
-      } else if (voice.running && (key === 'voice_wake_word' || key === 'voice_wake_words' || key === 'voice_wake_timeout')) {
-        voice.setWake(Boolean(cfg.voice_wake_word), String(cfg.voice_wake_words ?? ''), Number(cfg.voice_wake_timeout) || undefined);
-      }
-    })();
-  }, [store, session, readCfg, makeAgent, note, voice, startVoice, makeAssistantAgent, assistantKit, sidebarPercent]);
-
-  // The banner names the workspace, so opening a session needs its display
-  // name — one lookup per workspace, ever, cached for the window's life
-  // (names are stable enough; a rename shows up next launch). The launch
-  // session's name arrived in `initial`; a failed lookup falls back to the
-  // id, which still identifies the workspace.
-  // One lookup carries BOTH facts the window needs about a workspace — the
-  // display name for the banner and the card prefix (`PHA`: how this
-  // workspace names its cards) for the toolbar's card mark — so the mark
-  // costs no request of its own.
-  const wsNames = useRef(new Map<string, WsFacts>(
-    initial?.workspace ? [[initial.workspaceId, { label: initial.workspace }]] : []));
-  // The workspace LIST carries the same two facts per row: whoever reads it
-  // fills the cache, so a later open needs no lookup and a failed one can
-  // name the workspace rather than its id.
-  const seedWsFacts = useCallback((list: { id: string; name?: string; displayName?: string | null; cardPrefix?: string }[]) => {
-    for (const w of list) {
-      const label = w.displayName || w.name;
-      if (label && !wsNames.current.has(w.id)) wsNames.current.set(w.id, { label, ...(w.cardPrefix ? { cardPrefix: w.cardPrefix } : {}) });
-    }
-  }, []);
-  const wsFacts = useCallback(async (id: string): Promise<WsFacts> => {
-    const hit = wsNames.current.get(id);
-    if (hit) return hit;
-    try {
-      const w = await api('GET', `/workspaces/${id}`) as
-        { name?: string; displayName?: string | null; cardPrefix?: string };
-      const found = w.displayName || w.name;
-      if (!found) throw new Error(`the server sent no name for it`);
-      const facts: WsFacts = { label: found, ...(w.cardPrefix ? { cardPrefix: w.cardPrefix } : {}) };
-      wsNames.current.set(id, facts);
-      return facts;
-    } catch (e) {
-      // The session is open regardless — the lookup is for the banner. The
-      // id stands in for the name AND the session's first note says why, so
-      // an id on the banner never passes for a workspace called that.
-      return { label: id, error: `could not read workspace ${id}'s name: ${(e as Error).message}` };
-    }
-  }, [api]);
-
-  // Opening a session: it JOINS the window rather than replacing what is here.
-  // One that is already loaded is switched to, never opened twice. The target
-  // says what to open; core's openSession is the ONE path that resolves it
-  // (create / restart / attach), holds the lock, pulls the server transcript
-  // (the record) and the frozen prompt.
-  type OpenTarget = { kind: 'new'; workspaceId: string } | { kind: 'open'; id: string }
-    | { kind: 'duplicate'; id: string };
-  const openSession = useCallback(async (target: OpenTarget): Promise<boolean> => {
-    try {
-      // Already open: switch to it. Already open AND on screen: say so —
-      // re-adding it would reprint the same conversation for no reason.
-      if (target.kind === 'open') {
-        if (target.id === store.activeId) { note('already here'); return true; }
-        if (store.has(target.id)) { switchTo(target.id); return true; }
-        // Opening an existing session: clear the splash immediately so it
-        // never flashes during the network calls that follow. The final
-        // setSplash(resumed.length === 0) at the end of this function sets
-        // it back for the rare empty session.
-        setSplash(false);
-      }
-      const sessionId = target.kind === 'duplicate'
-        ? ((await api('POST', `/sessions/${target.id}/duplicate`, {}) as { id: string }).id)
-        : target.kind === 'open' ? target.id : undefined;
-      // Opening READS — it can no longer be refused by a lock; any error here
-      // is a real error and lands in the outer catch's note.
-      const opened = await coreOpenSession({ call: api, label: hostname(),
-        ...(sessionId ? { sessionId } : { workspaceId: (target as { workspaceId: string }).workspaceId }) });
-      const row = opened.session as { id: string; branch: string; workspaceId: string;
-        agent?: string | null; card?: number | null; planMode?: boolean;
-        skills?: SkillMeta[]; secrets?: SecretIndexEntry[]; agent_git_credentials?: boolean };
-      // The server record IS the conversation — unless this machine holds
-      // unsaved steps on top of it (a window that died mid-turn); then the
-      // local file is the fuller copy, opens here, and goes up now so the
-      // record catches up. The upload can fail (another client holding the
-      // session, a server that cannot store); the file is kept either way and
-      // the next turn end ships it.
-      const seated = adoptServerCopy(row.id, opened.raw);
-      let resumed = opened.messages;
-      let header = opened.header;
-      let syncStamp = opened.updatedAt;
-      let seatNote: string | null = null; // under the banner: what happened to the file
-      if (seated.localKept) {
-        const parsed = parseTranscript(seated.text);
-        resumed = parsed.messages;
-        header = parsed.header as TranscriptHeader | undefined;
-        try {
-          syncStamp = await syncTranscriptUp(api, row.id);
-          seatNote = 'unsaved steps found on this machine — uploaded';
-        } catch (e) {
-          seatNote = `unsaved steps found on this machine — kept locally, upload failed: ${(e as Error).message}`;
-        }
-      }
-      // The row's plan_mode seeds the mode AND picks the kit — the two must
-      // never disagree, so they read the same fact.
-      const planMode = row.planMode === true;
-      const tools = { ...await newTools(row.id, planMode, row.workspaceId), ...codingKanbanTool(codingKanbanHandler(row.workspaceId)),
-        ...screenModeTools(screenOps(store, row.id)) };
-      // Same freeze rule as launch: the transcript's stored prompt wins; a
-      // session without one gets a fresh stack — with the skill index the
-      // create response carried (repo scanned after checkout, merged with the
-      // image's system tier server-side) and the secrets index (names +
-      // descriptions, never values) the same response froze.
-      const instructions = header?.system_prompt
-        ?? codingInstructions(row.skills ?? [],
-          row.agent_git_credentials === undefined ? undefined
-            : { credentials: row.agent_git_credentials },
-          row.secrets ?? []);
-      // Opening a session builds an agent, so it reads its model, provider and
-      // key here — not from anything the window has been carrying.
-      const { agent, summary } = makeAgent(tools, await readCfg(), instructions,
-        (t) => store.note(row.id, t));
-      // The file adoptServerCopy seated is the working copy appends extend.
-      const transcript = makeTranscript({
-        type: 'session', session_id: row.id, workspace: row.workspaceId, branch: row.branch,
-        provider: summary.provider, model: summary.model, created_at: new Date().toISOString(),
-        system_prompt: instructions,
-      });
-      // The card this session builds, named the way the board names it
-      // (`PHA-7`) — resolved ONCE here, where both facts are in hand, so the
-      // toolbar has one string to draw and no lookup of its own. A server
-      // that did not send a prefix reads `card 7`, which still points at it.
-      const ws = await wsFacts(row.workspaceId);
-      const card = row.card != null
-        ? `${ws.cardPrefix ? `${ws.cardPrefix}-` : 'card '}${row.card}` : undefined;
-      // Save the current session's draft before the new one takes over.
-      const prev = store.active();
-      if (prev) prev.draft = inputRef.current;
-      store.add({
-        id: row.id, branch: row.branch, workspaceId: row.workspaceId,
-        tools, agent, summary, transcript, instructions,
-        history: resumed,
-        syncStamp,
-        planMode,
-        ...(card ? { card } : {}),
-        ...(row.agent === 'supervisor' ? { readonly: true } : {}),
-        done: [
-          ...bannerParts({ workspace: ws.label, branch: row.branch }, summary),
-          ...(ws.error ? [{ kind: 'note', id: nextId('note'), text: ws.error } as Part] : []),
-          ...(row.agent === 'supervisor'
-            ? [{ kind: 'note', id: nextId('note'),
-                text: `the supervisor's record${row.card != null ? ` · card ${row.card}` : ''} — read-only` } as Part]
-            : []),
-          ...(seatNote ? [{ kind: 'note', id: nextId('note'), text: seatNote } as Part] : []),
-          ...messagesToParts(resumed),
-        ],
-      });
-      // A new session starts with an empty prompt.
-      setInput('');
-      setScroll(0);
-      setHistAt(0);
-      // An empty conversation opens on the splash, exactly as boot's does —
-      // /new's first frame is the wordmark, gone on the first message.
-      setSplash(resumed.length === 0);
-      onSession?.({ id: row.id, branch: row.branch, workspaceId: row.workspaceId });
-      return true;
-    } catch (e) {
-      const what = target.kind === 'new'
-        ? `could not start a session in ${wsNames.current.get(target.workspaceId)?.label ?? `workspace ${target.workspaceId}`}`
-        : target.kind === 'duplicate' ? `could not duplicate session ${target.id}`
-          : `could not open session ${target.id}`;
-      note(`${what}: ${(e as Error).message}`);
-      return false;
-    }
-  }, [store, newTools, codingKanbanHandler, makeAgent, makeTranscript, loadHistory, loadPrompt, configPath, switchTo, onSession, note, wsFacts]);
-  openSessionRef.current = openSession;
-
-  // Flip a loaded session's plan mode: rebuild the kit (readonly preset on,
-  // full set off) and the agent over it, then move mode and tools together
-  // (store.setPlanMode). /plan calls this after its PATCH lands; the
-  // feed calls it when the server says another window flipped it. A
-  // turn already streaming keeps the agent it started with — the switch lands
-  // on the next turn, /model's rule. No-op while nothing changed, and a
-  // supervisor record (read-only, no chatting) never flips.
-  const applyPlanMode = useCallback(async (id: string, on: boolean): Promise<void> => {
-    const e = store.get(id);
-    if (!e || e.readonly || e.planMode === on) return;
-    const tools = { ...await newTools(id, on, e.workspaceId), ...codingKanbanTool(codingKanbanHandler(e.workspaceId)),
-      ...screenModeTools(screenOps(store, id)) };
-    const { agent, summary } = makeAgent(tools, await readCfg(), e.instructions,
-      (t) => store.note(id, t));
-    store.setPlanMode(id, on, tools, agent, summary);
-  }, [store, newTools, codingKanbanHandler, makeAgent, readCfg]);
-  applyPlanRef.current = applyPlanMode;
-
-  // THE picker fetch — the only place the two lists are read. Throws on
-  // failure so each caller decides what that means: opening says so and stays
-  // put; a background refresh keeps quiet and keeps the list it has.
-  // Sessions come in PAGES (PICKER_PAGE): opening fetches one, scrolling near
-  // the bottom appends the next (morePicker), and every session ever made
-  // stays reachable — the server list only grows (the looper mints two rows
-  // per card). A refresh re-reads however many rows are loaded, so what is on
-  // screen stays live however deep you have scrolled. A short page = the end.
-  const pickerRef = useRef(picker);
-  pickerRef.current = picker;
-  const moreInFlight = useRef(false);
-  // `git` asks the server for each row's work state (read from its checkout
-  // — real time per row), so the OPENING fetch never carries it: the list
-  // paints instantly with the work column blank, and the git-inclusive
-  // refresh right behind it fills the words in place (fixed widths, no
-  // jitter). The 10s poll keeps carrying it.
-  // The list's FILTERS are the server's (`typed`, `supervisor`): a page is a
-  // page on screen, and `total` is the count for exactly these filters. The
-  // one addition only this window can make: sessions open HERE that the
-  // server would leave out (nothing typed yet) — merged in, counted in.
-  const listQuery = () => `typed=true${showSupervisedRef.current ? '' : '&supervisor=false'}`;
-  const withOpenHere = (rows: SessionInfo[], total: number) => {
-    const seen = new Set(rows.map((s) => s.id));
-    const extras: SessionInfo[] = store.list().filter((e) => !seen.has(e.id) && !e.readonly).map((e) => ({
-      id: e.id, workspaceId: e.workspaceId, branch: e.branch, status: 'active', agent: null,
-      // Nothing typed = no activity: it sorts LAST, never ahead of real work.
-      lastUsedAt: new Date(e.lastMessageAt || 0).toISOString(), locked: false, lastUserMessage: null,
-    }));
-    return { sessions: [...rows, ...extras], total: total + extras.length };
-  };
-  const refreshPicker = useCallback(async () => {
-    const want = Math.max(pickerRef.current?.sessions.length ?? 0, PICKER_PAGE);
-    const [ws, got] = await Promise.all([api('GET', '/workspaces'),
-      api('GET', `/sessions?${listQuery()}&limit=${want}`)]);
-    const { sessions: ss, total } = got as { sessions: SessionInfo[]; total: number };
-    setPicker({ workspaces: ws as WorkspaceInfo[], ...withOpenHere(ss, total), end: ss.length < want });
-    setNames(ws as WorkspaceInfo[]);
-  }, [api, store]);
-  // The next page, appended in place. The cursor is the last loaded row as
-  // the client saw it; a session's last_used_at only ever grows, so a row can
-  // move UP past the cursor (the refresh catches it at the top) but pages
-  // going down never repeat one — the id filter is insurance for the 10s
-  // refresh racing an append. Failure keeps the loaded rows; scrolling again
-  // retries.
-  const morePicker = useCallback(async () => {
-    const p = pickerRef.current;
-    // The cursor is the last SERVER row — the open-here extras are appended
-    // after the pages and carry no server position.
-    const tail = [...(p?.sessions ?? [])].reverse().find((r) => r.lastUserMessage !== null);
-    if (!p || p.end || !tail || moreInFlight.current) return;
-    moreInFlight.current = true;
-    try {
-      const got = await api('GET', `/sessions?${listQuery()}&limit=${PICKER_PAGE}` +
-        `&before=${encodeURIComponent(tail.lastUsedAt)}&before_id=${tail.id}`) as
-        unknown as { sessions: SessionInfo[]; total: number };
-      setPicker((prev) => {
-        if (!prev) return prev;
-        const seen = new Set(prev.sessions.map((s) => s.id));
-        const rows = [...prev.sessions, ...got.sessions.filter((s) => !seen.has(s.id))];
-        // Server rows only, then the open-here extras go back on the end.
-        return { ...prev, ...withOpenHere(rows.filter((r) => r.lastUserMessage !== null), got.total),
-          end: got.sessions.length < PICKER_PAGE };
-      });
-    } catch (e) { quiet('load more sessions')(e); }
-    finally { moreInFlight.current = false; }
-  }, [api]);
-
-  // /resume is a status list — rows spin, locks appear and lapse, turns end on
-  // other machines — so while it is open it re-reads the server every
-  // pollMs (10s). The refresh swaps the rows in
-  // place: the cursor, the notice line and an armed trash all stay put
-  // (refreshPicker touches none of them). A failed tick is silent — an
-  // unreachable server must not nag every 10s while old rows still serve.
-  useEffect(() => {
-    if (menu !== 'resume') return;
-    const t = setInterval(() => { void refreshPicker().catch(quiet('refresh the session list')); }, pollMs);
-    t.unref?.();
-    return () => clearInterval(t);
-  }, [menu, refreshPicker, pollMs]);
-
-  const openPicker = useCallback(async (which: 'workspace' | 'resume') => {
-    try {
-      await refreshPicker();
-      setPickerNotice(undefined);
-      trashArmed.current = null;
-      setMenu(which);
-      // The work column, a beat behind the instant open (see refreshPicker).
-      if (which === 'resume') void refreshPicker().catch(quiet('refresh the session list'));
-    } catch (e) { note(`could not list ${which === 'resume' ? 'sessions' : 'workspaces'}: ${(e as Error).message}`); }
-  }, [refreshPicker, note]);
-
-  // What is running in the session's container — the /tasks screen's rows and
-  // the toolbar's count. The server reads the container fresh on every ask
-  // (ps inside it), so this is never a stored guess going stale.
-  const [tasksView, setTasksView] = useState<TasksView | null>(null);
-  const [tasksNotice, setTasksNotice] = useState<string | undefined>();
-  const [taskCount, setTaskCount] = useState<number | null>(null);
-  const killArmed = useRef<string | null>(null);
-  const refreshTasks = useCallback(async () => {
-    if (!sessionId) return;
-    const r = await api('GET', `/sessions/${sessionId}/tasks`) as unknown as TasksView;
-    setTasksView(r);
-    setTaskCount(r.tasks.length);
-  }, [api, sessionId]);
-  refreshTasksRef.current = refreshTasks;
-
-  // The count's own clock: seed it when a session lands on screen, then once
-  // a minute while the window idles — turn ends (the store callback) and the
-  // open /tasks screen refresh it more often. A failed tick keeps the last
-  // count; an unreachable server must not blank the toolbar.
-  useEffect(() => {
-    if (!sessionId) { setTaskCount(null); setTasksView(null); return; }
-    void refreshTasks().catch(quiet('refresh tasks'));
-    const t = setInterval(() => { void refreshTasks().catch(quiet('refresh tasks')); }, taskPollMs);
-    t.unref?.();
-    return () => clearInterval(t);
-  }, [sessionId, refreshTasks, taskPollMs]);
-
-  // /tasks is a status list like /resume: while it is open it re-reads on the
-  // picker clock (pollMs). The refresh swaps rows in place — the cursor, the
-  // notice and an armed kill stay put; a failed tick is silent.
-  useEffect(() => {
-    if (menu !== 'tasks') return;
-    const t = setInterval(() => { void refreshTasks().catch(quiet('refresh tasks')); }, pollMs);
-    t.unref?.();
-    return () => clearInterval(t);
-  }, [menu, refreshTasks, pollMs]);
-
-  // /archived — the workspace's archived cards, fetched for the screen alone
-  // (the board GET never carries the archive: the board doesn't render it,
-  // and the archive grows forever while the board stays small). Pages like
-  // /resume: one page at open, the next appended when the cursor nears the
-  // bottom (moreArchived); a short page = the end.
-  const [archivedNotice, setArchivedNotice] = useState<string | undefined>();
-  const [archivedCards, setArchivedCards] = useState<Card[]>([]);
-  /** The whole archive's size (the server's count) — the pages loaded are
-   *  `archivedCards`; the screen counts what is below against this. */
-  const [archivedTotal, setArchivedTotal] = useState<number | undefined>();
-  const archivedRef = useRef(archivedCards);
-  archivedRef.current = archivedCards;
-  const archivedEnd = useRef(false);
-  const moreArchivedInFlight = useRef(false);
-  // /archived and the board's [v] share this. Fresh rows before the screen
-  // (the /tasks shape: a failure says so and stays put).
-  const openArchived = useCallback(async (workspaceId: string) => {
-    try {
-      const d = await api('GET', `/workspaces/${workspaceId}/cards?archived=only&limit=${PICKER_PAGE}`) as { cards: Card[]; total?: number };
-      archivedEnd.current = d.cards.length < PICKER_PAGE;
-      setArchivedCards(d.cards);
-      setArchivedTotal(d.total);
-      setArchivedNotice(undefined);
-      setMenu('archived');
-    } catch (e) { note(`could not list archived cards: ${(e as Error).message}`); }
-  }, [api, note]);
-  // The next page, appended in place — morePicker's shape: the cursor is the
-  // last loaded row, failure keeps what is loaded, scrolling again retries.
-  const moreArchived = useCallback(async (workspaceId: string) => {
-    const tail = archivedRef.current[archivedRef.current.length - 1];
-    if (archivedEnd.current || !tail || moreArchivedInFlight.current) return;
-    moreArchivedInFlight.current = true;
-    try {
-      const d = await api('GET', `/workspaces/${workspaceId}/cards?archived=only&limit=${PICKER_PAGE}` +
-        `&before=${encodeURIComponent(tail.updated_at)}&before_id=${tail.id}`) as { cards: Card[]; total?: number };
-      archivedEnd.current = d.cards.length < PICKER_PAGE;
-      setArchivedTotal(d.total);
-      setArchivedCards((prev) => {
-        const seen = new Set(prev.map((t) => t.id));
-        return [...prev, ...d.cards.filter((t) => !seen.has(t.id))];
-      });
-    } catch (e) { quiet('load more archived cards')(e); }
-    finally { moreArchivedInFlight.current = false; }
-  }, [api]);
-
-  // [k] on /tasks arms the kill confirmation; [c] confirms — the universal
-  // destructive-confirm pattern (TERM, a second, then KILL — the whole tree).
-  const killTask = useCallback(async (sid: string, command: string) => {
-    if (!sessionId) return;
-    if (killArmed.current !== sid) {
-      killArmed.current = sid;
-      setTasksNotice(`kill "${command}"? — [c] to confirm`);
-      return;
-    }
-    killArmed.current = null;
-    try {
-      await api('DELETE', `/sessions/${sessionId}/tasks/${sid}`);
-      setTasksNotice(undefined);
-      // The kill landed; a failed re-read must not report "could not kill".
-      await refreshTasks().catch(quiet('refresh tasks'));
-    } catch (e) {
-      setTasksNotice(`could not kill "${command}": ${(e as Error).message}`);
-    }
-  }, [api, sessionId, refreshTasks]);
-
-  // The launch itself — the same flow /new and /workspace run, as an effect,
-  // so the window is ALREADY OPEN when anything goes wrong: the failure lands
-  // as words in the pane and the screens that fix it (/keys, /settings,
-  // /server) are a slash command away, never a stack trace before the
-  // app exists. On success it is exactly a /new in the chosen workspace.
-  const booted = useRef(false);
-  useEffect(() => {
-    if (!boot || booted.current) return;
-    booted.current = true;
-    void (async () => {
-      if (boot.resumeId) { await openSession({ kind: 'open', id: boot.resumeId }); return; }
-      let ws: WorkspaceInfo[];
-      try { ws = await api('GET', '/workspaces') as unknown as WorkspaceInfo[]; }
-      catch (e) {
-        // The request function already named the server and the failure;
-        // what goes under it is the fix — two different ones: the server
-        // answered and refused the key, or nothing answered at that address.
-        note((e as Error).message);
-        if ((e as { code?: string }).code === 'unauthorized') {
-          note('fix the key under /server — a server box prints its key with `phantom-backend key`; a dev checkout gets it from ./scripts/setup.sh');
-        } else {
-          note('have a server? its address and key go under /server, then /workspace starts a session');
-          note('need one? quit and run `phantom-cli setup-backend`');
-        }
-        return;
-      }
-      seedWsFacts(ws);
-      // Nothing registered yet: go straight to adding one. An empty install
-      // has to be able to start from here, not from curl.
-      if (!ws.length) { setMenu('addWorkspace'); return; }
-      if (ws.length === 1) { await openSession({ kind: 'new', workspaceId: ws[0].id }); return; }
-      // boot_last_workspace (a server setting, off by default) skips the
-      // picker: a new session in the workspace of the newest session you
-      // drove yourself — looper-run sessions do not count.
-      try {
-        if ((await readCfg()).boot_last_workspace === true) {
-          const ss = ((await api('GET', '/sessions')) as unknown as { sessions: SessionInfo[] }).sessions;
-          const last = lastWorkspaceId(ws, ss);
-          if (last) { await openSession({ kind: 'new', workspaceId: last }); return; }
-        }
-      } catch (e) { note(`could not reopen your last workspace: ${(e as Error).message}`); }
-      await openPicker('workspace');
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- launch only
-  }, []);
-
-  // THE close: a session leaves local memory — the tab ring, the open-session
-  // list, the dot on its /resume row. Nothing on the server changes, so
-  // opening it again gets it back exactly as it was. Every door ([x] on
-  // /resume, /close, the Assistant's session_close) comes through here, so
-  // the rules live once: refused while a turn runs there (the stream's
-  // onParts closes over that entry); closing the one on screen hands the
-  // screen to whatever you spoke to most recently — through switchTo, so it
-  // arrives like any other switch; closing the LAST one opens a fresh session
-  // in the same workspace — close means "done with this", never "leave me
-  // looking at nothing". The result is facts; each door renders them where
-  // its user is looking.
-  type CloseResult = { ok: true; closed: string; on_screen: string; opened_new: boolean } | { error: string };
-  const closeSession = useCallback(async (id?: string): Promise<CloseResult> => {
-    const target = id ?? store.activeId;
-    if (!target) return { error: 'no session is open — nothing to close' };
-    const e = store.get(target);
-    if (!e) return { error: `session ${target} is not open in this window — nothing to close` };
-    const { workspaceId } = e;
-    const wasOnScreen = store.activeId === target;
-    if (!store.close(target)) return { error: `a turn is running in ${target} — stop it first` };
-    let opened_new = false;
-    if (wasOnScreen) {
-      const next = store.list()[0];
-      if (next) switchTo(next.id);
-      else opened_new = await openSession({ kind: 'new', workspaceId });
-    }
-    return { ok: true, closed: target, on_screen: store.activeId, opened_new };
-  }, [store, switchTo, openSession]);
-  closeSessionRef.current = closeSession;
-
-  // [x] on /resume: the result on the picker's own notice line, where the
-  // list is.
-  const closeFromPicker = useCallback(async (id: string) => {
-    const r = await closeSession(id);
-    if ('error' in r) { setPickerNotice(r.error.includes('a turn is running') ? 'a turn is running there — esc stops it, then [x]' : r.error); return; }
-    setPickerNotice(r.opened_new ? 'closed the last one — a new session is open behind this list'
-      : 'closed — enter opens it again');
-  }, [closeSession]);
-
-  // [t] on /resume: the session leaves the server for good — row, transcript,
-  // files; only its pushed branch on origin survives. Refusals arm/say why on
-  // the picker's own notice line and the list refreshes in place.
-  const trashSession = useCallback(async (id: string) => {
-    if (store.has(id)) { setPickerNotice('that session is open in this window'); return; }
-    const force = trashArmed.current === id;
-    try {
-      await api('DELETE', `/sessions/${id}?purge=true${force ? '&force=true' : ''}`);
-      trashArmed.current = null;
-      setPickerNotice(undefined);
-      // The trash landed; a failed re-read must not report "could not trash".
-      await refreshPicker().catch(quiet('refresh the session list'));
-    } catch (e) {
-      const m = (e as Error).message;
-      const code = (e as { code?: string }).code ?? '';
-      if (code === 'unpushed_work' || m.includes('unpushed_work')) { trashArmed.current = id; setPickerNotice('unpushed work — [c] to confirm discard'); }
-      else if (code === 'session_locked' || m.includes('session_locked')) setPickerNotice('in use elsewhere — a held session cannot be trashed');
-      else setPickerNotice(`could not trash session ${id}: ${m}`);
-    }
-  }, [api, store, refreshPicker]);
-
-  // The one voice-switch toggle — /mic /speaker /headphones /wake, ctrl+r/l,
-  // and a click on either of the pane's switch rows all land here. Every
-  // switch IS a setting (voice_mic_muted / voice_speaker_muted /
-  // voice_headphones / voice_wake_word): the toggle writes the file and goes
-  // through onConfigChange — the same path the /voice screen takes, which is
-  // what keeps the screen and the toggle from diverging — and the state holds
-  // across engine and TUI restarts.
-  const toggleDevice = useCallback((which: 'mic' | 'speaker' | 'headphones' | 'wake') => {
-    if (!voice.running) { note('voice is off — /voice to turn it on'); return; }
-    const key = TOGGLE_KEY[which];
-    void (async () => {
-      // Read the switch, flip it, write it, then let onConfigChange read
-      // everything again. A toggle is a read-modify-write, so it reads.
-      let cfg: Record<string, ConfigValue>;
-      try { cfg = await readCfg(); }
-      catch (e) { note(`could not read settings: ${(e as Error).message}`); return; }
-      const now = !cfg[key];
-      // Where a switch is saved follows where the setting lives: the mic and
-      // speaker mutes and the headphones switch are facts about this machine,
-      // the wake word is not.
-      if (isLocalKey(key)) {
-        const err = setLocal(key, now, configPath);
-        if (err) { note(err); return; }
-      } else {
-        try { await settings.write(key, now); }
-        catch (e) { note(`could not save ${key}: ${(e as Error).message}`); return; }
-      }
-      onConfigChange(key);
-      switch (which) {
-        case 'mic': note(now ? 'voice: not listening' : 'voice: listening'); break;
-        case 'speaker': note(now ? 'voice: quiet — text only' : 'voice: speaking again'); break;
-        case 'headphones':
-          note(now ? 'voice: headphones on — talk over it'
-            : 'voice: headphones off — over speakers, the mic is muted while it speaks');
-          break;
-        case 'wake':
-          note(now ? `voice: waiting for the wake word (${String(cfg.voice_wake_words ?? '')})`
-            : 'voice: wake word off — it answers everything it hears');
-          break;
-      }
-    })();
-  }, [voice, note, configPath, onConfigChange, readCfg, settings]);
-
-  const runCommand = useCallback(async (name: string, args = '') => {
-    switch (name) {
-      case 'new':
-        // No session yet = no workspace to mean "here": the picker chooses.
-        // The splash goes up BEFORE the session is built, so the ghost appears
-        // on the next frame and the network calls run behind it.
-        if (session) { setSplash(true); await openSession({ kind: 'new', workspaceId: session.workspaceId }); }
-        else await openPicker('workspace');
-        return;
-      case 'resume': await openPicker('resume'); return;
-      case 'close': {
-        // The same act as [x] on /resume, aimed at the session on screen.
-        const r = await closeSession();
-        if ('error' in r) { note(r.error.includes('a turn is running') ? 'a turn is running here — esc stops it, then /close' : r.error); return; }
-        note(r.opened_new ? 'closed the last one — this is a new session; /resume opens the old one again'
-          : 'closed — /resume opens it again');
-        return;
-      }
-      case 'workspace': await openPicker('workspace'); return;
-      case 'rename': {
-        if (!session) { note('no session is open — nothing to rename'); return; }
-        try {
-          await api('PATCH', `/sessions/${session.id}`, { name: args || null });
-          note(args ? `renamed: ${args}` : 'name cleared — auto-titles are back on');
-        } catch (e) { note(`could not rename session ${session.id}: ${(e as Error).message}`); }
-        return;
-      }
-      case 'kanban':
-        if (!session) { note('no session is open — the board belongs to a workspace; /workspace starts a session in one'); return; }
-        setView('board');
-        return;
-      case 'archived':
-        if (!session) { note('no session is open — archived cards belong to a workspace; /workspace starts a session in one'); return; }
-        await openArchived(session.workspaceId);
-        return;
-      case 'tasks': {
-        if (!session) { note("no session is open — tasks run in a session's container"); return; }
-        // Refresh before opening, openPicker's shape: a failure says so and
-        // stays put rather than showing an empty screen.
-        try {
-          await refreshTasks();
-          setTasksNotice(undefined);
-          killArmed.current = null;
-          setMenu('tasks');
-        } catch (e) { note(`could not list tasks: ${(e as Error).message}`); }
-        return;
-      }
-      case 'plan': {
-        // The switch: the server row first (the record every window reads),
-        // then this window's kit. A failed rebuild reports the error; the
-        // next feed snapshot reads the saved mode again.
-        if (!session) { note('no session is open — nothing to switch'); return; }
-        if (session.readonly) { note("this is the supervisor's record — read-only"); return; }
-        const on = !session.planMode;
-        try {
-          await api('PATCH', `/sessions/${session.id}`, { plan_mode: on });
-          await applyPlanMode(session.id, on);
-        } catch (e) { note(`could not switch plan mode ${on ? 'on' : 'off'}: ${(e as Error).message}`); }
-        return;
-      }
-      case 'auto-push': {
-        if (!session) { note('no session is open — nothing to push'); return; }
-        // Detached from the command handler: an auto-push can run for minutes
-        // and the prompt never locks. Steps and the result land as notes.
-        void runAutoPush(session.id);
-        return;
-      }
-      case 'auto-pull': {
-        if (!session) { note('no session is open — nothing to pull into'); return; }
-        // Same detached shape as auto-push: steps and the result as notes.
-        void runAutoPull(session.id);
-        return;
-      }
-      case 'settings': setMenu('settings'); return;
-      case 'keys': setMenu('keys'); return;
-      case 'secrets': setMenu('secrets'); return;
-      case 'model': setMenu('model'); return;
-      case 'server': setMenu('server'); return;
-      case 'voice':
-        setMenu('voice');
-        // The mic/speaker pickers want names; with voice off, ask for them.
-        void voice.refreshDevices();
-        return;
-      case 'mic': toggleDevice('mic'); return;
-      case 'speaker': toggleDevice('speaker'); return;
-      case 'headphones': toggleDevice('headphones'); return;
-      case 'wake': toggleDevice('wake'); return;
-      case 'assistant':
-        if (!args) { note('/assistant <what to tell the Assistant>'); return; }
-        if (!voice.say(args)) note('voice is off — /voice to turn it on');
-        else setSidebar((s) => (s === false ? null : s));
-        return;
-      case 'help':
-        note(COMMANDS.map((c) => `  /${c.name.padEnd(10)} ${c.summary}`).join('\n'));
-        return;
-      case 'exit': quit(); return;
-    }
-  }, [api, quit, openPicker, openSession, openSwitcher, session, runAutoPush, runAutoPull, closeSession, note, voice, toggleDevice, applyPlanMode, openArchived]);
-
-  const submit = useCallback(async (text: string) => {
-    const msg = text.trim();
-    if (!msg) return;
-    // Locked elsewhere = read-only here: refuse BEFORE the box clears, so
-    // the typed line stays put to edit or resend. Slash commands still run —
-    // they are the window's, not the session's.
-    if (heldRef.current && !msg.startsWith('/') && msg !== 'exit' && msg !== 'quit') {
-      note(`not sent — a turn is running (${heldRef.current.label})`);
-      return;
-    }
-    clearInput();
-    setScroll(0);
-    setSplash(false);   // commands too: /help answers into the pane the splash covers
-    if (msg === 'exit' || msg === 'quit') { quit(); return; }
-    if (msg.startsWith('/')) {
-      // The list is showing with a row highlighted, so enter takes THAT row —
-      // arrowing to a command and pressing enter has to run it, not submit the
-      // half-typed text that produced the list.
-      const m = matches(msg);
-      if (m.length) { setSuggestAt(0); await runCommand(m[Math.min(suggestAt, m.length - 1)].name); return; }
-      // No menu: either an argument follows the command (`/assistant hello`) or
-      // nothing matched. parse() tells the two apart.
-      const { command, args, error } = parse(msg);
-      if (command) { await runCommand(command.name, args); return; }
-      note(error ?? `unknown command ${msg}`);
-      return;
-    }
-    // No session on screen: the words have no conversation to land in. Say
-    // where to get one instead of dropping them silently.
-    if (!session) { note('no session is open — /workspace starts one, /resume reopens an earlier one'); return; }
-    // A supervisor session is the looper's record — read it, never chat into it.
-    if (session.readonly) { note("this is the supervisor's record — read-only"); return; }
-    // Addressed to the session that is on screen, and it keeps running there
-    // whether or not you stay to watch it. Typed while it is already running,
-    // it waits its turn — shown under the live output until then.
-    store.say(session.id, msg);
-  }, [store, session, quit, runCommand, suggestAt, note]);
+  // Launch, once. The window is already drawn when it runs, so a failure is
+  // words in the pane rather than a stack trace before the app exists.
+  useEffect(() => { void windowStore.boot(); }, [windowStore]);
 
   /** What you have said to this session, oldest first. Straight off the history
    *  already in memory — nothing is stored a second time for this. */
@@ -1946,7 +430,7 @@ export function App({
     // With the board up, the left pane's mouse belongs to it (drag moves a
     // card, click opens one) — running text selection there too would copy on
     // every drop. The voice pane keeps its wheel and selection.
-    if (view !== 'chat' && ev && !(showSidebar && ev.x >= mainCols)) return;
+    if (windowStore.view !== 'chat' && ev && !(showSidebar && ev.x >= mainCols)) return;
     if (!ev) return;
     const inVoice = showSidebar && ev.x >= mainCols;
     if (ev.kind === 'wheel') {
@@ -1974,7 +458,7 @@ export function App({
     const text = screen.textOf(ranges).join('\n').trim();
     screen.highlight(null);
     if (!text) return;
-    void copyToClipboard(text).then(() => note(`copied ${text.length} characters`));
+    void copyToClipboard(text).then(() => windowStore.note(`copied ${text.length} characters`));
   });
 
   // Mic and speaker toggles, always on — like ctrl+c they must work from the
@@ -1982,17 +466,17 @@ export function App({
   // the set this terminal actually delivers (`npm run keys`).
   useInput((ch, key) => {
     if (!key.ctrl || (ch !== 'r' && ch !== 'l')) return;
-    toggleDevice(ch === 'r' ? 'mic' : 'speaker');
+    windowStore.toggleDevice(ch === 'r' ? 'mic' : 'speaker');
   });
 
   useInput((ch, key) => {
     if (!(key.ctrl && ch === 'c')) return;
-    if (menu === null && view === 'chat' && input) { clearInput(); return; }
-    if (ctrlC) { quit(); return; }
+    if (windowStore.menu === null && windowStore.view === 'chat' && input) { clearInput(); return; }
+    if (ctrlC) { windowStore.quit(); return; }
     if (session?.busy) store.abortTurn(session.id);
     // Break out of whatever is on screen first: the second press then lands on
     // the prompt, where the toolbar is showing what it will do.
-    if (menu !== null) setMenu(null);
+    if (windowStore.menu !== null) windowStore.setMenu(null);
     setCtrlC(true); setTimeout(() => setCtrlC(false), 1500);
   });
 
@@ -2029,7 +513,7 @@ export function App({
       return;
     }
     if (key.ctrl && ch === 'o') { setExpanded((e) => !e); return; }
-    if (key.ctrl && ch === 'g') { setSidebar(!showSidebar); return; }
+    if (key.ctrl && ch === 'g') { windowStore.setSidebar(!showSidebar); return; }
     // Scroll the conversation, through the same rule the wheel uses. A page is
     // most of the pane.
     const page = Math.max(1, screenRows - liveRows - 4);
@@ -2042,7 +526,7 @@ export function App({
     // second door for the terminals that send it, and it is gone: a shortcut
     // that works on some machines and silently does history on the rest is a
     // key nobody can learn.
-    if (key.ctrl && ch === 'n') { openSwitcher(); return; }
+    if (key.ctrl && ch === 'n') { windowStore.openSwitcher(); return; }
 
     // A slash line is being typed, so tab completes it and the arrows walk the
     // suggestions — that is what they mean while that list is up, and only
@@ -2060,7 +544,7 @@ export function App({
 
     // Everywhere else tab is the session ring — including while a turn runs,
     // which is the whole point of having more than one open.
-    if (key.tab) { cycle(key.shift ? -1 : 1); return; }
+    if (key.tab) { windowStore.cycle(key.shift ? -1 : 1); return; }
     // ↑ on an empty line while a turn runs and something is queued: take the
     // last queued line back into the box — that is how you fix what you said
     // too soon. Older history is one more ↑ away once the queue is empty.
@@ -2070,7 +554,7 @@ export function App({
     }
     if (key.upArrow && (histAt > 0 || input === '')) { recall(-1); return; }
     if (key.downArrow && histAt > 0) { recall(1); return; }
-  }, { isActive: menu === null && view === 'chat' });
+  }, { isActive: windowStore.menu === null && windowStore.view === 'chat' });
 
   const suggestions = matches(input);
   const at = Math.min(suggestAt, Math.max(0, suggestions.length - 1));
@@ -2101,8 +585,8 @@ export function App({
   const workMark: ToolbarPart | undefined = session?.work ? WORK[session.work] : undefined;
   // The bg task count — shown only when > 0. A zero is not news; it appearing
   // and vanishing is the signal that something started or stopped.
-  const taskMark = session && taskCount != null && taskCount > 0
-    ? `${taskCount} bg task${taskCount === 1 ? '' : 's'}`
+  const taskMark = session && windowStore.taskCount != null && windowStore.taskCount > 0
+    ? `${windowStore.taskCount} bg task${windowStore.taskCount === 1 ? '' : 's'}`
     : undefined;
   // Order: mode, card, git dot, bg tasks, notice pinned last.
   const withMode = (rest?: string): ToolbarPart[] =>
@@ -2112,29 +596,35 @@ export function App({
     <SizeContext.Provider value={{ rows: screenRows, cols: screenCols }}>
     <Box flexDirection="row" width={repaint ? 0 : screenCols} height={repaint ? 0 : screenRows} overflow="hidden">
     <Box flexDirection="column" width={mainCols} height={screenRows} overflow="hidden">
-      {view !== 'chat' && session ? (
-        <Boundary name="board" resetKey={view} onError={(m) => { note(`${m} — the board closed; the stack is in ~/.phantom-cli/cli.log`); setView('chat'); }}>
-        <Board store={boardFor(session.workspaceId)} width={mainCols} height={screenRows}
-          isActive solo={typeof view === 'object' ? view.card : undefined}
-          onClose={() => setView('chat')}
+      {windowStore.view !== 'chat' && session ? (
+        <Boundary name="board" resetKey={windowStore.view} onError={(m) => { windowStore.note(`${m} — the board closed; the stack is in ~/.phantom-cli/cli.log`); windowStore.setView('chat'); }}>
+        <Board store={windowStore.boardFor(session.workspaceId)} width={mainCols} height={screenRows}
+          isActive
+          // One card-editor state, in the window, which also knows where esc
+          // leaves it — from the board back to the columns, from anywhere else
+          // back to the chat.
+          card={typeof windowStore.view === 'object' ? windowStore.view.card : undefined}
+          onOpenCard={(seq) => windowStore.openCard(seq, 'board')}
+          onCloseCard={() => windowStore.closeCard()}
+          onClose={() => windowStore.setView('chat')}
           // The card editor's Session row: back to chat, then the one open
           // path — already loaded switches, otherwise it opens (read-only
           // while the looper holds it, like /resume).
-          onOpenSession={(id) => { setView('chat'); void openSession({ kind: 'open', id }); }}
-          onArchived={() => { setView('chat'); void openArchived(session.workspaceId); }} />
+          onOpenSession={(id) => { windowStore.setView('chat'); void windowStore.openSession({ kind: 'open', id }); }}
+          onArchived={() => { windowStore.setView('chat'); void windowStore.openArchived(session.workspaceId); }} />
         </Boundary>
       ) : (<>
       {/* keyFor: a part's own id, so the height the pane measured for it
           survives the list being rebuilt (a refresh reseats the whole
           conversation) and switching between sessions. */}
-      <Boundary name="conversation" resetKey={session?.id} onError={(m) => note(`${m} — the conversation stopped drawing; /resume it to redraw; the stack is in ~/.phantom-cli/cli.log`)}>
-      <Pane items={session ? session.done : windowNotes} offset={scroll} width={mainCols} onMeasure={setScrollMax} topGap
+      <Boundary name="conversation" resetKey={session?.id} onError={(m) => windowStore.note(`${m} — the conversation stopped drawing; /resume it to redraw; the stack is in ~/.phantom-cli/cli.log`)}>
+      <Pane items={session ? session.done : windowStore.notes} offset={scroll} width={mainCols} onMeasure={setScrollMax} topGap
         keyFor={(p) => p.id}
         render={(p) => <PartView key={p.id} part={p} width={width} expanded={expanded} />}
         // The splash rides the pane's empty space so the header stays put:
         // clearing it blanks only the banner's own rows — the pane-swap
         // version replaced 21 rows of the screen in one frame (traced).
-        fill={splash ? <Banner width={mainCols} /> : undefined} />
+        fill={windowStore.splash ? <Banner width={mainCols} /> : undefined} />
       </Boundary>
       <Box ref={bottomRef} flexDirection="column" flexShrink={0}>
         {session?.live.map((p) => (
@@ -2159,134 +649,97 @@ export function App({
           </Box>
         )}
 
-        <Boundary name={menu ?? 'prompt'} resetKey={menu} onError={(m) => { note(`${m} — ${menu ? `/${menu} closed` : 'the prompt stopped drawing'}; the stack is in ~/.phantom-cli/cli.log`); setMenu(null); }}>
-        {menu === 'sessions' ? (
+        <Boundary name={windowStore.menu ?? 'prompt'} resetKey={windowStore.menu} onError={(m) => { windowStore.note(`${m} — ${windowStore.menu ? `/${windowStore.menu} closed` : 'the prompt stopped drawing'}; the stack is in ~/.phantom-cli/cli.log`); windowStore.setMenu(null); }}>
+        {windowStore.menu === 'sessions' ? (
           <SessionSwitcher
-            sessions={store.list()} activeId={sessionId ?? ''} workspaces={names}
-            onPick={(id) => { setMenu(null); switchTo(id); }}
-            onCancel={() => setMenu(null)}
+            sessions={store.list()} activeId={sessionId ?? ''} workspaces={windowStore.workspaceRows}
+            onPick={(id) => { windowStore.setMenu(null); windowStore.switchTo(id); }}
+            onCancel={() => windowStore.setMenu(null)}
           />
-        ) : menu === 'settings' ? (
+        ) : windowStore.menu === 'settings' ? (
           // The server's own settings; the screen's sub line says the scope.
           <Settings api={api} configPath={configPath} startAt="api"
-            onClose={() => setMenu(null)} />
-        ) : menu === 'keys' ? (
+            onClose={() => windowStore.setMenu(null)} />
+        ) : windowStore.menu === 'keys' ? (
           // Its own screen so there is ONE place any credential is set — not
           // because these are a different kind of thing any more. A saved key
           // has to reach the app like any other setting change: the Assistant
           // takes its Deepgram key at spawn, and the agents take theirs at
           // build.
-          <Keys api={api} onClose={() => setMenu(null)}
-            onChanged={(name) => onConfigChange(name as ConfigKey)} />
-        ) : menu === 'secrets' ? (
+          <Keys api={api} onClose={() => windowStore.setMenu(null)}
+            onChanged={(name) => windowStore.settingChanged(name as ConfigKey)} />
+        ) : windowStore.menu === 'secrets' ? (
           // The agent's secrets, not phantom's own credentials (/keys). The
           // screen reads every layer itself — no session context needed.
-          <Secrets api={api} onClose={() => setMenu(null)} />
-        ) : menu === 'workspaceSettings' && editing ? (
+          <Secrets api={api} onClose={() => windowStore.setMenu(null)} />
+        ) : windowStore.menu === 'workspaceSettings' && windowStore.editing ? (
           <WorkspaceSettings
-            api={api} workspace={editing}
+            api={api} workspace={windowStore.editing}
             // Back to the list it was opened from, refreshed — a rename there
             // has to show up here.
-            onClose={() => { setEditing(null); void openPicker('workspace'); }}
-            onChanged={() => { void refreshPicker().catch(quiet('refresh the session list')); }}
+            onClose={() => { void windowStore.closeWorkspaceSettings(); }}
+            onChanged={() => { void windowStore.refreshPicker().catch(quiet('refresh the session list')); }}
           />
-        ) : menu === 'voice' ? (
+        ) : windowStore.menu === 'voice' ? (
           // The Assistant's settings — local, offline. Device rows offer
           // what the sidecar found; saving a boot-time key restarts it.
           <Settings api={api} configPath={configPath} startAt="local"
             title="voice" groups={['voice']}
             suggestions={{ voice_mic_device: vs.devices.mics, voice_speaker_device: vs.devices.speakers }}
             onOpenRow={(k) => { if (k === 'voice_mic_device' || k === 'voice_speaker_device') void voice.refreshDevices(); }}
-            onLocalChange={onConfigChange} onClose={() => setMenu(null)} />
-        ) : menu === 'model' || menu === 'server' ? (
+            onLocalChange={windowStore.settingChanged} onClose={() => windowStore.setMenu(null)} />
+        ) : windowStore.menu === 'model' || windowStore.menu === 'server' ? (
           // /server is the ONE screen that must work with the server down — it
           // is where you fix the address — so it gets the offline api and its
           // two keys are the two that live in the file. /model writes to the
           // server like every other setting screen.
-          <Settings api={menu === 'server' ? offline : api} configPath={configPath} startAt="local"
-            title={menu} groups={[menu === 'model' ? 'model' : 'server']}
-            onLocalChange={onConfigChange} onClose={() => setMenu(null)} />
-        ) : menu === 'addWorkspace' ? (
+          <Settings api={windowStore.menu === 'server' ? offline : api} configPath={configPath} startAt="local"
+            title={windowStore.menu} groups={[windowStore.menu === 'model' ? 'model' : 'server']}
+            onLocalChange={windowStore.settingChanged} onClose={() => windowStore.setMenu(null)} />
+        ) : windowStore.menu === 'addWorkspace' ? (
           <NewWorkspace
             api={api}
-            error={addError}
-            onCancel={() => setMenu(null)}
-            onSubmit={async (req: NewWorkspaceRequest) => {
-              // Cleared before the call so a second failure with the SAME
-              // message is still a change of the error prop — the form's
-              // recovery effect keys on it.
-              setAddError(undefined);
-              try {
-                const w = await api('POST', '/workspaces', req) as { id: string; owner: string; name: string };
-                setMenu(null);
-                // Adding one is only useful if you then work in it. The
-                // confirmation goes AFTER the switch, into the session you land
-                // in: noting it first writes it to the session you are leaving,
-                // where the switch immediately wipes it off screen unread.
-                await openSession({ kind: 'new', workspaceId: w.id });
-                note(`workspace ${w.owner}/${w.name} added`);
-              } catch (e) {
-                // Stay on the form with the server's own words — it distinguishes
-                // already_exists from a token that cannot create.
-                setAddError((e as Error).message.replace(/^POST \/workspaces: /, ''));
-                setMenu('addWorkspace');
-              }
-            }}
+            error={windowStore.addError}
+            onCancel={() => windowStore.setMenu(null)}
+            onSubmit={(req: NewWorkspaceRequest) => { void windowStore.addWorkspace(req); }}
           />
-        ) : menu === 'archived' && session ? (
-          <Archived cards={archivedCards} notice={archivedNotice}
-            onNearEnd={() => { void moreArchived(session.workspaceId); }}
-            total={archivedTotal}
+        ) : windowStore.menu === 'archived' && session ? (
+          <Archived cards={windowStore.archived} notice={windowStore.archivedNotice}
+            onNearEnd={() => { void windowStore.moreArchived(session.workspaceId); }}
+            total={windowStore.archivedTotal}
             // The solo editor renders from the store, which never holds
             // archived cards on its own — seat this one first.
-            onOpen={(t) => { boardFor(session.workspaceId).adoptCard(t); setMenu(null); setView({ card: t.seq }); }}
-            onRestore={(t) => {
-              void (async () => {
-                try {
-                  await api('PATCH', `/workspaces/${session.workspaceId}/cards/${t.id}`, { archived: false });
-                  setArchivedCards((prev) => prev.filter((x) => x.id !== t.id));
-                  setArchivedNotice(`restored ${t.seq}-${t.title} → ${t.status.replace(/_/g, ' ')}`);
-                  void boardFor(session.workspaceId).load(); // the card is back on the board
-                } catch (e) { setArchivedNotice(`could not restore card ${t.seq}: ${(e as Error).message}`); }
-              })();
-            }}
-            onCancel={() => setMenu(null)} />
-        ) : menu === 'tasks' && tasksView ? (
-          <Tasks view={tasksView} notice={tasksNotice}
-            onKill={(sid, cmd) => { void killTask(sid, cmd); }}
-            onCancel={() => setMenu(null)} />
-        ) : (menu === 'workspace' || menu === 'resume') && picker ? (
+            onOpen={(t) => windowStore.openArchivedCard(session.workspaceId, t)}
+            onRestore={(t) => { void windowStore.restoreCard(session.workspaceId, t); }}
+            onCancel={() => windowStore.setMenu(null)} />
+        ) : windowStore.menu === 'tasks' && windowStore.tasks ? (
+          <Tasks view={windowStore.tasks} notice={windowStore.tasksNotice}
+            onKill={(sid, cmd) => { void windowStore.killTask(sid, cmd); }}
+            onCancel={() => windowStore.setMenu(null)} />
+        ) : (windowStore.menu === 'workspace' || windowStore.menu === 'resume') && windowStore.picker ? (
             <Launcher
-              mode={menu === 'resume' ? 'sessions' : 'workspaces'}
-              workspaces={picker.workspaces} sessions={picker.sessions} total={picker.total}
-              showSupervised={showSupervised}
-              onToggleSupervised={() => {
-                setShowSupervised((x) => !x);
-                showSupervisedRef.current = !showSupervised;
-                void refreshPicker().catch(quiet('refresh the session list'));
-              }}
+              mode={windowStore.menu === 'resume' ? 'sessions' : 'workspaces'}
+              workspaces={windowStore.picker.workspaces} sessions={windowStore.picker.sessions} total={windowStore.picker.total}
+              showSupervised={windowStore.showSupervised}
+              onToggleSupervised={() => windowStore.toggleSupervised()}
               lastMessage={lastUserMessage}
               busy={(id) => store.get(id)?.busy ?? false}
               loaded={(id) => store.has(id)}
               clientId={clientId}
-              notice={pickerNotice}
-              onNearEnd={menu === 'resume' ? () => { void morePicker(); } : undefined}
-              onEdit={(id) => {
-                const w = picker.workspaces.find((x) => x.id === id);
-                if (!w) return;
-                setEditing(w); setMenu('workspaceSettings');
-              }}
+              notice={windowStore.pickerNotice}
+              onNearEnd={windowStore.menu === 'resume' ? () => { void windowStore.morePicker(); } : undefined}
+              onEdit={(id) => windowStore.editWorkspace(id)}
               onDuplicate={(id) => {
-                setMenu(null);
-                void openSession({ kind: 'duplicate', id });
+                windowStore.setMenu(null);
+                void windowStore.openSession({ kind: 'duplicate', id });
               }}
-              onClose={closeFromPicker}
-              onTrash={(id) => { void trashSession(id); }}
-              onCancel={() => setMenu(null)}
+              onClose={windowStore.closeFromPicker}
+              onTrash={(id) => { void windowStore.trashSession(id); }}
+              onCancel={() => windowStore.setMenu(null)}
               onPick={(l) => {
-                if (l.kind === 'add') { setAddError(undefined); setMenu('addWorkspace'); return; }
-                setMenu(null);
-                void openSession(l.kind === 'new'
+                if (l.kind === 'add') { windowStore.startAddWorkspace(); return; }
+                windowStore.setMenu(null);
+                void windowStore.openSession(l.kind === 'new'
                   ? { kind: 'new', workspaceId: l.workspaceId }
                   : { kind: 'open', id: l.sessionId });
               }}
@@ -2323,7 +776,7 @@ export function App({
               </Box>
             )}
             <Prompt value={input} onChange={(v) => { setInput(v); setSuggestAt(0); }}
-              onSubmit={submit} onMeasure={setPromptTop} />
+              onSubmit={(text) => { void windowStore.submit(text, suggestAt, () => { clearInput(); setScroll(0); }); }} onMeasure={setPromptTop} />
             <Toolbar
               // Held elsewhere: the marks, then WHO is working, the spinner,
               // and WHAT they are doing — `coding agent ⠹ building`. No
@@ -2343,41 +796,12 @@ export function App({
       </>)}
     </Box>
     {showSidebar && <Divider rows={screenRows} junctions={junctions} />}
-    {showSidebar && <Boundary name="voice pane" resetKey={showSidebar} onError={(m) => note(`${m} — the voice pane stopped drawing; /voice off and on redraws it; the stack is in ~/.phantom-cli/cli.log`)}>
+    {showSidebar && <Boundary name="voice pane" resetKey={showSidebar} onError={(m) => windowStore.note(`${m} — the voice pane stopped drawing; /voice off and on redraws it; the stack is in ~/.phantom-cli/cli.log`)}>
       <VoicePanel width={sideCols - 1} voice={vs} expanded={expanded}
-      offset={voiceScroll} onMeasure={setVoiceScrollMax} onDevice={toggleDevice}
-      approval={approval} onApproval={(ok) => approvalRef.current?.resolve(ok)} />
+      offset={voiceScroll} onMeasure={setVoiceScrollMax} onDevice={windowStore.toggleDevice}
+      approval={windowStore.approval} onApproval={(ok) => windowStore.approval?.resolve(ok)} />
     </Boundary>}
     </Box>
     </SizeContext.Provider>
   );
 }
-
-/** Compare the server's transcript stamp with what memory matches; when it
- *  moved, pull the transcript and reseat — the ONE way work done elsewhere
- *  (another window, a looper round) reaches this screen. Used at turn start
- *  (off the lock response), on switch, and by the session feed.
- *  `server` is the stamp the caller already holds; null means don't look. */
-async function reseatIfMoved(api: Api, store: SessionStore, id: string, server: string | null,
-  keepScreen = false): Promise<void> {
-  const cur = store.get(id);
-  if (!cur || cur.busy || !server || server === cur.syncStamp) return;
-  const t = await api('GET', `/sessions/${id}/transcript`) as { data: string | null; updated_at?: string | null };
-  // A local turn may have started (or the session closed) during the read.
-  if (store.get(id) !== cur || cur.busy) return;
-  // Same seating rule as open: a local file that is the server's text plus
-  // unsaved steps is kept and shipped; the screen shows the fuller copy.
-  const seated = adoptServerCopy(id, t.data);
-  const parsed = parseTranscript(seated.text);
-  if (seated.localKept) void syncTranscriptUp(api, id).then((stamp) => store.setStamp(id, stamp), () => {});
-  // keepScreen: the session feed showed us this whole turn as it happened, so
-  // the record brings the history and the stamp and the screen keeps what it
-  // drew — richer than a transcript replay (which carries no thinking and no
-  // tool timings), and no repaint to jump through. The note would be a lie
-  // there too: nothing moved forward unseen.
-  store.reseat(id, parsed.messages, keepScreen ? null : [
-    { kind: 'note', id: nextId('note'), text: 'refreshed — this session moved forward elsewhere' } as Part,
-    ...messagesToParts(parsed.messages),
-  ], t.updated_at ?? server);
-}
-
