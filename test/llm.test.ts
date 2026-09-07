@@ -332,8 +332,8 @@ test('assistant prompt: card creation names the tool and forbids phantom claims'
     '"full information" caused the model to wait — cards can be created with a title alone');
 });
 
-test('conflict message (rebase): branch pinned, no aborting, the files and what arrived, a way out', () => {
-  const m = toResolver.resolveConflict('rebase', 'agent/s1', 'main', ['a.ts', 'b.ts'], ['abc1 did a thing']);
+test('conflict message: branch pinned, no aborting, the files and what arrived, a way out', () => {
+  const m = toResolver.resolveConflict('agent/s1', 'main', ['a.ts', 'b.ts'], ['abc1 did a thing']);
   assert.match(m, /replayed on top of "main"/);
   assert.match(m, /- a\.ts\n- b\.ts/, 'the conflicted files are listed');
   assert.match(m, /- abc1 did a thing/, 'what landed on base is the briefing — the thing a stranger never had');
@@ -344,13 +344,11 @@ test('conflict message (rebase): branch pinned, no aborting, the files and what 
   assert.doesNotMatch(m, /git merge --abort/, 'a rebase is not a merge');
 });
 
-test('conflict message (merge): auto-pull finishes with a commit, not a rebase --continue', () => {
-  const m = toResolver.resolveConflict('merge', 'agent/s1', 'main', ['a.ts'], []);
-  assert.match(m, /merged into your branch "agent\/s1"/);
-  assert.match(m, /git commit --no-edit/);
-  assert.match(m, /Do NOT run `git merge --abort`/);
-  assert.doesNotMatch(m, /rebase --continue/, 'a merge is not a rebase');
-  assert.match(m, /- \(nothing new/, 'an empty arrival list still says something');
+test('conflict message: an empty arrival list still says something', () => {
+  const m = toResolver.resolveConflict('agent/s1', 'main', ['a.ts'], []);
+  assert.match(m, /- \(nothing new/);
+  assert.doesNotMatch(m, /git merge --edit|git commit --no-edit/,
+    'one message, because there is one operation — the merge variant is gone');
 });
 
 test('commit message prompt: the card is an optional line that vanishes whole', () => {

@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import Fastify from 'fastify';
 import {
-  verifyLanded, rebaseInProgress, rebaseOntoBase, stageAndSquash, commitStaged, GIT_CLIENT_ID,
+  verifyLanded, rebaseInProgress, rebaseOntoBase, stageAndSquash, commitStaged,
 } from '../phantom-backend/git/git.js';
 import { autoPush, type AutoPushEvent } from '../phantom-backend/git/autoPush.js';
 import { autoPull, type AutoPullEvent } from '../phantom-backend/git/autoPull.js';
@@ -365,12 +365,11 @@ test('engine + the coding agent: pull conflict is resolved inside the lock and p
 
   // session edits f.txt and pushes; base edits f.txt differently
   await fs.writeFile(path.join(dir, 'f.txt'), 'session\n');
-  const engine = new GitEngine(db, paths, key, async (_s, _r, d, ctx) => {
-    // the scripted stand-in for the coding agent's turn: keep both intents,
-    // conclude the merge. A manual pull merges, so the mode says so.
-    assert.equal(ctx.mode, 'merge');
+  const engine = new GitEngine(db, paths, key, async (_s, _r, d) => {
+    // the scripted stand-in for the coding agent's turn: keep both intents and
+    // continue the replay. A manual pull runs the same sync as auto-push.
     const exec = hostExec(d);
-    await exec('printf "session+base\\n" > f.txt && git add f.txt && git -c user.email=f@f -c user.name=agent commit -q --no-verify -m "resolve"');
+    await exec('printf "session+base\\n" > f.txt && git add f.txt && git -c core.editor=true -c user.email=f@f -c user.name=agent rebase --continue');
     return true;
   });
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId));
@@ -426,7 +425,7 @@ async function autoPushRoot() {
   return { root, paths, key, bare, seed, session, workspace,
     dir: repoDir(paths, session.id), originSha, pushMain,
     deps: (extra: Partial<Parameters<typeof autoPush>[0]> = {}) => ({
-      db, paths, encryptionKey: key, client: GIT_CLIENT_ID, ...extra }),
+      db, paths, encryptionKey: key, ...extra }),
     done: () => fs.rm(root, { recursive: true, force: true }) };
 }
 
@@ -472,10 +471,10 @@ test('auto-push: a stopped rebase goes to the coding agent, briefed, and the res
   const t = await autoPushRoot();
   await fs.writeFile(path.join(t.dir, 'f.txt'), 'session line\n');
   t.pushMain('f.txt', 'base line\n', 'base edits the same file');
-  let seen: { mode: string; files: string[]; arrived: string[] } | undefined;
+  let seen: { files: string[]; arrived: string[] } | undefined;
   const r = await autoPush(t.deps({
     resolve: async (_s, _w, d, ctx) => {
-      seen = { mode: ctx.mode, files: ctx.files, arrived: ctx.arrived };
+      seen = { files: ctx.files, arrived: ctx.arrived };
       // The agent resolves and CONTINUES the replay — it never commits itself.
       const exec = hostExec(d);
       await exec('printf "both lines\\n" > f.txt && git add f.txt && git -c core.editor=true -c user.email=f@f -c user.name=agent rebase --continue');
@@ -485,7 +484,6 @@ test('auto-push: a stopped rebase goes to the coding agent, briefed, and the res
   assert.equal(r.result, 'pushed', JSON.stringify(r));
   const now = execFileSync('git', ['-C', t.bare, 'show', 'main:f.txt'], { encoding: 'utf8' });
   assert.equal(now.trim(), 'both lines');
-  assert.equal(seen?.mode, 'rebase');
   assert.deepEqual(seen?.files, ['f.txt'], 'the agent is told which files');
   assert.match(seen?.arrived.join('\n') ?? '', /base edits the same file/,
     'and what landed on base — the briefing a separate fixer never had');
@@ -556,7 +554,8 @@ test('auto-pull: dirty tree is committed, a moved base merges in, the branch is 
   const r = await autoPull({ db, paths: t.paths, encryptionKey: t.key, onEvent: (e) => { events.push(e); } }, t.session, t.workspace);
   assert.equal(r.result, 'merged', JSON.stringify(r));
   assert.deepEqual(events.map((e) => e.step),
-    ['lock', 'fetch', 'commit', 'merge', 'verify', 'push_branch']);
+    ['lock', 'backup', 'commit', 'rebase', 'verify', 'push_branch'],
+    'the same steps auto-push runs, stopping before push_base');
   assert.equal(r.arrived?.length, 1, 'one base commit came in');
   assert.match(r.arrived![0], /other work/);
   assert.deepEqual(r.files, ['other.txt'], 'the files the merge touched');
@@ -583,8 +582,8 @@ test('auto-pull: nothing behind -> clean, and a dirty tree is NOT committed', as
   const events: AutoPullEvent[] = [];
   const r = await autoPull({ db, paths: t.paths, encryptionKey: t.key, onEvent: (e) => { events.push(e); } }, t.session, t.workspace);
   assert.equal(r.result, 'clean', JSON.stringify(r));
-  assert.deepEqual(events.map((e) => e.step), ['lock', 'fetch'],
-    'the lock comes first — it is the busy test — and a no-op pull has no commit step');
+  assert.deepEqual(events.map((e) => e.step), ['lock'],
+    'nothing behind stops before anything is written — no backup, no commit');
   const { stdout: headAfter } = await git(t.dir, ['rev-parse', 'HEAD']);
   assert.equal(headAfter, headBefore, 'no commit minted');
   const { stdout: status } = await git(t.dir, ['status', '--porcelain']);
@@ -592,21 +591,19 @@ test('auto-pull: nothing behind -> clean, and a dirty tree is NOT committed', as
   await t.done();
 });
 
-test('auto-pull: a conflict goes to the coding agent in MERGE mode; the resolution is on the branch, base untouched', async () => {
+test('auto-pull: a conflict goes to the coding agent; the resolution is on the branch, base untouched', async () => {
   const t = await autoPushRoot();
   await fs.writeFile(path.join(t.dir, 'f.txt'), 'session line\n');
   t.pushMain('f.txt', 'base line\n', 'base edits the same file');
   const mainBefore = t.originSha('refs/heads/main');
-  let mode: string | undefined;
   const r = await autoPull({ db, paths: t.paths, encryptionKey: t.key,
-    resolve: async (_s, _w, d, ctx) => {
-      mode = ctx.mode;
+    resolve: async (_s, _w, d) => {
+      // The agent resolves and CONTINUES the replay — a pull rebases too.
       const exec = hostExec(d);
-      await exec('printf "both lines\\n" > f.txt && git add f.txt && git -c user.email=f@f -c user.name=agent commit -q --no-verify -m "resolve"');
+      await exec('printf "both lines\\n" > f.txt && git add f.txt && git -c core.editor=true -c user.email=f@f -c user.name=agent rebase --continue');
       return true;
     },
   }, t.session, t.workspace);
-  assert.equal(mode, 'merge', 'a pull lands nothing, so it has no reason to rewrite the branch');
   assert.equal(r.result, 'merged', JSON.stringify(r));
   assert.equal(fsSync.readFileSync(path.join(t.dir, 'f.txt'), 'utf8').trim(), 'both lines');
   assert.equal(t.originSha('refs/heads/main'), mainBefore, 'nothing on base');
@@ -615,7 +612,7 @@ test('auto-pull: a conflict goes to the coding agent in MERGE mode; the resoluti
   await t.done();
 });
 
-test('auto-pull: the agent cannot resolve -> blocked, merge aborted, the pre-pull commit survives', async () => {
+test('auto-pull: the agent cannot resolve -> blocked, rebase aborted, the pre-pull commit survives', async () => {
   const t = await autoPushRoot();
   await fs.writeFile(path.join(t.dir, 'f.txt'), 'session line\n');
   t.pushMain('f.txt', 'base line\n', 'conflicting base work');
@@ -700,8 +697,8 @@ test('auto-pull over the route: 503 unwired; wired -> core\'s client pulls and t
   out = await autoPullSession(cfg, (label) => steps.push(label));
   assert.equal(out.result, 'merged', JSON.stringify(out));
   assert.deepEqual(out.files, ['other.txt']);
-  assert.deepEqual(steps, ['taking the session', 'fetching the base branch',
-    'committing this session\'s work', 'merging the base branch in',
+  assert.deepEqual(steps, ['taking the session', 'backing the branch up',
+    'committing this session\'s work', 'replaying the work on the base branch',
     'verifying against the repo', 'pushing the branch']);
 
   // The Telegram Assistant's kit carries git_auto_pull and it answers over the
@@ -746,8 +743,7 @@ test('auto-push over the route: 503 unwired; wired -> core\'s client streams the
 
   // Wired: the real flow behind the route.
   const app = await buildApp({ db, paths: t.paths, apiKey: 'k', encryptionKey: t.key, version: 'test', pgPool, fs: fsDeps, engine,
-    autoPush: (s, w, onEvent) => autoPush({ db, paths: t.paths, encryptionKey: t.key, onEvent,
-      client: GIT_CLIENT_ID }, s, w) });
+    autoPush: (s, w, onEvent) => autoPush({ db, paths: t.paths, encryptionKey: t.key, onEvent }, s, w) });
   const f = injectFetch(app);
   const cfg = { baseUrl: 'http://x', apiKey: 'k', sessionId: t.session.id, fetch: f };
 

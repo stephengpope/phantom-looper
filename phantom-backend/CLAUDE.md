@@ -9,7 +9,7 @@ in the api image, `npm run phantom-backend` from source.
 ```
 index.ts          boot: env → db + migrations → paths → docker → app → listen → looper → telegram.
                   Also the maintenance loop (pool tick, session sweep, container reap) and the wiring
-                  of the conflict-resolver hook + auto-push/auto-pull into AppCtx
+                  of the conflict-resolver hook + auto-push/auto-pull (git/sync.ts) into AppCtx
 env.ts            the four required env vars and PORT. Everything behavioral is a setting, not env
 settings.ts       DEFAULTS, DESCRIPTIONS, META, CREDENTIALS, SCOPED; resolve / resolveMany / resolveCredential /
                   settingsLayers / settingsBlock; validateSetting / validatePatch
@@ -26,7 +26,7 @@ log.ts            pino; logger(component); errStr(e) = message only
 api/              routes, the two event buses, AppCtx — own map
 looper/           the supervisor loop and the shared coding-turn runner — own map
 telegram/         the bot — own map
-git/              guarded git, auto-push's rebase, auto-pull, GitHub REST — own map
+git/              guarded git, the one sync flow (rebase), GitHub REST — own map
 pool/             paths.ts (the on-disk layout) · pool.ts (warm clones, claim by rename, tick)
 workspace/        container.ts (per-folder container lifecycle, buildContainerSpec) · sandbox.ts (the only dockerode exec caller)
 tools/            registry.ts (the seven tool definitions) · fuzzy.ts (the edit match chain) · diff.ts · envelope.ts (ToolError)

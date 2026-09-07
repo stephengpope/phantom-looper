@@ -16,6 +16,6 @@ Work reaches the base branch by auto-push only. The builder runs /auto-push in t
 
 If auto-push fails on archive, the card comes back un-archived in the blocked column with the reason. Auto-push needs the session to itself, so it refuses while a turn is running. Unpushed work is never deleted by cleanup.
 
-The other direction is auto-pull: on demand, a session's branch takes the base branch in — fetch, commit the session's in-flight work, merge base in, the coding agent resolves any conflict, the branch is pushed as a backup. A pull merges rather than replays, because it lands nothing. Like auto-push it needs the session to itself and refuses while a turn is running. Nothing reaches the base branch from a pull. It is how a session catches up with work others have landed before its own auto-push.
+The other direction is auto-pull: on demand, a session's branch takes the base branch in. It is exactly the same operation as auto-push, stopping one step short — nothing reaches the base branch from a pull. Like auto-push it needs the session to itself and refuses while a turn is running. It is how a session catches up with work others have landed before its own auto-push.
 
 `;

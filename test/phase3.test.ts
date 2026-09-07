@@ -184,11 +184,14 @@ test('conflict on pull: reported as conflict, tree left clean — diff-filter=U,
   assert.equal(json(r).data.result, 'conflict', r.body);
   const { stdout: status } = await git(repoDir(paths, sessionId), ['status', '--porcelain']);
   assert.equal(status.trim(), '', 'conflict must be aborted, not left half-merged');
-  // The session's own work is untouched on its branch — a conflict on base is
-  // not a data event.
-  const remote = originSha(`refs/heads/${branch}`);
-  const { stdout: local } = await git(repoDir(paths, sessionId), ['rev-parse', 'HEAD']);
-  assert.equal(remote, local.trim());
+  // The session's own work is untouched — a conflict on base is not a data
+  // event. Compared as TREES, not shas: the sync collapses the branch to one
+  // commit before it replays, so a blocked pull leaves the same content under a
+  // rewritten commit. The pre-squash commit is on origin, pushed as the backup
+  // before anything was rewritten.
+  const remote = originSha(`refs/heads/${branch}^{tree}`);
+  const { stdout: local } = await git(repoDir(paths, sessionId), ['rev-parse', 'HEAD^{tree}']);
+  assert.equal(remote, local.trim(), 'same content on both sides');
   // converge base so later tests start clean
   pushMain('conflict.txt', 'SESSION LINE\n', 'converge');
 });

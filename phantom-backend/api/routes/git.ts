@@ -53,7 +53,7 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
 
   app.post('/git/pull', { schema: { tags: ['git'], headers: sessionHeader,
     summary: 'Pull base now',
-    description: 'Merge origin/<base> into the session branch (requires a clean tree; a conflict goes to the session\'s own coding agent). A pull merges rather than replays: it lands nothing on base.',
+    description: 'Bring origin/<base> under this session\'s work and push the branch: the same flow as auto-push, stopping before the landing. A conflict goes to the session\'s own coding agent. Nothing reaches base.',
     body: { type: 'object', additionalProperties: false } } }, async (req, reply) => {
     try {
       const { session, workspace } = await resolveSession(req);
@@ -122,9 +122,9 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
   // Result: merged | clean | blocked | error | busy (+ reason?, arrived?, files?, sha?, pushed?).
   app.post('/git/auto-pull', { schema: { tags: ['git'], headers: sessionHeader,
     summary: 'Auto-pull base into the session',
-    description: 'Fetch origin/<base>; nothing behind -> clean. Otherwise commit everything on the branch, merge base in ' +
-      '(a conflict goes to the session\'s own coding agent), verify against the repo, push the branch as the backup. ' +
-      'A pull merges rather than replays, because nothing lands on base. ' +
+    description: 'Auto-push without the landing. Fetch origin/<base>; nothing behind -> clean. Otherwise back the branch up, ' +
+      'collapse the work into one commit, replay it on origin/<base> (a conflict goes to the session\'s own coding agent), ' +
+      'verify against the repo, force-push the branch with a lease. Nothing reaches base. ' +
       'ND-JSON stream: step records, then one result record (merged | clean | blocked | error | busy).',
     body: { type: 'object', additionalProperties: false } } },
   async (req, reply) => {

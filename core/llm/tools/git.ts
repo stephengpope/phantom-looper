@@ -65,13 +65,14 @@ export const AUTO_PUSH_STEPS: Record<string, string> = {
   retry: 'base moved — replaying again',
 };
 
-/** The pull's step names, in words. */
+/** The pull's step names, in words. The same steps as a push — it is the same
+ *  flow — minus the landing. */
 export const AUTO_PULL_STEPS: Record<string, string> = {
   lock: 'taking the session',
-  fetch: 'fetching the base branch',
+  backup: 'backing the branch up',
   commit: 'committing this session\'s work',
-  merge: 'merging the base branch in',
-  fix: 'resolving conflicts',
+  rebase: 'replaying the work on the base branch',
+  resolve: 'resolving conflicts',
   verify: 'verifying against the repo',
   push_branch: 'pushing the branch',
 };

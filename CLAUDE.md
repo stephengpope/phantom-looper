@@ -72,10 +72,11 @@ the live server.
 - Everything the agent touches goes through its container. Credential
   git runs in the api process behind the guard set. `agent_git_credentials`
   is the one exception, off by default, env only.
-- One branch per session, start to finish. Auto-push REBASES: squash to one
-  commit, replay onto base, fast-forward. The branch is backed up before any
-  rewrite, then force-pushed with a lease. Auto-pull merges — it lands nothing.
-  Never `--depth` on a fetch.
+- One branch per session, start to finish. ONE sync flow (`git/sync.ts`):
+  squash to one commit, replay onto base, fast-forward. Auto-pull is that flow
+  without the last step; the manual pull is the same. The branch is backed up
+  before any rewrite, then force-pushed with a lease. Never `--depth` on a
+  fetch.
 - One lock in the system: the session/turn lock. Tools and git take none.
   Never add an operation mutex.
 - Everything is a session, one session one transcript. The server

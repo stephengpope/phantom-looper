@@ -82,7 +82,7 @@ async function main() {
       client: GIT_CLIENT_ID, onRetry: (t: string) => log.warn({ session: session.id }, t) };
     try {
       const message = toCodingAgent.resolveConflict(
-        ctx.mode, ctx.branch, ctx.baseBranch, ctx.files, ctx.arrived);
+        ctx.branch, ctx.baseBranch, ctx.files, ctx.arrived);
       // planMode false: resolving means writing files.
       await runCodingTurn(deps, opened, workspace.id, message, false, await settingsValues(deps));
       return true;
@@ -114,8 +114,8 @@ async function main() {
     }
   };
   const autoPushFn = (session: SessionRow, workspace: WorkspaceRow, onEvent?: (e: AutoPushEvent) => void | Promise<void>) =>
-    autoPush({ db, paths, encryptionKey: env.encryptionKey, resolve: resolveConflict, messageConfig,
-      onEvent, client: GIT_CLIENT_ID }, session, workspace);
+    autoPush({ db, paths, encryptionKey: env.encryptionKey, resolve: resolveConflict, messageConfig, onEvent },
+      session, workspace);
   // Auto-pull rides the same resolver and the same message model — one
   // configuration for every git operation that commits or resolves.
   const autoPullFn = (session: SessionRow, workspace: WorkspaceRow, onEvent?: (e: AutoPullEvent) => void | Promise<void>) =>

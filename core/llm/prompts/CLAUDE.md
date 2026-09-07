@@ -16,7 +16,7 @@ sending.ts             SENDING_FILES — deliver a file by naming its path (the 
 coding/                SYSTEM, SKILLS, SECRETS, CREDENTIALS_FACT · wiring: systemPrompt(skills, git, secrets, facts)
 assistant/             SYSTEM · wiring: systemPrompt()
 supervisor/            SYSTEM + every message the looper sends (below) · wiring: firstLine, toCodingAgent, toSupervisor
-autoPush/              RESOLVE_REBASE_CONFLICT, RESOLVE_MERGE_CONFLICT, COMMIT_MESSAGE · wiring: toCodingAgent.resolveConflict, commitMessagePrompt
+autoPush/              RESOLVE_CONFLICT, COMMIT_MESSAGE · wiring: toCodingAgent.resolveConflict, commitMessagePrompt
 helpers/               sessionTitle.ts — the auto-titler's one-shot pair, not an agent · wiring: titleRequest
 ```
 

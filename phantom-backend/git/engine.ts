@@ -6,12 +6,12 @@
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { sessions, type WorkspaceRow, type SessionRow } from '../db/schema.js';
-import { git, commitAll, pushSession, mergeBase, verifyLanded, GIT_CLIENT_ID, type PushResult, type PullResult, type GitAuth } from './git.js';
-import { getFolder, acquireLock, releaseLock, renewLock } from '../sessions.js';
+import { git, commitAll, pushSession, type PushResult, type PullResult, type GitAuth } from './git.js';
+import { getFolder } from '../sessions.js';
 import type { FolderRow } from '../db/schema.js';
 import { resolveAuth } from '../pool/pool.js';
 import { repoDir, type Paths } from '../pool/paths.js';
-import { LOCK_TTL_MS, RENEW_MS, type ConflictContext } from './autoPush.js';
+import { syncBranch, type ConflictContext } from './sync.js';
 import { logger, errStr } from '../log.js';
 
 const log = logger('git');
@@ -72,66 +72,30 @@ export class GitEngine {
     }
   }
 
-  /** Merge origin/<base> into the branch this session is on, then push it so
-   *  the remote copy is always complete. When the session IS on base this is
-   *  the ordinary catch-up merge; when it is on its own branch it is what keeps
-   *  the branch mergeable. Either way the push goes to s.branch and nowhere
-   *  else.
+  /** Bring origin/<base> under this session's work and push the branch, so the
+   *  remote copy is always complete. This is `syncBranch` without the landing —
+   *  the SAME flow auto-push and auto-pull run, so the system has one answer to
+   *  "get base's new commits under my work", not three. Nothing reaches base.
    *
-   *  Takes the session for the same reason auto-pull does: it merges into the
-   *  checkout and may drive a coding turn to resolve. Held under GIT_CLIENT_ID,
-   *  so the resolver's own openSession re-takes this hold. */
+   *  It takes the session (sync does), which is why `busy` is a result here. */
   async pull(s: SessionRow, workspace: WorkspaceRow): Promise<PullResult | 'busy'> {
-    const folder = await this.folderOf(s);
-    const dir = repoDir(this.paths, folder.id);
-    if (!(await acquireLock(this.db, s, GIT_CLIENT_ID, LOCK_TTL_MS, 'pull'))) return 'busy';
-    const heartbeat = setInterval(() => {
-      void renewLock(this.db, s.id, GIT_CLIENT_ID, LOCK_TTL_MS)
-        .catch((e) => log.warn({ session: s.id, err: errStr(e) }, 'lock renewal failed'));
-    }, RENEW_MS);
-    try {
-      return await this.pullLocked(s, workspace, folder, dir);
-    } finally {
-      clearInterval(heartbeat);
-      await releaseLock(this.db, s.id, GIT_CLIENT_ID);
-    }
-  }
-
-  private async pullLocked(
-    s: SessionRow, workspace: WorkspaceRow, folder: FolderRow, dir: string,
-  ): Promise<PullResult> {
-    const { result, arrived } = await mergeBase(dir, workspace.baseBranch, await this.auth(workspace),
-      `Merge origin/${workspace.baseBranch} into ${folder.branch}\n\nPhantom-Session: ${s.id}`);
-    if (result === 'merged') {
+    const r = await syncBranch(
+      { db: this.db, paths: this.paths, encryptionKey: this.encryptionKey, resolve: this.resolveConflict },
+      s, workspace, { landOnBase: false, label: 'pull', onlyWhenBaseMoved: true });
+    if (r.outcome === 'ok') {
       const list = this.arrivals.get(s.id) ?? [];
-      list.push({ at: Date.now(), commits: arrived ?? [] });
+      list.push({ at: Date.now(), commits: r.arrived ?? [] });
       this.arrivals.set(s.id, list.slice(-20));
-      // The merge commit reaches the remote right away, so the remote branch
-      // is always complete.
-      await pushSession(dir, folder.branch, await this.auth(workspace));
-      log.info({ session: s.id, commits: arrived?.length }, 'pulled base');
-    } else if (result === 'conflict') {
-      if (this.resolveConflict) {
-        const { stdout: conflicted } = await git(dir, ['diff', '--name-only', '--diff-filter=U']);
-        const ctx: ConflictContext = {
-          mode: 'merge', branch: folder.branch, baseBranch: workspace.baseBranch,
-          files: conflicted.trim().split('\n').filter(Boolean), arrived: arrived ?? [],
-        };
-        const fixed = await this.resolveConflict(s, workspace, dir, ctx).catch((e) => {
-          log.error({ session: s.id, err: errStr(e) }, 'conflict turn threw'); return false;
-        });
-        // Verify against the REPO, never against what the agent said it did.
-        if (fixed && await verifyLanded(dir, workspace.baseBranch)) {
-          await pushSession(dir, folder.branch, await this.auth(workspace));
-          log.info({ session: s.id }, 'conflict resolved by the coding agent and pushed');
-          return 'merged';
-        }
-      }
-      // Unresolved: leave nothing half-merged.
-      await git(dir, ['merge', '--abort']).catch(() => {});
-      log.warn({ session: s.id }, 'pull conflict unresolved — aborted');
+      log.info({ session: s.id, commits: r.arrived?.length }, 'pulled base');
+      return 'merged';
     }
-    return result;
+    if (r.outcome === 'nothing') return 'clean';
+    if (r.outcome === 'busy') return 'busy';
+    if (r.outcome === 'blocked') {
+      log.warn({ session: s.id, reason: r.reason }, 'pull conflict unresolved — the branch is as it was');
+      return 'conflict';
+    }
+    return 'error';
   }
 
   /** What moved on base — read-only, changes nothing in the tree. */

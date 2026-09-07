@@ -7,10 +7,11 @@ agent's container has no token unless `agent_git_credentials` is on.
 git.ts            git(cwd, args, auth?) with the guard set; classifyGitFailure; cloneFresh; refreshPristine;
                   checkoutBranch; localState; workState; the primitives commitAll, pushSession, pushSessionForced,
                   pushToBase, fetchBase, stageAndSquash, commitStaged, rebaseOntoBase, rebaseInProgress,
-                  rebaseAbort, verifyLanded, mergeBase (auto-pull's), initializeRemote, GIT_CLIENT_ID
+                  rebaseAbort, verifyLanded, initializeRemote, GIT_CLIENT_ID
 engine.ts         GitEngine: the manual push, pull and status behind /git/*
-autoPush.ts       autoPush — the one way work reaches base; ConflictContext, LOCK_TTL_MS/RENEW_MS
-autoPull.ts       autoPull — base into the session branch
+sync.ts           syncBranch — THE flow, and the argument for it; ConflictContext, SyncEvent, the lock constants
+autoPush.ts       autoPush — syncBranch with landOnBase: true. Result vocabulary only
+autoPull.ts       autoPull — syncBranch with landOnBase: false. Result vocabulary only
 commitMessage.ts  commitMessageFor — a model writes the subject from the squashed staged diff plus the card,
                   file names as the floor
 github.ts         whoami, createRepo, listRepos on GitHub's REST paths (GITHUB_API_BASE is the test seam)
@@ -35,37 +36,42 @@ chosen; a network failure there is an error, never "new branch".
 best-effort `--shallow-since` fetch. Never `--depth` on a later fetch; it
 regrafts the branch and inverts every ancestry check.
 
-## Auto-push rebases
+## One flow
 
-Take the session lock (failing to get it IS the busy test — nothing
-inspects what is running), push the branch as the backup BEFORE anything
-rewrites it, `add -A` and `reset --soft` to the merge base so the session
-is one commit, write the message from that staged diff plus the card,
-commit with a `Phantom-Session` trailer, `rebase origin/base`, hand a stop
-to the coding agent, verify, force-push the branch with a lease, then a
-plain fast-forward push to base. Base moved: rebase again, three rounds,
-then give up with the branch intact.
+Auto-push, auto-pull and the manual `/git/pull` are the SAME operation asking
+the same question — how do I get base's new commits under my work — so they
+run one function, `syncBranch`. Auto-pull is auto-push without the last step.
+The only real difference is `landOnBase`.
 
-Rebase, not merge: the landing is a plain commit rather than a merge
-commit whose resolution normal review skips, and a rebase stands on base
-instead of making "keep ours" mean "drop what arrived". The rule against
-rewriting a published branch does not apply — one session owns its branch
-and nothing else pulls it; the cost is the backup, which is why the backup
-push comes first. `--force-with-lease` is used BARE, never
-`=<ref>:<expected>`: bare implies `--force-if-includes`, which is what
-closes the lease's real hole.
+Take the lock, fetch (what arrived on base is collected here and becomes the
+conflict briefing), push the branch as the backup BEFORE anything rewrites it,
+`add -A` and `reset --soft` to the merge base so the session is one commit,
+write the message from that staged diff plus the card, commit with a
+`Phantom-Session` trailer, `rebase origin/base`, hand a stop to the coding
+agent, verify, force-push the branch with a lease — and then, only when
+landing, a plain fast-forward push to base. Base moved: rebase again, three
+rounds, then give up with the branch intact.
+
+`onlyWhenBaseMoved` is the pull's early exit: nothing behind means nothing to
+do, asked before anything is written so a no-op pull mints no commit and
+spends no model call. Rounds are the landing's: nothing races a pull, so a
+sync that does not land runs one round.
+
+Rebase, not merge: the landing is a plain commit rather than a merge commit
+whose resolution normal review skips, and a rebase stands on base instead of
+making "keep ours" mean "drop what arrived". This holds for a PULL too — a bad
+resolution sits on the branch and the next auto-push squashes and lands it, so
+"a pull lands nothing" is false. The rule against rewriting a published branch
+does not apply: one session owns its branch and nothing else pulls it; the
+cost is the backup, which is why the backup push comes first.
+`--force-with-lease` is used BARE, never `=<ref>:<expected>`: bare implies
+`--force-if-includes`, which is what closes the lease's real hole.
 
 Squash first because replaying N commits stops N times, over intermediate
 trees that never existed, re-resolving the same hunks. One commit stops at
-most once, over finished work. It costs the step-by-step history on base.
-
-## Auto-pull merges
-
-Take the lock, fetch and count first so a no-op pull mints no commit,
-commit the session's work (never stash), merge base in, resolve, verify,
-push the branch. Nothing lands on base, so there is no reason to rewrite
-the branch. `merged` with `pushed: false` is still a sync.
-`docs/auto-pull.md` records why it stays a merge.
+most once, over finished work. It costs the step-by-step history on base, and
+it means a BLOCKED sync leaves the branch collapsed locally — same content,
+rewritten commit; the pre-squash commit is on origin as the backup.
 
 ## The lock
 

@@ -1,88 +1,85 @@
 # auto-pull
 
-Auto-push rebases. Auto-pull merges, on purpose. This records why, and what
-was fixed when the two were reconciled.
+Auto-pull is auto-push without the last step. Both, and the manual
+`/git/pull`, run one function: `syncBranch` in `phantom-backend/git/sync.ts`.
 
-## What auto-pull does
+## Why they were folded together
 
-Take the session lock, fetch and count (a no-op pull mints no commit and
-spends no model call), commit the session's in-flight work, merge
-`origin/<base>` into the branch, hand a conflict to the session's own coding
-agent, verify with `verifyLanded`, push the branch as the backup. Nothing
-lands on base.
+They are the same operation asking the same question — *how do I get base's
+new commits under my work* — and for one commit they had two answers.
 
-## Fixed: it took no lock
+Auto-pull merged. The reason given was: "a pull lands nothing on base, so a
+resolution buried in a merge commit does not matter." **That is false.** The
+resolution sits on the branch, and the next auto-push squashes the branch into
+one commit and lands it. The damage reaches base either way, just laundered
+through the squash instead of through the merge commit.
 
-This was the real problem and it is done.
+The second reason given was that rebasing on pull means force-pushing the
+backup on every catch-up. Also empty: auto-push already force-pushes the
+branch at every landing, so the append-only property being protected was
+already gone.
 
-Auto-push takes the session lock and fails when it cannot — the lock IS the
-concurrency test. Auto-pull took nothing, so it committed the working tree
-and merged into a checkout that a coding turn might be writing at that exact
-moment.
+Nothing survived. One operation, one answer.
 
-A conflicted pull was *accidentally* half-covered: the resolver calls
-`openSession(..., lock: true)`, which throws if a turn holds the session. But
-that only fired on the conflict path. A **clean** pull merged, committed and
-pushed with no lock at all, underneath a running turn.
+## The difference, in full
 
-Now auto-pull acquires the lock first under `GIT_CLIENT_ID`, renews it on a
-beat (a conflict turn outlives any fixed TTL), releases it in a `finally`,
-and returns `busy` when someone else holds it. `AutoPullResult` carries
-`busy`; the route's union and the Assistant's tool wording already did.
+```
+syncBranch(deps, session, workspace, { landOnBase, label, onlyWhenBaseMoved })
+```
 
-The manual `/git/pull` had the same hole and got the same fix —
-`GitEngine.pull` locks and returns `'busy'`, with the work moved into a
-private `pullLocked`.
+- **`landOnBase`** — the fast-forward push to base. True for auto-push, false
+  for auto-pull and the manual pull.
+- **`onlyWhenBaseMoved`** — the pull's early exit. Nothing behind means nothing
+  to do, asked before anything is written, so a no-op pull mints no commit and
+  spends no model call. A push has to proceed on local work whether or not
+  base moved.
+- **Rounds** — three when landing, one otherwise. Base can move between the
+  rebase and the fast-forward; nothing races a pull, because base moving after
+  it is simply the next pull.
 
-One id for every git operation, deliberately: the conflict turn opens the
-session from *inside* an operation that already holds the lock, and
-`acquireLock` only lets a holder re-take its own hold. The per-call label
-(`auto-push`, `auto-pull`, `pull`) is what tells a person which one is
-holding it.
+Everything else is shared: the lock, the backup push, the squash, the commit
+message, the replay, the conflict handoff, the verification, the forced branch
+push.
 
-## Why it stays a merge
+## What this deleted
 
-The case for rebase in auto-push is that the landing becomes a plain commit
-on base rather than a merge commit whose resolution normal review skips.
-**Auto-pull lands nothing on base, so that argument does not apply to it.**
+- `mergeBase` in `git.ts`
+- `RESOLVE_MERGE_CONFLICT` and the `ConflictMode` split — one conflict message,
+  because there is one operation
+- ~190 lines of duplicated flow in `autoPull.ts`, now a result mapping
+- the merge path in `GitEngine.pull`, now a result mapping
 
-What rebase would buy is a linear session branch. What it would cost is
-rewriting the branch on every catch-up — force-pushing the backup
-repeatedly, and losing the property that the branch is append-only between
-landings.
+## One consequence worth knowing
 
-There is a second-order argument for it: auto-push squashes and rebases at
-landing time anyway, so whatever merge commits auto-pull made get collapsed
-then. That makes auto-pull's merges cosmetic and short-lived — a reason not
-to bother rewriting them, not a reason to.
-
-If that ever changes, the primitives exist (`fetchBase`, `stageAndSquash`,
-`rebaseOntoBase`, `rebaseAbort`) and the conflict prompt already carries a
-rebase mode.
+A **blocked** sync leaves the branch collapsed to one commit locally. The
+squash happens before the replay, so a conflict that the agent cannot resolve
+leaves the same content under a rewritten commit. The pre-squash commit is on
+origin — the backup push runs before anything is rewritten. `test/phase3.test.ts`
+compares trees rather than shas for exactly this reason.
 
 ## Still open
 
 - **`engine.push` takes no lock.** It runs `commitAll` and pushes the branch,
-  so under a running turn it commits a half-written tree. Smaller than the
-  pull hole was — it only ever adds a commit to an append-only branch, and
-  never merges or rewrites — but it is the same shape and the same fix.
+  so under a running turn it commits a half-written tree. It only ever adds a
+  commit to the branch and never merges or rewrites, which is why it is smaller
+  than the pull hole was — but it is the same shape and the same fix.
 - **A git-driven turn is attributed to nobody.** `agentAfterSave` maps the
   writer's client id to `coding` only for `LOOP_CLIENT_ID`; a conflict turn
   writes under `GIT_CLIENT_ID`, so the session's `agent` column comes back
   null, which reads as "a person's". Cosmetic, wrong, cheap to fix.
-- **`commitAll`** is now only used by `GitEngine`; auto-push uses
-  `stageAndSquash` + `commitStaged`. Worth collapsing if `GitEngine` is
-  reworked.
-- **No rounds, and that is still right.** Nothing races a pull; base moving
-  after the merge is simply the next pull.
+- **`commitAll`** is now only used by `GitEngine.push`. Worth collapsing if
+  that is ever reworked.
+- **`PullResult`'s `dirty_tree` and `diverged`** are no longer reachable — the
+  sync commits everything, and a rebase either starts or errors. The union is
+  still what the app reads.
 
 ## What NOT to do
 
-- Do not add a second lock or an operation mutex. The session lock is the
-  only one in the system.
-- Do not give auto-pull its own resolver agent. One conversation per session
-  is the point — the coding agent resolving its own conflicts is why the Git
-  Fixer was deleted.
+- Do not add a second lock or an operation mutex. The session lock is the only
+  one in the system, held under `GIT_CLIENT_ID` by every git operation so the
+  conflict turn can re-take its own hold.
+- Do not give the pull its own resolver agent. One conversation per session is
+  the point.
 - Do not verify by grepping for conflict markers. `verifyLanded` asks the
   repository: clean tree, no unmerged entries, no rebase in flight, and
   origin/base in HEAD's history.

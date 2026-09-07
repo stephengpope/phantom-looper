@@ -269,6 +269,9 @@ export async function commitAll(dir: string, message: string): Promise<boolean> 
 }
 
 export type PushResult = 'pushed' | 'nothing' | 'conflict' | 'error';
+/** GitEngine.pull's vocabulary. `dirty_tree` and `diverged` are no longer
+ *  reachable — the sync commits everything and a rebase either starts or
+ *  errors — but the app still reads the union. */
 export type PullResult = 'clean' | 'merged' | 'conflict' | 'diverged' | 'dirty_tree' | 'error';
 
 const PUSH_ATTEMPTS = 3;
@@ -445,40 +448,6 @@ export async function verifyLanded(dir: string, baseBranch?: string): Promise<bo
       log.warn({ dir, err: (e as Error).message }, 'verification could not run — counted as not landed');
     }
     return false;
-  }
-}
-
-/** Merge origin/<base> into the session branch — AUTO-PULL's primitive, and
- *  only auto-pull's. Auto-push rebases (rebaseOntoBase): it rewrites the branch
- *  so the landing is one readable commit on base, and it force-pushes with a
- *  lease. Auto-pull does not land anything, so it has no reason to rewrite.
- *  See docs/auto-pull.md for the conversion.
- *
- *  `conflict` and `diverged` are distinct on purpose: markers in the tree give
- *  the resolver real work; a merge that could not START leaves a clean tree
- *  where verification reads as success while the same failure repeats (verified T9). */
-export async function mergeBase(
-  dir: string, baseBranch: string, auth: GitAuth, message?: string,
-): Promise<{ result: PullResult; arrived?: string[] }> {
-  try {
-    const { stdout: dirty } = await git(dir, ['status', '--porcelain']);
-    if (dirty.trim()) return { result: 'dirty_tree' };
-    await git(dir, ['fetch', 'origin', baseBranch], auth);
-    const { stdout: behind } = await git(dir, ['rev-list', '--count', `HEAD..origin/${baseBranch}`]);
-    if (Number(behind.trim()) === 0) return { result: 'clean' };
-    const { stdout: logOut } = await git(dir, ['log', '--format=%h %s', `HEAD..origin/${baseBranch}`]);
-    try {
-      await git(dir, ['merge', '--no-edit', '--no-verify', ...(message ? ['-m', message] : []), `origin/${baseBranch}`]);
-    } catch (e) {
-      const { stdout: unmerged } = await git(dir, ['diff', '--name-only', '--diff-filter=U']);
-      if (unmerged.trim()) return { result: 'conflict' };
-      log.error({ dir, err: errStr(e) }, 'merge could not start — diverged');
-      return { result: 'diverged' };
-    }
-    return { result: 'merged', arrived: logOut.trim().split('\n').filter(Boolean) };
-  } catch (e) {
-    log.error({ dir, err: errStr(e) }, 'pull failed');
-    return { result: 'error' };
   }
 }
 
