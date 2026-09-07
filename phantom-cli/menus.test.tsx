@@ -345,6 +345,22 @@ test('editing a server-held setting PATCHes it rather than writing the file', as
 });
 
 
+test('changing the provider clears the model in the same PATCH', async () => {
+  const calls: string[] = [];
+  const api = settingsApi({ provider: 'anthropic', model: 'claude-sonnet-4-20250514' }, calls);
+  const { stdin } = render(
+    <Settings api={api} configPath={cfgFile()} startAt="local" onClose={() => {}} groups={['model']} />);
+  await sleep(50);
+  stdin.write(ENTER); await sleep(50);        // open provider (first row)
+  stdin.write(DOWN); await sleep(20);         // move to the next provider
+  stdin.write(ENTER); await sleep(80);        // submit the change
+  const patch = calls.find((c) => c.startsWith('PATCH /settings'));
+  assert.ok(patch, `expected a PATCH: ${calls.join(' | ')}`);
+  const body = JSON.parse(patch!.replace('PATCH /settings ', ''));
+  assert.equal(body.model, null, 'the model is cleared when the provider changes');
+  assert.ok(body.provider && body.provider !== 'anthropic', 'the provider was changed');
+});
+
 test('esc from a scoped screen closes rather than falling into a scope list', async () => {
   let closed = 0;
   const { stdin } = render(
