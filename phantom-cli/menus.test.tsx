@@ -225,7 +225,7 @@ test('/resume rows mark a session loaded in this window with a steady dot', () =
   const rows = sessionChoices(W, S, () => undefined, NOW, () => false, (id) => id === 's1').slice(1);
   assert.equal(rows[0].dot, true);
   assert.equal((rows[0].columns ?? [])[6]?.text, '2h');
-  assert.match(String(rows[0].hint), /loaded in this window/);
+  assert.match(String(rows[0].hint), /Loaded in this window/);
   // Working beats the dot — the spinner already says it is in memory.
   const working = sessionChoices(W, S, () => undefined, NOW, () => true, () => true).slice(1)[0];
   assert.equal(working.busy, true);
@@ -233,10 +233,10 @@ test('/resume rows mark a session loaded in this window with a steady dot', () =
   // A dead session is not "open", whatever the store claims.
   const dead = sessionChoices(W, S, () => undefined, NOW, () => false, () => true).slice(1)[1];
   assert.equal(dead.dot, false);
-  // Not loaded: no dot, hint stays the bare branch.
+  // Not loaded: no dot, no hint (the branch says nothing to a person).
   const idle = sessionChoices(W, S, () => 'q', NOW).slice(1)[0];
   assert.equal(idle.dot, false);
-  assert.equal(idle.hint, 'agent/s1');
+  assert.equal(idle.hint, undefined);
 });
 
 test('workspace rows use the display name when one is set', () => {
@@ -861,7 +861,8 @@ test('[t] trashes a session; unpushed work refuses once and [c] confirms the dis
   assert.ok(calls.includes('DELETE /sessions/s9?purge=true&force=true'), 'the second [t] discards');
   const after = strip(lastFrame() ?? '');
   assert.doesNotMatch(after, /start the work/, 'the list refreshed in place — the trashed row is gone');
-  assert.match(after, /•.*agent\/s1|loaded in this window/, 'what is left is the session open here');
+  assert.match(after, /•.*widgets/, 'what is left is the session open here (dot on its row)');
+  assert.match(after, /Loaded in this window/, 'what is left is the session open here (hint)');
 });
 
 test('reopening the session you are already in says so instead of churning', async () => {

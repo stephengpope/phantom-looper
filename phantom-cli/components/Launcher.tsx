@@ -204,12 +204,12 @@ export function sessionChoices(
       busy: running,
       dot: open && !running,
       hint: dead
-        ? `Ended — reopening restarts it and checks ${s.branch} back out.`
+        ? `Ended — reopening restarts it.`
         : held
-          ? `${s.branch} — a turn is running (${s.lockedLabel || 'another machine'}); read freely — sends are refused while it runs`
+          ? `A turn is running (${s.lockedLabel || 'another machine'}); read freely — sends are refused while it runs.`
           : open
-            ? `${s.branch} — loaded in this window, enter switches to it`
-            : sup ? `the looper's rounds and verdicts for card ${s.card ?? '?'} — read-only` : s.branch,
+            ? 'Loaded in this window — enter switches to it.'
+            : sup ? `The looper's rounds and verdicts for card ${s.card ?? '?'} — read-only.` : undefined,
     };
   });
   return tableChoices('ws', [
