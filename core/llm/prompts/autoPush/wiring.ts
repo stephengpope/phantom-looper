@@ -26,11 +26,11 @@ export const toCodingAgent = {
   ): string => {
     const parts: string[] = [];
     parts.push(landed
-      ? `Just so you know, your work has been pushed to ${base}${arrived.length ? ` along with ${arrived.length} new commit${arrived.length === 1 ? '' : 's'} that came in from ${base}` : ''}.`
-      : `Just so you know, new changes from ${base} have been pulled into your working directory — ${arrived.length} commit${arrived.length === 1 ? '' : 's'} came in.`);
+      ? `Your work has been pushed to ${base}${arrived.length ? ` along with ${arrived.length} new commit${arrived.length === 1 ? '' : 's'} that came in from ${base}` : ''}.`
+      : `New changes from ${base} have been pulled into your working directory — ${arrived.length} commit${arrived.length === 1 ? '' : 's'} came in.`);
     if (arrived.length) parts.push(arrived.map((l) => `- ${l}`).join('\n'));
     if (files.length) parts.push(`Files changed: ${files.join(', ')}`);
-    parts.push('Use as needed.');
+    parts.push('Just letting you know, use as you see fit.');
     return parts.join('\n\n');
   },
 };
