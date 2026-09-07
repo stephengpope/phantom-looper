@@ -124,10 +124,9 @@ export function sessionsHandler(win: WindowStore, api: Api, clientId: string,
           status: s.status === 'active' ? 'active' : 'ended',
           running: isRunning(s, { busy, clientId }),
           on_screen: s.id === store.activeId,
+          git_status: s.work ?? null,
           last_message: oneLine(s.lastUserMessage),
           when: ago(s.lastUsedAt),
-          // No branch: it is the session id wearing a prefix and says nothing
-          // to a person (the same reason /resume's table leaves it out).
         })),
       };
     }
