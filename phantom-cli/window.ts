@@ -46,6 +46,9 @@ export interface Initial {
   /** The workspace's display name for the banner; the id stands in when the
    *  lookup failed — it still identifies the workspace. */
   workspace?: string;
+  /** The workspace's card number prefix (`PHA`). The toolbar shows it when
+   *  no card is attached, so you always know which project you are in. */
+  cardPrefix?: string;
   tools: Record<string, Tool>; resumed: ModelMessage[];
   card?: number | null;
   /** True when this is a supervisor session — a read-only record. */
@@ -249,7 +252,8 @@ export class WindowStore {
     this.voiceEnabled = Boolean(opts.bootConfig?.voice_enabled);
     this.sidebarWidth = Number(opts.bootConfig?.sidebar_width) || (opts.sidebarPercent ?? 20);
     if (opts.initial?.workspace) {
-      this.wsNames.set(opts.initial.workspaceId, { label: opts.initial.workspace });
+      this.wsNames.set(opts.initial.workspaceId, { label: opts.initial.workspace,
+        ...(opts.initial.cardPrefix ? { cardPrefix: opts.initial.cardPrefix } : {}) });
     }
     this.sessions = this.newSessionStore();
     // One subscription for the view: the window forwards what its parts say.
@@ -545,6 +549,16 @@ export class WindowStore {
   /** The name to say for a workspace id — the id itself when unknown, which
    *  is still an answer rather than a blank. */
   wsLabel(id: string): string { return this.wsNames.get(id)?.label ?? id; }
+
+  /** What the toolbar calls the work in front of you: the card the session is
+   *  building, named the way the board names it (`PHA-7`), and failing that
+   *  the workspace's prefix alone (`PHA`) so the line always says which
+   *  project you are in. Nothing at all when neither is known. */
+  get cardMark(): string | undefined {
+    const e = this.sessions.active();
+    if (!e) return undefined;
+    return e.card ?? this.wsNames.get(e.workspaceId)?.cardPrefix;
+  }
 
   // ── opening and closing ───────────────────────────────────────────────────
 

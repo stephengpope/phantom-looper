@@ -573,11 +573,11 @@ export function App({
   const modeMark = session && !session.readonly
     ? (session.planMode ? '» plan mode on' : '» code mode on')
     : undefined;
-  // Which card this session is building, when it is building one — the
-  // board's own name for it (`PHA-7`), so the line you read while typing
-  // answers "what am I working on" without opening anything. Nothing shows
-  // for a session you started yourself: no card is a state, not a warning.
-  const cardMark = session?.card;
+  // Which card this session is building — the board's own name for it
+  // (`PHA-7`), so the line you read while typing answers "what am I working
+  // on" without opening anything. With no card attached the workspace prefix
+  // alone (`PHA`) still shows: you always know which project.
+  const cardMark = windowStore.cardMark;
   // The git work dot — where the session's code stands, the colored • ahead
   // of the words: red = not pushed, yellow = not merged, green = merged. The
   // same WORK map the /resume table draws from (Launcher.tsx), so the three

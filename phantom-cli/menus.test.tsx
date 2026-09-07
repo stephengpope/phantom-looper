@@ -345,6 +345,22 @@ test('editing a server-held setting PATCHes it rather than writing the file', as
 });
 
 
+test('changing the provider clears the model in the same PATCH', async () => {
+  const calls: string[] = [];
+  const api = settingsApi({ provider: 'anthropic', model: 'claude-sonnet-4-20250514' }, calls);
+  const { stdin } = render(
+    <Settings api={api} configPath={cfgFile()} startAt="local" onClose={() => {}} groups={['model']} />);
+  await sleep(50);
+  stdin.write(ENTER); await sleep(50);        // open provider (first row)
+  stdin.write(DOWN); await sleep(20);         // move to the next provider
+  stdin.write(ENTER); await sleep(80);        // submit the change
+  const patch = calls.find((c) => c.startsWith('PATCH /settings'));
+  assert.ok(patch, `expected a PATCH: ${calls.join(' | ')}`);
+  const body = JSON.parse(patch!.replace('PATCH /settings ', ''));
+  assert.equal(body.model, null, 'the model is cleared when the provider changes');
+  assert.ok(body.provider && body.provider !== 'anthropic', 'the provider was changed');
+});
+
 test('esc from a scoped screen closes rather than falling into a scope list', async () => {
   let closed = 0;
   const { stdin } = render(
@@ -529,13 +545,16 @@ test('the toolbar names the card a session is building, the board\'s way, and sa
       'the card rides beside the mode, named as the board names it');
   } finally { r.unmount(); }
 
-  // A session you started yourself belongs to no card: no mark, no chatter.
-  const plain = app({ api: noApi, newTools: noTools });
+  // A session with no card still shows the workspace prefix — you always know
+  // which project. The initial seeds the prefix into the workspace facts cache.
+  const plain = app({ api: noApi, newTools: noTools,
+    initial: { ...INITIAL, workspace: 'widgets', cardPrefix: 'PHA' } });
   try {
     await sleep(50);
     const f = strip(plain.lastFrame() ?? '');
     assert.match(f, /» code mode on/);
-    assert.ok(!/PHA-/.test(f), 'nothing about cards on a session that has none');
+    assert.ok(!/PHA-\d/.test(f), 'no card number — just the prefix');
+    assert.match(f, /PHA/, 'the workspace prefix shows so you know which project');
   } finally { plain.unmount(); }
 });
 

@@ -274,8 +274,9 @@ export class LooperEngine {
       }
     } catch (e) {
       if (e instanceof SessionLockedError) {
-        log.info({ card: card.seq }, 'card session held elsewhere — skipping this turn');
-        return 'skipped';
+        log.info({ card: card.seq }, 'card session held elsewhere — blocking');
+        await this.blockCard(workspace.id, card.id, 'session in use — resolve to resume the loop');
+        return 'moved';
       }
       throw e;
     }
@@ -340,8 +341,9 @@ export class LooperEngine {
         });
       } catch (e) {
         if (e instanceof SessionLockedError) {
-          log.info({ card: card.seq }, 'supervisor session held elsewhere — skipping this turn');
-          return 'skipped';
+          log.info({ card: card.seq }, 'supervisor session held elsewhere — blocking');
+          await this.blockCard(workspace.id, card.id, 'session in use — resolve to resume the loop');
+          return 'moved';
         }
         throw e;
       }
