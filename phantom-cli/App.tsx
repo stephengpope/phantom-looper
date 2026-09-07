@@ -327,6 +327,389 @@ export function App({
   // The Assistant's read tools follow the session on screen.
   useEffect(() => { void windowStore.rebuildAssistant(); }, [windowStore, sessionId]);
 
+  // What the Assistant may do to the TUI: the `session_*` family, one handler.
+  //
+  // LIST is the SERVER's answer, not this window's. The store only holds the
+  // sessions you opened here — listing from it made the Assistant say "just
+  // one" while the workspace held fifty, and made "which are running" mean
+  // "which are running in front of me". The window still supplies the two
+  // facts the server cannot know: which session is on screen, and which is
+  // mid-turn locally.
+  //
+  // Paging is offset/limit, matching session_read and kanban_card_history
+  // rather than the cursor /resume uses: the caller is a model, and an offset
+  // is something it can reason about, while a two-field cursor is something it
+  // must copy back perfectly. The page is ONE request — ask for the rows up to
+  // the end of the window (plus the lookahead), drop the first offset, and
+  // never re-sort: the ordering has exactly one home, on the server.
+  const assistantTool = useCallback(async (args: SessionsArgs) => {
+    if (args.action === 'list') {
+      const limit = Math.min(Math.max(1, Math.trunc(args.limit ?? SESSION_PAGE)), SESSION_MAX);
+      const offset = Math.max(0, Math.trunc(args.offset ?? 0));
+      // One row past the window is the LOOKAHEAD: it is the difference
+      // between "the page came back full" (which cannot tell a full list from
+      // one with more behind it) and knowing. It is fetched, never shown.
+      const want = offset + limit + 1;
+      if (want > SESSION_REACH) {
+        return { error: `the list reaches ${SESSION_REACH} sessions back; offset + limit must stay inside that`,
+          on_screen: store.activeId };
+      }
+      let rows: SessionInfo[];
+      try {
+        // The workspace names ride along on the first list, in parallel, and
+        // stay in the cache after that (WorkspaceDirectory).
+        const [got] = await Promise.all([
+          api('GET', `/sessions?limit=${want}`),
+          wsDirectory.ensure(),
+        ]);
+        // A server that answers something other than a list is a broken
+        // server, not a crashed tool: say so and keep the window usable.
+        const list = (got as { sessions?: unknown })?.sessions;
+        rows = Array.isArray(list) ? list as SessionInfo[] : [];
+      } catch (e) {
+        return { error: `could not list sessions: ${(e as Error).message}`, on_screen: store.activeId };
+      }
+      const page = rows.slice(offset, offset + limit);
+      const busy = (id: string) => store.get(id)?.busy ?? false;
+      const wsName = (id: string) => wsDirectory.name(id);
+      return {
+        // The header states the slice the way renderRead's does — the model
+        // reports where it is instead of implying it saw everything.
+        showing: `${page.length} session${page.length === 1 ? '' : 's'}, newest activity first`
+          + (offset ? ` (skipping the ${offset} most recent)` : ''),
+        // The lookahead row came back, so there is genuinely more behind this
+        // page — not "the page was full, who knows".
+        more: rows.length > offset + limit,
+        // Stated even when that session falls outside the page.
+        on_screen: store.activeId,
+        sessions: page.map((s) => ({
+          id: s.id,
+          name: s.name ?? null,
+          // The workspace by NAME: a 26-character id cannot be spoken.
+          workspace: wsName(s.workspaceId),
+          card: s.card ?? null,
+          // Who drives it — the launcher's own three-way. Supervisor rows are
+          // MARKED, not hidden: the looper mints one per card, and a list that
+          // silently drops half of itself is a list that lies.
+          kind: whoDrives(s),
+          status: s.status === 'active' ? 'active' : 'ended',
+          running: isRunning(s, { busy, clientId }),
+          on_screen: s.id === store.activeId,
+          git_status: s.work ?? null,
+          last_message: oneLine(s.lastUserMessage),
+          when: ago(s.lastUsedAt),
+        })),
+      };
+    }
+    if (args.action === 'get_active') {
+      // The window knows WHICH session is on screen — nothing else can. What
+      // identifies it to a person (title, card) lives on the row, so this is
+      // one GET for that session alone, where the same answer used to cost a
+      // whole session_list page. Mode is deliberately absent: session_get_mode
+      // answers that, and one field with two homes is a field that drifts.
+      const id = store.activeId;
+      const e = id ? store.get(id) : undefined;
+      if (!e) return { error: 'no session is on screen' };
+      try {
+        const [row] = await Promise.all([
+          api('GET', `/sessions/${id}`) as Promise<{ name?: string | null; card?: number | null; status?: string }>,
+          wsDirectory.ensure(),
+        ]);
+        return { id, title: row?.name ?? null, workspace: wsDirectory.name(e.workspaceId),
+          card: row?.card ?? null, status: row?.status === 'active' ? 'active' : 'ended',
+          running: e.busy };
+      } catch (err) {
+        // The server is out of reach; which session is on screen is still this
+        // window's own fact, so answer it and say what is missing.
+        return { id, workspace: wsDirectory.name(e.workspaceId), running: e.busy,
+          note: `could not read the session row (${(err as Error).message}) — title and card unavailable` };
+      }
+    }
+    if (args.action === 'switch') {
+      // ONE open path, always — openSession decides whether the session is
+      // already here, needs attaching, or (having been swept) needs
+      // restarting. No local-vs-remote branch, and no partial-id matching:
+      // that took the FIRST session whose id started with the argument, so an
+      // ambiguous prefix silently landed on the wrong conversation. Ids come
+      // from session_list in the same breath; exact is the whole story.
+      const id = String(args.id ?? '').trim();
+      if (!id) return { error: 'session_switch needs an id — session_list has them' };
+      const ok = await openSessionRef.current?.({ kind: 'open', id });
+      if (!ok) {
+        return { error: `could not open session ${id} — check the id against session_list; ` +
+          'the conversation pane says what went wrong' };
+      }
+      return { ok: true, on_screen: store.activeId };
+    }
+    if (args.action === 'close') {
+      // The app's one close path; its result is already the answer — what
+      // closed, what is on screen now, whether a fresh session had to open.
+      const id = args.id ? String(args.id).trim() : undefined;
+      return closeSessionRef.current?.(id) ?? { error: 'the window is not ready to close a session yet' };
+    }
+    if (args.action === 'read') {
+      // No id = the session on screen; the store's history is the transcript.
+      // Only what is OPEN here can be read — switch is what opens one, and the
+      // error names that step rather than implying the id was wrong.
+      const id = args.id ? String(args.id) : store.activeId;
+      const e = id ? store.get(id) : undefined;
+      if (!e) {
+        return { error: `session ${id || '(none on screen)'} is not open in this window — ` +
+          'session_switch opens it, then read it' };
+      }
+      return renderRead(e.id, e.history, args);
+    }
+    return { error: `unknown action ${String(args.action)}` };
+  }, [store, api, clientId, wsDirectory]);
+
+  // What the LEFT PANE is showing — one state, one answer: the chat, the
+  // kanban board (/kanban or the Assistant), or ONE card alone (asked for
+  // from chat: no board first, and closing it goes back to chat). A card
+  // opened from the BOARD is the Board's own edit sub-state, not a view.
+  // One variable means the impossible states (board AND solo card) cannot
+  // exist, and every "is the pane mine?" check asks the same question.
+  const [view, setView] = useState<'chat' | 'board' | { card: number }>('chat');
+
+  // ── the approval gate ──────────────────────────────────────────────────────
+  // The Assistant's gated tool (workspace_create_repo) waits here until the
+  // user answers. It is the ASSISTANT asking, so the ask lives in ITS pane —
+  // three condensed rows under the header: what kind, the subject (the exact
+  // name about to exist), `accept · decline`. Answered by clicking either
+  // word or by SAYING it: voice.intercept claims everything that reaches
+  // turn() while one stands — the exact word "accept" or "decline" acts,
+  // anything else is swallowed (exact match like the wake word, never
+  // interpretation). No keyboard chord: the chat prompt stays live, and a
+  // letter key would collide with typing. ONE approval at a time; the tool
+  // call's abort — the user cut the Assistant off — declines, so a dead turn
+  // cannot leave the ask up waiting for an answer nothing would receive.
+  type Approval = { label: string; subject: string; resolve: (ok: boolean) => void };
+  const [approval, setApproval] = useState<Approval | null>(null);
+  // The live answer to "is one pending?" — updated synchronously, because the
+  // next tool call can arrive before React re-renders the state above (a
+  // render-synced ref briefly said an already-answered approval still stood).
+  const approvalRef = useRef<Approval | null>(null);
+  const requestApproval = useCallback((ask: { label: string; subject: string }, signal?: AbortSignal): Promise<boolean> => {
+    return new Promise<boolean>((resolve) => {
+      if (signal?.aborted) { resolve(false); return; }
+      const done = (ok: boolean) => {
+        signal?.removeEventListener('abort', onAbort);
+        approvalRef.current = null;
+        setApproval(null);
+        resolve(ok);
+      };
+      const onAbort = () => done(false);
+      signal?.addEventListener('abort', onAbort);
+      const entry = { ...ask, resolve: done };
+      approvalRef.current = entry;
+      setApproval(entry);
+      // The ask is in the voice pane — make sure the pane is on screen (the
+      // same nudge /assistant gives; an explicit ctrl+g hide is respected no more).
+      setSidebar((s) => (s === false ? null : s));
+    });
+  }, []);
+  useEffect(() => {
+    voice.intercept = (text: string) => {
+      const a = approvalRef.current;
+      if (!a) return false;
+      const word = text.toLowerCase().replace(/[^a-z]/g, '');
+      if (word === 'accept') a.resolve(true);
+      else if (word === 'decline') a.resolve(false);
+      return true;
+    };
+    return () => { voice.intercept = null; };
+  }, [voice]);
+
+  // `workspace_create_repo`: kebab the name, get the user's accept (the
+  // prompt shows the FINAL name — the point of the gate), then the backend
+  // does the whole flow (POST /workspaces create=true: repo, seed, register;
+  // always private — not the model's call) and the new workspace opens as a
+  // session on screen, the same join+switch every open uses.
+  const workspaceCreateHandler = useCallback(async (args: WorkspaceCreateArgs, opts: { abortSignal?: AbortSignal }) => {
+    const name = kebabName(args.name ?? '');
+    if (!name) return { error: 'no usable name — ask for the project name again' };
+    if (approvalRef.current) return { error: 'another approval is already waiting on screen' };
+    const ok = await requestApproval({ label: 'new private repo', subject: name }, opts.abortSignal);
+    if (!ok) {
+      return { declined: true, note: 'nothing was created — the user declined (or the turn was cut off). ' +
+        'Often the name was misheard: ask what to change before calling again.' };
+    }
+    try {
+      const w = await api('POST', '/workspaces', {
+        url: name, create: true, private: true,
+        ...(args.description ? { description: args.description } : {}),
+      }) as { id: string; owner: string; name: string };
+      const opened = await (openSessionRef.current?.({ kind: 'new', workspaceId: w.id }) ?? false);
+      return { ok: true, repo: `${w.owner}/${w.name}`, private: true, workspace_id: w.id,
+        on_screen: opened ? 'a new session in the new workspace'
+          : 'workspace created, but the session could not be opened — the conversation pane says why' };
+    } catch (e) { return { error: (e as Error).message }; }
+  }, [api, requestApproval]);
+
+  // AUTO-PUSH, one path for both doors — `/auto-push` and the Assistant's
+  // `git_auto_push`. Every step and the outcome land as notes in the pushed
+  // session's pane (where the builder watches a push); the outcome is also
+  // returned, for the door that can say it. Never throws: a failure is a
+  // result too.
+  const runAutoPush = useCallback(async (id: string): Promise<{ result: string; reason?: string; sha?: string }> => {
+    const say = (t: string) => store.note(id, t);
+    if (!autoPush) {
+      say('auto-push is unavailable in this build');
+      return { result: 'error', reason: 'auto-push is unavailable in this build' };
+    }
+    say('auto-push: starting');
+    try {
+      const r = await autoPush(id, (label) => say(`auto-push: ${label}`));
+      if (r.result === 'pushed') say(`auto-push: landed on the base branch (${(r.sha ?? '').slice(0, 10)})`);
+      else if (r.result === 'nothing') say('auto-push: nothing to push — the base branch already has it all');
+      else say(`auto-push: ${r.result}${r.reason ? ` — ${r.reason}` : ''}`);
+      return r;
+    } catch (e) {
+      say(`auto-push failed: ${(e as Error).message}`);
+      return { result: 'error', reason: (e as Error).message };
+    }
+  }, [store, autoPush]);
+
+  // `git_auto_push`: the session on screen unless an id was given, awaited
+  // to the end so the Assistant can say how it went.
+  const gitAutoPushHandler = useCallback(async (args: GitAutoPushArgs) => {
+    const id = args.id ?? store.activeId;
+    if (!id) return { error: 'no session is open — nothing to push' };
+    const r = await runAutoPush(id);
+    return { session: id, ...r };
+  }, [store, runAutoPush]);
+
+  // AUTO-PULL, the Assistant's `git_auto_pull`: base INTO the session's branch.
+  // Same shape as auto-push — steps and outcome as notes in that session's
+  // pane, the outcome returned; never throws.
+  const runAutoPull = useCallback(async (id: string) => {
+    const say = (t: string) => store.note(id, t);
+    if (!autoPull) {
+      say('auto-pull is unavailable in this build');
+      return { result: 'error', reason: 'auto-pull is unavailable in this build' };
+    }
+    say('auto-pull: starting');
+    try {
+      const r = await autoPull(id, (label) => say(`auto-pull: ${label}`));
+      if (r.result === 'merged') {
+        say(`auto-pull: ${r.arrived?.length ?? 0} commit${r.arrived?.length === 1 ? '' : 's'} from the base branch merged in` +
+          `${r.files?.length ? ` — ${r.files.length} file${r.files.length === 1 ? '' : 's'} changed` : ''}` +
+          `${r.pushed === false ? ` (${r.reason ?? 'branch push failed'})` : ''}`);
+      } else if (r.result === 'clean') say('auto-pull: nothing to pull — the branch already has all of base');
+      else say(`auto-pull: ${r.result}${r.reason ? ` — ${r.reason}` : ''}`);
+      return r;
+    } catch (e) {
+      say(`auto-pull failed: ${(e as Error).message}`);
+      return { result: 'error', reason: (e as Error).message };
+    }
+  }, [store, autoPull]);
+
+  const gitAutoPullHandler = useCallback(async (args: GitAutoPullArgs) => {
+    const id = args.id ?? store.activeId;
+    if (!id) return { error: 'no session is open — nothing to pull into' };
+    const r = await runAutoPull(id);
+    return { session: id, ...r };
+  }, [store, runAutoPull]);
+
+  // The Assistant's agent is built ONCE (voice start / model change), so the
+  // handler must not close over the workspace of that moment: it reads the
+  // CURRENT one through a ref, and stays a stable function. Empty while no
+  // session is on screen — there is no workspace to point a board at yet.
+  const workspaceRef = useRef(session?.workspaceId ?? '');
+  workspaceRef.current = session?.workspaceId ?? '';
+  // Same ref rule as the workspace: the handler is built once, the view moves.
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const assistantKanbanHandler = useCallback(async (args: KanbanArgs) => {
+    if (!workspaceRef.current) return { error: 'no session is on screen yet, so there is no workspace or board' };
+    // kanban_screen moves between chat → board → column / card, and the
+    // result names the level now on screen — the Assistant reports it
+    // instead of guessing.
+    if (args.action === 'screen') {
+      if (args.show === 'off') { setView('chat'); return { ok: true, screen: 'chat' }; }
+      const b = boardFor(workspaceRef.current);
+      if (!b.state.loaded) await b.load();
+      if (args.show === 'column') {
+        // One column across the whole width — the board's [e]. Spoken names
+        // are forgiven the way a move's are; the Board consumes the request
+        // once it is up (from chat it comes up first).
+        if (args.column === undefined) return { error: 'show column needs the column name' };
+        const col = resolveColumn(b, args.column);
+        if (!col) return { error: `no column "${args.column}" — the columns are: ${b.state.columns.join(', ')}` };
+        setView('board');
+        b.requestColumn(col);
+        return { ok: true, screen: `column ${col}, expanded` };
+      }
+      if (args.show === 'card') {
+        const up = viewRef.current === 'board';
+        if (args.card === undefined) return { error: 'show card needs the card number', screen: up ? 'board' : 'chat' };
+        if (!b.bySeq(args.card)) return { error: `no card ${args.card}`, screen: up ? 'board' : 'chat' };
+        // Board already up → the card opens on it (esc goes back to columns).
+        // From chat → the card alone; esc goes back to chat, no board first.
+        if (up) { b.requestCard(args.card); return { ok: true, screen: `card ${args.card}, on the board` }; }
+        setView({ card: args.card });
+        return { ok: true, screen: `card ${args.card}` };
+      }
+      setView('board');
+      b.requestBoard(); // "show the board" means every column: an open editor drops, an expanded column collapses
+      return { ok: true, screen: 'board' };
+    }
+    return kanbanOps(boardFor(workspaceRef.current), args);
+  }, [boardFor]);
+
+  // Declared before startVoice, which notes a failed Assistant build. With no
+  // session on screen the note is the WINDOW's and renders where the
+  // conversation would be — a boot that failed must say so on screen.
+  const note = useCallback((text: string) => {
+    setSplash(false);
+    if (store.active()) store.note(store.activeId, text);
+    else setWindowNotes((l) => [...l, { kind: 'note', id: nextId('note'), text } as Part]);
+  }, [store]);
+  /** The Assistant's whole kit: the two TUI tools plus read-only workspace
+   *  tools scoped to the session ON SCREEN. Rebuilt (setAgent — history kept)
+   *  when that session changes; a failed fetch just means no file tools. */
+  const assistantKit = useCallback(async () => ({
+    ...sessionsTool(assistantTool), ...assistantKanbanTool(assistantKanbanHandler),
+    ...workspaceCreateTool(workspaceCreateHandler),
+    ...gitAutoPushTool(gitAutoPushHandler),
+    ...gitAutoPullTool(gitAutoPullHandler),
+    ...screenModeTools(screenOps(store)),
+    ...(sessionId ? await newAssistantTools(sessionId).catch(() => ({} as Record<string, Tool>)) : {}),
+  }), [assistantTool, assistantKanbanHandler, workspaceCreateHandler, gitAutoPushHandler, gitAutoPullHandler, newAssistantTools, sessionId, screenOps, store]);
+
+  // Voice follows the setting: on at launch when enabled, stopped with the
+  // window. Restarted by onConfigChange when a boot-time setting moves.
+  const startVoice = useCallback(() => {
+    void (async () => {
+      // READ AT SPAWN. The sidecar takes its Deepgram key from the environment
+      // it is started with, so reading it here — not at app boot — is what lets
+      // you save the key and turn the Assistant on and have it work the first
+      // time, instead of switching it off and on to get a second attempt.
+      // A bad agent trio (assistant_provider overridden, no model) throws at
+      // build — say so instead of dying in a floating promise.
+      let built;
+      let cfg: Record<string, ConfigValue>;
+      try { cfg = await readCfg(); built = makeAssistantAgent(await assistantKit(), cfg); }
+      catch (e) { note(`assistant not started: ${(e as Error).message}`); return; }
+      voice.setAgent(built.agent, built.summary);
+      void voice.start(sidecarEnv(cfg));
+    })();
+  }, [voice, readCfg, assistantKit, makeAssistantAgent, note]);
+  // The read tools follow the session on screen: switching sessions rebuilds
+  // the Assistant's kit in place (same conversation, new session's files).
+  useEffect(() => {
+    if (!voice.running) return;
+    let stale = false;
+    void (async () => {
+      try {
+        const cfg = await readCfg();
+        const kit = await assistantKit();
+        if (stale) return;
+        voice.setAgent(makeAssistantAgent(kit, cfg).agent);
+      } catch (e) { if (!stale) note(`assistant not rebuilt for this session: ${(e as Error).message}`); }
+    })();
+    return () => { stale = true; };
+  }, [sessionId]);  // eslint-disable-line react-hooks/exhaustive-deps -- only the session switch triggers it
+
   // The chrome's two values and the voice decision, from one read at launch.
   // Nothing is torn down here: windowStore.close() owns every shutdown.
   useEffect(() => { void windowStore.readChrome(); }, [windowStore]);
