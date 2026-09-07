@@ -520,6 +520,8 @@ test('/assistant runs the brain; the reply is spoken and lands in the pane; sess
     id: 's7', name: 'auth redirect fix', workspace: 'Widgets', card: 7, kind: 'coder',
     status: 'active', running: false, on_screen: false,
     last_message: 'fix the login redirect', when: '3h',
+    // The branch against base: null until the server has measured it.
+    git_status: null,
   });
   assert.equal(res.sessions[0].on_screen, true, 'the window says which one you are looking at');
   // Running is the SERVER's lock, not this window's memory: a turn on another
