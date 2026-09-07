@@ -157,7 +157,7 @@ export function sessionChoices(
   // mark and its space (2) + "not pushed"/"not merged" (10) + the gutter; it
   // sits LEFT of who/when so a narrow terminal truncates the tail columns
   // before the one that says whether work would be lost.
-  const COLS = { card: 6, col: 13, name: 28, who: 12, msg: 32, work: 14 };
+  const COLS = { card: 6, status: 13, name: 28, who: 12, msg: 32, work: 14 };
   const rows = sessions.map((s): TableRow<Launch | null> => {
     const w = byId.get(s.workspaceId);
     // The server's transcript says what a conversation was about wherever it
@@ -179,7 +179,7 @@ export function sessionChoices(
     // prefix in the header, number on the row). Either seat of a loop
     // carries it; a session with no card is the blank-fact dot.
     const cardCol = s.card != null ? String(s.card) : '·';
-    const colCol = s.cardStatus ?? '·';
+    const statusCol = s.cardStatus ?? '·';
     // Two facts, two columns: the session's NAME (what is being built) and
     // the last thing typed. A blank fact is a dot — never the branch, which
     // is just the session id wearing a prefix and says nothing to a person.
@@ -200,7 +200,7 @@ export function sessionChoices(
     const workCol = s.work ? WORK[s.work] : '·';
     return {
       value: { kind: 'resume', sessionId: s.id } as Launch,
-      cells: [wsCol(s), cardCol, colCol, nameCol, msgCol, workCol, kind, when],
+      cells: [wsCol(s), cardCol, statusCol, nameCol, msgCol, workCol, kind, when],
       busy: running,
       dot: open && !running,
       hint: dead
@@ -213,7 +213,7 @@ export function sessionChoices(
     };
   });
   return tableChoices('ws', [
-    { title: 'card', width: COLS.card }, { title: 'col', width: COLS.col },
+    { title: 'card', width: COLS.card }, { title: 'status', width: COLS.status },
     { title: 'session', width: COLS.name }, { title: 'last message', width: COLS.msg },
     { title: 'git', width: COLS.work },
     { title: 'who', width: COLS.who }, { title: 'when' },

@@ -72,7 +72,7 @@ test('/resume rows: prefix, name AND last message, and dead sessions marked', ()
   // columns carry the titles with the SAME widths the data rows use —
   // SelectList renders both through one layout, so they cannot drift.
   assert.equal(all[0].label, 'ws', 'the header names the label column');
-  assert.deepEqual((all[0].columns ?? []).map((c) => c.text), ['card', 'col', 'session', 'last message', 'git', 'who', 'when']);
+  assert.deepEqual((all[0].columns ?? []).map((c) => c.text), ['card', 'status', 'session', 'last message', 'git', 'who', 'when']);
   assert.deepEqual((all[0].columns ?? []).map((c) => c.width),
     (all[1].columns ?? []).map((c) => c.width), 'header and rows share ONE set of widths');
   const rows = all.slice(1);
