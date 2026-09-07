@@ -211,7 +211,7 @@ export function sessionChoices(
   return tableChoices('ws', [
     { title: 'card', width: COLS.card },
     { title: 'session', width: COLS.name }, { title: 'last message', width: COLS.msg },
-    { title: 'work', width: COLS.work },
+    { title: 'git', width: COLS.work },
     { title: 'who', width: COLS.who }, { title: 'when' },
   ], rows);
 }

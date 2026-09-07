@@ -46,8 +46,9 @@ export function sessionsTool(handler: (args: SessionsArgs) => Promise<unknown>):
   return {
     session_list: tool({
       description: 'Every coding session on the server — not just the ones open in this window: id, title, ' +
-        'workspace, card, which is on screen, and which are RUNNING a turn right now (here or on another ' +
-        'machine). Newest activity first, 20 at a time; raise offset to page back through older ones. ' +
+        'workspace, card, which is on screen, which are RUNNING a turn right now (here or on another ' +
+        'machine), and git_status (not_pushed / not_merged / merged — the session branch vs the base branch). ' +
+        'Newest activity first, 20 at a time; raise offset to page back. ' +
         'The rows carry what identifies a session to a person (its title, the last thing typed, its card) — ' +
         'match what the user described against those rather than asking them for an id. ' +
         'Call this first when asked about sessions, and before switch/read with an id — ids come from here, ' +
