@@ -21,6 +21,8 @@ import { openSession, SessionLockedError, type OpenedSession } from '../core/ses
 import { runCodingTurn, settingsValues } from './looper/turn.js';
 import { injectFetch } from './looper/injectFetch.js';
 import { toCodingAgent } from '../core/llm/prompts/autoPush/wiring.js';
+import { serializeTranscript } from '../core/llm/transcript.js';
+import type { SyncDeps } from './git/sync.js';
 import type { WorkspaceRow, SessionRow } from './db/schema.js';
 import { LooperEngine } from './looper/engine.js';
 import { TelegramEngine } from './telegram/engine.js';
@@ -95,6 +97,33 @@ async function main() {
   };
   const engine = new GitEngine(db, paths, env.encryptionKey, resolveConflict);
 
+  // After a successful sync, drop a summary into the session's transcript so
+  // the coding agent knows what happened on its next turn. Same lock, same
+  // openSession pattern as the conflict resolver — the sync still holds the
+  // session under GIT_CLIENT_ID when this runs.
+  const recordSummary: SyncDeps['recordSummary'] = async (session, workspace, result, opts) => {
+    if (result.outcome !== 'ok') return;
+    const message = toCodingAgent.syncSummary(
+      workspace.baseBranch, opts.landOnBase, result.arrived ?? [], result.files ?? []);
+    const f = injectFetch(app);
+    let opened: OpenedSession;
+    try {
+      opened = await openSession({ baseUrl: TURN_BASE, apiKey: env.apiKey, clientId: GIT_CLIENT_ID,
+        label: 'recording sync summary', fetch: f, lock: true, sessionId: session.id });
+    } catch { return; }
+    try {
+      const messages = [...opened.messages, { role: 'user' as const, content: message }];
+      const header = opened.header ?? {
+        type: 'session' as const, agent: 'coding' as const,
+        provider: '', model: '', created_at: new Date().toISOString(),
+        session_id: session.id, workspace: workspace.id, branch: session.folderId ?? '',
+      };
+      await opened.saveTranscript(serializeTranscript(header, messages, opened.events));
+    } finally {
+      await opened.close().catch(() => {});
+    }
+  };
+
   // The auto-push commit message rides the ASSISTANT's model — the small-fast
   // slot; writing one subject line from a diff is not work for the model doing
   // the engineering. A config that cannot build (bad cascade pair, unknown
@@ -114,12 +143,12 @@ async function main() {
     }
   };
   const autoPushFn = (session: SessionRow, workspace: WorkspaceRow, onEvent?: (e: AutoPushEvent) => void | Promise<void>) =>
-    autoPush({ db, paths, encryptionKey: env.encryptionKey, resolve: resolveConflict, messageConfig, onEvent },
+    autoPush({ db, paths, encryptionKey: env.encryptionKey, resolve: resolveConflict, recordSummary, messageConfig, onEvent },
       session, workspace);
   // Auto-pull rides the same resolver and the same message model — one
   // configuration for every git operation that commits or resolves.
   const autoPullFn = (session: SessionRow, workspace: WorkspaceRow, onEvent?: (e: AutoPullEvent) => void | Promise<void>) =>
-    autoPull({ db, paths, encryptionKey: env.encryptionKey, resolve: resolveConflict, messageConfig, onEvent },
+    autoPull({ db, paths, encryptionKey: env.encryptionKey, resolve: resolveConflict, recordSummary, messageConfig, onEvent },
       session, workspace);
 
   // One loop drives both the pool tick and the session sweep. The interval is a

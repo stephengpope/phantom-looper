@@ -106,6 +106,10 @@ export interface SyncDeps {
    *  The sync already holds the session when this runs, under GIT_CLIENT_ID, so
    *  the hook's own openSession re-takes our hold rather than finding us. */
   resolve?: (session: SessionRow, workspace: WorkspaceRow, dir: string, ctx: ConflictContext) => Promise<boolean>;
+  /** Append a summary of the sync to the session's transcript — a user message
+   *  the agent picks up on its next turn. Same lock (GIT_CLIENT_ID), same
+   *  openSession pattern as `resolve`. Absent -> no summary is recorded. */
+  recordSummary?: (session: SessionRow, workspace: WorkspaceRow, result: SyncResult, opts: SyncOptions) => Promise<void>;
   /** Model for the commit message (the assistant's). null / absent -> the
    *  file-name fallback. */
   messageConfig?: () => Promise<ModelConfig | null>;
@@ -245,6 +249,8 @@ export async function syncBranch(
       };
       if (!opts.landOnBase) {
         log.info({ session: session.id, base, arrived: arrived.length, pushed }, 'pulled base');
+        await deps.recordSummary?.(session, workspace, done, opts).catch((e) =>
+          log.warn({ session: session.id, err: errStr(e) }, 'could not record sync summary'));
         return done;
       }
 
@@ -257,6 +263,8 @@ export async function syncBranch(
       const landed = await pushToBase(dir, base, auth);
       if (landed === 'pushed') {
         log.info({ session: session.id, base, rounds: round }, 'pushed');
+        await deps.recordSummary?.(session, workspace, done, opts).catch((e) =>
+          log.warn({ session: session.id, err: errStr(e) }, 'could not record sync summary'));
         return done;
       }
       if (landed === 'error') return { outcome: 'error', reason: 'push to base failed', rounds: round };

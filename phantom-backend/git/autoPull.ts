@@ -39,6 +39,7 @@ export interface AutoPullDeps {
   paths: Paths;
   encryptionKey: Buffer;
   resolve?: SyncDeps['resolve'];
+  recordSummary?: SyncDeps['recordSummary'];
   messageConfig?: SyncDeps['messageConfig'];
   onEvent?: (e: AutoPullEvent) => void | Promise<void>;
 }

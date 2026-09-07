@@ -25,6 +25,7 @@ export interface AutoPushDeps {
   paths: Paths;
   encryptionKey: Buffer;
   resolve?: SyncDeps['resolve'];
+  recordSummary?: SyncDeps['recordSummary'];
   messageConfig?: SyncDeps['messageConfig'];
   onEvent?: (e: AutoPushEvent) => void | Promise<void>;
 }
