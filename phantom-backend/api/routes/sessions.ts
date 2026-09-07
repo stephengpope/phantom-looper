@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { eq, ne, desc, and, or, isNull, isNotNull, lt, sql, count } from 'drizzle-orm';
+import { eq, ne, desc, and, or, isNull, isNotNull, lt, sql, count, inArray } from 'drizzle-orm';
 import { sessions, sessionColumns, workspaces, folders, loops, settings as settingsRows, type SessionRow } from '../../db/schema.js';
 import { createSession, getSession, destroySession, touchSession, SessionError,
   heldByOther, acquireLock, releaseLock, renewLock, assertDuplicable, conversationOnly, agentAfterSave,
@@ -193,6 +193,28 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       ctx.db.select({ total: count() }).from(sessions).where(filters.length ? and(...filters) : undefined),
     ]);
     const now = Date.now();
+    // Card status: the card's column on the board. Cards live in per-workspace
+    // schemas, so one raw query per workspace that has cards in this page.
+    // Keyed by `workspaceId:card` for the map below.
+    const cardStatusMap = new Map<string, string>();
+    const byWs = new Map<string, number[]>();
+    for (const r of rows) {
+      if (r.card == null) continue;
+      const arr = byWs.get(r.workspaceId);
+      if (arr) arr.push(r.card); else byWs.set(r.workspaceId, [r.card]);
+    }
+    if (byWs.size) {
+      const wsRows = await ctx.db.select({ id: workspaces.id, schemaName: workspaces.schemaName })
+        .from(workspaces).where(inArray(workspaces.id, [...byWs.keys()]));
+      const schemaOf = new Map(wsRows.map((w) => [w.id, w.schemaName]));
+      await Promise.all([...byWs.entries()].map(async ([wsId, cards]) => {
+        const schema = schemaOf.get(wsId);
+        if (!schema) return;
+        const { rows: cardRows } = await ctx.pgPool.query(
+          `select seq, status from "${schema}".cards where seq = any($1::int[])`, [cards]);
+        for (const c of cardRows) cardStatusMap.set(`${wsId}:${c.seq}`, c.status);
+      }));
+    }
     // `work` is a stored column on the session row, updated by the server's
     // periodic git-state refresh (workRefresh.ts). It rides every response
     // in the ...r spread — no on-read computation, no git=true flag.
@@ -200,6 +222,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     // server; a client only compares locked_by with its own id.
     return ok({ total, sessions: rows.map((r) => ({
       ...r, locked: !!r.lockedBy && !!r.lockExpiresAt && r.lockExpiresAt.getTime() > now,
+      cardStatus: r.card != null ? (cardStatusMap.get(`${r.workspaceId}:${r.card}`) ?? null) : null,
     })) });
   });
 

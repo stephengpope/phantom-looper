@@ -117,6 +117,7 @@ export function sessionsHandler(win: WindowStore, api: Api, clientId: string,
           // The workspace by NAME: a 26-character id cannot be spoken.
           workspace: workspaces.name(s.workspaceId),
           card: s.card ?? null,
+          card_status: s.cardStatus ?? null,
           // Who drives it — the launcher's own three-way. Supervisor rows are
           // MARKED, not hidden: the looper mints one per card, and a list that
           // silently drops half of itself is a list that lies.

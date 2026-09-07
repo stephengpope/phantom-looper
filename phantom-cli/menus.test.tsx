@@ -72,7 +72,7 @@ test('/resume rows: prefix, name AND last message, and dead sessions marked', ()
   // columns carry the titles with the SAME widths the data rows use —
   // SelectList renders both through one layout, so they cannot drift.
   assert.equal(all[0].label, 'ws', 'the header names the label column');
-  assert.deepEqual((all[0].columns ?? []).map((c) => c.text), ['card', 'session', 'last message', 'git', 'who', 'when']);
+  assert.deepEqual((all[0].columns ?? []).map((c) => c.text), ['card', 'col', 'session', 'last message', 'git', 'who', 'when']);
   assert.deepEqual((all[0].columns ?? []).map((c) => c.width),
     (all[1].columns ?? []).map((c) => c.width), 'header and rows share ONE set of widths');
   const rows = all.slice(1);
@@ -80,12 +80,12 @@ test('/resume rows: prefix, name AND last message, and dead sessions marked', ()
   // The workspace column is its card prefix, the server's resolved value.
   assert.equal(rows[0].label, 'PHA');
   // Columns are SelectList Column cells (the list aligns them), in order:
-  // card · session name · last message · work · who · when.
-  assert.deepEqual(texts(rows[0]), ['·', '·', '"fix the sync lock deadlock"', '·', 'manual', '2h']);
+  // card · col · session name · last message · work · who · when.
+  assert.deepEqual(texts(rows[0]), ['·', '·', '·', '"fix the sync lock deadlock"', '·', 'manual', '2h']);
   // A named session shows BOTH: its name and the last message.
   const named = sessionChoices(W, [{ ...S[0], name: 'sync lock deadlock fix' }],
     () => 'short question', NOW).slice(1);
-  assert.deepEqual(texts(named[0]), ['·', 'sync lock deadlock fix', '"short question"', '·', 'manual', '2h']);
+  assert.deepEqual(texts(named[0]), ['·', '·', 'sync lock deadlock fix', '"short question"', '·', 'manual', '2h']);
   // The card column: the BARE number beside the prefix the ws column already
   // shows (the board's own shape — prefix in the header, number on the row),
   // for either seat of a loop; a session with no card is the blank-fact dot.
@@ -93,25 +93,25 @@ test('/resume rows: prefix, name AND last message, and dead sessions marked', ()
     () => 'q', NOW, () => false, () => false, '', true).slice(1);
   assert.deepEqual(carded.map((r) => texts(r)[0]), ['7', '7'], 'coding and supervisor seats both name the card');
   // who = the seat the looper drives it from, by name.
-  assert.equal(texts(carded[0])[4], 'coder');
-  assert.equal(texts(carded[1])[4], 'supervisor');
+  assert.equal(texts(carded[0])[5], 'coder');
+  assert.equal(texts(carded[1])[5], 'supervisor');
   // A card session a person typed into (the server clears `agent` on their
   // save) is theirs: `manual`, card number kept — the card link is permanent,
   // who drives it is not.
   const taken = sessionChoices(W, [{ ...S[0], card: 7, agent: null }], () => 'q', NOW).slice(1);
-  assert.deepEqual([texts(taken[0])[0], texts(taken[0])[4]], ['7', 'manual']);
+  assert.deepEqual([texts(taken[0])[0], texts(taken[0])[5]], ['7', 'manual']);
   assert.equal(texts(rows[0])[0], '·', 'a manual session has no card');
   // A server without cardPrefix falls back to the workspace label.
   const bare = sessionChoices([{ id: 'w1', owner: 'sg', name: 'phantom-looper-e2e' }], [S[0]],
     () => 'q', NOW).slice(1);
   assert.equal(bare[0].label, 'phantom-looper-e2e');
   // A destroyed session still lists, marked, instead of vanishing.
-  assert.equal(texts(rows[1])[5], 'ended');
+  assert.equal(texts(rows[1])[6], 'ended');
   assert.match(String(rows[1].hint), /reopening restarts it/);
   // No name, no message: dots — never the branch, which is a session id.
   // (Only an open or running session can be this blank and still list.)
   const blank = texts(sessionChoices(W, S, () => undefined, NOW, () => false, (id) => id === 's1')[1]);
-  assert.deepEqual([blank[1], blank[2]], ['·', '·']);
+  assert.deepEqual([blank[2], blank[3]], ['·', '·']);
   // Nothing to resume says so rather than showing an empty box.
   assert.match(String(sessionChoices(W, [], () => undefined, NOW)[0].label), /no sessions yet/);
 });
@@ -119,7 +119,7 @@ test('/resume rows: prefix, name AND last message, and dead sessions marked', ()
 test('/resume\'s work column: the server\'s git fact in the operator\'s words, dot when absent', () => {
   const texts = (r: { columns?: { text: string }[] }) => (r.columns ?? []).map((c) => c.text);
   const at = (work: SessionInfo['work']) =>
-    texts(sessionChoices(W, [{ ...S[0], work }], () => 'q', NOW).slice(1)[0])[3];
+    texts(sessionChoices(W, [{ ...S[0], work }], () => 'q', NOW).slice(1)[0])[4];
   assert.equal(at('not_pushed'), 'not pushed', 'work only on the server\'s disk');
   assert.equal(at('not_merged'), 'not merged', 'on origin\'s branch, not in base');
   assert.equal(at('merged'), 'merged');
@@ -135,14 +135,14 @@ test('/resume\'s work column carries a severity mark: red not pushed, yellow not
   // for on origin but not in base, green for done. The blank-fact dot
   // carries NO mark: a color would claim a state the server did not give.
   const workCol = (work: SessionInfo['work']) =>
-    (sessionChoices(W, [{ ...S[0], work }], () => 'q', NOW).slice(1)[0].columns ?? [])[3];
+    (sessionChoices(W, [{ ...S[0], work }], () => 'q', NOW).slice(1)[0].columns ?? [])[4];
   assert.equal(workCol('not_pushed').mark, 'red');
   assert.equal(workCol('not_merged').mark, 'yellow');
   assert.equal(workCol('merged').mark, 'green');
   assert.equal(workCol(null).mark, undefined);
   assert.equal(workCol(undefined).mark, undefined);
   // The header names the column, unmarked.
-  assert.equal((sessionChoices(W, S, () => 'q', NOW)[0].columns ?? [])[3].mark, undefined);
+  assert.equal((sessionChoices(W, S, () => 'q', NOW)[0].columns ?? [])[4].mark, undefined);
   // The fixed width holds the mark (2), the longest words (10) and the
   // gutter (2) — a marked cell must never truncate into its gutter.
   assert.equal(workCol('not_pushed').width, 14);
@@ -213,10 +213,10 @@ test('/resume rows mark a session running a turn in this window', () => {
   assert.ok(!texts(rows[0]).some((t) => /working/.test(t)), 'no activity words in the columns');
   // A dead session cannot be working, whatever the store claims.
   const dead = sessionChoices(W, S, () => undefined, NOW, () => true).slice(1)[1];
-  assert.equal(texts(dead)[5], 'ended');
+  assert.equal(texts(dead)[6], 'ended');
   assert.equal(dead.busy, false);
   // Without the lookup the row falls back to the timestamp, as before.
-  assert.equal(texts(sessionChoices(W, S, () => 'q', NOW)[1])[5], '2h');
+  assert.equal(texts(sessionChoices(W, S, () => 'q', NOW)[1])[6], '2h');
 });
 
 test('/resume rows mark a session loaded in this window with a steady dot', () => {
@@ -224,7 +224,7 @@ test('/resume rows mark a session loaded in this window with a steady dot', () =
   // and the hint says enter switches rather than reopens.
   const rows = sessionChoices(W, S, () => undefined, NOW, () => false, (id) => id === 's1').slice(1);
   assert.equal(rows[0].dot, true);
-  assert.equal((rows[0].columns ?? [])[5]?.text, '2h');
+  assert.equal((rows[0].columns ?? [])[6]?.text, '2h');
   assert.match(String(rows[0].hint), /loaded in this window/);
   // Working beats the dot — the spinner already says it is in memory.
   const working = sessionChoices(W, S, () => undefined, NOW, () => true, () => true).slice(1)[0];
