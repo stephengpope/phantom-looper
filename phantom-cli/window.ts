@@ -889,7 +889,7 @@ export class WindowStore {
       .filter((e) => !seen.has(e.id) && !e.readonly)
       .map((e) => ({
         id: e.id, workspaceId: e.workspaceId, branch: e.branch, status: 'active', agent: null,
-        model: e.summary.model,
+        model: e.summary.model, tokensOutput: e.totalTokens || null,
         // Nothing typed = no activity: it sorts LAST, never ahead of real work.
         lastUsedAt: new Date(e.lastMessageAt || 0).toISOString(), locked: false, lastUserMessage: null,
       }));

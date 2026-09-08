@@ -9,6 +9,7 @@
 import { SelectList, type Choice } from './SelectList.js';
 import { Screen, type FooterKey } from './Screen.js';
 import { tableChoices, type TableRow } from './table.js';
+import { formatTokens } from '../state.js';
 
 export interface WorkspaceInfo {
   id: string; owner: string; name: string; displayName?: string | null;
@@ -41,6 +42,10 @@ export interface SessionInfo {
   /** The model that drives (or drove) this session, from the transcript
    *  header — stored on the session row at each transcript save. */
   model?: string | null;
+  /** Lifetime OUTPUT tokens (the expensive ones), the transcript save's own
+   *  sum cached on the row — the same number the status bar shows. Null on
+   *  rows saved before the cache existed; zero = nothing said yet. */
+  tokensOutput?: number | null;
 }
 
 /** The `work` column: the git facts in the operator's terms, each with its
@@ -154,13 +159,19 @@ export function sessionChoices(
   // Columns ride the shared table system (table.ts — /resume's geometry made
   // reusable): fixed widths on the value columns, because this list refreshes
   // in place and must not jitter as messages and names change under it.
-  // card is 6 = the title (4) + the 2-cell gutter inside the width (the
-  // column law), room for four digits; it sits right of ws so `PHA  7` reads
-  // as the board's PHA-7 and survives a narrow terminal. work is 14 = the
-  // mark and its space (2) + "not pushed"/"not merged" (10) + the gutter; it
-  // sits LEFT of who/when so a narrow terminal truncates the tail columns
-  // before the one that says whether work would be lost.
-  const COLS = { card: 6, status: 13, name: 28, model: 10, who: 12, msg: 32, work: 14 };
+  // The ORDER is the status bar's: the card with its git dot first
+  // (`PHA 7 in_progress • not pushed`), the model with its token meter near
+  // the end (`gpt-5 ↓ 12.4k`) — the two places the same facts show read the
+  // same way. card is 6 = the title (4) + the 2-cell gutter inside the width
+  // (the column law), room for four digits; it sits right of ws so `PHA  7`
+  // reads as the board's PHA-7 and survives a narrow terminal. work is 14 =
+  // the mark and its space (2) + "not pushed"/"not merged" (10) + the gutter;
+  // it sits well LEFT of the tail so a narrow terminal truncates the soft
+  // columns before the one that says whether work would be lost. who and
+  // when ride in ONE free-running last column ("coder 2h") — one question
+  // ("whose is this and how fresh"), one column, and the reclaimed width
+  // pays for the tokens meter.
+  const COLS = { card: 6, status: 13, work: 14, name: 28, msg: 32, model: 10, tokens: 9 };
   const rows = sessions.map((s): TableRow<Launch | null> => {
     const w = byId.get(s.workspaceId);
     // The server's transcript says what a conversation was about wherever it
@@ -201,9 +212,16 @@ export function sessionChoices(
     // the server did not give: the list may not have been fetched with
     // git=true yet (the instant first paint), or there is nothing to measure.
     const workCol = s.work ? WORK[s.work] : '·';
+    // The tokens meter is the status bar's own shape (`↓ 12.4k`) and the
+    // status bar's own rule: zero or unknown is no news, the blank-fact dot.
+    const tokensCol = s.tokensOutput ? `↓ ${formatTokens(s.tokensOutput)}` : '·';
+    // who and when answer ONE question — whose session is this and how fresh
+    // — so they ride in one cell; a fresh open with no activity time shows
+    // just the driver, never "manual ·".
+    const whoWhenCol = dead ? 'ended' : when === '·' ? kind : `${kind} ${when}`;
     return {
       value: { kind: 'resume', sessionId: s.id } as Launch,
-      cells: [wsCol(s), cardCol, statusCol, nameCol, s.model ?? '·', msgCol, workCol, kind, when],
+      cells: [wsCol(s), cardCol, statusCol, workCol, nameCol, msgCol, s.model ?? '·', tokensCol, whoWhenCol],
       busy: running,
       dot: open && !running,
       hint: dead
@@ -217,10 +235,10 @@ export function sessionChoices(
   });
   return tableChoices('ws', [
     { title: 'card', width: COLS.card }, { title: 'status', width: COLS.status },
-    { title: 'session', width: COLS.name }, { title: 'model', width: COLS.model },
-    { title: 'last message', width: COLS.msg },
     { title: 'git', width: COLS.work },
-    { title: 'who', width: COLS.who }, { title: 'when' },
+    { title: 'session', width: COLS.name }, { title: 'last message', width: COLS.msg },
+    { title: 'model', width: COLS.model }, { title: 'tokens', width: COLS.tokens },
+    { title: 'who · when' },
   ], rows);
 }
 
