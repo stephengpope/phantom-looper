@@ -42,18 +42,18 @@ const PRESET_GROUPS: Array<{ heading: string; keys: Array<{ key: string; label: 
     { key: 'max_steps', label: 'steps per turn' },
   ] },
   { heading: 'assistant', keys: [
-    { key: 'assistant_provider', label: 'assistant provider', choices: PROVIDERS },
-    { key: 'assistant_model', label: 'assistant model' },
-    { key: 'assistant_base_url', label: 'assistant endpoint' },
-    { key: 'assistant_reasoning', label: 'assistant reasoning', choices: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
-    { key: 'assistant_max_steps', label: 'assistant steps per turn' },
+    { key: 'assistant_provider', label: 'provider', choices: PROVIDERS },
+    { key: 'assistant_model', label: 'model' },
+    { key: 'assistant_base_url', label: 'endpoint' },
+    { key: 'assistant_reasoning', label: 'reasoning', choices: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
+    { key: 'assistant_max_steps', label: 'steps per turn' },
   ] },
   { heading: 'supervisor', keys: [
-    { key: 'supervisor_provider', label: 'supervisor provider', choices: PROVIDERS },
-    { key: 'supervisor_model', label: 'supervisor model' },
-    { key: 'supervisor_base_url', label: 'supervisor endpoint' },
-    { key: 'supervisor_reasoning', label: 'supervisor reasoning', choices: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
-    { key: 'supervisor_max_steps', label: 'supervisor steps per turn' },
+    { key: 'supervisor_provider', label: 'provider', choices: PROVIDERS },
+    { key: 'supervisor_model', label: 'model' },
+    { key: 'supervisor_base_url', label: 'endpoint' },
+    { key: 'supervisor_reasoning', label: 'reasoning', choices: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
+    { key: 'supervisor_max_steps', label: 'steps per turn' },
   ] },
 ];
 
