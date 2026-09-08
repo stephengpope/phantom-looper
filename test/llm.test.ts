@@ -334,13 +334,14 @@ test('assistant prompt: card creation names the tool and forbids phantom claims'
 
 test('conflict message: branch pinned, no aborting, the files and what arrived, a way out', () => {
   const m = toResolver.resolveConflict('agent/s1', 'main', ['a.ts', 'b.ts'], ['abc1 did a thing']);
-  assert.match(m, /replayed on top of "main"/);
+  assert.match(m, /landed on "main"/);
+  assert.match(m, /rebase was run to replay/);
   assert.match(m, /- a\.ts\n- b\.ts/, 'the conflicted files are listed');
   assert.match(m, /- abc1 did a thing/, 'what landed on base is the briefing — the thing a stranger never had');
   assert.match(m, /git rebase --continue/);
   assert.match(m, /Do NOT run `git rebase --abort`/);
   assert.match(m, /never run checkout, switch, branch, or reset --hard|Do NOT run checkout, switch, branch, or reset --hard/);
-  assert.match(m, /Block the card/, 'it can refuse instead of guessing');
+  assert.doesNotMatch(m, /Block the card/, 'the agent does not block — the system does, deterministically');
   assert.doesNotMatch(m, /git merge --abort/, 'a rebase is not a merge');
 });
 

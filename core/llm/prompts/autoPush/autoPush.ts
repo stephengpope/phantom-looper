@@ -19,15 +19,15 @@
 // frozen with its conversation, and this is guidance reaching a session that
 // is already running.
 
-export const RESOLVE_CONFLICT = `Your work on "{{branch}}" is being replayed on top of "{{base}}" so it can land, and the replay stopped: your changes and changes that arrived on "{{base}}" touch the same lines.
+export const RESOLVE_CONFLICT = `New commits landed on "{{base}}" that touch the same files you changed. A rebase was run to replay your work on top of them and a conflict needs to be resolved.
+
+What landed on "{{base}}":
+{{arrived}}
 
 Conflicted files:
 {{files}}
 
-What arrived on "{{base}}":
-{{arrived}}
-
-Resolve it. Read each conflicted file, keep both intents — yours and what arrived — and remove every conflict marker. Then stage the files and continue the replay:
+Read each conflicted file, keep both intents — yours and what arrived — and remove every conflict marker. Then stage the files and continue the rebase:
 
     git add <the files you fixed>
     git rebase --continue
@@ -35,10 +35,10 @@ Resolve it. Read each conflicted file, keep both intents — yours and what arri
 Rules for this:
 - Do NOT run \`git rebase --abort\`. Backing out is counted as a failure, not a resolution, and it throws away the landing.
 - Do NOT run checkout, switch, branch, or reset --hard. The repository must stay on "{{branch}}".
-- You have no network credentials here. Do not fetch, pull or push; those are done for you once the replay is in.
-- Stop as soon as \`git status\` is clean and the replay has finished.
+- You have no network credentials here. Do not fetch, pull or push; those are done for you once the rebase is in.
+- Stop as soon as \`git status\` is clean and the rebase has finished.
 
-If the two sides genuinely cannot both be kept — what arrived and what you wrote contradict each other, and choosing needs a decision you cannot make — do not guess. Block the card, say which files and what the contradiction is, and stop.`;
+If the two sides genuinely cannot both be kept — what arrived and what you wrote contradict each other — do your best to reconcile them. If you cannot, stop and say which files and what the contradiction is.`;
 
 // ═══ COMMIT MESSAGE REQUEST → the commit writer · every auto-push ══════════
 // One generateText call on the ASSISTANT's model (git/commitMessage.ts), the

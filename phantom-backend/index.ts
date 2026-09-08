@@ -4,7 +4,7 @@ import { makeDb } from './db/client.js';
 import { migrate } from './db/migrate.js';
 import { makePaths } from './pool/paths.js';
 import { bootCleanup, tick } from './pool/pool.js';
-import { sweepSessions } from './sessions.js';
+import { sweepSessions, loopOf } from './sessions.js';
 import { buildApp, type AppCtx } from './api/app.js';
 import { BoardEvents } from './api/boardEvents.js';
 import { SessionEvents } from './api/sessionEvents.js';
@@ -142,14 +142,39 @@ async function main() {
       return null;
     }
   };
-  const autoPushFn = (session: SessionRow, workspace: WorkspaceRow, onEvent?: (e: AutoPushEvent) => void | Promise<void>) =>
-    autoPush({ db, paths, encryptionKey: env.encryptionKey, resolve: resolveConflict, recordSummary, messageConfig, onEvent },
-      session, workspace);
+  // When a sync comes back blocked and the session is running a card, the card
+  // is blocked deterministically — the system decides, not the agent. The patch
+  // goes through the API so board events fire and the UI updates.
+  const blockCardOnConflict = async (session: SessionRow, workspace: WorkspaceRow, reason: string) => {
+    const loop = await loopOf(db, session.id).catch(() => undefined);
+    if (!loop) return;
+    const r = await pgPool.query(
+      `select id from "${workspace.schemaName}".cards where seq = $1`, [loop.card]);
+    const card = r.rows[0] as { id: number } | undefined;
+    if (!card) return;
+    const f = injectFetch(app);
+    await f(`${TURN_BASE}/workspaces/${workspace.id}/cards/${card.id}`, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${env.apiKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'blocked', blocked_reason: reason, resolution: null }),
+    }).catch((e) => log.warn({ session: session.id, err: errStr(e) }, 'could not block card after unresolved conflict'));
+  };
+  const syncDeps = { db, paths, encryptionKey: env.encryptionKey,
+    resolve: resolveConflict, recordSummary, messageConfig };
+  const autoPushFn = async (session: SessionRow, workspace: WorkspaceRow, onEvent?: (e: AutoPushEvent) => void | Promise<void>) => {
+    const r = await autoPush({ ...syncDeps, onEvent }, session, workspace);
+    if (r.result === 'blocked') await blockCardOnConflict(session, workspace,
+      r.reason ?? 'a rebase conflict could not be resolved');
+    return r;
+  };
   // Auto-pull rides the same resolver and the same message model — one
   // configuration for every git operation that commits or resolves.
-  const autoPullFn = (session: SessionRow, workspace: WorkspaceRow, onEvent?: (e: AutoPullEvent) => void | Promise<void>) =>
-    autoPull({ db, paths, encryptionKey: env.encryptionKey, resolve: resolveConflict, recordSummary, messageConfig, onEvent },
-      session, workspace);
+  const autoPullFn = async (session: SessionRow, workspace: WorkspaceRow, onEvent?: (e: AutoPullEvent) => void | Promise<void>) => {
+    const r = await autoPull({ ...syncDeps, onEvent }, session, workspace);
+    if (r.result === 'blocked') await blockCardOnConflict(session, workspace,
+      r.reason ?? 'a rebase conflict could not be resolved');
+    return r;
+  };
 
   // One loop drives both the pool tick and the session sweep. The interval is a
   // SETTING read per tick, so a change takes effect without a restart.
