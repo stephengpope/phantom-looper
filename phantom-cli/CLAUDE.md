@@ -169,10 +169,9 @@ fails out loud.
 ## Tested in
 
 `npm run test:phantom-cli` runs the files listed in package.json; a new
-test file must be added there. Suites: `tui` (reducer, a full turn,
-seating), `sessions` (the store, queue, lock, relay, feed), `window` (the window
-driven with no React at all), `board`,
-`menus` (commands and every screen), `voice` (VoiceClient against a
-scripted sidecar), `mouse`, `screen`, `trim`, `config`, `settings`,
-`session`, `oauth`, `provision`, `setup`, `selfUpdate`, `update`,
-`request`, and the component suites under `components/`.
+test file must be added there. Suites: `board` (the store and its event
+adoption), `sessions` (the store, queue, lock, relay), `window`,
+`screen`, `trim`, `config`, `settings`, `session`, `oauth`, `provision`,
+`setup`, `selfUpdate`, `update`, `request`, `cursorAudit`, `turnAge`,
+and the `Text`/`Parts`/`Markdown` component suites. Tests check what the
+code does and the data it produces — never what the screen looks like.

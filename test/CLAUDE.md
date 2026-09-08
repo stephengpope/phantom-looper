@@ -11,6 +11,16 @@ npm run test:all    test/*.test.ts serially; needs a running Docker daemon
 npm run test:down   remove the shared Postgres container
 ```
 
+## The one rule
+
+Tests check what the code DOES — the data it stores, the messages it sends,
+the rules it enforces — never what the screen looks like. A test that
+compares the rendered screen breaks every time someone deliberately improves
+the layout, so it cries wolf until nobody trusts any failure. And main stays
+green: a commit that breaks a test fixes or deletes that test in the same
+commit. A red suite is noise — every later failure costs detective work to
+tell "was already broken" from "I broke it".
+
 `tsx --test`, untyped. Node's runner silently ignores a listed file that
 does not exist, so adding a suite means adding it to the `test` script in
 package.json. `--test-concurrency=1` only on `test:all`; the Docker suites

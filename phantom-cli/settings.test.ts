@@ -55,10 +55,11 @@ test('null clears, and it is sent as null rather than as an empty string', async
   assert.deepEqual(calls, ['PATCH /settings {"base_url":null}']);
 });
 
-test('the credential list is the seven the server holds, one key per provider', () => {
+test('the credential list is the twelve the server holds, one key per provider', () => {
   assert.deepEqual([...CREDENTIAL_KEYS], [
     'github_token',
-    'anthropic_api_key', 'openai_api_key', 'google_api_key', 'openai_compatible_api_key',
+    'anthropic_api_key', 'openai_api_key', 'google_api_key', 'deepseek_api_key',
+    'kimi_api_key', 'xai_api_key', 'mistral_api_key', 'groq_api_key', 'openai_compatible_api_key',
     'deepgram_api_key', 'firecrawl_api_key',
   ]);
   assert.equal(isCredential('anthropic_api_key'), true);

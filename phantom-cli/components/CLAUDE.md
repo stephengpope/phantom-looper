@@ -80,5 +80,7 @@ that is not a log is one line (`42 lines`, `7 matches`, `2KB written`).
 
 ## Tested in
 
-`components/*.test.tsx` and `menus.test.tsx`. `Text.test.tsx` scans the
-tree for direct Ink Text imports.
+`Text.test.tsx` (the screenText cleaner and the one-door import scan),
+`Parts.test.ts`, `Markdown.test.ts`. These check what the code does, not
+what the screen looks like — layout comparisons were removed on purpose:
+they broke on every deliberate layout improvement.
