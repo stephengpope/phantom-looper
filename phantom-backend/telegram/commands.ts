@@ -225,9 +225,16 @@ async function stepBubble(client: TelegramClient, dm: number, title: string) {
   const lines = [title];
   const m = await client.sendMessage(dm, title).catch(() => null);
   const id: number | null = m?.message_id ?? null;
-  const edit = async () => {
-    if (id == null) return false;
-    try { await client.editMessageText(dm, id, lines.join('\n')); return true; } catch { return false; }
+  // Chain edits so the next waits for the previous — Telegram rate-limits
+  // edits to the same message and silently drops fast ones.
+  let pending: Promise<boolean> = Promise.resolve(true);
+  const edit = () => {
+    if (id == null) return Promise.resolve(false);
+    const text = lines.join('\n');
+    pending = pending.then(
+      () => client.editMessageText(dm, id, text).then(() => true, () => false),
+    );
+    return pending;
   };
   return {
     step(label: string) { lines.push(`· ${label}`); void edit(); },
