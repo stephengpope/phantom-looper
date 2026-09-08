@@ -268,7 +268,12 @@ export class LooperEngine {
         // The coder's session is named after its card from birth — /resume
         // never shows a nameless row while the first (long) plan turn runs.
         await nameIfUnnamed(db, opened.session.id, card.title);
-        this.deps.events?.publish(workspace.id, { event: 'session', card: card.seq, id: opened.session.id, name: card.title });
+        // locked: true rides the pairing because it is a fact — openSession
+        // locked the session above and close() releases it. The lock route's
+        // own board publish found no loop row yet (createLoop just ran), so
+        // without this the board's spinner missed the whole first turn.
+        this.deps.events?.publish(workspace.id,
+          { event: 'session', card: card.seq, id: opened.session.id, name: card.title, locked: true });
         supervisorSessionId = sup.id;
       }
     } catch (e) {

@@ -28,6 +28,7 @@ import { firstLine } from '../core/llm/prompts/supervisor/wiring.js';
 import { ndjson } from '../core/ndjson.js';
 import { refreshWorkState } from '../phantom-backend/git/workRefresh.js';
 import type { SessionEvent } from '../phantom-backend/api/sessionEvents.js';
+import type { BoardEvent } from '../phantom-backend/api/boardEvents.js';
 
 let db: Awaited<ReturnType<typeof testDb>>['db'];
 let pgPool: Awaited<ReturnType<typeof testDb>>['pool'];
@@ -857,6 +858,32 @@ test('session state: the looper publishes its corrected agent seat immediately a
     const reopened = await watchSession(seen[locked].id);
     try { assert.equal((await reopened.until((r) => r.event === 'session')).agent, 'coding'); }
     finally { await reopened.close(); }
+  } finally { unsubscribe(); }
+});
+
+test('session state: a fresh loop pairs the card with locked: true — the board spinner rides the first turn', async () => {
+  const card = json(await app.inject({ method: 'POST', url: `/workspaces/${wsId}/cards`, headers: H,
+    payload: { title: 'spinner from birth', status: 'plan' } })).data.card;
+  const engine = new LooperEngine({ db, pgPool, app, apiKey: 'test-key', modelFetch, events: ctx.events });
+  const seen: BoardEvent[] = [];
+  const unsubscribe = ctx.events!.subscribeAll((_w, e) => seen.push(e));
+  try {
+    script.coding.push({ text: 'PLAN: noted.' });
+    await engine.runTurn(workspace, await cardRow(card.seq), ledger());
+    // The lock route's own board publish found no loop row on a fresh loop
+    // (createLoop runs after openSession's lock), so the PAIRING event is
+    // the one that must carry the hold — before it, the spinner missed the
+    // whole first turn.
+    const holds = () => seen.filter((e) => e.event === 'session' && e.card === card.seq && 'locked' in e);
+    // The turn-end release is fire-and-forget off the lock route — wait for it.
+    const deadline = Date.now() + 5000;
+    while (holds().length < 2 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+    assert.equal(holds().length, 2, JSON.stringify(seen));
+    assert.deepEqual(holds()[0], { event: 'session', card: card.seq, id: holds()[0].id,
+      name: 'spinner from birth', locked: true }, 'the pairing event carries the hold');
+    assert.equal(typeof holds()[0].id, 'string');
+    assert.deepEqual(holds()[1], { event: 'session', card: card.seq, id: holds()[0].id,
+      name: null, locked: false }, 'the turn-end release clears the spinner');
   } finally { unsubscribe(); }
 });
 
