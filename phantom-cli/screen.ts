@@ -17,6 +17,7 @@ import { CONFIG_DIR } from './config.js';
 import xterm from '@xterm/headless';
 import { createTrim } from './trim.js';
 import { createCursorAudit } from './cursorAudit.js';
+import { logLine } from './cliLog.js';
 import type { Range } from './mouse.js';
 
 const { Terminal } = xterm;
@@ -128,7 +129,7 @@ export function createScreen(real: NodeJS.WriteStream,
     ask: () => { real.write('\x1b[6n'); },
     expected: () => ({ row: term.buffer.active.cursorY + 1, col: term.buffer.active.cursorX + 1 }),
     onDrift: () => { screen.onDrift?.(); },
-    log: (line) => { try { appendFileSync(join(CONFIG_DIR, 'cli.log'), `${line}\n`); } catch { /* the screen matters more */ } },
+    log: logLine,
     ...auditTiming,
   });
   const onResize = (): void => {

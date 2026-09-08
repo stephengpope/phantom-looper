@@ -13,6 +13,7 @@ phantom-cli --version | update [--client|--server] | setup-backend
 
 ```
 index.tsx          launch: subcommands, the per-request connection (`api`, `stream`), saved-CA trust, console → cli.log,
+cliLog.ts          the ONE way into cli.log: every recorded line gets its timestamp here
                    crash handlers, mouse on/off, render App, the resume line and version notice at quit
 App.tsx            the view: the two-pane layout, the screens, the keys and the mouse, and the state only a
                    keypress moves (the typed line, scroll, ctrl+o, ctrl+c arming). Builds the window and draws it

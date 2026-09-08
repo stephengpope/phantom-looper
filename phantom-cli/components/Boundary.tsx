@@ -30,7 +30,7 @@ export class Boundary extends Component<{
   static getDerivedStateFromError(error: Error): { error: Error } { return { error }; }
 
   override componentDidCatch(error: Error, info: { componentStack?: string | null }): void {
-    console.error(`[${new Date().toISOString()}] ${this.props.name} failed: ${error.stack ?? String(error)}${info.componentStack ?? ''}`);
+    console.error(`${this.props.name} failed: ${error.stack ?? String(error)}${info.componentStack ?? ''}`);
     this.props.onError(`${error.name}: ${error.message}`);
   }
 

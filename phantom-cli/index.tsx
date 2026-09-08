@@ -15,9 +15,8 @@
 // still override the file, and reach ONLY the local keys (PHANTOM_BACKEND_URL,
 // PHANTOM_BACKEND_KEY) — the settings screen shows which source each value
 // came from.
-import { appendFileSync, openSync } from 'node:fs';
+import { openSync } from 'node:fs';
 import { format } from 'node:util';
-import { join } from 'node:path';
 import { render } from 'ink';
 import { phantomTools } from '../core/llm/tools/workspace.js';
 import { skillTools } from '../core/llm/tools/skills.js';
@@ -29,7 +28,8 @@ import { App } from './App.js';
 import { createScreen } from './screen.js';
 import { createCprFilter } from './cursorAudit.js';
 import { MOUSE_OFF, MOUSE_ON } from './mouse.js';
-import { CONFIG_DIR, type ConfigValue } from './config.js';
+import { type ConfigValue } from './config.js';
+import { CLI_LOG_PATH, logLine } from './cliLog.js';
 import { resolveLocal, localValues } from './local.js';
 import { ndjson } from '../core/ndjson.js';
 import { apiFor, savedCaFor } from './provision.js';
@@ -288,12 +288,10 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 // file instead (CONFIG_DIR/cli.log — React warnings land there with their
 // component stacks), Ink's console patching stays OFF, and nothing may draw
 // over the screen. Restored on the way out for the resume line.
-const CLI_LOG = join(CONFIG_DIR, 'cli.log');
+const CLI_LOG = CLI_LOG_PATH;
 const origConsole = { log: console.log, info: console.info, warn: console.warn, error: console.error, debug: console.debug };
 const origStderrWrite = process.stderr.write.bind(process.stderr);
-const toLog = (text: string): void => {
-  try { appendFileSync(CLI_LOG, text.endsWith('\n') ? text : `${text}\n`); } catch { /* the screen matters more */ }
-};
+const toLog = logLine;
 for (const m of ['log', 'info', 'warn', 'error', 'debug'] as const) {
   // util.format, as console itself does: React's warnings are printf-style
   // ("same key, `%s`"), and a plain join logged the placeholder, not the key.
@@ -321,7 +319,7 @@ const restoreConsole = (): void => {
 let screenUp: { unmount(): void } | null = null;
 const onCrash = (kind: string) => (err: unknown): void => {
   const text = `${kind}: ${err instanceof Error ? err.stack ?? err.message : format(err)}`;
-  toLog(`[${new Date().toISOString()}] ${text}`);
+  toLog(text);
   try { screenUp?.unmount(); } catch { /* the screen is what is broken */ }
   mouseOff();
   restoreConsole();
