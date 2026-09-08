@@ -596,6 +596,7 @@ export class WindowStore {
         ...(sessionId ? { sessionId } : { workspaceId: (target as { workspaceId: string }).workspaceId }) });
       const row = opened.session as { id: string; branch: string; workspaceId: string;
         agent?: string | null; card?: number | null; planMode?: boolean;
+        provider?: string | null; model?: string | null;
         skills?: SkillMeta[]; secrets?: SecretIndexEntry[]; agent_git_credentials?: boolean };
       // The server record IS the conversation — unless this machine holds
       // unsaved steps on top of it (a window that died mid-turn); then the
@@ -628,9 +629,15 @@ export class WindowStore {
           row.agent_git_credentials === undefined ? undefined
             : { credentials: row.agent_git_credentials },
           row.secrets ?? []);
-      // Opening builds an agent, so it reads its model, provider and key here
-      // — not from anything the window has been carrying.
-      const { agent, summary } = this.buildFor(tools, await this.readCfg(), instructions, row.id);
+      // A session with messages has its model locked: the DB row's provider and
+      // model override the global settings. A new session (no messages) reads
+      // the global settings — /model and /presets write there.
+      const cfg = await this.readCfg();
+      if (resumed.length > 0 && row.provider && row.model) {
+        cfg.provider = row.provider;
+        cfg.model = row.model;
+      }
+      const { agent, summary } = this.buildFor(tools, cfg, instructions, row.id);
       const transcript = (this.opts.makeTranscript ?? ((h: TranscriptHeader) => new Transcript(h)))({
         type: 'session', session_id: row.id, workspace: row.workspaceId, branch: row.branch,
         provider: summary.provider, model: summary.model, created_at: new Date().toISOString(),
@@ -1212,11 +1219,7 @@ export class WindowStore {
         const before = session.summary;
         const next = make(session.tools, cfg, session.instructions).summary;
         if (next.provider !== before.provider || next.model !== before.model) {
-          if (session.lastMessageAt > 0) {
-            // Model locked to this session — note what happened but do not
-            // rebuild (rebuildAgents skips locked sessions).
-            this.note(`this session stays on ${before.model} — new sessions will use ${next.model}`);
-          } else {
+          if (session.lastMessageAt === 0) {
             session.transcript.appendEvent({ type: 'model', provider: next.provider, model: next.model,
               at: new Date().toISOString() });
             this.note(`model → ${next.provider}/${next.model}`);
