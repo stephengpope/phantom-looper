@@ -114,3 +114,23 @@ test('PHANTOM_CLI_TRACE_FRAMES records every frame with its raw bytes (the fligh
     assert.equal(lines[0].clear, true);
   } finally { delete process.env.PHANTOM_CLI_TRACE_FRAMES; }
 });
+
+test('a frame arms the cursor audit; a disagreeing reply asks for a repaint', async () => {
+  const { tty, writes } = fakeTty(40, 6);
+  const screen = createScreen(tty, { settleMs: 5, minIntervalMs: 5, timeoutMs: 100 });
+  let drifted = 0;
+  screen.onDrift = () => { drifted++; };
+  screen.stream.write('\x1b[H\x1b[2Jhello\n');
+  await flush();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.ok(writes.join('').includes('\x1b[6n'), 'the query went to the terminal');
+  // The frame left the cursor at row 2 col 1; the terminal saying so is health.
+  screen.cpr(2, 1);
+  assert.equal(drifted, 0);
+  // Row 3 is a drift — one wrap the width math missed.
+  screen.stream.write('\x1b[H\x1b[2Jhello\n');
+  await flush();
+  await new Promise((r) => setTimeout(r, 30));
+  screen.cpr(3, 1);
+  assert.equal(drifted, 1, 'the app is asked to repaint whole');
+});

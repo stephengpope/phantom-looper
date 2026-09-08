@@ -27,6 +27,7 @@ import { autoPushSession as corePush, autoPullSession as corePull } from '../cor
 import { newId } from '../core/ids.js';
 import { App } from './App.js';
 import { createScreen } from './screen.js';
+import { createCprFilter } from './cursorAudit.js';
 import { MOUSE_OFF, MOUSE_ON } from './mouse.js';
 import { CONFIG_DIR, type ConfigValue } from './config.js';
 import { resolveLocal, localValues } from './local.js';
@@ -272,6 +273,10 @@ const openedIds = new Set<string>();
 // report mouse events for as long as we run — switched off again on every way
 // out, or the shell inherits a mouse mode it does not understand.
 const screen = createScreen(process.stdout);
+// Cursor-position replies (the screen audit's, cursorAudit.ts) ride stdin
+// like mouse reports do — but unlike the mouse nothing else may see them, so
+// they are filtered out of the stream Ink reads; everything else passes.
+const stdin = createCprFilter(process.stdin, (at) => screen.cpr(at.row, at.col));
 const mouseOff = (): void => { try { process.stdout.write(MOUSE_OFF); } catch { /* gone */ } };
 process.on('exit', mouseOff);
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () => { mouseOff(); process.exit(1); });
@@ -349,7 +354,7 @@ const app = render(
   // resize moves the screen under it — is covered by App's repaint-on-resize.
   // patchConsole: false — console output must NEVER trigger Ink's
   // erase-everything-and-repaint; it is redirected to cli.log above.
-  { exitOnCtrlC: false, alternateScreen: true, stdout: screen.stream, incrementalRendering: true, patchConsole: false },
+  { exitOnCtrlC: false, alternateScreen: true, stdin, stdout: screen.stream, incrementalRendering: true, patchConsole: false },
 );
 screenUp = app;
 process.stdout.write(MOUSE_ON);

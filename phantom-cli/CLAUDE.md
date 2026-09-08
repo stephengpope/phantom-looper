@@ -44,6 +44,7 @@ settingLabels.ts   rendering a setting's value (30d, yes); names and meaning com
 request.ts         the Api type, requestError (the one sentence a failed request becomes), and quiet()
 mouse.ts           the SGR mouse parser, selection ranges, clipboard
 screen.ts          the screen mirror (@xterm/headless) behind Ink's stdout; selection highlight; frame tracing
+cursorAudit.ts     asks the terminal where its cursor really is after frames; a disagreement with the mirror forces a full repaint — drift self-heals
 trim.ts            drops the unchanged left part of Ink's row rewrites before they reach the terminal
 provision.ts       ssh provisioning: parseTarget, runInstall, readServerFacts, readServerCa, verifyFromHere, apiFor
 setup.ts           `setup-backend`: the install wizard on @clack/prompts, no Ink

@@ -206,6 +206,16 @@ export function App({
   }
   useEffect(() => { if (repaint) setRepaint(false); }, [repaint]);
 
+  // The screen audit (cursorAudit.ts) caught the terminal and Ink's model
+  // disagreeing about where the cursor is — a wrap the width math missed.
+  // Heal exactly the way a resize does: one collapsed frame, then the next
+  // frame written whole.
+  useEffect(() => {
+    if (!screen) return;
+    screen.onDrift = () => setRepaint(true);
+    return () => { screen.onDrift = undefined; };
+  }, [screen]);
+
   // THE WINDOW (window.ts): the sessions, the boards, the Assistant, and what
   // is on screen — everything with a caller that is not a React event. Built
   // in the initialiser, like the session store it replaces, so the banner is

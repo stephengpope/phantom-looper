@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { CONFIG_DIR } from './config.js';
 import xterm from '@xterm/headless';
 import { createTrim } from './trim.js';
+import { createCursorAudit } from './cursorAudit.js';
 import type { Range } from './mouse.js';
 
 const { Terminal } = xterm;
@@ -45,9 +46,14 @@ export interface Screen {
   highlight(ranges: Range[] | null): void;
   /** Current size, as the emulator sees it. */
   size(): { columns: number; rows: number };
+  /** A cursor-position reply off stdin (the audit's — see cursorAudit.ts). */
+  cpr(row: number, col: number): void;
+  /** Set by the app: the terminal and the mirror disagree — repaint whole. */
+  onDrift?: () => void;
 }
 
-export function createScreen(real: NodeJS.WriteStream): Screen {
+export function createScreen(real: NodeJS.WriteStream,
+  auditTiming: { settleMs?: number; minIntervalMs?: number; timeoutMs?: number } = {}): Screen {
   const term = new Terminal({ cols: real.columns || 80, rows: real.rows || 24, allowProposedApi: true, scrollback: 0 });
   const trim = createTrim();
   const trace = makeTracer();
@@ -99,10 +105,32 @@ export function createScreen(real: NodeJS.WriteStream): Screen {
       // It parses asynchronously: repaint the highlight from ITS callback, or
       // the overlay is drawn with the previous frame's text.
       term.write(s.replace(/\r?\n/g, '\r\n'), () => { if (ranges && ranges.length) paint(); });
+      audit.frame();
       return ok;
     };
   }
   const mirror = new Mirror();
+  // The integrity audit (cursorAudit.ts): after a burst of frames, ask the
+  // terminal where its cursor is and compare with the mirror's — one row of
+  // drift (a wrap the width math missed) would otherwise stand until the
+  // next full repaint. The reply rides stdin; index.tsx routes it to `cpr`.
+  const screen: Screen = {
+    stream: mirror as unknown as NodeJS.WriteStream,
+    textOf: (rs) => rs.map((r) => cellText(r.y, r.x0, r.x1).replace(/\s+$/, '')),
+    highlight: (rs) => {
+      ranges = rs && rs.length ? rs : null;
+      if (ranges || painted) paint();
+    },
+    size: () => ({ columns: term.cols, rows: term.rows }),
+    cpr: (row, col) => audit.reply(row, col),
+  };
+  const audit = createCursorAudit({
+    ask: () => { real.write('\x1b[6n'); },
+    expected: () => ({ row: term.buffer.active.cursorY + 1, col: term.buffer.active.cursorX + 1 }),
+    onDrift: () => { screen.onDrift?.(); },
+    log: (line) => { try { appendFileSync(join(CONFIG_DIR, 'cli.log'), `${line}\n`); } catch { /* the screen matters more */ } },
+    ...auditTiming,
+  });
   const onResize = (): void => {
     term.resize(real.columns || 80, real.rows || 24);
     trim.reset();
@@ -111,13 +139,5 @@ export function createScreen(real: NodeJS.WriteStream): Screen {
   };
   real.on('resize', onResize);
 
-  return {
-    stream: mirror as unknown as NodeJS.WriteStream,
-    textOf: (rs) => rs.map((r) => cellText(r.y, r.x0, r.x1).replace(/\s+$/, '')),
-    highlight: (rs) => {
-      ranges = rs && rs.length ? rs : null;
-      if (ranges || painted) paint();
-    },
-    size: () => ({ columns: term.cols, rows: term.rows }),
-  };
+  return screen;
 }
