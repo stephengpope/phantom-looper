@@ -93,7 +93,7 @@ export async function handleCommand(
         return;
       }
       if (!await engine.enterMode(client, dm, 'code')) {
-        await reply(engine.store.MODE_MESSAGE.code);
+        await reply(await engine.codeModeLabel());
       }
       return;
     }

@@ -54,14 +54,16 @@ export const MODE_MESSAGE: Record<TelegramMode, string> = {
 /** WHO answers a plain message — the mode, and only the mode. WHICH session
  *  is `setActiveSession`; the two are independent knobs, never written
  *  together. `announce` receives the transition line iff the mode changed;
- *  returns whether it did. */
+ *  returns whether it did. Pass `message` to override the default
+ *  MODE_MESSAGE — enterMode does this for code mode so the line carries
+ *  session context. */
 export async function setMode(db: Db, mode: TelegramMode,
-  announce: (text: string) => Promise<unknown>): Promise<boolean> {
+  announce: (text: string) => Promise<unknown>, message?: string): Promise<boolean> {
   const rows = await db.select({ mode: telegramAccount.mode }).from(telegramAccount)
     .where(eq(telegramAccount.id, 1));
   const before: TelegramMode = rows[0]?.mode === 'code' ? 'code' : 'assistant';
   await patch(db, { mode });
-  if (before !== mode) await announce(MODE_MESSAGE[mode]);
+  if (before !== mode) await announce(message ?? MODE_MESSAGE[mode]);
   return before !== mode;
 }
 

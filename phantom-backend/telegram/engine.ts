@@ -20,7 +20,7 @@ import { sessionDir } from '../pool/paths.js';
 import { injectFetch } from '../looper/injectFetch.js';
 import { runCodingTurn, settingsValues, type TurnDeps } from '../looper/turn.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
-import { getSession, currentLoop } from '../sessions.js';
+import { getSession, currentLoop, loopOf } from '../sessions.js';
 import { resolveCredential } from '../settings.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
 import type { BoardEvents, BoardEvent } from '../api/boardEvents.js';
@@ -567,9 +567,30 @@ export class TelegramEngine {
    *  whether the mode changed. Code mode presumes an active session — the
    *  caller checks (/code) or has just switched (a reply to a coder's bubble). */
   async enterMode(client: TelegramClient, dm: number, mode: store.TelegramMode): Promise<boolean> {
-    const changed = await store.setMode(this.deps.db, mode, (t) => client.sendMessage(dm, t));
+    const msg = mode === 'code'
+      ? await this.codeModeLabel()
+      : undefined;
+    const changed = await store.setMode(this.deps.db, mode, (t) => client.sendMessage(dm, t), msg);
     await client.setMyCommands(menuFor(mode), dm).catch(() => {});
     return changed;
+  }
+
+  /** The short line sent when entering code mode — workspace prefix, card ID,
+   *  session name. One function, used by enterMode and the /code echo. */
+  async codeModeLabel(): Promise<string> {
+    const acc = await store.getAccount(this.deps.db, this.deps.encryptionKey);
+    if (!acc.activeSessionId) return '🤖 Coding agent';
+    const s = await getSession(this.deps.db, acc.activeSessionId);
+    if (!s) return '🤖 Coding agent';
+    const loop = await loopOf(this.deps.db, acc.activeSessionId);
+    const ws = await (await this.call(`/workspaces/${s.workspaceId}`)).json().catch(() => null);
+    const prefix: string | undefined = ws?.ok ? ws.data.cardPrefix : undefined;
+    const parts: string[] = ['🤖 Coding agent'];
+    if (prefix) parts.push(prefix);
+    if (prefix && loop?.card != null) parts.push(`${prefix}-${loop.card}`);
+    else if (loop?.card != null) parts.push(`#${loop.card}`);
+    parts.push(s.name ?? 'untitled');
+    return parts.join(' · ');
   }
 
   private async speakReacted(reaction: any, dm: number): Promise<void> {
