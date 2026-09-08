@@ -895,8 +895,9 @@ test('a locked card session shows a spinner instead of the git dot; unlocking re
   const store = new BoardStore(withLocked, 'w1');
   await store.load();
 
-  // Store state: card 1 locked, card 3 not.
-  assert.equal(store.state.cardLocked?.[1], true);
+  // Store state: card 1 locked, card 3 not. The value is WHEN the turn was
+  // seen to start, not a flag — the board ages a turn to colour its spinner.
+  assert.ok(typeof store.state.cardLocked?.[1] === 'number', 'locked card carries a start time');
   assert.equal(store.state.cardLocked?.[3], undefined);
 
   // Render: card 1 should have a spinner (ink-spinner renders a braille dot),
@@ -910,7 +911,12 @@ test('a locked card session shows a spinner instead of the git dot; unlocking re
 
   // Now simulate a lock event over the stream — card 3 becomes locked.
   store.applyEvent({ event: 'session', card: 3, id: 's3', name: null, locked: true });
-  assert.equal(store.state.cardLocked?.[3], true);
+  const started = store.state.cardLocked?.[3];
+  assert.ok(typeof started === 'number', 'a lock event starts the clock');
+  // The lock event repeats on renewal and on reconnect. The START must survive
+  // that, or an hour-old turn would look new every time its hold was renewed.
+  store.applyEvent({ event: 'session', card: 3, id: 's3', name: null, locked: true });
+  assert.equal(store.state.cardLocked?.[3], started, 'a repeat does not restart the clock');
 
   // And an unlock event — card 1 unlocked.
   store.applyEvent({ event: 'session', card: 1, id: 's1', name: null, locked: false });

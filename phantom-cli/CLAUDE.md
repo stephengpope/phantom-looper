@@ -32,6 +32,7 @@ sessionFeed.ts     SessionFeed — the session on screen's live feed, folded int
 follow.ts          followStream — one reconnect policy (1 s → 10 s backoff, 45 s stall cut, an onReconnect refill hook)
 board.ts           BoardStore — one workspace's board, optimistic writes, follows the board feed
 state.ts           the stream-part reducer (applyPart), block splitting (takeCompleted), finalize, tokens, messagesToParts
+turnAge.ts         turnAgeColor — how long a turn has run, in the colour of the spinner already drawn
 agent.ts           runTurn — one agent turn with delta batching; the interrupted-step record
 agentFromConfig.ts buildAgent / buildAssistantAgent over core's resolver
 voice.ts           VoiceClient — the sidecar process, the JSON-lines wire, and the Assistant's brain and history

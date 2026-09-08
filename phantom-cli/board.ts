@@ -41,9 +41,11 @@ export interface BoardState {
   /** By card seq: the git work state (not_pushed / not_merged / merged),
    *  from the card's coding session row. Absent = no session or never checked. */
   cardWork?: Record<number, string>;
-  /** By card seq: whether the card's coding session is held (a turn is
-   *  running) right now. Absent seq = not locked or no session. */
-  cardLocked?: Record<number, boolean>;
+  /** By card seq: WHEN the card's coding session was seen to start running
+   *  (epoch ms), so the board can age a turn as well as show one. Absent seq =
+   *  not locked or no session. A turn that has run a long time is the thing a
+   *  person needs to notice, so the value is a clock, not a flag. */
+  cardLocked?: Record<number, number>;
   /** The workspace's resolved auto_plan / auto_build — what an `inherit` card
    *  actually gets — and which layer said so ('default' | 'global' | 'workspace'). */
   autoPlanDefault?: boolean; autoPlanSource?: string;
@@ -94,7 +96,10 @@ export class BoardStore {
       const cardWork = { ...(this.state.cardWork ?? {}) };
       if (rec.work != null) cardWork[card] = String(rec.work);
       const cardLocked = { ...(this.state.cardLocked ?? {}) };
-      if (rec.locked === true) cardLocked[card] = true;
+      // Keep the ORIGINAL start across repeats: the lock event repeats on
+      // renewal and on reconnect, and restamping each time would reset the age
+      // of a turn that has been running for an hour.
+      if (rec.locked === true) cardLocked[card] ??= Date.now();
       else if (rec.locked === false) delete cardLocked[card];
       this.state = { ...this.state, sessions, cardWork, cardLocked };
       this.notify();
@@ -168,9 +173,11 @@ export class BoardStore {
       const cardWork: Record<number, string> = {};
       for (const [k, v] of Object.entries((d.card_work as Record<string, string | null> | undefined) ?? {}))
         if (v) cardWork[Number(k)] = v;
-      const cardLocked: Record<number, boolean> = {};
+      const cardLocked: Record<number, number> = {};
       for (const [k, v] of Object.entries((d.card_locked as Record<string, boolean> | undefined) ?? {}))
-        if (v) cardLocked[Number(k)] = true;
+        // A refresh cannot know when a turn began — only that it is running.
+        // Keep any start we already had; otherwise start the clock now.
+        if (v) cardLocked[Number(k)] = this.state.cardLocked?.[Number(k)] ?? Date.now();
       this.state = { prefix: String(d.prefix), columns: d.columns as string[],
         cards: [...fresh, ...kept], loaded: true, sessions, cardWork, cardLocked,
         workspace: d.workspace ? String(d.workspace) : undefined,

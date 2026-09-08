@@ -11,6 +11,7 @@
 import { Box, useAnimation } from 'ink';
 import { Text } from './Text.js';
 import Spinner from 'ink-spinner';
+import { turnAgeColor } from '../turnAge.js';
 import { Shimmer } from './Shimmer.js';
 import { formatElapsed, formatTokens } from '../state.js';
 
@@ -27,7 +28,7 @@ export function StatusLine({ phase, startedAt, tokens = 0, escHint }: {
   if (phase) bits.push(phase);
   return (
     <Box marginTop={1}>
-      <Text color="magenta"><Spinner type="dots" /> </Text>
+      <Text color={turnAgeColor(startedAt)}><Spinner type="dots" /> </Text>
       <Shimmer text="Working…" color="#b48ead" shimmerColor="#ffffff" bold />
       <Text dimColor>{`  (${bits.join(' · ')})${escHint ? ` · ${escHint}` : ''}`}</Text>
     </Box>

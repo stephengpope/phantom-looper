@@ -59,6 +59,7 @@ export function switcherChoices(
       detail: `${s.summary.model}  ${said ? `"${said.slice(0, 40)}${said.length > 40 ? '…' : ''}"  ` : ''}${
         s.id === activeId && !s.busy ? 'you are here' : state}`,
       busy: s.busy,
+      busySince: s.startedAt,
       hint: s.id === activeId
         ? 'the session on screen — enter just closes this list'
         : `switch to ${s.branch}`,

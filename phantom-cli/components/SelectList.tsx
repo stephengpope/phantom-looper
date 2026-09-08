@@ -11,6 +11,7 @@
 import { Box, useInput } from 'ink';
 import { Text } from './Text.js';
 import Spinner from 'ink-spinner';
+import { turnAgeColor } from '../turnAge.js';
 import { useContext, useRef, useState } from 'react';
 import { BudgetContext, SizeContext } from './Screen.js';
 
@@ -78,6 +79,9 @@ export interface Choice<T> {
    *  line's dots) draws ahead of the detail, so a working session cannot be
    *  mistaken for an idle one at a glance. */
   busy?: boolean;
+  /** When that turn began (epoch ms) — ages the spinner, same rule as the
+   *  board and the status line. Absent = no age known, so plain magenta. */
+  busySince?: number;
   /** This row is live in this window but idle: a steady dot in the spinner's
    *  slot — same place, same color, just not moving. `busy` wins when both. */
   dot?: boolean;
@@ -260,7 +264,7 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
                 {/* U+2022 BULLET: unambiguous single-cell width — U+25CF ●
                     measures wide in Ink but renders narrow in Terminal.app,
                     which skewed every marked row by one cell. */}
-                {c.busy ? <Text color="magenta"><Spinner type="dots" /></Text>
+                {c.busy ? <Text color={turnAgeColor(c.busySince)}><Spinner type="dots" /></Text>
                   : c.dot ? <Text color="magenta">•</Text>
                     : c.lock ? <Text color="yellow">•</Text> : null}
               </Box>

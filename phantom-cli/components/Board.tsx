@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react';
 import { isMouseInput, parseMouse } from '../mouse.js';
 import { CardEditor } from './CardEditor.js';
 import type { BoardStore, Card } from '../board.js';
+import { turnAgeColor, TURN_AGE_TICK_MS } from '../turnAge.js';
 
 const HEADER_ROWS = 3; // column top border + header line + blank line, above the first card
 
@@ -36,6 +37,13 @@ export function Board({ store, width, height, isActive, onClose, card, onOpenCar
 }) {
   const [, bump] = useState(0);
   useEffect(() => store.subscribe(() => bump((n) => n + 1)), [store]);
+  // A running turn ages, so the board has to repaint even when nothing about
+  // the card changed — the spinner's colour IS the warning, and without a tick
+  // it would stay the colour it was born.
+  useEffect(() => {
+    const t = setInterval(() => bump((n) => n + 1), TURN_AGE_TICK_MS);
+    return () => clearInterval(t);
+  }, []);
   // One load at open; from then on the store's event stream keeps it current.
   useEffect(() => { void store.load(); }, [store]);
 
@@ -211,7 +219,9 @@ export function Board({ store, width, height, isActive, onClose, card, onOpenCar
                 // The two-cell gutter: the drag ghost's ▸ first, else a
                 // spinner when the card's session is actively running, else a
                 // colored • for the git work state (red/yellow/green).
-                const locked = store.state.cardLocked?.[t.seq];
+                const lockedSince = store.state.cardLocked?.[t.seq];
+                const locked = lockedSince != null;
+                const spinColor = turnAgeColor(lockedSince);
                 const work = store.state.cardWork?.[t.seq];
                 const WORK_COLOR: Record<string, string> = { not_pushed: 'red', not_merged: 'yellow', merged: 'green' };
                 const dotColor = work ? WORK_COLOR[work] : undefined;
@@ -222,7 +232,7 @@ export function Board({ store, width, height, isActive, onClose, card, onOpenCar
                     dimColor={dragging?.id === t.id}
                     color={ghostHere ? 'green' : t.blocked_reason ? 'red' : undefined}>
                     {ghostHere ? '▸ ' : locked
-                      ? <><Text color="magenta"><Spinner type="dots" /></Text>{' '}</>
+                      ? <><Text color={spinColor}><Spinner type="dots" /></Text>{' '}</>
                       : dotColor
                         ? <><Text color={dotColor} inverse={selected}>{'•'}</Text>{' '}</>
                         : '  '}{t.seq}-{t.title}{t.pinned ? ' 📌' : ''}

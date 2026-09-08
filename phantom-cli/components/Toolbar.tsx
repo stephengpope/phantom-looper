@@ -15,6 +15,7 @@
 // line: an empty row under the prompt reads as a rendering bug.
 import { Box } from 'ink';
 import Spinner from 'ink-spinner';
+import { turnAgeColor } from '../turnAge.js';
 import { Text } from './Text.js';
 
 /** One item on the line: plain text, or text with a severity mark — the
@@ -22,7 +23,10 @@ import { Text } from './Text.js';
  *  The same shape as table.ts's Cell, so the three places cannot disagree. */
 export type ToolbarPart = string | { text: string; mark: string };
 
-export function Toolbar({ parts = [], spin, spinWho }: { parts?: ToolbarPart[]; spin?: string; spinWho?: string }) {
+export function Toolbar({ parts = [], spin, spinWho, spinSince }: {
+  parts?: ToolbarPart[]; spin?: string; spinWho?: string;
+  /** When the running turn began (epoch ms), so the spinner can age. */
+  spinSince?: number }) {
   const shown = parts.filter((p) => (typeof p === 'string' ? p : p.text));
   if (!shown.length && !spin) return null;
   return (
@@ -37,7 +41,7 @@ export function Toolbar({ parts = [], spin, spinWho }: { parts?: ToolbarPart[]; 
       {spin ? (<>
         {shown.length ? <Text color="yellow"> · </Text> : null}
         {spinWho ? <Text color="yellow">{`${spinWho} `}</Text> : null}
-        <Text color="magenta"><Spinner type="dots" /></Text>
+        <Text color={turnAgeColor(spinSince)}><Spinner type="dots" /></Text>
         <Text color="yellow">{` ${spin}`}</Text>
       </>) : null}
     </Box>

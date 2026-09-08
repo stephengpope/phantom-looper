@@ -259,6 +259,16 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (!client) return reply.code(400).send(err('missing_client', 'x-phantom-looper-client header required'));
       const s = await getSession(ctx.db, req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
+      // A running server turn is the truth the clock is not. `activeTurns`
+      // holds the live turn's abort controller IN THIS PROCESS, so it cannot
+      // outlive the work the way a hold in SQL can — kill the process and the
+      // map and the turns die together. A lapsed TTL must therefore never hand
+      // the session to a second writer while the first is still streaming:
+      // that is two conversations on one transcript, and the last save wins.
+      // The holder itself still renews normally.
+      if (ctx.activeTurns?.has(s.id) && s.lockedBy && s.lockedBy !== client) {
+        return reply.code(409).send(lockedErr(s));
+      }
       const ttl = await resolve(ctx.db, 'session_lock_ttl_ms');
       const expires = await acquireLock(ctx.db, s, client, Number(ttl), req.body?.label);
       if (!expires) return reply.code(409).send(lockedErr(s));
@@ -352,6 +362,13 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       const s = await getSession(ctx.db, req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (heldByOther(s, client)) return reply.code(409).send(lockedErr(s));
+      // The same ground truth as the lock route: an expired hold is not an
+      // idle session while its turn is still streaming. Without this a lapsed
+      // TTL lets a second client overwrite the record the live turn is about
+      // to save — the whole file, not a merge.
+      if (ctx.activeTurns?.has(s.id) && s.lockedBy && s.lockedBy !== client) {
+        return reply.code(409).send(lockedErr(s));
+      }
       const data = req.body.data;
       // A list preview, not the record: the UI shows a few dozen characters,
       // and an uncapped copy of a pasted wall of text would ride every

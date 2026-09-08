@@ -906,6 +906,53 @@ test('session state: a manual save clears the agent label and lock renewal does 
   } finally { await watcher.close(); }
 });
 
+test('a lapsed hold is NOT an idle session: a live server turn refuses the lock and the transcript', async () => {
+  // The incident this exists for: a coding turn ran past session_lock_ttl_ms.
+  // The hold expired while the model was still streaming, so the session read
+  // as free — and the cli, which decides from that same clock, let a second
+  // turn start on the SAME conversation. Two writers, one transcript, and the
+  // upload is a whole-file replace: last save wins, the other's work is gone.
+  //
+  // The clock cannot answer "is a turn running". `activeTurns` can: it holds
+  // the live turn's abort controller in THIS process, so it cannot outlive the
+  // work the way a row in SQL can.
+  const made = json(await app.inject({ method: 'POST', url: '/sessions', headers: H,
+    payload: { workspace_id: wsId } })).data;
+  const holder = { ...H, 'x-phantom-looper-client': 'supervisor' };
+  const other = { ...H, 'x-phantom-looper-client': 'a-second-window' };
+  assert.equal(json(await app.inject({ method: 'POST', url: `/sessions/${made.id}/lock`,
+    headers: holder, payload: { label: 'building' } })).ok, true);
+
+  // The hold lapses mid-turn — the exact state at the 10 minute mark.
+  await db.update(sessions).set({ lockExpiresAt: new Date(Date.now() - 60_000) })
+    .where(eq(sessions.id, made.id));
+
+  // ...but the turn is still running.
+  const ac = new AbortController();
+  ctx.activeTurns!.set(made.id, ac);
+  try {
+    const grab = await app.inject({ method: 'POST', url: `/sessions/${made.id}/lock`,
+      headers: other, payload: { label: 'laptop' } });
+    assert.equal(grab.statusCode, 409, 'an expired hold must not hand away a live turn');
+    assert.equal(json(grab).error.code, 'session_locked');
+
+    const put = await app.inject({ method: 'PUT', url: `/sessions/${made.id}/transcript`,
+      headers: other, payload: { data: `${JSON.stringify({ role: 'user', content: 'mine' })}\n` } });
+    assert.equal(put.statusCode, 409, 'nor let a second writer overwrite the record it is about to save');
+
+    // The holder itself still renews — this guards a stranger, not the worker.
+    assert.equal((await app.inject({ method: 'POST', url: `/sessions/${made.id}/lock`,
+      headers: holder, payload: { label: 'building' } })).statusCode, 200);
+  } finally { ctx.activeTurns!.delete(made.id); }
+
+  // Turn over: the lapsed hold is now genuinely free, and the clock is right.
+  await db.update(sessions).set({ lockExpiresAt: new Date(Date.now() - 60_000) })
+    .where(eq(sessions.id, made.id));
+  assert.equal((await app.inject({ method: 'POST', url: `/sessions/${made.id}/lock`,
+    headers: other, payload: { label: 'laptop' } })).statusCode, 200,
+  'with no turn running the expiry means what it says');
+});
+
 test('the turn route respects the session lock: 409 while someone else holds it', async () => {
   const made = json(await app.inject({ method: 'POST', url: '/sessions', headers: H,
     payload: { workspace_id: wsId } })).data;

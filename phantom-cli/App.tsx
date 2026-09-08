@@ -280,7 +280,14 @@ export function App({
   // releasing does not spin here for ever. The feed also carries mode, git
   // state and transcript stamps; reconnecting refills anything missed. The
   // send-time server lock refusal is the backstop for concurrent writers.
-  const heldNow = session?.held && session.held.expiresAt > Date.now() ? session.held : null;
+  // Is someone else working in this session? The expiry alone cannot answer
+  // that: it is a clock, and a turn that outruns it goes on streaming. When it
+  // lapsed mid-turn this one expression switched off the stop key, the spinner
+  // AND the send guard together — so the window looked idle, esc did nothing,
+  // and typing started a SECOND turn on a live conversation. remoteBusy is the
+  // observed truth (parts arriving, no turn-end yet), so either signal holds.
+  const heldNow = session?.held && (session.held.expiresAt > Date.now() || session.remoteBusy)
+    ? session.held : null;
   const heldRef = useRef(heldNow);
   heldRef.current = heldNow;
   // Streamless callers get a one-shot fill. With a feed, its initial snapshot
@@ -812,6 +819,7 @@ export function App({
               // session's marks must not leak onto the splash screen.
               spin={!windowStore.opening && session && !session.busy && heldNow ? heldNow.label : undefined}
               spinWho={!windowStore.opening && session && !session.busy && heldNow ? heldNow.who : undefined}
+              spinSince={!windowStore.opening && session && !session.busy && heldNow ? session.startedAt : undefined}
               parts={
               windowStore.opening ? []
               : ctrlC ? withMode('press ctrl+c again to quit')
