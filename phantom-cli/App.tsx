@@ -503,8 +503,9 @@ export function App({
     setCtrlC(true); setTimeout(() => setCtrlC(false), 1500);
   });
 
-  // Remote interrupt: esc arms, [c] confirms. Armed per session, auto-disarms
-  // after 3 s. The interrupt route aborts the server-side turn.
+  // Remote interrupt: esc arms, a SECOND esc confirms. Armed per session,
+  // auto-disarms after 3 s. The interrupt route aborts the server-side turn.
+  // No letter key for the confirm — the prompt's TextInput owns letters.
   const [interruptArmed, setInterruptArmed] = useState(false);
   useEffect(() => {
     if (!interruptArmed) return;
@@ -524,15 +525,13 @@ export function App({
       else store.abortTurn(session.id);
       return;
     }
-    // esc on a remote turn: arm the interrupt confirmation.
+    // esc on a remote turn: the first press arms, the second fires the
+    // route and the turn stops.
     if (key.escape && !session?.busy && heldNow && sessionId) {
-      setInterruptArmed(true);
-      return;
-    }
-    // [c] confirms the interrupt — fire the route, the turn stops.
-    if (ch === 'c' && interruptArmed && sessionId) {
-      setInterruptArmed(false);
-      void api('POST', `/sessions/${sessionId}/interrupt`).catch(quiet('interrupt'));
+      if (interruptArmed) {
+        setInterruptArmed(false);
+        void api('POST', `/sessions/${sessionId}/interrupt`).catch(quiet('interrupt'));
+      } else setInterruptArmed(true);
       return;
     }
     if (key.ctrl && ch === 'o') { setExpanded((e) => !e); return; }
@@ -688,7 +687,7 @@ export function App({
           startedAt={session.startedAt} tokens={tokenCount(session.tokens)}
           escHint={session.busy
             ? (session.queue.length ? '[esc] clears the queue, then interrupts' : '[esc] to interrupt')
-            : interruptArmed ? '[c] to confirm interrupt' : '[esc] to interrupt'} />}
+            : interruptArmed ? '[esc] again to interrupt' : '[esc] to interrupt'} />}
         {session && session.queue.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
             <Text dimColor>{`  queued · sent together, in one turn, when this one ends`}</Text>

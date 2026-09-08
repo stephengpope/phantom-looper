@@ -22,11 +22,9 @@
 // again; the answer would otherwise re-arm the debounce forever. A store edit
 // while the card is open (a kanban tool, the refresh) lands live: fields the
 // user has not touched rebase to the incoming card, fields mid-edit keep the
-// user's text.
-// Quick actions ride the letter keys — [a] archive, [s] open the card's
-// session, [p]/[b] cycle auto plan / auto build — but only while a NON-text
-// row holds focus: a focused text row owns every letter, so the same key
-// that archives from the Archived row types into the Title.
+// user's text. Every action is enter/space on its row (or a click): letter
+// shortcuts were tried and dropped — a focused text row owns every letter,
+// so the key meant "archive" on one row and typed into the Title on another.
 import { Box, measureElement, useInput, type DOMElement } from 'ink';
 import { Text } from './Text.js';
 import { useEffect, useRef, useState } from 'react';
@@ -334,19 +332,6 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
     // delivers only ctrl+e r l f d n v; t/k/y are eaten. ctrl+t kept as a
     // silent extra for terminals that do pass it.
     if (key.ctrl && (ch === 'e' || ch === 't') && r.kind === 'item' && tickable(r.list)) { toggle(r.list, r.index); return; }
-    // Quick actions — the board's letter keys, in the card view. Plain
-    // letters, so they fire only on a row WITHOUT a live TextInput: a
-    // focused text row owns every letter (the same rule the board's
-    // new-card entry follows). Each is the action the matching row already
-    // takes: [a] the Archived row's toggle, [s] the Session row's open,
-    // [p]/[b] the auto rows' cycle.
-    if ((r.kind === 'auto' || r.kind === 'session' || r.kind === 'pinned' || r.kind === 'archived')
-      && ch && !key.ctrl && !key.meta) {
-      if (ch === 'a') { setDraft((d) => ({ ...d, archived: !d.archived })); return; }
-      if (ch === 's' && cardSession && onOpenSession) { flush(); onOpenSession(cardSession.id); return; }
-      if (ch === 'p') { setDraft((d) => ({ ...d, auto_plan: cycleAuto(d.auto_plan) })); return; }
-      if (ch === 'b') { setDraft((d) => ({ ...d, auto_build: cycleAuto(d.auto_build) })); return; }
-    }
     if (r.kind === 'auto') {
       if (key.return || ch === ' ') { setDraft((d) => ({ ...d, [r.field]: cycleAuto(d[r.field]) })); return; }
     }
@@ -498,7 +483,7 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
       </Box>
       <Box flexGrow={1} />
       <Box marginTop={1}>
-        <Text dimColor>[tab/↑↓] move · [enter] next line · [ctrl+e] tick · [a]rchive [s]ession [p]lan [b]uild · [esc] back</Text>
+        <Text dimColor>[tab/↑↓] move · [enter] next line · [ctrl+e] tick · [esc] back</Text>
       </Box>
     </Box>
   );
