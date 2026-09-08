@@ -636,7 +636,12 @@ export function App({
         fill={windowStore.splash ? <Banner width={mainCols} /> : undefined} />
       </Boundary>
       <Box ref={bottomRef} flexDirection="column" flexShrink={0}>
-        {!windowStore.opening && session?.live.map((p) => (
+        {/* Session output: live parts, the working line and the queue all
+            belong to the active session. During `opening` there is no
+            session output to show — one guard for the whole region, so a
+            new element added here is inside it by default. */}
+        {!windowStore.opening && (<>
+        {session?.live.map((p) => (
           <PartView key={p.id} part={p} width={width} expanded={expanded} maxRows={liveRows} />
         ))}
         {/* The working line, for OUR turn and for one we are watching. A tool
@@ -644,7 +649,7 @@ export function App({
             remote `bash` looks like a frozen screen. Watching it carries no
             esc hint: esc cannot stop someone else's turn, and offering it
             would be a lie. */}
-        {!windowStore.opening && (session?.busy || session?.remoteBusy) && <StatusLine phase={phaseLabel(session.live)}
+        {(session?.busy || session?.remoteBusy) && <StatusLine phase={phaseLabel(session.live)}
           startedAt={session.startedAt} tokens={tokenCount(session.tokens)}
           escHint={session.busy
             ? (session.queue.length ? '[esc] clears the queue, then interrupts' : '[esc] to interrupt')
@@ -657,6 +662,7 @@ export function App({
             ))}
           </Box>
         )}
+        </>)}
 
         <Boundary name={windowStore.menu ?? 'prompt'} resetKey={windowStore.menu} onError={(m) => { windowStore.note(`${m} — ${windowStore.menu ? `/${windowStore.menu} closed` : 'the prompt stopped drawing'}; the stack is in ~/.phantom-cli/cli.log`); windowStore.setMenu(null); }}>
         {windowStore.menu === 'sessions' ? (
@@ -795,10 +801,13 @@ export function App({
               // and WHAT they are doing — `coding agent ⠹ building`. No
               // sentence about being locked out: the spinner says something
               // is running, and typing says the rest.
-              spin={session && !session.busy && heldNow ? heldNow.label : undefined}
-              spinWho={session && !session.busy && heldNow ? heldNow.who : undefined}
+              // During `opening` the toolbar has nothing to say — the old
+              // session's marks must not leak onto the splash screen.
+              spin={!windowStore.opening && session && !session.busy && heldNow ? heldNow.label : undefined}
+              spinWho={!windowStore.opening && session && !session.busy && heldNow ? heldNow.who : undefined}
               parts={
-              ctrlC ? withMode('press ctrl+c again to quit')
+              windowStore.opening ? []
+              : ctrlC ? withMode('press ctrl+c again to quit')
               : !session
                 ? ['no session open — [/workspace] starts one · [/resume] reopens an earlier one']
                 : withMode()} />

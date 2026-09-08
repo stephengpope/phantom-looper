@@ -1352,9 +1352,12 @@ test('tab saves the unsent text and restores it on return', async () => {
   } finally { r.unmount(); }
 });
 
-// /new clears the pane BEFORE the ghost goes up. The old conversation used
+// /new clears ALL session output BEFORE the ghost goes up: the conversation,
+// the working line, the queue and the toolbar marks. The old conversation used
 // to stay on screen for the create call, squeezing the ghost into the rows
-// under it, then jumping to full size when the new session landed.
+// under it, then jumping to full size when the new session landed. The queue
+// and toolbar were later found leaking too (same region, missed by the
+// per-element guards that have since been replaced by one region guard).
 test('/new blanks the old conversation for the whole open, with the splash alone on screen', async () => {
   let release: () => void = () => {};
   const held = new Promise<void>((r) => { release = r; });
@@ -1370,12 +1373,15 @@ test('/new blanks the old conversation for the whole open, with the splash alone
     await sleep(50);
     r.stdin.write('hello'); await sleep(30);
     r.stdin.write(ENTER); await sleep(200);
-    assert.match(strip(r.lastFrame()!), /the old answer/, 'setup: s1 has a conversation on screen');
+    const before = strip(r.lastFrame()!);
+    assert.match(before, /the old answer/, 'setup: s1 has a conversation on screen');
+    assert.match(before, /code mode/, 'setup: the toolbar shows the mode mark');
     r.stdin.write('/new'); await sleep(40);
     r.stdin.write(ENTER); await sleep(100);
     const mid = strip(r.lastFrame()!);
     assert.doesNotMatch(mid, /the old answer/, 'mid-/new: the old conversation is off screen');
     assert.doesNotMatch(mid, /agent\/s1/, 'mid-/new: the old header is off screen');
+    assert.doesNotMatch(mid, /code mode/, 'mid-/new: the old toolbar marks are off screen');
     assert.match(mid, /█████/, 'mid-/new: the splash is up, alone');
     release(); await sleep(150);
     const after = strip(r.lastFrame()!);
