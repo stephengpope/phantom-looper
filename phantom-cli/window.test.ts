@@ -4,8 +4,14 @@
 // ever needs a component to run, the logic has leaked back into App.tsx.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { WindowStore } from './window.js';
+import { Transcript } from './session.js';
+import { sessionsHandler, WorkspaceDirectory } from './assistantKit.js';
 import type { Api } from './request.js';
+import type { SessionsArgs } from './voice.js';
 
 const nothing: Api = async () => ({});
 const noTools = async () => ({});
@@ -46,6 +52,41 @@ test('a failed open says which workspace it was, and opens nothing', async () =>
   const said = (w.notes.at(-1) as { text: string }).text;
   assert.match(said, /could not start a session in acme-app/, 'the workspace by name, not its id');
   assert.match(said, /no route/, "and the server's own words");
+  w.close();
+});
+
+test('session_switch navigates to CLI view from board, card and menu screens', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'phantom-win-'));
+  const w = new WindowStore({
+    api: nothing, newTools: noTools,
+    initial: { sessionId: 's1', branch: 'agent/s1', workspaceId: 'w1', tools: {}, resumed: [] },
+    makeAgent: () => ({ agent: {}, summary: { provider: 'test', model: 'fake', reasoning: 'none', maxSteps: 1 } }) as never,
+    makeTranscript: (h) => new Transcript(h, join(dir, 'x.jsonl')),
+  });
+  const handler = sessionsHandler(w, nothing, 'test', new WorkspaceDirectory(nothing));
+  const run = (args: SessionsArgs) => handler(args);
+
+  // From the board view
+  w.setView('board');
+  assert.equal(w.view, 'board');
+  let res = await run({ action: 'switch', id: 's1' }) as { ok?: boolean };
+  assert.equal(res.ok, true);
+  assert.equal(w.view, 'chat', 'view returned to chat from board');
+  assert.equal(w.menu, null, 'menu is closed');
+
+  // From a card editor
+  w.openCard(7, 'board');
+  assert.equal(typeof w.view, 'object');
+  await run({ action: 'switch', id: 's1' });
+  assert.equal(w.view, 'chat', 'view returned to chat from card');
+
+  // From a menu screen
+  w.setMenu('settings');
+  assert.equal(w.menu, 'settings');
+  await run({ action: 'switch', id: 's1' });
+  assert.equal(w.view, 'chat', 'view returned to chat from settings');
+  assert.equal(w.menu, null, 'menu closed after switch');
+
   w.close();
 });
 

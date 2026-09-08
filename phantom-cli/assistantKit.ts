@@ -168,6 +168,10 @@ export function sessionsHandler(win: WindowStore, api: Api, clientId: string,
         return { error: `could not open session ${id} — check the id against session_list; ` +
           'the conversation pane says what went wrong' };
       }
+      // Navigate to the CLI view: the builder sees the newly active session
+      // regardless of where they were (board, card, a menu screen).
+      win.setView('chat');
+      win.setMenu(null);
       return { ok: true, on_screen: store.activeId };
     }
     if (args.action === 'close') {
