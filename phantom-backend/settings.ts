@@ -96,6 +96,9 @@ export const DEFAULTS = {
   // A DM when the LOOP moves a card into in_progress / blocked / done — the
   // automated work, seen from the phone. Workspace-overridable.
   telegram_auto_build_notifications: true as boolean,
+  // How often the server checks GitHub for a new release and notifies via
+  // Telegram. 0 disables the check entirely.
+  update_check_interval_ms: 86_400_000 as number,   // 24 hours
 } as const;
 
 /** The credentials the SERVER holds, declared here so nothing can store one in
@@ -192,6 +195,7 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   telegram_reply_mode: 'How the bot answers: text, voice (a spoken note, on the Assistant\'s Deepgram voice), or both. Read at the start of each turn.',
   telegram_transcript_echo: 'On, a voice note\'s transcript is posted back as 🎤 "…" before the turn runs, so a misheard word is distinguishable from a misunderstood instruction.',
   telegram_auto_build_notifications: 'A message when the loop moves a card to in progress, blocked, or done. Moves made by people are never announced. Reply to one to enter the card\'s coding session. Per workspace: override on the workspace.',
+  update_check_interval_ms: 'How often the server checks GitHub for a new release and sends a Telegram notification. 0 disables the check. The check runs only when Telegram is enabled and an authorized user is set.',
 };
 
 /** Type metadata, one entry per setting — TypeScript forces completeness the
@@ -291,6 +295,7 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
     choices: ['text', 'voice', 'both'] },
   telegram_transcript_echo: { type: 'boolean', label: 'transcript echo', group: 'telegram' },
   telegram_auto_build_notifications: { type: 'boolean', label: 'auto build alerts', group: 'telegram' },
+  update_check_interval_ms: ms('upgrade check interval', 'telegram', 0),
 };
 
 // ONE rule at every layer: null in a PATCH clears the key; null is never

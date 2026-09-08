@@ -24,43 +24,15 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { CONFIG_DIR } from './config.js';
 
-export const REPO = 'stephengpope/phantom-looper';
+// Version primitives live in core/ so the server can share them.
+import { REPO as _REPO } from '../core/version.js';
+export { REPO, parseVersion, isBehind, checkLatest } from '../core/version.js';
+// Local alias so selfUpdate() below can reference it.
+const REPO = _REPO;
 
 // esbuild --define replaces this whole expression with the release string; a
 // checkout (tsx) reads nothing and stays 'dev'.
 export const APP_VERSION: string = process.env.PHANTOM_CLI_VERSION ?? 'dev';
-
-/** vX.Y.Z (or X.Y.Z) → [X, Y, Z]; anything else — 'dev', prereleases — null. */
-export function parseVersion(v: string): [number, number, number] | null {
-  const m = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(v.trim());
-  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
-}
-
-/** Is `mine` behind `theirs`? Unparseable on either side — 'dev', a
- *  prerelease — is never behind: only two release builds compare. */
-export function isBehind(mine: string, theirs: string): boolean {
-  const a = parseVersion(mine), b = parseVersion(theirs);
-  if (!a || !b) return false;
-  for (let i = 0; i < 3; i++) {
-    if (a[i] < b[i]) return true;
-    if (a[i] > b[i]) return false;
-  }
-  return false;
-}
-
-/** The latest PUBLISHED release tag, or null when there is none / no network.
- *  Never throws and never blocks long — call sites fire it in the background. */
-export async function checkLatest(fetchFn: typeof fetch = fetch, repo = REPO): Promise<string | null> {
-  try {
-    const r = await fetchFn(`https://api.github.com/repos/${repo}/releases/latest`, {
-      headers: { accept: 'application/vnd.github+json' },
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!r.ok) return null;
-    const j = await r.json() as { tag_name?: string };
-    return j.tag_name ?? null;
-  } catch { return null; }
-}
 
 export function platformAsset(platform = process.platform, arch = process.arch): string {
   const os = platform === 'darwin' ? 'darwin' : platform === 'linux' ? 'linux' : null;

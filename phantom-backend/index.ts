@@ -246,6 +246,22 @@ async function main() {
   ctx.telegram = telegram;
   void telegram.reconcile();
 
+  // Upgrade checker — periodic GitHub release check, notification via Telegram.
+  // Waits one interval before the first check: the server may have just
+  // restarted from an upgrade (checking immediately would find it current and
+  // waste a GitHub API call). The interval is a setting read per tick, so a
+  // change takes effect without a restart. 0 disables the check.
+  (async () => {
+    while (!stopped) {
+      const ms = await resolve(db, 'update_check_interval_ms').catch(() => 86_400_000);
+      if (Number(ms) <= 0) { await new Promise((r) => setTimeout(r, 60_000)); continue; }
+      await new Promise((r) => setTimeout(r, Number(ms)));
+      if (stopped) break;
+      await telegram.upgradeChecker.check()
+        .catch((e) => log.warn({ err: errStr(e) }, 'upgrade check failed'));
+    }
+  })();
+
   const shutdown = async () => {
     stopped = true;
     looper.stop();

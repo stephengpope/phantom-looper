@@ -25,6 +25,8 @@ store.ts           the migration-012 rows: the account row (mode, active session
 deepgram.ts        transcribeVoice and speakVoice, two REST calls, never throws
 connect.ts         the outbound connection policy (2 s connect cut, one retry, keep-alive under 5 s); undici's own fetch
 alerts.ts          autoBuildAlert: the pure decision for a DM on a loop move
+upgrade.ts         UpgradeChecker: periodic GitHub release check, /upgrade command, Approve/Deny inline buttons,
+                   triggers POST /update on approval. Callback prefix 'upg' (distinct from 'apv')
 sendMessageTool.ts send_message, injected into code-mode turns through extraTools
 ```
 
@@ -77,4 +79,5 @@ carries a variation selector Telegram rejects.
 ## Tested in
 
 `test/telegram.test.ts` (entities, attachments, media tags, approvals,
-the menus, alerts, outcome lines). Nothing here runs against Telegram.
+the menus, alerts, upgrade checker, outcome lines). Nothing here runs
+against Telegram.

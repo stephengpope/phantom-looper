@@ -34,6 +34,7 @@ import { transcribeVoice, speakVoice, SPEAK_MAX_CHARS, type Transcription } from
 import { writeAttachment, composeMessage, MAX_INBOUND_BYTES, type StoredAttachment } from './attachments.js';
 import { runAssistantTurn, type AssistantDeps } from './assistant.js';
 import { Approvals } from './approvals.js';
+import { UpgradeChecker } from './upgrade.js';
 import * as store from './store.js';
 import { menuFor, handleCommand } from './commands.js';
 import { autoPushSession, autoPullSession, type AutoPushOutcome, type AutoPullOutcome } from '../../core/llm/tools/git.js';
@@ -90,9 +91,39 @@ export class TelegramEngine {
   private assistantHistory: ModelMessage[] = [];
   /** The approval gate — gated tools ask the user here (approvals.ts). */
   private approvals = new Approvals();
+  /** The upgrade checker — periodic GitHub release check + Telegram notification. */
+  upgradeChecker: UpgradeChecker;
 
   constructor(private deps: TelegramEngineDeps) {
     this.f = injectFetch(deps.app);
+    this.upgradeChecker = new UpgradeChecker({
+      version: process.env.APP_VERSION ?? 'dev',
+      health: async () => {
+        try {
+          const r = await (await this.call('/health')).json();
+          return r.ok ? r : null;
+        } catch { return null; }
+      },
+      triggerUpdate: async (tag) => {
+        try {
+          const r = await (await this.call('/update', { method: 'POST', body: { tag } })).json();
+          return r.ok ? { ok: true } : { ok: false, error: r.error?.message ?? 'unknown' };
+        } catch (e) { return { ok: false, error: (e as Error).message }; }
+      },
+      setting: async (key) => {
+        const values = await settingsValues(this.turnDeps()).catch(() => ({} as Record<string, unknown>));
+        return values[key];
+      },
+      token: () => this.token(),
+      authorizedUser: async () => {
+        const values = await settingsValues(this.turnDeps()).catch(() => ({} as Record<string, unknown>));
+        const dm = Number(values.telegram_authorized_user ?? '');
+        return Number.isFinite(dm) && dm ? dm : null;
+      },
+      makeClient: (token, dm) => new TelegramClient(token,
+        (id, text) => { store.recordSent(deps.db, dm, id, text, { kind: 'assistant' }).catch(() => {}); },
+        (id) => { store.deleteSent(deps.db, dm, id).catch(() => {}); }),
+    });
     // Every card write in the system, all workspaces; alerts.ts decides which
     // are the loop's moves. Fire-and-forget: an alert that fails is logged,
     // never retried, and never touches the card.
@@ -219,14 +250,20 @@ export class TelegramEngine {
       return 200;
     }
 
-    // A tap on an approval bubble's button.
+    // A tap on an inline button: approval gate (apv:) or upgrade (upg:).
     const tap = update.callback_query;
     if (tap) {
       if (String(tap.from?.id) !== authorized) return 200;
       if (!(await store.markUpdate(db, update.update_id))) return 200;
       const client = new TelegramClient(await this.token());
-      this.approvals.handleCallback(client, dm, { id: String(tap.id), data: tap.data })
-        .catch((e) => log.warn({ err: errStr(e) }, 'approval tap failed'));
+      const q = { id: String(tap.id), data: tap.data as string | undefined };
+      if (UpgradeChecker.isUpgradeCallback(tap.data)) {
+        this.upgradeChecker.handleCallback(client, dm, q)
+          .catch((e) => log.warn({ err: errStr(e) }, 'upgrade tap failed'));
+      } else {
+        this.approvals.handleCallback(client, dm, q)
+          .catch((e) => log.warn({ err: errStr(e) }, 'approval tap failed'));
+      }
       return 200;
     }
 

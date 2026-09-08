@@ -9,6 +9,7 @@ session.ts        openSession — the one way anything obtains a session (below)
 ids.ts            newId() lowercase ULID · idTime(id) — the mint time rides in the name
 kanban.ts         DEFAULT_COLUMNS · checklist keys: newKey, normalizeKey, keyedItems
 ndjson.ts         ndjson(body) — records off a streaming response; the server's stream shape
+version.ts        REPO, parseVersion, isBehind, bare, checkLatest — shared by the cli and the server's upgrade checker
 skills/skills.ts  scanSkills(root), mergeSkills, frontmatter parsing (splitFrontmatter, parseDescription, parseName)
 skills/validate.ts the write-side rules a skill must pass; lintSkillMd warns only
 llm/              agents, prompts, tools, transcript — own map
