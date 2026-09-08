@@ -72,6 +72,7 @@ function keyState(values: Record<string, unknown>, key: string): KeyState {
 type View =
   | { at: 'list' }
   | { at: 'name' }
+  | { at: 'rename'; preset: Preset }
   | { at: 'editor'; preset: Preset }
   | { at: 'editValue'; preset: Preset; key: string; spec: EditSpec };
 
@@ -135,6 +136,8 @@ export function Presets({ api, onApplied, onClose }: {
   const [notice, setNotice] = useState<string | undefined>();
   const [last, setLast] = useState<string | undefined>();
   const [nameText, setNameText] = useState('');
+  /** The armed-to-apply preset id. [enter] arms, [c] confirms. */
+  const [applyArmed, setApplyArmed] = useState<string | null>(null);
 
   // Server settings — needed to filter provider choices to keyed providers.
   const [serverCfg, setServerCfg] = useState<Record<string, ConfigValue> | null>(null);
@@ -231,6 +234,19 @@ export function Presets({ api, onApplied, onClose }: {
     finally { setBusy(false); }
   }, [api, load]);
 
+  // ── Rename ─────────────────────────────────────────────────────────────────
+  const renamePreset = useCallback(async (preset: Preset, name: string) => {
+    setBusy(true);
+    try {
+      await api('PUT', `/presets/${preset.id}`, { name, values: preset.values });
+      const updated = { ...preset, name };
+      setPresets((ps) => (ps ?? []).map((p) => p.id === preset.id ? updated : p));
+      setView({ at: 'editor', preset: updated });
+      setNotice(undefined);
+    } catch (e) { setNotice(`could not rename: ${(e as Error).message}`); }
+    finally { setBusy(false); }
+  }, [api]);
+
   // ── Delete ─────────────────────────────────────────────────────────────────
   const deletePreset = useCallback(async (id: string) => {
     setBusy(true);
@@ -248,6 +264,16 @@ export function Presets({ api, onApplied, onClose }: {
       <NameInput notice={notice} initial={nameText}
         onSubmit={(n) => { void createPreset(n); }}
         onCancel={() => setView({ at: 'list' })}
+        onNotice={setNotice} />
+    );
+  }
+
+  // ── Rename ────────────────────────────────────────────────────────────────
+  if (view.at === 'rename') {
+    return (
+      <NameInput notice={notice} initial={view.preset.name} title="rename preset"
+        onSubmit={(n) => { void renamePreset(view.preset, n); }}
+        onCancel={() => setView({ at: 'editor', preset: view.preset })}
         onNotice={setNotice} />
     );
   }
@@ -296,6 +322,7 @@ export function Presets({ api, onApplied, onClose }: {
         footer={[
           { key: 'enter', does: 'set a value' },
           { key: 'd', does: 'cycle: clear / leave as is' },
+          { key: 'r', does: 'rename' },
           { key: 'esc', does: 'back' },
         ]}>
         <SelectList
@@ -318,6 +345,7 @@ export function Presets({ api, onApplied, onClose }: {
           }}
           onCancel={() => { setView({ at: 'list' }); setLast(p.id); }}
           onKey={(ch, k) => {
+            if (ch === 'r') { setView({ at: 'rename', preset: p }); return; }
             if (ch !== 'd' || !k) return;
             // Cycle: set → clear → leave as is → clear → leave as is → ...
             const state = keyState(p.values, k);
@@ -355,7 +383,8 @@ export function Presets({ api, onApplied, onClose }: {
       sub={presets.length ? 'switch all agents at once' : 'no presets yet — [n] to create one'}
       notice={notice} busy={busy}
       footer={[
-        { key: 'enter', does: 'apply', when: !!presets.length },
+        { key: 'c', does: 'confirm apply', when: !!applyArmed },
+        { key: 'enter', does: 'apply', when: !!presets.length && !applyArmed },
         { key: 'e', does: 'edit', when: !!presets.length },
         { key: 'n', does: 'new' },
         { key: 'd', does: 'delete', when: !!presets.length },
@@ -369,11 +398,21 @@ export function Presets({ api, onApplied, onClose }: {
           initial={last}
           choices={listChoices}
           onSelect={(id) => {
+            // [enter] arms the apply; notice tells the user to [c]onfirm.
             const p = presets.find((x) => x.id === id);
-            if (p) void applyPreset(p);
+            if (!p) return;
+            setApplyArmed(id);
+            setNotice(`apply "${p.name}"? — [c] to confirm`);
           }}
-          onCancel={onClose}
+          onCancel={() => { setApplyArmed(null); onClose(); }}
           onKey={(ch, id) => {
+            // Any key other than c disarms.
+            if (ch !== 'c') setApplyArmed(null);
+            if (ch === 'c' && applyArmed) {
+              const p = presets.find((x) => x.id === applyArmed);
+              if (p) { setApplyArmed(null); void applyPreset(p); }
+              return;
+            }
             if (ch === 'n') { setNameText(''); setView({ at: 'name' }); return; }
             if (!id) return;
             const p = presets.find((x) => x.id === id);
@@ -389,15 +428,15 @@ export function Presets({ api, onApplied, onClose }: {
 
 /** The name prompt for a new preset — its own component so useInput can
  *  catch esc (hooks cannot live inside a conditional return). */
-function NameInput({ notice, initial, onSubmit, onCancel, onNotice }: {
-  notice?: string; initial: string;
+function NameInput({ notice, initial, title = 'new preset', onSubmit, onCancel, onNotice }: {
+  notice?: string; initial: string; title?: string;
   onSubmit: (name: string) => void; onCancel: () => void;
   onNotice: (n: string | undefined) => void;
 }) {
   const [text, setText] = useState(initial);
   useInput((_ch, key) => { if (key.escape) onCancel(); });
   return (
-    <Screen title="new preset" footer={[{ key: 'enter', does: 'create' }, { key: 'esc', does: 'back' }]}
+    <Screen title={title} footer={[{ key: 'enter', does: 'save' }, { key: 'esc', does: 'back' }]}
       notice={notice}>
       <Box>
         <Text color="cyan">{'  name: '}</Text>
