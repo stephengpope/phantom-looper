@@ -90,6 +90,25 @@ test('session_switch navigates to CLI view from board, card and menu screens', a
   w.close();
 });
 
+test('/close does not write a note into the next session', async () => {
+  const w = new WindowStore({ api: nothing, newTools: noTools });
+  // Seat two stub sessions so closing one leaves another (no API call).
+  const stub = () => ({
+    tools: {}, agent: {} as any, summary: {} as any,
+    transcript: {} as any, history: [], done: [],
+  });
+  w.sessions.add({ id: 's1', branch: 'b1', workspaceId: 'w1', ...stub() });
+  w.sessions.add({ id: 's2', branch: 'b2', workspaceId: 'w1', ...stub() });
+  assert.equal(w.sessions.activeId, 's2', 'last added is active');
+  // Close the active session via the /close command handler.
+  await w.runCommand('close');
+  assert.equal(w.sessions.activeId, 's1', 'switched to the other session');
+  // The surviving session must have NO note parts — the close must not pollute it.
+  const notes = w.sessions.get('s1')!.done.filter((p) => p.kind === 'note');
+  assert.equal(notes.length, 0, 'no close note in the surviving session');
+  w.close();
+});
+
 test('one board per workspace, handed to every caller', () => {
   const w = new WindowStore({ api: nothing, newTools: noTools });
   assert.equal(w.boardFor('w1'), w.boardFor('w1'), 'the same store both times');

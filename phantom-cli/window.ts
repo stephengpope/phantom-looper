@@ -1318,11 +1318,7 @@ export class WindowStore {
         if ('error' in r) {
           this.note(r.error.includes('a turn is running')
             ? 'a turn is running here — esc stops it, then /close' : r.error);
-          return;
         }
-        this.note(r.opened_new
-          ? 'closed the last one — this is a new session; /resume opens the old one again'
-          : 'closed — /resume opens it again');
         return;
       }
       case 'workspace': await this.openPicker('workspace'); return;
