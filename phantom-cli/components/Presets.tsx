@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box, useInput } from 'ink';
 import { Text } from './Text.js';
 import { SelectList, type Choice } from './SelectList.js';
+import { tableChoices, type TableRow } from './table.js';
 import { ValueInput, type EditSpec } from './ValueInput.js';
 import { Screen } from './Screen.js';
 import { TextInput } from './TextInput.js';
@@ -59,7 +60,7 @@ const PRESET_GROUPS: Array<{ heading: string; keys: Array<{ key: string; label: 
 
 const ALL_KEYS = PRESET_GROUPS.flatMap((g) => g.keys.map((k) => k.key));
 
-interface Preset { id: string; name: string; values: Record<string, unknown> }
+export interface Preset { id: string; name: string; values: Record<string, unknown> }
 
 /** The three states a key can be in inside a preset. */
 type KeyState = 'set' | 'clear' | 'leave';
@@ -76,16 +77,25 @@ type View =
   | { at: 'editor'; preset: Preset }
   | { at: 'editValue'; preset: Preset; key: string; spec: EditSpec };
 
-/** One-line summary for the preset list: provider/model · reasoning. */
-function summary(p: Preset): string {
-  const prov = p.values.provider;
-  const model = p.values.model;
-  const reasoning = p.values.reasoning;
-  const parts: string[] = [];
-  if (typeof prov === 'string') parts.push(prov);
-  if (typeof model === 'string') parts.push(model);
-  const main = parts.join(' · ') || '—';
-  return reasoning ? `${main} · ${String(reasoning)}` : main;
+/** A summary cell: the value, or the system's empty-cell glyph (as /resume
+ *  draws a missing model) — never a dot used as a SEPARATOR between facts. */
+const cell = (v: unknown): string => (typeof v === 'string' ? v : '·');
+
+/** The selection list's rows, through the shared table system: provider,
+ *  model and reasoning each in their own aligned column under a header —
+ *  the same shape /resume, /tasks and /archived draw. Replaces the old
+ *  `detail` string that joined the three with ' · ' into one ragged blob. */
+export function presetChoices(presets: Preset[]): Choice<string | null>[] {
+  const rows = presets.map((p): TableRow<string> => ({
+    value: p.id,
+    cells: [p.name, cell(p.values.provider), cell(p.values.model), cell(p.values.reasoning)],
+    hint: presetHint(p),
+  }));
+  return tableChoices('preset', [
+    { title: 'provider', cap: 18 },   // fits 'openai-compatible' (17)
+    { title: 'model', cap: 30 },      // long ids truncate, never wrap
+    { title: 'reasoning' },           // the last column runs free
+  ], rows);
 }
 
 /** The value column on the preset editor row. */
@@ -371,12 +381,7 @@ export function Presets({ api, onApplied, onClose }: {
       notice={notice} sub="loading…" />;
   }
 
-  const listChoices: Choice<string>[] = presets.map((p) => ({
-    value: p.id,
-    label: p.name,
-    detail: summary(p),
-    hint: presetHint(p),
-  }));
+  const listChoices = presetChoices(presets);
 
   return (
     <Screen title="presets"
@@ -399,6 +404,7 @@ export function Presets({ api, onApplied, onClose }: {
           choices={listChoices}
           onSelect={(id) => {
             // [enter] arms the apply; notice tells the user to [c]onfirm.
+            if (!id) return;         // the table header carries null
             const p = presets.find((x) => x.id === id);
             if (!p) return;
             setApplyArmed(id);

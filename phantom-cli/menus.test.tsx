@@ -1955,6 +1955,44 @@ test('tableChoices: a marked cell carries its mark to the Column and counts the 
   assert.ok(!('mark' in plain));
 });
 
+// ── /presets: the selection list rides the table system ─────────────────────
+import { presetChoices } from './components/Presets.js';
+
+test('presetChoices: provider, model and reasoning each get their own aligned column', () => {
+  const presets = [
+    { id: 'p1', name: 'fast', values: { provider: 'anthropic', model: 'claude-sonnet-4', reasoning: 'high' } },
+    { id: 'p2', name: 'bare', values: {} },
+  ];
+  const [header, fast, bare] = presetChoices(presets);
+  // A header row over the data rows, as /resume and /archived draw it.
+  assert.ok(header.heading);
+  assert.equal(header.label, 'preset');
+  assert.deepEqual(header.columns?.map((c) => c.text), ['provider', 'model', 'reasoning']);
+  // Each fact is its own column — never one string joined with ' · ' dots,
+  // and the rows are choices with columns, not a `detail` blob.
+  assert.deepEqual(fast.columns?.map((c) => c.text), ['anthropic', 'claude-sonnet-4', 'high']);
+  assert.ok(!('detail' in fast));
+  // A missing value is the system's empty-cell glyph, not a run-on separator.
+  assert.deepEqual(bare.columns?.map((c) => c.text), ['·', '·', '·']);
+  // Header and rows share the computed widths; the last column runs free.
+  assert.equal(fast.columns?.[0].width, header.columns?.[0].width);
+  assert.equal(fast.columns?.[1].width, header.columns?.[1].width);
+  assert.equal(fast.columns?.[2].width, undefined);
+  // Values still select by preset id, and the full-values hint survives.
+  assert.equal(fast.value, 'p1');
+  assert.ok(fast.hint?.includes('coding agent:'));
+});
+
+test('presetChoices: a long provider or model truncates into its capped column', () => {
+  const [header, row] = presetChoices([
+    { id: 'p1', name: 'x', values: { provider: 'openai-compatible', model: 'a-very-long-model-id-that-keeps-going', reasoning: 'xhigh' } },
+  ]);
+  // Width = min(cap, widest content) + the 2-cell gutter (tableChoices' math).
+  assert.equal(row.columns?.[0].width, 19, 'openai-compatible (17) fits under the cap, gutter included');
+  assert.equal(row.columns?.[1].width, 32, 'model capped at 30 + gutter');
+  assert.equal(header.columns?.[0].width, 19, 'the header shares the computed width');
+});
+
 // ── the provider and model rows, every screen ────────────────────────────────
 // A provider row offers only providers with a key on /keys; a model row's
 // catalog follows its own provider, else the coding agent's — and with no
