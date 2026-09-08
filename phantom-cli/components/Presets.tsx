@@ -129,8 +129,10 @@ function hintForKey(state: KeyState, value: unknown): string {
 
 export function Presets({ api, onApplied, onClose }: {
   api: Api;
-  /** Fired after a preset is applied so the app can rebuild agents. */
-  onApplied: () => void;
+  /** Fired after a preset is applied so the app can rebuild agents and
+   *  confirm the switch — the screen closes on apply, so the confirmation
+   *  has to live where the user lands: the CLI. */
+  onApplied: (name: string) => void;
   onClose: () => void;
 }) {
   const settings = useMemo(() => makeSettings(api), [api]);
@@ -194,11 +196,14 @@ export function Presets({ api, onApplied, onClose }: {
       if (Object.keys(patch).length) {
         await settings.patch(patch);
       }
-      setNotice(`preset applied: ${p.name}`);
-      onApplied();
+      // Apply is the destination, not a step: back to the CLI, where
+      // onApplied confirms the switch. A failure keeps the screen open
+      // with the error.
+      onApplied(p.name);
+      onClose();
     } catch (e) { setNotice(`could not apply: ${(e as Error).message}`); }
     finally { setBusy(false); }
-  }, [settings, onApplied]);
+  }, [settings, onApplied, onClose]);
 
   // ── Save one key in a preset ───────────────────────────────────────────────
   // value = a real value → set; null → clear; undefined → leave unchanged

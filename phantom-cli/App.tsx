@@ -747,7 +747,12 @@ export function App({
             onLocalChange={windowStore.settingChanged} onClose={() => windowStore.setMenu(null)} />
         ) : windowStore.menu === 'presets' ? (
           <Presets api={api}
-            onApplied={() => windowStore.settingChanged('provider' as ConfigKey)}
+            // Applying closes the screen — the confirmation and the rebuilt
+            // agents both land in the CLI the user is back at.
+            onApplied={(name) => {
+              windowStore.note(`preset applied: ${name}`);
+              windowStore.settingChanged('provider' as ConfigKey);
+            }}
             onClose={() => windowStore.setMenu(null)} />
         ) : windowStore.menu === 'duplicateModel' && windowStore.duplicating ? (
           <DuplicateModel
