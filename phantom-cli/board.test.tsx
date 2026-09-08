@@ -252,7 +252,7 @@ test('n creates in the focused column; a archives with confirmation', async () =
   // First [a] arms — no PATCH yet, the confirmation prompt appears.
   r.stdin.write('a'); await sleep(30);
   assert.ok(!calls.some((c) => c.method === 'PATCH' && (c.body as { archived?: boolean }).archived), 'the first [a] only arms');
-  assert.match(strip(r.lastFrame()!), /archive #1-first card\?/, 'the confirmation prompt names the card');
+  assert.match(strip(r.lastFrame()!), /archive #1-first card\? \[c\] to confirm/, 'the confirmation prompt names the card');
   assert.match(strip(r.lastFrame()!), /\[c\] to confirm/, 'the prompt tells the user what to do');
   // [c] confirms — the PATCH fires.
   r.stdin.write('c'); await sleep(30);

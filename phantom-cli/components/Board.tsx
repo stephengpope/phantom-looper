@@ -253,7 +253,7 @@ export function Board({ store, width, height, isActive, onClose, card, onOpenCar
         ) : dragging ? (
           <Text color="green">moving #{dragging.seq} → {drag!.toCol.replace(/_/g, ' ')} (release to drop, esc to cancel)</Text>
         ) : archiveArmed.current != null && focusCard ? (
-          <Text color="yellow">archive #{focusCard.seq}-{focusCard.title}? — [c] to confirm, [esc] to cancel</Text>
+          <Text color="yellow">archive #{focusCard.seq}-{focusCard.title}? [c] to confirm, [esc] to cancel</Text>
         ) : (
           <Text dimColor>↑ ↓ ← →  [esc]  [enter] open  [tab/shift+tab] move  [j/k] sort  [n]ew  [p]in  [a]rchive  {zoom ? '[e] collapse' : '[e]xpand'}  [v]iew archived</Text>
         )}

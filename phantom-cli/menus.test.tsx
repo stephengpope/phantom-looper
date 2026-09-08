@@ -1923,7 +1923,7 @@ test('[k] on /tasks warns once; [c] confirms the kill and the list refreshes', a
   stdin.write(ENTER); await sleep(140);
   stdin.write('k'); await sleep(120);
   assert.ok(!calls.some((c) => c.startsWith('DELETE /sessions/s1/tasks/')), 'the first [k] only warns');
-  assert.match(strip(lastFrame() ?? ''), /kill "npm run dev"\? — \[c\] to confirm/);
+  assert.match(strip(lastFrame() ?? ''), /kill "npm run dev"\? \[c\] to confirm/);
   stdin.write('k'); await sleep(200);
   assert.ok(calls.includes('DELETE /sessions/s1/tasks/142'), 'the second [k] kills');
   assert.match(strip(lastFrame() ?? ''), /nothing running/, 'the list refreshed in place');

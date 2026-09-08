@@ -992,7 +992,7 @@ export class WindowStore {
       const code = (e as { code?: string }).code ?? '';
       if (code === 'unpushed_work' || m.includes('unpushed_work')) {
         this.trashArmed = id;
-        this.pickerNotice = 'unpushed work — [c] to confirm discard';
+        this.pickerNotice = 'unpushed work [c] to confirm discard';
       } else if (code === 'session_locked' || m.includes('session_locked')) {
         this.pickerNotice = 'in use elsewhere — a held session cannot be trashed';
       } else this.pickerNotice = `could not trash session ${id}: ${m}`;
@@ -1106,7 +1106,7 @@ export class WindowStore {
     if (!id) return;
     if (this.killArmed !== sid) {
       this.killArmed = sid;
-      this.tasksNotice = `kill "${command}"? — [c] to confirm`;
+      this.tasksNotice = `kill "${command}"? [c] to confirm`;
       this.notify();
       return;
     }

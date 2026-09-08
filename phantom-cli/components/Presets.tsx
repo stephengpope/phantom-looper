@@ -404,7 +404,7 @@ export function Presets({ api, onApplied, onClose }: {
             const p = presets.find((x) => x.id === id);
             if (!p) return;
             setApplyArmed(id);
-            setNotice(`apply "${p.name}"? — [c] to confirm`);
+            setNotice(`apply "${p.name}"? [c] to confirm`);
           }}
           onCancel={() => { setApplyArmed(null); onClose(); }}
           onKey={(ch, id) => {
