@@ -39,7 +39,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import type { ModelMessage, Tool } from 'ai';
 import { runTurn } from './agent.js';
 import { buildAgent, buildAssistantAgent } from './agentFromConfig.js';
-import { phaseLabel, tokenCount } from './state.js';
+import { phaseLabel, tokenCount, formatTokens } from './state.js';
 import { activeHold } from './sessions.js';
 import { Transcript, lastUserMessage, type TranscriptHeader } from './session.js';
 import { complete, matches } from './commands.js';
@@ -604,9 +604,15 @@ export function App({
   // are talking to. Before the first message it follows /model and /presets;
   // after, it is fixed for life.
   const modelMark = session?.summary.model;
-  // Order: card, git dot, mode, model, bg tasks, notice pinned last.
+  // The session's lifetime OUTPUT tokens (the expensive ones), right of the
+  // model: the exact sum at the last seat plus whatever a running turn has
+  // streamed on top. Hidden at zero — a fresh session has no news yet.
+  const tokensShown = session
+    ? session.totalTokens + ((session.busy || session.remoteBusy) ? tokenCount(session.tokens) : 0) : 0;
+  const tokensMark = tokensShown > 0 ? `↓ ${formatTokens(tokensShown)}` : undefined;
+  // Order: card, git dot, mode, model, tokens, bg tasks, notice pinned last.
   const withMode = (rest?: string): ToolbarPart[] =>
-    [cardMark, workMark, modeMark, modelMark, taskMark, rest].filter((p): p is ToolbarPart => Boolean(p));
+    [cardMark, workMark, modeMark, modelMark, tokensMark, taskMark, rest].filter((p): p is ToolbarPart => Boolean(p));
 
   return (
     <SizeContext.Provider value={{ rows: screenRows, cols: screenCols }}>

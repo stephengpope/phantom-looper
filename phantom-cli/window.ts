@@ -14,7 +14,7 @@ import { BoardStore, type Card, type Stream } from './board.js';
 import { VoiceClient, sidecarEnv, codingKanbanTool, screenModeTools,
   type KanbanArgs, type ScreenModeHandler } from './voice.js';
 import { Transcript, adoptServerCopy, syncTranscriptUp, type TranscriptHeader } from './session.js';
-import { parseTranscript } from '../core/llm/transcript.js';
+import { parseTranscript, sumUsageFromJsonl } from '../core/llm/transcript.js';
 import { pinnedCfg, sessionPin, type ModelPin } from '../core/llm/agentConfig.js';
 import { openSession as coreOpenSession } from '../core/session.js';
 import { buildAgent, buildAssistantAgent, codingInstructions } from './agentFromConfig.js';
@@ -476,7 +476,7 @@ export class WindowStore {
     this.sessions.reseat(id, parsed.messages, keepScreen ? null : [
       { kind: 'note', id: nextId('note'), text: 'refreshed — this session moved forward elsewhere' } as Part,
       ...messagesToParts(parsed.messages),
-    ], t.updated_at ?? server);
+    ], t.updated_at ?? server, sumUsageFromJsonl(seated.text).output);
   };
 
   // ── what is on screen ─────────────────────────────────────────────────────
@@ -666,6 +666,10 @@ export class WindowStore {
         syncStamp,
         pin,
         planMode,
+        // The toolbar's lifetime output tokens: the seated file is the
+        // record's working copy, so its usage lines are the exact sum —
+        // including any unsaved local steps adoptServerCopy kept.
+        totalTokens: sumUsageFromJsonl(seated.text).output,
         ...(card ? { card } : {}),
         ...(row.agent === 'supervisor' ? { readonly: true } : {}),
         done: [

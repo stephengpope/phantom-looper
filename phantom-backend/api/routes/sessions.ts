@@ -382,8 +382,11 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       const pinning = s.provider == null && s.model == null
         && head.provider != null && head.model != null;
       const stamp = new Date();
-      // The moved stamp is also what invalidates the cached token totals —
-      // tokens_as_of stops matching, and the next token-usage read recomputes.
+      // The token totals ride the save: the whole record is already in memory
+      // here, so summing its usage lines costs one pass, and the row's cache
+      // lands in the SAME statement as the text it sums — the two can never
+      // disagree, and no read ever has to recompute.
+      const tokens = sumUsageFromJsonl(data);
       // Every save is one turn: the counter that paces session naming.
       // Who drove it is read off the writer: a person's turn into the loop's
       // coding session takes the session over (sessions.ts agentAfterSave).
@@ -391,6 +394,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       const [saved] = await ctx.db.update(sessions)
         .set({ transcript: data, lastUserMessage, transcriptUpdatedAt: stamp,
           turnCount: sql`${sessions.turnCount} + 1`, agent,
+          tokensInput: tokens.input, tokensOutput: tokens.output,
+          tokensCacheRead: tokens.cache_read, tokensCacheWrite: tokens.cache_write,
+          tokensAsOf: stamp,
           ...(pinning ? { provider: head.provider, model: head.model, baseUrl: head.baseUrl } : {}),
         })
         .where(eq(sessions.id, s.id))
@@ -609,20 +615,28 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         const copy = await createSession(ctx.db, ctx.paths, ctx.encryptionKey, src.workspaceId);
         const t = await ctx.db.select({ data: sessions.transcript })
           .from(sessions).where(eq(sessions.id, src.id));
-        // Token totals are NOT copied: the copy's transcript carries the
-        // same usage lines, so its totals compute on first ask. The name
-        // travels; turn_count stays 0 — the copy renames on its own clock.
-        // Plan mode travels too — a copy of a planning session is still
-        // planning — with or without a transcript to bring along.
+        // The copy's token totals come from the same text (the header rewrite
+        // touches no usage line) — written here because this route saves the
+        // transcript directly, bypassing the save route. The name travels;
+        // turn_count stays 0 — the copy renames on its own clock. Plan mode
+        // travels too — a copy of a planning session is still planning — with
+        // or without a transcript to bring along.
+        const totals = t[0]?.data != null ? sumUsageFromJsonl(t[0].data) : null;
+        const stamp = new Date();
         await ctx.db.update(sessions).set({
           planMode: src.planMode,
           // The pin travels with the conversation: a copy of a session is the
           // same conversation, so it runs on the same model.
           provider: src.provider, model: src.model, baseUrl: src.baseUrl,
+          ...(totals ? {
+            tokensInput: totals.input, tokensOutput: totals.output,
+            tokensCacheRead: totals.cache_read, tokensCacheWrite: totals.cache_write,
+            tokensAsOf: stamp,
+          } : {}),
           ...(t[0]?.data != null ? {
             transcript: rewriteTranscriptHeader(t[0].data, { session_id: copy.id, branch: copy.branch }),
             lastUserMessage: src.lastUserMessage, name: src.name, nameManual: src.nameManual,
-            transcriptUpdatedAt: new Date(),
+            transcriptUpdatedAt: stamp,
           } : {}),
         }).where(eq(sessions.id, copy.id));
         return reply.code(201).send(ok({ ...copy, copied_from: src.id }));
@@ -659,45 +673,38 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   });
 
   // ---- token usage ---------------------------------------------------------
-  // Totals are computed ONLY when this route is asked: the transcript's usage
-  // lines (one per model call) are summed, and the sums are cached on the row,
-  // valid while tokens_as_of still equals transcript_updated_at. A save moves
-  // the stamp, so a stale cache is unrepresentable — worst case is one
-  // recompute. Nothing at save time does any of this.
+  // The totals are written by the transcript SAVE (and the duplicate route),
+  // in the same statement as the text they sum — so this route only reads the
+  // row. Rows saved before that write carry nulls: compute from the record
+  // once, backfill, and never again.
   app.get<{ Params: { id: string } }>(
     '/sessions/:id/token-usage', { schema: { ...TAG,
       summary: 'A session\'s token totals, summed from its transcript',
-      description: 'Sums the transcript\'s usage lines (one per model call — input, output, cache read/write ' +
-        'tokens as the provider reported them) on demand and caches the result against the transcript\'s ' +
-        'updated_at stamp. `as_of` is that stamp; `cached` says whether this answer was recomputed or served ' +
-        'from the cache. All zeros when nothing was ever recorded.',
+      description: 'The row\'s cache of the transcript\'s usage-line sum (one per model call — input, output, ' +
+        'cache read/write tokens as the provider reported them), written by the transcript save. `as_of` is ' +
+        'the transcript\'s stamp when the sum was computed; `cached` is false only when a row older than ' +
+        'the save-time write is backfilled on this read. All zeros when nothing was ever recorded.',
       params: idParam } },
     async (req, reply) => {
       const s = await getSession(ctx.db, req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
-      if (!s.transcriptUpdatedAt) {
-        return ok({ input: 0, output: 0, cache_read: 0, cache_write: 0, as_of: null, cached: false });
+      // A row older than the save-time write: backfill once from the record.
+      if (s.tokensInput == null && s.transcriptUpdatedAt) {
+        const rows = await ctx.db.select({ data: sessions.transcript })
+          .from(sessions).where(eq(sessions.id, s.id));
+        const totals = sumUsageFromJsonl(rows[0]?.data ?? '');
+        await ctx.db.update(sessions).set({
+          tokensInput: totals.input, tokensOutput: totals.output,
+          tokensCacheRead: totals.cache_read, tokensCacheWrite: totals.cache_write,
+          tokensAsOf: s.transcriptUpdatedAt,
+        }).where(eq(sessions.id, s.id));
+        return ok({ input: totals.input, output: totals.output,
+          cache_read: totals.cache_read, cache_write: totals.cache_write,
+          as_of: s.transcriptUpdatedAt.toISOString(), cached: false });
       }
-      if (s.tokensAsOf && s.tokensAsOf.getTime() === s.transcriptUpdatedAt.getTime()
-        && s.tokensInput != null) {
-        return ok({ input: s.tokensInput, output: s.tokensOutput ?? 0,
-          cache_read: s.tokensCacheRead ?? 0, cache_write: s.tokensCacheWrite ?? 0,
-          as_of: s.tokensAsOf.toISOString(), cached: true });
-      }
-      const rows = await ctx.db.select({ data: sessions.transcript, updatedAt: sessions.transcriptUpdatedAt })
-        .from(sessions).where(eq(sessions.id, s.id));
-      const totals = sumUsageFromJsonl(rows[0]?.data ?? '');
-      // Cache stamped with the stamp the sum was computed FROM — a save that
-      // lands between the read above and this write just means one more
-      // recompute next time, never a wrong answer.
-      await ctx.db.update(sessions).set({
-        tokensInput: totals.input, tokensOutput: totals.output,
-        tokensCacheRead: totals.cache_read, tokensCacheWrite: totals.cache_write,
-        tokensAsOf: rows[0]?.updatedAt ?? null,
-      }).where(eq(sessions.id, s.id));
-      return ok({ input: totals.input, output: totals.output,
-        cache_read: totals.cache_read, cache_write: totals.cache_write,
-        as_of: rows[0]?.updatedAt?.toISOString() ?? null, cached: false });
+      return ok({ input: s.tokensInput ?? 0, output: s.tokensOutput ?? 0,
+        cache_read: s.tokensCacheRead ?? 0, cache_write: s.tokensCacheWrite ?? 0,
+        as_of: s.tokensAsOf?.toISOString() ?? null, cached: true });
     });
 
   app.patch<{ Params: { id: string }; Body: { idle_destroy_ms?: number; name?: string | null; plan_mode?: boolean } }>(

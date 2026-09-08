@@ -184,8 +184,9 @@ export function headerModelFromJsonl(text: string):
 // --- token usage -------------------------------------------------------------
 // One `{"type":"usage",...}` line per model call, appended right after the
 // call's messages. No role, so replay never sees it (parseTranscript keeps it
-// in `events`); the totals are computed from these lines on demand — the
-// transcript is the record, the sessions row only caches the sum.
+// in `events`). The transcript save sums these lines into the sessions row in
+// the same statement as the text — the transcript is the record, the row its
+// cache, and the two cannot disagree.
 
 export interface UsageTotals {
   input: number;        // input (prompt) tokens as the provider reported them
@@ -253,7 +254,11 @@ export function memoryRecorder(startAt: number):
 export function sumUsageFromJsonl(text: string): UsageTotals {
   const t: UsageTotals = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
   for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
+    // Cheap gate before the parse: a transcript is mostly fat message lines
+    // (~17MB observed), and every usage line literally contains "usage", so a
+    // substring scan skips them without building an object per line. A rare
+    // false positive (a tool result mentioning usage) parses and falls through.
+    if (!line.includes('"usage"')) continue;
     let e: { type?: string; input?: unknown; output?: unknown; cache_read?: unknown; cache_write?: unknown };
     try { e = JSON.parse(line); } catch { continue; }
     if (e.type !== 'usage') continue;

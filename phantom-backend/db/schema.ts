@@ -120,9 +120,9 @@ export const sessions = phantomLooper.table('sessions', {
   lastUserMessage: text('last_user_message'),
   transcriptUpdatedAt: timestamp('transcript_updated_at', { withTimezone: true }),
   // CACHE of the transcript's usage-line sum (core/llm/transcript.ts),
-  // computed only when GET /sessions/:id/token-usage is asked and valid only
-  // while tokens_as_of equals transcript_updated_at. The transcript is the
-  // record; these can always be recomputed.
+  // written by the transcript save in the same statement as the text it sums
+  // — never stale by construction. Null only on rows saved before that write;
+  // the token-usage route backfills those once.
   tokensInput: bigint('tokens_input', { mode: 'number' }),
   tokensOutput: bigint('tokens_output', { mode: 'number' }),
   tokensCacheRead: bigint('tokens_cache_read', { mode: 'number' }),
