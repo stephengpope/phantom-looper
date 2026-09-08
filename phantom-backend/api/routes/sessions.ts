@@ -65,6 +65,19 @@ export function rewriteTranscriptHeader(data: string, patch: { session_id: strin
   } catch { return data; }
 }
 
+/** Look up the card linked to a session via the loops table, then publish a
+ *  board lock event so the kanban board can show/hide the spinner. Fire-and-
+ *  forget: a failed lookup never blocks the lock route. */
+async function publishBoardLock(ctx: AppCtx, sessionId: string, locked: boolean): Promise<void> {
+  try {
+    const [row] = await ctx.db.select({ card: loops.card, workspaceId: loops.workspaceId })
+      .from(loops).where(eq(loops.codingSessionId, sessionId))
+      .orderBy(desc(loops.createdAt)).limit(1);
+    if (row) ctx.events?.publish(row.workspaceId,
+      { event: 'session', card: row.card, id: sessionId, name: null, locked });
+  } catch { /* best-effort — the board refreshes on reconnect anyway */ }
+}
+
 export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   app.post<{ Body: { workspace_id: string; id?: string } }>('/sessions', { schema: { ...TAG,
     summary: 'Create — or restart — a session',
@@ -251,6 +264,10 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (!expires) return reply.code(409).send(lockedErr(s));
       ctx.sessionEvents?.publish(s.id, client, lockEvent(s, { locked: true, by: client,
         label: req.body?.label ?? s.lockedLabel ?? null, expires }));
+      // Notify the board when a session transitions from unlocked to locked
+      // (not on renewals — those fire on every transcript save). The pre-
+      // acquire row `s` tells us: same client = renewal, anything else = fresh.
+      if (s.lockedBy !== client) void publishBoardLock(ctx, s.id, true);
       // The transcript's stamp rides along so a turn can tell whether its
       // memory is current WITHOUT downloading anything: stamp unchanged =
       // run on memory; moved = someone advanced it, pull once first.
@@ -271,6 +288,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       const s = await getSession(ctx.db, req.params.id);
       const released = await releaseLock(ctx.db, req.params.id, client);
       if (released && s) ctx.sessionEvents?.publish(s.id, client, lockEvent(s, { locked: false }));
+      if (released) void publishBoardLock(ctx, req.params.id, false);
       // A freed session is the event a skipped looper round waits on — e.g.
       // the cli closing a card's coding session it had open.
       if (released) ctx.looper?.runLoopOfSession(req.params.id, client);

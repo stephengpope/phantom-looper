@@ -151,14 +151,17 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
   // Each card's CURRENT loop's coding session — the newest loop row per card,
   // the same ordering currentLoop() uses. Rides the board GET so the card
   // editor can name the session and open it; one query for the whole board.
+  // `locked` is computed here (same logic as GET /sessions) so the board can
+  // show a spinner on cards whose session is actively running.
   const cardSessions = async (w: WorkspaceRow) => {
     const { rows } = await pool.query(
-      `select distinct on (l.card) l.card, l.coding_session_id as id, s.name
+      `select distinct on (l.card) l.card, l.coding_session_id as id, s.name,
+              (s.locked_by is not null and s.lock_expires_at > now()) as locked
        from phantom_looper.loops l
        left join phantom_looper.sessions s on s.id = l.coding_session_id
        where l.workspace_id = $1
        order by l.card, l.created_at desc`, [w.id]);
-    return rows as { card: number; id: string; name: string | null }[];
+    return rows as { card: number; id: string; name: string | null; locked: boolean }[];
   };
 
   app.get<{ Params: { id: string };
@@ -213,14 +216,17 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
       // card_work: the git work state per card, read from the card's coding
       // session row — the stored column the 10s refresh job maintains.
       const cardWork: Record<number, string | null> = {};
+      // card_locked: whether the card's coding session is held right now.
+      const cardLocked: Record<number, boolean> = {};
       if (cs.length) {
         const sIds = cs.map((c) => c.id);
         const sRows = await ctx.db.select({ id: sessions.id, work: sessions.work })
           .from(sessions).where(inArray(sessions.id, sIds));
         const workOf = new Map(sRows.map((s) => [s.id, s.work]));
         for (const c of cs) { const w = workOf.get(c.id); if (w) cardWork[c.card] = w; }
+        for (const c of cs) { if (c.locked) cardLocked[c.card] = true; }
       }
-      return ok({ ...await board(w), cards: rows, card_sessions: cs, card_work: cardWork });
+      return ok({ ...await board(w), cards: rows, card_sessions: cs, card_work: cardWork, card_locked: cardLocked });
     });
 
   app.post<{ Params: { id: string }; Body: Record<string, unknown> }>(

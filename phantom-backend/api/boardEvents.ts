@@ -19,7 +19,7 @@ export type BoardEvent =
   // remembering anything. The cli's BoardStore reads `card` only.
   | { event: 'card'; card: Record<string, unknown>; from?: string; client?: string }
   | { event: 'deleted'; id: number }                        // hard-deleted
-  | { event: 'session'; card: number; id: string; name: string | null; work?: string | null }; // a loop paired the card with its coding session; work = git state update
+  | { event: 'session'; card: number; id: string; name: string | null; work?: string | null; locked?: boolean }; // a loop paired the card with its coding session; work = git state update; locked = session hold changed
 
 export class BoardEvents {
   private emitter = new EventEmitter();

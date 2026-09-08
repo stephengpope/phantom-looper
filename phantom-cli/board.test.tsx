@@ -788,3 +788,42 @@ test('no stream wired: follow is a no-op and the store still loads', async () =>
   assert.equal(store.bySeq(1)?.title, 'first card');
   store.close();
 });
+
+// ── card spinner (locked session) ──────────────────────────────────────────
+test('a locked card session shows a spinner instead of the git dot; unlocking restores the dot', async () => {
+  // card_locked and card_work ride the board GET. The fake serves card 1 as
+  // locked with a git state, and card 3 as unlocked with a git state.
+  const { api } = fakeApi(seed());
+  const withLocked = async (method: string, path: string, body?: unknown) => {
+    const d = await api(method, path, body) as Record<string, unknown>;
+    if (method === 'GET' && !path.includes('seq='))
+      return { ...d, card_sessions: [{ card: 1, id: 's1', name: null }, { card: 3, id: 's3', name: null }],
+        card_work: { 1: 'not_pushed', 3: 'not_merged' }, card_locked: { 1: true } };
+    return d;
+  };
+  const store = new BoardStore(withLocked, 'w1');
+  await store.load();
+
+  // Store state: card 1 locked, card 3 not.
+  assert.equal(store.state.cardLocked?.[1], true);
+  assert.equal(store.state.cardLocked?.[3], undefined);
+
+  // Render: card 1 should have a spinner (ink-spinner renders a braille dot),
+  // NOT the red • that not_pushed would show. Card 3 should have the yellow •.
+  const r = mount(store);
+  await sleep(50);
+  const f = strip(r.lastFrame()!);
+
+  // Card 3's row has the work dot (•).
+  assert.match(f, /•.*3-busy card/, 'unlocked card shows the git dot');
+
+  // Now simulate a lock event over the stream — card 3 becomes locked.
+  store.applyEvent({ event: 'session', card: 3, id: 's3', name: null, locked: true });
+  assert.equal(store.state.cardLocked?.[3], true);
+
+  // And an unlock event — card 1 unlocked.
+  store.applyEvent({ event: 'session', card: 1, id: 's1', name: null, locked: false });
+  assert.equal(store.state.cardLocked?.[1], undefined, 'unlock removes the key');
+
+  r.unmount();
+});

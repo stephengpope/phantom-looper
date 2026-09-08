@@ -7,6 +7,7 @@
 // `width` belong to the voice pane and are ignored here.
 import { Box, measureElement, useInput, type DOMElement } from 'ink';
 import { Text } from './Text.js';
+import Spinner from 'ink-spinner';
 import { useEffect, useRef, useState } from 'react';
 import { isMouseInput, parseMouse } from '../mouse.js';
 import { CardEditor } from './CardEditor.js';
@@ -208,7 +209,9 @@ export function Board({ store, width, height, isActive, onClose, card, onOpenCar
                 // The whole row is the title: a blocked card is just red, card
                 // progress lives on the edit page — no suffixes eating width.
                 // The two-cell gutter: the drag ghost's ▸ first, else a
+                // spinner when the card's session is actively running, else a
                 // colored • for the git work state (red/yellow/green).
+                const locked = store.state.cardLocked?.[t.seq];
                 const work = store.state.cardWork?.[t.seq];
                 const WORK_COLOR: Record<string, string> = { not_pushed: 'red', not_merged: 'yellow', merged: 'green' };
                 const dotColor = work ? WORK_COLOR[work] : undefined;
@@ -218,9 +221,11 @@ export function Board({ store, width, height, isActive, onClose, card, onOpenCar
                     inverse={selected}
                     dimColor={dragging?.id === t.id}
                     color={ghostHere ? 'green' : t.blocked_reason ? 'red' : undefined}>
-                    {ghostHere ? '▸ ' : dotColor
-                      ? <><Text color={dotColor} inverse={selected}>{'•'}</Text>{' '}</>
-                      : '  '}{t.seq}-{t.title}{t.pinned ? ' 📌' : ''}
+                    {ghostHere ? '▸ ' : locked
+                      ? <><Text color="magenta"><Spinner type="dots" /></Text>{' '}</>
+                      : dotColor
+                        ? <><Text color={dotColor} inverse={selected}>{'•'}</Text>{' '}</>
+                        : '  '}{t.seq}-{t.title}{t.pinned ? ' 📌' : ''}
                   </Text>
                 );
               })}

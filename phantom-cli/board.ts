@@ -41,6 +41,9 @@ export interface BoardState {
   /** By card seq: the git work state (not_pushed / not_merged / merged),
    *  from the card's coding session row. Absent = no session or never checked. */
   cardWork?: Record<number, string>;
+  /** By card seq: whether the card's coding session is held (a turn is
+   *  running) right now. Absent seq = not locked or no session. */
+  cardLocked?: Record<number, boolean>;
   /** The workspace's resolved auto_plan / auto_build — what an `inherit` card
    *  actually gets — and which layer said so ('default' | 'global' | 'workspace'). */
   autoPlanDefault?: boolean; autoPlanSource?: string;
@@ -90,7 +93,10 @@ export class BoardStore {
       const sessions = { ...(this.state.sessions ?? {}), [card]: { id: String(rec.id), name: (rec.name as string | null) ?? null } };
       const cardWork = { ...(this.state.cardWork ?? {}) };
       if (rec.work != null) cardWork[card] = String(rec.work);
-      this.state = { ...this.state, sessions, cardWork };
+      const cardLocked = { ...(this.state.cardLocked ?? {}) };
+      if (rec.locked === true) cardLocked[card] = true;
+      else if (rec.locked === false) delete cardLocked[card];
+      this.state = { ...this.state, sessions, cardWork, cardLocked };
       this.notify();
     }
   }
@@ -162,8 +168,11 @@ export class BoardStore {
       const cardWork: Record<number, string> = {};
       for (const [k, v] of Object.entries((d.card_work as Record<string, string | null> | undefined) ?? {}))
         if (v) cardWork[Number(k)] = v;
+      const cardLocked: Record<number, boolean> = {};
+      for (const [k, v] of Object.entries((d.card_locked as Record<string, boolean> | undefined) ?? {}))
+        if (v) cardLocked[Number(k)] = true;
       this.state = { prefix: String(d.prefix), columns: d.columns as string[],
-        cards: [...fresh, ...kept], loaded: true, sessions, cardWork,
+        cards: [...fresh, ...kept], loaded: true, sessions, cardWork, cardLocked,
         workspace: d.workspace ? String(d.workspace) : undefined,
         autoPlanDefault: Boolean(d.auto_plan_default),
         autoPlanSource: d.auto_plan_source ? String(d.auto_plan_source) : undefined,
