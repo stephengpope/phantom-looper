@@ -851,17 +851,40 @@ test('a locked card session shows a spinner instead of the git dot; unlocking re
   assert.match(f, /•.*3-busy card/, 'unlocked card shows the git dot');
 
   // Now simulate a lock event over the stream — card 3 becomes locked.
-  store.applyEvent({ event: 'session', card: 3, id: 's3', name: null, locked: true });
+  store.applyEvent({ event: 'session_lock', card: 3, id: 's3', locked: true });
   const started = store.state.cardLocked?.[3];
   assert.ok(typeof started === 'number', 'a lock event starts the clock');
   // The lock event repeats on renewal and on reconnect. The START must survive
   // that, or an hour-old turn would look new every time its hold was renewed.
-  store.applyEvent({ event: 'session', card: 3, id: 's3', name: null, locked: true });
+  store.applyEvent({ event: 'session_lock', card: 3, id: 's3', locked: true });
   assert.equal(store.state.cardLocked?.[3], started, 'a repeat does not restart the clock');
 
   // And an unlock event — card 1 unlocked.
-  store.applyEvent({ event: 'session', card: 1, id: 's1', name: null, locked: false });
+  store.applyEvent({ event: 'session_lock', card: 1, id: 's1', locked: false });
   assert.equal(store.state.cardLocked?.[1], undefined, 'unlock removes the key');
 
   r.unmount();
+});
+
+test('lock and git events never touch the session name the pairing announced', async () => {
+  // The regression: the old one-shape-fits-all `session` event let a lock or
+  // work update (which knows nothing of names) overwrite the name the loop
+  // pairing had just announced — the card editor reverted to "unnamed". The
+  // split makes each event complete for its own fact.
+  const { api } = fakeApi(seed());
+  const store = new BoardStore(api, 'w1');
+  await store.load();
+
+  store.applyEvent({ event: 'session', card: 2, id: 'sess-2', name: 'plan the thing' });
+  assert.deepEqual(store.state.sessions?.[2], { id: 'sess-2', name: 'plan the thing' });
+
+  store.applyEvent({ event: 'session_lock', card: 2, id: 'sess-2', locked: true });
+  store.applyEvent({ event: 'session_work', card: 2, id: 'sess-2', work: 'not_pushed' });
+  store.applyEvent({ event: 'session_lock', card: 2, id: 'sess-2', locked: false });
+  assert.deepEqual(store.state.sessions?.[2], { id: 'sess-2', name: 'plan the thing' },
+    'lock and work events leave the name alone');
+  assert.equal(store.state.cardWork?.[2], 'not_pushed', 'the work fact still lands');
+  assert.equal(store.state.cardLocked?.[2], undefined, 'the lock fact still lands');
+
+  store.close();
 });

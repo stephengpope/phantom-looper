@@ -1,8 +1,8 @@
 // Periodic refresh of the `work` column on sessions with an active container.
 // Called every 10s from index.ts. For each session the container manager
 // tracks, recomputes workState() and writes the row when the value changes.
-// A change publishes on the board event stream so the kanban board hears it
-// live (the `session` event type already carries card ↔ session facts).
+// A change publishes on the board event stream as `session_work` so the
+// kanban board hears it live.
 import { eq, and, inArray, desc } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { sessions, workspaces, folders, loops } from '../db/schema.js';
@@ -77,7 +77,7 @@ export async function refreshWorkState({ db, paths, containers, events, sessionE
     await db.update(sessions).set({ work }).where(eq(sessions.id, r.id));
     // Publish on the board stream so the kanban board picks it up.
     const card = cardOf.get(r.id) ?? 0;
-    events.publish(r.workspaceId, { event: 'session', card, id: r.id, name: null, work });
+    events.publish(r.workspaceId, { event: 'session_work', card, id: r.id, work });
     // Publish on the session stream so a window watching this session
     // sees the work-state dot update without polling.
     sessionEvents?.publish(r.id, '', { event: 'session', work });

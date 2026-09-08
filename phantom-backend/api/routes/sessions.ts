@@ -81,7 +81,7 @@ async function publishBoardLock(ctx: AppCtx, sessionId: string, locked: boolean)
       .from(loops).where(eq(loops.codingSessionId, sessionId))
       .orderBy(desc(loops.createdAt)).limit(1);
     if (row) ctx.events?.publish(row.workspaceId,
-      { event: 'session', card: row.card, id: sessionId, name: null, locked });
+      { event: 'session_lock', card: row.card, id: sessionId, locked });
   } catch { /* best-effort — the board refreshes on reconnect anyway */ }
 }
 

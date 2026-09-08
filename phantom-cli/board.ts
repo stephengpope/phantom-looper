@@ -91,17 +91,26 @@ export class BoardStore {
       this.state = { ...this.state, cards: this.state.cards.filter((t) => t.id !== id) };
       this.notify();
     } else if (rec.event === 'session') {
+      // The loop pairing — the ONE speaker for a card's session and its name.
       const card = Number(rec.card);
       const sessions = { ...(this.state.sessions ?? {}), [card]: { id: String(rec.id), name: (rec.name as string | null) ?? null } };
-      const cardWork = { ...(this.state.cardWork ?? {}) };
-      if (rec.work != null) cardWork[card] = String(rec.work);
+      this.state = { ...this.state, sessions };
+      this.notify();
+    } else if (rec.event === 'session_lock') {
+      const card = Number(rec.card);
       const cardLocked = { ...(this.state.cardLocked ?? {}) };
       // Keep the ORIGINAL start across repeats: the lock event repeats on
       // renewal and on reconnect, and restamping each time would reset the age
       // of a turn that has been running for an hour.
       if (rec.locked === true) cardLocked[card] ??= Date.now();
       else if (rec.locked === false) delete cardLocked[card];
-      this.state = { ...this.state, sessions, cardWork, cardLocked };
+      this.state = { ...this.state, cardLocked };
+      this.notify();
+    } else if (rec.event === 'session_work') {
+      const card = Number(rec.card);
+      const cardWork = { ...(this.state.cardWork ?? {}) };
+      if (rec.work != null) cardWork[card] = String(rec.work);
+      this.state = { ...this.state, cardWork };
       this.notify();
     }
   }

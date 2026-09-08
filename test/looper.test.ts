@@ -871,19 +871,22 @@ test('session state: a fresh loop pairs the card with locked: true — the board
     script.coding.push({ text: 'PLAN: noted.' });
     await engine.runTurn(workspace, await cardRow(card.seq), ledger());
     // The lock route's own board publish found no loop row on a fresh loop
-    // (createLoop runs after openSession's lock), so the PAIRING event is
-    // the one that must carry the hold — before it, the spinner missed the
-    // whole first turn.
-    const holds = () => seen.filter((e) => e.event === 'session' && e.card === card.seq && 'locked' in e);
+    // (createLoop runs after openSession's lock), so the pairing is followed
+    // by an explicit lock event — before it, the spinner missed the whole
+    // first turn.
+    const pairing = seen.find((e) => e.event === 'session' && e.card === card.seq);
+    assert.deepEqual(pairing, { event: 'session', card: card.seq, id: pairing?.id,
+      name: 'spinner from birth' }, 'the pairing event announces the session and its name');
+    assert.equal(typeof pairing?.id, 'string');
+    const holds = () => seen.filter((e) => e.event === 'session_lock' && e.card === card.seq);
     // The turn-end release is fire-and-forget off the lock route — wait for it.
     const deadline = Date.now() + 5000;
     while (holds().length < 2 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
     assert.equal(holds().length, 2, JSON.stringify(seen));
-    assert.deepEqual(holds()[0], { event: 'session', card: card.seq, id: holds()[0].id,
-      name: 'spinner from birth', locked: true }, 'the pairing event carries the hold');
-    assert.equal(typeof holds()[0].id, 'string');
-    assert.deepEqual(holds()[1], { event: 'session', card: card.seq, id: holds()[0].id,
-      name: null, locked: false }, 'the turn-end release clears the spinner');
+    assert.deepEqual(holds()[0], { event: 'session_lock', card: card.seq, id: pairing?.id,
+      locked: true }, 'the hold is announced right after the pairing');
+    assert.deepEqual(holds()[1], { event: 'session_lock', card: card.seq, id: pairing?.id,
+      locked: false }, 'the turn-end release clears the spinner');
   } finally { unsubscribe(); }
 });
 

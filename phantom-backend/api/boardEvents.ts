@@ -19,7 +19,12 @@ export type BoardEvent =
   // remembering anything. The cli's BoardStore reads `card` only.
   | { event: 'card'; card: Record<string, unknown>; from?: string; client?: string }
   | { event: 'deleted'; id: number }                        // hard-deleted
-  | { event: 'session'; card: number; id: string; name: string | null; work?: string | null; locked?: boolean }; // a loop paired the card with its coding session; work = git state update; locked = session hold changed
+  // One event type per fact, each complete — no field is ever a placeholder
+  // for a fact the publisher does not own (the per-session feed's rule,
+  // sessionEvents.ts).
+  | { event: 'session'; card: number; id: string; name: string | null } // a loop paired the card with its coding session — the ONE speaker for the card→session pairing and its name
+  | { event: 'session_lock'; card: number; id: string; locked: boolean } // the card's coding session hold changed
+  | { event: 'session_work'; card: number; id: string; work: string | null }; // the card's git state changed
 
 export class BoardEvents {
   private emitter = new EventEmitter();
