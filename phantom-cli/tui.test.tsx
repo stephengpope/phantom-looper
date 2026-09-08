@@ -335,6 +335,47 @@ test('App renders a full turn', async () => {
   } finally { r.unmount(); }
 });
 
+test('a menu holds still while a turn streams: /resume never moves', async () => {
+  // The live-output region (streaming parts, the working line) sits ABOVE the
+  // menu in the same bottom-anchored block, and its height changes with every
+  // token batch — so each change rode the whole menu up and down. While a
+  // menu is open the region is suspended: the title's screen row must not
+  // move from the frame the menu opens until the turn is long finished.
+  const api = async (method: string, path: string) => {
+    if (method === 'GET' && path === '/workspaces') return [{ id: 'w1', owner: 'sg', name: 'acme-app', cardPrefix: 'ACM' }];
+    if (method === 'GET' && path.startsWith('/sessions?')) return { sessions: [], total: 0 };
+    return {};
+  };
+  const r = render(<App api={api as never} initial={INITIAL} newTools={noTools} makeVoice={inertVoice}
+    makeAgent={seam(60)} makeTranscript={throwaway} />);
+  try {
+    await sleep(50);
+    r.stdin.write('do the thing');
+    await sleep(30);
+    r.stdin.write('\r');
+    await sleep(150);                 // the turn is mid-stream…
+    r.stdin.write('/resume');
+    await sleep(30);
+    r.stdin.write('\r');              // …when the menu opens
+    await sleep(1500);                // the rest of the turn streams and ends under it
+    const titleRow = (frame: string) =>
+      strip(frame).split('\n').findIndex((l) => l.trim() === 'resume');
+    const open = r.frames.map(titleRow).filter((i) => i >= 0);
+    assert.ok(open.length > 3, `the menu was on screen (${open.length} frames)`);
+    assert.deepEqual([...new Set(open)].length, 1,
+      `the title row moved across frames: ${[...new Set(open)].join(', ')}`);
+    const under = r.frames.slice(r.frames.findIndex((f) => titleRow(f) >= 0));
+    assert.ok(!strip(under.join('\n')).includes('Working…'),
+      'the working line is suspended while the menu is open');
+
+    r.stdin.write('\x1b');            // esc: back to the chat
+    await sleep(80);
+    assert.match(strip(r.lastFrame()!), /type a message/, 'closing the menu restores the prompt');
+    assert.match(strip(r.lastFrame()!), /Hello world from the agent\./,
+      'the turn finished under the menu and is in the pane on return');
+  } finally { r.unmount(); }
+});
+
 // --- the empty window: boot lives INSIDE the app -----------------------------
 // The window must come up whatever is wrong — the screens that fix a dead
 // token or a bad address are all in here — so launch passes `boot` and App

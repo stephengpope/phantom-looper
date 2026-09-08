@@ -14,7 +14,12 @@
 // typing area rather than floating over it, and while one is open this
 // component's own useInput is switched off: Ink delivers a keypress to every
 // active handler, so esc would otherwise close the menu and interrupt the
-// running turn in the same stroke.
+// running turn in the same stroke. While a menu is open the live-output
+// region above it (streaming parts, the working line, the queue) is not
+// drawn at all: its height changes with every token batch, and the menu sits
+// BELOW it in the same bottom-anchored block, so every change rode the whole
+// menu up and down — the /resume flicker. The stream itself is untouched;
+// closing the menu redraws the region from the store mid-turn.
 //
 // SEVERAL SESSIONS AT ONCE. Every session you open stays open and keeps
 // running; this component is a view over whichever one is active. The
@@ -638,9 +643,11 @@ export function App({
       <Box ref={bottomRef} flexDirection="column" flexShrink={0}>
         {/* Session output: live parts, the working line and the queue all
             belong to the active session. During `opening` there is no
-            session output to show — one guard for the whole region, so a
-            new element added here is inside it by default. */}
-        {!windowStore.opening && (<>
+            session output to show, and while a menu is open the region is
+            suspended so its changing height cannot move the menu (the
+            /resume flicker — see the header). One guard for the whole
+            region, so a new element added here is inside it by default. */}
+        {!windowStore.opening && windowStore.menu === null && (<>
         {session?.live.map((p) => (
           <PartView key={p.id} part={p} width={width} expanded={expanded} maxRows={liveRows} />
         ))}

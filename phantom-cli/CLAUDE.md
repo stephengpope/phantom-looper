@@ -138,7 +138,9 @@ the exact word accept or decline answers, the tool's abort declines.
 
 Alternate screen, no scrollback, no `<Static>`. `Pane` is a virtual list
 over the session's finished parts; the live block under it is budgeted to
-a third of the screen. `state.ts` commits closed markdown blocks as they
+a third of the screen. While a menu is open the live block (streaming
+parts, the working line, the queue) is not drawn — its changing height
+rode the menu up and down. `state.ts` commits closed markdown blocks as they
 stream so only the block being typed re-renders. Every drawn character goes
 through `components/Text`, which expands tabs and drops control characters
 before Ink measures. `trim.ts` sits between Ink and the terminal and cuts
