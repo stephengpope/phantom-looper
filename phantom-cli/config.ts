@@ -31,7 +31,7 @@ export const CONFIG_DIR = process.env.PHANTOM_CLI_DIR
     : join(homedir(), '.phantom-cli'));
 export const CONFIG_PATH = join(CONFIG_DIR, 'settings.json');
 
-export const PROVIDERS = ['anthropic', 'openai', 'google', 'openai-compatible'] as const;
+export const PROVIDERS = ['anthropic', 'openai', 'google', 'deepseek', 'kimi', 'xai', 'mistral', 'groq', 'openai-compatible'] as const;
 export const REASONINGS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 
 export const DEFAULTS = {
@@ -140,7 +140,7 @@ export interface ConfigMeta {
   env?: readonly string[];
 }
 
-const usesBaseUrl = (p: unknown) => p === 'openai' || p === 'openai-compatible';
+const usesBaseUrl = (p: unknown) => p === 'openai' || p === 'deepseek' || p === 'kimi' || p === 'openai-compatible';
 
 export const META: Record<ConfigKey, ConfigMeta> = {
   provider: { type: 'string', choices: PROVIDERS, group: 'model' },

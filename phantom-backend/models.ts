@@ -28,11 +28,21 @@ const TTL_MS = 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 8000;
 
 /** Only providers whose native ids the agents call directly. openai-compatible
- *  is an arbitrary endpoint with no registry to list: its model is always typed. */
-export const CATALOG_PROVIDERS = ['anthropic', 'openai', 'google'] as const;
+ *  is an arbitrary endpoint with no registry to list: its model is always typed.
+ *  models.dev lists Kimi under 'moonshotai', so the catalog key differs from
+ *  the provider name — PROVIDER_CATALOG_KEY maps it. */
+export const CATALOG_PROVIDERS = ['anthropic', 'openai', 'google', 'deepseek', 'kimi', 'xai', 'mistral', 'groq'] as const;
 export type CatalogProvider = typeof CATALOG_PROVIDERS[number];
 export const hasCatalog = (p: string): p is CatalogProvider =>
   (CATALOG_PROVIDERS as readonly string[]).includes(p);
+
+/** The key under which models.dev lists a provider. Most match; Kimi is listed
+ *  as 'moonshotai'. */
+const PROVIDER_CATALOG_KEY: Record<CatalogProvider, string> = {
+  anthropic: 'anthropic', openai: 'openai', google: 'google',
+  deepseek: 'deepseek', kimi: 'moonshotai', xai: 'xai',
+  mistral: 'mistral', groq: 'groq',
+};
 
 export interface CatalogModel {
   id: string;
@@ -54,7 +64,8 @@ type RawApi = Record<string, { models?: Record<string, {
 export function fromModelsDev(raw: RawApi): Catalog {
   const out = {} as Catalog;
   for (const p of CATALOG_PROVIDERS) {
-    const models = raw[p]?.models ?? {};
+    const rawKey = PROVIDER_CATALOG_KEY[p];
+    const models = raw[rawKey]?.models ?? {};
     out[p] = Object.keys(models).map((id) => ({
       id, name: models[id]?.name ?? id,
       reasoning: Boolean(models[id]?.reasoning),
@@ -86,7 +97,9 @@ function snapshot(): Catalog {
   for (const path of [SNAPSHOT_PATH, SNAPSHOT_FALLBACK]) {
     try { return (snapshotCache = JSON.parse(readFileSync(path, 'utf8')) as Catalog); } catch { /* next */ }
   }
-  return (snapshotCache = { anthropic: [], openai: [], google: [] });
+  const empty = {} as Catalog;
+  for (const p of CATALOG_PROVIDERS) empty[p] = [];
+  return (snapshotCache = empty);
 }
 
 let mem: { catalog: Catalog; fetchedAt: number } | null = null;

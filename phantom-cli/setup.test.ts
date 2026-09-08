@@ -86,8 +86,8 @@ test('runSetup: install (ssh owns the tty, script fetched by the box), read the 
     { github_token: 'ghp_abc' },
   ]);
   assert.deepEqual(ask.asked.map((a) => a.split(':')[0]), ['text', 'select', 'autocomplete', 'password', 'password']);
-  // no provider is preselected: the four are offered, none first by default
-  assert.deepEqual(ask.offered[0], ['anthropic', 'openai', 'google', 'openai-compatible']);
+  // no provider is preselected: all are offered, none first by default
+  assert.deepEqual(ask.offered[0], ['anthropic', 'openai', 'google', 'deepseek', 'kimi', 'xai', 'mistral', 'groq', 'openai-compatible']);
   // the model question is the server's catalog, newest first
   assert.deepEqual(ask.offered[1], ['claude-fable-5-1', 'claude-opus-5']);
 });

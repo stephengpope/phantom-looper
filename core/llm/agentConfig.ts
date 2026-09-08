@@ -10,7 +10,9 @@ import { codingAgent } from './agents/coding.js';
  *  rows the Git Fixer and the Assistant read. */
 export const PROVIDER_KEY = {
   anthropic: 'anthropic_api_key', openai: 'openai_api_key',
-  google: 'google_api_key', 'openai-compatible': 'openai_compatible_api_key',
+  google: 'google_api_key', deepseek: 'deepseek_api_key',
+  kimi: 'kimi_api_key', xai: 'xai_api_key', mistral: 'mistral_api_key',
+  groq: 'groq_api_key', 'openai-compatible': 'openai_compatible_api_key',
 } as const;
 
 export type SettingsValues = Record<string, unknown>;

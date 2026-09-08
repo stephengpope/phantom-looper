@@ -5,8 +5,8 @@
 // constructs a provider client.
 //
 // What lives here, so it is fixed once:
-// - the provider switch (anthropic | openai | google | openai-compatible) —
-//   provider packages only, no gateway;
+// - the provider switch (anthropic | openai | google | deepseek | kimi |
+//   openai-compatible) — provider packages only, no gateway;
 // - the Anthropic subscription-token disguise (OAuth tokens authenticate with
 //   Bearer, carry the Claude Code CLI headers, and need the Claude Code
 //   identity as the first system block) — see `anthropicProvider`;
@@ -22,8 +22,13 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { createDeepSeek } from '@ai-sdk/deepseek';
+import { createMoonshotAI } from '@ai-sdk/moonshotai';
+import { createXai } from '@ai-sdk/xai';
+import { createMistral } from '@ai-sdk/mistral';
+import { createGroq } from '@ai-sdk/groq';
 
-export const PROVIDERS = ['anthropic', 'openai', 'google', 'openai-compatible'] as const;
+export const PROVIDERS = ['anthropic', 'openai', 'google', 'deepseek', 'kimi', 'xai', 'mistral', 'groq', 'openai-compatible'] as const;
 export type Provider = typeof PROVIDERS[number];
 export type Reasoning = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
@@ -146,10 +151,15 @@ export function languageModel(cfg: ModelConfig): LanguageModel {
     case 'anthropic': return anthropicProvider(c)(c.model);
     case 'openai': return createOpenAI({ apiKey: c.apiKey ?? undefined, baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
     case 'google': return createGoogleGenerativeAI({ apiKey: c.apiKey ?? undefined, fetch: c.fetch })(c.model);
+    case 'deepseek': return createDeepSeek({ apiKey: c.apiKey ?? undefined, baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
+    case 'kimi': return createMoonshotAI({ apiKey: c.apiKey ?? undefined, baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
+    case 'xai': return createXai({ apiKey: c.apiKey ?? undefined, baseURL: c.baseUrl ?? undefined, fetch: c.fetch }).chat(c.model);
+    case 'mistral': return createMistral({ apiKey: c.apiKey ?? undefined, baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
+    case 'groq': return createGroq({ apiKey: c.apiKey ?? undefined, baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
     case 'openai-compatible':
       if (!c.baseUrl) throw new Error(`provider is openai-compatible but base_url is not set — set the endpoint on /model (phantom-cli), or PATCH /settings {base_url}`);
       return createOpenAICompatible({ name: 'phantom-looper', baseURL: c.baseUrl, apiKey: c.apiKey ?? 'none', fetch: c.fetch })(c.model);
-    default: throw new Error(`provider "${String((c as { provider: string }).provider)}" is not one of anthropic, openai, google, openai-compatible — ${PICK_MODEL}`);
+    default: throw new Error(`provider "${String((c as { provider: string }).provider)}" is not one of ${PROVIDERS.join(', ')} — ${PICK_MODEL}`);
   }
 }
 

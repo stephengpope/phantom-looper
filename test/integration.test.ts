@@ -484,7 +484,7 @@ test('settings ship type metadata, so a client can render an editor', async () =
   assert.equal(s.bash_timeout_max_ms.meta.nullable, true);
   // Choices exist as data, not only as prose in the description.
   assert.deepEqual(s.git_fixer_provider.meta.choices,
-    ['anthropic', 'openai', 'google', 'openai-compatible']);
+    ['anthropic', 'openai', 'google', 'deepseek', 'kimi', 'xai', 'mistral', 'groq', 'openai-compatible']);
   assert.equal(s.spare_clones.meta.unit, 'count');
   for (const [key, v] of Object.entries<{ meta?: unknown; description?: string }>(s)) {
     assert.ok(v.meta, `${key} carries meta`);

@@ -105,6 +105,36 @@ test('openai and openai-compatible: bearer key, the base url is honoured; compat
   assert.throws(() => languageModel({ provider: 'openai-compatible', model: 'x' }), /base_url is not set/);
 });
 
+test('deepseek: bearer key, default base url is api.deepseek.com', async () => {
+  const r = await request({ provider: 'deepseek', model: 'deepseek-v4-pro', apiKey: 'sk-ds' });
+  assert.match(r.url, /api\.deepseek\.com/);
+  assert.equal(r.headers['authorization'], 'Bearer sk-ds');
+});
+
+test('kimi: bearer key, default base url is api.moonshot.ai', async () => {
+  const r = await request({ provider: 'kimi', model: 'kimi-k3', apiKey: 'sk-moon' });
+  assert.match(r.url, /api\.moonshot\.ai/);
+  assert.equal(r.headers['authorization'], 'Bearer sk-moon');
+});
+
+test('xai: bearer key, default base url is api.x.ai', async () => {
+  const r = await request({ provider: 'xai', model: 'grok-4.3', apiKey: 'xai-key' });
+  assert.match(r.url, /api\.x\.ai/);
+  assert.equal(r.headers['authorization'], 'Bearer xai-key');
+});
+
+test('mistral: bearer key, default base url is api.mistral.ai', async () => {
+  const r = await request({ provider: 'mistral', model: 'mistral-large-latest', apiKey: 'sk-mis' });
+  assert.match(r.url, /api\.mistral\.ai/);
+  assert.equal(r.headers['authorization'], 'Bearer sk-mis');
+});
+
+test('groq: bearer key, default base url is api.groq.com', async () => {
+  const r = await request({ provider: 'groq', model: 'llama-3.3-70b-versatile', apiKey: 'gsk-key' });
+  assert.match(r.url, /api\.groq\.com/);
+  assert.equal(r.headers['authorization'], 'Bearer gsk-key');
+});
+
 test('cache breakpoints reach the wire on every step, not just the first', async () => {
   // The bug this guards: the marks used to be placed once, before the turn.
   // Anthropic looks only ~20 content blocks back from a breakpoint, so a mark

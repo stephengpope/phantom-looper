@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fromModelsDev, latestModel, modelsFor, catalog, refreshCatalog, resetCatalog, CATALOG_PROVIDERS } from '../phantom-backend/models.js';
 
-test('fromModelsDev: the three providers, each newest first, ids as the tie-break', () => {
+test('fromModelsDev: all catalog providers, each newest first, ids as the tie-break', () => {
   const c = fromModelsDev({
     anthropic: { models: {
       'claude-b': { name: 'B', release_date: '2026-01-01' },
@@ -19,12 +19,17 @@ test('fromModelsDev: the three providers, each newest first, ids as the tie-brea
     openai: { models: { 'gpt-x': { name: 'X', release_date: '2026-03-03' } } },
     // google absent; a provider models.dev does not know is dropped
     mistral: { models: { m: { name: 'm' } } },
+    // deepseek present, kimi listed under its models.dev key 'moonshotai'
+    deepseek: { models: { 'deepseek-v4-pro': { name: 'V4 Pro', release_date: '2026-06-01' } } },
+    moonshotai: { models: { 'kimi-k3': { name: 'Kimi K3', release_date: '2026-07-01' } } },
   });
   assert.deepEqual(Object.keys(c), [...CATALOG_PROVIDERS]);
   assert.deepEqual(c.anthropic.map((m) => m.id), ['claude-a', 'claude-b', 'claude-old', 'claude-undated']);
   assert.deepEqual(c.anthropic[0], { id: 'claude-a', name: 'A', reasoning: true, releaseDate: '2026-01-01' });
   assert.equal(c.anthropic[3].releaseDate, '', 'no date is the empty string, sorted last');
   assert.deepEqual(c.google, []);
+  assert.deepEqual(c.deepseek.map((m) => m.id), ['deepseek-v4-pro']);
+  assert.deepEqual(c.kimi.map((m) => m.id), ['kimi-k3'], 'moonshotai key maps to kimi provider');
 });
 
 test('offline: the snapshot answers, a failed refresh changes nothing, and latest is its first row', async () => {

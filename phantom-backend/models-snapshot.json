@@ -610,5 +610,10 @@
       "reasoning": false,
       "releaseDate": "2025-05-01"
     }
-  ]
+  ],
+  "deepseek": [],
+  "kimi": [],
+  "xai": [],
+  "mistral": [],
+  "groq": []
 }
