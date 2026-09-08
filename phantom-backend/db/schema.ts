@@ -183,6 +183,18 @@ export const commands = phantomLooper.table('commands', {
   endedAt: timestamp('ended_at', { withTimezone: true }),
 });
 
+// Provider presets: named snapshots of the model settings (provider/model/
+// base_url for each agent, reasoning, max_steps). Migration 014.
+export const presets = phantomLooper.table('presets', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull().unique(),
+  values: jsonb('values').notNull().$type<Record<string, unknown>>().default({}),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type PresetRow = typeof presets.$inferSelect;
+
 export type WorkspaceRow = typeof workspaces.$inferSelect;
 /** A session as reads return it — sessionColumns' shape, blob excluded. */
 export type SessionRow = Omit<typeof sessions.$inferSelect, 'transcript'>;

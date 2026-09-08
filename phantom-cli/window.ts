@@ -79,7 +79,7 @@ export type CloseResult = { ok: true; closed: string; on_screen: string; opened_
 
 /** Which screen has replaced the prompt. `null` is the prompt itself. */
 export type Menu = null | 'settings' | 'keys' | 'secrets' | 'model' | 'server' | 'voice' | 'workspace'
-  | 'resume' | 'addWorkspace' | 'workspaceSettings' | 'sessions' | 'tasks' | 'archived';
+  | 'resume' | 'addWorkspace' | 'workspaceSettings' | 'sessions' | 'tasks' | 'archived' | 'presets';
 
 /** /resume's page size: what the picker fetches at open and appends per
  *  scroll-to-the-bottom. Comfortably more than a screenful, small enough that
@@ -1359,6 +1359,7 @@ export class WindowStore {
       case 'keys': this.setMenu('keys'); return;
       case 'secrets': this.setMenu('secrets'); return;
       case 'model': this.setMenu('model'); return;
+      case 'presets': this.setMenu('presets'); return;
       case 'server': this.setMenu('server'); return;
       case 'voice':
         this.setMenu('voice');

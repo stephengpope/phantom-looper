@@ -12,10 +12,9 @@
 // them — changing something for everyone and changing it for one workspace
 // must not be two rows apart in the same list.
 //
-// Local and server settings never share a screen. The server has a git_fixer_model (the Git Fixer's)
-// (git auto-push's conflict-fix model) and it is NOT your chat model; one list
-// holding both invites exactly that mistake. The local screens also never make a network call, because you edit
-// the connection precisely when the server is unreachable.
+// Local and server settings never share a screen. The local screens never make
+// a network call, because you edit the connection precisely when the server is
+// unreachable.
 import { Text } from './Text.js';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -130,16 +129,9 @@ export function Settings({ api, onClose, onLocalChange, configPath = CONFIG_PATH
   /** The spec, plus the catalog for a model row and the keyed providers for a
    *  provider row — the two shapes every model-ish row takes, on both screens. */
   const finishSpec = async (key: string, spec: EditSpec, values: Record<string, unknown>): Promise<EditSpec> => {
-    const providerRow = providerChoices(key, spec.choices, values);
-    if (providerRow) return { ...spec, ...providerRow };
     const provider = providerForModelRow(key, values);
-    if (!provider) return spec;
-    const models = await loadModels(provider);
-    if (!models.length) return spec;
-    return { ...spec,
-      suggestions: models.map((m) => m.id),
-      suggestionLabels: Object.fromEntries(models.map((m) => [m.id, m.name])),
-      note: spec.note ?? `${provider} models, newest first · or type any model id · empty = the newest` };
+    const models = provider ? await loadModels(provider) : [];
+    return buildModelSpec(key, spec, values, models);
   };
 
   // ONE writer, routing on where the key LIVES — not on which screen you are
@@ -416,22 +408,22 @@ function localSpec(key: ConfigKey, cfg: Record<ConfigKey, ConfigValue>, envVar?:
 }
 
 /** One row of GET /models. */
-interface CatalogModel { id: string; name: string }
+export interface CatalogModel { id: string; name: string }
 
 const set = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
 
 /** Every model row and the provider row it follows — its own when overridden,
  *  else the coding agent's it cascades to. The same picker on every screen:
- *  the four are the same kind of row. */
-const MODEL_ROWS: Record<string, string> = {
+ *  the three are the same kind of row. */
+export const MODEL_ROWS: Record<string, string> = {
   model: 'provider', assistant_model: 'assistant_provider',
-  supervisor_model: 'supervisor_provider', git_fixer_model: 'git_fixer_provider',
+  supervisor_model: 'supervisor_provider',
 };
 
-const PROVIDER_ROWS = new Set(Object.values(MODEL_ROWS));
+export const PROVIDER_ROWS = new Set(Object.values(MODEL_ROWS));
 
 /** The model key to clear when a provider key changes. */
-const MODEL_FOR_PROVIDER: Record<string, string> = Object.fromEntries(
+export const MODEL_FOR_PROVIDER: Record<string, string> = Object.fromEntries(
   Object.entries(MODEL_ROWS).map(([m, p]) => [p, m]));
 
 /** The provider a model row's catalog is for; null when it is not a model row
@@ -452,4 +444,22 @@ export function providerChoices(key: string, choices: readonly string[] | undefi
   return keyed.length
     ? { choices: keyed, note: 'providers with a key on /keys' }
     : { choices: all, note: 'no provider key on /keys yet — save one there first' };
+}
+
+/** The reusable core of `finishSpec` — enriches an EditSpec for a provider or
+ *  model row with the keyed-provider filter or the model catalog. Pure: the
+ *  caller supplies the catalog. Used by Settings (inline) and by Presets. */
+export function buildModelSpec(
+  key: string, spec: EditSpec, values: Record<string, unknown>,
+  models: CatalogModel[],
+): EditSpec {
+  const providerRow = providerChoices(key, spec.choices, values);
+  if (providerRow) return { ...spec, ...providerRow };
+  const provider = providerForModelRow(key, values);
+  if (!provider) return spec;
+  if (!models.length) return spec;
+  return { ...spec,
+    suggestions: models.map((m) => m.id),
+    suggestionLabels: Object.fromEntries(models.map((m) => [m.id, m.name])),
+    note: spec.note ?? `${provider} models, newest first · or type any model id · empty = the newest` };
 }

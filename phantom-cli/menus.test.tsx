@@ -1974,7 +1974,7 @@ test('provider rows list the keyed providers only, and all four with a note whil
 test('a model row follows its own provider, then the coding agent\'s, then none', () => {
   assert.equal(providerForModelRow('model', { provider: 'anthropic' }), 'anthropic');
   assert.equal(providerForModelRow('assistant_model', { provider: 'anthropic', assistant_provider: 'google' }), 'google');
-  assert.equal(providerForModelRow('git_fixer_model', { provider: 'openai', git_fixer_provider: '' }), 'openai');
+  assert.equal(providerForModelRow('supervisor_model', { provider: 'openai', supervisor_provider: '' }), 'openai');
   assert.equal(providerForModelRow('supervisor_model', { provider: null }), null);
   assert.equal(providerForModelRow('reasoning', { provider: 'anthropic' }), null, 'not a model row');
 });

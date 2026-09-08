@@ -30,7 +30,8 @@ git/              guarded git, the one sync flow (rebase), GitHub REST — own m
 pool/             paths.ts (the on-disk layout) · pool.ts (warm clones, claim by rename, tick)
 workspace/        container.ts (per-folder container lifecycle, buildContainerSpec) · sandbox.ts (the only dockerode exec caller)
 tools/            registry.ts (the seven tool definitions) · fuzzy.ts (the edit match chain) · diff.ts · envelope.ts (ToolError)
-db/               client.ts · schema.ts (drizzle mirror of migrations/; sessionColumns leaves the transcript blob out) ·
+db/               client.ts · schema.ts (drizzle mirror of migrations/; sessionColumns leaves the transcript blob out;
+                  presets table for provider presets) ·
                   migrate.ts (migrations/*.sql in order, upTo is a test seam) · workspaceSchema.ts (per-workspace cards schema, versioned)
 ```
 

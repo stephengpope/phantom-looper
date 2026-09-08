@@ -45,7 +45,7 @@ env `PHANTOM_CLI_*` and `PHANTOM_BACKEND_*`; images
 /phantom-cli       imports /core. Never imports backend code; it reaches the backend over HTTP
 /phantom-backend   imports /core
 /core              imports from neither
-migrations/        001–012, forward-only, applied at boot
+migrations/        001–014, forward-only, applied at boot
 ```
 
 One package.json, one lockfile. The root tsconfig builds core and backend;

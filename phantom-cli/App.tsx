@@ -57,6 +57,7 @@ import { Keys } from './components/Keys.js';
 import { Tasks } from './components/Tasks.js';
 import { Archived } from './components/Archived.js';
 import { Secrets } from './components/Secrets.js';
+import { Presets } from './components/Presets.js';
 import { SizeContext, keyLine } from './components/Screen.js';
 import { Pane } from './components/Pane.js';
 import { Boundary } from './components/Boundary.js';
@@ -78,7 +79,7 @@ import type { GitFacts } from '../core/llm/prompts/coding/wiring.js';
 interface WsFacts { label: string; cardPrefix?: string; error?: string }
 
 type Menu = null | 'settings' | 'keys' | 'secrets' | 'model' | 'server' | 'voice' | 'workspace' | 'resume'
-  | 'addWorkspace' | 'workspaceSettings' | 'sessions' | 'tasks' | 'archived';
+  | 'addWorkspace' | 'workspaceSettings' | 'sessions' | 'tasks' | 'archived' | 'presets';
 
 const offline: Api = async () => ({});
 
@@ -700,6 +701,10 @@ export function App({
           <Settings api={windowStore.menu === 'server' ? offline : api} configPath={configPath} startAt="local"
             title={windowStore.menu} groups={[windowStore.menu === 'model' ? 'model' : 'server']}
             onLocalChange={windowStore.settingChanged} onClose={() => windowStore.setMenu(null)} />
+        ) : windowStore.menu === 'presets' ? (
+          <Presets api={api}
+            onApplied={() => windowStore.settingChanged('provider' as ConfigKey)}
+            onClose={() => windowStore.setMenu(null)} />
         ) : windowStore.menu === 'addWorkspace' ? (
           <NewWorkspace
             api={api}

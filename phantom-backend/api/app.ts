@@ -32,6 +32,7 @@ import { sessionRoutes } from './routes/sessions.js';
 import { systemRoutes } from './routes/system.js';
 import { tasksRoutes } from './routes/tasks.js';
 import { telegramRoutes } from './routes/telegram.js';
+import { presetRoutes } from './routes/presets.js';
 
 export interface AppCtx {
   db: Db;
@@ -165,6 +166,7 @@ export async function buildApp(ctx: AppCtx) {
   ctx.events ??= new BoardEvents();
   kanbanRoutes(app, ctx, { pgPool: ctx.pgPool });
   systemRoutes(app, ctx);
+  presetRoutes(app, ctx);
   telegramRoutes(app, ctx);
   return app;
 }

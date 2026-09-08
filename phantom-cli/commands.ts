@@ -17,6 +17,7 @@ export const COMMANDS: Command[] = [
   { name: 'auto-push', summary: "push this session's work to the base branch" },
   { name: 'auto-pull', summary: "bring the base branch into this session's branch" },
   { name: 'model', summary: 'provider, model, reasoning, steps per turn' },
+  { name: 'presets', summary: 'saved provider configurations — switch all agents at once' },
   // First row under the fold (the live menu shows MENU_ROWS = 8): closing a
   // session is a real everyday act, but not more everyday than the eight above
   // it, and [x] on /resume already teaches it.

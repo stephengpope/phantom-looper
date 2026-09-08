@@ -19,6 +19,7 @@ routes/git.ts        POST /git/push, /git/pull, GET /git/status, POST /git/auto-
 routes/kanban.ts     GET/POST /workspaces/:id/cards, PATCH/DELETE /workspaces/:id/cards/:cardId, GET /workspaces/:id/revisions,
                      GET /workspaces/:id/events; auto-push on archive
 routes/web.ts        POST /web/search, POST /web/fetch (Firecrawl; pages land in work/<id>/web/)
+routes/presets.ts    GET /presets, PUT /presets/:id, DELETE /presets/:id (provider presets — named model snapshots)
 routes/system.ts     GET /health, GET /models?provider=, POST /update
 routes/telegram.ts   POST /telegram/webhook — the one route outside the bearer hook
 ```

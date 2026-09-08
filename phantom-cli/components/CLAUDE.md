@@ -30,7 +30,9 @@ Launcher.tsx        /resume and /workspace: SessionInfo, whoDrives, isRunning, a
 SessionSwitcher.tsx ctrl+n: the sessions open in this window
 NewWorkspace.tsx    add a workspace: pick from GET /github/repos, or type a URL, or create on GitHub
 Settings.tsx        /settings, /model, /server, /voice: local rows and server rows, one writer per home;
-                    providerChoices, providerForModelRow
+                    providerChoices, providerForModelRow, buildModelSpec, MODEL_ROWS, MODEL_FOR_PROVIDER
+Presets.tsx          /presets: saved provider configurations; list → apply/edit/new/delete; the editor is the
+                    11 model keys in a SelectList + ValueInput, same pattern as /model
 WorkspaceSettings.tsx  `e` on /workspace: the row plus every overridable setting from GET /workspaces/:id
 Keys.tsx            /keys: the server's credentials, one row each, github_token checked on save
 Secrets.tsx         /secrets: every layer in one list; SecretEditor for new and edit
