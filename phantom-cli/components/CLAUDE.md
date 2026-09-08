@@ -24,7 +24,8 @@ Board.tsx           /kanban: columns from the BoardStore, keys and mouse drag, t
                     editor is open is the WINDOW's (`card` + onOpenCard/onCloseCard), not the board's, because
                     the window also knows where esc leaves it
 CardEditor.tsx      the card page: every field, one live TextInput on the focused row, debounced auto-save,
-                    letter quick actions (a/s/p/b) on the non-text rows only
+                    letter quick actions (a/s/p/b) on the non-text rows only;
+                    the Status row under the title cycles the card's column through store.move
 Archived.tsx        /archived: a table of archived cards, restore and open
 Tasks.tsx           /tasks: live process groups and recent commands, kill by sid
 Launcher.tsx        /resume and /workspace: SessionInfo, whoDrives, isRunning, ago, lastWorkspaceId, the session table

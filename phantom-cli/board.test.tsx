@@ -171,7 +171,7 @@ test('a new requirement saves ONCE and the corner settles on saved', async () =>
   r.stdin.write(sgr(0, x, y)); await sleep(20);
   r.stdin.write(sgr(0, x, y, true)); await sleep(30);
   // one tab per write: a single chunk of three is one key event, not three
-  for (let i = 0; i < 2; i++) { r.stdin.write('\t'); await sleep(20); }  // Title → Details → Requires
+  for (let i = 0; i < 3; i++) { r.stdin.write('\t'); await sleep(20); }  // Title → Status → Details → Requires
   r.stdin.write('it works'); await sleep(20);
   const patches = () => calls.filter((c) => c.method === 'PATCH' && c.path.endsWith('/cards/2'));
   await sleep(800);                                  // past the 600ms debounce
@@ -210,7 +210,8 @@ test('a save the server does not take stops at one PATCH and says so', async () 
   r.stdin.write(sgr(0, x, y)); await sleep(20);
   r.stdin.write(sgr(0, x, y, true)); await sleep(30);
   assert.match(strip(r.lastFrame()!), /PHA-1/, 'the editor is open');
-  r.stdin.write('\t'); await sleep(30);               // Title → Details
+  r.stdin.write('\t'); await sleep(30);               // Title → Status
+  r.stdin.write('\t'); await sleep(30);               // Status → Details
   r.stdin.write('as a builder'); await sleep(20);
   await sleep(2000);                                  // three debounce windows
   assert.equal(bodies.length, 1, 'the patch that did not land is never re-sent by itself');
@@ -529,7 +530,7 @@ test('the edit page shows every field, hides Blocked until it applies, and toggl
   r.stdin.write(sgr(0, x, y)); await sleep(20);
   r.stdin.write(sgr(0, x, y, true)); await sleep(30);
   let f = strip(r.lastFrame()!);
-  for (const label of ['Title', 'Details', 'Requires', 'Archived'])
+  for (const label of ['Title', 'Status', 'Details', 'Requires', 'Archived'])
     assert.match(f, new RegExp(label), `${label} is visible on an empty card`);
   assert.ok(!f.includes('Blocked'), 'Blocked hidden while it does not apply');
   // Toggle archived — the debounce flushes it without any Save.
@@ -552,6 +553,37 @@ test('the edit page shows every field, hides Blocked until it applies, and toggl
   f = strip(r.lastFrame()!);
   assert.match(f, /Blocked/);
   assert.match(f, /stuck/);
+  r.unmount();
+});
+
+test('the Status row names the card\'s column under the title; enter cycles it — a real move, with pos', async () => {
+  const { api, calls } = fakeApi(seed());
+  const r = mount(new BoardStore(api, 'w1'));
+  await sleep(50);
+  const lines = strip(r.lastFrame()!).split('\n');
+  const y = lines.findIndex((l) => l.includes('first card'));
+  const x = lines[y].indexOf('first card');
+  r.stdin.write(sgr(0, x, y)); await sleep(20);
+  r.stdin.write(sgr(0, x, y, true)); await sleep(30);
+  // Status sits directly under the Title block, naming the column the card
+  // is in, above every section.
+  const rows = strip(r.lastFrame()!).split('\n');
+  const order = (label: string) => rows.findIndex((l) => l.includes(label));
+  assert.ok(order('Title') < order('Status') && order('Status') < order('Details'),
+    'the Status row follows the title');
+  assert.match(rows[order('Status')], /Status\s+backlog/);
+  r.stdin.write('\t'); await sleep(20);              // Title → Status
+  assert.match(strip(r.lastFrame()!), /\[enter\] next column/, 'the focused row says what enter does');
+  r.stdin.write('\r'); await sleep(30);
+  const patch = calls.find((c) => c.method === 'PATCH' && c.path.endsWith('/cards/1'));
+  assert.deepEqual(patch!.body, { status: 'doing', pos: 4 },
+    'one column right, at the END of it — the board\'s own tab-move rule');
+  assert.match(strip(r.lastFrame()!), /Status\s+doing/, 'the row tracks the move');
+  // Wrap-around: three more enters walk done → blocked → backlog.
+  for (let i = 0; i < 3; i++) { r.stdin.write('\r'); await sleep(30); }
+  const last = calls.filter((c) => c.method === 'PATCH' && c.path.endsWith('/cards/1')).pop();
+  assert.equal((last!.body as { status: string }).status, 'backlog', 'the cycle wraps to the first column');
+  assert.match(strip(r.lastFrame()!), /Status\s+backlog/);
   r.unmount();
 });
 

@@ -8,6 +8,10 @@
 // previous field (the same rule TextInput and SelectList already follow).
 // Details and the three lists are all lines: enter inserts a line below,
 // backspace on an empty line removes it, ctrl+t ticks a checklist line. The
+// Status row under the title shows the card's column and CYCLES it on
+// enter/space or a click — straight through store.move (status carries pos,
+// which only the store computes), landing at the end of the next column,
+// the board's own tab-move rule. The
 // mouse clicks anything: a row to focus it, a checklist box to toggle it.
 // There is no Save: edits AUTO-SAVE — a debounced (600ms) flush PATCHes only
 // the fields that changed (one PATCH per pause, because every PATCH writes a
@@ -68,6 +72,7 @@ const tickable = (list: ListName) => list === 'requirements';
 
 type Row =
   | { kind: 'field'; field: 'title' | 'blocked' | 'resolution' }
+  | { kind: 'status' }
   | { kind: 'item'; list: ListName; index: number }
   | { kind: 'empty'; list: ListName }
   | { kind: 'pinned' }
@@ -77,6 +82,7 @@ type Row =
 
 const rowKey = (r: Row) =>
   r.kind === 'field' ? r.field : r.kind === 'archived' ? 'archived'
+  : r.kind === 'status' ? 'status'
   : r.kind === 'pinned' ? 'pinned'
   : r.kind === 'session' ? 'session'
   : r.kind === 'auto' ? r.field
@@ -87,7 +93,7 @@ const rowKey = (r: Row) =>
 const showBlocked = (_d: Draft, status: string) => status === 'blocked';
 
 function buildRows(d: Draft, status: string): Row[] {
-  const rows: Row[] = [{ kind: 'field', field: 'title' }];
+  const rows: Row[] = [{ kind: 'field', field: 'title' }, { kind: 'status' }];
   for (const { list } of SECTIONS) {
     const n = d[list].length;
     if (n === 0) rows.push({ kind: 'empty', list });
@@ -195,6 +201,21 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
     setAt((Math.min(atRef.current, n - 1) + d + n) % n);
   };
 
+  // Status is a MOVE, not a draft field: it carries pos, which only the
+  // store computes, so the row cycles the column straight through
+  // store.move — landing at the END of the target column, the board's own
+  // tab-move rule, so both UIs move a card the same way. Read from
+  // cardRef: a batched keypress right behind the optimistic update must
+  // not cycle twice off a stale prop.
+  const cycleStatus = () => {
+    const cols = store.state.columns;
+    if (!cols.length) return;
+    const cur = cardRef.current;
+    const next = cols[(Math.max(0, cols.indexOf(cur.status)) + 1) % cols.length];
+    if (next === cur.status) return;
+    void store.move(cur.id, next, store.cardsIn(next).length);
+  };
+
   const setList = (list: ListName, fn: (v: (string | CardStep)[]) => (string | CardStep)[]) =>
     setDraft((dr) => ({ ...dr, [list]: fn(dr[list] as (string | CardStep)[]) }));
   // A checklist item is keyed HERE, not by the server. A keyless item comes
@@ -294,6 +315,7 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
           setAt(i);
           if (hitRow.kind === 'archived') setDraft((d) => ({ ...d, archived: !d.archived }));
           if (hitRow.kind === 'pinned') setDraft((d) => ({ ...d, pinned: !d.pinned }));
+          if (hitRow.kind === 'status') cycleStatus();
           if (hitRow.kind === 'auto') setDraft((d) => ({ ...d, [hitRow.field]: cycleAuto(d[hitRow.field]) }));
           if (hitRow.kind === 'session' && cardSession && onOpenSession) { flush(); onOpenSession(cardSession.id); }
           // The [ ] box renders right-justified inside the 12-column label
@@ -327,6 +349,10 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
     }
     if (r.kind === 'auto') {
       if (key.return || ch === ' ') { setDraft((d) => ({ ...d, [r.field]: cycleAuto(d[r.field]) })); return; }
+    }
+    if (r.kind === 'status') {
+      if (key.return || ch === ' ') cycleStatus();
+      return;
     }
     if (r.kind === 'session') {
       if (key.return && cardSession && onOpenSession) { flush(); onOpenSession(cardSession.id); }
@@ -386,6 +412,13 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
       </Box>
       <Box marginTop={1} flexDirection="column">
         {fieldRow('title', 'Title', 'the card, in a line', () => move(1))}
+      </Box>
+      <Box marginTop={1} ref={ref({ kind: 'status' })}>
+        {label('Status', 'status')}
+        <Text color={focusedKey === 'status' ? 'cyan' : undefined} dimColor={focusedKey !== 'status'}>
+          {card.status.replace(/_/g, ' ')}
+        </Text>
+        {focusedKey === 'status' ? <Text dimColor> · [enter] next column</Text> : null}
       </Box>
 
       {SECTIONS.map(({ list, label: name, hint }) => {
