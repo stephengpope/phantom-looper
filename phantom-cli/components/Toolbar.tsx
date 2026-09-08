@@ -27,6 +27,7 @@ export function Toolbar({ parts = [], spin, spinWho }: { parts?: ToolbarPart[]; 
   if (!shown.length && !spin) return null;
   return (
     <Box paddingLeft={2}>
+      <Text color="yellow">» </Text>
       {shown.map((p, i) => (
         <Text key={i} color="yellow">
           {i > 0 ? ' · ' : ''}

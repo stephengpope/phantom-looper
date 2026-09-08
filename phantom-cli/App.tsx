@@ -569,11 +569,11 @@ export function App({
   const menuBelow = suggestions.length - menuFrom - menuRows.length;
 
   // The toolbar's mode mark — ALWAYS on while a session is on screen: the
-  // line says which mode you are in before you type, '» plan mode' or
-  // '» code mode', riding in front of whatever else it says. A supervisor
-  // record has no modes — you cannot chat there at all.
+  // line says which mode you are in before you type, 'plan mode' or
+  // 'code mode'. The » prefix is rendered by the Toolbar itself on the far
+  // left. A supervisor record has no modes — you cannot chat there at all.
   const modeMark = session && !session.readonly
-    ? (session.planMode ? '» plan mode on' : '» code mode on')
+    ? (session.planMode ? 'plan mode on' : 'code mode on')
     : undefined;
   // Which card this session is building — the board's own name for it
   // (`PHA-7`), so the line you read while typing answers "what am I working
@@ -594,9 +594,9 @@ export function App({
   // are talking to. Before the first message it follows /model and /presets;
   // after, it is fixed for life.
   const modelMark = session?.summary.model;
-  // Order: card, model, mode, git dot, bg tasks, notice pinned last.
+  // Order: card, git dot, mode, model, bg tasks, notice pinned last.
   const withMode = (rest?: string): ToolbarPart[] =>
-    [cardMark, modelMark, modeMark, workMark, taskMark, rest].filter((p): p is ToolbarPart => Boolean(p));
+    [cardMark, workMark, modeMark, modelMark, taskMark, rest].filter((p): p is ToolbarPart => Boolean(p));
 
   return (
     <SizeContext.Provider value={{ rows: screenRows, cols: screenCols }}>

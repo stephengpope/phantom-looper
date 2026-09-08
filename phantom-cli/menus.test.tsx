@@ -504,22 +504,22 @@ test('/plan flips plan mode: the row is PATCHed, the kit rebuilds readonly, the 
     newTools: async (_id: string, plan?: boolean) => { picks.push(plan); return {}; } });
   await sleep(50);
   // The mark is ALWAYS on: a fresh session says code mode before you type.
-  assert.match(strip(lastFrame() ?? ''), /» code mode on/, 'code mode is announced from the start');
+  assert.match(strip(lastFrame() ?? ''), /» .*code mode on/, 'code mode is announced from the start');
   stdin.write('/plan'); await sleep(40);
   stdin.write(ENTER); await sleep(150);
   // The server row is the record — PATCH first, then this window's kit.
   assert.ok(calls.includes('PATCH /sessions/s1 {"plan_mode":true}'), `PATCH landed: ${calls.join(' | ')}`);
   assert.deepEqual(picks, [true], 'the rebuild asked for the plan kit');
   const on = strip(lastFrame() ?? '');
-  assert.match(on, /» plan mode on/, 'the mark flips while plan mode is on');
-  assert.ok(!/» code mode/.test(on), 'one mode at a time');
+  assert.match(on, /» .*plan mode on/, 'the mark flips while plan mode is on');
+  assert.ok(!/code mode/.test(on), 'one mode at a time');
   stdin.write('/plan'); await sleep(40);
   stdin.write(ENTER); await sleep(150);
   assert.ok(calls.includes('PATCH /sessions/s1 {"plan_mode":false}'));
   assert.deepEqual(picks, [true, false], 'the full kit came back');
   const f = strip(lastFrame() ?? '');
-  assert.match(f, /» code mode on/, 'and back');
-  assert.ok(!/» plan mode/.test(f), 'the plan mark is gone');
+  assert.match(f, /» .*code mode on/, 'and back');
+  assert.ok(!/plan mode/.test(f), 'the plan mark is gone');
 });
 
 test('the toolbar names the card a session is building, the board\'s way, and says nothing when there is none', async () => {
@@ -541,7 +541,7 @@ test('the toolbar names the card a session is building, the board\'s way, and sa
     r.stdin.write('/resume'); await sleep(40);
     r.stdin.write(ENTER); await sleep(160);       // the list opens
     r.stdin.write(ENTER); await sleep(200);       // open the card's session
-    assert.match(strip(r.lastFrame() ?? ''), /PHA-7 · » code mode on/,
+    assert.match(strip(r.lastFrame() ?? ''), /» PHA-7 · .*code mode on/,
       'the card rides ahead of the mode, named as the board names it');
   } finally { r.unmount(); }
 
@@ -552,7 +552,7 @@ test('the toolbar names the card a session is building, the board\'s way, and sa
   try {
     await sleep(50);
     const f = strip(plain.lastFrame() ?? '');
-    assert.match(f, /» code mode on/);
+    assert.match(f, /» .*code mode on/);
     assert.ok(!/PHA-\d/.test(f), 'no card number — just the prefix');
     assert.match(f, /PHA/, 'the workspace prefix shows so you know which project');
   } finally { plain.unmount(); }
@@ -582,7 +582,7 @@ test('session_get_mode and screen_enter_plan_mode ride the coding kit: report, o
   assert.deepEqual(await t('screen_enter_plan_mode').execute({}, {}), { ok: true });
   assert.ok(calls.includes('PATCH /sessions/s1 {"plan_mode":true}'), 'the row is the record');
   await sleep(30);
-  assert.match(strip(lastFrame() ?? ''), /» plan mode on/, 'the toolbar followed the tool');
+  assert.match(strip(lastFrame() ?? ''), /» .*plan mode on/, 'the toolbar followed the tool');
   // The rebuilt kit reports the new mode; the way back is the user's alone.
   assert.deepEqual(await t('session_get_mode').execute({}, {}), { mode: 'plan' });
   assert.deepEqual(await t('screen_enter_plan_mode').execute({}, {}),
@@ -1912,7 +1912,7 @@ test('/archived lists archived cards newest first; [r] restores with a notice; e
   stdin.write(ENTER); await sleep(140);
   assert.match(strip(lastFrame() ?? ''), /PHA-6/, 'enter opens the card editor');
   stdin.write(ESC); await sleep(700); // esc flushes the editor's debounce, then closes
-  assert.match(strip(lastFrame() ?? ''), /» code mode on/, 'the editor closes to chat');
+  assert.match(strip(lastFrame() ?? ''), /» .*code mode on/, 'the editor closes to chat');
 });
 
 // ── the shared table system ─────────────────────────────────────────────────
