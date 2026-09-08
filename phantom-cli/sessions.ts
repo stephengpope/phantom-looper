@@ -376,9 +376,9 @@ export class SessionStore {
     this.notify();
   }
 
-  /** Interrupt the running turn. What was queued behind it stays queued —
-   *  esc means "stop this", not "forget what I said next"; the queue is
-   *  dropped explicitly with dequeue/clearQueue. */
+  /** Interrupt the running turn. The queue's front message starts
+   *  immediately (esc = "skip to next"). With an empty queue, esc just
+   *  stops. */
   abortTurn(id: string): void { this.get(id)?.abort?.abort(); }
 
   /** Say it now if the session is free, otherwise hold it until it is. */
@@ -390,7 +390,7 @@ export class SessionStore {
     this.notify();
   }
 
-  /** Drop everything queued, keep the turn running — the first esc. */
+  /** Drop everything queued — the backing method for `/pop all`. */
   clearQueue(id: string): void {
     const e = this.get(id);
     if (!e || !e.queue.length) return;
@@ -398,8 +398,7 @@ export class SessionStore {
     this.notify();
   }
 
-  /** Take the last queued message back (↑ on the prompt while a turn runs —
-   *  the way to edit something you said too soon). */
+  /** Take the last queued message back — the backing method for `/pop`. */
   unqueue(id: string): string | undefined {
     const e = this.get(id);
     if (!e || !e.queue.length) return undefined;
@@ -441,10 +440,9 @@ export class SessionStore {
     this.notify();
   }
 
-  /** Run a turn on `id`, whether or not it is the session on screen. Several
-   *  texts are several user messages in ONE turn — that is how a queue goes
-   *  out: everything you said while the last turn ran, together, so the model
-   *  answers the lot rather than each line in ignorance of the next. */
+  /** Run a turn on `id`, whether or not it is the session on screen. Each
+   *  queued message gets its own turn — the queue drains one at a time,
+   *  whether the turn ended normally or was interrupted. */
   async send(id: string, text: string | string[]): Promise<void> {
     const e = this.get(id);
     if (!e || e.busy) return;
@@ -555,13 +553,13 @@ export class SessionStore {
       // whole file to the server in the background.
       try { this.onTurnEnd?.(e); }
       catch (err) { this.note(e.id, `transcript sync failed (kept locally): ${(err as Error).message}`); }
-      // Whatever was typed while this ran goes next — ALL of it, as one turn
-      // — but not after an interrupt: esc stops the session, and firing the
-      // queue straight into it would be the opposite of stopping.
-      if (e.queue.length && !ac.signal.aborted) {
-        const batch = e.queue;
-        e.queue = [];
-        void this.send(e.id, batch);
+      // Whatever was typed while this ran goes next — one message per turn,
+      // whether the turn ended on its own or was interrupted. Esc becomes
+      // "skip to next": abort fires, the front message starts immediately.
+      if (e.queue.length) {
+        const next = e.queue[0];
+        e.queue = e.queue.slice(1);
+        void this.send(e.id, next);
       }
     }
   }

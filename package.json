@@ -64,6 +64,6 @@
     "marked-terminal": "^7.3.0",
     "react": "^19.2.8",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.3"
+    "typescript": "^5.9.3"
   }
 }

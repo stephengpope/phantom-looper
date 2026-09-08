@@ -27,7 +27,7 @@
 // in a session you are not looking at cannot write into component state that
 // belongs to the session you are.
 //
-// Keys: enter submit (queues while a turn runs) · esc interrupt · tab/shift+tab next/previous session ·
+// Keys: enter submit (queues while a turn runs) · esc interrupt (skip to next when queued) · tab/shift+tab next/previous session ·
 // ctrl+n the session list · ↑/↓ what you said before · ctrl+o show more
 // (thinking, and a tool's whole command and output) · ctrl+g the voice pane ·
 // ctrl+r mic · ctrl+l speaker (both work
@@ -365,6 +365,8 @@ export function App({
   // leaving. Set once: the ref is stable, so the window always reads the
   // current line without this component re-registering anything.
   useEffect(() => { windowStore.draftOnScreen = () => inputRef.current; }, [windowStore]);
+  // /pop injects the popped message into the prompt for editing.
+  useEffect(() => { windowStore.setPrompt = (text: string) => setInput(text); }, [windowStore]);
   // The session on screen changed (a switch, an open, a close). The window
   // parked the outgoing session's unsent text on its entry; this brings the
   // incoming one's back and puts the view at the tail of its conversation.
@@ -517,12 +519,11 @@ export function App({
 
   // Off while a menu owns the keyboard — see the note at the top of the file.
   useInput((ch, key) => {
-    // esc while a turn runs: with something queued, the first press drops the
-    // queue and the turn keeps going (what you said next was the mistake, not
-    // what is running); the next press stops the turn.
+    // esc while a turn runs: abort it. If something is queued, the front
+    // message starts immediately (the finally block in send pops it) —
+    // esc means "skip to next", not "forget what I said".
     if (key.escape && session?.busy) {
-      if (session.queue.length) store.clearQueue(session.id);
-      else store.abortTurn(session.id);
+      store.abortTurn(session.id);
       return;
     }
     // esc on a remote turn: the first press arms, the second fires the
@@ -567,13 +568,7 @@ export function App({
     // Everywhere else tab is the session ring — including while a turn runs,
     // which is the whole point of having more than one open.
     if (key.tab) { windowStore.cycle(key.shift ? -1 : 1); return; }
-    // ↑ on an empty line while a turn runs and something is queued: take the
-    // last queued line back into the box — that is how you fix what you said
-    // too soon. Older history is one more ↑ away once the queue is empty.
-    if (key.upArrow && input === '' && histAt === 0 && session?.queue.length) {
-      setInput(store.unqueue(session.id) ?? '');
-      return;
-    }
+    // ↑/↓ scroll through previously sent messages. /pop handles the queue.
     if (key.upArrow && (histAt > 0 || input === '')) { recall(-1); return; }
     if (key.downArrow && histAt > 0) { recall(1); return; }
   }, { isActive: windowStore.menu === null && windowStore.view === 'chat' });
@@ -686,13 +681,13 @@ export function App({
         {(session?.busy || session?.remoteBusy) && <StatusLine phase={phaseLabel(session.live)}
           startedAt={session.startedAt} tokens={tokenCount(session.tokens)}
           escHint={session.busy
-            ? (session.queue.length ? '[esc] clears the queue, then interrupts' : '[esc] to interrupt')
+            ? (session.queue.length ? '[esc] skip to next' : '[esc] to interrupt')
             : interruptArmed ? '[esc] again to interrupt' : '[esc] to interrupt'} />}
         {session && session.queue.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
-            <Text dimColor>{`  queued · sent together, in one turn, when this one ends`}</Text>
+            <Text dimColor>{`  queued — esc sends next · /pop edits last`}</Text>
             {session.queue.map((q, i) => (
-              <Text key={i} dimColor>{`  › ${q}`}</Text>
+              <Text key={i}><Text color="cyan">{`  ${i + 1}›`}</Text>{` ${q}`}</Text>
             ))}
           </Box>
         )}

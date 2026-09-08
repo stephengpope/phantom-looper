@@ -183,6 +183,10 @@ export class WindowStore {
    *  can be parked on the session being left. App fills this in. */
   draftOnScreen: () => string = () => '';
 
+  /** Inject text into the prompt — /pop puts the popped message here for
+   *  editing. App wires this up the same way it wires draftOnScreen. */
+  setPrompt: (text: string) => void = () => {};
+
   /** What the LEFT PANE is showing: the chat, the kanban board, or a card's
    *  editor. A card carries where esc goes BACK to, because that is the only
    *  thing that ever differed between a card opened from the chat and the same
@@ -1473,6 +1477,19 @@ export class WindowStore {
         if (!this.voice.say(args)) this.note('voice is off — /voice to turn it on');
         else if (this.sidebar === false) { this.sidebar = null; this.notify(); }
         return;
+      case 'pop': {
+        if (!session) { this.note('no session is open'); return; }
+        if (!session.queue.length) { this.note('the queue is empty — nothing to pop'); return; }
+        if (args === 'all') {
+          const all = session.queue.join('\n\n');
+          this.sessions.clearQueue(session.id);
+          this.setPrompt(all);
+          return;
+        }
+        const removed = this.sessions.unqueue(session.id);
+        if (removed) this.setPrompt(removed);
+        return;
+      }
       case 'help':
         this.note(COMMANDS.map((c) => `  /${c.name.padEnd(10)} ${c.summary}`).join('\n'));
         return;
