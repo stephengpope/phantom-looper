@@ -27,7 +27,7 @@ export const DEFAULTS = {
   spare_clone_refresh_ms: 3_600_000,        // performance only — the claim fetch is the guarantee
   spare_clone_max_age_ms: 7 * 24 * 3_600_000, // evict and re-stock rather than re-deepen
   session_idle_destroy_ms: 30 * 24 * 3_600_000,
-  container_idle_ms: 30 * 60_000,
+  container_idle_ms: 4320 * 60_000,
   container_memory_mb: null as number | null, // unset => no cap (Docker default)
   container_cpus: null as number | null,      // unset => no cap (Docker default)
   container_pids_limit: null as number | null, // unset => no cap (Docker default)

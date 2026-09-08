@@ -51,5 +51,21 @@ export function human(value: unknown, meta?: WireMeta): string {
   return String(value);
 }
 
+/** Parse a human duration like `3d`, `2h`, `30m`, `10s` into milliseconds.
+ *  A plain number passes through as-is (raw ms). Returns null when the input
+ *  is not a recognisable duration — the caller decides how to report it. */
+export function parseMs(input: string): number | null {
+  const v = input.trim();
+  const m = v.match(/^(\d+(?:\.\d+)?)\s*([dhms])$/i);
+  if (m) {
+    const n = Number(m[1]);
+    const unit = m[2].toLowerCase();
+    const scale = MS.find(([, s]) => s === unit);
+    return scale ? n * scale[0] : null;
+  }
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 /** Fit a rendered value into the list's value column. */
 export const fit = (s: string, width = 26) => s.length > width ? `${s.slice(0, width - 1)}…` : s;

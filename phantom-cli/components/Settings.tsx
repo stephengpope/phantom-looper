@@ -264,8 +264,9 @@ export function Settings({ api, onClose, onLocalChange, configPath = CONFIG_PATH
                 choiceLabels: s.meta?.choiceLabels,
                 type: (s.meta?.type as EditSpec['type']) ?? 'string',
                 current: s.value,
+                unit: s.meta?.unit,
                 note: s.meta?.unit === 'ms'
-                  ? 'in milliseconds · applies to every workspace'
+                  ? 'e.g. 30m, 2h, 3d · applies to every workspace'
                   : 'applies to every workspace',
               }, values).then((spec) => setView({ at: 'edit', scope: 'api', key: k as string, spec }));
             }}

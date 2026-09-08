@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { TextInput } from './TextInput.js';
 import { SelectList, type Choice } from './SelectList.js';
 import { Screen } from './Screen.js';
+import { parseMs, human } from '../settingLabels.js';
 
 export interface EditSpec {
   title: string;
@@ -30,6 +31,8 @@ export interface EditSpec {
   current: unknown;
   /** Shown under the field — where the value lands, or why it may not apply. */
   note?: string;
+  /** The server's unit tag — `ms` enables duration parsing (3d, 2h, 30m, 10s). */
+  unit?: string;
 }
 
 export function ValueInput({ spec, onSubmit, onCancel }: {
@@ -41,7 +44,10 @@ export function ValueInput({ spec, onSubmit, onCancel }: {
   // and you change it. The empty-field-with-ghost-value shape is only right
   // where editing makes no sense — a secret is all-or-nothing, never shown
   // back, so it starts blank.
-  const [text, setText] = useState(spec.secret ? '' : String(spec.current ?? ''));
+  const initial = spec.secret ? '' : spec.unit === 'ms' && typeof spec.current === 'number'
+    ? human(spec.current, { type: 'number', unit: 'ms' })
+    : String(spec.current ?? '');
+  const [text, setText] = useState(initial);
   const [error, setError] = useState<string | undefined>();
 
   const choices = spec.type === 'boolean' ? ['true', 'false'] : spec.choices;
@@ -83,6 +89,11 @@ export function ValueInput({ spec, onSubmit, onCancel }: {
     // "an endpoint that is the empty string" are not the same thing.
     if (!v) return onSubmit(null);
     if (spec.type === 'number') {
+      if (spec.unit === 'ms') {
+        const n = parseMs(v);
+        if (n === null) { setError('try a number like 30m, 2h, 3d, or raw milliseconds'); return; }
+        return onSubmit(n);
+      }
       const n = Number(v);
       if (!Number.isFinite(n)) { setError('must be a number'); return; }
       return onSubmit(n);

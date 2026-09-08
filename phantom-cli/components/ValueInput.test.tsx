@@ -5,6 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { render } from 'ink-testing-library';
 import { ValueInput, type EditSpec } from './ValueInput.js';
+import { parseMs } from '../settingLabels.js';
 
 const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -86,4 +87,15 @@ test('no suggestions (e.g. openai-compatible) is a plain text field, not a combo
   const f = strip(lastFrame() ?? '');
   assert.doesNotMatch(f, /filter or type an id/);
   assert.match(f, /\[empty\] clears it/, 'the plain text-field footer');
+});
+
+test('parseMs: human durations round-trip through the same scale table as the display', () => {
+  assert.equal(parseMs('3d'), 3 * 86_400_000);
+  assert.equal(parseMs('2h'), 2 * 3_600_000);
+  assert.equal(parseMs('30m'), 30 * 60_000);
+  assert.equal(parseMs('10s'), 10_000);
+  assert.equal(parseMs('1500'), 1500, 'plain number = raw ms');
+  assert.equal(parseMs('  30m  '), 30 * 60_000, 'whitespace tolerated');
+  assert.equal(parseMs('abc'), null, 'junk returns null');
+  assert.equal(parseMs('3x'), null, 'unknown suffix returns null');
 });
