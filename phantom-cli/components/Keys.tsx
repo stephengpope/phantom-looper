@@ -11,27 +11,49 @@
 // Named the way each vendor names the thing: GitHub says token, everyone else
 // says API key.
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { SelectList } from './SelectList.js';
+import { SelectList, type Choice } from './SelectList.js';
 import { ValueInput } from './ValueInput.js';
 import { Screen } from './Screen.js';
 import { makeSettings, type Api } from '../settings.js';
 
 const NAMES = [
-  { name: 'github_token', label: 'github token',
+  // git
+  { name: 'github_token', label: 'github token', group: 'git',
     hint: 'Used for clones, pushes and pull requests. A workspace with its own token ignores this one.' },
-  { name: 'anthropic_api_key', label: 'anthropic key',
+  // llm
+  { name: 'anthropic_api_key', label: 'anthropic key', group: 'llm',
     hint: 'Used by every agent set to the anthropic provider.' },
-  { name: 'openai_api_key', label: 'openai key', hint: 'Used by every agent set to the openai provider.' },
-  { name: 'google_api_key', label: 'google key', hint: 'Used by every agent set to the google provider.' },
-  { name: 'openai_compatible_api_key', label: 'openai-compatible key',
+  { name: 'openai_api_key', label: 'openai key', group: 'llm', hint: 'Used by every agent set to the openai provider.' },
+  { name: 'google_api_key', label: 'google key', group: 'llm', hint: 'Used by every agent set to the google provider (Gemini).' },
+  { name: 'deepseek_api_key', label: 'deepseek key', group: 'llm', hint: 'Used by every agent set to the deepseek provider.' },
+  { name: 'kimi_api_key', label: 'kimi key', group: 'llm', hint: 'Used by every agent set to the kimi provider (Moonshot AI / Kimi).' },
+  { name: 'xai_api_key', label: 'xai key', group: 'llm', hint: 'Used by every agent set to the xai provider (Grok).' },
+  { name: 'mistral_api_key', label: 'mistral key', group: 'llm', hint: 'Used by every agent set to the mistral provider.' },
+  { name: 'groq_api_key', label: 'groq key', group: 'llm', hint: 'Used by every agent set to the groq provider.' },
+  { name: 'openai_compatible_api_key', label: 'openai-compatible key', group: 'llm',
     hint: 'Used for an OpenAI-compatible endpoint: Ollama, vLLM, OpenRouter.' },
-  { name: 'deepgram_api_key', label: 'deepgram key',
+  // voice
+  { name: 'deepgram_api_key', label: 'deepgram key', group: 'voice',
     hint: 'Speech to text and text to speech for the Assistant. Without it the Assistant has no voice.' },
-  { name: 'firecrawl_api_key', label: 'firecrawl key',
+  // search
+  { name: 'firecrawl_api_key', label: 'firecrawl key', group: 'search',
     hint: 'Used by the web_search and web_fetch tools (firecrawl.dev). Without it web calls fail.' },
-  { name: 'telegram_bot_token', label: 'telegram bot token',
+  // chat
+  { name: 'telegram_bot_token', label: 'telegram bot token', group: 'chat',
     hint: 'From @BotFather. With telegram enabled and an authorized user set (/settings), saving it registers the webhook.' },
 ] as const;
+
+/** Build the flat choices array with group headings inserted where the group
+ *  changes — the same pattern Settings uses. */
+function groupedChoices(stored: Set<string>) {
+  const out: Choice<string>[] = [];
+  let last = '';
+  for (const n of NAMES) {
+    if (n.group !== last) { out.push({ value: `#${n.group}`, label: n.group, heading: true }); last = n.group; }
+    out.push({ value: n.name, label: n.label, detail: stored.has(n.name) ? 'stored' : 'not set', hint: n.hint });
+  }
+  return out;
+}
 
 export function Keys({ api, onClose, onChanged }: {
   api: Api; onClose: () => void;
@@ -114,12 +136,7 @@ export function Keys({ api, onClose, onChanged }: {
         { key: 'esc', does: 'close' },
       ]}>
       <SelectList
-        choices={NAMES.map((n) => ({
-          value: n.name,
-          label: n.label,
-          detail: stored.has(n.name) ? 'stored' : 'not set',
-          hint: n.hint,
-        }))}
+        choices={groupedChoices(stored)}
         initial={last}
         onSelect={(n) => { setLast(n); setEditing(n); }}
         onCancel={onClose}
