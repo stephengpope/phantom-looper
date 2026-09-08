@@ -663,6 +663,65 @@ test('the Session row names the card\'s coding session and a click opens it; no 
   r.unmount();
 });
 
+test('the card view\'s letter keys: [p]/[b] cycle the auto switches, [a] archives, [s] opens the session — and a text row still owns its letters', async () => {
+  // card 1 has a loop session, served the way the Session-row test serves it.
+  const { api, calls } = fakeApi(seed());
+  const withSessions = async (method: string, path: string, body?: unknown) => {
+    const d = await api(method, path, body) as Record<string, unknown>;
+    if (method === 'GET') return { ...d, card_sessions: [{ card: 1, id: 'sess-1', name: 'wiring the tasks screen' }] };
+    return d;
+  };
+  const opened: string[] = [];
+  const r = mount(new BoardStore(withSessions, 'w1'),
+    { width: 100, height: 30, onOpenSession: (id: string) => opened.push(id) });
+  await sleep(50);
+  // Open card 1.
+  let lines = strip(r.lastFrame()!).split('\n');
+  let y = lines.findIndex((l) => l.includes('first card'));
+  let x = lines[y].indexOf('first card');
+  r.stdin.write(sgr(0, x, y)); await sleep(20);
+  r.stdin.write(sgr(0, x, y, true)); await sleep(30);
+
+  // Focus opens on the Title — a TEXT row: the same letters type, they do
+  // not act. `p` lands in the title and auto_plan stays untouched.
+  r.stdin.write('p'); await sleep(30);
+  assert.match(strip(r.lastFrame()!), /first cardp/, 'a text row owns the letter');
+  assert.match(strip(r.lastFrame()!), /Auto plan\s+off ·/, 'no toggle from a text row');
+  assert.ok(!calls.some((c) => c.method === 'PATCH' && /auto_plan/.test(JSON.stringify(c.body))),
+    'no auto PATCH left the editor');
+
+  // Walk down to Auto plan (title → details → two requirements → Auto plan).
+  for (let i = 0; i < 4; i++) { r.stdin.write('\x1b[B'); await sleep(20); }
+  assert.match(strip(r.lastFrame()!), /❯ Auto plan/);
+
+  // [p] and [b] cycle the two switches, exactly the rows' own action.
+  r.stdin.write('p'); await sleep(30);
+  assert.match(strip(r.lastFrame()!), /Auto plan\s+on · this card/);
+  r.stdin.write('b'); await sleep(30);
+  assert.match(strip(r.lastFrame()!), /Auto build\s+on · this card/);
+
+  // [s] flushes what is pending and opens the card's session.
+  r.stdin.write('s'); await sleep(60);
+  assert.deepEqual(opened, ['sess-1']);
+  const autos = calls.filter((c) => c.method === 'PATCH')
+    .map((c) => c.body as Record<string, unknown>);
+  assert.ok(autos.some((b) => b.auto_plan === true), 'auto_plan rode a PATCH');
+  assert.ok(autos.some((b) => b.auto_build === true), 'auto_build rode a PATCH');
+
+  // [a] toggles archived, both ways — the Archived row's own action.
+  r.stdin.write('a'); await sleep(30);
+  assert.match(strip(r.lastFrame()!), /yes — off the board/);
+  await sleep(800); // past the debounce
+  assert.ok(calls.some((c) => c.method === 'PATCH'
+    && (c.body as Record<string, unknown>).archived === true), 'the archive PATCHed');
+  r.stdin.write('a'); await sleep(30);
+  assert.match(strip(r.lastFrame()!), /Archived\s+no/);
+  await sleep(800);
+  assert.ok(calls.some((c) => c.method === 'PATCH'
+    && (c.body as Record<string, unknown>).archived === false), 'and back');
+  r.unmount();
+});
+
 // ── the event stream ──────────────────────────────────────────────────────
 // The server's /events feed, scripted: `emit` pushes a record down the open
 // link, `end` hangs up (the store must reconnect), `opens` counts links.
