@@ -9,7 +9,7 @@
 // moves stay in App.
 import { hostname } from 'node:os';
 import type { ModelMessage, Tool } from 'ai';
-import { SessionStore, type LoadedSession } from './sessions.js';
+import { SessionStore, activeHold, type LoadedSession } from './sessions.js';
 import { BoardStore, type Card, type Stream } from './board.js';
 import { VoiceClient, sidecarEnv, codingKanbanTool, screenModeTools,
   type KanbanArgs, type ScreenModeHandler } from './voice.js';
@@ -1412,8 +1412,10 @@ export class WindowStore {
     if (!msg) return;
     const session = this.sessions.active();
     // Locked elsewhere = read-only here: refuse BEFORE the box clears. Slash
-    // commands still run — they are the window's, not the session's.
-    const held = session?.held && session.held.expiresAt > Date.now() ? session.held : null;
+    // commands still run — they are the window's, not the session's. The ONE
+    // busy test is activeHold (sessions.ts): the spinner and this guard can
+    // never disagree, so a send is refused up front, never after the fact.
+    const held = activeHold(session);
     if (held && !msg.startsWith('/') && msg !== 'exit' && msg !== 'quit') {
       this.note(`not sent — a turn is running (${held.label})`);
       return;

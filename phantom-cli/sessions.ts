@@ -96,6 +96,15 @@ export interface LoadedSession {
   draft: string;
 }
 
+/** Is someone else working in this session right now? The hold's expiry is a
+ *  clock, and a turn that outruns it keeps streaming — so observed activity
+ *  (parts arriving, no turn-end yet) counts too. THE one answer: the toolbar
+ *  spinner, the esc-stop and the send guard all read this, or they drift —
+ *  the last time they answered separately, a lapsed clock let a second turn
+ *  start on a live conversation. */
+export const activeHold = (e: LoadedSession | undefined | null): LoadedSession['held'] =>
+  e?.held && (e.held.expiresAt > Date.now() || e.remoteBusy) ? e.held : null;
+
 export interface NewSession {
   id: string; branch: string; workspaceId: string;
   /** The card this session builds, named `PHA-7` (see LoadedSession.card). */

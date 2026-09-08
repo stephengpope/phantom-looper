@@ -113,7 +113,10 @@ The store's `remoteStart`, `remoteParts`, `remoteEnd` draw watched turns
 through the same reducer as local ones. Watching the whole turn keeps its
 richer screen when the record lands; a gap repaints from the transcript.
 Who holds the session comes from `lock` records into `session.held` and
-lapses on this window's clock at `expires_at`. Git still gets measured by
+lapses on this window's clock at `expires_at` — but a turn still streaming
+(`remoteBusy`) outranks the clock: `activeHold` (sessions.ts) is the ONE
+"is someone working" answer, read by the toolbar spinner, the esc-stop and
+the send guard alike. Git still gets measured by
 the existing server-side refresh; its changes now ride the session feed.
 
 This window relays its own turn through `SessionStore.relay` so another

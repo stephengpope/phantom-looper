@@ -887,6 +887,50 @@ test('session state: a fresh loop pairs the card with locked: true — the board
   } finally { unsubscribe(); }
 });
 
+test('a seat held by a person SKIPS the round — the card is not blocked, and the lock release resumes the loop', async () => {
+  const card = json(await app.inject({ method: 'POST', url: `/workspaces/${wsId}/cards`, headers: H,
+    payload: { title: 'a human grabbed the seat', status: 'plan' } })).data.card;
+  const seq: number = card.seq;
+  const engine = new LooperEngine({ db, pgPool, app, apiKey: 'test-key', modelFetch });
+
+  // The kickoff creates the loop pair and its coding session.
+  script.coding.push({ text: 'PLAN: noted.' });
+  await engine.runTurn(workspace, await cardRow(seq), ledger());
+  const loopRow = (await db.select().from(loops).where(eq(loops.card, seq)))[0];
+
+  // A person's turn takes the seat (the cli locks per turn, as this client).
+  const human = { ...H, 'x-phantom-looper-client': 'a-laptop' };
+  const hold = await app.inject({ method: 'POST', url: `/sessions/${loopRow.codingSessionId}/lock`,
+    headers: human, payload: { label: 'a-laptop' } });
+  assert.equal(json(hold).ok, true, hold.body);
+
+  // The loop comes round and finds the seat taken: it WAITS. No block, no
+  // card write, no model call — the person keeps the session and the card
+  // keeps its column.
+  const wireBefore = wire.length;
+  const outcome = await engine.runTurn(workspace, await cardRow(seq), ledger());
+  assert.equal(outcome, 'skipped', 'a held seat is a skipped round, not a blocked card');
+  const during = await cardRow(seq);
+  assert.equal(during.status, 'plan', 'the card kept its column — nothing was blocked');
+  assert.equal(during.blocked_reason, null);
+  assert.equal(wire.length, wireBefore, 'no turn ran while the person held the seat');
+
+  // The engine's own releases never refire the loop — only a person's does.
+  await engine.runLoopOfSession(loopRow.codingSessionId, 'supervisor');
+  assert.equal(wire.length, wireBefore, "the loop's own release is not a wake-up");
+
+  // The person's turn ends and lets go: the same call the lock route makes
+  // on a release runs the owed step right away.
+  const rel = await app.inject({ method: 'DELETE', url: `/sessions/${loopRow.codingSessionId}/lock`, headers: human });
+  assert.equal(json(rel).data.released, true, rel.body);
+  script.supervisor.push({ text: 'Demand 1: name the verification step.' });
+  await engine.runLoop(wsId, seq);
+  assert.ok(wire.length > wireBefore, 'the release resumed the loop — the owed supervisor turn ran');
+  const after = await cardRow(seq);
+  assert.equal(after.status, 'plan');
+  assert.equal(after.blocked_reason, null, 'the card was never touched');
+});
+
 test('session state: a manual save clears the agent label and lock renewal does not restore stale identity', async () => {
   const made = json(await app.inject({ method: 'POST', url: '/sessions', headers: H,
     payload: { workspace_id: wsId } })).data;

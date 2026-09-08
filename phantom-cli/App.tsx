@@ -40,6 +40,7 @@ import type { ModelMessage, Tool } from 'ai';
 import { runTurn } from './agent.js';
 import { buildAgent, buildAssistantAgent } from './agentFromConfig.js';
 import { phaseLabel, tokenCount } from './state.js';
+import { activeHold } from './sessions.js';
 import { Transcript, lastUserMessage, type TranscriptHeader } from './session.js';
 import { complete, matches } from './commands.js';
 import { quiet, type Api } from './request.js';
@@ -280,14 +281,11 @@ export function App({
   // releasing does not spin here for ever. The feed also carries mode, git
   // state and transcript stamps; reconnecting refills anything missed. The
   // send-time server lock refusal is the backstop for concurrent writers.
-  // Is someone else working in this session? The expiry alone cannot answer
-  // that: it is a clock, and a turn that outruns it goes on streaming. When it
-  // lapsed mid-turn this one expression switched off the stop key, the spinner
-  // AND the send guard together — so the window looked idle, esc did nothing,
-  // and typing started a SECOND turn on a live conversation. remoteBusy is the
-  // observed truth (parts arriving, no turn-end yet), so either signal holds.
-  const heldNow = session?.held && (session.held.expiresAt > Date.now() || session.remoteBusy)
-    ? session.held : null;
+  // `activeHold` (sessions.ts) is THE one answer to "is someone working":
+  // the expiry clock OR observed activity — when this expression lived here
+  // alone, the send guard in the window answered differently, and a lapsed
+  // clock waved a message through that the server then refused.
+  const heldNow = activeHold(session);
   const heldRef = useRef(heldNow);
   heldRef.current = heldNow;
   // Streamless callers get a one-shot fill. With a feed, its initial snapshot

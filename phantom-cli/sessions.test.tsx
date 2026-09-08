@@ -666,6 +666,41 @@ test('session state: remote takeover updates the agent label in place and preser
   } finally { r.unmount(); }
 });
 
+test('session state: a lapsed clock mid-turn still spins and still refuses — activity, not the clock, answers "busy"', async () => {
+  const sid = 'state-lapsed';
+  let sends = 0;
+  const api = async (method: string, path: string) => {
+    if (path.endsWith('/tasks')) return { tasks: [] };
+    if (path.endsWith('/lock') && method === 'POST') sends++;
+    return {};
+  };
+  const { push, stream } = fakeFeed();
+  const r = render(<App api={api as never} stream={stream} initial={{ ...INITIAL, sessionId: sid }}
+    newTools={async () => ({})} makeVoice={inertVoice} makeAgent={stubAgent}
+    makeTranscript={(h) => new Transcript(h, tmp())} run={scriptedRun()} pollMs={60_000} />);
+  try {
+    await sleep(80);
+    // A hold whose clock runs out WHILE the turn is still streaming (a server
+    // turn that outran the ttl — the bug activeHold exists for).
+    push({ event: 'lock', locked: true, agent: 'coding', label: 'building',
+      expires_at: new Date(Date.now() + 400).toISOString() });
+    push({ event: 'turn-start', agent: 'coding', message: 'remote task' });
+    push({ event: 'part', part: { type: 'text-start', id: 'x' } });
+    push({ event: 'part', part: { type: 'text-delta', id: 'x', text: 'still going' } });
+    await sleep(80);
+    assert.match(strip(r.lastFrame()!), /building/, 'spinning while the clock is alive');
+    await sleep(1200);   // past the expiry AND the once-a-second tick
+    assert.match(strip(r.lastFrame()!), /building/,
+      'the clock lapsed but the turn is streaming — the spinner stays');
+    r.stdin.write('do not send this'); await sleep(30);
+    r.stdin.write(ENTER); await sleep(60);
+    assert.equal(sends, 0, 'refused up front — the guard and the spinner read the same truth');
+    const f = strip(r.lastFrame()!);
+    assert.match(f, /not sent — a turn is running \(building\)/);
+    assert.match(f, /do not send this/, 'the words stay in the prompt');
+  } finally { r.unmount(); }
+});
+
 test('session state: mode and git update on the feed with no recurring session GET', async () => {
   const sid = 'state-mode-work';
   let reads = 0;
