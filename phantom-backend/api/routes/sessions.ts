@@ -1,15 +1,16 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { eq, ne, desc, and, or, isNull, isNotNull, lt, sql, count, inArray } from 'drizzle-orm';
 import { sessions, sessionColumns, workspaces, folders, loops, settings as settingsRows, type SessionRow } from '../../db/schema.js';
-import { createSession, getSession, destroySession, touchSession, SessionError,
+import { createSession, getSession, getFolder, destroySession, touchSession, SessionError,
   heldByOther, acquireLock, releaseLock, renewLock, assertDuplicable, conversationOnly, agentAfterSave,
   turnStarted, LAST_MESSAGE_CHARS } from '../../sessions.js';
+import { GIT_CLIENT_ID } from '../../git/git.js';
 import { repoDir } from '../../pool/paths.js';
 
 import { scanSkills, mergeSkills } from '../../../core/skills/skills.js';
 import { systemSkills } from '../../systemSkills.js';
 import { environmentFacts } from '../../environment.js';
-import { lastUserFromJsonl, headerModelFromJsonl, sumUsageFromJsonl } from '../../../core/llm/transcript.js';
+import { lastUserFromJsonl, headerModelFromJsonl, sumUsageFromJsonl, stripUsageFromJsonl } from '../../../core/llm/transcript.js';
 import { resolve, settingsBlock, validateSetting } from '../../settings.js';
 import { putScoped, dropKey, sessionScope, listSecrets, GLOBAL, workspaceScope } from '../../store.js';
 import { ok, err, type AppCtx } from '../app.js';
@@ -48,13 +49,19 @@ const clientOf = (req: FastifyRequest): string => {
 };
 
 const lockedErr = (s: SessionRow) =>
-  err('session_locked', `session is in use${s.lockedLabel ? ` on ${s.lockedLabel}` : ''} — duplicate it to work beside the holder`, true);
+  err('session_locked', `session is in use${s.lockedLabel ? ` on ${s.lockedLabel}` : ''} — release it there, or wait for the hold to expire`, true);
 
 /** The first line of a transcript is its header; a duplicate keeps the frozen
  *  system prompt but is a different session on a different branch, so those
- *  two fields are rewritten. An unparsable first line is left alone — the
- *  loader skips what it cannot parse, same as everywhere. */
-export function rewriteTranscriptHeader(data: string, patch: { session_id: string; branch: string }): string {
+ *  two fields are rewritten — and the model fields are DROPPED (a key patched
+ *  to undefined serializes away), because the copy is born unpinned: it
+ *  follows /model and presets until its first new message, exactly like a
+ *  fresh session. An unparsable first line is left alone — the loader skips
+ *  what it cannot parse, same as everywhere. */
+export function rewriteTranscriptHeader(
+  data: string,
+  patch: { session_id: string; branch: string; provider?: undefined; model?: undefined; base_url?: undefined },
+): string {
   const nl = data.indexOf('\n');
   const first = nl < 0 ? data : data.slice(0, nl);
   try {
@@ -242,15 +249,16 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   // ---- the session lock ----------------------------------------------------
   // One holder per session, named by the x-phantom-looper-client header. Acquire and
   // renew are the same call; there is no takeover — a hold ends by release or
-  // by expiry (session_lock_ttl_ms). Copying the session (duplicate) is always
-  // open, which is the designed way past a holder.
+  // by expiry (session_lock_ttl_ms). Duplicating forks a session, but it too
+  // takes this lock first: its flush commits the tree, and a live writer
+  // mid-turn must not be committed half-written.
   app.post<{ Params: { id: string }; Body: { label?: string } }>(
     '/sessions/:id/lock', { schema: { ...TAG,
       summary: 'Hold a session',
       description: 'Claims the session for the client named in x-phantom-looper-client (an opaque id the client invents). ' +
         'While held, no other client may read or write the transcript. Calling again renews the hold; ' +
         'it also expires on its own after session_lock_ttl_ms without renewal. 409 while someone else holds it — ' +
-        'there is no takeover; POST /sessions/:id/duplicate works beside a holder.',
+        'there is no takeover: release it there, or wait for the hold to expire.',
       params: idParam,
       body: { type: 'object', additionalProperties: false, properties: {
         label: { type: 'string', maxLength: 200, description: 'What to show others (a hostname).' } } } } },
@@ -599,50 +607,93 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     });
 
   // ---- duplicate -----------------------------------------------------------
+  // THE way to fork a session — above all, to switch its model: a pinned
+  // session never changes model, but its copy is born UNPINNED and follows
+  // /model and presets until its first new message, exactly like a fresh
+  // session. The whole operation runs under the source's lock (held as every
+  // git operation holds it, labelled 'duplicate'): the lock, then the flush
+  // (everything outstanding committed and pushed to the source's branch on
+  // origin), then the copy cut FROM that branch — so the copy holds all of
+  // the source's work, not base's. 409 while someone else holds the source.
   app.post<{ Params: { id: string } }>(
     '/sessions/:id/duplicate', { schema: { ...TAG,
       summary: 'Copy a session',
-      description: 'Creates a NEW session in the same workspace (fresh checkout, its own branch) ' +
-        'and copies the source\'s transcript to it — the frozen system prompt travels, the header\'s session and ' +
-        'branch are rewritten. Works while the source is held by someone else: copying is the designed way past ' +
-        'the lock. Unpushed work in the source is not in the copy; the copy starts from what origin has.',
+      description: 'Takes the source\'s lock (409 while another client holds it), commits and pushes ' +
+        'everything outstanding to the source\'s branch on origin, then creates a NEW session whose own ' +
+        'branch is cut FROM that branch — the copy starts with all of the source\'s work. The transcript ' +
+        'travels minus its usage lines and model pin: the copy is born unpinned (it follows the model ' +
+        'settings until its first new message, like a fresh session) and its token totals count its own ' +
+        'spend from birth. The frozen system prompt, name and plan mode travel. A destroyed source skips ' +
+        'the flush — its branch on origin is the record. A failed flush aborts the copy with the error.',
       params: idParam } },
     async (req, reply) => {
       const src = await getSession(ctx.db, req.params.id);
       if (!src) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       try {
         assertDuplicable(src);
-        const copy = await createSession(ctx.db, ctx.paths, ctx.encryptionKey, src.workspaceId);
+      } catch (e) {
+        if (e instanceof SessionError) return reply.code(400).send(err(e.code, e.message));
+        throw e;
+      }
+      // The same ground truth as the lock route: an expired hold is not an
+      // idle session while its turn is still streaming — duplicating would
+      // flush a tree the live turn is halfway through writing.
+      if (ctx.activeTurns?.has(src.id) && src.lockedBy) return reply.code(409).send(lockedErr(src));
+      const ttl = await resolve(ctx.db, 'session_lock_ttl_ms');
+      const expires = await acquireLock(ctx.db, src, GIT_CLIENT_ID, Number(ttl), 'duplicate');
+      if (!expires) return reply.code(409).send(lockedErr(src));
+      ctx.sessionEvents?.publish(src.id, GIT_CLIENT_ID, lockEvent(src, { locked: true, by: GIT_CLIENT_ID,
+        label: 'duplicate', expires }));
+      void publishBoardLock(ctx, src.id, true);
+      try {
+        const srcFolder = src.folderId ? await getFolder(ctx.db, src.folderId) : undefined;
+        // The flush, while the lock keeps every writer out: the copy is cut
+        // from what origin has AFTER this, so nothing the source did is lost.
+        // A destroyed session has no checkout — its branch on origin is the
+        // record, and the cut below fails clearly if even that is gone.
+        if (src.status === 'active' && ctx.engine && srcFolder) {
+          const workspace = (await ctx.db.select().from(workspaces).where(eq(workspaces.id, src.workspaceId)))[0];
+          const r = await ctx.engine.push(src, workspace);
+          if (r !== 'pushed' && r !== 'nothing') {
+            return reply.code(502).send(err('flush_failed',
+              `could not push the session's work to origin first (push ${r}) — the copy was not made`, true));
+          }
+          // The clone below can outrun the hold's clock; slide it forward so
+          // nobody else takes the source mid-copy.
+          await renewLock(ctx.db, src.id, GIT_CLIENT_ID, Number(ttl));
+        }
+        const copy = await createSession(ctx.db, ctx.paths, ctx.encryptionKey, src.workspaceId,
+          srcFolder ? { fromBranch: srcFolder.branch } : {});
         const t = await ctx.db.select({ data: sessions.transcript })
           .from(sessions).where(eq(sessions.id, src.id));
-        // The copy's token totals come from the same text (the header rewrite
-        // touches no usage line) — written here because this route saves the
-        // transcript directly, bypassing the save route. The name travels;
-        // turn_count stays 0 — the copy renames on its own clock. Plan mode
-        // travels too — a copy of a planning session is still planning — with
-        // or without a transcript to bring along.
-        const totals = t[0]?.data != null ? sumUsageFromJsonl(t[0].data) : null;
         const stamp = new Date();
         await ctx.db.update(sessions).set({
           planMode: src.planMode,
-          // The pin travels with the conversation: a copy of a session is the
-          // same conversation, so it runs on the same model.
-          provider: src.provider, model: src.model, baseUrl: src.baseUrl,
-          ...(totals ? {
-            tokensInput: totals.input, tokensOutput: totals.output,
-            tokensCacheRead: totals.cache_read, tokensCacheWrite: totals.cache_write,
-            tokensAsOf: stamp,
-          } : {}),
+          // The name travels; turn_count stays 0 — the copy renames on its own
+          // clock. NO pin: the copy follows the model settings until its first
+          // new message saves one. NO token totals: the transcript's usage
+          // lines are stripped below, so the copy counts its own spend from
+          // birth (nulls = nothing recorded yet, the save route's own start).
           ...(t[0]?.data != null ? {
-            transcript: rewriteTranscriptHeader(t[0].data, { session_id: copy.id, branch: copy.branch }),
+            transcript: stripUsageFromJsonl(rewriteTranscriptHeader(t[0].data, {
+              session_id: copy.id, branch: copy.branch,
+              provider: undefined, model: undefined, base_url: undefined,
+            })),
             lastUserMessage: src.lastUserMessage, name: src.name, nameManual: src.nameManual,
             transcriptUpdatedAt: stamp,
           } : {}),
         }).where(eq(sessions.id, copy.id));
         return reply.code(201).send(ok({ ...copy, copied_from: src.id }));
       } catch (e) {
-        if (e instanceof SessionError) return reply.code(400).send(err(e.code, e.message));
+        if (e instanceof SessionError) {
+          const status = e.code === 'source_branch_gone' ? 409 : 400;
+          return reply.code(status).send(err(e.code, e.message, e.retryable));
+        }
         throw e;
+      } finally {
+        await releaseLock(ctx.db, src.id, GIT_CLIENT_ID);
+        ctx.sessionEvents?.publish(src.id, GIT_CLIENT_ID, lockEvent(src, { locked: false }));
+        void publishBoardLock(ctx, src.id, false);
       }
     });
 
@@ -673,10 +724,11 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   });
 
   // ---- token usage ---------------------------------------------------------
-  // The totals are written by the transcript SAVE (and the duplicate route),
-  // in the same statement as the text they sum — so this route only reads the
-  // row. Rows saved before that write carry nulls: compute from the record
-  // once, backfill, and never again.
+  // The totals are written by the transcript SAVE, in the same statement as
+  // the text they sum — so this route only reads the row. Rows saved before
+  // that write existed (and a duplicate's copy, whose usage lines were
+  // stripped) carry nulls: compute from the record once, backfill, and never
+  // again.
   app.get<{ Params: { id: string } }>(
     '/sessions/:id/token-usage', { schema: { ...TAG,
       summary: 'A session\'s token totals, summed from its transcript',

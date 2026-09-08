@@ -207,10 +207,11 @@ export class SessionStore {
       live: [], turn: [],
       busy: false, remoteBusy: false, held: null, startedAt: 0, tokens: NO_TOKENS,
       totalTokens: s.totalTokens ?? 0, abort: null, queue: [],
-      // A session with existing history has already sent messages — its model
-      // is pinned. lastMessageAt > 0 is the second signal (see rebuildAgents):
-      // it catches a session whose pin could not be read at all.
-      unseen: false, lastMessageAt: s.history?.length ? Date.now() : 0, addedAt: ++this.seq, work: null, draft: '',
+      // A session with history AND a pin has its model settled. History with
+      // NO pin is a duplicate's copy: its messages came from the source, so
+      // they do not settle it — it follows /model and presets until its first
+      // NEW message, exactly like a fresh session (rebuildAgents reads this).
+      unseen: false, lastMessageAt: s.history?.length && s.pin ? Date.now() : 0, addedAt: ++this.seq, work: null, draft: '',
     };
     this.entries.push(entry);
     this.activeId = entry.id;

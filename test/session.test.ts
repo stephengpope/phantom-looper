@@ -131,3 +131,57 @@ test('headerModelFromJsonl extracts provider, model and endpoint from a session 
   // Empty string returns nulls.
   assert.deepEqual(headerModelFromJsonl(''), { provider: null, model: null, baseUrl: null });
 });
+
+// ── stripUsageFromJsonl ───────────────────────────────────────────────────────
+import { stripUsageFromJsonl, sumUsageFromJsonl } from '../core/llm/transcript.js';
+
+test('stripUsageFromJsonl drops usage lines and nothing else — a duplicate counts its own spend', () => {
+  const jsonl = [
+    JSON.stringify({ type: 'session', provider: 'p', model: 'm', created_at: '' }),
+    JSON.stringify({ role: 'user', content: 'hello' }),
+    JSON.stringify({ type: 'usage', input: 100, output: 10, cache_read: 80, cache_write: 5 }),
+    JSON.stringify({ role: 'assistant', content: [{ type: 'text', text: 'mentions "usage" in prose' }] }),
+    'not json at all',
+    JSON.stringify({ type: 'model', provider: 'p', model: 'm2' }),
+  ].join('\n') + '\n';
+  const stripped = stripUsageFromJsonl(jsonl);
+  const lines = stripped.trim().split('\n');
+  assert.equal(lines.length, 5, 'only the usage line is gone');
+  assert.ok(!stripped.includes('"type":"usage"'), 'no usage line survives');
+  assert.deepEqual(sumUsageFromJsonl(stripped), { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+    'the copy sums to zero — its own spend from birth');
+  // Prose mentioning "usage" (escaped inside its message's JSON) and
+  // unparsable lines are kept: the cheap gate must not eat a message.
+  assert.ok(lines.some((l) => l.includes('mentions \\"usage\\" in prose')));
+  assert.ok(lines.includes('not json at all'));
+});
+
+// ── Transcript.setModel ───────────────────────────────────────────────────────
+import { Transcript } from '../core/llm/transcript.js';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+
+test('setModel re-points the header on disk and in memory, keeping the frozen prompt; undefined drops the endpoint', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'phantom-setmodel-'));
+  const file = join(dir, 's.jsonl');
+  const t = new Transcript({ type: 'session', provider: 'anthropic', model: 'm0',
+    base_url: 'https://old.example', created_at: 'then', system_prompt: 'FROZEN' }, file);
+
+  // Not started (no file): the first append writes the NEW header.
+  t.setModel({ provider: 'openai', model: 'm1', base_url: null });
+  t.append({ role: 'user', content: 'hi' });
+  let header = JSON.parse(readFileSync(file, 'utf8').split('\n')[0]);
+  assert.equal(header.provider, 'openai');
+  assert.equal(header.model, 'm1');
+  assert.ok(!('base_url' in header), 'a provider switch must not inherit the old endpoint');
+  assert.equal(header.system_prompt, 'FROZEN', 'the frozen prompt is untouched');
+
+  // Started: line 1 on disk moves, the rest of the file does not.
+  t.setModel({ provider: 'google', model: 'm2', base_url: 'https://new.example' });
+  const lines = readFileSync(file, 'utf8').split('\n');
+  header = JSON.parse(lines[0]);
+  assert.equal(header.provider, 'google');
+  assert.equal(header.base_url, 'https://new.example');
+  assert.deepEqual(JSON.parse(lines[1]), { role: 'user', content: 'hi' }, 'the messages are untouched');
+});

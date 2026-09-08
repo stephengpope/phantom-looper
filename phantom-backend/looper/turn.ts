@@ -117,11 +117,23 @@ export async function runCodingTurn(
     feed?.publish(id, deps.client, { event: 'turn-end' });
   }
 
-  const header: TranscriptHeader = opened.header ?? {
-    type: 'session', agent: 'coding', provider: model.provider, model: model.model,
-    ...(model.baseUrl ? { base_url: model.baseUrl } : {}),
-    created_at: new Date().toISOString(), system_prompt: opened.instructions,
-    session_id: opened.session.id, workspace: workspaceId, branch: opened.session.branch,
+  // The header's model is FROZEN only once the session is pinned. While the
+  // row carries no pin (a fresh session, a duplicate's copy), the header is
+  // provisional: this save is what pins the session, so it must name the
+  // model that actually ran — not whatever an earlier pick left in it. The
+  // frozen prompt and the header's other fields travel untouched either way.
+  const rowPinned = sessionPin(
+    opened.session as { provider?: string | null; model?: string | null; baseUrl?: string | null }, null);
+  // base_url: undefined OVERRIDES an old endpoint (JSON.stringify drops the
+  // key) — a provider switch must not inherit the last model's endpoint.
+  const running = { provider: model.provider, model: model.model, base_url: model.baseUrl ?? undefined };
+  const header: TranscriptHeader = opened.header && rowPinned ? opened.header : {
+    ...(opened.header ?? {
+      type: 'session' as const, agent: 'coding',
+      created_at: new Date().toISOString(), system_prompt: opened.instructions,
+      session_id: opened.session.id, workspace: workspaceId, branch: opened.session.branch,
+    }),
+    ...running,
   };
   await opened.saveTranscript(serializeTranscript(header,
     [...messages, ...turnMessages],

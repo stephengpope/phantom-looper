@@ -5,9 +5,11 @@
 // The contract under test: SQL is the record of a session's conversation (the
 // client's JSONL file, whole, in one row); one client at a time holds a
 // session (x-phantom-looper-client), everyone else is refused transcript read AND
-// write until release or expiry; duplicate copies the conversation into a NEW
-// session and is the designed way past a holder; purge removes the session —
-// row, transcript, overrides — for good.
+// write until release or expiry; duplicate forks a session INTO A NEW one —
+// but it takes the source's lock first (its flush commits the tree, so a live
+// writer must be kept out), which means there is no way past a holder any
+// more: release the hold, or wait for it to expire. Purge removes the
+// session — row, transcript, overrides — for good.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -22,12 +24,16 @@ import { workspaces, sessions } from '../phantom-backend/db/schema.js';
 import { makePaths, repoDir, type Paths } from '../phantom-backend/pool/paths.js';
 import { bootCleanup } from '../phantom-backend/pool/pool.js';
 import { buildApp } from '../phantom-backend/api/app.js';
+import { GitEngine } from '../phantom-backend/git/engine.js';
 import { stampAgent, agentAfterSave, LOOP_CLIENT_ID } from '../phantom-backend/sessions.js';
 import { newId } from '../core/ids.js';
 
 let db: ReturnType<typeof makeDb>['db'];
 let pgPool: ReturnType<typeof makeDb>['pool'];
 let app: Awaited<ReturnType<typeof buildApp>>;
+// The same app with the git engine wired, as production always has it: the
+// duplicate route's flush (commit + push before the copy) only runs then.
+let appGit: Awaited<ReturnType<typeof buildApp>>;
 let paths: Paths;
 let root: string;
 let originUrl: string;
@@ -58,6 +64,10 @@ before(async () => {
   app = await buildApp({
     db, paths, apiKey: 'test-key', encryptionKey: Buffer.alloc(32, 9), version: 'test', pgPool,
   });
+  appGit = await buildApp({
+    db, paths, apiKey: 'test-key', encryptionKey: Buffer.alloc(32, 9), version: 'test', pgPool,
+    engine: new GitEngine(db, paths, Buffer.alloc(32, 9)),
+  });
 
   workspaceId = newId();
   await db.insert(workspaces).values({
@@ -68,6 +78,7 @@ before(async () => {
 
 after(async () => {
   await app?.close();
+  await appGit?.close();
   await pgPool?.end();
   await fs.rm(root, { recursive: true, force: true });
 });
@@ -195,17 +206,25 @@ test('lock: a dead client\'s hold ages out; a holder\'s save renews it', async (
   }
 });
 
-test('duplicate: a new session, the conversation copied, the header rewritten — works past a holder', async () => {
+test('duplicate: 409 while the source is held — the copy takes the lock, so there is no way past a holder', async () => {
   const src = await mkSession();
   await app.inject({ method: 'PUT', url: `/sessions/${src.id}/transcript`, headers: asClient('A'),
     payload: { data: jsonl(src.id, src.branch, 'the conversation travels') } });
   await app.inject({ method: 'POST', url: `/sessions/${src.id}/lock`, headers: asClient('A'),
     payload: { label: 'holder' } });
 
-  // Client B cannot open src — but can copy it.
-  const r = await app.inject({ method: 'POST', url: `/sessions/${src.id}/duplicate`, headers: asClient('B') });
-  assert.equal(r.statusCode, 201, r.body);
-  const copy = json(r).data;
+  // Held — by ANY client, for any reason — a duplicate is refused: its flush
+  // would commit a tree a live writer may be halfway through writing.
+  const r = await appGit.inject({ method: 'POST', url: `/sessions/${src.id}/duplicate`, headers: asClient('B') });
+  assert.equal(r.statusCode, 409);
+  assert.equal(json(r).error.code, 'session_locked');
+  assert.ok(json(r).error.message.includes('holder'), 'the refusal names the holder');
+
+  // Released, the same call goes through.
+  await app.inject({ method: 'DELETE', url: `/sessions/${src.id}/lock`, headers: asClient('A') });
+  const ok = await appGit.inject({ method: 'POST', url: `/sessions/${src.id}/duplicate`, headers: asClient('B') });
+  assert.equal(ok.statusCode, 201, ok.body);
+  const copy = json(ok).data;
   assert.notEqual(copy.id, src.id);
   assert.equal(copy.workspaceId, workspaceId);
   assert.equal(copy.copied_from, src.id);
@@ -221,8 +240,94 @@ test('duplicate: a new session, the conversation copied, the header rewritten �
   const list = await app.inject({ method: 'GET', url: '/sessions', headers: H });
   const row = (json(list).data.sessions as Array<Record<string, unknown>>).find((x) => x.id === copy.id)!;
   assert.equal(row.lastUserMessage, 'the conversation travels', 'the list line rides the copy');
+});
 
-  await app.inject({ method: 'DELETE', url: `/sessions/${src.id}/lock`, headers: asClient('A') });
+test('duplicate: the flush and the cut — the copy holds ALL the source\'s work, born unpinned with reset tokens', async () => {
+  const src = await mkSession();
+  // Outstanding work: an uncommitted file in the source's checkout.
+  await fs.writeFile(path.join(repoDir(paths, src.id), 'work.txt'), 'all of it\n');
+  // A transcript with a usage line; the save pins the source's model.
+  const data = [
+    JSON.stringify({ type: 'session', agent: 'coding', provider: 'anthropic', model: 'm', base_url: 'https://api.anthropic.com',
+      created_at: 'now', system_prompt: 'FROZEN PROMPT', session_id: src.id, workspace: workspaceId, branch: src.branch }),
+    JSON.stringify({ role: 'user', content: 'build the thing' }),
+    JSON.stringify({ role: 'assistant', content: [{ type: 'text', text: 'done' }] }),
+    JSON.stringify({ type: 'usage', input: 100, output: 10, cache_read: 80, cache_write: 5 }),
+  ].join('\n') + '\n';
+  await app.inject({ method: 'PUT', url: `/sessions/${src.id}/transcript`, headers: asClient('A'), payload: { data } });
+  const srcRow = json(await app.inject({ method: 'GET', url: `/sessions/${src.id}`, headers: H })).data;
+  assert.equal(srcRow.provider, 'anthropic', 'the source is pinned');
+
+  const r = await appGit.inject({ method: 'POST', url: `/sessions/${src.id}/duplicate`, headers: H });
+  assert.equal(r.statusCode, 201, r.body);
+  const copy = json(r).data;
+
+  // The work traveled. It was UNCOMMITTED in the source — the only road to
+  // the copy's fresh checkout is the flush (commit + push the source branch)
+  // and the cut from it.
+  assert.equal(await fs.readFile(path.join(repoDir(paths, copy.id), 'work.txt'), 'utf8'), 'all of it\n');
+  // And the source's own checkout is clean: the flush committed it.
+  const dirty = sh(repoDir(paths, src.id), ['status', '--porcelain']);
+  assert.equal(dirty.trim(), '', 'the flush committed the source\'s outstanding work');
+
+  // Born UNPINNED and with its own spend: no pin columns, no token cache.
+  const copyRow = json(await app.inject({ method: 'GET', url: `/sessions/${copy.id}`, headers: H })).data;
+  assert.equal(copyRow.provider, null);
+  assert.equal(copyRow.model, null);
+  assert.equal(copyRow.baseUrl, null);
+  assert.equal(copyRow.turnCount, 0);
+  const u = json(await app.inject({ method: 'GET', url: `/sessions/${copy.id}/token-usage`, headers: H })).data;
+  assert.deepEqual([u.input, u.output, u.cache_read, u.cache_write], [0, 0, 0, 0], 'the copy counts its own spend from birth');
+
+  // The transcript: header rewritten, the model fields GONE, the usage line
+  // GONE — the conversation and the frozen prompt intact.
+  const t = await app.inject({ method: 'GET', url: `/sessions/${copy.id}/transcript`, headers: H });
+  const text = json(t).data.data as string;
+  const lines = text.trim().split('\n');
+  const header = JSON.parse(lines[0]);
+  assert.equal(header.session_id, copy.id);
+  assert.equal(header.branch, copy.branch);
+  assert.equal(header.system_prompt, 'FROZEN PROMPT', 'the frozen prompt travels');
+  assert.ok(!('provider' in header) && !('model' in header) && !('base_url' in header),
+    'the copy\'s header names no model — it is born unpinned');
+  assert.ok(!lines.some((l) => l.includes('"usage"')), 'usage lines do not travel');
+  assert.deepEqual(JSON.parse(lines[1]), { role: 'user', content: 'build the thing' });
+
+  // The point of the feature: the first NEW save pins whatever model the
+  // header then names — the model switch lands on the copy.
+  const copyData = [
+    JSON.stringify({ ...header, provider: 'openai', model: 'gpt-x' }),
+    JSON.stringify({ role: 'user', content: 'keep going' }),
+  ].join('\n') + '\n';
+  await app.inject({ method: 'PUT', url: `/sessions/${copy.id}/transcript`, headers: asClient('B'), payload: { data: copyData } });
+  const pinned = json(await app.inject({ method: 'GET', url: `/sessions/${copy.id}`, headers: H })).data;
+  assert.equal(pinned.provider, 'openai');
+  assert.equal(pinned.model, 'gpt-x');
+  assert.equal(pinned.baseUrl, null, 'a header with no endpoint pins none');
+});
+
+test('duplicate: a destroyed source copies from its branch on origin; a branch that never made it there is a clear refusal', async () => {
+  // Pushed (the delete flush), then destroyed: no checkout, nothing to
+  // flush — the branch on origin is the record, and the copy is cut from it.
+  const src = await mkSession();
+  await fs.writeFile(path.join(repoDir(paths, src.id), 'kept.txt'), 'on origin\n');
+  const del = await appGit.inject({ method: 'DELETE', url: `/sessions/${src.id}`, headers: H });
+  assert.equal(json(del).data.destroyed, src.id);
+  const r = await appGit.inject({ method: 'POST', url: `/sessions/${src.id}/duplicate`, headers: H });
+  assert.equal(r.statusCode, 201, r.body);
+  const copy = json(r).data;
+  assert.equal(await fs.readFile(path.join(repoDir(paths, copy.id), 'kept.txt'), 'utf8'), 'on origin\n');
+
+  // Destroyed and the branch GONE from origin (delete pushes first, so this
+  // takes an out-of-band removal): the duplicate says so — never a silent
+  // copy from base.
+  const s2 = await mkSession();
+  await fs.writeFile(path.join(repoDir(paths, s2.id), 'lost.txt'), 'gone\n');
+  await appGit.inject({ method: 'DELETE', url: `/sessions/${s2.id}?force=true`, headers: H });
+  sh(repoDir(paths, copy.id), ['push', originUrl, '--delete', `refs/heads/agent/${s2.id}`]);
+  const r2 = await appGit.inject({ method: 'POST', url: `/sessions/${s2.id}/duplicate`, headers: H });
+  assert.equal(r2.statusCode, 409, r2.body);
+  assert.equal(json(r2).error.code, 'source_branch_gone');
 });
 
 test('purge: the session leaves the server for good; plain delete still keeps the row', async () => {
@@ -323,7 +428,7 @@ test('rename: a manual name sticks, turns the titler off, travels on duplicate; 
   assert.equal(after.turnCount, 1);
   assert.equal(after.name, 'my deadlock hunt');
   // The name and its manual mark travel on duplicate; the turn clock does not.
-  const copy = json(await app.inject({ method: 'POST', url: `/sessions/${id}/duplicate`,
+  const copy = json(await appGit.inject({ method: 'POST', url: `/sessions/${id}/duplicate`,
     headers: H, payload: {} })).data;
   const copyRow = json(await app.inject({ method: 'GET', url: `/sessions/${copy.id}`, headers: H })).data;
   assert.equal(copyRow.name, 'my deadlock hunt');
@@ -386,7 +491,7 @@ test('plan mode lives on the row: false at birth, PATCH flips it, a duplicate ke
     .find((s: { id: string }) => s.id === id);
   assert.equal(listed.planMode, true);
   // A copy of a planning session is still planning — transcript or not.
-  const copy = json(await app.inject({ method: 'POST', url: `/sessions/${id}/duplicate`,
+  const copy = json(await appGit.inject({ method: 'POST', url: `/sessions/${id}/duplicate`,
     headers: H, payload: {} })).data;
   const copyRow = json(await app.inject({ method: 'GET', url: `/sessions/${copy.id}`, headers: H })).data;
   assert.equal(copyRow.planMode, true);

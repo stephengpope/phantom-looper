@@ -729,33 +729,124 @@ test('/resume lists earlier sessions and opens the chosen one in place', async (
   assert.match(strip(lastFrame() ?? ''), /type a message/, 'and the prompt comes back');
 });
 
-test('/resume marks a session held elsewhere, says what it was about, and [d] duplicates it', async () => {
+test('/resume marks a session held elsewhere: [d] refuses fast on the list, and works once the hold clears', async () => {
   const calls: string[] = [];
-  const sessions = [
+  let sessions = [
     { id: 's9', workspaceId: 'w1', branch: 'agent/s9', status: 'active', lastUsedAt: '2026-08-21T10:00:00Z',
-      locked: true, lockedBy: 'other-window', lockedLabel: 'laptop', lastUserMessage: 'ship the release' },
+      locked: true, lockedBy: 'other-window' as string | null, lockedLabel: 'laptop' as string | null,
+      lastUserMessage: 'ship the release' },
   ];
   const api = async (method: string, path: string) => {
     calls.push(`${method} ${path}`);
     if (path === '/workspaces') return [{ id: 'w1', owner: 'sg', name: 'widgets' }];
-    if (path.split('?')[0] === '/sessions') return { sessions: sessions, total: (sessions).length };
+    if (path.split('?')[0] === '/sessions') return { sessions, total: sessions.length };
     if (path === '/sessions/s9/duplicate') return { id: 's10', branch: 'agent/s10', workspaceId: 'w1', status: 'active' };
     if (path === '/sessions/s10') return { id: 's10', branch: 'agent/s10', workspaceId: 'w1', status: 'active' };
     if (path === '/sessions/s10/lock') return { locked: true };
     if (path === '/sessions/s10/transcript') return { data: null };
+    if (path === '/presets') return [];
     return {};
   };
   const seen: string[] = [];
-  const { stdin, lastFrame } = app({ api: settingsApi({}, [], api), newTools: async () => ({}), clientId: 'me', onSession: (s) => seen.push(`${s.id} ${s.branch}`) });
+  const { stdin, lastFrame } = app({ api: settingsApi({}, [], api), newTools: async () => ({}), clientId: 'me', pollMs: 120,
+    onSession: (s) => seen.push(`${s.id} ${s.branch}`) });
   await sleep(50);
   stdin.write('/resume'); await sleep(40);
   stdin.write(ENTER); await sleep(140);
   const listed = strip(lastFrame() ?? '');
   assert.match(listed, /"ship the release"/, 'the server transcript says what it was about');
   assert.match(listed, /\[d\] duplicate · \[x\] close · \[t\] trash/, 'the keys are offered');
+
+  // [d] on the held row: refused ON THE LIST — no menu close, no call, and a
+  // refresh is kicked so the marker catches up fast.
   stdin.write('d'); await sleep(200);
-  assert.ok(calls.includes('POST /sessions/s9/duplicate'), '[d] duplicates on the server');
+  assert.ok(!calls.includes('POST /sessions/s9/duplicate'), 'a held row is refused on the spot');
+  let f = strip(lastFrame() ?? '');
+  assert.match(f, /in use on laptop — release it there, or wait for the hold to expire/, 'the refusal says why');
+  assert.match(f, /resume/, 'still on the list');
+
+  // The hold lapses; a poll sees it, and the same key now duplicates.
+  sessions = [{ ...sessions[0], locked: false, lockedBy: null, lockedLabel: null }];
+  await sleep(300);                                     // a couple of poll ticks
+  stdin.write('d'); await sleep(250);
+  assert.ok(calls.includes('POST /sessions/s9/duplicate'), '[d] duplicates once the row reads free');
   assert.deepEqual(seen, ['s10 agent/s10'], 'and the copy opens here');
+});
+
+/** The duplicate flow's fake backend: one session to copy, one preset. */
+function duplicateApi(calls: string[], presets: unknown[]) {
+  return async (method: string, path: string) => {
+    calls.push(`${method} ${path}`);
+    if (path === '/workspaces') return [{ id: 'w1', owner: 'sg', name: 'widgets' }];
+    if (path.split('?')[0] === '/sessions') {
+      return { sessions: [{ id: 's9', workspaceId: 'w1', branch: 'agent/s9', status: 'active',
+        lastUsedAt: '2026-08-21T10:00:00Z', lastUserMessage: 'ship the release' }], total: 1 };
+    }
+    if (path === '/presets') return presets;
+    if (path === '/sessions/s9/duplicate') return { id: 's10', branch: 'agent/s10', workspaceId: 'w1', status: 'active' };
+    if (path === '/sessions/s10') return { id: 's10', branch: 'agent/s10', workspaceId: 'w1', status: 'active' };
+    if (path === '/sessions/s10/lock') return { locked: true };
+    if (path === '/sessions/s10/transcript') return { data: null };
+    return {};
+  };
+}
+const PRESET = { id: 'p1', name: 'fast', values: { provider: 'openai', model: 'gpt-x', base_url: null } };
+
+test('[d] with presets asks which model the copy runs on; a pick applies the preset, THEN duplicates', async () => {
+  const calls: string[] = [];
+  const settingsCalls: string[] = [];
+  const { stdin, lastFrame } = app({
+    api: settingsApi({}, settingsCalls, duplicateApi(calls, [PRESET])),
+    newTools: async () => ({}), clientId: 'me' });
+  await sleep(50);
+  stdin.write('/resume'); await sleep(40);
+  stdin.write(ENTER); await sleep(140);
+  stdin.write('d'); await sleep(200);
+  const prompt = strip(lastFrame() ?? '');
+  assert.match(prompt, /duplicate — which model\?/, 'the one question');
+  assert.match(prompt, /keep the current model/, 'the first row keeps the settings');
+  assert.match(prompt, /fast/, 'the preset is listed');
+  assert.ok(!calls.includes('POST /sessions/s9/duplicate'), 'no copy before the answer');
+
+  // Down to the preset, enter: the apply lands BEFORE the copy, so the
+  // copy's fresh header names it.
+  stdin.write(DOWN); await sleep(60);
+  stdin.write(ENTER); await sleep(250);
+  const apply = settingsCalls.findIndex((c) => c.startsWith('PATCH /settings'));
+  assert.ok(apply >= 0, 'the preset is applied as /presets does');
+  assert.ok(settingsCalls[apply].includes('"provider":"openai"'), 'the coding model is in the patch');
+  assert.ok(calls.includes('POST /sessions/s9/duplicate'), 'and the copy is made');
+  // The order that matters: the open's settings read comes AFTER the apply.
+  const readAfterApply = settingsCalls.findIndex((c, i) => i > apply && c.startsWith('GET /settings'));
+  assert.ok(readAfterApply > apply, 'the copy reads the settings AFTER the apply landed');
+});
+
+test('[d] with presets: keep-current duplicates without touching the settings; esc makes no copy', async () => {
+  const calls: string[] = [];
+  const settingsCalls: string[] = [];
+  const { stdin, lastFrame } = app({
+    api: settingsApi({}, settingsCalls, duplicateApi(calls, [PRESET])),
+    newTools: async () => ({}), clientId: 'me' });
+  await sleep(50);
+  stdin.write('/resume'); await sleep(40);
+  stdin.write(ENTER); await sleep(140);
+
+  // esc on the prompt: no copy, no apply — and back to the chat, like every
+  // screen's esc.
+  stdin.write('d'); await sleep(200);
+  stdin.write(ESC); await sleep(100);
+  assert.ok(!calls.includes('POST /sessions/s9/duplicate'), 'esc cancels the copy');
+  assert.ok(!settingsCalls.some((c) => c.startsWith('PATCH')), 'esc touches nothing');
+
+  // Again (reopen the list), enter on the first row: keep current — the copy,
+  // no apply.
+  stdin.write('/resume'); await sleep(40);
+  stdin.write(ENTER); await sleep(140);
+  stdin.write('d'); await sleep(200);
+  stdin.write(ENTER); await sleep(250);
+  assert.ok(calls.includes('POST /sessions/s9/duplicate'), 'keep-current duplicates');
+  assert.ok(!settingsCalls.some((c) => c.startsWith('PATCH')), 'the settings are untouched');
+  assert.match(strip(lastFrame() ?? ''), /type a message|agent\/s10/, 'the copy opened');
 });
 
 test('/resume refreshes itself while open, on pollMs; closing stops the clock', async () => {

@@ -16,7 +16,7 @@
 // resumed from), the Assistant (~/.phantom-cli/voice/, one per engine
 // start), and the server's one-shot helpers (work/<session>/logs/ —
 // outside repo/ so auto-push never commits it).
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { ModelMessage } from 'ai';
 
@@ -74,6 +74,28 @@ export class Transcript {
    *  safe to add without a format version. */
   appendEvent(event: Record<string, unknown> & { type: string }): void {
     this.append(event as never);
+  }
+
+  /** Re-point the header's model fields. Only meaningful while the session is
+   *  UNPINNED (nothing said yet — a fresh session, or a duplicate's copy):
+   *  until the first turn saves, the header's provider/model/base_url are
+   *  provisional and follow /model and presets; the first save pins whatever
+   *  the header then names. Line 1 on disk and this header move together;
+   *  the file's other header fields (the frozen prompt, created_at) are kept. */
+  setModel(model: { provider: string; model: string; base_url?: string | null }): void {
+    const patch = { provider: model.provider, model: model.model,
+      ...(model.base_url ? { base_url: model.base_url } : { base_url: undefined }) };
+    this.header = { ...this.header, ...patch };
+    if (!this.started) return;   // nothing on disk yet — the first append writes it
+    const text = readFileSync(this.path, 'utf8');
+    const nl = text.indexOf('\n');
+    const first = nl < 0 ? text : text.slice(0, nl);
+    try {
+      const h = JSON.parse(first) as { type?: string };
+      if (h.type !== 'session') return;
+      const line = JSON.stringify({ ...h, ...patch });
+      writeFileSync(this.path, nl < 0 ? line : line + text.slice(nl), { mode: 0o600 });
+    } catch { /* an unparsable first line is left alone — the loader skips it too */ }
   }
 }
 
@@ -247,6 +269,18 @@ export function memoryRecorder(startAt: number):
       },
     },
   };
+}
+
+/** A transcript without its usage lines — what a duplicate seats: the copy's
+ *  token totals are its own spend from birth, and the row's cache is summed
+ *  from this text, so the lines must not travel. Same line-tolerant reading
+ *  as sumUsageFromJsonl: anything unparsable is kept. */
+export function stripUsageFromJsonl(text: string): string {
+  return text.split('\n').filter((line) => {
+    if (!line.includes('"usage"')) return true;
+    try { return (JSON.parse(line) as { type?: string }).type !== 'usage'; }
+    catch { return true; }
+  }).join('\n');
 }
 
 /** Sum every usage line in a transcript's raw JSONL — the on-demand totals

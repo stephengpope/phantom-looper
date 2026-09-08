@@ -64,6 +64,7 @@ import { Tasks } from './components/Tasks.js';
 import { Archived } from './components/Archived.js';
 import { Secrets } from './components/Secrets.js';
 import { Presets } from './components/Presets.js';
+import { DuplicateModel } from './components/DuplicateModel.js';
 import { SizeContext, keyLine } from './components/Screen.js';
 import { Pane } from './components/Pane.js';
 import { Boundary } from './components/Boundary.js';
@@ -85,7 +86,7 @@ import type { GitFacts } from '../core/llm/prompts/coding/wiring.js';
 interface WsFacts { label: string; cardPrefix?: string; error?: string }
 
 type Menu = null | 'settings' | 'keys' | 'secrets' | 'model' | 'server' | 'voice' | 'workspace' | 'resume'
-  | 'addWorkspace' | 'workspaceSettings' | 'sessions' | 'tasks' | 'archived' | 'presets';
+  | 'addWorkspace' | 'workspaceSettings' | 'sessions' | 'tasks' | 'archived' | 'presets' | 'duplicateModel';
 
 const offline: Api = async () => ({});
 
@@ -749,6 +750,12 @@ export function App({
           <Presets api={api}
             onApplied={() => windowStore.settingChanged('provider' as ConfigKey)}
             onClose={() => windowStore.setMenu(null)} />
+        ) : windowStore.menu === 'duplicateModel' && windowStore.duplicating ? (
+          <DuplicateModel
+            presets={windowStore.duplicating.presets}
+            current={windowStore.duplicating.current}
+            onPick={(presetId) => { void windowStore.finishDuplicate(presetId); }}
+            onCancel={() => windowStore.cancelDuplicate()} />
         ) : windowStore.menu === 'addWorkspace' ? (
           <NewWorkspace
             api={api}
@@ -782,10 +789,7 @@ export function App({
               notice={windowStore.pickerNotice}
               onNearEnd={windowStore.menu === 'resume' ? () => { void windowStore.morePicker(); } : undefined}
               onEdit={(id) => windowStore.editWorkspace(id)}
-              onDuplicate={(id) => {
-                windowStore.setMenu(null);
-                void windowStore.openSession({ kind: 'duplicate', id });
-              }}
+              onDuplicate={(id) => { void windowStore.startDuplicate(id); }}
               onClose={windowStore.closeFromPicker}
               onTrash={(id) => { void windowStore.trashSession(id); }}
               onCancel={() => windowStore.setMenu(null)}

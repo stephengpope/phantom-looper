@@ -30,9 +30,16 @@ export class SessionError extends Error {
  *  Passing `id` restarts an existing session. Destroy deletes a session's FILES
  *  and nothing else — the row keeps its id and its branch — so a restart needs
  *  no extra state: the same id names the same branch, checkoutBranch finds it on
- *  origin, and the session carries on exactly where it stopped. */
+ *  origin, and the session carries on exactly where it stopped.
+ *
+ *  `fromBranch` changes only the new branch's CUT POINT (the duplicate route):
+ *  the folder is still obtained the one way — pool claim or clone off base —
+ *  but the session branch is cut from origin's copy of `fromBranch` instead of
+ *  from base. A missing ref is a hard error, never a silent fall back to base:
+ *  the caller flushed the source to origin first, so absent means something
+ *  is wrong, and a copy that quietly starts at base loses the work. */
 export async function createSession(
-  db: Db, p: Paths, encryptionKey: Buffer, workspaceId: string, opts: { id?: string } = {},
+  db: Db, p: Paths, encryptionKey: Buffer, workspaceId: string, opts: { id?: string; fromBranch?: string } = {},
 ): Promise<SessionFull> {
   const workspaceRows = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId));
   if (!workspaceRows.length) throw new SessionError('not_found', `no workspace ${workspaceId}`);
@@ -53,6 +60,11 @@ export async function createSession(
   if (prior && conversationOnly(prior)) {
     throw new SessionError('invalid_args',
       'a supervisor session holds only its conversation — there are no files to restart; the looper creates these');
+  }
+  // A cut point belongs to a NEW session alone: a restart's start point is the
+  // branch the folder remembers, never a second opinion.
+  if (prior && opts.fromBranch) {
+    throw new SessionError('invalid_args', 'fromBranch cuts a NEW session\'s branch — a restart has its own');
   }
 
   const id = prior?.id ?? opts.id ?? newId();
@@ -96,7 +108,26 @@ export async function createSession(
       await git(dir, ['config', '--add', 'remote.origin.fetch',
         `+refs/heads/${branch}:refs/remotes/origin/${branch}`]);
     }
-    found = await checkoutBranch(dir, branch, auth);
+    if (opts.fromBranch) {
+      // Cut the session branch from origin's copy of the source branch. The
+      // duplicate route flushed it there first; "no such ref" therefore means
+      // the work never made it to origin, which is an error — checking out
+      // from base instead would silently lose it.
+      try {
+        await git(dir, ['fetch', 'origin', `+refs/heads/${opts.fromBranch}:refs/remotes/origin/${opts.fromBranch}`], auth);
+      } catch (e) {
+        const msg = String((e as { stderr?: string }).stderr ?? e);
+        if (/couldn't find remote ref|not found in upstream|no such ref/i.test(msg)) {
+          throw new SessionError('source_branch_gone',
+            `the source branch ${opts.fromBranch} is not on origin — its work never made it there, so there is nothing to copy`);
+        }
+        throw e;
+      }
+      await git(dir, ['checkout', '-B', branch, `refs/remotes/origin/${opts.fromBranch}`]);
+      found = 'new';
+    } else {
+      found = await checkoutBranch(dir, branch, auth);
+    }
     const { stdout } = await git(dir, ['rev-parse', 'HEAD']);
     claimSha = stdout.trim();
   } catch (e) {

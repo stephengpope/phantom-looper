@@ -28,6 +28,7 @@ import { localValues, setLocal } from './local.js';
 import { makeSettings } from './settings.js';
 import { lastWorkspaceId, type SessionInfo, type WorkspaceInfo } from './components/Launcher.js';
 import type { TasksView } from './components/Tasks.js';
+import type { Preset } from './components/Presets.js';
 import type { NewWorkspaceRequest } from './components/NewWorkspace.js';
 import { COMMANDS, matches, parse } from './commands.js';
 import { WorkspaceDirectory, buildAssistantKit } from './assistantKit.js';
@@ -80,7 +81,8 @@ export type CloseResult = { ok: true; closed: string; on_screen: string; opened_
 
 /** Which screen has replaced the prompt. `null` is the prompt itself. */
 export type Menu = null | 'settings' | 'keys' | 'secrets' | 'model' | 'server' | 'voice' | 'workspace'
-  | 'resume' | 'addWorkspace' | 'workspaceSettings' | 'sessions' | 'tasks' | 'archived' | 'presets';
+  | 'resume' | 'addWorkspace' | 'workspaceSettings' | 'sessions' | 'tasks' | 'archived' | 'presets'
+  | 'duplicateModel';
 
 /** /resume's page size: what the picker fetches at open and appends per
  *  scroll-to-the-bottom. Comfortably more than a screenful, small enough that
@@ -651,6 +653,12 @@ export class WindowStore {
         created_at: new Date().toISOString(),
         system_prompt: instructions,
       });
+      // An unpinned session's header model is PROVISIONAL: a duplicate's copy
+      // arrives with the model fields stripped from its transcript, so line 1
+      // on disk names what is in effect NOW (and /model keeps moving it until
+      // the first new message). The first save pins whatever it then says.
+      if (!pin) transcript.setModel({ provider: summary.provider, model: summary.model,
+        base_url: modelCfg.base_url ? String(modelCfg.base_url) : null });
       // The card this session builds, named the way the board names it
       // (`PHA-7`), resolved ONCE here where both facts are in hand.
       const ws = await this.wsFacts(row.workspaceId);
@@ -701,6 +709,69 @@ export class WindowStore {
     }
   };
 
+  /** [d] on a session row: duplicate it. Presets get a say first — the copy
+   *  is born unpinned, so this is the one moment "this conversation, another
+   *  model" is possible: picking one applies it exactly as /presets does, and
+   *  the copy floats on it until its first new message pins it. No presets,
+   *  no question.
+   *
+   *  The list's own lock marker is the gate: a row the server said is held
+   *  is refused HERE, on the picker — no menu close, no preset question, no
+   *  dead round-trip. The marker can be a poll behind, so this is only the
+   *  shortcut: a stale "held" self-heals on the next refresh (kicked off
+   *  right away), a stale "free" meets the server's 409 as before. */
+  startDuplicate = async (id: string): Promise<void> => {
+    const row = this.picker?.sessions.find((s) => s.id === id);
+    if (row?.locked) {
+      // Held by THIS window = a turn running here; held by anything else =
+      // someone else's, and the server's 409 would say the same as this.
+      this.pickerNotice = row.lockedBy && row.lockedBy === (this.opts.clientId ?? '')
+        ? 'a turn is running in this session — esc stops it, then [d]'
+        : `in use${row.lockedLabel ? ` on ${row.lockedLabel}` : ''} — release it there, or wait for the hold to expire`;
+      this.notify();
+      void this.refreshPicker().catch(quiet('refresh the session list'));
+      return;
+    }
+    this.pickerNotice = undefined;   // the gate passed — no refusal to show
+    this.setMenu(null);
+    try {
+      const presets = await this.api('GET', '/presets') as Preset[];
+      if (!presets.length) { await this.openSession({ kind: 'duplicate', id }); return; }
+      const cfg = await this.readCfg();
+      this.duplicating = { id, presets,
+        current: { provider: String(cfg.provider ?? ''), model: String(cfg.model ?? '') } };
+      this.setMenu('duplicateModel');
+    } catch (e) {
+      this.note(`could not duplicate session ${id}: ${(e as Error).message}`);
+    }
+  };
+
+  /** The duplicate prompt's answer: a preset id (apply it as /presets does,
+   *  then copy) or null (copy on the current settings). The preset lands
+   *  BEFORE the open, so the copy's fresh header names it. */
+  finishDuplicate = async (presetId: string | null): Promise<void> => {
+    const d = this.duplicating;
+    this.duplicating = null;
+    this.setMenu(null);
+    if (!d) return;
+    try {
+      if (presetId) {
+        const p = d.presets.find((x) => x.id === presetId);
+        if (!p) throw new Error('that preset is gone');
+        const patch: Record<string, ConfigValue> = {};
+        for (const [k, v] of Object.entries(p.values)) patch[k] = v as ConfigValue;
+        if (Object.keys(patch).length) await makeSettings(this.api).patch(patch);
+        this.settingChanged('provider' as ConfigKey);
+      }
+      await this.openSession({ kind: 'duplicate', id: d.id });
+    } catch (e) {
+      this.note(`could not duplicate session ${d.id}: ${(e as Error).message}`);
+    }
+  };
+
+  /** esc on the duplicate prompt: nothing happens, no copy is made. */
+  cancelDuplicate = (): void => { this.duplicating = null; this.setMenu(null); };
+
   /** THE close: a session leaves local memory. Nothing on the server changes,
    *  so opening it again gets it back exactly as it was. Every door ([x] on
    *  /resume, /close, the Assistant's session_close) comes through here.
@@ -750,6 +821,9 @@ export class WindowStore {
 
   picker: { workspaces: WorkspaceInfo[]; sessions: SessionInfo[]; total: number; end: boolean } | null = null;
   pickerNotice: string | undefined;
+  /** A duplicate waiting on its one question — which model the copy runs on.
+   *  Held apart from `menu` so esc simply drops it. */
+  duplicating: { id: string; presets: Preset[]; current: { provider: string; model: string } } | null = null;
   /** [s] on /resume: the looper's supervisor seats in the list or not. A fetch
    *  parameter, not a filter — the server decides what the list is. */
   showSupervised = false;
@@ -1233,6 +1307,11 @@ export class WindowStore {
         const next = make(session.tools, cfg, session.instructions).summary;
         if (next.provider !== before.provider || next.model !== before.model) {
           if (session.lastMessageAt === 0) {
+            // Unpinned: the switch must reach the header, whose model the
+            // first save pins — the event alone would leave the OLD pick
+            // frozen into line 1.
+            session.transcript.setModel({ provider: next.provider, model: next.model,
+              base_url: cfg.base_url ? String(cfg.base_url) : null });
             session.transcript.appendEvent({ type: 'model', provider: next.provider, model: next.model,
               at: new Date().toISOString() });
             this.note(`model → ${next.provider}/${next.model}`);

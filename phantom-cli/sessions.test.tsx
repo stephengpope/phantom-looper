@@ -385,13 +385,16 @@ test('a session that has sent a message is locked — rebuildAgents skips it', a
   assert.equal(store.get('s2')!.summary.model, 'new-model', 's2 got the new model — unlocked');
 });
 
-test('a resumed session with history is locked from the start', () => {
+test('a resumed session with history and a pin is locked from the start', () => {
   const store = new SessionStore(scriptedRun());
   store.add({
     id: 's3', branch: 'b', workspaceId: 'w',
     tools: {}, agent: { id: 'a' } as never, summary,
     transcript: transcriptFor('s3'),
     history: [{ role: 'user', content: 'old message' }],
+    // A resumed session always carries its pin (the row's, or its transcript
+    // header's) — history-without-pin is the duplicate's copy, tested next.
+    pin: { provider: 'test', model: 'fake', baseUrl: null },
   });
   assert.ok(store.get('s3')!.lastMessageAt > 0, 'a resumed session with history is locked');
   store.rebuildAgents(() => ({
@@ -399,6 +402,32 @@ test('a resumed session with history is locked from the start', () => {
     summary: { ...summary, model: 'new-model' },
   }));
   assert.equal(store.get('s3')!.summary.model, 'fake', 'the resumed session kept its model — locked');
+});
+
+test('a duplicate\'s copy — history, NO pin — follows /model until its first NEW message', async () => {
+  const store = new SessionStore(scriptedRun({ text: 'reply' }));
+  store.add({
+    id: 's5', branch: 'b', workspaceId: 'w',
+    tools: {}, agent: { id: 'a' } as never, summary,
+    transcript: transcriptFor('s5'),
+    // The copy arrives with the source's conversation but no pin: its
+    // messages came from the source, so they must not settle the model.
+    history: [{ role: 'user', content: 'copied history' }],
+    pin: null,
+  });
+  assert.equal(store.get('s5')!.lastMessageAt, 0, 'copied history does not settle the model');
+  store.rebuildAgents(() => ({
+    agent: { id: 'rebuilt' } as never,
+    summary: { ...summary, model: 'new-model' },
+  }));
+  assert.equal(store.get('s5')!.summary.model, 'new-model', 'the copy follows /model like a fresh session');
+  // Its first NEW message ends the window — exactly like a fresh session.
+  await store.send('s5', 'the first new message');
+  store.rebuildAgents(() => ({
+    agent: { id: 'again' } as never,
+    summary: { ...summary, model: 'third-model' },
+  }));
+  assert.equal(store.get('s5')!.summary.model, 'new-model', 'the first new message settled it');
 });
 
 test('a pinned session is skipped even before it speaks — the pin is the signal, not the clock', () => {
