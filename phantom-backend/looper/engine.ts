@@ -38,7 +38,7 @@ import { currentLoop, loopOf, stampAgent, createSupervisorSession, createLoop, n
 import { resolveMany } from '../settings.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
 import { memoryRecorder, serializeTranscript, type TranscriptHeader } from '../../core/llm/transcript.js';
-import { agentModelConfig } from '../../core/llm/agentConfig.js';
+import { agentModelConfig, agentMaxSteps } from '../../core/llm/agentConfig.js';
 import { phantomTools } from '../../core/llm/tools/workspace.js';
 import { webTools } from '../../core/llm/tools/web.js';
 import {
@@ -355,6 +355,7 @@ export class LooperEngine {
         // land as user messages; its reply is its own, recorded whole (tool
         // traffic included — the step rule reads terminal turns off it). ────
         const model = agentModelConfig(cfg, 'supervisor');
+        const supMaxSteps = agentMaxSteps(cfg, 'supervisor');
         model.fetch = this.deps.modelFetch;
         model.onRetry = (t) => log.warn({ card: card.seq, agent: 'supervisor' }, t);
         const tools = {
@@ -368,7 +369,7 @@ export class LooperEngine {
         };
         const incoming: ModelMessage[] = step.append.map((t) => ({ role: 'user', content: t }));
         const messages = [...supOpened.messages, ...incoming];
-        const agent = supervisorAgent(model, tools);
+        const agent = supervisorAgent(model, tools, { maxSteps: supMaxSteps });
         // Cache marks on a copy — the supervisor's growing conversation reads
         // its own prefix back each turn; the transcript stays clean. The
         // step seam collects the WHOLE turn (tool calls included — the step

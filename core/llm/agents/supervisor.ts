@@ -19,10 +19,14 @@ export function supervisorInstructions(): string {
 /** The supervisor's agent. `tools` is the kit the caller assembled — the
  *  readonly inspection preset + card read + web, and the loop's two bound
  *  board tools — capabilities, never loop mechanics. */
-export function supervisorAgent(model: ModelConfig, tools: Record<string, Tool>, now = new Date()): Agent {
+export function supervisorAgent(
+  model: ModelConfig, tools: Record<string, Tool>,
+  opts?: { maxSteps?: number | null; now?: Date },
+): Agent {
+  const now = opts?.now ?? new Date();
   return createAgent(model, {
     instructions: withCurrentDate(supervisorInstructions(), now),
     tools,
-    maxSteps: 12,
+    maxSteps: opts?.maxSteps,
   });
 }

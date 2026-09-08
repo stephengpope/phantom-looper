@@ -47,17 +47,26 @@ export function cascade(cfg: SettingsValues, prefix: string):
 }
 
 /** A non-coding agent's ModelConfig from the same resolved settings values:
- *  the cascade above, plus the key row for whichever provider won and the
- *  shared reasoning. cfg is a full GET /settings read, so every provider's
- *  key is already in it. */
+ *  the cascade above, plus the key row for whichever provider won, and
+ *  reasoning (per-agent or the coding agent's). cfg is a full GET /settings
+ *  read, so every provider's key is already in it. */
 export function agentModelConfig(cfg: SettingsValues, prefix: string): ModelConfig {
   const c = cascade(cfg, prefix);
   const keyField = PROVIDER_KEY[c.provider as keyof typeof PROVIDER_KEY];
+  // Reasoning cascades: per-agent override → coding agent's.
+  const reasoning = set(cfg[`${prefix}_reasoning`]) ?? (cfg.reasoning != null ? String(cfg.reasoning) : undefined);
   return {
     provider: c.provider as Provider, model: c.model, baseUrl: c.baseUrl ?? undefined,
     apiKey: keyField ? set(cfg[keyField]) ?? undefined : undefined,
-    reasoning: cfg.reasoning != null ? (String(cfg.reasoning) as Reasoning) : undefined,
+    reasoning: reasoning != null ? (reasoning as Reasoning) : undefined,
   };
+}
+
+/** A non-coding agent's max_steps from its `<prefix>_max_steps` setting,
+ *  defaulting to unlimited (null). */
+export function agentMaxSteps(cfg: SettingsValues, prefix: string): number | null {
+  const n = cfg[`${prefix}_max_steps`] == null ? null : Number(cfg[`${prefix}_max_steps`]);
+  return n != null && Number.isFinite(n) && n > 0 ? n : null;
 }
 
 /** provider/model/base_url/reasoning + the provider's key → ModelConfig.

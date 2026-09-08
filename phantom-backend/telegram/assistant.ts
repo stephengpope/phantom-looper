@@ -17,7 +17,7 @@
 
 import type { ModelMessage, Tool } from 'ai';
 import { assistantAgent } from '../../core/llm/agents/assistant.js';
-import { agentModelConfig } from '../../core/llm/agentConfig.js';
+import { agentModelConfig, agentMaxSteps } from '../../core/llm/agentConfig.js';
 import { assistantKanbanTool, sessionsTool, workspaceCreateTool, gitAutoPushTool, gitAutoPullTool, renderRead, kebabName,
   type KanbanArgs, type SessionsArgs, type WorkspaceCreateArgs, type GitAutoPushArgs, type GitAutoPullArgs } from '../../core/llm/tools/tui.js';
 import { autoPushSession, autoPullSession } from '../../core/llm/tools/git.js';
@@ -256,8 +256,9 @@ export async function runAssistantTurn(
   ctx: AssistantCtx, abortSignal?: AbortSignal,
 ): Promise<string> {
   const model = agentModelConfig(ctx.settings, 'assistant');
+  const maxSteps = agentMaxSteps(ctx.settings, 'assistant');
   const tools = await assistantKit(deps, ctx);
-  const agent = assistantAgent({ ...model, fetch: deps.modelFetch }, tools);
+  const agent = assistantAgent({ ...model, fetch: deps.modelFetch }, tools, { maxSteps });
 
   // The user message joins the history now; the turn's produced messages
   // (assistant + tool) append after it. Cache marks are createAgent's and ride

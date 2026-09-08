@@ -56,10 +56,12 @@ export const DEFAULTS = {
   base_url: null as string | null,
   reasoning: 'medium' as string,
   max_steps: null as number | null,
-  // The Assistant's trio — null = the coding agent's (cascade rule).
+  // The Assistant's settings — null = the coding agent's (cascade rule).
   assistant_provider: null as string | null,
   assistant_model: null as string | null,
   assistant_base_url: null as string | null,
+  assistant_reasoning: null as string | null,
+  assistant_max_steps: null as number | null,
   // The Assistant's pane — rendered by the cli, stored here so every cli you
   // open is the same one.
   voice_enabled: false as boolean,
@@ -73,13 +75,15 @@ export const DEFAULTS = {
   voice_wake_timeout: 8,
   // The looper: the supervisor loop over kanban cards — TWO switches, one per
   // loop column (a card's own auto_plan/auto_build tri-state overrides them).
-  // The supervisor's trio — null = the coding agent's (cascade rule).
+  // The supervisor's settings — null = the coding agent's (cascade rule).
   auto_plan: false as boolean,
   auto_build: false as boolean,
   loop_budget_tokens: null as number | null,   // null = no limit
   supervisor_provider: null as string | null,
   supervisor_model: null as string | null,
   supervisor_base_url: null as string | null,
+  supervisor_reasoning: null as string | null,
+  supervisor_max_steps: null as number | null,
   // The cli's boot: skip the workspace picker, start where you last worked.
   boot_last_workspace: false as boolean,
   // Telegram: the bot as a client of this server (phantom-backend/telegram/).
@@ -160,6 +164,8 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   assistant_provider: 'The AI provider the Assistant answers on, on its key from /keys. Empty = the coding agent\'s provider.',
   assistant_model: 'Model the Assistant answers with. Empty = the coding agent\'s model; required when the provider differs from the coding agent\'s. A small fast model keeps replies quick.',
   assistant_base_url: 'Endpoint when the Assistant\'s provider is openai-compatible. Empty inherits the coding agent\'s only while the provider matches.',
+  assistant_reasoning: 'How much the Assistant thinks before answering. Empty = the coding agent\'s reasoning level.',
+  assistant_max_steps: 'Tool calls allowed per turn for the Assistant. Empty = unlimited.',
   voice_enabled: 'Start the Assistant with the cli. It listens on the mic, answers out loud and in the voice pane (ctrl+g), and can act on the cli through its tools.',
   sidebar_width: 'Width of the voice pane as a percent of the terminal.',
   voice_spoken_voice: 'Deepgram Aura voice the Assistant speaks with, e.g. aura-2-thalia-en, aura-2-orion-en.',
@@ -173,6 +179,8 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   supervisor_provider: 'The AI provider the supervisor judges on, on its key from /keys. Empty = the coding agent\'s provider.',
   supervisor_model: 'Model the supervisor judges with. Empty = the coding agent\'s model; required when the provider differs from the coding agent\'s.',
   supervisor_base_url: 'Endpoint when the supervisor\'s provider is openai-compatible. Empty inherits the coding agent\'s only while the provider matches.',
+  supervisor_reasoning: 'How much the supervisor thinks before answering. Empty = the coding agent\'s reasoning level.',
+  supervisor_max_steps: 'Tool calls allowed per turn for the supervisor. Empty = unlimited.',
   boot_last_workspace: 'On, launching the cli skips the workspace picker: it starts a new session in the workspace of the most recent session you drove yourself (looper-run sessions do not count). --resume is unaffected.',
   telegram_enabled: 'Answer Telegram DMs. Needs the telegram_bot_token key, telegram_authorized_user, and a public address (PHANTOM_BACKEND_ADDRESS) — the webhook registers itself when all three are set.',
   telegram_authorized_user: 'Your numeric Telegram user id — the ONE sender the bot answers; everyone else is silently ignored. Get it from @userinfobot.',
@@ -251,6 +259,9 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
     choices: ['anthropic', 'openai', 'google', 'openai-compatible'] },
   assistant_model: { type: 'string', label: 'assistant model', group: 'voice', nullable: true },
   assistant_base_url: { type: 'string', label: 'assistant endpoint', group: 'voice', nullable: true },
+  assistant_reasoning: { type: 'string', label: 'assistant reasoning', group: 'voice', nullable: true,
+    choices: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
+  assistant_max_steps: { type: 'number', label: 'assistant steps per turn', group: 'voice', unit: 'count', min: 1, nullable: true },
   voice_enabled: { type: 'boolean', label: 'assistant', group: 'voice' },
   sidebar_width: { type: 'number', label: 'voice pane width', group: 'voice', unit: 'count', min: 10 },
   voice_spoken_voice: { type: 'string', label: 'spoken voice', group: 'voice' },
@@ -265,6 +276,9 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
     choices: ['anthropic', 'openai', 'google', 'openai-compatible'] },
   supervisor_model: { type: 'string', label: 'supervisor model', group: 'board', nullable: true },
   supervisor_base_url: { type: 'string', label: 'supervisor endpoint', group: 'board', nullable: true },
+  supervisor_reasoning: { type: 'string', label: 'supervisor reasoning', group: 'board', nullable: true,
+    choices: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
+  supervisor_max_steps: { type: 'number', label: 'supervisor steps per turn', group: 'board', unit: 'count', min: 1, nullable: true },
   boot_last_workspace: { type: 'boolean', label: 'boot into last workspace', group: 'sessions' },
   telegram_enabled: { type: 'boolean', label: 'telegram', group: 'telegram' },
   telegram_authorized_user: { type: 'string', label: 'authorized user id', group: 'telegram', nullable: true },

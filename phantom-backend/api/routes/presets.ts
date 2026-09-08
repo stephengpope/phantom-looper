@@ -19,7 +19,9 @@ const TAG = { tags: ['presets'] };
 const PRESET_KEYS = [
   'provider', 'model', 'base_url', 'reasoning', 'max_steps',
   'assistant_provider', 'assistant_model', 'assistant_base_url',
+  'assistant_reasoning', 'assistant_max_steps',
   'supervisor_provider', 'supervisor_model', 'supervisor_base_url',
+  'supervisor_reasoning', 'supervisor_max_steps',
 ] as const;
 const PRESET_KEY_SET = new Set<string>(PRESET_KEYS);
 

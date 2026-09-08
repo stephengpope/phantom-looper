@@ -45,11 +45,15 @@ const PRESET_GROUPS: Array<{ heading: string; keys: Array<{ key: string; label: 
     { key: 'assistant_provider', label: 'assistant provider', choices: PROVIDERS },
     { key: 'assistant_model', label: 'assistant model' },
     { key: 'assistant_base_url', label: 'assistant endpoint' },
+    { key: 'assistant_reasoning', label: 'assistant reasoning', choices: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
+    { key: 'assistant_max_steps', label: 'assistant steps per turn' },
   ] },
   { heading: 'supervisor', keys: [
     { key: 'supervisor_provider', label: 'supervisor provider', choices: PROVIDERS },
     { key: 'supervisor_model', label: 'supervisor model' },
     { key: 'supervisor_base_url', label: 'supervisor endpoint' },
+    { key: 'supervisor_reasoning', label: 'supervisor reasoning', choices: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
+    { key: 'supervisor_max_steps', label: 'supervisor steps per turn' },
   ] },
 ];
 
@@ -305,7 +309,7 @@ export function Presets({ api, onApplied, onClose }: {
             const spec: EditSpec = {
               title: info.label,
               choices: info.choices,
-              type: k === 'max_steps' ? 'number' : 'string',
+              type: k.endsWith('max_steps') ? 'number' : 'string',
               current: p.values[k] ?? null,
               note: 'pick a value · empty = clear setting',
             };

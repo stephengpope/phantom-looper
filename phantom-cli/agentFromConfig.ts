@@ -5,7 +5,7 @@
 // file only adapts it to the app's Cfg shape.
 import type { Tool } from 'ai';
 import type { Agent } from '../core/llm/createAgent.js';
-import { buildCodingAgent, agentModelConfig } from '../core/llm/agentConfig.js';
+import { buildCodingAgent, agentModelConfig, agentMaxSteps } from '../core/llm/agentConfig.js';
 import { codingInstructions } from '../core/llm/agents/coding.js';
 import { assistantAgent } from '../core/llm/agents/assistant.js';
 import type { ConfigValue } from './config.js';
@@ -31,16 +31,17 @@ export function buildAgent(tools: Record<string, Tool>, cfg: Cfg, instructions?:
 
 export { codingInstructions };
 
-/** The Assistant: its own provider/model/base_url trio, each cascading to the
- *  coding agent's while the provider matches (core agentModelConfig — a
- *  provider override with no model throws, surfaced as the build notice). The
- *  prompt stack, the reasoning pin and the step cap live in
- *  core/llm/agents/assistant.ts; the tools are what the app lets it do. */
+/** The Assistant: its own provider/model/base_url/reasoning/max_steps, each
+ *  cascading to the coding agent's while the provider matches (core
+ *  agentModelConfig). Reasoning defaults to 'none' in the agent builder when
+ *  no override is set. */
 export function buildAssistantAgent(tools: Record<string, Tool>, cfg: Cfg):
 { agent: Agent; summary: AgentSummary } {
   const model = agentModelConfig(cfg, 'assistant');
+  const maxSteps = agentMaxSteps(cfg, 'assistant');
   return {
-    agent: assistantAgent(model, tools),
-    summary: { provider: model.provider, model: model.model, reasoning: 'none', maxSteps: 10 },
+    agent: assistantAgent(model, tools, { maxSteps }),
+    summary: { provider: model.provider, model: model.model,
+      reasoning: model.reasoning ?? 'none', maxSteps },
   };
 }

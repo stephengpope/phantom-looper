@@ -51,6 +51,8 @@ export const DEFAULTS = {
   assistant_provider: null as string | null,
   assistant_model: null as string | null,
   assistant_base_url: null as string | null,
+  assistant_reasoning: null as string | null,
+  assistant_max_steps: null as number | null,
   voice_spoken_voice: 'aura-2-thalia-en' as string,
   voice_stt_model: 'nova-3' as string,
   voice_mic_device: null as string | null,
@@ -108,6 +110,8 @@ export const DESCRIPTIONS: Record<ConfigKey, string> = {
   assistant_provider: 'The AI provider the Assistant answers on, on its key from /keys. Empty = the coding agent\'s provider.',
   assistant_model: 'Model the Assistant answers with. Empty = the coding agent\'s model; required when the provider differs from the coding agent\'s. A small fast model keeps replies quick.',
   assistant_base_url: 'Endpoint when the Assistant\'s provider is openai-compatible. Empty inherits the coding agent\'s only while the provider matches.',
+  assistant_reasoning: 'How much the Assistant thinks before answering. Empty = defaults to none for speed.',
+  assistant_max_steps: 'Tool calls allowed per turn for the Assistant. Empty = unlimited.',
   voice_spoken_voice: 'Deepgram Aura voice the Assistant speaks with, e.g. aura-2-thalia-en, aura-2-orion-en.',
   voice_stt_model: 'Deepgram model that hears you — the voice pane and Telegram voice notes alike. nova-3 is the current general model; nova-2 for languages it lacks.',
   voice_mic_device: 'Microphone, by device name. Empty = the system default.',
@@ -153,6 +157,8 @@ export const META: Record<ConfigKey, ConfigMeta> = {
   assistant_model: { type: 'string', group: 'voice' },
   assistant_base_url: { type: 'string', label: 'assistant endpoint', group: 'voice',
     appliesWhen: (c) => usesBaseUrl(c.assistant_provider || c.provider) },
+  assistant_reasoning: { type: 'string', choices: REASONINGS, group: 'voice' },
+  assistant_max_steps: { type: 'number', label: 'assistant steps per turn', group: 'voice' },
   voice_spoken_voice: { type: 'string', group: 'voice' },
   voice_stt_model: { type: 'string', label: 'hearing model', group: 'voice' },
   voice_mic_device: { type: 'string', label: 'microphone', group: 'voice' },
@@ -176,8 +182,9 @@ export const VOICE_BOOT_KEYS: string[] = [
  *  the brain in place (agentFromConfig.buildAssistantAgent); the sidecar is
  *  not touched — it never sees the model or its key. */
 export const ASSISTANT_MODEL_KEYS: string[] = [
-  'provider', 'model', 'base_url',
+  'provider', 'model', 'base_url', 'reasoning',
   'assistant_provider', 'assistant_model', 'assistant_base_url',
+  'assistant_reasoning', 'assistant_max_steps',
   ...Object.values(PROVIDER_KEY),
 ];
 

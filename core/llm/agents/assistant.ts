@@ -13,9 +13,9 @@
 // on screen, rebuilt when the screen switches; the app supplies the
 // handlers. The mutating file tools are deliberately not granted.
 //
-// Reasoning is pinned to 'none' — the Assistant must not sit and think
-// between turns; createAgent turns that into the lowest effort on a model
-// that cannot stop thinking.
+// Reasoning defaults to 'none' — the Assistant should be fast — but can be
+// overridden via assistant_reasoning. createAgent turns 'none' into the
+// lowest effort on a model that cannot stop thinking.
 import type { Tool } from 'ai';
 import { createAgent, type Agent, type ModelConfig } from '../createAgent.js';
 import { withCurrentDate } from '../prompts/template.js';
@@ -25,11 +25,17 @@ export function assistantInstructions(): string {
   return systemPrompt();
 }
 
-export function assistantAgent(model: ModelConfig, tools: Record<string, Tool>, now = new Date()): Agent {
+export function assistantAgent(
+  model: ModelConfig, tools: Record<string, Tool>,
+  opts?: { maxSteps?: number | null; now?: Date },
+): Agent {
+  const now = opts?.now ?? new Date();
+  // Reasoning: if the caller (agentModelConfig) resolved one, use it;
+  // otherwise default to 'none' for speed.
+  const reasoning = model.reasoning ?? 'none';
   return createAgent(
-    { ...model, reasoning: 'none' },
-    // Same date rule as the coding agent: date only, appended at build (the
-    // Assistant's prompt is rebuilt at every engine start and model change).
-    { instructions: withCurrentDate(assistantInstructions(), now), tools, maxSteps: 10 },
+    { ...model, reasoning },
+    { instructions: withCurrentDate(assistantInstructions(), now), tools,
+      maxSteps: opts?.maxSteps },
   );
 }
