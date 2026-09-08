@@ -717,7 +717,7 @@ test('session state: mode and git update on the feed with no recurring session G
   try {
     await sleep(80);
     push({ event: 'session', planMode: true, work: 'not_pushed' }); await sleep(100);
-    assert.match(strip(r.lastFrame()!), /plan mode on.*not pushed/);
+    assert.match(strip(r.lastFrame()!), /not pushed.*plan mode on/);
     assert.deepEqual(kits, [true], 'the tool kit follows the mode, not just the label');
     push({ event: 'session', planMode: false, work: 'merged' }); await sleep(100);
     assert.match(strip(r.lastFrame()!), /code mode on.*merged/);

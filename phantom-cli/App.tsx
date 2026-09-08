@@ -53,7 +53,7 @@ const MENU_ROWS = 8;
 import { PartView } from './components/Parts.js';
 import { Prompt } from './components/Prompt.js';
 import { StatusLine } from './components/StatusLine.js';
-import { Toolbar, type ToolbarPart } from './components/Toolbar.js';
+import { Toolbar, type ToolbarGroup, type ToolbarPart } from './components/Toolbar.js';
 import { Settings } from './components/Settings.js';
 import { Launcher, ago, WORK } from './components/Launcher.js';
 import { NewWorkspace, type NewWorkspaceRequest } from './components/NewWorkspace.js';
@@ -610,9 +610,15 @@ export function App({
   const tokensShown = session
     ? session.totalTokens + ((session.busy || session.remoteBusy) ? tokenCount(session.tokens) : 0) : 0;
   const tokensMark = tokensShown > 0 ? `↓ ${formatTokens(tokensShown)}` : undefined;
-  // Order: card, git dot, mode, model, tokens, bg tasks, notice pinned last.
-  const withMode = (rest?: string): ToolbarPart[] =>
-    [cardMark, workMark, modeMark, modelMark, tokensMark, taskMark, rest].filter((p): p is ToolbarPart => Boolean(p));
+  // Order: the card with its git dot (what you're building and whether it is
+  // safe), the mode, the model with its token meter, the bg tasks, a notice
+  // pinned last. Pairs that answer ONE question ride in one group — the line
+  // reads `PHA-7 • not pushed · code mode on · gpt-5 ↓ 12.4k`, facts separated
+  // by ` · `, not a flat list of fields.
+  const withMode = (rest?: string): ToolbarGroup[] =>
+    [[cardMark, workMark], [modeMark], [modelMark, tokensMark], [taskMark], [rest]]
+      .map((g) => g.filter((p): p is ToolbarPart => Boolean(p)))
+      .filter((g) => g.length);
 
   return (
     <SizeContext.Provider value={{ rows: screenRows, cols: screenCols }}>
@@ -824,11 +830,11 @@ export function App({
               spin={!windowStore.opening && session && !session.busy && heldNow ? heldNow.label : undefined}
               spinWho={!windowStore.opening && session && !session.busy && heldNow ? heldNow.who : undefined}
               spinSince={!windowStore.opening && session && !session.busy && heldNow ? session.startedAt : undefined}
-              parts={
+              groups={
               windowStore.opening ? []
               : ctrlC ? withMode('press ctrl+c again to quit')
               : !session
-                ? ['no session open — [/workspace] starts one · [/resume] reopens an earlier one']
+                ? [['no session open — [/workspace] starts one · [/resume] reopens an earlier one']]
                 : withMode()} />
           </>
         )}

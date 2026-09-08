@@ -23,19 +23,32 @@ import { Text } from './Text.js';
  *  The same shape as table.ts's Cell, so the three places cannot disagree. */
 export type ToolbarPart = string | { text: string; mark: string };
 
-export function Toolbar({ parts = [], spin, spinWho, spinSince }: {
-  parts?: ToolbarPart[]; spin?: string; spinWho?: string;
+/** Parts that belong together — the card and its git dot, the model and its
+ *  token meter. A group joins its parts with a bare space so they read as ONE
+ *  fact (`PHA-7 • not pushed`, `gpt-5 ↓ 12.4k`); the heavier ` · ` is kept for
+ *  between groups, so the eye parses facts, not a flat list of fields. */
+export type ToolbarGroup = ToolbarPart[];
+
+export function Toolbar({ groups = [], spin, spinWho, spinSince }: {
+  groups?: ToolbarGroup[]; spin?: string; spinWho?: string;
   /** When the running turn began (epoch ms), so the spinner can age. */
   spinSince?: number }) {
-  const shown = parts.filter((p) => (typeof p === 'string' ? p : p.text));
+  const shown = groups
+    .map((g) => g.filter((p) => (typeof p === 'string' ? p : p.text)))
+    .filter((g) => g.length);
   if (!shown.length && !spin) return null;
   return (
     <Box paddingLeft={2}>
       <Text color="yellow">» </Text>
-      {shown.map((p, i) => (
-        <Text key={i} color="yellow">
-          {i > 0 ? ' · ' : ''}
-          {typeof p === 'string' ? p : <><Text color={p.mark}>•</Text>{` ${p.text}`}</>}
+      {shown.map((g, gi) => (
+        <Text key={gi} color="yellow">
+          {gi > 0 ? ' · ' : ''}
+          {g.map((p, pi) => (
+            <Text key={pi} color="yellow">
+              {pi > 0 ? ' ' : ''}
+              {typeof p === 'string' ? p : <><Text color={p.mark}>•</Text>{` ${p.text}`}</>}
+            </Text>
+          ))}
         </Text>
       ))}
       {spin ? (<>
