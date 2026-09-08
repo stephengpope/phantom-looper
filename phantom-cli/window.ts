@@ -795,6 +795,7 @@ export class WindowStore {
       .filter((e) => !seen.has(e.id) && !e.readonly)
       .map((e) => ({
         id: e.id, workspaceId: e.workspaceId, branch: e.branch, status: 'active', agent: null,
+        model: e.summary.model,
         // Nothing typed = no activity: it sorts LAST, never ahead of real work.
         lastUsedAt: new Date(e.lastMessageAt || 0).toISOString(), locked: false, lastUserMessage: null,
       }));
@@ -1211,9 +1212,15 @@ export class WindowStore {
         const before = session.summary;
         const next = make(session.tools, cfg, session.instructions).summary;
         if (next.provider !== before.provider || next.model !== before.model) {
-          session.transcript.appendEvent({ type: 'model', provider: next.provider, model: next.model,
-            at: new Date().toISOString() });
-          this.note(`model → ${next.provider}/${next.model}`);
+          if (session.lastMessageAt > 0) {
+            // Model locked to this session — note what happened but do not
+            // rebuild (rebuildAgents skips locked sessions).
+            this.note(`this session stays on ${before.model} — new sessions will use ${next.model}`);
+          } else {
+            session.transcript.appendEvent({ type: 'model', provider: next.provider, model: next.model,
+              at: new Date().toISOString() });
+            this.note(`model → ${next.provider}/${next.model}`);
+          }
         }
       }
       this.sessions.rebuildAgents((tools, instructions, id) => make(tools, cfg, instructions,

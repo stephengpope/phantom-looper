@@ -178,7 +178,9 @@ export class SessionStore {
       syncStamp: s.syncStamp ?? null,
       live: [], turn: [],
       busy: false, remoteBusy: false, held: null, startedAt: 0, tokens: NO_TOKENS, abort: null, queue: [],
-      unseen: false, lastMessageAt: 0, addedAt: ++this.seq, work: null, draft: '',
+      // A session with existing history has already sent messages — its model
+      // is locked. lastMessageAt > 0 is the lock signal (see rebuildAgents).
+      unseen: false, lastMessageAt: s.history?.length ? Date.now() : 0, addedAt: ++this.seq, work: null, draft: '',
     };
     this.entries.push(entry);
     this.activeId = entry.id;
@@ -387,11 +389,13 @@ export class SessionStore {
     this.notify();
   }
 
-  /** /model changed: every loaded session gets the new model, not just the one
-   *  on screen. A turn already streaming keeps the agent it started with —
-   *  runTurn holds its own reference — so the switch lands on the next turn. */
+  /** /model changed: unlocked sessions (nothing sent yet) get the new model.
+   *  A session that has sent a message keeps its model for life — the lock.
+   *  A turn already streaming keeps the agent it started with — runTurn holds
+   *  its own reference — so the switch lands on the next turn. */
   rebuildAgents(make: (tools: Record<string, Tool>, instructions?: string, id?: string) => { agent: Agent; summary: AgentSummary }): void {
     for (const e of this.entries) {
+      if (e.lastMessageAt > 0) continue;   // model locked to this session
       const { agent, summary } = make(e.tools, e.instructions, e.id);
       e.agent = agent; e.summary = summary;
     }

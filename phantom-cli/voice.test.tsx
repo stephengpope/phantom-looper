@@ -517,7 +517,7 @@ test('/assistant runs the brain; the reply is spoken and lands in the pane; sess
   // The row a person can act on: title, workspace by NAME, card, the last
   // message on one line, and no branch (it is the id wearing a prefix).
   assert.deepEqual(res.sessions[1], {
-    id: 's7', name: 'auth redirect fix', workspace: 'Widgets', card: 7, kind: 'coder',
+    id: 's7', name: 'auth redirect fix', workspace: 'Widgets', card: 7, card_status: null, kind: 'coder',
     status: 'active', running: false, on_screen: false,
     last_message: 'fix the login redirect', when: '3h',
     // The branch against base: null until the server has measured it.

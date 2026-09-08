@@ -160,6 +160,22 @@ export function lastUserFromJsonl(text: string): string | undefined {
   return last;
 }
 
+/** The provider and model from a JSONL transcript's header line. Returns nulls
+ *  when the first line is not a session header or cannot be parsed — callers
+ *  leave the columns unchanged. Cheap: reads only to the first newline. */
+export function headerModelFromJsonl(text: string): { provider: string | null; model: string | null } {
+  const nl = text.indexOf('\n');
+  const first = nl < 0 ? text : text.slice(0, nl);
+  try {
+    const h = JSON.parse(first) as { type?: string; provider?: string; model?: string };
+    if (h.type !== 'session') return { provider: null, model: null };
+    return {
+      provider: typeof h.provider === 'string' ? h.provider : null,
+      model: typeof h.model === 'string' ? h.model : null,
+    };
+  } catch { return { provider: null, model: null }; }
+}
+
 // --- token usage -------------------------------------------------------------
 // One `{"type":"usage",...}` line per model call, appended right after the
 // call's messages. No role, so replay never sees it (parseTranscript keeps it

@@ -56,7 +56,7 @@ export function switcherChoices(
     return {
       value: s.id,
       label: `${w ? workspaceLabel(w) : s.workspaceId} · ${s.branch}`,
-      detail: `${said ? `"${said.slice(0, 40)}${said.length > 40 ? '…' : ''}"  ` : ''}${
+      detail: `${s.summary.model}  ${said ? `"${said.slice(0, 40)}${said.length > 40 ? '…' : ''}"  ` : ''}${
         s.id === activeId && !s.busy ? 'you are here' : state}`,
       busy: s.busy,
       hint: s.id === activeId

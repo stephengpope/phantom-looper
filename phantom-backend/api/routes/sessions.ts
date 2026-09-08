@@ -9,7 +9,7 @@ import { repoDir } from '../../pool/paths.js';
 import { scanSkills, mergeSkills } from '../../../core/skills/skills.js';
 import { systemSkills } from '../../systemSkills.js';
 import { environmentFacts } from '../../environment.js';
-import { lastUserFromJsonl, sumUsageFromJsonl } from '../../../core/llm/transcript.js';
+import { lastUserFromJsonl, headerModelFromJsonl, sumUsageFromJsonl } from '../../../core/llm/transcript.js';
 import { resolve, settingsBlock, validateSetting } from '../../settings.js';
 import { putScoped, dropKey, sessionScope, listSecrets, GLOBAL, workspaceScope } from '../../store.js';
 import { ok, err, type AppCtx } from '../app.js';
@@ -339,6 +339,10 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       // and an uncapped copy of a pasted wall of text would ride every
       // GET /sessions response for the life of the session.
       const lastUserMessage = lastUserFromJsonl(data)?.slice(0, LAST_MESSAGE_CHARS) ?? null;
+      // The model and provider from the transcript header (line 1) — what
+      // the session list shows beside each row. Extracted here alongside
+      // lastUserMessage so both ride the same save, same first-line parse.
+      const { provider: headerProvider, model: headerModel } = headerModelFromJsonl(data);
       const stamp = new Date();
       // The moved stamp is also what invalidates the cached token totals —
       // tokens_as_of stops matching, and the next token-usage read recomputes.
@@ -348,7 +352,10 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       const agent = agentAfterSave(s.agent, client);
       const [saved] = await ctx.db.update(sessions)
         .set({ transcript: data, lastUserMessage, transcriptUpdatedAt: stamp,
-          turnCount: sql`${sessions.turnCount} + 1`, agent })
+          turnCount: sql`${sessions.turnCount} + 1`, agent,
+          ...(headerProvider != null ? { provider: headerProvider } : {}),
+          ...(headerModel != null ? { model: headerModel } : {}),
+        })
         .where(eq(sessions.id, s.id))
         .returning({ name: sessions.name, turnCount: sessions.turnCount, nameManual: sessions.nameManual });
       // Saving a turn is activity: the session stays off the idle sweep and
@@ -572,6 +579,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         // planning — with or without a transcript to bring along.
         await ctx.db.update(sessions).set({
           planMode: src.planMode,
+          provider: src.provider, model: src.model,
           ...(t[0]?.data != null ? {
             transcript: rewriteTranscriptHeader(t[0].data, { session_id: copy.id, branch: copy.branch }),
             lastUserMessage: src.lastUserMessage, name: src.name, nameManual: src.nameManual,

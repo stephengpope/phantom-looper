@@ -590,9 +590,13 @@ export function App({
   const taskMark = session && windowStore.taskCount != null && windowStore.taskCount > 0
     ? `${windowStore.taskCount} bg task${windowStore.taskCount === 1 ? '' : 's'}`
     : undefined;
-  // Order: card, mode, git dot, bg tasks, notice pinned last.
+  // The model this session is running on — always shown so you know what you
+  // are talking to. Before the first message it follows /model and /presets;
+  // after, it is fixed for life.
+  const modelMark = session?.summary.model;
+  // Order: card, model, mode, git dot, bg tasks, notice pinned last.
   const withMode = (rest?: string): ToolbarPart[] =>
-    [cardMark, modeMark, workMark, taskMark, rest].filter((p): p is ToolbarPart => Boolean(p));
+    [cardMark, modelMark, modeMark, workMark, taskMark, rest].filter((p): p is ToolbarPart => Boolean(p));
 
   return (
     <SizeContext.Provider value={{ rows: screenRows, cols: screenCols }}>

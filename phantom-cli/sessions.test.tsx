@@ -357,7 +357,7 @@ test('the last queued line can be taken back to edit', () => {
   store.abortTurn('s1');
 });
 
-test('/model rebuilds every open session, not just the one on screen', () => {
+test('/model rebuilds every UNLOCKED session, not just the one on screen', () => {
   const store = new SessionStore(scriptedRun());
   seed(store, 's1'); seed(store, 's2');
   store.rebuildAgents(() => ({
@@ -367,6 +367,38 @@ test('/model rebuilds every open session, not just the one on screen', () => {
   assert.deepEqual(store.list().map((e) => e.summary.model), ['fake-2', 'fake-2']);
   assert.deepEqual(store.list().map((e) => (e.agent as unknown as { id: string }).id),
     ['rebuilt', 'rebuilt']);
+});
+
+test('a session that has sent a message is locked — rebuildAgents skips it', async () => {
+  const store = new SessionStore(scriptedRun({ text: 'reply' }));
+  seed(store, 's1'); seed(store, 's2');
+  // Send a message to s1 — it becomes locked (lastMessageAt > 0)
+  await store.send('s1', 'hello');
+  assert.ok(store.get('s1')!.lastMessageAt > 0, 'the session that spoke has lastMessageAt > 0');
+  assert.equal(store.get('s2')!.lastMessageAt, 0, 'the silent session is still at 0');
+  // Rebuild: s1 keeps its original model, s2 gets the new one.
+  store.rebuildAgents(() => ({
+    agent: { id: 'rebuilt' } as never,
+    summary: { ...summary, model: 'new-model' },
+  }));
+  assert.equal(store.get('s1')!.summary.model, 'fake', 's1 kept its original model — locked');
+  assert.equal(store.get('s2')!.summary.model, 'new-model', 's2 got the new model — unlocked');
+});
+
+test('a resumed session with history is locked from the start', () => {
+  const store = new SessionStore(scriptedRun());
+  store.add({
+    id: 's3', branch: 'b', workspaceId: 'w',
+    tools: {}, agent: { id: 'a' } as never, summary,
+    transcript: transcriptFor('s3'),
+    history: [{ role: 'user', content: 'old message' }],
+  });
+  assert.ok(store.get('s3')!.lastMessageAt > 0, 'a resumed session with history is locked');
+  store.rebuildAgents(() => ({
+    agent: { id: 'rebuilt' } as never,
+    summary: { ...summary, model: 'new-model' },
+  }));
+  assert.equal(store.get('s3')!.summary.model, 'fake', 'the resumed session kept its model — locked');
 });
 
 test('each session writes to its own transcript', async () => {
