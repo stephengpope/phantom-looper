@@ -723,11 +723,11 @@ export class WindowStore {
   startDuplicate = async (id: string): Promise<void> => {
     const row = this.picker?.sessions.find((s) => s.id === id);
     if (row?.locked) {
-      // Held by THIS window = a turn running here; held by anything else =
-      // someone else's, and the server's 409 would say the same as this.
-      this.pickerNotice = row.lockedBy && row.lockedBy === (this.opts.clientId ?? '')
-        ? 'a turn is running in this session — esc stops it, then [d]'
-        : `in use${row.lockedLabel ? ` on ${row.lockedLabel}` : ''} — release it there, or wait for the hold to expire`;
+      // The server's own words, whichever side the hold is on — the marker
+      // can be a poll behind, so this is only the shortcut: a stale "held"
+      // self-heals on the refresh kicked here, a stale "free" meets the
+      // server's 409 saying the same.
+      this.pickerNotice = 'session is in use — stop it first, or wait for it to complete';
       this.notify();
       void this.refreshPicker().catch(quiet('refresh the session list'));
       return;

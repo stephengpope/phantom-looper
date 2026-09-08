@@ -762,7 +762,7 @@ test('/resume marks a session held elsewhere: [d] refuses fast on the list, and 
   stdin.write('d'); await sleep(200);
   assert.ok(!calls.includes('POST /sessions/s9/duplicate'), 'a held row is refused on the spot');
   let f = strip(lastFrame() ?? '');
-  assert.match(f, /in use on laptop — release it there, or wait for the hold to expire/, 'the refusal says why');
+  assert.match(f, /session is in use — stop it first, or wait for it to complete/, 'the refusal says why');
   assert.match(f, /resume/, 'still on the list');
 
   // The hold lapses; a poll sees it, and the same key now duplicates.
