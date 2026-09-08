@@ -1,7 +1,7 @@
 // Upgrade checker — periodic GitHub release check with Telegram notification.
 // The server checks GitHub for a new release tag, compares it to its own
 // version, and sends a Telegram DM with [Approve] [Deny] inline buttons.
-// The same flow serves the /upgrade command (manual check). One pending
+// The same flow serves the /update command (manual check). One pending
 // approval at a time; a new check while one stands is skipped silently.
 //
 // The approval uses callback prefix 'upg' (distinct from 'apv' for tool
@@ -73,9 +73,9 @@ export class UpgradeChecker {
     await this.sendApproval(token, dm, latest);
   }
 
-  // ── /upgrade command ──────────────────────────────────────────────────
+  // ── /update command ───────────────────────────────────────────────────
 
-  /** Manual check from /upgrade. Always responds — even when current. */
+  /** Manual check from /update. Always responds — even when current. */
   async manualCheck(client: TelegramClient, dm: number): Promise<void> {
     if (this.pending) {
       await client.sendMessage(dm, `⬆️ Already waiting for your answer on ${bare(this.pending.tag)}.`);
@@ -107,7 +107,7 @@ export class UpgradeChecker {
 
     const p = this.pending;
     if (!p || p.id !== id) {
-      await client.answerCallbackQuery(query.id, 'That upgrade prompt has expired.').catch(() => {});
+      await client.answerCallbackQuery(query.id, 'That update prompt has expired.').catch(() => {});
       return true;
     }
 
@@ -120,7 +120,7 @@ export class UpgradeChecker {
       this.pending = null;
       if (p.messageId != null) {
         await client.editMessageText(dm, p.messageId,
-          `✖️ Upgrade to ${bare(p.tag)} skipped.`).catch(() => {});
+          `✖️ Update to ${bare(p.tag)} skipped.`).catch(() => {});
       }
     }
     return true;
@@ -140,8 +140,8 @@ export class UpgradeChecker {
     const v = bare(tag);
     const current = bare(this.deps.version);
     const text = `⬆️ ${v} is available — you're on ${current}.\n` +
-      'Upgrading restarts the server — any running turns are stopped and loop cards are blocked.\n\n' +
-      'Upgrade?';
+      'Updating restarts the server — any running turns are stopped and loop cards are blocked.\n\n' +
+      'Update?';
 
     const client = existingClient ?? this.deps.makeClient(token, dm);
     const m = await client.sendMessage(dm, text, {
@@ -164,19 +164,19 @@ export class UpgradeChecker {
     // Edit the approval bubble to show the decision.
     if (p.messageId != null) {
       await client.editMessageText(dm, p.messageId,
-        `✅ Upgrade to ${v} approved.`).catch(() => {});
+        `✅ Update to ${v} approved.`).catch(() => {});
     }
 
     // Trigger the upgrade.
     const r = await this.deps.triggerUpdate(tag);
     if (!r.ok) {
       await client.sendMessage(dm,
-        `⚠️ Could not start the upgrade: ${r.error ?? 'unknown error'}`);
+        `⚠️ Could not start the update: ${r.error ?? 'unknown error'}`);
       return;
     }
 
     await client.sendMessage(dm,
-      `⬆️ Upgrading to ${v}... The server will restart shortly — ` +
+      `⬆️ Updating to ${v}... The server will restart shortly — ` +
       'any running turns are stopped and loop cards are blocked.');
     log.info({ tag }, 'upgrade triggered via Telegram');
   }

@@ -26,7 +26,7 @@ const COMMON: Cmd[] = [
   { command: 'new', description: 'Start a new session' },
   { command: 'stop', description: 'Stop the running task' },
   { command: 'status', description: "Show what's running" },
-  { command: 'upgrade', description: 'Check for updates' },
+  { command: 'update', description: 'Check for updates' },
   { command: 'help', description: 'List commands' },
 ];
 
@@ -212,7 +212,7 @@ export async function handleCommand(
       return;
     }
 
-    case 'upgrade': {
+    case 'update': {
       await engine.upgradeChecker.manualCheck(client, dm);
       return;
     }
@@ -328,6 +328,6 @@ const HELP = [
   '',
   '/status — Show what\'s running',
   '/stop — Stop the running task',
-  '/upgrade — Check for updates',
+  '/update — Check for updates',
   '/help — List commands',
 ].join('\n');
