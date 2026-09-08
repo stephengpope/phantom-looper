@@ -308,7 +308,7 @@ test('a lock held elsewhere REFUSES the message — the queue is only for this w
   assert.match(note!.text, /"hello there"/, 'the words are in the note, not silently gone');
 });
 
-test('said while busy is queued, then sent TOGETHER as one turn when it ends', async () => {
+test('said while busy is queued, then drained ONE turn each when it ends', async () => {
   let turns = 0;
   const counting: RunTurn = (async (...args) => { turns++; return scriptedRun({ text: 'ok', hold: 40 })(...args); }) as RunTurn;
   const store = new SessionStore(counting);
@@ -319,23 +319,28 @@ test('said while busy is queued, then sent TOGETHER as one turn when it ends', a
   store.say('s1', 'three');                    // queued behind it
   assert.deepEqual(store.get('s1')!.queue, ['two', 'three'], 'held, in order');
   assert.equal(store.get('s1')!.history.filter((m) => m.role === 'user').length, 1, 'not yet said');
-  await sleep(160);
+  await sleep(250);
   const said = store.get('s1')!.history.filter((m) => m.role === 'user').map((m) => m.content);
   assert.deepEqual(said, ['one', 'two', 'three'], 'all said, in order');
-  assert.equal(turns, 2, 'one turn for "one", ONE turn for everything queued behind it');
+  assert.equal(turns, 3, 'one turn per message — the queue drains one at a time');
   assert.deepEqual(store.get('s1')!.queue, [], 'nothing left waiting');
 });
 
-test('interrupting does not fire the next queued line into the stopped session', async () => {
-  const store = new SessionStore(scriptedRun({ text: 'ok', hold: 200 }));
+test('interrupting fires the next queued line — esc is "skip to next", not stop-everything', async () => {
+  let turns = 0;
+  const counting: RunTurn = (async (...args) => { turns++; return scriptedRun({ text: 'ok', hold: 100 })(...args); }) as RunTurn;
+  const store = new SessionStore(counting);
   seed(store, 's1');
   store.say('s1', 'one');
   await sleep(10);
   store.say('s1', 'two');
   store.abortTurn('s1');
-  await sleep(60);
-  assert.equal(store.get('s1')!.busy, false, 'stopped');
-  assert.deepEqual(store.get('s1')!.queue, ['two'], 'still queued — esc means stop, not "go on"');
+  await sleep(200);
+  assert.equal(store.get('s1')!.busy, false, 'the queue drained, nothing running');
+  assert.equal(turns, 2, 'the interrupted turn, then the queued one');
+  const said = store.get('s1')!.history.filter((m) => m.role === 'user').map((m) => m.content);
+  assert.deepEqual(said, ['one', 'two'], 'the queued line was said after the interrupt');
+  assert.deepEqual(store.get('s1')!.queue, [], 'nothing left waiting');
 });
 
 test('the last queued line can be taken back to edit', () => {
