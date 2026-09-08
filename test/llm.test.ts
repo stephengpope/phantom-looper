@@ -758,3 +758,70 @@ test('cascade with no provider anywhere throws the same message; an agent-level 
     { provider: 'openai', model: 'gpt-x', baseUrl: null });
   assert.throws(() => cascade2({ provider: 'anthropic', model: null }, 'supervisor'), /no model set for anthropic/);
 });
+
+// ── the session's pin (core/llm/agentConfig.ts) ──────────────────────────────
+// One rule, tested once: a session that has said anything runs on the model it
+// already ran on. Global settings reach a session with nothing said yet and
+// nothing else — from the app, the looper, Telegram or a plan-mode flip alike,
+// because all of them resolve here.
+import { sessionPin, pinnedCfg, pinnedModel, modelConfigFrom as modelConfigFrom3 } from '../core/llm/agentConfig.js';
+
+const GLOBAL = { provider: 'openai', model: 'gpt-5', base_url: 'https://gateway.example/v1',
+  anthropic_api_key: 'sk-ant', openai_api_key: 'sk-oai', reasoning: 'medium' };
+
+test('sessionPin: the row wins whole', () => {
+  assert.deepEqual(
+    sessionPin({ provider: 'anthropic', model: 'claude-opus-5', baseUrl: null },
+      { provider: 'openai', model: 'gpt-5' }),
+    { provider: 'anthropic', model: 'claude-opus-5', baseUrl: null });
+});
+
+test('sessionPin: a row without the pair falls back to the header — never a field from each', () => {
+  // The row is empty (a session older than the columns): the header names both.
+  assert.deepEqual(sessionPin({ provider: null, model: null, baseUrl: 'https://row.example' },
+    { provider: 'anthropic', model: 'claude-opus-5', base_url: 'https://head.example' }),
+  { provider: 'anthropic', model: 'claude-opus-5', baseUrl: 'https://head.example' });
+  // Half a row is not a pin: a provider with no model says nothing usable.
+  assert.equal(sessionPin({ provider: 'anthropic', model: null }, null), null);
+  // Nothing anywhere — a session with nothing said yet.
+  assert.equal(sessionPin(null, null), null);
+});
+
+test('pinnedCfg: no pin leaves the global settings exactly as they are', () => {
+  assert.equal(pinnedCfg(GLOBAL, null), GLOBAL);
+});
+
+test('pinnedCfg: a pin overrides provider and model, and the key follows the provider', () => {
+  const cfg = pinnedCfg(GLOBAL, { provider: 'anthropic', model: 'claude-opus-5', baseUrl: null });
+  assert.equal(cfg.provider, 'anthropic');
+  assert.equal(cfg.model, 'claude-opus-5');
+  // The global settings themselves are untouched — the other agents' cascade
+  // still reads them.
+  assert.equal(GLOBAL.provider, 'openai');
+  const m = modelConfigFrom3(cfg);
+  assert.equal(m.apiKey, 'sk-ant', 'the pinned provider\'s key, not the global provider\'s');
+});
+
+test('pinnedCfg: the endpoint never crosses providers — the whole point of pinning three fields', () => {
+  // A pin on a DIFFERENT provider than the global one drops the global
+  // endpoint: sending anthropic traffic to an openai-compatible gateway is
+  // exactly the split this prevents.
+  assert.equal(pinnedCfg(GLOBAL, { provider: 'anthropic', model: 'claude-opus-5' }).base_url, null);
+  // Same provider: the global endpoint still applies.
+  assert.equal(pinnedCfg(GLOBAL, { provider: 'openai', model: 'gpt-4.1' }).base_url, 'https://gateway.example/v1');
+  // A pin carrying its own endpoint wins over both.
+  assert.equal(pinnedCfg(GLOBAL, { provider: 'openai', model: 'gpt-4.1', baseUrl: 'https://pinned.example' }).base_url,
+    'https://pinned.example');
+});
+
+test('pinnedModel: a cascaded agent takes the pin too, keeping its own reasoning', () => {
+  const base = agentModelConfig({ ...GLOBAL, supervisor_reasoning: 'high' }, 'supervisor');
+  const m = pinnedModel(base, GLOBAL, { provider: 'anthropic', model: 'claude-opus-5', baseUrl: null });
+  assert.equal(m.provider, 'anthropic');
+  assert.equal(m.model, 'claude-opus-5');
+  assert.equal(m.apiKey, 'sk-ant');
+  assert.equal(m.baseUrl, undefined, 'the global endpoint belongs to the other provider');
+  assert.equal(m.reasoning, 'high', 'reasoning is a setting, not part of what ran');
+  // No pin: the cascade's answer, untouched.
+  assert.equal(pinnedModel(base, GLOBAL, null), base);
+});

@@ -37,6 +37,17 @@ Who calls the builders:
 
 ## Model config
 
+**The pin.** A session that has said anything runs on the model it already ran
+on: `sessionPin(row, header)` reads the session row's provider/model/base_url
+(the header's, for rows older than those columns), and `pinnedCfg` /
+`pinnedModel` lay it over the resolved settings. Global settings reach a session
+with nothing said yet and NOTHING else — the app's open, a plan-mode rebuild,
+the looper, Telegram and the turn route all resolve here, so `/model` cannot
+land mid-conversation. The pin is written once, by the transcript save route,
+from the first header. The endpoint is pinned with the pair because a provider
+and a model name do not say where to send the request; a pin without one
+inherits the global endpoint only while the provider matches.
+
 There is no default provider. An unset provider still builds: `languageModel`
 returns a handle whose first call throws `NO_PROVIDER` with the fix in the
 message, so a session opens on a bare server. The other agents' trios

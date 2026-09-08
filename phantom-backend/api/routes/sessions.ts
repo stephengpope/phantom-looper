@@ -374,10 +374,13 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       // and an uncapped copy of a pasted wall of text would ride every
       // GET /sessions response for the life of the session.
       const lastUserMessage = lastUserFromJsonl(data)?.slice(0, LAST_MESSAGE_CHARS) ?? null;
-      // The model and provider from the transcript header (line 1) — what
-      // the session list shows beside each row. Extracted here alongside
-      // lastUserMessage so both ride the same save, same first-line parse.
-      const { provider: headerProvider, model: headerModel } = headerModelFromJsonl(data);
+      // The PIN, written ONCE. The first save names the model this session
+      // runs on for the rest of its life; no later save moves it. That is what
+      // makes the rule enforceable everywhere else: a session with a pin never
+      // reads the global settings again, whoever runs the turn.
+      const head = headerModelFromJsonl(data);
+      const pinning = s.provider == null && s.model == null
+        && head.provider != null && head.model != null;
       const stamp = new Date();
       // The moved stamp is also what invalidates the cached token totals —
       // tokens_as_of stops matching, and the next token-usage read recomputes.
@@ -388,8 +391,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       const [saved] = await ctx.db.update(sessions)
         .set({ transcript: data, lastUserMessage, transcriptUpdatedAt: stamp,
           turnCount: sql`${sessions.turnCount} + 1`, agent,
-          ...(headerProvider != null ? { provider: headerProvider } : {}),
-          ...(headerModel != null ? { model: headerModel } : {}),
+          ...(pinning ? { provider: head.provider, model: head.model, baseUrl: head.baseUrl } : {}),
         })
         .where(eq(sessions.id, s.id))
         .returning({ name: sessions.name, turnCount: sessions.turnCount, nameManual: sessions.nameManual });
@@ -614,7 +616,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         // planning — with or without a transcript to bring along.
         await ctx.db.update(sessions).set({
           planMode: src.planMode,
-          provider: src.provider, model: src.model,
+          // The pin travels with the conversation: a copy of a session is the
+          // same conversation, so it runs on the same model.
+          provider: src.provider, model: src.model, baseUrl: src.baseUrl,
           ...(t[0]?.data != null ? {
             transcript: rewriteTranscriptHeader(t[0].data, { session_id: copy.id, branch: copy.branch }),
             lastUserMessage: src.lastUserMessage, name: src.name, nameManual: src.nameManual,

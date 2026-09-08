@@ -132,11 +132,14 @@ export const sessions = phantomLooper.table('sessions', {
   // Updated by the server's periodic git-state refresh for sessions with
   // an active container. Null = never checked or no checkout. (013)
   work: text('work'),
-  // The model and provider that drive the session, extracted from the
-  // transcript header at each save. Null until the first transcript save.
-  // (015)
+  // The model this session runs on, PINNED: written once from the first
+  // transcript header and never moved, so a conversation cannot change model
+  // mid-life. Null = nothing said yet, and only then do the global settings
+  // apply. The endpoint rides along because the three only mean anything
+  // together. (015, 016)
   provider: text('provider'),
   model: text('model'),
+  baseUrl: text('base_url'),
 });
 
 // Every sessions read selects THESE, never the bare table: the one column

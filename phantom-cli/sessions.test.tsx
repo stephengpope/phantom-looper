@@ -401,6 +401,23 @@ test('a resumed session with history is locked from the start', () => {
   assert.equal(store.get('s3')!.summary.model, 'fake', 'the resumed session kept its model — locked');
 });
 
+test('a pinned session is skipped even before it speaks — the pin is the signal, not the clock', () => {
+  const store = new SessionStore(scriptedRun());
+  store.add({
+    id: 's4', branch: 'b', workspaceId: 'w',
+    tools: {}, agent: { id: 'a' } as never, summary,
+    transcript: transcriptFor('s4'),
+    // Opened with a pin but no replayed history (the transcript is on the
+    // server): the pin alone must keep /model off it.
+    pin: { provider: 'test', model: 'fake', baseUrl: null },
+  });
+  store.rebuildAgents(() => ({
+    agent: { id: 'rebuilt' } as never,
+    summary: { ...summary, model: 'new-model' },
+  }));
+  assert.equal(store.get('s4')!.summary.model, 'fake', 'the pin held');
+});
+
 test('each session writes to its own transcript', async () => {
   const store = new SessionStore(scriptedRun({ text: 'hi' }));
   const one = seed(store, 's1');

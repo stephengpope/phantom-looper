@@ -6,7 +6,7 @@
 import type { ModelMessage } from 'ai';
 import type { OpenedSession } from '../../core/session.js';
 import { memoryRecorder, serializeTranscript, type TranscriptHeader } from '../../core/llm/transcript.js';
-import { buildCodingAgent, modelConfigFrom } from '../../core/llm/agentConfig.js';
+import { buildCodingAgent, modelConfigFrom, pinnedCfg, sessionPin } from '../../core/llm/agentConfig.js';
 import { phantomTools } from '../../core/llm/tools/workspace.js';
 import { skillTools } from '../../core/llm/tools/skills.js';
 import { webTools } from '../../core/llm/tools/web.js';
@@ -72,8 +72,16 @@ export async function runCodingTurn(
     ...kanbanReadTool({ baseUrl: deps.base, apiKey: deps.apiKey, workspaceId, fetch: deps.f }),
     ...deps.extraTools,
   };
-  const model = modelConfigFrom(values);
-  const { agent } = buildCodingAgent(values, tools, opened.instructions, deps.modelFetch, deps.onRetry);
+  // THE rule, the same one the app applies: a session that has said anything
+  // runs on its pin — the row's model, or (rows written before the columns) its
+  // transcript header's. The global settings reach a session with nothing said
+  // yet and nothing else, so a /model change cannot land mid-conversation just
+  // because the turn happened to be run by the server.
+  const pinned = pinnedCfg(values, sessionPin(
+    opened.session as { provider?: string | null; model?: string | null; baseUrl?: string | null },
+    opened.header));
+  const model = modelConfigFrom(pinned);
+  const { agent } = buildCodingAgent(pinned, tools, opened.instructions, deps.modelFetch, deps.onRetry);
   const messages: ModelMessage[] = [...opened.messages, { role: 'user', content: message }];
 
   // The cache marks are createAgent's, placed on copies before every step;
@@ -111,6 +119,7 @@ export async function runCodingTurn(
 
   const header: TranscriptHeader = opened.header ?? {
     type: 'session', agent: 'coding', provider: model.provider, model: model.model,
+    ...(model.baseUrl ? { base_url: model.baseUrl } : {}),
     created_at: new Date().toISOString(), system_prompt: opened.instructions,
     session_id: opened.session.id, workspace: workspaceId, branch: opened.session.branch,
   };

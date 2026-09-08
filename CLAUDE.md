@@ -45,7 +45,7 @@ env `PHANTOM_CLI_*` and `PHANTOM_BACKEND_*`; images
 /phantom-cli       imports /core. Never imports backend code; it reaches the backend over HTTP
 /phantom-backend   imports /core
 /core              imports from neither
-migrations/        001–014, forward-only, applied at boot
+migrations/        001–016, forward-only, applied at boot
 ```
 
 One package.json, one lockfile. The root tsconfig builds core and backend;
@@ -89,6 +89,10 @@ the live server.
   failed round. Every loop exit is a card state a person can see. Agents
   never run loop mechanics. The coding agent may block its own card and
   nothing else; ticks mean verified.
+- A session's model is pinned with its conversation: written once from the
+  first transcript header (provider, model, endpoint together), and read by
+  every turn. Global settings reach a session that has said nothing yet and
+  nothing else.
 - A prompt is frozen with its conversation. Guidance that must reach a
   running session goes in a tool's description.
 - The host files ride in the api image; no script holds a file list. The

@@ -106,3 +106,67 @@ export function buildCodingAgent(
       reasoning: String(cfg.reasoning ?? ''), maxSteps },
   };
 }
+
+// --- the session's pin -------------------------------------------------------
+// One rule, one place, for every caller that runs a coding turn: a session that
+// has said anything runs on the model it already ran on. Global settings reach
+// a session with nothing said yet, and nothing else. The pin is written once
+// (the transcript save route, from the first header) and never moves, so
+// changing /model can no longer reach a conversation in progress — not from the
+// app, not from the looper, not from Telegram, not from a plan-mode flip.
+
+/** What a session is pinned to: the row's columns, or — for rows written
+ *  before the columns existed — its transcript header. */
+export interface ModelPin { provider?: string | null; model?: string | null; baseUrl?: string | null }
+
+/** The pin for one session. The row wins whole; a row missing the pair falls
+ *  back to the header whole. Never mixed field by field: a provider from one
+ *  source and an endpoint from the other is exactly the split this prevents. */
+export function sessionPin(
+  row?: { provider?: string | null; model?: string | null; baseUrl?: string | null } | null,
+  header?: { provider?: unknown; model?: unknown; base_url?: unknown } | null,
+): ModelPin | null {
+  if (set(row?.provider) && set(row?.model)) {
+    return { provider: row!.provider, model: row!.model, baseUrl: row!.baseUrl ?? null };
+  }
+  const hp = typeof header?.provider === 'string' ? header.provider : null;
+  const hm = typeof header?.model === 'string' ? header.model : null;
+  if (set(hp) && set(hm)) {
+    return { provider: hp, model: hm,
+      baseUrl: typeof header?.base_url === 'string' ? header.base_url : null };
+  }
+  return null;
+}
+
+/** The settings a session's turn builds from: the resolved global values with
+ *  the session's pin laid over them, as a COPY (the caller's values still feed
+ *  the other agents' cascade). No pin — a session with nothing said yet —
+ *  returns them untouched.
+ *
+ *  The endpoint rides the pin, because a provider and a model name do not say
+ *  where to send the request: a session pinned to one provider must not inherit
+ *  an endpoint someone set for another. A pin carrying no endpoint (an old
+ *  header) inherits the global one only while the provider matches — the same
+ *  compatibility rule as `cascade`. */
+/** The same rule for an agent whose model comes from the cascade (the
+ *  supervisor's `supervisor_*` trio): its resolved config, with the session's
+ *  pin — provider, model, endpoint and that provider's key — laid over it.
+ *  Reasoning and max_steps are settings, not part of what ran, so they keep
+ *  following the cascade. */
+export function pinnedModel(base: ModelConfig, cfg: SettingsValues, pin?: ModelPin | null): ModelConfig {
+  const provider = set(pin?.provider);
+  const model = set(pin?.model);
+  if (!provider || !model) return base;
+  const keyField = PROVIDER_KEY[provider as keyof typeof PROVIDER_KEY];
+  return { ...base, provider: provider as Provider, model,
+    baseUrl: set(pin?.baseUrl) ?? (provider === base.provider ? base.baseUrl ?? null : null) ?? undefined,
+    apiKey: keyField ? set(cfg[keyField]) ?? undefined : undefined };
+}
+
+export function pinnedCfg<T extends SettingsValues>(cfg: T, pin?: ModelPin | null): T {
+  const provider = set(pin?.provider);
+  const model = set(pin?.model);
+  if (!provider || !model) return cfg;
+  return { ...cfg, provider, model,
+    base_url: set(pin?.baseUrl) ?? (provider === set(cfg.provider) ? set(cfg.base_url) : null) };
+}

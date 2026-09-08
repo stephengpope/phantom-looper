@@ -160,20 +160,25 @@ export function lastUserFromJsonl(text: string): string | undefined {
   return last;
 }
 
-/** The provider and model from a JSONL transcript's header line. Returns nulls
- *  when the first line is not a session header or cannot be parsed — callers
- *  leave the columns unchanged. Cheap: reads only to the first newline. */
-export function headerModelFromJsonl(text: string): { provider: string | null; model: string | null } {
+/** The model a JSONL transcript's header line names — provider, model and the
+ *  endpoint it was called at, the three fields that only mean anything
+ *  together. Returns nulls when the first line is not a session header or
+ *  cannot be parsed — callers leave the columns unchanged. Cheap: reads only to
+ *  the first newline. */
+export function headerModelFromJsonl(text: string):
+{ provider: string | null; model: string | null; baseUrl: string | null } {
+  const none = { provider: null, model: null, baseUrl: null };
   const nl = text.indexOf('\n');
   const first = nl < 0 ? text : text.slice(0, nl);
   try {
-    const h = JSON.parse(first) as { type?: string; provider?: string; model?: string };
-    if (h.type !== 'session') return { provider: null, model: null };
+    const h = JSON.parse(first) as { type?: string; provider?: string; model?: string; base_url?: string };
+    if (h.type !== 'session') return none;
     return {
       provider: typeof h.provider === 'string' ? h.provider : null,
       model: typeof h.model === 'string' ? h.model : null,
+      baseUrl: typeof h.base_url === 'string' ? h.base_url : null,
     };
-  } catch { return { provider: null, model: null }; }
+  } catch { return none; }
 }
 
 // --- token usage -------------------------------------------------------------

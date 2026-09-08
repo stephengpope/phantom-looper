@@ -15,6 +15,7 @@ import { VoiceClient, sidecarEnv, codingKanbanTool, screenModeTools,
   type KanbanArgs, type ScreenModeHandler } from './voice.js';
 import { Transcript, adoptServerCopy, syncTranscriptUp, type TranscriptHeader } from './session.js';
 import { parseTranscript } from '../core/llm/transcript.js';
+import { pinnedCfg, sessionPin, type ModelPin } from '../core/llm/agentConfig.js';
 import { openSession as coreOpenSession } from '../core/session.js';
 import { buildAgent, buildAssistantAgent, codingInstructions } from './agentFromConfig.js';
 import { runTurn } from './agent.js';
@@ -354,7 +355,11 @@ export class WindowStore {
     const e = this.sessions.get(id);
     if (!e || e.readonly || e.planMode === on) return;
     const tools = await this.codingKit(id, on, e.workspaceId);
-    const { agent, summary } = this.buildFor(tools, await this.readCfg(), e.instructions, id);
+    // Plan mode changes the KIT, never the model: rebuilding through the
+    // session's pin is what keeps a flip from quietly moving a conversation
+    // onto whatever /model says now.
+    const { agent, summary } = this.buildFor(
+      tools, pinnedCfg(await this.readCfg(), e.pin), e.instructions, id);
     this.sessions.setPlanMode(id, on, tools, agent, summary);
   };
 
@@ -629,18 +634,21 @@ export class WindowStore {
           row.agent_git_credentials === undefined ? undefined
             : { credentials: row.agent_git_credentials },
           row.secrets ?? []);
-      // A session with messages has its model locked: the DB row's provider and
-      // model override the global settings. A new session (no messages) reads
-      // the global settings — /model and /presets write there.
-      const cfg = await this.readCfg();
-      if (resumed.length > 0 && row.provider && row.model) {
-        cfg.provider = row.provider;
-        cfg.model = row.model;
-      }
-      const { agent, summary } = this.buildFor(tools, cfg, instructions, row.id);
+      // THE rule (core agentConfig): a session that has said anything runs on
+      // its pin — the row's provider/model/endpoint, or, for rows written
+      // before those columns, its transcript header's. Global settings reach a
+      // session with nothing said yet and nothing else. The pin is kept on the
+      // entry so every later rebuild (plan mode, /model) resolves the same way
+      // instead of reading the global settings again.
+      const pin = resumed.length > 0 ? sessionPin(row, header) : null;
+      const modelCfg = pinnedCfg(await this.readCfg(), pin);
+      const { agent, summary } = this.buildFor(tools, modelCfg, instructions, row.id);
       const transcript = (this.opts.makeTranscript ?? ((h: TranscriptHeader) => new Transcript(h)))({
         type: 'session', session_id: row.id, workspace: row.workspaceId, branch: row.branch,
-        provider: summary.provider, model: summary.model, created_at: new Date().toISOString(),
+        provider: summary.provider, model: summary.model,
+        // The endpoint is part of what ran: it pins with the pair (016).
+        ...(modelCfg.base_url ? { base_url: String(modelCfg.base_url) } : {}),
+        created_at: new Date().toISOString(),
         system_prompt: instructions,
       });
       // The card this session builds, named the way the board names it
@@ -656,6 +664,7 @@ export class WindowStore {
         tools, agent, summary, transcript, instructions,
         history: resumed,
         syncStamp,
+        pin,
         planMode,
         ...(card ? { card } : {}),
         ...(row.agent === 'supervisor' ? { readonly: true } : {}),

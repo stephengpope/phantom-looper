@@ -38,7 +38,7 @@ import { currentLoop, loopOf, stampAgent, createSupervisorSession, createLoop, n
 import { resolveMany } from '../settings.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
 import { memoryRecorder, serializeTranscript, type TranscriptHeader } from '../../core/llm/transcript.js';
-import { agentModelConfig, agentMaxSteps } from '../../core/llm/agentConfig.js';
+import { agentModelConfig, agentMaxSteps, pinnedModel, sessionPin } from '../../core/llm/agentConfig.js';
 import { phantomTools } from '../../core/llm/tools/workspace.js';
 import { webTools } from '../../core/llm/tools/web.js';
 import {
@@ -359,7 +359,11 @@ export class LooperEngine {
         // ── the supervisor's turn: the missing seeds and the coder's reply
         // land as user messages; its reply is its own, recorded whole (tool
         // traffic included — the step rule reads terminal turns off it). ────
-        const model = agentModelConfig(cfg, 'supervisor');
+        // The same rule as the coding half: a supervisor conversation that has
+        // said anything runs on its pin, not on whatever the settings say now.
+        const model = pinnedModel(agentModelConfig(cfg, 'supervisor'), cfg,
+          sessionPin(supOpened.session as { provider?: string | null; model?: string | null;
+            baseUrl?: string | null }, supOpened.header));
         const supMaxSteps = agentMaxSteps(cfg, 'supervisor');
         model.fetch = this.deps.modelFetch;
         model.onRetry = (t) => log.warn({ card: card.seq, agent: 'supervisor' }, t);
@@ -400,6 +404,7 @@ export class LooperEngine {
         }
         const supHeader: TranscriptHeader = supOpened.header ?? {
           type: 'session', agent: CLIENT_ID, provider: model.provider, model: model.model,
+          ...(model.baseUrl ? { base_url: model.baseUrl } : {}),
           created_at: new Date().toISOString(), system_prompt: supervisorInstructions(),
           session_id: supOpened.session.id, card: card.seq,
         };

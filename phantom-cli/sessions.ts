@@ -15,6 +15,7 @@ import type { ModelMessage, Tool } from 'ai';
 import type { Agent } from './agent.js';
 import { runTurn } from './agent.js';
 import type { AgentSummary } from './agentFromConfig.js';
+import type { ModelPin } from '../core/llm/agentConfig.js';
 import { Transcript } from './session.js';
 import { applyPart, applyTokens, finalize, nextId, takeCompleted, NO_TOKENS, type Part, type StreamPart, type TurnTokens } from './state.js';
 
@@ -45,6 +46,12 @@ export interface LoadedSession {
    *  preset while this is on. The server row (sessions.plan_mode) is the
    *  record; this mirrors it, seeded at open, flipped by setPlanMode. */
   planMode: boolean;
+  /** The model this session is pinned to (core agentConfig): its row's
+   *  provider/model/endpoint, or its transcript header's for a session older
+   *  than those columns. Null only while nothing has been said — the one case
+   *  the global settings apply. Every rebuild resolves through it, so no path
+   *  can put a running conversation on a different model. */
+  pin: ModelPin | null;
   /** The server transcript's stamp our memory matches (null = never synced).
    *  Compared against the lock response's stamp at each turn start; a
    *  mismatch means another machine advanced the session — pull, reseat,
@@ -108,6 +115,9 @@ export interface NewSession {
   /** The server row's plan_mode — the tools passed above must already match. */
   planMode?: boolean;
   syncStamp?: string | null;
+  /** The model this session is pinned to (LoadedSession.pin). Absent only for
+   *  a session with nothing said yet. */
+  pin?: ModelPin | null;
   /** Open showing the supervisor side (the run's story) first. */
 }
 
@@ -176,10 +186,12 @@ export class SessionStore {
       readonly: s.readonly ?? false,
       planMode: s.planMode ?? false,
       syncStamp: s.syncStamp ?? null,
+      pin: s.pin ?? null,
       live: [], turn: [],
       busy: false, remoteBusy: false, held: null, startedAt: 0, tokens: NO_TOKENS, abort: null, queue: [],
       // A session with existing history has already sent messages — its model
-      // is locked. lastMessageAt > 0 is the lock signal (see rebuildAgents).
+      // is pinned. lastMessageAt > 0 is the second signal (see rebuildAgents):
+      // it catches a session whose pin could not be read at all.
       unseen: false, lastMessageAt: s.history?.length ? Date.now() : 0, addedAt: ++this.seq, work: null, draft: '',
     };
     this.entries.push(entry);
@@ -389,13 +401,13 @@ export class SessionStore {
     this.notify();
   }
 
-  /** /model changed: unlocked sessions (nothing sent yet) get the new model.
-   *  A session that has sent a message keeps its model for life — the lock.
+  /** /model changed: only sessions with nothing said yet get the new model.
+   *  A session that has spoken keeps its model for life — the pin.
    *  A turn already streaming keeps the agent it started with — runTurn holds
    *  its own reference — so the switch lands on the next turn. */
   rebuildAgents(make: (tools: Record<string, Tool>, instructions?: string, id?: string) => { agent: Agent; summary: AgentSummary }): void {
     for (const e of this.entries) {
-      if (e.lastMessageAt > 0) continue;   // model locked to this session
+      if (e.pin || e.lastMessageAt > 0) continue;   // pinned: this session's model is settled
       const { agent, summary } = make(e.tools, e.instructions, e.id);
       e.agent = agent; e.summary = summary;
     }

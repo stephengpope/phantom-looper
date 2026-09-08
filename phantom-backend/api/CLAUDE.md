@@ -46,10 +46,11 @@ routes/telegram.ts   POST /telegram/webhook — the one route outside the bearer
 - GET /sessions decides what the list is. `typed`, `supervisor` and the
   keyset cursor share one WHERE, so `total` matches the pages. `git=true`
   reads each checkout for `work`, so ask only when a screen shows it.
-- The transcript PUT does four things in one UPDATE: stores the blob,
-  moves the preview, bumps `turn_count`, re-derives `agent`. Then it
-  renews the holder's lock, publishes the `transcript` event, and may fire
-  the titler.
+- The transcript PUT does five things in one UPDATE: stores the blob,
+  moves the preview, bumps `turn_count`, re-derives `agent`, and — on the
+  FIRST save only — pins the session's model from the header
+  (provider/model/base_url, never moved again). Then it renews the holder's
+  lock, publishes the `transcript` event, and may fire the titler.
 - The token-usage cache is valid only while `tokens_as_of` equals
   `transcript_updated_at`; a save moves the stamp, so a stale cache cannot
   exist.

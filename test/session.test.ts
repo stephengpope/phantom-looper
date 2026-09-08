@@ -115,14 +115,19 @@ test('pickKit: full, readonly (drops declared mutators), explicit list; unknown 
 // ── headerModelFromJsonl ──────────────────────────────────────────────────────
 import { headerModelFromJsonl } from '../core/llm/transcript.js';
 
-test('headerModelFromJsonl extracts provider and model from a session transcript header', () => {
-  const header = JSON.stringify({ type: 'session', provider: 'anthropic', model: 'claude-sonnet-4-20250514', created_at: '' });
+test('headerModelFromJsonl extracts provider, model and endpoint from a session transcript header', () => {
+  const header = JSON.stringify({ type: 'session', provider: 'anthropic', model: 'claude-sonnet-4-20250514',
+    base_url: 'https://gateway.example/v1', created_at: '' });
   const jsonl = `${header}\n{"role":"user","content":"hello"}\n`;
-  assert.deepEqual(headerModelFromJsonl(jsonl), { provider: 'anthropic', model: 'claude-sonnet-4-20250514' });
+  assert.deepEqual(headerModelFromJsonl(jsonl),
+    { provider: 'anthropic', model: 'claude-sonnet-4-20250514', baseUrl: 'https://gateway.example/v1' });
+  // A header from before the endpoint was recorded: the pair, no endpoint.
+  assert.deepEqual(headerModelFromJsonl('{"type":"session","provider":"openai","model":"gpt-5"}'),
+    { provider: 'openai', model: 'gpt-5', baseUrl: null });
   // Non-session headers return nulls.
-  assert.deepEqual(headerModelFromJsonl('{"type":"other"}'), { provider: null, model: null });
+  assert.deepEqual(headerModelFromJsonl('{"type":"other"}'), { provider: null, model: null, baseUrl: null });
   // Unparsable text returns nulls (never throws).
-  assert.deepEqual(headerModelFromJsonl('not json'), { provider: null, model: null });
+  assert.deepEqual(headerModelFromJsonl('not json'), { provider: null, model: null, baseUrl: null });
   // Empty string returns nulls.
-  assert.deepEqual(headerModelFromJsonl(''), { provider: null, model: null });
+  assert.deepEqual(headerModelFromJsonl(''), { provider: null, model: null, baseUrl: null });
 });
