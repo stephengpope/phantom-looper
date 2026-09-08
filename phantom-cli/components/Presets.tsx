@@ -8,14 +8,15 @@
 //           pattern as /model and /settings)
 //
 // Each key in a preset has three states:
-//   set          a value — apply writes it
-//   clear setting  null  — apply nulls the setting (cascade/default takes over)
-//   leave as is  absent  — apply does not touch the setting
+//   set             a value — apply writes it
+//   clear           null  — apply nulls the setting (cascade/default takes over)
+//   leave unchanged absent  — apply does not touch the setting
 //
 // Storage: the preset's `values` object is { key: value } for set keys,
-// { key: null } for clear, and the key is absent for leave-as-is. On apply
-// the object is sent as the PATCH body — set keys write, null keys clear,
-// absent keys are untouched.
+// { key: null } for clear, and the key is absent for leave-unchanged. On
+// apply the object is sent as the PATCH body — set keys write, null keys
+// clear, absent keys are untouched. Clear is the default: a new preset
+// starts with every key null, and leave-unchanged is the deliberate opt-out.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box, useInput } from 'ink';
 import { Text } from './Text.js';
@@ -100,8 +101,8 @@ export function presetChoices(presets: Preset[]): Choice<string | null>[] {
 
 /** The value column on the preset editor row. */
 function displayValue(key: string, state: KeyState, value: unknown): string {
-  if (state === 'leave') return '· leave as is';
-  if (state === 'clear') return '∅ clear setting';
+  if (state === 'leave') return '· leave unchanged';
+  if (state === 'clear') return '∅ clear';
   return String(value);
 }
 
@@ -113,24 +114,17 @@ function presetHint(p: Preset): string {
     for (const k of g.keys) {
       const s = keyState(p.values, k.key);
       const label = s === 'set' ? String(p.values[k.key])
-        : s === 'clear' ? 'clear setting' : 'leave as is';
+        : s === 'clear' ? 'clear' : 'leave unchanged';
       lines.push(`  ${k.label}: ${label}`);
     }
   }
   return lines.join('\n');
 }
 
-function hintForKey(key: string, state: KeyState, value: unknown): string {
-  if (state === 'set') return `set to ${String(value)}`;
-  if (state === 'clear') {
-    if (key.startsWith('assistant_') || key.startsWith('supervisor_'))
-      return 'clear setting — the coding agent\'s value will be used (cascade)';
-    if (key === 'max_steps') return 'clear setting — unlimited';
-    if (key === 'model') return 'clear setting — the newest model for the provider';
-    return 'clear setting — the default will be used';
-  }
-  // leave
-  return 'leave as is — the current setting won\'t be touched';
+function hintForKey(state: KeyState, value: unknown): string {
+  if (state === 'set') return `apply writes this value: ${String(value)}`;
+  if (state === 'clear') return 'clear — apply wipes this setting; the normal fallback takes over';
+  return 'leave unchanged — apply won\'t touch this setting';
 }
 
 export function Presets({ api, onApplied, onClose }: {
@@ -191,10 +185,10 @@ export function Presets({ api, onApplied, onClose }: {
     setBusy(true);
     try {
       // Build a PATCH body from only the keys the preset has an opinion on.
-      // set keys → their value, clear keys → null, leave-as-is keys → skipped.
+      // set keys → their value, clear keys → null, leave-unchanged keys → skipped.
       const patch: Record<string, ConfigValue> = {};
       for (const k of ALL_KEYS) {
-        if (!(k in p.values)) continue;            // leave as is — don't touch
+        if (!(k in p.values)) continue;            // leave unchanged — don't touch
         patch[k] = p.values[k] as ConfigValue;     // value or null
       }
       if (Object.keys(patch).length) {
@@ -207,18 +201,18 @@ export function Presets({ api, onApplied, onClose }: {
   }, [settings, onApplied]);
 
   // ── Save one key in a preset ───────────────────────────────────────────────
-  // value = a real value → set; null → clear setting; undefined → leave as is
+  // value = a real value → set; null → clear; undefined → leave unchanged
   const savePresetKey = useCallback(async (preset: Preset, key: string, value: unknown) => {
     const next = { ...preset.values };
     if (value === undefined) {
-      delete next[key];                  // leave as is
+      delete next[key];                  // leave unchanged
     } else {
       next[key] = value;                 // set (a value) or clear (null)
     }
-    // When a provider changes, reset its model to leave-as-is — same UX as
-    // /model clearing the model when the provider changes.
+    // When a provider changes, reset its model to clear (the default state)
+    // — same UX as /model clearing the model when the provider changes.
     const modelKey = MODEL_FOR_PROVIDER[key];
-    if (modelKey && value !== preset.values[key]) delete next[modelKey];
+    if (modelKey && value !== preset.values[key]) next[modelKey] = null;
     setBusy(true);
     try {
       await api('PUT', `/presets/${preset.id}`, { name: preset.name, values: next });
@@ -235,8 +229,10 @@ export function Presets({ api, onApplied, onClose }: {
     setBusy(true);
     try {
       const id = newId();
-      await api('PUT', `/presets/${id}`, { name, values: {} });
-      const preset: Preset = { id, name, values: {} };
+      // Clear is the default: a new preset resets every key it doesn't set.
+      const values = Object.fromEntries(ALL_KEYS.map((k) => [k, null]));
+      await api('PUT', `/presets/${id}`, { name, values });
+      const preset: Preset = { id, name, values };
       await load();
       setView({ at: 'editor', preset });
       setNotice(undefined);
@@ -295,7 +291,7 @@ export function Presets({ api, onApplied, onClose }: {
         spec={view.spec}
         onCancel={() => setView({ at: 'editor', preset: view.preset })}
         onSubmit={(v) => {
-          // ValueInput returns null for empty → that maps to "clear setting".
+          // ValueInput returns null for empty → that maps to "clear".
           // A real value → "set".
           void savePresetKey(view.preset, view.key, v);
         }}
@@ -323,7 +319,7 @@ export function Presets({ api, onApplied, onClose }: {
           value: k.key,
           label: k.label,
           columns: [{ text: displayValue(k.key, state, v), width: 32 }],
-          hint: hintForKey(k.key, state, v),
+          hint: hintForKey(state, v),
         });
       }
     }
@@ -331,7 +327,7 @@ export function Presets({ api, onApplied, onClose }: {
       <Screen title={`edit: ${p.name}`} notice={notice} busy={busy}
         footer={[
           { key: 'enter', does: 'set a value' },
-          { key: 'd', does: 'cycle: clear / leave as is' },
+          { key: 'd', does: 'cycle: clear / leave unchanged' },
           { key: 'r', does: 'rename' },
           { key: 'esc', does: 'back' },
         ]}>
@@ -348,7 +344,7 @@ export function Presets({ api, onApplied, onClose }: {
               choices: info.choices,
               type: k.endsWith('max_steps') ? 'number' : 'string',
               current: p.values[k] ?? null,
-              note: 'pick a value · empty = clear setting',
+              note: 'pick a value · empty = clear',
             };
             void finishSpec(k, spec, merged).then((s) =>
               setView({ at: 'editValue', preset: p, key: k, spec: s }));
@@ -357,16 +353,16 @@ export function Presets({ api, onApplied, onClose }: {
           onKey={(ch, k) => {
             if (ch === 'r') { setView({ at: 'rename', preset: p }); return; }
             if (ch !== 'd' || !k) return;
-            // Cycle: set → clear → leave as is → clear → leave as is → ...
+            // Cycle: set → clear → leave unchanged → clear → leave unchanged → ...
             const state = keyState(p.values, k);
             if (state === 'set') {
-              // set → clear setting
+              // set → clear
               void savePresetKey(p, k, null);
             } else if (state === 'clear') {
-              // clear → leave as is
+              // clear → leave unchanged
               void savePresetKey(p, k, undefined);
             } else {
-              // leave → clear setting
+              // leave → clear
               void savePresetKey(p, k, null);
             }
           }}

@@ -55,13 +55,13 @@ export function presetRoutes(app: FastifyInstance, ctx: AppCtx) {
       }
       // Three states per key:
       //   present with a value  → "set" — apply writes this value
-      //   present with null     → "clear setting" — apply nulls the setting (cascade takes over)
-      //   absent from object    → "leave as is" — apply does not touch the setting
+      //   present with null     → "clear" — apply nulls the setting (cascade takes over)
+      //   absent from object    → "leave unchanged" — apply does not touch the setting
       // Validate non-null values against the same META the settings routes use.
       const clean: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(values)) {
-        if (v === undefined) continue;           // undefined = leave as is (strip it)
-        if (v === null) { clean[k] = null; continue; }  // null = clear setting
+        if (v === undefined) continue;           // undefined = leave unchanged (strip it)
+        if (v === null) { clean[k] = null; continue; }  // null = clear
         if (isSettingKey(k)) {
           const problem = validateSetting(k as never, v);
           if (problem) return reply.code(400).send(err('invalid_preset_value', problem));
