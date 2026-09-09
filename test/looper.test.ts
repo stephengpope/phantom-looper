@@ -884,6 +884,34 @@ test('a lapsed hold is NOT an idle session: a live server turn refuses the lock 
   'with no turn running the expiry means what it says');
 });
 
+test('the interrupt route is the ONE stop: aborts a registered server turn AND publishes on the feed', async () => {
+  // A cli window running a turn on this session has no controller in
+  // activeTurns — the feed event is how the stop reaches it. Both doors must
+  // fire on every call, and the route stays idempotent with nothing running.
+  const made = json(await app.inject({ method: 'POST', url: '/sessions', headers: H,
+    payload: { workspace_id: wsId } })).data;
+
+  const heard: SessionEvent[] = [];
+  const unsubscribe = ctx.sessionEvents!.subscribe(made.id, (e) => heard.push(e));
+
+  // Nothing registered: 200 anyway, and the event still goes out (a cli's
+  // turn is exactly the case where nothing is registered here).
+  const idle = await app.inject({ method: 'POST', url: `/sessions/${made.id}/interrupt`, headers: H });
+  assert.equal(idle.statusCode, 200);
+  assert.deepEqual(heard.map((e) => e.event), ['interrupt'], 'the stop rides the feed even with no server turn');
+
+  // A registered turn (a looper round, a Telegram code turn): aborted in place.
+  const ac = new AbortController();
+  ctx.activeTurns!.set(made.id, ac);
+  try {
+    const r = json(await app.inject({ method: 'POST', url: `/sessions/${made.id}/interrupt`, headers: H }));
+    assert.equal(r.data.interrupted, true);
+    assert.equal(ac.signal.aborted, true, 'the server turn was aborted directly');
+    assert.deepEqual(heard.map((e) => e.event), ['interrupt', 'interrupt'],
+      'and the feed event still went out for any cli running on the session');
+  } finally { ctx.activeTurns!.delete(made.id); unsubscribe(); }
+});
+
 test('the turn route respects the session lock: 409 while someone else holds it', async () => {
   const made = json(await app.inject({ method: 'POST', url: '/sessions', headers: H,
     payload: { workspace_id: wsId } })).data;

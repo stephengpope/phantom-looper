@@ -73,7 +73,6 @@ import { VoicePanel } from './components/VoicePanel.js';
 import { Divider } from './components/Divider.js';
 import { VoiceClient } from './voice.js';
 import { BoardStore, type Stream } from './board.js';
-import { SessionFeed } from './sessionFeed.js';
 import { Board } from './components/Board.js';
 import { type ConfigKey, type ConfigValue } from './config.js';
 
@@ -319,23 +318,10 @@ export function App({
     })();
     return () => { gone = true; };
   }, [api, store, sessionId, stream]);
-  // One ongoing source for the session on screen: lock, agent, mode, git and
-  // transcript state alongside live turn parts. Failed refills reject into
-  // followStream, which reconnects and reads a fresh snapshot — no poll.
-  useEffect(() => {
-    if (!stream || !sessionId) return;
-    const feed = new SessionFeed(stream, sessionId, store, {
-      // Neither hook catches: a failed refill must REJECT into followStream,
-      // which closes the link and reconnects onto a fresh snapshot. Swallowing
-      // it here left the window on stale state for ever once the poll that used
-      // to be the backstop was removed.
-      onRecordLanded: (updatedAt, keepScreen) =>
-        windowStore.refreshIfMoved(sessionId, updatedAt || null, keepScreen),
-      onPlanModeChanged: (on) => windowStore.applyPlanMode(sessionId, on),
-    });
-    feed.start();
-    return () => feed.stop();
-  }, [stream, api, store, sessionId]);
+  // The session feeds — one per OPEN session, lock/agent/mode/git and
+  // transcript state alongside live turn parts — are the window's: it opens
+  // one as a session joins and closes it as the session leaves
+  // (window.ts's watchSession). Nothing here follows the eye.
 
   // The countdown repaints once a second, only while someone else holds it
   // — and it is what notices the hold lapsing on this window's clock.

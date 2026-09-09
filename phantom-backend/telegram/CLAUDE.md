@@ -8,7 +8,11 @@ active session).
 ```
 engine.ts          TelegramEngine: reconcile (webhook + menus), handleUpdate (the webhook's fast ack), run (one
                    message: reply-switch → command → input → turn), assistantTurn, codeTurn, switchSession,
-                   enterMode, the auto build alert listener, autoPush / autoPull for the commands
+                   enterMode, the auto build alert listener, autoPush / autoPull for the commands. A code
+                   turn's abort rides into runCodingTurn as its signal and is fired two ways: /stop through
+                   the busy map, a remote interrupt through the turn's feed subscription. /stop in code mode
+                   then calls POST /sessions/:id/interrupt — the one stop — so every other runner hears it
+                   (the assistant's stop stays local: it is not a session)
 commands.ts        the slash commands and the per-mode menus; stepBubble for /auto_push and /auto_pull; HELP
 assistant.ts       the Assistant headless: core assistantAgent with handlers over this server's routes; assistantKit;
                    runAssistantTurn on the engine's one in-memory history

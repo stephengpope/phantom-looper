@@ -1,15 +1,16 @@
-// Watching a session someone else is running. The server publishes every part
-// of a turn it runs (a looper round, POST /sessions/:id/turn) on
-// `GET /sessions/:id/events`; this object holds that feed open for the session
-// ON SCREEN and folds what arrives into the SessionStore — through
-// `remoteStart/remoteParts/remoteEnd`, which are the same reducer and the same
-// block splitting a local turn goes through. Nothing here renders; nothing
-// here holds conversation state. The store owns the conversation, this owns
-// the wire.
+// Watching what happens to a session elsewhere. The server publishes every
+// part of a turn it runs (a looper round, POST /sessions/:id/turn) on
+// `GET /sessions/:id/events`, plus lock, mode and transcript state; this
+// object holds that feed open and folds what arrives into the SessionStore —
+// through `remoteStart/remoteParts/remoteEnd`, which are the same reducer
+// and the same block splitting a local turn goes through. Nothing here
+// renders; nothing here holds conversation state. The store owns the
+// conversation, this owns the wire.
 //
-// Only the session on screen is followed. A background session's live output
-// is drawn by nobody, and holding a socket per open session to accumulate
-// parts no one will read is cost without a reader.
+// The window holds one of these per OPEN session (window.ts's watchSession):
+// every session hears its own "someone else touched me" news live. Only the
+// session on screen repaints — the store's fold paints the active id alone —
+// so a background feed costs its connection and its parts, never a redraw.
 import { FLUSH_MS } from './agent.js';
 import { followStream, type Stream } from './follow.js';
 import type { SessionStore, LoadedSession } from './sessions.js';

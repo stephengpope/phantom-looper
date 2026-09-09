@@ -67,6 +67,10 @@ the writer; `telegram/alerts.ts` reads both. No replay; clients load on
 connect.
 
 The session feed streams turn-start, every AI SDK part, turn-end, error,
+interrupt (POST /sessions/:id/interrupt — THE one stop every client uses:
+it aborts a server-side turn registered in activeTurns, kills the session's
+in-flight foreground commands (foreground.ts), AND publishes the event, so
+any other client running a turn on the session stops it as its own esc),
 the `transcript` save, lock state (connect, take, renew, release), and
 `session` state changes (agent, planMode, work). Every connect sends a state
 snapshot including transcript_updated_at, so missed saves can be recovered

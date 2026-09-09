@@ -147,3 +147,126 @@ test('one board per workspace, handed to every caller', () => {
   assert.notEqual(w.boardFor('w1'), w.boardFor('w2'), 'one per workspace');
   w.close();
 });
+
+// ── the session feeds ─────────────────────────────────────────────────────
+// One feed per OPEN session (watchSession in window.ts), scripted like the
+// board's: `emit` pushes a record down the open link, `paths` records what
+// was opened, `signals` lets the test see an abort.
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function fakeStream() {
+  const paths: string[] = [];
+  const signals: AbortSignal[] = [];
+  let push: ((rec: Record<string, unknown> | null) => void) | null = null;
+  const stream = async (path: string, signal: AbortSignal) => {
+    paths.push(path);
+    signals.push(signal);
+    const queue: (Record<string, unknown> | null)[] = [];
+    let wake: (() => void) | null = null;
+    push = (rec) => { queue.push(rec); wake?.(); wake = null; };
+    signal.addEventListener('abort', () => push?.(null));
+    return (async function* () {
+      for (;;) {
+        while (queue.length === 0) await new Promise<void>((r) => { wake = r; });
+        const rec = queue.shift()!;
+        if (rec === null) return;
+        yield rec;
+      }
+    })();
+  };
+  return { stream: stream as import('./follow.js').Stream, paths, signals,
+    emit: (rec: Record<string, unknown>) => push?.(rec) };
+}
+
+function fedWindow(dir: string, stream: import('./follow.js').Stream) {
+  return new WindowStore({
+    api: nothing, newTools: noTools, stream,
+    initial: { sessionId: 's1', branch: 'agent/s1', workspaceId: 'w1', tools: {}, resumed: [] },
+    makeAgent: () => ({ agent: {}, summary: { provider: 'test', model: 'fake', reasoning: 'none', maxSteps: 1 } }) as never,
+    makeTranscript: (h) => new Transcript(h, join(dir, 'x.jsonl')),
+  });
+}
+
+test('an open session has its own feed: what happens to it elsewhere lands live, no render needed', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'phantom-win-'));
+  const feed = fakeStream();
+  const w = fedWindow(dir, feed.stream);
+  await sleep(30);
+  assert.deepEqual(feed.paths, ['/sessions/s1/events'], 'the session opened its pipe on seat');
+
+  // A lock taken elsewhere — the looper starting a round on this session.
+  feed.emit({ event: 'lock', locked: true, agent: 'coding', label: 'supervisor',
+    expires_at: new Date(Date.now() + 60_000).toISOString() });
+  await sleep(30);
+  assert.equal(w.sessions.get('s1')!.held?.label, 'supervisor', 'the hold landed live');
+
+  // A turn run elsewhere, streamed whole.
+  feed.emit({ event: 'turn-start', agent: 'coding', message: 'fix the parser' });
+  feed.emit({ event: 'part', part: { type: 'text-start', id: 't1' } });
+  feed.emit({ event: 'part', part: { type: 'text-end', id: 't1' } });
+  await sleep(30);
+  assert.equal(w.sessions.get('s1')!.remoteBusy, true, 'the remote turn is observed mid-flight');
+  feed.emit({ event: 'turn-end' });
+  await sleep(30);
+  const e = w.sessions.get('s1')!;
+  assert.equal(e.remoteBusy, false, 'the turn closed');
+  assert.ok(e.done.some((p) => p.kind === 'user' && (p as { text: string }).text === 'fix the parser'),
+    'its user message shows in the conversation');
+  w.close();
+});
+
+test('an interrupt off the feed stops this window\'s own running turn — remote esc', async () => {
+  // The unified stop: double-esc in ANOTHER window (or Telegram /stop, or
+  // the bare route) publishes `interrupt` on the session's feed; the window
+  // actually running the turn aborts it through the same path esc takes.
+  const dir = mkdtempSync(join(tmpdir(), 'phantom-win-'));
+  const feed = fakeStream();
+  // A turn that holds until its signal fires — the way a real turn sits in
+  // the model stream.
+  const holdRun = (async (_a: unknown, _m: unknown, _onParts: unknown, signal: AbortSignal) => {
+    while (!signal.aborted) await sleep(10);
+    return [];
+  }) as never;
+  const w = new WindowStore({
+    api: nothing, newTools: noTools, stream: feed.stream, run: holdRun,
+    initial: { sessionId: 's1', branch: 'agent/s1', workspaceId: 'w1', tools: {}, resumed: [] },
+    makeAgent: () => ({ agent: {}, summary: { provider: 'test', model: 'fake', reasoning: 'none', maxSteps: 1 } }) as never,
+    makeTranscript: (h) => new Transcript(h, join(dir, 'x.jsonl')),
+  });
+  await sleep(30);
+  const turn = w.sessions.send('s1', 'work');
+  await sleep(30);
+  assert.equal(w.sessions.get('s1')!.busy, true, 'the turn is running here');
+
+  feed.emit({ event: 'interrupt' });
+  await turn;
+  await sleep(30);
+  assert.equal(w.sessions.get('s1')!.busy, false, 'the feed interrupt cut the turn');
+  assert.ok(!w.sessions.get('s1')!.done.some((p) => p.kind === 'error'),
+    'an interrupt is not an error — exactly the esc rule');
+  w.close();
+});
+
+test('closing a session closes its feed; closing the window closes them all', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'phantom-win-'));
+  const feed = fakeStream();
+  const w = fedWindow(dir, feed.stream);
+  await sleep(30);
+  assert.equal(feed.signals.length, 1);
+
+  // Closing the session drops its pipe. (The close leaves no session, so the
+  // window tries to open a fresh one — the stub api refuses, as in the
+  // failed-open test above; that is not what is asserted here.)
+  await w.closeSession('s1');
+  assert.equal(feed.signals[0].aborted, true, 'the feed died with the session');
+  assert.equal(w.sessions.get('s1'), undefined, 'the session is gone');
+  w.close();
+
+  const dir2 = mkdtempSync(join(tmpdir(), 'phantom-win-'));
+  const feed2 = fakeStream();
+  const w2 = fedWindow(dir2, feed2.stream);
+  await sleep(30);
+  assert.equal(feed2.signals.length, 1);
+  w2.close();
+  assert.equal(feed2.signals[0].aborted, true, 'the window took the feed down with it');
+});

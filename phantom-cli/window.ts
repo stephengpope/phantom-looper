@@ -10,6 +10,7 @@
 import { hostname } from 'node:os';
 import type { ModelMessage, Tool } from 'ai';
 import { SessionStore, activeHold, type LoadedSession } from './sessions.js';
+import { SessionFeed } from './sessionFeed.js';
 import { BoardStore, type Card, type Stream } from './board.js';
 import { VoiceClient, sidecarEnv, codingKanbanTool, screenModeTools,
   type KanbanArgs, type ScreenModeHandler } from './voice.js';
@@ -462,6 +463,7 @@ export class WindowStore {
         ...messagesToParts(initial.resumed),
       ],
     });
+    this.watchSession(initial.sessionId, s);
   }
 
   /** Compare the server's transcript stamp with what memory matches; when it
@@ -706,6 +708,7 @@ export class WindowStore {
       this.splash = resumed.length === 0;
       this.opening = false;
       this.watchTasks();
+      this.watchSession(row.id);
       this.notify();
       this.opts.onSession?.({ id: row.id, branch: row.branch, workspaceId: row.workspaceId });
       return true;
@@ -798,6 +801,7 @@ export class WindowStore {
     const { workspaceId } = e;
     const wasOnScreen = this.sessions.activeId === target;
     if (!this.sessions.close(target)) return { error: `a turn is running in ${target} — stop it first` };
+    this.unwatchSession(target);
     let opened_new = false;
     if (wasOnScreen) {
       const next = this.sessions.list()[0];
@@ -1109,6 +1113,43 @@ export class WindowStore {
       this.setMenu('tasks');
     } catch (e) { this.note(`could not list tasks: ${(e as Error).message}`); }
   };
+
+  // ── the session feeds ────────────────────────────────────────────────────
+  // ONE feed per OPEN session, not one following the eye: every session in
+  // this window hears what happens to it elsewhere (a looper round, a
+  // Telegram turn, another window's relay, a lock or a plan flip) as it
+  // happens, instead of discovering it on switch. Only the session on screen
+  // repaints — the store's fold already paints the active id alone — so a
+  // busy background turn costs its connection and its parts, never a redraw.
+  // The server does not echo a window its own events, so nothing here
+  // double-draws a turn this window runs.
+  private feeds = new Map<string, SessionFeed>();
+
+  /** Open the session's feed (idempotent). No stream (tests, a server too
+   *  old to have one) = no feed; the switch-time re-read stays the backstop.
+   *  The store is a PARAMETER: the constructor's seat runs before
+   *  `this.sessions` is assigned, so reading it here would hand the feed
+   *  nothing. */
+  private watchSession(id: string, store: SessionStore = this.sessions): void {
+    if (!this.opts.stream || this.feeds.has(id)) return;
+    const feed = new SessionFeed(this.opts.stream, id, store, {
+      // Neither hook catches: a failed refill must REJECT into followStream,
+      // which closes the link and reconnects onto a fresh snapshot. Swallowing
+      // it here left the window on stale state for ever once the poll that
+      // used to be the backstop was removed.
+      onRecordLanded: (updatedAt, keepScreen) =>
+        this.refreshIfMoved(id, updatedAt || null, keepScreen),
+      onPlanModeChanged: (on) => this.applyPlanMode(id, on),
+    });
+    this.feeds.set(id, feed);
+    feed.start();
+  }
+
+  /** Close the session's feed — the session left the window. */
+  private unwatchSession(id: string): void {
+    this.feeds.get(id)?.stop();
+    this.feeds.delete(id);
+  }
 
   /** [k] arms the kill, [c] confirms (TERM, a second, then KILL — the whole
    *  tree). Armed per sid. */
@@ -1627,6 +1668,8 @@ export class WindowStore {
     if (this.taskClock) { clearInterval(this.taskClock); this.taskClock = null; }
     for (const b of this.boards.values()) b.close();
     this.boards.clear();
+    for (const f of this.feeds.values()) f.stop();
+    this.feeds.clear();
   }
 }
 

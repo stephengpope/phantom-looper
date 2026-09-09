@@ -21,7 +21,8 @@ window.ts          WindowStore — the window itself, outside React: the session
                    client, and what is on screen (view, menu, splash, `opening` — a /new in flight blanks the
                    pane so the ghost draws alone — the approval, the window's own notes).
                    `view` carries a card's back destination, so esc has one owner and one answer.
-                   Opening, closing and switching sessions; plan mode; the slash commands and submit; boot; the
+                   Opening, closing and switching sessions (and each session's feed — one per open session);
+                   plan mode; the slash commands and submit; boot; the
                    settings every change re-reads; auto-push and auto-pull; the data and re-read clocks behind
                    /resume, /tasks and /archived; refreshIfMoved, the one reseat path
 assistantKit.ts    the handlers behind the Assistant's tools (session_*, the board and screen, the gated
@@ -111,12 +112,22 @@ the agent it started with.
 
 ## Watching a session run elsewhere
 
-One session feed (`sessionFeed.ts`) carries lock, agent, plan mode, git
-work state and transcript saves alongside every live turn part. Its opening
-snapshot includes the transcript stamp, so reconnects repair missed saves
-through `reseatIfMoved`, the one reseat path. Failed transcript reads or
-mode rebuilds reconnect through `followStream`; there is no session-state
-poll. The switch-time transcript check and send-time lock check remain.
+The window holds one session feed (`sessionFeed.ts`) PER OPEN session —
+opened as a session joins (`watchSession`), closed as it leaves — so every
+session hears what happens to it elsewhere (a looper round, a Telegram
+turn, another window's relay, a lock or plan flip) live, not on switch.
+The feed also carries `interrupt`: POST /sessions/:id/interrupt (double-esc
+on a watched turn, Telegram /stop, the bare route) publishes it, and the
+window running a turn on that session aborts it through the same path esc
+takes — any client can stop any turn, and cleanup is always the runner's own.
+Each feed carries lock, agent, plan mode, git work state and transcript
+saves alongside every live turn part. Its opening snapshot includes the
+transcript stamp, so reconnects repair missed saves through
+`reseatIfMoved`, the one reseat path. Failed transcript reads or mode
+rebuilds reconnect through `followStream`; there is no session-state poll.
+The switch-time transcript check and send-time lock check remain. Only the
+session on screen repaints — the store's fold paints the active id alone,
+so a busy background feed costs its connection, never a redraw.
 The store's `remoteStart`, `remoteParts`, `remoteEnd` draw watched turns
 through the same reducer as local ones. Watching the whole turn keeps its
 richer screen when the record lands; a gap repaints from the transcript.

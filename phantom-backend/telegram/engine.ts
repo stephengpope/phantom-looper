@@ -80,8 +80,10 @@ export interface TelegramEngineDeps {
 /** A turn in flight on THIS server, keyed per session (code mode) or
  *  'assistant'. A second message to the SAME key is queued and sent as one
  *  follow-up turn (the cli's queue shape); a message to a DIFFERENT key
- *  starts its own turn — so multiple sessions can run concurrently. The
- *  AbortController is what /stop reaches. */
+ *  starts its own turn — so multiple sessions can run concurrently. A code
+ *  turn's AbortController rides into runCodingTurn and is aborted two ways:
+ *  /stop through this map, a remote interrupt through the turn's feed
+ *  subscription; the assistant's stop is local (it is not a session). */
 interface Busy { queue: string[]; abort: AbortController }
 
 export class TelegramEngine {
@@ -621,7 +623,9 @@ export class TelegramEngine {
   // ── /stop and command support (used by commands.ts) ──────────────────────
 
   /** Stop the in-flight turn for the given busy key (a sessionId in code mode,
-   *  'assistant' in assistant mode). Returns whether one was running. */
+   *  'assistant' in assistant mode). Returns whether one was running. OUR
+   *  turn only: stopping someone else's is the interrupt route's job, and
+   *  commands.ts calls it for exactly that. */
   stop(key: string): boolean {
     const b = this.busy.get(key);
     if (!b) return false;
