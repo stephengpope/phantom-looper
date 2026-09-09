@@ -27,6 +27,8 @@ window.ts          WindowStore — the window itself, outside React: the session
 assistantKit.ts    the handlers behind the Assistant's tools (session_*, the board and screen, the gated
                    workspace_create_repo, the two git ones) over the WindowStore, and the kit they compose into
 kanban.ts          kanbanOps — the card work both kanban tools do, against one BoardStore
+paste.ts           PasteStore — a big paste becomes a `[Pasted #N ~L lines]` chip in the prompt; the text waits
+                   here until submit swaps it back, and a chip with no entry is stripped, never sent raw
 sessions.ts        SessionStore — every open session and the one turn each may run; outside React
 session.ts         the local transcript file under CONFIG_DIR/sessions/; adoptServerCopy (the seating rule); syncTranscriptUp
 sessionFeed.ts     SessionFeed — the session on screen's live feed, folded into the store as remote turns

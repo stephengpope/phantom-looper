@@ -21,6 +21,7 @@ import { buildAgent, buildAssistantAgent, codingInstructions } from './agentFrom
 import { runTurn } from './agent.js';
 import { messagesToParts, nextId, type Part } from './state.js';
 import { kanbanOps } from './kanban.js';
+import { PasteStore } from './paste.js';
 import { quiet, type Api } from './request.js';
 import { REMOTE_DEFAULTS, VOICE_BOOT_KEYS, ASSISTANT_MODEL_KEYS, isLocalKey,
   type ConfigKey, type ConfigValue } from './config.js';
@@ -178,6 +179,11 @@ export class WindowStore {
   /** Notes with no session to land in — a failed boot open, a refused
    *  command. Rendered where the conversation would be. */
   notes: Part[] = [];
+
+  /** The window's paste chips: the prompt holds `[Pasted #1 ~12 lines]`,
+   *  this holds the text, and submit swaps it back before anything downstream
+   *  can see the chip (paste.ts). */
+  readonly pastes = new PasteStore();
 
   /** The unsent text on the prompt, asked for at the moment of a switch so it
    *  can be parked on the session being left. App fills this in. */
@@ -1508,7 +1514,21 @@ export class WindowStore {
    *  `highlighted` is the row the slash menu has under the cursor, so enter
    *  runs THAT command rather than the half-typed text that produced the list. */
   submit = async (text: string, highlighted = 0, accept: () => void = () => {}): Promise<void> => {
-    const msg = text.trim();
+    // Chips become their pasted text here, before the line is anything else —
+    // so no command, message or transcript ever sees a literal chip. A chip
+    // whose text is gone (recalled from an earlier run) is stripped; a plain
+    // message is sent without it, but a slash command or an empty line is
+    // refused — silently dropping part of a command changes what it runs.
+    const expanded = this.pastes.expand(text);
+    const msg = expanded.text.trim();
+    if (expanded.missing.length) {
+      const gone = expanded.missing.map((n) => `#${n}`).join(', ');
+      if (!msg || msg.startsWith('/')) {
+        this.note(`paste ${gone} is gone (from an earlier run) — the line was kept; delete the chip and resend`);
+        return;
+      }
+      this.note(`paste ${gone} is gone (from an earlier run) — sent without it`);
+    }
     if (!msg) return;
     const session = this.sessions.active();
     // Locked elsewhere = read-only here: refuse BEFORE the box clears. Slash

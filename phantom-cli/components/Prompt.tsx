@@ -11,9 +11,10 @@
 // check is on the process's own. Single-line editing on our own TextInput —
 // ink-text-input inserted every key it did not recognise as literal text,
 // which typed an `o` into the box each time ctrl+o toggled thinking and left
-// no ctrl chord usable for anything. Multiline editing with paste
-// placeholders is still out of scope; Ink 7 handles bracketed paste at the
-// raw level. Borders are top/bottom only, so the box stretches to the
+// no ctrl chord usable for anything. A big paste lands as a chip
+// (`[Pasted #1 ~12 lines]`) whose text the WindowStore's PasteStore holds
+// until submit swaps it back (paste.ts); multiline EDITING is still out of
+// scope. Borders are top/bottom only, so the box stretches to the
 // terminal width without ever wrapping.
 import { Box, useBoxMetrics } from 'ink';
 import { Text } from './Text.js';
@@ -21,9 +22,11 @@ import { useEffect, useRef } from 'react';
 import { TextInput } from './TextInput.js';
 import { Glint } from './Shimmer.js';
 import { APP_VERSION } from '../selfUpdate.js';
+import type { PasteStore } from '../paste.js';
 
-export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure }: {
+export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure, pastes }: {
   value: string; onChange: (v: string) => void; onSubmit: (v: string) => void;
+  pastes?: PasteStore;
   focus?: boolean;
   /** Where the box sits, as rows from the top of its parent (the top rule is
    *  that row, the bottom rule two below). The App aligns the divider's
@@ -53,6 +56,7 @@ export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure }: {
           onSubmit={onSubmit}
           focus={focus}
           placeholder="type a message…"
+          pastes={pastes}
         />
       </Box>
       <Box>

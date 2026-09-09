@@ -17,13 +17,14 @@
 import { useInput } from 'ink';
 import { Text } from './Text.js';
 import { isMouseInput } from '../mouse.js';
+import { PasteStore, chipAtEnd } from '../paste.js';
 import { useEffect, useRef, useState } from 'react';
 
 /** Reverse video for one character. Written out rather than pulled from chalk,
  *  which is only in the tree as one of Ink's own dependencies. */
 const invert = (s: string) => `\x1b[7m${s}\x1b[27m`;
 
-export function TextInput({ value, onChange, onSubmit, focus = true, placeholder = '', mask }: {
+export function TextInput({ value, onChange, onSubmit, focus = true, placeholder = '', mask, pastes }: {
   value: string;
   onChange: (value: string) => void;
   onSubmit?: (value: string) => void;
@@ -31,6 +32,9 @@ export function TextInput({ value, onChange, onSubmit, focus = true, placeholder
   placeholder?: string;
   /** Draw this character in place of each one typed — a key being entered. */
   mask?: string;
+  /** Given, a big paste lands as a chip (`[Pasted #1 ~12 lines]`) and its
+   *  text lives in the store until submit swaps it back (see paste.ts). */
+  pastes?: PasteStore;
 }) {
   const [cursorState, setCursorState] = useState(value.length);
   // The cursor is mirrored in a ref and READ from the ref: two keypresses
@@ -73,13 +77,19 @@ export function TextInput({ value, onChange, onSubmit, focus = true, placeholder
     else if (key.home) at = 0;
     else if (key.end) at = value.length;
     else if (key.backspace || key.delete) {
-      if (cursor > 0) { next = value.slice(0, cursor - 1) + value.slice(cursor); at = cursor - 1; }
+      // A chip deletes whole — eating into it a character at a time would
+      // strand a half-chip whose text can never be swapped back in.
+      const chip = chipAtEnd(value.slice(0, cursor));
+      const remove = chip || (cursor > 0 ? 1 : 0);
+      if (remove) { next = value.slice(0, cursor - remove) + value.slice(cursor); at = cursor - remove; }
     } else if (input) {
       // A paste arrives as one multi-character input; so does a single letter.
       // Control characters that reached here anyway are not text.
       // eslint-disable-next-line no-control-regex
-      const text = input.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+      let text = input.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
       if (!text) return;
+      // A big paste becomes a chip; the text waits in the store for submit.
+      if (pastes) text = pastes.collapse(text) ?? text;
       next = value.slice(0, cursor) + text + value.slice(cursor);
       at = cursor + text.length;
     }
