@@ -110,6 +110,12 @@ export class SessionFeed {
         this.ended = true;
         this.store.remoteEnd(this.sessionId);
         return;
+      case 'interrupt':
+        // The stop signal (esc-esc in another window, /stop on telegram, the
+        // interrupt route). If the turn is OURS, this ends it exactly as esc
+        // here would; if no turn is ours, abortTurn is a no-op.
+        this.store.abortTurn(this.sessionId);
+        return;
       case 'transcript': {
         // Never our own upload: the server does not echo a client its own
         // events (the feed route's rule), so every record here is someone

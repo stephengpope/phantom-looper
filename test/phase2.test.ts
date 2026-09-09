@@ -305,6 +305,26 @@ test('client abort kills the running command and its children in the container',
   assert.equal(left, 0, 'the killed command left no processes behind');
 });
 
+// The same kill must fire WITHOUT a socket: a server-side turn's tool calls
+// ride inject (no request to abort), so the interrupt route kills the
+// session's in-flight foreground commands itself (ctx.foreground).
+test('the interrupt route kills a running foreground command — no socket needed', async () => {
+  const pending = call('bash', { cmd: 'sleep 302 & sleep 302 & wait' });
+  await new Promise((r) => setTimeout(r, 800)); // exec spawned, pidfile written
+  const r = await app.inject({ method: 'POST', url: `/sessions/${sessionId}/interrupt`, headers: H });
+  assert.equal(r.statusCode, 200, r.body);
+  await pending; // the kill ends the exec, so the tool call resolves on its own
+  // TERM lands after the pidfile read; poll a few beats for the tree to go.
+  let left = -1;
+  for (let i = 0; i < 20 && left !== 0; i++) {
+    await new Promise((res) => setTimeout(res, 500));
+    const p = await call('bash', { cmd: 'ps -e -o pid,args | grep "[s]leep 302" | wc -l' });
+    const out = json(p).data?.stdout;
+    if (out !== undefined) left = Number(out.trim());
+  }
+  assert.equal(left, 0, 'the interrupt killed the command tree in the container');
+});
+
 // The timeout path shares the kill: stream teardown alone used to orphan the
 // process in the container ("the process still runs to completion" was real).
 test('exec timeout kills the process, not just the stream', async () => {

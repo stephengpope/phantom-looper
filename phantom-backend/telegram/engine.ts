@@ -419,9 +419,12 @@ export class TelegramEngine {
     const sink = makeTelegramSink(client, dm, this.deliverConfig(sessionId));
     // The bubble reads the session feed — the ONE place a coding turn's parts
     // are published. Subscribe before the run; the lock makes this the only
-    // turn on the session, so there is no gap.
+    // turn on the session, so there is no gap. The same feed carries the stop
+    // signal: an `interrupt` (esc-esc in a cli window, the interrupt route)
+    // aborts this turn exactly as /stop does.
     const unsubscribe = this.deps.sessionEvents?.subscribe(sessionId, (e) => {
       if (e.event === 'part') sink.part(e.part as Record<string, unknown>);
+      else if (e.event === 'interrupt') abort.abort();
     });
 
     try {
@@ -431,7 +434,11 @@ export class TelegramEngine {
       // The agent's deliberate "DM the user" tool — sends through this chat,
       // reading the reply mode at the delivery end.
       const send = sendMessageTool((text) => this.sendDm(client, dm, values, text));
-      const deps: TurnDeps = { ...this.turnDeps(), extraTools: send };
+      // `signal` is what makes the turn stoppable at all: /stop aborts this
+      // controller through the busy map, a remote interrupt through the feed
+      // subscription above — runCodingTurn ends it cleanly (interrupted, not
+      // failed) either way.
+      const deps: TurnDeps = { ...this.turnDeps(), extraTools: send, signal: abort.signal };
       const r = await runCodingTurn(deps, opened, workspaceId, message, planMode, values);
       unsubscribe?.();
       await sink.done(r.text);

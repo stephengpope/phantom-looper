@@ -206,9 +206,24 @@ export async function handleCommand(
     }
 
     case 'stop': {
-      const key = acc.mode === 'code' && acc.activeSessionId
-        ? acc.activeSessionId : 'assistant';
-      await reply(engine.stop(key) ? '🛑 Stopping.' : 'ℹ️ Nothing is running.');
+      // One rule everywhere: the runner stops its own turn; to stop someone
+      // else's you send the interrupt for the session and the runner hears it
+      // on the session feed (the cli's esc-esc posts the same route).
+      if (acc.mode === 'code' && acc.activeSessionId) {
+        const own = engine.stop(acc.activeSessionId);   // our turn: abort now
+        if (!own) {
+          const s = await sessionRow(engine, acc.activeSessionId);
+          if (!s?.locked) { await reply('ℹ️ Nothing is running.'); return; }
+        }
+        // The route does the rest of the stop, whoever runs the turn: it kills
+        // the session's foreground commands (our own turn's bash included —
+        // injectFetch has no socket to close, so no other kill reaches it)
+        // and signals every other listener. Idempotent against the abort above.
+        await engine.call(`/sessions/${acc.activeSessionId}/interrupt`, { method: 'POST' });
+        await reply('🛑 Stopping.');
+        return;
+      }
+      await reply(engine.stop('assistant') ? '🛑 Stopping.' : 'ℹ️ Nothing is running.');
       return;
     }
 

@@ -395,3 +395,29 @@ test('elapsedSeconds reads every ps etime shape and refuses the rest', async () 
   assert.equal(elapsedSeconds('garbage'), null);
   assert.equal(elapsedSeconds(''), null);
 });
+
+test('ForegroundCommands: killAll kills everything the session has in flight, and only that session', async () => {
+  const { ForegroundCommands } = await import('../phantom-backend/api/foreground.js');
+  const kills: string[] = [];
+  const ws = { run: (argv: string[]) => { kills.push(argv[2] ?? ''); return Promise.resolve({}); } };
+  const fg = new ForegroundCommands();
+  fg.add('s1', '/tmp/.phantom-bash-a.pid', ws as never);
+  fg.add('s1', '/tmp/.phantom-bash-b.pid', ws as never);
+  fg.add('s2', '/tmp/.phantom-bash-c.pid', ws as never);
+  fg.killAll('s1');
+  await new Promise((r) => setImmediate(r));
+  assert.equal(kills.length, 2, 'both in-flight commands of s1 are killed');
+  assert.ok(kills.every((k) => k.includes('pkill -TERM -s')), 'the TERM-then-KILL script');
+  assert.ok(kills[0].includes('pkill -KILL'), 'with the KILL follow-up');
+  // Entries stay until the fs route removes them (the exec ends when the
+  // kill lands) — a second interrupt before that re-fires the kill, which is
+  // a harmless pkill on an already-dead tree.
+  fg.killAll('unknown-session');   // no entries, no throw, no kills
+  assert.equal(kills.length, 2);
+  fg.remove('s1', '/tmp/.phantom-bash-a.pid');
+  fg.remove('s1', '/tmp/.phantom-bash-b.pid');
+  fg.remove('s2', '/tmp/.phantom-bash-c.pid');
+  fg.killAll('s1');
+  fg.killAll('s2');
+  assert.equal(kills.length, 2, 'removed entries are never killed — a reused pidfile is not hit');
+});

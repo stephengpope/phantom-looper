@@ -317,20 +317,35 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     });
 
   // ---- interrupt a running turn ---------------------------------------------
-  // Any viewer may stop a server-side turn (a looper round or the /turn route).
-  // The abort controller stops the model stream; killing the container's
-  // foreground processes stops a running bash command. The looper treats this
-  // as an interruption, not a failure — the card is NOT blocked.
+  // THE stop signal, one route for every client (esc-esc in the cli, /stop on
+  // telegram). Three doors, one effect — the turn stops and so does what it
+  // was running: a SERVER-side turn (a looper round or the /turn route) is
+  // aborted through `activeTurns`; a turn any OTHER client runs (a cli window,
+  // the telegram engine) hears the `interrupt` event on the session feed and
+  // aborts its own; and the session's in-flight FOREGROUND commands are
+  // killed here directly, because a server-side turn's tool calls ride
+  // injectFetch — there is no socket to close, so the disconnect kill in the
+  // fs route never fires for them. The turn saves what it recorded and ends
+  // cleanly — the looper treats it as an interruption, not a failure: the
+  // card is NOT blocked.
   app.post<{ Params: { id: string } }>(
     '/sessions/:id/interrupt', { schema: { ...TAG,
       summary: 'Interrupt a running turn',
-      description: 'Aborts the server-side turn on this session (if one is running) and kills any ' +
-        'foreground processes in its container. The turn saves what it recorded and ends cleanly — ' +
-        'the card is not blocked. 200 whether or not a turn was running (idempotent).',
+      description: 'Stops the turn running on this session, whoever runs it: a server-side turn is ' +
+        'aborted in place, an {event:"interrupt"} record on GET /sessions/:id/events tells every other ' +
+        'client running a turn here (a cli window, the telegram engine) to stop its own, and any ' +
+        'foreground bash commands the session has in flight are killed in their container (detached ' +
+        'commands are left running by design). The turn saves what it recorded and ends cleanly — the ' +
+        'card is not blocked. 200 whether or not a turn was running (idempotent).',
       params: idParam } },
     async (req) => {
       const ac = ctx.activeTurns?.get(req.params.id);
       if (ac) ac.abort();
+      ctx.foreground?.killAll(req.params.id);
+      // Published under the CALLER's id: the feed never echoes a client its
+      // own events, so the caller's own feed is untouched while every other
+      // listener — the runner among them — hears it.
+      ctx.sessionEvents?.publish(req.params.id, clientOf(req), { event: 'interrupt' });
       return ok({ interrupted: !!ac });
     });
 
@@ -450,6 +465,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       description: 'ND-JSON, open until the client hangs up. {event:"turn-start",agent,message} when a ' +
         'turn begins on the session, {event:"part",part} for every AI SDK stream part as it happens (tool ' +
         'results over 16KB are clipped and marked `capped`), {event:"turn-end"}, {event:"error",message}, ' +
+        '{event:"interrupt"} when someone stops the turn (the runner aborts its own turn on hearing it), ' +
         '{event:"transcript",updated_at,by} when the record is saved (by ANY client — this is the signal to ' +
         're-read it), {event:"lock",locked,by,label,agent,expires_at} first thing on connect and on every take / ' +
         'renew / release, {event:"session",agent?,planMode?,work?,transcript_updated_at?} on state changes ' +

@@ -558,3 +558,37 @@ test('/update command calls upgradeChecker.manualCheck; /upgrade is gone', async
   const sent = await drive(fakeEngine(), '/upgrade');
   assert.ok(sent.some((t) => /I don't know/.test(t)), '/upgrade is no longer a command');
 });
+
+test('/stop in code mode: a turn running ELSEWHERE goes through the interrupt route', async () => {
+  const e = fakeEngine({ mode: 'code', activeSessionId: 's42' });
+  e.stop = () => false;                       // no turn of ours on this session
+  const base = e.call;
+  e.call = async (p: string, init?: { method?: string }) => {
+    if (p === '/sessions/s42') return { json: async () => ({ ok: true, data: { locked: true, lockedLabel: 'cli' } }) };
+    return base(p, init);
+  };
+  const sent = await drive(e, '/stop');
+  assert.ok(
+    e.calls.some(([kind, p, m]) => kind === 'call' && p === '/sessions/s42/interrupt' && m === 'POST'),
+    'the stop signal for a foreign turn is the interrupt route — the same one esc-esc posts');
+  assert.match(sent[0], /Stopping/);
+});
+
+test('/stop in code mode: nothing of ours running and the session free — no route call', async () => {
+  const e = fakeEngine({ mode: 'code', activeSessionId: 's42' });
+  e.stop = () => false;
+  // The fake answers /sessions/s42 with ok:false — no row, so not locked.
+  const sent = await drive(e, '/stop');
+  assert.match(sent[0], /Nothing is running/);
+  assert.ok(!e.calls.some(([, p]) => String(p).includes('interrupt')), 'no interrupt post when nothing runs');
+});
+
+test('/stop on OUR OWN code turn also posts the interrupt route — that is what kills its bash', async () => {
+  const e = fakeEngine({ mode: 'code', activeSessionId: 's42' });
+  e.stop = () => true;                        // our turn is running; aborted directly
+  const sent = await drive(e, '/stop');
+  assert.ok(
+    e.calls.some(([kind, p, m]) => kind === 'call' && p === '/sessions/s42/interrupt' && m === 'POST'),
+    'the direct abort stops the stream; the route kill stops the turn\'s foreground commands');
+  assert.match(sent[0], /Stopping/);
+});

@@ -506,7 +506,8 @@ export function App({
   });
 
   // Remote interrupt: esc arms, a SECOND esc confirms. Armed per session,
-  // auto-disarms after 3 s. The interrupt route aborts the server-side turn.
+  // auto-disarms after 3 s. The interrupt route is THE stop signal — the turn
+  // stops whoever runs it (the server, another window, telegram).
   // No letter key for the confirm — the prompt's TextInput owns letters.
   const [interruptArmed, setInterruptArmed] = useState(false);
   useEffect(() => {
@@ -527,7 +528,7 @@ export function App({
       return;
     }
     // esc on a remote turn: the first press arms, the second fires the
-    // route and the turn stops.
+    // route and the turn stops, wherever it runs.
     if (key.escape && !session?.busy && heldNow && sessionId) {
       if (interruptArmed) {
         setInterruptArmed(false);

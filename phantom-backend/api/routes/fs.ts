@@ -15,6 +15,7 @@ import { TOOLS, type ToolCtx } from '../../tools/registry.js';
 import { ToolError } from '../../tools/envelope.js';
 import { resolve } from '../../settings.js';
 import { ok, err, type AppCtx } from '../app.js';
+import { killProcessGroup } from '../foreground.js';
 import type { ContainerManager } from '../../workspace/container.js';
 import type Docker from 'dockerode';
 import type { GitEngine } from '../../git/engine.js';
@@ -40,7 +41,8 @@ const STATUS: Record<string, number> = {
  *  builtin on alpine, procps in the workspace image — `kill -- -pgid` is NOT
  *  portable, busybox kill rejects `--`). The killer is its own exec in its
  *  own session — never inside what it kills. The tasks route kills by sid
- *  from the commands row; killProcessGroup below reads it from a pidfile. */
+ *  from the commands row; killProcessGroup (api/foreground.ts) reads it from
+ *  a pidfile. */
 export function killSid(ws: Sandbox, sid: string): Promise<unknown> {
   const script =
     'pkill -TERM -s "$0" 2>/dev/null; sleep 1; ' +
@@ -49,26 +51,15 @@ export function killSid(ws: Sandbox, sid: string): Promise<unknown> {
     .catch((e) => log.warn({ err: errStr(e) }, 'kill of command group failed'));
 }
 
-/** Same kill, sid read from the pidfile a bash wrapper wrote — one exec, the
- *  read and the kill in a single script. The pidfile can lag the exec's
- *  spawn by a beat, so the read retries briefly. */
-function killProcessGroup(ws: Sandbox, pidfile: string): Promise<unknown> {
-  const script =
-    'sid=""; for i in 1 2 3 4 5; do sid=$(cat "$0" 2>/dev/null) && [ -n "$sid" ] && break; sleep 0.2; done; ' +
-    '[ -n "$sid" ] || exit 0; ' +
-    'pkill -TERM -s "$sid" 2>/dev/null; sleep 1; ' +
-    'pgrep -s "$sid" >/dev/null 2>&1 && pkill -KILL -s "$sid" 2>/dev/null; ' +
-    'rm -f "$0"; exit 0';
-  return ws.run(['/bin/sh', '-c', script, pidfile], { timeoutMs: 15_000 })
-    .catch((e) => log.warn({ err: errStr(e) }, 'kill of command group failed'));
-}
-
 /** Full bash semantics, injected into the registry's bash tool. Unary runs
  *  to completion and answers; detached records a command row and streams ND-JSON to
  *  work/<id>/logs/ — outside workspace/, where add -A would commit it.
  *  `signal` is the client's disconnect (esc aborted the tool fetch): a unary
  *  command runs under setsid as its own process-group leader, pgid in a
- *  pidfile, and abort or timeout kills the GROUP — children included. */
+ *  pidfile, and abort or timeout kills the GROUP — children included. The
+ *  pidfile is also registered in ctx.foreground, so the interrupt route's
+ *  kill reaches turns that have no socket to close (server-side turns ride
+ *  injectFetch) — one kill, two doors. */
 async function runBash(
   ctx: AppCtx, deps: FsDeps, ws: Sandbox, session: SessionRow,
   args: { cmd: string; cwd?: string; detached?: boolean; timeout?: number },
@@ -103,6 +94,7 @@ async function runBash(
       'echo $$ >"$0"; /bin/sh -c "$1"; s=$?; rm -f "$0"; exit $s', pidfile, args.cmd];
     const onAbort = () => { void killProcessGroup(ws, pidfile); };
     signal?.addEventListener('abort', onAbort, { once: true });
+    ctx.foreground?.add(session.id, pidfile, ws);
     // Keep the TAIL (errors live at the end) and spill the full output to a
     // file the agent can read — nothing is lost. One shape for a finished
     // command and for one the timeout killed.
@@ -148,6 +140,7 @@ async function runBash(
       throw e;
     } finally {
       signal?.removeEventListener('abort', onAbort);
+      ctx.foreground?.remove(session.id, pidfile);
       deps.containers.commandEnded(session.id);
     }
   }

@@ -6,8 +6,9 @@
 //
 // Publishers: runCodingTurn (every part of a coding turn), the looper's
 // supervisor turn, POST /sessions/:id/events (a cli window relaying the turn
-// IT runs — the same records, over HTTP), and PUT /sessions/:id/transcript
-// (the one place that knows the record landed). Subscribers: GET
+// IT runs — the same records, over HTTP), PUT /sessions/:id/transcript
+// (the one place that knows the record landed), and POST
+// /sessions/:id/interrupt (the one stop signal). Subscribers: GET
 // /sessions/:id/events, and the POST /sessions/:id/turn route, which maps the
 // same parts into its own ND-JSON reply.
 //
@@ -33,6 +34,12 @@ export type SessionEvent =
   | { event: 'part'; part: Record<string, unknown> }
   | { event: 'turn-end' }
   | { event: 'error'; message: string }
+  /** Someone asked this session's turn to stop (esc-esc in a cli window,
+   *  /stop on telegram). THE stop signal: whoever runs a turn on the session
+   *  listens for it and aborts its own turn — a cli window's feed, the
+   *  telegram engine's subscription. Server-side turns get the same signal
+   *  in-process through `activeTurns`. */
+  | { event: 'interrupt' }
   /** The transcript was saved: the record moved. `by` is the client that
    *  wrote it. */
   | { event: 'transcript'; updated_at: string; by: string }
