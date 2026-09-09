@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import Fastify from 'fastify';
 import {
-  verifyLanded, rebaseInProgress, rebaseOntoBase, stageAndSquash, commitStaged,
+  verifyLanded, rebaseInProgress, rebaseOntoBase, squashToMergeBase, commitStaged,
 } from '../phantom-backend/git/git.js';
 import { autoPush, type AutoPushEvent } from '../phantom-backend/git/autoPush.js';
 import { autoPull, type AutoPullEvent } from '../phantom-backend/git/autoPull.js';
@@ -148,14 +148,10 @@ test('verifyLanded: an aborted REBASE is not a resolution either', async () => {
   await fs.rm(path.dirname(dir), { recursive: true, force: true });
 });
 
-test('stageAndSquash: many commits plus a dirty tree collapse to ONE commit; nothing to land says so', async () => {
+test('squashToMergeBase: many commits plus a dirty tree collapse to ONE commit', async () => {
   const dir = await plainRepo();
   sh(dir, ['update-ref', 'refs/remotes/origin/main', 'main']);
   sh(dir, ['checkout', '-qb', 'work']);
-
-  // nothing to land at all
-  assert.equal(await stageAndSquash(dir, 'main'), false, 'no work, no commit');
-  const headBefore = sh(dir, ['rev-parse', 'HEAD']).trim();
 
   // three commits and an uncommitted edit
   for (const n of ['1', '2', '3']) {
@@ -165,11 +161,13 @@ test('stageAndSquash: many commits plus a dirty tree collapse to ONE commit; not
   await fs.writeFile(path.join(dir, 'f4.txt'), '4\n');
   assert.equal(sh(dir, ['rev-list', '--count', 'origin/main..HEAD']).trim(), '3');
 
-  assert.equal(await stageAndSquash(dir, 'main'), true);
+  // the sync's order: stage, then squash to the merge-base, then commit
+  sh(dir, ['add', '-A']);
+  const mb = sh(dir, ['merge-base', 'HEAD', 'origin/main']).trim();
+  await squashToMergeBase(dir, mb);
   await commitStaged(dir, 'one commit');
   assert.equal(sh(dir, ['rev-list', '--count', 'origin/main..HEAD']).trim(), '1',
     'ONE commit is what keeps the rebase to a single conflict stop');
-  assert.notEqual(sh(dir, ['rev-parse', 'HEAD']).trim(), headBefore);
   for (const n of ['1', '2', '3', '4']) {
     assert.ok(fsSync.existsSync(path.join(dir, `f${n}.txt`)), `f${n} survived the squash`);
   }
@@ -371,7 +369,15 @@ test('engine + the coding agent: pull conflict is resolved inside the lock and p
     const exec = hostExec(d);
     await exec('printf "session+base\\n" > f.txt && git add f.txt && git -c core.editor=true -c user.email=f@f -c user.name=agent rebase --continue');
     return true;
-  });
+  }, async () => ({
+    // the pull's commit message needs a model like every sync — a fake one
+    provider: 'anthropic' as const, model: 'test-model', apiKey: 'k',
+    fetch: (async () => new Response(JSON.stringify({
+      id: 'msg_1', type: 'message', role: 'assistant', model: 'test-model',
+      content: [{ type: 'text', text: 'Land the session work' }],
+      stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 },
+    }), { status: 200, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch,
+  }));
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId));
   assert.equal(await engine.push(session, workspace), 'pushed');
   // base moves to a conflicting edit AFTER the session pushed its work
@@ -422,10 +428,20 @@ async function autoPushRoot() {
     fsSync.writeFileSync(path.join(seed, file), content);
     sh(seed, ['add', '-A']); sh(seed, ['commit', '-qm', msg]); sh(seed, ['push', '-q', 'origin', 'main']);
   };
+  // The sync has no file-name fallback any more: every test that commits
+  // needs a message model, and this fake one answers "Land the session work".
+  const messageConfig = async () => ({
+    provider: 'anthropic' as const, model: 'test-model', apiKey: 'k',
+    fetch: (async () => new Response(JSON.stringify({
+      id: 'msg_1', type: 'message', role: 'assistant', model: 'test-model',
+      content: [{ type: 'text', text: 'Land the session work' }],
+      stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 },
+    }), { status: 200, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch,
+  });
   return { root, paths, key, bare, seed, session, workspace,
-    dir: repoDir(paths, session.id), originSha, pushMain,
+    dir: repoDir(paths, session.id), originSha, pushMain, messageConfig,
     deps: (extra: Partial<Parameters<typeof autoPush>[0]> = {}) => ({
-      db, paths, encryptionKey: key, ...extra }),
+      db, paths, encryptionKey: key, messageConfig, ...extra }),
     done: () => fs.rm(root, { recursive: true, force: true }) };
 }
 
@@ -445,9 +461,9 @@ test('auto-push: clean — commits, merges a moved base, pushes branch then base
   assert.match(tree, /work\.txt/); assert.match(tree, /other\.txt/);
   // the branch backup went first
   assert.equal(t.originSha(`refs/heads/${t.session.branch}`), r.sha);
-  // the commit message fell back to file names (no model configured) + trailer
+  // the commit message came from the message model (there is no fallback) + trailer
   const msg = execFileSync('git', ['-C', t.bare, 'log', '--format=%B', '-2', 'main'], { encoding: 'utf8' });
-  assert.match(msg, /Update work\.txt/);
+  assert.match(msg, /Land the session work/);
   assert.match(msg, new RegExp(`Phantom-Session: ${t.session.id}`));
   assert.ok(events.some((e) => e.step === 'push_base'));
   await t.done();
@@ -492,7 +508,7 @@ test('auto-push: the agent cannot resolve -> blocked, base untouched, branch lef
   const { stdout: status } = await git(t.dir, ['status', '--porcelain']);
   assert.equal(status.trim(), '', 'no half-merged tree left behind');
   const { stdout: subject } = await git(t.dir, ['log', '--format=%s', '-1']);
-  assert.match(subject, /Update f\.txt/, 'the auto-push commit survives for the next try');
+  assert.match(subject, /Land the session work/, 'the auto-push commit survives for the next try');
   await t.done();
 });
 
@@ -513,7 +529,7 @@ test('auto-pull: dirty tree is committed, a moved base merges in, the branch is 
   t.pushMain('other.txt', 'someone else\n', 'other work');
   const mainBefore = t.originSha('refs/heads/main');
   const events: AutoPullEvent[] = [];
-  const r = await autoPull({ db, paths: t.paths, encryptionKey: t.key, onEvent: (e) => { events.push(e); } }, t.session, t.workspace);
+  const r = await autoPull({ db, paths: t.paths, encryptionKey: t.key, messageConfig: t.messageConfig, onEvent: (e) => { events.push(e); } }, t.session, t.workspace);
   assert.equal(r.result, 'merged', JSON.stringify(r));
   assert.deepEqual(events.map((e) => e.step),
     ['lock', 'backup', 'commit', 'rebase', 'verify', 'push_branch'],
@@ -530,9 +546,9 @@ test('auto-pull: dirty tree is committed, a moved base merges in, the branch is 
   // base untouched — a pull never lands on base; the branch backup is on origin
   assert.equal(t.originSha('refs/heads/main'), mainBefore);
   assert.equal(t.originSha(`refs/heads/${t.session.branch}`), r.sha);
-  // the in-flight work was committed with the session trailer
+  // the in-flight work was committed by the message model, with the session trailer
   const msg = execFileSync('git', ['-C', t.dir, 'log', '--format=%B', '-3'], { encoding: 'utf8' });
-  assert.match(msg, /Update work\.txt/);
+  assert.match(msg, /Land the session work/);
   assert.match(msg, new RegExp(`Phantom-Session: ${t.session.id}`));
   await t.done();
 });
@@ -542,7 +558,7 @@ test('auto-pull: nothing behind -> clean, and a dirty tree is NOT committed', as
   await fs.writeFile(path.join(t.dir, 'work.txt'), 'in flight\n');
   const { stdout: headBefore } = await git(t.dir, ['rev-parse', 'HEAD']);
   const events: AutoPullEvent[] = [];
-  const r = await autoPull({ db, paths: t.paths, encryptionKey: t.key, onEvent: (e) => { events.push(e); } }, t.session, t.workspace);
+  const r = await autoPull({ db, paths: t.paths, encryptionKey: t.key, messageConfig: t.messageConfig, onEvent: (e) => { events.push(e); } }, t.session, t.workspace);
   assert.equal(r.result, 'clean', JSON.stringify(r));
   assert.deepEqual(events.map((e) => e.step), ['lock'],
     'nothing behind stops before anything is written — no backup, no commit');
@@ -558,7 +574,7 @@ test('auto-pull: a conflict goes to the coding agent; the resolution is on the b
   await fs.writeFile(path.join(t.dir, 'f.txt'), 'session line\n');
   t.pushMain('f.txt', 'base line\n', 'base edits the same file');
   const mainBefore = t.originSha('refs/heads/main');
-  const r = await autoPull({ db, paths: t.paths, encryptionKey: t.key,
+  const r = await autoPull({ db, paths: t.paths, encryptionKey: t.key, messageConfig: t.messageConfig,
     resolve: async (_s, _w, d) => {
       // The agent resolves and CONTINUES the replay — a pull rebases too.
       const exec = hostExec(d);
@@ -578,12 +594,12 @@ test('auto-pull: the agent cannot resolve -> blocked, rebase aborted, the pre-pu
   const t = await autoPushRoot();
   await fs.writeFile(path.join(t.dir, 'f.txt'), 'session line\n');
   t.pushMain('f.txt', 'base line\n', 'conflicting base work');
-  const r = await autoPull({ db, paths: t.paths, encryptionKey: t.key, resolve: async () => false }, t.session, t.workspace);
+  const r = await autoPull({ db, paths: t.paths, encryptionKey: t.key, messageConfig: t.messageConfig, resolve: async () => false }, t.session, t.workspace);
   assert.equal(r.result, 'blocked', JSON.stringify(r));
   const { stdout: status } = await git(t.dir, ['status', '--porcelain']);
   assert.equal(status.trim(), '', 'no half-merged tree left behind');
   const { stdout: subject } = await git(t.dir, ['log', '--format=%s', '-1']);
-  assert.match(subject, /Update f\.txt/, 'the session work is committed and kept');
+  assert.match(subject, /Land the session work/, 'the session work is committed and kept');
   assert.equal(fsSync.readFileSync(path.join(t.dir, 'f.txt'), 'utf8'), 'session line\n', 'the session side is untouched');
   await t.done();
 });
@@ -599,7 +615,7 @@ test('the lock IS the busy test: a hold by anyone else refuses both, and nothing
 
   const push = await autoPush(t.deps(), t.session, t.workspace);
   assert.equal(push.result, 'busy', JSON.stringify(push));
-  const pull = await autoPull({ db, paths: t.paths, encryptionKey: t.key }, t.session, t.workspace);
+  const pull = await autoPull({ db, paths: t.paths, encryptionKey: t.key, messageConfig: t.messageConfig }, t.session, t.workspace);
   assert.equal(pull.result, 'busy', JSON.stringify(pull));
 
   // refused means refused: no commit, no rewrite, nothing on base
@@ -642,7 +658,7 @@ test('auto-push over the route: 503 unwired; wired -> core\'s client streams the
 
   // Wired: the real flow behind the route.
   const app = await buildApp({ db, paths: t.paths, apiKey: 'k', encryptionKey: t.key, version: 'test', pgPool, fs: fsDeps, engine,
-    autoPush: (s, w, onEvent) => autoPush({ db, paths: t.paths, encryptionKey: t.key, onEvent }, s, w) });
+    autoPush: (s, w, onEvent) => autoPush({ db, paths: t.paths, encryptionKey: t.key, messageConfig: t.messageConfig, onEvent }, s, w) });
   const f = injectFetch(app);
   const cfg = { baseUrl: 'http://x', apiKey: 'k', sessionId: t.session.id, fetch: f };
 
@@ -682,17 +698,29 @@ test('auto-push over the route: 503 unwired; wired -> core\'s client streams the
   await t.done();
 });
 
-test('commit message: a failing model is retried 3 times, then file names', async () => {
+test('commit message: no fallback — a failing model throws, nothing is invented', async () => {
   const t = await autoPushRoot();
   await fs.writeFile(path.join(t.dir, 'a.txt'), 'x\n');
-  await fs.writeFile(path.join(t.dir, 'b.txt'), 'y\n');
   await git(t.dir, ['add', '-A']);
+  // no config at all -> a named failure, not file names
+  await assert.rejects(commitMessageFor(t.dir, null), /no model configured/);
+  // a dead provider -> the error itself, at once (plain errors never retry)
   let calls = 0;
   const failingFetch: typeof fetch = async () => { calls++; throw new Error('model down'); };
-  const msg = await commitMessageFor(t.dir, {
+  await assert.rejects(commitMessageFor(t.dir, {
     provider: 'anthropic', model: 'claude-fable-5', apiKey: 'k', fetch: failingFetch,
-  });
-  assert.equal(calls, 3, 'three tries before giving up on the model');
-  assert.match(msg, /Update a\.txt, b\.txt/);
+  }), /model down/);
+  assert.equal(calls, 1, 'a permanent failure is not retried');
+  // a model that answers nonsense -> 3 tries, then a named failure
+  let nonsense = 0;
+  const emptyFetch = (async () => { nonsense++; return new Response(JSON.stringify({
+    id: 'msg_1', type: 'message', role: 'assistant', model: 'm',
+    content: [{ type: 'text', text: '' }], stop_reason: 'end_turn',
+    usage: { input_tokens: 1, output_tokens: 1 },
+  }), { status: 200, headers: { 'content-type': 'application/json' } }); }) as unknown as typeof fetch;
+  await assert.rejects(commitMessageFor(t.dir, {
+    provider: 'anthropic', model: 'claude-fable-5', apiKey: 'k', fetch: emptyFetch,
+  }), /could not produce a usable commit message/);
+  assert.equal(nonsense, 3, 'nonsense answers get the 3 tries');
   await t.done();
 });

@@ -11,7 +11,7 @@ import { getFolder } from '../sessions.js';
 import type { FolderRow } from '../db/schema.js';
 import { resolveAuth } from '../pool/pool.js';
 import { repoDir, type Paths } from '../pool/paths.js';
-import { syncBranch, type ConflictContext } from './sync.js';
+import { syncBranch, type ConflictContext, type SyncDeps } from './sync.js';
 import { logger, errStr } from '../log.js';
 
 const log = logger('git');
@@ -35,6 +35,10 @@ export class GitEngine {
     private resolveConflict?: (
       session: SessionRow, workspace: WorkspaceRow, dir: string, ctx: ConflictContext,
     ) => Promise<boolean>,
+    /** Model for the pull's commit message — the same one auto-push and
+     *  auto-pull use. Absent -> a pull with work to commit fails with the
+     *  reason; there is no file-name fallback anywhere. */
+    private messageConfig?: SyncDeps['messageConfig'],
   ) {}
 
   async detach(sessionId: string): Promise<void> {
@@ -80,7 +84,8 @@ export class GitEngine {
    *  It takes the session (sync does), which is why `busy` is a result here. */
   async pull(s: SessionRow, workspace: WorkspaceRow): Promise<PullResult | 'busy'> {
     const r = await syncBranch(
-      { db: this.db, paths: this.paths, encryptionKey: this.encryptionKey, resolve: this.resolveConflict },
+      { db: this.db, paths: this.paths, encryptionKey: this.encryptionKey,
+        resolve: this.resolveConflict, messageConfig: this.messageConfig },
       s, workspace, { landOnBase: false, label: 'pull' });
     if (r.outcome === 'ok') {
       const list = this.arrivals.get(s.id) ?? [];

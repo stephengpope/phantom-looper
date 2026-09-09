@@ -431,6 +431,11 @@ test('conflict message: branch pinned, no aborting, the files and what arrived, 
   assert.match(m, /git rebase --continue/);
   assert.match(m, /Do NOT run `git rebase --abort`/);
   assert.match(m, /never run checkout, switch, branch, or reset --hard|Do NOT run checkout, switch, branch, or reset --hard/);
+  // the exact acceptance test the system re-checks afterward
+  assert.match(m, /`git status` is clean/, 'the agent is told the check it will be held to');
+  assert.match(m, /No conflict markers/, 'markers named');
+  assert.match(m, /git merge-base --is-ancestor origin\/main HEAD/, 'the ancestry check, in git');
+  assert.match(m, /Stop only when all four pass/, 'the bar is explicit');
   assert.doesNotMatch(m, /Block the card/, 'the agent does not block — the system does, deterministically');
   assert.doesNotMatch(m, /git merge --abort/, 'a rebase is not a merge');
 });

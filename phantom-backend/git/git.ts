@@ -351,28 +351,19 @@ export async function hasWorkToLand(dir: string, baseBranch: string): Promise<bo
   return Number(ahead.trim()) > 0;
 }
 
-/** Stage everything and collapse the session's work back to ONE commit's worth
- *  of staged content — `add -A`, then `reset --soft` to the merge base. Nothing
- *  is committed here: the caller writes the message from the staged diff, which
- *  is why the squash has to come first.
+/** Collapse the session's staged work back to ONE commit's worth of staged
+ *  content — `reset --soft` to the merge base. The caller has already staged
+ *  everything and written the commit message from the staged diff, which is
+ *  why the squash comes last: until this runs, HEAD has not moved.
  *
  *  ONE commit is what keeps the rebase to a single conflict stop. Replaying N
  *  commits stops N times, over intermediate trees that never existed as a
- *  working state, re-resolving the same hunks — the cost the squash buys out.
- *
- *  False means there is nothing to land, and HEAD has not moved. */
-export async function stageAndSquash(dir: string, baseBranch: string): Promise<boolean> {
-  await git(dir, ['add', '-A']);
-  const { stdout: mb } = await git(dir, ['merge-base', 'HEAD', `origin/${baseBranch}`]);
-  const mergeBaseSha = mb.trim();
-  const { stdout: staged } = await git(dir, ['diff', '--cached', '--name-only']);
-  const { stdout: ahead } = await git(dir, ['rev-list', '--count', `${mergeBaseSha}..HEAD`]);
-  if (!staged.trim() && Number(ahead.trim()) === 0) return false;
+ *  working state, re-resolving the same hunks — the cost the squash buys out. */
+export async function squashToMergeBase(dir: string, mergeBaseSha: string): Promise<void> {
   await git(dir, ['reset', '--soft', mergeBaseSha]);
-  return true;
 }
 
-/** Commit whatever `stageAndSquash` left staged. */
+/** Commit whatever the squash left staged. */
 export async function commitStaged(dir: string, message: string): Promise<void> {
   await git(dir, ['commit', '--no-verify', '-m', message]);
 }
@@ -435,33 +426,51 @@ export async function pushSessionForced(
   }
 }
 
-/** Clean tree AND no unmerged entries AND no rebase still in flight AND
- *  origin/<base> in HEAD's history. Run against the directory, never against
- *  what the agent said it did.
+/** WHY a landing fails verification, in plain words — the explicit failure
+ *  notice a blocked sync owes the person (and the exact checks the conflict
+ *  prompt tells the agent it will be held to). [] = landed. Run against the
+ *  directory, never against what the agent said it did.
  *
- *  The last two are not decoration. `git rebase --abort` leaves a clean tree
- *  with no unmerged entries, so the first checks alone call a give-up a
+ *  The last two checks are not decoration. `git rebase --abort` leaves a clean
+ *  tree with no unmerged entries, so the first checks alone call a give-up a
  *  success: the caller then logs "resolved", pushes, and the same conflict
  *  returns forever. Requiring origin/<base> to be an ancestor of HEAD is the
  *  only statement of "the replay is in". */
-export async function verifyLanded(dir: string, baseBranch?: string): Promise<boolean> {
+export async function landingProblems(dir: string, baseBranch?: string): Promise<string[]> {
+  const problems: string[] = [];
   try {
     const { stdout: status } = await git(dir, ['status', '--porcelain']);
-    if (status.trim()) return false;
+    if (status.trim()) problems.push('the working tree has uncommitted changes');
     const { stdout: unmerged } = await git(dir, ['diff', '--name-only', '--diff-filter=U']);
-    if (unmerged.trim()) return false;
-    if (await rebaseInProgress(dir)) return false;
-    if (!baseBranch) return true;
-    await git(dir, ['merge-base', '--is-ancestor', `origin/${baseBranch}`, 'HEAD']);
-    return true;
-  } catch (e) {
-    // merge-base exits 1 when base is NOT an ancestor — a verdict, not a
-    // failure; anything else (no repo, no origin ref) is logged.
-    if (!/is-ancestor/.test(String((e as { cmd?: string }).cmd ?? ''))) {
-      log.warn({ dir, err: (e as Error).message }, 'verification could not run — counted as not landed');
+    if (unmerged.trim()) problems.push(`conflicts are still unmerged in: ${unmerged.trim().split('\n').join(', ')}`);
+    if (await rebaseInProgress(dir)) {
+      problems.push('the rebase is still in progress — git rebase --continue was not run or did not finish');
     }
-    return false;
+    if (baseBranch) {
+      try {
+        await git(dir, ['merge-base', '--is-ancestor', `origin/${baseBranch}`, 'HEAD']);
+      } catch (e) {
+        // Exit 1 is git's real "not an ancestor" — the verdict. Anything else
+        // (no repo, no origin ref) is the check itself failing.
+        if ((e as { code?: unknown }).code === 1) {
+          problems.push(`origin/${baseBranch} is not contained in the result — the replay is not in`);
+        } else {
+          log.warn({ dir, err: (e as Error).message }, 'verification could not run — counted as not landed');
+          problems.push(`verification itself failed: ${(e as Error).message}`);
+        }
+      }
+    }
+  } catch (e) {
+    log.warn({ dir, err: (e as Error).message }, 'verification could not run — counted as not landed');
+    problems.push(`verification itself failed: ${(e as Error).message}`);
   }
+  return problems;
+}
+
+/** Clean tree AND no unmerged entries AND no rebase still in flight AND
+ *  origin/<base> in HEAD's history. The boolean form of landingProblems. */
+export async function verifyLanded(dir: string, baseBranch?: string): Promise<boolean> {
+  return (await landingProblems(dir, baseBranch)).length === 0;
 }
 
 /** Give a brand-new empty remote its first commit on `branch` (a README), so

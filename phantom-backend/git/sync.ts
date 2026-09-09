@@ -42,8 +42,8 @@ import { resolveAuth } from '../pool/pool.js';
 import { repoDir, type Paths } from '../pool/paths.js';
 import { getFolder, acquireLock, releaseLock, renewLock, cardIntentFor } from '../sessions.js';
 import {
-  git, fetchBase, stageAndSquash, commitStaged, rebaseOntoBase, rebaseAbort,
-  verifyLanded, pushSession, pushSessionForced, pushToBase, hasWorkToLand, GIT_CLIENT_ID,
+  git, fetchBase, squashToMergeBase, commitStaged, rebaseOntoBase, rebaseAbort,
+  landingProblems, pushSession, pushSessionForced, pushToBase, hasWorkToLand, GIT_CLIENT_ID,
 } from './git.js';
 import { commitMessageFor } from './commitMessage.js';
 import type { ModelConfig } from '../../core/llm/createAgent.js';
@@ -110,8 +110,9 @@ export interface SyncDeps {
    *  the agent picks up on its next turn. Same lock (GIT_CLIENT_ID), same
    *  openSession pattern as `resolve`. Absent -> no summary is recorded. */
   recordSummary?: (session: SessionRow, workspace: WorkspaceRow, result: SyncResult, opts: SyncOptions) => Promise<void>;
-  /** Model for the commit message (the assistant's). null / absent -> the
-   *  file-name fallback. */
+  /** Model for the commit message (the assistant's). A throw or a null fails
+   *  the sync with the reason — there is no file-name fallback: base history
+   *  only ever gets a real message. */
   messageConfig?: () => Promise<ModelConfig | null>;
   /** Progress, one event per step — awaited, so a streaming route can write
    *  in order (and tests can inject races). */
@@ -172,19 +173,30 @@ export async function syncBranch(
     const backed = await pushSession(dir, folder.branch, auth);
     if (backed === 'error') return { outcome: 'error', reason: 'could not back the branch up — nothing was rewritten' };
 
-    // 3 — stage everything and collapse it to one commit's worth of content.
-    // The message is written AFTER the squash: it is built from the staged
-    // diff, which only shows the whole session's work once HEAD is back at the
-    // merge base.
-    // False here means a pull with nothing of its own — base moved but the
-    // session has not touched anything. The replay below is then a plain
+    // 3 — the commit. The message is written BEFORE anything is rewritten:
+    // stage everything, build the message from the staged diff against the
+    // merge-base (the whole session's work, HEAD still put), and only then
+    // squash and commit. A message that cannot be written FAILS the sync
+    // here — no commit, no squash, the index put back, nothing moved — and
+    // the reason is the provider's own words. A silent file-name fallback
+    // just hid a dead provider and guaranteed it stayed dead.
+    // False in the gate means a pull with nothing of its own — base moved but
+    // the session has not touched anything. The replay below is then a plain
     // fast-forward, which is exactly what that pull wants.
-    if (await stageAndSquash(dir, base)) {
+    if (await hasWorkToLand(dir, base)) {
       await ev('commit');
-      const config = deps.messageConfig ? await deps.messageConfig().catch(() => null) : null;
-      const card = await cardIntentFor(deps.db, session, workspace);
-      const msg = await commitMessageFor(dir, config, card);
-      await commitStaged(dir, `${msg}\n\nPhantom-Session: ${session.id}`);
+      try {
+        await git(dir, ['add', '-A']);
+        const { stdout: mb } = await git(dir, ['merge-base', 'HEAD', `origin/${base}`]);
+        const config = deps.messageConfig ? await deps.messageConfig() : null;
+        const card = await cardIntentFor(deps.db, session, workspace);
+        const msg = await commitMessageFor(dir, config, card, mb.trim());
+        await squashToMergeBase(dir, mb.trim());
+        await commitStaged(dir, `${msg}\n\nPhantom-Session: ${session.id}`);
+      } catch (e) {
+        await git(dir, ['reset', '-q']).catch(() => {}); // index back to HEAD; the tree was never touched
+        return { outcome: 'error', reason: `could not write the commit message: ${(e as Error).message}` };
+      }
     }
     const before = (await git(dir, ['rev-parse', 'HEAD'])).stdout.trim();
 
@@ -210,23 +222,29 @@ export async function syncBranch(
           : false;
         // Verified against the repo, never against what the agent said. The
         // rebase-in-progress and ancestor checks are what make a `rebase
-        // --abort` read as the failure it is.
-        if (!ok || !(await verifyLanded(dir, base))) {
+        // --abort` read as the failure it is. A block names exactly which
+        // check failed — the person (and the next attempt) gets the truth.
+        const problems = ok ? await landingProblems(dir, base) : [];
+        if (!ok || problems.length > 0) {
           await rebaseAbort(dir);
-          log.warn({ session: session.id, round }, 'sync: conflict unresolved — branch left as it was');
-          return { outcome: 'blocked', reason: 'the rebase conflict was left unresolved', rounds: round };
+          const reason = !ok
+            ? 'the conflict resolution turn could not run — the session may be busy or the agent failed'
+            : `the conflict was not resolved — ${problems.join('; ')}`;
+          log.warn({ session: session.id, round, reason }, 'sync: conflict unresolved — branch left as it was');
+          return { outcome: 'blocked', reason, rounds: round };
         }
       } else if (rebased === 'error') {
         await rebaseAbort(dir);
         return { outcome: 'error', reason: 'the rebase could not start', rounds: round };
       }
 
-      // 6 — verify against the repo: clean tree, no unmerged entries, no rebase
-      // still in flight, origin/<base> in HEAD's history.
+      // 6 — verify against the repo: clean tree, no unmerged entries, no
+      // rebase still in flight, origin/<base> in HEAD's history — named.
       await ev('verify');
-      if (!(await verifyLanded(dir, base))) {
+      const failed = await landingProblems(dir, base);
+      if (failed.length > 0) {
         await rebaseAbort(dir);
-        return { outcome: 'blocked', reason: 'verification failed after the rebase', rounds: round };
+        return { outcome: 'blocked', reason: `verification failed after the rebase — ${failed.join('; ')}`, rounds: round };
       }
 
       // 7 — the branch, rewritten by the rebase, so this forces with a lease.

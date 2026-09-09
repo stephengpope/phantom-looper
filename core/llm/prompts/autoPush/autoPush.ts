@@ -36,7 +36,13 @@ Rules for this:
 - Do NOT run \`git rebase --abort\`. Backing out is counted as a failure, not a resolution, and it throws away the landing.
 - Do NOT run checkout, switch, branch, or reset --hard. The repository must stay on "{{branch}}".
 - You have no network credentials here. Do not fetch, pull or push; those are done for you once the rebase is in.
-- Stop as soon as \`git status\` is clean and the rebase has finished.
+
+Before you stop, check your own work — the system re-checks exactly this against the repo afterward, and any failure is named:
+- \`git status\` is clean: nothing unstaged, nothing uncommitted.
+- No conflict markers (<<<<<<<, =======, >>>>>>>) remain in any file.
+- The rebase has finished: \`git status\` shows no rebase in progress (run \`git rebase --continue\` until it does not).
+- origin/{{base}} is contained in your work: \`git merge-base --is-ancestor origin/{{base}} HEAD\` exits 0 (read-only, no network).
+Stop only when all four pass. If you stop early, the replay is undone and the failed check is reported.
 
 If the two sides genuinely cannot both be kept — what arrived and what you wrote contradict each other — do your best to reconcile them. If you cannot, stop and say which files and what the contradiction is.`;
 

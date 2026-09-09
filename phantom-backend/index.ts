@@ -95,7 +95,22 @@ async function main() {
       await opened.close().catch(() => {});
     }
   };
-  const engine = new GitEngine(db, paths, env.encryptionKey, resolveConflict);
+  // The sync's commit message rides the ASSISTANT's model — the small-fast
+  // slot; writing one subject line from a diff is not work for the model doing
+  // the engineering. A config that cannot build THROWS, and the sync fails
+  // with that reason: there is no file-name fallback anywhere — a commit
+  // message that cannot be written is a broken setup the person must hear
+  // about, not paper over. Shared by auto-push, auto-pull and the manual
+  // pull (the engine below).
+  const messageConfig = async () => {
+    const cfg = await resolveMany(db,
+      ['provider', 'model', 'base_url', 'assistant_provider', 'assistant_model', 'assistant_base_url']);
+    const c = cascade(cfg, 'assistant'); // a bad pair throws with the fix in the message
+    if (!isProvider(c.provider)) return null;
+    const apiKey = await resolveCredential(db, env.encryptionKey, credentialForProvider(c.provider));
+    return { ...c, provider: c.provider, apiKey };
+  };
+  const engine = new GitEngine(db, paths, env.encryptionKey, resolveConflict, messageConfig);
 
   // After a successful sync, drop a summary into the session's transcript so
   // the coding agent knows what happened on its next turn. Same lock, same
@@ -124,24 +139,7 @@ async function main() {
     }
   };
 
-  // The auto-push commit message rides the ASSISTANT's model — the small-fast
-  // slot; writing one subject line from a diff is not work for the model doing
-  // the engineering. A config that cannot build (bad cascade pair, unknown
-  // provider) just means the file-name fallback: a commit message degrades,
-  // conflict resolution does not.
-  const messageConfig = async () => {
-    try {
-      const cfg = await resolveMany(db,
-        ['provider', 'model', 'base_url', 'assistant_provider', 'assistant_model', 'assistant_base_url']);
-      const c = cascade(cfg, 'assistant');
-      if (!isProvider(c.provider)) return null;
-      const apiKey = await resolveCredential(db, env.encryptionKey, credentialForProvider(c.provider));
-      return { ...c, provider: c.provider, apiKey };
-    } catch (e) {
-      log.warn({ err: (e as Error).message }, 'assistant config cannot build — commit messages fall back to file names');
-      return null;
-    }
-  };
+
   // When a sync comes back blocked and the session is running a card, the card
   // is blocked deterministically — the system decides, not the agent. The patch
   // goes through the API so board events fire and the UI updates.
