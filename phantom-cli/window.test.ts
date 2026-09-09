@@ -109,6 +109,38 @@ test('/close does not write a note into the next session', async () => {
   w.close();
 });
 
+test('session_list carries the /resume row whole: branch, git status, model, tokens', async () => {
+  // The fields the /resume table draws (Launcher.tsx) ride the server's
+  // /sessions rows; the list passes them through so the Assistant can filter
+  // by git status or branch without switching into each session.
+  const rows = [
+    { id: 's1', workspaceId: 'w1', branch: 'agent/s1', status: 'active',
+      lastUsedAt: new Date().toISOString(), card: 7, cardStatus: 'in_progress',
+      work: 'not_pushed', model: 'gpt-5', tokensOutput: 12400,
+      name: 'board work', lastUserMessage: 'fix the failing board test', agent: 'coding' },
+    { id: 's2', workspaceId: 'w1', branch: 'agent/s2', status: 'ended',
+      lastUsedAt: new Date().toISOString(), work: 'merged', model: null, tokensOutput: null },
+  ];
+  const api: Api = async (_m, path) =>
+    path.startsWith('/sessions') ? { sessions: rows }
+      : path === '/workspaces' ? [{ id: 'w1', name: 'acme-app', cardPrefix: 'PHA' }] : {};
+  const w = new WindowStore({ api: nothing, newTools: noTools });
+  const handler = sessionsHandler(w, api, 'test', new WorkspaceDirectory(api));
+  const res = await handler({ action: 'list' }) as { sessions: Array<Record<string, unknown>> };
+  assert.equal(res.sessions.length, 2);
+  const [one, two] = res.sessions;
+  assert.equal(one.branch, 'agent/s1', 'the branch rides the row');
+  assert.equal(one.git_status, 'not_pushed');
+  assert.equal(one.model, 'gpt-5');
+  assert.equal(one.tokens, 12400);
+  assert.equal(one.card_status, 'in_progress');
+  assert.equal(two.branch, 'agent/s2');
+  assert.equal(two.git_status, 'merged');
+  assert.equal(two.model, null, 'no pin is null, never an absent key');
+  assert.equal(two.tokens, null);
+  w.close();
+});
+
 test('one board per workspace, handed to every caller', () => {
   const w = new WindowStore({ api: nothing, newTools: noTools });
   assert.equal(w.boardFor('w1'), w.boardFor('w1'), 'the same store both times');

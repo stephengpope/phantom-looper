@@ -134,8 +134,10 @@ function sessionsHandler(
         const rows = (j.data.sessions as Array<Record<string, unknown>>).slice(offset, offset + limit);
         return {
           sessions: rows.map((s) => ({
-            id: s.id, title: s.name ?? null, workspace: s.workspaceId,
-            card: s.card ?? null, last_message: s.lastUserMessage ?? null, running: s.locked ?? false,
+            id: s.id, title: s.name ?? null, workspace: s.workspaceId, branch: s.branch ?? null,
+            card: s.card ?? null, card_status: s.cardStatus ?? null,
+            git_status: s.work ?? null, model: s.model ?? null, tokens: s.tokensOutput ?? null,
+            last_message: s.lastUserMessage ?? null, running: s.locked ?? false,
           })),
           total: j.data.total,
         };

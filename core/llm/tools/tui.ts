@@ -46,8 +46,10 @@ export function sessionsTool(handler: (args: SessionsArgs) => Promise<unknown>):
   return {
     session_list: tool({
       description: 'Every coding session on the server — not just the ones open in this window: id, title, ' +
-        'workspace, card, which is on screen, which are RUNNING a turn right now (here or on another ' +
-        'machine), and git_status (not_pushed / not_merged / merged — the session branch vs the base branch). ' +
+        'workspace, branch, card, model, token count, which is on screen, which are RUNNING a turn right now ' +
+        '(here or on another machine), and git_status (not_pushed / not_merged / merged — the session branch ' +
+        'vs the base branch). Filter and count sessions by git_status, branch or card from this one call — ' +
+        'do not switch into each session to find out. ' +
         'Newest activity first, 20 at a time; raise offset to page back. ' +
         'The rows carry what identifies a session to a person (its title, the last thing typed, its card) — ' +
         'match what the user described against those rather than asking them for an id. ' +
