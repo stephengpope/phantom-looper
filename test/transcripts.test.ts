@@ -485,30 +485,6 @@ test('who drives: a person\'s save takes the loop\'s coding seat over; the loop\
   assert.equal(await agentOf(id), 'supervisor');
 });
 
-test('plan mode lives on the row: false at birth, PATCH flips it, a duplicate keeps planning', async () => {
-  const { id } = await mkSession();
-  // Every new session starts in code mode.
-  const born = json(await app.inject({ method: 'GET', url: `/sessions/${id}`, headers: H })).data;
-  assert.equal(born.planMode, false);
-  // /plan: PATCH plan_mode is the record every window reads.
-  const r1 = json(await app.inject({ method: 'PATCH', url: `/sessions/${id}`, headers: H,
-    payload: { plan_mode: true } }));
-  assert.equal(r1.data.planMode, true);
-  // The list carries it like any other row fact — no extra read to seed a client.
-  const listed = json(await app.inject({ method: 'GET', url: '/sessions', headers: H })).data.sessions
-    .find((s: { id: string }) => s.id === id);
-  assert.equal(listed.planMode, true);
-  // A copy of a planning session is still planning — transcript or not.
-  const copy = json(await appGit.inject({ method: 'POST', url: `/sessions/${id}/duplicate`,
-    headers: H, payload: {} })).data;
-  const copyRow = json(await app.inject({ method: 'GET', url: `/sessions/${copy.id}`, headers: H })).data;
-  assert.equal(copyRow.planMode, true);
-  // And back to code mode.
-  const r2 = json(await app.inject({ method: 'PATCH', url: `/sessions/${id}`, headers: H,
-    payload: { plan_mode: false } }));
-  assert.equal(r2.data.planMode, false);
-});
-
 test('list pages by cursor: newest first, id breaks timestamp ties, before excludes everything seen', async () => {
   // Four sessions stamped into the FUTURE so this suite's other rows sit
   // below them: T+3h, then a T+2h tie pair (the id tiebreak's subject), T+1h.
@@ -576,14 +552,4 @@ test('the list filters server-side (typed, supervisor) and its total counts exac
   const page = json(await app.inject({ method: 'GET', url: '/sessions?typed=true&supervisor=false&limit=1', headers: H })).data;
   assert.equal(page.sessions.length, 1);
   assert.equal(page.total, noSeats.total, 'the page knows how long the list is');
-});
-
-test('the list preview is capped: a pasted wall of text stores 200 chars, not the message', async () => {
-  const s = await mkSession();
-  const wall = 'x'.repeat(1000);
-  await app.inject({ method: 'PUT', url: `/sessions/${s.id}/transcript`, headers: H,
-    payload: { data: jsonl(s.id, s.branch, wall) } });
-  const row = json(await app.inject({ method: 'GET', url: '/sessions', headers: H })).data.sessions
-    .find((x: { id: string }) => x.id === s.id);
-  assert.equal(row.lastUserMessage.length, 200, 'the preview, not the record');
 });

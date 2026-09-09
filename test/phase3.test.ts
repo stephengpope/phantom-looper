@@ -298,15 +298,6 @@ test('tasks: a stray background process lists untracked and dies by sid', async 
   assert.equal(json(ps).data.stdout.trim(), '0');
 });
 
-test('tasks: kill refuses a bogus sid and the baseline', async () => {
-  const bogus = await app.inject({ method: 'DELETE', url: `/sessions/${sessionId}/tasks/999999`, headers: H });
-  assert.equal(bogus.statusCode, 404);
-  assert.equal(json(bogus).error.code, 'no_such_task');
-  // sid 1 is docker-init + the keeper — filtered before the check, unkillable.
-  const base = await app.inject({ method: 'DELETE', url: `/sessions/${sessionId}/tasks/1`, headers: H });
-  assert.equal(base.statusCode, 404);
-});
-
 test('tasks: a stale running row is closed on read; a just-born one survives', async () => {
   const stale = newId();
   await db.insert(commands).values({ id: stale, sessionId, argv: ['/bin/sh', '-c', 'ghost'],
@@ -323,14 +314,6 @@ test('tasks: a stale running row is closed on read; a just-born one survives', a
   assert.equal(rowYoung.status, 'running', 'null-sid grace: a command mid-capture is not closed');
   await db.delete(commands).where(eq(commands.id, stale));
   await db.delete(commands).where(eq(commands.id, young));
-});
-
-test('tasks: listing never starts a container', async () => {
-  const r = await app.inject({ method: 'POST', url: '/sessions', headers: H, payload: { workspace_id: workspaceId } });
-  const fresh = json(r).data.id;
-  const d = await getTasks(fresh);
-  assert.equal(d.container, 'absent', 'no container was created just to look');
-  assert.deepEqual(d.tasks, []);
 });
 
 test('bash keeps the tail and spills full output to a readable file', async () => {

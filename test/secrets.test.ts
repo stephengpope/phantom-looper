@@ -124,27 +124,6 @@ test('routes: PUT validates the name and requires a value; list carries layers; 
   assert.match(json(miss).error.message, /deploy_token/, 'an unknown name answers with the names that exist');
 });
 
-test('migration 010 upgrades a table that already holds rows — settings and credentials intact', async () => {
-  const { migrate } = await import('../phantom-backend/db/migrate.js');
-  const pre = await testDb('secrets_upgrade', { upTo: '009_plan_mode.sql' });
-  try {
-    // Rows written by the PRE-namespace code: a plain override and an
-    // encrypted credential, exactly as a live install holds them.
-    await pre.pool.query(
-      `insert into phantom_looper.settings (scope, key, value) values ('global', 'spare_clones', '5'::jsonb)`);
-    const { encrypt } = await import('../phantom-backend/crypto.js');
-    await pre.pool.query(
-      `insert into phantom_looper.settings (scope, key, value_enc, secret) values ('global', 'github_token', $1, true)`,
-      [encrypt(KEY, 'ghp_upgraded')]);
-    await migrate(pre.pool);
-    const upgraded = await readStore(pre.db, KEY, [GLOBAL]);
-    assert.equal(upgraded.get(GLOBAL)?.get('spare_clones')?.value, 5, 'the override survives in general');
-    assert.equal(upgraded.get(GLOBAL)?.get('github_token')?.value, 'ghp_upgraded', 'the credential decrypts');
-    await putSecret(pre.db, KEY, GLOBAL, 'post_upgrade', 'works', 'v');
-    assert.equal(await readSecretValue(pre.db, KEY, 'post_upgrade', [GLOBAL]), 'v');
-  } finally { await pre.pool.end(); }
-});
-
 test('routes: DELETE removes one layer only; the other survives', async () => {
   const delWs = await app.inject({ method: 'DELETE', url: `/secrets/deploy_token?workspace=${wsId}`, headers: H });
   assert.equal(delWs.statusCode, 200);

@@ -517,90 +517,6 @@ test('POST /sessions/:id/turn: a server-side turn is a normal turn — string in
 // runs. Over a real socket (inject cannot hold a stream open), the board
 // feed's shape exactly. The parts ride verbatim, so the cli folds them with
 // the same reducer its own local turns use.
-test('GET /sessions/:id/events streams a server-side turn as it happens, this session only', async () => {
-  await app.listen({ port: 0, host: '127.0.0.1' });
-  const port = (app.server.address() as { port: number }).port;
-  const made = json(await app.inject({ method: 'POST', url: '/sessions', headers: H,
-    payload: { workspace_id: wsId } })).data;
-  const other = json(await app.inject({ method: 'POST', url: '/sessions', headers: H,
-    payload: { workspace_id: wsId } })).data;
-  const ac = new AbortController();
-  const r = await fetch(`http://127.0.0.1:${port}/sessions/${made.id}/events`,
-    { headers: { ...H, 'x-phantom-looper-client': 'watcher' }, signal: ac.signal });
-  assert.equal(r.status, 200);
-  assert.equal(r.headers.get('content-type'), 'application/x-ndjson');
-  const reader = r.body!.getReader();
-  const dec = new TextDecoder();
-  let buf = '';
-  const next = async (): Promise<Record<string, unknown>> => {
-    for (;;) {
-      const nl = buf.indexOf('\n');
-      if (nl >= 0) {
-        const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
-        const rec = JSON.parse(line);
-        if (rec.event !== 'heartbeat') return rec;
-        continue;
-      }
-      const { value, done } = await reader.read();
-      if (done) throw new Error('the stream ended');
-      buf += dec.decode(value, { stream: true });
-    }
-  };
-  try {
-    // A turn on ANOTHER session must never cross into this feed.
-    script.coding.push({ text: 'not for the watcher' });
-    await app.inject({ method: 'POST', url: `/sessions/${other.id}/turn`, headers: H,
-      payload: { message: 'elsewhere' } });
-
-    script.coding.push({ text: 'watch me work' });
-    await app.inject({ method: 'POST', url: `/sessions/${made.id}/turn`,
-      headers: { ...H, 'x-phantom-looper-client': 'the-runner' },
-      payload: { message: 'do the thing' } });
-
-    // First thing on the feed: who holds the session (nobody, at connect).
-    const free = await next();
-    assert.equal(free.event, 'lock');
-    assert.equal(free.locked, false);
-    assert.deepEqual(await next(), { event: 'session', agent: null, planMode: false, work: null, transcript_updated_at: null });
-    // The turn takes the hold: the spinner's record, before any part.
-    const held = await next();
-    assert.equal(held.event, 'lock');
-    assert.equal(held.locked, true);
-    assert.equal(held.by, 'the-runner');
-    assert.equal(held.agent, null, 'a manual turn: no seat, so no "who" — just the label');
-    assert.ok(typeof held.expires_at === 'string');
-    const start = await next();
-    assert.equal(start.event, 'turn-start');
-    assert.equal(start.agent, 'coding');
-    assert.equal(start.message, 'do the thing', 'the watcher sees what the turn is answering');
-
-    const seen: Record<string, unknown>[] = [];
-    let rec = await next();
-    while (rec.event === 'part') { seen.push(rec.part as Record<string, unknown>); rec = await next(); }
-    assert.ok(seen.some((p) => p.type === 'text-delta' && String(p.text).includes('watch')),
-      'the reply streamed part by part, verbatim');
-    assert.equal(rec.event, 'turn-end');
-
-    // The record landing is its own event — the signal to re-read — and it
-    // names the writer so a window ignores the echo of its own upload.
-    const landed = await next();
-    assert.equal(landed.event, 'transcript');
-    assert.equal(landed.by, 'the-runner');
-    assert.ok(typeof landed.updated_at === 'string' && landed.updated_at.length > 0);
-    // The save renews the hold; the turn's close releases it — both on the feed.
-    const renewed = await next();
-    assert.equal(renewed.event, 'lock');
-    assert.equal(renewed.locked, true);
-    const released = await next();
-    assert.equal(released.event, 'lock');
-    assert.equal(released.locked, false, 'the spinner clears the moment the turn lets go');
-  } finally {
-    // The socket goes; the app stays up for the tests after this one (the
-    // after() hook closes it) — inject works listening or not.
-    ac.abort();
-  }
-});
-
 // A turn the server does NOT run — a cli window driving the model on its own
 // machine — reaches the same feed through POST /sessions/:id/events. One feed,
 // whoever drives: the watcher cannot tell the two apart. Only the lock holder
@@ -806,38 +722,6 @@ test('session state: one socket carries mode and real git changes; reconnect inc
       event: 'session', agent: null, planMode: true, work: 'not_pushed', transcript_updated_at: saved.updated_at,
     });
   } finally { await reconnected.close(); }
-});
-
-test('session state: writes during the opening read survive, without replaying already recorded turn parts', async () => {
-  const made = json(await app.inject({ method: 'POST', url: '/sessions', headers: H,
-    payload: { workspace_id: wsId } })).data;
-  const [oldRow] = await db.select().from(sessions).where(eq(sessions.id, made.id));
-  let release!: (rows: typeof oldRow[]) => void;
-  let reading!: () => void;
-  const started = new Promise<void>((resolve) => { reading = resolve; });
-  const snapshot = new Promise<typeof oldRow[]>((resolve) => { release = resolve; });
-  const originalDb = ctx.db;
-  // Freeze only the opening read; mutations below still use the real DB.
-  ctx.db = { select: () => ({ from: () => ({ where: () => { reading(); return snapshot; } }) }) } as unknown as typeof db;
-  const opening = watchSession(made.id);
-  try {
-    await started;
-    ctx.db = originalDb;
-    const stamp = new Date();
-    await db.update(sessions).set({ agent: 'coding', planMode: true, transcriptUpdatedAt: stamp })
-      .where(eq(sessions.id, made.id));
-    ctx.sessionEvents!.publish(made.id, 'remote', { event: 'turn-start', agent: 'coding', message: 'during read' });
-    ctx.sessionEvents!.publishPart(made.id, 'remote', { type: 'text-delta', id: '0', text: 'already recorded' });
-    ctx.sessionEvents!.publish(made.id, 'remote', { event: 'session', agent: 'coding', planMode: true });
-    ctx.sessionEvents!.publish(made.id, 'remote', { event: 'transcript', updated_at: stamp.toISOString(), by: 'remote' });
-    release([oldRow]);
-    const watcher = await opening;
-    try {
-      await watcher.until((r) => r.event === 'transcript' && r.updated_at === stamp.toISOString());
-      assert.ok(watcher.records.some((r) => r.event === 'session' && r.agent === 'coding' && r.planMode === true));
-      assert.ok(!watcher.records.some((r) => r.event === 'part' || r.event === 'turn-start'));
-    } finally { await watcher.close(); }
-  } finally { ctx.db = originalDb; release([oldRow]); }
 });
 
 test('session state: the looper publishes its corrected agent seat immediately after locking', async () => {

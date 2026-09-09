@@ -55,14 +55,20 @@ tests may import server modules.
 ## Commands
 
 ```
-npm test                    # pure + real-git units, no Docker
-npm run test:all            # everything: containers, Postgres, the looper with the model scripted at the wire
-npm run test:phantom-cli    # the app, headless
+npm test                    # pure + real-git units, no Docker — seconds
+npm run test:phantom-cli    # the app, headless — a minute or two
 npm run typecheck           # tsc --noEmit && tsc -p phantom-cli
+npm run test:all            # PRE-RELEASE ONLY. Containers, Postgres, the looper — 10+ minutes.
 npm run phantom-backend     # the server from source
 npm run phantom-cli         # the app; -- --resume <id>
 npm run keys                # what your terminal sends for a key
 ```
+
+**Testing after a change means `npm test` + `npm run test:phantom-cli` +
+typecheck. Never `test:all`.** `test:all` spins real containers and a real
+database for ten-plus minutes; it runs once before a release, by whoever is
+cutting it. An agent that runs it mid-task burns the builder's time for
+nothing the fast suites wouldn't have caught.
 
 Server changes need `docker compose up -d --build`. Green tests are not
 the live server.

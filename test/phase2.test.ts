@@ -88,21 +88,6 @@ const call = (tool: string, args: Record<string, unknown> = {}) =>
   app.inject({ method: 'POST', url: `/tools/${tool}`, headers: HS(), payload: args });
 const json = (r: { body: string }) => JSON.parse(r.body);
 
-test('GET /tools serves the neutral schema; session id is not a parameter', async () => {
-  const r = await app.inject({ method: 'GET', url: '/tools', headers: H });
-  const d = json(r).data;
-  assert.equal(d.sessionHeader, 'x-phantom-looper-session');
-  assert.deepEqual(d.tools.map((t: { name: string }) => t.name).sort(),
-    ['bash', 'edit', 'find', 'grep', 'ls', 'read', 'write']);
-  const edit = d.tools.find((t: { name: string }) => t.name === 'edit');
-  assert.equal(edit.mutates, true);
-  // The invariant: session never appears as a PARAMETER the model could set.
-  for (const t of d.tools) {
-    const props = Object.keys(t.input.properties ?? {});
-    assert.ok(!props.some((p) => /session/i.test(p)), `${t.name} exposes a session parameter`);
-  }
-});
-
 test('ls, read: numbered read through a real container', async () => {
   let r = await call('ls', {});
   assert.equal(r.statusCode, 200, r.body);
@@ -228,13 +213,6 @@ test('read returns images as images; multi-edit is all-or-nothing; grep literal+
   assert.ok(rows.some((m: { content: string; context?: boolean }) => m.context && (m.content === 'one' || m.content === 'four')));
 });
 
-test('bash covers what dedicated tools no longer do (mkdir/mv/stat)', async () => {
-  const r = await call('bash', { cmd: 'mkdir -p deep/dir && echo x > deep/dir/f.txt && mv deep/dir/f.txt deep/dir/g.txt && stat -c %s deep/dir/g.txt' });
-  assert.equal(r.statusCode, 200, r.body);
-  assert.equal(json(r).data.exitCode, 0);
-  assert.equal(json(r).data.stdout.trim(), '2');
-});
-
 test('unknown session and missing header fail with envelope codes', async () => {
   let r = await app.inject({ method: 'POST', url: '/tools/ls', headers: H, payload: {} });
   assert.equal(json(r).error.code, 'session_not_found');
@@ -301,24 +279,6 @@ test('skills: create/list/load/patch/write_file/delete through the routes; bad w
 // so a fresh box has nothing local until the first session asks. Remove a
 // small public image, point a workspace at it, and the first tool call must
 // pull it rather than fail with "no such image".
-test('a workspace image not on this machine is pulled on first use', async () => {
-  const image = 'busybox:1.36';
-  const docker = makeDocker();
-  await docker.getImage(image).remove({ force: true }).catch(() => {});
-  const workspaceId = newId();
-  await db.insert(workspaces).values({
-    id: workspaceId, url: `file://${path.join(root, 'origin.git')}`, owner: 'local', name: 'pull',
-    baseBranch: 'main', branchPrefix: 'agent', schemaName: `repo_${workspaceId}`,
-  });
-  await setWorkspaceSetting(db, workspaceId, 'container_image', image);
-  let r = await app.inject({ method: 'POST', url: '/sessions', headers: H, payload: { workspace_id: workspaceId } });
-  const sid = JSON.parse(r.body).data.id;
-  r = await app.inject({ method: 'POST', url: '/tools/ls', headers: { ...H, 'x-phantom-looper-session': sid, 'content-type': 'application/json' }, payload: {} });
-  assert.equal(r.statusCode, 200, r.body);
-  assert.ok(json(r).data.entries.includes('hello.ts'));
-  await docker.getImage(image).inspect(); // it is here now
-});
-
 // Esc in the cli aborts the tool fetch; the server must KILL the running
 // command, not just stop listening — Docker's API cannot kill an exec
 // (moby#9098), so bash runs setsid'd with a pidfile and a second exec

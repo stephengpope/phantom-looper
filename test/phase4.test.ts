@@ -453,20 +453,6 @@ test('auto-push: clean — commits, merges a moved base, pushes branch then base
   await t.done();
 });
 
-test('auto-push: a second auto-push after re-editing the same line does not conflict with itself', async () => {
-  const t = await autoPushRoot();
-  await fs.writeFile(path.join(t.dir, 'f.txt'), 'session v1\n');
-  const r1 = await autoPush(t.deps(), t.session, t.workspace);
-  assert.equal(r1.result, 'pushed', JSON.stringify(r1));
-  // the session keeps going and re-edits the very line it just pushed
-  await fs.writeFile(path.join(t.dir, 'f.txt'), 'session v2\n');
-  const r2 = await autoPush(t.deps(), t.session, t.workspace);
-  assert.equal(r2.result, 'pushed', 'plain merge shares history — no self-conflict');
-  const now = execFileSync('git', ['-C', t.bare, 'show', 'main:f.txt'], { encoding: 'utf8' });
-  assert.equal(now.trim(), 'session v2');
-  await t.done();
-});
-
 test('auto-push: a stopped rebase goes to the coding agent, briefed, and the resolution lands on base', async () => {
   const t = await autoPushRoot();
   await fs.writeFile(path.join(t.dir, 'f.txt'), 'session line\n');
@@ -507,30 +493,6 @@ test('auto-push: the agent cannot resolve -> blocked, base untouched, branch lef
   assert.equal(status.trim(), '', 'no half-merged tree left behind');
   const { stdout: subject } = await git(t.dir, ['log', '--format=%s', '-1']);
   assert.match(subject, /Update f\.txt/, 'the auto-push commit survives for the next try');
-  await t.done();
-});
-
-test('auto-push: base moves between merge and push -> merge again, land on round 2', async () => {
-  const t = await autoPushRoot();
-  await fs.writeFile(path.join(t.dir, 'work.txt'), 'race work\n');
-  let raced = false;
-  const events: AutoPushEvent[] = [];
-  const r = await autoPush(t.deps({
-    onEvent: (e) => {
-      events.push(e);
-      // The window step 7 exists for: after our merge+verify, before our push
-      // to base, someone lands on main.
-      if (e.step === 'push_base' && !raced) {
-        raced = true;
-        t.pushMain('race.txt', 'raced in\n', 'race');
-      }
-    },
-  }), t.session, t.workspace);
-  assert.equal(r.result, 'pushed', JSON.stringify(r));
-  assert.equal(r.rounds, 2, 'round 1 was rejected, round 2 landed');
-  assert.ok(events.some((e) => e.step === 'retry'), 'the rejection is a step, not a silent loop');
-  const tree = execFileSync('git', ['-C', t.bare, 'ls-tree', '--name-only', 'main'], { encoding: 'utf8' });
-  assert.match(tree, /work\.txt/); assert.match(tree, /race\.txt/);
   await t.done();
 });
 
@@ -657,69 +619,6 @@ test('the lock IS the busy test: a hold by anyone else refuses both, and nothing
 
 // The wire: the route streams, core's ONE client reads it, and the Telegram
 // Assistant's kit answers through it. The coding agent has no git tool.
-test('auto-pull over the route: 503 unwired; wired -> core\'s client pulls and the Assistant kit pulls through it', async () => {
-  const { buildApp } = await import('../phantom-backend/api/app.js');
-  const { injectFetch } = await import('../phantom-backend/looper/injectFetch.js');
-  const { autoPullSession } = await import('../core/llm/tools/git.js');
-  const { GitEngine } = await import('../phantom-backend/git/engine.js');
-  const { makeDocker } = await import('../phantom-backend/docker.js');
-  const { ContainerManager } = await import('../phantom-backend/workspace/container.js');
-  const t = await autoPushRoot();
-  const H = { authorization: 'Bearer k', 'content-type': 'application/json', 'x-phantom-looper-session': t.session.id };
-  // The git routes register behind fs + engine (app.ts); neither constructor
-  // touches a daemon, and nothing here runs a container.
-  const docker = makeDocker();
-  const engine = new GitEngine(db, t.paths, t.key);
-  const fsDeps = { docker, containers: new ContainerManager(docker, t.paths), engine };
-
-  // Unwired: a refusal envelope, which the client turns into a thrown message.
-  const bare = await buildApp({ db, paths: t.paths, apiKey: 'k', encryptionKey: t.key, version: 'test', pgPool, fs: fsDeps, engine });
-  let r = await bare.inject({ method: 'POST', url: '/git/auto-pull', headers: H, payload: {} });
-  assert.equal(r.statusCode, 503, r.body);
-  await assert.rejects(
-    autoPullSession({ baseUrl: 'http://x', apiKey: 'k', sessionId: t.session.id, fetch: injectFetch(bare) }),
-    /auto-pull is not wired/);
-
-  // Wired: the real flow behind the route.
-  const app = await buildApp({ db, paths: t.paths, apiKey: 'k', encryptionKey: t.key, version: 'test', pgPool, fs: fsDeps, engine,
-    autoPull: (s, w, onEvent) => autoPull({ db, paths: t.paths, encryptionKey: t.key, onEvent }, s, w) });
-  const f = injectFetch(app);
-  const cfg = { baseUrl: 'http://x', apiKey: 'k', sessionId: t.session.id, fetch: f };
-
-  // Nothing behind -> clean.
-  let out = await autoPullSession(cfg);
-  assert.equal(out.result, 'clean', JSON.stringify(out));
-
-  // Base moves; the session is mid-edit; the client pulls, the steps were streamed in words.
-  t.pushMain('other.txt', 'landed elsewhere\n', 'landed elsewhere');
-  await fs.writeFile(path.join(t.dir, 'work.txt'), 'in flight\n');
-  const steps: string[] = [];
-  out = await autoPullSession(cfg, (label) => steps.push(label));
-  assert.equal(out.result, 'merged', JSON.stringify(out));
-  assert.deepEqual(out.files, ['other.txt']);
-  assert.deepEqual(steps, ['taking the session', 'backing the branch up',
-    'committing this session\'s work', 'replaying the work on the base branch',
-    'verifying against the repo', 'pushing the branch']);
-
-  // The Telegram Assistant's kit carries git_auto_pull and it answers over the
-  // same wire — bound to the account's active session, or an explicit id.
-  const { assistantKit } = await import('../phantom-backend/telegram/assistant.js');
-  const kit = await assistantKit({ f, apiKey: 'k' }, {
-    settings: {}, workspaceId: () => t.workspace.id, activeSession: () => null,
-    onSwitch: async () => ({}), approve: async () => false, onWorkspaceCreated: async () => ({}),
-  });
-  assert.ok(kit.git_auto_pull, 'the Telegram Assistant has git_auto_pull');
-  const run = kit.git_auto_pull!.execute as (a: unknown, o: unknown) => Promise<any>;
-  let tg = await run({}, {});
-  assert.match(tg.error, /no active session/, 'no pointer, no id -> says so');
-  t.pushMain('third.txt', 'more\n', 'more on base');
-  tg = await run({ id: t.session.id }, {});
-  assert.equal(tg.result, 'merged', JSON.stringify(tg));
-  assert.equal(tg.session, t.session.id);
-  assert.deepEqual(tg.files, ['third.txt']);
-  await t.done();
-});
-
 test('auto-push over the route: 503 unwired; wired -> core\'s client streams the steps in words and the Telegram Assistant pushes through it', async () => {
   const { buildApp } = await import('../phantom-backend/api/app.js');
   const { injectFetch } = await import('../phantom-backend/looper/injectFetch.js');

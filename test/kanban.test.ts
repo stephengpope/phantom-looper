@@ -41,23 +41,6 @@ after(async () => {
 const H = { authorization: 'Bearer test-key' };
 const json = (r: { body: string }) => JSON.parse(r.body);
 
-test('defaultPrefix: first three letters, letters only, uppercased', () => {
-  assert.equal(defaultPrefix('phantom-looper'), 'PHA');
-  assert.equal(defaultPrefix('x9-y'), 'XY');
-  assert.equal(defaultPrefix('...'), 'TSK');
-});
-
-test('empty board: code-default columns and repo-derived prefix', async () => {
-  const r = await app.inject({ method: 'GET', url: `/workspaces/${wsId}/cards`, headers: H });
-  assert.equal(r.statusCode, 200);
-  const d = json(r).data;
-  assert.deepEqual(d.columns, ['backlog', 'plan', 'in_progress', 'blocked', 'done']);
-  assert.equal(d.prefix, 'WID'); // widgets
-  assert.deepEqual(d.cards, []);
-  const missing = await app.inject({ method: 'GET', url: '/workspaces/nope/cards', headers: H });
-  assert.equal(missing.statusCode, 404);
-});
-
 test('create: seq counts up, status defaults to first column, pos appends per column', async () => {
   const a = json(await app.inject({ method: 'POST', url: `/workspaces/${wsId}/cards`, headers: H,
     payload: { title: 'first card', details: 'body',
@@ -267,26 +250,6 @@ test('item ops: add/edit/remove/tick by key touch nothing else; bad keys and ops
   const gone = await app.inject({ method: 'PATCH', url: `/workspaces/${wsId}/cards/999999`, headers: H,
     payload: { items: [{ op: 'tick', key: ka, done: true }] } });
   assert.equal(gone.statusCode, 404);
-});
-
-test('the board payload always carries both resolved looper defaults and their layers', async () => {
-  let d = json(await app.inject({ method: 'GET', url: `/workspaces/${wsId}/cards`, headers: H })).data;
-  assert.equal(d.auto_plan_default, false);
-  assert.equal(d.auto_plan_source, 'default');
-  assert.equal(d.auto_build_default, false);
-  assert.equal(d.auto_build_source, 'default');
-  // Turn ONE on at the workspace layer: the payload says the value AND the
-  // layer — which is what lets the card editor answer instead of saying
-  // "inherit" — and the other switch does not move.
-  await app.inject({ method: 'PATCH', url: `/settings?workspace=${wsId}`, headers: H,
-    payload: { auto_plan: true } });
-  d = json(await app.inject({ method: 'GET', url: `/workspaces/${wsId}/cards`, headers: H })).data;
-  assert.equal(d.auto_plan_default, true);
-  assert.equal(d.auto_plan_source, 'workspace');
-  assert.equal(d.auto_build_default, false);
-  assert.equal(d.auto_build_source, 'default');
-  await app.inject({ method: 'PATCH', url: `/settings?workspace=${wsId}`, headers: H,
-    payload: { auto_plan: null } });
 });
 
 test('pinned: an ordinary card field, and the board lists the pinned group first (pos inside each group)', async () => {

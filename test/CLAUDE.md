@@ -7,7 +7,7 @@ scripted at the wire through createAgent's `fetch` seam (`ctx.modelFetch`).
 
 ```
 npm test            unit · llm · skills · deploy · session · looper-logic · telegram · models — no Docker, no Postgres
-npm run test:all    test/*.test.ts serially; needs a running Docker daemon
+npm run test:all    test/*.test.ts serially — PRE-RELEASE ONLY (10+ minutes of containers and Postgres)
 npm run test:down   remove the shared Postgres container
 ```
 

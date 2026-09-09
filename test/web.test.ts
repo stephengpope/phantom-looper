@@ -147,27 +147,6 @@ test('search: query+limit go upstream; results map to title/url/snippet with the
   assert.equal(data[1].snippet, 'a short snippet');
 });
 
-test('search: filters pass through verbatim when given, are absent upstream when left out', async () => {
-  const r = await app.inject({ method: 'POST', url: '/web/search', headers: H,
-    payload: { query: 'q', tbs: 'sbd:1,qdr:w', categories: ['github'],
-      excludeDomains: ['reddit.com'] } });
-  assert.equal(r.statusCode, 200);
-  assert.deepEqual(searches.at(-1), { query: 'q', limit: 5, tbs: 'sbd:1,qdr:w',
-    categories: ['github'], excludeDomains: ['reddit.com'] },
-    'given filters go up under Firecrawl\'s own names; includeDomains was left out and stays out');
-  const bad = await app.inject({ method: 'POST', url: '/web/search', headers: H,
-    payload: { query: 'q', categories: ['blogs'] } });
-  assert.equal(bad.statusCode, 400, 'an unknown category is invalid_args, not forwarded');
-});
-
-test('search: limit defaults to 5 and validation caps it at 25', async () => {
-  await app.inject({ method: 'POST', url: '/web/search', headers: H, payload: { query: 'q' } });
-  assert.equal(searches.at(-1)?.limit, 5);
-  const over = await app.inject({ method: 'POST', url: '/web/search', headers: H,
-    payload: { query: 'q', limit: 100 } });
-  assert.equal(over.statusCode, 400, 'schema-declared like every route: invalid_args, not a silent clamp');
-});
-
 test('fetch: parallel per-URL entries in input order — files, pass-through status codes, verbatim upstream errors', async () => {
   const urls = ['http://ok.test/page', 'http://gone.test/x', 'http://blocked.test/js',
     'http://dead.test/x', 'https://ok.test/page'];

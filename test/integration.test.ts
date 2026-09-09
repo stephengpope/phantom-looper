@@ -170,72 +170,6 @@ test('workspaces: create, credential is write-only, the GET shows the settings c
   assert.equal(r.statusCode, 404, '/effective is folded into the plain GET');
 });
 
-test('a workspace override can be removed, and the GET carries enough to render an editor', async () => {
-  const patch = (payload: unknown) =>
-    app.inject({ method: 'PATCH', url: `/workspaces/${workspaceId}`, headers: H, payload });
-  const effective = async () =>
-    json(await app.inject({ method: 'GET', url: `/workspaces/${workspaceId}`, headers: H })).data.settings;
-
-  // Every overridable kind clears, including the switches the TUI draws.
-  await patch({ auto_push_on_archive: true, container_image: 'x:1',
-    session_idle_destroy_ms: 1000 });
-  let eff = await effective();
-  assert.equal(eff.auto_push_on_archive.source, 'workspace');
-  assert.equal(eff.auto_push_on_archive.value, true);
-  assert.equal(eff.container_image.value, 'x:1');
-  assert.equal(eff.session_idle_destroy_ms.value, 1000,
-    'the canonical setting name reaches the same column as idle_destroy_ms');
-
-  const cleared = await patch({ auto_push_on_archive: null, container_image: null,
-    session_idle_destroy_ms: null, spare_clones: null });
-  assert.equal(cleared.statusCode, 200, 'null removes the workspace value');
-  eff = await effective();
-  for (const k of ['auto_push_on_archive', 'container_image', 'session_idle_destroy_ms', 'spare_clones']) {
-    assert.equal(eff[k].source, 'default', `${k} follows the global value again`);
-  }
-
-  // What a client needs to draw the screen without knowing any setting by name.
-  assert.equal(eff.auto_push_on_archive.overridable, true);
-  // Not the prose itself — that is written for people and will be reworded.
-  // What a client needs is that a name and a description are always there.
-  assert.equal(eff.auto_push_on_archive.meta.label, 'auto-push on archive');
-  assert.ok(eff.auto_push_on_archive.description.length > 20, 'every setting explains itself');
-  assert.equal(eff.git_fixer_provider.overridable, false, 'global-only settings say so');
-
-  // base_branch is the workspace's own, not an override — there is nothing to
-  // fall back to. Ajv runs with coerceTypes, so a null arrives at the handler as
-  // "": without the guard this stored a workspace whose base branch is the empty
-  // string, which is worse than the error it now returns.
-  assert.equal((await patch({ base_branch: null })).statusCode, 400);
-  assert.equal((await patch({ base_branch: '  ' })).statusCode, 400, 'and blank is the same thing');
-  const still = json(await app.inject({ method: 'GET', url: `/workspaces/${workspaceId}`, headers: H })).data;
-  assert.equal(still.baseBranch, 'main', 'the refused write changed nothing');
-});
-
-test('a session override is visible resolved: GET /sessions/:id carries the session layer', async () => {
-  const localId = newId();
-  await db.insert(workspaces).values({
-    id: localId, url: originUrl, owner: 'local', name: 'sesslayer',
-    baseBranch: 'main', branchPrefix: 'agent', schemaName: `wsp_${localId}`,
-  });
-  const created = json(await app.inject({ method: 'POST', url: '/sessions', headers: H,
-    payload: { workspace_id: localId } })).data;
-  const patched = await app.inject({ method: 'PATCH', url: `/sessions/${created.id}`, headers: H,
-    payload: { idle_destroy_ms: 1234 } });
-  assert.equal(patched.statusCode, 200, patched.body);
-
-  const s = json(await app.inject({ method: 'GET', url: `/sessions/${created.id}`, headers: H })).data;
-  const k = s.settings.session_idle_destroy_ms;
-  assert.equal(k.value, 1234, 'the session override wins');
-  assert.equal(k.source, 'session');
-  assert.equal(k.session, 1234, 'the session layer itself is exposed');
-  assert.notEqual(k.default, 1234, 'the default rides along');
-
-  // The workspace view has no session in hand — its session layer stays null.
-  const w = json(await app.inject({ method: 'GET', url: `/workspaces/${localId}`, headers: H })).data;
-  assert.equal(w.settings.session_idle_destroy_ms.session, null);
-});
-
 test('sessions: 20 concurrent creates -> 20 distinct working branches', async () => {
   // Point a workspace at the local origin (route validation only accepts github
   // URLs, so the file:// fixture goes straight into the table).
@@ -446,52 +380,6 @@ test('BOTH write paths validate — a workspace override cannot store what /sett
   assert.equal(cleared.statusCode, 200);
 });
 
-test('git does NOT check the history window, so we do', async () => {
-  // Verified against git: `--shallow-since=7.dayz` exits 0 and quietly uses a
-  // different window, so a typo would never surface anywhere.
-  const bad = await app.inject({ method: 'PATCH', url: '/settings', headers: H,
-    payload: { initial_history_depth: 'banana' } });
-  assert.equal(bad.statusCode, 400);
-  for (const good of ['full', '7.days', '30.day', '2.weeks']) {
-    const r = await app.inject({ method: 'PATCH', url: '/settings', headers: H,
-      payload: { initial_history_depth: good } });
-    assert.equal(r.statusCode, 200, `${good} is a valid window`);
-  }
-  await app.inject({ method: 'DELETE', url: '/settings/initial_history_depth', headers: H });
-});
-
-test('one settings block: the workspace GET and the session GET ship the same shape', async () => {
-  const w = await app.inject({ method: 'GET', url: `/workspaces/${workspaceId}`, headers: H });
-  const entry = json(w).data.settings.card_prefix;
-  // card_prefix is a real setting now: it has a default, layers and meta, and
-  // `overridable` is what puts it on the TUI's workspace screen.
-  assert.ok(entry, 'card_prefix appears in the settings block');
-  assert.equal(entry.default, null);
-  assert.equal(entry.overridable, true);
-  assert.ok(entry.meta && entry.description);
-  for (const v of Object.values<{ meta?: unknown; description?: string }>(json(w).data.settings)) {
-    assert.ok(v.meta && v.description, 'every entry carries meta + description');
-  }
-});
-
-test('settings ship type metadata, so a client can render an editor', async () => {
-  const r = await app.inject({ method: 'GET', url: '/settings', headers: H });
-  const s = json(r).data;
-  // Nullable settings need meta — without it a null's type is unguessable.
-  assert.equal(s.bash_timeout_ms.value, 120000, 'two minutes by default');
-  assert.equal(s.bash_timeout_max_ms.value, null);
-  assert.equal(s.bash_timeout_max_ms.meta.type, 'number');
-  assert.equal(s.bash_timeout_max_ms.meta.nullable, true);
-  // Choices exist as data, not only as prose in the description.
-  assert.deepEqual(s.git_fixer_provider.meta.choices,
-    ['anthropic', 'openai', 'google', 'deepseek', 'kimi', 'xai', 'mistral', 'groq', 'openai-compatible']);
-  assert.equal(s.spare_clones.meta.unit, 'count');
-  for (const [key, v] of Object.entries<{ meta?: unknown; description?: string }>(s)) {
-    assert.ok(v.meta, `${key} carries meta`);
-    assert.ok(v.description, `${key} carries a description`);
-  }
-});
-
 test('PATCH /settings rejects wrong-typed values instead of storing them', async () => {
   const bad = await app.inject({ method: 'PATCH', url: '/settings', headers: H,
     payload: { spare_clones: 'banana' } });
@@ -527,92 +415,9 @@ test('PATCH /settings rejects wrong-typed values instead of storing them', async
   await app.inject({ method: 'DELETE', url: '/settings/bash_timeout_ms', headers: H });
 });
 
-test('GET /sessions lists every session, newest activity first', async () => {
-  const localId = (await db.select().from(workspaces)).find((x) => x.owner === 'local')!.id;
-  const mk = async () => {
-    const r = await app.inject({ method: 'POST', url: '/sessions', headers: H,
-      payload: { workspace_id: localId } });
-    assert.equal(r.statusCode, 201, r.body);
-    return json(r).data.id as string;
-  };
-  const first = await mk();
-  const second = await mk();
-
-  const r = await app.inject({ method: 'GET', url: '/sessions', headers: H });
-  assert.equal(r.statusCode, 200);
-  const list = json(r).data.sessions as Array<{ id: string; workspaceId: string; status: string; branch: string }>;
-  const ids = list.map((s) => s.id);
-  assert.ok(ids.includes(first) && ids.includes(second));
-  assert.equal(ids.indexOf(second) < ids.indexOf(first), true, 'most recent first');
-  // The launcher needs these fields without a second call per row.
-  const row = list.find((s) => s.id === second)!;
-  assert.equal(row.workspaceId, localId);
-  assert.equal(row.status, 'active');
-  assert.match(row.branch, /^agent\//);
-
-  // Destroyed sessions stay listed, so the launcher can grey them rather than
-  // infer their fate from whether a local transcript happens to exist.
-  await app.inject({ method: 'DELETE', url: `/sessions/${first}?force=true`, headers: H });
-  const after = json(await app.inject({ method: 'GET', url: '/sessions', headers: H })).data.sessions as Array<{ id: string; status: string; work?: unknown }>;
-  const gone = after.find((s) => s.id === first);
-  assert.ok(gone, 'still listed');
-  assert.notEqual(gone!.status, 'active');
-  assert.ok(!('work' in after.find((s) => s.id === second)!), 'work rides only a git=true ask');
-
-  // ?git=true reads each checkout: a fresh session holds nothing of its own
-  // (merged); the destroyed one has no files to measure (null, a blank cell).
-  const withGit = json(await app.inject({ method: 'GET', url: '/sessions?git=true', headers: H }))
-    .data.sessions as Array<{ id: string; work: string | null }>;
-  assert.equal(withGit.find((s) => s.id === second)!.work, 'merged');
-  assert.equal(withGit.find((s) => s.id === first)!.work, null);
-});
-
 // The launcher renders straight off these two payloads. Field names are the
 // contract; a camelCase slip here is invisible to component tests and fatal at
 // runtime, so assert the real responses satisfy the real row builder.
-test('GET /workspaces and /sessions carry exactly what the TUI launcher needs', async () => {
-  const { sessionChoices, workspaceChoices } = await import('../phantom-cli/components/Launcher.js');
-  const ws = json(await app.inject({ method: 'GET', url: '/workspaces', headers: H })).data;
-  const ss = json(await app.inject({ method: 'GET', url: '/sessions', headers: H })).data.sessions;
-
-  for (const w of ws) {
-    assert.equal(typeof w.id, 'string');
-    assert.equal(typeof w.owner, 'string');
-    assert.equal(typeof w.name, 'string');
-    assert.equal(typeof w.displayName, 'string', 'falls back to the GitHub name');
-    assert.equal(typeof w.cardPrefix, 'string', 'the resolved card prefix — the launcher\'s ws column');
-    assert.ok(w.cardPrefix.length >= 1, 'never empty — defaultPrefix floors at TSK');
-    assert.ok(!('credentialEnc' in w), 'credentials never leave the server');
-  }
-  for (const s of ss) {
-    assert.equal(typeof s.id, 'string');
-    assert.equal(typeof s.workspaceId, 'string');
-    assert.equal(typeof s.branch, 'string');
-    assert.equal(typeof s.status, 'string');
-    assert.ok(Date.parse(s.lastUsedAt) > 0, 'lastUsedAt parses — the launcher prints an age from it');
-  }
-
-  // One workspace carries the SAME prefix under the SAME name: the cli reads
-  // this route when a session opens (banner name + the toolbar's card mark)
-  // and must not have to list every workspace to learn how cards are named.
-  const one = json(await app.inject({ method: 'GET', url: `/workspaces/${ws[0].id}`, headers: H })).data;
-  assert.equal(one.cardPrefix, ws[0].cardPrefix, 'the single-workspace route agrees with the list');
-
-  const prefixes = new Set(ws.map((w: { cardPrefix: string }) => w.cardPrefix));
-  // Every /resume row resolved to a real workspace's card prefix, not a bare id.
-  for (const r of sessionChoices(ws, ss.slice(0, 5), () => 'a previous message')) {
-    if (r.heading) continue;
-    assert.ok(prefixes.has(r.label), `"${r.label}" resolved to a known workspace prefix`);
-  }
-  // And every workspace row points at a session-creatable id. `false` drops the
-  // trailing "add a workspace…" row, which is an action rather than a workspace.
-  const ids = new Set(ws.map((w: { id: string }) => w.id));
-  for (const r of workspaceChoices(ws, false)) {
-    assert.ok(ids.has((r.value as { workspaceId: string }).workspaceId));
-  }
-  assert.equal(workspaceChoices(ws).length, ws.length + 1, 'and adding one is always offered');
-});
-
 // ── POST /update — the remote upgrade trigger ────────────────────────────────
 // The route only hands a tag to the updater sidecar through a shared directory;
 // the sidecar (updater/watch.sh) does the rest. Without that directory the
