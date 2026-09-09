@@ -26,7 +26,7 @@ export type ToolbarPart = string | { text: string; mark: string };
 
 /** Parts that belong together — the card and its git dot, the model and its
  *  token meter. A group joins its parts with a bare space so they read as ONE
- *  fact (`PHA-7 • not pushed`, `gpt-5 ↓ 12.4k`); the heavier ` · ` is kept for
+ *  fact (`PHA-7 • not pushed`, `gpt-5 12.4k ↓`); the heavier ` · ` is kept for
  *  between groups, so the eye parses facts, not a flat list of fields. */
 export type ToolbarGroup = ToolbarPart[];
 

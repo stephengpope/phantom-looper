@@ -39,7 +39,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import type { ModelMessage, Tool } from 'ai';
 import { runTurn } from './agent.js';
 import { buildAgent, buildAssistantAgent } from './agentFromConfig.js';
-import { phaseLabel, tokenCount, formatTokens } from './state.js';
+import { phaseLabel, tokenCount, formatTokensOut } from './state.js';
 import { activeHold } from './sessions.js';
 import { Transcript, lastUserMessage, type TranscriptHeader } from './session.js';
 import { complete, matches } from './commands.js';
@@ -614,11 +614,11 @@ export function App({
   // streamed on top. Hidden at zero — a fresh session has no news yet.
   const tokensShown = session
     ? session.totalTokens + ((session.busy || session.remoteBusy) ? tokenCount(session.tokens) : 0) : 0;
-  const tokensMark = tokensShown > 0 ? `↓ ${formatTokens(tokensShown)}` : undefined;
+  const tokensMark = tokensShown > 0 ? formatTokensOut(tokensShown) : undefined;
   // Order: the card with its git dot (what you're building and whether it is
   // safe), the mode, the model with its token meter, the bg tasks, a notice
   // pinned last. Pairs that answer ONE question ride in one group — the line
-  // reads `PHA-7 • not pushed · code mode on · gpt-5 ↓ 12.4k`, facts separated
+  // reads `PHA-7 • not pushed · code mode on · gpt-5 12.4k ↓`, facts separated
   // by ` · `, not a flat list of fields.
   const withMode = (rest?: string): ToolbarGroup[] =>
     [[cardMark, workMark], [modeMark], [modelMark, tokensMark], [taskMark], [rest]]

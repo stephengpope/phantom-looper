@@ -9,7 +9,7 @@
 import { SelectList, type Choice } from './SelectList.js';
 import { Screen, type FooterKey } from './Screen.js';
 import { tableChoices, type TableRow } from './table.js';
-import { formatTokens } from '../state.js';
+import { formatTokensOut } from '../state.js';
 
 export interface WorkspaceInfo {
   id: string; owner: string; name: string; displayName?: string | null;
@@ -161,7 +161,7 @@ export function sessionChoices(
   // in place and must not jitter as messages and names change under it.
   // The ORDER is the status bar's: the card with its git dot first
   // (`PHA 7 in_progress • not pushed`), the model with its token meter near
-  // the end (`gpt-5 ↓ 12.4k`) — the two places the same facts show read the
+  // the end (`gpt-5 12.4k ↓`) — the two places the same facts show read the
   // same way. card is 6 = the title (4) + the 2-cell gutter inside the width
   // (the column law), room for four digits; it sits right of ws so `PHA  7`
   // reads as the board's PHA-7 and survives a narrow terminal. work is 14 =
@@ -212,9 +212,9 @@ export function sessionChoices(
     // the server did not give: the list may not have been fetched with
     // git=true yet (the instant first paint), or there is nothing to measure.
     const workCol = s.work ? WORK[s.work] : '·';
-    // The tokens meter is the status bar's own shape (`↓ 12.4k`) and the
+    // The tokens meter is the status bar's own shape (`12.4k ↓`) and the
     // status bar's own rule: zero or unknown is no news, the blank-fact dot.
-    const tokensCol = s.tokensOutput ? `↓ ${formatTokens(s.tokensOutput)}` : '·';
+    const tokensCol = s.tokensOutput ? formatTokensOut(s.tokensOutput) : '·';
     // who and when answer ONE question — whose session is this and how fresh
     // — so they ride in one cell; a fresh open with no activity time shows
     // just the driver, never "manual ·".

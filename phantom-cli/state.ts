@@ -250,7 +250,7 @@ export function phaseLabel(live: Part[]): string {
 // --- tokens ------------------------------------------------------------------
 
 /**
- * Output tokens this turn, for the status line ("↓ 1.7k tokens"). Every
+ * Output tokens this turn, for the status line ("1.7k ↓"). Every
  * provider reports usage once per step, when the step ends; between those
  * reports the count moves on an estimate from the streamed text (~4 chars a
  * token) so it is never stuck while a long reply streams, and snaps to the
@@ -294,6 +294,11 @@ export function formatTokens(n: number): string {
   const k = n / 1000;
   return k < 10 ? `${k.toFixed(1).replace(/\.0$/, '')}k` : `${Math.round(k)}k`;
 }
+
+/** The output-token meter shown everywhere (toolbar, launcher, status line):
+ *  950 → "950 ↓", 1700 → "1.7k ↓". ONE shape, so the same fact reads the
+ *  same way wherever it shows. */
+export const formatTokensOut = (n: number): string => `${formatTokens(n)} ↓`;
 
 /** 44 → "44s", 124 → "2m 4s". */
 export function formatElapsed(ms: number): string {

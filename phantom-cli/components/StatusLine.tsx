@@ -1,4 +1,4 @@
-// "⠹ Working… (44s · ↓ 1.7k tokens · thinking) · [esc] to interrupt" — Claude
+// "⠹ Working… (44s · 1.7k ↓ · thinking) · [esc] to interrupt" — Claude
 // Code's shape: spinner (ink-spinner, as in Gemini CLI / Qwen Code /
 // Nanocoder) + glimmering label, then ONE parenthetical with elapsed, output
 // tokens so far, and the phase (thinking / writing / the tool that is
@@ -13,7 +13,7 @@ import { Text } from './Text.js';
 import Spinner from 'ink-spinner';
 import { turnAgeColor } from '../turnAge.js';
 import { Shimmer } from './Shimmer.js';
-import { formatElapsed, formatTokens } from '../state.js';
+import { formatElapsed, formatTokensOut } from '../state.js';
 
 export function StatusLine({ phase, startedAt, tokens = 0, escHint }: {
   /** `thinking`, `writing`, a tool name, or '' between parts. */
@@ -24,7 +24,7 @@ export function StatusLine({ phase, startedAt, tokens = 0, escHint }: {
   // 1s tick just for the elapsed counter; the shimmer has its own cadence.
   useAnimation({ interval: 1000 });
   const bits = [formatElapsed(Date.now() - startedAt)];
-  if (tokens > 0) bits.push(`↓ ${formatTokens(tokens)} tokens`);
+  if (tokens > 0) bits.push(formatTokensOut(tokens));
   if (phase) bits.push(phase);
   return (
     <Box marginTop={1}>

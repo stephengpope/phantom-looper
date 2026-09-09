@@ -76,7 +76,7 @@ export interface LoadedSession {
   startedAt: number;
   /** Output tokens so far this turn (status line). Reset when a turn starts. */
   tokens: TurnTokens;
-  /** Output tokens over the session's LIFE (the toolbar's `↓ 12.4k`): the
+  /** Output tokens over the session's LIFE (the toolbar's `12.4k ↓`): the
    *  sum of the record's usage lines at the last seat (open or reseat — the
    *  local file IS the record's working copy), plus each finished turn's
    *  count folded in at turn end. A running turn's `tokens` ride on top live.
