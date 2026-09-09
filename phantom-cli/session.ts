@@ -60,14 +60,26 @@ export interface Seated { text: string; localKept: boolean }
  *  hour's conversation). Such a file is kept and reported so the caller
  *  uploads it. Anything else — no file, the same text, a file that matches
  *  only up to a point (both sides ran turns after the same moment: the saved
- *  ones win) — is replaced by the server's copy, an empty one included. */
+ *  ones win) — is replaced by the server's copy.
+ *
+ *  A session that has said NOTHING has no transcript, and this writes no file
+ *  for it. The file is the conversation; there is not one yet. Writing an
+ *  empty one cost a session its model: Transcript takes an existing file to
+ *  mean its header is already in it, so line 1 became the first user message,
+ *  the header was never written, and the save had nothing to pin from — that
+ *  session ran turn after turn on the global settings with a blank model in
+ *  /resume. Nothing to misread if nothing is there. */
 export function adoptServerCopy(sessionId: string, raw: string | null, file = transcriptPath(sessionId)): Seated {
   const server = raw ?? '';
   mkdirSync(SESSIONS_DIR, { recursive: true, mode: 0o700 });
   if (existsSync(file)) {
     const local = readFileSync(file, 'utf8');
     if (local.length > server.length && local.startsWith(server)) return { text: local, localKept: true };
+    // A local file with nothing to replace it: leave it be rather than
+    // truncate it to zero, which is the same trap by another road.
+    if (!server) return { text: local, localKept: local.length > 0 };
   }
+  if (!server) return { text: '', localKept: false };
   writeFileSync(file, server, { mode: 0o600 });
   return { text: server, localKept: false };
 }

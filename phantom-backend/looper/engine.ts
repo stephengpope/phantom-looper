@@ -364,7 +364,7 @@ export class LooperEngine {
         // said anything runs on its pin, not on whatever the settings say now.
         const model = pinnedModel(agentModelConfig(cfg, 'supervisor'), cfg,
           sessionPin(supOpened.session as { provider?: string | null; model?: string | null;
-            baseUrl?: string | null }, supOpened.header));
+            baseUrl?: string | null }));
         const supMaxSteps = agentMaxSteps(cfg, 'supervisor');
         model.fetch = this.deps.modelFetch;
         model.onRetry = (t) => log.warn({ card: card.seq, agent: 'supervisor' }, t);

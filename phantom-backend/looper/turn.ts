@@ -73,13 +73,12 @@ export async function runCodingTurn(
     ...deps.extraTools,
   };
   // THE rule, the same one the app applies: a session that has said anything
-  // runs on its pin — the row's model, or (rows written before the columns) its
-  // transcript header's. The global settings reach a session with nothing said
-  // yet and nothing else, so a /model change cannot land mid-conversation just
-  // because the turn happened to be run by the server.
+  // runs on its pin — the row's model, and only the row's. The global settings
+  // reach a session with nothing said yet and nothing else, so a /model change
+  // cannot land mid-conversation just because the turn happened to be run by
+  // the server.
   const pinned = pinnedCfg(values, sessionPin(
-    opened.session as { provider?: string | null; model?: string | null; baseUrl?: string | null },
-    opened.header));
+    opened.session as { provider?: string | null; model?: string | null; baseUrl?: string | null }));
   const model = modelConfigFrom(pinned);
   const { agent } = buildCodingAgent(pinned, tools, opened.instructions, deps.modelFetch, deps.onRetry);
   const messages: ModelMessage[] = [...opened.messages, { role: 'user', content: message }];
@@ -117,13 +116,14 @@ export async function runCodingTurn(
     feed?.publish(id, deps.client, { event: 'turn-end' });
   }
 
-  // The header's model is FROZEN only once the session is pinned. While the
-  // row carries no pin (a fresh session, a duplicate's copy), the header is
-  // provisional: this save is what pins the session, so it must name the
-  // model that actually ran — not whatever an earlier pick left in it. The
-  // frozen prompt and the header's other fields travel untouched either way.
+  // The header records what RAN. While the row carries no pin (a fresh
+  // session, a duplicate's copy) this save is what pins the session, so the
+  // header must be brought to the model that actually ran — not whatever an
+  // earlier pick, or a copied conversation, left in it. Once the row is
+  // pinned the header is history and stays untouched. The frozen prompt and
+  // the header's other fields travel either way.
   const rowPinned = sessionPin(
-    opened.session as { provider?: string | null; model?: string | null; baseUrl?: string | null }, null);
+    opened.session as { provider?: string | null; model?: string | null; baseUrl?: string | null });
   // base_url: undefined OVERRIDES an old endpoint (JSON.stringify drops the
   // key) — a provider switch must not inherit the last model's endpoint.
   const running = { provider: model.provider, model: model.model, base_url: model.baseUrl ?? undefined };

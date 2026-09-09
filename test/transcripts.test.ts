@@ -279,8 +279,8 @@ test('duplicate: the flush and the cut — the copy holds ALL the source\'s work
   const u = json(await app.inject({ method: 'GET', url: `/sessions/${copy.id}/token-usage`, headers: H })).data;
   assert.deepEqual([u.input, u.output, u.cache_read, u.cache_write], [0, 0, 0, 0], 'the copy counts its own spend from birth');
 
-  // The transcript: header rewritten, the model fields GONE, the usage line
-  // GONE — the conversation and the frozen prompt intact.
+  // The transcript: only the identity rewritten, the usage lines GONE — the
+  // conversation, the frozen prompt AND the model that ran all travel whole.
   const t = await app.inject({ method: 'GET', url: `/sessions/${copy.id}/transcript`, headers: H });
   const text = json(t).data.data as string;
   const lines = text.trim().split('\n');
@@ -288,15 +288,23 @@ test('duplicate: the flush and the cut — the copy holds ALL the source\'s work
   assert.equal(header.session_id, copy.id);
   assert.equal(header.branch, copy.branch);
   assert.equal(header.system_prompt, 'FROZEN PROMPT', 'the frozen prompt travels');
-  assert.ok(!('provider' in header) && !('model' in header) && !('base_url' in header),
-    'the copy\'s header names no model — it is born unpinned');
+  // The header is a RECORD of what the source ran, and a record is not edited
+  // to change a decision. It travels untouched; the copy is unpinned because
+  // its ROW carries no model, which is the only place a pin lives. Emptying
+  // the header used to be the mechanism, and it was the wrong one.
+  assert.equal(header.provider, 'anthropic', 'the source\'s model still stands in the record');
+  assert.ok(typeof header.model === 'string' && header.model.length > 0);
   assert.ok(!lines.some((l) => l.includes('"usage"')), 'usage lines do not travel');
   assert.deepEqual(JSON.parse(lines[1]), { role: 'user', content: 'build the thing' });
 
   // The point of the feature: the first NEW save pins whatever model the
-  // header then names — the model switch lands on the copy.
+  // header then names — the model switch lands on the copy. The copy's writer
+  // brings line 1 to what IS about to run, endpoint included: switching
+  // provider drops the source's endpoint rather than inheriting it, which is
+  // why the writers set base_url explicitly instead of leaving it be.
+  const { base_url: _sourceEndpoint, ...carried } = header as Record<string, unknown>;
   const copyData = [
-    JSON.stringify({ ...header, provider: 'openai', model: 'gpt-x' }),
+    JSON.stringify({ ...carried, provider: 'openai', model: 'gpt-x' }),
     JSON.stringify({ role: 'user', content: 'keep going' }),
   ].join('\n') + '\n';
   await app.inject({ method: 'PUT', url: `/sessions/${copy.id}/transcript`, headers: asClient('B'), payload: { data: copyData } });

@@ -115,25 +115,29 @@ export function buildCodingAgent(
 // changing /model can no longer reach a conversation in progress — not from the
 // app, not from the looper, not from Telegram, not from a plan-mode flip.
 
-/** What a session is pinned to: the row's columns, or — for rows written
- *  before the columns existed — its transcript header. */
+/** What a session is pinned to: its row's columns, and nothing else. */
 export interface ModelPin { provider?: string | null; model?: string | null; baseUrl?: string | null }
 
-/** The pin for one session. The row wins whole; a row missing the pair falls
- *  back to the header whole. Never mixed field by field: a provider from one
- *  source and an endpoint from the other is exactly the split this prevents. */
+/** The pin for one session — THE ROW, whole or not at all. Never mixed field
+ *  by field: a provider from one source and an endpoint from another is
+ *  exactly the split this prevents.
+ *
+ *  The header is NOT a fallback. It records what ran; the row decides what
+ *  runs. When the header could also pin, a duplicate had to be stripped of
+ *  its model to be born unpinned — the copy would otherwise inherit the
+ *  source's pin from the very transcript it copied, which is the opposite of
+ *  what duplicating is for. One home for the fact, and that whole problem is
+ *  gone: a copy carries its conversation untouched and is unpinned because
+ *  its ROW is.
+ *
+ *  A session old enough to carry a model in its header but not in its row
+ *  reads as unpinned and follows the settings for one turn, which then pins
+ *  it from what actually ran. */
 export function sessionPin(
   row?: { provider?: string | null; model?: string | null; baseUrl?: string | null } | null,
-  header?: { provider?: unknown; model?: unknown; base_url?: unknown } | null,
 ): ModelPin | null {
   if (set(row?.provider) && set(row?.model)) {
     return { provider: row!.provider, model: row!.model, baseUrl: row!.baseUrl ?? null };
-  }
-  const hp = typeof header?.provider === 'string' ? header.provider : null;
-  const hm = typeof header?.model === 'string' ? header.model : null;
-  if (set(hp) && set(hm)) {
-    return { provider: hp, model: hm,
-      baseUrl: typeof header?.base_url === 'string' ? header.base_url : null };
   }
   return null;
 }

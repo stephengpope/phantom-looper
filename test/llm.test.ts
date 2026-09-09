@@ -771,20 +771,21 @@ const GLOBAL = { provider: 'openai', model: 'gpt-5', base_url: 'https://gateway.
 
 test('sessionPin: the row wins whole', () => {
   assert.deepEqual(
-    sessionPin({ provider: 'anthropic', model: 'claude-opus-5', baseUrl: null },
-      { provider: 'openai', model: 'gpt-5' }),
+    sessionPin({ provider: 'anthropic', model: 'claude-opus-5', baseUrl: null }),
     { provider: 'anthropic', model: 'claude-opus-5', baseUrl: null });
 });
 
-test('sessionPin: a row without the pair falls back to the header — never a field from each', () => {
-  // The row is empty (a session older than the columns): the header names both.
-  assert.deepEqual(sessionPin({ provider: null, model: null, baseUrl: 'https://row.example' },
-    { provider: 'anthropic', model: 'claude-opus-5', base_url: 'https://head.example' }),
-  { provider: 'anthropic', model: 'claude-opus-5', baseUrl: 'https://head.example' });
+test('sessionPin: the ROW is the pin — a header is a record of what ran, never a pin', () => {
+  // This is what lets a duplicate carry its conversation untouched. The copy's
+  // transcript still names the SOURCE's model in line 1; if that could pin,
+  // the copy would inherit the very model it was made to escape, and the only
+  // way out was to strip the header — editing a record to change a decision.
+  // One home for the fact: the row. The copy's row is empty, so it is unpinned.
+  assert.equal(sessionPin({ provider: null, model: null, baseUrl: 'https://row.example' }), null);
   // Half a row is not a pin: a provider with no model says nothing usable.
-  assert.equal(sessionPin({ provider: 'anthropic', model: null }, null), null);
+  assert.equal(sessionPin({ provider: 'anthropic', model: null }), null);
   // Nothing anywhere — a session with nothing said yet.
-  assert.equal(sessionPin(null, null), null);
+  assert.equal(sessionPin(null), null);
 });
 
 test('pinnedCfg: no pin leaves the global settings exactly as they are', () => {

@@ -11,13 +11,30 @@ const SERVER = '{"role":"user","content":"hi"}\n{"role":"assistant","content":"h
 const EXTRA = '{"role":"user","content":"more"}\n{"role":"assistant","content":[{"type":"tool-call","toolCallId":"t1","toolName":"bash","input":{}}]}\n';
 const file = () => join(mkdtempSync(join(tmpdir(), 'phantom-seat-')), 's.jsonl');
 
-test('no local file: the server copy is written, empty included', () => {
+test('no local file: the server copy is written', () => {
   const f = file();
   assert.deepEqual(adoptServerCopy('s', SERVER, f), { text: SERVER, localKept: false });
   assert.equal(readFileSync(f, 'utf8'), SERVER);
+});
+
+test('a session that has said nothing gets NO file — the file is the conversation', () => {
+  // What an empty file cost: Transcript reads an existing file as "the header
+  // is already in it", so the header was never written, line 1 became the
+  // first user message, and the save had nothing to pin the model from. That
+  // session then ran turn after turn on the global settings with a blank
+  // model in /resume. Nothing to misread if nothing is there.
   const g = file();
   assert.deepEqual(adoptServerCopy('s', null, g), { text: '', localKept: false });
-  assert.ok(existsSync(g) && readFileSync(g, 'utf8') === '', 'an empty file: the working copy appends extend');
+  assert.equal(existsSync(g), false, 'no conversation, no file');
+});
+
+test('an existing local file is never truncated to nothing by an empty server copy', () => {
+  // The same trap by another road: zeroing a file leaves one that exists and
+  // says nothing, which is exactly what the header write skips over.
+  const f = file();
+  writeFileSync(f, SERVER);
+  assert.deepEqual(adoptServerCopy('s', null, f), { text: SERVER, localKept: true });
+  assert.equal(readFileSync(f, 'utf8'), SERVER, 'untouched');
 });
 
 test('local = server text plus more: the local file is kept and reported', () => {

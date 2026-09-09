@@ -647,12 +647,11 @@ export class WindowStore {
             : { credentials: row.agent_git_credentials },
           row.secrets ?? []);
       // THE rule (core agentConfig): a session that has said anything runs on
-      // its pin — the row's provider/model/endpoint, or, for rows written
-      // before those columns, its transcript header's. Global settings reach a
-      // session with nothing said yet and nothing else. The pin is kept on the
-      // entry so every later rebuild (plan mode, /model) resolves the same way
-      // instead of reading the global settings again.
-      const pin = resumed.length > 0 ? sessionPin(row, header) : null;
+      // its pin — the ROW's provider/model/endpoint, and only the row's.
+      // Global settings reach a session with nothing said yet and nothing
+      // else. The pin is kept on the entry so every later rebuild (plan mode,
+      // /model) resolves the same way instead of reading the settings again.
+      const pin = resumed.length > 0 ? sessionPin(row) : null;
       const modelCfg = pinnedCfg(await this.readCfg(), pin);
       const { agent, summary } = this.buildFor(tools, modelCfg, instructions, row.id);
       const transcript = (this.opts.makeTranscript ?? ((h: TranscriptHeader) => new Transcript(h)))({
@@ -664,9 +663,11 @@ export class WindowStore {
         system_prompt: instructions,
       });
       // An unpinned session's header model is PROVISIONAL: a duplicate's copy
-      // arrives with the model fields stripped from its transcript, so line 1
-      // on disk names what is in effect NOW (and /model keeps moving it until
-      // the first new message). The first save pins whatever it then says.
+      // arrives carrying the SOURCE's model in line 1, which is not what the
+      // copy will run — so line 1 is brought to what is in effect NOW (and
+      // /model keeps moving it until the first new message). The copy is
+      // unpinned because its ROW is, never because its header was emptied.
+      // The first save pins whatever it then says.
       if (!pin) transcript.setModel({ provider: summary.provider, model: summary.model,
         base_url: modelCfg.base_url ? String(modelCfg.base_url) : null });
       // The card this session builds, named the way the board names it

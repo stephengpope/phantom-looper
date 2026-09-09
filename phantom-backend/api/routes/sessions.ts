@@ -56,11 +56,14 @@ const lockedErr = (s: SessionRow) =>
  *  two fields are rewritten — and the model fields are DROPPED (a key patched
  *  to undefined serializes away), because the copy is born unpinned: it
  *  follows /model and presets until its first new message, exactly like a
- *  fresh session. An unparsable first line is left alone — the loader skips
- *  what it cannot parse, same as everywhere. */
+ *  fresh session — because its ROW carries no pin, which is the only place a
+ *  pin lives. The header travels WHOLE: it records what the source ran, and
+ *  the copy's first message rewrites it to what the copy ran. An unparsable
+ *  first line is left alone — the loader skips what it cannot parse, same as
+ *  everywhere. */
 export function rewriteTranscriptHeader(
   data: string,
-  patch: { session_id: string; branch: string; provider?: undefined; model?: undefined; base_url?: undefined },
+  patch: { session_id: string; branch: string },
 ): string {
   const nl = data.indexOf('\n');
   const first = nl < 0 ? data : data.slice(0, nl);
@@ -621,9 +624,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       description: 'Takes the source\'s lock (409 while another client holds it), commits and pushes ' +
         'everything outstanding to the source\'s branch on origin, then creates a NEW session whose own ' +
         'branch is cut FROM that branch — the copy starts with all of the source\'s work. The transcript ' +
-        'travels minus its usage lines and model pin: the copy is born unpinned (it follows the model ' +
-        'settings until its first new message, like a fresh session) and its token totals count its own ' +
-        'spend from birth. The frozen system prompt, name and plan mode travel. A destroyed source skips ' +
+        'travels whole minus its usage lines: the copy is born unpinned (its ROW carries no model, so it ' +
+        'follows the model settings until its first new message, like a fresh session) and its token ' +
+        'totals count its own spend from birth. The frozen system prompt, name and plan mode travel. A destroyed source skips ' +
         'the flush — its branch on origin is the record. A failed flush aborts the copy with the error.',
       params: idParam } },
     async (req, reply) => {
@@ -670,14 +673,16 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         await ctx.db.update(sessions).set({
           planMode: src.planMode,
           // The name travels; turn_count stays 0 — the copy renames on its own
-          // clock. NO pin: the copy follows the model settings until its first
-          // new message saves one. NO token totals: the transcript's usage
-          // lines are stripped below, so the copy counts its own spend from
-          // birth (nulls = nothing recorded yet, the save route's own start).
+          // clock. NO pin, and that is the whole mechanism: the pin lives in
+          // the ROW and the copy's row has none, so it follows the model
+          // settings until its first new message saves one. The conversation
+          // travels untouched — the header still names what the SOURCE ran,
+          // and the first new message rewrites it to what the copy ran. NO
+          // token totals: the usage lines are stripped below, so the copy
+          // counts its own spend from birth.
           ...(t[0]?.data != null ? {
             transcript: stripUsageFromJsonl(rewriteTranscriptHeader(t[0].data, {
               session_id: copy.id, branch: copy.branch,
-              provider: undefined, model: undefined, base_url: undefined,
             })),
             lastUserMessage: src.lastUserMessage, name: src.name, nameManual: src.nameManual,
             transcriptUpdatedAt: stamp,
