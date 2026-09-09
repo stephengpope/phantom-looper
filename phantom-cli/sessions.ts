@@ -83,10 +83,12 @@ export interface LoadedSession {
    *  An esc-cut step's estimate stands until the next seat recomputes. */
   totalTokens: number;
   abort: AbortController | null;
-  /** Typed while a turn was running. Sent together, in order, as ONE turn
-   *  when the running one ends — the way Claude Code holds lines under the
-   *  active turn. Per session: what you queued for one is not said to
-   *  another. */
+  /** Typed while a turn is running. The turn drains it whole into the very
+   *  next model call (the nudge seam — a typed word steers the agent
+   *  mid-turn); whatever is still here when the turn ends starts its own
+   *  turn, one message at a time. ONE array per session, mutated in place —
+   *  the running turn holds its reference. Per session: what you queued for
+   *  one is not said to another. */
   queue: string[];
   /** Finished (or failed) while you were looking somewhere else. */
   unseen: boolean;
@@ -381,12 +383,16 @@ export class SessionStore {
    *  stops. */
   abortTurn(id: string): void { this.get(id)?.abort?.abort(); }
 
-  /** Say it now if the session is free, otherwise hold it until it is. */
+  /** Say it now if the session is free, otherwise queue it behind the
+   *  running turn. The queue is ONE array per session, mutated in place,
+   *  never replaced: the running turn holds its reference and drains it
+   *  into the next model call (the nudge seam in createAgent), so a new
+   *  array would be a queue the turn cannot see. */
   say(id: string, text: string): void {
     const e = this.get(id);
     if (!e) return;
     if (!e.busy) { void this.send(id, text); return; }
-    e.queue = [...e.queue, text];
+    e.queue.push(text);
     this.notify();
   }
 
@@ -394,7 +400,7 @@ export class SessionStore {
   clearQueue(id: string): void {
     const e = this.get(id);
     if (!e || !e.queue.length) return;
-    e.queue = [];
+    e.queue.length = 0;
     this.notify();
   }
 
@@ -402,8 +408,7 @@ export class SessionStore {
   unqueue(id: string): string | undefined {
     const e = this.get(id);
     if (!e || !e.queue.length) return undefined;
-    const last = e.queue[e.queue.length - 1];
-    e.queue = e.queue.slice(0, -1);
+    const last = e.queue.pop();
     this.notify();
     return last;
   }
@@ -515,6 +520,17 @@ export class SessionStore {
         // The transcript records the step — messages and usage line — through
         // createAgent's `record` seam, the same way every agent does.
         e.transcript,
+        // The nudge seam: the turn drains this queue into the very next
+        // model call mid-turn (what stays queued at turn end starts its own
+        // turn below, as ever). Whatever was poured lands in the transcript
+        // through the record seam; here it joins history and the screen.
+        { queued: e.queue, onNudge: (texts) => {
+          for (const t of texts) {
+            e.done = [...e.done, { kind: 'user', id: nextId('user'), text: t }];
+            e.history.push({ role: 'user', content: t });
+          }
+          this.notify();
+        } },
       );
     } catch (err) {
       if (!ac.signal.aborted && !streamErrored) {
@@ -557,8 +573,7 @@ export class SessionStore {
       // whether the turn ended on its own or was interrupted. Esc becomes
       // "skip to next": abort fires, the front message starts immediately.
       if (e.queue.length) {
-        const next = e.queue[0];
-        e.queue = e.queue.slice(1);
+        const next = e.queue.shift()!;
         void this.send(e.id, next);
       }
     }

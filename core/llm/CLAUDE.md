@@ -83,6 +83,15 @@ tool call with no result, and pins events by `at` (messages before it) so
 plus a usage line land through `appendStep`. The step seam is used because
 the SDK's turn-end `response.messages` carries only the final step.
 
+`queued` is the nudge seam: pass a live `string[]` (plus `onNudge`) to
+`stream`/`generate` and a per-call `prepareStep` drains it whole before
+every model call — the texts join that call's messages (carried forward by
+the SDK), are recorded like a step, and are reported through `onNudge`.
+Leftovers at turn end are the caller's to run as the next turn; the SDK
+ends a turn unconditionally when a step has no tool calls. The per-call
+prepareStep replaces the constructor's (call options merge over settings),
+so the cache marks are re-applied inside it.
+
 ## Cache marks
 
 `withCacheBreakpoints` goes on at every conversation-shaped call site

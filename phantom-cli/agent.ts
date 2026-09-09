@@ -36,11 +36,18 @@ export async function runTurn(
   // Where the turn is recorded (createAgent's usage seam): each step's
   // messages AND its usage line land through this — pass the transcript.
   record?: StepRecord,
+  // The session's live queue (createAgent's nudge seam): before every model
+  // call the whole queue is drained into that call, so a message typed
+  // mid-turn reaches the very next LLM call. `onNudge` fires with what was
+  // drained, so the store can mirror it into history and on screen.
+  nudge?: { queued: string[]; onNudge?: (texts: string[]) => void },
 ): Promise<ModelMessage[]> {
   const result = await agent.stream({
     messages,
     abortSignal: signal,
     record,
+    queued: nudge?.queued,
+    onNudge: nudge?.onNudge,
     onStepEnd: (step) => onStep?.(step.response.messages as ModelMessage[]),
   });
 

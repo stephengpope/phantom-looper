@@ -686,8 +686,9 @@ export function App({
         {session && session.queue.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
             <Text dimColor>{`  queued — esc sends next · /pop edits last`}</Text>
+            <Text>{' '}</Text>
             {session.queue.map((q, i) => (
-              <Text key={i}><Text color="cyan">{`  ${i + 1}›`}</Text>{` ${q}`}</Text>
+              <Text key={i}><Text color="cyan">{`  ›`}</Text>{` ${q}`}</Text>
             ))}
           </Box>
         )}

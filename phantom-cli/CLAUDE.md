@@ -100,7 +100,10 @@ file is kept, shown, and uploaded.
 
 Turns append to the transcript per step through core's `record` seam. An
 esc cut writes the step from what streamed, because its tool calls already
-ran. Enter while a turn runs queues per session; each queued message gets
+ran. Enter while a turn runs queues per session (one live array, mutated in
+place — the running turn holds its reference): the turn drains the queue
+whole into the very next model call (core's nudge seam), so a typed word
+steers the agent mid-turn; whatever is still queued when the turn ends gets
 its own turn, draining one at a time. Esc skips to the next queued message;
 `/pop` pulls the last queued message into the prompt for editing. `/model` and `/plan` rebuild agents — always through the session's pin
 (core `pinnedCfg`), so neither moves a session that has spoken; a turn already streaming keeps

@@ -4,7 +4,7 @@
 // the thinking rule, the provider switch.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { tool } from 'ai';
+import { tool, type ModelMessage } from 'ai';
 import { z } from 'zod';
 import {
   createAgent, effectiveReasoning, isAnthropicOAuth, withClaudeCodeIdentity, CLAUDE_CODE_SYSTEM,
@@ -172,6 +172,66 @@ test('cache breakpoints reach the wire on every step, not just the first', async
   assert.equal(second[0], true, 'the anchor stays on the first message');
   assert.equal(second.at(-1), true, 'the rolling mark is at the end');
   assert.equal(second.filter(Boolean).length, 2, 'no stale marks left behind');
+});
+
+test('nudge: the queue drains into the very next LLM call, mid-turn, and is recorded', async () => {
+  // The feature this guards: typed while the agent works, a message rides the
+  // NEXT request's payload — not a turn of its own after. Drive a two-step
+  // turn; the nudge lands in the queue while the first request is in flight.
+  const bodies: Array<Record<string, unknown>> = [];
+  const reply = (content: unknown, stop: string) => new Response(JSON.stringify({
+    id: 'm', type: 'message', role: 'assistant', model: 'claude-haiku-4-5',
+    content, stop_reason: stop, usage: { input_tokens: 1, output_tokens: 1 },
+  }), { status: 200, headers: { 'content-type': 'application/json' } });
+  const queued: string[] = [];
+  const f: typeof fetch = async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    if (bodies.length === 1) {
+      queued.push('use vitest, not jest', 'and keep it small');
+      return reply([{ type: 'tool_use', id: 't1', name: 'ping', input: {} }], 'tool_use');
+    }
+    return reply([{ type: 'text', text: 'done' }], 'end_turn');
+  };
+  const agent = createAgent(
+    { provider: 'anthropic', model: 'claude-haiku-4-5', apiKey: 'sk-ant-api03-k', fetch: f },
+    { instructions: 'be brief', maxSteps: 2,
+      tools: { ping: tool({ description: 'ping', inputSchema: z.object({}), execute: async () => 'pong' }) } },
+  );
+  const nudged: string[][] = [];
+  const steps: ModelMessage[][] = [];
+  await agent.generate({ prompt: 'hi', queued, onNudge: (texts) => nudged.push(texts),
+    record: { appendStep: (msgs) => steps.push(msgs as ModelMessage[]) } });
+
+  assert.equal(bodies.length, 2, 'the tool call made a second request');
+  assert.deepEqual(queued, [], 'the whole queue was poured');
+  assert.deepEqual(nudged, [['use vitest, not jest', 'and keep it small']], 'the drain was reported once, in order');
+  const second = bodies[1].messages as Array<{ role: string; content: Array<{ type: string; text?: string }> }>;
+  const tail = second.at(-1)!;
+  assert.equal(tail.role, 'user', 'the nudges trail the conversation');
+  // Anthropic merges consecutive user messages into one user turn, so both
+  // texts land as blocks of the final user message, behind the tool result.
+  const texts = tail.content.filter((c) => c.type === 'text').map((c) => c.text);
+  assert.deepEqual(texts, ['use vitest, not jest', 'and keep it small']);
+  // The record holds the nudges BETWEEN the two steps — replaying it tells
+  // the story in the order it happened.
+  assert.deepEqual(steps.map((s) => s.map((m) => m.role)),
+    [['assistant', 'tool'], ['user', 'user'], ['assistant']]);
+  // The nudge request still carries the cache marks — the seam composes with
+  // them, it does not replace them.
+  const marked = (b: Record<string, unknown>) => (b.messages as Array<{ content: Array<{ cache_control?: unknown }> }>)
+    .filter((m) => Array.isArray(m.content) && m.content.some((c) => c.cache_control)).length;
+  assert.equal(marked(bodies[1]), 2, 'anchor + rolling marks on the nudge request');
+});
+
+test('nudge: an empty queue changes nothing — the request is the usual one', async () => {
+  const cap = capture();
+  const agent = createAgent(
+    { provider: 'anthropic', model: 'claude-haiku-4-5', apiKey: 'sk-ant-api03-k', fetch: cap.fetch },
+    { instructions: 'be brief', tools: {}, maxSteps: 1 });
+  await agent.generate({ prompt: 'hi', queued: [] })
+    .then(() => { throw new Error('should have failed'); }, () => undefined);
+  const msgs = cap.last().body.messages as Array<{ role: string }>;
+  assert.deepEqual(msgs.map((m) => m.role), ['user'], 'one user message, no phantom extras');
 });
 
 test('google: the key rides as a header, not in the url', async () => {

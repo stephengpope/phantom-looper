@@ -326,6 +326,54 @@ test('said while busy is queued, then drained ONE turn each when it ends', async
   assert.deepEqual(store.get('s1')!.queue, [], 'nothing left waiting');
 });
 
+test('a nudge typed mid-turn is poured into the running turn, not held for the next one', async () => {
+  // The scripted run stands in for createAgent's nudge seam: mid-turn it
+  // drains the live queue and fires onNudge, exactly as the real prepareStep
+  // does before the next model call.
+  let turns = 0;
+  let seen: string[] = [];
+  const draining: RunTurn = (async (_agent, _messages, onParts, signal, onStep, _flushMs, record, nudge) => {
+    turns++;
+    seen = nudge!.queued;                      // the store must hand over the LIVE array
+    await sleep(30);                           // mid-turn: the user types now
+    const poured = nudge!.queued.splice(0);    // what createAgent does at the next model call
+    if (poured.length) nudge!.onNudge?.(poured);
+    onParts(say('ok'));
+    const messages: ModelMessage[] = [{ role: 'assistant', content: 'ok' }];
+    record?.appendStep(messages, undefined);
+    onStep?.(messages);
+    return messages;
+  }) as RunTurn;
+  const store = new SessionStore(draining);
+  seed(store, 's1');
+  store.say('s1', 'one');
+  await sleep(10);
+  store.say('s1', 'two');                      // typed while the turn runs
+  await sleep(150);
+  assert.equal(seen, store.get('s1')!.queue, 'the turn holds the one live queue, not a copy');
+  assert.equal(turns, 1, 'poured mid-turn — no second turn ran');
+  assert.deepEqual(store.get('s1')!.queue, [], 'nothing left waiting at turn end');
+  const said = store.get('s1')!.history.filter((m) => m.role === 'user').map((m) => m.content);
+  assert.deepEqual(said, ['one', 'two'], 'the nudge joined the conversation in order');
+  const users = store.get('s1')!.done.filter((p) => p.kind === 'user').map((p) => (p as { text: string }).text);
+  assert.deepEqual(users, ['one', 'two'], 'and shows on screen as said');
+});
+
+test('what is still queued when the turn ends starts its own turn, as ever', async () => {
+  // The drain's other half: a message typed during the FINAL answer has no
+  // next model call to ride, so the turn-end hand-off is unchanged.
+  let turns = 0;
+  const counting: RunTurn = (async (...args) => { turns++; return scriptedRun({ text: 'ok', hold: 30 })(...args); }) as RunTurn;
+  const store = new SessionStore(counting);
+  seed(store, 's1');
+  store.say('s1', 'one');
+  await sleep(10);
+  store.say('s1', 'two');
+  await sleep(200);
+  assert.equal(turns, 2, 'the leftover became its own turn');
+  assert.deepEqual(store.get('s1')!.queue, [], 'nothing left waiting');
+});
+
 test('interrupting fires the next queued line — esc is "skip to next", not stop-everything', async () => {
   let turns = 0;
   const counting: RunTurn = (async (...args) => { turns++; return scriptedRun({ text: 'ok', hold: 100 })(...args); }) as RunTurn;

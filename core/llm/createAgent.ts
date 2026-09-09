@@ -328,29 +328,61 @@ export interface AgentSpec {
 /** The one usage-recording seam, inherited by EVERY agent built here: pass
  *  `record` (a Transcript, or memoryRecorder's sink) to `stream`/`generate`
  *  and each step's messages + usage line land through it — no agent
- *  re-implements the bookkeeping. */
-function spliceRecord<T extends { onStepEnd?: (step: never) => unknown }>(
-  o: T & { record?: StepRecord },
+ *  re-implements the bookkeeping.
+ *
+ *  `queued` is the nudge seam: a LIVE array of user texts typed while the
+ *  turn runs. Before every model call the whole array is drained IN PLACE
+ *  and appended to that call's messages — a typed word reaches the very
+ *  next LLM call mid-turn, the way pi's steering and opencode's stream
+ *  append work. Drained texts are recorded like any step and reported
+ *  through `onNudge` so the caller can mirror them into its own history
+ *  and screen. Whatever is still queued when the turn ends (typed during
+ *  the final answer — there is no next call to ride) is the caller's to
+ *  run as the next turn. A per-call prepareStep REPLACES the constructor's
+ *  (ToolLoopAgent merges call options over settings), so the cache marks
+ *  are re-applied here rather than assumed. */
+function spliceTurn<T extends { onStepEnd?: (step: never) => unknown }>(
+  o: T & { record?: StepRecord; queued?: string[]; onNudge?: (texts: string[]) => void },
 ): T {
-  const { record, ...rest } = o;
-  if (!record) return rest as T;
-  const prior = rest.onStepEnd as ((step: unknown) => unknown) | undefined;
-  return {
-    ...rest,
-    onStepEnd: (step: { response: { messages: unknown[] }; usage?: unknown }) => {
-      record.appendStep(step.response.messages as ModelMessage[],
-        step.usage as Parameters<StepRecord['appendStep']>[1]);
-      return prior?.(step);
-    },
-  } as unknown as T;
+  const { record, queued, onNudge, ...rest } = o;
+  let out = rest as T;
+  if (record) {
+    const prior = out.onStepEnd as ((step: unknown) => unknown) | undefined;
+    out = {
+      ...out,
+      onStepEnd: (step: { response: { messages: unknown[] }; usage?: unknown }) => {
+        record.appendStep(step.response.messages as ModelMessage[],
+          step.usage as Parameters<StepRecord['appendStep']>[1]);
+        return prior?.(step);
+      },
+    } as unknown as T;
+  }
+  if (queued) {
+    out = {
+      ...out,
+      prepareStep: ({ messages }: { messages: ModelMessage[] }) => {
+        const nudges = queued.splice(0);
+        if (nudges.length) {
+          const userMessages = nudges.map((content) => ({ role: 'user', content }) as ModelMessage);
+          record?.appendStep(userMessages);
+          onNudge?.(nudges);
+          return { messages: withCacheBreakpoints([...messages, ...userMessages]) };
+        }
+        return { messages: withCacheBreakpoints(messages) };
+      },
+    } as unknown as T;
+  }
+  return out;
 }
 
 class RecordingAgent<TOOLS extends Record<string, Tool>> extends ToolLoopAgent<never, TOOLS> {
-  override stream(o: Parameters<ToolLoopAgent<never, TOOLS>['stream']>[0] & { record?: StepRecord }) {
-    return super.stream(spliceRecord(o));
+  override stream(o: Parameters<ToolLoopAgent<never, TOOLS>['stream']>[0] &
+    { record?: StepRecord; queued?: string[]; onNudge?: (texts: string[]) => void }) {
+    return super.stream(spliceTurn(o));
   }
-  override generate(o: Parameters<ToolLoopAgent<never, TOOLS>['generate']>[0] & { record?: StepRecord }) {
-    return super.generate(spliceRecord(o));
+  override generate(o: Parameters<ToolLoopAgent<never, TOOLS>['generate']>[0] &
+    { record?: StepRecord; queued?: string[]; onNudge?: (texts: string[]) => void }) {
+    return super.generate(spliceTurn(o));
   }
 }
 
