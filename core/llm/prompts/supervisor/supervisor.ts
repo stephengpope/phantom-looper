@@ -102,11 +102,9 @@ export const BUILD_FROM_PLAN = `The plan you produced earlier for card {{seq}} w
 
 "Done" means demonstrated, not assumed:
 
-- Run the full relevant test suites and typecheck. Report the real numbers.
-- New behavior gets a test that fails without your change and passes with it.
-- Verify in the running system if up any running, not just the test suite
-- Rebuild or restart whatever needed to test and run the updates (restart/rebuid docker etc)
-- Always include if there was something you absoluately could not test knowing I'll challenge it.
+- Run typecheck and report the result.
+- Verify in the running system: rebuild or restart whatever needs it (restart/rebuild docker etc) and exercise the changed path live, end to end, the way a user would hit it.
+- Always include if there was something you absoluately could not verify knowing I'll challenge it.
 
 Your final reply is the completion report. This format is intentional — these sections, in this order, nothing else without a documented justification.
 
@@ -122,7 +120,7 @@ The card:
 // ═══ FIRST MESSAGE → coding agent · card starts in in_progress ═════════════
 // No plan phase happened — ADAPTED from the execute message above with
 // the card as the contract and NO planning language anywhere (unsentKickoff's
-// discrimination and the tests rely on that). Same completion report
+// discrimination relies on that). Same completion report
 // ({{reportFormat}} = the shared REPORT_FORMAT block) — the coder's final reply is
 // what the supervisor reviews.
 
@@ -144,10 +142,9 @@ its details and requirements define what must become true. Your job is to make i
 
 "Done" means demonstrated, not believed:
 
-- Run the full relevant test suites and typecheck. Report the real numbers.
-- New behavior gets a test that fails without your change and passes with it.
-- Verify in the running system, not just the suite: rebuild or restart whatever needs it and exercise the changed path live, end to end, the way a user would hit it.
-- Report honestly. Never claim a check you didn't run. A check you couldn't run is stated plainly — "not verified in the running app" — with the reason. A real failure is workable; a false "tested" poisons everything after it.
+- Run typecheck and report the result.
+- Verify in the running system: rebuild or restart whatever needs it and exercise the changed path live, end to end, the way a user would hit it.
+- Report honestly. Never claim a check you didn't run. A check you couldn't run is stated plainly — "not verified in the running app" — with the reason. A real failure is workable; a false "verified" poisons everything after it.
 
 ## Completion report
 
@@ -173,7 +170,7 @@ export const REPORT_FORMAT = `
 
 3. **Deviations** — every place the built thing differs from the contract, each with its reason. "None" is a claim; be able to defend it against the diff.
 
-4. **Verification** — exactly what was run and what it showed: test counts, typecheck, the live end-to-end check. Then anything NOT verified, stated plainly with the reason.
+4. **Verification** — exactly what was run and what it showed: typecheck, the live end-to-end check. Then anything NOT verified, stated plainly with the reason.
 
 5. **Raised, not done** — what was noticed outside the contract's scope and left alone.
 
@@ -221,7 +218,7 @@ Its completion report follows this format:
 Rules for this review:
 
 - The files are what happened; the report is the claim. Read every file the work touched and match it to the contract: {{contract}}.
-- Every claimed check needs its evidence: the actual commands, numbers, output. A claim with no evidence — or evidence the code contradicts — is the most serious defect there is; a false "tested" poisons everything after it. New behavior needs a test that fails without the change.
+- Every claimed check needs its evidence: the actual commands, numbers, output. A claim with no evidence — or evidence the code contradicts — is the most serious defect there is; a false "verified" poisons everything after it.
 - You did not write this work, and you will not fix it.
 - A "How it works" you can't follow is a defect: a fuzzy explanation means insufficient understanding, and machinery with no stated reason fails the simplicity wall.
 - Tick a requirement key through your items tool only once you verified it yourself.

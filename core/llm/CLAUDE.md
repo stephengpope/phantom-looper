@@ -97,9 +97,3 @@ so the cache marks are re-applied inside it.
 `withCacheBreakpoints` goes on at every conversation-shaped call site
 (`phantom-cli/agent.ts`, `looper/turn.ts`, `looper/engine.ts`,
 `telegram/assistant.ts`) and never into the stored history.
-
-## Tested in
-
-`test/llm.test.ts` (createAgent on a capturing fetch, the cascade, the
-thinking rule, retries, the transcript format), `test/transcripts.test.ts`
-(the server side of the record).

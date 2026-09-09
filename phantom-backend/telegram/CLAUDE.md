@@ -79,9 +79,3 @@ The webhook URL is always `https://PHANTOM_BACKEND_ADDRESS/telegram/webhook`.
 reads `getWebhookInfo` first and re-registers only on drift, keeping the
 pending queue. Reactions are spelled as escapes because a pasted glyph
 carries a variation selector Telegram rejects.
-
-## Tested in
-
-`test/telegram.test.ts` (entities, attachments, media tags, approvals,
-the menus, alerts, upgrade checker, outcome lines). Nothing here runs
-against Telegram.

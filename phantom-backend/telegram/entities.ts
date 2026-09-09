@@ -29,7 +29,7 @@
 // a second parser.
 //
 // Ported whole from ../shockwave (api/src/telegram/markdownEntities.ts) —
-// battle-tested there; the UTF-16 pin lives in test/telegram.test.ts.
+// battle-tested there; offsets are UTF-16 code units throughout.
 
 import { fromMarkdown } from 'mdast-util-from-markdown';
 

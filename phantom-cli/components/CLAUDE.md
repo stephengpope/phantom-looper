@@ -78,9 +78,3 @@ A tool row is budgeted in rendered rows, not lines: the command keeps its
 head, the output its tail, each cut marked with the ctrl+o hint. A result
 that is not a log is one line (`42 lines`, `7 matches`, `2KB written`).
 
-## Tested in
-
-`Text.test.tsx` (the screenText cleaner and the one-door import scan),
-`Parts.test.ts`, `Markdown.test.ts`. These check what the code does, not
-what the screen looks like — layout comparisons were removed on purpose:
-they broke on every deliberate layout improvement.

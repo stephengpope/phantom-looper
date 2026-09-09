@@ -145,8 +145,5 @@ npm run phantom-cli    # the app from source; `-- --resume <id>` to reopen a ses
 ```
 
 ```bash
-npm test                    # pure + real-git units, ~1s, no Docker
-npm run test:all            # everything incl. containers + Postgres + the looper
-npm run test:phantom-cli    # the Ink app, headless
 npm run typecheck
 ```

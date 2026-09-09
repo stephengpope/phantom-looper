@@ -15,7 +15,7 @@
 // those polls just miss). A restart cuts off every loop round in flight and
 // blocks those cards, so `loops_running` from /health gates a confirmation.
 //
-// Everything reaches this module through `deps`, so update.test.ts scripts a
+// Everything reaches this module through `deps`, so a caller can script a
 // release, a server and a clock without a network or a terminal.
 import { isBehind } from './selfUpdate.js';
 

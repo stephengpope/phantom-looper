@@ -14,7 +14,7 @@ autoPush.ts       autoPush — syncBranch with landOnBase: true. Result vocabula
 autoPull.ts       autoPull — syncBranch with landOnBase: false. Result vocabulary only
 commitMessage.ts  commitMessageFor — a model writes the subject from the squashed staged diff plus the card,
                   file names as the floor
-github.ts         whoami, createRepo, listRepos on GitHub's REST paths (GITHUB_API_BASE is the test seam)
+github.ts         whoami, createRepo, listRepos on GitHub's REST paths (GITHUB_API_BASE points the client at another host)
 remote.ts         pure URL policy: remoteUrl, hasEmbeddedCredentials, parseGitHubUrl, parseRepoRef
 ```
 
@@ -106,10 +106,3 @@ matches Setext headings.
 Auto-push aborts in exactly one place: when it gives up, so the session is
 not left mid-rebase. The agent is told never to.
 
-## Tested in
-
-`test/unit.test.ts` (remote.ts, classifyGitFailure, localState, clone
-depth), `test/phase3.test.ts` (manual push and pull), `test/phase4.test.ts`
-(verifyLanded's four checks, the rebase primitives, stageAndSquash,
-auto-push, auto-pull, the lock refusing both, GitHub against a fake),
-`test/e2e-auto-push.test.ts`.

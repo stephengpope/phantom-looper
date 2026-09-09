@@ -692,7 +692,7 @@ async def main() -> None:
 
     # Kept by name: `set headphones` flips its interruptions while running. The
     # flag is read each time a turn start triggers, not at pipeline build
-    # (checked against the installed 1.4.0; test_sidecar pins the read), so the
+    # (checked against the installed 1.4.0), so the
     # flip is a message, not a restart — same deal as the wake gate.
     vad_start = VADUserTurnStartStrategy(enable_interruptions=cfg.headphones)
     start = [

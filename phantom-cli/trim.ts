@@ -18,8 +18,8 @@
 // never a corrupted frame. Style state is tracked, and a row is only trimmed
 // when the terminal's style state entering it was the default both times —
 // a byte-identical prefix under a different inherited style would render
-// differently. trim.test.ts replays streams through the filter into a second
-// terminal emulator and asserts the screen ends up cell-identical.
+// differently — a byte-identical prefix under a different inherited style
+// would render differently.
 import stringWidth from 'string-width';
 
 const MIN_SAVED_COLS = 8; // fewer saved cells than this is not worth the moves

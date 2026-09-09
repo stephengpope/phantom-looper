@@ -3,11 +3,11 @@
 A fullscreen Ink app over phantom-backend. It builds the coding agent and
 the Assistant from `/core`, streams them into the terminal, keeps several
 sessions open in one window, and reaches the server over HTTP only. It
-never imports server code; the tsconfig includes `phantom-backend` so
-tests may assert against server modules, production code may not.
+never imports server code; the tsconfig includes `phantom-backend` for
+typechecking only — production code may not import it.
 
 ```
-npm run phantom-cli [-- --resume <id>]   npm run test:phantom-cli   npm run keys
+npm run phantom-cli [-- --resume <id>]   npm run keys
 phantom-cli --version | update [--client|--server] | setup-backend
 ```
 
@@ -68,7 +68,7 @@ machine. Everything else is the server's store. Settings are read where
 they are used: an agent build, a sidecar spawn, a screen opening. Nothing
 holds a resolved settings object except `bootConfig` for the first build.
 `CONFIG_DIR` is `~/.phantom-cli` installed and `<repo>/.phantom-cli` from
-source; `PHANTOM_CLI_DIR` overrides it and the test script sets it.
+source; `PHANTOM_CLI_DIR` overrides it.
 
 ## A session in this window
 
@@ -182,12 +182,3 @@ prefixes what it was doing. Background work that runs again on its own may
 fail quietly through `quiet(...)`, which logs; anything a person asked for
 fails out loud.
 
-## Tested in
-
-`npm run test:phantom-cli` runs the files listed in package.json; a new
-test file must be added there. Suites: `board` (the store and its event
-adoption), `sessions` (the store, queue, lock, relay), `window`,
-`screen`, `trim`, `config`, `settings`, `session`, `oauth`, `provision`,
-`setup`, `selfUpdate`, `update`, `request`, `cursorAudit`, `turnAge`,
-and the `Text`/`Parts`/`Markdown` component suites. Tests check what the
-code does and the data it produces — never what the screen looks like.

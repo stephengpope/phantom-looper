@@ -4,8 +4,7 @@ Every tool an agent can call is built here. A kit is a function that returns
 `Record<string, Tool>` (AI SDK tools). Two shapes:
 
 - **headless kits** talk to phantom-backend over HTTP themselves. They take
-  `{baseUrl, apiKey, sessionId | workspaceId, fetch?}`; `fetch` is the test
-  seam. Session-scoped calls send `x-phantom-looper-session`.
+  `{baseUrl, apiKey, sessionId | workspaceId, fetch?}`; `fetch` swaps the transport. Session-scoped calls send `x-phantom-looper-session`.
 - **host-handled kits** (`tui.ts`) only declare schemas and descriptions; the
   caller passes the handler that does the work (App in the cli,
   `phantom-backend/telegram/assistant.ts` headless).
@@ -63,10 +62,3 @@ on screen. `session_read` renders what the window holds. The board tools
 edit the same BoardStore the screen draws from, so an edit repaints. The
 descriptions are static; mode and screen state are a tool call away, never
 rewritten into the schema.
-
-## Tested in
-
-`test/llm.test.ts` (every kit on a capturing fetch, pickKit, the abort
-signal), `test/looper-logic.test.ts` (the loop-bound tools' enums and
-descriptions), `phantom-cli/*.test.tsx` (the tui kits through App's
-handlers).

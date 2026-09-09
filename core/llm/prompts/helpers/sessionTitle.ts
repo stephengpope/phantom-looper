@@ -7,8 +7,8 @@
 // ./wiring.ts fills it.
 
 // ═══ SYSTEM PROMPT — the titler ═════════════════════════════════════════════
-// The first words are also how the e2e wire recognizes a title call
-// (test/e2e-auto-push.test.ts) — keep them stable.
+// The first words are how a scripted wire recognizes a title call — keep
+// them stable.
 
 export const SYSTEM = `You name coding-agent sessions. From this excerpt of the conversation, name the thing being built or fixed — the feature, the bug, the change itself, not the activity around it. If nothing is being built yet, summarize the conversation instead. 3-6 words. Always answer with a title — never explain, refuse, or comment on the input. No quotes, no trailing punctuation.`;
 

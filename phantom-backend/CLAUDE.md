@@ -32,7 +32,7 @@ workspace/        container.ts (per-folder container lifecycle, buildContainerSp
 tools/            registry.ts (the seven tool definitions) · fuzzy.ts (the edit match chain) · diff.ts · envelope.ts (ToolError)
 db/               client.ts · schema.ts (drizzle mirror of migrations/; sessionColumns leaves the transcript blob out;
                   presets table for provider presets) ·
-                  migrate.ts (migrations/*.sql in order, upTo is a test seam) · workspaceSchema.ts (per-workspace cards schema, versioned)
+                  migrate.ts (migrations/*.sql in order, upTo bounds a replay) · workspaceSchema.ts (per-workspace cards schema, versioned)
 ```
 
 ## Sessions, folders, loops
@@ -103,7 +103,5 @@ Credential-bearing git runs in this process with the guard set in
 `git/git.ts`. `agent_git_credentials` is the one deliberate exception:
 the token goes into the container env, per workspace, and dies with it.
 
-## Tested in
-
-`test/` — see its map. Server changes need `docker compose up -d --build`;
-green tests are not the live server.
+Server changes need `docker compose up -d --build`; green typecheck is not
+the live server.

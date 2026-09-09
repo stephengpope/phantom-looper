@@ -1,7 +1,6 @@
 // The looper's pure decisions — canTurn, which kickoff is owed, and the
 // STEP RULE that drives the dialogue — factored out of the engine so every
-// rule is unit-tested without a server, a model, or a clock
-// (test/looper-logic.test.ts).
+// rule reads without a server, a model, or a clock.
 //
 // The transcripts ARE the state: whose turn it is derives from comparing the
 // two conversations, and the same rule runs turn 1, turn 50, and the turn

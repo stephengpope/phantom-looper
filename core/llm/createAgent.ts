@@ -229,7 +229,7 @@ export function withRetry(
       } catch (e) {
         // Only a genuine network failure retries — fetch rejects those as
         // TypeError ('fetch failed'). Aborts and everything else (a bug, a
-        // test seam) are not transient and rethrow untouched.
+        // scripted transport) are not transient and rethrow untouched.
         if (!(e instanceof TypeError)) throw e;
         netErr = e;
       }

@@ -53,7 +53,3 @@ Repo wins a name collision. Identity is the folder name; the frontmatter
 `name` is checked on write only. A skill with no parseable description is
 skipped silently.
 
-## Tested in
-
-`test/session.test.ts` (openSession on a scripted ApiCall), `test/skills.test.ts`,
-`test/unit.test.ts` (ids), `test/kanban.test.ts` (keys through the routes).

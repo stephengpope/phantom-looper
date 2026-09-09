@@ -93,9 +93,3 @@ card write calls `ctx.looper.runLoop`; the engine decides eligibility.
 Archiving a done card auto-pushes when the setting says so; a failed push
 un-archives it into blocked with the reason.
 
-## Tested in
-
-`test/integration.test.ts`, `phase2.test.ts` (tools), `phase3.test.ts`
-(git, tasks), `phase4.test.ts` (auto-push, auto-pull, GitHub),
-`kanban.test.ts`, `transcripts.test.ts`, `looper.test.ts` (the feeds),
-`web.test.ts`, `secrets.test.ts`, `skills.test.ts`.

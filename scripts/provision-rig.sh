@@ -77,6 +77,5 @@ cat <<DONE
 
   target to type in:  root@localhost:$SSH_PORT
 
-  Or headless, end to end:  npx tsx --tsconfig phantom-cli/tsconfig.json scripts/provision-e2e.ts
   Tear down:                ./scripts/provision-rig.sh down
 DONE

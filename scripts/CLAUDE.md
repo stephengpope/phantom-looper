@@ -30,7 +30,7 @@ caddy/Caddyfile              the https profile: public (ACME, short-lived profil
 docker-compose.yml           postgres · api · docker-proxy · updater · autoheal · caddy (profile https)
 Dockerfile                   the api image: build + a fresh models snapshot; deploy files at /host-files
 release.yml                  v* tag → images per arch on native runners → multi-arch manifests → draft release with the
-                             tarballs → publish. No test gate
+                             tarballs → publish
 ```
 
 ## How an install and an update move
@@ -59,8 +59,3 @@ The root `.env.example` is the api process's own env for a source run.
 Let's Encrypt issuance, the release workflow, or the default session image
 with docker installed. `install.sh` is verified on Linux through the rig.
 
-## Tested in
-
-`test/deploy.test.ts` (the tag regex agrees in three places, every deploy
-file ships in `/host-files`, no file lists, one symlink, exec bits),
-`provision-e2e.ts` against the rig.

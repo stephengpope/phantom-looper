@@ -70,7 +70,3 @@ looper matches these against transcripts to know what was already sent, so
 a reworded body never breaks the match. `BUILD_FROM_CARD` must contain no
 planning language; the discriminator depends on it.
 
-## Tested in
-
-`test/llm.test.ts` (fill's rules, the prompt stack, every loop message
-starts with its own first line and the lines are unique).

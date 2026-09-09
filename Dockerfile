@@ -40,8 +40,7 @@ RUN mkdir -p /workspaces /trigger && chown -R node:node /workspaces /trigger /ap
 # fetching a file list from GitHub. The layout mirrors the install directory
 # exactly, so extraction is a straight copy. There is deliberately no list of
 # these files anywhere on a server: a list frozen in whatever script a box last
-# installed is what jammed Shockwave's boxes when a file was removed
-# (test/deploy.test.ts pins this).
+# installed is what jammed Shockwave's boxes when a file was removed.
 COPY docker-compose.yml /host-files/
 COPY caddy/Caddyfile /host-files/caddy/
 

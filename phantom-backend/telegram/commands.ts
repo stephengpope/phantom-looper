@@ -47,8 +47,8 @@ export const MENU: Record<TelegramMode, Cmd[]> = {
   ],
 };
 
-/** The menu for a mode (test/telegram.test.ts pins that every entry in each
- *  is a command handleCommand answers, so a menu entry never goes unanswered). */
+/** The menu for a mode. Every entry must be a command handleCommand
+ *  answers, so a menu entry never goes unanswered. */
 export function menuFor(mode: TelegramMode): Cmd[] { return MENU[mode]; }
 
 // Per-chat numbered lists — /sessions n and /workspaces n read positions off

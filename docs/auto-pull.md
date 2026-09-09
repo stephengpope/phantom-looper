@@ -58,8 +58,8 @@ push.
 A **blocked** sync leaves the branch collapsed to one commit locally. The
 squash happens before the replay, so a conflict that the agent cannot resolve
 leaves the same content under a rewritten commit. The pre-squash commit is on
-origin — the backup push runs before anything is rewritten. `test/phase3.test.ts`
-compares trees rather than shas for exactly this reason.
+origin — the backup push runs before anything is rewritten; trees, not shas,
+are what agree after a rewrite.
 
 ## Still open
 

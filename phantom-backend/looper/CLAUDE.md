@@ -68,9 +68,3 @@ every part on the session feed under the caller's client id, and saves
 the whole turn from `memoryRecorder` because the SDK's turn-end response
 carries only the final step. `drain` throws the stream's error part so
 the model's own words become the blocked reason.
-
-## Tested in
-
-`test/looper-logic.test.ts` (every rule in logic.ts, no server),
-`test/looper.test.ts` (the loop end to end with the model scripted at the
-wire, the feeds, the turn route).

@@ -34,7 +34,7 @@ interface ToolListing {
   tools: { name: string; summary: string; description?: string; input: Record<string, unknown>; mutates: boolean }[];
 }
 
-/** Filter the listing by `pick`. Exported for tests. */
+/** Filter the listing by `pick`. */
 export function pickTools<T extends { name: string; mutates: boolean }>(tools: T[], pick?: string[] | 'readonly'): T[] {
   if (!pick) return tools;
   if (pick === 'readonly') return tools.filter((t) => !t.mutates);

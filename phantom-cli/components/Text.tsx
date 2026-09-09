@@ -8,8 +8,8 @@
 // characters break a row the same way (`\r` returns to column 0 mid-row).
 //
 // Cleaning happens HERE, before Ink measures, so a tab becomes real spaces and
-// the layout stays right. No file in the app imports Ink's Text directly —
-// Text.test.tsx scans the tree — so nothing can bypass this.
+// the layout stays right. No file in the app imports Ink's Text directly,
+// so nothing can bypass this.
 import { Text as InkText } from 'ink';
 import type { ComponentProps, ReactNode } from 'react';
 
