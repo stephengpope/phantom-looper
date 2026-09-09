@@ -11,8 +11,9 @@
 // running thing on this screen looks, so the line needs no sentence
 // explaining that you cannot type; the refusal says that if you try.
 //
-// With no session (and nothing to say) nothing renders, not a reserved blank
-// line: an empty row under the prompt reads as a rendering bug.
+// The row is ALWAYS held, blank when there is nothing to say: appearing and
+// vanishing moved the prompt on boot (the line lands only once the session
+// seats), and a held blank row costs nothing next to a page that bounces.
 import { Box } from 'ink';
 import Spinner from 'ink-spinner';
 import { turnAgeColor } from '../turnAge.js';
@@ -36,7 +37,11 @@ export function Toolbar({ groups = [], spin, spinWho, spinSince }: {
   const shown = groups
     .map((g) => g.filter((p) => (typeof p === 'string' ? p : p.text)))
     .filter((g) => g.length);
-  if (!shown.length && !spin) return null;
+  if (!shown.length && !spin) return (
+    // The held blank row — same shape as the real line, one cell of content
+    // so yoga keeps the height.
+    <Box paddingLeft={2}><Text> </Text></Box>
+  );
   return (
     <Box paddingLeft={2}>
       <Text color="yellow">» </Text>
