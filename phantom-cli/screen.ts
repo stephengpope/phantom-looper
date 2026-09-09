@@ -49,6 +49,10 @@ export interface Screen {
   size(): { columns: number; rows: number };
   /** A cursor-position reply off stdin (the audit's — see cursorAudit.ts). */
   cpr(row: number, col: number): void;
+  /** The app is going away: the audit never asks again (teardown frames would
+   *  otherwise re-arm it, asking after the screen is already down). True when
+   *  a query was in flight — its reply still needs swallowing before exit. */
+  stopAudit(): boolean;
   /** Set by the app: the terminal and the mirror disagree — repaint whole. */
   onDrift?: () => void;
 }
@@ -124,6 +128,7 @@ export function createScreen(real: NodeJS.WriteStream,
     },
     size: () => ({ columns: term.cols, rows: term.rows }),
     cpr: (row, col) => audit.reply(row, col),
+    stopAudit: () => audit.stop(),
   };
   const audit = createCursorAudit({
     ask: () => { real.write('\x1b[6n'); },

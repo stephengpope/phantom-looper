@@ -279,7 +279,25 @@ const screen = createScreen(process.stdout);
 const stdin = createCprFilter(process.stdin, (at) => screen.cpr(at.row, at.col));
 const mouseOff = (): void => { try { process.stdout.write(MOUSE_OFF); } catch { /* gone */ } };
 process.on('exit', mouseOff);
-for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () => { mouseOff(); process.exit(1); });
+// A DSR query in flight at exit gets its answer after we are gone — and the
+// shell reads it as typed input (`^[[41;1R` at the prompt). So every way out
+// stops the audit, and if a query WAS out we linger briefly before exiting:
+// the CPR filter is still reading stdin, so the reply is swallowed by us.
+// Terminals answer DSR in single-digit milliseconds; 150ms is generous.
+const CPR_DRAIN_MS = 150;
+// Raw mode again for the drain itself: with canonical mode back on (Ink
+// restores it on the way out) the line discipline HOLDS a reply — it has no
+// newline — and hands it to the next reader, the shell. That is the leak.
+const drainCpr = async (): Promise<void> => {
+  try { process.stdin.setRawMode(true); } catch { /* not a tty */ }
+  await new Promise((r) => setTimeout(r, CPR_DRAIN_MS));
+  try { process.stdin.setRawMode(false); } catch { /* not a tty */ }
+};
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () => {
+  mouseOff();
+  if (screen.stopAudit()) setTimeout(() => process.exit(1), CPR_DRAIN_MS);
+  else process.exit(1);
+});
 
 // A fullscreen app cannot show console output. Ink's answer to a console or
 // stderr line is to ERASE THE WHOLE SCREEN, write the line, and repaint every
@@ -321,10 +339,12 @@ const onCrash = (kind: string) => (err: unknown): void => {
   const text = `${kind}: ${err instanceof Error ? err.stack ?? err.message : format(err)}`;
   toLog(text);
   try { screenUp?.unmount(); } catch { /* the screen is what is broken */ }
+  const lateReply = screen.stopAudit();
   mouseOff();
   restoreConsole();
   try { origStderrWrite(`\nphantom-cli crashed — ${text}\nwritten to ${CLI_LOG}\n`); } catch { /* gone */ }
-  process.exit(1);
+  if (lateReply) setTimeout(() => process.exit(1), CPR_DRAIN_MS);
+  else process.exit(1);
 };
 process.on('uncaughtException', onCrash('uncaughtException'));
 process.on('unhandledRejection', onCrash('unhandledRejection'));
@@ -357,6 +377,11 @@ const app = render(
 screenUp = app;
 process.stdout.write(MOUSE_ON);
 await app.waitUntilExit();
+// Stop the audit the moment the screen is down: its teardown frames wrote
+// through the mirror and re-armed the settle timer, and the lock releases
+// below keep us alive long enough for it to fire — a DSR asked after the
+// alternate screen is gone, answered into the user's shell.
+const lateReply = screen.stopAudit();
 mouseOff();
 restoreConsole();
 
@@ -381,3 +406,8 @@ if (currentId) {
 // dev checkout is never behind, so from a checkout only the server is named.
 const notice = quitNotice(APP_VERSION, serverVersion || null, latestRelease);
 if (notice) console.log(`${notice}\n`);
+
+// Last thing: if a DSR was in flight when the screen came down, linger so
+// its reply is swallowed by the CPR filter (still reading stdin) instead of
+// landing in the shell's input buffer.
+if (lateReply) await drainCpr();

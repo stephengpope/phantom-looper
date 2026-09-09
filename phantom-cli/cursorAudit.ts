@@ -79,6 +79,18 @@ export function createCursorAudit({ ask, expected, onDrift, log,
       log(`cursor audit: terminal at ${row},${col} but the frame left the cursor at ${want.row},${want.col} — drift, repainting`);
       onDrift({ row, col }, want);
     },
+    /** The app is going away: never ask again, and say whether a query is
+     *  still in flight — its reply arrives after we are gone unless the
+     *  caller lingers to swallow it (a reply that lands after the process
+     *  exits is typed into the user's shell: `^[[41;1R` at the prompt). */
+    stop(): boolean {
+      off = true;
+      if (settle) { clearTimeout(settle); settle = null; }
+      if (!pending) return false;
+      clearTimeout(pending.deadline);
+      pending = null;
+      return true;
+    },
     get off(): boolean { return off; },
   };
 }
