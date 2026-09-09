@@ -14,7 +14,7 @@
 // Cursor state is ours too, so a value changed from outside — tab completion,
 // ↑ through what you said before — puts the cursor at the end without the
 // caller having to remount the component to move it.
-import { useInput } from 'ink';
+import { useInput, usePaste } from 'ink';
 import { Text } from './Text.js';
 import { isMouseInput } from '../mouse.js';
 import { PasteStore, chipAtEnd } from '../paste.js';
@@ -95,6 +95,26 @@ export function TextInput({ value, onChange, onSubmit, focus = true, placeholder
     }
 
     setCursor(at);
+    if (next !== value) { ours.current = next; valueRef.current = next; onChange(next); }
+  }, { isActive: focus });
+
+  // A paste rides Ink's paste channel, not useInput: bracketed paste mode
+  // (which the hook enables) makes the terminal wrap the paste in markers,
+  // so the WHOLE paste arrives as one string no matter how many stdin
+  // chunks it took. Collapsing per chunk — the useInput path — made one
+  // paste over the threshold land as two chips.
+  usePaste((pasted) => {
+    // Pasted line breaks arrive as \r; the store counts lines by \n. The
+    // control-character rule is the same one typed input follows above.
+    let text = pasted.replace(/\r\n?/g, '\n');
+    // eslint-disable-next-line no-control-regex
+    text = text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+    if (!text) return;
+    if (pastes) text = pastes.collapse(text) ?? text;
+    const value = valueRef.current;
+    const cursor = cursorRef.current;
+    const next = value.slice(0, cursor) + text + value.slice(cursor);
+    setCursor(cursor + text.length);
     if (next !== value) { ours.current = next; valueRef.current = next; onChange(next); }
   }, { isActive: focus });
 
