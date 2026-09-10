@@ -13,6 +13,10 @@ import { Markdown } from './Markdown.js';
 // single line and twenty rows. The command keeps its HEAD (what ran), the
 // output keeps its TAIL (the server keeps the tail too, because errors live
 // at the end). ctrl+o — already "show me more" for thinking — lifts both.
+// User-message bubble colours — shared so queue and conversation stay in sync.
+export const USER_MSG_BG = '#2e2e2e';
+export const USER_MSG_FG = '#ffffff';
+
 const CMD_ROWS = 3;   // the row with the tool name, plus two continuation rows
 const OUT_ROWS = 5;
 // Byte guards, not display rules: the text still has to be measured and
@@ -107,7 +111,7 @@ function Gutter({ marker, width, children }: {
 function UserMessage({ text, width, color }: { text: string; width: number; color?: string }) {
   return (
     <Gutter width={width} marker={<Text color="cyan" bold>{'›'}</Text>}>
-      <Text bold color={color ?? '#ffffff'} backgroundColor="#3a3a3a">{text}</Text>
+      <Text bold color={color ?? USER_MSG_FG} backgroundColor={USER_MSG_BG}>{text}</Text>
     </Gutter>
   );
 }

@@ -50,7 +50,7 @@ export type { Initial };
 
 /** Rows the slash menu shows at once; the window slides to follow the cursor. */
 const MENU_ROWS = 8;
-import { PartView } from './components/Parts.js';
+import { PartView, USER_MSG_BG, USER_MSG_FG } from './components/Parts.js';
 import { Prompt } from './components/Prompt.js';
 import { StatusLine } from './components/StatusLine.js';
 import { Toolbar, type ToolbarGroup, type ToolbarPart } from './components/Toolbar.js';
@@ -659,7 +659,7 @@ export function App({
             <Text dimColor>{`  queued — esc sends next · /pop edits last`}</Text>
             <Text>{' '}</Text>
             {session.queue.map((q, i) => (
-              <Text key={i}><Text color="cyan">{`  ›`}</Text><Text bold color="#ffffff" backgroundColor="#3a3a3a">{` ${q}`}</Text></Text>
+              <Box key={i}><Text color="cyan">{`  › `}</Text><Text bold color={USER_MSG_FG} backgroundColor={USER_MSG_BG}>{q}</Text></Box>
             ))}
           </Box>
         )}
