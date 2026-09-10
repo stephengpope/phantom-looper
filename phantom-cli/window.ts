@@ -1195,18 +1195,25 @@ export class WindowStore {
 
   /** [t] on /resume arms the trash, [c] confirms — the kill pattern, one rule
    *  for every destructive key. The session leaves the server for good: row,
-   *  transcript, files; only its pushed branch on origin survives. The
+   *  transcript, files; only its pushed branch on origin survives. When the
+   *  session is open in this window the confirm closes it first with the same
+   *  switch-over logic /close uses (next tab, or a fresh session). The
    *  unpushed-work refusal re-arms at force so a second [c] discards
    *  knowingly. Arming client-side is what makes the confirm real: the flush
    *  means the unforced delete almost always succeeds, so a server-refusal
    *  arm alone would fire only when the push failed. */
   trashSession = async (id: string): Promise<void> => {
-    if (this.sessions.has(id)) { this.pickerNotice = 'that session is open in this window'; this.notify(); return; }
     if (this.trashArmed?.id !== id) {
       this.trashArmed = { id, force: false };
       this.pickerNotice = 'trash this session for good? [c] to confirm';
       this.notify();
       return;
+    }
+    // Close first when the session is open in this window — the same
+    // switch-over logic /close uses (next tab, or a fresh session).
+    if (this.sessions.has(id)) {
+      const r = await this.closeSession(id, true);
+      if ('error' in r) { this.pickerNotice = `not trashed — ${r.error}`; this.notify(); return; }
     }
     try {
       const verdict = await this.purgeSession(id, this.trashArmed.force);
