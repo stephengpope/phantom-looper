@@ -588,13 +588,18 @@ export function App({
   const tokensShown = session
     ? session.totalTokens + ((session.busy || session.remoteBusy) ? tokenCount(session.tokens) : 0) : 0;
   const tokensMark = tokensShown > 0 ? formatTokensOut(tokensShown) : undefined;
-  // Order: the card with its git dot (what you're building and whether it is
-  // safe), the mode, the model with its token meter, the bg tasks, a notice
-  // pinned last. Pairs that answer ONE question ride in one group — the line
-  // reads `PHA-7 • not pushed · code mode on · gpt-5 12.4k ↓`, facts separated
-  // by ` · `, not a flat list of fields.
+  // The session's name (from /rename or the auto-title); a fresh session
+  // without one yet shows nothing here. Kept current by /rename and the
+  // staleness GET (window.ts), so the line moves the moment the name lands.
+  const nameMark = session?.name ?? undefined;
+  // Order: the mode, the card, the session's name, the git work dot (red =
+  // not pushed, yellow = not merged, green = merged), the model with its
+  // token meter, the bg tasks, a notice pinned last. The model and its meter
+  // answer ONE question so they ride in one group — the line reads
+  // `code mode on · PHA-7 · my session · • not pushed · gpt-5 12.4k ↓`,
+  // facts separated by ` · `, not a flat list of fields.
   const withMode = (rest?: string): ToolbarGroup[] =>
-    [[cardMark, workMark], [modeMark], [modelMark, tokensMark], [taskMark], [rest]]
+    [[modeMark], [cardMark], [nameMark], [workMark], [modelMark, tokensMark], [taskMark], [rest]]
       .map((g) => g.filter((p): p is ToolbarPart => Boolean(p)))
       .filter((g) => g.length);
 
