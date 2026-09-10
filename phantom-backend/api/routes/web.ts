@@ -16,7 +16,7 @@ import { sessionDir } from '../../pool/paths.js';
 import { getSession, touchSession } from '../../sessions.js';
 import { resolveCredential } from '../../settings.js';
 import { ok, err, type AppCtx } from '../app.js';
-import { SESSION_HEADER } from './fs.js';
+import { SESSION_HEADER } from '../sessionHeader.js';
 
 const TAG = { tags: ['web'] };
 

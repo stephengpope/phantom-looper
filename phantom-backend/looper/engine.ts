@@ -50,6 +50,7 @@ import { canTurn, unsentKickoff, nextStep, needsFreshSession, heldBy, LOOP_COLUM
 import { injectFetch } from './injectFetch.js';
 import type { BoardEvents } from '../api/boardEvents.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
+import type { Notices } from '../api/notices.js';
 import { logger, errStr } from '../log.js';
 
 const log = logger('looper');
@@ -73,6 +74,9 @@ export interface LooperDeps {
   /** Active turns by session id — the interrupt route aborts these. The engine
    *  registers on entry and deregisters on exit. */
   activeTurns?: Map<string, AbortController>;
+  /** Passive notices (api/notices.ts) — every turn this engine runs drains
+   *  its session's queue into the turn's messages. */
+  notices?: Notices;
   /** Test seam: the fetch every MODEL call uses (createAgent's own seam).
    *  Production never sets it. */
   modelFetch?: typeof fetch;
@@ -463,6 +467,7 @@ export class LooperEngine {
   private turnDeps(card?: number, signal?: AbortSignal) {
     return { f: this.f, apiKey: this.deps.apiKey, base: BASE,
       modelFetch: this.deps.modelFetch, sessionEvents: this.deps.sessionEvents, client: CLIENT_ID,
+      notices: this.deps.notices,
       onRetry: (t: string) => log.warn({ card, agent: 'coding' }, t),
       signal };
   }

@@ -1,6 +1,7 @@
-// The tool surface: seven tools, mirroring the pi coding agent's default CLI
-// set (bash, read, write, edit, ls, find, grep) — which knack's sandbox tools
-// match one for one. Bash does everything else; mapping individual unix
+// The tool surface: the seven file tools, mirroring the pi coding agent's
+// default CLI set (bash, read, write, edit, ls, find, grep) — which knack's
+// sandbox tools match one for one — plus the task_* tools over bash's
+// detached commands. Bash does everything else; mapping individual unix
 // commands as tools was over-engineering and is gone.
 //
 // Reads are numbered; edits are NOT (the documented cross-harness failure is
@@ -20,6 +21,13 @@ export interface ToolCtx {
    *  detached commands with ND-JSON logs). The registry stays free of db and
    *  docker plumbing. */
   runBash: (args: { cmd: string; cwd?: string; detached?: boolean; timeout?: number }) => Promise<unknown>;
+  /** Injected by the route layer: the session's detached commands, over the
+   *  same rows the /tasks screen reads. */
+  tasks: {
+    list: () => Promise<unknown>;
+    wait: (cmdId: string, timeoutMs: number) => Promise<unknown>;
+    kill: (cmdId: string) => Promise<unknown>;
+  };
 }
 
 export interface ToolDef {
@@ -121,6 +129,48 @@ export const TOOLS: ToolDef[] = [
         cmd: s(a.cmd), cwd: a.cwd ? s(a.cwd) : undefined, detached: Boolean(a.detached),
         timeout: a.timeout === undefined ? undefined : Number(a.timeout),
       });
+    },
+  },
+  {
+    name: 'task_list',
+    summary: "List this session's background (detached) commands.",
+    description: 'Every detached bash command of this session: `running` now, plus the 10 most ' +
+      'recent finished ones with exit codes. Each entry carries its cmd_id and log_file. Rows ' +
+      'whose process is gone are reconciled on read, so `running` is the truth.',
+    input: obj({}, []),
+    mutates: false, streaming: false,
+    async execute(ctx) {
+      return ctx.tasks.list();
+    },
+  },
+  {
+    name: 'task_wait',
+    summary: 'Wait for a background command to finish.',
+    description: 'Polls the command until it exits or `timeout` ms pass (default 30s, max 5 ' +
+      'min). On exit it returns the status, exit code and the tail of the log; on timeout it ' +
+      'returns still-running and you decide — call again to keep waiting. Prefer this over ' +
+      'sleep loops.',
+    input: obj({
+      cmd_id: str('The cmd_id a detached bash call returned (or one from task_list).'),
+      timeout: int('Milliseconds to wait (default 30000, max 300000).', 30000),
+    }, ['cmd_id']),
+    mutates: false, streaming: false,
+    async execute(ctx, a) {
+      return ctx.tasks.wait(s(a.cmd_id), a.timeout === undefined ? 30_000 : Number(a.timeout));
+    },
+  },
+  {
+    name: 'task_kill',
+    summary: 'Kill a running background command by its cmd_id.',
+    description: "TERM, a second, then KILL — the command's whole process tree, named by the " +
+      'cmd_id a detached bash call returned. Kills by id, never by name matching. The exit is ' +
+      'then reported like any other: the task leaves `running` and the next turn hears of it.',
+    input: obj({
+      cmd_id: str('The cmd_id of the running task (from task_list).'),
+    }, ['cmd_id']),
+    mutates: true, streaming: false,
+    async execute(ctx, a) {
+      return ctx.tasks.kill(s(a.cmd_id));
     },
   },
   {

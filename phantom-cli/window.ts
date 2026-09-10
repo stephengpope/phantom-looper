@@ -456,6 +456,12 @@ export class WindowStore {
         { transcript_updated_at?: string | null };
       await this.refreshIfMoved(id, r?.transcript_updated_at ?? null);
     };
+    // Passive notices (a detached command exited) ride this window's next
+    // send; the drain runs after the lock above, so one consumer takes them.
+    s.drainNotices = async (id) => {
+      const r = await this.api('POST', `/sessions/${id}/notices/drain`) as { notices?: string[] };
+      return r?.notices ?? [];
+    };
     // This window's own turn, relayed as it runs, so any watcher sees it
     // stream exactly like a turn the server runs.
     s.relay = async (id, events) => { await this.api('POST', `/sessions/${id}/events`, { events }); };

@@ -9,9 +9,9 @@
 // Kit: the caller's — `session_*`, the full board kit, `screen_*`,
 // `workspace_create_repo` (gated in the app), the web kit
 // (core/llm/tools/tui.ts + web.ts), and the READ-ONLY workspace tools
-// (read ls find grep — phantomTools pick:'readonly') scoped to the session
-// on screen, rebuilt when the screen switches; the app supplies the
-// handlers. The mutating file tools are deliberately not granted.
+// (read ls find grep task_list task_wait — phantomTools pick:'readonly')
+// scoped to the session on screen, rebuilt when the screen switches; the
+// app supplies the handlers. The mutating tools are deliberately not granted.
 //
 // Reasoning defaults to 'none' — the Assistant should be fast — but can be
 // overridden via assistant_reasoning. createAgent turns 'none' into the

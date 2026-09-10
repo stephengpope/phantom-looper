@@ -8,7 +8,8 @@ import { workspaces, commands, type SessionRow, type WorkspaceRow } from '../../
 import { getSession, touchSession } from '../../sessions.js';
 import { ToolError } from '../../tools/envelope.js';
 import { ok, err, type AppCtx } from '../app.js';
-import { SESSION_HEADER, type FsDeps } from './fs.js';
+import { SESSION_HEADER } from '../sessionHeader.js';
+import type { FsDeps } from './fs.js';
 import type { GitEngine } from '../../git/engine.js';
 import { logger, errStr } from '../../log.js';
 

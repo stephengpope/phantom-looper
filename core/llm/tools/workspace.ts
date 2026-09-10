@@ -1,6 +1,7 @@
 /**
- * The WORKSPACE kit — the seven file tools (`bash read write edit ls find
- * grep`). Needs: a phantom-backend and a session. Any agent whose host has
+ * The WORKSPACE kit — the file tools (`bash read write edit ls find grep`)
+ * plus the task tools (`task_list task_wait task_kill`) over bash's detached
+ * commands. Needs: a phantom-backend and a session. Any agent whose host has
  * those can carry this kit (the coding agent does; the Assistant could).
  *
  * The definitions are not written here — they live in ONE place, the server's
@@ -9,7 +10,8 @@
  * and base URL never appear in a schema the model sees.
  *
  * `pick` bounds the kit: a list of names, or 'readonly' for the tools the
- * server marks as not mutating (read ls find grep). Default: all of them.
+ * server marks as not mutating (read ls find grep task_list task_wait).
+ * Default: all of them.
  *
  *   import { phantomTools } from '../core/llm/tools/workspace.js';
  *   const tools = await phantomTools({ baseUrl, apiKey, sessionId });

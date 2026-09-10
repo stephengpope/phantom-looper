@@ -1,108 +1,27 @@
 // What is running in a session's container, answered fresh on demand — no
 // poller, no stored live state. One task = one started command's whole
 // process tree, grouped by process-session id (runc setsids every exec, so
-// the leader's pid IS the sid). Everything here speaks the CONTAINER's pid
-// namespace: the listing is `ps` run inside the container, the kill is
-// `pkill -s` inside it. Docker's own /containers/:id/top reports HOST pids
-// (verified live) and is deliberately not used — its numbers can never meet
-// a `pkill` in the container.
+// the leader's pid IS the sid). The ps reading, grouping and row reconcile
+// live in fs.ts beside the command rows they read — shared with the task_*
+// tools, so the screen and the agent read one truth. Docker's own
+// /containers/:id/top reports HOST pids (verified live) and is deliberately
+// not used — its numbers can never meet a `pkill` in the container.
 import type { FastifyInstance } from 'fastify';
 import { and, desc, eq } from 'drizzle-orm';
 import { commands } from '../../db/schema.js';
 import { getSession } from '../../sessions.js';
 import { Sandbox } from '../../workspace/sandbox.js';
 import { ok, err, type AppCtx } from '../app.js';
-import { killSid, type FsDeps } from './fs.js';
+import {
+  killSid, probeGroups, reconcileRunning, commandOf, elapsedSeconds,
+  type CmdRow, type LiveGroup, type FsDeps,
+} from './fs.js';
 import { logger, errStr } from '../../log.js';
 
 const log = logger('tasks');
 
 const TAG = { tags: ['tasks'] };
 const idParam = { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] };
-
-// One invocation serving both userlands: busybox ps (the alpine test image)
-// and procps (the workspace image) both accept -eo with these columns.
-const PS_ARGV = ['ps', '-eo', 'pid,sid,etime,args'];
-
-export interface PsRow { pid: string; sid: string; elapsed: string; args: string }
-
-/** Parse `ps -eo pid,sid,etime,args` output. Columns are located by the
- *  header line, defensively — if a userland ever omits SID, each row stands
- *  alone (sid = pid) rather than the parse failing. args is everything after
- *  the fixed columns, spaces preserved. */
-export function parsePs(out: string): PsRow[] {
-  const lines = out.split('\n').filter((l) => l.trim() !== '');
-  if (!lines.length) return [];
-  const titles = lines[0].trim().split(/\s+/).map((t) => t.toUpperCase());
-  // args/command is last and open-ended; everything before it is one token.
-  const fixed = titles.length - 1;
-  const col = (name: string) => titles.indexOf(name);
-  const iPid = col('PID');
-  const iSid = col('SID');
-  const iElapsed = col('ELAPSED') >= 0 ? col('ELAPSED') : col('TIME');
-  if (iPid < 0) return [];
-  const rows: PsRow[] = [];
-  for (const line of lines.slice(1)) {
-    const m = line.trim().split(/\s+/);
-    if (m.length <= fixed) continue;
-    const args = m.slice(fixed).join(' ');
-    const pid = m[iPid] ?? '';
-    if (!/^\d+$/.test(pid)) continue;
-    rows.push({
-      pid,
-      sid: iSid >= 0 && /^\d+$/.test(m[iSid] ?? '') ? m[iSid] : pid,
-      elapsed: iElapsed >= 0 ? (m[iElapsed] ?? '') : '',
-      args,
-    });
-  }
-  return rows;
-}
-
-/** ps's etime — `[[dd-]hh:]mm:ss` on procps and busybox alike — to seconds;
- *  null when the string is anything else. The client never sees raw etime
- *  vocabulary: an untracked task's start time is derived from this, so every
- *  row speaks one field. */
-export function elapsedSeconds(etime: string): number | null {
-  const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(etime.trim());
-  if (!m) return null;
-  return Number(m[1] ?? 0) * 86_400 + Number(m[2] ?? 0) * 3_600 + Number(m[3]) * 60 + Number(m[4]);
-}
-
-export interface LiveGroup { sid: string; command: string; elapsed: string; pids: number }
-
-/** Group ps rows into tasks by sid. Drops the container's own baseline —
- *  docker-init (pid 1) and the `sleep infinity` keeper share sid 1 (verified
- *  live) — and our own ps invocation, which is itself a setsid'd exec and
- *  would otherwise appear as a task on every read. */
-export function liveGroups(rows: PsRow[]): LiveGroup[] {
-  const bySid = new Map<string, PsRow[]>();
-  for (const r of rows) {
-    if (r.sid === '1') continue;
-    const g = bySid.get(r.sid);
-    if (g) g.push(r); else bySid.set(r.sid, [r]);
-  }
-  const groups: LiveGroup[] = [];
-  for (const [sid, g] of bySid) {
-    const leader = g.find((r) => r.pid === r.sid) ?? g[0];
-    if (g.length === 1 && leader.args === PS_ARGV.join(' ')) continue;
-    groups.push({ sid, command: leader.args, elapsed: leader.elapsed, pids: g.length });
-  }
-  return groups;
-}
-
-/** The command a row ran, as the user typed it: argv is ['/bin/sh','-c',cmd]. */
-const commandOf = (argv: unknown): string => {
-  const a = Array.isArray(argv) ? (argv as string[]) : [];
-  return a.length === 3 && a[0] === '/bin/sh' && a[1] === '-c' ? a[2] : a.join(' ');
-};
-
-type CmdRow = typeof commands.$inferSelect;
-
-/** Rows still marked running with no live process are provably dead — the
- *  final write was lost (server restart mid-command). Close them here, on
- *  read: looking is exactly when a stale row matters. Rows whose sid capture
- *  is still in flight (null sid, just born) get a grace window. */
-const SID_CAPTURE_GRACE_MS = 15_000;
 
 export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
   /** The session's container, probed WITHOUT creating one — listing must
@@ -132,10 +51,8 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
     const { state, container } = await probe(session.folderId ?? session.id);
     let groups: LiveGroup[] = [];
     if (container) {
-      const ws = new Sandbox(deps.docker, container);
       try {
-        const r = await ws.run(PS_ARGV, { timeoutMs: 15_000 });
-        groups = liveGroups(parsePs(r.stdout.toString('utf8')));
+        groups = await probeGroups(new Sandbox(deps.docker, container));
       } catch (e) {
         log.warn({ session: session.id, err: errStr(e) }, 'ps in container failed');
       }
@@ -166,17 +83,7 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
 
     // Reconcile: running rows with no live group are dead. Applies equally
     // when the container is absent or stopped — nothing survives either.
-    const live = new Set(groups.map((g) => g.sid));
-    const now = Date.now();
-    for (const row of running) {
-      if (row.sid && live.has(row.sid)) continue;
-      if (!row.sid && now - row.startedAt.getTime() < SID_CAPTURE_GRACE_MS) continue;
-      await ctx.db.update(commands)
-        .set({ status: 'exited', exitCode: null, endedAt: new Date() })
-        .where(and(eq(commands.id, row.id), eq(commands.status, 'running')))
-        .catch(() => {});
-      row.status = 'exited';
-    }
+    await reconcileRunning(ctx, running, groups);
 
     const liveIds = new Set(tasks.map((t) => t.cmd_id).filter(Boolean));
     const recent = rows
@@ -209,8 +116,7 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
     if (!container) return reply.code(404).send(err('no_such_task', 'nothing is running — the container is not up'));
 
     const ws = new Sandbox(deps.docker, container);
-    const r = await ws.run(PS_ARGV, { timeoutMs: 15_000 });
-    const groups = liveGroups(parsePs(r.stdout.toString('utf8')));
+    const groups = await probeGroups(ws);
     if (!groups.some((g) => g.sid === req.params.sid)) {
       return reply.code(404).send(err('no_such_task', `no running task with sid ${req.params.sid}`));
     }

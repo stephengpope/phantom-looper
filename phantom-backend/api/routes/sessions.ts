@@ -623,7 +623,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       try {
         const { text } = await runCodingTurn(
           { f, apiKey: ctx.apiKey, base: 'http://looper', modelFetch: ctx.modelFetch,
-            sessionEvents: ctx.sessionEvents, client },
+            sessionEvents: ctx.sessionEvents, client, notices: ctx.notices },
           opened, opened.session.workspaceId, req.body.message, req.body.plan === true);
         line({ type: 'result', text });
       } catch (e) {
@@ -634,6 +634,21 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         reply.raw.end();
       }
     });
+
+  // ---- passive notices -----------------------------------------------------
+  // A window's side of the notices channel (notices.ts): as its send starts,
+  // it drains what is waiting and folds it into the turn ahead of the typed
+  // text — the server-side turn runner drains in-process and never crosses
+  // here. Drain is take-not-peek: the window records what it got with the
+  // turn, and the fact each notice reports lives in its own row regardless.
+  app.post<{ Params: { id: string } }>(
+    '/sessions/:id/notices/drain', { schema: { ...TAG,
+      summary: "Take the session's pending passive notices",
+      description: 'Drains and returns the one-line notices waiting for the session\'s next turn ' +
+        '(a detached command exiting). The caller folds them into the turn it is starting and ' +
+        'records them with it.',
+      params: idParam } },
+    async (req) => ok({ notices: ctx.notices?.drain(req.params.id) ?? [] }));
 
   // ---- duplicate -----------------------------------------------------------
   // THE way to fork a session — above all, to switch its model: a pinned

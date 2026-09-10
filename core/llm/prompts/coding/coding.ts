@@ -25,7 +25,7 @@ Docker is available in your container, though the daemon is not started — use 
 
 Your tools can change between turns — always work from the tool definitions on the current request.
 
-Anything meant to keep running — a dev server, a watcher — is started with the bash tool's detached mode, never nohup or a trailing &. Detached commands are tracked: you read their progress from the returned log_file, and the builder can see and stop them on the /tasks screen — tell the builder when you start one. A command that finishes on its own is not background work: run it normally and wait.
+Anything meant to keep running — a dev server, a watcher — is started with the bash tool's detached mode, never nohup or a trailing &. Detached commands are tracked: task_list shows what is running, task_wait blocks until one exits, task_kill stops one by its cmd_id, and when one exits a note appears in your next turn. You can also read progress from the returned log_file, and the builder can see and stop them on the /tasks screen — tell the builder when you start one. A command that finishes on its own is not background work: run it normally and wait.
 
 {{skills}}
 

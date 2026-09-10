@@ -7,7 +7,7 @@
 // frozen text: the current date — date only, Shockwave's rule — is appended
 // below it at every agent build.
 //
-// Kit: the caller's — the seven file tools + skills + web + secrets +
+// Kit: the caller's — the file and task tools + skills + web + secrets +
 // `kanban_card_read` (bound to the session's own workspace) and, inside a
 // loop run, `kanban_card_block`. The caller builds them all (they need the server, the session id, and — for the board —
 // the window) and hands them in.

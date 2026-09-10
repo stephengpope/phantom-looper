@@ -170,6 +170,12 @@ export class SessionStore {
    *  it. It does NOT queue: the queue is only for this window's own running
    *  turn, never for a lock held elsewhere. */
   onTurnStart?: (id: string) => Promise<void>;
+  /** Drain the session's passive notices (App wires
+   *  `POST /sessions/:id/notices/drain`): server-side one-liners — a detached
+   *  command exited — that ride the next turn ahead of the typed text. A
+   *  failure loses nothing: the server drops only what it answered, so they
+   *  wait for the next send. */
+  drainNotices?: (id: string) => Promise<string[]>;
   /** The relay: this window's own turn, published to the server as it runs
    *  (App wires `POST /sessions/:id/events`), so a watcher anywhere sees it
    *  exactly as they see a turn the server runs — one feed, whoever drives.
@@ -502,8 +508,14 @@ export class SessionStore {
       }
     }
 
+    // Notices first: they are older facts than what was just typed, so they
+    // ride AHEAD of it — recorded into history and the transcript exactly
+    // like a typed message, which keeps them whether or not the turn lands.
+    // A drain failure keeps them server-side for the next send.
+    let notices: string[] = [];
+    try { notices = (await this.drainNotices?.(id)) ?? []; } catch { notices = []; }
     e.lastMessageAt = Date.now();
-    for (const t of texts) {
+    for (const t of [...notices, ...texts]) {
       e.done = [...e.done, { kind: 'user', id: nextId('user'), text: t }];
       const message: ModelMessage = { role: 'user', content: t };
       e.history.push(message);

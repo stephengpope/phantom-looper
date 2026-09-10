@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { workspaces, commands, type SessionRow } from '../../db/schema.js';
 import { getSession, touchSession } from '../../sessions.js';
 import { newId } from '../../../core/ids.js';
@@ -16,11 +16,10 @@ import { ToolError } from '../../tools/envelope.js';
 import { resolve } from '../../settings.js';
 import { ok, err, type AppCtx } from '../app.js';
 import { killProcessGroup } from '../foreground.js';
+import { SESSION_HEADER } from '../sessionHeader.js';
 import type { ContainerManager } from '../../workspace/container.js';
 import type Docker from 'dockerode';
 import type { GitEngine } from '../../git/engine.js';
-
-export const SESSION_HEADER = 'x-phantom-looper-session';
 
 const log = logger('bash');
 
@@ -49,6 +48,119 @@ export function killSid(ws: Sandbox, sid: string): Promise<unknown> {
     'pgrep -s "$0" >/dev/null 2>&1 && pkill -KILL -s "$0" 2>/dev/null; exit 0';
   return ws.run(['/bin/sh', '-c', script, sid], { timeoutMs: 15_000 })
     .catch((e) => log.warn({ err: errStr(e) }, 'kill of command group failed'));
+}
+
+// ---- live tasks: what the container is actually running ---------------------
+// Shared by the /tasks screen (routes/tasks.ts) and the task_* tools below.
+// Everything speaks the CONTAINER's pid namespace: the listing is `ps` run
+// inside the container, the kill is `pkill -s` inside it. One task = one
+// started command's whole process tree, grouped by process-session id (runc
+// setsids every exec, so the leader's pid IS the sid).
+
+// One invocation serving both userlands: busybox ps (the alpine test image)
+// and procps (the workspace image) both accept -eo with these columns.
+const PS_ARGV = ['ps', '-eo', 'pid,sid,etime,args'];
+
+export interface PsRow { pid: string; sid: string; elapsed: string; args: string }
+
+/** Parse `ps -eo pid,sid,etime,args` output. Columns are located by the
+ *  header line, defensively — if a userland ever omits SID, each row stands
+ *  alone (sid = pid) rather than the parse failing. args is everything after
+ *  the fixed columns, spaces preserved. */
+export function parsePs(out: string): PsRow[] {
+  const lines = out.split('\n').filter((l) => l.trim() !== '');
+  if (!lines.length) return [];
+  const titles = lines[0].trim().split(/\s+/).map((t) => t.toUpperCase());
+  // args/command is last and open-ended; everything before it is one token.
+  const fixed = titles.length - 1;
+  const col = (name: string) => titles.indexOf(name);
+  const iPid = col('PID');
+  const iSid = col('SID');
+  const iElapsed = col('ELAPSED') >= 0 ? col('ELAPSED') : col('TIME');
+  if (iPid < 0) return [];
+  const rows: PsRow[] = [];
+  for (const line of lines.slice(1)) {
+    const m = line.trim().split(/\s+/);
+    if (m.length <= fixed) continue;
+    const args = m.slice(fixed).join(' ');
+    const pid = m[iPid] ?? '';
+    if (!/^\d+$/.test(pid)) continue;
+    rows.push({
+      pid,
+      sid: iSid >= 0 && /^\d+$/.test(m[iSid] ?? '') ? m[iSid] : pid,
+      elapsed: iElapsed >= 0 ? (m[iElapsed] ?? '') : '',
+      args,
+    });
+  }
+  return rows;
+}
+
+/** ps's etime — `[[dd-]hh:]mm:ss` on procps and busybox alike — to seconds;
+ *  null when the string is anything else. The client never sees raw etime
+ *  vocabulary: an untracked task's start time is derived from this, so every
+ *  row speaks one field. */
+export function elapsedSeconds(etime: string): number | null {
+  const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(etime.trim());
+  if (!m) return null;
+  return Number(m[1] ?? 0) * 86_400 + Number(m[2] ?? 0) * 3_600 + Number(m[3]) * 60 + Number(m[4]);
+}
+
+export interface LiveGroup { sid: string; command: string; elapsed: string; pids: number }
+
+/** Group ps rows into tasks by sid. Drops the container's own baseline —
+ *  docker-init (pid 1) and the `sleep infinity` keeper share sid 1 (verified
+ *  live) — and our own ps invocation, which is itself a setsid'd exec and
+ *  would otherwise appear as a task on every read. */
+export function liveGroups(rows: PsRow[]): LiveGroup[] {
+  const bySid = new Map<string, PsRow[]>();
+  for (const r of rows) {
+    if (r.sid === '1') continue;
+    const g = bySid.get(r.sid);
+    if (g) g.push(r); else bySid.set(r.sid, [r]);
+  }
+  const groups: LiveGroup[] = [];
+  for (const [sid, g] of bySid) {
+    const leader = g.find((r) => r.pid === r.sid) ?? g[0];
+    if (g.length === 1 && leader.args === PS_ARGV.join(' ')) continue;
+    groups.push({ sid, command: leader.args, elapsed: leader.elapsed, pids: g.length });
+  }
+  return groups;
+}
+
+/** The live groups of a container, one ps. */
+export async function probeGroups(ws: Sandbox): Promise<LiveGroup[]> {
+  const r = await ws.run(PS_ARGV, { timeoutMs: 15_000 });
+  return liveGroups(parsePs(r.stdout.toString('utf8')));
+}
+
+/** The command a row ran, as the user typed it: argv is ['/bin/sh','-c',cmd]. */
+export const commandOf = (argv: unknown): string => {
+  const a = Array.isArray(argv) ? (argv as string[]) : [];
+  return a.length === 3 && a[0] === '/bin/sh' && a[1] === '-c' ? a[2] : a.join(' ');
+};
+
+export type CmdRow = typeof commands.$inferSelect;
+
+/** Rows still marked running with no live process are provably dead — the
+ *  final write was lost (server restart mid-command). Close them on read:
+ *  looking is exactly when a stale row matters. Rows whose sid capture is
+ *  still in flight (null sid, just born) get a grace window. */
+const SID_CAPTURE_GRACE_MS = 15_000;
+
+export async function reconcileRunning(
+  ctx: AppCtx, running: CmdRow[], groups: LiveGroup[],
+): Promise<void> {
+  const live = new Set(groups.map((g) => g.sid));
+  const now = Date.now();
+  for (const row of running) {
+    if (row.sid && live.has(row.sid)) continue;
+    if (!row.sid && now - row.startedAt.getTime() < SID_CAPTURE_GRACE_MS) continue;
+    await ctx.db.update(commands)
+      .set({ status: 'exited', exitCode: null, endedAt: new Date() })
+      .where(and(eq(commands.id, row.id), eq(commands.status, 'running')))
+      .catch(() => {});
+    row.status = 'exited';
+  }
 }
 
 /** Full bash semantics, injected into the registry's bash tool. Unary runs
@@ -185,6 +297,13 @@ async function runBash(
       // overwrite them.
       await ctx.db.update(commands).set({ status, exitCode, endedAt: new Date() })
         .where(and(eq(commands.id, cmdId), eq(commands.status, 'running'))).catch(() => {});
+      // The exit notice rides the session's NEXT turn (notices.ts) — no turn
+      // is started for it. Read the row's final word rather than the local
+      // `status`: a kill from /tasks or task_kill marks the row first, and
+      // the row is the truth.
+      const final = await ctx.db.select().from(commands).where(eq(commands.id, cmdId))
+        .catch(() => [] as CmdRow[]);
+      if (final[0]) ctx.notices?.push(session.id, noticeOf(final[0]));
     }
   })();
   // Sid capture, fire-and-forget beside the stream: retry-read the pidfile
@@ -203,6 +322,109 @@ async function runBash(
   // read it (the /commands/:id/logs HTTP route is for API clients, which the
   // agent is not). Same mapping as the unary spill file above.
   return { cmd_id: cmdId, log_file: `/workspace/logs/${cmdId}.ndjson` };
+}
+
+// ---- the task tools ----------------------------------------------------------
+// The agent's own view of its detached commands, over the SAME commands rows
+// the /tasks screen reads — one truth, two readers. Injected into the
+// registry's task_* tools; the registry stays free of db and docker plumbing.
+
+/** The one-line notice a finished detached command leaves for the next turn. */
+function noticeOf(row: CmdRow): string {
+  const cmd = commandOf(row.argv);
+  const short = cmd.length > 120 ? `${cmd.slice(0, 120)}…` : cmd;
+  const what = row.status === 'killed' ? 'was killed'
+    : row.status === 'orphaned' ? 'died with its container'
+    : `exited, code ${row.exitCode ?? '?'}`;
+  return `[background] task ${row.id} ${what} — "${short}"`;
+}
+
+const shapeCommand = (r: CmdRow) => ({
+  cmd_id: r.id, command: commandOf(r.argv), status: r.status,
+  exit_code: r.exitCode, started_at: r.startedAt, ended_at: r.endedAt,
+  log_file: `/workspace/logs/${r.id}.ndjson`,
+});
+
+async function taskList(ctx: AppCtx, ws: Sandbox, session: SessionRow): Promise<unknown> {
+  const rows: CmdRow[] = await ctx.db.select().from(commands)
+    .where(eq(commands.sessionId, session.id))
+    .orderBy(desc(commands.startedAt)).limit(20);
+  const running = rows.filter((r) => r.status === 'running');
+  if (running.length) {
+    // Reconcile on read so `running` is the truth. A failed ps SKIPS it —
+    // rows still answer unreconciled rather than live commands being closed
+    // on a bad reading.
+    try { await reconcileRunning(ctx, running, await probeGroups(ws)); }
+    catch (e) { log.warn({ err: errStr(e) }, 'task_list reconcile skipped — ps failed'); }
+  }
+  return {
+    running: rows.filter((r) => r.status === 'running').map(shapeCommand),
+    recent: rows.filter((r) => r.status !== 'running').slice(0, 10).map(shapeCommand),
+  };
+}
+
+/** One command row of THIS session, or a not_found the model can act on. */
+async function ownCommand(ctx: AppCtx, session: SessionRow, cmdId: string): Promise<CmdRow> {
+  const rows: CmdRow[] = await ctx.db.select().from(commands)
+    .where(and(eq(commands.id, cmdId), eq(commands.sessionId, session.id)));
+  if (!rows[0]) throw new ToolError('not_found', `no task ${cmdId} in this session — task_list shows what is running`);
+  return rows[0];
+}
+
+/** task_wait's ceiling: the tool call is one HTTP request — long, never
+ *  unbounded. */
+const WAIT_MAX_MS = 300_000;
+
+async function taskWait(ctx: AppCtx, session: SessionRow, cmdId: string, timeoutMs: number): Promise<unknown> {
+  let row = await ownCommand(ctx, session, cmdId);
+  const deadline = Date.now() + Math.min(Math.max(0, timeoutMs), WAIT_MAX_MS);
+  while (row.status === 'running' && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1_000));
+    row = await ownCommand(ctx, session, cmdId);
+  }
+  if (row.status === 'running') {
+    return { ...shapeCommand(row), hint: 'still running — call task_wait again to keep waiting' };
+  }
+  return { ...shapeCommand(row), tail: await tailLog(row.logPath, 10) };
+}
+
+async function taskKill(ctx: AppCtx, ws: Sandbox, session: SessionRow, cmdId: string): Promise<unknown> {
+  const row = await ownCommand(ctx, session, cmdId);
+  if (row.status !== 'running') return { ...shapeCommand(row), note: 'not running — nothing to kill' };
+  if (!row.sid) {
+    throw new ToolError('not_ready', `task ${cmdId} has no process id yet (just started) — retry in a moment`, true);
+  }
+  // Mark first: the detached stream's terminal write is conditioned on
+  // status='running', so 'killed' set here is final even if the stream's
+  // exit lands a moment later. The same order as the /tasks route's kill.
+  await ctx.db.update(commands).set({ status: 'killed', endedAt: new Date() })
+    .where(and(eq(commands.id, row.id), eq(commands.status, 'running')));
+  await killSid(ws, row.sid);
+  return { cmd_id: row.id, status: 'killed' };
+}
+
+/** The last `lines` records of a detached command's ND-JSON log, read bounded
+ *  from the end — a dev server's log can run for hours. */
+async function tailLog(logPath: string, lines: number): Promise<string[]> {
+  try {
+    const st = await fsp.stat(logPath);
+    const from = Math.max(0, st.size - 16_384);
+    const fh = await fsp.open(logPath, 'r');
+    try {
+      const buf = Buffer.alloc(st.size - from);
+      await fh.read(buf, 0, buf.length, from);
+      const out: string[] = [];
+      for (const line of buf.toString('utf8').split('\n')) {
+        if (!line) continue;
+        try {
+          const rec = JSON.parse(line) as { data?: string; event?: string; code?: number };
+          if (typeof rec.data === 'string') out.push(rec.data.replace(/\n$/, ''));
+          else if (rec.event === 'exit') out.push(`[exit ${rec.code}]`);
+        } catch { /* the window's partial first line */ }
+      }
+      return out.slice(-lines);
+    } finally { await fh.close(); }
+  } catch { return []; }
 }
 
 export function fsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
@@ -262,6 +484,11 @@ export function fsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
           maxSearchResults: Number(await resolve(ctx.db, 'max_search_results')),
         },
         runBash: (args) => runBash(ctx, deps, ws, session, args, ac.signal),
+        tasks: {
+          list: () => taskList(ctx, ws, session),
+          wait: (cmdId, timeoutMs) => taskWait(ctx, session, cmdId, timeoutMs),
+          kill: (cmdId) => taskKill(ctx, ws, session, cmdId),
+        },
       };
       try {
         // Tools take no lock — the agent fans out parallel calls in one turn
