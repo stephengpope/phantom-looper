@@ -6,6 +6,11 @@
 # Custom container_image values must include it.
 #
 # Debian 13 (trixie): current stable — system python is 3.13, everything recent.
+# The uv pin lives at GLOBAL scope: buildkit cannot expand variables in
+# COPY --from=<image>, so the pin feeds a named stage and the COPY names the
+# stage (found broken live: the v0.1.29 session-image build failed on it).
+ARG UV_VERSION=0.12.12
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv-bin
 FROM debian:trixie-slim
 ARG UID=1000
 
@@ -106,8 +111,7 @@ RUN printf '%s\n' \
 # venv + pip above remain the boring fallback.
 # Pinned like Playwright below: a floating uv tag would let the toolchain
 # drift between builds. Bump with the other ARGs.
-ARG UV_VERSION=0.12.12
-COPY --from=ghcr.io/astral-sh/uv:${UV_VERSION} /uv /uvx /usr/local/bin/
+COPY --from=uv-bin /uv /uvx /usr/local/bin/
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
 RUN uv python install 3.11 3.12 3.13 && chown -R ${UID}:${UID} /opt/uv
 
