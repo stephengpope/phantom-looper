@@ -30,12 +30,14 @@ import { logger, errStr } from './log.js';
 const log = logger('disk');
 
 /** Idle-backup gates: worth it only once a session has real work (turns), and
- *  only after it has been quiet long enough that taking its lock cannot steal
- *  a live turn — with the lock itself as the final check when the clock lies
- *  (one 2-hour command inside a single tool call updates nothing until it
- *  ends, but the running turn HOLDS the lock, so the backup reads busy). */
+ *  only after a short quiet spell so the common case is one backup per work
+ *  session, not one per coffee sip — with the lock itself as the final check
+ *  when the clock lies (one 2-hour command inside a single tool call updates
+ *  nothing until it ends, but the running turn HOLDS the lock, so the backup
+ *  reads busy). 5 minutes keeps unpushed work on quiet sessions minutes
+ *  stale, not hours. */
 const BACKUP_MIN_TURNS = 10;
-const BACKUP_IDLE_MS = 3_600_000;
+const BACKUP_IDLE_MS = 5 * 60_000;
 
 /** Percent of the workspace filesystem in use, 0-100. The named volume and
  *  docker's own data share the host's one disk in any standard install, so
