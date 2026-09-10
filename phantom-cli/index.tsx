@@ -16,6 +16,8 @@
 // PHANTOM_BACKEND_KEY, PHANTOM_CLI_AUTO_UPDATE) — the settings screen shows
 // which source each value came from.
 import { openSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { join } from 'node:path';
 import { format } from 'node:util';
 import { render } from 'ink';
 import { phantomTools } from '../core/llm/tools/workspace.js';
@@ -28,13 +30,13 @@ import { App } from './App.js';
 import { createScreen } from './screen.js';
 import { createCprFilter } from './cursorAudit.js';
 import { MOUSE_OFF, MOUSE_ON } from './mouse.js';
-import { type ConfigValue } from './config.js';
+import { CONFIG_DIR, type ConfigValue } from './config.js';
 import { CLI_LOG_PATH, logLine } from './cliLog.js';
 import { resolveLocal, localValues } from './local.js';
 import { ndjson } from '../core/ndjson.js';
 import { apiFor, savedCaFor } from './provision.js';
 import { APP_VERSION, checkLatest, selfUpdate } from './selfUpdate.js';
-import { CHECK_INTERVAL_MS, autoUpdateCycle, dueForCheck, stampChecked } from './autoUpdate.js';
+import { CHECK_INTERVAL_MS, autoUpdateCycle, dueForCheck, prelaunchReconcile, stampChecked } from './autoUpdate.js';
 import { quitNotice, runUpdate, versionLines } from './update.js';
 import type { ServerLink, Target } from './update.js';
 import { makeSettings } from './settings.js';
@@ -52,6 +54,11 @@ if (configError) console.error(configError);
 // machine AND the server to the latest release; `--client` / `--server` take
 // one half. The messages, the wait and the loop guard live in update.ts.
 const firstArg = process.argv[2];
+
+// Clears the current terminal line before reprinting it — the ticking waits
+// (the update command's, the launch gate's) rewrite one line instead of
+// scrolling. Empty off a TTY: there is no line to clear in a pipe.
+const TTY_CLEAR = process.stdout.isTTY ? '\r\x1b[2K' : '';
 
 /** The paired server as update.ts sees it — null when nothing is paired. */
 function pairedServer(): ServerLink | null {
@@ -76,15 +83,14 @@ if (firstArg === 'update') {
   const target: Target = flags.includes('--client') && !flags.includes('--server') ? 'client'
     : flags.includes('--server') && !flags.includes('--client') ? 'server' : 'both';
   // The ticking wait rewrites its line; every real line clears it first.
-  const clear = process.stdout.isTTY ? '\r\x1b[2K' : '';
   const code = await runUpdate(target, {
     appVersion: APP_VERSION,
     latest: checkLatest,
     server: pairedServer(),
     installClient: selfUpdate,
     confirm: askYesNo,
-    out: (line) => { process.stdout.write(clear + line + '\n'); },
-    tick: process.stdout.isTTY ? (line) => { process.stdout.write(clear + line); } : undefined,
+    out: (line) => { process.stdout.write(TTY_CLEAR + line + '\n'); },
+    tick: process.stdout.isTTY ? (line) => { process.stdout.write(TTY_CLEAR + line); } : undefined,
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     now: Date.now,
   });
@@ -183,6 +189,32 @@ function versionWatch(): void {
 }
 versionWatch();
 setInterval(versionWatch, CHECK_INTERVAL_MS).unref();
+
+// The launch gate (autoUpdate.ts): settle any version gap between this
+// machine and the server BEFORE the app opens — no session is open yet, so
+// nothing is interrupted and no lock is ever taken by a build that is about
+// to be replaced. The client half re-execs into the matching build; the
+// server half is always a confirmed y/N, because it restarts the server.
+await prelaunchReconcile({
+  appVersion: APP_VERSION,
+  server: pairedServer(),
+  install: selfUpdate,
+  confirm: askYesNo,
+  out: (line) => { process.stdout.write(TTY_CLEAR + line + '\n'); },
+  tick: process.stdout.isTTY ? (line) => { process.stdout.write(TTY_CLEAR + line); } : undefined,
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  now: Date.now,
+  reexec: (version) => {
+    // One hop, never a loop: the new process carries the marker, so a server
+    // still ahead of it (ahead of the latest PUBLISHED release — a manual
+    // tag) opens mismatched with the quit notice instead of re-execing forever.
+    if (process.env.PHANTOM_CLI_REEXEC) return;
+    const r = spawnSync(join(CONFIG_DIR, 'app', version, 'bin', 'phantom-cli'), process.argv.slice(2), {
+      stdio: 'inherit', env: { ...process.env, PHANTOM_CLI_REEXEC: '1' },
+    });
+    process.exit(r.status ?? 0);
+  },
+});
 
 /** POST /git/auto-push for one session — core's client over the ND-JSON
  *  stream (heartbeats keep the connection alive, step records become notes,

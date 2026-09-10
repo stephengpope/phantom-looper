@@ -111,7 +111,10 @@ export class TelegramEngine {
       },
       triggerUpdate: async (tag) => {
         try {
-          const r = await (await this.call('/update', { method: 'POST', body: { tag } })).json();
+          // restart_anyway: the approval DM already warns that running turns
+          // are stopped and loop cards blocked — a tap on Approve is the
+          // informed yes the /update guard asks for.
+          const r = await (await this.call('/update', { method: 'POST', body: { tag, restart_anyway: true } })).json();
           return r.ok ? { ok: true } : { ok: false, error: r.error?.message ?? 'unknown' };
         } catch (e) { return { ok: false, error: (e as Error).message }; }
       },

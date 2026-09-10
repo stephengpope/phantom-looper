@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import { CONFIG_DIR } from './config.js';
 import { bare, isBehind } from '../core/version.js';
 import { logLine } from './cliLog.js';
+import { readHealth, waitForVersion, TIMEOUT_MS, type ServerLink } from './update.js';
 
 export const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
@@ -78,5 +79,91 @@ export async function autoUpdateCycle(d: AutoUpdateDeps): Promise<CycleResult> {
   } catch (e) {
     logLine(`auto-update to ${latest} failed: ${e instanceof Error ? e.message : String(e)}`);
     return { latest, installed: null };
+  }
+}
+
+// ── the launch gate ─────────────────────────────────────────────────────────
+// Every launch compares this machine and the paired server BEFORE the app
+// opens, and brings the two in line right there — no session is open yet, so
+// nothing is interrupted and no lock is ever taken by a build that is about
+// to be replaced:
+//
+//   server newer → install the SERVER'S exact tag and re-exec into it. The
+//     target is the server's tag, never latest: catching up must not
+//     overshoot into a version the server does not have.
+//   cli newer    → the fix is a server update, which RESTARTS the server —
+//     so it is always confirmed: one y/N naming the versions (and the cards
+//     being worked on, when there are any; a yes then carries
+//     restart_anyway). A yes is followed by a ticking wait for the server to
+//     come back on the new version.
+//
+// A declined or failed reconcile opens the app anyway, mismatched — the quit
+// notice names what is behind. Unreachable server, nothing paired, a dev
+// checkout: no gate at all.
+
+const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+export interface ReconcileDeps {
+  /** APP_VERSION — 'dev' skips the gate. */
+  appVersion: string;
+  /** The paired server, or null when nothing is paired. */
+  server: ServerLink | null;
+  /** selfUpdate(tag) — download, verify, unpack, re-link. */
+  install(tag: string): Promise<unknown>;
+  /** Ask the person a yes/no question. */
+  confirm(question: string): Promise<boolean>;
+  /** Print one line. */
+  out(line: string): void;
+  /** Hand the terminal to the installed build of `version` and exit. */
+  reexec(version: string): void;
+  /** Rewrite the current line — the ticking wait. Absent: no ticks. */
+  tick?(line: string): void;
+  sleep(ms: number): Promise<void>;
+  now(): number;
+  pollMs?: number;
+  timeoutMs?: number;
+}
+
+export async function prelaunchReconcile(d: ReconcileDeps): Promise<void> {
+  if (d.appVersion === 'dev' || !d.server) return;
+  const h = await readHealth(d.server);
+  if (!h?.version) return;   // unreachable is its own, louder failure in the app
+  const server = bare(String(h.version));
+  const me = bare(d.appVersion);
+
+  if (isBehind(me, server)) {
+    d.out(`The server is on v${server}, this machine is on v${me} — updating this machine to match.`);
+    try {
+      await d.install(`v${server}`);
+    } catch (e) {
+      d.out(`The update failed: ${errText(e)} — opening anyway.`);
+      return;
+    }
+    d.reexec(server);
+    return;
+  }
+
+  if (isBehind(server, me)) {
+    const n = h.loops_running ?? 0;
+    const q = n > 0
+      ? `The server is on v${server}, this machine is on v${me}. Updating the server restarts it and stops the ${n === 1 ? '1 card' : `${n} cards`} being worked on. Update now? [y/N] `
+      : `The server is on v${server}, this machine is on v${me}. Update the server now? It restarts — about a minute. [y/N] `;
+    if (!await d.confirm(q)) {
+      d.out('Left as-is — the versions differ; phantom-cli update brings them in line.');
+      return;
+    }
+    try {
+      await d.server.call('POST', '/update', { tag: `v${me}`, restart_anyway: true });
+    } catch (e) {
+      d.out(`The update could not be requested: ${errText(e)} — opening anyway.`);
+      return;
+    }
+    const r = await waitForVersion(d, d.server, me);
+    if (r.ok) {
+      d.out(`The server is on v${me}.`);
+    } else {
+      d.out(`Waited ${Math.max(1, Math.round((d.timeoutMs ?? TIMEOUT_MS) / 60_000))} minutes and the server still reports ${r.last ?? server} — opening anyway.`);
+      d.out('If it never comes back, on the server run: docker logs phantom-update-run');
+    }
   }
 }

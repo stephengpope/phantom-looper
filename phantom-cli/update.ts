@@ -53,9 +53,11 @@ export const TIMEOUT_MS = 180_000;
 /** 'v0.1.3' → '0.1.3'. */
 export function bare(v: string): string { return v.replace(/^v/, ''); }
 
-interface Health { version?: string; loops_running?: number }
+export interface Health { version?: string; loops_running?: number }
 
-async function readHealth(server: ServerLink): Promise<Health | null> {
+/** GET /health, null when the server cannot be reached. Exported for the
+ *  launch gate (autoUpdate.ts), which reconciles versions before the app opens. */
+export async function readHealth(server: ServerLink): Promise<Health | null> {
   try { return await server.call('GET', '/health') as Health; } catch { return null; }
 }
 
@@ -72,8 +74,18 @@ function minutes(ms: number): string {
   return m === 1 ? '1 minute' : `${m} minutes`;
 }
 
+/** The slice of UpdateDeps the version wait needs — narrow, so the launch
+ *  gate (autoUpdate.ts) can drive it without the command's full machinery. */
+export interface WaitDeps {
+  tick?(line: string): void;
+  sleep(ms: number): Promise<void>;
+  now(): number;
+  pollMs?: number;
+  timeoutMs?: number;
+}
+
 /** Poll /health until it reports `version`, or the timeout passes. */
-async function waitForVersion(d: UpdateDeps, server: ServerLink, version: string):
+export async function waitForVersion(d: WaitDeps, server: ServerLink, version: string):
   Promise<{ ok: true; ms: number } | { ok: false; last: string | null }> {
   const start = d.now();
   const timeout = d.timeoutMs ?? TIMEOUT_MS;
@@ -159,7 +171,9 @@ export async function runUpdate(target: Target, d: UpdateDeps): Promise<number> 
         }
       }
       try {
-        await d.server.call('POST', '/update', { tag: latest });
+        // restart_anyway: running the command IS the yes — and when cards are
+        // mid-round the guard above already asked its explicit question.
+        await d.server.call('POST', '/update', { tag: latest, restart_anyway: true });
       } catch (e) {
         d.out(`  The update could not be requested: ${errorText(e)}`);
         return 1;

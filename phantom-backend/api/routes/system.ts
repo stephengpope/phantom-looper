@@ -51,17 +51,29 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
         'refreshes the deploy files on the host from the image, and recreates the stack. Returns as soon as ' +
         'the request is handed over — the upgrade itself takes a minute or two, during which the API ' +
         'restarts (in-flight bash commands are cut off; sessions resume on their next call). ' +
-        'Watch GET /health `version` change. `updater_unavailable` (503) means this server was started ' +
-        'without the sidecar (a dev `docker compose up`, or an install older than it): re-run install.sh once.',
+        'Watch GET /health `version` change. While a card has a loop round in flight the route refuses ' +
+        '(409 `loops_running`) unless the caller passes `restart_anyway` — the guard lives HERE so no ' +
+        'client can kill running cards by forgetting to check. `updater_unavailable` (503) means this ' +
+        'server was started without the sidecar (a dev `docker compose up`, or an install older than ' +
+        'it): re-run install.sh once.',
       body: {
         type: 'object', required: ['tag'], additionalProperties: false,
         properties: {
           tag: { type: 'string', pattern: RELEASE_TAG.source, description: 'Release tag, e.g. v0.2.0 (no prereleases)' },
+          restart_anyway: { type: 'boolean', description: 'Update even with loop rounds in flight — they are cut off and their cards blocked. Only a caller whose human was warned should send this.' },
         },
       },
     },
   }, async (req, reply) => {
-    const { tag } = req.body as { tag: string };
+    const { tag, restart_anyway: restartAnyway } = req.body as { tag: string; restart_anyway?: boolean };
+    // THE guard: a restart cuts every loop round in flight and blocks those
+    // cards, so a request that has not been explicitly told to restart anyway
+    // is refused while any card is mid-round.
+    const loops = ctx.looper?.runningCount() ?? 0;
+    if (loops > 0 && !restartAnyway) {
+      return reply.code(409).send(err('loops_running',
+        `${loops === 1 ? '1 card has' : `${loops} cards have`} a round in flight — updating now would stop ${loops === 1 ? 'it' : 'them'} and block the ${loops === 1 ? 'card' : 'cards'}; send restart_anyway: true to update anyway`, true));
+    }
     if (!ctx.updateTriggerDir) {
       return reply.code(503).send(err('updater_unavailable', 'this server has no updater sidecar (UPDATE_TRIGGER_DIR unset) — re-run install.sh once'));
     }
