@@ -25,6 +25,11 @@ export interface LoadedSession {
   id: string;
   branch: string;
   workspaceId: string;
+  /** The server row's name — the auto-title or a /rename. Seeded at open and
+   *  refreshed by /rename and by each landing's staleness GET; it can still
+   *  lag the server (naming rides the save, fire-and-forget), so anything
+   *  that must be exact re-reads the row. Null until the first title. */
+  name: string | null;
   /** The kanban card this session is building, already named the way the
    *  board names it (`PHA-7`). Absent when the session belongs to no card —
    *  anything you started yourself. */
@@ -119,6 +124,8 @@ export const activeHold = (e: LoadedSession | undefined | null): LoadedSession['
 
 export interface NewSession {
   id: string; branch: string; workspaceId: string;
+  /** The server row's name at open (see LoadedSession.name). */
+  name?: string | null;
   /** The card this session builds, named `PHA-7` (see LoadedSession.card). */
   card?: string;
   tools: Record<string, Tool>;
@@ -203,7 +210,7 @@ export class SessionStore {
     const existing = this.get(s.id);
     if (existing) { this.activate(existing.id); return existing; }
     const entry: LoadedSession = {
-      id: s.id, branch: s.branch, workspaceId: s.workspaceId, card: s.card,
+      id: s.id, branch: s.branch, workspaceId: s.workspaceId, name: s.name ?? null, card: s.card,
       tools: s.tools, agent: s.agent, summary: s.summary, transcript: s.transcript,
       instructions: s.instructions,
       history: [...(s.history ?? [])],
@@ -257,6 +264,15 @@ export class SessionStore {
     if (this.activeId === id) this.activeId = '';
     this.notify();
     return true;
+  }
+
+  /** The window's copy of the server name moves with /rename and with the
+   *  staleness GET each landing makes. */
+  setName(id: string, name: string | null): void {
+    const e = this.get(id);
+    if (!e || e.name === name) return;
+    e.name = name;
+    this.notify();
   }
 
   /** The next session round the ring, or undefined when there is only one. */

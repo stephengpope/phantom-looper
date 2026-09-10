@@ -181,6 +181,21 @@ export class WindowStore {
    *  command. Rendered where the conversation would be. */
   notes: Part[] = [];
 
+  /** Set when a close put a DIFFERENT session on screen: the red line that
+   *  takes the toolbar's row, naming what closed and what you are looking at
+   *  NOW — the conversation in front of you is never mistaken for the one
+   *  just closed. Stands until you act: type, submit or switch
+   *  (dismissClosed). */
+  justClosed: string | null = null;
+
+  /** Acting dismisses the close banner: it answered "where am I?", and
+   *  anything you do next says you know. */
+  dismissClosed = (): void => {
+    if (this.justClosed === null) return;
+    this.justClosed = null;
+    this.notify();
+  };
+
   /** The window's paste chips: the prompt holds `[Pasted #1 ~12 lines]`,
    *  this holds the text, and submit swaps it back before anything downstream
    *  can see the chip (paste.ts). */
@@ -566,6 +581,8 @@ export class WindowStore {
     if (prev) prev.draft = this.draftOnScreen();
     if (!this.sessions.activate(id)) return;
     this.splash = false;
+    // A switch is an act: the close banner has answered "where am I?".
+    this.justClosed = null;
     const e = this.sessions.get(id);
     if (e) this.opts.onSession?.({ id: e.id, branch: e.branch, workspaceId: e.workspaceId });
     this.watchTasks();
@@ -575,7 +592,11 @@ export class WindowStore {
     if (e && !e.busy) {
       void (async () => {
         try {
-          const row = await this.api('GET', `/sessions/${id}`) as { transcript_updated_at?: string | null };
+          const row = await this.api('GET', `/sessions/${id}`) as
+            { transcript_updated_at?: string | null; name?: string | null };
+          // The row carries the name too — refresh the seated copy off the
+          // same answer, so the close banner names sessions right.
+          if (row?.name !== undefined) this.sessions.setName(id, row.name ?? null);
           await this.refreshIfMoved(id, row?.transcript_updated_at ?? null);
         } catch (err) { quiet(`check session ${id} for changes`)(err); }
       })();
@@ -664,7 +685,7 @@ export class WindowStore {
       const opened = await coreOpenSession({ call: this.api, label: hostname(),
         ...(sessionId ? { sessionId } : { workspaceId: (target as { workspaceId: string }).workspaceId }) });
       const row = opened.session as { id: string; branch: string; workspaceId: string;
-        agent?: string | null; card?: number | null; planMode?: boolean; starred?: boolean;
+        name?: string | null; agent?: string | null; card?: number | null; planMode?: boolean; starred?: boolean;
         provider?: string | null; model?: string | null;
         skills?: SkillMeta[]; secrets?: SecretIndexEntry[]; agent_git_credentials?: boolean };
       // The server record IS the conversation — unless this machine holds
@@ -732,6 +753,7 @@ export class WindowStore {
       if (prev) prev.draft = this.draftOnScreen();
       this.sessions.add({
         id: row.id, branch: row.branch, workspaceId: row.workspaceId,
+        name: row.name ?? null,
         tools, agent, summary, transcript, instructions,
         history: resumed,
         syncStamp,
@@ -758,6 +780,8 @@ export class WindowStore {
       // An empty conversation opens on the splash, exactly as boot's does.
       this.splash = resumed.length === 0;
       this.opening = false;
+      // Another session took the screen: an earlier close banner is answered.
+      this.justClosed = null;
       this.watchTasks();
       this.watchSession(row.id);
       this.notify();
@@ -837,13 +861,20 @@ export class WindowStore {
   /** esc on the duplicate prompt: nothing happens, no copy is made. */
   cancelDuplicate = (): void => { this.duplicating = null; this.setMenu(null); };
 
+  /** What the window CALLS a session when it must name one: the server name
+   *  (auto-title or /rename), else its card (`PHA-7`), else its branch —
+   *  never a bare session id. */
+  private labelOf(e: LoadedSession): string { return e.name ?? e.card ?? e.branch; }
+
   /** THE close: a session leaves local memory. Nothing on the server changes,
    *  so opening it again gets it back exactly as it was. Every door ([x] on
    *  /resume, /close, the Assistant's session_close) comes through here.
    *  Refused while a turn runs there. Closing the one on screen hands the
    *  screen to whatever you spoke to most recently; closing the LAST one opens
    *  a fresh session in the same workspace, because close means "done with
-   *  this", never "leave me looking at nothing". */
+   *  this", never "leave me looking at nothing". The banner says what
+   *  happened, loud, until the next action. */
+
   closeSession = async (id?: string): Promise<CloseResult> => {
     const target = id ?? this.sessions.activeId;
     if (!target) return { error: 'no session is open — nothing to close' };
@@ -861,6 +892,30 @@ export class WindowStore {
       // Both of those restart the count's clock; a failed open leaves no
       // session on screen, and this is what clears the toolbar's count.
       if (!this.sessions.activeId) this.watchTasks();
+      // The screen changed underfoot — say what closed and what this is, on
+      // the red banner, until the next action dismisses it. Set AFTER the
+      // switch/open above: those clear justClosed as acts of their own.
+      const now = this.sessions.active();
+      const build = (closed: string, current: string | undefined): string =>
+        opened_new ? `closed: ${closed} — a fresh session is open`
+          : current === undefined ? `closed: ${closed} — no session is open`
+            : `closed: ${closed} — you are now in ${current}`;
+      const first = build(this.labelOf(e), now ? this.labelOf(now) : undefined);
+      this.justClosed = first;
+      this.notify();
+      // The seated name can lag the row (the auto-title lands on a save,
+      // after the session was seated): refine the banner off the record the
+      // moment it answers. Only while THIS banner still stands — an action
+      // or a second close ends it.
+      void this.api('GET', `/sessions/${target}`).then((row) => {
+        if (this.justClosed !== first) return;
+        const current = now ? this.sessions.get(now.id) ?? now : undefined;
+        const refined = build((row as { name?: string | null }).name ?? this.labelOf(e),
+          current ? this.labelOf(current) : undefined);
+        if (refined === first) return;
+        this.justClosed = refined;
+        this.notify();
+      }, () => { /* the seated name stands */ });
     }
     return { ok: true, closed: target, on_screen: this.sessions.activeId, opened_new };
   };
@@ -1559,6 +1614,7 @@ export class WindowStore {
         if (!session) { this.note('no session is open — nothing to rename'); return; }
         try {
           await this.api('PATCH', `/sessions/${session.id}`, { name: args || null });
+          this.sessions.setName(session.id, args || null);
           this.note(args ? `renamed: ${args}` : 'name cleared — auto-titles are back on');
         } catch (e) { this.note(`could not rename session ${session.id}: ${(e as Error).message}`); }
         return;
@@ -1683,6 +1739,8 @@ export class WindowStore {
     accept();
     // Commands too: /help answers into the pane the splash covers.
     this.setSplash(false);
+    // A line was accepted: the close banner's "where am I?" is answered.
+    this.justClosed = null;
     if (msg === 'exit' || msg === 'quit') { this.quit(); return; }
     if (msg.startsWith('/')) {
       const m = matches(msg);
