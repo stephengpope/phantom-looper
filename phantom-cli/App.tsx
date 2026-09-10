@@ -102,7 +102,7 @@ const TOGGLE_KEY: Record<'mic' | 'speaker' | 'headphones' | 'wake', ConfigKey> =
 export const PICKER_PAGE = 30;
 
 export function App({
-  api, stream, initial, boot, newTools, configPath, onSession, bootConfig,
+  api, stream, initial, boot, newTools, configPath, onSession, onWindow, bootConfig,
   autoPush,
   autoPull,
   clientId = '',
@@ -187,6 +187,9 @@ export function App({
    *  tab all switch it, so the id the caller started with is not the one you
    *  are in when you quit. */
   onSession?: (s: { id: string; branch: string; workspaceId: string }) => void;
+  /** Hands the caller the window store once it exists — index.tsx's version
+   *  watch uses it to light up the update-ready label. */
+  onWindow?: (w: WindowStore) => void;
 }) {
   const { exit } = useApp();
   const { columns, rows } = useWindowSize();
@@ -233,6 +236,7 @@ export function App({
   const [, bump] = useReducer((n: number) => n + 1, 0);
   useEffect(() => windowStore.subscribe(bump), [windowStore]);
   useEffect(() => () => windowStore.close(), [windowStore]);
+  useEffect(() => { onWindow?.(windowStore); }, [windowStore, onWindow]);
   const vs = voice.snapshot();
   // The voice pane, on the right. Shown when voice is on; ctrl+g overrides
   // that either way. Its share of the width is a setting (percent).
@@ -813,7 +817,7 @@ export function App({
             )}
             <Prompt value={input} onChange={(v) => { setInput(v); setSuggestAt(0); windowStore.dismissClosed(); }}
               onSubmit={(text) => { void windowStore.submit(text, suggestAt, () => { clearInput(); setScroll(0); }); }} onMeasure={setPromptTop}
-              pastes={windowStore.pastes} />
+              pastes={windowStore.pastes} updateReady={windowStore.updateReady} />
             {windowStore.justClosed ? (
               // The close banner takes the toolbar's held row — the row is
               // always there, so nothing on screen moves. White on red until

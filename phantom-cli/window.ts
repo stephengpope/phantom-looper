@@ -181,6 +181,12 @@ export class WindowStore {
    *  command. Rendered where the conversation would be. */
   notes: Part[] = [];
 
+  /** The version a background auto-update put in place this run (autoUpdate.ts),
+   *  or null. While set, the prompt's version label swaps to name it — the
+   *  running process is still the old build; next launch runs this one. */
+  updateReady: string | null = null;
+  setUpdateReady(v: string): void { this.updateReady = v; this.notify(); }
+
   /** Set when a close put a DIFFERENT session on screen: the red line that
    *  takes the toolbar's row, naming what closed and what you are looking at
    *  NOW — the conversation in front of you is never mistaken for the one

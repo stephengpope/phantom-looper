@@ -193,10 +193,17 @@ export function versionLines(app: string, server: { url: string; version: string
 /** The notice printed at quit, or null when nothing is behind. `latest` is the
  *  latest published release (null offline); `server` the paired server's
  *  version (null when unreachable or unpaired). A dev checkout is never
- *  behind, so from a checkout only the server half can be named. */
-export function quitNotice(app: string, server: string | null, latest: string | null): string | null {
+ *  behind, so from a checkout only the server half can be named. `installed`
+ *  is the version a background auto-update put in place this run (autoUpdate.ts)
+ *  — this machine is then done, and only the server can still be behind. */
+export function quitNotice(app: string, server: string | null, latest: string | null, installed: string | null = null): string | null {
   const clientBehind = latest ? isBehind(app, latest) : false;
   const serverBehind = latest && server ? isBehind(server, latest) : false;
+  if (installed) {
+    const ready = `phantom-cli v${installed} is ready — runs next launch`;
+    if (serverBehind) return `${ready}\nVersion ${bare(latest!)} is available. The server is on ${bare(server!)}.\nRun: phantom-cli update --server`;
+    return ready;
+  }
   if (latest && (clientBehind || serverBehind)) {
     const v = bare(latest);
     const a = bare(app);

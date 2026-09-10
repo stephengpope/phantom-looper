@@ -10,7 +10,7 @@
 //
 // ONE flat store on the server (no namespaces): every key is declared in the
 // server's code with its default, so `all()` already carries the resolved
-// value for every key this client renders. The seven machine-local settings
+// value for every key this client renders. The machine-local settings
 // (local.ts) need no network, which is what keeps /server usable exactly when
 // this is failing — and a read that cannot reach the server THROWS rather than
 // showing invented numbers beside real ones.

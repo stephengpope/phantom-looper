@@ -24,9 +24,12 @@ import { Glint } from './Shimmer.js';
 import { APP_VERSION } from '../selfUpdate.js';
 import type { PasteStore } from '../paste.js';
 
-export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure, pastes }: {
+export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure, pastes, updateReady }: {
   value: string; onChange: (v: string) => void; onSubmit: (v: string) => void;
   pastes?: PasteStore;
+  /** The version a background auto-update installed: the label below swaps
+   *  from this build's version to naming it until the launch that runs it. */
+  updateReady?: string | null;
   focus?: boolean;
   /** Where the box sits, as rows from the top of its parent (the top rule is
    *  that row, the bottom rule two below). The App aligns the divider's
@@ -65,7 +68,14 @@ export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure, pas
             many terminals and made this corner glow beside the divider's ┫. */}
         <Box flexGrow={1} borderStyle="bold" borderTop borderBottom={false} borderLeft={false} borderRight={false} borderDimColor />
         <Text dimColor>{' '}</Text>
-        <Glint text={`phantom-looper ${APP_VERSION === 'dev' ? '[dev]' : `v${APP_VERSION}`}`} color="#5f87ff" shimmerColor="#b3ecff" bold
+        {/* One label, never two: this build's version, or — once a
+            background auto-update has installed the next one — what is ready
+            for the next launch, with the name dropped so it stands out.
+            Same glint either way. */}
+        <Glint text={updateReady
+          ? `v${updateReady} is ready — runs next launch`
+          : `phantom-looper ${APP_VERSION === 'dev' ? '[dev]' : `v${APP_VERSION}`}`}
+          color="#5f87ff" shimmerColor="#b3ecff" bold
           active={process.stdout.isTTY === true} />
         <Text dimColor>{' ━━'}</Text>
       </Box>

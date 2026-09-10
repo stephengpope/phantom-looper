@@ -1,9 +1,11 @@
-// The eight settings that stay on this machine, and the file they live in.
+// The settings that stay on this machine, and the file they live in.
 //
 // Two of them are how you REACH the server (`server_url`, `server_key`) — they
 // cannot live on the thing they are the address of, and you edit them precisely
-// when it is unreachable, so nothing here makes a network call. The other five
-// are facts about the machine you are sitting at: which microphone, which
+// when it is unreachable, so nothing here makes a network call. `auto_update`
+// is this machine's own update preference (the server would share one choice
+// across every TUI you open). The rest are facts about the machine you are
+// sitting at: which microphone, which
 // speaker, whether you are wearing headphones, whether you muted yourself here.
 // A device name is simply wrong on your other machine; so is the Deepgram address
 // that answers from here (the engine finds it, the app saves it).

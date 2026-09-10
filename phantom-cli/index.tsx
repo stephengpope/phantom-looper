@@ -13,8 +13,8 @@
 // The machine-local settings live in ~/.phantom-cli/settings.json; everything
 // else is on the server, edited in-app with /settings and /model. Env vars
 // still override the file, and reach ONLY the local keys (PHANTOM_BACKEND_URL,
-// PHANTOM_BACKEND_KEY) — the settings screen shows which source each value
-// came from.
+// PHANTOM_BACKEND_KEY, PHANTOM_CLI_AUTO_UPDATE) — the settings screen shows
+// which source each value came from.
 import { openSync } from 'node:fs';
 import { format } from 'node:util';
 import { render } from 'ink';
@@ -34,6 +34,7 @@ import { resolveLocal, localValues } from './local.js';
 import { ndjson } from '../core/ndjson.js';
 import { apiFor, savedCaFor } from './provision.js';
 import { APP_VERSION, checkLatest, selfUpdate } from './selfUpdate.js';
+import { CHECK_INTERVAL_MS, autoUpdateCycle, dueForCheck, stampChecked } from './autoUpdate.js';
 import { quitNotice, runUpdate, versionLines } from './update.js';
 import type { ServerLink, Target } from './update.js';
 import { makeSettings } from './settings.js';
@@ -148,12 +149,40 @@ await trustSavedCa(connection().base);
 // windows see on the "in use" row.
 const CLIENT_ID = newId();
 
-// Version watch, in the background, printed at QUIT — the screen belongs to
-// the app while it runs. One tag cuts the cli and the server, so "behind" is
-// a compare of two release strings; a dev checkout ('dev') never nags.
+// Version watch, in the background — the screen belongs to the app while it
+// runs. Gated by a stamp file to about once a day, at launch and on an unref'd
+// daily timer for windows that stay open (autoUpdate.ts). With auto_update on,
+// a new release installs itself: the prompt's version label swaps to "ready —
+// runs next launch" and the quit line repeats it. Off: no install, and the
+// quit notice offers `phantom-cli update` as before. One tag cuts the cli and
+// the server, so "behind" is a compare of two release strings; a dev checkout
+// ('dev') never nags.
 let latestRelease: string | null = null;
-if (APP_VERSION !== 'dev') void checkLatest().then((t) => { latestRelease = t; });
+let installedVersion: string | null = null;
 let serverVersion: string | null = null;
+// The window store, handed up by App (the onWindow prop) once it exists — a
+// finished install lights up the version label through it.
+let windowStore: { setUpdateReady(v: string): void } | null = null;
+function versionWatch(): void {
+  // One install per run: once a version is ready, the label already says so
+  // and re-installing the same tag daily would be pure waste.
+  if (APP_VERSION === 'dev' || installedVersion || !dueForCheck(Date.now())) return;
+  stampChecked(Date.now());
+  void autoUpdateCycle({
+    appVersion: APP_VERSION,
+    autoUpdate: localValues().auto_update !== false,
+    latest: checkLatest,
+    install: selfUpdate,
+  }).then((r) => {
+    latestRelease = r.latest;
+    if (r.installed) {
+      installedVersion = r.installed;
+      windowStore?.setUpdateReady(r.installed);
+    }
+  });
+}
+versionWatch();
+setInterval(versionWatch, CHECK_INTERVAL_MS).unref();
 
 /** POST /git/auto-push for one session — core's client over the ND-JSON
  *  stream (heartbeats keep the connection alive, step records become notes,
@@ -362,6 +391,7 @@ const app = render(
     newAssistantTools={(id) => phantomTools({ baseUrl: connection().base, apiKey: connection().key, sessionId: id, pick: 'readonly' })
       .then((t) => ({ ...t, ...webKit(id) }))}
     onSession={(s) => { currentId = s.id; openedIds.add(s.id); }}
+    onWindow={(w) => { windowStore = w; if (installedVersion) w.setUpdateReady(installedVersion); }}
     clientId={CLIENT_ID}
     screen={screen}
   />,
@@ -401,10 +431,11 @@ if (currentId) {
   console.log(`\nResume this session with:\n${launch} --resume ${currentId}\n`);
 }
 
-// The version notice waits for this quiet moment too — offered, never
-// automatic. Both halves against the latest release, in either direction; a
-// dev checkout is never behind, so from a checkout only the server is named.
-const notice = quitNotice(APP_VERSION, serverVersion || null, latestRelease);
+// The version notice waits for this quiet moment too. An auto-updated machine
+// is told its new version is ready; anything still behind (the server, or this
+// machine with auto_update off) is offered `phantom-cli update`. A dev
+// checkout is never behind, so from a checkout only the server is named.
+const notice = quitNotice(APP_VERSION, serverVersion || null, latestRelease, installedVersion);
 if (notice) console.log(`${notice}\n`);
 
 // Last thing: if a DSR was in flight when the screen came down, linger so

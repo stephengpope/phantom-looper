@@ -6,7 +6,7 @@
 //
 // One file, CONFIG_DIR/settings.json. CONFIG_DIR is the ONE root every file the
 // cli owns hangs off (settings.json, sessions/, voice/, bin/, ca/, cli.log,
-// models-cache.json): ~/.phantom-cli for an installed build, <repo>/.phantom-cli
+// models-cache.json, last-update-check): ~/.phantom-cli for an installed build, <repo>/.phantom-cli
 // (gitignored) when running from source. build-cli.sh bakes the release string
 // into process.env.PHANTOM_CLI_VERSION; a checkout reads nothing and is 'dev'.
 // So a dev run and the installed app never share a byte — dev talks to the
@@ -45,6 +45,9 @@ export const DEFAULTS = {
   max_steps: null as number | null,
   server_url: 'http://localhost:8080' as string,
   server_key: null as string | null,
+  // This machine's own update preference — it cannot live on the server, or
+  // every TUI you open would share one choice.
+  auto_update: true as boolean,
   // The Assistant and its voice (a Python sidecar the TUI starts; see voice.ts).
   voice_enabled: false as boolean,
   sidebar_width: 20 as number,
@@ -75,7 +78,7 @@ export const DEFAULTS = {
  *  Two homes, two modules (local.ts, settings.ts), no routing: a call site can
  *  see which it is reading. */
 export const LOCAL_KEYS = [
-  'server_url', 'server_key',
+  'server_url', 'server_key', 'auto_update',
   'voice_mic_device', 'voice_speaker_device', 'voice_headphones',
   'voice_mic_muted', 'voice_speaker_muted',
 ] as const;
@@ -105,6 +108,7 @@ export const DESCRIPTIONS: Record<ConfigKey, string> = {
   max_steps: 'Tool calls allowed per turn before the agent must stop and answer. Empty = unlimited (esc still interrupts).',
   server_url: 'Base URL of the phantom-looper API.',
   server_key: 'Bearer token for the phantom-looper API (its API_KEY).',
+  auto_update: 'Check for a new phantom-cli release about once a day and install it in the background. It runs on next launch — the version label above the prompt says when one is ready.',
   voice_enabled: 'Start the Assistant with the TUI. It listens on the mic, answers out loud and in the voice pane (ctrl+g), and can act on the TUI through its tools.',
   sidebar_width: 'Width of the voice pane as a percent of the terminal.',
   assistant_provider: 'The AI provider the Assistant answers on, on its key from /keys. Empty = the coding agent\'s provider.',
@@ -151,6 +155,7 @@ export const META: Record<ConfigKey, ConfigMeta> = {
   max_steps: { type: 'number', label: 'steps per turn', group: 'model' },
   server_url: { type: 'string', group: 'server', env: ['PHANTOM_BACKEND_URL'] },
   server_key: { type: 'string', label: 'api key', secret: true, group: 'server', env: ['PHANTOM_BACKEND_KEY', 'API_KEY'] },
+  auto_update: { type: 'boolean', label: 'auto update', group: 'server', env: ['PHANTOM_CLI_AUTO_UPDATE'] },
   voice_enabled: { type: 'boolean', label: 'assistant', group: 'voice' },
   sidebar_width: { type: 'number', label: 'pane width', group: 'voice' },
   assistant_provider: { type: 'string', choices: PROVIDERS, group: 'voice' },
