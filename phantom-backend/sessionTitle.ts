@@ -63,8 +63,8 @@ export function userMessagesContext(userMessages: string[]): TitleContext {
   const last = messages.slice(lastStart);
   const omitted = messages.length - first.length - last.length;
   const contextNote = omitted
-    ? `This excerpt contains the first ${FIRST_USER_MESSAGES} user messages and the last ${LAST_USER_MESSAGES} user messages. ${omitted} middle messages are omitted.`
-    : 'These are all user messages, oldest to newest.';
+    ? `These are the session's first ${FIRST_USER_MESSAGES} user messages and last ${LAST_USER_MESSAGES} user messages. ${omitted} middle messages are omitted.`
+    : `These are all of the session's user messages, oldest to newest.`;
 
   const lines = ['FIRST USER MESSAGES',
     ...first.map((m, i) => `${i + 1}. ${m}`)];

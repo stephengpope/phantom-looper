@@ -9,21 +9,21 @@
 // The first words are how a scripted wire recognizes a title call — keep
 // them stable.
 
-export const SYSTEM = `You are a coding-session titler. You identify the software objective behind a conversation and express it as a short, distinctive title.`;
+export const SYSTEM = `You are a coding-session titler. You identify the software objective behind a conversation and express it as a title a person instantly understands.`;
 
 // ═══ THE REQUEST — the selected user messages attached ═════════════════════
 // Blanks: {{contextNote}}, {{userMessages}} — the first 5 user messages and,
 // for longer conversations, the last 20, with omitted middle messages counted
 // (phantom-backend/sessionTitle.ts titleContext).
 
-export const NAME_THE_SESSION = `Name the feature, bug fix, or code change the user wants.
+export const NAME_THE_SESSION = `Read the user messages below and write the title for this session.
 
-The context below contains only user messages.
-Use FIRST USER MESSAGES to find the original request.
-Use LAST USER MESSAGES to update that request. If the user clearly starts a new task, name the new task.
-Focus on the feature and its current step, not errors or side topics.
+The title says what the user asked to be done, verb first: "Add …", "Fix …", "Refactor …".
+For a bug fix, name what's broken.
+If the user clearly starts a new task partway through, title the new task.
 
-Use 5-6 words. Return one bare title.
+One short phrase, roughly 5-8 words. Clarity beats brevity: a person scanning a
+session list must know at a glance what this session is doing. Return one bare title.
 
 {{contextNote}}
 
