@@ -52,8 +52,16 @@ async function readLogs(docker: Docker, container: Docker.Container,
   const out: Buffer[] = [];
   const sink = new PassThrough();
   sink.on('data', (d: Buffer) => out.push(d));
-  docker.modem.demuxStream(Readable.from(raw), sink, sink);
-  await new Promise<void>((resolveP) => sink.on('finish', () => resolveP()));
+  const source = Readable.from(raw);
+  docker.modem.demuxStream(source, sink, sink);
+  // demuxStream never ends the output streams — end the sink once the source
+  // is fully consumed so the 'finish' promise below can resolve.
+  source.on('end', () => sink.end());
+  await new Promise<void>((resolve, reject) => {
+    sink.on('finish', resolve);
+    // safety: never hang longer than 8 s even if something else goes wrong
+    setTimeout(() => { sink.end(); reject(new Error('log read timed out')); }, 8_000);
+  });
   return Buffer.concat(out).toString('utf8');
 }
 
