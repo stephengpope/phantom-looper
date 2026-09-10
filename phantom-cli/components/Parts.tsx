@@ -107,7 +107,7 @@ function Gutter({ marker, width, children }: {
 function UserMessage({ text, width, color }: { text: string; width: number; color?: string }) {
   return (
     <Gutter width={width} marker={<Text color="cyan" bold>{'›'}</Text>}>
-      <Text bold color={color ?? 'white'} backgroundColor="#3a3a3a">{text}</Text>
+      <Text bold color={color ?? '#ffffff'} backgroundColor="#3a3a3a">{text}</Text>
     </Gutter>
   );
 }

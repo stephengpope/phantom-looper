@@ -664,7 +664,7 @@ export function App({
             <Text dimColor>{`  queued — esc sends next · /pop edits last`}</Text>
             <Text>{' '}</Text>
             {session.queue.map((q, i) => (
-              <Text key={i}><Text color="cyan">{`  ›`}</Text>{` ${q}`}</Text>
+              <Text key={i}><Text color="cyan">{`  ›`}</Text><Text bold color="#ffffff" backgroundColor="#3a3a3a">{` ${q}`}</Text></Text>
             ))}
           </Box>
         )}
