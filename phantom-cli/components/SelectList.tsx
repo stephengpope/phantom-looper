@@ -8,7 +8,7 @@
 // row's whole area, and the children keep their own colors on top of it
 // (verified against Ink 7.1.1). It used to be a cyan text color; a colored
 // word is easy to lose in a dense table, a bar is not.
-import { USER_MSG_BG } from './Parts.js';
+import { HIGHLIGHT_BG, HIGHLIGHT_FG } from './Parts.js';
 //
 // Layout law: every region this list renders holds ONE height while it is on
 // screen. The row window is sized from the page budget, the more-line is
@@ -245,7 +245,7 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
         return (
           // The selection bar (the header): the row Box carries the
           // background, so it runs the full width whatever the content's.
-          <Box key={idx} {...(on ? { backgroundColor: USER_MSG_BG } : {})}>
+          <Box key={idx} {...(on ? { backgroundColor: HIGHLIGHT_BG } : {})}>
             {/* THE COLUMN LAW: a gutter is paddingRight INSIDE a fixed,
                 flexShrink=0 box — never leftover space. When a row overflows
                 the terminal, yoga reclaims spare space and squeezes
@@ -255,7 +255,7 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
                 With every column pinned, overflow can only truncate the
                 row's TAIL — the free last column — never a gap. */}
             <Box width={2} flexShrink={0}>
-              <Text color={on ? 'white' : undefined} bold={on}>{on ? '❯ ' : '  '}</Text>
+              <Text color={on ? HIGHLIGHT_FG : undefined} bold={on}>{on ? '❯ ' : '  '}</Text>
             </Box>
             {/* A HARD two-cell marker box, FIRST — activity reads down the
                 left edge, and the glyph's own measured width can never shift
@@ -275,7 +275,7 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
                 gap still renders — spare space would be the first thing an
                 overflowing row loses. */}
             <Box width={labelWidth} flexShrink={0} paddingRight={2}>
-              <Text color={on ? 'white' : undefined} bold={on} wrap="truncate-end">{c.label}</Text>
+              <Text color={on ? HIGHLIGHT_FG : undefined} bold={on} wrap="truncate-end">{c.label}</Text>
             </Box>
             {/* One row is ONE line: a long column truncates, never wraps.
                 paddingRight keeps a two-cell gutter INSIDE the width — a full

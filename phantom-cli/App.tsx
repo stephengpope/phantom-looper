@@ -50,7 +50,7 @@ export type { Initial };
 
 /** Rows the slash menu shows at once; the window slides to follow the cursor. */
 const MENU_ROWS = 8;
-import { PartView, USER_MSG_BG, USER_MSG_FG } from './components/Parts.js';
+import { PartView, HIGHLIGHT_BG, HIGHLIGHT_FG } from './components/Parts.js';
 import { Prompt } from './components/Prompt.js';
 import { StatusLine } from './components/StatusLine.js';
 import { Toolbar, type ToolbarGroup, type ToolbarPart } from './components/Toolbar.js';
@@ -659,7 +659,7 @@ export function App({
             <Text dimColor>{`  queued — esc sends next · /pop edits last`}</Text>
             <Text>{' '}</Text>
             {session.queue.map((q, i) => (
-              <Box key={i}><Text color="cyan">{`  › `}</Text><Text bold color={USER_MSG_FG} backgroundColor={USER_MSG_BG}>{q}</Text></Box>
+              <Box key={i}><Text color="cyan">{`  › `}</Text><Text color={HIGHLIGHT_FG} backgroundColor={HIGHLIGHT_BG}>{q}</Text></Box>
             ))}
           </Box>
         )}
@@ -687,8 +687,8 @@ export function App({
                   return (
                     // truncate-end keeps a row ONE line on a narrow terminal —
                     // a wrapped summary would break this menu's fixed height.
-                    <Box key={c.name} {...(i === at ? { backgroundColor: USER_MSG_BG } : {})}>
-                      <Text color={i === at ? 'white' : undefined} bold={i === at} dimColor={i !== at} wrap="truncate-end">
+                    <Box key={c.name} {...(i === at ? { backgroundColor: HIGHLIGHT_BG } : {})}>
+                      <Text color={i === at ? HIGHLIGHT_FG : undefined} bold={i === at} dimColor={i !== at} wrap="truncate-end">
                         {`${i === at ? '❯ ' : '  '}/${c.name.padEnd(10)} ${c.summary}`}
                       </Text>
                     </Box>

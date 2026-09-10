@@ -13,9 +13,13 @@ import { Markdown } from './Markdown.js';
 // single line and twenty rows. The command keeps its HEAD (what ran), the
 // output keeps its TAIL (the server keeps the tail too, because errors live
 // at the end). ctrl+o — already "show me more" for thinking — lifts both.
-// User-message bubble colours — shared so queue and conversation stay in sync.
-export const USER_MSG_BG = '#2e2e2e';
-export const USER_MSG_FG = '#ffffff';
+// The app's ONE highlight surface: dark-grey background, bright-white text.
+// Used for user messages, queued messages, menu selection bars — everywhere
+// content is "selected" or "important".  Change here, changes everywhere.
+//   • menus: HIGHLIGHT_BG + HIGHLIGHT_FG + bold
+//   • user / assistant messages: HIGHLIGHT_BG + HIGHLIGHT_FG, no bold
+export const HIGHLIGHT_BG = '#2e2e2e';
+export const HIGHLIGHT_FG = '#ffffff';
 
 const CMD_ROWS = 3;   // the row with the tool name, plus two continuation rows
 const OUT_ROWS = 5;
@@ -111,7 +115,7 @@ function Gutter({ marker, width, children }: {
 function UserMessage({ text, width, color }: { text: string; width: number; color?: string }) {
   return (
     <Gutter width={width} marker={<Text color="cyan" bold>{'›'}</Text>}>
-      <Text bold color={color ?? USER_MSG_FG} backgroundColor={USER_MSG_BG}>{text}</Text>
+      <Text color={color ?? HIGHLIGHT_FG} backgroundColor={HIGHLIGHT_BG}>{text}</Text>
     </Gutter>
   );
 }
