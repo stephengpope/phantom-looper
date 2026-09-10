@@ -13,7 +13,7 @@ import { getFolder, acquireLock, releaseLock, renewLock } from '../sessions.js';
 import type { FolderRow } from '../db/schema.js';
 import { resolveAuth } from '../pool/pool.js';
 import { repoDir, type Paths } from '../pool/paths.js';
-import { syncBranch, LOCK_TTL_MS, RENEW_MS, type ConflictContext, type SyncDeps } from './sync.js';
+import { syncBranch, LOCK_TTL_MS, RENEW_MS, type ConflictContext, type SyncDeps, type SyncEvent } from './sync.js';
 import { logger, errStr } from '../log.js';
 
 const log = logger('git');
@@ -41,6 +41,10 @@ export class GitEngine {
      *  auto-pull use. Absent -> a pull with work to commit fails with the
      *  reason; there is no file-name fallback anywhere. */
     private messageConfig?: SyncDeps['messageConfig'],
+    /** Every sync step of a manual pull, for the session's live feed — the
+     *  pull's route is unary, so this is the only way a watcher sees it run
+     *  (a commit-message retry included). Absent -> the pull runs quiet. */
+    private onSyncEvent?: (sessionId: string, e: SyncEvent) => void,
   ) {}
 
   async detach(sessionId: string): Promise<void> {
@@ -107,7 +111,8 @@ export class GitEngine {
   async pull(s: SessionRow, workspace: WorkspaceRow): Promise<PullResult | 'busy'> {
     const r = await syncBranch(
       { db: this.db, paths: this.paths, encryptionKey: this.encryptionKey,
-        resolve: this.resolveConflict, messageConfig: this.messageConfig },
+        resolve: this.resolveConflict, messageConfig: this.messageConfig,
+        onEvent: (e) => this.onSyncEvent?.(s.id, e) },
       s, workspace, { landOnBase: false, label: 'pull' });
     if (r.outcome === 'ok') {
       const list = this.arrivals.get(s.id) ?? [];

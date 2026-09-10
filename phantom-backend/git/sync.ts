@@ -112,8 +112,10 @@ export interface SyncDeps {
   recordSummary?: (session: SessionRow, workspace: WorkspaceRow, result: SyncResult, opts: SyncOptions) => Promise<void>;
   /** Model for the commit message (the assistant's). A throw or a null fails
    *  the sync with the reason — there is no file-name fallback: base history
-   *  only ever gets a real message. */
-  messageConfig?: () => Promise<ModelConfig | null>;
+   *  only ever gets a real message. `report` is the retry loop's voice
+   *  (withRetry): each failed attempt and the final give-up, as they happen
+   *  — hand it to the config's onRetry or the wait is invisible. */
+  messageConfig?: (report?: (note: string) => void) => Promise<ModelConfig | null>;
   /** Progress, one event per step — awaited, so a streaming route can write
    *  in order (and tests can inject races). */
   onEvent?: (e: SyncEvent) => void | Promise<void>;
@@ -188,7 +190,12 @@ export async function syncBranch(
       try {
         await git(dir, ['add', '-A']);
         const { stdout: mb } = await git(dir, ['merge-base', 'HEAD', `origin/${base}`]);
-        const config = deps.messageConfig ? await deps.messageConfig() : null;
+        // Retry notes stream as commit-step events, so a rate-limited message
+        // call shows its recovery (and its give-up) where the sync's progress
+        // already shows — silence here was the original bug.
+        const config = deps.messageConfig
+          ? await deps.messageConfig((note) => { void ev('commit', note); })
+          : null;
         const card = await cardIntentFor(deps.db, session, workspace);
         const msg = await commitMessageFor(dir, config, card, mb.trim());
         await squashToMergeBase(dir, mb.trim());

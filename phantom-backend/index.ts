@@ -23,7 +23,7 @@ import { runCodingTurn, settingsValues } from './looper/turn.js';
 import { injectFetch } from './looper/injectFetch.js';
 import { toCodingAgent } from '../core/llm/prompts/autoPush/wiring.js';
 import { serializeTranscript } from '../core/llm/transcript.js';
-import type { SyncDeps } from './git/sync.js';
+import type { SyncDeps, SyncEvent } from './git/sync.js';
 import type { WorkspaceRow, SessionRow } from './db/schema.js';
 import { LooperEngine } from './looper/engine.js';
 import { TelegramEngine } from './telegram/engine.js';
@@ -103,15 +103,31 @@ async function main() {
   // message that cannot be written is a broken setup the person must hear
   // about, not paper over. Shared by auto-push, auto-pull and the manual
   // pull (the engine below).
-  const messageConfig = async () => {
+  // `report` comes from the sync (it streams each note as a commit-step
+  // event); onRetry is what makes the retry loop's waits VISIBLE — without
+  // it the call retried in silence, which was the original bug.
+  const messageConfig: SyncDeps['messageConfig'] = async (report) => {
     const cfg = await resolveMany(db,
       ['provider', 'model', 'base_url', 'assistant_provider', 'assistant_model', 'assistant_base_url']);
     const c = cascade(cfg, 'assistant'); // a bad pair throws with the fix in the message
     if (!isProvider(c.provider)) return null;
     const apiKey = await resolveCredential(db, env.encryptionKey, credentialForProvider(c.provider));
-    return { ...c, provider: c.provider, apiKey };
+    const onRetry = (note: string) => { log.warn(`commit message: ${note}`); report?.(note); };
+    return { ...c, provider: c.provider, apiKey, onRetry };
   };
-  const engine = new GitEngine(db, paths, env.encryptionKey, resolveConflict, messageConfig);
+  // Every sync step also lands on the session's live feed, so a window
+  // WATCHING the session sees the sync whoever kicked it off — a card
+  // archive fires one detached, with no stream of its own. Published under
+  // the caller's own client id (`by`) when the call came from a route: the
+  // feed's echo rule then skips the one window that already draws the
+  // stream it asked for. `sessionEvents` is captured lazily, like `app`.
+  const publishSync = (sessionId: string, op: 'push' | 'pull', by?: string) =>
+    (e: SyncEvent) => sessionEvents.publish(sessionId, by || GIT_CLIENT_ID,
+      { event: 'sync', op, step: e.step, detail: e.detail });
+  // The manual /git/pull has no stream of its own — the feed is how anyone
+  // sees it run, so its steps publish under the git client (no caller to echo).
+  const engine = new GitEngine(db, paths, env.encryptionKey, resolveConflict, messageConfig,
+    (sessionId, e) => publishSync(sessionId, 'pull')(e));
 
   // After a successful sync, drop a summary into the session's transcript so
   // the coding agent knows what happened on its next turn. Same lock, same
@@ -160,16 +176,22 @@ async function main() {
   };
   const syncDeps = { db, paths, encryptionKey: env.encryptionKey,
     resolve: resolveConflict, recordSummary, messageConfig };
-  const autoPushFn = async (session: SessionRow, workspace: WorkspaceRow, onEvent?: (e: AutoPushEvent) => void | Promise<void>) => {
-    const r = await autoPush({ ...syncDeps, onEvent }, session, workspace);
+  const autoPushFn = async (session: SessionRow, workspace: WorkspaceRow,
+    onEvent?: (e: AutoPushEvent) => void | Promise<void>, by?: string) => {
+    const publish = publishSync(session.id, 'push', by);
+    const r = await autoPush({ ...syncDeps,
+      onEvent: async (e) => { publish(e); await onEvent?.(e); } }, session, workspace);
     if (r.result === 'blocked') await blockCardOnConflict(session, workspace,
       r.reason ?? 'a rebase conflict could not be resolved');
     return r;
   };
   // Auto-pull rides the same resolver and the same message model — one
   // configuration for every git operation that commits or resolves.
-  const autoPullFn = async (session: SessionRow, workspace: WorkspaceRow, onEvent?: (e: AutoPullEvent) => void | Promise<void>) => {
-    const r = await autoPull({ ...syncDeps, onEvent }, session, workspace);
+  const autoPullFn = async (session: SessionRow, workspace: WorkspaceRow,
+    onEvent?: (e: AutoPullEvent) => void | Promise<void>, by?: string) => {
+    const publish = publishSync(session.id, 'pull', by);
+    const r = await autoPull({ ...syncDeps,
+      onEvent: async (e) => { publish(e); await onEvent?.(e); } }, session, workspace);
     if (r.result === 'blocked') await blockCardOnConflict(session, workspace,
       r.reason ?? 'a rebase conflict could not be resolved');
     return r;

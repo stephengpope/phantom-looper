@@ -47,12 +47,15 @@ export interface AppCtx {
   /** Auto-push (git/autoPush.ts), wired in index.ts with the fixer and the
    *  message model. Absent in DB-only tests — the auto-push route answers 503
    *  and the archive trigger no-ops. */
+  /** `by` is the caller's client id: every step also lands on the session's
+   *  live feed, published under it, so the feed's echo rule skips the one
+   *  window that already draws this stream. */
   autoPush?: (session: SessionRow, workspace: WorkspaceRow,
-    onEvent?: (e: AutoPushEvent) => void | Promise<void>) => Promise<AutoPushResult>;
+    onEvent?: (e: AutoPushEvent) => void | Promise<void>, by?: string) => Promise<AutoPushResult>;
   /** Auto-pull (git/autoPull.ts) — base INTO the branch, same fixer. Absent
    *  in DB-only tests: the auto-pull route answers 503. */
   autoPull?: (session: SessionRow, workspace: WorkspaceRow,
-    onEvent?: (e: AutoPullEvent) => void | Promise<void>) => Promise<AutoPullResult>;
+    onEvent?: (e: AutoPullEvent) => void | Promise<void>, by?: string) => Promise<AutoPullResult>;
   pgPool: pg.Pool;
   /** The board's event bus (boardEvents.ts) — the card routes publish, the
    *  events route streams, the looper engine publishes its pairings. index.ts

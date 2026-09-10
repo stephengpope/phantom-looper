@@ -20,6 +20,14 @@ const sessionHeader = {
 };
 
 export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engine: GitEngine) {
+  // The caller's lock identity ('' when absent — publishSync falls back to
+  // the git client). Handed to auto-push/auto-pull as `by`, so the session
+  // feed's echo rule skips the window that is already drawing this stream.
+  const clientOf = (req: { headers: Record<string, unknown> }): string => {
+    const h = req.headers['x-phantom-looper-client'];
+    return typeof h === 'string' ? h : '';
+  };
+
   async function resolveSession(req: { headers: Record<string, unknown> }):
     Promise<{ session: SessionRow; workspace: WorkspaceRow }> {
     const sessionId = String(req.headers[SESSION_HEADER] ?? '');
@@ -115,7 +123,7 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
     catch (e) { return send(reply, e); }
     const autoPush = ctx.autoPush;
     if (!autoPush) return reply.code(503).send(err('unavailable', 'auto-push is not wired on this server', true));
-    return streamRun(reply, 'auto-push', session.id, (onStep) => autoPush(session, workspace, onStep));
+    return streamRun(reply, 'auto-push', session.id, (onStep) => autoPush(session, workspace, onStep, clientOf(req)));
   });
 
   // AUTO-PULL: base INTO the session branch in one call, streamed the same way.
@@ -133,7 +141,7 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
     catch (e) { return send(reply, e); }
     const autoPull = ctx.autoPull;
     if (!autoPull) return reply.code(503).send(err('unavailable', 'auto-pull is not wired on this server', true));
-    return streamRun(reply, 'auto-pull', session.id, (onStep) => autoPull(session, workspace, onStep));
+    return streamRun(reply, 'auto-pull', session.id, (onStep) => autoPull(session, workspace, onStep, clientOf(req)));
   });
 
   // ── exec ───────────────────────────────────────────────────────────────────

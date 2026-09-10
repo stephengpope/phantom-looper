@@ -23,10 +23,12 @@ const log = logger('auto-push');
 
 const MAX_DIFF_BYTES = 60_000;
 const TRIES = 3;
-/** The whole call's leash — transport retries included. A subject line is
- *  worth seconds; longer means the provider is in trouble and the sync
- *  should say so, not wait. */
-const LEASH_MS = 30_000;
+// No timeout and no retry loop HERE, on purpose: this call rides the ONE
+// retry loop every model call rides (withRetry in core/llm/createAgent.ts —
+// the schedule, the 180s budget, the give-up with the provider's own words,
+// and each attempt reported through config.onRetry). A second leash on top
+// fired mid-recovery — the standard schedule's waits alone reach 29s — and
+// turned a rate limit every other call rides out into a failed sync.
 
 /** A subject line from the STAGED diff against `base` (the merge-base — the
  *  caller has staged everything but rewritten nothing). Throws when no real
@@ -42,23 +44,19 @@ export async function commitMessageFor(
   const { stdout: patch } = await git(dir, ['diff', '--cached', ...range]);
   const diff = patch.length > MAX_DIFF_BYTES ? `${patch.slice(0, MAX_DIFF_BYTES)}\n… (truncated)` : patch;
   for (let attempt = 1; attempt <= TRIES; attempt++) {
-    const leash = AbortSignal.timeout(LEASH_MS);
     try {
       const { text } = await generateText({
         model: languageModel(config),
         maxRetries: 0, // transport retries live in languageModel's fetch wrapper
         prompt: commitMessagePrompt(stat, diff, card),
-        abortSignal: leash,
       });
       const msg = text.trim();
       if (msg && msg.length <= 2000) return msg;
       log.warn({ dir, attempt }, 'commit message attempt answered nonsense — trying again');
     } catch (e) {
-      // The leash, a refusal, a transport failure: all permanent for this
-      // run, all reported with the provider's own words. Never retried here.
-      if (leash.aborted) {
-        throw new Error(`the model did not answer within ${LEASH_MS / 1000}s — it may be overloaded or unreachable`);
-      }
+      // A refusal or a transport failure that withRetry's budget already
+      // gave up on: permanent for this run, reported with the provider's
+      // own words. Never retried here — one retry loop, never stacked.
       throw e;
     }
   }

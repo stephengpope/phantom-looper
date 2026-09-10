@@ -467,7 +467,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         'results over 16KB are clipped and marked `capped`), {event:"turn-end"}, {event:"error",message}, ' +
         '{event:"interrupt"} when someone stops the turn (the runner aborts its own turn on hearing it), ' +
         '{event:"transcript",updated_at,by} when the record is saved (by ANY client — this is the signal to ' +
-        're-read it), {event:"lock",locked,by,label,agent,expires_at} first thing on connect and on every take / ' +
+        're-read it), {event:"sync",op,step,detail?} for every step of a git sync on the session (a push or ' +
+        'pull, whoever kicked it off — a commit-message retry included), ' +
+        '{event:"lock",locked,by,label,agent,expires_at} first thing on connect and on every take / ' +
         'renew / release, {event:"session",agent?,planMode?,work?,transcript_updated_at?} on state changes ' +
         'and as a snapshot on every connect, {event:"heartbeat"} every 15 s. Every turn streams here whoever runs it — the server ' +
         'publishes its own, a cli window relays the one it runs through POST /sessions/:id/events. ' +

@@ -12,6 +12,7 @@
 // session on screen repaints — the store's fold paints the active id alone —
 // so a background feed costs its connection and its parts, never a redraw.
 import { FLUSH_MS } from './agent.js';
+import { AUTO_PUSH_STEPS } from '../core/llm/tools/git.js';
 import { followStream, type Stream } from './follow.js';
 import type { SessionStore, LoadedSession } from './sessions.js';
 import type { StreamPart } from './state.js';
@@ -111,6 +112,17 @@ export class SessionFeed {
         this.ended = true;
         this.store.remoteEnd(this.sessionId);
         return;
+      case 'sync': {
+        // A git sync's step on this session, whoever kicked it off (a card
+        // archive fires one detached). The window that ASKED for the sync
+        // draws its own stream and the feed's echo rule keeps this copy from
+        // it — a note here is always news from somewhere else.
+        const step = String(rec.step ?? '');
+        const op = rec.op === 'push' ? 'auto-push' : 'auto-pull';
+        const detail = typeof rec.detail === 'string' && rec.detail ? ` — ${rec.detail}` : '';
+        this.store.note(this.sessionId, `${op}: ${AUTO_PUSH_STEPS[step] ?? step}${detail}`);
+        return;
+      }
       case 'interrupt':
         // The stop signal (esc-esc in another window, /stop on telegram, the
         // interrupt route). If the turn is OURS, this ends it exactly as esc

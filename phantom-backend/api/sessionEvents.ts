@@ -7,10 +7,11 @@
 // Publishers: runCodingTurn (every part of a coding turn), the looper's
 // supervisor turn, POST /sessions/:id/events (a cli window relaying the turn
 // IT runs — the same records, over HTTP), PUT /sessions/:id/transcript
-// (the one place that knows the record landed), and POST
-// /sessions/:id/interrupt (the one stop signal). Subscribers: GET
-// /sessions/:id/events, and the POST /sessions/:id/turn route, which maps the
-// same parts into its own ND-JSON reply.
+// (the one place that knows the record landed), POST
+// /sessions/:id/interrupt (the one stop signal), and index.ts's sync wiring
+// (every git push/pull step on the session, whoever kicked it off).
+// Subscribers: GET /sessions/:id/events, and the POST /sessions/:id/turn
+// route, which maps the same parts into its own ND-JSON reply.
 //
 // Every event carries WHO published it (`by`, the client id holding the
 // session), and the feed never hands a client its own events back: a window
@@ -34,6 +35,15 @@ export type SessionEvent =
   | { event: 'part'; part: Record<string, unknown> }
   | { event: 'turn-end' }
   | { event: 'error'; message: string }
+  /** A git sync's progress on this session (auto-push, auto-pull, a manual
+   *  pull): one record per step, `detail` carrying what the step name can't
+   *  — the conflicted files, the round, a commit-message retry as it
+   *  happens. This is how a WATCHER sees a sync whoever kicked it off (a
+   *  card archive fires one with no stream of its own). Published under the
+   *  caller's own client id when the call came from a route, so the feed's
+   *  echo rule skips the one window that already draws the stream it asked
+   *  for. */
+  | { event: 'sync'; op: 'push' | 'pull'; step: string; detail?: string }
   /** Someone asked this session's turn to stop (esc-esc in a cli window,
    *  /stop on telegram). THE stop signal: whoever runs a turn on the session
    *  listens for it and aborts its own turn — a cli window's feed, the

@@ -113,7 +113,14 @@ async function runGitStream<T extends { result: string }>(
   if (!r.body) throw new Error(`phantom-backend at ${cfg.baseUrl} answered ${route} with HTTP ${r.status} and no stream`);
   let result: T | undefined;
   for await (const rec of ndjson(r.body)) {
-    if (rec.event === 'step' && typeof rec.step === 'string') onStep?.(steps[rec.step] ?? rec.step);
+    // `detail` is the part the step name cannot say — the conflicted files,
+    // the round, a commit-message retry as it happens. Dropping it made a
+    // rate-limited call look like a hang.
+    if (rec.event === 'step' && typeof rec.step === 'string') {
+      const label = steps[rec.step] ?? rec.step;
+      const detail = typeof rec.detail === 'string' && rec.detail ? ` — ${rec.detail}` : '';
+      onStep?.(`${label}${detail}`);
+    }
     else if (rec.event === 'result') {
       const { event: _e, ...rest } = rec;
       result = { result: 'error', ...rest } as unknown as T;
