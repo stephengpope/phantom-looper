@@ -687,7 +687,7 @@ export function App({
                   return (
                     // truncate-end keeps a row ONE line on a narrow terminal —
                     // a wrapped summary would break this menu's fixed height.
-                    <Box key={c.name} {...(i === at ? { backgroundColor: 'gray' } : {})}>
+                    <Box key={c.name} {...(i === at ? { backgroundColor: USER_MSG_BG } : {})}>
                       <Text color={i === at ? 'white' : undefined} bold={i === at} dimColor={i !== at} wrap="truncate-end">
                         {`${i === at ? '❯ ' : '  '}/${c.name.padEnd(10)} ${c.summary}`}
                       </Text>

@@ -8,6 +8,7 @@
 // row's whole area, and the children keep their own colors on top of it
 // (verified against Ink 7.1.1). It used to be a cyan text color; a colored
 // word is easy to lose in a dense table, a bar is not.
+import { USER_MSG_BG } from './Parts.js';
 //
 // Layout law: every region this list renders holds ONE height while it is on
 // screen. The row window is sized from the page budget, the more-line is
@@ -244,7 +245,7 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
         return (
           // The selection bar (the header): the row Box carries the
           // background, so it runs the full width whatever the content's.
-          <Box key={idx} {...(on ? { backgroundColor: 'gray' } : {})}>
+          <Box key={idx} {...(on ? { backgroundColor: USER_MSG_BG } : {})}>
             {/* THE COLUMN LAW: a gutter is paddingRight INSIDE a fixed,
                 flexShrink=0 box — never leftover space. When a row overflows
                 the terminal, yoga reclaims spare space and squeezes
