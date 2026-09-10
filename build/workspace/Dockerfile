@@ -14,18 +14,30 @@ FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv-bin
 FROM debian:trixie-slim
 ARG UID=1000
 
-# Base toolchain. build-essential/pkg-config/libssl-dev/libffi-dev cover native
+# Base toolchain — everything the agent might need without burning a turn on
+# `apt install`. build-essential/pkg-config/libssl-dev/libffi-dev cover native
 # builds (node-gyp needs make+g++; pip sdists need a compiler) — the biggest
 # "invisible until a turn needs it" gap the lean image had.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git git-lfs ca-certificates openssl sudo \
       curl wget jq ripgrep sqlite3 file less bc tree procps \
       unzip zip xz-utils bzip2 \
-      build-essential pkg-config libssl-dev libffi-dev \
+      build-essential pkg-config libssl-dev libffi-dev cmake \
       python3 python3-pip python3-venv \
       openssh-client rsync patch \
       postgresql-client \
+      # Networking: modern ip/ss, packet capture, socket swiss-army-knife, legacy ifconfig/netstat
+      iproute2 tcpdump socat net-tools \
       dnsutils iputils-ping netcat-openbsd tzdata \
+      # Debug & inspection
+      strace ltrace lsof htop gdb valgrind \
+      # Search & lint
+      fd-find shellcheck man-db \
+      # Media, docs & OCR
+      ffmpeg imagemagick poppler-utils ghostscript qpdf \
+      tesseract-ocr tesseract-ocr-eng pandoc graphviz \
+      # Languages (Node and Python installed separately below)
+      golang rustc cargo ruby php-cli lua5.4 \
   && rm -rf /var/lib/apt/lists/* \
   && git lfs install --system
 ENV LANG=C.UTF-8
@@ -193,6 +205,13 @@ RUN mkdir -p /workspace/repo && chown -R ${UID}:${UID} /workspace
 # (Ported from Shockwave, verified live there.)
 ENV PLAYWRIGHT_MCP_BROWSER=chromium
 
+# Whisper (speech-to-text): whisper-ctranslate2 is a drop-in CLI replacement
+# for OpenAI's whisper that runs on CTranslate2 — same flags, 4x faster on CPU,
+# no PyTorch dependency. Aliased to `whisper` so the original command name works.
+# ffmpeg is added to the base apt install above (whisper needs it for audio decoding).
+RUN pip install --break-system-packages whisper-ctranslate2 \
+  && ln -s "$(which whisper-ctranslate2)" /usr/local/bin/whisper
+
 # Pre-authentication for the agent, when the API turns it on: the helper reads
 # GITHUB_TOKEN from the environment, so a container started with that variable
 # has a working `git push` with NOTHING written to disk and nothing embedded in
@@ -221,8 +240,20 @@ RUN rg --version && git --version && git lfs version && gh --version \
   && test -f /opt/skills/playwright-cli/SKILL.md \
   && test "$(git config --system core.excludesFile)" = /etc/gitexcludes \
   && psql --version && ssh -V && rsync --version \
-  && cc --version && sudo -n true \
+  && cc --version && cmake --version && sudo -n true \
   && docker --version && docker buildx version && docker compose version \
+  && whisper --help > /dev/null \
+  # Languages
+  && go version && rustc --version && cargo --version \
+  && ruby --version && php --version && lua5.4 -v \
+  # Networking & debug
+  && ip -V && tcpdump --version && socat -V > /dev/null \
+  && strace -V && gdb --version > /dev/null && valgrind --version \
+  # Media, docs & OCR
+  && ffmpeg -version > /dev/null && convert --version > /dev/null \
+  && pdftotext -v 2>&1 | grep -q poppler && gs --version \
+  && tesseract --version > /dev/null && pandoc --version > /dev/null \
+  && dot -V 2>&1 \
   && test -x /usr/local/bin/start-docker && id -nG | tr ' ' '\n' | grep -qx docker
 WORKDIR /workspace/repo
 # No CMD — the runtime supplies `sleep infinity`; any image works here.
