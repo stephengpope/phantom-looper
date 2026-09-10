@@ -17,6 +17,7 @@ import { runTurn } from './agent.js';
 import type { AgentSummary } from './agentFromConfig.js';
 import type { ModelPin } from '../core/llm/agentConfig.js';
 import { Transcript } from './session.js';
+import type { UsageTotals } from '../core/llm/transcript.js';
 import { applyPart, applyTokens, finalize, nextId, takeCompleted, tokenCount, NO_TOKENS, type Part, type StreamPart, type TurnTokens } from './state.js';
 
 export interface LoadedSession {
@@ -85,12 +86,15 @@ export interface LoadedSession {
   startedAt: number;
   /** Output tokens so far this turn (status line). Reset when a turn starts. */
   tokens: TurnTokens;
-  /** Output tokens over the session's LIFE (the toolbar's `12.4k ↓`): the
-   *  sum of the record's usage lines at the last seat (open or reseat — the
-   *  local file IS the record's working copy), plus each finished turn's
-   *  count folded in at turn end. A running turn's `tokens` ride on top live.
-   *  An esc-cut step's estimate stands until the next seat recomputes. */
-  totalTokens: number;
+  /** Token totals over the session's LIFE (the toolbar's `↓ 12.4k`, the
+   *  launcher's up/down meters and the cache % all read this one object):
+   *  the sum of the record's usage lines at the last seat (open or reseat —
+   *  the local file IS the record's working copy), plus each finished turn's
+   *  OUTPUT count folded in at turn end (only output streams live; input and
+   *  cache figures stand at the last seat until the next). A running turn's
+   *  `tokens` ride on top live. An esc-cut step's estimate stands until the
+   *  next seat recomputes. */
+  usage: UsageTotals;
   abort: AbortController | null;
   /** Typed while a turn is running. The turn drains it whole into the very
    *  next model call (the nudge seam — a typed word steers the agent
@@ -148,8 +152,8 @@ export interface NewSession {
   /** The model this session is pinned to (LoadedSession.pin). Absent only for
    *  a session with nothing said yet. */
   pin?: ModelPin | null;
-  /** Output tokens summed from the seated transcript (LoadedSession.totalTokens). */
-  totalTokens?: number;
+  /** Token totals summed from the seated transcript (LoadedSession.usage). */
+  usage?: UsageTotals;
   /** Open showing the supervisor side (the run's story) first. */
 }
 
@@ -228,7 +232,7 @@ export class SessionStore {
       pin: s.pin ?? null,
       live: [], turn: [],
       busy: false, remoteBusy: false, held: null, startedAt: 0, tokens: NO_TOKENS,
-      totalTokens: s.totalTokens ?? 0, abort: null, queue: [],
+      usage: s.usage ?? { input: 0, output: 0, cache_read: 0, cache_write: 0 }, abort: null, queue: [],
       // A session with history AND a pin has its model settled. History with
       // NO pin is a duplicate's copy: its messages came from the source, so
       // they do not settle it — it follows /model and presets until its first
@@ -313,7 +317,7 @@ export class SessionStore {
    *  clean watch — joined mid-turn, a reconnect, a clipped tool result,
    *  another window's work — passes parts and repaints. */
   reseat(id: string, history: ModelMessage[], parts: Part[] | null, stamp: string | null,
-    totalTokens?: number): void {
+    usage?: UsageTotals): void {
     const e = this.get(id);
     if (!e) return;
     e.history = [...history];
@@ -325,9 +329,9 @@ export class SessionStore {
       e.turn = [];
     }
     e.syncStamp = stamp;
-    // The record just landed whole, so its exact sum replaces whatever the
+    // The record just landed whole, so its exact sums replace whatever the
     // live folds had accumulated — no estimate survives a reseat.
-    if (totalTokens !== undefined) e.totalTokens = totalTokens;
+    if (usage) e.usage = usage;
     this.notify();
   }
 
@@ -380,10 +384,10 @@ export class SessionStore {
     // the session exactly as it is — in particular do not mark it unseen.
     if (!e.remoteBusy && !e.turn.length) return;
     e.remoteBusy = false;
-    // The watched turn's tokens join the session total; the record landing
-    // behind it (the feed's `transcript` event → reseat) replaces the base
-    // with the exact sum, so an estimate never stands for long.
-    e.totalTokens += tokenCount(e.tokens);
+    // The watched turn's output tokens join the session totals; the record
+    // landing behind it (the feed's `transcript` event → reseat) replaces the
+    // base with the exact sums, so an estimate never stands for long.
+    e.usage.output += tokenCount(e.tokens);
     const rest = finalize(e.turn);
     e.turn = [];
     e.live = [];
@@ -600,11 +604,11 @@ export class SessionStore {
       e.live = [];
       e.busy = false;
       e.abort = null;
-      // The turn's output joins the session's lifetime total (the toolbar's
+      // The turn's output joins the session's lifetime totals (the toolbar's
       // number). Settled is exact — every step ended with a finish-step's
       // real usage; only an esc-cut step leaves an estimate, and the next
       // seat recomputes from the record.
-      e.totalTokens += tokenCount(e.tokens);
+      e.usage.output += tokenCount(e.tokens);
       // An error counts as something to come back to, same as an answer — a
       // session that fell over must not sit in the list looking idle.
       if (e.id !== this.activeId) e.unseen = true;

@@ -9,7 +9,7 @@
 import { SelectList, type Choice } from './SelectList.js';
 import { Screen, type FooterKey } from './Screen.js';
 import { tableChoices, type TableRow } from './table.js';
-import { formatTokensOut } from '../state.js';
+import { formatTokensIn, formatTokensOut, cachePct } from '../state.js';
 
 export interface WorkspaceInfo {
   id: string; owner: string; name: string; displayName?: string | null;
@@ -42,10 +42,14 @@ export interface SessionInfo {
   /** The model that drives (or drove) this session, from the transcript
    *  header — stored on the session row at each transcript save. */
   model?: string | null;
-  /** Lifetime OUTPUT tokens (the expensive ones), the transcript save's own
-   *  sum cached on the row — the same number the status bar shows. Null on
-   *  rows saved before the cache existed; zero = nothing said yet. */
+  /** Lifetime token totals, the transcript save's own sums cached on the row.
+   *  Null on rows saved before the cache existed; zero = nothing said yet.
+   *  tokensOutput is the same number the status bar shows; the cache figures
+   *  feed state.ts's one hit-rate rule. */
+  tokensInput?: number | null;
   tokensOutput?: number | null;
+  tokensCacheRead?: number | null;
+  tokensCacheWrite?: number | null;
   /** /star: pinned to the top of the list, ahead of rows in motion. */
   starred?: boolean;
 }
@@ -120,7 +124,6 @@ export function ago(iso: string, now = Date.now()): string {
 export function sessionChoices(
   workspaces: WorkspaceInfo[],
   sessions: SessionInfo[],
-  lastMessage: (sessionId: string) => string | undefined,
   now = Date.now(),
   busy: (sessionId: string) => boolean = () => false,
   loaded: (sessionId: string) => boolean = () => false,
@@ -165,22 +168,21 @@ export function sessionChoices(
   // reusable): fixed widths on the value columns, because this list refreshes
   // in place and must not jitter as messages and names change under it.
   // The ORDER is the status bar's: the card with its git dot first
-  // (`PHA 7 in_progress • not pushed`), the model with its token meter near
-  // the end (`gpt-5 12.4k ↓`) — the two places the same facts show read the
-  // same way. card is 6 = the title (4) + the 2-cell gutter inside the width
-  // (the column law), room for four digits; it sits right of ws so `PHA  7`
-  // reads as the board's PHA-7 and survives a narrow terminal. work is 14 =
-  // the mark and its space (2) + "not pushed"/"not merged" (10) + the gutter;
-  // it sits well LEFT of the tail so a narrow terminal truncates the soft
-  // columns before the one that says whether work would be lost. who and
-  // when ride in ONE free-running last column ("coder 2h") — one question
-  // ("whose is this and how fresh"), one column, and the reclaimed width
-  // pays for the tokens meter.
-  const COLS = { card: 6, status: 13, work: 14, name: 28, msg: 32, model: 10, tokens: 9 };
+  // (`PHA 7 in_progress • not pushed`), the model with its token meters near
+  // the end (`gpt-5 ↑ 12.4k (84%) ↓ 1.7k`) — the two places the same facts
+  // show read the same way. card is 6 = the title (4) + the 2-cell gutter
+  // inside the width (the column law), room for four digits; it sits right
+  // of ws so `PHA  7` reads as the board's PHA-7 and survives a narrow
+  // terminal. work is 14 = the mark and its space (2) + "not pushed"/
+  // "not merged" (10) + the gutter; it sits well LEFT of the tail so a
+  // narrow terminal truncates the soft columns before the one that says
+  // whether work would be lost. tokens is 24 = the widest meter pair
+  // ("↑ 12.4k (100%) ↓ 12.4k", 22) + the gutter. who and when ride in ONE
+  // free-running last column ("coder 2h") — one question ("whose is this
+  // and how fresh"), one column.
+  const COLS = { card: 6, status: 13, work: 14, name: 28, model: 10, tokens: 24 };
   const rows = sessions.map((s): TableRow<Launch | null> => {
     const w = byId.get(s.workspaceId);
-    // The server's transcript says what a conversation was about wherever it
-    // was typed; the local file covers a server that stores none.
     // A supervisor session names itself: the looper's verdict record for its
     // card — read-only.
     const sup = s.agent === 'supervisor';
@@ -199,19 +201,11 @@ export function sessionChoices(
     // carries it; a session with no card is the blank-fact dot.
     const cardCol = s.card != null ? String(s.card) : '·';
     const statusCol = s.cardStatus ?? '·';
-    // Two facts, two columns: the session's NAME (what is being built) and
-    // the last thing typed. A blank fact is a dot — never the branch, which
-    // is just the session id wearing a prefix and says nothing to a person.
-    // One row is ONE line: a newline in the stored text (the loop's kickoff
-    // opens "Plan card 9.\n\n…") would break the cell into extra lines —
-    // truncate-end clips width, not line breaks — so whitespace flattens here.
-    const msg = (s.lastUserMessage ?? lastMessage(s.id))?.replace(/\s+/g, ' ').trim();
-    // A starred row carries its mark on the name — the column a pinned row
-    // is pinned FOR. An unnamed one is the star alone, never "★ ·".
+    // A blank fact is a dot — never the branch, which is just the session id
+    // wearing a prefix and says nothing to a person. A starred row carries
+    // its mark on the name — the column a pinned row is pinned FOR. An
+    // unnamed one is the star alone, never "★ ·".
     const nameCol = s.starred === true ? `★ ${s.name ?? ''}`.trimEnd() : s.name ?? '·';
-    const msgCol = sup ? 'verdicts · read-only'
-      : msg ? `"${msg}"`
-      : '·';
     // A session open here that nothing was typed into carries no activity
     // time (App's merge fills epoch 0 so it sorts last) — the dot, not "2957w".
     const when = dead ? 'ended' : Date.parse(s.lastUsedAt) > 0 ? ago(s.lastUsedAt, now) : '·';
@@ -219,16 +213,22 @@ export function sessionChoices(
     // the server did not give: the list may not have been fetched with
     // git=true yet (the instant first paint), or there is nothing to measure.
     const workCol = s.work ? WORK[s.work] : '·';
-    // The tokens meter is the status bar's own shape (`12.4k ↓`) and the
-    // status bar's own rule: zero or unknown is no news, the blank-fact dot.
-    const tokensCol = s.tokensOutput ? formatTokensOut(s.tokensOutput) : '·';
+    // The token meters are the status bar's own shapes (`↑ 12.4k`,
+    // `↓ 1.7k`) and its own rule: zero or unknown is no news, the blank-fact
+    // dot. The cache hit rate rides the INPUT meter — caching is a property
+    // of prompt tokens, never of output — by state.ts's one rule.
+    const pct = cachePct(s.tokensInput ?? 0, s.tokensCacheRead ?? 0, s.tokensCacheWrite ?? 0);
+    const inMeter = s.tokensInput
+      ? formatTokensIn(s.tokensInput) + (pct != null ? ` (${pct}%)` : '') : '';
+    const outMeter = s.tokensOutput ? formatTokensOut(s.tokensOutput) : '';
+    const tokensCol = [inMeter, outMeter].filter(Boolean).join(' ') || '·';
     // who and when answer ONE question — whose session is this and how fresh
     // — so they ride in one cell; a fresh open with no activity time shows
     // just the driver, never "manual ·".
     const whoWhenCol = dead ? 'ended' : when === '·' ? kind : `${kind} ${when}`;
     return {
       value: { kind: 'resume', sessionId: s.id } as Launch,
-      cells: [wsCol(s), cardCol, statusCol, workCol, nameCol, msgCol, s.model ?? '·', tokensCol, whoWhenCol],
+      cells: [wsCol(s), cardCol, statusCol, workCol, nameCol, s.model ?? '·', tokensCol, whoWhenCol],
       busy: running,
       dot: open && !running,
       hint: dead
@@ -243,7 +243,7 @@ export function sessionChoices(
   const table = tableChoices('ws', [
     { title: 'card', width: COLS.card }, { title: 'status', width: COLS.status },
     { title: 'git', width: COLS.work },
-    { title: 'session', width: COLS.name }, { title: 'last message', width: COLS.msg },
+    { title: 'session', width: COLS.name },
     { title: 'model', width: COLS.model }, { title: 'tokens', width: COLS.tokens },
     { title: 'who · when' },
   ], rows);
@@ -278,7 +278,7 @@ export function workspaceChoices(workspaces: WorkspaceInfo[], canAdd = true): Ch
 /** One list, two uses. `mode` decides which — sessions for /resume, workspaces
  *  for a fresh start. Deliberately not both at once: launching means "start
  *  work", reopening is a different intent with its own command. */
-export function Launcher({ mode, workspaces, sessions, total, lastMessage, busy, loaded, clientId, onPick, onEdit, onDuplicate, onStar, onClose, onTrash, onCancel, onNearEnd, showSupervised, onToggleSupervised, now, title, footer, notice, canAdd }: {
+export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clientId, onPick, onEdit, onDuplicate, onStar, onClose, onTrash, onCancel, onNearEnd, showSupervised, onToggleSupervised, now, title, footer, notice, canAdd }: {
   mode: 'sessions' | 'workspaces';
   workspaces: WorkspaceInfo[];
   sessions?: SessionInfo[];
@@ -290,7 +290,6 @@ export function Launcher({ mode, workspaces, sessions, total, lastMessage, busy,
    *  the owner to flip it (the list is re-read with the switch). */
   showSupervised?: boolean;
   onToggleSupervised?: () => void;
-  lastMessage?: (sessionId: string) => string | undefined;
   /** Is this session running a turn in THIS window right now? The server list
    *  cannot know; the SessionStore can. */
   busy?: (sessionId: string) => boolean;
@@ -330,7 +329,7 @@ export function Launcher({ mode, workspaces, sessions, total, lastMessage, busy,
   const canStar = mode === 'sessions' && !!onStar;
   // The looper's card sessions are hidden by default; [v] toggles them in.
   const choices = mode === 'sessions'
-    ? sessionChoices(workspaces, sessions ?? [], lastMessage ?? (() => undefined), now, busy, loaded, clientId, showSupervised ?? false)
+    ? sessionChoices(workspaces, sessions ?? [], now, busy, loaded, clientId, showSupervised ?? false)
     : workspaceChoices(workspaces, canAdd ?? true);
   return (
     <Screen title={title ?? (mode === 'sessions' ? 'resume' : 'workspace')}

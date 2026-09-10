@@ -567,7 +567,7 @@ export class WindowStore {
     this.sessions.reseat(id, parsed.messages, keepScreen ? null : [
       { kind: 'note', id: nextId('note'), text: 'refreshed — this session moved forward elsewhere' } as Part,
       ...messagesToParts(parsed.messages),
-    ], t.updated_at ?? server, sumUsageFromJsonl(seated.text).output);
+    ], t.updated_at ?? server, sumUsageFromJsonl(seated.text));
   };
 
   // ── what is on screen ─────────────────────────────────────────────────────
@@ -772,10 +772,10 @@ export class WindowStore {
         pin,
         planMode,
         starred: row.starred === true,
-        // The toolbar's lifetime output tokens: the seated file is the
-        // record's working copy, so its usage lines are the exact sum —
+        // The toolbar's lifetime token totals: the seated file is the
+        // record's working copy, so its usage lines are the exact sums —
         // including any unsaved local steps adoptServerCopy kept.
-        totalTokens: sumUsageFromJsonl(seated.text).output,
+        usage: sumUsageFromJsonl(seated.text),
         ...(card ? { card } : {}),
         ...(row.agent === 'supervisor' ? { readonly: true } : {}),
         done: [
@@ -1028,7 +1028,9 @@ export class WindowStore {
       .filter((e) => !seen.has(e.id) && !e.readonly)
       .map((e) => ({
         id: e.id, workspaceId: e.workspaceId, branch: e.branch, status: 'active', agent: null,
-        model: e.summary.model, tokensOutput: e.totalTokens || null, starred: e.starred,
+        model: e.summary.model, starred: e.starred,
+        tokensInput: e.usage.input || null, tokensOutput: e.usage.output || null,
+        tokensCacheRead: e.usage.cache_read || null, tokensCacheWrite: e.usage.cache_write || null,
         // Nothing typed = no activity: it sorts LAST, never ahead of real work.
         lastUsedAt: new Date(e.lastMessageAt || 0).toISOString(), locked: false, lastUserMessage: null,
       }));

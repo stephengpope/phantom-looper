@@ -39,9 +39,9 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import type { ModelMessage, Tool } from 'ai';
 import { runTurn } from './agent.js';
 import { buildAgent, buildAssistantAgent } from './agentFromConfig.js';
-import { phaseLabel, tokenCount, formatTokensOut } from './state.js';
+import { phaseLabel, tokenCount, formatTokensOut, cachePct } from './state.js';
 import { activeHold } from './sessions.js';
-import { Transcript, lastUserMessage, type TranscriptHeader } from './session.js';
+import { Transcript, type TranscriptHeader } from './session.js';
 import { complete, matches } from './commands.js';
 import { quiet, type Api } from './request.js';
 import { WindowStore, type Initial } from './window.js';
@@ -588,10 +588,13 @@ export function App({
   const modelMark = session?.summary.model;
   // The session's lifetime OUTPUT tokens (the expensive ones), right of the
   // model: the exact sum at the last seat plus whatever a running turn has
-  // streamed on top. Hidden at zero — a fresh session has no news yet.
+  // streamed on top, with the prompt-cache hit rate (state.ts's one rule)
+  // after it. Hidden at zero — a fresh session has no news yet.
   const tokensShown = session
-    ? session.totalTokens + ((session.busy || session.remoteBusy) ? tokenCount(session.tokens) : 0) : 0;
-  const tokensMark = tokensShown > 0 ? formatTokensOut(tokensShown) : undefined;
+    ? session.usage.output + ((session.busy || session.remoteBusy) ? tokenCount(session.tokens) : 0) : 0;
+  const pct = session ? cachePct(session.usage.input, session.usage.cache_read, session.usage.cache_write) : null;
+  const tokensMark = tokensShown > 0
+    ? formatTokensOut(tokensShown) + (pct != null ? ` (${pct}%)` : '') : undefined;
   // The session's name (from /rename or the auto-title); a fresh session
   // without one yet shows nothing here. Kept current by /rename and the
   // staleness GET (window.ts), so the line moves the moment the name lands.
@@ -600,7 +603,7 @@ export function App({
   // not pushed, yellow = not merged, green = merged), the model with its
   // token meter, the bg tasks, a notice pinned last. The model and its meter
   // answer ONE question so they ride in one group — the line reads
-  // `code mode on · PHA-7 · my session · • not pushed · gpt-5 12.4k ↓`,
+  // `code mode on · PHA-7 · my session · • not pushed · gpt-5 ↓ 12.4k (84%)`,
   // facts separated by ` · `, not a flat list of fields.
   const withMode = (rest?: string): ToolbarGroup[] =>
     [[modeMark], [cardMark], [nameMark], [workMark], [modelMark, tokensMark], [taskMark], [rest]]
@@ -764,7 +767,6 @@ export function App({
               workspaces={windowStore.picker.workspaces} sessions={windowStore.picker.sessions} total={windowStore.picker.total}
               showSupervised={windowStore.showSupervised}
               onToggleSupervised={() => windowStore.toggleSupervised()}
-              lastMessage={lastUserMessage}
               busy={(id) => store.get(id)?.busy ?? false}
               loaded={(id) => store.has(id)}
               clientId={clientId}

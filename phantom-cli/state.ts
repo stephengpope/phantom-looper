@@ -296,9 +296,22 @@ export function formatTokens(n: number): string {
 }
 
 /** The output-token meter shown everywhere (toolbar, launcher, status line):
- *  950 → "950 ↓", 1700 → "1.7k ↓". ONE shape, so the same fact reads the
+ *  950 → "↓ 950", 1700 → "↓ 1.7k". ONE shape, so the same fact reads the
  *  same way wherever it shows. */
-export const formatTokensOut = (n: number): string => `${formatTokens(n)} ↓`;
+export const formatTokensOut = (n: number): string => `↓ ${formatTokens(n)}`;
+
+/** The input-token meter, the output meter's mirror: 1700 → "↑ 1.7k". */
+export const formatTokensIn = (n: number): string => `↑ ${formatTokens(n)}`;
+
+/** THE cache hit rate: the share of a session's lifetime PROMPT tokens the
+ *  provider served from its prompt cache (cache reads over everything ever
+ *  sent — fresh input + reads + writes). One rule, so the launcher and the
+ *  status bar never compute it two ways. Null when nothing was ever sent
+ *  (nothing to rate); 0 is a real answer — the cache is not working. */
+export function cachePct(input: number, cacheRead: number, cacheWrite: number): number | null {
+  const sent = input + cacheRead + cacheWrite;
+  return sent > 0 ? Math.round((cacheRead / sent) * 100) : null;
+}
 
 /** 44 → "44s", 124 → "2m 4s". */
 export function formatElapsed(ms: number): string {
