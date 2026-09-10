@@ -14,6 +14,17 @@ import { connectFetch } from './connect.js';
  *  an oversize send is reported as itself, not as a generic API failure. */
 export const MAX_OUTBOUND_BYTES = 50 * 1024 * 1024;
 
+/** A header + message bubble: the header line, a blank line, the content.
+ *  The ONE way titled status bubbles are composed — title and content are
+ *  separate arguments so the blank line under a header is structural, never
+ *  remembered. NOT for the agent's streamed replies (those have no header)
+ *  and NOT for a heading that spans two lines of its own (the approval
+ *  bubble's kind + subject is ONE heading — its message already follows a
+ *  blank line). */
+export function titled(title: string, body: string): string {
+  return `${title}\n\n${body}`;
+}
+
 /** Which Telegram method a file goes out through. */
 export type SendKind = 'photo' | 'video' | 'voice' | 'audio' | 'document';
 
@@ -101,6 +112,12 @@ export class TelegramClient {
       commands,
       ...(chatId != null ? { scope: { type: 'chat', chat_id: chatId } } : {}),
     });
+  }
+
+  /** A header + message bubble — sendMessage of titled(). */
+  sendTitled(chatId: number, title: string, body: string,
+    opts: { replyToMessageId?: number; entities?: Entity[]; replyMarkup?: unknown } = {}) {
+    return this.sendMessage(chatId, titled(title, body), opts);
   }
 
   /** `replyMarkup` is a Telegram reply_markup object (an inline keyboard for

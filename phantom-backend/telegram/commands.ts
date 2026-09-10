@@ -16,6 +16,7 @@
 // edited in place — a line per step as it happens, the result on the last line.
 
 import type { TelegramClient } from './client.js';
+import { titled } from './client.js';
 import type { TelegramEngine } from './engine.js';
 import type { TelegramMode } from './store.js';
 import { PROVIDERS } from '../../core/llm/createAgent.js';
@@ -82,7 +83,7 @@ export async function handleCommand(
   switch (cmd) {
     case 'start':
     case 'help':
-      await reply(`ℹ️ ${HELP}`);
+      await client.sendTitled(dm, 'ℹ️ phantom-looper', HELP);
       return;
 
     case 'assistant':
@@ -126,7 +127,7 @@ export async function handleCommand(
       sessionList.set(dm, j.data.sessions.map((s: any) => s.id));
       const rows = j.data.sessions.map((s: any, i: number) =>
         `${i + 1}. ${s.starred ? '⭐ ' : ''}${s.name ?? 'untitled'}${s.id === acc.activeSessionId ? ' (active)' : ''}${s.locked ? ' (busy)' : ''}`);
-      await reply(['📋 Sessions:', '', ...rows, '',
+      await client.sendTitled(dm, '📋 Sessions:', [...rows, '',
         'Pick one with /sessions <number>; /code <number> talks to its coding agent'].join('\n'));
       return;
     }
@@ -150,7 +151,7 @@ export async function handleCommand(
       }
       workspaceList.set(dm, list.map((w) => w.id));
       const rows = list.map((w, i) => `${i + 1}. ${w.name}${w.id === acc.activeWorkspaceId ? ' (active)' : ''}`);
-      await reply(['📋 Workspaces:', '', ...rows, '', 'Switch with /workspaces <number>'].join('\n'));
+      await client.sendTitled(dm, '📋 Workspaces:', [...rows, '', 'Switch with /workspaces <number>'].join('\n'));
       return;
     }
 
@@ -189,8 +190,8 @@ export async function handleCommand(
         const tasks = t?.ok ? (t.data.tasks ?? []).length : 0;
         const where = [s?.branch ? `Branch: ${s.branch}` : null, s?.card != null ? `card #${s.card}` : null]
           .filter(Boolean).join(' · ');
-        await reply(['🤖 Coding agent', '',
-          `Active session: ${s?.name ?? 'untitled'}`,
+        await client.sendTitled(dm, '🤖 Coding agent',
+          [`Active session: ${s?.name ?? 'untitled'}`,
           where || null,
           `Running: ${s?.locked ? `yes${s.lockedLabel ? ` (${s.lockedLabel})` : ''}` : 'no'}`,
           `Last request: ${s?.lastUserMessage ? oneLine(s.lastUserMessage) : '(none yet)'}`,
@@ -199,8 +200,8 @@ export async function handleCommand(
       } else {
         const w = acc.activeWorkspaceId ? await workspaceRow(engine, acc.activeWorkspaceId) : null;
         const s = acc.activeSessionId ? await sessionRow(engine, acc.activeSessionId) : null;
-        await reply(['🏠 Assistant', '',
-          `Active workspace: ${w?.name ?? acc.activeWorkspaceId ?? '(none — /workspaces)'}`,
+        await client.sendTitled(dm, '🏠 Assistant',
+          [`Active workspace: ${w?.name ?? acc.activeWorkspaceId ?? '(none — /workspaces)'}`,
           `Active session: ${s ? `${s.name ?? 'untitled'} (/code to talk to it)` : '(none — /sessions or /new)'}`].join('\n'));
       }
       return;
@@ -242,13 +243,12 @@ export async function handleCommand(
         const j = await (await engine.call('/settings', { method: 'PATCH', body: { provider: p, model: null } })).json();
         if (!j.ok) { await reply(`⚠️ Couldn't switch provider: ${j.error?.message}`); return; }
         const model = latestModel(p);
-        await reply([
+        await client.sendTitled(dm,
           `✅ Provider: ${p}${model ? ` — model: ${model} (the catalog's newest)` : ''}`,
-          ...(p === 'openai-compatible'
-            ? ['', '⚠️ openai-compatible also needs an endpoint and a model id — set both in the cli under /model.'] : []),
-          '',
+          [...(p === 'openai-compatible'
+            ? ['⚠️ openai-compatible also needs an endpoint and a model id — set both in the cli under /model.', ''] : []),
           'See the top models with /models; switch with /models <number>.',
-        ].join('\n'));
+          ].join('\n'));
         return;
       }
       providerList.set(dm, [...PROVIDERS]);
@@ -259,7 +259,7 @@ export async function handleCommand(
             : ' — no catalog (set model + endpoint in the cli)';
         return `${i + 1}. ${p}${note}${p === current ? ' (current)' : ''}`;
       });
-      await reply(['🧠 Providers:', '', ...rows, '',
+      await client.sendTitled(dm, '🧠 Providers:', [...rows, '',
         'Switch with /providers <number> — the model follows the catalog\'s newest shown above'].join('\n'));
       return;
     }
@@ -284,7 +284,8 @@ export async function handleCommand(
       }
       modelList.set(dm, models.map((m) => m.id));
       const rows = models.map((m, i) => `${i + 1}. ${m.id}${m.id === model ? ' (current)' : ''}`);
-      await reply([`🧠 Models — ${provider} (current: ${model ?? 'none'}):`, '', ...rows, '',
+      await client.sendTitled(dm, `🧠 Models — ${provider} (current: ${model ?? 'none'}):`,
+        [...rows, '',
         'Switch with /models <number>; any other id can be set in the cli under /model'].join('\n'));
       return;
     }
@@ -303,16 +304,14 @@ export async function handleCommand(
         const applied = await (await engine.call('/settings', { method: 'PATCH', body: p.values })).json();
         if (!applied.ok) { await reply(`⚠️ Couldn't apply "${p.name}": ${applied.error?.message}`); return; }
         const { provider, model } = await resolveMany(engine.db, ['provider', 'model']);
-        await reply([
+        await client.sendTitled(dm,
           `✅ Applied preset "${p.name}" — ${provider ?? 'no provider'}${model ? ` / ${model}` : ''}.`,
-          '',
-          'See the top models with /models; switch with /models <number>.',
-        ].join('\n'));
+          'See the top models with /models; switch with /models <number>.');
         return;
       }
       presetList.set(dm, list.map((p) => p.id));
       const rows = list.map((p, i) => `${i + 1}. ${p.name}${presetSummary(p.values)}`);
-      await reply(['🧰 Presets:', '', ...rows, '', 'Apply one with /presets <number>'].join('\n'));
+      await client.sendTitled(dm, '🧰 Presets:', [...rows, '', 'Apply one with /presets <number>'].join('\n'));
       return;
     }
 
@@ -349,7 +348,7 @@ export async function handleCommand(
       // Telegram's message ceiling is 4096; the status script is ~30 lines,
       // so the clip is a guard, never the expected path.
       const text = String(j.data.text ?? '');
-      await reply(`🖥 Server status\n${text.length > 3800 ? `${text.slice(0, 3800)}…` : text}`);
+      await client.sendTitled(dm, '🖥 Server status', text.length > 3800 ? `${text.slice(0, 3800)}…` : text);
       return;
     }
 
@@ -374,7 +373,7 @@ export async function handleCommand(
     }
 
     default:
-      await reply(`⚠️ I don't know /${cmd}.\n\nℹ️ ${HELP}`);
+      await client.sendTitled(dm, `⚠️ I don't know /${cmd}`, titled('ℹ️ phantom-looper', HELP));
   }
 }
 
@@ -384,7 +383,7 @@ export async function handleCommand(
  *  body, a deleted message) falls back to a fresh message for the result, so
  *  the outcome is never lost. */
 async function stepBubble(client: TelegramClient, dm: number, title: string) {
-  const lines = [title];
+  const steps: string[] = [];
   const m = await client.sendMessage(dm, title).catch(() => null);
   const id: number | null = m?.message_id ?? null;
   // Chain edits so the next waits for the previous — Telegram rate-limits
@@ -392,16 +391,16 @@ async function stepBubble(client: TelegramClient, dm: number, title: string) {
   let pending: Promise<boolean> = Promise.resolve(true);
   const edit = () => {
     if (id == null) return Promise.resolve(false);
-    const text = lines.join('\n');
+    const text = titled(title, steps.join('\n'));
     pending = pending.then(
       () => client.editMessageText(dm, id, text).then(() => true, () => false),
     );
     return pending;
   };
   return {
-    step(label: string) { lines.push(`· ${label}`); void edit(); },
+    step(label: string) { steps.push(`· ${label}`); void edit(); },
     async end(result: string) {
-      lines.push(result);
+      steps.push(result);
       if (!await edit()) await client.sendMessage(dm, result);
     },
   };
@@ -462,12 +461,11 @@ async function sessionRow(engine: TelegramEngine, id: string): Promise<{
   return j.ok ? j.data : null;
 }
 
-// /help — the same sentence-case phrases as the menu, one command per line
-// with a dash (Telegram's proportional font collapses padded columns), the
-// numbered forms as real examples. Two agents, neither the default.
+// /help's body — the same sentence-case phrases as the menu, one command per
+// line with a dash (Telegram's proportional font collapses padded columns),
+// the numbered forms as real examples. Two agents, neither the default. The
+// 'ℹ️ phantom-looper' header is the sender's title, not part of the body.
 const HELP = [
-  'phantom-looper',
-  '',
   'Two agents answer here: the assistant, which manages the board, sessions and workspaces, '
   + 'and the active session\'s coding agent. /assistant and /code choose which one your messages go to.',
   '',

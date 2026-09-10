@@ -411,7 +411,7 @@ export class TelegramEngine {
         await this.assistantTurn(client, dm, input, values);
       }
     } catch (e) {
-      await client.sendMessage(dm, `⚠️ Something went wrong:\n${(e as Error).message}`).catch(() => {});
+      await client.sendTitled(dm, '⚠️ Something went wrong', (e as Error).message).catch(() => {});
       throw e;
     }
   }

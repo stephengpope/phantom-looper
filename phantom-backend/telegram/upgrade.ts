@@ -139,12 +139,10 @@ export class UpgradeChecker {
     const id = crypto.randomBytes(6).toString('hex');
     const v = bare(tag);
     const current = bare(this.deps.version);
-    const text = `⬆️ ${v} is available — you're on ${current}.\n` +
-      'Updating restarts the server — any running turns are stopped and loop cards are blocked.\n\n' +
-      'Update?';
-
     const client = existingClient ?? this.deps.makeClient(token, dm);
-    const m = await client.sendMessage(dm, text, {
+    const m = await client.sendTitled(dm, `⬆️ ${v} is available — you're on ${current}.`,
+      'Updating restarts the server — any running turns are stopped and loop cards are blocked.\n\n' +
+      'Update?', {
       replyMarkup: { inline_keyboard: [[
         { text: '✅ Approve', callback_data: `${PREFIX}:${id}:y` },
         { text: '✖️ Deny', callback_data: `${PREFIX}:${id}:n` },
