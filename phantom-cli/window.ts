@@ -892,7 +892,9 @@ export class WindowStore {
   /** [s] on /resume: the looper's supervisor seats in the list or not. A fetch
    *  parameter, not a filter — the server decides what the list is. */
   showSupervised = false;
-  private trashArmed: string | null = null;
+  /** The armed /resume trash: the row [t] armed, and whether the server's
+   *  unpushed-work refusal already upgraded it to a force-confirm. */
+  private trashArmed: { id: string; force: boolean } | null = null;
   private morePickerInFlight = false;
 
   tasks: TasksView | null = null;
@@ -1040,14 +1042,24 @@ export class WindowStore {
     this.notify();
   };
 
-  /** [t] on /resume: the session leaves the server for good — row, transcript,
-   *  files; only its pushed branch on origin survives. Unpushed work refuses
-   *  once and arms; [c] confirms. */
+  /** [t] on /resume arms the trash, [c] confirms — the kill pattern, one rule
+   *  for every destructive key. The session leaves the server for good: row,
+   *  transcript, files; only its pushed branch on origin survives. The confirm
+   *  goes UNFORCED — the server pushes first (the flush) and refuses if work
+   *  would still be lost, which re-arms at force so a second [c] discards
+   *  knowingly. Arming client-side is what makes the confirm real: the flush
+   *  means the unforced delete almost always succeeds, so a server-refusal
+   *  arm alone would fire only when the push failed. */
   trashSession = async (id: string): Promise<void> => {
     if (this.sessions.has(id)) { this.pickerNotice = 'that session is open in this window'; this.notify(); return; }
-    const force = this.trashArmed === id;
+    if (this.trashArmed?.id !== id) {
+      this.trashArmed = { id, force: false };
+      this.pickerNotice = 'trash this session for good? [c] to confirm';
+      this.notify();
+      return;
+    }
     try {
-      await this.api('DELETE', `/sessions/${id}?purge=true${force ? '&force=true' : ''}`);
+      await this.api('DELETE', `/sessions/${id}?purge=true${this.trashArmed.force ? '&force=true' : ''}`);
       this.trashArmed = null;
       this.pickerNotice = undefined;
       // The trash landed; a failed re-read must not report "could not trash".
@@ -1056,9 +1068,10 @@ export class WindowStore {
       const m = (e as Error).message;
       const code = (e as { code?: string }).code ?? '';
       if (code === 'unpushed_work' || m.includes('unpushed_work')) {
-        this.trashArmed = id;
+        this.trashArmed = { id, force: true };
         this.pickerNotice = 'unpushed work [c] to confirm discard';
       } else if (code === 'session_locked' || m.includes('session_locked')) {
+        this.trashArmed = null;
         this.pickerNotice = 'in use elsewhere — a held session cannot be trashed';
       } else this.pickerNotice = `could not trash session ${id}: ${m}`;
     }
