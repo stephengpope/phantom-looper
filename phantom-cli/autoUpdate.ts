@@ -6,44 +6,43 @@
 // ("v0.1.4 is ready — runs next launch") until then. auto_update off: no
 // install, and the quit-time notice offers `phantom-cli update` as before.
 //
-// "Once a day" for a cli whose sessions run for minutes is a stamp file, not
-// a timer: a launch checks only when the last check is a day old, and a
-// window that stays open re-asks on the same gate. The stamp is bookkeeping,
-// not a choice, which is why it is NOT in settings.json — that file holds
-// only what a person changed (config.ts's one rule).
+// "Once a day" for a cli whose sessions run for minutes is a stamp, not a
+// timer: a launch checks only when the last check is a day old, and a window
+// that stays open re-asks on the same gate. The stamp is the app's
+// bookkeeping, so it lives in settings.json (last_update_check) — a key the
+// settings writer preserves but never shows (local.ts), not a setting a
+// person sets.
 //
 // Two open windows can both pass the gate and download the same release.
 // The checksum makes the bytes identical and the symlink move is the whole
 // switch, so the worst case is a wasted download — accepted, rather than a
 // lock file that a killed window could leave behind (which would silently
 // stop updates on that machine for good).
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { CONFIG_DIR } from './config.js';
+import { existsSync, rmSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { CONFIG_PATH } from './config.js';
+import { readOverrides, setBookkeeping } from './local.js';
 import { bare, isBehind } from '../core/version.js';
 import { logLine } from './cliLog.js';
-import { readHealth, waitForVersion, TIMEOUT_MS, type ServerLink } from './update.js';
+import { readHealth, runUpdate, type UpdateDeps } from './update.js';
 
 export const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
-const stampPath = (dir: string): string => join(dir, 'last-update-check');
+const STAMP_KEY = 'last_update_check';
 
 /** Is it time to check again? No stamp — or an unreadable one — means due. */
-export function dueForCheck(now: number, dir = CONFIG_DIR): boolean {
-  try {
-    const t = Number(readFileSync(stampPath(dir), 'utf8').trim());
-    return !Number.isFinite(t) || now - t >= CHECK_INTERVAL_MS;
-  } catch { return true; }
+export function dueForCheck(now: number, path = CONFIG_PATH): boolean {
+  const t = Number(readOverrides(path).overrides[STAMP_KEY]);
+  return !Number.isFinite(t) || t <= 0 || now - t >= CHECK_INTERVAL_MS;
 }
 
 /** Record the check BEFORE it runs: a failed attempt retries tomorrow, not
- *  on every launch. Best-effort — a failed write just means the next launch
- *  checks again. */
-export function stampChecked(now: number, dir = CONFIG_DIR): void {
-  try {
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(stampPath(dir), String(now));
-  } catch { /* the next launch checks again */ }
+ *  on every launch. Also sweeps the side file the first version of this used
+ *  — one check per machine, then it is gone for good. */
+export function stampChecked(now: number, path = CONFIG_PATH): void {
+  setBookkeeping(STAMP_KEY, now, path);
+  const legacy = join(dirname(path), 'last-update-check');
+  if (existsSync(legacy)) rmSync(legacy, { force: true });
 }
 
 export interface AutoUpdateDeps {
@@ -83,87 +82,70 @@ export async function autoUpdateCycle(d: AutoUpdateDeps): Promise<CycleResult> {
 }
 
 // ── the launch gate ─────────────────────────────────────────────────────────
-// Every launch compares this machine and the paired server BEFORE the app
-// opens, and brings the two in line right there — no session is open yet, so
-// nothing is interrupted and no lock is ever taken by a build that is about
-// to be replaced:
+// Every launch brings BOTH halves to the latest release before the app opens,
+// through the ONE update flow: runUpdate (update.ts), the same code
+// `phantom-cli update` runs — the client half first (automatic — nothing
+// restarts but this process), then the server half (it RESTARTS the server,
+// so cards in flight gate a confirmation; a yes carries restart_anyway past
+// the server's own guard). No session is open yet, so nothing is interrupted
+// and no lock is ever taken by a build that is about to be replaced.
 //
-//   server newer → install the SERVER'S exact tag and re-exec into it. The
-//     target is the server's tag, never latest: catching up must not
-//     overshoot into a version the server does not have.
-//   cli newer    → the fix is a server update, which RESTARTS the server —
-//     so it is always confirmed: one y/N naming the versions (and the cards
-//     being worked on, when there are any; a yes then carries
-//     restart_anyway). A yes is followed by a ticking wait for the server to
-//     come back on the new version.
+// The target is ALWAYS the latest published release: a version mismatch
+// (from /health) forces the GitHub check, and the daily stamp gates it when
+// the versions agree, so ordinary launches never wait on the network. When
+// the client half landed, the gate re-execs into it — the "next launch" the
+// install message names is this one.
 //
-// A declined or failed reconcile opens the app anyway, mismatched — the quit
-// notice names what is behind. Unreachable server, nothing paired, a dev
-// checkout: no gate at all.
+// A declined or failed step opens the app anyway — runUpdate has already
+// named what happened, and the quit notice names what is still behind.
+// Unreachable server, nothing paired, a dev checkout: no gate at all (the
+// background cycle above still keeps an unpaired client current).
 
-const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+/** The gate's health read must never hold a launch hostage: a server that
+ *  accepts the connection and says nothing costs this much, then no gate. */
+export const HEALTH_TIMEOUT_MS = 5_000;
 
-export interface ReconcileDeps {
-  /** APP_VERSION — 'dev' skips the gate. */
-  appVersion: string;
-  /** The paired server, or null when nothing is paired. */
-  server: ServerLink | null;
-  /** selfUpdate(tag) — download, verify, unpack, re-link. */
-  install(tag: string): Promise<unknown>;
-  /** Ask the person a yes/no question. */
-  confirm(question: string): Promise<boolean>;
-  /** Print one line. */
-  out(line: string): void;
+export interface ReconcileDeps extends UpdateDeps {
   /** Hand the terminal to the installed build of `version` and exit. */
   reexec(version: string): void;
-  /** Rewrite the current line — the ticking wait. Absent: no ticks. */
-  tick?(line: string): void;
-  sleep(ms: number): Promise<void>;
-  now(): number;
-  pollMs?: number;
-  timeoutMs?: number;
+  /** The settings file the stamp lives in — the test seam, CONFIG_PATH in
+   *  production. */
+  settingsPath?: string;
 }
 
 export async function prelaunchReconcile(d: ReconcileDeps): Promise<void> {
   if (d.appVersion === 'dev' || !d.server) return;
-  const h = await readHealth(d.server);
+  const h = await Promise.race([
+    readHealth(d.server),
+    d.sleep(HEALTH_TIMEOUT_MS).then(() => null),
+  ]);
   if (!h?.version) return;   // unreachable is its own, louder failure in the app
   const server = bare(String(h.version));
   const me = bare(d.appVersion);
 
-  if (isBehind(me, server)) {
-    d.out(`The server is on v${server}, this machine is on v${me} — updating this machine to match.`);
-    try {
-      await d.install(`v${server}`);
-    } catch (e) {
-      d.out(`The update failed: ${errText(e)} — opening anyway.`);
-      return;
+  // In line and checked recently: open without touching the network. A
+  // mismatch is itself the news that something released, stamp or no stamp.
+  if (me === server && !dueForCheck(d.now(), d.settingsPath)) return;
+  const latest = await d.latest();
+  stampChecked(d.now(), d.settingsPath);
+  if (!latest) {
+    if (me !== server) {
+      d.out(`The server is on v${server}, this machine is on v${me}, and GitHub cannot be reached to find the latest release — opening as-is.`);
     }
-    d.reexec(server);
     return;
   }
+  const target = bare(latest);
+  const clientBehind = isBehind(me, target);
+  if (!clientBehind && !isBehind(server, target)) return;
 
-  if (isBehind(server, me)) {
-    const n = h.loops_running ?? 0;
-    const q = n > 0
-      ? `The server is on v${server}, this machine is on v${me}. Updating the server restarts it and stops the ${n === 1 ? '1 card' : `${n} cards`} being worked on. Update now? [y/N] `
-      : `The server is on v${server}, this machine is on v${me}. Update the server now? It restarts — about a minute. [y/N] `;
-    if (!await d.confirm(q)) {
-      d.out('Left as-is — the versions differ; phantom-cli update brings them in line.');
-      return;
-    }
-    try {
-      await d.server.call('POST', '/update', { tag: `v${me}`, restart_anyway: true });
-    } catch (e) {
-      d.out(`The update could not be requested: ${errText(e)} — opening anyway.`);
-      return;
-    }
-    const r = await waitForVersion(d, d.server, me);
-    if (r.ok) {
-      d.out(`The server is on v${me}.`);
-    } else {
-      d.out(`Waited ${Math.max(1, Math.round((d.timeoutMs ?? TIMEOUT_MS) / 60_000))} minutes and the server still reports ${r.last ?? server} — opening anyway.`);
-      d.out('If it never comes back, on the server run: docker logs phantom-update-run');
-    }
-  }
+  // The ONE update flow. Two wraps: latest() replays the tag just fetched
+  // (one GitHub call, not two), and installClient records a landing so the
+  // gate knows whether there is a new build to re-exec into.
+  let installed: string | null = null;
+  await runUpdate('both', {
+    ...d,
+    latest: async () => latest,
+    installClient: async (tag) => { await d.installClient(tag); installed = bare(tag); },
+  });
+  if (installed) d.reexec(installed);
 }

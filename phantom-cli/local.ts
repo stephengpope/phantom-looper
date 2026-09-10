@@ -13,10 +13,10 @@
 // Everything else is on the server (settings.ts), so every TUI you open is the
 // same one. Reads here are synchronous because a file read is; a call site can
 // tell which kind it is by whether it awaits.
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import {
-  CONFIG_PATH, DEFAULTS, META, LOCAL_KEYS, isLocalKey, validate,
+  CONFIG_PATH, DEFAULTS, META, LOCAL_KEYS, validate,
   type LocalKey, type ConfigValue,
 } from './config.js';
 
@@ -25,8 +25,11 @@ export interface Resolved { value: ConfigValue; source: Source; envVar?: string 
 
 /** Whatever is on disk. A corrupt file must NOT be silently rewritten: that
  *  destroys the very keys someone is trying to recover. Warn and carry on with
- *  defaults instead. */
-export function readOverrides(path = CONFIG_PATH): { overrides: Partial<Record<LocalKey, ConfigValue>>; error?: string } {
+ *  defaults instead. EVERY key comes back here, known or not: keys that moved
+ *  to the server (an older TUI pointed at the same file still reads them) and
+ *  the app's own bookkeeping (last_update_check) must survive every write —
+ *  dropping them is how a settings file earns its "never touch it" hacks. */
+export function readOverrides(path = CONFIG_PATH): { overrides: Record<string, ConfigValue>; error?: string } {
   if (!existsSync(path)) return { overrides: {} };
   let parsed: unknown;
   try { parsed = JSON.parse(readFileSync(path, 'utf8')); }
@@ -34,13 +37,7 @@ export function readOverrides(path = CONFIG_PATH): { overrides: Partial<Record<L
   // the part that can go.
   catch (e) { return { overrides: {}, error: `settings file is not valid JSON — using defaults; it has not been touched (${path}: ${(e as Error).message})` }; }
   if (!parsed || typeof parsed !== 'object') return { overrides: {}, error: `settings file is not an object — using defaults (${path})` };
-  const out: Partial<Record<LocalKey, ConfigValue>> = {};
-  // Keys that moved to the server are ignored, not deleted: an older TUI
-  // pointed at the same file still reads them.
-  for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-    if (isLocalKey(k)) out[k] = v as ConfigValue;
-  }
-  return { overrides: out, error: undefined };
+  return { overrides: parsed as Record<string, ConfigValue>, error: undefined };
 }
 
 function envValue(key: LocalKey, env: NodeJS.ProcessEnv): { value: string; envVar: string } | undefined {
@@ -84,11 +81,15 @@ export function localValues(path = CONFIG_PATH, env: NodeJS.ProcessEnv = process
 
 /** 0600 is applied with an explicit chmod, NOT the writeFileSync mode option:
  *  that option is ignored when the file already exists, so a settings.json that
- *  was ever 0644 would silently stay 0644 while holding the API key. */
-function writeOverrides(overrides: Partial<Record<LocalKey, ConfigValue>>, path = CONFIG_PATH): void {
+ *  was ever 0644 would silently stay 0644 while holding the API key. The write
+ *  is tmp-then-rename: a crash lands the old file or the new one, never half
+ *  of one — this file holds the API key. */
+function writeOverrides(overrides: Record<string, ConfigValue>, path = CONFIG_PATH): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  writeFileSync(path, `${JSON.stringify(overrides, null, 2)}\n`, { mode: 0o600 });
-  chmodSync(path, 0o600);
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(overrides, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(tmp, 0o600);
+  renameSync(tmp, path);
 }
 
 /** Set one local override. Returns an error message instead of throwing. */
@@ -100,6 +101,17 @@ export function setLocal(key: LocalKey, value: ConfigValue, path = CONFIG_PATH):
   overrides[key] = value;
   writeOverrides(overrides, path);
   return null;
+}
+
+/** The app's own bookkeeping (last_update_check) — a key in the same file,
+ *  preserved on every write, never shown on the settings screen, never
+ *  validated. Same refusal rule as setLocal: a file we could not read is
+ *  never overwritten. */
+export function setBookkeeping(key: string, value: ConfigValue, path = CONFIG_PATH): void {
+  const { overrides, error } = readOverrides(path);
+  if (error) return;
+  overrides[key] = value;
+  writeOverrides(overrides, path);
 }
 
 /** Clear one, so the key follows the code default again. */

@@ -187,18 +187,16 @@ function versionWatch(): void {
     }
   });
 }
-versionWatch();
-setInterval(versionWatch, CHECK_INTERVAL_MS).unref();
-
-// The launch gate (autoUpdate.ts): settle any version gap between this
-// machine and the server BEFORE the app opens — no session is open yet, so
-// nothing is interrupted and no lock is ever taken by a build that is about
-// to be replaced. The client half re-execs into the matching build; the
-// server half is always a confirmed y/N, because it restarts the server.
+// The launch gate (autoUpdate.ts): bring both halves to the latest release
+// BEFORE the app opens, through the ONE update flow (`phantom-cli update`'s
+// runUpdate) — no session is open yet, so nothing is interrupted and no lock
+// is ever taken by a build that is about to be replaced. A client half that
+// landed re-execs into the new build.
 await prelaunchReconcile({
   appVersion: APP_VERSION,
+  latest: checkLatest,
   server: pairedServer(),
-  install: selfUpdate,
+  installClient: selfUpdate,
   confirm: askYesNo,
   out: (line) => { process.stdout.write(TTY_CLEAR + line + '\n'); },
   tick: process.stdout.isTTY ? (line) => { process.stdout.write(TTY_CLEAR + line); } : undefined,
@@ -215,6 +213,12 @@ await prelaunchReconcile({
     process.exit(r.status ?? 0);
   },
 });
+
+// After the gate: it stamps the check when it runs one, so this skips itself
+// on the launches the gate already covered — its job is the windows the gate
+// does not (unpaired, an unreachable server) and windows that stay open.
+versionWatch();
+setInterval(versionWatch, CHECK_INTERVAL_MS).unref();
 
 /** POST /git/auto-push for one session — core's client over the ND-JSON
  *  stream (heartbeats keep the connection alive, step records become notes,

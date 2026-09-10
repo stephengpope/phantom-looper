@@ -6,7 +6,7 @@
 //
 // One file, CONFIG_DIR/settings.json. CONFIG_DIR is the ONE root every file the
 // cli owns hangs off (settings.json, sessions/, voice/, bin/, ca/, cli.log,
-// models-cache.json, last-update-check): ~/.phantom-cli for an installed build, <repo>/.phantom-cli
+// models-cache.json): ~/.phantom-cli for an installed build, <repo>/.phantom-cli
 // (gitignored) when running from source. build-cli.sh bakes the release string
 // into process.env.PHANTOM_CLI_VERSION; a checkout reads nothing and is 'dev'.
 // So a dev run and the installed app never share a byte — dev talks to the

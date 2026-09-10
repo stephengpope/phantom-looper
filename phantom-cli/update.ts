@@ -74,18 +74,8 @@ function minutes(ms: number): string {
   return m === 1 ? '1 minute' : `${m} minutes`;
 }
 
-/** The slice of UpdateDeps the version wait needs — narrow, so the launch
- *  gate (autoUpdate.ts) can drive it without the command's full machinery. */
-export interface WaitDeps {
-  tick?(line: string): void;
-  sleep(ms: number): Promise<void>;
-  now(): number;
-  pollMs?: number;
-  timeoutMs?: number;
-}
-
 /** Poll /health until it reports `version`, or the timeout passes. */
-export async function waitForVersion(d: WaitDeps, server: ServerLink, version: string):
+async function waitForVersion(d: UpdateDeps, server: ServerLink, version: string):
   Promise<{ ok: true; ms: number } | { ok: false; last: string | null }> {
   const start = d.now();
   const timeout = d.timeoutMs ?? TIMEOUT_MS;
