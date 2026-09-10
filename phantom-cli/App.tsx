@@ -576,10 +576,10 @@ export function App({
   // not pushed, yellow = not merged, green = merged), the model with its
   // token meter, the bg tasks, a notice pinned last. The model and its meter
   // answer ONE question so they ride in one group — the line reads
-  // `coding · PHA-7 · my session · • not pushed · gpt-5 ↑ 48.2k (84%) ↓ 12.4k`,
+  // `coding · PHA-7 my session • not pushed · gpt-5 ↑ 48.2k (84%) ↓ 12.4k`,
   // facts separated by ` · `, not a flat list of fields.
   const withMode = (rest?: string): ToolbarGroup[] =>
-    [[modeMark], [cardMark], [nameMark], [workMark], [modelMark, tokensMark], [taskMark], [rest]]
+    [[modeMark], [cardMark, nameMark, workMark], [modelMark, tokensMark], [taskMark], [rest]]
       .map((g) => g.filter((p): p is ToolbarPart => Boolean(p)))
       .filter((g) => g.length);
 
