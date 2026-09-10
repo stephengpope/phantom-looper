@@ -202,21 +202,6 @@ export class WindowStore {
   updateReady: string | null = null;
   setUpdateReady(v: string): void { this.updateReady = v; this.notify(); }
 
-  /** Set when a close put a DIFFERENT session on screen: the red line that
-   *  takes the toolbar's row, naming what closed and what you are looking at
-   *  NOW — the conversation in front of you is never mistaken for the one
-   *  just closed. Stands until you act: type, submit or switch
-   *  (dismissClosed). */
-  justClosed: string | null = null;
-
-  /** Acting dismisses the close banner: it answered "where am I?", and
-   *  anything you do next says you know. */
-  dismissClosed = (): void => {
-    if (this.justClosed === null) return;
-    this.justClosed = null;
-    this.notify();
-  };
-
   /** The window's paste chips: the prompt holds `[Pasted #1 ~12 lines]`,
    *  this holds the text, and submit swaps it back before anything downstream
    *  can see the chip (paste.ts). */
@@ -658,8 +643,6 @@ export class WindowStore {
     if (prev) prev.draft = this.draftOnScreen();
     if (!this.sessions.activate(id)) return;
     this.splash = false;
-    // A switch is an act: the close banner has answered "where am I?".
-    this.justClosed = null;
     const e = this.sessions.get(id);
     if (e) this.opts.onSession?.({ id: e.id, branch: e.branch, workspaceId: e.workspaceId });
     this.watchTasks();
@@ -672,7 +655,7 @@ export class WindowStore {
           const row = await this.api('GET', `/sessions/${id}`) as
             { transcript_updated_at?: string | null; name?: string | null };
           // The row carries the name too — refresh the seated copy off the
-          // same answer, so the close banner names sessions right.
+          // same answer, so the header names the session right.
           if (row?.name !== undefined) this.sessions.setName(id, row.name ?? null);
           await this.refreshIfMoved(id, row?.transcript_updated_at ?? null);
         } catch (err) { quiet(`check session ${id} for changes`)(err); }
@@ -857,8 +840,6 @@ export class WindowStore {
       // An empty conversation opens on the splash, exactly as boot's does.
       this.splash = resumed.length === 0;
       this.opening = false;
-      // Another session took the screen: an earlier close banner is answered.
-      this.justClosed = null;
       this.watchTasks();
       this.watchSession(row.id);
       this.notify();
@@ -949,10 +930,10 @@ export class WindowStore {
    *  Refused while a turn runs there. Closing the one on screen hands the
    *  screen to whatever you spoke to most recently; closing the LAST one opens
    *  a fresh session in the same workspace, because close means "done with
-   *  this", never "leave me looking at nothing". The banner says what
-   *  happened, loud, until the next action. */
+   *  this", never "leave me looking at nothing". A note in the pane says
+   *  what happened; `quiet` is for doors that say their own (trash). */
 
-  closeSession = async (id?: string): Promise<CloseResult> => {
+  closeSession = async (id?: string, quiet = false): Promise<CloseResult> => {
     const target = id ?? this.sessions.activeId;
     if (!target) return { error: 'no session is open — nothing to close' };
     const e = this.sessions.get(target);
@@ -969,30 +950,10 @@ export class WindowStore {
       // Both of those restart the count's clock; a failed open leaves no
       // session on screen, and this is what clears the toolbar's count.
       if (!this.sessions.activeId) this.watchTasks();
-      // The screen changed underfoot — say what closed and what this is, on
-      // the red banner, until the next action dismisses it. Set AFTER the
-      // switch/open above: those clear justClosed as acts of their own.
-      const now = this.sessions.active();
-      const build = (closed: string, current: string | undefined): string =>
-        opened_new ? `closed: ${closed} — a fresh session is open`
-          : current === undefined ? `closed: ${closed} — no session is open`
-            : `closed: ${closed} — you are now in ${current}`;
-      const first = build(this.labelOf(e), now ? this.labelOf(now) : undefined);
-      this.justClosed = first;
-      this.notify();
-      // The seated name can lag the row (the auto-title lands on a save,
-      // after the session was seated): refine the banner off the record the
-      // moment it answers. Only while THIS banner still stands — an action
-      // or a second close ends it.
-      void this.api('GET', `/sessions/${target}`).then((row) => {
-        if (this.justClosed !== first) return;
-        const current = now ? this.sessions.get(now.id) ?? now : undefined;
-        const refined = build((row as { name?: string | null }).name ?? this.labelOf(e),
-          current ? this.labelOf(current) : undefined);
-        if (refined === first) return;
-        this.justClosed = refined;
-        this.notify();
-      }, () => { /* the seated name stands */ });
+      // The screen changed underfoot — say so, in the pane of the session
+      // now on screen. AFTER the switch/open above: the note lands in
+      // whatever those seated.
+      if (!quiet) this.note('Session closed');
     }
     return { ok: true, closed: target, on_screen: this.sessions.activeId, opened_new };
   };
@@ -1248,7 +1209,7 @@ export class WindowStore {
    *  without the session back on screen. */
   private trashActive = async (armed: { id: string; force: boolean }): Promise<void> => {
     if (this.sessions.has(armed.id)) {
-      const r = await this.closeSession(armed.id);
+      const r = await this.closeSession(armed.id, true);
       if ('error' in r) { this.note(`not trashed — ${r.error}`); return; }
     }
     let verdict: 'ok' | 'unpushed_work' | 'session_locked';
@@ -1259,7 +1220,7 @@ export class WindowStore {
       this.note('unpushed work — [c] to confirm discard');
     } else if (verdict === 'session_locked') {
       this.note('in use elsewhere — a held session cannot be trashed');
-    } else this.note(`trashed session ${armed.id} — only its pushed branch on origin survives`);
+    } else this.note('Session trashed');
   };
 
   /** ctrl+n: the sessions open in this window. It shows FIRST and fills the
@@ -1896,8 +1857,6 @@ export class WindowStore {
     accept();
     // Commands too: /help answers into the pane the splash covers.
     this.setSplash(false);
-    // A line was accepted: the close banner's "where am I?" is answered.
-    this.justClosed = null;
     if (msg === 'exit' || msg === 'quit') { this.quit(); return; }
     if (msg.startsWith('/')) {
       const m = matches(msg);

@@ -705,15 +705,9 @@ export function App({
                 ])}`}</Text>
               </Box>
             )}
-            <Prompt value={input} onChange={(v) => { setInput(v); setSuggestAt(0); windowStore.dismissClosed(); }}
+            <Prompt value={input} onChange={(v) => { setInput(v); setSuggestAt(0); }}
               onSubmit={(text) => { void windowStore.submit(text, suggestAt, () => { clearInput(); setScroll(0); }); }} onMeasure={setPromptTop}
               pastes={windowStore.pastes} onFileDrop={(paths) => { void windowStore.dropFiles(paths); }} updateReady={windowStore.updateReady} />
-            {windowStore.justClosed ? (
-              // The close banner takes the toolbar's held row — the row is
-              // always there, so nothing on screen moves. White on red until
-              // the next action (type, submit, switch) dismisses it.
-              <Box paddingLeft={2}><Text backgroundColor="red" color="white" bold>{` ${windowStore.justClosed} `}</Text></Box>
-            ) : (
             <Toolbar
               // Held elsewhere: the marks, then WHO is working, the spinner,
               // and WHAT they are doing — `coding agent ⠹ building`. No
@@ -730,7 +724,6 @@ export function App({
               : !session
                 ? [['no session open — [/workspace] starts one · [/resume] reopens an earlier one']]
                 : withMode()} />
-            )}
           </>
         </Boundary>
       </Box>
