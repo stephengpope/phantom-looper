@@ -407,10 +407,14 @@ export async function rebaseAbort(dir: string): Promise<void> {
 }
 
 /** Push the rebased branch. A rebase rewrites the branch, so this must force —
- *  and it is the BARE `--force-with-lease`, never the `=<ref>:<expected>` form:
- *  bare implies --force-if-includes, which is what closes the lease's real hole
- *  (a fetch between your read and your push refreshes the tracking ref, so the
- *  lease passes on commits you never saw).
+ *  and the lease names the expected value EXPLICITLY, read off the remote a
+ *  moment before the push. The bare `--force-with-lease` form is wrong here:
+ *  session clones are single-branch (cloneFresh's --depth implies it), so the
+ *  fetch refspec never maps the session branch, no remote-tracking ref exists
+ *  for it, and a bare lease then demands the remote branch NOT exist — it
+ *  always does (the backup pushed it), so every push is rejected "stale
+ *  info". ls-remote reads the remote's ACTUAL value, which is also a stronger
+ *  lease than any local ref.
  *
  *  Deliberately without pushSession's fold-the-remote-in backstop: merging the
  *  remote branch back over a rebase undoes the rebase. */
@@ -418,7 +422,12 @@ export async function pushSessionForced(
   dir: string, branch: string, auth: GitAuth,
 ): Promise<PushResult> {
   try {
-    await git(dir, ['push', '--no-verify', '--force-with-lease', 'origin', `HEAD:${branch}`], auth);
+    const { stdout: listing } = await git(dir, ['ls-remote', 'origin', `refs/heads/${branch}`], auth);
+    const expected = listing.trim().split(/\s+/)[0] ?? '';
+    // Nothing on the remote yet: no lease to hold (a plain create never
+    // needs forcing, and --force on a create is harmless).
+    const lease = expected ? `--force-with-lease=refs/heads/${branch}:${expected}` : '--force';
+    await git(dir, ['push', '--no-verify', lease, 'origin', `HEAD:${branch}`], auth);
     return 'pushed';
   } catch (e) {
     log.error({ dir, branch, err: errStr(e) }, 'forced branch push failed');
