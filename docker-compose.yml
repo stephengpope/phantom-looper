@@ -156,7 +156,10 @@ services:
   # Restarts any container labeled autoheal=true when Docker marks it
   # unhealthy. Needs the docker socket to do so.
   autoheal:
-    image: willfarrell/autoheal:latest
+    # Pinned by digest, not tag: upstream only maintains `latest` (the newest
+    # version tag, 1.2.0, is from 2021), so a floating tag is the only fresh
+    # one — the digest freezes those exact bits. Bump deliberately.
+    image: willfarrell/autoheal:latest@sha256:8dff3993db56e6646a3febe690809809159aa14aa6b8ecd205db1f0bc1fbd0e1
     restart: unless-stopped
     environment:
       AUTOHEAL_CONTAINER_LABEL: autoheal

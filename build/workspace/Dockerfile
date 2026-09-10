@@ -104,7 +104,10 @@ RUN printf '%s\n' \
 # agent gets `uv venv -p 3.12`, `uv pip`, `uvx` for free. Installed to a fixed
 # system path (agent-owned, so it can add versions later); system python3.13 +
 # venv + pip above remain the boring fallback.
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+# Pinned like Playwright below: a floating uv tag would let the toolchain
+# drift between builds. Bump with the other ARGs.
+ARG UV_VERSION=0.12.12
+COPY --from=ghcr.io/astral-sh/uv:${UV_VERSION} /uv /uvx /usr/local/bin/
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
 RUN uv python install 3.11 3.12 3.13 && chown -R ${UID}:${UID} /opt/uv
 

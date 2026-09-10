@@ -3,7 +3,9 @@
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
 COPY package*.json ./
-RUN npm install --no-audit --no-fund
+# npm ci, not install: exactly the committed lockfile or a failed build — never
+# a silent drift to newer in-range versions.
+RUN npm ci --no-audit --no-fund
 COPY tsconfig.json ./
 COPY core/ core/
 COPY phantom-backend/ phantom-backend/
