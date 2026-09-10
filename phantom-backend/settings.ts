@@ -40,7 +40,7 @@ export const DEFAULTS = {
   max_search_results: 200,
   max_bash_output_bytes: 1_048_576,
   session_lock_ttl_ms: 3_600_000,
-  auto_push_on_archive: false as boolean,
+  auto_push_on_archive: true as boolean,
   agent_git_credentials: false as boolean,
   // The Assistant's model config: an agent trio (provider/model/base_url),
   // null = the coding agent's, per the cascade rule (core agentModelConfig).
