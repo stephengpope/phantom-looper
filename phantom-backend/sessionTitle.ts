@@ -12,18 +12,18 @@ import { and, eq } from 'drizzle-orm';
 import { generateText } from 'ai';
 import { languageModel, isProvider, type ModelConfig } from '../core/llm/createAgent.js';
 import { cascade } from '../core/llm/agentConfig.js';
-import { titleRequest } from '../core/llm/prompts/helpers/wiring.js';
+import { titleRequest, type TitleContext } from '../core/llm/prompts/helpers/wiring.js';
 import { parseTranscript } from '../core/llm/transcript.js';
 import { resolveMany, resolveCredential, credentialForProvider } from './settings.js';
-import { sessions } from './db/schema.js';
+import { loops, sessions } from './db/schema.js';
 import type { Db } from './db/client.js';
 import { logger, errStr } from './log.js';
 
 const log = logger('session-title');
 
-const TAIL_MESSAGES = 20;
-const TOOL_PART_CAP = 400;
-const TEXT_CAP = 4000;
+const FIRST_USER_MESSAGES = 5;
+const LAST_USER_MESSAGES = 20;
+const USER_MESSAGE_CAP = 1000;
 const MAX_TITLE = 80;
 const TRIES = 3;
 
@@ -38,20 +38,52 @@ const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n)}
 
 const partText = (p: unknown): string => {
   const part = p as { type?: string; text?: string };
-  if (part?.type === 'text' && typeof part.text === 'string') return part.text;
-  // Tool calls and results: enough to see WHAT happened, truncated hard.
-  return clip(JSON.stringify(p), TOOL_PART_CAP);
+  return part?.type === 'text' && typeof part.text === 'string' ? part.text : '';
 };
 
-/** The last ~20 messages as plain "role: text" blocks, tool traffic clipped. */
-export function recentMessages(jsonl: string): string {
+const messageText = (content: unknown): string => {
+  const body = typeof content === 'string'
+    ? content
+    : Array.isArray(content) ? content.map(partText).join('\n') : '';
+  return clip(body.trim().replace(/\s+/g, ' '), USER_MESSAGE_CAP);
+};
+
+/** The title's whole view of a conversation: the user's first 5 messages and,
+ *  once there are more than 25, the last 20, with the skipped middle counted.
+ *  Assistant and tool messages never enter the title call. */
+export function userMessagesContext(userMessages: string[]): TitleContext {
+  const messages = userMessages.map((m) => m.trim().replace(/\s+/g, ' '))
+    .map((m) => clip(m, USER_MESSAGE_CAP)).filter(Boolean);
+  if (!messages.length) return { contextNote: '', userMessages: '' };
+
+  const first = messages.slice(0, FIRST_USER_MESSAGES);
+  const lastStart = messages.length > FIRST_USER_MESSAGES + LAST_USER_MESSAGES
+    ? messages.length - LAST_USER_MESSAGES
+    : first.length;
+  const last = messages.slice(lastStart);
+  const omitted = messages.length - first.length - last.length;
+  const contextNote = omitted
+    ? `This excerpt contains the first ${FIRST_USER_MESSAGES} user messages and the last ${LAST_USER_MESSAGES} user messages. ${omitted} middle messages are omitted.`
+    : 'These are all user messages, oldest to newest.';
+
+  const lines = ['FIRST USER MESSAGES',
+    ...first.map((m, i) => `${i + 1}. ${m}`)];
+  if (omitted) lines.push('', `MIDDLE USER MESSAGES OMITTED: ${omitted}`);
+  if (last.length) lines.push('', 'LAST USER MESSAGES',
+    ...last.map((m, i) => `${lastStart + i + 1}. ${m}`));
+  return { contextNote, userMessages: lines.join('\n') };
+}
+
+/** The user messages in a saved transcript, selected for the title call. */
+export function titleContext(jsonl: string): TitleContext {
   const { messages } = parseTranscript(jsonl);
-  return messages.slice(-TAIL_MESSAGES).map((m) => {
-    const body = typeof m.content === 'string'
-      ? m.content
-      : (m.content as unknown[]).map(partText).join('\n');
-    return `${m.role}: ${clip(body, m.role === 'tool' ? TOOL_PART_CAP : TEXT_CAP)}`;
-  }).join('\n\n');
+  return userMessagesContext(messages.filter((m) => m.role === 'user')
+    .map((m) => messageText(m.content)));
+}
+
+/** The first user message, before a transcript exists. */
+export function firstMessageContext(message: string): TitleContext {
+  return userMessagesContext([message]);
 }
 
 /** Trim, strip one layer of wrapping quotes, collapse whitespace, cap. */
@@ -86,20 +118,28 @@ async function titleConfig(db: Db, encryptionKey: Buffer): Promise<ModelConfig |
   return { provider: c.provider, model: c.model, baseUrl: c.baseUrl ?? undefined, apiKey };
 }
 
-/** Write the session's name from the transcript it just saved. Never throws.
+/** Write the session's name from the selected user messages. Never throws.
  *  `modelFetch` is the test seam (createAgent's own), threaded from AppCtx
  *  like the turn route's. */
-/** `recent` is the conversation as "role: text" blocks — `recentMessages`
- *  off a saved transcript, or the one user line a turn just started with. */
 export async function nameSession(
-  db: Db, encryptionKey: Buffer, sessionId: string, recent: string, modelFetch?: typeof fetch,
+  db: Db, encryptionKey: Buffer, sessionId: string, context: TitleContext, modelFetch?: typeof fetch,
 ): Promise<void> {
   try {
+    // A card's coding session already carries the customer's own objective:
+    // the card title. It stays the session title until a person clears it.
+    const cardSeat = await db.select({ id: loops.id }).from(loops)
+      .where(eq(loops.codingSessionId, sessionId)).limit(1);
+    if (cardSeat.length) {
+      const named = await db.select({ name: sessions.name }).from(sessions)
+        .where(eq(sessions.id, sessionId)).limit(1);
+      if (named[0]?.name !== null) return;
+    }
+
     const config = await titleConfig(db, encryptionKey);
     if (!config) return;
     config.fetch = modelFetch;
-    if (!recent.trim()) return;
-    const { system, prompt } = titleRequest(recent);
+    if (!context.userMessages.trim()) return;
+    const { system, prompt } = titleRequest(context);
     for (let attempt = 1; attempt <= TRIES; attempt++) {
       try {
         const { text } = await generateText({

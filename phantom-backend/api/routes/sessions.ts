@@ -34,7 +34,7 @@ function lockEvent(s: SessionRow, over: Partial<{ locked: boolean; by: string | 
     agent: s.agent ?? null,
     expires_at: locked && expires ? expires.toISOString() : null };
 }
-import { shouldName, nameSession, recentMessages } from '../../sessionTitle.js';
+import { shouldName, nameSession, titleContext, firstMessageContext } from '../../sessionTitle.js';
 import { logger, errStr } from '../../log.js';
 
 const TAG = { tags: ['sessions'] };
@@ -453,7 +453,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       // failure leaves the old name (or null) standing. A manual name
       // (/rename) turns the titler off for the session.
       if (saved && !saved.nameManual && shouldName(saved.name, saved.turnCount))
-        void nameSession(ctx.db, ctx.encryptionKey, s.id, recentMessages(data), ctx.modelFetch);
+        void nameSession(ctx.db, ctx.encryptionKey, s.id, titleContext(data), ctx.modelFetch);
       return ok({ saved: true, bytes: Buffer.byteLength(data), updated_at: stamp.toISOString() });
     });
 
@@ -566,7 +566,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   ctx.sessionEvents!.subscribeAll((sessionId, e) => {
     if (e.event !== 'turn-start' || e.agent !== 'coding') return;
     void turnStarted(ctx.db, sessionId, e.message).then(({ firstMessage }) => {
-      if (firstMessage) return nameSession(ctx.db, ctx.encryptionKey, sessionId, `user: ${e.message}`, ctx.modelFetch);
+      if (firstMessage) return nameSession(ctx.db, ctx.encryptionKey, sessionId, firstMessageContext(e.message), ctx.modelFetch);
     }).catch((err) => log.warn({ session: sessionId, err: errStr(err) }, 'turn-start hook failed'));
   });
 
