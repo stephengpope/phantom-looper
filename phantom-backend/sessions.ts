@@ -199,36 +199,8 @@ export async function destroySession(
   log.info({ session: session.id, state }, 'session destroyed');
 }
 
-/** Age out idle sessions. Deletion fails CLOSED: if the list of live sessions
- *  cannot be read, not knowing what is protected is not the same as nothing
- *  being protected — abort and wait a tick. */
-export async function sweepSessions(db: Db, p: Paths): Promise<void> {
-  let rows: SessionRow[];
-  let workspaceRows: WorkspaceRow[];
-  try {
-    rows = await db.select(sessionColumns).from(sessions).where(eq(sessions.status, 'active'));
-    workspaceRows = await db.select().from(workspaces);
-  } catch (e) {
-    log.warn({ err: errStr(e) }, 'skipping session sweep — could not read state');
-    return;
-  }
-  const byId = new Map(workspaceRows.map((r) => [r.id, r]));
-  const now = Date.now();
-  for (const s of rows) {
-    // Only folder OWNERS hold disk; everything else has nothing to reclaim.
-    if (s.folderId !== s.id) continue;
-    const workspace = byId.get(s.workspaceId);
-    const idleMs = await resolve(db, 'session_idle_destroy_ms', { workspace, session: s });
-    if (now - s.lastUsedAt.getTime() < idleMs) continue;
-    try {
-      await destroySession(db, p, s, { force: false });
-    } catch (e) {
-      // Refused (work present) or failed — the route layer's push-before-destroy
-      // clears the former. Loud, then leave it alone.
-      log.warn({ session: s.id, err: errStr(e) }, 'sweep left session in place');
-    }
-  }
-}
+/** Idle sessions keep their files until the disk needs them back: the
+ *  pressure sweep (disk.ts) is the ONE deleter, and it backs up first. */
 
 // ── The session's OWN rules — one owner, everything else calls in ───────────
 // Locks, the loop's stamps, and the conversation-only special case all live

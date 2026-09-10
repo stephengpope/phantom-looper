@@ -54,6 +54,10 @@ services:
       # Where POST /update drops the requested release tag for the updater
       # sidecar (shared volume; the sidecar polls it).
       UPDATE_TRIGGER_DIR: /trigger
+      # The api's OWN image name. A container cannot name its own image from
+      # inside; handed in here, the disk cleanup can prune its old tags the
+      # same way it prunes the session image's.
+      API_IMAGE: ${PHANTOM_BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend-api}
       # The bot's public address — the Telegram webhook registers at
       # https://<this>/telegram/webhook. Empty = telegram stays off.
       PHANTOM_BACKEND_ADDRESS: ${PHANTOM_BACKEND_ADDRESS:-}

@@ -142,6 +142,10 @@ async function runBash(
       signal?.removeEventListener('abort', onAbort);
       ctx.foreground?.remove(session.id, pidfile);
       deps.containers.commandEnded(session.id);
+      // A long command is the one gap in the idle clock: it touches at start
+      // and runs for hours inside this one call. Touch at end too, so the
+      // disk sweep's idle gates see the activity the session actually had.
+      void touchSession(ctx.db, session.id);
     }
   }
 
@@ -175,6 +179,7 @@ async function runBash(
     } finally {
       out.end();
       deps.containers.commandEnded(session.id);
+      void touchSession(ctx.db, session.id); // a long detached command is activity, seen only here at its end
       // Conditional on still-running: the tasks route's 'killed' and the
       // reconciler's 'exited' are final — a late stream teardown must not
       // overwrite them.

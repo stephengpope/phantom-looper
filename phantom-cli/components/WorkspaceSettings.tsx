@@ -149,7 +149,7 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
   // auto-push switch. Anything the server adds later that is not named
   // here still shows, at the end.
   const ORDER = ['agent_git_credentials', 'auto_push_on_archive',
-    'container_image', 'initial_history_depth', 'spare_clones', 'session_idle_destroy_ms'];
+    'container_image', 'initial_history_depth', 'spare_clones'];
   const overridable = Object.keys(eff).filter((k) => eff[k].overridable);
   const settingKeys = [
     ...ORDER.filter((k) => overridable.includes(k)),

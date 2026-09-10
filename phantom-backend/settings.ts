@@ -26,7 +26,7 @@ export const DEFAULTS = {
   maintenance_interval_ms: 60_000,
   spare_clone_refresh_ms: 3_600_000,        // performance only — the claim fetch is the guarantee
   spare_clone_max_age_ms: 7 * 24 * 3_600_000, // evict and re-stock rather than re-deepen
-  session_idle_destroy_ms: 30 * 24 * 3_600_000,
+  disk_cleanup_percent: 80,
   container_idle_ms: 4320 * 60_000,
   container_memory_mb: null as number | null, // unset => no cap (Docker default)
   container_cpus: null as number | null,      // unset => no cap (Docker default)
@@ -144,10 +144,10 @@ export const credentialForProvider = (p: string): CredentialName =>
  *  here. */
 export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   spare_clones: 'Clones of the repo kept ready and waiting. A new session takes one instead of waiting for a clone. Each one costs disk.',
-  maintenance_interval_ms: 'How often the maintenance loop runs — restocking spare clones, session idle cleanup, stopping idle containers. Every other "after this long" setting is only checked this often.',
+  maintenance_interval_ms: 'How often the maintenance loop runs — restocking spare clones, backing up idle sessions, stopping idle containers, disk cleanup. Every other "after this long" setting is only checked this often.',
   spare_clone_refresh_ms: 'A spare clone older than this is brought up to date in the background. Speed only: a session always fetches when it takes one.',
   spare_clone_max_age_ms: 'A spare clone older than this is thrown away and cloned fresh.',
-  session_idle_destroy_ms: 'How long an unused session keeps its clone on disk. After this it is deleted — the session, its branch and its pushed work all survive, but reopening it has to clone again.',
+  disk_cleanup_percent: 'Reclaim disk when the workspace drive passes this percent full: idle containers and spare clones first, then old images, then the oldest sessions — each one backed up to its branch on GitHub before its files are deleted, so nothing is lost and reopening it just re-clones. 0 disables.',
   container_idle_ms: 'How long a container sits unused before it is stopped. The next tool call starts a fresh one, costing a second or two. This is also when a changed image or token setting takes effect.',
   container_memory_mb: 'Unset (the default) means no cap — the container uses what the host allows. Set it only to protect a shared host; too low and builds and tests get killed part-way through.',
   container_cpus: 'Unset (the default) means no cap. Set it only to keep one session from starving others on a shared host; fewer cores makes work slower, not impossible.',
@@ -219,6 +219,7 @@ export interface SettingMeta {
   choiceLabels?: Readonly<Record<string, string>>;
   /** May be cleared to null ("no timeout", "no endpoint"). */
   nullable?: boolean;
+  max?: number;
   /** Exact shape a string value must take. `choices` covers a closed list;
    *  this covers an open one with a grammar — the history window is any
    *  `<n>.<unit>` git understands, and git ACCEPTS GARBAGE SILENTLY (verified:
@@ -239,7 +240,7 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
   maintenance_interval_ms: ms('maintenance interval', 'sessions', 1000),
   spare_clone_refresh_ms: ms('spare clone refresh', 'sessions', 0),
   spare_clone_max_age_ms: ms('spare clone max age', 'sessions', 0),
-  session_idle_destroy_ms: ms('session idle cleanup', 'sessions', 0),
+  disk_cleanup_percent: { type: 'number', label: 'disk cleanup', group: 'sessions', unit: 'count', min: 0, max: 100 },
   container_idle_ms: ms('container idle timeout', 'containers', 0),
   container_memory_mb: { type: 'number', label: 'container memory limit', group: 'containers', unit: 'mb', min: 128, nullable: true },
   container_cpus: { type: 'number', label: 'container cpu limit', group: 'containers', unit: 'count', min: 1, nullable: true },
@@ -324,6 +325,7 @@ export function validateSetting(key: SettingKey, value: unknown): string | null 
   if (m.type === 'number') {
     if (typeof value !== 'number' || !Number.isFinite(value)) return `${key} must be a number`;
     if (m.min !== undefined && value < m.min) return `${key} must be >= ${m.min}`;
+    if (m.max !== undefined && value > m.max) return `${key} must be <= ${m.max}`;
     return null;
   }
   if (m.type === 'boolean') return typeof value === 'boolean' ? null : `${key} must be true or false`;
@@ -336,11 +338,9 @@ export function validateSetting(key: SettingKey, value: unknown): string | null 
  *  never validated — the caller deletes those. Returns the messages, empty when
  *  fine.
  *
- *  Both write paths call this. They used not to: PATCH /settings validated and
- *  PATCH /workspaces/:id did not, so the same value was refused globally and
- *  stored per workspace — and `session_idle_destroy_ms: -1` there made every
- *  session in the workspace instantly idle, so the next sweep deleted every
- *  clone. A second write path is a second place to forget. */
+ *  both write paths call this. They used not to: PATCH /settings validated and
+ *  PATCH /workspaces/:id did not, so `spare_clones: -5` was refused globally
+ *  and stored per workspace. A second write path is a second place to forget. */
 export function validatePatch(entries: Array<[string, unknown]>): string[] {
   return entries
     .filter(([, v]) => v !== null)
@@ -363,7 +363,6 @@ export function isSettingKey(k: string): k is SettingKey {
  *  accept is refused. */
 const SCOPED: Partial<Record<SettingKey, Array<'workspace' | 'session'>>> = {
   spare_clones: ['workspace'],
-  session_idle_destroy_ms: ['workspace', 'session'],
   initial_history_depth: ['workspace'],
   container_image: ['workspace'],
   container_docker: ['workspace'],

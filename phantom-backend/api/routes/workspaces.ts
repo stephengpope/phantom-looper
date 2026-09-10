@@ -201,11 +201,6 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
         display_name: { type: 'string', description: 'Human label; empty string reverts to the workspace name.' },
         base_branch: { type: 'string' }, branch_prefix: { type: 'string' },
         spare_clones: { type: ['integer', 'null'] },
-        // Same column, two names: `session_idle_destroy_ms` is what the setting
-        // is called everywhere else, so a client rendering the `settings` block
-        // on the GET can PATCH the key it was handed.
-        session_idle_destroy_ms: { type: ['integer', 'null'] },
-        idle_destroy_ms: { type: ['integer', 'null'], description: 'Alias of session_idle_destroy_ms.' },
         initial_history_depth: { type: ['string', 'null'], examples: ['7.days', 'full'] },
         container_image: { type: ['string', 'null'] },
         agent_git_credentials: { type: ['boolean', 'null'],
@@ -225,15 +220,10 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
       const OWN: Record<string, string> = {
         display_name: 'displayName', base_branch: 'baseBranch', branch_prefix: 'branchPrefix' };
 
-      // `idle_destroy_ms` is the same setting under an older name.
-      const asSetting = (k: string) => (k === 'idle_destroy_ms' ? 'session_idle_destroy_ms' : k);
-      const settingEntries = Object.entries(body).filter(([k]) => !(k in OWN))
-        .map(([k, v]) => [asSetting(k), v] as [string, unknown]);
+      const settingEntries = Object.entries(body).filter(([k]) => !(k in OWN));
 
       // The SAME validator PATCH /settings runs. Without it the two doors
-      // disagreed: spare_clones: -5 was refused globally and stored here, and
-      // session_idle_destroy_ms: -1 made every session in the workspace read as
-      // idle, so the next sweep deleted every clone.
+      // disagreed: spare_clones: -5 was refused globally and stored here.
       const invalid = validatePatch(settingEntries);
       if (invalid.length) return reply.code(400).send(err('invalid_setting', invalid.join('; ')));
       const notHere = settingEntries.filter(([k]) => !isWorkspaceOverridable(k as SettingKey)).map(([k]) => k);

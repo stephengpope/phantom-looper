@@ -11,8 +11,8 @@ import { scanSkills, mergeSkills } from '../../../core/skills/skills.js';
 import { systemSkills } from '../../systemSkills.js';
 import { environmentFacts } from '../../environment.js';
 import { lastUserFromJsonl, headerModelFromJsonl, sumUsageFromJsonl, stripUsageFromJsonl } from '../../../core/llm/transcript.js';
-import { resolve, settingsBlock, validateSetting } from '../../settings.js';
-import { putScoped, dropKey, sessionScope, listSecrets, GLOBAL, workspaceScope } from '../../store.js';
+import { resolve, settingsBlock } from '../../settings.js';
+import { sessionScope, listSecrets, GLOBAL, workspaceScope } from '../../store.js';
 import { ok, err, type AppCtx } from '../app.js';
 import { openSession, SessionLockedError } from '../../../core/session.js';
 import { injectFetch } from '../../looper/injectFetch.js';
@@ -722,7 +722,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     summary: 'Session metadata, settings resolved',
     description: 'Status, branch, claim_sha, timestamps, plus `settings`: every setting with its layers ' +
       '(default/global/workspace/session) and the computed value + source — the SESSION is the deepest ' +
-      'scope, so this is the only view where a session override (idle_destroy_ms) shows resolved. ' +
+      'scope, so this is the only view where a session override (auto_push_on_archive) shows resolved. ' +
       'The workspace container is runtime state and has no field here.',
     params: idParam } }, async (req, reply) => {
     const s = await getSession(ctx.db, req.params.id);
@@ -780,7 +780,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         as_of: s.tokensAsOf?.toISOString() ?? null, cached: true });
     });
 
-  app.patch<{ Params: { id: string }; Body: { idle_destroy_ms?: number; name?: string | null; plan_mode?: boolean } }>(
+  app.patch<{ Params: { id: string }; Body: { name?: string | null; plan_mode?: boolean } }>(
     '/sessions/:id', { schema: { ...TAG, summary: 'Per-session overrides',
       description: 'Session values sit at the end of the settings chain: default -> override -> workspace -> session. ' +
         '`name` renames the session by hand — the auto-titler never writes over a manual name; null clears it and ' +
@@ -788,22 +788,10 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         'the coding agent\'s mutating kits with the readonly preset; every session starts false (code mode).',
       params: idParam,
       body: { type: 'object', additionalProperties: false,
-        properties: { idle_destroy_ms: { type: ['integer', 'null'] },
-          name: { type: ['string', 'null'], maxLength: 80 },
+        properties: { name: { type: ['string', 'null'], maxLength: 80 },
           plan_mode: { type: 'boolean' } } } } }, async (req, reply) => {
       const s = await getSession(ctx.db, req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
-      // A session override is a row at session scope, like every other layer —
-      // null clears it, same as everywhere.
-      if (req.body?.idle_destroy_ms !== undefined) {
-        const v = req.body.idle_destroy_ms;
-        if (v === null) await dropKey(ctx.db, 'session_idle_destroy_ms', sessionScope(s.id));
-        else {
-          const bad = validateSetting('session_idle_destroy_ms', v);
-          if (bad) return reply.code(400).send(err('invalid_setting', bad));
-          await putScoped(ctx.db, ctx.encryptionKey, sessionScope(s.id), 'session_idle_destroy_ms', v, false);
-        }
-      }
       if (req.body?.name !== undefined) {
         const name = req.body.name === null ? null : req.body.name.trim();
         if (name === '') return reply.code(400).send(err('invalid_name', 'a name cannot be blank — null clears it'));

@@ -4,7 +4,8 @@ import { makeDb } from './db/client.js';
 import { migrate } from './db/migrate.js';
 import { makePaths } from './pool/paths.js';
 import { bootCleanup, tick } from './pool/pool.js';
-import { sweepSessions, loopOf } from './sessions.js';
+import { loopOf } from './sessions.js';
+import { idleBackupSweep, pressureSweep } from './disk.js';
 import { buildApp, type AppCtx } from './api/app.js';
 import { BoardEvents } from './api/boardEvents.js';
 import { SessionEvents } from './api/sessionEvents.js';
@@ -180,9 +181,10 @@ async function main() {
   (async () => {
     while (!stopped) {
       await tick(db, paths, env.encryptionKey).catch((e) => log.error({ err: errStr(e) }, 'pool tick threw'));
-      await sweepSessions(db, paths).catch((e) => log.error({ err: errStr(e) }, 'session sweep threw'));
+      await idleBackupSweep(db, engine).catch((e) => log.error({ err: errStr(e) }, 'idle backup sweep threw'));
       const idleMs = await resolve(db, 'container_idle_ms').catch(() => 30 * 60_000);
       await containers.reap(Number(idleMs)).catch((e) => log.error({ err: errStr(e) }, 'container reap threw'));
+      await pressureSweep(db, paths, docker, containers, engine).catch((e) => log.error({ err: errStr(e) }, 'pressure sweep threw'));
       const ms = await resolve(db, 'maintenance_interval_ms').catch(() => 60_000);
       await new Promise((r) => setTimeout(r, Number(ms)));
     }

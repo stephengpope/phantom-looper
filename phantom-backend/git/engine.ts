@@ -1,17 +1,19 @@
 // The git engine — the MANUAL operations (/git/push, /git/pull, /git/status).
 // There is no background git any more: no watcher, no tick, no commit timers,
 // no periodic base merge. Work reaches base through auto-push (autoPush.ts);
-// push and pull remain as explicit calls. No lock anywhere: one user drives
-// these, and a true simultaneous git op errors on git's own index.lock.
+// push and pull remain as explicit calls. `backup` is the ONE locked caller:
+// the disk sweeps fire it unattended, so it holds the session lock while a
+// person-driven push/pull relies on git's own index.lock to error a true
+// simultaneous op.
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { sessions, type WorkspaceRow, type SessionRow } from '../db/schema.js';
-import { git, commitAll, pushSession, type PushResult, type PullResult, type GitAuth } from './git.js';
-import { getFolder } from '../sessions.js';
+import { git, commitAll, pushSession, GIT_CLIENT_ID, type PushResult, type PullResult, type GitAuth } from './git.js';
+import { getFolder, acquireLock, releaseLock, renewLock } from '../sessions.js';
 import type { FolderRow } from '../db/schema.js';
 import { resolveAuth } from '../pool/pool.js';
 import { repoDir, type Paths } from '../pool/paths.js';
-import { syncBranch, type ConflictContext, type SyncDeps } from './sync.js';
+import { syncBranch, LOCK_TTL_MS, RENEW_MS, type ConflictContext, type SyncDeps } from './sync.js';
 import { logger, errStr } from '../log.js';
 
 const log = logger('git');
@@ -53,6 +55,26 @@ export class GitEngine {
     const folder = s.folderId ? await getFolder(this.db, s.folderId) : undefined;
     if (!folder) throw new Error(`session ${s.id} has no folder — nothing to push or pull`);
     return folder;
+  }
+
+  /** BACKUP — the branch to origin and nothing else: commitAll + pushSession
+   *  under the session lock, so the disk sweeps can fire it unattended. No
+   *  rebase, no landing — main is never touched, and a later auto-push
+   *  squashes these wip commits into its one real commit (the message is
+   *  written from the whole diff, so backup messages never reach base).
+   *  'busy' = the session is being driven; nothing was written. */
+  async backup(s: SessionRow, workspace: WorkspaceRow): Promise<PushResult | 'busy'> {
+    if (!(await acquireLock(this.db, s, GIT_CLIENT_ID, LOCK_TTL_MS, 'backup'))) return 'busy';
+    const heartbeat = setInterval(() => {
+      void renewLock(this.db, s.id, GIT_CLIENT_ID, LOCK_TTL_MS)
+        .catch((e) => log.warn({ session: s.id, err: errStr(e) }, 'backup lock renewal failed'));
+    }, RENEW_MS);
+    try {
+      return await this.push(s, workspace);
+    } finally {
+      clearInterval(heartbeat);
+      await releaseLock(this.db, s.id, GIT_CLIENT_ID);
+    }
   }
 
   /** commit -> push the branch this session is on. That is the whole of it:
