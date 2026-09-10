@@ -2,7 +2,7 @@
 // from one place — and so an unknown /command is an error the user sees rather
 // than a message the model has to make sense of.
 //
-// A command may take the rest of the line as its argument (`/assistant hello`). Only
+// A command may take the rest of the line as its argument (`/say hello`). Only
 // the first word is the command; while there is an argument the live menu
 // stays out of the way, so enter sends the line rather than the highlighted row.
 export interface Command { name: string; summary: string; args?: string }
@@ -30,12 +30,12 @@ export const COMMANDS: Command[] = [
   { name: 'settings', summary: "the server's settings, for everyone" },
   { name: 'keys', summary: 'the credentials the server holds' },
   { name: 'secrets', summary: "the coding agent's secrets — tokens it can read and use" },
-  { name: 'voice', summary: 'the Assistant: model, voice, devices, wake word' },
+  { name: 'assistant', summary: 'the Assistant: model, voice, devices, wake word' },
   { name: 'mic', summary: 'the Assistant: stop/start listening' },
   { name: 'speaker', summary: 'the Assistant: stop/start speaking' },
   { name: 'headphones', summary: 'the Assistant: headphones mode on/off' },
   { name: 'wake', summary: 'the Assistant: wake word on/off' },
-  { name: 'assistant', summary: 'type something to the Assistant', args: 'text' },
+  { name: 'say', summary: 'type something to the Assistant', args: 'text' },
   { name: 'rename', summary: 'name this session (blank goes back to auto-titles)', args: 'name' },
   { name: 'pin', summary: 'pin this session to the top of /resume (again unpins)' },
   // Late on purpose: the live menu shows the first MENU_ROWS commands and the
@@ -55,7 +55,7 @@ function split(input: string): { head: string; args: string; hasArgs: boolean } 
   const m = /^(\S*)(\s+([\s\S]*))?$/.exec(body);
   const head = (m?.[1] ?? '').toLowerCase();
   const args = (m?.[3] ?? '').trim();
-  // "/assistant " (a space after a complete name) already means "the argument comes
+  // "/say " (a space after a complete name) already means "the argument comes
   // next": the menu steps aside so typing is not fighting a highlighted row.
   return { head, args, hasArgs: m?.[2] !== undefined && head.length > 0 };
 }

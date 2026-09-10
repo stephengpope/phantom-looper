@@ -335,7 +335,7 @@ class LiveWakeStrategy(WakePhraseUserTurnStartStrategy):
     """pipecat's wake-phrase gate, switchable and re-wordable while running.
     Always first in the start strategies; when off it just lets every frame
     through (CONTINUE) as if always awake, so turning the wake word on or off
-    in /voice is a message, not an engine restart."""
+    in /assistant is a message, not an engine restart."""
 
     def __init__(self, *, phrases: list[str], enabled: bool, timeout: float = 8.0) -> None:
         super().__init__(phrases=phrases, timeout=timeout)
@@ -696,7 +696,7 @@ async def main() -> None:
     # flip is a message, not a restart — same deal as the wake gate.
     vad_start = VADUserTurnStartStrategy(enable_interruptions=cfg.headphones)
     start = [
-        wake,   # always present; off = pass-through — so /voice can flip it live
+        wake,   # always present; off = pass-through — so /assistant can flip it live
         vad_start,
         TranscriptionUserTurnStartStrategy(use_interim=False),
     ]

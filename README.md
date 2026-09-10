@@ -108,8 +108,8 @@ The full product: voice, web, and the looper on autopilot. Row names are the one
 | add | where | you get |
 |---|---|---|
 | `deepgram key` | `/keys` | the Assistant's ears and mouth |
-| `assistant` on | `/voice` | the voice pane opens with the app; run the board and your sessions by talking |
-| `assistant model` | `/voice` | a small fast model, so spoken replies come back quick |
+| `assistant` on | `/assistant` | the voice pane opens with the app; run the board and your sessions by talking |
+| `assistant model` | `/assistant` | a small fast model, so spoken replies come back quick |
 | `firecrawl key` | `/keys` | the agents can search and read the web |
 | `auto plan` + `auto build` on | `/settings` | cards in plan and in progress drive themselves |
 | `auto-push on archive` on | `/settings` | archiving a done card merges and pushes it |

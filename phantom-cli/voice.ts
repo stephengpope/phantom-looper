@@ -363,7 +363,7 @@ export class VoiceClient {
   private turns = new Map<string, Turn>();
   private turnSeq = 0;
   /** Modal hook: while an approval prompt is on screen the App claims the
-   *  next words — spoken or typed via /assistant, both land in turn(). The exact word
+   *  next words — spoken or typed via /say, both land in turn(). The exact word
    *  "accept" or "decline" answers the prompt; anything else is swallowed
    *  (the prompt on screen says the two words). Return true = consumed: the
    *  text still shows in the pane as yours, but the brain does not run. */
@@ -488,7 +488,7 @@ export class VoiceClient {
           if (gen !== this.gen) return;
           this.proc = null;
           if (this.snap.status !== 'off') {
-            this.set({ status: 'error', detail: `voice engine stopped${code != null ? ` (exit ${code})` : detail ? ` (${detail})` : ''} — /voice to restart` });
+            this.set({ status: 'error', detail: `voice engine stopped${code != null ? ` (exit ${code})` : detail ? ` (${detail})` : ''} — /assistant to restart` });
           }
         },
         (text) => { if (gen === this.gen) this.set({ detail: text }); },
@@ -500,7 +500,7 @@ export class VoiceClient {
     }
   }
 
-  /** Re-scan the mic/speaker lists — every time /voice opens, so a device
+  /** Re-scan the mic/speaker lists — every time /assistant opens, so a device
    *  plugged in after launch shows up. A running sidecar re-enumerates on
    *  request (it answers with a `devices` line); otherwise `devices.py` runs. */
   async refreshDevices(list: () => Promise<{ mics: string[]; speakers: string[] }> = listDevices): Promise<void> {

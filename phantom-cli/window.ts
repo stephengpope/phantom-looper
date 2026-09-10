@@ -1671,10 +1671,10 @@ export class WindowStore {
   /** The one voice-switch toggle — /mic /speaker /headphones /wake, ctrl+r and
    *  ctrl+l, and a click on either of the pane's switch rows. Every switch IS
    *  a setting: the toggle writes it and goes through settingChanged, the same
-   *  path the /voice screen takes, which is what keeps the screen and the
+   *  path the /assistant screen takes, which is what keeps the screen and the
    *  toggle from diverging. The state holds across engine and TUI restarts. */
   toggleDevice = (which: 'mic' | 'speaker' | 'headphones' | 'wake'): void => {
-    if (!this.voice.running) { this.note('voice is off — /voice to turn it on'); return; }
+    if (!this.voice.running) { this.note('voice is off — /assistant to turn it on'); return; }
     const key = SWITCH_KEY[which];
     void (async () => {
       // Read the switch, flip it, write it, then let settingChanged read
@@ -1802,7 +1802,7 @@ export class WindowStore {
           : 'restart the server (the api — everything is offline for a few seconds)? [c] to confirm');
         return;
       }
-      case 'voice':
+      case 'assistant':
         this.setScreen('voice');
         // The mic and speaker pickers want device names; with voice off, ask.
         void this.voice.refreshDevices();
@@ -1811,9 +1811,9 @@ export class WindowStore {
       case 'speaker': this.toggleDevice('speaker'); return;
       case 'headphones': this.toggleDevice('headphones'); return;
       case 'wake': this.toggleDevice('wake'); return;
-      case 'assistant':
-        if (!args) { this.note('/assistant <what to tell the Assistant>'); return; }
-        if (!this.voice.say(args)) this.note('voice is off — /voice to turn it on');
+      case 'say':
+        if (!args) { this.note('/say <what to tell the Assistant>'); return; }
+        if (!this.voice.say(args)) this.note('voice is off — /assistant to turn it on');
         else if (this.sidebar === false) { this.sidebar = null; this.notify(); }
         return;
       case 'pop': {
@@ -1911,7 +1911,7 @@ export class WindowStore {
     if (msg.startsWith('/')) {
       const m = matches(msg);
       if (m.length) { await this.runCommand(m[Math.min(highlighted, m.length - 1)].name); return; }
-      // No menu: either an argument follows the command (`/assistant hello`)
+      // No menu: either an argument follows the command (`/say hello`)
       // or nothing matched. parse() tells the two apart.
       const { command, args, error } = parse(msg);
       if (command) { await this.runCommand(command.name, args); return; }
