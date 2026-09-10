@@ -152,8 +152,13 @@ export class SessionFeed {
         return;
       }
       case 'session': {
-        // Session state: agent seat, plan mode, work state. Published on
-        // change AND on connect, so reconnects refill even if a save was missed.
+        // Session state: agent seat, plan mode, work state, name. Published
+        // on change AND on connect, so reconnects refill even if a save was
+        // missed. The name is how the status bar learns the auto-title the
+        // moment the server writes it — no switch away and back.
+        if (rec.name !== undefined) {
+          this.store.setName(this.sessionId, rec.name === null ? null : String(rec.name));
+        }
         if (rec.agent !== undefined) {
           const a = String(rec.agent ?? '');
           const entry = this.store.get(this.sessionId);

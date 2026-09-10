@@ -118,12 +118,13 @@ async function titleConfig(db: Db, encryptionKey: Buffer): Promise<ModelConfig |
   return { provider: c.provider, model: c.model, baseUrl: c.baseUrl ?? undefined, apiKey };
 }
 
-/** Write the session's name from the selected user messages. Never throws.
- *  `modelFetch` is the test seam (createAgent's own), threaded from AppCtx
- *  like the turn route's. */
+/** Write the session's name from the selected user messages; returns the
+ *  title written so the caller can put it on the session feed, null when
+ *  nothing was written. Never throws. `modelFetch` is the test seam
+ *  (createAgent's own), threaded from AppCtx like the turn route's. */
 export async function nameSession(
   db: Db, encryptionKey: Buffer, sessionId: string, context: TitleContext, modelFetch?: typeof fetch,
-): Promise<void> {
+): Promise<string | null> {
   try {
     // A card's coding session already carries the customer's own objective:
     // the card title. It stays the session title until a person clears it.
@@ -132,13 +133,13 @@ export async function nameSession(
     if (cardSeat.length) {
       const named = await db.select({ name: sessions.name }).from(sessions)
         .where(eq(sessions.id, sessionId)).limit(1);
-      if (named[0]?.name !== null) return;
+      if (named[0]?.name !== null) return null;
     }
 
     const config = await titleConfig(db, encryptionKey);
-    if (!config) return;
+    if (!config) return null;
     config.fetch = modelFetch;
-    if (!context.userMessages.trim()) return;
+    if (!context.userMessages.trim()) return null;
     const { system, prompt } = titleRequest(context);
     for (let attempt = 1; attempt <= TRIES; attempt++) {
       try {
@@ -153,7 +154,7 @@ export async function nameSession(
           // titler never writes over a manual name.
           await db.update(sessions).set({ name: title })
             .where(and(eq(sessions.id, sessionId), eq(sessions.nameManual, false)));
-          return;
+          return title;
         }
       } catch (e) {
         log.warn({ session: sessionId, attempt, err: errStr(e) }, 'session title attempt failed');
@@ -165,4 +166,5 @@ export async function nameSession(
   } catch (e) {
     log.warn({ session: sessionId, err: errStr(e) }, 'session naming skipped');
   }
+  return null;
 }

@@ -474,7 +474,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       // failure leaves the old name (or null) standing. A manual name
       // (/rename) turns the titler off for the session.
       if (saved && !saved.nameManual && shouldName(saved.name, saved.turnCount))
-        void nameSession(ctx.db, ctx.encryptionKey, s.id, titleContext(data), ctx.modelFetch);
+        void nameSession(ctx.db, ctx.encryptionKey, s.id, titleContext(data), ctx.modelFetch)
+          .then((name) => { if (name) ctx.sessionEvents?.publish(s.id, '', { event: 'session', name }); });
       return ok({ saved: true, bytes: Buffer.byteLength(data), updated_at: stamp.toISOString() });
     });
 
@@ -499,7 +500,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         're-read it), {event:"sync",op,step,detail?} for every step of a git sync on the session (a push or ' +
         'pull, whoever kicked it off — a commit-message retry included), ' +
         '{event:"lock",locked,by,label,agent,expires_at} first thing on connect and on every take / ' +
-        'renew / release, {event:"session",agent?,planMode?,work?,transcript_updated_at?} on state changes ' +
+        'renew / release, {event:"session",agent?,planMode?,work?,name?,transcript_updated_at?} on state changes ' +
         'and as a snapshot on every connect, {event:"heartbeat"} every 15 s. Every turn streams here whoever runs it — the server ' +
         'publishes its own, a cli window relays the one it runs through POST /sessions/:id/events. ' +
         'Events published under the reader\'s own x-phantom-looper-client are not sent back to it.',
@@ -532,7 +533,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         // lock: clear any previous remote holder rather than suppressing it.
         write(lockEvent(s, s.lockedBy === client ? { locked: false } : {}));
         write({ event: 'session', agent: s.agent ?? null, planMode: s.planMode, work: s.work ?? null,
-          transcript_updated_at: s.transcriptUpdatedAt?.toISOString() ?? null });
+          name: s.name ?? null, transcript_updated_at: s.transcriptUpdatedAt?.toISOString() ?? null });
         for (const e of pending) write(e);
         pending = null;
         await new Promise<void>((resolve) => reply.raw.on('close', resolve));
@@ -586,8 +587,13 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   // to say what is being built. Best effort, off the request path.
   ctx.sessionEvents!.subscribeAll((sessionId, e) => {
     if (e.event !== 'turn-start' || e.agent !== 'coding') return;
-    void turnStarted(ctx.db, sessionId, e.message).then(({ firstMessage }) => {
-      if (firstMessage) return nameSession(ctx.db, ctx.encryptionKey, sessionId, firstMessageContext(e.message), ctx.modelFetch);
+    void turnStarted(ctx.db, sessionId, e.message).then(async ({ firstMessage }) => {
+      if (!firstMessage) return;
+      const name = await nameSession(ctx.db, ctx.encryptionKey, sessionId, firstMessageContext(e.message), ctx.modelFetch);
+      // The server authored this name — published with no client id, so the
+      // window running the turn hears it too (the feed drops a client's own
+      // events, and this name belongs to no client).
+      if (name) ctx.sessionEvents?.publish(sessionId, '', { event: 'session', name });
     }).catch((err) => log.warn({ session: sessionId, err: errStr(err) }, 'turn-start hook failed'));
   });
 
@@ -880,6 +886,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         await ctx.db.update(sessions)
           .set({ name, nameManual: name !== null })
           .where(eq(sessions.id, s.id));
+        ctx.sessionEvents?.publish(s.id, clientOf(req), { event: 'session', name });
       }
       if (req.body?.plan_mode !== undefined) {
         await ctx.db.update(sessions)
