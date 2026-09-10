@@ -25,6 +25,8 @@ export interface SessionsArgs {
   action: 'list' | 'switch' | 'read' | 'get_active' | 'close';
   id?: string;
   limit?: number; offset?: number; tools?: boolean;
+  /** true = the raw transcript (JSONL), not the rendered view. */
+  raw?: boolean;
 }
 
 /** The `session_*` family: list every coding session, put one on screen,
@@ -92,6 +94,8 @@ export function sessionsTool(handler: (args: SessionsArgs) => Promise<unknown>):
         limit: z.number().int().optional().describe('messages to return (default 50)'),
         offset: z.number().int().optional().describe('skip this many of the most recent messages (default 0) — raise it to page backwards'),
         tools: z.boolean().optional().describe('true = full tool output; default one line each'),
+        raw: z.boolean().optional().describe('true = the raw transcript (JSONL, one event per line) instead of the ' +
+          'rendered view — for the exact record of a tool call, an error, or what the agent was told'),
       }),
       execute: async (args) => handler({ action: 'read', ...args }),
     }),
@@ -104,6 +108,39 @@ export function sessionsTool(handler: (args: SessionsArgs) => Promise<unknown>):
       execute: async ({ id }) => handler({ action: 'close', id }),
     }),
   };
+}
+
+/** `docker_logs` — the server containers' logs, narrowed server-side. Typed
+ *  args, never a shell: this runs where the server's credentials live, and a
+ *  shell there could read them. */
+export interface DockerLogsArgs { service?: string; tail?: number; since?: string; grep?: string }
+
+export function dockerLogsTool(handler: (args: DockerLogsArgs) => Promise<unknown>): Record<string, Tool> {
+  return {
+    docker_logs: tool({
+      description: 'Read a server container\'s logs — for "why did the server …" questions: crashes, ' +
+        'restarts, errors, failed deploys, webhook failures. Services: api (the server itself — start ' +
+        'here), postgres, caddy (https/webhook entry), updater (upgrades), autoheal (restarts unhealthy ' +
+        'containers). Returns the newest lines, capped at 64 KB — narrow with tail/since/grep rather ' +
+        'than reading everything. grep filters WITHIN the tail, so raise tail for a wider search. ' +
+        'For server STATUS (cpu, memory, disk) tell the user /cpu shows it; restarting needs /restart.',
+      inputSchema: z.object({
+        service: z.enum(['api', 'postgres', 'caddy', 'updater', 'autoheal']).optional()
+          .describe('which container (default api)'),
+        tail: z.number().int().optional().describe('last N lines (default 100, max 1000)'),
+        since: z.string().optional().describe('only logs newer than this — "30m", "2h"'),
+        grep: z.string().optional().describe('keep only lines matching this (regex, case-insensitive)'),
+      }),
+      execute: async (args) => handler(args),
+    }),
+  };
+}
+
+/** The raw transcript for `read` with raw:true — the JSONL itself, capped at
+ *  the TAIL (the newest events are the ones being asked about). */
+export function renderRaw(jsonl: string, maxChars = 100_000): string {
+  if (jsonl.length <= maxChars) return jsonl;
+  return `(truncated — the last ${maxChars} of ${jsonl.length} characters)\n` + jsonl.slice(-maxChars);
 }
 
 /** Render a slice of a session's conversation for `read` — the compact view

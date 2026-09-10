@@ -1032,6 +1032,9 @@ export class WindowStore {
    *  the server's unpushed-work refusal already upgraded it to a
    *  force-confirm. The picker's [t]/[c] rule, in the prompt. */
   private promptTrashArmed: { id: string; force: boolean } | null = null;
+  /** The armed /restart: the service the prompt's [c] will restart (null =
+   *  the api). Same [c] rule as /trash. */
+  private promptRestartArmed: { service: string | null } | null = null;
   private morePickerInFlight = false;
 
   tasks: TasksView | null = null;
@@ -1772,6 +1775,22 @@ export class WindowStore {
       case 'model': this.setScreen('model'); return;
       case 'presets': this.setScreen('presets'); return;
       case 'server': this.setScreen('server'); return;
+      case 'cpu': {
+        try {
+          const r = await this.api('GET', '/system/status') as { text?: string; warnings?: string };
+          this.note([r.text || '(empty status)', r.warnings ? `warnings: ${r.warnings}` : ''].filter(Boolean).join('\n'));
+        } catch (e) { this.note(`could not read the server status: ${(e as Error).message}`); }
+        return;
+      }
+      case 'restart': {
+        // Arm only — the prompt's [c] fires (the /trash rule: a restart cuts
+        // every in-flight turn, so it is never one keystroke away).
+        this.promptRestartArmed = { service: args || null };
+        this.note(args
+          ? `restart ${args}? [c] to confirm`
+          : 'restart the server (the api — everything is offline for a few seconds)? [c] to confirm');
+        return;
+      }
       case 'voice':
         this.setScreen('voice');
         // The mic and speaker pickers want device names; with voice off, ask.
@@ -1847,6 +1866,22 @@ export class WindowStore {
         return;
       }
       this.note('trash cancelled');
+    }
+    if (this.promptRestartArmed) {
+      const armed = this.promptRestartArmed;
+      this.promptRestartArmed = null;
+      if (msg === 'c') {
+        accept();
+        this.setSplash(false);
+        try {
+          await this.api('POST', '/system/restart', armed.service ? { service: armed.service } : {});
+          this.note(armed.service
+            ? `restarting ${armed.service}`
+            : 'restarting the api — back in a few seconds (the window reconnects on its own)');
+        } catch (e) { this.note(`could not restart: ${(e as Error).message}`); }
+        return;
+      }
+      this.note('restart cancelled');
     }
     const session = this.sessions.active();
     // Locked elsewhere = read-only here: refuse BEFORE the box clears. Slash

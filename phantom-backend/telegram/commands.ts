@@ -34,6 +34,8 @@ const COMMON: Cmd[] = [
   { command: 'models', description: 'List or switch models' },
   { command: 'presets', description: 'List or apply model presets' },
   { command: 'update', description: 'Check for updates' },
+  { command: 'cpu', description: 'Server status — cpu, memory, disk' },
+  { command: 'restart', description: 'Restart the server (or one service)' },
   { command: 'help', description: 'List commands' },
 ];
 
@@ -341,6 +343,36 @@ export async function handleCommand(
       return;
     }
 
+    case 'cpu': {
+      const j = await (await engine.call('/system/status')).json().catch(() => null);
+      if (!j?.ok) { await reply(`⚠️ Couldn't read the server status: ${j?.error?.message ?? 'no answer from the server'}`); return; }
+      // Telegram's message ceiling is 4096; the status script is ~30 lines,
+      // so the clip is a guard, never the expected path.
+      const text = String(j.data.text ?? '');
+      await reply(`🖥 Server status\n${text.length > 3800 ? `${text.slice(0, 3800)}…` : text}`);
+      return;
+    }
+
+    case 'restart': {
+      // Accept/decline first — restarting the api cuts every in-flight turn.
+      // The gate's bubble records the verdict, so a decline needs no reply.
+      const service = arg;
+      const accepted = await engine.askApproval(client, dm, {
+        label: 'restart',
+        subject: service
+          ? `service: ${service}`
+          : 'the api — the whole server is offline for a few seconds (in-flight replies are cut)',
+      });
+      if (!accepted) return;
+      const j = await (await engine.call('/system/restart',
+        { method: 'POST', body: service ? { service } : {} })).json().catch(() => null);
+      if (!j?.ok) { await reply(`⚠️ Couldn't restart: ${j?.error?.message ?? 'no answer from the server'}`); return; }
+      await reply(service
+        ? `🔄 Restarting ${service}.`
+        : '🔄 Restarting the api — back in a few seconds. Messages sent now queue until it is.');
+      return;
+    }
+
     default:
       await reply(`⚠️ I don't know /${cmd}.\n\nℹ️ ${HELP}`);
   }
@@ -470,5 +502,10 @@ const HELP = [
   '/status — Show what\'s running',
   '/stop — Stop the running task',
   '/update — Check for updates',
+  '',
+  'Server',
+  '/cpu — Server status (cpu, load, memory, disk)',
+  '/restart — Restart the server (asks first); /restart postgres restarts one service',
+  '',
   '/help — List commands',
 ].join('\n');

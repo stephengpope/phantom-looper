@@ -116,6 +116,15 @@ The full product: voice, web, and the looper on autopilot. Row names are the one
 | `loop token budget` | `/settings` | a spend cap per card run |
 | `boot into last workspace` on | `/settings` | skip the picker, start where you left off |
 
+### The server, from the app or Telegram
+
+| Command | What it does |
+|---|---|
+| `/cpu` | server status — cpu, load, memory used/free, disk used/free |
+| `/restart` | restart the server (asks first); `/restart postgres` restarts one service |
+
+The assistant can also read the server's container logs itself: ask "why did the server restart last night?" and it goes and looks — api, postgres, caddy, updater or autoheal logs, narrowed by lines, time window or a search term. Reading is all it can do; it cannot change, restart or delete anything.
+
 ---
 
 ## Command line

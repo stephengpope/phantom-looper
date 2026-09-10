@@ -38,7 +38,7 @@ import { agentModelConfig } from '../../core/llm/agentConfig.js';
 import { assistantInstructions } from '../../core/llm/agents/assistant.js';
 import { loadTranscriptFile, newestTranscriptFile, Transcript, transcriptStamp } from '../../core/llm/transcript.js';
 import { createCompactor, DEFAULT_HISTORY_LIMIT, type Compactor } from '../../core/llm/compaction.js';
-import { Approvals } from './approvals.js';
+import { Approvals, type Ask } from './approvals.js';
 import { UpgradeChecker } from './upgrade.js';
 import * as store from './store.js';
 import { menuFor, handleCommand } from './commands.js';
@@ -724,6 +724,12 @@ export class TelegramEngine {
   get db() { return this.deps.db; }
   get key() { return this.deps.encryptionKey; }
   assistantReset() { this.assistantHistory = []; }
+
+  /** The approval gate, for slash commands that need a confirm (today:
+   *  /restart). Same gate gated tools use — one question per chat. */
+  askApproval(client: TelegramClient, dm: number, ask: Ask): Promise<boolean> {
+    return this.approvals.request(client, dm, ask);
+  }
 
   /** A JSON call to this server's own surface, as the telegram client — the
    *  one door commands.ts reaches the routes through. */

@@ -7,9 +7,9 @@
 // screen when it was built.
 import type { Tool } from 'ai';
 import { sessionsTool, assistantKanbanTool, workspaceCreateTool, gitAutoPushTool,
-  gitAutoPullTool, screenModeTools, kebabName, renderRead,
-  type KanbanArgs, type SessionsArgs, type WorkspaceCreateArgs,
-  type GitAutoPushArgs, type GitAutoPullArgs } from './voice.js';
+  gitAutoPullTool, screenModeTools, kebabName, renderRead, renderRaw, dockerLogsTool,
+  type SessionsArgs, type KanbanArgs, type WorkspaceCreateArgs,
+  type GitAutoPushArgs, type GitAutoPullArgs, type DockerLogsArgs } from './voice.js';
 import { isRunning, whoDrives, ago, type SessionInfo, type WorkspaceInfo } from './components/Launcher.js';
 import { kanbanOps, resolveColumn } from './kanban.js';
 import type { WindowStore } from './window.js';
@@ -191,6 +191,16 @@ export function sessionsHandler(win: WindowStore, api: Api, clientId: string,
         return { error: `session ${id || '(none on screen)'} is not open in this window — ` +
           'session_switch opens it, then read it' };
       }
+      // Raw asks for the server's record, not this window's memory: the JSONL
+      // transcript is the exact event log (the window holds no copy of it).
+      if (args.raw) {
+        try {
+          const j = await api('GET', `/sessions/${e.id}/transcript`) as { data?: string };
+          return { text: renderRaw(String(j?.data ?? '')) };
+        } catch (err) {
+          return { error: `could not read the raw transcript: ${(err as Error).message}` };
+        }
+      }
       return renderRead(e.id, e.history, args);
     }
     return { error: `unknown action ${String(args.action)}` };
@@ -302,6 +312,25 @@ export async function buildAssistantKit(win: WindowStore, deps: {
     ...gitAutoPushTool(git.push),
     ...gitAutoPullTool(git.pull),
     ...screenModeTools(win.screenOps()),
+    ...dockerLogsTool(dockerLogsHandler(deps.api)),
     ...(sessionId ? await deps.newAssistantTools(sessionId).catch(() => ({} as Record<string, Tool>)) : {}),
+  };
+}
+
+/** `docker_logs`: the args straight through to POST /system/logs — the route
+ *  does the narrowing; the result is just shaped for the model. */
+function dockerLogsHandler(api: Api) {
+  return async (args: DockerLogsArgs): Promise<unknown> => {
+    let d: { service: string; text: string; truncated?: boolean };
+    try {
+      d = await api('POST', '/system/logs', args) as typeof d;
+    } catch (e) {
+      return { error: (e as Error).message };
+    }
+    return {
+      service: d.service,
+      text: d.text || '(no matching log lines)',
+      ...(d.truncated ? { truncated: 'output hit the 64 KB cap — narrow with tail/since/grep and retry' } : {}),
+    };
   };
 }

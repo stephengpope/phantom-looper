@@ -11,7 +11,11 @@
 // observable result (GET /health's version changes).
 import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs/promises';
+import { statfsSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { PassThrough, Readable } from 'node:stream';
+import type Docker from 'dockerode';
 import type { AppCtx } from '../app.js';
 import { err, ok } from '../app.js';
 import { logger, errStr } from '../../log.js';
@@ -19,6 +23,39 @@ import { catalog, modelsFor } from '../../models.js';
 import { PROVIDERS, isProvider } from '../../../core/llm/createAgent.js';
 
 const log = logger('system');
+
+/** A log answer is a page, not a dump: lines asked for, bytes returned. */
+const LOG_MAX_BYTES = 64 * 1024;
+const LOG_MAX_TAIL = 1000;
+
+/** The stack's containers a service name may mean — the label the compose
+ *  file sets, never a container name (compose generates those). */
+const LOG_SERVICES = ['api', 'postgres', 'caddy', 'updater', 'autoheal'] as const;
+
+/** The one container for a compose service, or null when absent or stopped
+ *  (listContainers is running-only). */
+async function serviceContainer(docker: Docker, service: string): Promise<Docker.Container | null> {
+  const list = await docker.listContainers({ filters: { label: [`com.docker.compose.service=${service}`] } });
+  return list.length ? docker.getContainer(list[0].Id) : null;
+}
+
+/** The container's whole log stream as one string (stdout + stderr, demuxed
+ *  — over the socket the two arrive in one multiplexed stream). */
+async function readLogs(docker: Docker, container: Docker.Container,
+  opts: { tail: number; since?: string }): Promise<string> {
+  // follow:false answers with the whole multiplexed payload as ONE buffer;
+  // re-stream it so the modem can split stdout/stderr frames off it.
+  const raw = await container.logs({
+    stdout: true, stderr: true, follow: false,
+    tail: opts.tail, ...(opts.since ? { since: opts.since } : {}),
+  });
+  const out: Buffer[] = [];
+  const sink = new PassThrough();
+  sink.on('data', (d: Buffer) => out.push(d));
+  docker.modem.demuxStream(Readable.from(raw), sink, sink);
+  await new Promise<void>((resolveP) => sink.on('finish', () => resolveP()));
+  return Buffer.concat(out).toString('utf8');
+}
 
 export const RELEASE_TAG = /^v\d+\.\d+\.\d+$/;
 
@@ -85,5 +122,151 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
     }
     log.info({ tag }, 'update requested');
     return ok({ tag, requested: true });
+  });
+
+  app.post<{ Body: { service?: string; tail?: number; since?: string; grep?: string } }>('/system/logs', {
+    schema: {
+      tags: ['meta'],
+      summary: 'Read a server container\'s logs',
+      description: '`docker logs` for one of the stack\'s containers (api, postgres, caddy, updater, ' +
+        'autoheal — default api), narrowed server-side: `tail` lines (default 100, max 1000), `since` ' +
+        '(a duration like "30m" / "2h"), `grep` (a regex; filters WITHIN the tail, so raise tail for a ' +
+        'wider search). Answers as `text`, newest last, capped at 64 KB (`truncated`). This backs the ' +
+        'assistant\'s docker_logs tool.',
+      body: {
+        type: 'object', additionalProperties: false,
+        properties: {
+          service: { type: 'string', enum: [...LOG_SERVICES], description: 'compose service (default api)' },
+          tail: { type: 'integer', minimum: 1, maximum: LOG_MAX_TAIL, description: 'last N lines (default 100)' },
+          since: { type: 'string', maxLength: 64, pattern: '^[0-9smhd]+$', description: 'duration, e.g. "30m"' },
+          grep: { type: 'string', maxLength: 500, description: 'regex — keep only matching lines' },
+        },
+      },
+    },
+  }, async (req, reply) => {
+    const docker = ctx.fs?.docker;
+    if (!docker) return reply.code(503).send(err('logs_unavailable', 'this server has no docker access'));
+    const { service = 'api', tail = 100, since, grep } = req.body ?? {};
+    const container = await serviceContainer(docker, service).catch(() => null);
+    if (!container) {
+      return reply.code(404).send(err('no_such_service', `no running container for service "${service}"`));
+    }
+    let text: string;
+    try {
+      text = await readLogs(docker, container, { tail, since });
+    } catch (e) {
+      log.error({ err: errStr(e), service }, 'log read failed');
+      return reply.code(503).send(err('logs_unavailable', `could not read ${service} logs: ${errStr(e)}`));
+    }
+    if (grep) {
+      let keep: (line: string) => boolean;
+      try {
+        const re = new RegExp(grep, 'i');
+        keep = (line) => re.test(line);
+      } catch {
+        const needle = grep.toLowerCase();  // not a regex — a plain substring
+        keep = (line) => line.toLowerCase().includes(needle);
+      }
+      text = text.split('\n').filter(keep).join('\n');
+    }
+    // The newest lines are the answer: cut from the FRONT when over the cap.
+    const truncated = text.length > LOG_MAX_BYTES;
+    if (truncated) text = text.slice(-LOG_MAX_BYTES);
+    return ok({ service, text, ...(truncated ? { truncated: true } : {}) });
+  });
+
+  app.get('/system/status', {
+    schema: {
+      tags: ['meta'],
+      summary: 'Server status — cpu, load, memory, disk',
+      description: 'Read straight from the kernel (no docker, no mounts): in a container /proc shows the ' +
+        'HOST\'s cpu, load and memory, and the workspaces volume sits on the host\'s root filesystem, so ' +
+        'statfs on it is the disk docker\'s data lives on. Answers as preformatted `text` — render it ' +
+        'as-is (the cli\'s /cpu and telegram\'s /cpu both do).',
+    },
+  }, async () => {
+    const gib = (bytes: number) => `${(bytes / 2 ** 30).toFixed(1)}G`;
+    // Two samples of the per-cpu tick counters, 250 ms apart — the same math
+    // top does, no subprocess.
+    const times = () => os.cpus().map((c) => ({ ...c.times }));
+    const a = times();
+    await new Promise((r) => setTimeout(r, 250));
+    const b = times();
+    let idle = 0, all = 0;
+    for (let i = 0; i < a.length; i++) {
+      const totalA = a[i].user + a[i].nice + a[i].sys + a[i].idle + a[i].irq;
+      const totalB = b[i].user + b[i].nice + b[i].sys + b[i].idle + b[i].irq;
+      idle += b[i].idle - a[i].idle;
+      all += totalB - totalA;
+    }
+    const cpuPct = all > 0 ? Math.round((1 - idle / all) * 100) : 0;
+    const load = os.loadavg().map((n) => n.toFixed(2)).join(' ');
+    const totalMem = os.totalmem(), freeMem = os.freemem();
+    const disk = statfsSync(ctx.paths.root);
+    const diskTotal = disk.blocks * disk.bsize, diskAvail = disk.bavail * disk.bsize;
+    const text = [
+      '== cpu ==',
+      `${cpuPct}% busy · ${a.length} cores`,
+      '',
+      '== load ==',
+      `${load}  (1, 5, 15 min)`,
+      '',
+      '== memory ==',
+      `${gib(totalMem - freeMem)} used · ${gib(freeMem)} free · ${gib(totalMem)} total`,
+      '',
+      '== disk (root filesystem) ==',
+      `${gib(diskTotal - diskAvail)} used · ${gib(diskAvail)} free · ${gib(diskTotal)} total`,
+    ].join('\n');
+    return ok({ text });
+  });
+
+  app.post<{ Body: { service?: string } }>('/system/restart', {
+    schema: {
+      tags: ['meta'],
+      summary: 'Restart a server container (default: the api)',
+      description: 'Restarts one compose service\'s container — `api` (the default), `postgres`, `caddy`, ' +
+        '`updater`, `autoheal`, `observer`. Goes through the api\'s existing docker proxy, which already ' +
+        'permits container restarts; nothing new is exposed. Restarting `api` replies FIRST and restarts ' +
+        'half a second later, so the answer always lands — clients should expect the connection to drop ' +
+        'right after it.',
+      body: {
+        type: 'object', additionalProperties: false,
+        properties: { service: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]*$',
+          description: 'compose service name (default api)' } },
+      },
+    },
+  }, async (req, reply) => {
+    const docker = ctx.fs?.docker;
+    if (!docker) return reply.code(503).send(err('restart_unavailable', 'this server has no docker access'));
+    const service = req.body?.service ?? 'api';
+    const all = await docker.listContainers().catch((e) => {
+      log.error({ err: errStr(e) }, 'container list failed');
+      return null;
+    });
+    if (!all) return reply.code(503).send(err('restart_unavailable', 'docker did not answer'));
+    const target = all.find((c) => (c.Labels?.['com.docker.compose.service'] ?? '') === service);
+    if (!target) {
+      const services = [...new Set(all.map((c) => c.Labels?.['com.docker.compose.service']).filter(Boolean))].sort();
+      return reply.code(404).send(err('no_such_service',
+        `no running container for service "${service}" — running services: ${services.join(', ') || '(none)'}`));
+    }
+    const container = docker.getContainer(target.Id);
+    if (service === 'api') {
+      // Reply first: the restart kills this very process, so the answer must
+      // be out the door before docker is asked.
+      setTimeout(() => {
+        container.restart().catch((e) => log.warn({ err: errStr(e) }, 'api self-restart failed'));
+      }, 500).unref();
+      log.info('api restart requested');
+      return ok({ restarting: service, note: 'the api is restarting — back in a few seconds' });
+    }
+    try {
+      await container.restart();
+    } catch (e) {
+      log.error({ err: errStr(e), service }, 'restart failed');
+      return reply.code(503).send(err('restart_unavailable', `could not restart ${service}: ${errStr(e)}`));
+    }
+    log.info({ service }, 'service restarted');
+    return ok({ restarting: service });
   });
 }

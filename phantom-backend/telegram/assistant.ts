@@ -20,8 +20,10 @@
 import type { ModelMessage, Tool } from 'ai';
 import { assistantAgent } from '../../core/llm/agents/assistant.js';
 import { agentModelConfig, agentMaxSteps } from '../../core/llm/agentConfig.js';
-import { assistantKanbanTool, sessionsTool, workspaceCreateTool, gitAutoPushTool, gitAutoPullTool, renderRead, kebabName,
-  type KanbanArgs, type SessionsArgs, type WorkspaceCreateArgs, type GitAutoPushArgs, type GitAutoPullArgs } from '../../core/llm/tools/tui.js';
+import { assistantKanbanTool, sessionsTool, workspaceCreateTool, gitAutoPushTool, gitAutoPullTool, renderRead, renderRaw, kebabName,
+  dockerLogsTool,
+  type KanbanArgs, type SessionsArgs, type WorkspaceCreateArgs, type GitAutoPushArgs, type GitAutoPullArgs,
+  type DockerLogsArgs } from '../../core/llm/tools/tui.js';
 import { autoPushSession, autoPullSession } from '../../core/llm/tools/git.js';
 import { phantomTools } from '../../core/llm/tools/workspace.js';
 import { webTools } from '../../core/llm/tools/web.js';
@@ -153,6 +155,7 @@ function sessionsHandler(
         if (!id) return { error: 'no session — pass an id' };
         const j = await api(deps, `/sessions/${id}/transcript`);
         if (!j.ok) return { error: j.error?.message };
+        if (args.raw) return { text: renderRaw(String(j.data.data ?? '')) };
         const parsed = parseTranscript(String(j.data.data ?? ''));
         return { text: renderRead(id, parsed.messages, { limit: args.limit, offset: args.offset, tools: args.tools }) };
       }
@@ -229,9 +232,24 @@ function gitAutoPullHandler(deps: AssistantDeps, activeSession: () => string | n
   };
 }
 
+/** `docker_logs`, headless: the args straight through to POST /system/logs.
+ *  The route does the narrowing; here the result is just shaped for the model. */
+function dockerLogsHandler(deps: AssistantDeps) {
+  return async (args: DockerLogsArgs): Promise<unknown> => {
+    const j = await api(deps, '/system/logs', { method: 'POST', body: args });
+    if (!j.ok) return { error: j.error?.message };
+    const d = j.data as { service: string; text: string; truncated?: boolean };
+    return {
+      service: d.service,
+      text: d.text || '(no matching log lines)',
+      ...(d.truncated ? { truncated: 'output hit the 64 KB cap — narrow with tail/since/grep and retry' } : {}),
+    };
+  };
+}
+
 /** The Assistant's whole kit for a telegram turn. File tools + web bind to the
  *  active session when there is one (read-only); board + sessions + the gated
- *  workspace_create_repo + git_auto_push + git_auto_pull always. */
+ *  workspace_create_repo + git_auto_push + git_auto_pull + docker_logs always. */
 export async function assistantKit(deps: AssistantDeps, ctx: AssistantCtx): Promise<Record<string, Tool>> {
   const { workspaceId, activeSession, onSwitch } = ctx;
   const kit: Record<string, Tool> = {
@@ -240,6 +258,7 @@ export async function assistantKit(deps: AssistantDeps, ctx: AssistantCtx): Prom
     ...workspaceCreateTool(workspaceCreateHandler(deps, ctx)),
     ...gitAutoPushTool(gitAutoPushHandler(deps, activeSession)),
     ...gitAutoPullTool(gitAutoPullHandler(deps, activeSession)),
+    ...dockerLogsTool(dockerLogsHandler(deps)),
   };
   const session = activeSession();
   if (session) {

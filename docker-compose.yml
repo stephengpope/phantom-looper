@@ -91,6 +91,10 @@ services:
       IMAGES: 1
       POST: 1
       INFO: 1
+      # Log READS are allowed too (docker logs of the stack's containers) —
+      # the assistant's docker_logs tool and nothing else uses them. The
+      # write surface is unchanged.
+      LOGS: 1
       VOLUMES: 0
       NETWORKS: 0
       SERVICES: 0
