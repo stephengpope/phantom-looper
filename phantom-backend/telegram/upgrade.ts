@@ -9,6 +9,7 @@
 
 import crypto from 'node:crypto';
 import type { TelegramClient } from './client.js';
+import { titled } from './client.js';
 import { checkLatest, isBehind, bare } from '../../core/version.js';
 import { logger, errStr } from '../log.js';
 
@@ -140,9 +141,9 @@ export class UpgradeChecker {
     const v = bare(tag);
     const current = bare(this.deps.version);
     const client = existingClient ?? this.deps.makeClient(token, dm);
-    const m = await client.sendTitled(dm, `⬆️ ${v} is available — you're on ${current}.`,
+    const m = await client.sendMarkdown(dm, titled(`⬆️ ${v} is available — you're on ${current}.`,
       'Updating restarts the server — any running turns are stopped and loop cards are blocked.\n\n' +
-      'Update?', {
+      'Update?'), {
       replyMarkup: { inline_keyboard: [[
         { text: '✅ Approve', callback_data: `${PREFIX}:${id}:y` },
         { text: '✖️ Deny', callback_data: `${PREFIX}:${id}:n` },

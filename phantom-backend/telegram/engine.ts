@@ -27,10 +27,9 @@ import type { BackdoorQueue } from '../api/backdoor.js';
 import type { BoardEvents, BoardEvent } from '../api/boardEvents.js';
 import { autoBuildAlert } from './alerts.js';
 import { logger, errStr } from '../log.js';
-import { TelegramClient, ALLOWED_UPDATES } from './client.js';
+import { TelegramClient, ALLOWED_UPDATES, titled } from './client.js';
 import { makeTelegramSink, type DeliverConfig } from './sink.js';
 import { sendMessageTool } from './sendMessageTool.js';
-import { toTelegram, splitFormatted } from './entities.js';
 import { transcribeVoice, speakVoice, SPEAK_MAX_CHARS, type Transcription } from './deepgram.js';
 import { writeAttachment, composeMessage, MAX_INBOUND_BYTES, type StoredAttachment } from './attachments.js';
 import { runAssistantTurn, type AssistantDeps } from './assistant.js';
@@ -411,7 +410,7 @@ export class TelegramEngine {
         await this.assistantTurn(client, dm, input, values);
       }
     } catch (e) {
-      await client.sendTitled(dm, '⚠️ Something went wrong', (e as Error).message).catch(() => {});
+      await client.sendMarkdown(dm, titled('⚠️ Something went wrong', (e as Error).message)).catch(() => {});
       throw e;
     }
   }
@@ -783,9 +782,7 @@ export class TelegramEngine {
     if (!say) return { ok: false, error: 'empty message' };
     const mode = String(values.telegram_reply_mode ?? 'text');
     try {
-      if (mode !== 'voice') {
-        for (const c of splitFormatted(toTelegram(say))) await client.sendMessage(dm, c.text, { entities: c.entities });
-      }
+      if (mode !== 'voice') await client.sendMarkdown(dm, say);
       if (mode === 'voice' || mode === 'both') await this.maybeSpeak(client, dm, values, say);
       return { ok: true };
     } catch (e) {

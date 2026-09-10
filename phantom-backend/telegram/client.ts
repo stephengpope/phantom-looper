@@ -8,6 +8,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { Entity } from './entities.js';
+import { toTelegram, splitFormatted } from './entities.js';
 import { connectFetch } from './connect.js';
 
 /** Telegram's ceiling for anything a bot uploads. Checked before the read, so
@@ -114,10 +115,22 @@ export class TelegramClient {
     });
   }
 
-  /** A header + message bubble — sendMessage of titled(). */
-  sendTitled(chatId: number, title: string, body: string,
-    opts: { replyToMessageId?: number; entities?: Entity[]; replyMarkup?: unknown } = {}) {
-    return this.sendMessage(chatId, titled(title, body), opts);
+  /** Markdown out, the normal way: formatted to entities and chunked under
+   *  the 4096 ceiling, each chunk a sendMessage. A keyboard rides the LAST
+   *  chunk — the question it answers ends there. Compose the text first
+   *  (titled() for a header + message bubble); this never re-shapes it. */
+  async sendMarkdown(chatId: number, md: string,
+    opts: { replyToMessageId?: number; replyMarkup?: unknown } = {}) {
+    const chunks = splitFormatted(toTelegram(md));
+    let last;
+    for (let i = 0; i < chunks.length; i++) {
+      last = await this.sendMessage(chatId, chunks[i].text, {
+        replyToMessageId: opts.replyToMessageId,
+        entities: chunks[i].entities,
+        replyMarkup: i === chunks.length - 1 ? opts.replyMarkup : undefined,
+      });
+    }
+    return last;
   }
 
   /** `replyMarkup` is a Telegram reply_markup object (an inline keyboard for

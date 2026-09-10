@@ -17,6 +17,7 @@
 
 import type { TelegramClient } from './client.js';
 import { titled } from './client.js';
+import { toTelegram } from './entities.js';
 import type { TelegramEngine } from './engine.js';
 import type { TelegramMode } from './store.js';
 import { PROVIDERS } from '../../core/llm/createAgent.js';
@@ -83,7 +84,7 @@ export async function handleCommand(
   switch (cmd) {
     case 'start':
     case 'help':
-      await client.sendTitled(dm, 'ℹ️ phantom-looper', HELP);
+      await client.sendMarkdown(dm, titled('ℹ️ phantom-looper', HELP));
       return;
 
     case 'assistant':
@@ -127,8 +128,8 @@ export async function handleCommand(
       sessionList.set(dm, j.data.sessions.map((s: any) => s.id));
       const rows = j.data.sessions.map((s: any, i: number) =>
         `${i + 1}. ${s.starred ? '⭐ ' : ''}${s.name ?? 'untitled'}${s.id === acc.activeSessionId ? ' (active)' : ''}${s.locked ? ' (busy)' : ''}`);
-      await client.sendTitled(dm, '📋 Sessions:', [...rows, '',
-        'Pick one with /sessions <number>; /code <number> talks to its coding agent'].join('\n'));
+      await client.sendMarkdown(dm, titled('📋 Sessions:', [...rows, '',
+        'Pick one with /sessions <number>; /code <number> talks to its coding agent'].join('\n')));
       return;
     }
 
@@ -151,7 +152,7 @@ export async function handleCommand(
       }
       workspaceList.set(dm, list.map((w) => w.id));
       const rows = list.map((w, i) => `${i + 1}. ${w.name}${w.id === acc.activeWorkspaceId ? ' (active)' : ''}`);
-      await client.sendTitled(dm, '📋 Workspaces:', [...rows, '', 'Switch with /workspaces <number>'].join('\n'));
+      await client.sendMarkdown(dm, titled('📋 Workspaces:', [...rows, '', 'Switch with /workspaces <number>'].join('\n')));
       return;
     }
 
@@ -190,19 +191,19 @@ export async function handleCommand(
         const tasks = t?.ok ? (t.data.tasks ?? []).length : 0;
         const where = [s?.branch ? `Branch: ${s.branch}` : null, s?.card != null ? `card #${s.card}` : null]
           .filter(Boolean).join(' · ');
-        await client.sendTitled(dm, '🤖 Coding agent',
+        await client.sendMarkdown(dm, titled('🤖 Coding agent',
           [`Active session: ${s?.name ?? 'untitled'}`,
           where || null,
           `Running: ${s?.locked ? `yes${s.lockedLabel ? ` (${s.lockedLabel})` : ''}` : 'no'}`,
           `Last request: ${s?.lastUserMessage ? oneLine(s.lastUserMessage) : '(none yet)'}`,
           `Plan mode: ${s?.planMode ? 'on' : 'off'}`,
-          `Background tasks: ${tasks}`].filter((v) => v != null).join('\n'));
+          `Background tasks: ${tasks}`].filter((v) => v != null).join('\n')));
       } else {
         const w = acc.activeWorkspaceId ? await workspaceRow(engine, acc.activeWorkspaceId) : null;
         const s = acc.activeSessionId ? await sessionRow(engine, acc.activeSessionId) : null;
-        await client.sendTitled(dm, '🏠 Assistant',
+        await client.sendMarkdown(dm, titled('🏠 Assistant',
           [`Active workspace: ${w?.name ?? acc.activeWorkspaceId ?? '(none — /workspaces)'}`,
-          `Active session: ${s ? `${s.name ?? 'untitled'} (/code to talk to it)` : '(none — /sessions or /new)'}`].join('\n'));
+          `Active session: ${s ? `${s.name ?? 'untitled'} (/code to talk to it)` : '(none — /sessions or /new)'}`].join('\n')));
       }
       return;
     }
@@ -243,12 +244,12 @@ export async function handleCommand(
         const j = await (await engine.call('/settings', { method: 'PATCH', body: { provider: p, model: null } })).json();
         if (!j.ok) { await reply(`⚠️ Couldn't switch provider: ${j.error?.message}`); return; }
         const model = latestModel(p);
-        await client.sendTitled(dm,
+        await client.sendMarkdown(dm, titled(
           `✅ Provider: ${p}${model ? ` — model: ${model} (the catalog's newest)` : ''}`,
           [...(p === 'openai-compatible'
             ? ['⚠️ openai-compatible also needs an endpoint and a model id — set both in the cli under /model.', ''] : []),
           'See the top models with /models; switch with /models <number>.',
-          ].join('\n'));
+          ].join('\n')));
         return;
       }
       providerList.set(dm, [...PROVIDERS]);
@@ -259,8 +260,8 @@ export async function handleCommand(
             : ' — no catalog (set model + endpoint in the cli)';
         return `${i + 1}. ${p}${note}${p === current ? ' (current)' : ''}`;
       });
-      await client.sendTitled(dm, '🧠 Providers:', [...rows, '',
-        'Switch with /providers <number> — the model follows the catalog\'s newest shown above'].join('\n'));
+      await client.sendMarkdown(dm, titled('🧠 Providers:', [...rows, '',
+        'Switch with /providers <number> — the model follows the catalog\'s newest shown above'].join('\n')));
       return;
     }
 
@@ -284,9 +285,9 @@ export async function handleCommand(
       }
       modelList.set(dm, models.map((m) => m.id));
       const rows = models.map((m, i) => `${i + 1}. ${m.id}${m.id === model ? ' (current)' : ''}`);
-      await client.sendTitled(dm, `🧠 Models — ${provider} (current: ${model ?? 'none'}):`,
+      await client.sendMarkdown(dm, titled(`🧠 Models — ${provider} (current: ${model ?? 'none'}):`,
         [...rows, '',
-        'Switch with /models <number>; any other id can be set in the cli under /model'].join('\n'));
+        'Switch with /models <number>; any other id can be set in the cli under /model'].join('\n')));
       return;
     }
 
@@ -304,14 +305,14 @@ export async function handleCommand(
         const applied = await (await engine.call('/settings', { method: 'PATCH', body: p.values })).json();
         if (!applied.ok) { await reply(`⚠️ Couldn't apply "${p.name}": ${applied.error?.message}`); return; }
         const { provider, model } = await resolveMany(engine.db, ['provider', 'model']);
-        await client.sendTitled(dm,
+        await client.sendMarkdown(dm, titled(
           `✅ Applied preset "${p.name}" — ${provider ?? 'no provider'}${model ? ` / ${model}` : ''}.`,
-          'See the top models with /models; switch with /models <number>.');
+          'See the top models with /models; switch with /models <number>.'));
         return;
       }
       presetList.set(dm, list.map((p) => p.id));
       const rows = list.map((p, i) => `${i + 1}. ${p.name}${presetSummary(p.values)}`);
-      await client.sendTitled(dm, '🧰 Presets:', [...rows, '', 'Apply one with /presets <number>'].join('\n'));
+      await client.sendMarkdown(dm, titled('🧰 Presets:', [...rows, '', 'Apply one with /presets <number>'].join('\n')));
       return;
     }
 
@@ -345,10 +346,8 @@ export async function handleCommand(
     case 'cpu': {
       const j = await (await engine.call('/system/status')).json().catch(() => null);
       if (!j?.ok) { await reply(`⚠️ Couldn't read the server status: ${j?.error?.message ?? 'no answer from the server'}`); return; }
-      // Telegram's message ceiling is 4096; the status script is ~30 lines,
-      // so the clip is a guard, never the expected path.
       const text = String(j.data.text ?? '');
-      await client.sendTitled(dm, '🖥 Server status', text.length > 3800 ? `${text.slice(0, 3800)}…` : text);
+      await client.sendMarkdown(dm, titled('🖥 Server status', text));
       return;
     }
 
@@ -373,7 +372,7 @@ export async function handleCommand(
     }
 
     default:
-      await client.sendTitled(dm, `⚠️ I don't know /${cmd}`, titled('ℹ️ phantom-looper', HELP));
+      await client.sendMarkdown(dm, titled(`⚠️ I don't know /${cmd}`, titled('ℹ️ phantom-looper', HELP)));
   }
 }
 
@@ -391,9 +390,9 @@ async function stepBubble(client: TelegramClient, dm: number, title: string) {
   let pending: Promise<boolean> = Promise.resolve(true);
   const edit = () => {
     if (id == null) return Promise.resolve(false);
-    const text = titled(title, steps.join('\n'));
+    const fmt = toTelegram(titled(title, steps.join('\n')));
     pending = pending.then(
-      () => client.editMessageText(dm, id, text).then(() => true, () => false),
+      () => client.editMessageText(dm, id, fmt.text, fmt.entities).then(() => true, () => false),
     );
     return pending;
   };
