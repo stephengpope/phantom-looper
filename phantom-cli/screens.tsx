@@ -163,7 +163,7 @@ export function MenuScreen({ w, api, configPath, clientId }: {
           onNearEnd={w.screen === 'resume' ? () => { void w.morePicker(); } : undefined}
           onEdit={(id) => w.editWorkspace(id)}
           onDuplicate={(id) => { void w.startDuplicate(id); }}
-          onStar={(id) => { void w.starFromPicker(id); }}
+          onPin={(id) => { void w.pinFromPicker(id); }}
           onClose={w.closeFromPicker}
           onTrash={(id) => { void w.trashSession(id); }}
           onCancel={close}

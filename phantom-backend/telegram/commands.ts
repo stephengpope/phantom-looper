@@ -29,7 +29,7 @@ interface Cmd { command: string; description: string }
 const COMMON: Cmd[] = [
   { command: 'sessions', description: 'List or switch sessions' },
   { command: 'new', description: 'Start a new session' },
-  { command: 'star', description: 'Pin the active session to the top of the list' },
+  { command: 'pin', description: 'Pin active session to the top' },
   { command: 'stop', description: 'Stop the running task' },
   { command: 'status', description: "Show what's running" },
   { command: 'providers', description: 'List or switch LLM providers' },
@@ -127,7 +127,7 @@ export async function handleCommand(
       if (!j.ok || !j.data.sessions.length) { await reply('ℹ️ No sessions yet. /new starts one.'); return; }
       sessionList.set(dm, j.data.sessions.map((s: any) => s.id));
       const rows = j.data.sessions.map((s: any, i: number) =>
-        `${i + 1}. ${s.starred ? '⭐ ' : ''}${s.name ?? 'untitled'}${s.id === acc.activeSessionId ? ' (active)' : ''}${s.locked ? ' (busy)' : ''}`);
+        `${i + 1}. ${s.pinned ? '📌 ' : ''}${s.name ?? 'untitled'}${s.id === acc.activeSessionId ? ' (active)' : ''}${s.locked ? ' (busy)' : ''}`);
       await client.sendMarkdown(dm, titled('📋 Sessions:', [...rows, '',
         'Pick one with /sessions <number>; /code <number> talks to its coding agent'].join('\n')));
       return;
@@ -170,17 +170,17 @@ export async function handleCommand(
       return;
     }
 
-    case 'star': {
+    case 'pin': {
       // The pointer's flag, whoever is answering — like /sessions, not a
       // coding-agent act. Toggles; the row says which way.
       if (!acc.activeSessionId) { await reply('⚠️ Pick a session first — /sessions or /new.'); return; }
       const s = await sessionRow(engine, acc.activeSessionId);
       if (!s) { await reply('⚠️ That session no longer exists — /sessions for a fresh list.'); return; }
-      const next = !s.starred;
-      await engine.call(`/sessions/${acc.activeSessionId}`, { method: 'PATCH', body: { starred: next } });
+      const next = !s.pinned;
+      await engine.call(`/sessions/${acc.activeSessionId}`, { method: 'PATCH', body: { pinned: next } });
       await reply(next
-        ? `⭐ Starred ${s.name ?? 'untitled'} — pinned to the top of the session list.`
-        : `☆ Unstarred ${s.name ?? 'untitled'}.`);
+        ? `📌 Pinned ${s.name ?? 'untitled'} — it sits at the top of the session list.`
+        : `Unpinned ${s.name ?? 'untitled'}.`);
       return;
     }
 
@@ -453,7 +453,7 @@ function oneLine(text: string, max = 120): string {
 }
 
 async function sessionRow(engine: TelegramEngine, id: string): Promise<{
-  name?: string | null; planMode?: boolean; starred?: boolean; branch?: string | null; card?: number | null;
+  name?: string | null; planMode?: boolean; pinned?: boolean; branch?: string | null; card?: number | null;
   locked?: boolean; lockedLabel?: string | null; lastUserMessage?: string | null;
 } | null> {
   const j = await (await engine.call(`/sessions/${id}`)).json();
@@ -472,7 +472,7 @@ const HELP = [
   '/sessions — List sessions',
   '/sessions 2 — Make session 2 active',
   '/new — Start a new session',
-  '/star — Pin the active session to the top of the list',
+  '/pin — Pin active session to the top',
   '',
   'Who answers',
   '/code — Talk to the coding agent',

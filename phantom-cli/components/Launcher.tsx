@@ -50,8 +50,8 @@ export interface SessionInfo {
   tokensOutput?: number | null;
   tokensCacheRead?: number | null;
   tokensCacheWrite?: number | null;
-  /** /star: pinned to the top of the list, ahead of rows in motion. */
-  starred?: boolean;
+  /** /pin: pinned to the top of the list, ahead of rows in motion. */
+  pinned?: boolean;
 }
 
 /** The `work` column: the git facts in the operator's terms, each with its
@@ -138,21 +138,21 @@ export function sessionChoices(
   // open session nothing was typed into yet would be missing from the
   // server's list, and /resume is the switcher — hiding an open session
   // would strand it. App merges those in (`sessions` already carries them).
-  // STARRED rows pin first (/star, [s] on a row) — the one order the server
+  // PINNED rows sit first (/pin, [p] on a row) — the one order the server
   // already returns; this sort only has to keep it while adding what the
   // server cannot know: rows in MOTION (a turn here, a hold elsewhere — the
   // looper included) sort next; the rest by last use. A held row's own
   // lastUsedAt can be old, which made the list read as unordered.
   const inMotion = (s: SessionInfo) => isRunning(s, { busy, clientId });
   sessions = [...sessions].sort((a, b) =>
-    Number(b.starred === true) - Number(a.starred === true)
+    Number(b.pinned === true) - Number(a.pinned === true)
     || Number(inMotion(b)) - Number(inMotion(a))
     || Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt));
   if (!sessions.length) {
     return showSupervised
       ? [{ value: null, label: 'no sessions yet', detail: 'start one with /workspace', heading: true }]
       : [{ value: null, label: 'no sessions yet',
-          detail: 'start one with /workspace · [v] shows the looper\'s card sessions', heading: true }];
+          detail: 'start one with /workspace · [s] shows the looper\'s card sessions', heading: true }];
   }
   // The workspace column is its card prefix ("PHA") — the resolved value the
   // server sends on the list; a server without it falls back to the label. A
@@ -202,10 +202,10 @@ export function sessionChoices(
     const cardCol = s.card != null ? String(s.card) : '·';
     const statusCol = s.cardStatus ?? '·';
     // A blank fact is a dot — never the branch, which is just the session id
-    // wearing a prefix and says nothing to a person. A starred row carries
+    // wearing a prefix and says nothing to a person. A pinned row carries
     // its mark on the name — the column a pinned row is pinned FOR. An
-    // unnamed one is the star alone, never "★ ·".
-    const nameCol = s.starred === true ? `★ ${s.name ?? ''}`.trimEnd() : s.name ?? '·';
+    // unnamed one is the pin alone, never "📌 ·".
+    const nameCol = s.pinned === true ? `📌 ${s.name ?? ''}`.trimEnd() : s.name ?? '·';
     // A session open here that nothing was typed into carries no activity
     // time (App's merge fills epoch 0 so it sorts last) — the dot, not "2957w".
     const when = dead ? 'ended' : Date.parse(s.lastUsedAt) > 0 ? ago(s.lastUsedAt, now) : '·';
@@ -249,12 +249,12 @@ export function sessionChoices(
   ], rows);
   // One blank line between the pinned block and the rest — a heading row, so
   // the cursor skips it and the total counts sessions only. Only when both
-  // groups exist: a list that is all-starred or all-unstarred reads as one.
+  // groups exist: a list that is all-pinned or all-unpinned reads as one.
   // Inserted AFTER tableChoices so the column geometry never sees it (the
-  // header sits at index 0, the starred block right under it).
-  const starredCount = sessions.filter((s) => s.starred === true).length;
-  if (starredCount > 0 && starredCount < rows.length) {
-    table.splice(1 + starredCount, 0, { value: null, label: '', heading: true });
+  // header sits at index 0, the pinned block right under it).
+  const pinnedCount = sessions.filter((s) => s.pinned === true).length;
+  if (pinnedCount > 0 && pinnedCount < rows.length) {
+    table.splice(1 + pinnedCount, 0, { value: null, label: '', heading: true });
   }
   return table;
 }
@@ -278,7 +278,7 @@ export function workspaceChoices(workspaces: WorkspaceInfo[], canAdd = true): Ch
 /** One list, two uses. `mode` decides which — sessions for /resume, workspaces
  *  for a fresh start. Deliberately not both at once: launching means "start
  *  work", reopening is a different intent with its own command. */
-export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clientId, onPick, onEdit, onDuplicate, onStar, onClose, onTrash, onCancel, onNearEnd, showSupervised, onToggleSupervised, now, title, footer, notice, canAdd }: {
+export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clientId, onPick, onEdit, onDuplicate, onPin, onClose, onTrash, onCancel, onNearEnd, showSupervised, onToggleSupervised, now, title, footer, notice, canAdd }: {
   mode: 'sessions' | 'workspaces';
   workspaces: WorkspaceInfo[];
   sessions?: SessionInfo[];
@@ -286,7 +286,7 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
    *  filters in force, plus what this window merged in) — `sessions` is the
    *  pages loaded so far. Omitted = the loaded rows are the list. */
   total?: number;
-  /** The looper's supervisor seats are hidden unless this is on; [v] asks
+  /** The looper's supervisor seats are hidden unless this is on; [s] asks
    *  the owner to flip it (the list is re-read with the switch). */
   showSupervised?: boolean;
   onToggleSupervised?: () => void;
@@ -303,8 +303,8 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
   onEdit?: (workspaceId: string) => void;
   /** `d` on a session row: duplicate it into a new session — the way past a lock. */
   onDuplicate?: (sessionId: string) => void;
-  /** `s` on a session row: star it — pinned to the top of the list (or back). */
-  onStar?: (sessionId: string) => void;
+  /** `p` on a session row: pin it to the top of the list (or take it down). */
+  onPin?: (sessionId: string) => void;
   /** `x` on a session row: close it — out of local memory (the tab ring, the
    *  open-session list, the dot). The session stays on the server. */
   onClose?: (sessionId: string) => void;
@@ -326,8 +326,8 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
   // and not the "add a workspace…" row that sits with them.
   const canEdit = mode === 'workspaces' && !!onEdit;
   const canCopy = mode === 'sessions' && !!onDuplicate;
-  const canStar = mode === 'sessions' && !!onStar;
-  // The looper's card sessions are hidden by default; [v] toggles them in.
+  const canPin = mode === 'sessions' && !!onPin;
+  // The looper's card sessions are hidden by default; [s] toggles them in.
   const choices = mode === 'sessions'
     ? sessionChoices(workspaces, sessions ?? [], now, busy, loaded, clientId, showSupervised ?? false)
     : workspaceChoices(workspaces, canAdd ?? true);
@@ -341,8 +341,8 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
           { key: 'enter', does: 'open' },
           { key: 'd', does: 'duplicate', when: canCopy }, { key: 'x', does: 'close', when: canCopy },
           { key: 't', does: 'trash', when: canCopy },
-          { key: 's', does: 'star', when: canStar },
-          { key: 'v', does: 'supervised', when: canCopy }, { key: 'esc', does: 'close' },
+          { key: 'p', does: 'pin', when: canPin },
+          { key: 's', does: 'supervised', when: canCopy }, { key: 'esc', does: 'close' },
         ])}>
       <SelectList
         choices={choices}
@@ -356,10 +356,10 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
           // The same act as the "add a workspace…" row, one key from any row.
           else if (ch === 'n' && (canAdd ?? true)) onPick({ kind: 'add' });
         } : mode === 'sessions' ? (ch, v) => {
-          if (ch === 'v') { onToggleSupervised?.(); return; }
+          if (ch === 's') { onToggleSupervised?.(); return; }
           if (v?.kind !== 'resume') return;
           if (ch === 'd') onDuplicate?.(v.sessionId);
-          else if (ch === 's') onStar?.(v.sessionId);
+          else if (ch === 'p') onPin?.(v.sessionId);
           else if (ch === 'x') onClose?.(v.sessionId);
           else if (ch === 't' || ch === 'c') onTrash?.(v.sessionId);
         } : undefined}

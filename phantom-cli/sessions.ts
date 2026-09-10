@@ -52,10 +52,10 @@ export interface LoadedSession {
    *  preset while this is on. The server row (sessions.plan_mode) is the
    *  record; this mirrors it, seeded at open, flipped by setPlanMode. */
   planMode: boolean;
-  /** /star: pinned to the top of /resume. The server row (sessions.starred)
+  /** /pin: pinned to the top of /resume. The server row (sessions.pinned)
    *  is the record; this mirrors it so the picker's open-here extras carry
-   *  the pin too — seeded at open, flipped by setStarred. */
-  starred: boolean;
+   *  the pin too — seeded at open, flipped by setPinned. */
+  pinned: boolean;
   /** The model this session is pinned to (core agentConfig): its row's
    *  provider/model/endpoint, or its transcript header's for a session older
    *  than those columns. Null only while nothing has been said — the one case
@@ -146,8 +146,8 @@ export interface NewSession {
   readonly?: boolean;
   /** The server row's plan_mode — the tools passed above must already match. */
   planMode?: boolean;
-  /** The server row's starred (LoadedSession.starred). */
-  starred?: boolean;
+  /** The server row's pinned (LoadedSession.pinned). */
+  pinned?: boolean;
   syncStamp?: string | null;
   /** The model this session is pinned to (LoadedSession.pin). Absent only for
    *  a session with nothing said yet. */
@@ -227,7 +227,7 @@ export class SessionStore {
       done: [...(s.done ?? [])],
       readonly: s.readonly ?? false,
       planMode: s.planMode ?? false,
-      starred: s.starred ?? false,
+      pinned: s.pinned ?? false,
       syncStamp: s.syncStamp ?? null,
       pin: s.pin ?? null,
       live: [], turn: [],
@@ -451,12 +451,12 @@ export class SessionStore {
    *  exit until it settles: the window closes and the shell hangs. */
   abortAll(): void { for (const e of this.entries) e.abort?.abort(); }
 
-  /** /star flipped: the mirror follows the server row (the PATCH landed
+  /** /pin flipped: the mirror follows the server row (the PATCH landed
    *  before this is called), so an open-here extra in /resume pins too. */
-  setStarred(id: string, on: boolean): void {
+  setPinned(id: string, on: boolean): void {
     const e = this.get(id);
-    if (!e || e.starred === on) return;
-    e.starred = on;
+    if (!e || e.pinned === on) return;
+    e.pinned = on;
     this.notify();
   }
 

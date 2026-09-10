@@ -177,11 +177,11 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   // launcher, above all. No filters: a deployment has a handful of sessions,
   // and the launcher wants the ended ones too so it can grey them out rather
   // than infer their fate from whether a local transcript happens to exist.
-  app.get<{ Querystring: { limit?: number; before?: string; before_id?: string; before_starred?: boolean; git?: string;
+  app.get<{ Querystring: { limit?: number; before?: string; before_id?: string; before_pinned?: boolean; git?: string;
     typed?: boolean; supervisor?: boolean } }>(
     '/sessions', { schema: { ...TAG,
     summary: 'List sessions',
-    description: 'Every session, starred first then newest activity first, including destroyed ones (status says which). ' +
+    description: 'Every session, pinned first then newest activity first, including destroyed ones (status says which). ' +
       'Each row carries `locked` (someone holds it right now, label in locked_label/locked_by), ' +
       '`lastUserMessage` (the last thing the user typed, from the server-side transcript) and ' +
       '`name` (a model-written title of what the session is building, best-effort). ' +
@@ -201,14 +201,14 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       supervisor: { type: 'boolean', description: 'false = leave out the looper\'s supervisor seats.' },
       before: { type: 'string', description: 'A row\'s last_used_at (ISO) — return only older activity.' },
       before_id: { type: 'string', description: 'That row\'s id, breaking last_used_at ties.' },
-      before_starred: { type: 'boolean', description: 'That row\'s starred flag — starred sorts ahead of activity, so the cursor carries it or a starred page boundary leaks unstarred rows into the starred block (and vice versa).' },
+      before_pinned: { type: 'boolean', description: 'That row\'s pinned flag — pinned sorts ahead of activity, so the cursor carries it or a pinned page boundary leaks unpinned rows into the pinned block (and vice versa).' },
       git: { type: 'string', enum: ['true'], description: 'Compute `work` per row from the checkout.' } } } } },
   async (req) => {
     // last_user_message rides the list; the transcript blob NEVER does —
     // sessionColumns leaves it out, which is what keeps this list cheap.
     // branch comes from the session's FOLDER, card from its LOOP (either
     // seat) — sessions carry neither themselves.
-    const { limit, before, before_id: beforeId, before_starred: beforeStarred } = req.query;
+    const { limit, before, before_id: beforeId, before_pinned: beforePinned } = req.query;
     const cut = before ? new Date(before) : undefined;
     // What the list IS is decided here, once — the filters and the count
     // share one WHERE, so `total` is exactly the rows the pages add up to.
@@ -222,18 +222,18 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       .from(sessions)
       .leftJoin(folders, eq(folders.id, sessions.folderId))
       .leftJoin(loops, or(eq(loops.codingSessionId, sessions.id), eq(loops.supervisorSessionId, sessions.id)))
-      // Starred rows pin ahead of all activity ordering (018). id descends
+      // Pinned rows sit ahead of all activity ordering (018). id descends
       // too: a page boundary between rows sharing a timestamp must cut the
       // same way every time or the next page skips or repeats.
-      .orderBy(desc(sessions.starred), desc(sessions.lastUsedAt), desc(sessions.id))
+      .orderBy(desc(sessions.pinned), desc(sessions.lastUsedAt), desc(sessions.id))
       .$dynamic();
     // The cursor is the whole sort key of the last row the client saw:
-    // starred first (a starred tail means only unstarred rows follow), then
+    // pinned first (a pinned tail means only unpinned rows follow), then
     // the (last_used_at, id) pair as ever.
     const cursor = cut && !isNaN(cut.getTime())
       ? or(
-        beforeStarred === true ? eq(sessions.starred, false) : undefined,
-        and(eq(sessions.starred, beforeStarred === true),
+        beforePinned === true ? eq(sessions.pinned, false) : undefined,
+        and(eq(sessions.pinned, beforePinned === true),
           beforeId
             ? or(lt(sessions.lastUsedAt, cut), and(eq(sessions.lastUsedAt, cut), lt(sessions.id, beforeId)))
             : lt(sessions.lastUsedAt, cut)))
@@ -867,17 +867,17 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         as_of: s.tokensAsOf?.toISOString() ?? null, cached: true });
     });
 
-  app.patch<{ Params: { id: string }; Body: { name?: string | null; plan_mode?: boolean; starred?: boolean } }>(
+  app.patch<{ Params: { id: string }; Body: { name?: string | null; plan_mode?: boolean; pinned?: boolean } }>(
     '/sessions/:id', { schema: { ...TAG, summary: 'Per-session overrides',
       description: 'Session values sit at the end of the settings chain: default -> override -> workspace -> session. ' +
         '`name` renames the session by hand — the auto-titler never writes over a manual name; null clears it and ' +
         'hands the session back to the titler. `plan_mode` is the cli\'s /plan switch: while true, clients build ' +
         'the coding agent\'s mutating kits with the readonly preset; every session starts false (code mode). ' +
-        '`starred` is the /star switch: while true, the session pins to the top of every session list.',
+        '`pinned` is the /pin switch: while true, the session pins to the top of every session list.',
       params: idParam,
       body: { type: 'object', additionalProperties: false,
         properties: { name: { type: ['string', 'null'], maxLength: 80 },
-          plan_mode: { type: 'boolean' }, starred: { type: 'boolean' } } } } }, async (req, reply) => {
+          plan_mode: { type: 'boolean' }, pinned: { type: 'boolean' } } } } }, async (req, reply) => {
       const s = await getSession(ctx.db, req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (req.body?.name !== undefined) {
@@ -895,9 +895,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         ctx.sessionEvents?.publish(s.id, clientOf(req),
           { event: 'session', planMode: req.body.plan_mode });
       }
-      if (req.body?.starred !== undefined) {
+      if (req.body?.pinned !== undefined) {
         await ctx.db.update(sessions)
-          .set({ starred: req.body.starred })
+          .set({ pinned: req.body.pinned })
           .where(eq(sessions.id, s.id));
       }
       return ok(await getSession(ctx.db, s.id));
