@@ -240,13 +240,23 @@ export function sessionChoices(
             : sup ? `The looper's rounds and verdicts for card ${s.card ?? '?'} — read-only.` : undefined,
     };
   });
-  return tableChoices('ws', [
+  const table = tableChoices('ws', [
     { title: 'card', width: COLS.card }, { title: 'status', width: COLS.status },
     { title: 'git', width: COLS.work },
     { title: 'session', width: COLS.name }, { title: 'last message', width: COLS.msg },
     { title: 'model', width: COLS.model }, { title: 'tokens', width: COLS.tokens },
     { title: 'who · when' },
   ], rows);
+  // One blank line between the pinned block and the rest — a heading row, so
+  // the cursor skips it and the total counts sessions only. Only when both
+  // groups exist: a list that is all-starred or all-unstarred reads as one.
+  // Inserted AFTER tableChoices so the column geometry never sees it (the
+  // header sits at index 0, the starred block right under it).
+  const starredCount = sessions.filter((s) => s.starred === true).length;
+  if (starredCount > 0 && starredCount < rows.length) {
+    table.splice(1 + starredCount, 0, { value: null, label: '', heading: true });
+  }
+  return table;
 }
 
 /** Workspace rows — launching with no arguments, and /workspace. Always ends
