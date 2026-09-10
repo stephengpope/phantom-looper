@@ -17,7 +17,7 @@
 // scope. Borders are top/bottom only, so the box stretches to the
 // terminal width without ever wrapping.
 import { Box, useBoxMetrics } from 'ink';
-import { Text } from './Text.js';
+import { FixedText, Text } from './Text.js';
 import { useEffect, useRef } from 'react';
 import { TextInput } from './TextInput.js';
 import { Glint } from './Shimmer.js';
@@ -52,7 +52,9 @@ export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure, pas
       borderDimColor
     >
       <Box>
-        <Text color="cyan" bold>{'> '}</Text>
+        {/* FixedText: the marker never shrinks, so the space after `>`
+            survives the input wrapping (see Text.tsx). */}
+        <FixedText color="cyan" bold>{'> '}</FixedText>
         <TextInput
           value={value}
           onChange={onChange}

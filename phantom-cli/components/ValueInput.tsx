@@ -3,7 +3,7 @@
 // otherwise, masked when it is a secret. Nothing here knows what a setting
 // means — it is handed a shape and returns a value.
 import { Box, useInput } from 'ink';
-import { Text } from './Text.js';
+import { FixedText, Text } from './Text.js';
 import { useState } from 'react';
 import { TextInput } from './TextInput.js';
 import { SelectList, type Choice } from './SelectList.js';
@@ -105,7 +105,7 @@ export function ValueInput({ spec, onSubmit, onCancel }: {
     <Screen title={spec.title} sub={spec.note} error={error}
       footer={[{ key: 'enter', does: 'save' }, { key: 'empty', does: 'clears it' }, { key: 'esc', does: 'back' }]}>
       <Box>
-        <Text color="cyan">{'  > '}</Text>
+        <FixedText color="cyan">{'  > '}</FixedText>
         <TextInput
           value={text}
           onChange={(v) => { setText(v); setError(undefined); }}
@@ -163,7 +163,7 @@ function SuggestField({ spec, onSubmit, onCancel }: {
         { key: 'enter', does: 'use highlighted' }, { key: 'esc', does: 'back' },
       ]}>
       <Box marginBottom={1}>
-        <Text color="cyan">{'  > '}</Text>
+        <FixedText color="cyan">{'  > '}</FixedText>
         <TextInput
           value={query}
           onChange={setQuery}

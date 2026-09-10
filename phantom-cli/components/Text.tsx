@@ -10,7 +10,7 @@
 // Cleaning happens HERE, before Ink measures, so a tab becomes real spaces and
 // the layout stays right. No file in the app imports Ink's Text directly,
 // so nothing can bypass this.
-import { Text as InkText } from 'ink';
+import { Box, Text as InkText } from 'ink';
 import type { ComponentProps, ReactNode } from 'react';
 
 const TAB = 8;
@@ -42,4 +42,13 @@ function clean(node: ReactNode): ReactNode {
 
 export function Text(props: ComponentProps<typeof InkText>) {
   return <InkText {...props}>{clean(props.children)}</InkText>;
+}
+
+/** Text that keeps its width when its row overflows. Ink's Text hardcodes
+ *  flexShrink 1, so a label sitting beside a wrapping input ("> " in the
+ *  prompt) gets shrunk by Yoga along with the input — and when the label's
+ *  last column is the space after `>`, that space is what disappears. In a
+ *  flexShrink-0 box the label never shrinks and the input wraps alone. */
+export function FixedText(props: ComponentProps<typeof InkText>) {
+  return <Box flexShrink={0}><Text {...props} /></Box>;
 }

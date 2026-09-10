@@ -17,7 +17,7 @@
 // the render was a new component type on every render, so React remounted the
 // whole step per keystroke — TextInput's cursor-at-end behaviour hid it.
 import { Box, useInput } from 'ink';
-import { Text } from './Text.js';
+import { FixedText, Text } from './Text.js';
 import { useEffect, useState } from 'react';
 import { TextInput } from './TextInput.js';
 import { SelectList, type Choice } from './SelectList.js';
@@ -149,7 +149,7 @@ export function NewWorkspace({ api, onSubmit, onCancel, error, now }: {
           { key: 'enter', does: 'add highlighted' }, { key: 'esc', does: 'back' },
         ]}>
         <Box marginBottom={1}>
-          <Text color="cyan">{'  > '}</Text>
+          <FixedText color="cyan">{'  > '}</FixedText>
           <TextInput value={query} onChange={setQuery} placeholder="filter, or type owner/name…" />
         </Box>
         <SelectList
@@ -179,7 +179,7 @@ export function NewWorkspace({ api, onSubmit, onCancel, error, now }: {
           { key: 'esc', does: 'back' },
         ]}>
         <Box>
-          <Text color="cyan">{'  > '}</Text>
+          <FixedText color="cyan">{'  > '}</FixedText>
           <TextInput
             value={url} onChange={setUrl}
             placeholder={step.create ? 'my-project' : 'https://github.com/owner/name'}

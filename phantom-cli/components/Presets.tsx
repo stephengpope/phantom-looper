@@ -19,7 +19,7 @@
 // starts with every key null, and leave-unchanged is the deliberate opt-out.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box, useInput } from 'ink';
-import { Text } from './Text.js';
+import { FixedText, Text } from './Text.js';
 import { SelectList, type Choice } from './SelectList.js';
 import { tableChoices, type TableRow } from './table.js';
 import { ValueInput, type EditSpec } from './ValueInput.js';
@@ -446,7 +446,7 @@ function NameInput({ notice, initial, title = 'new preset', onSubmit, onCancel, 
     <Screen title={title} footer={[{ key: 'enter', does: 'save' }, { key: 'esc', does: 'back' }]}
       notice={notice}>
       <Box>
-        <Text color="cyan">{'  name: '}</Text>
+        <FixedText color="cyan">{'  name: '}</FixedText>
         <TextInput
           value={text}
           onChange={(v) => { setText(v); onNotice(undefined); }}
