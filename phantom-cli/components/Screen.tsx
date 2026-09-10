@@ -1,10 +1,11 @@
-// The one shape every page in the TUI has. The margins above and below, the
-// title, the blank line under it, the status line and the key footer with its
-// gap all live HERE and nowhere else. Pages used to frame themselves and they
-// drifted — two private copies of this, two more by hand, one footer mechanism
-// in SelectList and another here, and the /model editor with none of it. A
-// page that wants to look different has to argue with this file, not add a
-// marginTop.
+// The one shape every page in the TUI has. A page is a FULL SCREEN: while it
+// is up it owns the main column (App.tsx's one layout rule), so this frame is
+// the page's whole height — the title at the top, the status line and the key
+// footer pinned to the BOTTOM, the content between them. Pages used to frame
+// themselves and they drifted — two private copies of this, two more by hand,
+// one footer mechanism in SelectList and another here, and the /model editor
+// with none of it. A page that wants to look different has to argue with this
+// file, not add a marginTop.
 //
 // Two rules this file enforces so pages cannot drift again:
 //
@@ -16,9 +17,15 @@
 //   renders, and handed down by context. Gemini CLI's settings dialog kept a
 //   parallel height constant and it drifted from the real chrome — the budget
 //   and the chrome must be one source.
-import { Box, useBoxMetrics } from 'ink';
+//
+// Because the frame is always the full height, content that grows (a list
+// loading its next page) pushes into free space and NOTHING on screen moves —
+// there is no remembered-height floor to keep a short page as tall as the
+// last one (that memory existed only because menus used to share the screen
+// with the conversation).
+import { Box } from 'ink';
 import { Text } from './Text.js';
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, type ReactNode } from 'react';
 
 /** One key the page answers to. `when: false` drops it from the footer, so
  *  a key that does not apply right now is not offered (bubbles' help-model
@@ -43,15 +50,6 @@ export const BudgetContext = createContext(24 - CHROME_ROWS());
  *  JSX below and nowhere else. */
 function CHROME_ROWS(): number { return 7; }
 
-/** The last screen's natural content height. A mounting screen reads it once
- *  as its minHeight floor, so a tall list handing off to a short form keeps
- *  the frame and the footer never jumps. Natural (inner-box) height only —
- *  the padding never feeds back, so heights cannot ratchet. */
-let lastContentRows = 0;
-
-/** Test seam: forget the previous screen's height. */
-export function resetScreenHeight() { lastContentRows = 0; }
-
 export function Screen({ title, footer, sub, busy, notice, error, children }: {
   title: string;
   /** The keys that work here. Rendered by keyLine; `when: false` hides one. */
@@ -65,12 +63,6 @@ export function Screen({ title, footer, sub, busy, notice, error, children }: {
   error?: string;
   children?: ReactNode;
 }) {
-  // The floor is read ONCE at mount (it must not drop mid-screen); the memory
-  // is updated from the measured inner box on every render.
-  const body = useRef(null);
-  const { height: contentRows, hasMeasured } = useBoxMetrics(body);
-  const [floor] = useState(() => lastContentRows);
-  useEffect(() => { if (hasMeasured) lastContentRows = contentRows; });
   // One line, one priority order. What matters most speaks; the rest waits.
   const status: { text: string; color?: string; dim?: boolean } =
     error ? { text: error, color: 'red' }
@@ -79,14 +71,15 @@ export function Screen({ title, footer, sub, busy, notice, error, children }: {
           : { text: sub ?? ' ', dim: true };
   const { rows } = useContext(SizeContext);
   return (
-    <Box flexDirection="column" marginTop={1} marginBottom={1}>
+    // The page's full height (the margins take the two rows beyond it), so
+    // the content box's flexGrow pins the status line and the footer to the
+    // bottom of the screen whatever the content's height.
+    <Box flexDirection="column" marginTop={1} marginBottom={1} height={rows - 2}>
       <Text bold>{`  ${title}`}</Text>
       <Text> </Text>
       <BudgetContext.Provider value={Math.max(3, rows - CHROME_ROWS())}>
-        <Box flexDirection="column" minHeight={Math.min(floor, Math.max(3, rows - CHROME_ROWS()))}>
-          <Box ref={body} flexDirection="column" flexShrink={0}>
-            {children}
-          </Box>
+        <Box flexDirection="column" flexGrow={1} overflow="hidden">
+          {children}
         </Box>
       </BudgetContext.Provider>
       <Text color={status.color} dimColor={status.dim} wrap="truncate-end">{`  ${status.text || ' '}`}</Text>

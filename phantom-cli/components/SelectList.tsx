@@ -2,12 +2,17 @@
 // has not shipped since May 2024, and the whole need is one useInput and a
 // window slice — so we own it rather than depend on a dormant package.
 //
+// THE ONE SELECTION LOOK, for every row selector in the app (this list, the
+// prompt's slash menu): the highlighted row is BOLD WHITE on a dark-grey bar
+// that runs the width of the screen — Ink's Box backgroundColor paints the
+// row's whole area, and the children keep their own colors on top of it
+// (verified against Ink 7.1.1). It used to be a cyan text color; a colored
+// word is easy to lose in a dense table, a bar is not.
+//
 // Layout law: every region this list renders holds ONE height while it is on
 // screen. The row window is sized from the page budget, the more-line is
 // always one row, and the hint block is exactly HINT_ROWS whether the hint is
-// long, short or absent. Anything that grows and shrinks under a
-// bottom-anchored pane rewrites every shifted row — the flicker the slash
-// menu measured at 25 of 30 rows per keystroke.
+// long, short or absent.
 import { Box, useInput } from 'ink';
 import { Text } from './Text.js';
 import Spinner from 'ink-spinner';
@@ -95,7 +100,7 @@ export interface Choice<T> {
   heading?: boolean;
 }
 
-export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, initial, reserve = 0, pad = false, total }: {
+export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, initial, reserve = 0, total }: {
   choices: Choice<T>[];
   onSelect: (value: T) => void;
   /** The row the cursor starts on. A screen that swaps this list for an
@@ -119,10 +124,6 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
    *  line then counts what is really below, not what happens to be loaded.
    *  Headings are not rows. Omitted = the loaded choices are the list. */
   total?: number;
-  /** Render blank rows for unused window slots. For a list whose choices
-   *  change while it is on screen (the combobox filtering as you type): the
-   *  slots hold the height, so the rows above and below never move. */
-  pad?: boolean;
 }) {
   const pickable = choices.map((c, i) => (c.heading ? -1 : i)).filter((i) => i >= 0);
   const [cursorRaw, setCursor] = useState(() => {
@@ -214,15 +215,12 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
   // The hint, wrapped HERE to a fixed measure rather than left to Ink — Ink
   // wraps at the terminal's full width, which reads as a broken line rather
   // than a paragraph. Then CUT to HINT_ROWS: the block is exactly that tall
-  // whatever is highlighted, because a hint that changes height as you arrow
-  // through the list moves the footer and the prompt under it up and down.
+  // whatever is highlighted, so arrowing through the list never grows or
+  // shrinks the page under it.
   const hintLines = (hint ? wrapHint(hint, Math.min(76, cols - 6)) : []).slice(0, HINT_ROWS);
-  const slots = pad ? visible : window.length;
   return (
     <Box flexDirection="column">
-      {Array.from({ length: slots }, (_, i) => {
-        const c = window[i];
-        if (!c) return <Text key={`pad${i}`}> </Text>;
+      {window.map((c, i) => {
         const idx = above + i;
         const on = idx === cursor;
         if (c.heading && !c.columns) return <Text key={idx} dimColor wrap="truncate-end">{` ${c.label}`}</Text>;
@@ -244,7 +242,9 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
         }
         const cols_ = c.columns ?? (c.detail !== undefined ? [{ text: c.detail }] : []);
         return (
-          <Box key={idx}>
+          // The selection bar (the header): the row Box carries the
+          // background, so it runs the full width whatever the content's.
+          <Box key={idx} {...(on ? { backgroundColor: 'gray' } : {})}>
             {/* THE COLUMN LAW: a gutter is paddingRight INSIDE a fixed,
                 flexShrink=0 box — never leftover space. When a row overflows
                 the terminal, yoga reclaims spare space and squeezes
@@ -254,7 +254,7 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
                 With every column pinned, overflow can only truncate the
                 row's TAIL — the free last column — never a gap. */}
             <Box width={2} flexShrink={0}>
-              <Text color={on ? 'cyan' : undefined}>{on ? '❯ ' : '  '}</Text>
+              <Text color={on ? 'white' : undefined} bold={on}>{on ? '❯ ' : '  '}</Text>
             </Box>
             {/* A HARD two-cell marker box, FIRST — activity reads down the
                 left edge, and the glyph's own measured width can never shift
@@ -274,7 +274,7 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
                 gap still renders — spare space would be the first thing an
                 overflowing row loses. */}
             <Box width={labelWidth} flexShrink={0} paddingRight={2}>
-              <Text color={on ? 'cyan' : undefined} bold={on} wrap="truncate-end">{c.label}</Text>
+              <Text color={on ? 'white' : undefined} bold={on} wrap="truncate-end">{c.label}</Text>
             </Box>
             {/* One row is ONE line: a long column truncates, never wraps.
                 paddingRight keeps a two-cell gutter INSIDE the width — a full
@@ -287,7 +287,7 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
       })}
       {/* Always one line, blank when nothing is hidden — so the rows below do
           not hop when the window scrolls onto or off an end of the list. */}
-      {choices.length > 0 || pad ? (
+      {choices.length > 0 ? (
         <Text dimColor>{above > 0 || below > 0
           ? `  ${[above > 0 ? `↑ ${above}` : '', below > 0 ? `↓ ${below}` : ''].filter(Boolean).join(' · ')} more`
           : ' '}</Text>
@@ -296,7 +296,7 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
           wrapper is load-bearing: bare Text rows under a height-capped Box get
           SHRUNK by yoga (six rows render as "b d f"), not clipped — the same
           Ink behaviour Pane.tsx documents. Verified against Ink 7.1.1. */}
-      {choices.length > 0 || pad ? (
+      {choices.length > 0 ? (
         <Box marginTop={1} paddingLeft={2} height={HINT_ROWS} overflow="hidden" flexDirection="column">
           <Box flexDirection="column" flexShrink={0}>
             {Array.from({ length: HINT_ROWS }, (_, i) =>

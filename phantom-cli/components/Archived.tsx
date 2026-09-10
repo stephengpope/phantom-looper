@@ -51,9 +51,8 @@ export function Archived({ cards, total, notice, onOpen, onRestore, onCancel, on
         onCancel={onCancel}
         onKey={(ch, t) => { if (ch === 'r' && t) onRestore(t); }}
         onNearEnd={onNearEnd}
-        // Window-tall from the first frame, counting against the real total
-        // (/resume's shape) — pages landing below never move anything.
-        pad
+        // Counts against the real total (/resume's shape) — the "↓ N more"
+        // line says what is really below.
         total={total}
       />
     </Screen>

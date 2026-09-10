@@ -123,8 +123,7 @@ export function ValueInput({ spec, onSubmit, onCancel }: {
 // so a custom id — one models.dev doesn't list yet, or a private one — is
 // entered and submitted in the same field, no mode to switch into.
 //
-// The list IS SelectList — same rows, same window, same fixed hint block — in
-// `pad` mode, so the list holds one height while typing filters it. Key
+// The list IS SelectList — same rows, same window, same fixed hint block. Key
 // ownership divides cleanly: TextInput takes the letters and, given no
 // onSubmit, ignores enter; SelectList takes ↑/↓/enter/esc and, given no
 // onKey, ignores the letters. The `key={query}` remount puts the highlight
@@ -174,7 +173,6 @@ function SuggestField({ spec, onSubmit, onCancel }: {
         key={query}
         choices={choices}
         reserve={2}
-        pad
         onSelect={onSubmit}
         onCancel={onCancel}
       />

@@ -1,25 +1,25 @@
 // Layout: the whole terminal, drawn live (alternate screen — index.tsx). A row
-// of two panes: the conversation on the left, the Assistant on the right
-// (ctrl+g shows and hides it; its width is a setting). Each pane is a `Pane`:
-// a clipped viewport anchored at the bottom, scrolled by rows. Under the left
-// pane sits the block still being written, the status line, the typing area
-// and the toolbar; that block is budgeted in rows (`liveRows`) so the pane
-// above it keeps its share of the screen.
+// of two panes: the main column on the left, the Assistant on the right
+// (ctrl+g shows and hides it; its width is a setting).
+//
+// THE ONE LAYOUT RULE: `windowStore.screen` says what owns the main column,
+// and anything that is not the chat takes the WHOLE column — the board, a
+// card's editor, and every menu (/settings, /model, /workspace, /resume, the
+// session switcher …) are all full screens, dispatched in screens.tsx. The
+// menus used to replace the prompt under the live conversation, each at its
+// own height; that split (and the flicker defenses it needed) is gone. While
+// a screen is up, this component's own useInput is switched off: Ink delivers
+// a keypress to every active handler, so esc would otherwise close the screen
+// and interrupt the running turn in the same stroke.
+//
+// The chat screen: the conversation pane (a clipped viewport anchored at the
+// bottom, scrolled by rows), then under it the block still being written, the
+// status line, the typing area and the toolbar; that block is budgeted in
+// rows (`liveRows`) so the pane above it keeps its share of the screen.
 //
 // Nothing is printed into scrollback any more: there is no <Static>, and
 // switching session no longer wipes the terminal — the pane simply shows a
 // different list.
-//
-// A menu (/settings, /model, /workspace, the session switcher) REPLACES the
-// typing area rather than floating over it, and while one is open this
-// component's own useInput is switched off: Ink delivers a keypress to every
-// active handler, so esc would otherwise close the menu and interrupt the
-// running turn in the same stroke. While a menu is open the live-output
-// region above it (streaming parts, the working line, the queue) is not
-// drawn at all: its height changes with every token batch, and the menu sits
-// BELOW it in the same bottom-anchored block, so every change rode the whole
-// menu up and down — the /resume flicker. The stream itself is untouched;
-// closing the menu redraws the region from the store mid-turn.
 //
 // SEVERAL SESSIONS AT ONCE. Every session you open stays open and keeps
 // running; this component is a view over whichever one is active. The
@@ -48,23 +48,14 @@ import { WindowStore, type Initial } from './window.js';
 
 export type { Initial };
 
-/** Rows the slash windowStore.menu shows at once; the window slides to follow the cursor. */
+/** Rows the slash menu shows at once; the window slides to follow the cursor. */
 const MENU_ROWS = 8;
 import { PartView } from './components/Parts.js';
 import { Prompt } from './components/Prompt.js';
 import { StatusLine } from './components/StatusLine.js';
 import { Toolbar, type ToolbarGroup, type ToolbarPart } from './components/Toolbar.js';
-import { Settings } from './components/Settings.js';
-import { Launcher, ago, WORK } from './components/Launcher.js';
-import { NewWorkspace, type NewWorkspaceRequest } from './components/NewWorkspace.js';
-import { WorkspaceSettings } from './components/WorkspaceSettings.js';
-import { SessionSwitcher } from './components/SessionSwitcher.js';
-import { Keys } from './components/Keys.js';
-import { Tasks } from './components/Tasks.js';
-import { Archived } from './components/Archived.js';
-import { Secrets } from './components/Secrets.js';
-import { Presets } from './components/Presets.js';
-import { DuplicateModel } from './components/DuplicateModel.js';
+import { MenuScreen } from './screens.js';
+import { WORK } from './components/Launcher.js';
 import { SizeContext, keyLine } from './components/Screen.js';
 import { Pane } from './components/Pane.js';
 import { Boundary } from './components/Boundary.js';
@@ -74,7 +65,7 @@ import { Divider } from './components/Divider.js';
 import { VoiceClient } from './voice.js';
 import { BoardStore, type Stream } from './board.js';
 import { Board } from './components/Board.js';
-import { type ConfigKey, type ConfigValue } from './config.js';
+import { type ConfigValue } from './config.js';
 
 import { copyToClipboard, isMouseInput, parseMouse, selectionRanges, type Selection } from './mouse.js';
 import type { Screen } from './screen.js';
@@ -83,23 +74,6 @@ import type { GitFacts } from '../core/llm/prompts/coding/wiring.js';
 /** What the window remembers about a workspace: the banner's display name and
  *  the prefix its cards are named with (`PHA` → `PHA-7`). */
 interface WsFacts { label: string; cardPrefix?: string; error?: string }
-
-type Menu = null | 'settings' | 'keys' | 'secrets' | 'model' | 'server' | 'voice' | 'workspace' | 'resume'
-  | 'addWorkspace' | 'workspaceSettings' | 'sessions' | 'tasks' | 'archived' | 'presets' | 'duplicateModel';
-
-const offline: Api = async () => ({});
-
-/** Each voice switch is a setting — the toggle writes it and windowStore.settingChanged
- *  pushes it to the engine, so the state holds across restarts. */
-const TOGGLE_KEY: Record<'mic' | 'speaker' | 'headphones' | 'wake', ConfigKey> = {
-  mic: 'voice_mic_muted', speaker: 'voice_speaker_muted',
-  headphones: 'voice_headphones', wake: 'voice_wake_word',
-};
-
-/** /resume's page size: what the windowStore.picker fetches at open and appends per
- *  scroll-to-the-bottom. Comfortably more than a screenful, small enough that
- *  a list of thousands never rides one response. */
-export const PICKER_PAGE = 30;
 
 export function App({
   api, stream, initial, boot, newTools, configPath, onSession, onWindow, bootConfig,
@@ -431,7 +405,7 @@ export function App({
     // With the board up, the left pane's mouse belongs to it (drag moves a
     // card, click opens one) — running text selection there too would copy on
     // every drop. The voice pane keeps its wheel and selection.
-    if (windowStore.view !== 'chat' && ev && !(showSidebar && ev.x >= mainCols)) return;
+    if (windowStore.screen !== 'chat' && ev && !(showSidebar && ev.x >= mainCols)) return;
     if (!ev) return;
     const inVoice = showSidebar && ev.x >= mainCols;
     if (ev.kind === 'wheel') {
@@ -472,12 +446,12 @@ export function App({
 
   useInput((ch, key) => {
     if (!(key.ctrl && ch === 'c')) return;
-    if (windowStore.menu === null && windowStore.view === 'chat' && input) { clearInput(); return; }
+    if (windowStore.screen === 'chat' && input) { clearInput(); return; }
     if (ctrlC) { windowStore.quit(); return; }
     if (session?.busy) store.abortTurn(session.id);
-    // Break out of whatever is on screen first: the second press then lands on
-    // the prompt, where the toolbar is showing what it will do.
-    if (windowStore.menu !== null) windowStore.setMenu(null);
+    // Break out of whatever menu is on screen first: the second press then
+    // lands on the prompt, where the toolbar is showing what it will do.
+    if (windowStore.menuUp) windowStore.closeScreen();
     setCtrlC(true); setTimeout(() => setCtrlC(false), 1500);
   });
 
@@ -548,7 +522,7 @@ export function App({
     // ↑/↓ scroll through previously sent messages. /pop handles the queue.
     if (key.upArrow && (histAt > 0 || input === '')) { recall(-1); return; }
     if (key.downArrow && histAt > 0) { recall(1); return; }
-  }, { isActive: windowStore.menu === null && windowStore.view === 'chat' });
+  }, { isActive: windowStore.screen === 'chat' });
 
   const suggestions = matches(input);
   const at = Math.min(suggestAt, Math.max(0, suggestions.length - 1));
@@ -610,26 +584,41 @@ export function App({
       .map((g) => g.filter((p): p is ToolbarPart => Boolean(p)))
       .filter((g) => g.length);
 
+  // THE ONE LAYOUT RULE (see the header): what owns the main column. The
+  // board needs a session; a menu's name, for its Boundary, is the screen
+  // itself. Anything else is the chat.
+  const screenNow = windowStore.screen;
+  const boardUp = (screenNow === 'board' || typeof screenNow === 'object') && !!session;
+  const menuUp = typeof screenNow === 'string' && screenNow !== 'chat' && screenNow !== 'board'
+    ? screenNow : null;
+
   return (
     <SizeContext.Provider value={{ rows: screenRows, cols: screenCols }}>
     <Box flexDirection="row" width={repaint ? 0 : screenCols} height={repaint ? 0 : screenRows} overflow="hidden">
     <Box flexDirection="column" width={mainCols} height={screenRows} overflow="hidden">
-      {windowStore.view !== 'chat' && session ? (
-        <Boundary name="board" resetKey={windowStore.view} onError={(m) => { windowStore.note(`${m} — the board closed; the stack is in ~/.phantom-cli/cli.log`); windowStore.setView('chat'); }}>
+      {boardUp && session ? (
+        <Boundary name="board" resetKey={screenNow} onError={(m) => { windowStore.note(`${m} — the board closed; the stack is in ~/.phantom-cli/cli.log`); windowStore.setScreen('chat'); }}>
         <Board store={windowStore.boardFor(session.workspaceId)} width={mainCols} height={screenRows}
           isActive
           // One card-editor state, in the window, which also knows where esc
           // leaves it — from the board back to the columns, from anywhere else
           // back to the chat.
-          card={typeof windowStore.view === 'object' ? windowStore.view.card : undefined}
+          card={typeof screenNow === 'object' ? screenNow.card : undefined}
           onOpenCard={(seq) => windowStore.openCard(seq, 'board')}
           onCloseCard={() => windowStore.closeCard()}
-          onClose={() => windowStore.setView('chat')}
+          onClose={() => windowStore.setScreen('chat')}
           // The card editor's Session row: back to chat, then the one open
           // path — already loaded switches, otherwise it opens (read-only
           // while the looper holds it, like /resume).
-          onOpenSession={(id) => { windowStore.setView('chat'); void windowStore.openSession({ kind: 'open', id }); }}
-          onArchived={() => { windowStore.setView('chat'); void windowStore.openArchived(session.workspaceId); }} />
+          onOpenSession={(id) => { windowStore.setScreen('chat'); void windowStore.openSession({ kind: 'open', id }); }}
+          onArchived={() => { windowStore.setScreen('chat'); void windowStore.openArchived(session.workspaceId); }} />
+        </Boundary>
+      ) : menuUp ? (
+        // A menu is a FULL SCREEN — it owns the whole column while it is up
+        // (screens.tsx). The conversation keeps streaming underneath; closing
+        // the menu draws it again from the store.
+        <Boundary name={menuUp} resetKey={menuUp} onError={(m) => { windowStore.note(`${m} — /${menuUp} closed; the stack is in ~/.phantom-cli/cli.log`); windowStore.closeScreen(); }}>
+          <MenuScreen w={windowStore} api={api} configPath={configPath} clientId={clientId} />
         </Boundary>
       ) : (<>
       {/* keyFor: a part's own id, so the height the pane measured for it
@@ -650,11 +639,9 @@ export function App({
       <Box ref={bottomRef} flexDirection="column" flexShrink={0}>
         {/* Session output: live parts, the working line and the queue all
             belong to the active session. During `opening` there is no
-            session output to show, and while a menu is open the region is
-            suspended so its changing height cannot move the menu (the
-            /resume flicker — see the header). One guard for the whole
-            region, so a new element added here is inside it by default. */}
-        {!windowStore.opening && windowStore.menu === null && (<>
+            session output to show. One guard for the whole region, so a new
+            element added here is inside it by default. */}
+        {!windowStore.opening && (<>
         {session?.live.map((p) => (
           <PartView key={p.id} part={p} width={width} expanded={expanded} maxRows={liveRows} />
         ))}
@@ -679,114 +666,7 @@ export function App({
         )}
         </>)}
 
-        <Boundary name={windowStore.menu ?? 'prompt'} resetKey={windowStore.menu} onError={(m) => { windowStore.note(`${m} — ${windowStore.menu ? `/${windowStore.menu} closed` : 'the prompt stopped drawing'}; the stack is in ~/.phantom-cli/cli.log`); windowStore.setMenu(null); }}>
-        {windowStore.menu === 'sessions' ? (
-          <SessionSwitcher
-            sessions={store.list()} activeId={sessionId ?? ''} workspaces={windowStore.workspaceRows}
-            onPick={(id) => { windowStore.setMenu(null); windowStore.switchTo(id); }}
-            onCancel={() => windowStore.setMenu(null)}
-          />
-        ) : windowStore.menu === 'settings' ? (
-          // The server's own settings; the screen's sub line says the scope.
-          <Settings api={api} configPath={configPath} startAt="api"
-            onClose={() => windowStore.setMenu(null)} />
-        ) : windowStore.menu === 'keys' ? (
-          // Its own screen so there is ONE place any credential is set — not
-          // because these are a different kind of thing any more. A saved key
-          // has to reach the app like any other setting change: the Assistant
-          // takes its Deepgram key at spawn, and the agents take theirs at
-          // build.
-          <Keys api={api} onClose={() => windowStore.setMenu(null)}
-            onChanged={(name) => windowStore.settingChanged(name as ConfigKey)} />
-        ) : windowStore.menu === 'secrets' ? (
-          // The agent's secrets, not phantom's own credentials (/keys). The
-          // screen reads every layer itself — no session context needed.
-          <Secrets api={api} onClose={() => windowStore.setMenu(null)} />
-        ) : windowStore.menu === 'workspaceSettings' && windowStore.editing ? (
-          <WorkspaceSettings
-            api={api} workspace={windowStore.editing}
-            // Back to the list it was opened from, refreshed — a rename there
-            // has to show up here.
-            onClose={() => { void windowStore.closeWorkspaceSettings(); }}
-            onChanged={() => { void windowStore.refreshPicker().catch(quiet('refresh the session list')); }}
-          />
-        ) : windowStore.menu === 'voice' ? (
-          // The Assistant's settings — local, offline. Device rows offer
-          // what the sidecar found; saving a boot-time key restarts it.
-          <Settings api={api} configPath={configPath} startAt="local"
-            title="voice" groups={['voice']}
-            suggestions={{ voice_mic_device: vs.devices.mics, voice_speaker_device: vs.devices.speakers }}
-            onOpenRow={(k) => { if (k === 'voice_mic_device' || k === 'voice_speaker_device') void voice.refreshDevices(); }}
-            onLocalChange={windowStore.settingChanged} onClose={() => windowStore.setMenu(null)} />
-        ) : windowStore.menu === 'model' || windowStore.menu === 'server' ? (
-          // /server is the ONE screen that must work with the server down — it
-          // is where you fix the address — so it gets the offline api and its
-          // two keys are the two that live in the file. /model writes to the
-          // server like every other setting screen.
-          <Settings api={windowStore.menu === 'server' ? offline : api} configPath={configPath} startAt="local"
-            title={windowStore.menu} groups={[windowStore.menu === 'model' ? 'model' : 'server']}
-            onLocalChange={windowStore.settingChanged} onClose={() => windowStore.setMenu(null)} />
-        ) : windowStore.menu === 'presets' ? (
-          <Presets api={api}
-            // Applying closes the screen — the confirmation and the rebuilt
-            // agents both land in the CLI the user is back at.
-            onApplied={(name) => {
-              windowStore.note(`preset applied: ${name}`);
-              windowStore.settingChanged('provider' as ConfigKey);
-            }}
-            onClose={() => windowStore.setMenu(null)} />
-        ) : windowStore.menu === 'duplicateModel' && windowStore.duplicating ? (
-          <DuplicateModel
-            presets={windowStore.duplicating.presets}
-            current={windowStore.duplicating.current}
-            onPick={(presetId) => { void windowStore.finishDuplicate(presetId); }}
-            onCancel={() => windowStore.cancelDuplicate()} />
-        ) : windowStore.menu === 'addWorkspace' ? (
-          <NewWorkspace
-            api={api}
-            error={windowStore.addError}
-            onCancel={() => windowStore.setMenu(null)}
-            onSubmit={(req: NewWorkspaceRequest) => { void windowStore.addWorkspace(req); }}
-          />
-        ) : windowStore.menu === 'archived' && session ? (
-          <Archived cards={windowStore.archived} notice={windowStore.archivedNotice}
-            onNearEnd={() => { void windowStore.moreArchived(session.workspaceId); }}
-            total={windowStore.archivedTotal}
-            // The solo editor renders from the store, which never holds
-            // archived cards on its own — seat this one first.
-            onOpen={(t) => windowStore.openArchivedCard(session.workspaceId, t)}
-            onRestore={(t) => { void windowStore.restoreCard(session.workspaceId, t); }}
-            onCancel={() => windowStore.setMenu(null)} />
-        ) : windowStore.menu === 'tasks' && windowStore.tasks ? (
-          <Tasks view={windowStore.tasks} notice={windowStore.tasksNotice}
-            onKill={(sid, cmd) => { void windowStore.killTask(sid, cmd); }}
-            onCancel={() => windowStore.setMenu(null)} />
-        ) : (windowStore.menu === 'workspace' || windowStore.menu === 'resume') && windowStore.picker ? (
-            <Launcher
-              mode={windowStore.menu === 'resume' ? 'sessions' : 'workspaces'}
-              workspaces={windowStore.picker.workspaces} sessions={windowStore.picker.sessions} total={windowStore.picker.total}
-              showSupervised={windowStore.showSupervised}
-              onToggleSupervised={() => windowStore.toggleSupervised()}
-              busy={(id) => store.get(id)?.busy ?? false}
-              loaded={(id) => store.has(id)}
-              clientId={clientId}
-              notice={windowStore.pickerNotice}
-              onNearEnd={windowStore.menu === 'resume' ? () => { void windowStore.morePicker(); } : undefined}
-              onEdit={(id) => windowStore.editWorkspace(id)}
-              onDuplicate={(id) => { void windowStore.startDuplicate(id); }}
-              onStar={(id) => { void windowStore.starFromPicker(id); }}
-              onClose={windowStore.closeFromPicker}
-              onTrash={(id) => { void windowStore.trashSession(id); }}
-              onCancel={() => windowStore.setMenu(null)}
-              onPick={(l) => {
-                if (l.kind === 'add') { windowStore.startAddWorkspace(); return; }
-                windowStore.setMenu(null);
-                void windowStore.openSession(l.kind === 'new'
-                  ? { kind: 'new', workspaceId: l.workspaceId }
-                  : { kind: 'open', id: l.sessionId });
-              }}
-            />
-        ) : (
+        <Boundary name="prompt" resetKey={screenNow} onError={(m) => { windowStore.note(`${m} — the prompt stopped drawing; the stack is in ~/.phantom-cli/cli.log`); windowStore.closeScreen(); }}>
           <>
             {suggestions.length > 0 && (
               // One height however many commands match. The menu sits under a
@@ -803,12 +683,16 @@ export function App({
                   const c = menuRows[j];
                   if (!c) return <Text key={`pad${j}`}> </Text>;
                   const i = menuFrom + j;
+                  // The highlighted row is the row selector's one look: bold
+                  // white on a dark-grey bar (SelectList's rule).
                   return (
                     // truncate-end keeps a row ONE line on a narrow terminal —
                     // a wrapped summary would break this menu's fixed height.
-                    <Text key={c.name} color={i === at ? 'cyan' : undefined} dimColor={i !== at} wrap="truncate-end">
-                      {`${i === at ? '❯ ' : '  '}/${c.name.padEnd(10)} ${c.summary}`}
-                    </Text>
+                    <Box key={c.name} {...(i === at ? { backgroundColor: 'gray' } : {})}>
+                      <Text color={i === at ? 'white' : undefined} bold={i === at} dimColor={i !== at} wrap="truncate-end">
+                        {`${i === at ? '❯ ' : '  '}/${c.name.padEnd(10)} ${c.summary}`}
+                      </Text>
+                    </Box>
                   );
                 })}
                 <Text dimColor>{menuBelow > 0 ? `    ↓ ${menuBelow} more` : ' '}</Text>
@@ -844,7 +728,6 @@ export function App({
                 : withMode()} />
             )}
           </>
-        )}
         </Boundary>
       </Box>
       </>)}

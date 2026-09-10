@@ -347,9 +347,8 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
       <SelectList
         choices={choices}
         onNearEnd={onNearEnd}
-        // The block is window-tall from the first frame — pages landing
-        // below never change its height — and counts against the real total.
-        pad={mode === 'sessions'}
+        // `total` counts against the real total — the "↓ N more" line says
+        // what is really below, not what happens to be loaded.
         total={mode === 'sessions' ? total : undefined}
         onSelect={(v) => { if (v) onPick(v); }}
         onKey={canEdit ? (ch, v) => {

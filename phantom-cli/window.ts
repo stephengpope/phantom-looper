@@ -84,10 +84,15 @@ export interface Approval { label: string; subject: string; resolve: (ok: boolea
 export type CloseResult = { ok: true; closed: string; on_screen: string; opened_new: boolean }
   | { error: string };
 
-/** Which screen has replaced the prompt. `null` is the prompt itself. */
-export type Menu = null | 'settings' | 'keys' | 'secrets' | 'model' | 'server' | 'voice' | 'workspace'
+/** A menu screen — everything that is not the chat or the board. */
+export type Menu = 'settings' | 'keys' | 'secrets' | 'model' | 'server' | 'voice' | 'workspace'
   | 'resume' | 'addWorkspace' | 'workspaceSettings' | 'sessions' | 'tasks' | 'archived' | 'presets'
   | 'duplicateModel';
+
+/** What owns the main column: the chat, the board, a card's editor, or one
+ *  of the menus. ONE answer — a gate that used to read "no menu open AND the
+ *  chat view" reads this field alone. */
+export type ScreenName = 'chat' | 'board' | { card: number; back: 'chat' | 'board' } | Menu;
 
 /** /resume's page size: what the picker fetches at open and appends per
  *  scroll-to-the-bottom. Comfortably more than a screenful, small enough that
@@ -225,13 +230,16 @@ export class WindowStore {
    *  editing. App wires this up the same way it wires draftOnScreen. */
   setPrompt: (text: string) => void = () => {};
 
-  /** What the LEFT PANE is showing: the chat, the kanban board, or a card's
-   *  editor. A card carries where esc goes BACK to, because that is the only
-   *  thing that ever differed between a card opened from the chat and the same
-   *  card opened from the board. One variable, one owner: the board used to
-   *  keep a second copy of "a card is open" and every caller that was not a
-   *  keypress had to work out which of the two to write. */
-  view: 'chat' | 'board' | { card: number; back: 'chat' | 'board' } = 'chat';
+  /** What the MAIN COLUMN is showing: the chat, the kanban board, a card's
+   *  editor, or a menu. ONE layout rule for all of them: anything that is not
+   *  the chat takes the whole column (the board always did; the menus used to
+   *  squeeze in under the conversation, each at its own height — that split
+   *  is gone). A card carries where esc goes BACK to, because that is the
+   *  only thing that ever differed between a card opened from the chat and
+   *  the same card opened from the board. One variable, one owner: the board
+   *  used to keep a second copy of "a card is open" and every caller that was
+   *  not a keypress had to work out which of the two to write. */
+  screen: ScreenName = 'chat';
 
   /** The voice pane's override: null follows the voice_enabled setting, true
    *  and false are ctrl+g. */
@@ -245,18 +253,43 @@ export class WindowStore {
    *  tool call can land before a render, and this must already be right. */
   approval: Approval | null = null;
 
-  setView(v: 'chat' | 'board' | { card: number; back: 'chat' | 'board' }): void {
-    this.view = v;
-    if (v !== 'chat') this.splash = false;
+  /** Put a screen on the main column. Everything a screen change does lives
+   *  here: a screen that is not the chat retires the splash, and /resume and
+   *  /tasks — status lists whose rows spin and whose locks lapse while you
+   *  watch — re-read on `pollMs` for as long as they are up. The refresh
+   *  swaps rows in place: the cursor, the notice line and an armed
+   *  confirmation all stay put. A failed tick is silent, because an
+   *  unreachable server must not nag every ten seconds while old rows serve. */
+  setScreen(s: ScreenName): void {
+    this.screen = s;
+    if (s !== 'chat') this.splash = false;
+    if (this.menuClock) { clearInterval(this.menuClock); this.menuClock = null; }
+    const tick = s === 'resume' ? () => { void this.refreshPicker().catch(quiet('refresh the session list')); }
+      : s === 'tasks' ? () => { void this.refreshTasks().catch(quiet('refresh tasks')); }
+        : null;
+    if (tick) {
+      this.menuClock = setInterval(tick, this.pollMs);
+      this.menuClock.unref?.();
+    }
     this.notify();
+  }
+
+  /** Back to the conversation — every menu's esc and close lands here. */
+  closeScreen = (): void => { this.setScreen('chat'); };
+
+  /** True while a MENU (not the chat, not the board) owns the column — the
+   *  case where the app-level keys (ctrl+c) close the screen for you; the
+   *  board handles its own. */
+  get menuUp(): boolean {
+    return typeof this.screen === 'string' && this.screen !== 'chat' && this.screen !== 'board';
   }
 
   /** A card's editor, and where esc leaves it. Opening one from the board
    *  goes back to the columns; from anywhere else, back to the chat. */
-  openCard(seq: number, back: 'chat' | 'board' = 'chat'): void { this.setView({ card: seq, back }); }
+  openCard(seq: number, back: 'chat' | 'board' = 'chat'): void { this.setScreen({ card: seq, back }); }
 
   /** esc out of a card's editor, to wherever it was opened from. */
-  closeCard(): void { this.setView(typeof this.view === 'object' ? this.view.back : 'chat'); }
+  closeCard(): void { this.setScreen(typeof this.screen === 'object' ? this.screen.back : 'chat'); }
 
   /** ctrl+g, and the nudge that puts the pane back when the Assistant needs to
    *  be seen. `undefined` clears the override back to the setting. */
@@ -520,7 +553,7 @@ export class WindowStore {
       await this.recheckSession(e.id);
       if (this.syncFailing.has(e.id)) this.uploadTranscript(e);
     }
-    if (this.menu === 'resume' || this.menu === 'workspace') {
+    if (this.screen === 'resume' || this.screen === 'workspace') {
       await this.refreshPicker().catch(quiet('refresh the session list'));
     }
     this.note('back in touch with the server — everything re-synced');
@@ -866,14 +899,14 @@ export class WindowStore {
       return;
     }
     this.pickerNotice = undefined;   // the gate passed — no refusal to show
-    this.setMenu(null);
+    this.closeScreen();
     try {
       const presets = await this.api('GET', '/presets') as Preset[];
       if (!presets.length) { await this.openSession({ kind: 'duplicate', id }); return; }
       const cfg = await this.readCfg();
       this.duplicating = { id, presets,
         current: { provider: String(cfg.provider ?? ''), model: String(cfg.model ?? '') } };
-      this.setMenu('duplicateModel');
+      this.setScreen('duplicateModel');
     } catch (e) {
       this.note(`could not duplicate session ${id}: ${(e as Error).message}`);
     }
@@ -885,7 +918,7 @@ export class WindowStore {
   finishDuplicate = async (presetId: string | null): Promise<void> => {
     const d = this.duplicating;
     this.duplicating = null;
-    this.setMenu(null);
+    this.closeScreen();
     if (!d) return;
     try {
       if (presetId) {
@@ -903,7 +936,7 @@ export class WindowStore {
   };
 
   /** esc on the duplicate prompt: nothing happens, no copy is made. */
-  cancelDuplicate = (): void => { this.duplicating = null; this.setMenu(null); };
+  cancelDuplicate = (): void => { this.duplicating = null; this.closeScreen(); };
 
   /** What the window CALLS a session when it must name one: the server name
    *  (auto-title or /rename), else its card (`PHA-7`), else its branch —
@@ -964,17 +997,17 @@ export class WindowStore {
     return { ok: true, closed: target, on_screen: this.sessions.activeId, opened_new };
   };
 
-  // ── the screens ───────────────────────────────────────────────────────────
-  // Which screen has replaced the prompt, and the data behind the three that
-  // do not fetch for themselves. They are fed rather than self-fetching for
-  // one reason: every one of them opens fetch-FIRST, so a server that cannot
-  // answer leaves you on the chat with a note instead of on an empty screen.
-  // Two of them also need facts only this window has — which sessions are open
-  // here, which is mid-turn, this window's lock id.
+  // ── the menu screens ──────────────────────────────────────────────────────
+  // The data behind the screens that do not fetch for themselves. They are fed
+  // rather than self-fetching for one reason: every one of them opens
+  // fetch-FIRST, so a server that cannot answer leaves you on the chat with a
+  // note instead of on an empty screen. Two of them also need facts only this
+  // window has — which sessions are open here, which is mid-turn, this
+  // window's lock id.
 
-  menu: Menu = null;
   /** The workspace whose settings are showing (`e` on /workspace). Held apart
-   *  from `menu` so closing that screen lands back on the list it came from. */
+   *  from `screen` so closing that screen lands back on the list it came
+   *  from. */
   editing: WorkspaceInfo | null = null;
   /** A rejected "add a workspace" stays on the form with the server's words. */
   addError: string | undefined;
@@ -1016,32 +1049,12 @@ export class WindowStore {
   private moreArchivedInFlight = false;
 
   /** The open screen's re-read clock, and the task count's own. Cleared and
-   *  restarted by setMenu and by a change of session; both unref'd so neither
-   *  holds the process open. */
+   *  restarted by setScreen and by a change of session; both unref'd so
+   *  neither holds the process open. */
   private menuClock: ReturnType<typeof setInterval> | null = null;
   private taskClock: ReturnType<typeof setInterval> | null = null;
 
   private get pollMs(): number { return this.opts.pollMs ?? 10_000; }
-
-  /** Open a screen, or close whatever is open (`null`). /resume and /tasks are
-   *  status lists — rows spin, locks appear and lapse, turns end on other
-   *  machines — so while one is open it re-reads on `pollMs`. The refresh
-   *  swaps rows in place: the cursor, the notice line and an armed
-   *  confirmation all stay put. A failed tick is silent, because an
-   *  unreachable server must not nag every ten seconds while old rows serve. */
-  setMenu(m: Menu): void {
-    this.menu = m;
-    if (m !== null) this.splash = false;
-    if (this.menuClock) { clearInterval(this.menuClock); this.menuClock = null; }
-    const tick = m === 'resume' ? () => { void this.refreshPicker().catch(quiet('refresh the session list')); }
-      : m === 'tasks' ? () => { void this.refreshTasks().catch(quiet('refresh tasks')); }
-        : null;
-    if (tick) {
-      this.menuClock = setInterval(tick, this.pollMs);
-      this.menuClock.unref?.();
-    }
-    this.notify();
-  }
 
   // ── /resume and /workspace ────────────────────────────────────────────────
 
@@ -1121,7 +1134,7 @@ export class WindowStore {
       await this.refreshPicker();
       this.pickerNotice = undefined;
       this.trashArmed = null;
-      this.setMenu(which);
+      this.setScreen(which);
     } catch (e) {
       this.note(`could not list ${which === 'resume' ? 'sessions' : 'workspaces'}: ${(e as Error).message}`);
     }
@@ -1249,7 +1262,7 @@ export class WindowStore {
   /** ctrl+n: the sessions open in this window. It shows FIRST and fills the
    *  workspace names in behind — the rows read fine as ids until they land. */
   openSwitcher(): void {
-    this.setMenu('sessions');
+    this.setScreen('sessions');
     if (this.workspaceRows.length) return;
     void (async () => {
       try { this.seeWorkspaces(await this.api('GET', '/workspaces') as unknown as WorkspaceInfo[]); this.notify(); }
@@ -1272,7 +1285,7 @@ export class WindowStore {
     const w = this.picker?.workspaces.find((x) => x.id === id);
     if (!w) return;
     this.editing = w;
-    this.setMenu('workspaceSettings');
+    this.setScreen('workspaceSettings');
   }
 
   /** Back to the list it was opened from, refreshed — a rename there has to
@@ -1283,7 +1296,7 @@ export class WindowStore {
   };
 
   /** The add row, with any previous complaint cleared. */
-  startAddWorkspace(): void { this.addError = undefined; this.setMenu('addWorkspace'); }
+  startAddWorkspace(): void { this.addError = undefined; this.setScreen('addWorkspace'); }
 
   /** The add form's submit. Adding a workspace is only useful if you then work
    *  in it, so it opens a session there; the confirmation goes AFTER that
@@ -1298,12 +1311,12 @@ export class WindowStore {
     this.notify();
     try {
       const w = await this.api('POST', '/workspaces', req) as { id: string; owner: string; name: string };
-      this.setMenu(null);
+      this.closeScreen();
       await this.openSession({ kind: 'new', workspaceId: w.id });
       this.note(`workspace ${w.owner}/${w.name} added`);
     } catch (e) {
       this.addError = (e as Error).message.replace(/^POST \/workspaces: /, '');
-      this.setMenu('addWorkspace');
+      this.setScreen('addWorkspace');
     }
   };
 
@@ -1341,7 +1354,7 @@ export class WindowStore {
       await this.refreshTasks();
       this.tasksNotice = undefined;
       this.killArmed = null;
-      this.setMenu('tasks');
+      this.setScreen('tasks');
     } catch (e) { this.note(`could not list tasks: ${(e as Error).message}`); }
   };
 
@@ -1419,7 +1432,7 @@ export class WindowStore {
       this.archived = d.cards;
       this.archivedTotal = d.total;
       this.archivedNotice = undefined;
-      this.setMenu('archived');
+      this.setScreen('archived');
     } catch (e) { this.note(`could not list archived cards: ${(e as Error).message}`); }
   };
 
@@ -1457,7 +1470,6 @@ export class WindowStore {
    *  never holds archived cards on its own — seat this one first. */
   openArchivedCard = (workspaceId: string, card: Card): void => {
     this.boardFor(workspaceId).adoptCard(card);
-    this.setMenu(null);
     // esc from here is the chat: the archive screen it came from is a menu,
     // and going "back" to a board the user never opened would be a surprise.
     this.openCard(card.seq, 'chat');
@@ -1725,7 +1737,7 @@ export class WindowStore {
       }
       case 'kanban':
         if (!session) { this.note('no session is open — the board belongs to a workspace; /workspace starts a session in one'); return; }
-        this.setView('board');
+        this.setScreen('board');
         return;
       case 'archived':
         if (!session) { this.note('no session is open — archived cards belong to a workspace; /workspace starts a session in one'); return; }
@@ -1754,14 +1766,14 @@ export class WindowStore {
         if (!session) { this.note('no session is open — nothing to pull into'); return; }
         void this.runAutoPull(session.id);
         return;
-      case 'settings': this.setMenu('settings'); return;
-      case 'keys': this.setMenu('keys'); return;
-      case 'secrets': this.setMenu('secrets'); return;
-      case 'model': this.setMenu('model'); return;
-      case 'presets': this.setMenu('presets'); return;
-      case 'server': this.setMenu('server'); return;
+      case 'settings': this.setScreen('settings'); return;
+      case 'keys': this.setScreen('keys'); return;
+      case 'secrets': this.setScreen('secrets'); return;
+      case 'model': this.setScreen('model'); return;
+      case 'presets': this.setScreen('presets'); return;
+      case 'server': this.setScreen('server'); return;
       case 'voice':
-        this.setMenu('voice');
+        this.setScreen('voice');
         // The mic and speaker pickers want device names; with voice off, ask.
         void this.voice.refreshDevices();
         return;
@@ -1902,7 +1914,7 @@ export class WindowStore {
     this.seeWorkspaces(ws);
     // Nothing registered yet: go straight to adding one. An empty install has
     // to be able to start from here, not from curl.
-    if (!ws.length) { this.setMenu('addWorkspace'); return; }
+    if (!ws.length) { this.setScreen('addWorkspace'); return; }
     if (ws.length === 1) { await this.openSession({ kind: 'new', workspaceId: ws[0].id }); return; }
     // boot_last_workspace (a server setting, off by default) skips the picker:
     // a new session in the workspace of the newest session you drove yourself.

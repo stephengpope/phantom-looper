@@ -156,7 +156,6 @@ export function NewWorkspace({ api, onSubmit, onCancel, error, now }: {
           key={query}
           choices={choices}
           reserve={2}
-          pad
           onSelect={(p) => {
             if ('typed' in p) { submitExisting(p.typed, 'pick'); return; }
             if (p.repo.added) { setNotice(`${p.repo.owner}/${p.repo.name} is already a workspace here`); return; }

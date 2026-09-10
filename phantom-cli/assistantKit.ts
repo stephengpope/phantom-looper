@@ -173,8 +173,7 @@ export function sessionsHandler(win: WindowStore, api: Api, clientId: string,
       }
       // Navigate to the CLI view: the builder sees the newly active session
       // regardless of where they were (board, card, a menu screen).
-      win.setView('chat');
-      win.setMenu(null);
+      win.closeScreen();
       return { ok: true, on_screen: store.activeId };
     }
     if (args.action === 'close') {
@@ -207,7 +206,7 @@ export function kanbanHandler(win: WindowStore) {
     const workspaceId = win.sessions.active()?.workspaceId ?? '';
     if (!workspaceId) return { error: 'no session is on screen yet, so there is no workspace or board' };
     if (args.action === 'screen') {
-      if (args.show === 'off') { win.setView('chat'); return { ok: true, screen: 'chat' }; }
+      if (args.show === 'off') { win.closeScreen(); return { ok: true, screen: 'chat' }; }
       const b = win.boardFor(workspaceId);
       if (!b.state.loaded) await b.load();
       if (args.show === 'column') {
@@ -217,12 +216,12 @@ export function kanbanHandler(win: WindowStore) {
         if (args.column === undefined) return { error: 'show column needs the column name' };
         const col = resolveColumn(b, args.column);
         if (!col) return { error: `no column "${args.column}" — the columns are: ${b.state.columns.join(', ')}` };
-        win.setView('board');
+        win.setScreen('board');
         b.requestColumn(col);
         return { ok: true, screen: `column ${col}, expanded` };
       }
       if (args.show === 'card') {
-        const up = win.view === 'board';
+        const up = win.screen === 'board';
         if (args.card === undefined) return { error: 'show card needs the card number', screen: up ? 'board' : 'chat' };
         if (!b.bySeq(args.card)) return { error: `no card ${args.card}`, screen: up ? 'board' : 'chat' };
         // Where esc will go is decided HERE, once: back to the columns when
@@ -230,7 +229,7 @@ export function kanbanHandler(win: WindowStore) {
         win.openCard(args.card, up ? 'board' : 'chat');
         return { ok: true, screen: up ? `card ${args.card}, on the board` : `card ${args.card}` };
       }
-      win.setView('board');
+      win.setScreen('board');
       b.requestBoard(); // every column: an open editor drops, an expanded column collapses
       return { ok: true, screen: 'board' };
     }
