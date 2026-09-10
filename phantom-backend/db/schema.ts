@@ -100,6 +100,9 @@ export const sessions = phantomLooper.table('sessions', {
   // code mode, every new session's start. (009) The looper never reads this —
   // its plan-column kickoff passes plan mode explicitly per turn.
   planMode: boolean('plan_mode').notNull().default(false),
+  // /star: pinned to the top of every session list, ahead of recency and of
+  // sessions in motion. The row is the record so every client agrees. (018)
+  starred: boolean('starred').notNull().default(false),
   // WHICH FOLDER MY TOOLS OPEN. A session that owns its checkout points at
   // its own id; a supervisor session points at its coder's. Null = no files
   // (an orphaned record). This is plumbing — the coder/supervisor

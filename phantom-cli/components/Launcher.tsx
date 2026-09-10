@@ -46,6 +46,8 @@ export interface SessionInfo {
    *  sum cached on the row — the same number the status bar shows. Null on
    *  rows saved before the cache existed; zero = nothing said yet. */
   tokensOutput?: number | null;
+  /** /star: pinned to the top of the list, ahead of rows in motion. */
+  starred?: boolean;
 }
 
 /** The `work` column: the git facts in the operator's terms, each with its
@@ -133,18 +135,21 @@ export function sessionChoices(
   // open session nothing was typed into yet would be missing from the
   // server's list, and /resume is the switcher — hiding an open session
   // would strand it. App merges those in (`sessions` already carries them).
-  // Rows in MOTION (a turn here, a hold elsewhere — the looper included)
-  // sort first; the rest by last use. A held row's own lastUsedAt can be old,
-  // which made the list read as unordered.
+  // STARRED rows pin first (/star, [s] on a row) — the one order the server
+  // already returns; this sort only has to keep it while adding what the
+  // server cannot know: rows in MOTION (a turn here, a hold elsewhere — the
+  // looper included) sort next; the rest by last use. A held row's own
+  // lastUsedAt can be old, which made the list read as unordered.
   const inMotion = (s: SessionInfo) => isRunning(s, { busy, clientId });
   sessions = [...sessions].sort((a, b) =>
-    Number(inMotion(b)) - Number(inMotion(a))
+    Number(b.starred === true) - Number(a.starred === true)
+    || Number(inMotion(b)) - Number(inMotion(a))
     || Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt));
   if (!sessions.length) {
     return showSupervised
       ? [{ value: null, label: 'no sessions yet', detail: 'start one with /workspace', heading: true }]
       : [{ value: null, label: 'no sessions yet',
-          detail: 'start one with /workspace · [s] shows the looper\'s card sessions', heading: true }];
+          detail: 'start one with /workspace · [v] shows the looper\'s card sessions', heading: true }];
   }
   // The workspace column is its card prefix ("PHA") — the resolved value the
   // server sends on the list; a server without it falls back to the label. A
@@ -201,7 +206,9 @@ export function sessionChoices(
     // opens "Plan card 9.\n\n…") would break the cell into extra lines —
     // truncate-end clips width, not line breaks — so whitespace flattens here.
     const msg = (s.lastUserMessage ?? lastMessage(s.id))?.replace(/\s+/g, ' ').trim();
-    const nameCol = s.name ?? '·';
+    // A starred row carries its mark on the name — the column a pinned row
+    // is pinned FOR. An unnamed one is the star alone, never "★ ·".
+    const nameCol = s.starred === true ? `★ ${s.name ?? ''}`.trimEnd() : s.name ?? '·';
     const msgCol = sup ? 'verdicts · read-only'
       : msg ? `"${msg}"`
       : '·';
@@ -261,7 +268,7 @@ export function workspaceChoices(workspaces: WorkspaceInfo[], canAdd = true): Ch
 /** One list, two uses. `mode` decides which — sessions for /resume, workspaces
  *  for a fresh start. Deliberately not both at once: launching means "start
  *  work", reopening is a different intent with its own command. */
-export function Launcher({ mode, workspaces, sessions, total, lastMessage, busy, loaded, clientId, onPick, onEdit, onDuplicate, onClose, onTrash, onCancel, onNearEnd, showSupervised, onToggleSupervised, now, title, footer, notice, canAdd }: {
+export function Launcher({ mode, workspaces, sessions, total, lastMessage, busy, loaded, clientId, onPick, onEdit, onDuplicate, onStar, onClose, onTrash, onCancel, onNearEnd, showSupervised, onToggleSupervised, now, title, footer, notice, canAdd }: {
   mode: 'sessions' | 'workspaces';
   workspaces: WorkspaceInfo[];
   sessions?: SessionInfo[];
@@ -269,7 +276,7 @@ export function Launcher({ mode, workspaces, sessions, total, lastMessage, busy,
    *  filters in force, plus what this window merged in) — `sessions` is the
    *  pages loaded so far. Omitted = the loaded rows are the list. */
   total?: number;
-  /** The looper's supervisor seats are hidden unless this is on; [s] asks
+  /** The looper's supervisor seats are hidden unless this is on; [v] asks
    *  the owner to flip it (the list is re-read with the switch). */
   showSupervised?: boolean;
   onToggleSupervised?: () => void;
@@ -287,6 +294,8 @@ export function Launcher({ mode, workspaces, sessions, total, lastMessage, busy,
   onEdit?: (workspaceId: string) => void;
   /** `d` on a session row: duplicate it into a new session — the way past a lock. */
   onDuplicate?: (sessionId: string) => void;
+  /** `s` on a session row: star it — pinned to the top of the list (or back). */
+  onStar?: (sessionId: string) => void;
   /** `x` on a session row: close it — out of local memory (the tab ring, the
    *  open-session list, the dot). The session stays on the server. */
   onClose?: (sessionId: string) => void;
@@ -308,7 +317,8 @@ export function Launcher({ mode, workspaces, sessions, total, lastMessage, busy,
   // and not the "add a workspace…" row that sits with them.
   const canEdit = mode === 'workspaces' && !!onEdit;
   const canCopy = mode === 'sessions' && !!onDuplicate;
-  // The looper's card sessions are hidden by default; [s] toggles them in.
+  const canStar = mode === 'sessions' && !!onStar;
+  // The looper's card sessions are hidden by default; [v] toggles them in.
   const choices = mode === 'sessions'
     ? sessionChoices(workspaces, sessions ?? [], lastMessage ?? (() => undefined), now, busy, loaded, clientId, showSupervised ?? false)
     : workspaceChoices(workspaces, canAdd ?? true);
@@ -322,7 +332,8 @@ export function Launcher({ mode, workspaces, sessions, total, lastMessage, busy,
           { key: 'enter', does: 'open' },
           { key: 'd', does: 'duplicate', when: canCopy }, { key: 'x', does: 'close', when: canCopy },
           { key: 't', does: 'trash', when: canCopy },
-          { key: 's', does: 'supervised', when: canCopy }, { key: 'esc', does: 'close' },
+          { key: 's', does: 'star', when: canStar },
+          { key: 'v', does: 'supervised', when: canCopy }, { key: 'esc', does: 'close' },
         ])}>
       <SelectList
         choices={choices}
@@ -337,9 +348,10 @@ export function Launcher({ mode, workspaces, sessions, total, lastMessage, busy,
           // The same act as the "add a workspace…" row, one key from any row.
           else if (ch === 'n' && (canAdd ?? true)) onPick({ kind: 'add' });
         } : mode === 'sessions' ? (ch, v) => {
-          if (ch === 's') { onToggleSupervised?.(); return; }
+          if (ch === 'v') { onToggleSupervised?.(); return; }
           if (v?.kind !== 'resume') return;
           if (ch === 'd') onDuplicate?.(v.sessionId);
+          else if (ch === 's') onStar?.(v.sessionId);
           else if (ch === 'x') onClose?.(v.sessionId);
           else if (ch === 't' || ch === 'c') onTrash?.(v.sessionId);
         } : undefined}

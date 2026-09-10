@@ -763,6 +763,7 @@ export function App({
               onNearEnd={windowStore.menu === 'resume' ? () => { void windowStore.morePicker(); } : undefined}
               onEdit={(id) => windowStore.editWorkspace(id)}
               onDuplicate={(id) => { void windowStore.startDuplicate(id); }}
+              onStar={(id) => { void windowStore.starFromPicker(id); }}
               onClose={windowStore.closeFromPicker}
               onTrash={(id) => { void windowStore.trashSession(id); }}
               onCancel={() => windowStore.setMenu(null)}

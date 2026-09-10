@@ -664,7 +664,7 @@ export class WindowStore {
       const opened = await coreOpenSession({ call: this.api, label: hostname(),
         ...(sessionId ? { sessionId } : { workspaceId: (target as { workspaceId: string }).workspaceId }) });
       const row = opened.session as { id: string; branch: string; workspaceId: string;
-        agent?: string | null; card?: number | null; planMode?: boolean;
+        agent?: string | null; card?: number | null; planMode?: boolean; starred?: boolean;
         provider?: string | null; model?: string | null;
         skills?: SkillMeta[]; secrets?: SecretIndexEntry[]; agent_git_credentials?: boolean };
       // The server record IS the conversation — unless this machine holds
@@ -737,6 +737,7 @@ export class WindowStore {
         syncStamp,
         pin,
         planMode,
+        starred: row.starred === true,
         // The toolbar's lifetime output tokens: the seated file is the
         // record's working copy, so its usage lines are the exact sum —
         // including any unsaved local steps adoptServerCopy kept.
@@ -889,7 +890,7 @@ export class WindowStore {
   /** A duplicate waiting on its one question — which model the copy runs on.
    *  Held apart from `menu` so esc simply drops it. */
   duplicating: { id: string; presets: Preset[]; current: { provider: string; model: string } } | null = null;
-  /** [s] on /resume: the looper's supervisor seats in the list or not. A fetch
+  /** [v] on /resume: the looper's supervisor seats in the list or not. A fetch
    *  parameter, not a filter — the server decides what the list is. */
   showSupervised = false;
   /** The armed /resume trash: the row [t] armed, and whether the server's
@@ -956,7 +957,7 @@ export class WindowStore {
       .filter((e) => !seen.has(e.id) && !e.readonly)
       .map((e) => ({
         id: e.id, workspaceId: e.workspaceId, branch: e.branch, status: 'active', agent: null,
-        model: e.summary.model, tokensOutput: e.totalTokens || null,
+        model: e.summary.model, tokensOutput: e.totalTokens || null, starred: e.starred,
         // Nothing typed = no activity: it sorts LAST, never ahead of real work.
         lastUsedAt: new Date(e.lastMessageAt || 0).toISOString(), locked: false, lastUserMessage: null,
       }));
@@ -992,7 +993,8 @@ export class WindowStore {
     this.morePickerInFlight = true;
     try {
       const got = await this.api('GET', `/sessions?${this.listQuery()}&limit=${PICKER_PAGE}`
-        + `&before=${encodeURIComponent(tail.lastUsedAt)}&before_id=${tail.id}`) as
+        + `&before=${encodeURIComponent(tail.lastUsedAt)}&before_id=${tail.id}`
+        + `&before_starred=${tail.starred === true}`) as
         { sessions: SessionInfo[]; total: number };
       const prev = this.picker;
       if (prev) {
@@ -1020,7 +1022,31 @@ export class WindowStore {
     }
   };
 
-  /** [s] on /resume: flip the filter and re-read. */
+  /** The one star write: /star and [s] on /resume both come through here.
+   *  The server row is the record; the local mirror follows so this window's
+   *  open-here extras pin too. Throws on failure — each caller reports where
+   *  it lives (a note in the session, the picker's notice line). */
+  setStarred = async (id: string, on: boolean): Promise<void> => {
+    await this.api('PATCH', `/sessions/${id}`, { starred: on });
+    this.sessions.setStarred(id, on);
+  };
+
+  /** [s] on /resume: pin the row to the top of the list (or take it down).
+   *  The row in hand says which way the toggle goes; the re-read draws it. */
+  starFromPicker = async (id: string): Promise<void> => {
+    const row = this.picker?.sessions.find((s) => s.id === id);
+    const on = !(row?.starred ?? false);
+    try {
+      await this.setStarred(id, on);
+      this.pickerNotice = undefined;
+      await this.refreshPicker().catch(quiet('refresh the session list'));
+    } catch (e) {
+      this.pickerNotice = `could not star session ${id}: ${(e as Error).message}`;
+    }
+    this.notify();
+  };
+
+  /** [v] on /resume: flip the filter and re-read. */
   toggleSupervised(): void {
     this.showSupervised = !this.showSupervised;
     this.notify();
@@ -1535,6 +1561,15 @@ export class WindowStore {
           await this.api('PATCH', `/sessions/${session.id}`, { name: args || null });
           this.note(args ? `renamed: ${args}` : 'name cleared — auto-titles are back on');
         } catch (e) { this.note(`could not rename session ${session.id}: ${(e as Error).message}`); }
+        return;
+      }
+      case 'star': {
+        if (!session) { this.note('no session is open — nothing to star'); return; }
+        const on = !session.starred;
+        try {
+          await this.setStarred(session.id, on);
+          this.note(on ? 'starred — pinned to the top of /resume' : 'unstarred');
+        } catch (e) { this.note(`could not star session ${session.id}: ${(e as Error).message}`); }
         return;
       }
       case 'kanban':
