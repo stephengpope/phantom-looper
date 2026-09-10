@@ -611,9 +611,428 @@
       "releaseDate": "2025-05-01"
     }
   ],
-  "deepseek": [],
-  "kimi": [],
-  "xai": [],
-  "mistral": [],
-  "groq": []
+  "deepseek": [
+    {
+      "id": "deepseek-v4-flash-vision-exp",
+      "name": "DeepSeek V4 Flash Vision Exp",
+      "reasoning": true,
+      "releaseDate": "2026-08-21"
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "name": "DeepSeek V4 Pro",
+      "reasoning": true,
+      "releaseDate": "2026-08-12"
+    },
+    {
+      "id": "deepseek-v4-flash",
+      "name": "DeepSeek V4 Flash",
+      "reasoning": true,
+      "releaseDate": "2026-07-31"
+    }
+  ],
+  "kimi": [
+    {
+      "id": "kimi-k3",
+      "name": "Kimi K3",
+      "reasoning": true,
+      "releaseDate": "2026-07-16"
+    },
+    {
+      "id": "kimi-k2.7-code",
+      "name": "Kimi K2.7 Code",
+      "reasoning": true,
+      "releaseDate": "2026-06-12"
+    },
+    {
+      "id": "kimi-k2.7-code-highspeed",
+      "name": "Kimi K2.7 Code HighSpeed",
+      "reasoning": true,
+      "releaseDate": "2026-06-12"
+    },
+    {
+      "id": "kimi-k2.6",
+      "name": "Kimi K2.6",
+      "reasoning": true,
+      "releaseDate": "2026-04-21"
+    }
+  ],
+  "xai": [
+    {
+      "id": "grok-4.6",
+      "name": "Grok 4.6",
+      "reasoning": true,
+      "releaseDate": "2026-08-12"
+    },
+    {
+      "id": "grok-imagine-image-2.0",
+      "name": "Grok Imagine Image 2.0",
+      "reasoning": false,
+      "releaseDate": "2026-08-07"
+    },
+    {
+      "id": "grok-4.5",
+      "name": "Grok 4.5",
+      "reasoning": true,
+      "releaseDate": "2026-07-08"
+    },
+    {
+      "id": "grok-imagine-video-1.5",
+      "name": "Grok Imagine Video 1.5",
+      "reasoning": false,
+      "releaseDate": "2026-05-30"
+    },
+    {
+      "id": "grok-4.3",
+      "name": "Grok 4.3",
+      "reasoning": true,
+      "releaseDate": "2026-04-17"
+    },
+    {
+      "id": "grok-build-0.1",
+      "name": "Grok Build 0.1",
+      "reasoning": true,
+      "releaseDate": "2026-04-16"
+    },
+    {
+      "id": "grok-imagine-image-quality",
+      "name": "Grok Imagine Image Quality",
+      "reasoning": false,
+      "releaseDate": "2026-04-03"
+    },
+    {
+      "id": "grok-4.20-0309-non-reasoning",
+      "name": "Grok 4.20 (Non-Reasoning)",
+      "reasoning": false,
+      "releaseDate": "2026-03-09"
+    },
+    {
+      "id": "grok-4.20-0309-reasoning",
+      "name": "Grok 4.20 (Reasoning)",
+      "reasoning": true,
+      "releaseDate": "2026-03-09"
+    },
+    {
+      "id": "grok-4.20-multi-agent-0309",
+      "name": "Grok 4.20 Multi-Agent",
+      "reasoning": true,
+      "releaseDate": "2026-03-09"
+    },
+    {
+      "id": "grok-imagine-image",
+      "name": "Grok Imagine Image",
+      "reasoning": false,
+      "releaseDate": "2026-01-28"
+    },
+    {
+      "id": "grok-imagine-video",
+      "name": "Grok Imagine Video",
+      "reasoning": false,
+      "releaseDate": "2026-01-28"
+    }
+  ],
+  "mistral": [
+    {
+      "id": "zai-glm-5-2",
+      "name": "GLM-5.2",
+      "reasoning": true,
+      "releaseDate": "2026-06-13"
+    },
+    {
+      "id": "mistral-medium-2604",
+      "name": "Mistral Medium 3.5",
+      "reasoning": true,
+      "releaseDate": "2026-04-29"
+    },
+    {
+      "id": "mistral-medium-latest",
+      "name": "Mistral Medium (latest)",
+      "reasoning": true,
+      "releaseDate": "2026-04-29"
+    },
+    {
+      "id": "mistral-small-2603",
+      "name": "Mistral Small 4",
+      "reasoning": true,
+      "releaseDate": "2026-03-16"
+    },
+    {
+      "id": "mistral-small-latest",
+      "name": "Mistral Small (latest)",
+      "reasoning": true,
+      "releaseDate": "2026-03-16"
+    },
+    {
+      "id": "voxtral-mini-tts-latest",
+      "name": "Voxtral Mini TTS (latest)",
+      "reasoning": false,
+      "releaseDate": "2026-03-01"
+    },
+    {
+      "id": "voxtral-mini-latest",
+      "name": "Voxtral Mini (latest)",
+      "reasoning": false,
+      "releaseDate": "2026-02-01"
+    },
+    {
+      "id": "devstral-2512",
+      "name": "Devstral 2",
+      "reasoning": false,
+      "releaseDate": "2025-12-09"
+    },
+    {
+      "id": "devstral-latest",
+      "name": "Devstral 2",
+      "reasoning": false,
+      "releaseDate": "2025-12-09"
+    },
+    {
+      "id": "labs-devstral-small-2512",
+      "name": "Devstral Small 2",
+      "reasoning": false,
+      "releaseDate": "2025-12-09"
+    },
+    {
+      "id": "devstral-medium-latest",
+      "name": "Devstral 2 (latest)",
+      "reasoning": false,
+      "releaseDate": "2025-12-02"
+    },
+    {
+      "id": "mistral-medium-2508",
+      "name": "Mistral Medium 3.1",
+      "reasoning": false,
+      "releaseDate": "2025-08-12"
+    },
+    {
+      "id": "voxtral-small-latest",
+      "name": "Voxtral Small (latest)",
+      "reasoning": false,
+      "releaseDate": "2025-07-15"
+    },
+    {
+      "id": "devstral-medium-2507",
+      "name": "Devstral Medium",
+      "reasoning": false,
+      "releaseDate": "2025-07-10"
+    },
+    {
+      "id": "devstral-small-2507",
+      "name": "Devstral Small",
+      "reasoning": false,
+      "releaseDate": "2025-07-10"
+    },
+    {
+      "id": "mistral-small-2506",
+      "name": "Mistral Small 3.2",
+      "reasoning": false,
+      "releaseDate": "2025-06-20"
+    },
+    {
+      "id": "devstral-small-2505",
+      "name": "Devstral Small 2505",
+      "reasoning": false,
+      "releaseDate": "2025-05-07"
+    },
+    {
+      "id": "mistral-medium-2505",
+      "name": "Mistral Medium 3",
+      "reasoning": false,
+      "releaseDate": "2025-05-07"
+    },
+    {
+      "id": "magistral-medium-latest",
+      "name": "Magistral Medium (latest)",
+      "reasoning": true,
+      "releaseDate": "2025-03-17"
+    },
+    {
+      "id": "magistral-small",
+      "name": "Magistral Small",
+      "reasoning": true,
+      "releaseDate": "2025-03-17"
+    },
+    {
+      "id": "mistral-large-2411",
+      "name": "Mistral Large 2.1",
+      "reasoning": false,
+      "releaseDate": "2024-11-18"
+    },
+    {
+      "id": "mistral-large-2512",
+      "name": "Mistral Large 3",
+      "reasoning": false,
+      "releaseDate": "2024-11-01"
+    },
+    {
+      "id": "mistral-large-latest",
+      "name": "Mistral Large (latest)",
+      "reasoning": false,
+      "releaseDate": "2024-11-01"
+    },
+    {
+      "id": "pixtral-large-latest",
+      "name": "Pixtral Large (latest)",
+      "reasoning": false,
+      "releaseDate": "2024-11-01"
+    },
+    {
+      "id": "ministral-3b-latest",
+      "name": "Ministral 3B (latest)",
+      "reasoning": false,
+      "releaseDate": "2024-10-01"
+    },
+    {
+      "id": "ministral-8b-latest",
+      "name": "Ministral 8B (latest)",
+      "reasoning": false,
+      "releaseDate": "2024-10-01"
+    },
+    {
+      "id": "pixtral-12b",
+      "name": "Pixtral 12B",
+      "reasoning": false,
+      "releaseDate": "2024-09-01"
+    },
+    {
+      "id": "mistral-nemo",
+      "name": "Mistral Nemo",
+      "reasoning": false,
+      "releaseDate": "2024-07-01"
+    },
+    {
+      "id": "open-mistral-nemo",
+      "name": "Open Mistral Nemo",
+      "reasoning": false,
+      "releaseDate": "2024-07-01"
+    },
+    {
+      "id": "codestral-latest",
+      "name": "Codestral (latest)",
+      "reasoning": false,
+      "releaseDate": "2024-05-29"
+    },
+    {
+      "id": "open-mixtral-8x22b",
+      "name": "Mixtral 8x22B",
+      "reasoning": false,
+      "releaseDate": "2024-04-17"
+    },
+    {
+      "id": "mistral-embed",
+      "name": "Mistral Embed",
+      "reasoning": false,
+      "releaseDate": "2023-12-11"
+    },
+    {
+      "id": "open-mixtral-8x7b",
+      "name": "Mixtral 8x7B",
+      "reasoning": false,
+      "releaseDate": "2023-12-11"
+    },
+    {
+      "id": "open-mistral-7b",
+      "name": "Mistral 7B",
+      "reasoning": false,
+      "releaseDate": "2023-09-27"
+    }
+  ],
+  "groq": [
+    {
+      "id": "qwen/qwen3.8-27b",
+      "name": "Qwen3.8 27B",
+      "reasoning": true,
+      "releaseDate": "2026-08-14"
+    },
+    {
+      "id": "qwen/qwen3.6-27b",
+      "name": "Qwen3.6 27B",
+      "reasoning": true,
+      "releaseDate": "2026-04-22"
+    },
+    {
+      "id": "canopylabs/orpheus-v1-english",
+      "name": "Canopy Labs Orpheus V1 English",
+      "reasoning": false,
+      "releaseDate": "2025-12-19"
+    },
+    {
+      "id": "canopylabs/orpheus-arabic-saudi",
+      "name": "Canopy Labs Orpheus Arabic Saudi",
+      "reasoning": false,
+      "releaseDate": "2025-12-16"
+    },
+    {
+      "id": "openai/gpt-oss-safeguard-20b",
+      "name": "Safety GPT OSS 20B",
+      "reasoning": true,
+      "releaseDate": "2025-10-29"
+    },
+    {
+      "id": "groq/compound",
+      "name": "Compound",
+      "reasoning": false,
+      "releaseDate": "2025-09-04"
+    },
+    {
+      "id": "groq/compound-mini",
+      "name": "Compound Mini",
+      "reasoning": false,
+      "releaseDate": "2025-09-04"
+    },
+    {
+      "id": "openai/gpt-oss-120b",
+      "name": "GPT OSS 120B",
+      "reasoning": true,
+      "releaseDate": "2025-08-05"
+    },
+    {
+      "id": "openai/gpt-oss-20b",
+      "name": "GPT OSS 20B",
+      "reasoning": true,
+      "releaseDate": "2025-08-05"
+    },
+    {
+      "id": "meta-llama/llama-prompt-guard-2-22m",
+      "name": "Llama Prompt Guard 2 22M",
+      "reasoning": false,
+      "releaseDate": "2025-05-29"
+    },
+    {
+      "id": "meta-llama/llama-prompt-guard-2-86m",
+      "name": "Prompt Guard 2 86M",
+      "reasoning": false,
+      "releaseDate": "2025-05-29"
+    },
+    {
+      "id": "allam-2-7b",
+      "name": "ALLaM-2-7b",
+      "reasoning": false,
+      "releaseDate": "2025-01-23"
+    },
+    {
+      "id": "llama-3.3-70b-versatile",
+      "name": "Llama 3.3 70B",
+      "reasoning": false,
+      "releaseDate": "2024-12-06"
+    },
+    {
+      "id": "whisper-large-v3-turbo",
+      "name": "Whisper Large V3 Turbo",
+      "reasoning": false,
+      "releaseDate": "2024-10-01"
+    },
+    {
+      "id": "llama-3.1-8b-instant",
+      "name": "Llama 3.1 8B",
+      "reasoning": false,
+      "releaseDate": "2024-07-23"
+    },
+    {
+      "id": "whisper-large-v3",
+      "name": "Whisper",
+      "reasoning": false,
+      "releaseDate": "2023-09-01"
+    }
+  ]
 }

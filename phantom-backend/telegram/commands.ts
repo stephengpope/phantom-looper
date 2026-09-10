@@ -18,6 +18,9 @@
 import type { TelegramClient } from './client.js';
 import type { TelegramEngine } from './engine.js';
 import type { TelegramMode } from './store.js';
+import { PROVIDERS } from '../../core/llm/createAgent.js';
+import { hasCatalog, latestModel, modelsFor } from '../models.js';
+import { resolveMany } from '../settings.js';
 
 interface Cmd { command: string; description: string }
 
@@ -27,6 +30,9 @@ const COMMON: Cmd[] = [
   { command: 'star', description: 'Pin the active session to the top of the list' },
   { command: 'stop', description: 'Stop the running task' },
   { command: 'status', description: "Show what's running" },
+  { command: 'providers', description: 'List or switch LLM providers' },
+  { command: 'models', description: 'List or switch models' },
+  { command: 'presets', description: 'List or apply model presets' },
   { command: 'update', description: 'Check for updates' },
   { command: 'help', description: 'List commands' },
 ];
@@ -57,6 +63,9 @@ export function menuFor(mode: TelegramMode): Cmd[] { return MENU[mode]; }
 // re-prompts, never acts on the wrong row.
 const sessionList = new Map<number, string[]>();
 const workspaceList = new Map<number, string[]>();
+const providerList = new Map<number, string[]>();
+const modelList = new Map<number, string[]>();
+const presetList = new Map<number, string[]>();
 
 /** Handle a slash command. `text` starts with '/'. */
 export async function handleCommand(
@@ -220,6 +229,91 @@ export async function handleCommand(
       return;
     }
 
+    case 'providers': {
+      // The same PROVIDERS list the cli's /model offers; each row names the
+      // catalog's newest model — what an unset `model` resolves to. Switching
+      // clears `model` so it follows that default (the cli's /model rule).
+      const { provider: current } = await resolveMany(engine.db, ['provider']);
+      if (arg !== undefined) {
+        const p = listed(providerList, dm, arg);
+        if (!p) { await reply('⚠️ Send /providers first to see the list, then /providers <number>.'); return; }
+        const j = await (await engine.call('/settings', { method: 'PATCH', body: { provider: p, model: null } })).json();
+        if (!j.ok) { await reply(`⚠️ Couldn't switch provider: ${j.error?.message}`); return; }
+        const model = latestModel(p);
+        await reply([
+          `✅ Provider: ${p}${model ? ` — model: ${model} (the catalog's newest)` : ''}`,
+          ...(p === 'openai-compatible'
+            ? ['', '⚠️ openai-compatible also needs an endpoint and a model id — set both in the cli under /model.'] : []),
+          '',
+          'See the top models with /models; switch with /models <number>.',
+        ].join('\n'));
+        return;
+      }
+      providerList.set(dm, [...PROVIDERS]);
+      const rows = PROVIDERS.map((p, i) => {
+        const d = latestModel(p);
+        const note = d ? ` → ${d}`
+          : hasCatalog(p) ? ' — catalog list unavailable right now'
+            : ' — no catalog (set model + endpoint in the cli)';
+        return `${i + 1}. ${p}${note}${p === current ? ' (current)' : ''}`;
+      });
+      await reply(['🧠 Providers:', '', ...rows, '',
+        'Switch with /providers <number> — the model follows the catalog\'s newest shown above'].join('\n'));
+      return;
+    }
+
+    case 'models': {
+      // The catalog's top 10 for the current provider. The list is a
+      // convenience, never a fence — any other id can be typed in the cli.
+      const { provider, model } = await resolveMany(engine.db, ['provider', 'model']);
+      if (!provider) { await reply('⚠️ No provider yet — pick one with /providers.'); return; }
+      const models = modelsFor(provider).slice(0, 10);
+      if (!models.length) {
+        await reply(`ℹ️ ${provider} has no catalog list — the model is set by id in the cli under /model.`);
+        return;
+      }
+      if (arg !== undefined) {
+        const id = listed(modelList, dm, arg);
+        if (!id) { await reply('⚠️ Send /models first to see the list, then /models <number>.'); return; }
+        const j = await (await engine.call('/settings', { method: 'PATCH', body: { model: id } })).json();
+        if (!j.ok) { await reply(`⚠️ Couldn't switch model: ${j.error?.message}`); return; }
+        await reply(`✅ Model: ${id}`);
+        return;
+      }
+      modelList.set(dm, models.map((m) => m.id));
+      const rows = models.map((m, i) => `${i + 1}. ${m.id}${m.id === model ? ' (current)' : ''}`);
+      await reply([`🧠 Models — ${provider} (current: ${model ?? 'none'}):`, '', ...rows, '',
+        'Switch with /models <number>; any other id can be set in the cli under /model'].join('\n'));
+      return;
+    }
+
+    case 'presets': {
+      // Saved model configurations. Applying one is the cli's rule: the
+      // preset's keys become a PATCH /settings body — set keys write their
+      // value, clear keys null the setting, absent keys stay untouched.
+      const j = await (await engine.call('/presets')).json();
+      const list: Array<{ id: string; name: string; values: Record<string, unknown> }> = j.ok ? j.data : [];
+      if (!list.length) { await reply('ℹ️ No presets saved yet — save one in the cli under /presets.'); return; }
+      if (arg !== undefined) {
+        const id = listed(presetList, dm, arg);
+        if (!id) { await reply('⚠️ Send /presets first to see the list, then /presets <number>.'); return; }
+        const p = list.find((x) => x.id === id)!;
+        const applied = await (await engine.call('/settings', { method: 'PATCH', body: p.values })).json();
+        if (!applied.ok) { await reply(`⚠️ Couldn't apply "${p.name}": ${applied.error?.message}`); return; }
+        const { provider, model } = await resolveMany(engine.db, ['provider', 'model']);
+        await reply([
+          `✅ Applied preset "${p.name}" — ${provider ?? 'no provider'}${model ? ` / ${model}` : ''}.`,
+          '',
+          'See the top models with /models; switch with /models <number>.',
+        ].join('\n'));
+        return;
+      }
+      presetList.set(dm, list.map((p) => p.id));
+      const rows = list.map((p, i) => `${i + 1}. ${p.name}${presetSummary(p.values)}`);
+      await reply(['🧰 Presets:', '', ...rows, '', 'Apply one with /presets <number>'].join('\n'));
+      return;
+    }
+
     case 'stop': {
       // One rule everywhere: the runner stops its own turn; to stop someone
       // else's you send the interrupt for the session and the runner hears it
@@ -300,13 +394,21 @@ export function outcomeLine(pull: boolean, r: { result: string; reason?: string;
   return `⚠️ ${r.result}${why}`;
 }
 
-/** The id at position `arg` of the list /sessions last printed to this chat,
- *  or null when there is no list or the number is off it. */
-function listedSession(dm: number, arg: string): string | null {
-  const ids = sessionList.get(dm);
+/** The entry at position `arg` of the numbered list a command last printed
+ *  to this chat, or null when there is no list or the number is off it. */
+function listed(list: Map<number, string[]>, dm: number, arg: string): string | null {
+  const ids = list.get(dm);
   const n = Number.parseInt(arg, 10);
   if (!ids || !Number.isInteger(n) || n < 1 || n > ids.length) return null;
   return ids[n - 1];
+}
+
+const listedSession = (dm: number, arg: string) => listed(sessionList, dm, arg);
+
+/** A preset's provider / model as a short row suffix, when it sets them. */
+function presetSummary(values: Record<string, unknown>): string {
+  const bits = [values.provider, values.model].filter((v): v is string => typeof v === 'string');
+  return bits.length ? ` — ${bits.join(' / ')}` : '';
 }
 
 async function workspaceRow(engine: TelegramEngine, id: string): Promise<{ name?: string } | null> {
@@ -351,6 +453,14 @@ const HELP = [
   'Workspaces',
   '/workspaces — List workspaces',
   '/workspaces 2 — Switch to workspace 2',
+  '',
+  'Model',
+  '/providers — List providers and the model each selects by default',
+  '/providers 2 — Switch to provider 2',
+  '/models — List the top models for the current provider',
+  '/models 2 — Switch to model 2',
+  '/presets — List saved model presets',
+  '/presets 2 — Apply preset 2',
   '',
   'Coding agent',
   '/plan — Toggle plan mode',
