@@ -202,10 +202,8 @@ export function sessionChoices(
     const cardCol = s.card != null ? String(s.card) : '·';
     const statusCol = s.cardStatus ?? '·';
     // A blank fact is a dot — never the branch, which is just the session id
-    // wearing a prefix and says nothing to a person. A pinned row carries
-    // its mark on the name — the column a pinned row is pinned FOR. An
-    // unnamed one is the pin alone, never "📌 ·".
-    const nameCol = s.pinned === true ? `📌 ${s.name ?? ''}`.trimEnd() : s.name ?? '·';
+    // wearing a prefix and says nothing to a person.
+    const nameCol = s.name ?? '·';
     // A session open here that nothing was typed into carries no activity
     // time (App's merge fills epoch 0 so it sorts last) — the dot, not "2957w".
     const when = dead ? 'ended' : Date.parse(s.lastUsedAt) > 0 ? ago(s.lastUsedAt, now) : '·';
@@ -253,8 +251,14 @@ export function sessionChoices(
   // Inserted AFTER tableChoices so the column geometry never sees it (the
   // header sits at index 0, the pinned block right under it).
   const pinnedCount = sessions.filter((s) => s.pinned === true).length;
-  if (pinnedCount > 0 && pinnedCount < rows.length) {
-    table.splice(1 + pinnedCount, 0, { value: null, label: '', heading: true });
+  if (pinnedCount > 0) {
+    // A small group header: pin icon above the pinned block.
+    table.splice(1, 0, { value: null, label: '📌', heading: true });
+    // Blank separator between pinned and non-pinned (only when both exist).
+    if (pinnedCount < rows.length) {
+      // +2: table header at 0, pin heading at 1, then pinnedCount rows.
+      table.splice(2 + pinnedCount, 0, { value: null, label: '', heading: true });
+    }
   }
   return table;
 }
