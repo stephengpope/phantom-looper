@@ -19,10 +19,10 @@ import { Text } from './Text.js';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   DEFAULTS, DESCRIPTIONS, META, CONFIG_PATH, PROVIDER_KEY, REMOTE_DEFAULTS,
-  mask, visibleKeys, hiddenKeyCount, isLocalKey,
+  mask, visibleKeys, hiddenKeyCount,
   type ConfigKey, type ConfigValue,
 } from '../config.js';
-import { resolveLocal, localValues, setLocal, clearLocal } from '../local.js';
+import { resolveLocal, localValues } from '../local.js';
 import { makeSettings } from '../settings.js';
 import { SelectList, type Choice } from './SelectList.js';
 import { human, labelFor, type WireMeta } from '../settingLabels.js';
@@ -84,7 +84,7 @@ export function Settings({ api, onClose, onLocalChange, configPath = CONFIG_PATH
   // shows what is stored right now — never a copy the app has been carrying
   // since launch, which is what left the Assistant running on the settings it
   // was born with.
-  const settings = useMemo(() => makeSettings(api), [api]);
+  const settings = useMemo(() => makeSettings(api, configPath), [api, configPath]);
   const [remote, setRemote] = useState<Record<string, ConfigValue> | null>(null);
   useEffect(() => {
     if (startAt !== 'local') return;
@@ -134,17 +134,9 @@ export function Settings({ api, onClose, onLocalChange, configPath = CONFIG_PATH
     return buildModelSpec(key, spec, values, models);
   };
 
-  // ONE writer, routing on where the key LIVES — not on which screen you are
-  // looking at. Local is a file and answers immediately; everything else is a
-  // request to the server and can fail, which the notice says out loud rather
-  // than silently keeping the old value on screen.
+  // ONE writer. The settings object routes by where the key lives; after the
+  // write this screen re-reads and shows what was stored, never what was sent.
   const writeLocal = (key: ConfigKey, v: ConfigValue) => {
-    if (isLocalKey(key)) {
-      const bad = v === null ? clearLocal(key, configPath) : setLocal(key, v, configPath);
-      setNotice(bad ?? undefined);
-      if (!bad) { setTick((t) => t + 1); onLocalChange?.(key); }
-      return;
-    }
     void (async () => {
       try {
         await settings.write(key, v);

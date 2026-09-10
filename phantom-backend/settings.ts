@@ -7,7 +7,7 @@
 // effect without a restart or the config API lies.
 import type { Db } from './db/client.js';
 import type { WorkspaceRow, SessionRow } from './db/schema.js';
-import { readStore, GLOBAL, workspaceScope, sessionScope } from './store.js';
+import { readStore, putScoped, dropKey, GLOBAL, workspaceScope, sessionScope } from './store.js';
 import { latestModel } from './models.js';
 
 // Plain settings are never encrypted, so resolving one asks for plain values
@@ -351,6 +351,51 @@ export function validatePatch(entries: Array<[string, unknown]>): string[] {
     .filter((m): m is string => m !== null);
 }
 
+/** A write that cannot be stored, with the API's error code already chosen. */
+export class SettingsWriteError extends Error {
+  constructor(readonly code: string, message: string) { super(message); }
+}
+
+export type SettingsWriteLayer = 'global' | 'workspace' | 'session';
+
+/** THE settings writer. Every route that changes a setting — global, workspace
+ *  or session — goes through this one validation + store path, so a second
+ *  door cannot accept a value the first refused. null clears; it is never
+ *  stored. Returns the keys written, so the caller can fan out the change. */
+export async function writeSettings(
+  db: Db, encryptionKey: Buffer,
+  layer: SettingsWriteLayer, scope: string,
+  values: Record<string, unknown>,
+): Promise<string[]> {
+  const entries = Object.entries(values);
+  const bad = entries.filter(([k]) => !isSettingKey(k) && !isCredential(k)).map(([k]) => k);
+  if (bad.length) throw new SettingsWriteError('unknown_setting', `unknown settings: ${bad.join(', ')}`);
+  const invalid = validatePatch(entries.filter(([k]) => !isCredential(k)));
+  if (invalid.length) throw new SettingsWriteError('invalid_setting', invalid.join('; '));
+  for (const [k] of entries) {
+    if (layer === 'global') {
+      if (isSettingKey(k) && !isGlobalSettable(k)) {
+        throw new SettingsWriteError('not_overridable', `${k} is a fact about one workspace — set it there`);
+      }
+      continue;
+    }
+    const okHere = isCredential(k)
+      ? layer === 'workspace' && isCredentialWorkspaceScoped(k)
+      : layer === 'workspace' ? isWorkspaceOverridable(k as SettingKey)
+        : isSessionOverridable(k as SettingKey);
+    if (!okHere) throw new SettingsWriteError('not_overridable', `${k} cannot be set per ${layer}`);
+  }
+  for (const [k, value] of entries) {
+    if (value === null) { await dropKey(db, k, scope); continue; }
+    const secret = isCredential(k);
+    if (secret && typeof value !== 'string') {
+      throw new SettingsWriteError('invalid_args', `${k} must be a string to be stored as a secret`);
+    }
+    await putScoped(db, encryptionKey, scope, k, value, secret);
+  }
+  return entries.map(([k]) => k);
+}
+
 export type SettingKey = keyof typeof DEFAULTS;
 export type SettingValue = (typeof DEFAULTS)[SettingKey];
 
@@ -511,9 +556,9 @@ export async function resolveCredential(
 
 /** Every setting's layers for one context, from ONE read. */
 export async function settingsLayers(
-  db: Db, ctx: ResolveCtx,
+  db: Db, ctx: ResolveCtx, alreadyRead?: ByScope,
 ): Promise<Record<SettingKey, SettingLayers>> {
-  const byScope = await readStore(db, null, scopesFor(ctx));
+  const byScope = alreadyRead ?? await readStore(db, null, scopesFor(ctx));
   const out = {} as Record<SettingKey, SettingLayers>;
   for (const key of Object.keys(DEFAULTS) as SettingKey[]) {
     out[key] = computeLayersFor(key, byScope, ctx);

@@ -23,6 +23,8 @@ import { webRoutes } from './routes/web.js';
 import type { GitEngine } from '../git/engine.js';
 import { BoardEvents } from './boardEvents.js';
 import { SessionEvents } from './sessionEvents.js';
+import { SettingsEvents } from './settingsEvents.js';
+import { writeSettings, type SettingsWriteLayer } from '../settings.js';
 import { ForegroundCommands } from './foreground.js';
 import { BackdoorQueue } from './backdoor.js';
 import type { AutoPushResult, AutoPushEvent } from '../git/autoPush.js';
@@ -69,6 +71,14 @@ export interface AppCtx {
    *  at registration like the board's, so it is never absent: the turn
    *  route's own ND-JSON reply is built off it. */
   sessionEvents?: SessionEvents;
+  /** Settings write notifications. The event names the scope only; listeners
+   *  re-read the settings route rather than receiving a second copy. */
+  settingsEvents?: SettingsEvents;
+  /** THE writer every settings route uses: validates, stores, then announces
+   *  the scope. Wired at registration so a route cannot store without the
+   *  change notice listeners rely on. */
+  settingsWrite?: (layer: SettingsWriteLayer, scope: string,
+    values: Record<string, unknown>, client?: string) => Promise<string[]>;
   /** Active server-side turns, keyed by session id. The interrupt route aborts
    *  the controller; the turn runner registers on entry and removes on exit.
    *  Absent only in tests that never run a turn. */
@@ -167,6 +177,12 @@ export async function buildApp(ctx: AppCtx) {
   });
 
   ctx.sessionEvents ??= new SessionEvents();
+  ctx.settingsEvents ??= new SettingsEvents();
+  ctx.settingsWrite = async (layer, scope, values, client) => {
+    const updated = await writeSettings(ctx.db, ctx.encryptionKey, layer, scope, values);
+    if (updated.length) ctx.settingsEvents!.publish(scope, client);
+    return updated;
+  };
   ctx.activeTurns ??= new Map();
   ctx.foreground ??= new ForegroundCommands();
   ctx.backdoor ??= new BackdoorQueue();

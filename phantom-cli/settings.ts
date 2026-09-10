@@ -8,13 +8,16 @@
 // more — every read below is a call, answered by the server, at the moment the
 // value is used.
 //
-// ONE flat store on the server (no namespaces): every key is declared in the
-// server's code with its default, so `all()` already carries the resolved
-// value for every key this client renders. The machine-local settings
-// (local.ts) need no network, which is what keeps /server usable exactly when
-// this is failing — and a read that cannot reach the server THROWS rather than
-// showing invented numbers beside real ones.
-import { PROVIDER_KEY, type ConfigValue } from './config.js';
+// Server settings are ONE flat store (no namespaces): every key is declared in
+// the server's code with its default, so `all()` carries the resolved value.
+// Machine-local settings (local.ts) stay separate and are routed here, which
+// keeps /server usable exactly when the server itself is failing. A server
+// read that cannot reach the server THROWS rather than inventing values.
+import {
+  CONFIG_PATH, PROVIDER_KEY, isLocalKey,
+  type ConfigValue, type LocalKey,
+} from './config.js';
+import { localValues, setLocal, clearLocal } from './local.js';
 
 export const CREDENTIAL_KEYS = [
   'github_token',
@@ -47,44 +50,60 @@ const q = (s: Scope = {}) => {
   return t ? `?${t}` : '';
 };
 
-/** The settings client: one method per route, same shapes and names, so "what
- *  does this do" is answered by the API docs and nothing here has an opinion of
- *  its own. */
-export function makeSettings(api: Api) {
+/** The settings client: one door for server settings and this machine's local
+ *  ones. A read always asks its store; a write always routes by where the key
+ *  lives. The returned values are for the operation in hand, never for keeping. */
+export function makeSettings(api: Api, configPath = CONFIG_PATH) {
+  const all = (scope?: Scope) =>
+    api('GET', `/settings${q(scope)}`) as Promise<Record<string, Entry>>;
+  const remotePatch = (values: Record<string, ConfigValue>, scope?: Scope) =>
+    api('PATCH', `/settings${q(scope)}`, values) as Promise<{ updated: string[] }>;
+  const valuesOf = (entries: Record<string, Entry>): Record<string, ConfigValue> => {
+    const out: Record<string, ConfigValue> = {};
+    for (const [k, v] of Object.entries(entries ?? {})) out[k] = v.value as ConfigValue;
+    return out;
+  };
+
   return {
     /** The call the client is built on, for the one-off reads beside the
      *  settings (the catalog, the GitHub check). */
     api,
-    /** GET /settings — every setting resolved, with layers/meta/description. */
-    all: (scope?: Scope) =>
-      api('GET', `/settings${q(scope)}`) as Promise<Record<string, Entry>>,
+    /** GET /settings — every server setting resolved, with layers/meta. */
+    all,
 
-    /** PATCH /settings — several keys in one call, like the route. null
-     *  clears a key at that layer. */
-    patch: (values: Record<string, ConfigValue>, scope?: Scope) =>
-      api('PATCH', `/settings${q(scope)}`, values) as Promise<{ updated: string[] }>,
-
-    /** DELETE /settings/:key */
-    clear: (key: string, scope?: Scope) =>
-      api('DELETE', `/settings/${key}${q(scope)}`),
-
-    // ── what this client actually asks for ──────────────────────────────────
-
-    /** Everything this client reads, as plain values. The server declares every
-     *  key's default, so the resolved `value` is always present.
-     *
-     *  Call this AT THE POINT OF USE — when a sidecar spawns, when an agent is
-     *  built, when a screen opens. Do not keep the result. */
-    async read(): Promise<Record<string, ConfigValue>> {
-      const entries = await this.all();
-      const out: Record<string, ConfigValue> = {};
-      for (const [k, v] of Object.entries(entries ?? {})) out[k] = v.value as ConfigValue;
-      return out;
+    /** Plain values, fresh from the store at the point of use. A global read
+     *  overlays this machine's local keys; a scoped read is server-only. */
+    async read(scope?: Scope): Promise<Record<string, ConfigValue>> {
+      const remote = valuesOf(await all(scope));
+      return scope ? remote : { ...remote, ...localValues(configPath) };
     },
 
-    /** Write one setting. One store — no routing decision to make. */
-    write(key: string, value: ConfigValue) {
-      return this.patch({ [key]: value });
+    /** Write several settings. Server keys go in one PATCH; machine-local
+     *  keys go to the local file. A scoped write is server-only. */
+    async patch(values: Record<string, ConfigValue>, scope?: Scope): Promise<{ updated: string[] }> {
+      if (scope) return remotePatch(values, scope);
+      const remote: Record<string, ConfigValue> = {};
+      const local: Array<[LocalKey, ConfigValue]> = [];
+      for (const [k, v] of Object.entries(values)) {
+        if (isLocalKey(k)) local.push([k, v]); else remote[k] = v;
+      }
+      const result = Object.keys(remote).length ? await remotePatch(remote) : { updated: [] };
+      for (const [k, v] of local) {
+        const bad = v === null ? clearLocal(k, configPath) : setLocal(k, v, configPath);
+        if (bad) throw new Error(bad);
+      }
+      return { updated: [...result.updated, ...local.map(([k]) => k)] };
+    },
+
+    /** Write one setting. null clears it at the store that owns it. */
+    write(key: string, value: ConfigValue, scope?: Scope) {
+      return this.patch({ [key]: value }, scope);
+    },
+
+    /** Clear one setting. Same write path as PATCH {key:null}; local keys
+     *  clear locally, server keys clear on the server. */
+    clear(key: string, scope?: Scope) {
+      return this.patch({ [key]: null }, scope);
     },
   };
 }

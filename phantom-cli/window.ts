@@ -13,6 +13,7 @@ import { basename } from 'node:path';
 import type { ModelMessage, Tool } from 'ai';
 import { SessionStore, activeHold, type LoadedSession } from './sessions.js';
 import { SessionFeed } from './sessionFeed.js';
+import { SettingsFeed } from './settingsFeed.js';
 import { BoardStore, type Card, type Stream } from './board.js';
 import { VoiceClient, sidecarEnv, codingKanbanTool, screenModeTools,
   type KanbanArgs, type ScreenModeHandler } from './voice.js';
@@ -27,9 +28,8 @@ import { messagesToParts, nextId, type Part } from './state.js';
 import { kanbanOps } from './kanban.js';
 import { PasteStore } from './paste.js';
 import { quiet, watchConnection, type Api } from './request.js';
-import { REMOTE_DEFAULTS, VOICE_BOOT_KEYS, ASSISTANT_MODEL_KEYS, isLocalKey,
+import { REMOTE_DEFAULTS, VOICE_BOOT_KEYS, ASSISTANT_MODEL_KEYS,
   type ConfigKey, type ConfigValue } from './config.js';
-import { localValues, setLocal } from './local.js';
 import { makeSettings } from './settings.js';
 import { lastWorkspaceId, type SessionInfo, type WorkspaceInfo } from './components/Launcher.js';
 import type { TasksView } from './components/Tasks.js';
@@ -108,9 +108,6 @@ export interface WindowOptions {
    *  `plan` builds the plan-mode kit: the readonly preset on the mutating kits. */
   newTools: (sessionId: string, plan?: boolean, workspaceId?: string) => Promise<Record<string, Tool>>;
   configPath?: string;
-  /** Settings as index.tsx read them a moment ago, for the FIRST agent build
-   *  only. Not a cache: nothing reads it twice. */
-  bootConfig?: Record<string, ConfigValue>;
   initial?: Initial;
   /** What launching wants: resume a named session, or find a workspace and
    *  start. A resume has history coming, so it never opens on the splash. */
@@ -180,7 +177,8 @@ export class WindowStore {
    *  board tool and every coding session's — so a tool edit repaints an open
    *  board with no extra wiring. */
   private readonly boards = new Map<string, BoardStore>();
-  /** Display name and card prefix per workspace: one lookup each, ever. */
+  /** Display name and card prefix per workspace: a display cache, cleared
+   *  when the settings feed says they may have changed. */
   private readonly wsNames = new Map<string, WsFacts>();
 
   /** The launch splash, where the conversation will be. Cleared by the first
@@ -312,19 +310,27 @@ export class WindowStore {
 
   private readonly listeners = new Set<() => void>();
   private readonly settings;
+  private readonly settingsFeed: SettingsFeed | null;
   private readonly api: Api;
+  /** Bumped when another client wrote settings; menus keyed on it re-read. */
+  settingsVersion = 0;
 
   constructor(private readonly opts: WindowOptions) {
     // Every request rides the connection watch: the first success after an
     // outage fires recover(), which puts everything this window holds right
     // from the record — the request path's version of a feed's reconnect.
     this.api = watchConnection(opts.api, () => this.recover());
-    this.settings = makeSettings(this.api);
+    this.settings = makeSettings(this.api, opts.configPath);
+    this.settingsFeed = opts.stream
+      ? new SettingsFeed(opts.stream, () => this.settingsWrittenElsewhere(), opts.clientId)
+      : null;
+    this.settingsFeed?.start();
     this.workspaces = new WorkspaceDirectory(this.api);
     this.voice = (opts.makeVoice ?? (() => new VoiceClient(undefined, undefined, opts.run ?? runTurn)))();
     this.splash = opts.initial ? opts.initial.resumed.length === 0 : !opts.boot?.resumeId;
-    this.voiceEnabled = Boolean(opts.bootConfig?.voice_enabled);
-    this.sidebarWidth = Number(opts.bootConfig?.sidebar_width) || (opts.sidebarPercent ?? 20);
+    // Defaults only until readChrome's first server read lands.
+    this.voiceEnabled = false;
+    this.sidebarWidth = opts.sidebarPercent ?? 20;
     if (opts.initial?.workspace) {
       this.wsNames.set(opts.initial.workspaceId, { label: opts.initial.workspace,
         ...(opts.initial.cardPrefix ? { cardPrefix: opts.initial.cardPrefix } : {}) });
@@ -350,10 +356,10 @@ export class WindowStore {
 
   private notify(): void { for (const l of [...this.listeners]) l(); }
 
-  /** Settings, read where they are used. Never held: a resolved object goes
-   *  stale the moment anything writes through another door. */
-  private readCfg = async (): Promise<Record<string, ConfigValue>> =>
-    ({ ...await this.settings.read(), ...localValues(this.opts.configPath) });
+  /** Settings, read where they are used. Never held: the settings object asks
+   *  its store on every call, and the result lives only for this operation. */
+  private readSettings = async (): Promise<Record<string, ConfigValue>> =>
+    this.settings.read();
 
   // ── boards ────────────────────────────────────────────────────────────────
 
@@ -420,11 +426,11 @@ export class WindowStore {
     const e = this.sessions.get(id);
     if (!e || e.readonly || e.planMode === on) return;
     const tools = await this.codingKit(id, on, e.workspaceId);
-    // Plan mode changes the KIT, never the model: rebuilding through the
-    // session's pin is what keeps a flip from quietly moving a conversation
-    // onto whatever /model says now.
+    // Plan mode changes the KIT, never the model: the row's pin, read now,
+    // keeps a flip from quietly moving a conversation onto /model's latest.
+    const pin = await this.readSessionPin(id);
     const { agent, summary } = this.buildFor(
-      tools, pinnedCfg(await this.readCfg(), e.pin), e.instructions, id);
+      tools, pinnedCfg(await this.readSettings(), pin), e.instructions, id);
     this.sessions.setPlanMode(id, on, tools, agent, summary);
   };
 
@@ -442,6 +448,27 @@ export class WindowStore {
     instructions: string | undefined, noteInto: string) {
     const make = this.opts.makeAgent ?? buildAgent;
     return make(tools, cfg, instructions, (t) => this.sessions.note(noteInto, t));
+  }
+
+  private async readSessionPin(id: string): Promise<ModelPin | null> {
+    const row = await this.api('GET', `/sessions/${id}`) as
+      { provider?: string | null; model?: string | null; baseUrl?: string | null };
+    return sessionPin(row);
+  }
+
+  /** Build the agent a turn is about to use from the server, right now: the
+   *  session row supplies its locked model trio; current settings supply
+   *  everything else. The result replaces the previous disposable agent. */
+  private async refreshAgentForTurn(id: string): Promise<void> {
+    const e = this.sessions.get(id);
+    if (!e || e.readonly) return;
+    const pin = await this.readSessionPin(id);
+    const cfg = await this.readSettings();
+    const modelCfg = pinnedCfg(cfg, pin);
+    const { agent, summary } = this.buildFor(e.tools, modelCfg, e.instructions, id);
+    if (!pin) e.transcript.setModel({ provider: summary.provider, model: summary.model,
+      base_url: modelCfg.base_url ? String(modelCfg.base_url) : null });
+    this.sessions.setAgent(id, agent, summary, pin);
   }
 
   // ── the session store, and the turn's two ends ────────────────────────────
@@ -489,6 +516,7 @@ export class WindowStore {
       const r = await this.api('POST', `/sessions/${id}/lock`, { label: hostname() }) as
         { transcript_updated_at?: string | null };
       await this.refreshIfMoved(id, r?.transcript_updated_at ?? null);
+      await this.refreshAgentForTurn(id);
     };
     // The backdoor message queue (a detached command exited, a file was
     // dropped) rides this window's next send; the drain runs after the lock
@@ -552,7 +580,7 @@ export class WindowStore {
     const tools = { ...initial.tools, ...codingKanbanTool(this.codingKanbanHandler(initial.workspaceId)),
       ...screenModeTools(this.screenOps(initial.sessionId)) };
     const make = this.opts.makeAgent ?? buildAgent;
-    const { agent, summary } = make(tools, this.opts.bootConfig ?? REMOTE_DEFAULTS, instructions,
+    const { agent, summary } = make(tools, REMOTE_DEFAULTS, instructions,
       (t) => s.note(initial.sessionId, t));
     const transcript = (this.opts.makeTranscript ?? ((h: TranscriptHeader) => new Transcript(h)))({
       type: 'session', session_id: initial.sessionId, workspace: initial.workspaceId,
@@ -673,19 +701,17 @@ export class WindowStore {
   // ── workspaces ────────────────────────────────────────────────────────────
 
   /** The workspace LIST carries the same two facts per row: whoever reads it
-   *  fills the cache, so a later open needs no lookup. */
+   *  refreshes the display cache, so a later open needs no lookup. */
   seedWsFacts(list: { id: string; name?: string; displayName?: string | null; cardPrefix?: string }[]): void {
     for (const w of list) {
       const label = w.displayName || w.name;
-      if (label && !this.wsNames.has(w.id)) {
-        this.wsNames.set(w.id, { label, ...(w.cardPrefix ? { cardPrefix: w.cardPrefix } : {}) });
-      }
+      if (label) this.wsNames.set(w.id, { label, ...(w.cardPrefix ? { cardPrefix: w.cardPrefix } : {}) });
     }
   }
 
-  /** The display name and card prefix for a workspace, one lookup ever. A
-   *  failure answers with the id AND says why, so an id never passes for a
-   *  workspace called that. */
+  /** The display name and card prefix for a workspace. A failure answers
+   *  with the id AND says why, so an id never passes for a workspace called
+   *  that. */
   async wsFacts(id: string): Promise<WsFacts> {
     const hit = this.wsNames.get(id);
     if (hit) return hit;
@@ -785,7 +811,7 @@ export class WindowStore {
       // else. The pin is kept on the entry so every later rebuild (plan mode,
       // /model) resolves the same way instead of reading the settings again.
       const pin = resumed.length > 0 ? sessionPin(row) : null;
-      const modelCfg = pinnedCfg(await this.readCfg(), pin);
+      const modelCfg = pinnedCfg(await this.readSettings(), pin);
       const { agent, summary } = this.buildFor(tools, modelCfg, instructions, row.id);
       const transcript = (this.opts.makeTranscript ?? ((h: TranscriptHeader) => new Transcript(h)))({
         type: 'session', session_id: row.id, workspace: row.workspaceId, branch: row.branch,
@@ -884,7 +910,7 @@ export class WindowStore {
     try {
       const presets = await this.api('GET', '/presets') as Preset[];
       if (!presets.length) { await this.openSession({ kind: 'duplicate', id }); return; }
-      const cfg = await this.readCfg();
+      const cfg = await this.readSettings();
       this.duplicating = { id, presets,
         current: { provider: String(cfg.provider ?? ''), model: String(cfg.model ?? '') } };
       this.setScreen('duplicateModel');
@@ -907,7 +933,7 @@ export class WindowStore {
         if (!p) throw new Error('that preset is gone');
         const patch: Record<string, ConfigValue> = {};
         for (const [k, v] of Object.entries(p.values)) patch[k] = v as ConfigValue;
-        if (Object.keys(patch).length) await makeSettings(this.api).patch(patch);
+        if (Object.keys(patch).length) await this.settings.patch(patch);
         this.settingChanged('provider' as ConfigKey);
       }
       await this.openSession({ kind: 'duplicate', id: d.id });
@@ -1510,13 +1536,13 @@ export class WindowStore {
    *  what lets you save the key, turn the Assistant on, and have it work the
    *  first time. A bad agent trio throws at build; say so rather than dying in
    *  a floating promise. */
-  startVoice(): void {
+  startVoice(current?: Record<string, ConfigValue>): void {
     void (async () => {
       const make = this.opts.makeAssistantAgent ?? buildAssistantAgent;
       let built;
       let cfg: Record<string, ConfigValue>;
       try {
-        cfg = await this.readCfg();
+        cfg = current ?? await this.readSettings();
         built = make(await buildAssistantKit(this, this.assistantDeps), cfg);
       } catch (e) { this.note(`assistant not started: ${(e as Error).message}`); return; }
       this.voice.setAgent(built.agent, built.summary);
@@ -1527,11 +1553,11 @@ export class WindowStore {
 
   /** The read tools follow the session on screen: switching rebuilds the kit
    *  in place, same conversation, the new session's files. */
-  async rebuildAssistant(): Promise<void> {
+  async rebuildAssistant(current?: Record<string, ConfigValue>): Promise<void> {
     if (!this.voice.running) return;
     const make = this.opts.makeAssistantAgent ?? buildAssistantAgent;
     try {
-      const cfg = await this.readCfg();
+      const cfg = current ?? await this.readSettings();
       const kit = await buildAssistantKit(this, this.assistantDeps);
       this.voice.setAgent(make(kit, cfg).agent);
       this.voice.setCompaction(agentModelConfig(cfg, 'assistant'), historyLimit(cfg));
@@ -1541,12 +1567,20 @@ export class WindowStore {
   /** Launch: the chrome's two values and the voice decision, from one read. */
   async readChrome(): Promise<void> {
     try {
-      const c = await this.readCfg();
+      const c = await this.readSettings();
       this.voiceEnabled = Boolean(c.voice_enabled);
       this.sidebarWidth = Number(c.sidebar_width) || (this.opts.sidebarPercent ?? 20);
       this.notify();
-      if (c.voice_enabled) this.startVoice();
+      if (c.voice_enabled) this.startVoice(c);
     } catch { /* index.tsx already refused to start without the server */ }
+  }
+
+  /** Another client wrote settings: make open menus re-read, then refresh
+   *  every consumer from the server. The event carries no values. */
+  private settingsWrittenElsewhere(): void {
+    this.settingsVersion += 1;
+    this.notify();
+    this.settingChanged();
   }
 
   /** A setting changed. Everything that consumes one READS IT AGAIN here —
@@ -1556,16 +1590,23 @@ export class WindowStore {
   settingChanged = (key?: ConfigKey): void => {
     void (async () => {
       let cfg: Record<string, ConfigValue>;
-      try { cfg = await this.readCfg(); }
+      try { cfg = await this.readSettings(); }
       catch (e) { this.note(`could not read settings: ${(e as Error).message}`); return; }
       this.voiceEnabled = Boolean(cfg.voice_enabled);
       this.sidebarWidth = Number(cfg.sidebar_width) || (this.opts.sidebarPercent ?? 20);
+      if (this.duplicating) {
+        this.duplicating = { ...this.duplicating,
+          current: { provider: String(cfg.provider ?? ''), model: String(cfg.model ?? '') } };
+      }
 
       const make = this.opts.makeAgent ?? buildAgent;
+      const buildSession = (e: LoadedSession) =>
+        make(e.tools, pinnedCfg(cfg, e.pin), e.instructions,
+          (t) => this.sessions.note(e.id, t));
       const session = this.sessions.active();
       if (session) {
         const before = session.summary;
-        const next = make(session.tools, cfg, session.instructions).summary;
+        const next = buildSession(session).summary;
         if (next.provider !== before.provider || next.model !== before.model) {
           if (session.lastMessageAt === 0) {
             // Unpinned: the switch must reach the header, whose model the
@@ -1579,8 +1620,7 @@ export class WindowStore {
           }
         }
       }
-      this.sessions.rebuildAgents((tools, instructions, id) => make(tools, cfg, instructions,
-        (t) => { if (id) this.sessions.note(id, t); }));
+      this.sessions.rebuildAgents(buildSession);
 
       // The Assistant follows its settings: on/off starts and stops it; an
       // audio value (the Deepgram key, the devices) restarts the sidecar,
@@ -1588,13 +1628,23 @@ export class WindowStore {
       // in place — the history stays, the next turn uses the new model; the
       // spoken voice, the mutes, headphones and the wake word are pushed live.
       const running = this.voice.running;
-      if (key === 'voice_enabled') {
-        if (cfg.voice_enabled) this.startVoice(); else this.voice.stop();
+      if (key === undefined) {
+        // A server event names no key: every consumer re-reads. Workspace and
+        // board rows carry resolved settings too (card prefix, loop defaults).
+        this.wsNames.clear();
+        void this.api('GET', '/workspaces')
+          .then((ws) => this.seeWorkspaces(ws as unknown as WorkspaceInfo[]))
+          .catch(quiet('reload workspace settings'));
+        for (const b of this.boards.values()) void b.load().catch(quiet('reload board settings'));
+        if (cfg.voice_enabled) this.startVoice(cfg);
+        else { this.voice.stop(); this.sidebar = null; }
+      } else if (key === 'voice_enabled') {
+        if (cfg.voice_enabled) this.startVoice(cfg); else this.voice.stop();
         this.sidebar = null;
       } else if (running && key && VOICE_BOOT_KEYS.includes(key)) {
-        this.startVoice();
+        this.startVoice(cfg);
       } else if (running && key && ASSISTANT_MODEL_KEYS.includes(key)) {
-        await this.rebuildAssistant();
+        await this.rebuildAssistant(cfg);
       } else if (running && key === 'voice_spoken_voice') {
         this.voice.update({ voice: String(cfg.voice_spoken_voice) });
       } else if (running && key === 'voice_mic_muted') {
@@ -1623,18 +1673,11 @@ export class WindowStore {
       // Read the switch, flip it, write it, then let settingChanged read
       // everything again. A toggle is a read-modify-write, so it reads.
       let cfg: Record<string, ConfigValue>;
-      try { cfg = await this.readCfg(); }
+      try { cfg = await this.readSettings(); }
       catch (e) { this.note(`could not read settings: ${(e as Error).message}`); return; }
       const now = !cfg[key];
-      // Where a switch is saved follows where the setting lives: the mutes and
-      // the headphones switch are facts about this machine, the wake word is not.
-      if (isLocalKey(key)) {
-        const err = setLocal(key, now, this.opts.configPath);
-        if (err) { this.note(err); return; }
-      } else {
-        try { await this.settings.write(key, now); }
-        catch (e) { this.note(`could not save ${key}: ${(e as Error).message}`); return; }
-      }
+      try { await this.settings.write(key, now); }
+      catch (e) { this.note(`could not save ${key}: ${(e as Error).message}`); return; }
       this.settingChanged(key);
       switch (which) {
         case 'mic': this.note(now ? 'voice: not listening' : 'voice: listening'); break;
@@ -1913,7 +1956,7 @@ export class WindowStore {
     // boot_last_workspace (a server setting, off by default) skips the picker:
     // a new session in the workspace of the newest session you drove yourself.
     try {
-      if ((await this.readCfg()).boot_last_workspace === true) {
+      if ((await this.readSettings()).boot_last_workspace === true) {
         const ss = ((await this.api('GET', '/sessions')) as unknown as { sessions: SessionInfo[] }).sessions;
         const last = lastWorkspaceId(ws, ss);
         if (last) { await this.openSession({ kind: 'new', workspaceId: last }); return; }
@@ -1935,6 +1978,7 @@ export class WindowStore {
   /** The window is going away: the clocks, the boards' event streams and the
    *  sidecar all close with it. */
   close(): void {
+    this.settingsFeed?.stop();
     this.voice.stop();
     if (this.menuClock) { clearInterval(this.menuClock); this.menuClock = null; }
     if (this.taskClock) { clearInterval(this.taskClock); this.taskClock = null; }

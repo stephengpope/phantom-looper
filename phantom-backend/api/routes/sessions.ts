@@ -12,7 +12,7 @@ import { scanSkills, mergeSkills } from '../../../core/skills/skills.js';
 import { systemSkills } from '../../systemSkills.js';
 import { environmentFacts } from '../../environment.js';
 import { lastUserFromJsonl, headerModelFromJsonl, sumUsageFromJsonl, stripUsageFromJsonl } from '../../../core/llm/transcript.js';
-import { resolve, settingsBlock } from '../../settings.js';
+import { resolve, resolveMany, settingsBlock } from '../../settings.js';
 import { sessionScope, listSecrets, GLOBAL, workspaceScope } from '../../store.js';
 import { ok, err, type AppCtx } from '../app.js';
 import { openSession, SessionLockedError } from '../../../core/session.js';
@@ -141,13 +141,14 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       // checkout is on the SESSION's branch (a claim sits on base until
       // checkoutBranch; scanning at claim would read the wrong branch, worst
       // on restart) — and the image's system tier, repo shadowing system.
-      const image = await resolve(ctx.db, 'container_image', { workspace });
+      const creation = await resolveMany(ctx.db, ['container_image', 'agent_git_credentials'], { workspace });
+      const image = creation.container_image;
       const skills = mergeSkills(
         await scanSkills(repoDir(ctx.paths, s.id)),
         ctx.fs ? await systemSkills(ctx.fs.docker, String(image)) : []);
       // The workspace fact a client states in the frozen prompt: resolved
       // NOW (default -> override -> workspace), same name as the setting.
-      const agent_git_credentials = await resolve(ctx.db, 'agent_git_credentials', { workspace });
+      const agent_git_credentials = creation.agent_git_credentials;
       // The secrets index, frozen the same way as skills: names +
       // descriptions only, global + this workspace, workspace shadowing
       // global by name. secret_list is the live view.

@@ -76,8 +76,7 @@ export const DEFAULTS = {
  *  A device name is wrong on your other machine; a model choice is not.
  *
  *  Everything else lives on the server, so every TUI you open is the same one.
- *  Two homes, two modules (local.ts, settings.ts), no routing: a call site can
- *  see which it is reading. */
+ *  Two homes, declared here once; settings.ts routes each key to its home. */
 export const LOCAL_KEYS = [
   'server_url', 'server_key', 'auto_update',
   'voice_mic_device', 'voice_speaker_device', 'voice_headphones',

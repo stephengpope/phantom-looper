@@ -4,9 +4,8 @@ import { workspaces, sessions, sessionColumns, settings as settingsTable } from 
 import { parseRepoRef, remoteUrl } from '../../git/remote.js';
 import { createRepo, listRepos, whoami } from '../../git/github.js';
 import { initializeRemote, classifyGitFailure } from '../../git/git.js';
-import { settingsBlock, validatePatch, resolveCredential, isWorkspaceOverridable,
-  type SettingKey } from '../../settings.js';
-import { putScoped, dropKey, readKey, workspaceScope } from '../../store.js';
+import { settingsBlock, resolveCredential, SettingsWriteError } from '../../settings.js';
+import { readKey, workspaceScope } from '../../store.js';
 import { newId } from '../../../core/ids.js';
 import { ensureWorkspaceSchema, dropWorkspaceSchema } from '../../db/workspaceSchema.js';
 import { prefixOf } from './kanban.js';
@@ -162,7 +161,8 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
       // A token handed to create= belongs to this workspace: `github_token` at
       // its own scope, the same key the global one uses one layer down.
       if (ownToken) {
-        await putScoped(ctx.db, ctx.encryptionKey, workspaceScope(id), 'github_token', ownToken, true);
+        await ctx.settingsWrite!('workspace', workspaceScope(id), { github_token: ownToken },
+          String(req.headers['x-phantom-looper-client'] ?? '') || undefined);
       }
       await ensureWorkspaceSchema(ctx.pgPool, id, row.schemaName);
       const created = await ctx.db.select().from(workspaces).where(eq(workspaces.id, id));
@@ -222,14 +222,6 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
 
       const settingEntries = Object.entries(body).filter(([k]) => !(k in OWN));
 
-      // The SAME validator PATCH /settings runs. Without it the two doors
-      // disagreed: spare_clones: -5 was refused globally and stored here.
-      const invalid = validatePatch(settingEntries);
-      if (invalid.length) return reply.code(400).send(err('invalid_setting', invalid.join('; ')));
-      const notHere = settingEntries.filter(([k]) => !isWorkspaceOverridable(k as SettingKey)).map(([k]) => k);
-      if (notHere.length) {
-        return reply.code(400).send(err('not_overridable', `${notHere.join(', ')} cannot be set per workspace`));
-      }
 
       const patch: Record<string, unknown> = {};
       for (const [k, column] of Object.entries(OWN)) if (k in body) patch[column] = body[k];
@@ -250,10 +242,17 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (Object.keys(patch).length) {
         await ctx.db.update(workspaces).set(patch).where(eq(workspaces.id, req.params.id));
       }
-      // null clears the override — one rule at every layer.
-      for (const [k, v] of settingEntries) {
-        if (v === null) await dropKey(ctx.db, k, workspaceScope(req.params.id));
-        else await putScoped(ctx.db, ctx.encryptionKey, workspaceScope(req.params.id), k, v, false);
+      // The SAME settings writer PATCH /settings runs: null clears, and a
+      // key this workspace may not override is refused here too.
+      if (settingEntries.length) {
+        try {
+          await ctx.settingsWrite!('workspace', workspaceScope(req.params.id),
+            Object.fromEntries(settingEntries),
+            String(req.headers['x-phantom-looper-client'] ?? '') || undefined);
+        } catch (e) {
+          if (e instanceof SettingsWriteError) return reply.code(400).send(err(e.code, e.message));
+          throw e;
+        }
       }
       const rows = await ctx.db.select().from(workspaces).where(eq(workspaces.id, req.params.id));
       return ok(publicWorkspace(rows[0],
@@ -283,6 +282,8 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
       // Its overrides and its own token go with it — a scope whose workspace is
       // gone is a row nothing will ever read again.
       await ctx.db.delete(settingsTable).where(eq(settingsTable.scope, workspaceScope(req.params.id)));
+      ctx.settingsEvents?.publish(workspaceScope(req.params.id),
+        String(req.headers['x-phantom-looper-client'] ?? '') || undefined);
       await ctx.db.delete(workspaces).where(eq(workspaces.id, req.params.id));
       return ok({ deleted: req.params.id });
     });

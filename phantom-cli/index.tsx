@@ -30,7 +30,7 @@ import { App } from './App.js';
 import { createScreen } from './screen.js';
 import { createCprFilter } from './cursorAudit.js';
 import { MOUSE_OFF, MOUSE_ON } from './mouse.js';
-import { CONFIG_DIR, type ConfigValue } from './config.js';
+import { CONFIG_DIR } from './config.js';
 import { CLI_LOG_PATH, logLine } from './cliLog.js';
 import { resolveLocal, localValues } from './local.js';
 import { ndjson } from '../core/ndjson.js';
@@ -39,7 +39,6 @@ import { APP_VERSION, checkLatest, selfUpdate } from './selfUpdate.js';
 import { CHECK_INTERVAL_MS, autoUpdateCycle, dueForCheck, prelaunchReconcile, stampChecked } from './autoUpdate.js';
 import { quitNotice, runUpdate, versionLines } from './update.js';
 import type { ServerLink, Target } from './update.js';
-import { makeSettings } from './settings.js';
 import { requestError } from './request.js';
 
 // The connection comes from the file, synchronously: it is how we REACH the
@@ -310,19 +309,6 @@ const webKit = (id: string) => webTools({ baseUrl: connection().base, apiKey: co
 // Workspace-bound, not session-bound: the workspace's secrets shadow global
 // ones by name, and only App knows which workspace a session is in.
 const secretKit = (ws: string) => secretTools({ baseUrl: connection().base, apiKey: connection().key, workspaceId: ws });
-// Settings for the chrome's first frame (voice pane on/off, sidebar width).
-// Started here, not awaited: the app renders immediately with defaults and
-// the mount effect (readCfg → setChrome) corrects them as soon as the read
-// lands — one frame of default chrome at most. The old await blocked the
-// entire render on a network call, delaying the splash screen.
-const cfgPromise = makeSettings(api).read().then((r) => ({ ...r, ...localValues() })).catch(() => undefined);
-const cfg: Record<string, ConfigValue> | undefined = await Promise.race([
-  cfgPromise,
-  // Yield immediately if the settings haven't arrived yet — the app opens
-  // on defaults and the mount effect corrects them when the read lands.
-  new Promise<undefined>((r) => setTimeout(() => r(undefined), 0)),
-]);
-
 // The session you quit from is not necessarily the one you started in — /new,
 // /resume, /workspace and tab all move it — so track the live one and print
 // THAT id on the way out. One line, for the session you were actually in:
@@ -420,7 +406,6 @@ const app = render(
     stream={stream}
     autoPush={autoPushSession}
     autoPull={autoPullSession}
-    bootConfig={cfg}
     boot={{ ...(resumeId ? { resumeId } : {}) }}
     newTools={(id, plan, ws) => phantomTools({ baseUrl: connection().base, apiKey: connection().key, sessionId: id, ...(plan ? { pick: 'readonly' as const } : {}) })
       .then((t) => ({ ...t, ...skillKit(id, plan), ...webKit(id), ...(ws ? secretKit(ws) : {}) }))}

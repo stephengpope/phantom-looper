@@ -3,6 +3,7 @@
 //   GET    /settings           every setting, resolved with its layers
 //   PATCH  /settings           write; null clears a key
 //   DELETE /settings/:key      clear one
+//   GET    /settings/events    change notices (no values — listeners re-read)
 //
 // Every key is declared in code (settings.ts) — defaults, types, descriptions,
 // which layers it accepts. Unknown keys are refused: a store where every key
@@ -13,12 +14,12 @@
 import type { FastifyInstance } from 'fastify';
 import {
   CREDENTIALS, CREDENTIAL_NAMES,
-  isSettingKey, isCredential, isWorkspaceOverridable, isSessionOverridable,
-  isCredentialWorkspaceScoped, isGlobalSettable, validatePatch, settingsLayers, type SettingKey,
+  isWorkspaceOverridable, isCredentialWorkspaceScoped, isGlobalSettable,
+  settingsLayers, SettingsWriteError, type SettingKey,
   DEFAULTS, DESCRIPTIONS, META,
 } from '../../settings.js';
 import {
-  readStore, putScoped, dropKey,
+  readStore,
   GLOBAL, workspaceScope, sessionScope,
 } from '../../store.js';
 import { workspaces, sessions, sessionColumns } from '../../db/schema.js';
@@ -74,7 +75,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
         ? (await ctx.db.select().from(workspaces).where(eq(workspaces.id, req.query.workspace)))[0] : undefined;
       const sRow = req.query.session
         ? (await ctx.db.select(sessionColumns).from(sessions).where(eq(sessions.id, req.query.session)))[0] : undefined;
-      const layers = await settingsLayers(ctx.db, { workspace: wsRow, session: sRow });
+      const layers = await settingsLayers(ctx.db, { workspace: wsRow, session: sRow }, byScope);
       const out: Record<string, unknown> = {};
       for (const key of Object.keys(DEFAULTS) as SettingKey[]) {
         // A workspace-only key has no global meaning — the global list omits it.
@@ -107,54 +108,26 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
       querystring: scopeQuery,
       body: { type: 'object', additionalProperties: true } } },
     async (req, reply) => {
-      const body = req.body ?? {};
       const sc = await scopeOf(req.query);
       if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
-
-      const entries = Object.entries(body).map(([k, value]) => ({ key: k, value }));
-      const bad = entries.filter((e) => !isSettingKey(e.key) && !isCredential(e.key)).map((e) => e.key);
-      if (bad.length) return reply.code(400).send(err('unknown_setting', `unknown settings: ${bad.join(', ')}`));
-      const invalid = validatePatch(entries.filter((e) => !isCredential(e.key)).map((e) => [e.key, e.value] as [string, unknown]));
-      if (invalid.length) return reply.code(400).send(err('invalid_setting', invalid.join('; ')));
-      // A key may only be written at a layer it declares. Otherwise a typo'd
-      // scope silently creates a row nothing will ever read.
-      for (const e of entries) {
-        if (sc.kind === 'global') {
-          if (isSettingKey(e.key) && !isGlobalSettable(e.key)) {
-            return reply.code(400).send(err('not_overridable',
-              `${e.key} is a fact about one workspace — set it there`));
-          }
-          continue;
-        }
-        const okHere = isCredential(e.key)
-          ? (sc.kind === 'workspace' && isCredentialWorkspaceScoped(e.key))
-          : sc.kind === 'workspace' ? isWorkspaceOverridable(e.key as SettingKey)
-            : isSessionOverridable(e.key as SettingKey);
-        if (!okHere) {
-          return reply.code(400).send(err('not_overridable',
-            `${e.key} cannot be set per ${sc.kind}`));
-        }
-      }
-
-      for (const e of entries) {
-        if (e.value === null) { await dropKey(ctx.db, e.key, sc.write); continue; }
-        // Secret-ness is a property of the key, declared in code.
-        const secret = isCredential(e.key);
-        if (secret && typeof e.value !== 'string') {
-          return reply.code(400).send(err('invalid_args', `${e.key} must be a string to be stored as a secret`));
-        }
-        await putScoped(ctx.db, ctx.encryptionKey, sc.write, e.key, e.value, secret);
+      let updated: string[];
+      try {
+        updated = await ctx.settingsWrite!(sc.kind, sc.write, req.body ?? {},
+          String(req.headers['x-phantom-looper-client'] ?? '') || undefined);
+      } catch (e) {
+        if (e instanceof SettingsWriteError) return reply.code(400).send(err(e.code, e.message));
+        throw e;
       }
       // Supervision flipped (either switch): the looper re-examines the
       // affected workspace — or every one, when the global layer changed.
       // Event-driven, no poll.
-      if (entries.some((e) => LOOP_SETTING_KEYS.includes(e.key))) {
+      if (updated.some((k) => LOOP_SETTING_KEYS.includes(k))) {
         ctx.looper?.runAllLoops(sc.kind === 'workspace' ? req.query.workspace : undefined);
       }
-      if (entries.some((e) => TELEGRAM_SETTING_KEYS.includes(e.key))) {
+      if (updated.some((k) => TELEGRAM_SETTING_KEYS.includes(k))) {
         void ctx.telegram?.reconcile();
       }
-      return ok({ updated: entries.map((e) => e.key) });
+      return ok({ updated });
     });
 
   app.delete<{ Params: { key: string }; Querystring: { workspace?: string; session?: string } }>(
@@ -166,11 +139,35 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
     async (req, reply) => {
       const sc = await scopeOf(req.query);
       if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
-      await dropKey(ctx.db, req.params.key, sc.write);
+      try {
+        await ctx.settingsWrite!(sc.kind, sc.write, { [req.params.key]: null },
+          String(req.headers['x-phantom-looper-client'] ?? '') || undefined);
+      } catch (e) {
+        if (e instanceof SettingsWriteError) return reply.code(400).send(err(e.code, e.message));
+        throw e;
+      }
       if (LOOP_SETTING_KEYS.includes(req.params.key)) {
         ctx.looper?.runAllLoops(sc.kind === 'workspace' ? req.query.workspace : undefined);
       }
       if (TELEGRAM_SETTING_KEYS.includes(req.params.key)) void ctx.telegram?.reconcile();
       return ok({ cleared: req.params.key });
+    });
+
+  // Change notices, never values: every listener re-reads GET /settings. No
+  // replay — a reconnect is itself the signal to re-read, which closes any gap.
+  app.get('/settings/events', { schema: { ...TAG,
+    summary: 'Settings change events',
+    description: 'ND-JSON, open until the client hangs up: {event:"settings_changed",scope,client?} after a write, ' +
+      'plus {event:"heartbeat"}. The record carries no setting values — listeners re-read /settings.' } },
+    async (req, reply) => {
+      reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
+      const write = (o: unknown) => { reply.raw.write(`${JSON.stringify(o)}\n`); };
+      const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
+      const unsubscribe = ctx.settingsEvents!.subscribe(write);
+      write({ event: 'heartbeat' });
+      await new Promise<void>((resolve) => reply.raw.on('close', resolve));
+      clearInterval(heartbeat);
+      unsubscribe();
+      return reply;
     });
 }

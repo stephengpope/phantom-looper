@@ -5,7 +5,7 @@
 import type Docker from 'dockerode';
 import type { Db } from '../db/client.js';
 import type { WorkspaceRow, SessionRow } from '../db/schema.js';
-import { resolve } from '../settings.js';
+import { resolve, resolveMany } from '../settings.js';
 import { resolveAuth } from '../pool/pool.js';
 import type { Paths } from '../pool/paths.js';
 import { sessionDir } from '../pool/paths.js';
@@ -137,7 +137,10 @@ export class ContainerManager {
       await c.remove({ force: true, v: true }).catch(() => {});
     } catch { /* no such container */ }
 
-    const image = await resolve(db, 'container_image', { workspace });
+    const limits = await resolveMany(db,
+      ['container_image', 'container_memory_mb', 'container_cpus', 'container_pids_limit', 'container_docker'],
+      { workspace });
+    const image = limits.container_image;
     const Env = await this.credentialEnv(db, workspace);
     const key = session.folderId ?? session.id;
     const spec = buildContainerSpec({
@@ -145,13 +148,13 @@ export class ContainerManager {
       image: String(image),
       labelValue: key,
       env: Env,
-      memMb: await resolve(db, 'container_memory_mb'),
-      cpus: await resolve(db, 'container_cpus'),
-      pids: await resolve(db, 'container_pids_limit'),
+      memMb: limits.container_memory_mb,
+      cpus: limits.container_cpus,
+      pids: limits.container_pids_limit,
       mount: this.opts.volume
         ? { volume: this.opts.volume, subpath: `work/${key}` }
         : { bind: sessionDir(this.paths, key) },
-      docker: !!(await resolve(db, 'container_docker', { workspace })),
+      docker: !!limits.container_docker,
     }) as never;
     let created: Docker.Container;
     try {

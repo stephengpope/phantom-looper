@@ -54,14 +54,14 @@ export function MenuScreen({ w, api, configPath, clientId }: {
       );
     case 'settings':
       // The server's own settings; the screen's sub line says the scope.
-      return <Settings api={api} configPath={configPath} startAt="api" onClose={close} />;
+      return <Settings key={`settings-${w.settingsVersion}`} api={api} configPath={configPath} startAt="api" onClose={close} />;
     case 'keys':
       // Its own screen so there is ONE place any credential is set — not
       // because these are a different kind of thing any more. A saved key
       // has to reach the app like any other setting change: the Assistant
       // takes its Deepgram key at spawn, and the agents take theirs at
       // build.
-      return <Keys api={api} onClose={close}
+      return <Keys key={`keys-${w.settingsVersion}`} api={api} onClose={close}
         onChanged={(name) => w.settingChanged(name as ConfigKey)} />;
     case 'secrets':
       // The agent's secrets, not phantom's own credentials (/keys). The
@@ -71,6 +71,7 @@ export function MenuScreen({ w, api, configPath, clientId }: {
       if (!w.editing) return null;
       return (
         <WorkspaceSettings
+          key={`workspace-settings-${w.settingsVersion}`}
           api={api} workspace={w.editing}
           // Back to the list it was opened from, refreshed — a rename there
           // has to show up here.
@@ -83,7 +84,8 @@ export function MenuScreen({ w, api, configPath, clientId }: {
       // the sidecar found; saving a boot-time key restarts it.
       const vs = w.voice.snapshot();
       return (
-        <Settings api={api} configPath={configPath} startAt="local"
+        <Settings key={`voice-settings-${w.settingsVersion}`}
+          api={api} configPath={configPath} startAt="local"
           title="voice" groups={['voice']}
           suggestions={{ voice_mic_device: vs.devices.mics, voice_speaker_device: vs.devices.speakers }}
           onOpenRow={(k) => { if (k === 'voice_mic_device' || k === 'voice_speaker_device') void w.voice.refreshDevices(); }}
@@ -95,13 +97,14 @@ export function MenuScreen({ w, api, configPath, clientId }: {
       // /model writes to the server like every other setting screen; /server
       // gets the offline api (see above).
       return (
-        <Settings api={w.screen === 'server' ? offline : api} configPath={configPath} startAt="local"
+        <Settings key={`local-settings-${w.settingsVersion}`}
+          api={w.screen === 'server' ? offline : api} configPath={configPath} startAt="local"
           title={w.screen} groups={[w.screen === 'model' ? 'model' : 'server']}
           onLocalChange={w.settingChanged} onClose={close} />
       );
     case 'presets':
       return (
-        <Presets api={api}
+        <Presets key={`presets-${w.settingsVersion}`} api={api}
           // Applying closes the screen — the confirmation and the rebuilt
           // agents both land in the CLI the user is back at.
           onApplied={(name) => {

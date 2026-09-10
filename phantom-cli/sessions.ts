@@ -56,11 +56,11 @@ export interface LoadedSession {
    *  is the record; this mirrors it so the picker's open-here extras carry
    *  the pin too — seeded at open, flipped by setPinned. */
   pinned: boolean;
-  /** The model this session is pinned to (core agentConfig): its row's
-   *  provider/model/endpoint, or its transcript header's for a session older
-   *  than those columns. Null only while nothing has been said — the one case
-   *  the global settings apply. Every rebuild resolves through it, so no path
-   *  can put a running conversation on a different model. */
+  /** The model this session is pinned to (core agentConfig): the row's
+   *  provider/model/endpoint, refreshed whenever a turn starts. Null only
+   *  while nothing has been said — the one case the global settings apply.
+   *  Every rebuild resolves through it, so no path can put a running
+   *  conversation on a different model. */
   pin: ModelPin | null;
   /** The server transcript's stamp our memory matches (null = never synced).
    *  Compared against the lock response's stamp at each turn start; a
@@ -474,14 +474,25 @@ export class SessionStore {
     this.notify();
   }
 
-  /** /model changed: only sessions with nothing said yet get the new model.
-   *  A session that has spoken keeps its model for life — the pin.
-   *  A turn already streaming keeps the agent it started with — runTurn holds
-   *  its own reference — so the switch lands on the next turn. */
-  rebuildAgents(make: (tools: Record<string, Tool>, instructions?: string, id?: string) => { agent: Agent; summary: AgentSummary }): void {
+  /** Replace one session's disposable agent and the settings summary the
+   *  chrome shows. The caller has just read the server. */
+  setAgent(id: string, agent: Agent, summary: AgentSummary, pin: ModelPin | null): void {
+    const e = this.get(id);
+    if (!e) return;
+    e.agent = agent;
+    e.summary = summary;
+    e.pin = pin;
+    this.notify();
+  }
+
+  /** Settings changed: rebuild every session so reasoning, max steps and
+   *  credentials refresh. The caller applies each entry's pin, so a spoken
+   *  session keeps its model for life. A turn already streaming keeps the
+   *  agent it started with — runTurn holds its own reference — so the switch
+   *  lands on the next turn. */
+  rebuildAgents(make: (e: LoadedSession) => { agent: Agent; summary: AgentSummary }): void {
     for (const e of this.entries) {
-      if (e.pin || e.lastMessageAt > 0) continue;   // pinned: this session's model is settled
-      const { agent, summary } = make(e.tools, e.instructions, e.id);
+      const { agent, summary } = make(e);
       e.agent = agent; e.summary = summary;
     }
     this.notify();

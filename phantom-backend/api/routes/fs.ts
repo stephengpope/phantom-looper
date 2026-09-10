@@ -13,7 +13,7 @@ import { logger, errStr } from '../../log.js';
 import { Sandbox } from '../../workspace/sandbox.js';
 import { TOOLS, type ToolCtx } from '../../tools/registry.js';
 import { ToolError } from '../../tools/envelope.js';
-import { resolve } from '../../settings.js';
+import { resolveMany } from '../../settings.js';
 import { ok, err, type AppCtx } from '../app.js';
 import { killProcessGroup } from '../foreground.js';
 import { SESSION_HEADER } from '../sessionHeader.js';
@@ -181,13 +181,13 @@ async function runBash(
   // No timeout by default: a command runs until it finishes. The tool's
   // timeout argument sets one per call; bash_timeout_ms sets a default and
   // bash_timeout_max_ms a ceiling (default two minutes and no ceiling).
-  const defaultRaw = await resolve(ctx.db, 'bash_timeout_ms');
-  const maxRaw = await resolve(ctx.db, 'bash_timeout_max_ms');
-  const defaultMs = defaultRaw == null ? undefined : Number(defaultRaw);
-  const maxMs = maxRaw == null ? undefined : Number(maxRaw);
+  const limits = await resolveMany(ctx.db,
+    ['bash_timeout_ms', 'bash_timeout_max_ms', 'max_bash_output_bytes']);
+  const defaultMs = limits.bash_timeout_ms == null ? undefined : Number(limits.bash_timeout_ms);
+  const maxMs = limits.bash_timeout_max_ms == null ? undefined : Number(limits.bash_timeout_max_ms);
   let timeoutMs = args.timeout && args.timeout > 0 ? args.timeout : defaultMs;
   if (timeoutMs !== undefined && maxMs !== undefined) timeoutMs = Math.min(timeoutMs, maxMs);
-  const maxOut = Number(await resolve(ctx.db, 'max_bash_output_bytes'));
+  const maxOut = Number(limits.max_bash_output_bytes);
 
   if (!args.detached) {
     if (signal?.aborted) throw new ToolError('interrupted', 'client disconnected before the command started', false);
@@ -476,12 +476,13 @@ export function fsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
       // writableFinished is true and nothing aborts.
       const ac = new AbortController();
       reply.raw.on('close', () => { if (!reply.raw.writableFinished) ac.abort(); });
+      const readLimits = await resolveMany(ctx.db, ['max_read_bytes', 'max_search_results']);
       const toolCtx: ToolCtx = {
         ws,
         sessionId,
         limits: {
-          maxReadBytes: Number(await resolve(ctx.db, 'max_read_bytes')),
-          maxSearchResults: Number(await resolve(ctx.db, 'max_search_results')),
+          maxReadBytes: Number(readLimits.max_read_bytes),
+          maxSearchResults: Number(readLimits.max_search_results),
         },
         runBash: (args) => runBash(ctx, deps, ws, session, args, ac.signal),
         tasks: {

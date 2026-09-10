@@ -65,7 +65,6 @@ import { Divider } from './components/Divider.js';
 import { VoiceClient } from './voice.js';
 import { BoardStore, type Stream } from './board.js';
 import { Board } from './components/Board.js';
-import { type ConfigValue } from './config.js';
 
 import { copyToClipboard, isMouseInput, parseMouse, selectionRanges, type Selection } from './mouse.js';
 import type { Screen } from './screen.js';
@@ -76,7 +75,7 @@ import type { GitFacts } from '../core/llm/prompts/coding/wiring.js';
 interface WsFacts { label: string; cardPrefix?: string; error?: string }
 
 export function App({
-  api, stream, initial, boot, newTools, configPath, onSession, onWindow, bootConfig,
+  api, stream, initial, boot, newTools, configPath, onSession, onWindow,
   autoPush,
   autoPull,
   clientId = '',
@@ -117,10 +116,6 @@ export function App({
    *  refresh it too; this clock only keeps the count honest between them
    *  (a dev server dying quietly must not read "1 task" all day). Test seam. */
   taskPollMs?: number;
-  /** Settings as index.tsx read them a moment ago, used for the FIRST agent
-   *  build only — that happens synchronously as the store is created. Every
-   *  later read goes to the server. Not a cache: nothing reads it twice. */
-  bootConfig?: Record<string, ConfigValue>;
   /** Width of the voice pane as a percent of the terminal, when `sidebar_width`
    *  is not set (tests). */
   sidebarPercent?: number;
@@ -198,7 +193,7 @@ export function App({
   // in the initialiser, like the session store it replaces, so the banner is
   // on screen for the first frame. This component is a view over it.
   const [windowStore] = useState(() => new WindowStore({
-    api, stream, newTools, configPath, bootConfig, initial, boot,
+    api, stream, newTools, configPath, initial, boot,
     makeAgent, makeTranscript, run, makeVoice, onSession, exit,
     autoPush, autoPull, clientId, pollMs, taskPollMs,
     makeAssistantAgent, newAssistantTools, sidebarPercent,

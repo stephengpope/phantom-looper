@@ -20,7 +20,7 @@
 // global / workspace), the computed value + source, description, meta and
 // overridable. Nothing here hardcodes what a setting is, so a new overridable
 // setting appears on its own.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { SelectList } from './SelectList.js';
 import { ValueInput, type EditSpec } from './ValueInput.js';
 import { Screen } from './Screen.js';
@@ -59,6 +59,7 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
   /** Fired after any write, so the caller can refresh its workspace list. */
   onChanged?: () => void;
 }) {
+  const settings = useMemo(() => makeSettings(api), [api]);
   const [view, setView] = useState<View>({ at: 'list' });
   // The row the list left from, so the cursor comes back to it after the
   // editor (or the delete prompt) rather than to the top.
@@ -129,7 +130,7 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
           if (view.kind === 'credential') {
             if (v === null) { setView({ at: 'list' }); return; }   // empty = changed my mind
             // github_token at this workspace's layer — the same key /keys writes globally.
-            void write(() => makeSettings(api).patch({ github_token: String(v) }, { workspace: workspace.id }),
+            void write(() => settings.patch({ github_token: String(v) }, { workspace: workspace.id }),
               'this workspace now uses its own GitHub token');
             return;
           }
@@ -248,7 +249,7 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
           if (k === 'credential') {
             if (!row.hasCredential) { setNotice(`${label} is already using the shared token`); return; }
             // null clears the workspace layer; the global token applies again.
-            void write(() => makeSettings(api).patch({ github_token: null }, { workspace: workspace.id }),
+            void write(() => settings.patch({ github_token: null }, { workspace: workspace.id }),
               `${label} is back on the shared token from /keys`);
             return;
           }

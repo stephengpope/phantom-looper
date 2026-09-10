@@ -14,7 +14,7 @@ import path from 'node:path';
 import type { Db } from '../db/client.js';
 import { workspaces, type WorkspaceRow } from '../db/schema.js';
 
-import { resolve, resolveCredential } from '../settings.js';
+import { resolveCredential, resolveMany } from '../settings.js';
 import { cloneFresh, refreshPristine, type GitAuth } from '../git/git.js';
 import { newId, idTime } from '../../core/ids.js';
 import { slotPrefix, slotUlid, type Paths } from './paths.js';
@@ -102,10 +102,11 @@ export async function tick(db: Db, p: Paths, encryptionKey: Buffer): Promise<voi
     // Per-workspace maintenance, concurrently across workspaces — one at a time globally
     // would take workspaces × target ticks to fill from cold.
     await Promise.all([...wanted.entries()].map(async ([prefix, workspace]) => {
-      const target = await resolve(db, 'spare_clones', { workspace });
-      const refreshMs = await resolve(db, 'spare_clone_refresh_ms');
-      const maxAgeMs = await resolve(db, 'spare_clone_max_age_ms');
-      const depth = await resolve(db, 'initial_history_depth', { workspace });
+      const cfg = await resolveMany(db,
+        ['spare_clones', 'spare_clone_refresh_ms', 'spare_clone_max_age_ms', 'initial_history_depth'],
+        { workspace });
+      const { spare_clones: target, spare_clone_refresh_ms: refreshMs,
+        spare_clone_max_age_ms: maxAgeMs, initial_history_depth: depth } = cfg;
       const auth = await resolveAuth(db, workspace, encryptionKey);
 
       let mine = ready.filter((s) => s.startsWith(prefix));

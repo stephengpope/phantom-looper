@@ -88,10 +88,10 @@ export interface LooperDeps {
  *  the lock's release re-runs the loop. */
 export type TurnOutcome = 'turn' | 'moved' | 'idle' | 'skipped' | 'interrupted';
 
-/** The chain's token ledger: seeded once from the token API when the loop
- *  picks the card up, each turn's own numbers added as they land. Lives only
- *  for the loop — a restart just seeds again. */
-interface Budget { seeded: boolean; spent: number; limit: number | null }
+/** The chain's token spend: seeded once from the token API when the loop
+ *  picks the card up, each turn's own numbers added as they land. The limit
+ *  itself is a setting and is read again before every turn. */
+interface Budget { seeded: boolean; spent: number }
 
 export class LooperEngine {
   private stopped = false;
@@ -169,7 +169,7 @@ export class LooperEngine {
     this.running.add(claim);
     // One ledger per loop: seeded on the first turn that needs it, carried
     // across the turns, dropped when the loop ends.
-    const budget: Budget = { seeded: false, spent: 0, limit: null };
+    const budget: Budget = { seeded: false, spent: 0 };
     // Called fire-and-forget from routes: nothing here may reject upward.
     // Every path falls through to the while check, so a call that lands
     // mid-turn (`pending`) is honored — except stop, which ends everything.
@@ -306,23 +306,23 @@ export class LooperEngine {
       // ── the token budget — seeded once per loop, checked before every
       // turn, each turn's own numbers added as they land. Breach is a card
       // state a human can see, like every other loop exit. ─────────────────
+      const b = await resolveMany(db, ['loop_budget_tokens'], { workspace })
+        .catch(() => ({ loop_budget_tokens: null }));
+      const limit = b.loop_budget_tokens == null ? null : Number(b.loop_budget_tokens);
       if (!budget.seeded) {
-        const b = await resolveMany(db, ['loop_budget_tokens'], { workspace })
-          .catch(() => ({ loop_budget_tokens: null }));
-        budget.limit = b.loop_budget_tokens == null ? null : Number(b.loop_budget_tokens);
-        if (budget.limit != null) {
+        if (limit != null) {
           budget.spent = await this.tokensOf(opened.session.id)
             + await this.tokensOf(supervisorSessionId);
         }
         budget.seeded = true;
       }
-      if (budget.limit != null && budget.spent >= budget.limit) {
+      if (limit != null && budget.spent >= limit) {
         await this.patchCard(workspace.id, card.id, {
           status: 'blocked',
-          blocked_reason: `token budget exhausted: ${budget.spent} of ${budget.limit} tokens used`,
+          blocked_reason: `token budget exhausted: ${budget.spent} of ${limit} tokens used`,
           resolution: null,
         });
-        log.info({ card: card.seq, spent: budget.spent, limit: budget.limit }, 'looper budget exhausted');
+        log.info({ card: card.seq, spent: budget.spent, limit }, 'looper budget exhausted');
         return 'moved';
       }
 
