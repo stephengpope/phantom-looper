@@ -23,6 +23,7 @@ export const COMMANDS: Command[] = [
   // it, and [x] on /resume already teaches it.
   { name: 'pop', summary: 'pull the last queued message into the prompt, or /pop all', args: 'all' },
   { name: 'close', summary: 'close this session — it stays on the server' },
+  { name: 'trash', summary: 'trash this session for good — row, transcript, files' },
   { name: 'server', summary: 'the server url and api key, this machine only' },
   { name: 'settings', summary: "the server's settings, for everyone" },
   { name: 'keys', summary: 'the credentials the server holds' },

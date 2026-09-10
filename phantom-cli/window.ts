@@ -951,6 +951,10 @@ export class WindowStore {
   /** The armed /resume trash: the row [t] armed, and whether the server's
    *  unpushed-work refusal already upgraded it to a force-confirm. */
   private trashArmed: { id: string; force: boolean } | null = null;
+  /** The armed /trash: the session the prompt's [c] will purge, and whether
+   *  the server's unpushed-work refusal already upgraded it to a
+   *  force-confirm. The picker's [t]/[c] rule, in the prompt. */
+  private promptTrashArmed: { id: string; force: boolean } | null = null;
   private morePickerInFlight = false;
 
   tasks: TasksView | null = null;
@@ -1123,11 +1127,27 @@ export class WindowStore {
     this.notify();
   };
 
+  /** The one destructive call, shared by [t] on /resume and /trash in the
+   *  prompt. The confirm goes UNFORCED — the server pushes first (the flush)
+   *  and refuses if work would still be lost. The two refusals come back as
+   *  names so each caller re-arms its own way; anything else throws. */
+  private async purgeSession(id: string, force: boolean): Promise<'ok' | 'unpushed_work' | 'session_locked'> {
+    try {
+      await this.api('DELETE', `/sessions/${id}?purge=true${force ? '&force=true' : ''}`);
+      return 'ok';
+    } catch (e) {
+      const m = (e as Error).message;
+      const code = (e as { code?: string }).code ?? '';
+      if (code === 'unpushed_work' || m.includes('unpushed_work')) return 'unpushed_work';
+      if (code === 'session_locked' || m.includes('session_locked')) return 'session_locked';
+      throw e;
+    }
+  }
+
   /** [t] on /resume arms the trash, [c] confirms — the kill pattern, one rule
    *  for every destructive key. The session leaves the server for good: row,
-   *  transcript, files; only its pushed branch on origin survives. The confirm
-   *  goes UNFORCED — the server pushes first (the flush) and refuses if work
-   *  would still be lost, which re-arms at force so a second [c] discards
+   *  transcript, files; only its pushed branch on origin survives. The
+   *  unpushed-work refusal re-arms at force so a second [c] discards
    *  knowingly. Arming client-side is what makes the confirm real: the flush
    *  means the unforced delete almost always succeeds, so a server-refusal
    *  arm alone would fire only when the push failed. */
@@ -1140,23 +1160,44 @@ export class WindowStore {
       return;
     }
     try {
-      await this.api('DELETE', `/sessions/${id}?purge=true${this.trashArmed.force ? '&force=true' : ''}`);
-      this.trashArmed = null;
-      this.pickerNotice = undefined;
-      // The trash landed; a failed re-read must not report "could not trash".
-      await this.refreshPicker().catch(quiet('refresh the session list'));
-    } catch (e) {
-      const m = (e as Error).message;
-      const code = (e as { code?: string }).code ?? '';
-      if (code === 'unpushed_work' || m.includes('unpushed_work')) {
+      const verdict = await this.purgeSession(id, this.trashArmed.force);
+      if (verdict === 'unpushed_work') {
         this.trashArmed = { id, force: true };
         this.pickerNotice = 'unpushed work [c] to confirm discard';
-      } else if (code === 'session_locked' || m.includes('session_locked')) {
+      } else if (verdict === 'session_locked') {
         this.trashArmed = null;
         this.pickerNotice = 'in use elsewhere — a held session cannot be trashed';
-      } else this.pickerNotice = `could not trash session ${id}: ${m}`;
+      } else {
+        this.trashArmed = null;
+        this.pickerNotice = undefined;
+        // The trash landed; a failed re-read must not report "could not trash".
+        await this.refreshPicker().catch(quiet('refresh the session list'));
+      }
+    } catch (e) {
+      this.pickerNotice = `could not trash session ${id}: ${(e as Error).message}`;
     }
     this.notify();
+  };
+
+  /** [c] to an armed /trash. The window lets the session go first — its own
+   *  hold would lock the purge — then the same DELETE as [t] on /resume runs,
+   *  refusal re-arms and all. The close stands even when the purge refuses:
+   *  the [c] was already "done with this", and a second [c] finishes the job
+   *  without the session back on screen. */
+  private trashActive = async (armed: { id: string; force: boolean }): Promise<void> => {
+    if (this.sessions.has(armed.id)) {
+      const r = await this.closeSession(armed.id);
+      if ('error' in r) { this.note(`not trashed — ${r.error}`); return; }
+    }
+    let verdict: 'ok' | 'unpushed_work' | 'session_locked';
+    try { verdict = await this.purgeSession(armed.id, armed.force); }
+    catch (e) { this.note(`could not trash session ${armed.id}: ${(e as Error).message}`); return; }
+    if (verdict === 'unpushed_work') {
+      this.promptTrashArmed = { id: armed.id, force: true };
+      this.note('unpushed work — [c] to confirm discard');
+    } else if (verdict === 'session_locked') {
+      this.note('in use elsewhere — a held session cannot be trashed');
+    } else this.note(`trashed session ${armed.id} — only its pushed branch on origin survives`);
   };
 
   /** ctrl+n: the sessions open in this window. It shows FIRST and fills the
@@ -1609,6 +1650,12 @@ export class WindowStore {
         }
         return;
       }
+      case 'trash': {
+        if (!session) { this.note('no session is open — nothing to trash'); return; }
+        this.promptTrashArmed = { id: session.id, force: false };
+        this.note(`trash ${this.labelOf(session)} for good — the row, the transcript, the files? [c] to confirm`);
+        return;
+      }
       case 'workspace': await this.openPicker('workspace'); return;
       case 'rename': {
         if (!session) { this.note('no session is open — nothing to rename'); return; }
@@ -1726,6 +1773,21 @@ export class WindowStore {
       this.note(`paste ${gone} is gone (from an earlier run) — sent without it`);
     }
     if (!msg) return;
+    // An armed /trash owns the next line: `c` confirms, anything else cancels
+    // and is then handled as the line it is. Before the held check on purpose
+    // — the confirm is a window act, never a message to the session.
+    if (this.promptTrashArmed) {
+      const armed = this.promptTrashArmed;
+      this.promptTrashArmed = null;
+      if (msg === 'c') {
+        accept();
+        // The confirmation reads from the pane — the splash must not cover it.
+        this.setSplash(false);
+        await this.trashActive(armed);
+        return;
+      }
+      this.note('trash cancelled');
+    }
     const session = this.sessions.active();
     // Locked elsewhere = read-only here: refuse BEFORE the box clears. Slash
     // commands still run — they are the window's, not the session's. The ONE
