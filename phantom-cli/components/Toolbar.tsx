@@ -1,5 +1,5 @@
-// The one line under the typing area: the mode mark — '» plan mode on' or
-// '» code mode on', ALWAYS shown while a session is on screen so you know which
+// The one line under the typing area: the mode mark — '» planning' or
+// '» coding', ALWAYS shown while a session is on screen so you know which
 // before you type — with the transient notices (ctrl+c's "again to quit")
 // composed after it by App. Padded two cells to clear the `> ` prompt gutter
 // above it.

@@ -561,11 +561,11 @@ export function App({
   const menuBelow = suggestions.length - menuFrom - menuRows.length;
 
   // The toolbar's mode mark — ALWAYS on while a session is on screen: the
-  // line says which mode you are in before you type, 'plan mode' or
-  // 'code mode'. The » prefix is rendered by the Toolbar itself on the far
+  // line says which mode you are in before you type, 'planning' or
+  // 'coding'. The » prefix is rendered by the Toolbar itself on the far
   // left. A supervisor record has no modes — you cannot chat there at all.
   const modeMark = session && !session.readonly
-    ? (session.planMode ? 'plan mode on' : 'code mode on')
+    ? (session.planMode ? 'planning' : 'coding')
     : undefined;
   // Which card this session is building — the board's own name for it
   // (`PHA-7`), so the line you read while typing answers "what am I working
@@ -603,7 +603,7 @@ export function App({
   // not pushed, yellow = not merged, green = merged), the model with its
   // token meter, the bg tasks, a notice pinned last. The model and its meter
   // answer ONE question so they ride in one group — the line reads
-  // `code mode on · PHA-7 · my session · • not pushed · gpt-5 ↓ 12.4k (84%)`,
+  // `coding · PHA-7 · my session · • not pushed · gpt-5 ↓ 12.4k (84%)`,
   // facts separated by ` · `, not a flat list of fields.
   const withMode = (rest?: string): ToolbarGroup[] =>
     [[modeMark], [cardMark], [nameMark], [workMark], [modelMark, tokensMark], [taskMark], [rest]]
