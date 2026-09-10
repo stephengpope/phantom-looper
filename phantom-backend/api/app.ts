@@ -24,7 +24,7 @@ import type { GitEngine } from '../git/engine.js';
 import { BoardEvents } from './boardEvents.js';
 import { SessionEvents } from './sessionEvents.js';
 import { ForegroundCommands } from './foreground.js';
-import { Notices } from './notices.js';
+import { BackdoorQueue } from './backdoor.js';
 import type { AutoPushResult, AutoPushEvent } from '../git/autoPush.js';
 import type { AutoPullResult, AutoPullEvent } from '../git/autoPull.js';
 import type { WorkspaceRow, SessionRow } from '../db/schema.js';
@@ -77,10 +77,11 @@ export interface AppCtx {
    *  The interrupt route kills them: aborting the stream alone leaves the
    *  command running in the container for turns with no socket to close. */
   foreground?: ForegroundCommands;
-  /** Passive notices (notices.ts) — one-liners a session's NEXT turn
-   *  carries without a turn being started for them (a detached command
-   *  exiting). Defaulted at registration like the buses above. */
-  notices?: Notices;
+  /** The backdoor message queue (backdoor.ts) — one-liners a session's
+   *  NEXT turn carries without a turn being started for them (a detached
+   *  command exiting, a file dropped onto the cli window). Defaulted at
+   *  registration like the buses above. */
+  backdoor?: BackdoorQueue;
   /** Where POST /update drops a release tag for the updater sidecar
    *  (UPDATE_TRIGGER_DIR). Absent: the route answers `updater_unavailable`. */
   updateTriggerDir?: string;
@@ -168,7 +169,7 @@ export async function buildApp(ctx: AppCtx) {
   ctx.sessionEvents ??= new SessionEvents();
   ctx.activeTurns ??= new Map();
   ctx.foreground ??= new ForegroundCommands();
-  ctx.notices ??= new Notices();
+  ctx.backdoor ??= new BackdoorQueue();
   settingsRoutes(app, ctx);
   secretsRoutes(app, ctx);
   workspaceRoutes(app, ctx);

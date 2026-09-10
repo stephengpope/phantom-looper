@@ -819,7 +819,7 @@ export function App({
             )}
             <Prompt value={input} onChange={(v) => { setInput(v); setSuggestAt(0); windowStore.dismissClosed(); }}
               onSubmit={(text) => { void windowStore.submit(text, suggestAt, () => { clearInput(); setScroll(0); }); }} onMeasure={setPromptTop}
-              pastes={windowStore.pastes} updateReady={windowStore.updateReady} />
+              pastes={windowStore.pastes} onFileDrop={(paths) => { void windowStore.dropFiles(paths); }} updateReady={windowStore.updateReady} />
             {windowStore.justClosed ? (
               // The close banner takes the toolbar's held row — the row is
               // always there, so nothing on screen moves. White on red until

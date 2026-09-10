@@ -1,11 +1,12 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
+import path from 'node:path';
 import { eq, ne, desc, and, or, isNull, isNotNull, lt, sql, count, inArray } from 'drizzle-orm';
 import { sessions, sessionColumns, workspaces, folders, loops, settings as settingsRows, type SessionRow } from '../../db/schema.js';
 import { createSession, getSession, getFolder, destroySession, touchSession, SessionError,
   heldByOther, acquireLock, releaseLock, renewLock, assertDuplicable, conversationOnly, agentAfterSave,
   turnStarted, LAST_MESSAGE_CHARS } from '../../sessions.js';
 import { GIT_CLIENT_ID } from '../../git/git.js';
-import { repoDir } from '../../pool/paths.js';
+import { repoDir, sessionDir } from '../../pool/paths.js';
 
 import { scanSkills, mergeSkills } from '../../../core/skills/skills.js';
 import { systemSkills } from '../../systemSkills.js';
@@ -17,6 +18,7 @@ import { ok, err, type AppCtx } from '../app.js';
 import { openSession, SessionLockedError } from '../../../core/session.js';
 import { injectFetch } from '../../looper/injectFetch.js';
 import { runCodingTurn } from '../../looper/turn.js';
+import { writeAttachment, type StoredAttachment } from '../../telegram/attachments.js';
 import type { SessionEvent } from '../sessionEvents.js';
 
 const log = logger('sessions');
@@ -39,6 +41,25 @@ import { logger, errStr } from '../../log.js';
 
 const TAG = { tags: ['sessions'] };
 const idParam = { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] };
+
+/** An attached file's ceiling (attachments route) — ours, unlike telegram's
+ *  20MB bot-API ceiling: a screencast should fit, a disk image should not. */
+const MAX_ATTACHMENT_BYTES = 64 * 1024 * 1024;
+
+/** What the backdoor message says about a drop. Unlike a telegram
+ *  attachment — which arrives WITH the user's instruction, and so is worded
+ *  to make the agent act — a drop lands while the user is still typing.
+ *  The wording is deliberately neutral: the file is available, acting on it
+ *  is the user's call. */
+function dropMessage(a: StoredAttachment): string {
+  const what = a.kind === 'image' ? 'an image'
+    : a.kind === 'video' ? 'a video'
+    : a.kind === 'audio' ? 'an audio file' : 'a file';
+  const see = a.kind === 'image' ? ' Read it with your read tool to see it.' : '';
+  const inline = a.inlineText !== undefined ? ' Its content is included below.' : '';
+  const note = `[The user dropped ${what} into the chat: '${a.displayName}'. It is saved at: ${a.containerPath}.${see}${inline} Use it as needed — or not — depending on what they ask.]`;
+  return a.inlineText !== undefined ? `${note}\n\n[Content of ${a.displayName}]:\n${a.inlineText}` : note;
+}
 
 // The session lock rides the x-phantom-looper-client header: an opaque id the client
 // invents for itself (the TUI mints one per window). Never in a body — the
@@ -623,7 +644,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       try {
         const { text } = await runCodingTurn(
           { f, apiKey: ctx.apiKey, base: 'http://looper', modelFetch: ctx.modelFetch,
-            sessionEvents: ctx.sessionEvents, client, notices: ctx.notices },
+            sessionEvents: ctx.sessionEvents, client, backdoor: ctx.backdoor },
           opened, opened.session.workspaceId, req.body.message, req.body.plan === true);
         line({ type: 'result', text });
       } catch (e) {
@@ -635,20 +656,55 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       }
     });
 
-  // ---- passive notices -----------------------------------------------------
-  // A window's side of the notices channel (notices.ts): as its send starts,
-  // it drains what is waiting and folds it into the turn ahead of the typed
-  // text — the server-side turn runner drains in-process and never crosses
-  // here. Drain is take-not-peek: the window records what it got with the
-  // turn, and the fact each notice reports lives in its own row regardless.
+  // ---- the backdoor message queue ------------------------------------------
+  // A window's side of the backdoor message queue (backdoor.ts): as its send
+  // starts, it drains what is waiting and folds it into the turn ahead of the
+  // typed text — the server-side turn runner drains in-process and never
+  // crosses here. Drain is take-not-peek: the window records what it got with
+  // the turn, and the fact each message reports lives in its own row
+  // regardless.
   app.post<{ Params: { id: string } }>(
-    '/sessions/:id/notices/drain', { schema: { ...TAG,
-      summary: "Take the session's pending passive notices",
-      description: 'Drains and returns the one-line notices waiting for the session\'s next turn ' +
-        '(a detached command exiting). The caller folds them into the turn it is starting and ' +
-        'records them with it.',
+    '/sessions/:id/backdoor/drain', { schema: { ...TAG,
+      summary: "Take the session's pending backdoor messages",
+      description: 'Drains and returns the one-line backdoor messages waiting for the session\'s next ' +
+        'turn (a detached command exiting, a file dropped onto the cli window). The caller folds them ' +
+        'into the turn it is starting and records them with it.',
       params: idParam } },
-    async (req) => ok({ notices: ctx.notices?.drain(req.params.id) ?? [] }));
+    async (req) => ok({ messages: ctx.backdoor?.drain(req.params.id) ?? [] }));
+
+  // ---- attachments -----------------------------------------------------------
+  // A file given to the session out-of-band — the first caller is a drag
+  // onto the cli window: the terminal pastes the path, the cli reads the
+  // LOCAL file and posts it here. It lands in the session's scratch pad —
+  // the same policy telegram attachments follow (attachments.ts) — and the
+  // agent is told through the backdoor message queue on its next turn. The
+  // post itself starts no turn: the user is still typing.
+  app.post<{ Params: { id: string }; Body: { name: string; data: string } }>(
+    '/sessions/:id/attachments', { schema: { ...TAG,
+      summary: 'Attach a file to the session',
+      description: 'Saves `data` (base64) under the session\'s scratch dir as `name` and queues a ' +
+        'backdoor message telling the agent where it landed. The message rides the session\'s next ' +
+        'turn; the post starts no turn of its own.',
+      params: idParam,
+      body: { type: 'object', required: ['name', 'data'], additionalProperties: false,
+        properties: { name: { type: 'string', minLength: 1 }, data: { type: 'string' } } } },
+      // base64 inflates by 4/3; fastify's 1MB default would refuse every
+      // screenshot.
+      bodyLimit: Math.ceil(MAX_ATTACHMENT_BYTES * 4 / 3) + 1024 },
+    async (req, reply) => {
+      const session = await getSession(ctx.db, req.params.id);
+      if (!session) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
+      const data = Buffer.from(req.body.data, 'base64');
+      if (!data.length) return reply.code(400).send(err('invalid_args', 'the file is empty', true));
+      if (data.length > MAX_ATTACHMENT_BYTES) {
+        return reply.code(413).send(err('too_large', `file is over ${MAX_ATTACHMENT_BYTES / 1024 / 1024}MB`, true));
+      }
+      const scratch = path.join(sessionDir(ctx.paths, session.folderId ?? session.id), 'scratch');
+      const a = await writeAttachment(scratch, data, { filename: req.body.name });
+      if (!a) return reply.code(422).send(err('invalid_args', 'the file claims to be an image but is not one', true));
+      ctx.backdoor?.push(session.id, dropMessage(a));
+      return ok({ path: a.containerPath, kind: a.kind, name: a.displayName });
+    });
 
   // ---- duplicate -----------------------------------------------------------
   // THE way to fork a session — above all, to switch its model: a pinned

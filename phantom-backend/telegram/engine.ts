@@ -23,7 +23,7 @@ import { openSession, SessionLockedError, type OpenedSession } from '../../core/
 import { getSession, currentLoop, loopOf } from '../sessions.js';
 import { resolveCredential } from '../settings.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
-import type { Notices } from '../api/notices.js';
+import type { BackdoorQueue } from '../api/backdoor.js';
 import type { BoardEvents, BoardEvent } from '../api/boardEvents.js';
 import { autoBuildAlert } from './alerts.js';
 import { logger, errStr } from '../log.js';
@@ -77,8 +77,9 @@ export interface TelegramEngineDeps {
   sessionEvents?: SessionEvents;
   /** The board bus — the auto build alerts listen on it (alerts.ts). */
   events?: BoardEvents;
-  /** Passive notices (api/notices.ts) — each turn drains its session's queue. */
-  notices?: Notices;
+  /** The backdoor message queue (api/backdoor.ts) — each turn drains its
+   *  session's queue. */
+  backdoor?: BackdoorQueue;
   modelFetch?: typeof fetch;
   /** https://PHANTOM_BACKEND_ADDRESS — the only source of the webhook URL. */
   publicAddress?: string;
@@ -753,7 +754,7 @@ export class TelegramEngine {
   private turnDeps(): TurnDeps {
     return { f: this.f, apiKey: this.deps.apiKey, base: BASE,
       modelFetch: this.deps.modelFetch, sessionEvents: this.deps.sessionEvents, client: CLIENT_ID,
-      notices: this.deps.notices };
+      backdoor: this.deps.backdoor };
   }
 
   /** File delivery for a session's reply: map the agent's /workspace/... paths

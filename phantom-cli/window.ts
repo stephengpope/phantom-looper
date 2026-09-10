@@ -8,6 +8,8 @@
 // lives here. Typing, scrolling and the two toggles that only a keypress
 // moves stay in App.
 import { hostname } from 'node:os';
+import { readFile } from 'node:fs/promises';
+import { basename } from 'node:path';
 import type { ModelMessage, Tool } from 'ai';
 import { SessionStore, activeHold, type LoadedSession } from './sessions.js';
 import { SessionFeed } from './sessionFeed.js';
@@ -470,11 +472,12 @@ export class WindowStore {
         { transcript_updated_at?: string | null };
       await this.refreshIfMoved(id, r?.transcript_updated_at ?? null);
     };
-    // Passive notices (a detached command exited) ride this window's next
-    // send; the drain runs after the lock above, so one consumer takes them.
-    s.drainNotices = async (id) => {
-      const r = await this.api('POST', `/sessions/${id}/notices/drain`) as { notices?: string[] };
-      return r?.notices ?? [];
+    // The backdoor message queue (a detached command exited, a file was
+    // dropped) rides this window's next send; the drain runs after the lock
+    // above, so one consumer takes them.
+    s.drainBackdoor = async (id) => {
+      const r = await this.api('POST', `/sessions/${id}/backdoor/drain`) as { messages?: string[] };
+      return r?.messages ?? [];
     };
     // This window's own turn, relayed as it runs, so any watcher sees it
     // stream exactly like a turn the server runs.
@@ -593,6 +596,27 @@ export class WindowStore {
   };
 
   setSplash(on: boolean): void { this.splash = on; this.notify(); }
+
+  /** Files dragged onto the window (drop.ts caught the paste before it
+   *  became text). Each is read locally and uploaded into the active
+   *  session's scratch pad; the agent hears where it landed through the
+   *  backdoor message queue on the next turn — the drop itself sends
+   *  nothing, the user is still typing. */
+  dropFiles = async (paths: string[]): Promise<void> => {
+    const session = this.sessions.active();
+    if (!session) { this.note('a dropped file needs an open session — /new or /resume first'); return; }
+    for (const p of paths) {
+      try {
+        const data = await readFile(p);
+        const r = await this.api('POST', `/sessions/${session.id}/attachments`,
+          { name: basename(p), data: data.toString('base64') }) as { path?: string };
+        this.sessions.note(session.id,
+          `dropped ${basename(p)} → ${r.path ?? 'the scratch pad'} — the agent will be told on your next message`);
+      } catch (e) {
+        this.sessions.note(session.id, `drop failed: ${basename(p)} — ${(e as Error).message}`);
+      }
+    }
+  };
 
   /** Show that session's conversation in the pane, tail first. The unsent
    *  text goes with the session being left and comes back with it. */

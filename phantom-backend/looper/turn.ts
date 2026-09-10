@@ -13,7 +13,7 @@ import { webTools } from '../../core/llm/tools/web.js';
 import { secretTools } from '../../core/llm/tools/secrets.js';
 import { kanbanReadTool } from '../../core/llm/tools/kanban.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
-import type { Notices } from '../api/notices.js';
+import type { BackdoorQueue } from '../api/backdoor.js';
 
 export interface TurnDeps {
   f: typeof fetch;               // the server's own surface (injectFetch)
@@ -38,9 +38,9 @@ export interface TurnDeps {
    *  mid-stream. The SDK stops between steps; running tool calls end when
    *  the process in the container is killed (the interrupt route does both). */
   signal?: AbortSignal;
-  /** Passive notices (api/notices.ts): drained into the turn's messages
-   *  below, restored if the turn fails before they are saved. */
-  notices?: Notices;
+  /** The backdoor message queue (api/backdoor.ts): drained into the turn's
+   *  messages below, restored if the turn fails before they are saved. */
+  backdoor?: BackdoorQueue;
 }
 
 /** The resolved settings as plain values — the same rows every client reads,
@@ -85,13 +85,14 @@ export async function runCodingTurn(
     opened.session as { provider?: string | null; model?: string | null; baseUrl?: string | null }));
   const model = modelConfigFrom(pinned);
   const { agent } = buildCodingAgent(pinned, tools, opened.instructions, deps.modelFetch, deps.onRetry);
-  // Pending notices ride this turn as their own user messages, AHEAD of the
-  // one that started it — they are the older facts. They are restored if the
-  // turn dies before they are saved: a failed turn must not eat them.
-  const notes = deps.notices?.drain(opened.session.id) ?? [];
+  // Pending backdoor messages ride this turn as their own user messages,
+  // AHEAD of the one that started it — they are the older facts. They are
+  // restored if the turn dies before they are saved: a failed turn must not
+  // eat them.
+  const notes = deps.backdoor?.drain(opened.session.id) ?? [];
   let notesOwed = notes.length > 0;
   const restoreNotes = () => {
-    if (notesOwed) { deps.notices?.restore(opened.session.id, notes); notesOwed = false; }
+    if (notesOwed) { deps.backdoor?.restore(opened.session.id, notes); notesOwed = false; }
   };
   const messages: ModelMessage[] = [...opened.messages,
     ...notes.map((content) => ({ role: 'user', content }) as ModelMessage),
@@ -154,7 +155,7 @@ export async function runCodingTurn(
       [...messages, ...turnMessages],
       [...opened.events, ...turnEvents,
         ...(interrupted ? [{ at: messages.length + turnMessages.length, event: { type: 'interrupted' } }] : [])]));
-    notesOwed = false; // the notices are in the record now — never re-queued
+    notesOwed = false; // the backdoor messages are in the record now — never re-queued
   } catch (e) {
     restoreNotes();
     throw e;

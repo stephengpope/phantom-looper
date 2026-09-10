@@ -9,7 +9,7 @@ import { idleBackupSweep, pressureSweep } from './disk.js';
 import { buildApp, type AppCtx } from './api/app.js';
 import { BoardEvents } from './api/boardEvents.js';
 import { SessionEvents } from './api/sessionEvents.js';
-import { Notices } from './api/notices.js';
+import { BackdoorQueue } from './api/backdoor.js';
 import { makeDocker } from './docker.js';
 import { migrateAllWorkspaceSchemas } from './db/workspaceSchema.js';
 import { ContainerManager } from './workspace/container.js';
@@ -83,7 +83,7 @@ async function main() {
       throw e;
     }
     const deps = { f, apiKey: env.apiKey, base: TURN_BASE, sessionEvents: sessionEvents,
-      notices: notices,
+      backdoor,
       client: GIT_CLIENT_ID, onRetry: (t: string) => log.warn({ session: session.id }, t) };
     try {
       const message = toCodingAgent.resolveConflict(
@@ -219,7 +219,7 @@ async function main() {
   // the references are captured at definition time).
   const events = new BoardEvents();
   const sessionEvents = new SessionEvents();
-  const notices = new Notices();
+  const backdoor = new BackdoorQueue();
 
   // Work-state refresh: every 10s, recompute `work` for sessions with an
   // active container. A change writes the row and publishes on the board
@@ -244,7 +244,7 @@ async function main() {
     pgPool,
     events,
     sessionEvents,
-    notices,
+    backdoor,
     updateTriggerDir: process.env.UPDATE_TRIGGER_DIR || undefined,
   };
   const app = await buildApp(ctx);
@@ -256,7 +256,7 @@ async function main() {
   // are answering. Event-driven: routes poke it through ctx.looper; start()
   // is ONE recovery sweep, not a poll.
   const looper = new LooperEngine({ db, pgPool, app, apiKey: env.apiKey, events: ctx.events,
-    sessionEvents: ctx.sessionEvents, activeTurns: ctx.activeTurns, notices: ctx.notices });
+    sessionEvents: ctx.sessionEvents, activeTurns: ctx.activeTurns, backdoor: ctx.backdoor });
   ctx.looper = looper;
   looper.start();
 
@@ -266,7 +266,7 @@ async function main() {
   // re-registers a stale webhook and pushes the command menu.
   const telegram = new TelegramEngine({
     db, paths, app, apiKey: env.apiKey, encryptionKey: env.encryptionKey,
-    events: ctx.events, notices: ctx.notices,
+    events: ctx.events, backdoor: ctx.backdoor,
     sessionEvents: ctx.sessionEvents, publicAddress: process.env.PHANTOM_BACKEND_ADDRESS,
   });
   ctx.telegram = telegram;

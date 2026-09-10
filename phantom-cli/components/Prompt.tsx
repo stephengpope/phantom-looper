@@ -24,9 +24,12 @@ import { Glint } from './Shimmer.js';
 import { APP_VERSION } from '../selfUpdate.js';
 import type { PasteStore } from '../paste.js';
 
-export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure, pastes, updateReady }: {
+export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure, pastes, onFileDrop, updateReady }: {
   value: string; onChange: (v: string) => void; onSubmit: (v: string) => void;
   pastes?: PasteStore;
+  /** A paste that IS a dragged file's path (drop.ts) goes to the window as
+   *  paths — it never lands in the box as text. */
+  onFileDrop?: (paths: string[]) => void;
   /** The version a background auto-update installed: the label below swaps
    *  from this build's version to naming it until the launch that runs it. */
   updateReady?: string | null;
@@ -62,6 +65,7 @@ export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure, pas
           focus={focus}
           placeholder="type a message…"
           pastes={pastes}
+          onFileDrop={onFileDrop}
         />
       </Box>
       <Box>

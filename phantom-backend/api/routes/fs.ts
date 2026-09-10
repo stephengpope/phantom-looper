@@ -297,13 +297,13 @@ async function runBash(
       // overwrite them.
       await ctx.db.update(commands).set({ status, exitCode, endedAt: new Date() })
         .where(and(eq(commands.id, cmdId), eq(commands.status, 'running'))).catch(() => {});
-      // The exit notice rides the session's NEXT turn (notices.ts) — no turn
-      // is started for it. Read the row's final word rather than the local
-      // `status`: a kill from /tasks or task_kill marks the row first, and
-      // the row is the truth.
+      // The exit message rides the session's NEXT turn through the backdoor
+      // message queue (backdoor.ts) — no turn is started for it. Read the
+      // row's final word rather than the local `status`: a kill from /tasks
+      // or task_kill marks the row first, and the row is the truth.
       const final = await ctx.db.select().from(commands).where(eq(commands.id, cmdId))
         .catch(() => [] as CmdRow[]);
-      if (final[0]) ctx.notices?.push(session.id, noticeOf(final[0]));
+      if (final[0]) ctx.backdoor?.push(session.id, noticeOf(final[0]));
     }
   })();
   // Sid capture, fire-and-forget beside the stream: retry-read the pidfile

@@ -18,13 +18,14 @@ import { useInput, usePaste } from 'ink';
 import { Text } from './Text.js';
 import { isMouseInput } from '../mouse.js';
 import { PasteStore, chipAtEnd } from '../paste.js';
+import { parseDrop } from '../drop.js';
 import { useEffect, useRef, useState } from 'react';
 
 /** Reverse video for one character. Written out rather than pulled from chalk,
  *  which is only in the tree as one of Ink's own dependencies. */
 const invert = (s: string) => `\x1b[7m${s}\x1b[27m`;
 
-export function TextInput({ value, onChange, onSubmit, focus = true, placeholder = '', mask, pastes }: {
+export function TextInput({ value, onChange, onSubmit, focus = true, placeholder = '', mask, pastes, onFileDrop }: {
   value: string;
   onChange: (value: string) => void;
   onSubmit?: (value: string) => void;
@@ -35,6 +36,9 @@ export function TextInput({ value, onChange, onSubmit, focus = true, placeholder
   /** Given, a big paste lands as a chip (`[Pasted #1 ~12 lines]`) and its
    *  text lives in the store until submit swaps it back (see paste.ts). */
   pastes?: PasteStore;
+  /** Given, a paste that IS a dragged file's path (drop.ts) goes here as
+   *  paths instead of landing in the box as text. */
+  onFileDrop?: (paths: string[]) => void;
 }) {
   const [cursorState, setCursorState] = useState(value.length);
   // The cursor is mirrored in a ref and READ from the ref: two keypresses
@@ -110,6 +114,12 @@ export function TextInput({ value, onChange, onSubmit, focus = true, placeholder
     // eslint-disable-next-line no-control-regex
     text = text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
     if (!text) return;
+    // A dragged file is a paste of its path (drop.ts): it never becomes
+    // text here — the window uploads it to the session's scratch pad.
+    if (onFileDrop) {
+      const dropped = parseDrop(text);
+      if (dropped) { onFileDrop(dropped); return; }
+    }
     if (pastes) text = pastes.collapse(text) ?? text;
     const value = valueRef.current;
     const cursor = cursorRef.current;
