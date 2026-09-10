@@ -62,6 +62,7 @@ export const DEFAULTS = {
   assistant_base_url: null as string | null,
   assistant_reasoning: null as string | null,
   assistant_max_steps: null as number | null,
+  assistant_history_limit: 100 as number,
   // The Assistant's pane — rendered by the cli, stored here so every cli you
   // open is the same one.
   voice_enabled: false as boolean,
@@ -174,6 +175,7 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   assistant_base_url: 'Endpoint when the Assistant\'s provider is openai-compatible. Empty inherits the coding agent\'s only while the provider matches.',
   assistant_reasoning: 'How much the Assistant thinks before answering. Empty = the coding agent\'s reasoning level.',
   assistant_max_steps: 'Tool calls allowed per turn for the Assistant. Empty = unlimited.',
+  assistant_history_limit: 'Messages the Assistant keeps before older ones are summarized into context (compaction), on the cli pane and Telegram alike. The full record stays on disk.',
   voice_enabled: 'Start the Assistant with the cli. It listens on the mic, answers out loud and in the voice pane (ctrl+g), and can act on the cli through its tools.',
   sidebar_width: 'Width of the voice pane as a percent of the terminal.',
   voice_spoken_voice: 'Deepgram Aura voice the Assistant speaks with, e.g. aura-2-thalia-en, aura-2-orion-en.',
@@ -272,6 +274,7 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
   assistant_reasoning: { type: 'string', label: 'assistant reasoning', group: 'voice', nullable: true,
     choices: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
   assistant_max_steps: { type: 'number', label: 'assistant steps per turn', group: 'voice', unit: 'count', min: 1, nullable: true },
+  assistant_history_limit: { type: 'number', label: 'assistant history limit', group: 'voice', unit: 'count', min: 10 },
   voice_enabled: { type: 'boolean', label: 'assistant', group: 'voice' },
   sidebar_width: { type: 'number', label: 'voice pane width', group: 'voice', unit: 'count', min: 10 },
   voice_spoken_voice: { type: 'string', label: 'spoken voice', group: 'voice' },

@@ -2,9 +2,9 @@
 // TUI's side pane and is spoken to — voice is how you reach it, not its name.
 //
 // Prompt: prompts/assistant/assistant.ts systemPrompt — the whole prompt in
-// one list, assembled when the voice engine starts and kept for its life (a
-// restart is a fresh conversation, so a fresh prompt). The current date is
-// appended at build, date only.
+// one list, assembled fresh at every start (the conversation resumes, the
+// prompt is rebuilt — current date and all). The current date is appended at
+// build, date only.
 //
 // Kit: the caller's — `session_*`, the full board kit, `screen_*`,
 // `workspace_create_repo` (gated in the app), the web kit

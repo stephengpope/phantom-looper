@@ -34,6 +34,10 @@ import { toTelegram, splitFormatted } from './entities.js';
 import { transcribeVoice, speakVoice, SPEAK_MAX_CHARS, type Transcription } from './deepgram.js';
 import { writeAttachment, composeMessage, MAX_INBOUND_BYTES, type StoredAttachment } from './attachments.js';
 import { runAssistantTurn, type AssistantDeps } from './assistant.js';
+import { agentModelConfig } from '../../core/llm/agentConfig.js';
+import { assistantInstructions } from '../../core/llm/agents/assistant.js';
+import { loadTranscriptFile, newestTranscriptFile, Transcript, transcriptStamp } from '../../core/llm/transcript.js';
+import { createCompactor, DEFAULT_HISTORY_LIMIT, type Compactor } from '../../core/llm/compaction.js';
 import { Approvals } from './approvals.js';
 import { UpgradeChecker } from './upgrade.js';
 import * as store from './store.js';
@@ -92,8 +96,78 @@ interface Busy { queue: string[]; abort: AbortController }
 export class TelegramEngine {
   private f: typeof fetch;
   private busy = new Map<string, Busy>();
-  /** The Assistant's ONE in-memory conversation (reset on restart). */
+  /** The Assistant's ONE conversation — backed by the newest transcript file
+   *  in assistantDir, loaded back on the first turn after a boot. */
   private assistantHistory: ModelMessage[] = [];
+  private assistantTranscript: Transcript | null = null;
+  private assistantLoaded = false;
+  /** The last turn's settings read and chat — the compactor's model/limit
+   *  source and where the compaction notice goes. */
+  private assistantValues: Record<string, unknown> = {};
+  private assistantChat: { client: TelegramClient; dm: number } | null = null;
+  /** The background compactor (core/llm/compaction.ts), kicked after every
+   *  assistant turn. A failed summary is logged and retried after a later
+   *  turn — the history is never dropped without one. */
+  private compactor: Compactor = createCompactor({
+    model: () => agentModelConfig(this.assistantValues, 'assistant'),
+    limit: () => {
+      const n = Number(this.assistantValues.assistant_history_limit);
+      return Number.isFinite(n) && n > 0 ? n : DEFAULT_HISTORY_LIMIT;
+    },
+    onCompacted: () => this.onAssistantCompacted(),
+    onFailed: (err) => log.warn({ err: err.message }, 'assistant compaction failed — will retry after a later turn'),
+  });
+
+  /** The Assistant's transcript directory: one live file (the newest), older
+   *  ones the archive compaction left behind. Under the data root, outside
+   *  any session's work dir — the Assistant is not a session. */
+  private assistantDir(): string {
+    return path.join(this.deps.paths.root, 'assistant');
+  }
+
+  /** The live transcript, created on first write. The header names the
+   *  current assistant model best-effort — it records what wrote the file. */
+  private transcript(): Transcript {
+    if (!this.assistantTranscript) {
+      let provider = 'unknown', model = 'unknown';
+      try {
+        const c = agentModelConfig(this.assistantValues, 'assistant');
+        provider = c.provider; model = c.model;
+      } catch { /* no model configured yet — the header says unknown */ }
+      this.assistantTranscript = new Transcript({
+        type: 'session', agent: 'assistant', provider, model,
+        created_at: new Date().toISOString(), system_prompt: assistantInstructions(),
+      }, path.join(this.assistantDir(), `${transcriptStamp()}.jsonl`));
+    }
+    return this.assistantTranscript;
+  }
+
+  /** Resume the conversation from the newest transcript — once per boot, on
+   *  the first assistant turn. The file keeps appending from there. */
+  private loadAssistant(): void {
+    if (this.assistantLoaded) return;
+    this.assistantLoaded = true;
+    const file = newestTranscriptFile(this.assistantDir());
+    if (!file) return;
+    const loaded = loadTranscriptFile(file);
+    if (!loaded.messages.length) return;
+    this.assistantHistory.push(...loaded.messages);
+    this.assistantTranscript = new Transcript(loaded.header ?? {
+      type: 'session', agent: 'assistant', provider: 'unknown', model: 'unknown',
+      created_at: new Date().toISOString(), system_prompt: assistantInstructions(),
+    }, file);
+  }
+
+  /** The swap landed: the record rolls to a fresh file — the summary opens
+   *  it, the carried-over messages behind it; the old file stays as the
+   *  archive. The user gets one line so the Assistant's shorter memory reads
+   *  for what it is. */
+  private onAssistantCompacted(): void {
+    this.assistantTranscript = null;
+    this.transcript().appendAll([...this.assistantHistory]);
+    const chat = this.assistantChat;
+    if (chat) void chat.client.sendMessage(chat.dm, '🧠 Chat compacted — older messages are summarized.').catch(() => {});
+  }
   /** The approval gate — gated tools ask the user here (approvals.ts). */
   private approvals = new Approvals();
   /** The upgrade checker — periodic GitHub release check + Telegram notification. */
@@ -347,6 +421,9 @@ export class TelegramEngine {
   private async assistantTurn(client: TelegramClient, dm: number, message: string,
     values: Record<string, unknown>): Promise<void> {
     const { db } = this.deps;
+    this.assistantValues = values;
+    this.assistantChat = { client, dm };
+    this.loadAssistant();
     const typing = startTyping(client, dm);
     const abort = new AbortController();
     const busyKey = 'assistant';
@@ -387,7 +464,9 @@ export class TelegramEngine {
         onSwitch,
         approve: (ask, signal) => this.approvals.request(client, dm, ask, signal),
         onWorkspaceCreated,
-      }, abort.signal);
+      }, abort.signal, this.transcript());
+      // Long chat? Summarize it in the background — turns never wait on it.
+      this.compactor.kick(this.assistantHistory);
       // Any messages queued while we ran go out as one follow-up turn.
       const queued = this.busy.get(busyKey)?.queue ?? [];
       this.busy.delete(busyKey);

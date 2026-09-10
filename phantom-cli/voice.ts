@@ -15,8 +15,10 @@
 //      core/llm/createAgent exactly like the coding agent (agentFromConfig.
 //      buildAssistantAgent): its own prompt, its own history, the `session_*` tools.
 //      Run here, in this process, with runTurn; the pane shows the same `Part`s
-//      the conversation renders. In memory only; appended to a per-day file as
-//      it goes, never loaded back (a restart is a fresh conversation).
+//      the conversation renders. The history is the newest file in VOICE_DIR —
+//      resumed on start and shown in the pane, appended as it goes; past the
+//      message limit it compacts (core/llm/compaction.ts), the summary opening
+//      a fresh file and the old ones staying as the archive.
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -28,8 +30,10 @@ import type { ModelMessage } from 'ai';
 import { CONFIG_DIR, type ConfigKey, type ConfigValue } from './config.js';
 import { applyPart, finalize, nextId, takeCompleted, type Part, type StreamPart } from './state.js';
 import { FLUSH_MS, runTurn, type Agent } from './agent.js';
-import { Transcript } from '../core/llm/transcript.js';
+import { loadTranscriptFile, newestTranscriptFile, Transcript, transcriptStamp } from '../core/llm/transcript.js';
+import { createCompactor, DEFAULT_HISTORY_LIMIT, isSummaryMessage, SUMMARY_HEAD, type Compactor } from '../core/llm/compaction.js';
 import { assistantInstructions } from '../core/llm/agents/assistant.js';
+import type { ModelConfig } from '../core/llm/createAgent.js';
 
 export const SIDECAR_DIR = fileURLToPath(new URL('./sidecar/', import.meta.url));
 export const VOICE_DIR = join(CONFIG_DIR, 'voice');
@@ -301,6 +305,30 @@ export function joinSpeech(a: string, b: string): string {
   return [a.trim(), b.trim()].filter(Boolean).join(' ');
 }
 
+/** Resumed history → pane parts: what was said, yours and the Assistant's.
+ *  Tool calls and results are skipped — the pane's live rendering never shows
+ *  them as separate rows either; a summary shows as its comment head plus its
+ *  text, so the boundary in the conversation reads for what it is. */
+export function partsFromHistory(messages: ModelMessage[]): Part[] {
+  const out: Part[] = [];
+  for (const m of messages) {
+    if (m.role === 'user' && typeof m.content === 'string') {
+      if (isSummaryMessage(m)) {
+        out.push({ kind: 'note', id: nextId('vnote'), text: SUMMARY_HEAD });
+        const body = m.content.slice(SUMMARY_HEAD.length).trim();
+        if (body) out.push({ kind: 'text', id: nextId('vtext'), text: body, done: true });
+      } else {
+        out.push({ kind: 'user', id: nextId('vuser'), text: m.content });
+      }
+    } else if (m.role === 'assistant') {
+      const text = typeof m.content === 'string' ? m.content
+        : m.content.filter((c) => c.type === 'text').map((c) => (c as { type: 'text'; text: string }).text).join('');
+      if (text.trim()) out.push({ kind: 'text', id: nextId('vtext'), text: text.trim(), done: true });
+    }
+  }
+  return out;
+}
+
 export class VoiceClient {
   private proc: SidecarProcess | null = null;
   private subs = new Set<() => void>();
@@ -359,6 +387,67 @@ export class VoiceClient {
 
   private modelInfo = { provider: 'unknown', model: 'unknown' };
   private transcript: Transcript | null = null;
+  /** Compaction config, supplied with the agent (setCompaction) since both
+   *  come from the same settings read. */
+  private compactionModel: ModelConfig | null = null;
+  private compactionLimit: number = DEFAULT_HISTORY_LIMIT;
+  private resumed = false;
+  /** The background compactor (core/llm/compaction.ts): kicked after every
+   *  turn, swaps the summarized prefix for the summary message when it
+   *  lands, and this rolls the transcript and tells the pane. */
+  private compactor: Compactor = createCompactor({
+    model: () => {
+      if (!this.compactionModel) throw new Error('no assistant model — compaction skipped');
+      return this.compactionModel;
+    },
+    limit: () => this.compactionLimit,
+    onCompacted: (dropped) => this.onCompacted(dropped),
+    // A failed summary leaves the history whole and retries after the next
+    // turn — nothing to tell the user about.
+    onFailed: () => {},
+  });
+
+  /** The Assistant's model + history limit for compaction — set alongside
+   *  setAgent (same settings read), so /model and the setting are followed. */
+  setCompaction(model: ModelConfig, limit: number): void {
+    this.compactionModel = model;
+    if (Number.isFinite(limit) && limit > 0) this.compactionLimit = limit;
+  }
+
+  /** The swap landed: the summary replaced `dropped` messages. Turns in
+   *  flight index the history from their start — shift them with it (clamped
+   *  behind the summary); the record rolls to a fresh file the summary opens
+   *  (the old one stays as the archive); the pane says what happened. */
+  private onCompacted(dropped: number): void {
+    for (const t of this.turns.values()) t.historyStart = Math.max(1, t.historyStart - (dropped - 1));
+    if (this.transcriptDir) {
+      const t = new Transcript({
+        type: 'session', agent: 'assistant', provider: this.modelInfo.provider, model: this.modelInfo.model,
+        created_at: new Date().toISOString(), system_prompt: assistantInstructions(),
+      }, join(this.transcriptDir, `${transcriptStamp()}.jsonl`));
+      t.appendAll([...this.history]);
+      this.transcript = t;
+    }
+    this.note({ kind: 'note', id: nextId('vnote'), text: 'chat compacted — older messages summarized' });
+  }
+
+  /** Resume the conversation from the newest transcript — once per process,
+   *  on the first engine start. The messages seed the brain and render in
+   *  the pane like a resumed coding session; the file keeps appending. */
+  private resume(): void {
+    if (this.resumed || !this.transcriptDir) return;
+    this.resumed = true;
+    const file = newestTranscriptFile(this.transcriptDir);
+    if (!file) return;
+    const loaded = loadTranscriptFile(file);
+    if (!loaded.messages.length) return;
+    this.history.push(...loaded.messages);
+    this.transcript = new Transcript(loaded.header ?? {
+      type: 'session', agent: 'assistant', provider: this.modelInfo.provider, model: this.modelInfo.model,
+      created_at: new Date().toISOString(), system_prompt: assistantInstructions(),
+    }, file);
+    this.set({ done: [...this.snap.done, ...partsFromHistory(loaded.messages)] });
+  }
 
   /** The brain. Set before start, and again whenever the model config changes
    *  (the history stays; only the next turn sees the new model). `info` names
@@ -376,7 +465,7 @@ export class VoiceClient {
   private log(): Transcript | null {
     if (!this.transcriptDir) return null;
     if (!this.transcript) {
-      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const stamp = transcriptStamp();
       this.transcript = new Transcript({
         type: 'session', agent: 'assistant', provider: this.modelInfo.provider, model: this.modelInfo.model,
         created_at: new Date().toISOString(), system_prompt: assistantInstructions(),
@@ -388,7 +477,7 @@ export class VoiceClient {
   /** Start (or restart) the sidecar with this environment. */
   async start(env: Record<string, string>): Promise<void> {
     this.stop();
-    this.transcript = null;   // a fresh engine run is a fresh conversation and a fresh file
+    this.resume();   // the conversation outlives the engine — pick it back up
     const gen = ++this.gen;
     this.set({ status: 'starting', detail: 'starting…' });
     try {
@@ -488,8 +577,11 @@ export class VoiceClient {
     // catch sees; when the stream already spoke, the catch stays quiet.
     let streamErrored = false;
     try {
+      // A COPY: compaction may swap the stored history mid-turn (its splice
+      // keeps appends intact), and the turn in flight must finish on the
+      // conversation it started with — also the warm cached prefix.
       await this.run(
-        this.agent, this.history,
+        this.agent, [...this.history],
         (parts) => {
           // Time to the first token (text, thinking or a tool call) — not to
           // the stream's own `start` markers, which arrive at once.
@@ -522,6 +614,8 @@ export class VoiceClient {
         done: [...this.snap.done, ...done], live: this.live(),
         status: this.cur || this.snap.status === 'speaking' ? this.snap.status : this.snap.status === 'error' ? 'error' : 'listening',
       });
+      // Long chat? Summarize it in the background — turns never wait on it.
+      this.compactor.kick(this.history);
     }
   }
 

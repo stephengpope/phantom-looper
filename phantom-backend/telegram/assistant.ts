@@ -5,9 +5,11 @@
 // Python voice sidecar, with HEADLESS tool handlers hitting this server's own
 // routes instead of the app's BoardStore.
 //
-// The conversation is ONE long in-memory ModelMessage[] (held by the engine,
-// reset on restart) — the same way the app's Assistant works. Every turn is
-// also appended to a JSONL log like every other agent, never loaded back.
+// The conversation is one ModelMessage[] held by the engine, backed by the
+// newest transcript file in the server's assistant dir — written as it goes,
+// loaded back on boot, so a restart continues the chat. Past the message
+// limit it compacts (core/llm/compaction.ts): the summary opens a fresh file
+// and the old ones stay as the archive.
 //
 // Board and sessions are the Assistant's job (create/move cards, list/read
 // sessions); the file tools + web are bound to the account's active session,
@@ -23,7 +25,7 @@ import { assistantKanbanTool, sessionsTool, workspaceCreateTool, gitAutoPushTool
 import { autoPushSession, autoPullSession } from '../../core/llm/tools/git.js';
 import { phantomTools } from '../../core/llm/tools/workspace.js';
 import { webTools } from '../../core/llm/tools/web.js';
-import { parseTranscript } from '../../core/llm/transcript.js';
+import { parseTranscript, type Transcript } from '../../core/llm/transcript.js';
 import type { TelegramSink } from './sink.js';
 
 const BASE = 'http://looper';
@@ -249,13 +251,14 @@ export async function assistantKit(deps: AssistantDeps, ctx: AssistantCtx): Prom
   return kit;
 }
 
-/** Run ONE Assistant turn on the in-memory conversation, streaming to the
- *  telegram sink. Appends the user + reply to `history` and returns the reply
- *  text. `onSwitch` is called if the Assistant's session_switch fires — the
- *  caller moves the active-session pointer. */
+/** Run ONE Assistant turn on the conversation, streaming to the telegram
+ *  sink. Appends the user + reply to `history` (and to `transcript`, the
+ *  on-disk record, when given) and returns the reply text. `onSwitch` is
+ *  called if the Assistant's session_switch fires — the caller moves the
+ *  active-session pointer. */
 export async function runAssistantTurn(
   deps: AssistantDeps, history: ModelMessage[], message: string, sink: TelegramSink,
-  ctx: AssistantCtx, abortSignal?: AbortSignal,
+  ctx: AssistantCtx, abortSignal?: AbortSignal, transcript?: Transcript,
 ): Promise<string> {
   const model = agentModelConfig(ctx.settings, 'assistant');
   const maxSteps = agentMaxSteps(ctx.settings, 'assistant');
@@ -266,10 +269,15 @@ export async function runAssistantTurn(
   // (assistant + tool) append after it. Cache marks are createAgent's and ride
   // COPIES — the stored history stays clean, the same rule the coding turn
   // follows.
-  history.push({ role: 'user', content: message });
+  const user: ModelMessage = { role: 'user', content: message };
+  history.push(user);
+  transcript?.append(user);
   let text = '';
   try {
-    const r = await agent.stream({ messages: history, abortSignal });
+    // A COPY: compaction may swap the stored history mid-turn (its splice
+    // keeps appends intact), and the turn in flight must finish on the
+    // conversation it started with — also the warm cached prefix.
+    const r = await agent.stream({ messages: [...history], abortSignal });
     for await (const part of r.stream) {
       const p = part as Record<string, unknown>;
       if (p.type === 'text-delta' && typeof p.text === 'string') text += p.text;
@@ -277,6 +285,7 @@ export async function runAssistantTurn(
     }
     const resp = await r.response;
     history.push(...(resp.messages as ModelMessage[]));
+    transcript?.appendAll(resp.messages as ModelMessage[]);
   } catch (e) {
     await sink.dispose();
     throw e;

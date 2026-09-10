@@ -16,8 +16,8 @@
 // resumed from), the Assistant (~/.phantom-cli/voice/, one per engine
 // start), and the server's one-shot helpers (work/<session>/logs/ —
 // outside repo/ so auto-push never commits it).
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { ModelMessage } from 'ai';
 
 /** Line 1. Written once; resume reads the messages and ignores the rest —
@@ -159,6 +159,21 @@ export function parseTranscript(text: string): LoadedTranscript {
 export function loadTranscriptFile(file: string): LoadedTranscript {
   if (!existsSync(file)) return { messages: [], events: [] };
   return parseTranscript(readFileSync(file, 'utf8'));
+}
+
+/** A transcript file's name stamp — sorts lexicographically in time order. */
+export function transcriptStamp(now = new Date()): string {
+  return now.toISOString().replace(/[:.]/g, '-');
+}
+
+/** The newest `.jsonl` in a transcript directory — the live one a resume
+ *  loads; older files are the archive compaction left behind. Null when the
+ *  directory is missing or holds none. */
+export function newestTranscriptFile(dir: string): string | null {
+  try {
+    const files = readdirSync(dir).filter((f) => f.endsWith('.jsonl')).sort();
+    return files.length ? join(dir, files[files.length - 1]) : null;
+  } catch { return null; }
 }
 
 /** The last thing the user said in a JSONL transcript — the resume list's
