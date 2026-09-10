@@ -302,22 +302,8 @@ export function App({
   // does this job: a parallel GET could land late and overwrite newer state.
   useEffect(() => {
     if (!sessionId || stream) return;
-    let gone = false;
-    (async () => {
-      const cur = store.get(sessionId);
-      if (!cur || cur.busy || cur.readonly) return;
-      try {
-        const r = await api('GET', `/sessions/${sessionId}`) as {
-          planMode?: boolean; transcript_updated_at?: string | null;
-          work?: 'not_pushed' | 'not_merged' | 'merged' | null };
-        if (gone) return;
-        if (typeof r.planMode === 'boolean') await windowStore.applyPlanMode(sessionId, r.planMode);
-        store.setWork(sessionId, r.work ?? null);
-        await windowStore.refreshIfMoved(sessionId, r.transcript_updated_at ?? null);
-      } catch (e) { quiet(`re-read session ${sessionId}`)(e); }
-    })();
-    return () => { gone = true; };
-  }, [api, store, sessionId, stream]);
+    void windowStore.recheckSession(sessionId);
+  }, [windowStore, sessionId, stream]);
   // The session feeds — one per OPEN session, lock/agent/mode/git and
   // transcript state alongside live turn parts — are the window's: it opens
   // one as a session joins and closes it as the session leaves

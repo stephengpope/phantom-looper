@@ -23,7 +23,7 @@ import { runTurn } from './agent.js';
 import { messagesToParts, nextId, type Part } from './state.js';
 import { kanbanOps } from './kanban.js';
 import { PasteStore } from './paste.js';
-import { quiet, type Api } from './request.js';
+import { quiet, watchConnection, type Api } from './request.js';
 import { REMOTE_DEFAULTS, VOICE_BOOT_KEYS, ASSISTANT_MODEL_KEYS, isLocalKey,
   type ConfigKey, type ConfigValue } from './config.js';
 import { localValues, setLocal } from './local.js';
@@ -263,10 +263,15 @@ export class WindowStore {
 
   private readonly listeners = new Set<() => void>();
   private readonly settings;
+  private readonly api: Api;
 
   constructor(private readonly opts: WindowOptions) {
-    this.settings = makeSettings(opts.api);
-    this.workspaces = new WorkspaceDirectory(opts.api);
+    // Every request rides the connection watch: the first success after an
+    // outage fires recover(), which puts everything this window holds right
+    // from the record — the request path's version of a feed's reconnect.
+    this.api = watchConnection(opts.api, () => this.recover());
+    this.settings = makeSettings(this.api);
+    this.workspaces = new WorkspaceDirectory(this.api);
     this.voice = (opts.makeVoice ?? (() => new VoiceClient(undefined, undefined, opts.run ?? runTurn)))();
     this.splash = opts.initial ? opts.initial.resumed.length === 0 : !opts.boot?.resumeId;
     this.voiceEnabled = Boolean(opts.bootConfig?.voice_enabled);
@@ -300,8 +305,6 @@ export class WindowStore {
    *  stale the moment anything writes through another door. */
   private readCfg = async (): Promise<Record<string, ConfigValue>> =>
     ({ ...await this.settings.read(), ...localValues(this.opts.configPath) });
-
-  private get api(): Api { return this.opts.api; }
 
   // ── boards ────────────────────────────────────────────────────────────────
 
@@ -394,26 +397,37 @@ export class WindowStore {
 
   // ── the session store, and the turn's two ends ────────────────────────────
 
-  private newSessionStore(): SessionStore {
-    // When a turn ends the whole local file goes to the server — SQL is the
-    // record. Chained per session: two turns ending close together must land
-    // in order, or a stale upload could overwrite the newer one. A failure is
-    // noted ONCE per streak, so a server that cannot store transcripts is one
-    // line, not one per turn.
-    const chains = new Map<string, Promise<void>>();
-    const failing = new Set<string>();
-    const s: SessionStore = new SessionStore(this.opts.run ?? runTurn, (e) => {
-      const prev = chains.get(e.id) ?? Promise.resolve();
-      chains.set(e.id, prev.then(() => syncTranscriptUp(this.api, e.id, e.transcript.path)).then(
-        (stamp) => { s.setStamp(e.id, stamp); if (failing.delete(e.id)) s.note(e.id, 'transcript sync recovered'); },
+  // The transcript upload's two bookkeeping sets. Chained per session: two
+  // turns ending close together must land in order, or a stale upload could
+  // overwrite the newer one. A failure is noted ONCE per streak, so a server
+  // that cannot store transcripts is one line, not one per turn — and the
+  // streak set is also what recover() retries.
+  private syncChains = new Map<string, Promise<void>>();
+  private syncFailing = new Set<string>();
+
+  /** Ship the whole local file to the server — SQL is the record. `after`
+   *  runs once the record landed or failed (the turn-end lock release hangs
+   *  off it: holding the lock helps nobody either way). */
+  private uploadTranscript = (e: LoadedSession, after?: () => void): void => {
+    const next = (this.syncChains.get(e.id) ?? Promise.resolve())
+      .then(() => syncTranscriptUp(this.api, e.id, e.transcript.path))
+      .then(
+        (stamp) => { this.sessions.setStamp(e.id, stamp); if (this.syncFailing.delete(e.id)) this.sessions.note(e.id, 'transcript sync recovered'); },
         (err) => {
-          if (failing.has(e.id)) return;
-          failing.add(e.id);
-          s.note(e.id, `transcript sync failed (kept locally): ${(err as Error).message}`);
+          if (this.syncFailing.has(e.id)) return;
+          this.syncFailing.add(e.id);
+          this.sessions.note(e.id, `transcript sync failed (kept locally): ${(err as Error).message}`);
         },
-      // The turn's lock is released once the record landed (or failed —
-      // holding it helps nobody; the file is kept locally either way).
-      ).finally(() => { void this.api('DELETE', `/sessions/${e.id}/lock`).catch(quiet(`release session ${e.id}`)); }));
+      )
+      .finally(() => { after?.(); });
+    this.syncChains.set(e.id, next);
+  };
+
+  private newSessionStore(): SessionStore {
+    const s: SessionStore = new SessionStore(this.opts.run ?? runTurn, (e) => {
+      // The turn is on disk already (appended per step); the whole file goes
+      // up now, and the turn's lock is released behind it.
+      this.uploadTranscript(e, () => { void this.api('DELETE', `/sessions/${e.id}/lock`).catch(quiet(`release session ${e.id}`)); });
       // The toolbar's task count follows every turn — a turn is when tasks
       // start and stop. Background: a failure goes to cli.log, not the pane.
       void this.onTurnEnded?.().catch(quiet('refresh tasks'));
@@ -437,6 +451,42 @@ export class WindowStore {
   /** Whatever wants to hear that a turn settled. The /tasks count hangs off
    *  it: a turn is when tasks start and stop. */
   onTurnEnded: (() => Promise<void>) | null = null;
+
+  /** Re-read one loaded session's row and pull whatever moved: plan mode,
+   *  git work state, the transcript (refreshIfMoved reseats when the stamp
+   *  moved). App's streamless mount fill and the outage recovery both come
+   *  through here — one place that knows what "bring this session current"
+   *  means. Quiet on failure: the caller runs again on its own. */
+  recheckSession = async (id: string): Promise<void> => {
+    const cur = this.sessions.get(id);
+    if (!cur || cur.busy || cur.readonly) return;
+    try {
+      const r = await this.api('GET', `/sessions/${id}`) as {
+        planMode?: boolean; transcript_updated_at?: string | null;
+        work?: 'not_pushed' | 'not_merged' | 'merged' | null };
+      if (typeof r.planMode === 'boolean') await this.applyPlanMode(id, r.planMode);
+      this.sessions.setWork(id, r.work ?? null);
+      await this.refreshIfMoved(id, r.transcript_updated_at ?? null);
+    } catch (e) { quiet(`re-read session ${id}`)(e); }
+  };
+
+  /** The server is reachable again after a stretch of failures (the
+   *  connection watch's first success after a failure). Everything this
+   *  window holds may be stale or unsaved, so put it right from the record —
+   *  the same refill a feed reconnect runs, for the request path: every open
+   *  session re-read, every failed transcript upload retried, the open list
+   *  refreshed. One note says it happened, so a screen that fixes itself is
+   *  not a mystery. */
+  private recover = async (): Promise<void> => {
+    for (const e of this.sessions.list()) {
+      await this.recheckSession(e.id);
+      if (this.syncFailing.has(e.id)) this.uploadTranscript(e);
+    }
+    if (this.menu === 'resume' || this.menu === 'workspace') {
+      await this.refreshPicker().catch(quiet('refresh the session list'));
+    }
+    this.note('back in touch with the server — everything re-synced');
+  };
 
   /** The seeded session, on the first frame. The prompt is assembled ONCE
    *  here and frozen into the transcript header, so this session keeps these
