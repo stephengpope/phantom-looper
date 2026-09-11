@@ -22,7 +22,7 @@ import type { TelegramEngine } from './engine.js';
 import type { TelegramMode } from './store.js';
 import { PROVIDERS } from '../../core/llm/createAgent.js';
 import { hasCatalog, latestModel, modelsFor } from '../models.js';
-import { resolveMany } from '../settings.js';
+import { resolveMany, resolveCredential, credentialForProvider } from '../settings.js';
 
 interface Cmd { command: string; description: string }
 
@@ -252,8 +252,19 @@ export async function handleCommand(
           ].join('\n')));
         return;
       }
-      providerList.set(dm, [...PROVIDERS]);
-      const rows = PROVIDERS.map((p, i) => {
+      // Only show providers the user has a key for (plus the current one).
+      const keyed: string[] = [];
+      for (const p of PROVIDERS) {
+        if (p === current) { keyed.push(p); continue; }          // always show the active one
+        const v = await resolveCredential(engine.db, engine.key, credentialForProvider(p));
+        if (v) keyed.push(p);
+      }
+      if (!keyed.length) {
+        await reply('⚠️ No provider keys configured yet.');
+        return;
+      }
+      providerList.set(dm, keyed);
+      const rows = keyed.map((p, i) => {
         const d = latestModel(p);
         const note = d ? ` → ${d}`
           : hasCatalog(p) ? ' — catalog list unavailable right now'
