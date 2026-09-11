@@ -1,6 +1,7 @@
 // The one line under the typing area: the mode mark — '» planning' or
-// '» coding', ALWAYS shown while a session is on screen so you know which
-// before you type — with the transient notices (ctrl+c's "again to quit")
+// '» coding' (📌 replaces » when the session is pinned), ALWAYS shown while
+// a session is on screen so you know which before you type — with the
+// transient notices (ctrl+c's "again to quit")
 // composed after it by App. Padded two cells to clear the `> ` prompt gutter
 // above it.
 //
@@ -32,13 +33,15 @@ export type ToolbarPart = string | { text: string; mark: string };
  *  between groups, so the eye parses facts, not a flat list of fields. */
 export type ToolbarGroup = ToolbarPart[];
 
-export function Toolbar({ groups = [], spin, spinWho, spinSince, toast }: {
+export function Toolbar({ groups = [], spin, spinWho, spinSince, toast, pinned }: {
   groups?: ToolbarGroup[]; spin?: string; spinWho?: string;
   /** When the running turn began (epoch ms), so the spinner can age. */
   spinSince?: number;
   /** A timed message overriding the normal content — white text on a colored
    *  background (the `bg` field). Auto-dismissed by the caller's timer. */
-  toast?: { text: string; bg: string } }) {
+  toast?: { text: string; bg: string };
+  /** Session is pinned — show 📌 instead of ». */
+  pinned?: boolean }) {
   const { cols } = useContext(SizeContext);
   if (toast) return (
     <Box paddingLeft={2} width={cols} overflow="hidden"><Text backgroundColor={toast.bg} color="white" bold>{` ${toast.text} `}</Text></Box>
@@ -53,7 +56,7 @@ export function Toolbar({ groups = [], spin, spinWho, spinSince, toast }: {
   );
   return (
     <Box paddingLeft={2} width={cols} overflow="hidden">
-      <Text color="yellow">» </Text>
+      <Text color="yellow">{pinned ? '📌 ' : '» '}</Text>
       {shown.map((g, gi) => (
         <Text key={gi} color="yellow">
           {gi > 0 ? ' · ' : ''}

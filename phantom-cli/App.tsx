@@ -531,8 +531,9 @@ export function App({
 
   // The toolbar's mode mark — ALWAYS on while a session is on screen: the
   // line says which mode you are in before you type, 'planning' or
-  // 'coding'. The » prefix is rendered by the Toolbar itself on the far
-  // left. A supervisor record has no modes — you cannot chat there at all.
+  // 'coding'. The » prefix (or 📌 when pinned) is rendered by the Toolbar
+  // itself on the far left. A supervisor record has no modes — you cannot
+  // chat there at all.
   const modeMark = session && !session.readonly
     ? (session.planMode ? 'planning' : 'coding')
     : undefined;
@@ -714,6 +715,7 @@ export function App({
               spinWho={!windowStore.opening && session && !session.busy && heldNow ? heldNow.who : undefined}
               spinSince={!windowStore.opening && session && !session.busy && heldNow ? session.startedAt : undefined}
               toast={windowStore.toast ?? undefined}
+              pinned={session?.pinned}
               groups={
               windowStore.opening ? []
               : ctrlC ? withMode('press ctrl+c again to quit')
