@@ -73,7 +73,7 @@ export interface Initial {
 /** What opening resolves to. core's openSession turns each into the same
  *  create / restart / attach path. */
 export type OpenTarget = { kind: 'new'; workspaceId: string } | { kind: 'open'; id: string }
-  | { kind: 'duplicate'; id: string };
+  | { kind: 'duplicate'; id: string; modelOverride?: Record<string, ConfigValue> };
 
 /** An ask standing in the Assistant's pane, and the promise its tool is
  *  parked on. */
@@ -831,7 +831,14 @@ export class WindowStore {
       // else. The pin is kept on the entry so every later rebuild (plan mode,
       // /model) resolves the same way instead of reading the settings again.
       const pin = resumed.length > 0 ? sessionPin(row) : null;
-      const modelCfg = pinnedCfg(await this.readSettings(), pin);
+      // A duplicate can carry a one-shot model override (the preset the user
+      // picked on the duplicate screen). It is NOT a settings change — global
+      // settings stay untouched. The override is layered on top of the current
+      // settings for this open only, exactly as a pin would be.
+      const baseCfg = await this.readSettings();
+      const modelCfg = target.kind === 'duplicate' && target.modelOverride
+        ? { ...baseCfg, ...target.modelOverride }
+        : pinnedCfg(baseCfg, pin);
       const { agent, summary } = this.buildFor(tools, modelCfg, instructions, row.id);
       const transcript = (this.opts.makeTranscript ?? ((h: TranscriptHeader) => new Transcript(h)))({
         type: 'session', session_id: row.id, workspace: row.workspaceId, branch: row.branch,
@@ -904,9 +911,8 @@ export class WindowStore {
 
   /** [d] on a session row: duplicate it. Presets get a say first — the copy
    *  is born unpinned, so this is the one moment "this conversation, another
-   *  model" is possible: picking one applies it exactly as /presets does, and
-   *  the copy floats on it until its first new message pins it. No presets,
-   *  no question.
+   *  model" is possible: a preset is applied as a one-shot override on the
+   *  copy only — global settings stay untouched. No presets, no question.
    *
    *  The list's own lock marker is the gate: a row the server said is held
    *  is refused HERE, on the picker — no menu close, no preset question, no
@@ -930,33 +936,43 @@ export class WindowStore {
     try {
       const presets = await this.api('GET', '/presets') as Preset[];
       if (!presets.length) { await this.openSession({ kind: 'duplicate', id }); return; }
-      const cfg = await this.readSettings();
-      this.duplicating = { id, presets,
-        current: { provider: String(cfg.provider ?? ''), model: String(cfg.model ?? '') } };
+      // "Keep current model" shows the SOURCE session's model when it has one
+      // (pinned = has spoken), else the global settings — so the first row
+      // names what THIS conversation runs on, not whatever was last set globally.
+      const srcProvider = row?.provider as string | undefined;
+      const srcModel = row?.model as string | undefined;
+      let current: { provider: string; model: string };
+      if (srcProvider && srcModel) {
+        current = { provider: srcProvider, model: srcModel };
+      } else {
+        const cfg = await this.readSettings();
+        current = { provider: String(cfg.provider ?? ''), model: String(cfg.model ?? '') };
+      }
+      this.duplicating = { id, presets, current };
       this.setScreen('duplicateModel');
     } catch (e) {
       this.note(`could not duplicate session ${id}: ${(e as Error).message}`);
     }
   };
 
-  /** The duplicate prompt's answer: a preset id (apply it as /presets does,
-   *  then copy) or null (copy on the current settings). The preset lands
-   *  BEFORE the open, so the copy's fresh header names it. */
+  /** The duplicate prompt's answer: a preset id (apply its model values as a
+   *  one-shot override on the copy) or null (copy on the current settings).
+   *  Global settings are NEVER changed — the preset is scoped to this
+   *  duplicate only. */
   finishDuplicate = async (presetId: string | null): Promise<void> => {
     const d = this.duplicating;
     this.duplicating = null;
     this.closeScreen();
     if (!d) return;
     try {
+      let modelOverride: Record<string, ConfigValue> | undefined;
       if (presetId) {
         const p = d.presets.find((x) => x.id === presetId);
         if (!p) throw new Error('that preset is gone');
-        const patch: Record<string, ConfigValue> = {};
-        for (const [k, v] of Object.entries(p.values)) patch[k] = v as ConfigValue;
-        if (Object.keys(patch).length) await this.settings.patch(patch);
-        this.settingChanged('provider' as ConfigKey);
+        modelOverride = {};
+        for (const [k, v] of Object.entries(p.values)) modelOverride[k] = v as ConfigValue;
       }
-      await this.openSession({ kind: 'duplicate', id: d.id });
+      await this.openSession({ kind: 'duplicate', id: d.id, modelOverride });
     } catch (e) {
       this.note(`could not duplicate session ${d.id}: ${(e as Error).message}`);
     }
