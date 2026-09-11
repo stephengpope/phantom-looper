@@ -36,9 +36,10 @@ export function TextInput({ value, onChange, onSubmit, focus = true, placeholder
   /** Given, a big paste lands as a chip (`[Pasted #1 ~12 lines]`) and its
    *  text lives in the store until submit swaps it back (see paste.ts). */
   pastes?: PasteStore;
-  /** Given, a paste that IS a dragged file's path (drop.ts) goes here as
-   *  paths instead of landing in the box as text. */
-  onFileDrop?: (paths: string[]) => void;
+  /** Given, a paste that IS a dragged file's path (drop.ts) goes here.
+   *  Returns chip text to insert at the cursor (e.g. `[📎 file.txt]`),
+   *  or null when nothing should be inserted. */
+  onFileDrop?: (paths: string[]) => Promise<string | null>;
 }) {
   const [cursorState, setCursorState] = useState(value.length);
   // The cursor is mirrored in a ref and READ from the ref: two keypresses
@@ -114,11 +115,21 @@ export function TextInput({ value, onChange, onSubmit, focus = true, placeholder
     // eslint-disable-next-line no-control-regex
     text = text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
     if (!text) return;
-    // A dragged file is a paste of its path (drop.ts): it never becomes
-    // text here — the window uploads it to the session's scratch pad.
+    // A dragged file is a paste of its path (drop.ts): the window uploads
+    // it and returns a chip to insert at the cursor position.
     if (onFileDrop) {
       const dropped = parseDrop(text);
-      if (dropped) { onFileDrop(dropped); return; }
+      if (dropped) {
+        void onFileDrop(dropped).then((chip) => {
+          if (!chip) return;
+          const v = valueRef.current;
+          const c = cursorRef.current;
+          const next = v.slice(0, c) + chip + v.slice(c);
+          setCursor(c + chip.length);
+          ours.current = next; valueRef.current = next; onChange(next);
+        });
+        return;
+      }
     }
     if (pastes) text = pastes.collapse(text) ?? text;
     const value = valueRef.current;

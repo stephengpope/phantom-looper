@@ -27,9 +27,9 @@ import type { PasteStore } from '../paste.js';
 export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure, pastes, onFileDrop, updateReady }: {
   value: string; onChange: (v: string) => void; onSubmit: (v: string) => void;
   pastes?: PasteStore;
-  /** A paste that IS a dragged file's path (drop.ts) goes to the window as
-   *  paths — it never lands in the box as text. */
-  onFileDrop?: (paths: string[]) => void;
+  /** A paste that IS a dragged file's path (drop.ts) goes to the window.
+   *  Returns chip text to insert at the cursor, or null. */
+  onFileDrop?: (paths: string[]) => Promise<string | null>;
   /** The version a background auto-update installed: the label below swaps
    *  from this build's version to naming it until the launch that runs it. */
   updateReady?: string | null;

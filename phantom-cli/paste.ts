@@ -14,12 +14,21 @@
 // The chip carries its own id (#1) rather than linking by cursor position
 // (opencode's tracked ranges): our prompt is a plain string, so an id in
 // the text is the link that survives every edit around it for free.
+//
+// File chips — a drag-and-drop file gets a `[📎 file.txt]` chip at the
+// cursor. The store maps the chip's name to the scratch pad path the
+// backend returned. On submit, each file chip expands to its path — the
+// agent sees the path inline in the user's message, alongside the backdoor
+// message that describes the file.
 
-/** One whole chip, e.g. `[Pasted #2 ~12 lines]`. */
-const CHIP = /\[Pasted #(\d+) ~(\d+) lines\]/g;
+/** One whole paste chip, e.g. `[Pasted #2 ~12 lines]`. */
+const PASTE_CHIP = /\[Pasted #(\d+) ~(\d+) lines\]/g;
 
-/** A chip at the very end of a string — what a backspace should remove whole. */
-const CHIP_AT_END = /\[Pasted #\d+ ~\d+ lines\]$/;
+/** One whole file chip, e.g. `[📎 readme.md]`. */
+const FILE_CHIP = /\[📎 ([^\]]+)\]/g;
+
+/** Any chip at the very end of a string — what a backspace should remove whole. */
+const CHIP_AT_END = /(?:\[Pasted #\d+ ~\d+ lines\]|\[📎 [^\]]+\])$/;
 
 /** Over this, a paste becomes a chip. Under it, text lands as typed. */
 const MIN_LINES = 3;
@@ -28,6 +37,9 @@ const MIN_CHARS = 150;
 export class PasteStore {
   private texts = new Map<number, string>();
   private nextId = 1;
+
+  /** file chip name → scratch pad path */
+  private files = new Map<string, string>();
 
   /** Collapse a big paste into its chip; a small paste returns null and the
    *  caller inserts the text as-is. */
@@ -40,14 +52,27 @@ export class PasteStore {
     return `[Pasted #${id} ~${lines} lines]`;
   }
 
-  /** Swap each chip in a submitted line for its stored text. A chip with no
-   *  entry (recalled from an earlier run, or never ours) is stripped and
-   *  reported in `missing` — the literal chip is never sent. */
+  /** Store a dropped file's path and return the chip to insert at the cursor.
+   *  The same filename dropped twice overwrites the path — the latest drop
+   *  wins, which is what the user expects. */
+  collapseFile(name: string, scratchPath: string): string {
+    this.files.set(name, scratchPath);
+    return `[📎 ${name}]`;
+  }
+
+  /** Swap each chip in a submitted line for its stored text / path. A chip
+   *  with no entry (recalled from an earlier run, or never ours) is stripped
+   *  and reported in `missing` — the literal chip is never sent. */
   expand(line: string): { text: string; missing: number[] } {
     const missing: number[] = [];
-    const text = line.replace(CHIP, (_chip, id) => {
+    let text = line.replace(PASTE_CHIP, (_chip, id) => {
       const stored = this.texts.get(Number(id));
       if (stored === undefined) { missing.push(Number(id)); return ''; }
+      return stored;
+    });
+    text = text.replace(FILE_CHIP, (_chip, name) => {
+      const stored = this.files.get(name);
+      if (stored === undefined) return ''; // stale chip — strip it
       return stored;
     });
     return { text, missing };

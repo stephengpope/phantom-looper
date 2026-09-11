@@ -660,21 +660,28 @@ export class WindowStore {
    *  became text). Each is read locally and uploaded into the active
    *  session's scratch pad; the agent hears where it landed through the
    *  backdoor message queue on the next turn — the drop itself sends
-   *  nothing, the user is still typing. */
-  dropFiles = async (paths: string[]): Promise<void> => {
+   *  nothing, the user is still typing.
+   *
+   *  Returns a combined chip string to insert at the cursor (one chip per
+   *  file that uploaded successfully), or null when nothing landed. */
+  dropFiles = async (paths: string[]): Promise<string | null> => {
     const session = this.sessions.active();
-    if (!session) { this.note('a dropped file needs an open session — /new or /resume first'); return; }
+    if (!session) { this.note('a dropped file needs an open session — /new or /resume first'); return null; }
+    const chips: string[] = [];
     for (const p of paths) {
       try {
         const data = await readFile(p);
         const r = await this.api('POST', `/sessions/${session.id}/attachments`,
           { name: basename(p), data: data.toString('base64') }) as { path?: string };
-        this.sessions.note(session.id,
-          `dropped ${basename(p)} → ${r.path ?? 'the scratch pad'} — the agent will be told on your next message`);
+        const name = basename(p);
+        const scratchPath = r.path ?? 'the scratch pad';
+        chips.push(this.pastes.collapseFile(name, scratchPath));
+        this.sessions.note(session.id, `${name} uploaded to the scratch pad`);
       } catch (e) {
         this.sessions.note(session.id, `drop failed: ${basename(p)} — ${(e as Error).message}`);
       }
     }
+    return chips.length ? chips.join(' ') : null;
   };
 
   /** Show that session's conversation in the pane, tail first. The unsent

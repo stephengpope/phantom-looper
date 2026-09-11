@@ -18,7 +18,7 @@ import { ok, err, type AppCtx } from '../app.js';
 import { openSession, SessionLockedError } from '../../../core/session.js';
 import { injectFetch } from '../../looper/injectFetch.js';
 import { runCodingTurn } from '../../looper/turn.js';
-import { writeAttachment, type StoredAttachment } from '../../telegram/attachments.js';
+import { writeAttachment } from '../../telegram/attachments.js';
 import type { SessionEvent } from '../sessionEvents.js';
 
 const log = logger('sessions');
@@ -46,20 +46,7 @@ const idParam = { type: 'object', properties: { id: { type: 'string' } }, requir
  *  20MB bot-API ceiling: a screencast should fit, a disk image should not. */
 const MAX_ATTACHMENT_BYTES = 64 * 1024 * 1024;
 
-/** What the backdoor message says about a drop. Unlike a telegram
- *  attachment — which arrives WITH the user's instruction, and so is worded
- *  to make the agent act — a drop lands while the user is still typing.
- *  The wording is deliberately neutral: the file is available, acting on it
- *  is the user's call. */
-function dropMessage(a: StoredAttachment): string {
-  const what = a.kind === 'image' ? 'an image'
-    : a.kind === 'video' ? 'a video'
-    : a.kind === 'audio' ? 'an audio file' : 'a file';
-  const see = a.kind === 'image' ? ' Read it with your read tool to see it.' : '';
-  const inline = a.inlineText !== undefined ? ' Its content is included below.' : '';
-  const note = `[The user dropped ${what} into the chat: '${a.displayName}'. It is saved at: ${a.containerPath}.${see}${inline} Use it as needed — or not — depending on what they ask.]`;
-  return a.inlineText !== undefined ? `${note}\n\n[Content of ${a.displayName}]:\n${a.inlineText}` : note;
-}
+
 
 // The session lock rides the x-phantom-looper-client header: an opaque id the client
 // invents for itself (the TUI mints one per window). Never in a body — the
@@ -683,15 +670,14 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   // A file given to the session out-of-band — the first caller is a drag
   // onto the cli window: the terminal pastes the path, the cli reads the
   // LOCAL file and posts it here. It lands in the session's scratch pad —
-  // the same policy telegram attachments follow (attachments.ts) — and the
-  // agent is told through the backdoor message queue on its next turn. The
-  // post itself starts no turn: the user is still typing.
+  // the same policy telegram attachments follow (attachments.ts). The cli
+  // inserts a chip into the user's prompt that expands to the scratch path
+  // on submit, so the agent sees the path inline — no backdoor message.
   app.post<{ Params: { id: string }; Body: { name: string; data: string } }>(
     '/sessions/:id/attachments', { schema: { ...TAG,
       summary: 'Attach a file to the session',
-      description: 'Saves `data` (base64) under the session\'s scratch dir as `name` and queues a ' +
-        'backdoor message telling the agent where it landed. The message rides the session\'s next ' +
-        'turn; the post starts no turn of its own.',
+      description: 'Saves `data` (base64) under the session\'s scratch dir as `name`. Returns the ' +
+        'scratch path; the cli inserts a chip that expands to this path on submit.',
       params: idParam,
       body: { type: 'object', required: ['name', 'data'], additionalProperties: false,
         properties: { name: { type: 'string', minLength: 1 }, data: { type: 'string' } } } },
@@ -709,7 +695,6 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       const scratch = path.join(sessionDir(ctx.paths, session.folderId ?? session.id), 'scratch');
       const a = await writeAttachment(scratch, data, { filename: req.body.name });
       if (!a) return reply.code(422).send(err('invalid_args', 'the file claims to be an image but is not one', true));
-      ctx.backdoor?.push(session.id, dropMessage(a));
       return ok({ path: a.containerPath, kind: a.kind, name: a.displayName });
     });
 
