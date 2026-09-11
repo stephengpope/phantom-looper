@@ -1829,6 +1829,13 @@ export class WindowStore {
         } catch (e) { this.note(`could not read the server status: ${(e as Error).message}`); }
         return;
       }
+      case 'status': {
+        try {
+          const r = await this.api('GET', '/system/token-usage') as { text?: string };
+          this.note(r.text || '(no usage data)');
+        } catch (e) { this.note(`could not read token usage: ${(e as Error).message}`); }
+        return;
+      }
       case 'restart': {
         // Arm only — the prompt's [c] fires (the /trash rule: a restart cuts
         // every in-flight turn, so it is never one keystroke away).

@@ -16,6 +16,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
 import type Docker from 'dockerode';
+import { and, ne, gte, sql } from 'drizzle-orm';
+import { sessions } from '../../db/schema.js';
 import type { AppCtx } from '../app.js';
 import { err, ok } from '../app.js';
 import { logger, errStr } from '../../log.js';
@@ -276,5 +278,93 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
     }
     log.info({ service }, 'service restarted');
     return ok({ restarting: service });
+  });
+
+  // ---- token usage report ---------------------------------------------------
+  // Sums the cached token columns across non-destroyed sessions for today and
+  // the current week (Monday–now), total and per provider/model. The columns
+  // are written by the transcript save, so they are never stale — no need to
+  // re-parse transcripts here. Rows with null tokens (pre-migration) count as
+  // zero. `last_used_at` is the session's clock: a turn saves the transcript
+  // AND touches lastUsedAt in the same statement, so the two agree. Using it
+  // (instead of createdAt) means a session that ran today shows up today, even
+  // if it was created last week — which is how a person thinks about "tokens I
+  // used today".
+  app.get('/system/token-usage', {
+    schema: {
+      tags: ['meta'],
+      summary: 'Token usage report — today, this week, by provider/model',
+      description: 'Sums token columns across sessions whose last activity falls inside the window. ' +
+        'Answers as preformatted `text` — render it as-is (the cli\'s /status does).',
+    },
+  }, async () => {
+    const now = new Date();
+
+    // Today: midnight in the server's timezone.
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+
+    // This week: Monday 00:00 in the server's timezone.
+    const weekStart = new Date(todayStart);
+    const dayOfWeek = weekStart.getDay();  // 0=Sun … 6=Sat
+    weekStart.setDate(weekStart.getDate() - ((dayOfWeek + 6) % 7));
+
+    const notDestroyed = ne(sessions.status, 'destroyed');
+    const sumTokens = (since: Date) => ctx.db
+      .select({
+        provider: sessions.provider,
+        model: sessions.model,
+        input: sql<number>`coalesce(sum(${sessions.tokensInput}), 0)`.as('input'),
+        output: sql<number>`coalesce(sum(${sessions.tokensOutput}), 0)`.as('output'),
+        cacheRead: sql<number>`coalesce(sum(${sessions.tokensCacheRead}), 0)`.as('cache_read'),
+        cacheWrite: sql<number>`coalesce(sum(${sessions.tokensCacheWrite}), 0)`.as('cache_write'),
+      })
+      .from(sessions)
+      .where(and(notDestroyed, gte(sessions.lastUsedAt, since)))
+      .groupBy(sessions.provider, sessions.model);
+
+    const [todayRows, weekRows] = await Promise.all([
+      sumTokens(todayStart),
+      sumTokens(weekStart),
+    ]);
+
+    const k = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M`
+      : n >= 1_000 ? `${(n / 1_000).toFixed(1)}k`
+      : String(n);
+
+    const totalOf = (rows: typeof todayRows) => rows.reduce(
+      (a, r) => ({ input: a.input + Number(r.input), output: a.output + Number(r.output),
+        cacheRead: a.cacheRead + Number(r.cacheRead), cacheWrite: a.cacheWrite + Number(r.cacheWrite) }),
+      { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+
+    const fmtTotal = (t: ReturnType<typeof totalOf>) =>
+      `↓ ${k(t.input)} in · ↑ ${k(t.output)} out · cache ${k(t.cacheRead)} read / ${k(t.cacheWrite)} write`;
+
+    const fmtBreakdown = (rows: typeof todayRows) => {
+      if (!rows.length) return '  (none)';
+      // Sort by total descending so the biggest consumer is first.
+      const sorted = [...rows].sort((a, b) =>
+        (Number(b.input) + Number(b.output)) - (Number(a.input) + Number(a.output)));
+      return sorted.map((r) => {
+        const label = r.provider && r.model ? `${r.provider}/${r.model}`
+          : r.provider || r.model || '(unknown)';
+        return `  ${label}: ↓ ${k(Number(r.input))} in · ↑ ${k(Number(r.output))} out`;
+      }).join('\n');
+    };
+
+    const todayTotal = totalOf(todayRows);
+    const weekTotal = totalOf(weekRows);
+
+    const text = [
+      `== today (${todayStart.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}) ==`,
+      fmtTotal(todayTotal),
+      fmtBreakdown(todayRows),
+      '',
+      `== this week (Mon–today) ==`,
+      fmtTotal(weekTotal),
+      fmtBreakdown(weekRows),
+    ].join('\n');
+
+    return ok({ text });
   });
 }
