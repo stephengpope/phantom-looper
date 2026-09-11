@@ -413,8 +413,8 @@ export function Presets({ api, onApplied, onClose }: {
           }}
           onCancel={() => { setApplyArmed(null); onClose(); }}
           onKey={(ch, id) => {
-            // Any key other than c disarms.
-            if (ch !== 'c') setApplyArmed(null);
+            // Any key other than c disarms and clears the confirm notice.
+            if (ch !== 'c') { setApplyArmed(null); setNotice(undefined); }
             if (ch === 'c' && applyArmed) {
               const p = presets.find((x) => x.id === applyArmed);
               if (p) { setApplyArmed(null); void applyPreset(p); }
