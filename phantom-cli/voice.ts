@@ -363,7 +363,7 @@ export class VoiceClient {
   private turns = new Map<string, Turn>();
   private turnSeq = 0;
   /** Modal hook: while an approval prompt is on screen the App claims the
-   *  next words — spoken or typed via /say, both land in turn(). The exact word
+   *  next words — spoken or typed via /ask, both land in turn(). The exact word
    *  "accept" or "decline" answers the prompt; anything else is swallowed
    *  (the prompt on screen says the two words). Return true = consumed: the
    *  text still shows in the pane as yours, but the brain does not run. */

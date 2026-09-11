@@ -1811,8 +1811,8 @@ export class WindowStore {
       case 'speaker': this.toggleDevice('speaker'); return;
       case 'headphones': this.toggleDevice('headphones'); return;
       case 'wake': this.toggleDevice('wake'); return;
-      case 'say':
-        if (!args) { this.note('/say <what to tell the Assistant>'); return; }
+      case 'ask':
+        if (!args) { this.note('/ask <what to tell the Assistant>'); return; }
         if (!this.voice.say(args)) this.note('voice is off — /assistant to turn it on');
         else if (this.sidebar === false) { this.sidebar = null; this.notify(); }
         return;
@@ -1911,7 +1911,7 @@ export class WindowStore {
     if (msg.startsWith('/')) {
       const m = matches(msg);
       if (m.length) { await this.runCommand(m[Math.min(highlighted, m.length - 1)].name); return; }
-      // No menu: either an argument follows the command (`/say hello`)
+      // No menu: either an argument follows the command (`/ask hello`)
       // or nothing matched. parse() tells the two apart.
       const { command, args, error } = parse(msg);
       if (command) { await this.runCommand(command.name, args); return; }
