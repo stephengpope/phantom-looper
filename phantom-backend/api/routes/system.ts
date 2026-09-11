@@ -354,7 +354,7 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
       { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 
     const fmtTotal = (t: ReturnType<typeof totalOf>) =>
-      `↓ ${k(t.input)} in · ↑ ${k(t.output)} out · cache ${k(t.cacheRead)} read / ${k(t.cacheWrite)} write`;
+      `↑ ${k(t.input)} in · ↓ ${k(t.output)} out · cache ${k(t.cacheRead)} read / ${k(t.cacheWrite)} write`;
 
     const fmtBreakdown = (rows: typeof todayRows) => {
       if (!rows.length) return '  (none)';
@@ -364,7 +364,7 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
       return sorted.map((r) => {
         const label = r.provider && r.model ? `${r.provider}/${r.model}`
           : r.provider || r.model || '(unknown)';
-        return `  ${label}: ↓ ${k(Number(r.input))} in · ↑ ${k(Number(r.output))} out`;
+        return `  ${label}: ↑ ${k(Number(r.input))} in · ↓ ${k(Number(r.output))} out`;
       }).join('\n');
     };
 
@@ -374,7 +374,7 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
         (a, r) => ({ input: a.input + Number(r.input), output: a.output + Number(r.output), calls: a.calls + Number(r.calls) }),
         { input: 0, output: 0, calls: 0 });
       const byKind = rows.map((r) => `${Number(r.calls)} ${String(r.kind).replace(/_/g, ' ')}`).join(', ');
-      return `↓ ${k(t.input)} in · ↑ ${k(t.output)} out · ${t.calls} call${t.calls === 1 ? '' : 's'} (${byKind})`;
+      return `↑ ${k(t.input)} in · ↓ ${k(t.output)} out · ${t.calls} call${t.calls === 1 ? '' : 's'} (${byKind})`;
     };
 
     const todayTotal = totalOf(todayRows);

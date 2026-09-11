@@ -1868,7 +1868,7 @@ export class WindowStore {
         } catch (e) { this.note(`could not read the server status: ${(e as Error).message}`); }
         return;
       }
-      case 'status': {
+      case 'tokens': {
         try {
           const r = await this.api('GET', '/system/token-usage') as { text?: string };
           this.note(r.text || '(no usage data)');
