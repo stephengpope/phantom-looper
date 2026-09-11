@@ -161,7 +161,13 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
   const step = (dir: 1 | -1) => {
     const from = normalize(cursorRef.current);
     const at = pickable.indexOf(from);
-    const next = pickable[(at + dir + pickable.length) % pickable.length] ?? from;
+    const raw = at + dir;
+    // Paginated lists (onNearEnd) clamp at both ends — wrapping to a partial
+    // last page is not the true end and triggers a fetch that shifts the
+    // window mid-jump.  Fully-loaded lists wrap normally.
+    const next = onNearEnd
+      ? pickable[Math.max(0, Math.min(raw, pickable.length - 1))] ?? from
+      : pickable[(raw + pickable.length) % pickable.length] ?? from;
     cursorRef.current = next;
     setCursor(next);
     if (onNearEnd && next >= choices.length - NEAR_END) onNearEnd();
