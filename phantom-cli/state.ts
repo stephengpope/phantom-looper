@@ -304,13 +304,16 @@ export const formatTokensOut = (n: number): string => `↓ ${formatTokens(n)}`;
 export const formatTokensIn = (n: number): string => `↑ ${formatTokens(n)}`;
 
 /** THE cache hit rate: the share of a session's lifetime PROMPT tokens the
- *  provider served from its prompt cache (cache reads over everything ever
- *  sent — fresh input + reads + writes). One rule, so the launcher and the
- *  status bar never compute it two ways. Null when nothing was ever sent
- *  (nothing to rate); 0 is a real answer — the cache is not working. */
-export function cachePct(input: number, cacheRead: number, cacheWrite: number): number | null {
-  const sent = input + cacheRead + cacheWrite;
-  return sent > 0 ? Math.round((cacheRead / sent) * 100) : null;
+ *  provider served from its prompt cache (cache reads / total input tokens).
+ *  After AI SDK v7, `input` is already the total (noCache + cacheRead +
+ *  cacheWrite), so the rate is simply cacheRead / input. One rule, so the
+ *  launcher and the status bar never compute it two ways. Null when nothing
+ *  was ever sent (nothing to rate); 0 is a real answer — cache not working. */
+export function cachePct(input: number, cacheRead: number, _cacheWrite: number): number | null {
+  // After AI SDK v7, `input` is already the total prompt tokens (noCache +
+  // cacheRead + cacheWrite) as reported by the provider's normalized usage.
+  // The rate is simply how much of that total was served from cache.
+  return input > 0 ? Math.round((cacheRead / input) * 100) : null;
 }
 
 /** 44 → "44s", 124 → "2m 4s". */
