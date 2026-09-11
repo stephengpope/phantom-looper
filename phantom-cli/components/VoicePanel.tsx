@@ -35,9 +35,6 @@ const COLOR: Partial<Record<VoiceSnapshot['status'], string>> = {
   listening: 'green', hearing: 'cyan', thinking: 'yellow', speaking: 'magenta', error: 'red',
 };
 
-// What you said, a touch softer than the agent's text (75% white).
-const USER_COLOR = '#bfbfbf';
-
 export type VoiceSwitch = 'mic' | 'speaker' | 'headphones' | 'wake';
 interface SwitchItem { key: VoiceSwitch; label: string; on: boolean; accent?: boolean }
 
@@ -210,7 +207,7 @@ export function VoicePanel({ width, voice, expanded, offset = 0, onMeasure, onDe
           or the bottom edge. */}
       <Text> </Text>
       <Pane items={items} offset={offset} width={inner} onMeasure={onMeasure} keyFor={(p) => p.id}
-        render={(p) => <PartView key={p.id} part={p} width={inner} expanded={expanded} maxRows={8} userColor={USER_COLOR} compactTools />} />
+        render={(p) => <PartView key={p.id} part={p} width={inner} expanded={expanded} maxRows={8} compactTools />} />
       {/* The ask sits UNDER the chat — where the Assistant's newest words
           are — as a fixed block the Pane above shrinks around, so an ask
           arriving at the tail pushes the chat up rather than covering it. */}
