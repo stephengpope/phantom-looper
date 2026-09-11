@@ -31,7 +31,7 @@ export const CONFIG_DIR = process.env.PHANTOM_CLI_DIR
     : join(homedir(), '.phantom-cli'));
 export const CONFIG_PATH = join(CONFIG_DIR, 'settings.json');
 
-export const PROVIDERS = ['anthropic', 'openai', 'google', 'deepseek', 'kimi', 'xai', 'mistral', 'groq', 'openai-compatible'] as const;
+export const PROVIDERS = ['anthropic', 'openai', 'openai-codex', 'google', 'deepseek', 'kimi', 'xai', 'mistral', 'groq', 'openai-compatible'] as const;
 export const REASONINGS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 
 export const DEFAULTS = {

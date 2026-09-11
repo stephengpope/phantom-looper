@@ -28,6 +28,8 @@
     "@ai-sdk/xai": "^4.0.54",
     "@clack/prompts": "^1.7.0",
     "@fastify/http-proxy": "^11.6.1",
+    "@openai-oauth/core": "^2.0.0",
+    "@openai-oauth/local": "^2.0.0",
     "@parcel/watcher": "^2.6.0",
     "@xterm/headless": "^6.0.0",
     "ai": "^7.0.73",

@@ -208,6 +208,7 @@ export async function runSetup(deps: SetupDeps = {}): Promise<void> {
   const provider = await ask.select('which AI provider?', PROVIDERS.map((p) => ({
     value: p as string, label: p as string,
     hint: p === 'anthropic' ? 'API key or Claude subscription token'
+      : p === 'openai-codex' ? 'ChatGPT subscription — run `codex login` first'
       : p === 'openai-compatible' ? 'Ollama, vLLM, OpenRouter — any OpenAI-shaped endpoint' : undefined,
   })));
   if (!provider) return bail();
@@ -230,19 +231,31 @@ export async function runSetup(deps: SetupDeps = {}): Promise<void> {
   if (!model?.trim()) return bail();
 
   // 4. the key. A failed save is reported and asked again.
-  for (;;) {
-    const key = await ask.password(`${provider} — paste the key`);
-    if (key === undefined) return bail();
-    if (!key.trim()) continue;
+  //    openai-codex needs no key — credentials come from ~/.codex/auth.json
+  //    (written by `codex login`).
+  if (provider === 'openai-codex') {
     try {
-      await settings.patch({
-        provider, model: model.trim(), ...(baseUrl ? { base_url: baseUrl.trim() } : {}),
-        [PROVIDER_KEY[provider as keyof typeof PROVIDER_KEY]]: key.trim(),
-      });
-      clack.log.success(`${provider} · ${model.trim()} — key saved on the server`);
-      break;
+      await settings.patch({ provider, model: model.trim() });
+      clack.log.success(`${provider} · ${model.trim()} — credentials from ~/.codex/auth.json`);
     } catch (e) {
       clack.log.error((e as Error).message);
+      return bail();
+    }
+  } else {
+    for (;;) {
+      const key = await ask.password(`${provider} — paste the key`);
+      if (key === undefined) return bail();
+      if (!key.trim()) continue;
+      try {
+        await settings.patch({
+          provider, model: model.trim(), ...(baseUrl ? { base_url: baseUrl.trim() } : {}),
+          [PROVIDER_KEY[provider as keyof typeof PROVIDER_KEY]]: key.trim(),
+        });
+        clack.log.success(`${provider} · ${model.trim()} — key saved on the server`);
+        break;
+      } catch (e) {
+        clack.log.error((e as Error).message);
+      }
     }
   }
 

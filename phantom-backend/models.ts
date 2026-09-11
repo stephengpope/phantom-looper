@@ -129,13 +129,17 @@ export function catalog(): { catalog: Catalog; source: CatalogSource } {
 }
 
 /** The models for one provider, newest first; [] for a provider with no
- *  catalog (openai-compatible) or one that is unknown. */
+ *  catalog (openai-compatible) or one that is unknown. openai-codex uses the
+ *  same models as openai (accessed through a ChatGPT subscription instead of
+ *  an API key), so it shares the openai catalog. */
 export function modelsFor(provider: string): CatalogModel[] {
-  return hasCatalog(provider) ? catalog().catalog[provider] ?? [] : [];
+  const p = provider === 'openai-codex' ? 'openai' : provider;
+  return hasCatalog(p) ? catalog().catalog[p] ?? [] : [];
 }
 
 /** The newest model listed for a provider — the `model` default when the row
- *  is unset. null when there is nothing to pick from. */
+ *  is unset. null when there is nothing to pick from. The openai-codex
+ *  redirect is already in modelsFor. */
 export function latestModel(provider: string | null | undefined): string | null {
   if (!provider) return null;
   return modelsFor(provider)[0]?.id ?? null;

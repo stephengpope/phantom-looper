@@ -5,8 +5,9 @@
 // constructs a provider client.
 //
 // What lives here, so it is fixed once:
-// - the provider switch (anthropic | openai | google | deepseek | kimi |
-//   openai-compatible) — provider packages only, no gateway;
+// - the provider switch (anthropic | openai | openai-codex | google |
+//   deepseek | kimi | openai-compatible) — provider packages only, no
+//   gateway;
 // - the Anthropic subscription-token disguise (OAuth tokens authenticate with
 //   Bearer, carry the Claude Code CLI headers, and need the Claude Code
 //   identity as the first system block) — see `anthropicProvider`;
@@ -27,8 +28,10 @@ import { createMoonshotAI } from '@ai-sdk/moonshotai';
 import { createXai } from '@ai-sdk/xai';
 import { createMistral } from '@ai-sdk/mistral';
 import { createGroq } from '@ai-sdk/groq';
+import { createOpenAIOAuthTransport } from '@openai-oauth/core';
+import { openaiCredentials } from '@openai-oauth/local';
 
-export const PROVIDERS = ['anthropic', 'openai', 'google', 'deepseek', 'kimi', 'xai', 'mistral', 'groq', 'openai-compatible'] as const;
+export const PROVIDERS = ['anthropic', 'openai', 'openai-codex', 'google', 'deepseek', 'kimi', 'xai', 'mistral', 'groq', 'openai-compatible'] as const;
 export type Provider = typeof PROVIDERS[number];
 export type Reasoning = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
@@ -118,6 +121,37 @@ function anthropicProvider(c: ModelConfig) {
   return createAnthropic({ apiKey: c.apiKey ?? undefined, fetch: c.fetch });
 }
 
+// --- OpenAI Codex (ChatGPT subscription) ------------------------------------------
+
+/** OpenAI Codex: uses the ChatGPT OAuth token from ~/.codex/auth.json (written
+ *  by `codex login`) to hit the Codex Responses API at chatgpt.com. The
+ *  @openai-oauth/core transport handles token refresh, Codex headers, and the
+ *  Responses wire protocol; we feed it to the standard @ai-sdk/openai provider
+ *  the same way the openai-oauth-provider package does. No API key setting
+ *  needed — credentials live in the file.
+ *
+ *  When ~/.codex/auth.json is missing or has no valid token, the library throws
+ *  on the first request. We catch that in a fetch wrapper and rethrow with a
+ *  message that names the fix (`npx @openai/codex login`). */
+function openaiCodexModel(c: ModelConfig): LanguageModel {
+  const creds = openaiCredentials();
+  const transport = createOpenAIOAuthTransport({
+    auth: () => creds.getSession().catch(() => {
+      throw new Error(
+        'openai-codex: no valid ChatGPT credentials found — run `npx @openai/codex login` ' +
+        'to sign in, then try again (credentials are stored in ~/.codex/auth.json)',
+      );
+    }),
+    baseURL: creds.baseURL,
+    fetch: c.fetch,
+  });
+  return createOpenAI({
+    apiKey: 'openai-oauth',
+    baseURL: transport.baseURL,
+    fetch: transport.fetch,
+  }).responses(c.model);
+}
+
 // --- thinking ---------------------------------------------------------------------
 
 /** Models on which thinking cannot be turned off (`thinking: disabled` is a 400). */
@@ -150,6 +184,7 @@ export function languageModel(cfg: ModelConfig): LanguageModel {
   switch (c.provider) {
     case 'anthropic': return anthropicProvider(c)(c.model);
     case 'openai': return createOpenAI({ apiKey: c.apiKey ?? undefined, baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
+    case 'openai-codex': return openaiCodexModel(c);
     case 'google': return createGoogleGenerativeAI({ apiKey: c.apiKey ?? undefined, fetch: c.fetch })(c.model);
     case 'deepseek': return createDeepSeek({ apiKey: c.apiKey ?? undefined, baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
     case 'kimi': return createMoonshotAI({ apiKey: c.apiKey ?? undefined, baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
