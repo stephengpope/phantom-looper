@@ -378,7 +378,7 @@ export class TelegramEngine {
     // so the agent sees all photos together instead of each as its own task.
     const groupId = msg.media_group_id ? String(msg.media_group_id) : null;
     if (groupId) {
-      const entry = this.albums.get(groupId) ?? { msgs: [], timer: null as any };
+      const entry = this.albums.get(groupId) ?? { msgs: [] as any[], timer: null as any };
       entry.msgs.push(msg);
       clearTimeout(entry.timer);
       entry.timer = setTimeout(() => {
