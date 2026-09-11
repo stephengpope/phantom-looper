@@ -173,6 +173,41 @@ export async function touchSession(db: Db, id: string): Promise<void> {
   await db.update(sessions).set({ lastUsedAt: new Date() }).where(eq(sessions.id, id));
 }
 
+/** Add a turn's token usage to a session's running totals. Incremental — each
+ *  call adds to the existing sums, so turns update the row without re-reading
+ *  the whole transcript. Also touches lastUsedAt and pins the model on the
+ *  first call (same rule as the coding transcript save). */
+export async function addSessionUsage(
+  db: Db, id: string, usage: { input: number; output: number; cache_read: number; cache_write: number },
+  model?: { provider: string; model: string; baseUrl?: string | null },
+): Promise<void> {
+  const stamp = new Date();
+  const s = await getSession(db, id);
+  if (!s) return;
+  const pinning = s.provider == null && s.model == null && model;
+  await db.update(sessions).set({
+    tokensInput: (s.tokensInput ?? 0) + usage.input,
+    tokensOutput: (s.tokensOutput ?? 0) + usage.output,
+    tokensCacheRead: (s.tokensCacheRead ?? 0) + usage.cache_read,
+    tokensCacheWrite: (s.tokensCacheWrite ?? 0) + usage.cache_write,
+    tokensAsOf: stamp,
+    lastUsedAt: stamp,
+    turnCount: sqlRaw`${sessions.turnCount} + 1`,
+    ...(pinning ? { provider: model.provider, model: model.model, baseUrl: model.baseUrl } : {}),
+  }).where(eq(sessions.id, id));
+}
+
+/** Move a conversation-only session's workspace and folder pointers — the
+ *  assistant's session follows what the user is looking at. */
+export async function updateSessionPointers(
+  db: Db, id: string, patch: { workspaceId?: string; folderId?: string | null },
+): Promise<void> {
+  const set: Record<string, unknown> = {};
+  if (patch.workspaceId !== undefined) set.workspaceId = patch.workspaceId;
+  if (patch.folderId !== undefined) set.folderId = patch.folderId;
+  if (Object.keys(set).length) await db.update(sessions).set(set).where(eq(sessions.id, id));
+}
+
 /** Explicit delete honors the request even when work would be lost — that is
  *  the caller's decision to make. The automatic sweep below never does. */
 export async function destroySession(
@@ -206,10 +241,11 @@ export async function destroySession(
 // Locks, the loop's stamps, and the conversation-only special case all live
 // HERE. No route, no engine, no trigger touches the sessions table directly.
 
-/** A session that holds only its conversation (the supervisor's record): no
- *  checkout, no container, nothing on disk — the ONE special case, stated
- *  once. */
-export const conversationOnly = (s: SessionRow): boolean => s.agent === 'supervisor';
+/** A session that holds only its conversation — no checkout, no container,
+ *  nothing on disk. Supervisor (the looper's verdict record) and assistant
+ *  (the voice/Telegram conversation) are both this shape. */
+export const conversationOnly = (s: SessionRow): boolean =>
+  s.agent === 'supervisor' || s.agent === 'assistant';
 
 /** Duplicating copies a conversation into a fresh checkout — meaningless for
  *  a record that has no checkout and belongs to its card's run. */
@@ -343,16 +379,35 @@ export async function stampAgent(db: Db, id: string, agent: 'coding' | 'supervis
   await db.update(sessions).set({ agent }).where(eq(sessions.id, id));
 }
 
+/** A conversation-only session: no checkout of its own — `folderId` points at
+ *  another session's folder (the files it can read), or is null when there is
+ *  nothing to read. The shared base for supervisor and assistant sessions. */
+export async function createConversationSession(
+  db: Db, workspaceId: string,
+  opts: { agent: 'supervisor' | 'assistant'; folderId?: string | null },
+): Promise<SessionRow> {
+  const id = newId();
+  await db.insert(sessions).values({
+    id, workspaceId, status: 'active', agent: opts.agent,
+    ...(opts.folderId ? { folderId: opts.folderId } : {}),
+  });
+  return (await db.select(sessionColumns).from(sessions).where(eq(sessions.id, id)))[0];
+}
+
 /** The supervisor's conversation-only session: no folder of its own — its
  *  folder_id points at the coder's, which is where the files are. */
 export async function createSupervisorSession(
   db: Db, workspaceId: string, folderId: string,
 ): Promise<SessionRow> {
-  const id = newId();
-  await db.insert(sessions).values({
-    id, workspaceId, status: 'active', agent: 'supervisor', folderId,
-  });
-  return (await db.select(sessionColumns).from(sessions).where(eq(sessions.id, id)))[0];
+  return createConversationSession(db, workspaceId, { agent: 'supervisor', folderId });
+}
+
+/** The assistant's conversation-only session: workspace and folder track
+ *  whatever the user is looking at, updated as they switch. */
+export async function createAssistantSession(
+  db: Db, workspaceId: string, folderId?: string | null,
+): Promise<SessionRow> {
+  return createConversationSession(db, workspaceId, { agent: 'assistant', folderId });
 }
 
 /** Name a still-unnamed session. The loop's coder seat takes its CARD's

@@ -4,7 +4,7 @@ import { eq, ne, desc, and, or, isNull, isNotNull, lt, sql, count, inArray } fro
 import { sessions, sessionColumns, workspaces, folders, loops, settings as settingsRows, type SessionRow } from '../../db/schema.js';
 import { createSession, getSession, getFolder, destroySession, touchSession, SessionError,
   heldByOther, acquireLock, releaseLock, renewLock, assertDuplicable, conversationOnly, agentAfterSave,
-  turnStarted, LAST_MESSAGE_CHARS } from '../../sessions.js';
+  turnStarted, LAST_MESSAGE_CHARS, createAssistantSession, addSessionUsage } from '../../sessions.js';
 import { GIT_CLIENT_ID } from '../../git/git.js';
 import { repoDir, sessionDir } from '../../pool/paths.js';
 
@@ -205,6 +205,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     const filters = [];
     if (req.query.typed === true) filters.push(isNotNull(sessions.lastUserMessage));
     if (req.query.supervisor === false) filters.push(or(isNull(sessions.agent), ne(sessions.agent, 'supervisor')));
+    // Assistant sessions are tracked for tokens, not for the session list —
+    // always excluded from the list the user sees.
+    filters.push(or(isNull(sessions.agent), ne(sessions.agent, 'assistant')));
     let q = ctx.db
       .select({ ...sessionColumns, branch: folders.branch, card: loops.card })
       .from(sessions)
@@ -931,5 +934,42 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         if (e instanceof SessionError) return reply.code(409).send(err(e.code, e.message));
         throw e;
       }
+    });
+
+  // ---- assistant session management ----------------------------------------
+  // The voice assistant (TUI) creates and updates assistant sessions through
+  // these two routes. The Telegram assistant uses the same functions directly
+  // (it lives in the server process).
+
+  app.post<{ Body: { workspace_id: string; folder_id?: string | null } }>(
+    '/sessions/assistant', { schema: { ...TAG,
+      summary: 'Create an assistant session',
+      description: 'Creates a conversation-only session for the assistant, tracked for token usage.',
+      body: { type: 'object', required: ['workspace_id'], properties: {
+        workspace_id: { type: 'string' },
+        folder_id: { type: ['string', 'null'] },
+      } } } },
+    async (req) => {
+      const row = await createAssistantSession(ctx.db, req.body.workspace_id, req.body.folder_id);
+      return ok({ id: row.id });
+    });
+
+  app.post<{ Params: { id: string }; Body: { usage: { input: number; output: number; cache_read: number; cache_write: number } } }>(
+    '/sessions/:id/assistant-usage', { schema: { ...TAG,
+      summary: 'Add token usage to an assistant session',
+      description: 'Increments the session row\'s token totals by the given amounts.',
+      params: idParam,
+      body: { type: 'object', required: ['usage'], properties: {
+        usage: { type: 'object', required: ['input', 'output', 'cache_read', 'cache_write'], properties: {
+          input: { type: 'number' }, output: { type: 'number' },
+          cache_read: { type: 'number' }, cache_write: { type: 'number' },
+        } },
+      } } } },
+    async (req, reply) => {
+      const s = await getSession(ctx.db, req.params.id);
+      if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
+      if (s.agent !== 'assistant') return reply.code(400).send(err('not_assistant', 'this route is for assistant sessions only'));
+      await addSessionUsage(ctx.db, s.id, req.body.usage);
+      return ok({});
     });
 }

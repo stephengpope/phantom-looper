@@ -90,9 +90,12 @@ export function lastWorkspaceId(workspaces: WorkspaceInfo[], sessions: SessionIn
  *  alone, never the card: the card link is permanent, but who is driving is
  *  not — a person who types into a card's coding session takes it over, and
  *  the row says so from the next save. `coder` names the seat, not the loop. */
-export type Driver = 'supervisor' | 'coder' | 'manual';
+export type Driver = 'supervisor' | 'coder' | 'assistant' | 'manual';
 export function whoDrives(s: Pick<SessionInfo, 'agent'>): Driver {
-  return s.agent === 'supervisor' ? 'supervisor' : s.agent === 'coding' ? 'coder' : 'manual';
+  return s.agent === 'supervisor' ? 'supervisor'
+    : s.agent === 'coding' ? 'coder'
+    : s.agent === 'assistant' ? 'assistant'
+    : 'manual';
 }
 
 /** IS A TURN LIVE IN THIS SESSION — the one definition, shared by the /resume

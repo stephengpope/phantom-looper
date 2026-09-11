@@ -20,7 +20,7 @@ import { sessionDir } from '../pool/paths.js';
 import { injectFetch } from '../looper/injectFetch.js';
 import { runCodingTurn, settingsValues, type TurnDeps } from '../looper/turn.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
-import { getSession, currentLoop, loopOf } from '../sessions.js';
+import { getSession, currentLoop, loopOf, createAssistantSession, addSessionUsage, updateSessionPointers } from '../sessions.js';
 import { resolveCredential } from '../settings.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
 import type { BackdoorQueue } from '../api/backdoor.js';
@@ -101,6 +101,9 @@ export class TelegramEngine {
   private assistantHistory: ModelMessage[] = [];
   private assistantTranscript: Transcript | null = null;
   private assistantLoaded = false;
+  /** The assistant's session row id — created on first turn, rolled on
+   *  compaction. Token usage accumulates on this row. */
+  private assistantSessionId: string | null = null;
   /** The last turn's settings read and chat — the compactor's model/limit
    *  source and where the compaction notice goes. */
   private assistantValues: Record<string, unknown> = {};
@@ -158,11 +161,22 @@ export class TelegramEngine {
     }, file);
   }
 
-  /** The swap landed: the record rolls to a fresh file — the summary opens
-   *  it, the carried-over messages behind it; the old file stays as the
-   *  archive. The user gets one line so the Assistant's shorter memory reads
-   *  for what it is. */
+  /** Ensure the assistant has a session row. Created on first turn; after
+   *  compaction a new one replaces it (the old row keeps its frozen totals). */
+  private async ensureAssistantSession(workspaceId: string | null, folderId?: string | null): Promise<string> {
+    if (this.assistantSessionId) return this.assistantSessionId;
+    if (!workspaceId) throw new Error('no active workspace — /workspaces to pick one');
+    const row = await createAssistantSession(this.deps.db, workspaceId, folderId);
+    this.assistantSessionId = row.id;
+    return row.id;
+  }
+
+  /** The swap landed: the record rolls to a fresh file and a NEW session row —
+   *  the old session keeps its frozen token totals as the historical record.
+   *  The summary opens the new file, the carried-over messages behind it. */
   private onAssistantCompacted(): void {
+    // End the old session, start a new one on the next turn.
+    this.assistantSessionId = null;
     this.assistantTranscript = null;
     this.transcript().appendAll([...this.assistantHistory]);
     const chat = this.assistantChat;
@@ -457,7 +471,10 @@ export class TelegramEngine {
         await client.sendMessage(dm, '🆕 New session in the new workspace. Send your first message to begin.');
         return { session: j.data.id as string };
       };
-      replyText = await runAssistantTurn(deps, this.assistantHistory, message, sink, {
+      // Ensure the assistant has a session row for token tracking.
+      const sessionId = await this.ensureAssistantSession(
+        acc.activeWorkspaceId, acc.activeSessionId);
+      const result = await runAssistantTurn(deps, this.assistantHistory, message, sink, {
         settings: values,
         workspaceId: () => acc.activeWorkspaceId ?? null,
         activeSession: () => active,
@@ -465,6 +482,12 @@ export class TelegramEngine {
         approve: (ask, signal) => this.approvals.request(client, dm, ask, signal),
         onWorkspaceCreated,
       }, abort.signal, this.transcript());
+      replyText = result.text;
+      // Record this turn's token usage on the session row.
+      const model = (() => { try { return agentModelConfig(values, 'assistant'); } catch { return undefined; } })();
+      await addSessionUsage(db, sessionId, result.usage,
+        model ? { provider: model.provider, model: model.model } : undefined).catch(
+        (e) => log.warn({ err: errStr(e) }, 'assistant session usage update failed'));
       // Long chat? Summarize it in the background — turns never wait on it.
       this.compactor.kick(this.assistantHistory);
       // Any messages queued while we ran go out as one follow-up turn.

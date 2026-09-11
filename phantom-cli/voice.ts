@@ -30,10 +30,19 @@ import type { ModelMessage } from 'ai';
 import { CONFIG_DIR, type ConfigKey, type ConfigValue } from './config.js';
 import { applyPart, finalize, nextId, takeCompleted, type Part, type StreamPart } from './state.js';
 import { FLUSH_MS, runTurn, type Agent } from './agent.js';
-import { loadTranscriptFile, newestTranscriptFile, Transcript, transcriptStamp } from '../core/llm/transcript.js';
+import { loadTranscriptFile, newestTranscriptFile, Transcript, transcriptStamp, usageEvent } from '../core/llm/transcript.js';
 import { createCompactor, DEFAULT_HISTORY_LIMIT, isSummaryMessage, SUMMARY_HEAD, type Compactor } from '../core/llm/compaction.js';
 import { assistantInstructions } from '../core/llm/agents/assistant.js';
 import type { ModelConfig } from '../core/llm/createAgent.js';
+
+/** Callbacks for assistant session tracking — wired by the WindowStore which
+ *  has API access, called by VoiceClient which does not. */
+export interface VoiceSessionOps {
+  /** Create a new assistant session row, return its id. */
+  create: () => Promise<string>;
+  /** Add a turn's token usage to the session row. */
+  addUsage: (sessionId: string, usage: { input: number; output: number; cache_read: number; cache_write: number }) => Promise<void>;
+}
 
 export const SIDECAR_DIR = fileURLToPath(new URL('./sidecar/', import.meta.url));
 export const VOICE_DIR = join(CONFIG_DIR, 'voice');
@@ -368,6 +377,9 @@ export class VoiceClient {
    *  (the prompt on screen says the two words). Return true = consumed: the
    *  text still shows in the pane as yours, but the brain does not run. */
   intercept: ((text: string) => boolean) | null = null;
+  /** Session tracking — wired by the WindowStore after construction. */
+  sessionOps: VoiceSessionOps | null = null;
+  private sessionId: string | null = null;
 
   constructor(
     private spawner: Spawner = spawnSidecar,
@@ -417,7 +429,9 @@ export class VoiceClient {
   /** The swap landed: the summary replaced `dropped` messages. Turns in
    *  flight index the history from their start — shift them with it (clamped
    *  behind the summary); the record rolls to a fresh file the summary opens
-   *  (the old one stays as the archive); the pane says what happened. */
+   *  (the old one stays as the archive); a new session row will be created on
+   *  the next turn (the old one keeps its frozen token totals); the pane says
+   *  what happened. */
   private onCompacted(dropped: number): void {
     for (const t of this.turns.values()) t.historyStart = Math.max(1, t.historyStart - (dropped - 1));
     if (this.transcriptDir) {
@@ -428,6 +442,9 @@ export class VoiceClient {
       t.appendAll([...this.history]);
       this.transcript = t;
     }
+    // The old session row keeps its frozen totals; a new one is created on
+    // the next turn.
+    this.sessionId = null;
     this.note({ kind: 'note', id: nextId('vnote'), text: 'chat compacted — older messages summarized' });
   }
 
@@ -576,6 +593,8 @@ export class VoiceClient {
     // a failed call as an `error` event in the stream AND as the rejection the
     // catch sees; when the stream already spoke, the catch stays quiet.
     let streamErrored = false;
+    // Accumulate usage across all steps in this turn.
+    const turnUsage = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
     try {
       // A COPY: compaction may swap the stored history mid-turn (its splice
       // keeps appends intact), and the turn in flight must finish on the
@@ -599,8 +618,16 @@ export class VoiceClient {
         0,   // speech wants every delta now, not batched for the screen
         // The transcript records the step (messages + usage line) through
         // createAgent's `record` seam — same abort rule as the history.
+        // Usage is also accumulated for the session row update.
         { appendStep: (msgs, usage) => {
-          if (!t.abort.signal.aborted) this.log()?.appendStep(msgs, usage);
+          if (!t.abort.signal.aborted) {
+            this.log()?.appendStep(msgs, usage);
+            const ev = usageEvent(usage);
+            turnUsage.input += ev.input as number;
+            turnUsage.output += ev.output as number;
+            turnUsage.cache_read += ev.cache_read as number;
+            turnUsage.cache_write += ev.cache_write as number;
+          }
         } },
       );
     } catch (e) {
@@ -614,6 +641,15 @@ export class VoiceClient {
         done: [...this.snap.done, ...done], live: this.live(),
         status: this.cur || this.snap.status === 'speaking' ? this.snap.status : this.snap.status === 'error' ? 'error' : 'listening',
       });
+      // Record this turn's token usage on the assistant session row.
+      if (this.sessionOps && (turnUsage.input || turnUsage.output)) {
+        (async () => {
+          try {
+            if (!this.sessionId) this.sessionId = await this.sessionOps!.create();
+            await this.sessionOps!.addUsage(this.sessionId, turnUsage);
+          } catch { /* best-effort — a failed update is not a failed turn */ }
+        })();
+      }
       // Long chat? Summarize it in the background — turns never wait on it.
       this.compactor.kick(this.history);
     }

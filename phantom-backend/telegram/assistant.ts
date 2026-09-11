@@ -27,7 +27,7 @@ import { assistantKanbanTool, sessionsTool, workspaceCreateTool, gitAutoPushTool
 import { autoPushSession, autoPullSession } from '../../core/llm/tools/git.js';
 import { phantomTools } from '../../core/llm/tools/workspace.js';
 import { webTools } from '../../core/llm/tools/web.js';
-import { parseTranscript, type Transcript } from '../../core/llm/transcript.js';
+import { parseTranscript, usageEvent, type Transcript } from '../../core/llm/transcript.js';
 import type { TelegramSink } from './sink.js';
 
 const BASE = 'http://looper';
@@ -266,19 +266,29 @@ export async function assistantKit(deps: AssistantDeps, ctx: AssistantCtx): Prom
   return kit;
 }
 
+/** The result of one assistant turn — the reply text and the token usage
+ *  across all steps, for the session row's running totals. */
+export interface AssistantTurnResult {
+  text: string;
+  usage: { input: number; output: number; cache_read: number; cache_write: number };
+}
+
 /** Run ONE Assistant turn on the conversation, streaming to the telegram
  *  sink. Appends the user + reply to `history` (and to `transcript`, the
- *  on-disk record, when given) and returns the reply text. `onSwitch` is
- *  called if the Assistant's session_switch fires — the caller moves the
- *  active-session pointer. */
+ *  on-disk record, when given). Returns the reply text and the turn's
+ *  accumulated token usage. `onSwitch` is called if the Assistant's
+ *  session_switch fires — the caller moves the active-session pointer. */
 export async function runAssistantTurn(
   deps: AssistantDeps, history: ModelMessage[], message: string, sink: TelegramSink,
   ctx: AssistantCtx, abortSignal?: AbortSignal, transcript?: Transcript,
-): Promise<string> {
+): Promise<AssistantTurnResult> {
   const model = agentModelConfig(ctx.settings, 'assistant');
   const maxSteps = agentMaxSteps(ctx.settings, 'assistant');
   const tools = await assistantKit(deps, ctx);
   const agent = assistantAgent({ ...model, fetch: deps.modelFetch }, tools, { maxSteps });
+
+  // Accumulate usage across all steps in this turn.
+  const usage = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
 
   // The user message joins the history now; the turn's produced messages
   // (assistant + tool) append after it. Cache marks are createAgent's and ride
@@ -292,7 +302,22 @@ export async function runAssistantTurn(
     // A COPY: compaction may swap the stored history mid-turn (its splice
     // keeps appends intact), and the turn in flight must finish on the
     // conversation it started with — also the warm cached prefix.
-    const r = await agent.stream({ messages: [...history], abortSignal });
+    // The `record` seam writes each step's messages AND its usage line to the
+    // transcript — the same per-step recording the voice assistant and coding
+    // sessions use. No step is lost, no usage is missed.
+    const r = await agent.stream({
+      messages: [...history], abortSignal,
+      record: transcript ? {
+        appendStep: (msgs, u) => {
+          transcript.appendStep(msgs, u);
+          const ev = usageEvent(u);
+          usage.input += ev.input as number;
+          usage.output += ev.output as number;
+          usage.cache_read += ev.cache_read as number;
+          usage.cache_write += ev.cache_write as number;
+        },
+      } : undefined,
+    });
     let failure: unknown;
     for await (const part of r.stream) {
       const p = part as Record<string, unknown>;
@@ -308,11 +333,14 @@ export async function runAssistantTurn(
     }
     const resp = await r.response;
     history.push(...(resp.messages as ModelMessage[]));
-    transcript?.appendAll(resp.messages as ModelMessage[]);
+    // Messages are already written per-step through the record seam above.
+    // Only append them here when there is no transcript (no record seam) —
+    // history still needs the messages either way.
+    if (!transcript) { /* history already has them from the push above */ }
   } catch (e) {
     await sink.dispose();
     throw e;
   }
   await sink.done(text);
-  return text;
+  return { text, usage };
 }

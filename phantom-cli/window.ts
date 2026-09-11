@@ -340,6 +340,22 @@ export class WindowStore {
     this.settingsFeed?.start();
     this.workspaces = new WorkspaceDirectory(this.api);
     this.voice = (opts.makeVoice ?? (() => new VoiceClient(undefined, undefined, opts.run ?? runTurn)))();
+    // Wire session tracking: the voice client creates and updates assistant
+    // session rows through this window's API connection.
+    this.voice.sessionOps = {
+      create: async () => {
+        const active = this.sessions.active();
+        const workspaceId = active?.workspaceId;
+        if (!workspaceId) throw new Error('no workspace');
+        const r = await this.api('POST', '/sessions/assistant', {
+          workspace_id: workspaceId,
+        }) as { id: string };
+        return r.id;
+      },
+      addUsage: async (sessionId, usage) => {
+        await this.api('POST', `/sessions/${sessionId}/assistant-usage`, { usage });
+      },
+    };
     this.splash = opts.initial ? opts.initial.resumed.length === 0 : !opts.boot?.resumeId;
     // Defaults only until readChrome's first server read lands.
     this.voiceEnabled = false;
