@@ -207,6 +207,24 @@ export const presets = phantomLooper.table('presets', {
 
 export type PresetRow = typeof presets.$inferSelect;
 
+// Helper LLM calls (migration 020): one-shot generateText calls that are not
+// part of any agent turn — session titles, commit messages. Token usage here
+// completes the picture: coding + assistant sessions + these = 100% of spend.
+export const helperLlmUsage = phantomLooper.table('helper_llm_usage', {
+  id: text('id').primaryKey(),
+  kind: text('kind').notNull(),
+  sessionId: text('session_id'),
+  provider: text('provider').notNull(),
+  model: text('model').notNull(),
+  systemPrompt: text('system_prompt'),
+  userPrompt: text('user_prompt'),
+  tokensInput: bigint('tokens_input', { mode: 'number' }).notNull().default(0),
+  tokensOutput: bigint('tokens_output', { mode: 'number' }).notNull().default(0),
+  tokensCacheRead: bigint('tokens_cache_read', { mode: 'number' }).notNull().default(0),
+  tokensCacheWrite: bigint('tokens_cache_write', { mode: 'number' }).notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type WorkspaceRow = typeof workspaces.$inferSelect;
 /** A session as reads return it — sessionColumns' shape, blob excluded. */
 export type SessionRow = Omit<typeof sessions.$inferSelect, 'transcript'>;

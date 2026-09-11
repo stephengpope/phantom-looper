@@ -16,8 +16,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
 import type Docker from 'dockerode';
-import { and, ne, gte, sql } from 'drizzle-orm';
-import { sessions } from '../../db/schema.js';
+import { and, ne, gte, sql, count } from 'drizzle-orm';
+import { sessions, helperLlmUsage } from '../../db/schema.js';
 import type { AppCtx } from '../app.js';
 import { err, ok } from '../app.js';
 import { logger, errStr } from '../../log.js';
@@ -323,9 +323,25 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
       .where(and(notDestroyed, gte(sessions.lastUsedAt, since)))
       .groupBy(sessions.provider, sessions.model);
 
-    const [todayRows, weekRows] = await Promise.all([
+    // Helper calls (titles, commit messages) — from the helper_llm_usage table.
+    const sumHelpers = (since: Date) => ctx.db
+      .select({
+        kind: helperLlmUsage.kind,
+        input: sql<number>`coalesce(sum(${helperLlmUsage.tokensInput}), 0)`.as('h_input'),
+        output: sql<number>`coalesce(sum(${helperLlmUsage.tokensOutput}), 0)`.as('h_output'),
+        cacheRead: sql<number>`coalesce(sum(${helperLlmUsage.tokensCacheRead}), 0)`.as('h_cache_read'),
+        cacheWrite: sql<number>`coalesce(sum(${helperLlmUsage.tokensCacheWrite}), 0)`.as('h_cache_write'),
+        calls: count().as('h_calls'),
+      })
+      .from(helperLlmUsage)
+      .where(gte(helperLlmUsage.createdAt, since))
+      .groupBy(helperLlmUsage.kind);
+
+    const [todayRows, weekRows, todayHelpers, weekHelpers] = await Promise.all([
       sumTokens(todayStart),
       sumTokens(weekStart),
+      sumHelpers(todayStart),
+      sumHelpers(weekStart),
     ]);
 
     const k = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M`
@@ -352,6 +368,15 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
       }).join('\n');
     };
 
+    const fmtHelpers = (rows: typeof todayHelpers) => {
+      if (!rows.length) return '  (none)';
+      const t = rows.reduce(
+        (a, r) => ({ input: a.input + Number(r.input), output: a.output + Number(r.output), calls: a.calls + Number(r.calls) }),
+        { input: 0, output: 0, calls: 0 });
+      const byKind = rows.map((r) => `${Number(r.calls)} ${String(r.kind).replace(/_/g, ' ')}`).join(', ');
+      return `↓ ${k(t.input)} in · ↑ ${k(t.output)} out · ${t.calls} call${t.calls === 1 ? '' : 's'} (${byKind})`;
+    };
+
     const todayTotal = totalOf(todayRows);
     const weekTotal = totalOf(weekRows);
 
@@ -363,6 +388,10 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
       `== this week (Mon–today) ==`,
       fmtTotal(weekTotal),
       fmtBreakdown(weekRows),
+      '',
+      '== helper calls (titles, commits) ==',
+      `today: ${fmtHelpers(todayHelpers)}`,
+      `week:  ${fmtHelpers(weekHelpers)}`,
     ].join('\n');
 
     return ok({ text });

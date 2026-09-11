@@ -9,8 +9,8 @@
 // a half-set assistant pair falls back silently to the coding agent's. Never throws — on any failure the old name (or null) stands (the
 // commitMessage.ts pattern).
 import { and, eq } from 'drizzle-orm';
-import { generateText } from 'ai';
-import { languageModel, isProvider, type ModelConfig } from '../core/llm/createAgent.js';
+import { isProvider, type ModelConfig } from '../core/llm/createAgent.js';
+import { helperCall } from './helperCall.js';
 import { cascade } from '../core/llm/agentConfig.js';
 import { titleRequest, type TitleContext } from '../core/llm/prompts/helpers/wiring.js';
 import { parseTranscript } from '../core/llm/transcript.js';
@@ -143,10 +143,8 @@ export async function nameSession(
     const { system, prompt } = titleRequest(context);
     for (let attempt = 1; attempt <= TRIES; attempt++) {
       try {
-        const { text } = await generateText({
-          model: languageModel(config),
-          maxRetries: 0, // transport retries live in languageModel's fetch wrapper
-          system, prompt,
+        const { text } = await helperCall({
+          db, config, kind: 'title', sessionId, system, prompt,
         });
         const title = cleanTitle(text);
         if (title) {

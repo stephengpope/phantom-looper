@@ -13,11 +13,12 @@
 // The card rides along because a diff says what changed and never why. It is
 // the same intent the coding agent had; this call is the only place the sync
 // spends a model when nothing conflicts.
-import { generateText } from 'ai';
-import { languageModel, type ModelConfig } from '../../core/llm/createAgent.js';
+import type { ModelConfig } from '../../core/llm/createAgent.js';
 import { commitMessagePrompt } from '../../core/llm/prompts/autoPush/wiring.js';
+import { helperCall } from '../helperCall.js';
 import { git } from './git.js';
 import { logger } from '../log.js';
+import type { Db } from '../db/client.js';
 
 const log = logger('auto-push');
 
@@ -35,6 +36,7 @@ const TRIES = 3;
  *  message can be produced: the sync's answer is to fail, not to guess. */
 export async function commitMessageFor(
   dir: string, config: ModelConfig | null, card = '', base?: string,
+  db?: Db, sessionId?: string,
 ): Promise<string> {
   if (!config) {
     throw new Error('no model configured to write the commit message — set one on /model (phantom-cli), or PATCH /settings {provider, model}');
@@ -43,12 +45,11 @@ export async function commitMessageFor(
   const { stdout: stat } = await git(dir, ['diff', '--cached', '--stat', ...range]);
   const { stdout: patch } = await git(dir, ['diff', '--cached', ...range]);
   const diff = patch.length > MAX_DIFF_BYTES ? `${patch.slice(0, MAX_DIFF_BYTES)}\n… (truncated)` : patch;
+  const prompt = commitMessagePrompt(stat, diff, card);
   for (let attempt = 1; attempt <= TRIES; attempt++) {
     try {
-      const { text } = await generateText({
-        model: languageModel(config),
-        maxRetries: 0, // transport retries live in languageModel's fetch wrapper
-        prompt: commitMessagePrompt(stat, diff, card),
+      const { text } = await helperCall({
+        db: db!, config, kind: 'commit_message', sessionId, prompt,
       });
       const msg = text.trim();
       if (msg && msg.length <= 2000) return msg;
