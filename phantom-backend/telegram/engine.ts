@@ -44,6 +44,7 @@ import * as store from './store.js';
 import { menuFor, handleCommand } from './commands.js';
 import { autoPushSession, autoPullSession, type AutoPushOutcome, type AutoPullOutcome } from '../../core/llm/tools/git.js';
 
+
 const log = logger('telegram');
 const BASE = 'http://looper';
 const CLIENT_ID = 'telegram';
@@ -190,6 +191,7 @@ export class TelegramEngine {
   private approvals = new Approvals();
   /** The upgrade checker — periodic GitHub release check + Telegram notification. */
   upgradeChecker: UpgradeChecker;
+
 
   constructor(private deps: TelegramEngineDeps) {
     this.f = injectFetch(deps.app);

@@ -14,7 +14,7 @@ import type { Db } from './db/client.js';
 
 const log = logger('helper-call');
 
-export type HelperKind = 'title' | 'commit_message';
+export type HelperKind = 'title' | 'commit_message' | 'session_digest';
 
 export interface HelperCallOpts {
   /** The database to record usage in. When absent, the call runs normally but

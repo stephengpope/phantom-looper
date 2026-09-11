@@ -132,6 +132,10 @@ export const sessions = phantomLooper.table('sessions', {
   tokensCacheRead: bigint('tokens_cache_read', { mode: 'number' }),
   tokensCacheWrite: bigint('tokens_cache_write', { mode: 'number' }),
   tokensAsOf: timestamp('tokens_as_of', { withTimezone: true }),
+  // When this session was last included in the idle digest notification.
+  // Null = never notified. A session is eligible when transcriptUpdatedAt >
+  // digestNotifiedAt AND it has been idle > the configured threshold. (021)
+  digestNotifiedAt: timestamp('digest_notified_at', { withTimezone: true }),
   // Where the session's code stands: not_pushed, not_merged, merged.
   // Updated by the server's periodic git-state refresh for sessions with
   // an active container. Null = never checked or no checkout. (013)

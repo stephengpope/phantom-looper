@@ -19,6 +19,8 @@ import { autoPull, type AutoPullEvent } from './git/autoPull.js';
 import type { ConflictContext } from './git/autoPush.js';
 import { GIT_CLIENT_ID } from './git/git.js';
 import { isProvider } from '../core/llm/createAgent.js';
+import { SessionDigest } from './notifications/digest.js';
+import { telegramChannel } from './notifications/telegramChannel.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../core/session.js';
 import { runCodingTurn, settingsValues } from './looper/turn.js';
 import { injectFetch } from './looper/injectFetch.js';
@@ -272,6 +274,14 @@ async function main() {
   ctx.telegram = telegram;
   void telegram.reconcile();
 
+  // Session idle digest — a periodic notification listing sessions that
+  // finished. Standalone timer, no dependency on the engine's turn machinery.
+  const digest = new SessionDigest({
+    db, encryptionKey: env.encryptionKey,
+    channels: [telegramChannel(db, env.encryptionKey)],
+  });
+  void digest.start();
+
   // Upgrade checker — periodic GitHub release check, notification via Telegram.
   // Waits one interval before the first check: the server may have just
   // restarted from an upgrade (checking immediately would find it current and
@@ -291,6 +301,7 @@ async function main() {
   const shutdown = async () => {
     stopped = true;
     looper.stop();
+    digest.stop();
     await app.close();
     await pgPool.end();
     process.exit(0);
