@@ -571,7 +571,7 @@ export function App({
   // The session's name (from /rename or the auto-title); a fresh session
   // without one yet shows nothing here. Kept current by /rename and the
   // staleness GET (window.ts), so the line moves the moment the name lands.
-  const nameMark = session?.name ?? undefined;
+  const nameMark = session?.name ? `· ${session.name}` : undefined;
   // Order: the mode, the card, the session's name, the git work dot (red =
   // not pushed, yellow = not merged, green = merged), the model with its
   // token meter, the bg tasks, a notice pinned last. The model and its meter
