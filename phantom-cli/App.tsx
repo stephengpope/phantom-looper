@@ -501,7 +501,7 @@ export function App({
     // suggestions — that is what they mean while that list is up, and only
     // then. shift+tab is left alone here rather than cycling mid-command.
     const m = matches(input);
-    const suggesting = m.length > 0 && !session?.busy;
+    const suggesting = m.length > 0;
     if (suggesting) {
       if (key.tab && !key.shift) {
         setInput((cur) => complete(cur, suggestAt < m.length ? suggestAt : undefined));
