@@ -643,7 +643,20 @@ export class SessionStore {
   private fold(e: LoadedSession, parts: StreamPart[]): void {
     let t = e.turn;
     let tokens = e.tokens;
-    for (const p of parts) { t = applyPart(t, p); tokens = applyTokens(tokens, p); }
+    for (const p of parts) {
+      t = applyPart(t, p);
+      tokens = applyTokens(tokens, p);
+      // Accumulate input/cache tokens from each step so the toolbar's input
+      // meter updates live — output is already tracked via TurnTokens.
+      if (p.type === 'finish-step' && p.usage) {
+        const inp = p.usage.inputTokens ?? 0;
+        const cr = p.usage.inputTokenDetails?.cacheReadTokens ?? 0;
+        const cw = p.usage.inputTokenDetails?.cacheWriteTokens ?? 0;
+        e.usage.input += inp;
+        e.usage.cache_read += cr;
+        e.usage.cache_write += cw;
+      }
+    }
     e.tokens = tokens;
     const split = takeCompleted(t);
     e.turn = split.live;
