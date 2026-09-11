@@ -293,10 +293,18 @@ export async function runAssistantTurn(
     // keeps appends intact), and the turn in flight must finish on the
     // conversation it started with — also the warm cached prefix.
     const r = await agent.stream({ messages: [...history], abortSignal });
+    let failure: unknown;
     for await (const part of r.stream) {
       const p = part as Record<string, unknown>;
+      if (p.type === 'error' && failure === undefined) failure = p.error;
       if (p.type === 'text-delta' && typeof p.text === 'string') text += p.text;
       sink.part(p);
+    }
+    if (failure !== undefined) {
+      // The SDK's r.response rejects with a generic "No output generated" —
+      // the real reason is in the error part. Throw it so the caller sees it.
+      Promise.resolve(r.response).catch(() => {});
+      throw failure instanceof Error ? failure : new Error(String(failure));
     }
     const resp = await r.response;
     history.push(...(resp.messages as ModelMessage[]));
