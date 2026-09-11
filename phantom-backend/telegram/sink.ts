@@ -41,9 +41,18 @@ export interface TelegramSink {
   dispose(): Promise<void>;
 }
 
+/**
+ * `voiceOnly`: when true the sink never types the answer out — only progress
+ * (the placeholder bubble and a line per tool call) renders, so the chat is
+ * not empty while the turn runs. The answer itself is delivered as a voice
+ * note by the caller; typing it out here only to have it duplicated by audio
+ * is what this flag prevents.
+ */
 export function makeTelegramSink(
   client: TelegramClient, chatId: number, deliver?: DeliverConfig,
+  opts: { voiceOnly?: boolean } = {},
 ): TelegramSink {
+  const voiceOnly = opts.voiceOnly === true;
   let text = '';                        // current assistant text segment
   let messageId: number | null = null;  // the message being edited for this segment
   let dirty = false;
@@ -74,6 +83,10 @@ export function makeTelegramSink(
   }
 
   async function flushInner(force: boolean) {
+    // Voice-only: the answer is the voice note. Progress (placeholder + tool
+    // lines) still renders, but the streamed text does not — typing it out
+    // only to have the same words read aloud is redundant.
+    if (voiceOnly) { dirty = false; return; }
     if (!dirty) return;
     if (!force && Date.now() - lastEdit < 1300) return;
     dirty = false; lastEdit = Date.now();
@@ -155,7 +168,11 @@ export function makeTelegramSink(
     }
 
     await takeSlot();                   // a turn that rendered nothing still edits into the bubble
-    if (final) {
+    if (voiceOnly) {
+      // Voice-only: the answer is the voice note, not text. Drop the
+      // placeholder — the caller delivers audio after this returns.
+      await dropPlaceholder();
+    } else if (final) {
       try {
         const chunks = splitFormatted(toTelegram(final));
         if (messageId != null) await client.editMessageText(chatId, messageId, chunks[0].text, chunks[0].entities);

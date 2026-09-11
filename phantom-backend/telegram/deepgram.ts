@@ -39,12 +39,66 @@ export async function transcribeVoice(apiKey: string, audio: Buffer, model: stri
   }
 }
 
-/** Aura's per-request input ceiling. A longer script is CUT, not rejected —
- *  over the limit the whole request fails, which loses the audio entirely;
- *  cutting costs the listener the tail and the reader nothing, because the
- *  full text is delivered in writing on every mode but voice-only, and
- *  voice-only falls back to text when the audio comes back short. */
+/** Aura's per-request input ceiling. Over this the request is rejected. */
 export const SPEAK_MAX_CHARS = 2000;
+
+// ── Speech chunking ──────────────────────────────────────────────────────────
+// Synthesis is ~260ms regardless of length (measured), so the constraint is the
+// 2000-char API limit, not speed. The first chunk is kept small (~50 chars min)
+// so audio arrives in under a second; later chunks fill the 2000-char limit
+// since playback (~24s per 2000 chars) far exceeds synthesis time.
+
+/** A sentence end: terminal punctuation, optional closing quote/bracket, then
+ *  whitespace or end-of-string. */
+const SENTENCE_END = /[.!?…]["''")\]]*(?:\s|$)/g;
+
+/** Minimum chars for the first chunk — below this, take the next sentence too.
+ *  ~50 chars ≈ 0.6s of audio, enough to start listening immediately. */
+const FIRST_MIN = 50;
+
+/**
+ * Split `text` into speech chunks. First chunk is small (first sentence(s),
+ * ≥ FIRST_MIN chars). Remaining chunks fill up to SPEAK_MAX_CHARS each. Never
+ * cuts mid-sentence. Returns `[text]` unchanged when it fits in one request.
+ */
+export function splitForSpeech(text: string): string[] {
+  const script = text.trim();
+  if (!script || script.length <= SPEAK_MAX_CHARS) return script ? [script] : [];
+
+  const breaks = sentenceBreaks(script);
+  if (!breaks.length) return [script.slice(0, SPEAK_MAX_CHARS)]; // no sentences — hard cut as last resort
+
+  const chunks: string[] = [];
+  let pos = 0;
+
+  // First chunk: take sentences until we pass FIRST_MIN.
+  for (const b of breaks) {
+    if (b >= FIRST_MIN && pos === 0) { chunks.push(script.slice(0, b).trim()); pos = b; break; }
+  }
+  // If no break reached FIRST_MIN, take the first sentence anyway.
+  if (pos === 0) { chunks.push(script.slice(0, breaks[0]).trim()); pos = breaks[0]; }
+
+  // Remaining chunks: fill up to SPEAK_MAX_CHARS at sentence boundaries.
+  while (pos < script.length) {
+    const rest = script.slice(pos);
+    if (rest.trim().length <= SPEAK_MAX_CHARS) { chunks.push(rest.trim()); break; }
+    const restBreaks = sentenceBreaks(rest);
+    let cut = 0;
+    for (const b of restBreaks) { if (b <= SPEAK_MAX_CHARS) cut = b; else break; }
+    if (!cut) { chunks.push(rest.slice(0, SPEAK_MAX_CHARS).trim()); pos += SPEAK_MAX_CHARS; }
+    else { chunks.push(rest.slice(0, cut).trim()); pos += cut; }
+  }
+
+  return chunks.filter(Boolean);
+}
+
+/** Every index just past a sentence end in `text`. */
+function sentenceBreaks(text: string): number[] {
+  const re = new RegExp(SENTENCE_END.source, 'g');
+  const out: number[] = [];
+  for (const m of text.matchAll(re)) out.push(m.index + m[0].length);
+  return out;
+}
 
 /** Speak `text` as an OGG/Opus voice note — the container Telegram's voice
  *  bubbles want. `voice` is the Aura model (the voice_spoken_voice setting,

@@ -29,8 +29,9 @@ import { autoBuildAlert } from './alerts.js';
 import { logger, errStr } from '../log.js';
 import { TelegramClient, ALLOWED_UPDATES, titled } from './client.js';
 import { makeTelegramSink, type DeliverConfig } from './sink.js';
+import { startWaitingBubble } from './bubble.js';
 import { sendMessageTool } from './sendMessageTool.js';
-import { transcribeVoice, speakVoice, SPEAK_MAX_CHARS, type Transcription } from './deepgram.js';
+import { transcribeVoice, speakVoice, splitForSpeech, SPEAK_MAX_CHARS, type Transcription } from './deepgram.js';
 import { writeAttachment, composeMessage, MAX_INBOUND_BYTES, type StoredAttachment } from './attachments.js';
 import { runAssistantTurn, type AssistantDeps } from './assistant.js';
 import { agentModelConfig } from '../../core/llm/agentConfig.js';
@@ -96,6 +97,9 @@ interface Busy { queue: string[]; abort: AbortController }
 export class TelegramEngine {
   private f: typeof fetch;
   private busy = new Map<string, Busy>();
+  /** Album debounce: Telegram sends multi-photo sends as separate updates
+   *  sharing a `media_group_id`. A short timer collects them and runs once. */
+  private albums = new Map<string, { msgs: any[]; timer: NodeJS.Timeout }>();
   /** The Assistant's ONE conversation — backed by the newest transcript file
    *  in assistantDir, loaded back on the first turn after a boot. */
   private assistantHistory: ModelMessage[] = [];
@@ -367,14 +371,31 @@ export class TelegramEngine {
     if (!msg || String(msg.from?.id) !== authorized) return 200;
     if (!(await store.markUpdate(db, update.update_id))) return 200;
 
-    this.run(dm, msg, values).catch((e) => log.error({ err: errStr(e) }, 'telegram turn failed'));
+    // An album (several photos sent at once) arrives as SEPARATE updates
+    // sharing a media_group_id. Collect them briefly and run as one turn,
+    // so the agent sees all photos together instead of each as its own task.
+    const groupId = msg.media_group_id ? String(msg.media_group_id) : null;
+    if (groupId) {
+      const entry = this.albums.get(groupId) ?? { msgs: [], timer: null as any };
+      entry.msgs.push(msg);
+      clearTimeout(entry.timer);
+      entry.timer = setTimeout(() => {
+        this.albums.delete(groupId);
+        this.run(dm, entry.msgs, values).catch((e) => log.error({ err: errStr(e) }, 'telegram turn failed'));
+      }, 800);
+      this.albums.set(groupId, entry);
+      return 200;
+    }
+
+    this.run(dm, [msg], values).catch((e) => log.error({ err: errStr(e) }, 'telegram turn failed'));
     return 200;
   }
 
   // ── the turn ─────────────────────────────────────────────────────────────
 
-  private async run(dm: number, msg: any, values: Record<string, unknown>): Promise<void> {
+  private async run(dm: number, msgs: any[], values: Record<string, unknown>): Promise<void> {
     const { db, encryptionKey } = this.deps;
+    const msg = msgs[0];
     const token = await this.token();
     // The client records every bubble it sends, tagged with the current mode's
     // origin, so a reply or a reaction can find its conversation.
@@ -385,10 +406,12 @@ export class TelegramEngine {
 
     try {
       // A reply to one of my bubbles switches conversation BEFORE anything
-      // reads which mode this is — commands included.
-      await this.switchForReply(client, dm, msg);
+      // reads which mode this is — commands included. Telegram puts the reply
+      // on whichever album item carried it, so check all of them.
+      for (const m of msgs) await this.switchForReply(client, dm, m);
 
-      const typed = String(msg.text ?? msg.caption ?? '').trim();
+      // Typed text: Telegram puts the caption on only one album item.
+      const typed = msgs.map((m) => String(m.text ?? m.caption ?? '').trim()).find(Boolean) ?? '';
       if (typed.startsWith('/')) {
         await handleCommand(this, client, dm, typed);
         return;
@@ -399,7 +422,7 @@ export class TelegramEngine {
         ? { kind: 'session', sessionId: acc.activeSessionId }
         : { kind: 'assistant' };
 
-      const input = await this.resolveInput(client, dm, msg, values, acc);
+      const input = await this.resolveInput(client, dm, msgs, values, acc);
       if (input === null) return;
 
       // A question standing: the exact word answers it and is nothing else;
@@ -445,8 +468,10 @@ export class TelegramEngine {
     const acc = await store.getAccount(db, this.deps.encryptionKey);
     // The assistant can deliver a file it names from the active session's work
     // dir (its file tools are read-only, but it can point at one the coder made).
+    const voiceOnly = String(values.telegram_reply_mode ?? 'text') === 'voice';
     const sink = makeTelegramSink(client, dm,
-      acc.activeSessionId ? this.deliverConfig(acc.activeSessionId) : undefined);
+      acc.activeSessionId ? this.deliverConfig(acc.activeSessionId) : undefined,
+      { voiceOnly });
     const deps: AssistantDeps = { f: this.f, apiKey: this.deps.apiKey, modelFetch: this.deps.modelFetch };
     let replyText = '';
     // The pointer as this turn sees it — live across a switch within the turn.
@@ -493,8 +518,8 @@ export class TelegramEngine {
       // Any messages queued while we ran go out as one follow-up turn.
       const queued = this.busy.get(busyKey)?.queue ?? [];
       this.busy.delete(busyKey);
+      await this.maybeSpeak(client, dm, values, replyText, typing);
       typing.stop();
-      await this.maybeSpeak(client, dm, values, replyText);
       if (queued.length) await this.assistantTurn(client, dm, queued.join('\n\n'), values);
     } catch (e) {
       this.busy.delete(busyKey);
@@ -526,7 +551,8 @@ export class TelegramEngine {
     this.busy.set(sessionId, { queue: [], abort });
     // Files the agent names in its reply are delivered from this session's work
     // dir; the agent writes /workspace/... container paths, which map there.
-    const sink = makeTelegramSink(client, dm, this.deliverConfig(sessionId));
+    const voiceOnly = String(values.telegram_reply_mode ?? 'text') === 'voice';
+    const sink = makeTelegramSink(client, dm, this.deliverConfig(sessionId), { voiceOnly });
     // The bubble reads the session feed — the ONE place a coding turn's parts
     // are published. Subscribe before the run; the lock makes this the only
     // turn on the session, so there is no gap. The same feed carries the stop
@@ -555,8 +581,8 @@ export class TelegramEngine {
       const queued = this.busy.get(sessionId)?.queue ?? [];
       this.busy.delete(sessionId);
       await opened.close();
+      await this.maybeSpeak(client, dm, values, r.text, typing);
       typing.stop();
-      await this.maybeSpeak(client, dm, values, r.text);
       if (queued.length) await this.codeTurn(client, dm, sessionId, queued.join('\n\n'), values);
       return;
     } catch (e) {
@@ -569,26 +595,75 @@ export class TelegramEngine {
     }
   }
 
-  /** Speak the reply when the mode asks. Text has already gone out (the
-   *  sink), so a synthesis failure loses nothing. */
+  /** Speak the reply when the mode asks. Long replies are split into chunks
+   *  so audio starts playing in under a second — two synthesis requests fly
+   *  in parallel, sent in order, dots between pieces. In `voice` mode the
+   *  sink withheld the text, so a failed synthesis falls back to sending it.
+   *  `typing` is the turn's indicator loop — swapped to `record_voice` while
+   *  synthesis runs so the user sees "recording audio…" instead of "typing…". */
   private async maybeSpeak(client: TelegramClient, dm: number,
-    values: Record<string, unknown>, text?: string): Promise<void> {
+    values: Record<string, unknown>, text?: string,
+    typing?: { set(a: string): void }): Promise<void> {
     const mode = String(values.telegram_reply_mode ?? 'text');
     if (mode !== 'voice' && mode !== 'both') return;
     const say = (text ?? '').trim();
     if (!say) return;
     const apiKey = (await resolveCredential(this.deps.db, this.deps.encryptionKey, 'deepgram_api_key').catch(() => '')) ?? '';
-    if (!apiKey) return;
-    typingAction(client, dm, 'record_voice');
-    const audio = await speakVoice(apiKey, String(values.voice_spoken_voice ?? ''), say.slice(0, SPEAK_MAX_CHARS));
-    if (audio) await client.sendVoiceBytes(dm, audio).catch(() => {});
+    if (!apiKey) {
+      if (mode === 'voice') await client.sendMarkdown(dm, say).catch(() => {});
+      return;
+    }
+    typing?.set('record_voice');
+    const voice = String(values.voice_spoken_voice ?? '');
+    const chunks = splitForSpeech(say);
+    if (!chunks.length) return;
+
+    // Single chunk — the common case, no pipeline needed.
+    if (chunks.length === 1) {
+      const audio = await speakVoice(apiKey, voice, chunks[0]);
+      if (audio) await client.sendVoiceBytes(dm, audio).catch(() => {});
+      else if (mode === 'voice') await client.sendMarkdown(dm, say).catch(() => {});
+      return;
+    }
+
+    // Multi-chunk: 2 synthesis requests in parallel, send in order, dots
+    // between pieces. Synthesis is ~260ms flat (measured), playback is ~24s
+    // per 2000 chars, so every chunk after #1 is ready long before it's needed.
+    const jobs: (Promise<Buffer | null> | undefined)[] = [];
+    const startJob = (i: number) => {
+      if (i >= chunks.length || jobs[i]) return;
+      jobs[i] = speakVoice(apiKey, voice, chunks[i]);
+    };
+    startJob(0); startJob(1);
+
+    let sent = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      const bubble = i === 0 ? null : startWaitingBubble(client, dm);
+      try {
+        const audio = await jobs[i]!;
+        startJob(i + 2);  // keep 2 in flight
+        if (!audio) break;
+        await bubble?.remove();
+        await client.sendVoiceBytes(dm, audio);
+        sent++;
+      } catch {
+        await bubble?.remove();
+        break;
+      }
+    }
+
+    if (!sent && mode === 'voice') {
+      await client.sendMarkdown(dm, say).catch(() => {});
+    }
   }
 
   // ── input: voice, attachments, text ──────────────────────────────────────
 
-  private async resolveInput(client: TelegramClient, dm: number, msg: any,
+  private async resolveInput(client: TelegramClient, dm: number, msgs: any[],
     values: Record<string, unknown>, acc: store.TelegramAccountRow): Promise<string | null> {
-    const typed = String(msg.text ?? msg.caption ?? '').trim();
+    const msg = msgs[0];
+    // Telegram puts the caption on only one album item.
+    const typed = msgs.map((m) => String(m.text ?? m.caption ?? '').trim()).find(Boolean) ?? '';
 
     // A voice note is the message itself (never `audio` — an mp3 is a file).
     const voice = msg.voice;
@@ -615,9 +690,31 @@ export class TelegramEngine {
       return heard.text;
     }
 
+    // A round video message (video_note) is treated like a voice note for now:
+    // download, extract audio, transcribe. Full video processing later.
+    const videoNote = msg.video_note;
+    if (videoNote && !typed) {
+      const react = (emoji?: string) => client.setMessageReaction(dm, msg.message_id, emoji).catch(() => {});
+      if (videoNote.file_size && videoNote.file_size > MAX_INBOUND_BYTES) {
+        await client.sendMessage(dm, "⚠️ That video note is over Telegram's 20 MB limit for bots.");
+        return null;
+      }
+      const apiKey = (await resolveCredential(this.deps.db, this.deps.encryptionKey, 'deepgram_api_key').catch(() => '')) ?? '';
+      if (!apiKey) { await client.sendMessage(dm, NOT_HEARD.no_key); return null; }
+      const [, audio] = await Promise.all([react(REACT_TRANSCRIBING), client.downloadFile(videoNote.file_id)])
+        .catch(async (e) => { await react(); throw e; });
+      const heard = await transcribeVoice(apiKey, audio, String(values.voice_stt_model ?? ''));
+      if ('error' in heard) { await react(); await client.sendMessage(dm, NOT_HEARD[heard.error]); return null; }
+      if (!heard.text) { await react(); await client.sendMessage(dm, "🎤 I couldn't make out any speech in that."); return null; }
+      await react(REACT_HEARD);
+      if (values.telegram_transcript_echo === true) await client.sendMessage(dm, `🎤 "${heard.text}"`);
+      return heard.text;
+    }
+
     // Everything else file-bearing: save to the session's scratch, describe it.
     // Attachments only land in code mode (there is a session's scratch to use).
-    const files = collectFiles(msg);
+    // Collect from ALL messages — an album sends each photo as a separate update.
+    const files = msgs.flatMap(collectFiles);
     if (files.length) {
       if (acc.mode !== 'code' || !acc.activeSessionId) {
         await client.sendMessage(dm, "⚠️ Files go into the session you're coding in — /code to enter one first.");
@@ -720,7 +817,7 @@ export class TelegramEngine {
     const client = new TelegramClient(token);
     const apiKey = (await resolveCredential(this.deps.db, this.deps.encryptionKey, 'deepgram_api_key').catch(() => '')) ?? '';
     const values = await settingsValues(this.turnDeps()).catch(() => ({} as Record<string, unknown>));
-    typingAction(client, dm, 'record_voice');
+    client.sendChatAction(dm, 'record_voice').catch(() => {});
     const audio = await speakVoice(apiKey, String(values.voice_spoken_voice ?? ''),
       stored.content.replace(/\n\n\(\d+\/\d+\)$/, '').slice(0, SPEAK_MAX_CHARS));
     if (audio) await client.sendVoiceBytes(chatId, audio, { replyToMessageId: messageId }).catch(() => {});
@@ -817,14 +914,20 @@ export class TelegramEngine {
 // ── helpers ────────────────────────────────────────────────────────────────
 
 const TYPING_MS = 4000;
-function startTyping(client: TelegramClient, dm: number) {
-  const ping = () => client.sendChatAction(dm, 'typing').catch(() => {});
+/** Keep an action showing for the whole turn, and let the caller change WHICH
+ *  one. Telegram expires an action after ~5s, so it has to be re-sent on a
+ *  timer — a one-off `record_voice` from elsewhere would be overwritten by the
+ *  next `typing` tick. The switch belongs to the loop. */
+function startTyping(client: TelegramClient, dm: number, initial = 'typing') {
+  let action = initial;
+  const ping = () => { client.sendChatAction(dm, action).catch(() => {}); };
   ping();
   const timer = setInterval(ping, TYPING_MS);
-  return { stop() { clearInterval(timer); } };
-}
-function typingAction(client: TelegramClient, dm: number, action: string) {
-  client.sendChatAction(dm, action).catch(() => {});
+  return {
+    /** Show something else from now on, immediately and on every later tick. */
+    set(next: string) { action = next; ping(); },
+    stop() { clearInterval(timer); },
+  };
 }
 
 function hasEmoji(list: any, emoji: string): boolean {
@@ -833,8 +936,8 @@ function hasEmoji(list: any, emoji: string): boolean {
 
 const MEDIA_FIELDS: Array<{ field: string; kind?: 'image' | 'video' | 'audio' }> = [
   { field: 'photo', kind: 'image' }, { field: 'document' },
-  { field: 'video', kind: 'video' }, { field: 'animation', kind: 'video' },
-  { field: 'audio', kind: 'audio' },
+  { field: 'video', kind: 'video' }, { field: 'video_note', kind: 'video' },
+  { field: 'animation', kind: 'video' }, { field: 'audio', kind: 'audio' },
 ];
 function collectFiles(msg: any): Array<{ file: any; kind?: 'image' | 'video' | 'audio' }> {
   const out: Array<{ file: any; kind?: 'image' | 'video' | 'audio' }> = [];
