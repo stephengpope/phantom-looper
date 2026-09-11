@@ -19,7 +19,9 @@ import { logger } from '../log.js';
 
 const log = logger('digest');
 
-const SYSTEM = `You write a short notification about coding sessions that finished. You receive session names, their last assistant message, and card status if any. Start with a count line using the 📋 emoji, then one bullet (•) per session — session name and a few words about the outcome. Keep each bullet under 100 characters. No markdown formatting.`;
+const TITLE = (n: number) => `📋 ${n} turn${n === 1 ? '' : 's'} completed:`;
+
+const SYSTEM = `You summarize completed coding session turns as a bullet list. For each session you receive, write one line starting with • — the session name and a few words about what happened. Under 100 characters per line. No title, no extra text, just the bullets.`;
 
 export interface DigestDeps {
   db: Db;
@@ -144,11 +146,13 @@ export class SessionDigest {
         system: SYSTEM,
         prompt: `Sessions that finished:\n\n${prompt}`,
       });
-      message = text.trim();
+      const bullets = text.trim();
+      message = `${TITLE(rows.length)}\n${bullets}`;
     } catch (e) {
       log.warn({ err: (e as Error).message }, 'digest LLM call failed');
       // Fallback: just list session names, no LLM summary.
-      message = `📋 ${rows.length} session${rows.length === 1 ? '' : 's'} finished: ${items.map((i) => i.name).join(', ')}`;
+      const fallbackBullets = items.map((i) => `• ${i.name}`).join('\n');
+      message = `${TITLE(rows.length)}\n${fallbackBullets}`;
     }
 
     if (!message) return;
