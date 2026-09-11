@@ -183,7 +183,7 @@ export function sessionChoices(
   // ("↑ 12.4k (100%) ↓ 12.4k", 22) + the gutter. who and when ride in ONE
   // free-running last column ("coder 2h") — one question ("whose is this
   // and how fresh"), one column.
-  const COLS = { card: 6, status: 13, work: 14, name: 28, model: 15, tokens: 24 };
+  const COLS = { card: 6, status: 13, work: 14, name: 42, model: 15, tokens: 24 };
   const rows = sessions.map((s): TableRow<Launch | null> => {
     const w = byId.get(s.workspaceId);
     // A supervisor session names itself: the looper's verdict record for its
