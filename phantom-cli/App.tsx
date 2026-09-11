@@ -713,6 +713,7 @@ export function App({
               spin={!windowStore.opening && session && !session.busy && heldNow ? heldNow.label : undefined}
               spinWho={!windowStore.opening && session && !session.busy && heldNow ? heldNow.who : undefined}
               spinSince={!windowStore.opening && session && !session.busy && heldNow ? session.startedAt : undefined}
+              toast={windowStore.toast ?? undefined}
               groups={
               windowStore.opening ? []
               : ctrlC ? withMode('press ctrl+c again to quit')

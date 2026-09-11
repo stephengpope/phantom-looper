@@ -30,10 +30,16 @@ export type ToolbarPart = string | { text: string; mark: string };
  *  between groups, so the eye parses facts, not a flat list of fields. */
 export type ToolbarGroup = ToolbarPart[];
 
-export function Toolbar({ groups = [], spin, spinWho, spinSince }: {
+export function Toolbar({ groups = [], spin, spinWho, spinSince, toast }: {
   groups?: ToolbarGroup[]; spin?: string; spinWho?: string;
   /** When the running turn began (epoch ms), so the spinner can age. */
-  spinSince?: number }) {
+  spinSince?: number;
+  /** A timed message overriding the normal content — white text on a colored
+   *  background (the `bg` field). Auto-dismissed by the caller's timer. */
+  toast?: { text: string; bg: string } }) {
+  if (toast) return (
+    <Box paddingLeft={2}><Text backgroundColor={toast.bg} color="white" bold>{` ${toast.text} `}</Text></Box>
+  );
   const shown = groups
     .map((g) => g.filter((p) => (typeof p === 'string' ? p : p.text)))
     .filter((g) => g.length);

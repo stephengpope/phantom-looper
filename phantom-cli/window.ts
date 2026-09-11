@@ -194,6 +194,19 @@ export class WindowStore {
    *  command. Rendered where the conversation would be. */
   notes: Part[] = [];
 
+  /** A timed message on the status bar — white text on a colored background,
+   *  auto-cleared after a few seconds. Used for confirmations that need to be
+   *  visible without polluting the pane — e.g. "Session closed". */
+  toast: { text: string; bg: string } | null = null;
+  private toastTimer: ReturnType<typeof setTimeout> | null = null;
+
+  setToast(text: string, bg = 'red', ms = 3000): void {
+    if (this.toastTimer) clearTimeout(this.toastTimer);
+    this.toast = { text, bg };
+    this.toastTimer = setTimeout(() => { this.toast = null; this.toastTimer = null; this.notify(); }, ms);
+    this.notify();
+  }
+
   /** The version a background auto-update put in place this run (autoUpdate.ts),
    *  or null. While set, the prompt's version label swaps to name it — the
    *  running process is still the old build; next launch runs this one. */
@@ -956,8 +969,8 @@ export class WindowStore {
    *  Refused while a turn runs there. Closing the one on screen hands the
    *  screen to whatever you spoke to most recently; closing the LAST one opens
    *  a fresh session in the same workspace, because close means "done with
-   *  this", never "leave me looking at nothing". A note in the pane says
-   *  what happened; `quiet` is for doors that say their own (trash). */
+   *  this", never "leave me looking at nothing". A timed flash on the
+   *  toolbar confirms it; `quiet` is for doors that say their own (trash). */
 
   closeSession = async (id?: string, quiet = false): Promise<CloseResult> => {
     const target = id ?? this.sessions.activeId;
@@ -979,7 +992,7 @@ export class WindowStore {
       // The screen changed underfoot — say so, in the pane of the session
       // now on screen. AFTER the switch/open above: the note lands in
       // whatever those seated.
-      if (!quiet) this.note('Session closed');
+      if (!quiet) this.setToast('Session closed');
     }
     return { ok: true, closed: target, on_screen: this.sessions.activeId, opened_new };
   };
@@ -1253,7 +1266,7 @@ export class WindowStore {
       this.note('unpushed work — [c] to confirm discard');
     } else if (verdict === 'session_locked') {
       this.note('in use elsewhere — a held session cannot be trashed');
-    } else this.note('Session trashed');
+    } else this.setToast('Session trashed');
   };
 
   /** ctrl+n: the sessions open in this window. It shows FIRST and fills the
