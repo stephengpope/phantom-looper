@@ -16,7 +16,9 @@
 // seats), and a held blank row costs nothing next to a page that bounces.
 import { Box } from 'ink';
 import Spinner from 'ink-spinner';
+import { useContext } from 'react';
 import { turnAgeColor } from '../turnAge.js';
+import { SizeContext } from './Screen.js';
 import { Text } from './Text.js';
 
 /** One item on the line: plain text, or text with a severity mark — the
@@ -37,8 +39,9 @@ export function Toolbar({ groups = [], spin, spinWho, spinSince, toast }: {
   /** A timed message overriding the normal content — white text on a colored
    *  background (the `bg` field). Auto-dismissed by the caller's timer. */
   toast?: { text: string; bg: string } }) {
+  const { cols } = useContext(SizeContext);
   if (toast) return (
-    <Box paddingLeft={2}><Text backgroundColor={toast.bg} color="white" bold>{` ${toast.text} `}</Text></Box>
+    <Box paddingLeft={2} width={cols} overflow="hidden"><Text backgroundColor={toast.bg} color="white" bold>{` ${toast.text} `}</Text></Box>
   );
   const shown = groups
     .map((g) => g.filter((p) => (typeof p === 'string' ? p : p.text)))
@@ -46,10 +49,10 @@ export function Toolbar({ groups = [], spin, spinWho, spinSince, toast }: {
   if (!shown.length && !spin) return (
     // The held blank row — same shape as the real line, one cell of content
     // so yoga keeps the height.
-    <Box paddingLeft={2}><Text> </Text></Box>
+    <Box paddingLeft={2} width={cols} overflow="hidden"><Text> </Text></Box>
   );
   return (
-    <Box paddingLeft={2}>
+    <Box paddingLeft={2} width={cols} overflow="hidden">
       <Text color="yellow">» </Text>
       {shown.map((g, gi) => (
         <Text key={gi} color="yellow">
