@@ -60,6 +60,84 @@ export function makeTelegramSink(
   let unwritten = false;                // the held message has nothing real in it (a slot)
   let tookBubble = false;
 
+  // ── Tool elapsed timer ──────────────────────────────────────────────────
+  // A tool can run for 30+ seconds. Without this the chat freezes on
+  // `⚙️ bash` with no sign of life. The timer edits the tool line every 5s
+  // with the elapsed time (`⚙️ bash · 5s`). On tool-result, it marks the
+  // line with ✓ — that tells the user "done, thinking about the result now".
+  let toolMsgId: number | null = null;
+  let toolEmoji = '🔧';
+  let toolNameStr = 'tool';
+  let toolStart = 0;
+  let toolTimer: ReturnType<typeof setInterval> | null = null;
+
+  function stopToolTimer() {
+    if (toolTimer) { clearInterval(toolTimer); toolTimer = null; }
+  }
+
+  function startToolTimer(msgId: number, emoji: string, name: string) {
+    stopToolTimer();
+    toolMsgId = msgId; toolEmoji = emoji; toolNameStr = name;
+    toolStart = Date.now();
+    toolTimer = setInterval(() => {
+      if (toolMsgId == null) { stopToolTimer(); return; }
+      const sec = Math.round((Date.now() - toolStart) / 1000);
+      chain = chain.then(async () => {
+        if (toolMsgId == null) return;
+        await client.editMessageText(chatId, toolMsgId, `${toolEmoji} ${toolNameStr} · ${sec}s`);
+      }).catch(() => { stopToolTimer(); });
+    }, 5000);
+  }
+
+  const THINKING_DOTS = ['💭 thinking ...', '💭 thinking ....', '💭 thinking .....', '💭 thinking ......'];
+  let thinkingTimer: ReturnType<typeof setInterval> | null = null;
+  let thinkingFrame = 0;
+
+  function stopThinking() {
+    if (thinkingTimer) { clearInterval(thinkingTimer); thinkingTimer = null; }
+  }
+
+  /** Mark thinking done with ✓, release the slot so the reply posts below it. */
+  function markThinkingDone() {
+    stopThinking();
+    if (!unwritten || messageId == null) return;
+    const id = messageId;
+    messageId = null; unwritten = false;
+    chain = chain.then(async () => {
+      await client.editMessageText(chatId, id, '💭 thinking ✓');
+    }).catch(() => { /* best-effort */ });
+  }
+
+  function markToolDone() {
+    stopToolTimer();
+    if (toolMsgId == null) return;
+    const id = toolMsgId;
+    const sec = Math.round((Date.now() - toolStart) / 1000);
+    toolMsgId = null;
+    chain = chain.then(async () => {
+      await client.editMessageText(chatId, id, `${toolEmoji} ${toolNameStr} ✓ ${sec}s`);
+      // "thinking" as a slot — the next text-delta edits into it, the next
+      // tool-call takes it over. Either way it never lingers as a stale line.
+      // Animated dots like the waiting bubble (600ms per frame).
+      try {
+        thinkingFrame = 0;
+        const m = await client.sendMessage(chatId, THINKING_DOTS[0]);
+        messageId = m?.message_id ?? null;
+        unwritten = messageId != null;
+        if (messageId != null) {
+          const mid = messageId;
+          thinkingTimer = setInterval(() => {
+            thinkingFrame = (thinkingFrame + 1) % THINKING_DOTS.length;
+            chain = chain.then(async () => {
+              if (messageId !== mid || !unwritten) { stopThinking(); return; }
+              await client.editMessageText(chatId, mid, THINKING_DOTS[thinkingFrame]);
+            }).catch(() => { stopThinking(); });
+          }, 600);
+        }
+      } catch { /* best-effort */ }
+    }).catch(() => { /* best-effort */ });
+  }
+
   // Every flush is chained; done() awaits the chain so a first post still in
   // flight can't make done() send a second message.
   let chain: Promise<void> = Promise.resolve();
@@ -110,14 +188,18 @@ export function makeTelegramSink(
   function toolLine(name: string) {
     void flush(true);                   // close the current text segment first
     chain = chain.then(async () => {
+      stopToolTimer(); markThinkingDone();  // previous tool's timer (if any)
       text = '';                        // reset BEFORE any await — deltas append outside the chain
       await takeSlot();
       const slot = unwritten ? messageId : null;
       messageId = null; unwritten = false;
-      const line = `${TOOL_EMOJI[name] || '🔧'} ${name}`;
+      const emoji = TOOL_EMOJI[name] || '🔧';
+      const line = `${emoji} ${name}`;
       try {
-        if (slot != null) await client.editMessageText(chatId, slot, line);
-        else await client.sendMessage(chatId, line);
+        let mid: number | null = null;
+        if (slot != null) { await client.editMessageText(chatId, slot, line); mid = slot; }
+        else { const m = await client.sendMessage(chatId, line); mid = m?.message_id ?? null; }
+        if (mid != null) startToolTimer(mid, emoji, name);
       } catch { /* best-effort */ }
     }).catch(() => { /* best-effort */ });
   }
@@ -128,12 +210,16 @@ export function makeTelegramSink(
   const marked = new Set<string>();
   function part(p: Record<string, unknown>) {
     const type = p.type;
-    if (type === 'text-delta' && typeof p.text === 'string') { text += p.text; dirty = true; }
-    else if (type === 'tool-input-start' || type === 'tool-call') {
+    if (type === 'text-delta' && typeof p.text === 'string') {
+      stopToolTimer(); markThinkingDone();  // model is talking — thinking done
+      text += p.text; dirty = true;
+    } else if (type === 'tool-input-start' || type === 'tool-call') {
       const id = typeof p.toolCallId === 'string' ? p.toolCallId : typeof p.id === 'string' ? p.id : null;
       if (id != null) { if (marked.has(id)) return; marked.add(id); }
       const name = typeof p.toolName === 'string' ? p.toolName : 'tool';
       toolLine(name);
+    } else if (type === 'tool-result') {
+      markToolDone();                   // ✓ with elapsed — "done, thinking now"
     }
   }
 
@@ -147,6 +233,7 @@ export function makeTelegramSink(
 
   async function dispose() {
     clearInterval(editTimer);
+    stopToolTimer(); stopThinking();
     bubble.stop();
     await chain.catch(() => { /* best-effort */ });
     await dropPlaceholder();
@@ -154,6 +241,7 @@ export function makeTelegramSink(
 
   async function done(finalText: string) {
     clearInterval(editTimer);
+    stopToolTimer(); stopThinking();
     bubble.stop();
     await chain;                        // let any in-flight post land
 

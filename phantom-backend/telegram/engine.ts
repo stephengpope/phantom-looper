@@ -405,6 +405,10 @@ export class TelegramEngine {
       (id) => { store.deleteSent(db, dm, id).catch(() => {}); });
 
     try {
+      // Show life immediately — before resolveInput (voice download +
+      // transcription can take 1-3s) so the user never stares at nothing.
+      client.sendChatAction(dm, 'typing').catch(() => {});
+
       // A reply to one of my bubbles switches conversation BEFORE anything
       // reads which mode this is — commands included. Telegram puts the reply
       // on whichever album item carried it, so check all of them.
