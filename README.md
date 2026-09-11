@@ -1,6 +1,4 @@
-<img src="assets/logo.png" alt="phantom-looper logo" width="40" align="left" style="margin-right:8px;" /> 
-
-# phantom-looper
+<h1><img src="assets/logo.png" alt="phantom-looper logo" width="36" style="vertical-align:middle;" />&nbsp; phantom-looper</h1>
 
 A coding agent that plans, builds and ships from a kanban board, with a voice assistant that runs it.
 
