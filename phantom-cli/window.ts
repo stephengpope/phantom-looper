@@ -1776,6 +1776,29 @@ export class WindowStore {
         }
         return;
       }
+      case 'duplicate': {
+        if (!session) { this.note('no session is open — nothing to duplicate'); return; }
+        if (session.busy || session.remoteBusy) {
+          this.note('a turn is running — wait for it to finish, then /duplicate');
+          return;
+        }
+        try {
+          const presets = await this.api('GET', '/presets') as Preset[];
+          if (!presets.length) { await this.openSession({ kind: 'duplicate', id: session.id }); return; }
+          const srcProvider = session.pin?.provider;
+          const srcModel = session.pin?.model;
+          let current: { provider: string; model: string };
+          if (srcProvider && srcModel) {
+            current = { provider: srcProvider, model: srcModel };
+          } else {
+            const cfg = await this.readSettings();
+            current = { provider: String(cfg.provider ?? ''), model: String(cfg.model ?? '') };
+          }
+          this.duplicating = { id: session.id, presets, current };
+          this.setScreen('duplicateModel');
+        } catch (e) { this.note(`could not duplicate: ${(e as Error).message}`); }
+        return;
+      }
       case 'trash': {
         if (!session) { this.note('no session is open — nothing to trash'); return; }
         this.promptTrashArmed = { id: session.id, force: false };

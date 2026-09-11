@@ -22,6 +22,7 @@ export const COMMANDS: Command[] = [
   // session is a real everyday act, but not more everyday than the eight above
   // it, and [x] on /resume already teaches it.
   { name: 'pop', summary: 'pull the last queued message into the prompt, or /pop all', args: 'all' },
+  { name: 'duplicate', summary: 'copy this session — transcript, branch, optionally a new model' },
   { name: 'close', summary: 'close this session — it stays on the server' },
   { name: 'trash', summary: 'trash this session for good — row, transcript, files' },
   { name: 'server', summary: 'the server url and api key, this machine only' },

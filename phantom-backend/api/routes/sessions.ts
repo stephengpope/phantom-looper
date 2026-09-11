@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import path from 'node:path';
+import fs from 'node:fs/promises';
 import { eq, ne, desc, and, or, isNull, isNotNull, lt, sql, count, inArray } from 'drizzle-orm';
 import { sessions, sessionColumns, workspaces, folders, loops, settings as settingsRows, type SessionRow } from '../../db/schema.js';
 import { createSession, getSession, getFolder, destroySession, touchSession, SessionError,
@@ -759,6 +760,12 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         }
         const copy = await createSession(ctx.db, ctx.paths, ctx.encryptionKey, src.workspaceId,
           srcFolder ? { fromBranch: srcFolder.branch } : {});
+        // Copy the source's scratch pad into the copy's folder — same filenames,
+        // the copy's container mounts them at the same /workspace/scratch/ path,
+        // so every reference in the transcript works without rewriting.
+        const srcScratch = path.join(sessionDir(ctx.paths, src.folderId ?? src.id), 'scratch');
+        const dstScratch = path.join(sessionDir(ctx.paths, copy.id), 'scratch');
+        await fs.cp(srcScratch, dstScratch, { recursive: true }).catch(() => {});
         const t = await ctx.db.select({ data: sessions.transcript })
           .from(sessions).where(eq(sessions.id, src.id));
         const stamp = new Date();
