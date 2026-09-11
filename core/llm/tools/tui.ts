@@ -22,7 +22,7 @@ const statusEnum = (columns: string[]) =>
   columns.length ? z.enum(columns as [string, ...string[]]) : z.string();
 
 export interface SessionsArgs {
-  action: 'list' | 'switch' | 'read' | 'get_active' | 'close';
+  action: 'list' | 'switch' | 'read' | 'close';
   id?: string;
   limit?: number; offset?: number; tools?: boolean;
   /** true = the raw transcript (JSONL), not the rendered view. */
@@ -63,15 +63,6 @@ export function sessionsTool(handler: (args: SessionsArgs) => Promise<unknown>):
       }),
       execute: async (args) => handler({ action: 'list', ...args }),
     }),
-    session_get_active: tool({
-      description: 'Which session is on screen right now: its id, title, workspace, and card. ' +
-        'ONE session — the one the user is looking at — so ask this instead of session_list when the ' +
-        'question is what is on screen, or before acting on "this session": it is the live answer, not ' +
-        'what a session_list said earlier or what you remember. session_list is still where you get OTHER ' +
-        "sessions' ids. session_get_mode says whether that session is in plan or code mode.",
-      inputSchema: z.object({}),
-      execute: async () => handler({ action: 'get_active' }),
-    }),
     session_switch: tool({
       description: 'Put a session on screen by id — ANY session session_list returned, not only the ones ' +
         'already open in this window. Opening one is reading: it never blocks whoever is running it. A session ' +
@@ -87,8 +78,8 @@ export function sessionsTool(handler: (args: SessionsArgs) => Promise<unknown>):
       description: "Read a session's conversation — what the user and the coding agent said and did. " +
         'Use when asked what a session is doing or has done. Returns the newest slice oldest-first; ' +
         "raise offset to page back; tools:true only when the one-line results aren't enough. " +
-        'Defaults to the session on screen. Reads only sessions OPEN in this window — for any other, ' +
-        'session_switch opens it first.',
+        'Defaults to the session on screen — no need to look up the active session first. ' +
+        'Reads only sessions OPEN in this window — for any other, session_switch opens it first.',
       inputSchema: z.object({
         id: z.string().optional().describe('session id (defaults to the one on screen)'),
         limit: z.number().int().optional().describe('messages to return (default 50)'),

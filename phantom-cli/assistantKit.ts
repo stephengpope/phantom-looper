@@ -134,29 +134,6 @@ export function sessionsHandler(win: WindowStore, api: Api, clientId: string,
         })),
       };
     }
-    if (args.action === 'get_active') {
-      // The window knows WHICH session is on screen — nothing else can. What
-      // identifies it to a person (title, card) lives on the row, so this is
-      // one GET for that session alone. Mode is deliberately absent:
-      // session_get_mode answers that, and one field with two homes drifts.
-      const id = store.activeId;
-      const e = id ? store.get(id) : undefined;
-      if (!e) return { error: 'no session is on screen' };
-      try {
-        const [row] = await Promise.all([
-          api('GET', `/sessions/${id}`) as Promise<{ name?: string | null; card?: number | null; status?: string }>,
-          workspaces.ensure(),
-        ]);
-        return { id, title: row?.name ?? null, workspace: workspaces.name(e.workspaceId),
-          card: row?.card ?? null, status: row?.status === 'active' ? 'active' : 'ended',
-          running: e.busy };
-      } catch (err) {
-        // The server is out of reach; which session is on screen is still this
-        // window's own fact, so answer it and say what is missing.
-        return { id, workspace: workspaces.name(e.workspaceId), running: e.busy,
-          note: `could not read the session row (${(err as Error).message}) — title and card unavailable` };
-      }
-    }
     if (args.action === 'switch') {
       // ONE open path, always — openSession decides whether the session is
       // already here, needs attaching, or (having been swept) needs

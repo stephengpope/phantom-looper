@@ -146,10 +146,6 @@ function sessionsHandler(
           total: j.data.total,
         };
       }
-      case 'get_active': {
-        const id = activeSession();
-        return id ? { id } : { note: 'no active session — session_switch sets one' };
-      }
       case 'read': {
         const id = args.id ?? activeSession();
         if (!id) return { error: 'no session — pass an id' };
