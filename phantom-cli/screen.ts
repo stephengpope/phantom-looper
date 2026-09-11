@@ -15,6 +15,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { CONFIG_DIR } from './config.js';
 import xterm from '@xterm/headless';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { createTrim } from './trim.js';
 import { createCursorAudit } from './cursorAudit.js';
 import { logLine } from './cliLog.js';
@@ -60,6 +61,13 @@ export interface Screen {
 export function createScreen(real: NodeJS.WriteStream,
   auditTiming: { settleMs?: number; minIntervalMs?: number; timeoutMs?: number } = {}): Screen {
   const term = new Terminal({ cols: real.columns || 80, rows: real.rows || 24, allowProposedApi: true, scrollback: 0 });
+  // Modern terminals render emoji (📌, ↑, etc.) as 2-column glyphs; xterm.js
+  // defaults to Unicode 6 widths which count many of them as 1.  The mismatch
+  // puts the cursor one column off, the audit catches it, and a full-screen
+  // clear fires — the "flicker on every session switch".  Unicode 11 tables
+  // agree with what terminals actually draw.
+  term.loadAddon(new Unicode11Addon());
+  term.unicode.activeVersion = '11';
   const trim = createTrim();
   const trace = makeTracer();
   let ranges: Range[] | null = null;

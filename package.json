@@ -31,6 +31,7 @@
     "@openai-oauth/core": "^2.0.0",
     "@openai-oauth/local": "^2.0.0",
     "@parcel/watcher": "^2.6.0",
+    "@xterm/addon-unicode11": "^0.9.0",
     "@xterm/headless": "^6.0.0",
     "ai": "^7.0.73",
     "dockerode": "^5.0.1",
