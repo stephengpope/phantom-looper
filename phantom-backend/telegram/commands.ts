@@ -188,35 +188,40 @@ export async function handleCommand(
     }
 
     case 'status': {
-      // Unified: always server + workspace + session; code mode adds the
-      // coding session's details. One command, same structure, additive.
-      const sysJ = await (await engine.call('/system/status')).json().catch(() => null);
-      const serverLine = sysJ?.ok ? String(sysJ.data.text ?? '') : '(unavailable)';
-
+      // Four lines: workspace, session + state, mode, server (compact).
       const w = acc.activeWorkspaceId ? await workspaceRow(engine, acc.activeWorkspaceId) : null;
       const s = acc.activeSessionId ? await sessionRow(engine, acc.activeSessionId) : null;
 
-      const lines: (string | null)[] = [
-        serverLine, '',
-        `Workspace: ${w?.name ?? acc.activeWorkspaceId ?? '(none — /workspaces)'}`,
-        `Session: ${s?.name ?? (acc.activeSessionId ? 'untitled' : '(none — /sessions or /new)')}`,
-      ];
-
-      // In code mode with an active session, append the coding details.
-      if (acc.mode === 'code' && s) {
-        const t = await (await engine.call(`/sessions/${acc.activeSessionId}/tasks`)).json().catch(() => null);
-        const tasks = t?.ok ? (t.data.tasks ?? []).length : 0;
-        const where = [s.branch ? `Branch: ${s.branch}` : null, s.card != null ? `Card #${s.card}` : null]
-          .filter(Boolean).join(' · ');
-        lines.push('',
-          where || null,
-          `Running: ${s.locked ? `yes${s.lockedLabel ? ` (${s.lockedLabel})` : ''}` : 'no'}`,
-          `Last request: ${s.lastUserMessage ? oneLine(s.lastUserMessage) : '(none yet)'}`,
-          `Plan mode: ${s.planMode ? 'on' : 'off'}`,
-          `Background tasks: ${tasks}`);
+      let sessionLine: string;
+      if (s) {
+        const state = s.locked ? 'running' : 'idle';
+        sessionLine = `${s.name ?? 'untitled'} — ${state}`;
+      } else {
+        sessionLine = 'none — /sessions or /new';
       }
 
-      await client.sendMarkdown(dm, titled('📊 Status', lines.filter((v) => v != null).join('\n')));
+      const lines = [
+        `Workspace: ${w?.name ?? acc.activeWorkspaceId ?? 'none — /workspaces'}`,
+        `Session: ${sessionLine}`,
+        `Mode: ${acc.mode}`,
+      ];
+
+      // Server stats condensed to one line.
+      const sysJ = await (await engine.call('/system/status')).json().catch(() => null);
+      if (sysJ?.ok) {
+        const raw = String(sysJ.data.text ?? '');
+        const cpu = raw.match(/(\d+)% busy/)?.[1];
+        const mem = raw.match(/([\d.]+G) used .* ([\d.]+G) total\n/);
+        const disk = raw.match(/disk.*\n([\d.]+G) used .* ([\d.]+G) free/s);
+        const parts = [
+          cpu ? `CPU ${cpu}%` : null,
+          mem ? `Mem ${mem[1]}/${mem[2]}` : null,
+          disk ? `Disk ${disk[2]} free` : null,
+        ].filter(Boolean).join(' · ');
+        lines.push(`Server: ${parts || raw.split('\n')[0]}`);
+      }
+
+      await client.sendMarkdown(dm, titled('📊 Status', lines.join('\n')));
       return;
     }
 
