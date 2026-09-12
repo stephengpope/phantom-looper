@@ -57,7 +57,14 @@ export interface Column { text: string; width?: number; mark?: string; markChar?
 function Cell({ col }: { col: Column }) {
   const text = <Text dimColor wrap="truncate-end">{col.text}</Text>;
   if (!col.mark) return text;
-  const icon = <Box width={2} flexShrink={0}><Text color={col.mark}>{col.markChar ?? '•'}</Text></Box>;
+  // The box's spare cell is the gap between mark and text: it trails a
+  // leading mark (`✓ 7`) and must LEAD a trailing one (`7 ✓`), so a trailing
+  // mark is right-aligned inside its box.
+  const icon = (
+    <Box width={2} flexShrink={0} justifyContent={col.markAfter ? 'flex-end' : 'flex-start'}>
+      <Text color={col.mark}>{col.markChar ?? '•'}</Text>
+    </Box>
+  );
   return col.markAfter ? <>{text}{icon}</> : <>{icon}{text}</>;
 }
 
