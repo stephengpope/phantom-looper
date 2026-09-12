@@ -288,11 +288,13 @@ export function applyTokens(t: TurnTokens, part: StreamPart): TurnTokens {
 /** The number to show: settled plus the estimate for what is in flight. */
 export const tokenCount = (t: TurnTokens): number => t.settled + Math.ceil(t.pendingChars / CHARS_PER_TOKEN);
 
-/** 950 → "950", 1700 → "1.7k", 12400 → "12k". */
+/** 950 → "950", 1700 → "1.7k", 12400 → "12k", 1700000 → "1.7M". */
 export function formatTokens(n: number): string {
   if (n < 1000) return String(n);
   const k = n / 1000;
-  return k < 10 ? `${k.toFixed(1).replace(/\.0$/, '')}k` : `${Math.round(k)}k`;
+  if (k < 1000) return k < 10 ? `${k.toFixed(1).replace(/\.0$/, '')}k` : `${Math.round(k)}k`;
+  const m = k / 1000;
+  return m < 10 ? `${m.toFixed(1).replace(/\.0$/, '')}M` : `${Math.round(m)}M`;
 }
 
 /** The output-token meter shown everywhere (toolbar, launcher, status line):

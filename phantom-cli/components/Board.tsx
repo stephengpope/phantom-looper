@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react';
 import { isMouseInput, parseMouse } from '../mouse.js';
 import { CardEditor } from './CardEditor.js';
 import type { BoardStore, Card } from '../board.js';
+import { STATUS_ICON } from './Launcher.js';
 import { turnAgeColor, TURN_AGE_TICK_MS } from '../turnAge.js';
 
 const HEADER_ROWS = 3; // column top border + header line + blank line, above the first card
@@ -209,6 +210,9 @@ export function Board({ store, width, height, isActive, onClose, card, onOpenCar
               borderStyle="round" borderColor={isTarget ? 'green' : ci === focus.col ? 'cyan' : 'gray'}
               paddingX={1} overflow="hidden">
               <Text bold color={ci === focus.col ? 'cyan' : undefined}>
+                {STATUS_ICON[col]
+                  ? <><Text color={STATUS_ICON[col].color}>{STATUS_ICON[col].char}</Text>{' '}</>
+                  : null}
                 {col.replace(/_/g, ' ')} <Text dimColor>({cards.length})</Text>
               </Text>
               <Text> </Text>

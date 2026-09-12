@@ -8,7 +8,7 @@
 // workspace id, which goes stale the moment you switch.
 import { SelectList, type Choice } from './SelectList.js';
 import { Screen, type FooterKey } from './Screen.js';
-import { tableChoices, type TableRow } from './table.js';
+import { tableChoices, type TableRow, type Cell } from './table.js';
 import { formatTokensIn, formatTokensOut, cachePct } from '../state.js';
 
 export interface WorkspaceInfo {
@@ -64,6 +64,16 @@ export const WORK = {
   not_merged: { text: 'not merged', mark: 'yellow' },
   merged: { text: 'merged', mark: 'green' },
 } as const;
+
+/** Colored icon per card status — one map for /resume's card column and the
+ *  board's column headers. The icon replaces the status word entirely. */
+export const STATUS_ICON: Record<string, { char: string; color: string }> = {
+  backlog:     { char: '○', color: 'gray' },
+  plan:        { char: '◇', color: 'magenta' },
+  in_progress: { char: '▶', color: 'yellow' },
+  blocked:     { char: '✕', color: 'red' },
+  done:        { char: '✓', color: 'green' },
+};
 
 export type Launch =
   | { kind: 'resume'; sessionId: string }
@@ -170,20 +180,20 @@ export function sessionChoices(
   // Columns ride the shared table system (table.ts — /resume's geometry made
   // reusable): fixed widths on the value columns, because this list refreshes
   // in place and must not jitter as messages and names change under it.
-  // The ORDER is the status bar's: the card with its git dot first
-  // (`PHA 7 in_progress • not pushed`), the model with its token meters near
-  // the end (`gpt-5 ↑ 12.4k (84%) ↓ 1.7k`) — the two places the same facts
-  // show read the same way. card is 6 = the title (4) + the 2-cell gutter
-  // inside the width (the column law), room for four digits; it sits right
-  // of ws so `PHA  7` reads as the board's PHA-7 and survives a narrow
-  // terminal. work is 14 = the mark and its space (2) + "not pushed"/
-  // "not merged" (10) + the gutter; it sits well LEFT of the tail so a
-  // narrow terminal truncates the soft columns before the one that says
-  // whether work would be lost. tokens is 24 = the widest meter pair
+  // The ORDER is the status bar's: card number with a colored status icon
+  // first (`PHA  ○ 7` — dim hollow circle = backlog), the model with its
+  // token meters near the end (`gpt-5 ↑ 12.4k (84%) ↓ 1.7k`).
+  // card is 8 = number (4) + the mark (2) + the 2-cell gutter — compact, the
+  // icon trails the number (`7 ▶`) so the numbers stay left-aligned.
+  // Status icons: ○ gray (backlog), ◇ magenta (plan), ▶ yellow (in_progress),
+  //               ✕ red (blocked), ✓ green (done).
+  // work is 14 = the mark and its space (2) + "not pushed"/"not merged" (10)
+  // + the gutter. tokens is 24 = the widest meter pair
   // ("↑ 12.4k (100%) ↓ 12.4k", 22) + the gutter. who and when ride in ONE
   // free-running last column ("coder 2h") — one question ("whose is this
   // and how fresh"), one column.
-  const COLS = { card: 6, status: 13, work: 14, name: 42, model: 15, tokens: 24 };
+
+  const COLS = { card: 8, work: 14, name: 42, model: 20, tokens: 24 };
   const rows = sessions.map((s): TableRow<Launch | null> => {
     const w = byId.get(s.workspaceId);
     // A supervisor session names itself: the looper's verdict record for its
@@ -197,13 +207,16 @@ export function sessionChoices(
     // per turn) — same spinner as a local turn. One fact, one place.
     const held = !dead && !!s.locked && s.lockedBy !== clientId;
     const running = isRunning(s, { busy, clientId });   // === working || held
-    const kind = whoDrives(s);
     // The card this session works on — the BARE number, because the ws
     // column beside it already shows the prefix (the board's own shape:
     // prefix in the header, number on the row). Either seat of a loop
     // carries it; a session with no card is the blank-fact dot.
-    const cardCol = s.card != null ? String(s.card) : '·';
-    const statusCol = s.cardStatus ?? '·';
+    // Card number with a colored status icon as the mark: ▶ 7 (yellow = in_progress).
+    const cardNum = s.card != null ? String(s.card) : '·';
+    const icon = s.cardStatus ? STATUS_ICON[s.cardStatus] : undefined;
+    const cardCol: Cell = icon
+      ? { text: cardNum, mark: icon.color, markChar: icon.char, markAfter: true }
+      : cardNum;
     // A blank fact is a dot — never the branch, which is just the session id
     // wearing a prefix and says nothing to a person.
     const nameCol = s.name ?? '·';
@@ -223,13 +236,10 @@ export function sessionChoices(
       ? formatTokensIn(s.tokensInput) + (pct != null ? ` (${pct}%)` : '') : '';
     const outMeter = s.tokensOutput ? formatTokensOut(s.tokensOutput) : '';
     const tokensCol = [inMeter, outMeter].filter(Boolean).join(' ') || '·';
-    // who and when answer ONE question — whose session is this and how fresh
-    // — so they ride in one cell; a fresh open with no activity time shows
-    // just the driver, never "manual ·".
-    const whoWhenCol = dead ? 'ended' : when === '·' ? kind : `${kind} ${when}`;
+    const whenCol = dead ? 'ended' : when;
     return {
       value: { kind: 'resume', sessionId: s.id } as Launch,
-      cells: [wsCol(s), cardCol, statusCol, workCol, nameCol, s.model ?? '·', tokensCol, whoWhenCol],
+      cells: [wsCol(s), cardCol, workCol, nameCol, s.model ?? '·', tokensCol, whenCol],
       busy: running,
       dot: open && !running,
       hint: dead
@@ -242,11 +252,11 @@ export function sessionChoices(
     };
   });
   const table = tableChoices('ws', [
-    { title: 'card', width: COLS.card }, { title: 'status', width: COLS.status },
+    { title: 'card', width: COLS.card },
     { title: 'git', width: COLS.work },
     { title: 'session', width: COLS.name },
     { title: 'model', width: COLS.model }, { title: 'tokens', width: COLS.tokens },
-    { title: 'who · when' },
+    { title: 'when' },
   ], rows);
   // One blank line between the pinned block and the rest — a heading row, so
   // the cursor skips it and the total counts sessions only. Only when both

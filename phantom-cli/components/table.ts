@@ -28,8 +28,8 @@ import { type Choice, type Column } from './SelectList.js';
 export interface ColSpec { title: string; width?: number; cap?: number }
 
 /** A cell's content: the text, or the text with a mark (an Ink color name)
- *  drawn as a colored • ahead of it. */
-export type Cell = string | { text: string; mark?: string };
+ *  drawn as a colored • (or custom `markChar`) ahead of it. */
+export type Cell = string | { text: string; mark?: string; markChar?: string; markAfter?: boolean };
 
 /** One row: `cells[0]` is the label (its mark, if any, is ignored — the
  *  label column has no mark slot), the rest sit under `cols` in order.
@@ -44,18 +44,19 @@ const GUTTER = 2;
 /** The mark and the space after it. */
 const MARK = 2;
 
-const cellOf = (c: Cell | undefined): { text: string; mark?: string } =>
+const cellOf = (c: Cell | undefined): { text: string; mark?: string; markChar?: string; markAfter?: boolean } =>
   typeof c === 'string' ? { text: c } : c ?? { text: '' };
 /** Cells the content takes on screen — the mark included. */
 const cellWidth = (c: Cell | undefined): number => {
   const { text, mark } = cellOf(c);
   return text.length + (mark ? MARK : 0);
 };
-/** The Column for a cell: `mark` only when set, so an unmarked cell keeps the
- *  exact `{ text, width? }` shape. */
+/** The Column for a cell: `mark`/`markChar`/`markAfter` only when set, so an
+ *  unmarked cell keeps the exact `{ text, width? }` shape. */
 const column = (c: Cell | undefined, width: number | undefined): Column => {
-  const { text, mark } = cellOf(c);
-  return { text, ...(width ? { width } : {}), ...(mark ? { mark } : {}) };
+  const { text, mark, markChar, markAfter } = cellOf(c);
+  return { text, ...(width ? { width } : {}), ...(mark ? { mark } : {}),
+    ...(markChar ? { markChar } : {}), ...(markAfter ? { markAfter } : {}) };
 };
 
 /** The aligned table: a dim header Choice over the rows, geometry computed

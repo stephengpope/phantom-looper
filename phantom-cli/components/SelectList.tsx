@@ -43,8 +43,10 @@ export function wrapHint(hint: string, width = 76): string[] {
  *  column may omit it and run free. The column math that four screens each
  *  hand-rolled with padEnd lives here now. `mark` is an Ink color name: a
  *  colored • drawn ahead of the text (two cells, counted inside `width`) —
- *  severity at a glance where the words stay dim (/resume's work column). */
-export interface Column { text: string; width?: number; mark?: string }
+ *  severity at a glance where the words stay dim (/resume's work column).
+ *  `markChar` overrides the default • when a column needs its own icon.
+ *  `markAfter` puts the mark after the text instead of before it. */
+export interface Column { text: string; width?: number; mark?: string; markChar?: string; markAfter?: boolean }
 
 /** A column cell: the dim text, with its mark ahead of it when it has one.
  *  The mark is a SIBLING in a pinned two-cell box, never nested in the dim
@@ -55,12 +57,8 @@ export interface Column { text: string; width?: number; mark?: string }
 function Cell({ col }: { col: Column }) {
   const text = <Text dimColor wrap="truncate-end">{col.text}</Text>;
   if (!col.mark) return text;
-  return (
-    <>
-      <Box width={2} flexShrink={0}><Text color={col.mark}>•</Text></Box>
-      {text}
-    </>
-  );
+  const icon = <Box width={2} flexShrink={0}><Text color={col.mark}>{col.markChar ?? '•'}</Text></Box>;
+  return col.markAfter ? <>{text}{icon}</> : <>{icon}{text}</>;
 }
 
 /** The label column's width for the longest label in a list: content capped,
