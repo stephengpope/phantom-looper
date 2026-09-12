@@ -367,10 +367,14 @@ export function assistantKanbanTool(handler: (args: KanbanArgs) => Promise<unkno
 export interface ScreenModeHandler {
   getMode: () => Promise<unknown>;
   enterPlan: () => Promise<unknown>;
+  /** Request switching from plan mode to code mode — gated on user approval.
+   *  Optional: absent means the tool is not offered (server-side turns with
+   *  no user to ask). */
+  requestCode?: (signal?: AbortSignal) => Promise<unknown>;
 }
 
 export function screenModeTools(handler: ScreenModeHandler): Record<string, Tool> {
-  return {
+  const tools: Record<string, Tool> = {
     session_get_mode: tool({
       description: "The cli's current mode for the session on screen: plan mode (file tools " +
         'read-only) or code mode (full tools).',
@@ -384,6 +388,18 @@ export function screenModeTools(handler: ScreenModeHandler): Record<string, Tool
       execute: async () => handler.enterPlan(),
     }),
   };
+  if (handler.requestCode) {
+    const requestCode = handler.requestCode;
+    tools.screen_request_code_mode = tool({
+      description: 'Request switching from plan mode to code mode. This sends an approval prompt to ' +
+        'the user — the tool blocks until they accept or decline. Accepted: the session moves to code mode ' +
+        '(full tools). Declined: stays in plan mode. Use when planning is done and you are ready to write code. ' +
+        'Only meaningful while in plan mode — check session_get_mode first.',
+      inputSchema: z.object({}),
+      execute: async (_args, opts) => requestCode(opts?.abortSignal),
+    });
+  }
+  return tools;
 }
 
 /** The spoken project name → the repo name: lowercase, every run of anything

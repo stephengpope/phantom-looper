@@ -262,6 +262,13 @@ export class WindowStore {
    *  tool call can land before a render, and this must already be right. */
   approval: Approval | null = null;
 
+  /** The coding agent's `screen_request_code_mode` waits here until the user
+   *  answers. Shown in the toolbar; answered by typing `y` + enter (accept)
+   *  or `n` + enter (decline). Any other submitted text declines and is
+   *  processed normally (the Telegram rule: a different message means the
+   *  user moved on). ONE at a time; the tool call's abort declines. */
+  modeRequest: Approval | null = null;
+
   /** Put a screen on the main column. Everything a screen change does lives
    *  here: a screen that is not the chat retires the splash, and /resume and
    *  /tasks — status lists whose rows spin and whose locks lapse while you
@@ -453,6 +460,30 @@ export class WindowStore {
         if (e.planMode) return { ok: false, error: 'already in plan mode' };
         await this.api('PATCH', `/sessions/${e.id}`, { plan_mode: true });
         await this.applyPlanMode(e.id, true);
+        return { ok: true };
+      },
+      requestCode: async (signal?: AbortSignal) => {
+        const e = at();
+        if (!e) return { ok: false, error: 'no session is open' };
+        if (e.readonly) return { ok: false, error: 'a supervisor record has no modes' };
+        if (!e.planMode) return { ok: false, error: 'already in code mode' };
+        if (this.modeRequest) return { ok: false, error: 'a mode request is already pending' };
+        const ok = await new Promise<boolean>((resolve) => {
+          if (signal?.aborted) { resolve(false); return; }
+          const done = (accepted: boolean) => {
+            signal?.removeEventListener('abort', onAbort);
+            this.modeRequest = null;
+            this.notify();
+            resolve(accepted);
+          };
+          const onAbort = () => done(false);
+          signal?.addEventListener('abort', onAbort);
+          this.modeRequest = { label: 'switch to code mode', subject: 'the coding agent is ready to write code', resolve: done };
+          this.notify();
+        });
+        if (!ok) return { ok: false, declined: true };
+        await this.api('PATCH', `/sessions/${e.id}`, { plan_mode: false });
+        await this.applyPlanMode(e.id, false);
         return { ok: true };
       },
     };
@@ -2019,6 +2050,21 @@ export class WindowStore {
         return;
       }
       this.note('restart cancelled');
+    }
+    // A mode request from the coding agent: `y` accepts, `n` declines, any
+    // other text declines AND is processed normally (the user moved on).
+    // Checked BEFORE the held guard: the turn is running and the user is
+    // answering it, not sending a new message.
+    if (this.modeRequest) {
+      const mr = this.modeRequest;
+      const word = msg.toLowerCase();
+      if (word === 'y' || word === 'yes' || word === 'accept') {
+        accept(); mr.resolve(true); return;
+      }
+      // Anything else declines — `n` is consumed, other text falls through.
+      mr.resolve(false);
+      if (word === 'n' || word === 'no' || word === 'decline') { accept(); return; }
+      // Fall through: the user's text is a message, not a verdict.
     }
     const session = this.sessions.active();
     // A new session is being built: refuse messages so they don't route to

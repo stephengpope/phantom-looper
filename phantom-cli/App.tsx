@@ -736,6 +736,7 @@ export function App({
               pinned={session?.pinned}
               groups={
               windowStore.opening ? []
+              : windowStore.modeRequest ? withMode('⇥ code mode? [y] accept [n] decline')
               : ctrlC ? withMode('press ctrl+c again to quit')
               : !session
                 ? [['no session open — [/workspace] starts one · [/resume] reopens an earlier one']]

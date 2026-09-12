@@ -13,7 +13,8 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
-import type { ModelMessage } from 'ai';
+import { tool as makeTool, type ModelMessage } from 'ai';
+import { z } from 'zod';
 import type { Db } from '../db/client.js';
 import type { Paths } from '../pool/paths.js';
 import { sessionDir } from '../pool/paths.js';
@@ -613,11 +614,35 @@ export class TelegramEngine {
       // The agent's deliberate "DM the user" tool — sends through this chat,
       // reading the reply mode at the delivery end.
       const send = sendMessageTool((text) => this.sendDm(client, dm, values, text));
+      // The mode-request tool: the coding agent asks to switch to code mode,
+      // gated on the user's approval — the same approval gate slash commands
+      // and the assistant's gated tools use. On accept the session's plan_mode
+      // is flipped; on decline nothing changes.
+      const modeRequestTool = planMode ? (() => {
+        return {
+          screen_request_code_mode: makeTool({
+            description: 'Request switching from plan mode to code mode. Sends an approval prompt — ' +
+              'blocks until the user accepts or declines.',
+            inputSchema: z.object({}),
+            execute: async () => {
+              const ok = await this.approvals.request(client, dm,
+                { label: 'switch to code mode', subject: 'the coding agent is ready to write code' },
+                abort.signal);
+              if (!ok) return { ok: false, declined: true };
+              await this.f(`${BASE}/sessions/${sessionId}`, {
+                method: 'PATCH', headers: { authorization: `Bearer ${this.deps.apiKey}`, 'content-type': 'application/json' },
+                body: JSON.stringify({ plan_mode: false }),
+              });
+              return { ok: true };
+            },
+          }),
+        };
+      })() : {};
       // `signal` is what makes the turn stoppable at all: /stop aborts this
       // controller through the busy map, a remote interrupt through the feed
       // subscription above — runCodingTurn ends it cleanly (interrupted, not
       // failed) either way.
-      const deps: TurnDeps = { ...this.turnDeps(), extraTools: send, signal: abort.signal };
+      const deps: TurnDeps = { ...this.turnDeps(), extraTools: { ...send, ...modeRequestTool }, signal: abort.signal };
       const r = await runCodingTurn(deps, opened, workspaceId, message, planMode, values);
       unsubscribe?.();
       await sink.done(r.text);
