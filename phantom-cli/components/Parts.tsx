@@ -112,7 +112,7 @@ function Gutter({ marker, width, children }: {
   );
 }
 
-function UserMessage({ text, width, color }: { text: string; width: number; color?: string }) {
+export function UserMessage({ text, width, color }: { text: string; width: number; color?: string }) {
   return (
     <Gutter width={width} marker={<Text color="cyan" bold>{'›'}</Text>}>
       <Text color={color ?? HIGHLIGHT_FG} backgroundColor={HIGHLIGHT_BG}>{text}</Text>
