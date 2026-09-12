@@ -21,6 +21,7 @@ import { Transcript, adoptServerCopy, syncTranscriptUp, type TranscriptHeader } 
 import { parseTranscript, sumUsageFromJsonl } from '../core/llm/transcript.js';
 import { agentModelConfig, pinnedCfg, sessionPin, type ModelPin } from '../core/llm/agentConfig.js';
 import { contextWindowFor } from '../phantom-backend/models.js';
+import { compact, getStrategy } from '../core/llm/compaction.js';
 
 /** Build the compaction settings from a config read for setCompaction. */
 function compactionSettings(cfg: Record<string, ConfigValue>) {
@@ -1856,6 +1857,37 @@ export class WindowStore {
           await this.api('PATCH', `/sessions/${session.id}`, { plan_mode: on });
           await this.applyPlanMode(session.id, on);
         } catch (e) { this.note(`could not switch plan mode ${on ? 'on' : 'off'}: ${(e as Error).message}`); }
+        return;
+      }
+      case 'compact': {
+        if (!session) { this.note('no session is open — nothing to compact'); return; }
+        if (session.readonly) { this.note("this is the supervisor's record — read-only"); return; }
+        const strategyName = args || 'fast';
+        const cfg = await this.readSettings();
+        const summarizePct = Number(cfg.compact_summarize_pct ?? 75);
+        let model;
+        try { model = agentModelConfig(cfg, 'supervisor'); } catch {
+          try { model = agentModelConfig(cfg, 'assistant'); } catch {
+            this.note('no model configured for compaction'); return;
+          }
+        }
+        this.note('compacting — summarizing older messages in the background');
+        compact({
+          history: session.history,
+          strategy: getStrategy(strategyName),
+          summarizePct,
+          call: async (system, prompt) => {
+            const { generateText } = await import('ai');
+            const { languageModel } = await import('../core/llm/createAgent.js');
+            const r = await generateText({ model: languageModel(model), maxRetries: 0, system, prompt });
+            return r.text;
+          },
+          onCompacted: () => {
+            this.note('chat compacted — older messages summarized');
+            this.uploadTranscript(session);
+          },
+          onFailed: (err) => { this.note(`compaction failed: ${err.message}`); },
+        });
         return;
       }
       case 'auto-push':

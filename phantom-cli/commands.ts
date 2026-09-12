@@ -21,6 +21,7 @@ export const COMMANDS: Command[] = [
   // First row under the fold (the live menu shows MENU_ROWS = 8): closing a
   // session is a real everyday act, but not more everyday than the eight above
   // it, and [x] on /resume already teaches it.
+  { name: 'compact', summary: 'compact this session — summarize older messages', args: 'fast' },
   { name: 'pop', summary: 'pull the last queued message into the prompt, or /pop all', args: 'all' },
   { name: 'duplicate', summary: 'copy this session — transcript, branch, optionally a new model' },
   { name: 'close', summary: 'close this session — it stays on the server' },
