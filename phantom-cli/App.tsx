@@ -342,6 +342,18 @@ export function App({
   // the slash-menu highlight go together (submit and ctrl+c both use it).
   const clearInput = useCallback(() => { setInput(''); setHistAt(0); setSuggestAt(0); }, []);
 
+  // The display width of the text area inside the prompt: total main column
+  // minus the "> " prefix (2 chars). Enables up/down cursor navigation
+  // within wrapped text in TextInput; history recall moves to onBoundary.
+  const promptCols = Math.max(1, mainCols - 2);
+  // When up/down hits the edge of the wrapped text, TextInput fires this
+  // callback — the same history recall that the arrow keys used to do
+  // directly, now gated behind "the cursor has nowhere else to go".
+  const onBoundary = useCallback((dir: 'up' | 'down') => {
+    if (dir === 'up' && (histAt > 0 || input === '')) recall(-1);
+    else if (dir === 'down' && histAt > 0) recall(1);
+  }, [histAt, input, recall]);
+
   // Launch, once. The window is already drawn when it runs, so a failure is
   // words in the pane rather than a stack trace before the app exists.
   useEffect(() => { void windowStore.boot(); }, [windowStore]);
@@ -514,9 +526,14 @@ export function App({
     // Everywhere else tab is the session ring — including while a turn runs,
     // which is the whole point of having more than one open.
     if (key.tab) { windowStore.cycle(key.shift ? -1 : 1); return; }
-    // ↑/↓ scroll through previously sent messages. /pop handles the queue.
-    if (key.upArrow && (histAt > 0 || input === '')) { recall(-1); return; }
-    if (key.downArrow && histAt > 0) { recall(1); return; }
+    // ↑/↓ through previously sent messages — only when TextInput has no
+    // columns (no vertical nav) and thus ignores the arrows itself. With
+    // columns wired, TextInput handles cursor movement and fires onBoundary
+    // at the edges, which is where recall now lives.
+    if (!promptCols) {
+      if (key.upArrow && (histAt > 0 || input === '')) { recall(-1); return; }
+      if (key.downArrow && histAt > 0) { recall(1); return; }
+    }
   }, { isActive: windowStore.screen === 'chat' });
 
   const suggestions = matches(input);
@@ -703,7 +720,8 @@ export function App({
             )}
             <Prompt value={input} onChange={(v) => { setInput(v); setSuggestAt(0); }}
               onSubmit={(text) => { void windowStore.submit(text, suggestAt, () => { clearInput(); setScroll(0); }); }} onMeasure={setPromptTop}
-              pastes={windowStore.pastes} onFileDrop={(paths) => windowStore.dropFiles(paths)} updateReady={windowStore.updateReady} />
+              pastes={windowStore.pastes} onFileDrop={(paths) => windowStore.dropFiles(paths)} updateReady={windowStore.updateReady}
+              columns={promptCols} onBoundary={onBoundary} />
             <Toolbar
               // Held elsewhere: the marks, then WHO is working, the spinner,
               // and WHAT they are doing — `coding agent ⠹ building`. No

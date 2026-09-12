@@ -24,7 +24,7 @@ import { Glint } from './Shimmer.js';
 import { APP_VERSION } from '../selfUpdate.js';
 import type { PasteStore } from '../paste.js';
 
-export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure, pastes, onFileDrop, updateReady }: {
+export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure, pastes, onFileDrop, updateReady, columns, onBoundary }: {
   value: string; onChange: (v: string) => void; onSubmit: (v: string) => void;
   pastes?: PasteStore;
   /** A paste that IS a dragged file's path (drop.ts) goes to the window.
@@ -38,6 +38,12 @@ export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure, pas
    *  that row, the bottom rule two below). The App aligns the divider's
    *  junctions to it. */
   onMeasure?: (top: number) => void;
+  /** Display width for the text area (columns minus the "> " prefix). Enables
+   *  up/down cursor navigation within wrapped text. */
+  columns?: number;
+  /** Fired when up/down hits the boundary of the wrapped text — the parent
+   *  uses it for history recall. */
+  onBoundary?: (dir: 'up' | 'down') => void;
 }) {
   const ref = useRef(null);
   const { top, hasMeasured } = useBoxMetrics(ref);
@@ -66,6 +72,8 @@ export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure, pas
           placeholder="type a message…"
           pastes={pastes}
           onFileDrop={onFileDrop}
+          columns={columns}
+          onBoundary={onBoundary}
         />
       </Box>
       <Box>

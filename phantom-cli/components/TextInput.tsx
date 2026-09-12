@@ -25,7 +25,7 @@ import { useEffect, useRef, useState } from 'react';
  *  which is only in the tree as one of Ink's own dependencies. */
 const invert = (s: string) => `\x1b[7m${s}\x1b[27m`;
 
-export function TextInput({ value, onChange, onSubmit, focus = true, placeholder = '', mask, pastes, onFileDrop }: {
+export function TextInput({ value, onChange, onSubmit, focus = true, placeholder = '', mask, pastes, onFileDrop, columns, onBoundary }: {
   value: string;
   onChange: (value: string) => void;
   onSubmit?: (value: string) => void;
@@ -40,6 +40,13 @@ export function TextInput({ value, onChange, onSubmit, focus = true, placeholder
    *  Returns chip text to insert at the cursor (e.g. `[📎 file.txt]`),
    *  or null when nothing should be inserted. */
   onFileDrop?: (paths: string[]) => Promise<string | null>;
+  /** Display width in columns — enables up/down cursor navigation within
+   *  wrapped text. Without it, up/down are left for the handlers above. */
+  columns?: number;
+  /** Called when up is pressed on the first visual line or down on the last.
+   *  The parent uses it for history recall — TextInput cannot navigate
+   *  further, so the keypress belongs to whatever is above. */
+  onBoundary?: (dir: 'up' | 'down') => void;
 }) {
   const [cursorState, setCursorState] = useState(value.length);
   // The cursor is mirrored in a ref and READ from the ref: two keypresses
@@ -66,7 +73,26 @@ export function TextInput({ value, onChange, onSubmit, focus = true, placeholder
     // Not text: a chord, or a key some handler above this one owns. Returning
     // here is what makes ctrl+<letter> and the arrow keys usable at all.
     if (key.ctrl || key.meta) return;
-    if (key.upArrow || key.downArrow || key.tab || key.escape || key.pageUp || key.pageDown) return;
+    if (key.tab || key.escape || key.pageUp || key.pageDown) return;
+    // Up/down: vertical cursor movement within wrapped text when we know the
+    // display width. On the boundary (first line up, last line down) the
+    // parent gets the event for history recall. Without `columns` the arrows
+    // are left alone — the old behaviour, no regression.
+    if (key.upArrow || key.downArrow) {
+      if (!columns || columns <= 0) return;
+      const value = valueRef.current;
+      const cursor = cursorRef.current;
+      const row = Math.floor(cursor / columns);
+      const lastRow = Math.floor(value.length / columns);
+      if (key.upArrow) {
+        if (row === 0) { onBoundary?.('up'); return; }
+        setCursor(cursor - columns);
+      } else {
+        if (row >= lastRow) { onBoundary?.('down'); return; }
+        setCursor(Math.min(value.length, cursor + columns));
+      }
+      return;
+    }
     // A mouse report ("[<64;10;5M", see mouse.ts) reaches every handler as
     // plain text; App routes it — it must never be typed into the box.
     if (isMouseInput(input)) return;
