@@ -346,13 +346,6 @@ export function App({
   // minus the "> " prefix (2 chars). Enables up/down cursor navigation
   // within wrapped text in TextInput; history recall moves to onBoundary.
   const promptCols = Math.max(1, mainCols - 2);
-  // When up/down hits the edge of the wrapped text, TextInput fires this
-  // callback — the same history recall that the arrow keys used to do
-  // directly, now gated behind "the cursor has nowhere else to go".
-  const onBoundary = useCallback((dir: 'up' | 'down') => {
-    if (dir === 'up' && (histAt > 0 || input === '')) recall(-1);
-    else if (dir === 'down' && histAt > 0) recall(1);
-  }, [histAt, input, recall]);
 
   // Launch, once. The window is already drawn when it runs, so a failure is
   // words in the pane rather than a stack trace before the app exists.
@@ -383,6 +376,15 @@ export function App({
     setHistAt(next);
     setInput(next === 0 ? '' : said[said.length - next]);
   }, [said, histAt]);
+
+  // When up/down hits the edge of the wrapped text, TextInput fires this
+  // callback — the same history recall that the arrow keys used to do
+  // directly, now gated behind "the cursor has nowhere else to go".
+  // Declared after `recall`: its deps array reads `recall` during render.
+  const onBoundary = useCallback((dir: 'up' | 'down') => {
+    if (dir === 'up' && (histAt > 0 || input === '')) recall(-1);
+    else if (dir === 'down' && histAt > 0) recall(1);
+  }, [histAt, input, recall]);
 
   // ctrl+c is the one key that has to work from anywhere — it is how you get
   // out. The handler below is switched off while a menu is open (esc must not
