@@ -68,11 +68,12 @@ export const WORK = {
 /** Colored icon per card status — one map for /resume's card column and the
  *  board's column headers. The icon replaces the status word entirely. */
 export const STATUS_ICON: Record<string, { char: string; color: string }> = {
-  backlog:     { char: '○', color: 'gray' },
+  backlog:     { char: '○', color: 'white' },
   plan:        { char: '◇', color: 'magenta' },
-  in_progress: { char: '▶', color: 'yellow' },
+  in_progress: { char: '▶', color: 'blue' },
   blocked:     { char: '✕', color: 'red' },
   done:        { char: '✓', color: 'green' },
+  archived:    { char: '▪', color: 'gray' },
 };
 
 export type Launch =
