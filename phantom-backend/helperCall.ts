@@ -14,7 +14,7 @@ import type { Db } from './db/client.js';
 
 const log = logger('helper-call');
 
-export type HelperKind = 'title' | 'commit_message' | 'session_digest';
+export type HelperKind = 'title' | 'commit_message' | 'session_digest' | 'compaction';
 
 export interface HelperCallOpts {
   /** The database to record usage in. When absent, the call runs normally but
@@ -27,6 +27,8 @@ export interface HelperCallOpts {
   system?: string;
   prompt: string;
   maxRetries?: number;
+  /** Output token cap. Unset = the model decides. */
+  maxTokens?: number;
 }
 
 export interface HelperCallResult {
@@ -47,6 +49,7 @@ export async function helperCall(opts: HelperCallOpts): Promise<HelperCallResult
     maxRetries: opts.maxRetries ?? 0,
     ...(opts.system ? { system: opts.system } : {}),
     prompt: opts.prompt,
+    ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
   });
   const u = {
     input: usage.inputTokens ?? 0,

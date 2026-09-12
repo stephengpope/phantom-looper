@@ -20,7 +20,24 @@ import { VoiceClient, sidecarEnv, codingKanbanTool, screenModeTools,
 import { Transcript, adoptServerCopy, syncTranscriptUp, type TranscriptHeader } from './session.js';
 import { parseTranscript, sumUsageFromJsonl } from '../core/llm/transcript.js';
 import { agentModelConfig, pinnedCfg, sessionPin, type ModelPin } from '../core/llm/agentConfig.js';
-import { DEFAULT_HISTORY_LIMIT } from '../core/llm/compaction.js';
+import { contextWindowFor } from '../phantom-backend/models.js';
+
+/** Build the compaction settings from a config read for setCompaction. */
+function compactionSettings(cfg: Record<string, ConfigValue>) {
+  const pct = Number(cfg.assistant_compact_on_max_tokens ?? 50);
+  let cw = 0;
+  try {
+    const mc = agentModelConfig(cfg, 'assistant');
+    cw = contextWindowFor(mc.provider, mc.model);
+  } catch { /* no model configured — compaction stays off */ }
+  return {
+    pct,
+    contextWindow: cw,
+    summarizePct: Number(cfg.compact_summarize_pct ?? 75),
+    strategy: String(cfg.assistant_compact_strategy ?? cfg.compact_strategy ?? 'fast'),
+    ...(cfg.compact_max_tokens != null ? { maxTokens: Number(cfg.compact_max_tokens) } : {}),
+  };
+}
 import { openSession as coreOpenSession } from '../core/session.js';
 import { buildAgent, buildAssistantAgent, codingInstructions } from './agentFromConfig.js';
 import { runTurn } from './agent.js';
@@ -144,12 +161,7 @@ export interface WindowOptions {
   taskPollMs?: number;
 }
 
-/** The Assistant's message limit from a settings read — unset or nonsense
- *  falls back to the core default. */
-function historyLimit(cfg: Record<string, ConfigValue>): number {
-  const n = cfg.assistant_history_limit == null ? NaN : Number(cfg.assistant_history_limit);
-  return Number.isFinite(n) && n > 0 ? n : DEFAULT_HISTORY_LIMIT;
-}
+
 
 /** Each voice switch IS a setting: the toggle writes it, and the state holds
  *  across engine and TUI restarts. */
@@ -1605,7 +1617,7 @@ export class WindowStore {
         built = make(await buildAssistantKit(this, this.assistantDeps), cfg);
       } catch (e) { this.note(`assistant not started: ${(e as Error).message}`); return; }
       this.voice.setAgent(built.agent, built.summary);
-      this.voice.setCompaction(agentModelConfig(cfg, 'assistant'), historyLimit(cfg));
+      this.voice.setCompaction(agentModelConfig(cfg, 'assistant'), compactionSettings(cfg));
       void this.voice.start(sidecarEnv(cfg));
     })();
   }
@@ -1619,7 +1631,7 @@ export class WindowStore {
       const cfg = current ?? await this.readSettings();
       const kit = await buildAssistantKit(this, this.assistantDeps);
       this.voice.setAgent(make(kit, cfg).agent);
-      this.voice.setCompaction(agentModelConfig(cfg, 'assistant'), historyLimit(cfg));
+      this.voice.setCompaction(agentModelConfig(cfg, 'assistant'), compactionSettings(cfg));
     } catch (e) { this.note(`assistant not rebuilt for this session: ${(e as Error).message}`); }
   }
 

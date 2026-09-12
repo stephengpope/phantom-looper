@@ -31,7 +31,7 @@ import { CONFIG_DIR, type ConfigKey, type ConfigValue } from './config.js';
 import { applyPart, finalize, nextId, takeCompleted, type Part, type StreamPart } from './state.js';
 import { FLUSH_MS, runTurn, type Agent } from './agent.js';
 import { loadTranscriptFile, newestTranscriptFile, Transcript, transcriptStamp, usageEvent } from '../core/llm/transcript.js';
-import { createCompactor, DEFAULT_HISTORY_LIMIT, isSummaryMessage, SUMMARY_HEAD, type Compactor } from '../core/llm/compaction.js';
+import { compact, shouldCompact, getStrategy, isSummaryMessage } from '../core/llm/compaction.js';
 import { assistantInstructions } from '../core/llm/agents/assistant.js';
 import type { ModelConfig } from '../core/llm/createAgent.js';
 
@@ -323,9 +323,10 @@ export function partsFromHistory(messages: ModelMessage[]): Part[] {
   for (const m of messages) {
     if (m.role === 'user' && typeof m.content === 'string') {
       if (isSummaryMessage(m)) {
-        out.push({ kind: 'note', id: nextId('vnote'), text: SUMMARY_HEAD });
-        const body = m.content.slice(SUMMARY_HEAD.length).trim();
-        if (body) out.push({ kind: 'text', id: nextId('vtext'), text: body, done: true });
+        out.push({ kind: 'note', id: nextId('vnote'), text: '--- conversation summary ---' });
+        if (typeof m.content === 'string' && m.content.trim()) {
+          out.push({ kind: 'text', id: nextId('vtext'), text: m.content.trim(), done: true });
+        }
       } else {
         out.push({ kind: 'user', id: nextId('vuser'), text: m.content });
       }
@@ -402,49 +403,33 @@ export class VoiceClient {
   /** Compaction config, supplied with the agent (setCompaction) since both
    *  come from the same settings read. */
   private compactionModel: ModelConfig | null = null;
-  private compactionLimit: number = DEFAULT_HISTORY_LIMIT;
+  private compactionSettings: {
+    pct: number; contextWindow: number; summarizePct: number;
+    strategy: string; maxTokens?: number;
+  } = { pct: 0, contextWindow: 0, summarizePct: 75, strategy: 'fast' };
+  private compacting = false;
   private resumed = false;
-  /** The background compactor (core/llm/compaction.ts): kicked after every
-   *  turn, swaps the summarized prefix for the summary message when it
-   *  lands, and this rolls the transcript and tells the pane. */
-  private compactor: Compactor = createCompactor({
-    model: () => {
-      if (!this.compactionModel) throw new Error('no assistant model — compaction skipped');
-      return this.compactionModel;
-    },
-    limit: () => this.compactionLimit,
-    onCompacted: (dropped) => this.onCompacted(dropped),
-    // A failed summary leaves the history whole and retries after the next
-    // turn — nothing to tell the user about.
-    onFailed: () => {},
-  });
 
-  /** The Assistant's model + history limit for compaction — set alongside
-   *  setAgent (same settings read), so /model and the setting are followed. */
-  setCompaction(model: ModelConfig, limit: number): void {
+  /** The Assistant's compaction config — set alongside setAgent (same settings
+   *  read), so /model and the setting are followed. */
+  setCompaction(model: ModelConfig, settings: {
+    pct: number; contextWindow: number; summarizePct: number;
+    strategy: string; maxTokens?: number;
+  }): void {
     this.compactionModel = model;
-    if (Number.isFinite(limit) && limit > 0) this.compactionLimit = limit;
+    this.compactionSettings = settings;
   }
 
-  /** The swap landed: the summary replaced `dropped` messages. Turns in
-   *  flight index the history from their start — shift them with it (clamped
-   *  behind the summary); the record rolls to a fresh file the summary opens
-   *  (the old one stays as the archive); a new session row will be created on
-   *  the next turn (the old one keeps its frozen token totals); the pane says
-   *  what happened. */
-  private onCompacted(dropped: number): void {
-    for (const t of this.turns.values()) t.historyStart = Math.max(1, t.historyStart - (dropped - 1));
-    if (this.transcriptDir) {
-      const t = new Transcript({
-        type: 'session', agent: 'assistant', provider: this.modelInfo.provider, model: this.modelInfo.model,
-        created_at: new Date().toISOString(), system_prompt: assistantInstructions(),
-      }, join(this.transcriptDir, `${transcriptStamp()}.jsonl`));
-      t.appendAll([...this.history]);
-      this.transcript = t;
+  /** The swap landed: the summary replaced messages. Rewrite the transcript
+   *  in place with the compacted history and tell the pane. */
+  private onCompacted(removed: number): void {
+    for (const t of this.turns.values()) t.historyStart = Math.max(1, t.historyStart - (removed - 1));
+    // Rewrite the transcript in place.
+    if (this.transcriptDir && this.transcript) {
+      this.transcript = null;
+      const t = this.log();
+      if (t) t.appendAll([...this.history]);
     }
-    // The old session row keeps its frozen totals; a new one is created on
-    // the next turn.
-    this.sessionId = null;
     this.note({ kind: 'note', id: nextId('vnote'), text: 'chat compacted — older messages summarized' });
   }
 
@@ -651,7 +636,27 @@ export class VoiceClient {
         })();
       }
       // Long chat? Summarize it in the background — turns never wait on it.
-      this.compactor.kick(this.history);
+      if (!this.compacting && this.compactionModel
+        && shouldCompact(turnUsage.input, this.compactionSettings.contextWindow, this.compactionSettings.pct)) {
+        this.compacting = true;
+        compact({
+          history: this.history,
+          strategy: getStrategy(this.compactionSettings.strategy),
+          summarizePct: this.compactionSettings.summarizePct,
+          call: async (system, prompt) => {
+            const { generateText } = await import('ai');
+            const { languageModel } = await import('../core/llm/createAgent.js');
+            const r = await generateText({
+              model: languageModel(this.compactionModel!), maxRetries: 0,
+              system, prompt,
+              ...(this.compactionSettings.maxTokens ? { maxTokens: this.compactionSettings.maxTokens } : {}),
+            });
+            return r.text;
+          },
+          onCompacted: ({ removed }) => { this.compacting = false; this.onCompacted(removed); },
+          onFailed: () => { this.compacting = false; },
+        });
+      }
     }
   }
 

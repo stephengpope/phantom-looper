@@ -298,6 +298,7 @@ export async function runAssistantTurn(
   history.push(user);
   transcript?.append(user);
   let text = '';
+  let success = false;
   try {
     // A COPY: compaction may swap the stored history mid-turn (its splice
     // keeps appends intact), and the turn in flight must finish on the
@@ -333,11 +334,14 @@ export async function runAssistantTurn(
     }
     const resp = await r.response;
     history.push(...(resp.messages as ModelMessage[]));
-    // Messages are already written per-step through the record seam above.
-    // Only append them here when there is no transcript (no record seam) —
-    // history still needs the messages either way.
-    if (!transcript) { /* history already has them from the push above */ }
+    success = true;
   } catch (e) {
+    // Remove the user message so the history stays usable — a "prompt too
+    // long" rejection must not permanently poison the session.
+    if (!success) {
+      const idx = history.lastIndexOf(user);
+      if (idx >= 0) history.splice(idx, 1);
+    }
     await sink.dispose();
     throw e;
   }

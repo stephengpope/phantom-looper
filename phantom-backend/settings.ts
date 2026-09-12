@@ -62,7 +62,16 @@ export const DEFAULTS = {
   assistant_base_url: null as string | null,
   assistant_reasoning: null as string | null,
   assistant_max_steps: null as number | null,
-  assistant_history_limit: 100 as number,
+  // Compaction: auto-summarize when the session approaches the model's
+  // context window. Per-agent `<prefix>_compact_on_max_tokens` (% of model
+  // context window, 0 = off) and `<prefix>_compact_strategy`. Global
+  // settings control the summarization itself.
+  compact_on_max_tokens: 0 as number,           // coding agent: off by default
+  compact_strategy: 'fast' as string,           // coding agent strategy
+  compact_summarize_pct: 75 as number,          // % of user+assistant messages to summarize
+  compact_max_tokens: null as number | null,     // output cap for the summary; null = model decides
+  assistant_compact_on_max_tokens: 50 as number, // assistant: 50% of context window
+  assistant_compact_strategy: 'fast' as string,
   // The Assistant's pane — rendered by the cli, stored here so every cli you
   // open is the same one.
   voice_enabled: false as boolean,
@@ -179,7 +188,12 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   assistant_base_url: 'Endpoint when the Assistant\'s provider is openai-compatible. Empty inherits the coding agent\'s only while the provider matches.',
   assistant_reasoning: 'How much the Assistant thinks before answering. Empty = the coding agent\'s reasoning level.',
   assistant_max_steps: 'Tool calls allowed per turn for the Assistant. Empty = unlimited.',
-  assistant_history_limit: 'Messages the Assistant keeps before older ones are summarized into context (compaction), on the cli pane and Telegram alike. The full record stays on disk.',
+  compact_on_max_tokens: 'Percentage of the model\'s context window that triggers auto-compaction for the coding agent. 0 = off. Checked after every turn using the last turn\'s input token count.',
+  compact_strategy: 'The compaction strategy for the coding agent. fast = user/assistant text only.',
+  compact_summarize_pct: 'Percentage of user+assistant messages to summarize when compaction fires. The rest stay as-is.',
+  compact_max_tokens: 'Output token cap for the compaction summary. Empty = the model decides how long the summary is.',
+  assistant_compact_on_max_tokens: 'Percentage of the model\'s context window that triggers auto-compaction for the Assistant. 0 = off. Default 50%.',
+  assistant_compact_strategy: 'The compaction strategy for the Assistant. fast = user/assistant text only.',
   voice_enabled: 'Start the Assistant with the cli. It listens on the mic, answers out loud and in the voice pane (ctrl+g), and can act on the cli through its tools.',
   sidebar_width: 'Width of the voice pane as a percent of the terminal.',
   voice_spoken_voice: 'Deepgram Aura voice the Assistant speaks with, e.g. aura-2-thalia-en, aura-2-orion-en.',
@@ -279,7 +293,12 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
   assistant_reasoning: { type: 'string', label: 'assistant reasoning', group: 'voice', nullable: true,
     choices: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
   assistant_max_steps: { type: 'number', label: 'assistant steps per turn', group: 'voice', unit: 'count', min: 1, nullable: true },
-  assistant_history_limit: { type: 'number', label: 'assistant history limit', group: 'voice', unit: 'count', min: 10 },
+  compact_on_max_tokens: { type: 'number', label: 'auto-compact threshold %', group: 'model', unit: 'count', min: 0, max: 100 },
+  compact_strategy: { type: 'string', label: 'compact strategy', group: 'model', choices: ['fast'] },
+  compact_summarize_pct: { type: 'number', label: 'compact summarize %', group: 'model', unit: 'count', min: 1, max: 100 },
+  compact_max_tokens: { type: 'number', label: 'compact output cap', group: 'model', unit: 'count', min: 1, nullable: true },
+  assistant_compact_on_max_tokens: { type: 'number', label: 'assistant auto-compact threshold %', group: 'voice', unit: 'count', min: 0, max: 100 },
+  assistant_compact_strategy: { type: 'string', label: 'assistant compact strategy', group: 'voice', choices: ['fast'] },
   voice_enabled: { type: 'boolean', label: 'assistant', group: 'voice' },
   sidebar_width: { type: 'number', label: 'voice pane width', group: 'voice', unit: 'count', min: 10 },
   voice_spoken_voice: { type: 'string', label: 'spoken voice', group: 'voice' },

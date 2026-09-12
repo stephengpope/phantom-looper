@@ -50,6 +50,9 @@ export interface CatalogModel {
   reasoning: boolean;
   /** YYYY-MM-DD as models.dev states it; '' when it does not. */
   releaseDate: string;
+  /** Maximum context window in tokens, from models.dev `limit.context`.
+   *  0 when the catalog does not report one. */
+  contextWindow: number;
 }
 
 /** provider → models, newest first. The shape of the snapshot too. */
@@ -57,7 +60,8 @@ export type Catalog = Record<CatalogProvider, CatalogModel[]>;
 
 // Raw models.dev: providers at the top level, models nested under `.models`.
 type RawApi = Record<string, { models?: Record<string, {
-  name?: string; reasoning?: boolean; release_date?: string } > }>;
+  name?: string; reasoning?: boolean; release_date?: string;
+  limit?: { context?: number } } > }>;
 
 /** models.dev's shape → ours: the three providers, each sorted newest first
  *  (release date descending, id ascending as the tie-break). Pure. */
@@ -70,6 +74,7 @@ export function fromModelsDev(raw: RawApi): Catalog {
       id, name: models[id]?.name ?? id,
       reasoning: Boolean(models[id]?.reasoning),
       releaseDate: typeof models[id]?.release_date === 'string' ? models[id].release_date : '',
+      contextWindow: Number(models[id]?.limit?.context) || 0,
     })).sort((a, b) => b.releaseDate.localeCompare(a.releaseDate) || a.id.localeCompare(b.id));
   }
   return out;
@@ -143,6 +148,11 @@ export function modelsFor(provider: string): CatalogModel[] {
 export function latestModel(provider: string | null | undefined): string | null {
   if (!provider) return null;
   return modelsFor(provider)[0]?.id ?? null;
+}
+
+/** The context window (tokens) for a provider+model pair. 0 when unknown. */
+export function contextWindowFor(provider: string, model: string): number {
+  return modelsFor(provider).find((m) => m.id === model)?.contextWindow ?? 0;
 }
 
 /** Test seam: forget the memory copy so the next read starts over. */

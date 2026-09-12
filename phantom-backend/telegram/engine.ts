@@ -22,6 +22,7 @@ import { runCodingTurn, settingsValues, type TurnDeps } from '../looper/turn.js'
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
 import { getSession, currentLoop, loopOf, createAssistantSession, addSessionUsage, updateSessionPointers } from '../sessions.js';
 import { resolveCredential } from '../settings.js';
+import { helperCall } from '../helperCall.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
 import type { BackdoorQueue } from '../api/backdoor.js';
 import type { BoardEvents, BoardEvent } from '../api/boardEvents.js';
@@ -37,7 +38,8 @@ import { runAssistantTurn, type AssistantDeps } from './assistant.js';
 import { agentModelConfig } from '../../core/llm/agentConfig.js';
 import { assistantInstructions } from '../../core/llm/agents/assistant.js';
 import { loadTranscriptFile, newestTranscriptFile, Transcript, transcriptStamp } from '../../core/llm/transcript.js';
-import { createCompactor, DEFAULT_HISTORY_LIMIT, type Compactor } from '../../core/llm/compaction.js';
+import { compact, shouldCompact, getStrategy, isSummaryMessage } from '../../core/llm/compaction.js';
+import { contextWindowFor } from '../models.js';
 import { Approvals, type Ask } from './approvals.js';
 import { UpgradeChecker } from './upgrade.js';
 import * as store from './store.js';
@@ -113,18 +115,8 @@ export class TelegramEngine {
    *  source and where the compaction notice goes. */
   private assistantValues: Record<string, unknown> = {};
   private assistantChat: { client: TelegramClient; dm: number } | null = null;
-  /** The background compactor (core/llm/compaction.ts), kicked after every
-   *  assistant turn. A failed summary is logged and retried after a later
-   *  turn — the history is never dropped without one. */
-  private compactor: Compactor = createCompactor({
-    model: () => agentModelConfig(this.assistantValues, 'assistant'),
-    limit: () => {
-      const n = Number(this.assistantValues.assistant_history_limit);
-      return Number.isFinite(n) && n > 0 ? n : DEFAULT_HISTORY_LIMIT;
-    },
-    onCompacted: () => this.onAssistantCompacted(),
-    onFailed: (err) => log.warn({ err: err.message }, 'assistant compaction failed — will retry after a later turn'),
-  });
+  /** Whether a background compaction is in flight — only one at a time. */
+  private compacting = false;
 
   /** The Assistant's transcript directory: one live file (the newest), older
    *  ones the archive compaction left behind. Under the data root, outside
@@ -176,16 +168,61 @@ export class TelegramEngine {
     return row.id;
   }
 
-  /** The swap landed: the record rolls to a fresh file and a NEW session row —
-   *  the old session keeps its frozen token totals as the historical record.
-   *  The summary opens the new file, the carried-over messages behind it. */
-  private onAssistantCompacted(): void {
-    // End the old session, start a new one on the next turn.
-    this.assistantSessionId = null;
-    this.assistantTranscript = null;
-    this.transcript().appendAll([...this.assistantHistory]);
-    const chat = this.assistantChat;
-    if (chat) void chat.client.sendMessage(chat.dm, '🧠 Chat compacted — older messages are summarized.').catch(() => {});
+  /** Kick compaction if the last turn's input tokens crossed the threshold.
+   *  Runs in the background — the next turn proceeds against the old history
+   *  while the summary is being generated. */
+  private kickCompaction(inputTokens: number): void {
+    if (this.compacting) return;
+    const values = this.assistantValues;
+    const pct = Number(values.assistant_compact_on_max_tokens ?? 50);
+    if (pct <= 0) return;
+
+    // Look up the model's context window from the catalog.
+    let contextWindow = 0;
+    try {
+      const mc = agentModelConfig(values, 'assistant');
+      contextWindow = contextWindowFor(mc.provider, mc.model);
+    } catch { return; }
+
+    if (!shouldCompact(inputTokens, contextWindow, pct)) return;
+
+    const strategyName = String(values.assistant_compact_strategy ?? values.compact_strategy ?? 'fast');
+    const summarizePct = Number(values.compact_summarize_pct ?? 75);
+    const maxTokens = values.compact_max_tokens != null ? Number(values.compact_max_tokens) : undefined;
+
+    let model;
+    try { model = agentModelConfig(values, 'supervisor'); } catch {
+      try { model = agentModelConfig(values, 'assistant'); } catch { return; }
+    }
+
+    this.compacting = true;
+    compact({
+      history: this.assistantHistory,
+      strategy: getStrategy(strategyName),
+      summarizePct,
+      call: async (system, prompt) => {
+        const r = await helperCall({
+          db: this.deps.db, config: model, kind: 'compaction',
+          system, prompt, ...(maxTokens ? { maxTokens } : {}),
+        });
+        return r.text;
+      },
+      onCompacted: ({ summary }) => {
+        this.compacting = false;
+        // Rewrite the transcript in place with the compacted history.
+        if (this.assistantTranscript) {
+          this.assistantTranscript = null;
+          this.transcript().appendAll([...this.assistantHistory]);
+        }
+        const chat = this.assistantChat;
+        if (chat) void chat.client.sendMessage(chat.dm, '🧠 Chat compacted — older messages are summarized.').catch(() => {});
+        log.info({ summaryLen: summary.length, historyLen: this.assistantHistory.length }, 'assistant compacted');
+      },
+      onFailed: (err) => {
+        this.compacting = false;
+        log.warn({ err: err.message }, 'assistant compaction failed — will retry after a later turn');
+      },
+    });
   }
   /** The approval gate — gated tools ask the user here (approvals.ts). */
   private approvals = new Approvals();
@@ -520,7 +557,7 @@ export class TelegramEngine {
         model ? { provider: model.provider, model: model.model } : undefined).catch(
         (e) => log.warn({ err: errStr(e) }, 'assistant session usage update failed'));
       // Long chat? Summarize it in the background — turns never wait on it.
-      this.compactor.kick(this.assistantHistory);
+      this.kickCompaction(result.usage.input);
       // Any messages queued while we ran go out as one follow-up turn.
       const queued = this.busy.get(busyKey)?.queue ?? [];
       this.busy.delete(busyKey);
