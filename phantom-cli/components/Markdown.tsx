@@ -230,7 +230,7 @@ const HLJS_STYLES: Record<string, ChalkInstance> = {
 };
 
 /** Walk a lowlight HAST tree and produce an ANSI string. */
-function hastToAnsi(nodes: import('lowlight').Root['children']): string {
+function hastToAnsi(nodes: ReturnType<typeof lowlight.highlight>['children']): string {
   let out = '';
   for (const node of nodes) {
     if (node.type === 'text') { out += node.value; continue; }

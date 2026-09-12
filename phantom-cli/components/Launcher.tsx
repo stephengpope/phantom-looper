@@ -42,6 +42,8 @@ export interface SessionInfo {
   /** The model that drives (or drove) this session, from the transcript
    *  header — stored on the session row at each transcript save. */
   model?: string | null;
+  /** The provider that model belongs to, pinned on the row alongside it. */
+  provider?: string | null;
   /** Lifetime token totals, the transcript save's own sums cached on the row.
    *  Null on rows saved before the cache existed; zero = nothing said yet.
    *  tokensOutput is the same number the status bar shows; the cache figures
