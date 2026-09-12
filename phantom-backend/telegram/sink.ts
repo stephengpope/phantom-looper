@@ -61,10 +61,10 @@ export function makeTelegramSink(
   let tookBubble = false;
 
   // ── Tool elapsed timer ──────────────────────────────────────────────────
-  // A tool can run for 30+ seconds. Without this the chat freezes on
-  // `⚙️ bash` with no sign of life. The timer edits the tool line every 5s
-  // with the elapsed time (`⚙️ bash · 5s`). On tool-result, it marks the
-  // line with ✓ — that tells the user "done, thinking about the result now".
+  // A tool can run for 30+ seconds. Without this the chat freezes with no
+  // sign of life. The line starts as `⚙️ bash · 0s`, the timer edits it
+  // every 3s with the elapsed time. On tool-result, it becomes `⚙️ bash ✓`
+  // — that tells the user "done, thinking about the result now".
   let toolMsgId: number | null = null;
   let toolEmoji = '🔧';
   let toolNameStr = 'tool';
@@ -86,12 +86,13 @@ export function makeTelegramSink(
         if (toolMsgId == null) return;
         await client.editMessageText(chatId, toolMsgId, `${toolEmoji} ${toolNameStr} · ${sec}s`);
       }).catch(() => { stopToolTimer(); });
-    }, 5000);
+    }, 3000);
   }
 
   const THINKING_DOTS = ['💭 thinking ...', '💭 thinking ....', '💭 thinking .....', '💭 thinking ......'];
   let thinkingTimer: ReturnType<typeof setInterval> | null = null;
   let thinkingFrame = 0;
+  let thinkingPending = false;   // set synchronously, cleared in chain or by markThinkingDone
 
   function stopThinking() {
     if (thinkingTimer) { clearInterval(thinkingTimer); thinkingTimer = null; }
@@ -100,6 +101,9 @@ export function makeTelegramSink(
   /** Mark thinking done with ✓, release the slot so the reply posts below it. */
   function markThinkingDone() {
     stopThinking();
+    // Cancel a thinking bubble the chain hasn't sent yet (race: text-delta
+    // arrives before the chain from markToolDone resolves).
+    thinkingPending = false;
     if (!unwritten || messageId == null) return;
     const id = messageId;
     messageId = null; unwritten = false;
@@ -112,10 +116,14 @@ export function makeTelegramSink(
     stopToolTimer();
     if (toolMsgId == null) return;
     const id = toolMsgId;
-    const sec = Math.round((Date.now() - toolStart) / 1000);
     toolMsgId = null;
+    thinkingPending = true;              // set synchronously — markThinkingDone can cancel
     chain = chain.then(async () => {
-      await client.editMessageText(chatId, id, `${toolEmoji} ${toolNameStr} ✓ ${sec}s`);
+      await client.editMessageText(chatId, id, `${toolEmoji} ${toolNameStr} ✓`);
+      // If text-delta arrived before we got here, thinkingPending was cleared
+      // — skip the thinking bubble so it can't become a text message.
+      if (!thinkingPending) return;
+      thinkingPending = false;
       // "thinking" as a slot — the next text-delta edits into it, the next
       // tool-call takes it over. Either way it never lingers as a stale line.
       // Animated dots like the waiting bubble (600ms per frame).
@@ -135,7 +143,7 @@ export function makeTelegramSink(
           }, 600);
         }
       } catch { /* best-effort */ }
-    }).catch(() => { /* best-effort */ });
+    }).catch(() => { thinkingPending = false; });
   }
 
   // Every flush is chained; done() awaits the chain so a first post still in
@@ -194,7 +202,7 @@ export function makeTelegramSink(
       const slot = unwritten ? messageId : null;
       messageId = null; unwritten = false;
       const emoji = TOOL_EMOJI[name] || '🔧';
-      const line = `${emoji} ${name}`;
+      const line = `${emoji} ${name} · 0s`;
       try {
         let mid: number | null = null;
         if (slot != null) { await client.editMessageText(chatId, slot, line); mid = slot; }
@@ -233,7 +241,7 @@ export function makeTelegramSink(
 
   async function dispose() {
     clearInterval(editTimer);
-    stopToolTimer(); stopThinking();
+    stopToolTimer(); stopThinking(); thinkingPending = false;
     bubble.stop();
     await chain.catch(() => { /* best-effort */ });
     await dropPlaceholder();
@@ -241,7 +249,7 @@ export function makeTelegramSink(
 
   async function done(finalText: string) {
     clearInterval(editTimer);
-    stopToolTimer(); stopThinking();
+    stopToolTimer(); stopThinking(); thinkingPending = false;
     bubble.stop();
     await chain;                        // let any in-flight post land
 
