@@ -11,9 +11,10 @@
 // same thing (MarkdownDisplay.tsx + markdownParsingUtils.ts) because no
 // maintained library handles streaming + tables + Ink together.
 
-import chalk from 'chalk';
+import chalk, { type ChalkInstance } from 'chalk';
 import { Text } from './Text.js';
 import { useMemo } from 'react';
+import { createLowlight, common } from 'lowlight';
 
 // ─── ANSI helpers ───────────────────────────────────────────────────────────
 
@@ -194,11 +195,70 @@ function renderBlocks(text: string, width: number): string {
 
 // ─── code block ─────────────────────────────────────────────────────────────
 
+const lowlight = createLowlight(common);
+
+/** Map highlight.js CSS classes to chalk styles. */
+const HLJS_STYLES: Record<string, ChalkInstance> = {
+  'hljs-keyword':    chalk.blue,
+  'hljs-built_in':   chalk.cyan,
+  'hljs-type':       chalk.cyan.dim,
+  'hljs-literal':    chalk.blue,
+  'hljs-number':     chalk.green,
+  'hljs-string':     chalk.green,
+  'hljs-regexp':     chalk.red,
+  'hljs-symbol':     chalk.green,
+  'hljs-bullet':     chalk.green,
+  'hljs-link':       chalk.cyan.underline,
+  'hljs-title':      chalk.yellow,
+  'hljs-section':    chalk.yellow,
+  'hljs-name':       chalk.blue,
+  'hljs-attr':       chalk.cyan,
+  'hljs-attribute':  chalk.cyan,
+  'hljs-variable':   chalk.red,
+  'hljs-params':     chalk.white,
+  'hljs-comment':    chalk.dim,
+  'hljs-doctag':     chalk.dim,
+  'hljs-meta':       chalk.dim,
+  'hljs-tag':        chalk.dim,
+  'hljs-selector-tag':   chalk.blue,
+  'hljs-selector-id':    chalk.yellow,
+  'hljs-selector-class': chalk.yellow,
+  'hljs-template-variable': chalk.red,
+  'hljs-template-tag':      chalk.blue,
+  'hljs-addition':   chalk.green,
+  'hljs-deletion':   chalk.red,
+};
+
+/** Walk a lowlight HAST tree and produce an ANSI string. */
+function hastToAnsi(nodes: import('lowlight').Root['children']): string {
+  let out = '';
+  for (const node of nodes) {
+    if (node.type === 'text') { out += node.value; continue; }
+    if (node.type === 'element') {
+      const cls = (node.properties?.className as string[] | undefined)?.[0] ?? '';
+      const style = HLJS_STYLES[cls];
+      const inner = hastToAnsi(node.children);
+      out += style ? style(inner) : inner;
+    }
+  }
+  return out;
+}
+
 function renderCodeBlock(lines: string[], lang: string): string {
+  const code = lines.join('\n');
+  let highlighted: string;
+  try {
+    const tree = lang && lowlight.listLanguages().includes(lang)
+      ? lowlight.highlight(lang, code)
+      : lowlight.highlightAuto(code);
+    highlighted = hastToAnsi(tree.children);
+  } catch {
+    highlighted = code;
+  }
   const parts: string[] = [];
   if (lang) parts.push(chalk.dim(`  ${lang}`));
   const border = chalk.dim('│');
-  for (const l of lines) parts.push(`${border} ${l}`);
+  for (const l of highlighted.split('\n')) parts.push(`${border} ${l}`);
   return parts.join('\n');
 }
 
