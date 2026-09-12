@@ -4,7 +4,7 @@
 -- other model call so /status can account for 100% of LLM spend.
 create table phantom_looper.helper_llm_usage (
   id          text primary key,
-  kind        text not null,               -- 'title' | 'commit_message'
+  kind        text not null,               -- 'title' | 'commit_message' | 'session_digest'
   session_id  text,                         -- the session this call served (nullable: a future helper may not belong to one)
   provider    text not null,
   model       text not null,

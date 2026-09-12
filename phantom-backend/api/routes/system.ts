@@ -373,8 +373,17 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
       const t = rows.reduce(
         (a, r) => ({ input: a.input + Number(r.input), output: a.output + Number(r.output), calls: a.calls + Number(r.calls) }),
         { input: 0, output: 0, calls: 0 });
-      const byKind = rows.map((r) => `${Number(r.calls)} ${String(r.kind).replace(/_/g, ' ')}`).join(', ');
-      return `↑ ${k(t.input)} in · ↓ ${k(t.output)} out · ${t.calls} call${t.calls === 1 ? '' : 's'} (${byKind})`;
+      const sorted = [...rows].sort((a, b) =>
+        (Number(b.input) + Number(b.output)) - (Number(a.input) + Number(a.output)));
+      const lines = [
+        `↑ ${k(t.input)} in · ↓ ${k(t.output)} out · ${t.calls} call${t.calls === 1 ? '' : 's'}`,
+        ...sorted.map((r) => {
+          const label = String(r.kind).replace(/_/g, ' ');
+          const calls = Number(r.calls);
+          return `  ${label}: ↑ ${k(Number(r.input))} in · ↓ ${k(Number(r.output))} out · ${calls} call${calls === 1 ? '' : 's'}`;
+        }),
+      ];
+      return lines.join('\n');
     };
 
     const todayTotal = totalOf(todayRows);
@@ -389,7 +398,7 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
       fmtTotal(weekTotal),
       fmtBreakdown(weekRows),
       '',
-      '== helper calls (titles, commits) ==',
+      '== helper calls ==',
       `today: ${fmtHelpers(todayHelpers)}`,
       `week:  ${fmtHelpers(weekHelpers)}`,
     ].join('\n');
