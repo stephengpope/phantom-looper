@@ -22,9 +22,13 @@ The title says what the user asked to be done, verb first: "Add …", "Fix …",
 For a bug fix, name what's broken.
 If the user clearly starts a new task partway through, title the new task.
 
+Always return a title. When messages are vague, just use the words as the title.
+
 One short phrase, roughly 5-8 words. Clarity beats brevity: a person scanning a
 session list must know at a glance what this session is doing. Return one bare title.
 
 {{contextNote}}
+
+User messages below.
 
 {{userMessages}}`;
