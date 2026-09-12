@@ -15,6 +15,7 @@ import { agentModelConfig } from '../../core/llm/agentConfig.js';
 import { resolve } from '../settings.js';
 import { lastAssistantFromJsonl } from './transcriptHelper.js';
 import type { NotificationChannel } from './channel.js';
+import { titled } from '../telegram/client.js';
 import { logger } from '../log.js';
 
 const log = logger('digest');
@@ -147,12 +148,12 @@ export class SessionDigest {
         prompt: `Sessions that finished:\n\n${prompt}`,
       });
       const bullets = text.trim();
-      message = `${TITLE(rows.length)}\n${bullets}`;
+      message = titled(TITLE(rows.length), bullets);
     } catch (e) {
       log.warn({ err: (e as Error).message }, 'digest LLM call failed');
       // Fallback: just list session names, no LLM summary.
       const fallbackBullets = items.map((i) => `• ${i.name}`).join('\n');
-      message = `${TITLE(rows.length)}\n${fallbackBullets}`;
+      message = titled(TITLE(rows.length), fallbackBullets);
     }
 
     if (!message) return;

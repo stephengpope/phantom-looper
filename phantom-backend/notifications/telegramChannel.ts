@@ -21,7 +21,7 @@ export function telegramChannel(db: Db, encryptionKey: Buffer): NotificationChan
         if (!dm || !Number.isFinite(dm)) return;
         const token = (await resolveCredential(db, encryptionKey, 'telegram_bot_token')) ?? '';
         if (!token) return;
-        await new TelegramClient(token).sendMessage(dm, message);
+        await new TelegramClient(token).sendMarkdown(dm, message);
       } catch (e) {
         log.warn({ err: (e as Error).message }, 'telegram notification failed');
       }
