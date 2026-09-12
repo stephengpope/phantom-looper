@@ -357,10 +357,11 @@ export function assistantKanbanTool(handler: (args: KanbanArgs) => Promise<unkno
   };
 }
 
-/** The mode pair (`session_get_mode`, `screen_enter_plan_mode`): a SESSION's
+/** The mode tools (`get_mode`, `plan_mode`, `code_mode`): a SESSION's
  *  plan/code mode — the row is the record, the handler reads it. Two modes
- *  exist — code mode (full tools) and plan mode (file tools read-only) — and an agent's
- *  switch is ONE WAY: only the user leaves plan mode (/plan). Carried by both
+ *  exist — code mode (full tools) and plan mode (file tools read-only). An
+ *  agent enters plan mode on its own; it leaves only through the USER —
+ *  /plan, or approving the agent's `code_mode` ask. Carried by both
  *  in-window agents (the coding agent and the Assistant). Descriptions are
  *  STATIC — the kit never rewrites them per mode; the mode is a tool call
  *  away, never a memory. */
@@ -374,20 +375,20 @@ export interface ScreenModeHandler {
 
 export function screenModeTools(handler: ScreenModeHandler): Record<string, Tool> {
   return {
-    session_get_mode: tool({
+    get_mode: tool({
       description: "The cli's current mode for the session on screen: plan mode (file tools " +
         'read-only) or code mode (full tools).',
       inputSchema: z.object({}),
       execute: async () => handler.getMode(),
     }),
-    screen_enter_plan_mode: tool({
+    plan_mode: tool({
       description: 'Switch the cli to plan mode: the file tools become read-only. Use this when ' +
-        'asked to plan something. The user returns the cli to code mode with /plan, or approves ' +
-        'your ask_for_code_mode request.',
+        'asked to plan something. The user returns the cli to code mode with /plan, or by ' +
+        'approving your code_mode request.',
       inputSchema: z.object({}),
       execute: async () => handler.enterPlan(),
     }),
-    ask_for_code_mode: tool({
+    code_mode: tool({
       description: 'Ask the user to approve leaving plan mode for code mode (full file tools). ' +
         'Shows them an approve/deny prompt with your reason — nothing changes until they approve. ' +
         'Use it when the plan is agreed and you are ready to build. Approved: code mode is on from ' +
