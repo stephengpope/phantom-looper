@@ -2021,6 +2021,13 @@ export class WindowStore {
       this.note('restart cancelled');
     }
     const session = this.sessions.active();
+    // A new session is being built: refuse messages so they don't route to
+    // the old session. The text stays in the input box — resend when ready.
+    // Slash commands and exit still run (they belong to the window, not the session).
+    if (this.opening && !msg.startsWith('/') && msg !== 'exit' && msg !== 'quit') {
+      this.note('not sent — opening a new session');
+      return;
+    }
     // Locked elsewhere = read-only here: refuse BEFORE the box clears. Slash
     // commands still run — they are the window's, not the session's. The ONE
     // busy test is activeHold (sessions.ts): the spinner and this guard can
