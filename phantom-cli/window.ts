@@ -134,6 +134,8 @@ export interface Overlay {
  *  scroll-to-the-bottom. Comfortably more than a screenful, small enough that
  *  a list of thousands never rides one response. */
 export const PICKER_PAGE = 30;
+/** How long the picker's workspace list serves before its poll re-reads it. */
+const WORKSPACES_TTL_MS = 60_000;
 
 export interface WindowOptions {
   api: Api;
@@ -282,7 +284,7 @@ export class WindowStore {
   /** Put an overlay on screen. One at a time: whatever was up goes first,
    *  unanswered (its callback gets `undefined`). A screen retires the
    *  splash, and one that polls starts its clock — a failed tick is silent,
-   *  because an unreachable server must not nag every ten seconds while
+   *  because an unreachable server must not nag every few seconds while
    *  old rows serve. */
   showOverlay(o: Overlay): void {
     if (this.overlay) this.dismissOverlay(undefined);
@@ -315,9 +317,20 @@ export class WindowStore {
   get boardUp(): boolean { return this.overlay?.name === 'board'; }
 
   /** A yes/no in the prompt zone: enter is yes, esc is no, and so is
-   *  anything that takes the question off the screen. */
-  confirm(title: string, message?: string): Promise<boolean> {
-    return new Promise((resolve) => this.showOverlay(confirmScreen(this, title, message, resolve)));
+   *  anything that takes the question off the screen. An AGENT's question
+   *  names the asker (`who`) and rides its turn's abort: a stopped turn
+   *  takes the question down, answered no, so nothing waits on a dead call. */
+  confirm(title: string, message?: string, ask?: { who: string; signal?: AbortSignal }): Promise<boolean> {
+    return new Promise((resolve) => {
+      if (ask?.signal?.aborted) { resolve(false); return; }
+      const screen = confirmScreen(this, title, message, ask?.who, (yes) => {
+        ask?.signal?.removeEventListener('abort', onAbort);
+        resolve(yes);
+      });
+      const onAbort = () => { if (this.overlay === screen) this.dismissOverlay(false); };
+      ask?.signal?.addEventListener('abort', onAbort);
+      this.showOverlay(screen);
+    });
   }
 
   /** /kanban, and the Assistant's "show the board". */
@@ -338,7 +351,7 @@ export class WindowStore {
   /** The open list's re-read clock (`Overlay.poll`), unref'd so it never
    *  holds the process open. */
   private overlayClock: ReturnType<typeof setInterval> | null = null;
-  private get pollMs(): number { return this.opts.pollMs ?? 10_000; }
+  private get pollMs(): number { return this.opts.pollMs ?? 3_000; }
 
   /** ctrl+g, and the nudge that puts the pane back when the Assistant needs to
    *  be seen. `undefined` clears the override back to the setting. */
@@ -501,6 +514,24 @@ export class WindowStore {
         await this.api('PATCH', `/sessions/${e.id}`, { plan_mode: true });
         await this.applyPlanMode(e.id, true);
         return { ok: true };
+      },
+      // The one way an agent LEAVES plan mode: through the user. The ask is
+      // an inline overlay in the chat, named as the agent's, tied to the
+      // turn's abort. The flip is the same record-first write /plan makes;
+      // a turn already streaming keeps the kit it started with, so code mode
+      // is real from the next turn — the answer says so.
+      askCodeMode: async (reason, { abortSignal }) => {
+        const e = at();
+        if (!e) return { ok: false, error: 'no session is open' };
+        if (e.readonly) return { ok: false, error: 'a supervisor record has no modes' };
+        if (!e.planMode) return { ok: false, error: 'already in code mode' };
+        // Bound to a session = the coding agent; unbound = the Assistant.
+        const yes = await this.confirm('leave plan mode for code mode?', reason,
+          { who: sessionId ? `coding agent (${this.labelOf(e)})` : 'the Assistant', signal: abortSignal });
+        if (!yes) return { ok: false, declined: true, mode: 'plan' };
+        await this.api('PATCH', `/sessions/${e.id}`, { plan_mode: false });
+        await this.applyPlanMode(e.id, false);
+        return { ok: true, mode: 'code', note: 'code mode is on from the next turn — end this one' };
       },
     };
   }
@@ -1171,15 +1202,19 @@ export class WindowStore {
    *  live however deep you have scrolled. A short page = the end. */
   refreshPicker = async (): Promise<void> => {
     const want = Math.max(this.picker?.sessions.length ?? 0, PICKER_PAGE);
+    // Sessions move every tick; workspaces almost never. On the poll the
+    // workspace list is re-read once a minute, the session list every time.
+    const wsFresh = this.picker && Date.now() - this.workspacesReadAt < WORKSPACES_TTL_MS;
     const [ws, got] = await Promise.all([
-      this.api('GET', '/workspaces'),
+      wsFresh ? this.picker!.workspaces : this.api('GET', '/workspaces') as Promise<WorkspaceInfo[]>,
       this.api('GET', `/sessions?${this.listQuery()}&limit=${want}`),
     ]);
+    if (!wsFresh) { this.workspacesReadAt = Date.now(); this.seeWorkspaces(ws); }
     const { sessions: ss, total } = got as { sessions: SessionInfo[]; total: number };
-    this.picker = { workspaces: ws as WorkspaceInfo[], ...this.withOpenHere(ss, total), end: ss.length < want };
-    this.seeWorkspaces(ws as WorkspaceInfo[]);
+    this.picker = { workspaces: ws, ...this.withOpenHere(ss, total), end: ss.length < want };
     this.notify();
   };
+  private workspacesReadAt = 0;
 
   /** The next page, appended in place. The cursor is the last SERVER row as
    *  this client saw it (the open-here extras carry no server position); a
@@ -1213,6 +1248,7 @@ export class WindowStore {
    *  were with a note, never on an empty screen. */
   openPicker = async (which: 'workspace' | 'resume'): Promise<void> => {
     try {
+      this.workspacesReadAt = 0;   // an OPEN always reads both lists fresh; only the poll spares one
       await this.refreshPicker();
       this.pickerNotice = undefined;
       this.trashArmed = null;

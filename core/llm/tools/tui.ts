@@ -367,6 +367,9 @@ export function assistantKanbanTool(handler: (args: KanbanArgs) => Promise<unkno
 export interface ScreenModeHandler {
   getMode: () => Promise<unknown>;
   enterPlan: () => Promise<unknown>;
+  /** Ask the USER to approve leaving plan mode. Resolves with the answer;
+   *  an aborted turn answers "declined" so nothing waits on a dead call. */
+  askCodeMode: (reason: string | undefined, opts: { abortSignal?: AbortSignal }) => Promise<unknown>;
 }
 
 export function screenModeTools(handler: ScreenModeHandler): Record<string, Tool> {
@@ -379,9 +382,21 @@ export function screenModeTools(handler: ScreenModeHandler): Record<string, Tool
     }),
     screen_enter_plan_mode: tool({
       description: 'Switch the cli to plan mode: the file tools become read-only. Use this when ' +
-        'asked to plan something. The user returns the cli to code mode with /plan.',
+        'asked to plan something. The user returns the cli to code mode with /plan, or approves ' +
+        'your ask_for_code_mode request.',
       inputSchema: z.object({}),
       execute: async () => handler.enterPlan(),
+    }),
+    ask_for_code_mode: tool({
+      description: 'Ask the user to approve leaving plan mode for code mode (full file tools). ' +
+        'Shows them an approve/deny prompt with your reason — nothing changes until they approve. ' +
+        'Use it when the plan is agreed and you are ready to build. Approved: code mode is on from ' +
+        'the NEXT turn, so end this turn by saying what you will build first. Denied: stay in plan ' +
+        'mode and ask what is missing.',
+      inputSchema: z.object({
+        reason: z.string().optional().describe('one line: what you will build once in code mode'),
+      }),
+      execute: async (args, opts) => handler.askCodeMode(args.reason, { abortSignal: opts?.abortSignal }),
     }),
   };
 }

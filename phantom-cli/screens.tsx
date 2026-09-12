@@ -45,11 +45,11 @@ const full = (name: string, render: Overlay['render'], rest: Partial<Overlay> = 
 
 /** A yes/no in the prompt zone. enter = true, esc = false; anything that
  *  replaces it (another overlay, ctrl+c) answers false too — a question
- *  taken off the screen was not answered yes. */
+ *  taken off the screen was not answered yes. `who` names an agent asking. */
 export const confirmScreen = (w: WindowStore, title: string, message: string | undefined,
-  resolve: (yes: boolean) => void): Overlay => ({
+  who: string | undefined, resolve: (yes: boolean) => void): Overlay => ({
   size: 'inline', name: 'confirm',
-  render: () => <Confirm title={title} message={message} onResult={w.dismissOverlay} />,
+  render: () => <Confirm title={title} message={message} who={who} onResult={w.dismissOverlay} />,
   onDismiss: (yes) => resolve(yes === true),
 });
 

@@ -73,7 +73,7 @@ export function App({
   autoPush,
   autoPull,
   clientId = '',
-  pollMs = 10_000,
+  pollMs = 3_000,
   taskPollMs = 60_000,
   makeAgent = buildAgent,
   makeTranscript = (h: TranscriptHeader) => new Transcript(h),
