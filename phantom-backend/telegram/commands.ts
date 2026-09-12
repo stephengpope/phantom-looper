@@ -2,8 +2,12 @@
 // agent turn. Two independent knobs, each with its own commands: WHICH session
 // the account points at (`/sessions n`, `/new` — pointer only) and WHO answers
 // a plain message (`/code`, `/assistant` — the only two doors between modes).
-// The menu is per mode (chat scope, swapped by enterMode) and is a HINT: every
-// handler answers correctly whichever mode you are in.
+//
+// The menus are per mode (chat scope, swapped by enterMode). Each mode shows
+// only what belongs in that context — assistant mode shows workspace/session
+// navigation and server basics; code mode shows the coding session's own
+// actions plus model management. Every handler still answers correctly from
+// either mode (graceful errors), so a typed command never goes unanswered.
 //
 // Merged pairs: `/sessions` lists, `/sessions 2` points at number 2;
 // `/workspaces` lists, `/workspaces 2` switches. No singular /session or
@@ -26,35 +30,34 @@ import { resolveMany, resolveCredential, credentialForProvider } from '../settin
 
 interface Cmd { command: string; description: string }
 
-const COMMON: Cmd[] = [
-  { command: 'sessions', description: 'List or switch sessions' },
-  { command: 'new', description: 'Start a new session' },
-  { command: 'pin', description: 'Pin active session to the top' },
-  { command: 'stop', description: 'Stop the running task' },
-  { command: 'status', description: "Show what's running" },
-  { command: 'providers', description: 'List or switch LLM providers' },
-  { command: 'models', description: 'List or switch models' },
-  { command: 'presets', description: 'List or apply model presets' },
-  { command: 'update', description: 'Check for updates' },
-  { command: 'cpu', description: 'Server status — cpu, memory, disk' },
-  { command: 'restart', description: 'Restart the server (or one service)' },
-  { command: 'help', description: 'List commands' },
-];
-
-/** The menus — one per mode. Home shows the door INTO a session's coding
- *  agent; code mode shows the door home plus the coder's own actions. */
+/** The menus — one per mode. Assistant mode shows workspace/session navigation
+ *  and server basics; code mode shows the coding session's actions plus model
+ *  management. No shared COMMON array — each menu is explicit about what
+ *  belongs in that context. */
 export const MENU: Record<TelegramMode, Cmd[]> = {
   assistant: [
     { command: 'code', description: 'Talk to the coding agent' },
     { command: 'workspaces', description: 'List or switch workspaces' },
-    ...COMMON,
+    { command: 'sessions', description: 'List or switch sessions' },
+    { command: 'status', description: 'Server, workspace and session overview' },
+    { command: 'presets', description: 'List or apply model presets' },
+    { command: 'restart', description: 'Restart the server (or one service)' },
+    { command: 'help', description: 'List commands' },
   ],
   code: [
     { command: 'assistant', description: 'Talk to the assistant' },
+    { command: 'sessions', description: 'List or switch sessions' },
+    { command: 'new', description: 'Start a new coding session' },
+    { command: 'pin', description: 'Pin active session to the top' },
     { command: 'plan', description: 'Toggle plan mode' },
     { command: 'auto_push', description: 'Land this session\'s work on the base branch' },
     { command: 'auto_pull', description: 'Bring the base branch into this session' },
-    ...COMMON,
+    { command: 'stop', description: 'Stop the running task' },
+    { command: 'status', description: 'Server, session and what\'s running' },
+    { command: 'presets', description: 'List or apply model presets' },
+    { command: 'update', description: 'Check for updates' },
+    { command: 'restart', description: 'Restart the server (or one service)' },
+    { command: 'help', description: 'List commands' },
   ],
 };
 
@@ -185,26 +188,35 @@ export async function handleCommand(
     }
 
     case 'status': {
-      if (acc.mode === 'code' && acc.activeSessionId) {
-        const s = await sessionRow(engine, acc.activeSessionId);
+      // Unified: always server + workspace + session; code mode adds the
+      // coding session's details. One command, same structure, additive.
+      const sysJ = await (await engine.call('/system/status')).json().catch(() => null);
+      const serverLine = sysJ?.ok ? String(sysJ.data.text ?? '') : '(unavailable)';
+
+      const w = acc.activeWorkspaceId ? await workspaceRow(engine, acc.activeWorkspaceId) : null;
+      const s = acc.activeSessionId ? await sessionRow(engine, acc.activeSessionId) : null;
+
+      const lines: (string | null)[] = [
+        serverLine, '',
+        `Workspace: ${w?.name ?? acc.activeWorkspaceId ?? '(none — /workspaces)'}`,
+        `Session: ${s?.name ?? (acc.activeSessionId ? 'untitled' : '(none — /sessions or /new)')}`,
+      ];
+
+      // In code mode with an active session, append the coding details.
+      if (acc.mode === 'code' && s) {
         const t = await (await engine.call(`/sessions/${acc.activeSessionId}/tasks`)).json().catch(() => null);
         const tasks = t?.ok ? (t.data.tasks ?? []).length : 0;
-        const where = [s?.branch ? `Branch: ${s.branch}` : null, s?.card != null ? `card #${s.card}` : null]
+        const where = [s.branch ? `Branch: ${s.branch}` : null, s.card != null ? `Card #${s.card}` : null]
           .filter(Boolean).join(' · ');
-        await client.sendMarkdown(dm, titled('🤖 Coding agent',
-          [`Active session: ${s?.name ?? 'untitled'}`,
+        lines.push('',
           where || null,
-          `Running: ${s?.locked ? `yes${s.lockedLabel ? ` (${s.lockedLabel})` : ''}` : 'no'}`,
-          `Last request: ${s?.lastUserMessage ? oneLine(s.lastUserMessage) : '(none yet)'}`,
-          `Plan mode: ${s?.planMode ? 'on' : 'off'}`,
-          `Background tasks: ${tasks}`].filter((v) => v != null).join('\n')));
-      } else {
-        const w = acc.activeWorkspaceId ? await workspaceRow(engine, acc.activeWorkspaceId) : null;
-        const s = acc.activeSessionId ? await sessionRow(engine, acc.activeSessionId) : null;
-        await client.sendMarkdown(dm, titled('🏠 Assistant',
-          [`Active workspace: ${w?.name ?? acc.activeWorkspaceId ?? '(none — /workspaces)'}`,
-          `Active session: ${s ? `${s.name ?? 'untitled'} (/code to talk to it)` : '(none — /sessions or /new)'}`].join('\n')));
+          `Running: ${s.locked ? `yes${s.lockedLabel ? ` (${s.lockedLabel})` : ''}` : 'no'}`,
+          `Last request: ${s.lastUserMessage ? oneLine(s.lastUserMessage) : '(none yet)'}`,
+          `Plan mode: ${s.planMode ? 'on' : 'off'}`,
+          `Background tasks: ${tasks}`);
       }
+
+      await client.sendMarkdown(dm, titled('📊 Status', lines.filter((v) => v != null).join('\n')));
       return;
     }
 
@@ -355,10 +367,11 @@ export async function handleCommand(
     }
 
     case 'cpu': {
+      // Legacy alias — folded into /status but still answered if typed.
       const j = await (await engine.call('/system/status')).json().catch(() => null);
       if (!j?.ok) { await reply(`⚠️ Couldn't read the server status: ${j?.error?.message ?? 'no answer from the server'}`); return; }
       const text = String(j.data.text ?? '');
-      await client.sendMarkdown(dm, titled('🖥 Server status', text));
+      await client.sendMarkdown(dm, titled('🖥 Server status', text + '\n\nℹ️ /cpu is now part of /status'));
       return;
     }
 
@@ -471,49 +484,38 @@ async function sessionRow(engine: TelegramEngine, id: string): Promise<{
   return j.ok ? j.data : null;
 }
 
-// /help's body — the same sentence-case phrases as the menu, one command per
-// line with a dash (Telegram's proportional font collapses padded columns),
-// the numbered forms as real examples. Two agents, neither the default. The
-// 'ℹ️ phantom-looper' header is the sender's title, not part of the body.
+// /help's body — grouped by context. The 'ℹ️ phantom-looper' header is the
+// sender's title, not part of the body.
 const HELP = [
-  'Two agents answer here: the assistant, which manages the board, sessions and workspaces, '
-  + 'and the active session\'s coding agent. /assistant and /code choose which one your messages go to.',
-  '',
-  'Sessions',
-  '/sessions — List sessions',
-  '/sessions 2 — Make session 2 active',
-  '/new — Start a new session',
-  '/pin — Pin active session to the top',
+  'Two agents answer here: the assistant and the active session\'s coding agent. '
+  + '/assistant and /code choose which one your messages go to.',
   '',
   'Who answers',
   '/code — Talk to the coding agent',
   '/code 2 — Make session 2 active and talk to its coding agent',
   '/assistant — Talk to the assistant',
   '',
-  'Workspaces',
-  '/workspaces — List workspaces',
-  '/workspaces 2 — Switch to workspace 2',
+  'Navigation',
+  '/workspaces — List workspaces; /workspaces 2 switches',
+  '/sessions — List sessions; /sessions 2 switches',
   '',
-  'Model',
-  '/providers — List providers and the model each selects by default',
-  '/providers 2 — Switch to provider 2',
-  '/models — List the top models for the current provider',
-  '/models 2 — Switch to model 2',
-  '/presets — List saved model presets',
-  '/presets 2 — Apply preset 2',
-  '',
-  'Coding agent',
+  'Coding session',
+  '/new — Start a new coding session',
+  '/pin — Pin active session to the top',
   '/plan — Toggle plan mode',
   '/auto_push — Land this session\'s work on the base branch',
   '/auto_pull — Bring the base branch into this session',
-  '',
-  '/status — Show what\'s running',
   '/stop — Stop the running task',
-  '/update — Check for updates',
+  '',
+  'Model',
+  '/presets — List or apply model presets',
+  '/providers — List or switch LLM providers',
+  '/models — List or switch models',
   '',
   'Server',
-  '/cpu — Server status (cpu, load, memory, disk)',
-  '/restart — Restart the server (asks first); /restart postgres restarts one service',
+  '/status — Server health, workspace, session and what\'s running',
+  '/restart — Restart the server; /restart postgres restarts one service',
+  '/update — Check for updates',
   '',
-  '/help — List commands',
+  '/help — This list',
 ].join('\n');
