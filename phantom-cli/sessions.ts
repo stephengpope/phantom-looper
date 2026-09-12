@@ -154,7 +154,9 @@ export interface NewSession {
   pin?: ModelPin | null;
   /** Token totals summed from the seated transcript (LoadedSession.usage). */
   usage?: UsageTotals;
-  /** Open showing the supervisor side (the run's story) first. */
+  /** Text already in the prompt that belongs to THIS session (typed while
+   *  /new was building it). Lands in the box the moment it opens. */
+  draft?: string;
 }
 
 /** Injectable so tests drive turns without a model. */
@@ -237,7 +239,7 @@ export class SessionStore {
       // NO pin is a duplicate's copy: its messages came from the source, so
       // they do not settle it — it follows /model and presets until its first
       // NEW message, exactly like a fresh session (rebuildAgents reads this).
-      unseen: false, lastMessageAt: s.history?.length && s.pin ? Date.now() : 0, addedAt: ++this.seq, work: null, draft: '',
+      unseen: false, lastMessageAt: s.history?.length && s.pin ? Date.now() : 0, addedAt: ++this.seq, work: null, draft: s.draft ?? '',
     };
     this.entries.push(entry);
     this.activeId = entry.id;

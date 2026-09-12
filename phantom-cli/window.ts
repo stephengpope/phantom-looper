@@ -967,10 +967,15 @@ export class WindowStore {
       const ws = await this.wsFacts(row.workspaceId);
       const card = row.card != null
         ? `${ws.cardPrefix ? `${ws.cardPrefix}-` : 'card '}${row.card}` : undefined;
-      // Park the current session's draft before the new one takes over.
+      // Whose is the text in the box? /new cleared it before these calls ran,
+      // so anything there now was typed FOR the session being built — it goes
+      // with the new entry. Any other open was picked from an overlay over a
+      // session the user was typing in: that text is parked on the one left.
+      const onScreen = this.draftOnScreen();
       const prev = this.sessions.active();
-      if (prev) prev.draft = this.draftOnScreen();
+      if (prev && target.kind !== 'new') prev.draft = onScreen;
       this.sessions.add({
+        ...(target.kind === 'new' ? { draft: onScreen } : {}),
         id: row.id, branch: row.branch, workspaceId: row.workspaceId,
         name: row.name ?? null,
         tools, agent, summary, transcript, instructions,
