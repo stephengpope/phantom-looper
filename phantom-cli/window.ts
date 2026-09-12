@@ -1878,7 +1878,7 @@ export class WindowStore {
           size: 'inline',
           name: 'confirm-trash',
           component: createElement(Confirm, {
-            title: `trash ${trashLabel} for good?`,
+            title: `trash "${trashLabel}" for good?`,
             message: 'the row, the transcript, the files — gone for good',
             onResult: (yes: boolean) => this.dismissOverlay(yes),
           }),
