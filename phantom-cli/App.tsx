@@ -536,7 +536,7 @@ export function App({
       if (key.upArrow && (histAt > 0 || input === '')) { recall(-1); return; }
       if (key.downArrow && histAt > 0) { recall(1); return; }
     }
-  }, { isActive: windowStore.screen === 'chat' });
+  }, { isActive: windowStore.screen === 'chat' && !windowStore.hasOverlay });
 
   const suggestions = matches(input);
   const at = Math.min(suggestAt, Math.max(0, suggestions.length - 1));
@@ -610,6 +610,8 @@ export function App({
   const boardUp = (screenNow === 'board' || typeof screenNow === 'object') && !!session;
   const menuUp = typeof screenNow === 'string' && screenNow !== 'chat' && screenNow !== 'board'
     ? screenNow : null;
+  const fullOverlay = windowStore.overlay?.size === 'full' ? windowStore.overlay : null;
+  const inlineOverlay = windowStore.overlay?.size === 'inline' ? windowStore.overlay : null;
 
   return (
     <SizeContext.Provider value={{ rows: screenRows, cols: screenCols }}>
@@ -631,6 +633,11 @@ export function App({
           // while the looper holds it, like /resume).
           onOpenSession={(id) => { windowStore.setScreen('chat'); void windowStore.openSession({ kind: 'open', id }); }}
           onArchived={() => { windowStore.setScreen('chat'); void windowStore.openArchived(session.workspaceId); }} />
+        </Boundary>
+      ) : fullOverlay ? (
+        // A full overlay replaces the column — the same rule as a menu screen.
+        <Boundary name={`overlay-${fullOverlay.name}`} resetKey={fullOverlay.name} onError={(m) => { windowStore.note(`${m} — overlay closed; the stack is in ~/.phantom-cli/cli.log`); windowStore.dismissOverlay(undefined); }}>
+          {fullOverlay.component}
         </Boundary>
       ) : menuUp ? (
         // A menu is a FULL SCREEN — it owns the whole column while it is up
@@ -687,7 +694,14 @@ export function App({
 
         <Boundary name="prompt" resetKey={screenNow} onError={(m) => { windowStore.note(`${m} — the prompt stopped drawing; the stack is in ~/.phantom-cli/cli.log`); windowStore.closeScreen(); }}>
           <>
-            {suggestions.length > 0 && (
+            {inlineOverlay ? (
+              // An inline overlay replaces the slash menu and prompt zone.
+              // The conversation pane stays above; the overlay owns the keyboard.
+              <Boundary name={`overlay-${inlineOverlay.name}`} resetKey={inlineOverlay.name}
+                onError={(m) => { windowStore.note(`${m} — overlay closed`); windowStore.dismissOverlay(undefined); }}>
+                {inlineOverlay.component}
+              </Boundary>
+            ) : suggestions.length > 0 ? (
               // One height however many commands match. The menu sits under a
               // bottom-anchored pane, so a box that resized as the list
               // narrowed shifted the whole conversation on every keystroke —
@@ -719,11 +733,11 @@ export function App({
                   { key: 'tab', does: 'complete' }, { key: '↑↓', does: 'choose' }, { key: 'enter', does: 'run' },
                 ])}`}</Text>
               </Box>
-            )}
-            <Prompt value={input} onChange={(v) => { setInput(v); setSuggestAt(0); }}
+            ) : null}
+            {!inlineOverlay && <Prompt value={input} onChange={(v) => { setInput(v); setSuggestAt(0); }}
               onSubmit={(text) => { void windowStore.submit(text, suggestAt, () => { clearInput(); setScroll(0); }); }} onMeasure={setPromptTop}
               pastes={windowStore.pastes} onFileDrop={(paths) => windowStore.dropFiles(paths)} updateReady={windowStore.updateReady}
-              columns={promptCols} onBoundary={onBoundary} />
+              columns={promptCols} onBoundary={onBoundary} />}
             <Toolbar
               // Held elsewhere: the marks, then WHO is working, the spinner,
               // and WHAT they are doing — `coding agent ⠹ building`. No

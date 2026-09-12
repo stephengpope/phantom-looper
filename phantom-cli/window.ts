@@ -7,6 +7,7 @@
 // The rule that shapes it: anything with a caller that is not a React event
 // lives here. Typing, scrolling and the two toggles that only a keypress
 // moves stay in App.
+import { createElement, type ReactNode } from 'react';
 import { hostname } from 'node:os';
 import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
@@ -55,6 +56,7 @@ import type { Preset } from './components/Presets.js';
 import type { NewWorkspaceRequest } from './components/NewWorkspace.js';
 import { COMMANDS, matches, parse } from './commands.js';
 import { WorkspaceDirectory, buildAssistantKit } from './assistantKit.js';
+import { Confirm } from './components/Confirm.js';
 import type { SkillMeta } from '../core/skills/skills.js';
 import type { SecretIndexEntry, GitFacts } from '../core/llm/prompts/coding/wiring.js';
 
@@ -106,6 +108,29 @@ export type CloseResult = { ok: true; closed: string; on_screen: string; opened_
 export type Menu = 'settings' | 'keys' | 'secrets' | 'model' | 'server' | 'voice' | 'workspace'
   | 'resume' | 'addWorkspace' | 'workspaceSettings' | 'sessions' | 'tasks' | 'archived' | 'presets'
   | 'duplicateModel';
+
+// ── Overlay ───────────────────────────────────────────────────────────────
+// One field, one concept: something is showing on top of the chat, or not.
+// Inline overlays replace the prompt zone (the chat pane stays above).
+// Full overlays replace the column (like today's menu screens).
+// The component inside handles its own rendering and keyboard; the overlay
+// system just puts it on screen and delivers the result when it dismisses.
+
+export type OverlaySize = 'inline' | 'full';
+
+export interface Overlay {
+  size: OverlaySize;
+  /** A label for debugging and gating — not a union dispatch key. */
+  name: string;
+  /** The React element to render. Receives no special props — the component
+   *  calls `windowStore.dismissOverlay(result)` when it is done. */
+  component: ReactNode;
+  /** Called when the overlay dismisses. The result type depends on what the
+   *  overlay is: a confirm returns boolean, a select returns string | null,
+   *  a full screen returns void. Fires AFTER the overlay field is cleared,
+   *  so the callback may safely open another overlay. */
+  onDismiss: (result: unknown) => void;
+}
 
 /** What owns the main column: the chat, the board, a card's editor, or one
  *  of the menus. ONE answer — a gate that used to read "no menu open AND the
@@ -261,6 +286,39 @@ export class WindowStore {
    *  an answer nothing would receive. A plain field, not React state: the next
    *  tool call can land before a render, and this must already be right. */
   approval: Approval | null = null;
+
+  // ── overlay ─────────────────────────────────────────────────────────────
+  // One field: something is showing on top of the chat, or nothing is.
+  // Inline overlays swap the prompt zone; full overlays replace the column.
+  // The overlay's component handles its own rendering and keyboard; the
+  // store just puts it on screen and delivers the result when it dismisses.
+
+  /** The active overlay, or null when the chat is normal. */
+  overlay: Overlay | null = null;
+
+  /** Show an overlay. If one is already up, dismiss it first (the previous
+   *  callback receives `undefined` — replaced, not answered). */
+  showOverlay(o: Overlay): void {
+    if (this.overlay) this.dismissOverlay(undefined);
+    this.overlay = o;
+    this.splash = false;
+    this.notify();
+  }
+
+  /** Remove the overlay and deliver the result to the callback. The field
+   *  is cleared BEFORE the callback fires, so the callback may safely open
+   *  another overlay without it being clobbered. */
+  dismissOverlay = (result: unknown): void => {
+    const prev = this.overlay;
+    this.overlay = null;
+    prev?.onDismiss(result);
+    this.notify();
+  };
+
+  /** True when any overlay (inline or full) is up — the one gate for input
+   *  routing: the chat's handlers and the prompt are inactive while this is
+   *  true. Replaces the per-case checks that used to read `screen`. */
+  get hasOverlay(): boolean { return this.overlay !== null; }
 
   /** Put a screen on the main column. Everything a screen change does lives
    *  here: a screen that is not the chat retires the splash, and /resume and
@@ -1814,8 +1872,18 @@ export class WindowStore {
       }
       case 'trash': {
         if (!session) { this.note('no session is open — nothing to trash'); return; }
-        this.promptTrashArmed = { id: session.id, force: false };
-        this.note(`trash ${this.labelOf(session)} for good — the row, the transcript, the files? [c] to confirm`);
+        const trashId = session.id;
+        const trashLabel = this.labelOf(session);
+        this.showOverlay({
+          size: 'inline',
+          name: 'confirm-trash',
+          component: createElement(Confirm, {
+            title: `trash ${trashLabel} for good?`,
+            message: 'the row, the transcript, the files — gone for good',
+            onResult: (yes: boolean) => this.dismissOverlay(yes),
+          }),
+          onDismiss: (yes) => { if (yes) void this.trashActive({ id: trashId, force: false }); },
+        });
         return;
       }
       case 'workspace': await this.openPicker('workspace'); return;
@@ -1920,12 +1988,29 @@ export class WindowStore {
         return;
       }
       case 'restart': {
-        // Arm only — the prompt's [c] fires (the /trash rule: a restart cuts
-        // every in-flight turn, so it is never one keystroke away).
-        this.promptRestartArmed = { service: args || null };
-        this.note(args
-          ? `restart ${args}? [c] to confirm`
-          : 'restart the server (the api — everything is offline for a few seconds)? [c] to confirm');
+        const svc = args || null;
+        const title = svc ? `restart ${svc}?` : 'restart the server?';
+        const msg = svc ? '' : 'the api — everything is offline for a few seconds';
+        this.showOverlay({
+          size: 'inline',
+          name: 'confirm-restart',
+          component: createElement(Confirm, {
+            title,
+            ...(msg ? { message: msg } : {}),
+            onResult: (yes: boolean) => this.dismissOverlay(yes),
+          }),
+          onDismiss: (yes) => {
+            if (!yes) return;
+            void (async () => {
+              try {
+                await this.api('POST', '/system/restart', svc ? { service: svc } : {});
+                this.note(svc
+                  ? `restarting ${svc}`
+                  : 'restarting the api — back in a few seconds (the window reconnects on its own)');
+              } catch (e) { this.note(`could not restart: ${(e as Error).message}`); }
+            })();
+          },
+        });
         return;
       }
       case 'assistant':
