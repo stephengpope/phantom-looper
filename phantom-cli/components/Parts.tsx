@@ -5,7 +5,7 @@ import { Text } from './Text.js';
 import Spinner from 'ink-spinner';
 import type { ReactNode } from 'react';
 import { formatClock, formatElapsed, type Part } from '../state.js';
-import { Markdown } from './Markdown.js';
+import { Markdown, formatInline } from './Markdown.js';
 
 // A tool row is budgeted in RENDERED ROWS, like Codex's exec cell
 // (codex-rs/tui/src/exec_cell/render.rs: command continuation 2, output 5):
@@ -138,10 +138,13 @@ function AssistantText({ part, width, maxRows }: {
   }
   if (!part.text) return null;
   const { lines, omitted } = clipRows(part.text, Math.max(1, width - 2), maxRows);
+  // Apply inline markdown (bold, italic, code, links) while streaming —
+  // balanced markers render immediately, unbalanced ones pass through as-is.
+  const formatted = lines.map(l => formatInline(l)).join('\n');
   return (
     <Gutter width={width} marker={marker}>
       {omitted > 0 && <Text dimColor>…</Text>}
-      <Text>{lines.join('\n')}▋</Text>
+      <Text>{formatted}▋</Text>
     </Gutter>
   );
 }

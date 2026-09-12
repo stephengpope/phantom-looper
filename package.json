@@ -49,7 +49,6 @@
   },
   "devDependencies": {
     "@types/dockerode": "^4.0.1",
-    "@types/marked-terminal": "^6.1.1",
     "@types/node": "^22.10.5",
     "@types/pg": "^8.11.10",
     "@types/react": "^19.2.18",
@@ -58,8 +57,6 @@
     "esbuild": "^0.28.2",
     "ink": "^7.1.1",
     "ink-spinner": "^5.0.0",
-    "marked": "^15.0.12",
-    "marked-terminal": "^7.3.0",
     "react": "^19.2.8",
     "tsx": "^4.19.2",
     "typescript": "^5.9.3"
