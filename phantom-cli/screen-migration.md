@@ -1,123 +1,59 @@
-# Screen → Overlay Migration
+# Screen → Overlay Migration — DONE
 
 ## What this is
 
-A unified overlay system for the phantom-looper CLI. One field on the window
-store (`overlay`) controls what's showing on top of the chat. Inline overlays
-replace the prompt zone (the conversation pane stays above). Full overlays
-replace the entire column (like today's menu screens). The component inside
-handles its own rendering and keyboard; the overlay system just puts it on
-screen and delivers the result when it dismisses.
+One field on the window store, `overlay`, says what is on top of the chat.
+Nothing else does. An overlay is `{ size, name, render, onDismiss?, poll? }`
+(window.ts). `size: 'inline'` stands in for the prompt zone with the
+conversation still above it (a confirmation); `size: 'full'` takes the whole
+column (every menu, the board, a card's editor). Every overlay is built in
+`screens.tsx`; the store shows one with `showOverlay(...)` and everything
+closes the same way: `dismissOverlay(result)`.
 
 ## Why
 
-The CLI had three separate mechanisms for asking the user something:
+The CLI had three mechanisms for "something on top of the chat": a `screen`
+union with a 16-case dispatch, typed-`c`-into-the-prompt confirmations, and
+the overlay field added half-way. Three gates for the keyboard, two clocks,
+two places to read "is the board up". Now there is one of each.
 
-1. **Full-screen menus** — `setScreen('settings')` replaces the column with a
-   Screen component. Keyboard ownership is implicit (the component's `useInput`
-   fires because the chat is unmounted).
+## The shape
 
-2. **Typed confirmations** — `/trash` and `/restart` set `promptTrashArmed` /
-   `promptRestartArmed`, then the user types `c` into the message prompt. The
-   submit path intercepts it. The user has no visible UI — just a note saying
-   "type c to confirm."
+- `render(main)` is a FUNCTION, not an element. It runs on every App render
+  and reads the store's current data — so a poll landing on `/tasks`, a page
+  appended to `/resume`, a rejected add-workspace form's error all show up
+  without re-opening the screen (and without remounting it, which would lose
+  the cursor or what was typed).
+- `poll` is the overlay's own re-read clock. `showOverlay` starts it,
+  `dismissOverlay` stops it; `recover()` fires it once on reconnect.
+- `onDismiss(result)` fires AFTER the field is cleared, so it may show another
+  overlay. `confirm(title, message?)` wraps this as a promise: enter → true,
+  esc / anything replacing it → false.
+- The board and a card's editor are ONE component (`Board`) under ONE
+  Boundary slot, so swapping the board overlay for a card overlay keeps the
+  columns mounted — your place on the board survives editing a card. A card
+  opened FROM the board is still named `board` (esc goes back to the
+  columns, `boardUp` stays true for the Assistant); a card opened from the
+  chat or the archive is named `card` (esc goes to the chat).
+- In-screen confirmations ([t]/[c] on /resume, [k]/[c] on /tasks, [a]/[c] on
+  the board) stay as they are: they are the screen's own notice line, not a
+  second overlay, and one overlay is up at a time.
 
-3. **Slash menu** — ad-hoc JSX in App.tsx for autocomplete. Stays as-is
-   (it's prompt autocomplete, not a dialog).
+## What was removed
 
-The overlay system replaces #1 and #2 with one concept. #3 stays unchanged.
+`Menu`, `ScreenName`, `screen`, `setScreen`, `closeScreen`, `menuUp`,
+`closeCard`, `menuClock`, `editing`, `cancelDuplicate`,
+`closeWorkspaceSettings`, `promptTrashArmed`, `promptRestartArmed` and the
+two typed-`c` blocks in `submit()`, the `MenuScreen` switch, App's three-way
+column branch.
 
-## What was built
+## Adding a screen
 
-### Store (`window.ts`)
-- `Overlay` interface: `{ size, name, component, onDismiss }`
-- `overlay: Overlay | null` field on WindowStore
-- `showOverlay(o)` — shows an overlay, auto-dismisses previous
-- `dismissOverlay(result)` — clears field, fires callback (field cleared
-  BEFORE callback so it can safely open another overlay)
-- `hasOverlay` getter — the one gate for input routing
+A builder in `screens.tsx` returning an `Overlay`, and the store method or
+slash command that calls `showOverlay(thatScreen(this))`. Nothing else.
 
-### Rendering (`App.tsx`)
-- Full overlay (`size: 'full'`): renders between board and old menu dispatch,
-  replacing the column
-- Inline overlay (`size: 'inline'`): renders in the prompt zone, replacing
-  the slash menu and prompt. The conversation pane stays above.
-- Prompt hidden when an inline overlay is up
-- App's main `useInput` gated on `!windowStore.hasOverlay`
+## Future: agent questions
 
-### Confirm component (`components/Confirm.tsx`)
-- Inline confirmation dialog: title, optional message, enter/esc
-- Owns its own `useInput`
-
-### Migrated commands
-- `/trash` — was `promptTrashArmed` + typed `c` → now inline Confirm overlay
-- `/restart` — was `promptRestartArmed` + typed `c` → now inline Confirm overlay
-
-## What's left
-
-### Remove old confirmation code
-The `promptTrashArmed` and `promptRestartArmed` fields and their submit-path
-interception in `submit()` still exist. They're used by the `/resume` picker's
-`[t]` trash path (a different flow from the chat `/trash` command). Once that
-path is also migrated, remove:
-- `private promptTrashArmed` field
-- `private promptRestartArmed` field
-- The `if (this.promptTrashArmed)` block in `submit()`
-- The `if (this.promptRestartArmed)` block in `submit()`
-- The `trashActive` method's fallback to `promptTrashArmed` on unpushed_work
-
-### Migrate full-screen menus to overlays
-Each `setScreen('x')` call becomes a `showOverlay({ size: 'full', ... })`.
-The component is the same — just wrapped in the overlay. `onClose` becomes
-`() => windowStore.dismissOverlay(null)`.
-
-Screens to migrate (in rough priority order):
-
-| Screen | Command / trigger | Notes |
-|--------|------------------|-------|
-| `settings` | `/settings` | Simple: `setScreen` → `showOverlay` |
-| `keys` | `/keys` | Same pattern |
-| `secrets` | `/secrets` | Same pattern |
-| `model` | `/model` | Same pattern |
-| `server` | `/server` | Uses offline API — pass through |
-| `voice` | `/assistant` | Same pattern |
-| `presets` | `/presets` | Same pattern |
-| `tasks` | `/tasks` | Has poll clock — start on show, stop on dismiss |
-| `resume` | `/resume` | Has poll clock, pagination, trash arming |
-| `workspace` | `/workspace` | Same as resume |
-| `sessions` | ctrl+n | Instant show, async workspace fill |
-| `addWorkspace` | from picker | Sub-screen of workspace |
-| `workspaceSettings` | `[e]` on workspace | Sub-screen of workspace |
-| `archived` | `/archived` | Pagination |
-| `duplicateModel` | `/duplicate` | Already an inline-feeling screen |
-| `board` | `/kanban` | Manages card editor internally |
-
-For each migration:
-1. Change the `setScreen('x')` call in `runCommand` (or wherever it opens) to
-   `showOverlay({ size: 'full', name: 'x', component: ..., onDismiss: ... })`
-2. Change the component's `onClose` prop from `windowStore.closeScreen` to
-   `() => windowStore.dismissOverlay(null)`
-3. For screens with poll clocks (resume, tasks): start the clock when the
-   overlay opens, stop it on dismiss
-4. Remove the screen's case from `screens.tsx` dispatch
-
-Once all screens are migrated:
-- Remove the `Menu` type union
-- Remove `ScreenName` (replace with just `'chat' | 'board' | { card }`)
-- Remove `setScreen` / `closeScreen` / `menuUp`
-- Remove `screens.tsx` entirely
-- Remove the old menu rendering path in App.tsx
-
-### The board
-The board + card editor is one full overlay. The Board component manages its
-own sub-navigation (columns ↔ card editor) via the `card` prop. When migrated:
-- `/kanban` opens a full overlay with the Board component
-- The board's esc closes the overlay (`dismissOverlay(null)`)
-- Card editing happens inside the board — no separate overlay needed
-- `openCard` / `closeCard` become internal to the board's overlay
-
-### Future: agent questions
-The overlay system is ready for agent-triggered questions. The coding agent
-would call `windowStore.showOverlay({ size: 'inline', ... })` with a Confirm,
-a select list, or a text input. The dismiss callback returns the answer.
-No new mechanism needed.
+A coding-agent question is `windowStore.confirm(...)` or a new inline
+builder (a select list, a text input) — `showOverlay` + `onDismiss`. No new
+mechanism.

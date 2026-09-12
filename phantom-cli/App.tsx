@@ -2,14 +2,15 @@
 // of two panes: the main column on the left, the Assistant on the right
 // (ctrl+g shows and hides it; its width is a setting).
 //
-// THE ONE LAYOUT RULE: `windowStore.screen` says what owns the main column,
-// and anything that is not the chat takes the WHOLE column — the board, a
-// card's editor, and every menu (/settings, /model, /workspace, /resume, the
-// session switcher …) are all full screens, dispatched in screens.tsx. The
-// menus used to replace the prompt under the live conversation, each at its
-// own height; that split (and the flicker defenses it needed) is gone. While
-// a screen is up, this component's own useInput is switched off: Ink delivers
-// a keypress to every active handler, so esc would otherwise close the screen
+// THE ONE LAYOUT RULE: `windowStore.overlay` says what is on top of the chat.
+// A FULL overlay takes the WHOLE column — the board, a card's editor, and
+// every menu (/settings, /model, /workspace, /resume, the session switcher …)
+// are all built in screens.tsx. An INLINE overlay (a confirmation) takes the
+// prompt zone only, with the conversation still above it. The menus used to
+// replace the prompt under the live conversation, each at its own height;
+// that split (and the flicker defenses it needed) is gone. While any overlay
+// is up, this component's own useInput is switched off: Ink delivers a
+// keypress to every active handler, so esc would otherwise close the screen
 // and interrupt the running turn in the same stroke.
 //
 // The chat screen: the conversation pane (a clipped viewport anchored at the
@@ -36,7 +37,7 @@
 import { Box, useApp, useBoxMetrics, useInput, useWindowSize } from 'ink';
 import { Text } from './components/Text.js';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import type { ModelMessage, Tool } from 'ai';
+import type { Tool } from 'ai';
 import { runTurn } from './agent.js';
 import { buildAgent, buildAssistantAgent } from './agentFromConfig.js';
 import { phaseLabel, tokenCount, formatTokensIn, formatTokensOut, cachePct } from './state.js';
@@ -54,7 +55,6 @@ import { PartView, UserMessage, HIGHLIGHT_BG, HIGHLIGHT_FG } from './components/
 import { Prompt } from './components/Prompt.js';
 import { StatusLine } from './components/StatusLine.js';
 import { Toolbar, type ToolbarGroup, type ToolbarPart } from './components/Toolbar.js';
-import { MenuScreen } from './screens.js';
 import { WORK } from './components/Launcher.js';
 import { SizeContext, keyLine } from './components/Screen.js';
 import { Pane } from './components/Pane.js';
@@ -63,16 +63,10 @@ import { Banner } from './components/Banner.js';
 import { VoicePanel } from './components/VoicePanel.js';
 import { Divider } from './components/Divider.js';
 import { VoiceClient } from './voice.js';
-import { BoardStore, type Stream } from './board.js';
-import { Board } from './components/Board.js';
+import type { Stream } from './board.js';
 
 import { copyToClipboard, isMouseInput, parseMouse, selectionRanges, type Selection } from './mouse.js';
 import type { Screen } from './screen.js';
-import type { GitFacts } from '../core/llm/prompts/coding/wiring.js';
-
-/** What the window remembers about a workspace: the banner's display name and
- *  the prefix its cards are named with (`PHA` → `PHA-7`). */
-interface WsFacts { label: string; cardPrefix?: string; error?: string }
 
 export function App({
   api, stream, initial, boot, newTools, configPath, onSession, onWindow,
@@ -411,10 +405,11 @@ export function App({
   useInput((ch) => {
     if (!isMouseInput(ch)) return;
     const ev = parseMouse(ch);
-    // With the board up, the left pane's mouse belongs to it (drag moves a
-    // card, click opens one) — running text selection there too would copy on
-    // every drop. The voice pane keeps its wheel and selection.
-    if (windowStore.screen !== 'chat' && ev && !(showSidebar && ev.x >= mainCols)) return;
+    // With a full overlay up the left pane's mouse belongs to it (on the
+    // board a drag moves a card, a click opens one) — running text selection
+    // there too would copy on every drop. The voice pane keeps its wheel and
+    // selection.
+    if (windowStore.overlay?.size === 'full' && ev && !(showSidebar && ev.x >= mainCols)) return;
     if (!ev) return;
     const inVoice = showSidebar && ev.x >= mainCols;
     if (ev.kind === 'wheel') {
@@ -455,12 +450,12 @@ export function App({
 
   useInput((ch, key) => {
     if (!(key.ctrl && ch === 'c')) return;
-    if (windowStore.screen === 'chat' && input) { clearInput(); return; }
+    if (!windowStore.hasOverlay && input) { clearInput(); return; }
     if (ctrlC) { windowStore.quit(); return; }
     if (session?.busy) store.abortTurn(session.id);
-    // Break out of whatever menu is on screen first: the second press then
-    // lands on the prompt, where the toolbar is showing what it will do.
-    if (windowStore.menuUp) windowStore.closeScreen();
+    // Break out of whatever is on screen first: the second press then lands
+    // on the prompt, where the toolbar is showing what it will do.
+    if (windowStore.hasOverlay) windowStore.dismissOverlay();
     setCtrlC(true); setTimeout(() => setCtrlC(false), 1500);
   });
 
@@ -477,7 +472,7 @@ export function App({
   // Clear the armed state when the hold drops (the turn ended on its own).
   useEffect(() => { if (!heldNow) setInterruptArmed(false); }, [heldNow]);
 
-  // Off while a menu owns the keyboard — see the note at the top of the file.
+  // Off while an overlay owns the keyboard — see the note at the top of the file.
   useInput((ch, key) => {
     // esc while a turn runs: abort it. If something is queued, the front
     // message starts immediately (the finally block in send pops it) —
@@ -536,7 +531,7 @@ export function App({
       if (key.upArrow && (histAt > 0 || input === '')) { recall(-1); return; }
       if (key.downArrow && histAt > 0) { recall(1); return; }
     }
-  }, { isActive: windowStore.screen === 'chat' && !windowStore.hasOverlay });
+  }, { isActive: !windowStore.hasOverlay });
 
   const suggestions = matches(input);
   const at = Math.min(suggestAt, Math.max(0, suggestions.length - 1));
@@ -603,13 +598,9 @@ export function App({
       .map((g) => g.filter((p): p is ToolbarPart => Boolean(p)))
       .filter((g) => g.length);
 
-  // THE ONE LAYOUT RULE (see the header): what owns the main column. The
-  // board needs a session; a menu's name, for its Boundary, is the screen
-  // itself. Anything else is the chat.
-  const screenNow = windowStore.screen;
-  const boardUp = (screenNow === 'board' || typeof screenNow === 'object') && !!session;
-  const menuUp = typeof screenNow === 'string' && screenNow !== 'chat' && screenNow !== 'board'
-    ? screenNow : null;
+  // THE ONE LAYOUT RULE (see the header): what owns the main column. A full
+  // overlay takes it whole; anything else is the chat, with an inline
+  // overlay standing in for the prompt when one is up.
   const fullOverlay = windowStore.overlay?.size === 'full' ? windowStore.overlay : null;
   const inlineOverlay = windowStore.overlay?.size === 'inline' ? windowStore.overlay : null;
 
@@ -617,34 +608,14 @@ export function App({
     <SizeContext.Provider value={{ rows: screenRows, cols: screenCols }}>
     <Box flexDirection="row" width={repaint ? 0 : screenCols} height={repaint ? 0 : screenRows} overflow="hidden">
     <Box flexDirection="column" width={mainCols} height={screenRows} overflow="hidden">
-      {boardUp && session ? (
-        <Boundary name="board" resetKey={screenNow} onError={(m) => { windowStore.note(`${m} — the board closed; the stack is in ~/.phantom-cli/cli.log`); windowStore.setScreen('chat'); }}>
-        <Board store={windowStore.boardFor(session.workspaceId)} width={mainCols} height={screenRows}
-          isActive
-          // One card-editor state, in the window, which also knows where esc
-          // leaves it — from the board back to the columns, from anywhere else
-          // back to the chat.
-          card={typeof screenNow === 'object' ? screenNow.card : undefined}
-          onOpenCard={(seq) => windowStore.openCard(seq, 'board')}
-          onCloseCard={() => windowStore.closeCard()}
-          onClose={() => windowStore.setScreen('chat')}
-          // The card editor's Session row: back to chat, then the one open
-          // path — already loaded switches, otherwise it opens (read-only
-          // while the looper holds it, like /resume).
-          onOpenSession={(id) => { windowStore.setScreen('chat'); void windowStore.openSession({ kind: 'open', id }); }}
-          onArchived={() => { windowStore.setScreen('chat'); void windowStore.openArchived(session.workspaceId); }} />
-        </Boundary>
-      ) : fullOverlay ? (
-        // A full overlay replaces the column — the same rule as a menu screen.
-        <Boundary name={`overlay-${fullOverlay.name}`} resetKey={fullOverlay.name} onError={(m) => { windowStore.note(`${m} — overlay closed; the stack is in ~/.phantom-cli/cli.log`); windowStore.dismissOverlay(undefined); }}>
-          {fullOverlay.component}
-        </Boundary>
-      ) : menuUp ? (
-        // A menu is a FULL SCREEN — it owns the whole column while it is up
-        // (screens.tsx). The conversation keeps streaming underneath; closing
-        // the menu draws it again from the store.
-        <Boundary name={menuUp} resetKey={menuUp} onError={(m) => { windowStore.note(`${m} — /${menuUp} closed; the stack is in ~/.phantom-cli/cli.log`); windowStore.closeScreen(); }}>
-          <MenuScreen w={windowStore} api={api} configPath={configPath} clientId={clientId} />
+      {fullOverlay ? (
+        // A full overlay owns the whole column while it is up (screens.tsx).
+        // The conversation keeps streaming underneath; closing it draws the
+        // chat again from the store. ONE Boundary slot for every full
+        // overlay, so swapping one for another that draws the same component
+        // (the board with and without a card open) keeps it mounted.
+        <Boundary name={fullOverlay.name} resetKey={fullOverlay.name} onError={(m) => { windowStore.note(`${m} — ${fullOverlay.name} closed; the stack is in ~/.phantom-cli/cli.log`); windowStore.dismissOverlay(); }}>
+          {fullOverlay.render({ width: mainCols, height: screenRows })}
         </Boundary>
       ) : (<>
       {/* keyFor: a part's own id, so the height the pane measured for it
@@ -692,14 +663,14 @@ export function App({
         )}
         </>)}
 
-        <Boundary name="prompt" resetKey={screenNow} onError={(m) => { windowStore.note(`${m} — the prompt stopped drawing; the stack is in ~/.phantom-cli/cli.log`); windowStore.closeScreen(); }}>
+        <Boundary name="prompt" resetKey={inlineOverlay} onError={(m) => { windowStore.note(`${m} — the prompt stopped drawing; the stack is in ~/.phantom-cli/cli.log`); windowStore.dismissOverlay(); }}>
           <>
             {inlineOverlay ? (
-              // An inline overlay replaces the slash menu and prompt zone.
-              // The conversation pane stays above; the overlay owns the keyboard.
-              <Boundary name={`overlay-${inlineOverlay.name}`} resetKey={inlineOverlay.name}
-                onError={(m) => { windowStore.note(`${m} — overlay closed`); windowStore.dismissOverlay(undefined); }}>
-                {inlineOverlay.component}
+              // An inline overlay stands in for the slash menu and the prompt.
+              // The conversation stays above; the overlay owns the keyboard.
+              <Boundary name={inlineOverlay.name} resetKey={inlineOverlay}
+                onError={(m) => { windowStore.note(`${m} — ${inlineOverlay.name} closed; the stack is in ~/.phantom-cli/cli.log`); windowStore.dismissOverlay(); }}>
+                {inlineOverlay.render({ width: mainCols, height: screenRows })}
               </Boundary>
             ) : suggestions.length > 0 ? (
               // One height however many commands match. The menu sits under a

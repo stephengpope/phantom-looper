@@ -100,7 +100,7 @@ export function presetChoices(presets: Preset[]): Choice<string | null>[] {
 }
 
 /** The value column on the preset editor row. */
-function displayValue(key: string, state: KeyState, value: unknown): string {
+function displayValue(state: KeyState, value: unknown): string {
   if (state === 'leave') return '· leave unchanged';
   if (state === 'clear') return '∅ clear';
   return String(value);
@@ -323,7 +323,7 @@ export function Presets({ api, onApplied, onClose }: {
         choices.push({
           value: k.key,
           label: k.label,
-          columns: [{ text: displayValue(k.key, state, v), width: 32 }],
+          columns: [{ text: displayValue(state, v), width: 32 }],
           hint: hintForKey(state, v),
         });
       }

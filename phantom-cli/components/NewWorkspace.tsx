@@ -66,11 +66,11 @@ export function NewWorkspace({ api, onSubmit, onCancel, error, now }: {
   useInput((_c, key) => { if (key.escape) onCancel(); },
     { isActive: step.at === 'url' });
 
-  // A rejected submit must hand the form back. App cannot remount this
-  // component (the menu is already 'addWorkspace', so setMenu is a no-op):
-  // the server's error is the signal, and it drops the form out of
-  // 'working' to the step it came from with the typed value kept for
-  // correction. Without this, every rejection left the form dead on the spinner.
+  // A rejected submit must hand the form back. The window does not remount
+  // this component (re-showing the screen would lose what was typed): the
+  // server's error is the signal, and it drops the form out of 'working' to
+  // the step it came from with the typed value kept for correction. Without
+  // this, every rejection left the form dead on the spinner.
   useEffect(() => {
     if (error) {
       setStep((s) => s.at === 'working'

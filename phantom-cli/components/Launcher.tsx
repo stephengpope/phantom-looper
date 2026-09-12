@@ -198,18 +198,16 @@ export function sessionChoices(
 
   const COLS = { card: 8, work: 14, name: 42, model: 20, tokens: 24 };
   const rows = sessions.map((s): TableRow<Launch | null> => {
-    const w = byId.get(s.workspaceId);
     // A supervisor session names itself: the looper's verdict record for its
     // card — read-only.
     const sup = s.agent === 'supervisor';
     const dead = s.status !== 'active';
-    const working = !dead && busy(s.id);
     // Loaded in THIS window's memory (running wins the marker slot).
     const open = !dead && loaded(s.id);
     // Locked by someone else = a turn IS running there right now (locks are
     // per turn) — same spinner as a local turn. One fact, one place.
     const held = !dead && !!s.locked && s.lockedBy !== clientId;
-    const running = isRunning(s, { busy, clientId });   // === working || held
+    const running = isRunning(s, { busy, clientId });   // a local turn, or held elsewhere
     // The card this session works on — the BARE number, because the ws
     // column beside it already shows the prefix (the board's own shape:
     // prefix in the header, number on the row). Either seat of a loop

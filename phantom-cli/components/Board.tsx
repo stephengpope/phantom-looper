@@ -181,11 +181,16 @@ export function Board({ store, width, height, isActive, onClose, card, onOpenCar
   const dragging = drag?.moved ? store.state.cards.find((t) => t.id === drag.cardId) : undefined;
 
   // ONE card-editor path, however the card was opened. esc is onCloseCard,
-  // and the window decides where that lands.
+  // and the window decides where that lands. A card that is not on the
+  // board (archived elsewhere, a bad number) closes its editor — from an
+  // effect, not mid-render: closing repaints the window, and React refuses
+  // a state change while it is drawing this component.
+  const gone = card !== undefined && loaded && !store.bySeq(card);
+  useEffect(() => { if (gone) onCloseCard(); }, [gone]);
   if (card !== undefined) {
     if (!loaded) return null;   // no column flash while the data loads
     const open = store.bySeq(card);
-    if (!open) { onCloseCard(); return null; }
+    if (!open) return null;
     return (
       <CardEditor key={open.id} store={store} card={open} width={width} height={height}
         prefix={prefix} isActive={isActive} onClose={onCloseCard} onOpenSession={onOpenSession} />

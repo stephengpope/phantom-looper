@@ -3,7 +3,7 @@
 // otherwise, masked when it is a secret. Nothing here knows what a setting
 // means — it is handed a shape and returns a value.
 import { Box, useInput } from 'ink';
-import { FixedText, Text } from './Text.js';
+import { FixedText } from './Text.js';
 import { useState } from 'react';
 import { TextInput } from './TextInput.js';
 import { SelectList, type Choice } from './SelectList.js';

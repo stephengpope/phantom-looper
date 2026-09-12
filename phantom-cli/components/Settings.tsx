@@ -24,7 +24,7 @@ import {
 } from '../config.js';
 import { resolveLocal, localValues } from '../local.js';
 import { makeSettings } from '../settings.js';
-import { SelectList, type Choice } from './SelectList.js';
+import { SelectList } from './SelectList.js';
 import { human, labelFor, type WireMeta } from '../settingLabels.js';
 import { ValueInput, type EditSpec } from './ValueInput.js';
 import { Screen } from './Screen.js';

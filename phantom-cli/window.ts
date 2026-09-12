@@ -7,7 +7,7 @@
 // The rule that shapes it: anything with a caller that is not a React event
 // lives here. Typing, scrolling and the two toggles that only a keypress
 // moves stay in App.
-import { createElement, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { hostname } from 'node:os';
 import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
@@ -56,7 +56,9 @@ import type { Preset } from './components/Presets.js';
 import type { NewWorkspaceRequest } from './components/NewWorkspace.js';
 import { COMMANDS, matches, parse } from './commands.js';
 import { WorkspaceDirectory, buildAssistantKit } from './assistantKit.js';
-import { Confirm } from './components/Confirm.js';
+import { confirmScreen, boardScreen, switcherScreen, settingsScreen, keysScreen, secretsScreen,
+  voiceScreen, localSettingsScreen, presetsScreen, duplicateModelScreen, workspaceSettingsScreen,
+  addWorkspaceScreen, archivedScreen, tasksScreen, pickerScreen } from './screens.js';
 import type { SkillMeta } from '../core/skills/skills.js';
 import type { SecretIndexEntry, GitFacts } from '../core/llm/prompts/coding/wiring.js';
 
@@ -104,38 +106,29 @@ export interface Approval { label: string; subject: string; resolve: (ok: boolea
 export type CloseResult = { ok: true; closed: string; on_screen: string; opened_new: boolean }
   | { error: string };
 
-/** A menu screen — everything that is not the chat or the board. */
-export type Menu = 'settings' | 'keys' | 'secrets' | 'model' | 'server' | 'voice' | 'workspace'
-  | 'resume' | 'addWorkspace' | 'workspaceSettings' | 'sessions' | 'tasks' | 'archived' | 'presets'
-  | 'duplicateModel';
-
 // ── Overlay ───────────────────────────────────────────────────────────────
 // One field, one concept: something is showing on top of the chat, or not.
-// Inline overlays replace the prompt zone (the chat pane stays above).
-// Full overlays replace the column (like today's menu screens).
-// The component inside handles its own rendering and keyboard; the overlay
-// system just puts it on screen and delivers the result when it dismisses.
-
-export type OverlaySize = 'inline' | 'full';
+// An INLINE overlay replaces the prompt zone (the conversation stays above);
+// a FULL one replaces the whole column (every menu, the board). The
+// component inside owns its drawing and its keyboard; the window just puts
+// it on screen and delivers the result when it goes. Every overlay is built
+// in screens.tsx.
 
 export interface Overlay {
-  size: OverlaySize;
-  /** A label for debugging and gating — not a union dispatch key. */
+  size: 'inline' | 'full';
+  /** What is up, for the log line and the few gates that ask (`boardUp`). */
   name: string;
-  /** The React element to render. Receives no special props — the component
-   *  calls `windowStore.dismissOverlay(result)` when it is done. */
-  component: ReactNode;
-  /** Called when the overlay dismisses. The result type depends on what the
-   *  overlay is: a confirm returns boolean, a select returns string | null,
-   *  a full screen returns void. Fires AFTER the overlay field is cleared,
-   *  so the callback may safely open another overlay. */
-  onDismiss: (result: unknown) => void;
+  /** Draws it. Runs on every App render, so it reads the store's CURRENT
+   *  data each time. `main` is the column's size — the board lays out by it. */
+  render: (main: { width: number; height: number }) => ReactNode;
+  /** Fires when the overlay goes, with what it answered: a confirm's
+   *  boolean; `undefined` when something else took it off the screen. Fires
+   *  AFTER the field is cleared, so it may safely show another overlay. */
+  onDismiss?: (result: unknown) => void;
+  /** Re-read while up, every `pollMs` — the lists whose rows spin and whose
+   *  locks lapse while you watch (/resume, /tasks). Stopped on dismiss. */
+  poll?: () => void;
 }
-
-/** What owns the main column: the chat, the board, a card's editor, or one
- *  of the menus. ONE answer — a gate that used to read "no menu open AND the
- *  chat view" reads this field alone. */
-export type ScreenName = 'chat' | 'board' | { card: number; back: 'chat' | 'board' } | Menu;
 
 /** /resume's page size: what the picker fetches at open and appends per
  *  scroll-to-the-bottom. Comfortably more than a screenful, small enough that
@@ -264,17 +257,6 @@ export class WindowStore {
    *  editing. App wires this up the same way it wires draftOnScreen. */
   setPrompt: (text: string) => void = () => {};
 
-  /** What the MAIN COLUMN is showing: the chat, the kanban board, a card's
-   *  editor, or a menu. ONE layout rule for all of them: anything that is not
-   *  the chat takes the whole column (the board always did; the menus used to
-   *  squeeze in under the conversation, each at its own height — that split
-   *  is gone). A card carries where esc goes BACK to, because that is the
-   *  only thing that ever differed between a card opened from the chat and
-   *  the same card opened from the board. One variable, one owner: the board
-   *  used to keep a second copy of "a card is open" and every caller that was
-   *  not a keypress had to work out which of the two to write. */
-  screen: ScreenName = 'chat';
-
   /** The voice pane's override: null follows the voice_enabled setting, true
    *  and false are ctrl+g. */
   sidebar: boolean | null = null;
@@ -287,76 +269,76 @@ export class WindowStore {
    *  tool call can land before a render, and this must already be right. */
   approval: Approval | null = null;
 
-  // ── overlay ─────────────────────────────────────────────────────────────
-  // One field: something is showing on top of the chat, or nothing is.
-  // Inline overlays swap the prompt zone; full overlays replace the column.
-  // The overlay's component handles its own rendering and keyboard; the
-  // store just puts it on screen and delivers the result when it dismisses.
+  // ── the overlay ───────────────────────────────────────────────────────────────────
+  // What is on top of the chat. ONE field for the board, a card's editor,
+  // every menu and every confirmation: a gate that used to read "no menu
+  // open AND the chat view" reads this alone. The menus used to squeeze in
+  // under the conversation, each at its own height — that split is gone;
+  // anything full takes the whole column, as the board always did.
 
-  /** The active overlay, or null when the chat is normal. */
+  /** The overlay up now, or null: the chat, its prompt and its keys. */
   overlay: Overlay | null = null;
 
-  /** Show an overlay. If one is already up, dismiss it first (the previous
-   *  callback receives `undefined` — replaced, not answered). */
+  /** Put an overlay on screen. One at a time: whatever was up goes first,
+   *  unanswered (its callback gets `undefined`). A screen retires the
+   *  splash, and one that polls starts its clock — a failed tick is silent,
+   *  because an unreachable server must not nag every ten seconds while
+   *  old rows serve. */
   showOverlay(o: Overlay): void {
     if (this.overlay) this.dismissOverlay(undefined);
     this.overlay = o;
     this.splash = false;
-    this.notify();
-  }
-
-  /** Remove the overlay and deliver the result to the callback. The field
-   *  is cleared BEFORE the callback fires, so the callback may safely open
-   *  another overlay without it being clobbered. */
-  dismissOverlay = (result: unknown): void => {
-    const prev = this.overlay;
-    this.overlay = null;
-    prev?.onDismiss(result);
-    this.notify();
-  };
-
-  /** True when any overlay (inline or full) is up — the one gate for input
-   *  routing: the chat's handlers and the prompt are inactive while this is
-   *  true. Replaces the per-case checks that used to read `screen`. */
-  get hasOverlay(): boolean { return this.overlay !== null; }
-
-  /** Put a screen on the main column. Everything a screen change does lives
-   *  here: a screen that is not the chat retires the splash, and /resume and
-   *  /tasks — status lists whose rows spin and whose locks lapse while you
-   *  watch — re-read on `pollMs` for as long as they are up. The refresh
-   *  swaps rows in place: the cursor, the notice line and an armed
-   *  confirmation all stay put. A failed tick is silent, because an
-   *  unreachable server must not nag every ten seconds while old rows serve. */
-  setScreen(s: ScreenName): void {
-    this.screen = s;
-    if (s !== 'chat') this.splash = false;
-    if (this.menuClock) { clearInterval(this.menuClock); this.menuClock = null; }
-    const tick = s === 'resume' ? () => { void this.refreshPicker().catch(quiet('refresh the session list')); }
-      : s === 'tasks' ? () => { void this.refreshTasks().catch(quiet('refresh tasks')); }
-        : null;
-    if (tick) {
-      this.menuClock = setInterval(tick, this.pollMs);
-      this.menuClock.unref?.();
+    if (o.poll) {
+      this.overlayClock = setInterval(o.poll, this.pollMs);
+      this.overlayClock.unref?.();
     }
     this.notify();
   }
 
-  /** Back to the conversation — every menu's esc and close lands here. */
-  closeScreen = (): void => { this.setScreen('chat'); };
+  /** Take the overlay down and deliver its answer — every screen's esc and
+   *  close, every confirm's enter. The field is cleared BEFORE the callback
+   *  fires, so the callback may open another overlay without being clobbered. */
+  dismissOverlay = (result?: unknown): void => {
+    const prev = this.overlay;
+    this.overlay = null;
+    if (this.overlayClock) { clearInterval(this.overlayClock); this.overlayClock = null; }
+    prev?.onDismiss?.(result);
+    this.notify();
+  };
 
-  /** True while a MENU (not the chat, not the board) owns the column — the
-   *  case where the app-level keys (ctrl+c) close the screen for you; the
-   *  board handles its own. */
-  get menuUp(): boolean {
-    return typeof this.screen === 'string' && this.screen !== 'chat' && this.screen !== 'board';
+  /** True while anything is up — the one gate for input routing: the chat's
+   *  handlers and the prompt are off while this is true. */
+  get hasOverlay(): boolean { return this.overlay !== null; }
+
+  /** The board owns the column (a card opened from it counts). The
+   *  Assistant's "show card" asks, to know where esc should go back to. */
+  get boardUp(): boolean { return this.overlay?.name === 'board'; }
+
+  /** A yes/no in the prompt zone: enter is yes, esc is no, and so is
+   *  anything that takes the question off the screen. */
+  confirm(title: string, message?: string): Promise<boolean> {
+    return new Promise((resolve) => this.showOverlay(confirmScreen(this, title, message, resolve)));
   }
 
-  /** A card's editor, and where esc leaves it. Opening one from the board
-   *  goes back to the columns; from anywhere else, back to the chat. */
-  openCard(seq: number, back: 'chat' | 'board' = 'chat'): void { this.setScreen({ card: seq, back }); }
+  /** /kanban, and the Assistant's "show the board". */
+  openBoard(): void {
+    const e = this.sessions.active();
+    if (!e) { this.note('no session is open — the board belongs to a workspace; /workspace starts a session in one'); return; }
+    this.showOverlay(boardScreen(this, e.workspaceId));
+  }
 
-  /** esc out of a card's editor, to wherever it was opened from. */
-  closeCard(): void { this.setScreen(typeof this.screen === 'object' ? this.screen.back : 'chat'); }
+  /** A card's editor, and where esc leaves it: opened from the board it goes
+   *  back to the columns; from anywhere else, to the chat. */
+  openCard(seq: number, back: 'chat' | 'board' = 'chat'): void {
+    const e = this.sessions.active();
+    if (!e) return;
+    this.showOverlay(boardScreen(this, e.workspaceId, { seq, back }));
+  }
+
+  /** The open list's re-read clock (`Overlay.poll`), unref'd so it never
+   *  holds the process open. */
+  private overlayClock: ReturnType<typeof setInterval> | null = null;
+  private get pollMs(): number { return this.opts.pollMs ?? 10_000; }
 
   /** ctrl+g, and the nudge that puts the pane back when the Assistant needs to
    *  be seen. `undefined` clears the override back to the setting. */
@@ -395,9 +377,16 @@ export class WindowStore {
   private readonly listeners = new Set<() => void>();
   private readonly settings;
   private readonly settingsFeed: SettingsFeed | null;
-  private readonly api: Api;
+  /** Every request this window makes, riding the connection watch — the
+   *  screens share it so a save that reaches the server after an outage
+   *  triggers the same recovery a chat request would. */
+  readonly api: Api;
   /** Bumped when another client wrote settings; menus keyed on it re-read. */
   settingsVersion = 0;
+  /** The two launch facts the screens need: /settings and /server edit the
+   *  local file at this path; /resume marks this window's own holds. */
+  get configPath(): string | undefined { return this.opts.configPath; }
+  get clientId(): string { return this.opts.clientId ?? ''; }
 
   constructor(private readonly opts: WindowOptions) {
     // Every request rides the connection watch: the first success after an
@@ -666,9 +655,8 @@ export class WindowStore {
       await this.recheckSession(e.id);
       if (this.syncFailing.has(e.id)) this.uploadTranscript(e);
     }
-    if (this.screen === 'resume' || this.screen === 'workspace') {
-      await this.refreshPicker().catch(quiet('refresh the session list'));
-    }
+    // The open list, if one polls, re-reads now rather than on its next tick.
+    this.overlay?.poll?.();
     this.note('back in touch with the server — everything re-synced');
   };
 
@@ -1019,7 +1007,7 @@ export class WindowStore {
       return;
     }
     this.pickerNotice = undefined;   // the gate passed — no refusal to show
-    this.closeScreen();
+    this.dismissOverlay();
     try {
       const presets = await this.api('GET', '/presets') as Preset[];
       if (!presets.length) { await this.openSession({ kind: 'duplicate', id }); return; }
@@ -1036,7 +1024,7 @@ export class WindowStore {
         current = { provider: String(cfg.provider ?? ''), model: String(cfg.model ?? '') };
       }
       this.duplicating = { id, presets, current };
-      this.setScreen('duplicateModel');
+      this.showOverlay(duplicateModelScreen(this));
     } catch (e) {
       this.note(`could not duplicate session ${id}: ${(e as Error).message}`);
     }
@@ -1048,8 +1036,7 @@ export class WindowStore {
    *  duplicate only. */
   finishDuplicate = async (presetId: string | null): Promise<void> => {
     const d = this.duplicating;
-    this.duplicating = null;
-    this.closeScreen();
+    this.dismissOverlay();   // drops `duplicating` — read above first
     if (!d) return;
     try {
       let modelOverride: Record<string, ConfigValue> | undefined;
@@ -1064,9 +1051,6 @@ export class WindowStore {
       this.note(`could not duplicate session ${d.id}: ${(e as Error).message}`);
     }
   };
-
-  /** esc on the duplicate prompt: nothing happens, no copy is made. */
-  cancelDuplicate = (): void => { this.duplicating = null; this.closeScreen(); };
 
   /** What the window CALLS a session when it must name one: the server name
    *  (auto-title or /rename), else its card (`PHA-7`), else its branch —
@@ -1115,10 +1099,6 @@ export class WindowStore {
   // window has — which sessions are open here, which is mid-turn, this
   // window's lock id.
 
-  /** The workspace whose settings are showing (`e` on /workspace). Held apart
-   *  from `screen` so closing that screen lands back on the list it came
-   *  from. */
-  editing: WorkspaceInfo | null = null;
   /** A rejected "add a workspace" stays on the form with the server's words. */
   addError: string | undefined;
   /** The workspace rows the switcher names its sessions with, fetched the
@@ -1130,7 +1110,7 @@ export class WindowStore {
   picker: { workspaces: WorkspaceInfo[]; sessions: SessionInfo[]; total: number; end: boolean } | null = null;
   pickerNotice: string | undefined;
   /** A duplicate waiting on its one question — which model the copy runs on.
-   *  Held apart from `menu` so esc simply drops it. */
+   *  Dropped with its screen. */
   duplicating: { id: string; presets: Preset[]; current: { provider: string; model: string } } | null = null;
   /** [s] on /resume: the looper's supervisor seats in the list or not. A fetch
    *  parameter, not a filter — the server decides what the list is. */
@@ -1138,13 +1118,6 @@ export class WindowStore {
   /** The armed /resume trash: the row [t] armed, and whether the server's
    *  unpushed-work refusal already upgraded it to a force-confirm. */
   private trashArmed: { id: string; force: boolean } | null = null;
-  /** The armed /trash: the session the prompt's [c] will purge, and whether
-   *  the server's unpushed-work refusal already upgraded it to a
-   *  force-confirm. The picker's [t]/[c] rule, in the prompt. */
-  private promptTrashArmed: { id: string; force: boolean } | null = null;
-  /** The armed /restart: the service the prompt's [c] will restart (null =
-   *  the api). Same [c] rule as /trash. */
-  private promptRestartArmed: { service: string | null } | null = null;
   private morePickerInFlight = false;
 
   tasks: TasksView | null = null;
@@ -1161,13 +1134,9 @@ export class WindowStore {
   private archivedEnd = false;
   private moreArchivedInFlight = false;
 
-  /** The open screen's re-read clock, and the task count's own. Cleared and
-   *  restarted by setScreen and by a change of session; both unref'd so
-   *  neither holds the process open. */
-  private menuClock: ReturnType<typeof setInterval> | null = null;
+  /** The task count's clock: restarted by a change of session, unref'd so
+   *  it never holds the process open. */
   private taskClock: ReturnType<typeof setInterval> | null = null;
-
-  private get pollMs(): number { return this.opts.pollMs ?? 10_000; }
 
   // ── /resume and /workspace ────────────────────────────────────────────────
 
@@ -1247,7 +1216,7 @@ export class WindowStore {
       await this.refreshPicker();
       this.pickerNotice = undefined;
       this.trashArmed = null;
-      this.setScreen(which);
+      this.showOverlay(pickerScreen(this, which));
     } catch (e) {
       this.note(`could not list ${which === 'resume' ? 'sessions' : 'workspaces'}: ${(e as Error).message}`);
     }
@@ -1358,22 +1327,22 @@ export class WindowStore {
     this.notify();
   };
 
-  /** [c] to an armed /trash. The window lets the session go first — its own
-   *  hold would lock the purge — then the same DELETE as [t] on /resume runs,
-   *  refusal re-arms and all. The close stands even when the purge refuses:
-   *  the [c] was already "done with this", and a second [c] finishes the job
-   *  without the session back on screen. */
-  private trashActive = async (armed: { id: string; force: boolean }): Promise<void> => {
-    if (this.sessions.has(armed.id)) {
-      const r = await this.closeSession(armed.id, true);
+  /** /trash, confirmed. The window lets the session go first — its own hold
+   *  would lock the purge — then the same DELETE as [t] on /resume runs. The
+   *  close stands even when the purge refuses: the confirm was already "done
+   *  with this", and the unpushed-work refusal asks ONCE more, at force, so
+   *  the second yes discards knowingly without the session back on screen. */
+  private trashActive = async (id: string, force = false): Promise<void> => {
+    if (this.sessions.has(id)) {
+      const r = await this.closeSession(id, true);
       if ('error' in r) { this.note(`not trashed — ${r.error}`); return; }
     }
     let verdict: 'ok' | 'unpushed_work' | 'session_locked';
-    try { verdict = await this.purgeSession(armed.id, armed.force); }
-    catch (e) { this.note(`could not trash session ${armed.id}: ${(e as Error).message}`); return; }
+    try { verdict = await this.purgeSession(id, force); }
+    catch (e) { this.note(`could not trash session ${id}: ${(e as Error).message}`); return; }
     if (verdict === 'unpushed_work') {
-      this.promptTrashArmed = { id: armed.id, force: true };
-      this.note('unpushed work — [c] to confirm discard');
+      if (await this.confirm('unpushed work — discard it?', 'commits on this branch never reached origin; they go with the session'))
+        await this.trashActive(id, true);
     } else if (verdict === 'session_locked') {
       this.note('in use elsewhere — a held session cannot be trashed');
     } else this.setToast('Session trashed');
@@ -1382,7 +1351,7 @@ export class WindowStore {
   /** ctrl+n: the sessions open in this window. It shows FIRST and fills the
    *  workspace names in behind — the rows read fine as ids until they land. */
   openSwitcher(): void {
-    this.setScreen('sessions');
+    this.showOverlay(switcherScreen(this));
     if (this.workspaceRows.length) return;
     void (async () => {
       try { this.seeWorkspaces(await this.api('GET', '/workspaces') as unknown as WorkspaceInfo[]); this.notify(); }
@@ -1399,24 +1368,15 @@ export class WindowStore {
     this.notify();
   }
 
-  /** `e` on a /workspace row: that workspace's settings, on their own screen,
-   *  remembering the list to come back to. */
+  /** `e` on a /workspace row: that workspace's settings, on their own screen
+   *  (its close reopens the list). */
   editWorkspace(id: string): void {
     const w = this.picker?.workspaces.find((x) => x.id === id);
-    if (!w) return;
-    this.editing = w;
-    this.setScreen('workspaceSettings');
+    if (w) this.showOverlay(workspaceSettingsScreen(this, w));
   }
 
-  /** Back to the list it was opened from, refreshed — a rename there has to
-   *  show up here. */
-  closeWorkspaceSettings = async (): Promise<void> => {
-    this.editing = null;
-    await this.openPicker('workspace');
-  };
-
-  /** The add row, with any previous complaint cleared. */
-  startAddWorkspace(): void { this.addError = undefined; this.setScreen('addWorkspace'); }
+  /** The add form, with any previous complaint cleared. */
+  startAddWorkspace(): void { this.addError = undefined; this.showOverlay(addWorkspaceScreen(this)); }
 
   /** The add form's submit. Adding a workspace is only useful if you then work
    *  in it, so it opens a session there; the confirmation goes AFTER that
@@ -1431,12 +1391,14 @@ export class WindowStore {
     this.notify();
     try {
       const w = await this.api('POST', '/workspaces', req) as { id: string; owner: string; name: string };
-      this.closeScreen();
+      this.dismissOverlay();
       await this.openSession({ kind: 'new', workspaceId: w.id });
       this.note(`workspace ${w.owner}/${w.name} added`);
     } catch (e) {
+      // The form is still up and reads this on its next draw — it is NOT
+      // re-shown, which would remount it and lose what was typed.
       this.addError = (e as Error).message.replace(/^POST \/workspaces: /, '');
-      this.setScreen('addWorkspace');
+      this.notify();
     }
   };
 
@@ -1474,7 +1436,7 @@ export class WindowStore {
       await this.refreshTasks();
       this.tasksNotice = undefined;
       this.killArmed = null;
-      this.setScreen('tasks');
+      this.showOverlay(tasksScreen(this));
     } catch (e) { this.note(`could not list tasks: ${(e as Error).message}`); }
   };
 
@@ -1552,7 +1514,7 @@ export class WindowStore {
       this.archived = d.cards;
       this.archivedTotal = d.total;
       this.archivedNotice = undefined;
-      this.setScreen('archived');
+      this.showOverlay(archivedScreen(this, workspaceId));
     } catch (e) { this.note(`could not list archived cards: ${(e as Error).message}`); }
   };
 
@@ -1866,24 +1828,14 @@ export class WindowStore {
             current = { provider: String(cfg.provider ?? ''), model: String(cfg.model ?? '') };
           }
           this.duplicating = { id: session.id, presets, current };
-          this.setScreen('duplicateModel');
+          this.showOverlay(duplicateModelScreen(this));
         } catch (e) { this.note(`could not duplicate: ${(e as Error).message}`); }
         return;
       }
       case 'trash': {
         if (!session) { this.note('no session is open — nothing to trash'); return; }
-        const trashId = session.id;
-        const trashLabel = this.labelOf(session);
-        this.showOverlay({
-          size: 'inline',
-          name: 'confirm-trash',
-          component: createElement(Confirm, {
-            title: `trash "${trashLabel}" for good?`,
-            message: 'the row, the transcript, the files — gone for good',
-            onResult: (yes: boolean) => this.dismissOverlay(yes),
-          }),
-          onDismiss: (yes) => { if (yes) void this.trashActive({ id: trashId, force: false }); },
-        });
+        if (await this.confirm(`trash "${this.labelOf(session)}" for good?`,
+          'the row, the transcript, the files — gone for good')) await this.trashActive(session.id);
         return;
       }
       case 'workspace': await this.openPicker('workspace'); return;
@@ -1905,10 +1857,7 @@ export class WindowStore {
         } catch (e) { this.note(`could not pin session ${session.id}: ${(e as Error).message}`); }
         return;
       }
-      case 'kanban':
-        if (!session) { this.note('no session is open — the board belongs to a workspace; /workspace starts a session in one'); return; }
-        this.setScreen('board');
-        return;
+      case 'kanban': this.openBoard(); return;
       case 'archived':
         if (!session) { this.note('no session is open — archived cards belong to a workspace; /workspace starts a session in one'); return; }
         await this.openArchived(session.workspaceId);
@@ -1967,12 +1916,12 @@ export class WindowStore {
         if (!session) { this.note('no session is open — nothing to pull into'); return; }
         void this.runAutoPull(session.id);
         return;
-      case 'settings': this.setScreen('settings'); return;
-      case 'keys': this.setScreen('keys'); return;
-      case 'secrets': this.setScreen('secrets'); return;
-      case 'model': this.setScreen('model'); return;
-      case 'presets': this.setScreen('presets'); return;
-      case 'server': this.setScreen('server'); return;
+      case 'settings': this.showOverlay(settingsScreen(this)); return;
+      case 'keys': this.showOverlay(keysScreen(this)); return;
+      case 'secrets': this.showOverlay(secretsScreen(this)); return;
+      case 'model': this.showOverlay(localSettingsScreen(this, 'model')); return;
+      case 'presets': this.showOverlay(presetsScreen(this)); return;
+      case 'server': this.showOverlay(localSettingsScreen(this, 'server')); return;
       case 'cpu': {
         try {
           const r = await this.api('GET', '/system/status') as { text?: string; warnings?: string };
@@ -1988,33 +1937,20 @@ export class WindowStore {
         return;
       }
       case 'restart': {
+        // A restart cuts every in-flight turn, so it is never one keystroke away.
         const svc = args || null;
-        const title = svc ? `restart ${svc}?` : 'restart the server?';
-        const msg = svc ? '' : 'the api — everything is offline for a few seconds';
-        this.showOverlay({
-          size: 'inline',
-          name: 'confirm-restart',
-          component: createElement(Confirm, {
-            title,
-            ...(msg ? { message: msg } : {}),
-            onResult: (yes: boolean) => this.dismissOverlay(yes),
-          }),
-          onDismiss: (yes) => {
-            if (!yes) return;
-            void (async () => {
-              try {
-                await this.api('POST', '/system/restart', svc ? { service: svc } : {});
-                this.note(svc
-                  ? `restarting ${svc}`
-                  : 'restarting the api — back in a few seconds (the window reconnects on its own)');
-              } catch (e) { this.note(`could not restart: ${(e as Error).message}`); }
-            })();
-          },
-        });
+        const yes = svc ? await this.confirm(`restart ${svc}?`)
+          : await this.confirm('restart the server?', 'the api — everything is offline for a few seconds');
+        if (!yes) return;
+        try {
+          await this.api('POST', '/system/restart', svc ? { service: svc } : {});
+          this.note(svc ? `restarting ${svc}`
+            : 'restarting the api — back in a few seconds (the window reconnects on its own)');
+        } catch (e) { this.note(`could not restart: ${(e as Error).message}`); }
         return;
       }
       case 'assistant':
-        this.setScreen('voice');
+        this.showOverlay(voiceScreen(this));
         // The mic and speaker pickers want device names; with voice off, ask.
         void this.voice.refreshDevices();
         return;
@@ -2074,37 +2010,6 @@ export class WindowStore {
       this.note(`paste ${gone} is gone (from an earlier run) — sent without it`);
     }
     if (!msg) return;
-    // An armed /trash owns the next line: `c` confirms, anything else cancels
-    // and is then handled as the line it is. Before the held check on purpose
-    // — the confirm is a window act, never a message to the session.
-    if (this.promptTrashArmed) {
-      const armed = this.promptTrashArmed;
-      this.promptTrashArmed = null;
-      if (msg === 'c') {
-        accept();
-        // The confirmation reads from the pane — the splash must not cover it.
-        this.setSplash(false);
-        await this.trashActive(armed);
-        return;
-      }
-      this.note('trash cancelled');
-    }
-    if (this.promptRestartArmed) {
-      const armed = this.promptRestartArmed;
-      this.promptRestartArmed = null;
-      if (msg === 'c') {
-        accept();
-        this.setSplash(false);
-        try {
-          await this.api('POST', '/system/restart', armed.service ? { service: armed.service } : {});
-          this.note(armed.service
-            ? `restarting ${armed.service}`
-            : 'restarting the api — back in a few seconds (the window reconnects on its own)');
-        } catch (e) { this.note(`could not restart: ${(e as Error).message}`); }
-        return;
-      }
-      this.note('restart cancelled');
-    }
     const session = this.sessions.active();
     // A new session is being built: refuse messages so they don't route to
     // the old session. The text stays in the input box — resend when ready.
@@ -2176,7 +2081,7 @@ export class WindowStore {
     this.seeWorkspaces(ws);
     // Nothing registered yet: go straight to adding one. An empty install has
     // to be able to start from here, not from curl.
-    if (!ws.length) { this.setScreen('addWorkspace'); return; }
+    if (!ws.length) { this.startAddWorkspace(); return; }
     if (ws.length === 1) { await this.openSession({ kind: 'new', workspaceId: ws[0].id }); return; }
     // boot_last_workspace (a server setting, off by default) skips the picker:
     // a new session in the workspace of the newest session you drove yourself.
@@ -2205,7 +2110,7 @@ export class WindowStore {
   close(): void {
     this.settingsFeed?.stop();
     this.voice.stop();
-    if (this.menuClock) { clearInterval(this.menuClock); this.menuClock = null; }
+    if (this.overlayClock) { clearInterval(this.overlayClock); this.overlayClock = null; }
     if (this.taskClock) { clearInterval(this.taskClock); this.taskClock = null; }
     for (const b of this.boards.values()) b.close();
     this.boards.clear();
