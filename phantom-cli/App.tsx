@@ -745,7 +745,8 @@ export function App({
             {!windowStore.hasOverlay && <Prompt value={input} onChange={(v) => { setInput(v); setSuggestAt(0); }}
               onSubmit={(text) => { void windowStore.submit(text, suggestAt, () => { clearInput(); setScroll(0); }); }} onMeasure={setPromptTop}
               pastes={windowStore.pastes} onFileDrop={(paths) => windowStore.dropFiles(paths)} updateReady={windowStore.updateReady}
-              columns={promptCols} onBoundary={onBoundary} />}
+              columns={promptCols} onBoundary={onBoundary}
+              historyAt={histAt} historyTotal={said.length} />}
             <Toolbar
               // Held elsewhere: the marks, then WHO is working, the spinner,
               // and WHAT they are doing — `coding agent ⠹ building`. No

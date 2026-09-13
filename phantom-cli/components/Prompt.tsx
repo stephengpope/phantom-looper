@@ -24,7 +24,7 @@ import { Glint } from './Shimmer.js';
 import { APP_VERSION } from '../selfUpdate.js';
 import type { PasteStore } from '../paste.js';
 
-export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure, pastes, onFileDrop, updateReady, columns, onBoundary }: {
+export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure, pastes, onFileDrop, updateReady, columns, onBoundary, historyAt, historyTotal }: {
   value: string; onChange: (v: string) => void; onSubmit: (v: string) => void;
   pastes?: PasteStore;
   /** A paste that IS a dragged file's path (drop.ts) goes to the window.
@@ -44,22 +44,36 @@ export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure, pas
   /** Fired when up/down hits the boundary of the wrapped text — the parent
    *  uses it for history recall. */
   onBoundary?: (dir: 'up' | 'down') => void;
+  /** When browsing history: which entry (1-based from newest). 0 = not browsing. */
+  historyAt?: number;
+  /** Total history entries available. */
+  historyTotal?: number;
 }) {
   const ref = useRef(null);
   const { top, hasMeasured } = useBoxMetrics(ref);
   useEffect(() => { if (hasMeasured) onMeasure?.(top); }, [top, hasMeasured, onMeasure]);
+  const browsing = !!(historyAt && historyAt > 0 && historyTotal);
   return (
     <Box
       ref={ref}
       flexDirection="column"
       marginTop={1}
       borderStyle="bold"
-      borderTop
+      borderTop={!browsing}
       borderBottom={false}
       borderLeft={false}
       borderRight={false}
       borderDimColor
     >
+      {browsing && (
+        <Box>
+          <Box flexGrow={1} borderStyle="bold" borderTop borderBottom={false} borderLeft={false} borderRight={false} borderDimColor />
+          <Text dimColor>{' '}</Text>
+          <Text color="#5f87ff" bold>{`History ${historyTotal! - historyAt + 1}/${historyTotal}`}</Text>
+          <Text dimColor>{' '}</Text>
+          <Box flexGrow={1} borderStyle="bold" borderTop borderBottom={false} borderLeft={false} borderRight={false} borderDimColor />
+        </Box>
+      )}
       <Box>
         {/* FixedText: the marker never shrinks, so the space after `>`
             survives the input wrapping (see Text.tsx). */}
