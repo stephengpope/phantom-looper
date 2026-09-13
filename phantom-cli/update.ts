@@ -48,7 +48,7 @@ export interface UpdateDeps {
 }
 
 export const POLL_MS = 3_000;
-export const TIMEOUT_MS = 180_000;
+export const TIMEOUT_MS = 300_000;
 
 /** 'v0.1.3' → '0.1.3'. */
 export function bare(v: string): string { return v.replace(/^v/, ''); }

@@ -50,20 +50,24 @@ ENV_FILE="$PHANTOM_BACKEND_DIR/.env"
 
 echo "apply: upgrading to $TAG (image: $API_IMAGE:$TAG)"
 
-# ── 1. Pull the new images (disk still untouched) ───────────────────────────
+# ── 1. Pull the new images in parallel (disk still untouched) ────────────────
 # A failed pull is tolerated only when the image is ALREADY on the box (pulled
 # by hand, or a registry blip on a re-run); otherwise nothing has changed and
-# nothing will.
+# nothing will. Both pulls run concurrently to halve download time.
+docker pull "$SESSION_IMAGE:$TAG" \
+  && echo "apply: workspace image pulled" \
+  || echo "apply: workspace image pull failed — the api will pull it on first use" &
+SESSION_PID=$!
+
 if docker pull "$API_IMAGE:$TAG"; then
   echo "apply: api image pulled"
 elif docker image inspect "$API_IMAGE:$TAG" >/dev/null 2>&1; then
   echo "apply: pull failed but $API_IMAGE:$TAG is already present — using it"
 else
+  wait "$SESSION_PID" 2>/dev/null || true
   echo "apply: image pull failed and $API_IMAGE:$TAG is not on this machine — aborting, nothing changed"; exit 1
 fi
-docker pull "$SESSION_IMAGE:$TAG" \
-  && echo "apply: workspace image pulled" \
-  || echo "apply: workspace image pull failed — the api will pull it on first use"
+wait "$SESSION_PID" 2>/dev/null || true
 
 # ── 2. Copy the host files out of the api image ─────────────────────────────
 # The staging dir sits INSIDE the install dir on purpose: step 3 has to be a
