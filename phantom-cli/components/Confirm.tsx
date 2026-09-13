@@ -2,22 +2,22 @@
 // an optional message, and [enter] / [esc]. Owns its own useInput — the
 // prompt is inactive while this is up.
 //
-// Two voices, told apart at a glance: the APP asking ("trash this for
-// good?") is plain; an AGENT asking (`who` set) gets a cyan bar and a line
-// naming the asker, and its keys read approve/deny — it is a request from
-// someone working for you, not a safety check.
+// Both voices get a left bar. An AGENT asking (`who` set) gets a cyan bar
+// with "who: title" on one line, and its keys read approve/deny. The APP
+// asking (no `who`) gets a red bar — it is a safety check, not a request.
 import { Box, useInput } from 'ink';
 import { Text } from './Text.js';
 import { keyLine } from './Screen.js';
 
-/** Rows the dialog draws with neither `who` nor `message`: the margins,
- *  the title, the gap, the keys. Each optional line adds one. */
-export const CONFIRM_ROWS = 5;
+/** Rows the dialog draws with neither `who` nor `message`: the top margin,
+ *  the title, the gap, the keys, the bottom margin. Each optional line adds
+ *  one. */
+export const CONFIRM_ROWS = 7;
 
 export function Confirm({ title, message, who, onResult }: {
   title: string;
   message?: string;
-  /** Who is asking, when it is an agent — `coding agent (my-branch)`. */
+  /** Who is asking, when it is an agent — `coding agent`. */
   who?: string;
   onResult: (yes: boolean) => void;
 }) {
@@ -26,9 +26,11 @@ export function Confirm({ title, message, who, onResult }: {
     else if (key.escape) onResult(false);
   });
 
+  const color = who ? 'cyan' : 'red';
+  const bar = <Text color={color}>{'▌ '}</Text>;
+
   const lines = [
-    ...(who ? [<Text key="who" color="cyan">{who} asks</Text>] : []),
-    <Text key="title" bold>{title}</Text>,
+    <Text key="title" bold>{who ? `${who}: ${title}` : title}</Text>,
     ...(message ? [<Text key="msg" dimColor>{message}</Text>] : []),
     <Text key="gap"> </Text>,
     <Text key="keys" dimColor>{keyLine([
@@ -37,13 +39,15 @@ export function Confirm({ title, message, who, onResult }: {
     ])}</Text>,
   ];
   return (
-    <Box flexDirection="column" marginTop={1} marginBottom={1} paddingLeft={who ? 1 : 2}>
+    <Box flexDirection="column" marginTop={1} marginBottom={1} paddingLeft={1}>
+      <Box>{bar}<Text> </Text></Box>
       {lines.map((l, i) => (
         <Box key={i}>
-          {who ? <Text color="cyan">{'▌ '}</Text> : null}
+          {bar}
           {l}
         </Box>
       ))}
+      <Box>{bar}<Text> </Text></Box>
     </Box>
   );
 }

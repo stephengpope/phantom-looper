@@ -52,7 +52,7 @@ const third = (name: string, render: Overlay['render'], rest: Partial<Overlay> =
 export const confirmDialog = (w: WindowStore, title: string, message: string | undefined,
   who: string | undefined, resolve: (yes: boolean) => void): Dialog => ({
   render: () => <Confirm title={title} message={message} who={who} onResult={w.dismissDialog} />,
-  rows: CONFIRM_ROWS + (who ? 1 : 0) + (message ? 1 : 0),
+  rows: CONFIRM_ROWS + (message ? 1 : 0),
   onDismiss: (yes) => resolve(yes === true),
 });
 

@@ -389,11 +389,9 @@ export function screenModeTools(handler: ScreenModeHandler): Record<string, Tool
       execute: async () => handler.enterPlan(),
     }),
     session_code_mode: tool({
-      description: 'Ask the user to approve leaving plan mode for code mode (full file tools). ' +
-        'Shows them an approve/deny prompt with your reason — nothing changes until they approve. ' +
-        'Use it when the plan is agreed and you are ready to build. Approved: code mode is on from ' +
-        'the NEXT turn, so end this turn by saying what you will build first. Denied: stay in plan ' +
-        'mode and ask what is missing.',
+      description: 'Request approval to switch from plan mode to code mode. ' +
+        'Shows the user an approve/deny prompt with your reason. ' +
+        'Denied: stay in plan mode and ask what is missing.',
       inputSchema: z.object({
         reason: z.string().optional().describe('one line: what you will build once in code mode'),
       }),

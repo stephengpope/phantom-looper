@@ -567,12 +567,12 @@ export class WindowStore {
         if (e.readonly) return { ok: false, error: 'a supervisor record has no modes' };
         if (!e.planMode) return { ok: false, error: 'already in code mode' };
         // Bound to a session = the coding agent; unbound = the Assistant.
-        const yes = await this.confirm('leave plan mode for code mode?', reason,
-          { who: sessionId ? `coding agent (${this.labelOf(e)})` : 'the Assistant', signal: abortSignal });
+        const yes = await this.confirm('enter code mode?', reason,
+          { who: sessionId ? 'coding agent' : 'the Assistant', signal: abortSignal });
         if (!yes) return { ok: false, declined: true, mode: 'plan' };
         await this.api('PATCH', `/sessions/${e.id}`, { plan_mode: false });
         await this.applyPlanMode(e.id, false);
-        return { ok: true, mode: 'code', note: 'code mode is on from the next turn — end this one' };
+        return { ok: true, mode: 'code', note: 'code mode is now active' };
       },
     };
   }
