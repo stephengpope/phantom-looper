@@ -289,8 +289,9 @@ export class SessionStore {
 
   /** The next session round the ring, or undefined when there is nowhere to
    *  go. Sessions that have never been spoken to (`lastMessageAt === 0`) are
-   *  skipped — they sit in the open list but stay out of the tab ring until
-   *  someone says something to them. */
+   *  skipped — unless pinned, which is an explicit "keep visible" signal.
+   *  Unpinned empty sessions sit in the open list but stay out of the tab
+   *  ring until someone says something to them. */
   next(dir: 1 | -1 = 1): LoadedSession | undefined {
     const order = this.list();
     if (order.length < 2) return undefined;
@@ -299,7 +300,7 @@ export class SessionStore {
     let idx = at < 0 ? 0 : at;
     for (let i = 0; i < n - 1; i++) {
       idx = (idx + dir + n) % n;
-      if (order[idx].lastMessageAt > 0) return order[idx];
+      if (order[idx].lastMessageAt > 0 || order[idx].pinned) return order[idx];
     }
     return undefined;
   }
