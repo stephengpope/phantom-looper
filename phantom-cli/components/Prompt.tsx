@@ -67,10 +67,7 @@ export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure, pas
     >
       {browsing && (
         <Box>
-          <Box flexGrow={1} borderStyle="bold" borderTop borderBottom={false} borderLeft={false} borderRight={false} borderDimColor />
-          <Text dimColor>{' '}</Text>
-          <Text color="#5f87ff" bold>{`History ${historyTotal! - historyAt + 1}/${historyTotal}`}</Text>
-          <Text dimColor>{' '}</Text>
+          <Text dimColor>{`   History ${historyTotal! - historyAt + 1}/${historyTotal} `}</Text>
           <Box flexGrow={1} borderStyle="bold" borderTop borderBottom={false} borderLeft={false} borderRight={false} borderDimColor />
         </Box>
       )}
