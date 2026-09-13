@@ -14,6 +14,12 @@
 // Cursor state is ours too, so a value changed from outside — tab completion,
 // ↑ through what you said before — puts the cursor at the end without the
 // caller having to remount the component to move it.
+//
+// Up/down: the text wraps visually at `columns` display-width positions (Ink's
+// wrap-ansi hard wrap). The cursor navigates between visual rows using
+// string-width to compute the correct character offset — the same display-width
+// measure Ink uses to decide where lines break. The approach follows
+// react-ink-textarea's computeVisualUpCursor / computeVisualDownCursor.
 import { usePaste } from 'ink';
 import { useInput } from './useInput.js';
 import { Text } from './Text.js';
@@ -21,10 +27,61 @@ import { isMouseInput } from '../mouse.js';
 import { PasteStore, chipAtEnd } from '../paste.js';
 import { parseDrop } from '../drop.js';
 import { useEffect, useRef, useState } from 'react';
+import stringWidth from 'string-width';
 
 /** Reverse video for one character. Written out rather than pulled from chalk,
  *  which is only in the tree as one of Ink's own dependencies. */
 const invert = (s: string) => `\x1b[7m${s}\x1b[27m`;
+
+// ── visual row mapping ────────────────────────────────────────────────────
+// Ink wraps text using wrap-ansi with display-width (string-width) columns.
+// To navigate up/down we need to know which visual row a character offset
+// sits on and where the same visual column lands on the adjacent row.
+// Each row is { start, end } in CHARACTER offsets (not display columns).
+
+interface VRow { start: number; end: number }
+
+const segmenter = new Intl.Segmenter('en', { granularity: 'grapheme' });
+
+/** Split `text` into visual rows of at most `width` display columns each.
+ *  Matches Ink's hard-wrap behaviour: break at the grapheme whose display
+ *  width would exceed the column budget, never mid-grapheme. Iterates by
+ *  grapheme cluster (Intl.Segmenter) so surrogate pairs and emoji sequences
+ *  are never split — the same approach react-ink-textarea uses. */
+function visualRows(text: string, width: number): VRow[] {
+  if (width <= 0 || !text.length) return [{ start: 0, end: text.length }];
+  const rows: VRow[] = [];
+  let start = 0;
+  let col = 0;
+  for (const { segment, index } of segmenter.segment(text)) {
+    const gw = stringWidth(segment);
+    if (col + gw > width && index > start) {
+      rows.push({ start, end: index });
+      start = index;
+      col = 0;
+    }
+    col += gw;
+  }
+  rows.push({ start, end: text.length });
+  return rows;
+}
+
+/** The display-column offset of `cursor` within its visual row. */
+function visualCol(text: string, rowStart: number, cursor: number): number {
+  return stringWidth(text.slice(rowStart, cursor));
+}
+
+/** The character offset at (or nearest to) a target display column on a row. */
+function charAtVisualCol(text: string, rowStart: number, rowEnd: number, targetCol: number): number {
+  let col = 0;
+  const slice = text.slice(rowStart, rowEnd);
+  for (const { segment, index } of segmenter.segment(slice)) {
+    const gw = stringWidth(segment);
+    if (col + gw > targetCol) return rowStart + index;
+    col += gw;
+  }
+  return rowEnd;
+}
 
 export function TextInput({ value, onChange, onSubmit, focus = true, placeholder = '', mask, pastes, onFileDrop, columns, onBoundary }: {
   value: string;
@@ -83,14 +140,19 @@ export function TextInput({ value, onChange, onSubmit, focus = true, placeholder
       if (!columns || columns <= 0) return;
       const value = valueRef.current;
       const cursor = cursorRef.current;
-      const row = Math.floor(cursor / columns);
-      const lastRow = Math.floor(value.length / columns);
+      const rows = visualRows(value, columns);
+      const rowIdx = rows.findIndex((r) => cursor >= r.start && cursor <= r.end
+        && (cursor < r.end || r === rows[rows.length - 1]));
       if (key.upArrow) {
-        if (row === 0) { onBoundary?.('up'); return; }
-        setCursor(cursor - columns);
+        if (rowIdx <= 0) { onBoundary?.('up'); return; }
+        const col = visualCol(value, rows[rowIdx]!.start, cursor);
+        const prev = rows[rowIdx - 1]!;
+        setCursor(charAtVisualCol(value, prev.start, prev.end, col));
       } else {
-        if (row >= lastRow) { onBoundary?.('down'); return; }
-        setCursor(Math.min(value.length, cursor + columns));
+        if (rowIdx >= rows.length - 1) { onBoundary?.('down'); return; }
+        const col = visualCol(value, rows[rowIdx]!.start, cursor);
+        const next = rows[rowIdx + 1]!;
+        setCursor(charAtVisualCol(value, next.start, next.end, col));
       }
       return;
     }
@@ -166,17 +228,21 @@ export function TextInput({ value, onChange, onSubmit, focus = true, placeholder
     if (next !== value) { ours.current = next; valueRef.current = next; onChange(next); }
   }, { isActive: focus });
 
+  // Hard wrap: Ink breaks at exact display-width positions (no word wrap), so
+  // visual line breaks match our string-width-based row computation above.
+  const wrap = 'hard' as const;
+
   if (!value.length) {
     const shown = placeholder
       ? (focus ? invert(placeholder.slice(0, 1)) + placeholder.slice(1) : placeholder)
       : (focus ? invert(' ') : '');
-    return <Text dimColor={!!placeholder}>{shown}</Text>;
+    return <Text wrap={wrap} dimColor={!!placeholder}>{shown}</Text>;
   }
   const shown = mask ? mask.repeat(value.length) : value;
-  if (!focus) return <Text>{shown}</Text>;
+  if (!focus) return <Text wrap={wrap}>{shown}</Text>;
   // The cursor sits ON a character, or on a trailing space past the end.
   return (
-    <Text>
+    <Text wrap={wrap}>
       {shown.slice(0, cursor) + invert(shown[cursor] ?? ' ') + shown.slice(cursor + 1)}
     </Text>
   );

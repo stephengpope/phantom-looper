@@ -213,10 +213,16 @@ export class SessionStore {
 
   active(): LoadedSession | undefined { return this.get(this.activeId); }
 
-  /** Every loaded session, most recently spoken to first. */
+  /** Every loaded session sorted for the tab ring and session list.
+   *  Pinned sessions float to the top sorted by recency among themselves,
+   *  then unpinned sessions sorted by recency. */
   list(): LoadedSession[] {
-    return [...this.entries].sort(
-      (a, b) => (b.lastMessageAt - a.lastMessageAt) || (b.addedAt - a.addedAt));
+    return [...this.entries].sort((a, b) => {
+      const ap = a.pinned && a.lastMessageAt > 0;
+      const bp = b.pinned && b.lastMessageAt > 0;
+      if (ap !== bp) return bp ? 1 : -1;
+      return (b.lastMessageAt - a.lastMessageAt) || (b.addedAt - a.addedAt);
+    });
   }
 
   /** Add and make active. Adding one you already have just activates it —
