@@ -44,7 +44,7 @@ export function Toolbar({ groups = [], spin, spinWho, spinSince, toast, pinned }
   pinned?: boolean }) {
   const { cols } = useContext(SizeContext);
   if (toast) return (
-    <Box paddingLeft={1} width={cols} overflow="hidden"><Text backgroundColor={toast.bg} color="white" bold>{` ${toast.text} `}</Text></Box>
+    <Box paddingLeft={1} width={cols} height={1} overflow="hidden"><Text backgroundColor={toast.bg} color="white" bold>{` ${toast.text} `}</Text></Box>
   );
   const shown = groups
     .map((g) => g.filter((p) => (typeof p === 'string' ? p : p.text)))
@@ -52,10 +52,10 @@ export function Toolbar({ groups = [], spin, spinWho, spinSince, toast, pinned }
   if (!shown.length && !spin) return (
     // The held blank row — same shape as the real line, one cell of content
     // so yoga keeps the height.
-    <Box paddingLeft={1} width={cols} overflow="hidden"><Text> </Text></Box>
+    <Box paddingLeft={1} width={cols} height={1} overflow="hidden"><Text> </Text></Box>
   );
   return (
-    <Box paddingLeft={1} width={cols} overflow="hidden">
+    <Box paddingLeft={1} width={cols} height={1} overflow="hidden">
       <Text color="yellow">{pinned ? '📌 ' : '» '}</Text>
       {shown.map((g, gi) => (
         <Text key={gi} color="yellow">
