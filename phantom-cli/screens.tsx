@@ -200,13 +200,14 @@ export const tasksScreen = (w: WindowStore): Overlay => third('tasks', () => (
 ), { poll: () => { void w.refreshTasks().catch(quiet('refresh tasks')); } });
 
 /** /resume (sessions) and /workspace (workspaces) — one launcher, two
- *  modes. /resume re-reads on the poll while up: its rows spin and its
- *  locks lapse while you watch. The refresh swaps rows in place, so the
- *  cursor, the notice line and an armed [t] all stay put. */
+ *  modes. /resume follows the session list feed while up: a row moving
+ *  anywhere re-reads the list, so its rows spin and its locks lapse as they
+ *  happen. The refresh swaps rows in place, so the cursor and the notice
+ *  line stay put. */
 export const pickerScreen = (w: WindowStore, which: 'workspace' | 'resume'): Overlay => full(which, () => (
   w.picker ? <Launcher
     mode={which === 'resume' ? 'sessions' : 'workspaces'}
-    workspaces={w.picker.workspaces} sessions={w.picker.sessions} total={w.picker.total}
+    workspaces={w.workspaceRows} sessions={w.picker.sessions} total={w.picker.total}
     showSupervised={w.showSupervised}
     onToggleSupervised={() => w.toggleSupervised()}
     query={w.pickerQuery} rowsQuery={w.picker.query}
@@ -229,4 +230,4 @@ export const pickerScreen = (w: WindowStore, which: 'workspace' | 'resume'): Ove
         ? { kind: 'new', workspaceId: l.workspaceId }
         : { kind: 'open', id: l.sessionId });
     }} /> : null
-), which === 'resume' ? { poll: () => { void w.refreshPicker().catch(quiet('refresh the session list')); } } : {});
+), which === 'resume' ? { watch: w.watchPicker } : {});

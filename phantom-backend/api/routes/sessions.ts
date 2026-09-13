@@ -376,6 +376,30 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       return ok({ saved: true, bytes: Buffer.byteLength(data), updated_at: stamp.toISOString() });
     });
 
+  // The LIST's feed: every session's row changes, as notices. No rows ride it
+  // — the list is the server's query (Sessions.list: filters, cursor, pinned
+  // block), so a listener re-reads GET /sessions rather than adopting a
+  // second copy of the list rule. Built on the same bus as the per-session
+  // feeds: a turn's tokens (`part`) are left out, everything else — a hold,
+  // a save, a name, a pin, a create, a purge — is "this row moved". Not
+  // echo-filtered on purpose: the list draws the caller's own sessions too.
+  app.get('/sessions/events', { schema: { ...TAG, summary: 'Session list events stream',
+    description: 'ND-JSON, open until the client hangs up: {event:"changed",id} whenever any session row ' +
+      'changes in a way the list shows (hold, save, name, pin, plan mode, work state, create, destroy, ' +
+      'purge), plus {event:"heartbeat"} every 15 s. Carries no rows — re-read GET /sessions.' } },
+    async (req, reply) => {
+      reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
+      const write = (o: unknown) => { if (!reply.raw.destroyed) reply.raw.write(`${JSON.stringify(o)}\n`); };
+      const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
+      const unsubscribe = ctx.sessionEvents!.subscribeAll((id, e) => {
+        if (e.event !== 'part') write({ event: 'changed', id });
+      });
+      write({ event: 'heartbeat' });
+      await new Promise<void>((resolve) => reply.raw.on('close', resolve));
+      clearInterval(heartbeat);
+      unsubscribe();
+    });
+
   // The session's live feed: one long-lived ND-JSON stream per watched
   // session, the board route's shape exactly. Reading is allowed while another
   // client holds the session — watching a running session is safe; only writes

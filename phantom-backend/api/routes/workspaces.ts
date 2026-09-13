@@ -166,6 +166,10 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
       }
       await ensureWorkspaceSchema(ctx.pgPool, id, row.schemaName);
       const created = await ctx.db.select().from(workspaces).where(eq(workspaces.id, id));
+      // A workspace row changing IS a settings-shaped fact to every client
+      // (the list, the prefixes, the scopes): the settings feed is how they
+      // learn to re-read /workspaces — create, patch and delete all say so.
+      ctx.settingsEvents?.publish(workspaceScope(id), String(req.headers['x-phantom-looper-client'] ?? '') || undefined);
       return reply.code(201).send(ok(publicWorkspace(created[0], !!ownToken)));
     });
 
@@ -241,6 +245,8 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
       }
       if (Object.keys(patch).length) {
         await ctx.db.update(workspaces).set(patch).where(eq(workspaces.id, req.params.id));
+        ctx.settingsEvents?.publish(workspaceScope(req.params.id),
+          String(req.headers['x-phantom-looper-client'] ?? '') || undefined);
       }
       // The SAME settings writer PATCH /settings runs: null clears, and a
       // key this workspace may not override is refused here too.

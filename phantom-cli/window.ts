@@ -15,6 +15,7 @@ import type { ModelMessage, Tool } from 'ai';
 import { SessionStore, activeHold, type LoadedSession } from './sessions.js';
 import { SessionFeed } from './sessionFeed.js';
 import { SettingsFeed } from './settingsFeed.js';
+import { SessionsFeed } from './sessionsFeed.js';
 import { BoardStore, type Card, type Stream } from './board.js';
 import { VoiceClient, sidecarEnv, codingKanbanTool, screenModeTools,
   type KanbanArgs, type ScreenModeHandler } from './voice.js';
@@ -129,9 +130,12 @@ export interface Overlay {
    *  off the screen. Fires AFTER the field is cleared, so it may safely show
    *  another overlay. */
   onDismiss?: (result: unknown) => void;
-  /** Re-read while up, every `pollMs` — the lists whose rows spin and whose
-   *  locks lapse while you watch (/resume, /tasks). Stopped on dismiss. */
+  /** Re-read while up, every `pollMs` — a list whose rows the server cannot
+   *  announce (/tasks reads a container). Stopped on dismiss. */
   poll?: () => void;
+  /** Follow a server feed while up: starts the subscription, returns its
+   *  stop. The live way — /resume rides the session list feed. */
+  watch?: () => () => void;
 }
 
 export interface Dialog {
@@ -148,8 +152,6 @@ export interface Dialog {
 export const PICKER_PAGE = 30;
 /** How long after the last keystroke in /resume's filter line the list re-reads. */
 const PICKER_FILTER_DEBOUNCE_MS = 150;
-/** How long the picker's workspace list serves before its poll re-reads it. */
-const WORKSPACES_TTL_MS = 60_000;
 
 export interface WindowOptions {
   api: Api;
@@ -188,8 +190,8 @@ export interface WindowOptions {
   /** This window's session-lock id, so its own held sessions do not read
    *  "in use" on /resume. Empty in tests. */
   clientId?: string;
-  /** How often the open /resume and /tasks lists refresh. Session state on
-   *  screen follows the live feed, not this clock. Test seam. */
+  /** How often the open /tasks list refreshes (the container is read, not
+   *  announced). /resume and session state follow live feeds. Test seam. */
   pollMs?: number;
   /** How often the session's container is asked what is running while the
    *  window idles. Turn ends and opening /tasks refresh it too. Test seam. */
@@ -310,6 +312,7 @@ export class WindowStore {
       this.overlayClock = setInterval(o.poll, this.pollMs);
       this.overlayClock.unref?.();
     }
+    if (o.watch) this.overlayWatch = o.watch();
     this.notify();
   }
 
@@ -320,6 +323,7 @@ export class WindowStore {
     const prev = this.overlay;
     this.overlay = null;
     if (this.overlayClock) { clearInterval(this.overlayClock); this.overlayClock = null; }
+    if (this.overlayWatch) { this.overlayWatch(); this.overlayWatch = null; }
     // A question about what just left the screen has no answer.
     if (this.dialog) this.dismissDialog(undefined);
     prev?.onDismiss?.(result);
@@ -388,6 +392,8 @@ export class WindowStore {
   /** The open list's re-read clock (`Overlay.poll`), unref'd so it never
    *  holds the process open. */
   private overlayClock: ReturnType<typeof setInterval> | null = null;
+  /** The open overlay's feed subscription (`Overlay.watch`), stopped with it. */
+  private overlayWatch: (() => void) | null = null;
   private get pollMs(): number { return this.opts.pollMs ?? 3_000; }
 
   /** ctrl+g, and the nudge that puts the pane back when the Assistant needs to
@@ -1182,7 +1188,7 @@ export class WindowStore {
 
   /** `query` is the filter text these rows ANSWER (the screen's empty
    *  state reads it) — the live text is `pickerQuery`, which runs ahead. */
-  picker: { workspaces: WorkspaceInfo[]; sessions: SessionInfo[]; total: number; end: boolean; query: string } | null = null;
+  picker: { sessions: SessionInfo[]; total: number; end: boolean; query: string } | null = null;
   pickerNotice: string | undefined;
   /** A duplicate waiting on its one question — which model the copy runs on.
    *  Dropped with its screen. */
@@ -1278,20 +1284,19 @@ export class WindowStore {
     // old list was scrolled. The same filter re-reads what is loaded.
     const want = this.pickerQuery !== (this.picker?.query ?? '')
       ? PICKER_PAGE : Math.max(this.picker?.sessions.length ?? 0, PICKER_PAGE);
-    // Sessions move every tick; workspaces almost never. On the poll the
-    // workspace list is re-read once a minute, the session list every time.
-    const wsFresh = this.picker && Date.now() - this.workspacesReadAt < WORKSPACES_TTL_MS;
+    // The workspace list is read ONCE, at open; after that the settings feed
+    // says when a workspace row moved (create, patch, delete) and
+    // settingChanged re-reads it into workspaceRows, which the screen draws.
     const [ws, got] = await Promise.all([
-      wsFresh ? this.picker!.workspaces : this.api('GET', '/workspaces') as Promise<WorkspaceInfo[]>,
+      this.picker ? this.workspaceRows : this.api('GET', '/workspaces') as Promise<WorkspaceInfo[]>,
       this.api('GET', `/sessions?${this.listQuery()}&limit=${want}`),
     ]);
     if (seq !== this.pickerSeq) return;
-    if (!wsFresh) { this.workspacesReadAt = Date.now(); this.seeWorkspaces(ws); }
+    if (!this.picker) this.seeWorkspaces(ws);
     const { sessions: ss, total } = got as { sessions: SessionInfo[]; total: number };
-    this.picker = { workspaces: ws, ...this.withOpenHere(ss, total), end: ss.length < want, query: this.pickerQuery };
+    this.picker = { ...this.withOpenHere(ss, total), end: ss.length < want, query: this.pickerQuery };
     this.notify();
   };
-  private workspacesReadAt = 0;
   private pickerSeq = 0;
 
   /** The next page, appended in place. The cursor is the last SERVER row as
@@ -1326,7 +1331,7 @@ export class WindowStore {
    *  were with a note, never on an empty screen. */
   openPicker = async (which: 'workspace' | 'resume'): Promise<void> => {
     try {
-      this.workspacesReadAt = 0;   // an OPEN always reads both lists fresh; only the poll spares one
+      this.picker = null;   // an OPEN reads both lists fresh
       this.pickerQuery = '';
       await this.refreshPicker();
       this.pickerNotice = undefined;
@@ -1358,6 +1363,18 @@ export class WindowStore {
       this.pickerNotice = `could not pin session ${id}: ${(e as Error).message}`;
     }
     this.notify();
+  };
+
+  /** /resume follows the session list feed while up: any row moving
+   *  anywhere re-reads the loaded rows (coalesced); a reconnect re-reads
+   *  too, since notices were missed. No stream (tests) = the list stands
+   *  as read at open. Returns the stop. */
+  watchPicker = (): (() => void) => {
+    if (!this.opts.stream) return () => {};
+    const feed = new SessionsFeed(this.opts.stream,
+      () => { void this.refreshPicker().catch(quiet('refresh the session list')); });
+    feed.start();
+    return () => feed.stop();
   };
 
   /** [s] on /resume: flip the filter and re-read. */
@@ -1464,7 +1481,7 @@ export class WindowStore {
   /** `e` on a /workspace row: that workspace's settings, on their own screen
    *  (its close reopens the list). */
   editWorkspace(id: string): void {
-    const w = this.picker?.workspaces.find((x) => x.id === id);
+    const w = this.workspaceRows.find((x) => x.id === id);
     if (w) this.showOverlay(workspaceSettingsScreen(this, w));
   }
 

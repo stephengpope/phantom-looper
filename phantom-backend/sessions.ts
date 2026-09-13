@@ -14,9 +14,12 @@
 // and is recorded on the row, so it is decided once and never re-derived.
 //
 // Events: a write that changes a fact a watcher draws (name, plan mode, agent,
-// work, the record landing) publishes it here, with the write. Lock events
-// stay with their callers: a hold means different things to a window (its
-// spinner) and to a git sync (nothing to show), so the caller says.
+// work, the record landing) publishes it here, with the write; EVERY other
+// write publishes a bare `session` record — "this row moved" — which is what
+// the session LIST feed (GET /sessions/events) is built on, so no writer
+// anywhere has to remember to tell the list. Lock events proper stay with
+// their callers: a hold means different things to a window (its spinner) and
+// to a git sync (nothing to show), so the caller says.
 import fs from 'node:fs/promises';
 import { and, desc, eq, gte, ilike, inArray, isNull, isNotNull, lt, ne, or, count, sql as sqlRaw } from 'drizzle-orm';
 import type { Db } from './db/client.js';
@@ -144,6 +147,10 @@ export class Sessions {
     /** The per-session feed; absent in tests that have no watchers. */
     private readonly events?: SessionEvents,
   ) {}
+
+  /** The row moved in a way no richer event names: the list re-reads. Under
+   *  no client, so every listener hears it (the feed drops a client's own). */
+  private changed(id: string): void { this.events?.publish(id, '', { event: 'session' }); }
 
   // ── reads ──────────────────────────────────────────────────────────────────
 
@@ -394,6 +401,7 @@ export class Sessions {
       await this.db.update(sessions).set({ status: 'active', lastUsedAt: new Date() })
         .where(eq(sessions.id, prior.id));
       log.info({ session: id, branch, found }, 'session restarted');
+      this.changed(prior.id);
       const row = (await this.db.select(sessionColumns).from(sessions).where(eq(sessions.id, prior.id)))[0];
       return { ...row, branch, claimSha: priorFolder?.claimSha ?? claimSha };
     }
@@ -405,6 +413,7 @@ export class Sessions {
     const row = (await this.db.select(sessionColumns).from(sessions).where(eq(sessions.id, id)))[0];
     log.info({ session: id, workspace: `${workspace.owner}/${workspace.name}`, branch, found, claimed, claimSha },
       'session created');
+    this.changed(id);
     return { ...row, branch, claimSha };
   }
 
@@ -419,6 +428,7 @@ export class Sessions {
       id, workspaceId, status: 'active', agent: opts.agent,
       ...(opts.folderId ? { folderId: opts.folderId } : {}),
     });
+    this.changed(id);
     return (await this.get(id))!;
   }
 
@@ -453,6 +463,7 @@ export class Sessions {
         transcriptUpdatedAt: stamp,
       } : {}),
     }).where(eq(sessions.id, copy.id));
+    this.changed(copy.id);
   }
 
   /** Explicit delete honors the request even when work would be lost — that is
@@ -465,6 +476,7 @@ export class Sessions {
     if (session.folderId !== session.id) {
       await this.db.update(sessions).set({ status: 'destroyed' }).where(eq(sessions.id, session.id));
       log.info({ session: session.id }, 'conversation-only session destroyed (no files)');
+      this.changed(session.id);
       return;
     }
     const folder = await getFolder(this.db, session.folderId);
@@ -479,6 +491,7 @@ export class Sessions {
     await fs.rm(sessionDir(this.paths, session.id), { recursive: true, force: true });
     await this.db.update(sessions).set({ status: 'destroyed' }).where(eq(sessions.id, session.id));
     log.info({ session: session.id, state }, 'session destroyed');
+    this.changed(session.id);
   }
 
   /** The row goes for good — its overrides with it, the transcript on it.
@@ -486,6 +499,7 @@ export class Sessions {
   async purge(id: string): Promise<void> {
     await this.db.delete(settingsRows).where(eq(settingsRows.scope, sessionScope(id)));
     await this.db.delete(sessions).where(eq(sessions.id, id));
+    this.changed(id);
   }
 
   // ── the record ─────────────────────────────────────────────────────────────
@@ -554,6 +568,7 @@ export class Sessions {
       .where(eq(sessions.id, id))
       .returning({ name: sessions.name, turnCount: sessions.turnCount, agent: sessions.agent });
     const r = rows[0];
+    this.changed(id);
     return { firstMessage: !!r && r.name === null && r.turnCount === 0 && r.agent === null };
   }
 
@@ -567,6 +582,7 @@ export class Sessions {
       tokensCacheRead: totals.cache_read, tokensCacheWrite: totals.cache_write,
       tokensAsOf: s.transcriptUpdatedAt,
     }).where(eq(sessions.id, s.id));
+    this.changed(s.id);
     return totals;
   }
 
@@ -590,6 +606,7 @@ export class Sessions {
       turnCount: sqlRaw`${sessions.turnCount} + 1`,
       ...(pinning ? { provider: model.provider, model: model.model, baseUrl: model.baseUrl } : {}),
     }).where(eq(sessions.id, id));
+    this.changed(id);
   }
 
   // ── facts a person or a job sets ───────────────────────────────────────────
@@ -620,6 +637,7 @@ export class Sessions {
    *  (a person's /rename included) stands. */
   async nameIfUnnamed(id: string, name: string): Promise<void> {
     await this.db.update(sessions).set({ name }).where(and(eq(sessions.id, id), isNull(sessions.name)));
+    this.changed(id);
   }
 
   /** The cli's /plan switch: while on, clients build the coding agent's
@@ -632,6 +650,7 @@ export class Sessions {
   /** The /pin switch: while on, the session sits at the top of every list. */
   async setPinned(id: string, on: boolean): Promise<void> {
     await this.db.update(sessions).set({ pinned: on }).where(eq(sessions.id, id));
+    this.changed(id);
   }
 
   /** Where the session's work stands, as the git refresh measured it. A
@@ -644,6 +663,7 @@ export class Sessions {
   /** The branch reached origin. */
   async markPushed(id: string): Promise<void> {
     await this.db.update(sessions).set({ lastPushAt: new Date() }).where(eq(sessions.id, id));
+    this.changed(id);
   }
 
   /** The idle digest mentioned this session. */
@@ -654,6 +674,7 @@ export class Sessions {
   /** Tool calls count as use; background jobs do not, or nothing ever goes cold. */
   async touch(id: string): Promise<void> {
     await this.db.update(sessions).set({ lastUsedAt: new Date() }).where(eq(sessions.id, id));
+    this.changed(id);
   }
 
   /** Tag a conversation with who drives it. The loop stamps its coder seat at
@@ -661,6 +682,7 @@ export class Sessions {
    *  save re-derives it from the writer at turn END (agentAfterSave). */
   async stampAgent(id: string, agent: 'coding' | 'supervisor'): Promise<void> {
     await this.db.update(sessions).set({ agent }).where(eq(sessions.id, id));
+    this.changed(id);
   }
 
   // ── holds ──────────────────────────────────────────────────────────────────
@@ -677,6 +699,7 @@ export class Sessions {
         or(isNull(sessions.lockedBy), eq(sessions.lockedBy, client),
           isNull(sessions.lockExpiresAt), lt(sessions.lockExpiresAt, new Date()))))
       .returning({ id: sessions.id });
+    if (rows.length) this.changed(s.id);
     return rows.length ? expires : null;
   }
 
@@ -687,6 +710,7 @@ export class Sessions {
       .set({ lockedBy: null, lockedLabel: null, lockExpiresAt: null })
       .where(and(eq(sessions.id, id), eq(sessions.lockedBy, client)))
       .returning({ id: sessions.id });
+    if (rows.length) this.changed(id);
     return rows.length > 0;
   }
 
