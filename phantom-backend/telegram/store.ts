@@ -134,4 +134,19 @@ export class TelegramState {
       : { kind: 'assistant' },
   };
 }
+
+  /** The most recent message the bot sent for a given session, by recency.
+   *  Used to show the last agent reply when switching into code mode. */
+  async getLastSentForSession(chatId: number, sessionId: string): Promise<string | null> {
+    const rows = await this.db.select({ content: telegramSent.content })
+      .from(telegramSent)
+      .where(and(
+        eq(telegramSent.chatId, chatId),
+        eq(telegramSent.origin, 'session'),
+        eq(telegramSent.originSessionId, sessionId),
+      ))
+      .orderBy(sql`${telegramSent.sentAt} desc`)
+      .limit(1);
+    return rows.length ? rows[0].content : null;
+  }
 }

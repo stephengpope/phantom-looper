@@ -102,17 +102,19 @@ export async function handleCommand(
     case 'code': {
       // Hand the conversation to the active session's coding agent — the ONE
       // slash command that routes there. `/code n` points at n first.
+      // Silent: enterMode sends the code-mode label which already carries the
+      // session name (and the last agent message), so the 🔀 line is redundant.
       if (arg !== undefined) {
         const id = listedSession(dm, arg);
         if (!id) { await reply('⚠️ Send /sessions first to see the list, then /code <number>.'); return; }
-        const r = await engine.switchSession(client, dm, id);
+        const r = await engine.switchSession(client, dm, id, { silent: true });
         if ('error' in r) { await reply('⚠️ That session no longer exists — /sessions for a fresh list.'); return; }
       } else if (!acc.activeSessionId) {
         await reply('⚠️ Pick a session first — /sessions or /new.');
         return;
       }
       if (!await engine.enterMode(client, dm, 'code')) {
-        await reply(await engine.codeModeLabel());
+        await reply(await engine.codeModeLabel(dm));
       }
       return;
     }

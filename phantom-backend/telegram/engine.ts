@@ -797,7 +797,7 @@ export class TelegramEngine {
     if (stored.origin.kind === 'session' && stored.origin.sessionId) {
       if (acc.activeSessionId === stored.origin.sessionId && acc.mode === 'code') return;
       if (acc.activeSessionId !== stored.origin.sessionId) {
-        const r = await this.switchSession(client, dm, stored.origin.sessionId);
+        const r = await this.switchSession(client, dm, stored.origin.sessionId, { silent: true });
         if ('error' in r) { await client.sendMessage(dm, '⚠️ That session no longer exists.'); return; }
       }
       await this.enterMode(client, dm, 'code');
@@ -812,13 +812,15 @@ export class TelegramEngine {
 
   /** Point the account at a session. The pointer only — the mode is untouched,
    *  so the assistant keeps the conversation and a coder is never entered by
-   *  accident. Announces the switch; the ONE place the 🔀 line is sent. */
-  async switchSession(client: TelegramClient, dm: number, id: string):
+   *  accident. Announces the switch unless `silent` — callers that immediately
+   *  follow with enterMode('code') pass silent because the code-mode label
+   *  already carries the session name. */
+  async switchSession(client: TelegramClient, dm: number, id: string, opts?: { silent?: boolean }):
   Promise<{ id: string; title: string | null } | { error: string }> {
     const s = await this.deps.sessions.get(id);
     if (!s) return { error: `no session ${id}` };
     await this.deps.state.setActiveSession(id);
-    await client.sendMessage(dm, `🔀 Active session: ${s.name ?? 'untitled'}`);
+    if (!opts?.silent) await client.sendMessage(dm, `🔀 Active session: ${s.name ?? 'untitled'}`);
     return { id, title: s.name ?? null };
   }
 
@@ -828,7 +830,7 @@ export class TelegramEngine {
    *  caller checks (/code) or has just switched (a reply to a coder's bubble). */
   async enterMode(client: TelegramClient, dm: number, mode: TelegramMode): Promise<boolean> {
     const msg = mode === 'code'
-      ? await this.codeModeLabel()
+      ? await this.codeModeLabel(dm)
       : undefined;
     const changed = await this.deps.state.setMode(mode, (t) => client.sendMessage(dm, t), msg);
     await client.setMyCommands(menuFor(mode), dm).catch(() => {});
@@ -836,8 +838,10 @@ export class TelegramEngine {
   }
 
   /** The short line sent when entering code mode — workspace prefix, card ID,
-   *  session name. One function, used by enterMode and the /code echo. */
-  async codeModeLabel(): Promise<string> {
+   *  session name, and (when switching) the last thing the agent said. One
+   *  function, used by enterMode and the /code echo. Pass `dm` to include the
+   *  last agent message (the switch announcement); omit it for a bare label. */
+  async codeModeLabel(dm?: number): Promise<string> {
     const acc = await this.deps.state.account();
     if (!acc.activeSessionId) return '🤖 Coding agent';
     const s = await this.deps.sessions.get(acc.activeSessionId);
@@ -850,7 +854,12 @@ export class TelegramEngine {
     if (prefix && loop?.card != null) parts.push(`${prefix}-${loop.card}`);
     else if (loop?.card != null) parts.push(`#${loop.card}`);
     parts.push(s.name ?? 'untitled');
-    return parts.join(' · ');
+    const title = parts.join(' · ');
+    if (dm != null) {
+      const last = await this.deps.state.getLastSentForSession(dm, acc.activeSessionId).catch(() => null);
+      if (last) return titled(title, last);
+    }
+    return title;
   }
 
   private async speakReacted(reaction: any, dm: number): Promise<void> {
