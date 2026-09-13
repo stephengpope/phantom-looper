@@ -50,6 +50,7 @@ import { runCodingTurn, drain, settingsValues, sumTokens, sumInputTokens } from 
 import { shouldCompact, resolveContextWindow, resolveCompactSetting, CompactionLock, compact, getStrategy } from '../../core/llm/compaction.js';
 import { contextWindowFor } from '../models.js';
 import { helperCall } from '../helperCall.js';
+import type { HelperUsage } from '../helperUsage.js';
 import { supervisorAgent, supervisorInstructions } from '../../core/llm/agents/supervisor.js';
 import { canTurn, unsentKickoff, nextStep, needsFreshSession, heldBy, LOOP_COLUMNS, type CardRow } from './logic.js';
 import { injectFetch } from './injectFetch.js';
@@ -68,6 +69,7 @@ export interface LooperDeps {
   loops: Loops;
   cards: Cards;
   settings: Settings;
+  helperUsage: HelperUsage;
   app: FastifyInstance;
   apiKey: string;
   /** The board's event bus (api/boardEvents.ts): the engine's card writes go
@@ -473,7 +475,7 @@ export class LooperEngine {
       summarizePct,
       call: async (system, prompt) => {
         const r = await helperCall({
-          db: this.deps.db, config: model, kind: 'compaction',
+          usage: this.deps.helperUsage, config: model, kind: 'compaction', sessionId,
           system, prompt, ...(maxTokens != null ? { maxTokens: Number(maxTokens) } : {}),
         });
         return r.text;

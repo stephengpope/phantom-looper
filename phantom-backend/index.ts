@@ -281,7 +281,7 @@ async function main() {
   // are answering. Event-driven: routes poke it through ctx.looper; start()
   // is ONE recovery sweep, not a poll.
   const looper = new LooperEngine({ sessions, workspaces, loops, cards, settings, app, apiKey: env.apiKey, events: ctx.events,
-    sessionEvents: ctx.sessionEvents, activeTurns: ctx.activeTurns, backdoor: ctx.backdoor });
+    sessionEvents: ctx.sessionEvents, activeTurns: ctx.activeTurns, backdoor: ctx.backdoor, helperUsage });
   ctx.looper = looper;
   looper.start();
 
