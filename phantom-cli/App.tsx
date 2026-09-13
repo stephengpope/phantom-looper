@@ -246,6 +246,18 @@ export function App({
   // pane it started in; on release its text is copied. Kept in a ref — the
   // events arrive faster than a render.
   const selection = useRef<Selection | null>(null);
+  // The scroll offset as a ref — the auto-scroll interval and mouse handlers
+  // need the live value without re-registering on every scroll change.
+  const scrollRef = useRef(scroll);
+  scrollRef.current = scroll;
+  const voiceScrollRef = useRef(voiceScroll);
+  voiceScrollRef.current = voiceScroll;
+  // Auto-scroll during drag-to-select: when the mouse reaches the top or
+  // bottom edge of the pane, a 50ms interval scrolls and extends the
+  // selection continuously — the xterm.js pattern (SelectionService's
+  // _dragScrollIntervalTimer). Cleared on release.
+  const dragScrollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const dragScrollDir = useRef<number>(0);   // -1 up, +1 down, 0 none
 
   // The session on screen — or NONE. The window opens whatever is wrong (that
   // is the point: the screens that fix a dead token or a bad address are all
@@ -406,6 +418,29 @@ export function App({
   // it started in, highlighted through the screen mirror and copied to the
   // clipboard on release — nothing to press. Every other handler ignores
   // these strings (TextInput asks isMouseInput; the rest act on key flags).
+  //
+  // Selection coordinates are in CONTENT space (screenY + scroll), so the
+  // anchor stays pinned to the same text when the viewport scrolls — no
+  // manual adjustment needed. Converted to screen space only for rendering.
+  // Auto-scroll: a 50ms interval fires while the mouse is at the top or
+  // bottom edge during a drag, scrolling the pane and extending the selection.
+
+  /** The scroll for whichever pane the selection lives in. */
+  const selScroll = (pane: 'chat' | 'voice') =>
+    pane === 'chat' ? scrollRef.current : voiceScrollRef.current;
+
+  /** Highlight the current selection on screen, converting content → screen. */
+  const highlightSel = (sel: Selection | null) => {
+    if (!sel) { screen?.highlight(null); return; }
+    screen?.highlight(selectionRanges(sel, selScroll(sel.pane), screenRows));
+  };
+
+  /** Stop the auto-scroll interval. */
+  const stopDragScroll = () => {
+    if (dragScrollTimer.current) { clearInterval(dragScrollTimer.current); dragScrollTimer.current = null; }
+    dragScrollDir.current = 0;
+  };
+
   useInput((ch) => {
     if (!isMouseInput(ch)) return;
     const ev = parseMouse(ch);
@@ -420,34 +455,67 @@ export function App({
       if (ev.button === 0) return;
       const step = 3 * ev.button;   // +down scrolls toward the tail (offset shrinks)
       scrollBy(inVoice ? 'voice' : 'chat', -step);
-      // Scrolling during a drag-select: content shifts on screen so the
-      // anchor (the press point) now sits on different text. Adjust its y by
-      // the scroll step so the selection tracks the original content and the
-      // user can extend across multiple pages.
+      // During a drag-select, re-highlight: the anchor is in content space so
+      // it tracks the text automatically — just re-render with the new scroll.
       const sel = selection.current;
       if (sel) {
-        sel.anchor.y += step;
-        sel.head = { x: ev.x, y: ev.y };
-        screen?.highlight(selectionRanges(sel));
+        sel.head = { x: ev.x, contentY: ev.y + selScroll(sel.pane) };
+        highlightSel(sel);
       }
       return;
     }
     if (ev.button !== 0) return;   // left button only
     if (ev.kind === 'press') {
+      stopDragScroll();
+      const pane: 'chat' | 'voice' = inVoice ? 'voice' : 'chat';
+      const curScroll = selScroll(pane);
       const region = inVoice ? { left: mainCols + 1, right: screenCols - 1 } : { left: 0, right: mainCols - 1 };
-      selection.current = { anchor: { x: ev.x, y: ev.y }, head: { x: ev.x, y: ev.y }, region };
+      selection.current = {
+        anchor: { x: ev.x, contentY: ev.y + curScroll },
+        head:   { x: ev.x, contentY: ev.y + curScroll },
+        region, pane,
+      };
       screen?.highlight(null);
+      // Start the auto-scroll interval — it only acts when dragScrollDir is
+      // non-zero (the drag handler sets it when the mouse is at an edge).
+      dragScrollTimer.current = setInterval(() => {
+        const dir = dragScrollDir.current;
+        const sel = selection.current;
+        if (!dir || !sel) return;
+        const step = 3;   // rows per tick, matching the wheel step
+        scrollBy(sel.pane, dir * step);
+        // Extend the head to the viewport edge in content space.
+        const sc = selScroll(sel.pane);
+        if (dir > 0) {
+          // Scrolling up (into history): head → top of viewport
+          sel.head = { x: sel.region.left, contentY: sc + 0 };
+        } else {
+          // Scrolling down (toward tail): head → bottom of viewport
+          sel.head = { x: sel.region.right, contentY: sc + screenRows - 1 };
+        }
+        highlightSel(sel);
+      }, 50);
       return;
     }
     const sel = selection.current;
     if (!sel) return;
-    sel.head = { x: ev.x, y: ev.y };
-    const ranges = selectionRanges(sel);
-    if (ev.kind === 'drag') { screen?.highlight(ranges); return; }
+    if (ev.kind === 'drag') {
+      sel.head = { x: ev.x, contentY: ev.y + selScroll(sel.pane) };
+      // Detect edge: set the auto-scroll direction.
+      if (ev.y <= 0) dragScrollDir.current = 1;        // at top → scroll up (into history, offset grows)
+      else if (ev.y >= screenRows - 1) dragScrollDir.current = -1;  // at bottom → scroll down
+      else dragScrollDir.current = 0;
+      highlightSel(sel);
+      return;
+    }
     // release
-    const moved = sel.anchor.x !== sel.head.x || sel.anchor.y !== sel.head.y;
+    stopDragScroll();
+    const curScroll = selScroll(sel.pane);
+    sel.head = { x: ev.x, contentY: ev.y + curScroll };
+    const moved = sel.anchor.x !== sel.head.x || sel.anchor.contentY !== sel.head.contentY;
     selection.current = null;
     if (!moved || !screen) { screen?.highlight(null); return; }
+    const ranges = selectionRanges(sel, curScroll, screenRows);
     const text = screen.textOf(ranges).join('\n').trim();
     screen.highlight(null);
     if (!text) return;

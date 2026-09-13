@@ -55,24 +55,37 @@ export function parseMouse(input: string): MouseEvent | null {
 
 // --- selection ------------------------------------------------------------------
 
-export interface Point { x: number; y: number }
+/** A point in content space: x is a screen column, contentY is the screen row
+ *  plus the pane's scroll offset at the time of the event — so it stays pinned
+ *  to the same text regardless of scrolling (xterm.js's buffer-coordinate idea,
+ *  where bufferRow = viewportRow + ydisp). */
+export interface ContentPoint { x: number; contentY: number }
 /** A region the selection may not leave — the pane it started in. */
 export interface Region { left: number; right: number }
-export interface Selection { anchor: Point; head: Point; region: Region }
+export interface Selection {
+  anchor: ContentPoint;
+  head: ContentPoint;
+  region: Region;
+  /** Which pane the selection lives in, so auto-scroll targets the right one. */
+  pane: 'chat' | 'voice';
+}
 /** One highlighted row: columns x0..x1 inclusive. */
 export interface Range { y: number; x0: number; x1: number }
 
 /** The rows and columns a selection covers, reading order, clamped to its
- *  region: the first row from the start column to the region's right edge,
- *  whole rows between, the last row from the region's left edge to the end.
- *  Like a terminal's selection, but it cannot bleed into the other pane. */
-export function selectionRanges(sel: Selection): Range[] {
+ *  region and the visible viewport. Anchor and head are in content space;
+ *  `scroll` converts them to screen rows, and `screenRows` clips to what is
+ *  on screen — rows outside the viewport produce no Range entries. */
+export function selectionRanges(sel: Selection, scroll: number, screenRows: number): Range[] {
   const { region } = sel;
-  let a = sel.anchor, b = sel.head;
+  // Convert content coords to screen coords.
+  let a = { x: sel.anchor.x, y: sel.anchor.contentY - scroll };
+  let b = { x: sel.head.x, y: sel.head.contentY - scroll };
   if (b.y < a.y || (b.y === a.y && b.x < a.x)) [a, b] = [b, a];
   const clamp = (x: number) => Math.min(region.right, Math.max(region.left, x));
   const out: Range[] = [];
   for (let y = a.y; y <= b.y; y++) {
+    if (y < 0 || y >= screenRows) continue;   // off-screen — skip
     const x0 = y === a.y ? clamp(a.x) : region.left;
     const x1 = y === b.y ? clamp(b.x) : region.right;
     if (x1 >= x0) out.push({ y, x0, x1 });
