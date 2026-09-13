@@ -14,7 +14,8 @@
 // Cursor state is ours too, so a value changed from outside — tab completion,
 // ↑ through what you said before — puts the cursor at the end without the
 // caller having to remount the component to move it.
-import { useInput, usePaste } from 'ink';
+import { usePaste } from 'ink';
+import { useInput } from './useInput.js';
 import { Text } from './Text.js';
 import { isMouseInput } from '../mouse.js';
 import { PasteStore, chipAtEnd } from '../paste.js';

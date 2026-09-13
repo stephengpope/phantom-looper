@@ -2,7 +2,8 @@
 // when it has open-ended suggestions (the models.dev catalog), a line of text
 // otherwise, masked when it is a secret. Nothing here knows what a setting
 // means — it is handed a shape and returns a value.
-import { Box, useInput } from 'ink';
+import { Box } from 'ink';
+import { useInput } from './useInput.js';
 import { FixedText } from './Text.js';
 import { useState } from 'react';
 import { TextInput } from './TextInput.js';

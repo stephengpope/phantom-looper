@@ -56,7 +56,7 @@ import type { Preset } from './components/Presets.js';
 import type { NewWorkspaceRequest } from './components/NewWorkspace.js';
 import { COMMANDS, matches, parse } from './commands.js';
 import { WorkspaceDirectory, buildAssistantKit } from './assistantKit.js';
-import { confirmScreen, boardScreen, switcherScreen, settingsScreen, keysScreen, secretsScreen,
+import { confirmDialog, boardScreen, switcherScreen, settingsScreen, keysScreen, secretsScreen,
   voiceScreen, localSettingsScreen, presetsScreen, duplicateModelScreen, workspaceSettingsScreen,
   addWorkspaceScreen, archivedScreen, tasksScreen, pickerScreen } from './screens.js';
 import type { SkillMeta } from '../core/skills/skills.js';
@@ -107,27 +107,39 @@ export type CloseResult = { ok: true; closed: string; on_screen: string; opened_
   | { error: string };
 
 // ── Overlay ───────────────────────────────────────────────────────────────
-// One field, one concept: something is showing on top of the chat, or not.
-// An INLINE overlay replaces the prompt zone (the conversation stays above);
-// a FULL one replaces the whole column (every menu, the board). The
-// component inside owns its drawing and its keyboard; the window just puts
-// it on screen and delivers the result when it goes. Every overlay is built
-// in screens.tsx.
+// One field, one concept: a screen is showing on top of the chat, or not.
+// A FULL overlay replaces the whole column (every menu, the board); a THIRD
+// takes the bottom third with the conversation still above it (the glance
+// lists: /tasks, the duplicate's model pick). The component inside owns its
+// drawing and its keyboard; the window just puts it on screen and delivers
+// the result when it goes. Every overlay is built in screens.tsx.
+//
+// A DIALOG is the one thing that sits on top of an overlay: a yes/no in its
+// own slot at the bottom of the column, whatever is under it. While one is
+// up the component beneath stops taking keys (components/useInput.ts).
 
 export interface Overlay {
-  size: 'inline' | 'full';
+  size: 'full' | 'third';
   /** What is up, for the log line and the few gates that ask (`boardUp`). */
   name: string;
   /** Draws it. Runs on every App render, so it reads the store's CURRENT
    *  data each time. `main` is the column's size — the board lays out by it. */
   render: (main: { width: number; height: number }) => ReactNode;
-  /** Fires when the overlay goes, with what it answered: a confirm's
-   *  boolean; `undefined` when something else took it off the screen. Fires
-   *  AFTER the field is cleared, so it may safely show another overlay. */
+  /** Fires when the overlay goes. `undefined` when something else took it
+   *  off the screen. Fires AFTER the field is cleared, so it may safely show
+   *  another overlay. */
   onDismiss?: (result: unknown) => void;
   /** Re-read while up, every `pollMs` — the lists whose rows spin and whose
    *  locks lapse while you watch (/resume, /tasks). Stopped on dismiss. */
   poll?: () => void;
+}
+
+export interface Dialog {
+  render: () => ReactNode;
+  /** Rows it draws, so the screen under it can give them up. */
+  rows: number;
+  /** The answer: enter's true, esc's false, `undefined` when taken down. */
+  onDismiss: (result: unknown) => void;
 }
 
 /** /resume's page size: what the picker fetches at open and appends per
@@ -280,6 +292,8 @@ export class WindowStore {
 
   /** The overlay up now, or null: the chat, its prompt and its keys. */
   overlay: Overlay | null = null;
+  /** The question up now, over whatever is under it, or null. */
+  dialog: Dialog | null = null;
 
   /** Put an overlay on screen. One at a time: whatever was up goes first,
    *  unanswered (its callback gets `undefined`). A screen retires the
@@ -304,32 +318,53 @@ export class WindowStore {
     const prev = this.overlay;
     this.overlay = null;
     if (this.overlayClock) { clearInterval(this.overlayClock); this.overlayClock = null; }
+    // A question about what just left the screen has no answer.
+    if (this.dialog) this.dismissDialog(undefined);
     prev?.onDismiss?.(result);
+    this.notify();
+  };
+
+  /** Put a question up. One at a time: a second one replaces the first,
+   *  unanswered. */
+  showDialog(d: Dialog): void {
+    if (this.dialog) this.dismissDialog(undefined);
+    this.dialog = d;
+    this.splash = false;
+    this.notify();
+  }
+
+  /** Take the question down with its answer — the dialog's enter and esc,
+   *  ctrl+c, and whatever replaces what it was asking about. */
+  dismissDialog = (result?: unknown): void => {
+    const prev = this.dialog;
+    this.dialog = null;
+    prev?.onDismiss(result);
     this.notify();
   };
 
   /** True while anything is up — the one gate for input routing: the chat's
    *  handlers and the prompt are off while this is true. */
-  get hasOverlay(): boolean { return this.overlay !== null; }
+  get hasOverlay(): boolean { return this.overlay !== null || this.dialog !== null; }
 
   /** The board owns the column (a card opened from it counts). The
    *  Assistant's "show card" asks, to know where esc should go back to. */
   get boardUp(): boolean { return this.overlay?.name === 'board'; }
 
-  /** A yes/no in the prompt zone: enter is yes, esc is no, and so is
-   *  anything that takes the question off the screen. An AGENT's question
-   *  names the asker (`who`) and rides its turn's abort: a stopped turn
-   *  takes the question down, answered no, so nothing waits on a dead call. */
+  /** THE yes/no, wherever you are — the chat, /resume, the board: enter is
+   *  yes, esc is no, and so is anything that takes the question off the
+   *  screen. An AGENT's question names the asker (`who`) and rides its
+   *  turn's abort: a stopped turn takes the question down, answered no, so
+   *  nothing waits on a dead call. */
   confirm(title: string, message?: string, ask?: { who: string; signal?: AbortSignal }): Promise<boolean> {
     return new Promise((resolve) => {
       if (ask?.signal?.aborted) { resolve(false); return; }
-      const screen = confirmScreen(this, title, message, ask?.who, (yes) => {
+      const dialog = confirmDialog(this, title, message, ask?.who, (yes) => {
         ask?.signal?.removeEventListener('abort', onAbort);
         resolve(yes);
       });
-      const onAbort = () => { if (this.overlay === screen) this.dismissOverlay(false); };
+      const onAbort = () => { if (this.dialog === dialog) this.dismissDialog(false); };
       ask?.signal?.addEventListener('abort', onAbort);
-      this.showOverlay(screen);
+      this.showDialog(dialog);
     });
   }
 
@@ -1151,16 +1186,12 @@ export class WindowStore {
   /** [s] on /resume: the looper's supervisor seats in the list or not. A fetch
    *  parameter, not a filter — the server decides what the list is. */
   showSupervised = false;
-  /** The armed /resume trash: the row [t] armed, and whether the server's
-   *  unpushed-work refusal already upgraded it to a force-confirm. */
-  private trashArmed: { id: string; force: boolean } | null = null;
   private morePickerInFlight = false;
 
   tasks: TasksView | null = null;
   tasksNotice: string | undefined;
   /** The toolbar's count. Null only before the first read lands. */
   taskCount: number | null = null;
-  private killArmed: string | null = null;
 
   archived: Card[] = [];
   archivedNotice: string | undefined;
@@ -1256,7 +1287,6 @@ export class WindowStore {
       this.workspacesReadAt = 0;   // an OPEN always reads both lists fresh; only the poll spares one
       await this.refreshPicker();
       this.pickerNotice = undefined;
-      this.trashArmed = null;
       this.showOverlay(pickerScreen(this, which));
     } catch (e) {
       this.note(`could not list ${which === 'resume' ? 'sessions' : 'workspaces'}: ${(e as Error).message}`);
@@ -1309,10 +1339,9 @@ export class WindowStore {
     this.notify();
   };
 
-  /** The one destructive call, shared by [t] on /resume and /trash in the
-   *  prompt. The confirm goes UNFORCED — the server pushes first (the flush)
-   *  and refuses if work would still be lost. The two refusals come back as
-   *  names so each caller re-arms its own way; anything else throws. */
+  /** The one destructive call. The confirm goes UNFORCED — the server pushes
+   *  first (the flush) and refuses if work would still be lost. The two
+   *  refusals come back as names; anything else throws. */
   private async purgeSession(id: string, force: boolean): Promise<'ok' | 'unpushed_work' | 'session_locked'> {
     try {
       await this.api('DELETE', `/sessions/${id}?purge=true${force ? '&force=true' : ''}`);
@@ -1326,68 +1355,48 @@ export class WindowStore {
     }
   }
 
-  /** [t] on /resume arms the trash, [c] confirms — the kill pattern, one rule
-   *  for every destructive key. The session leaves the server for good: row,
-   *  transcript, files; only its pushed branch on origin survives. When the
-   *  session is open in this window the confirm closes it first with the same
-   *  switch-over logic /close uses (next tab, or a fresh session). The
-   *  unpushed-work refusal re-arms at force so a second [c] discards
-   *  knowingly. Arming client-side is what makes the confirm real: the flush
-   *  means the unforced delete almost always succeeds, so a server-refusal
-   *  arm alone would fire only when the push failed. */
-  trashSession = async (id: string): Promise<void> => {
-    if (this.trashArmed?.id !== id) {
-      this.trashArmed = { id, force: false };
-      this.pickerNotice = 'trash this session for good? [c] to confirm';
-      this.notify();
-      return;
-    }
-    // Close first when the session is open in this window — the same
-    // switch-over logic /close uses (next tab, or a fresh session).
+  /** THE trash, for both doors — [t] on /resume and /trash in the chat. The
+   *  dialog asks first; yes lets the window's own copy go (its hold would
+   *  lock the purge — the same switch-over /close uses), then the DELETE
+   *  runs. The unpushed-work refusal asks ONCE more, at force, so the
+   *  second yes discards knowingly. The session leaves the server for good:
+   *  row, transcript, files; only its pushed branch on origin survives.
+   *  `say` is where each door reports — the picker's notice line, or the
+   *  pane and a toast. */
+  private trash = async (id: string, label: string,
+    say: { refuse: (t: string) => void; done: () => void }, force = false): Promise<void> => {
+    const yes = force
+      ? await this.confirm('unpushed work — discard it?', 'commits on this branch never reached origin; they go with the session')
+      : await this.confirm(`trash "${label}" for good?`, 'the row, the transcript, the files — gone for good');
+    if (!yes) return;
     if (this.sessions.has(id)) {
       const r = await this.closeSession(id, true);
-      if ('error' in r) { this.pickerNotice = `not trashed — ${r.error}`; this.notify(); return; }
-    }
-    try {
-      const verdict = await this.purgeSession(id, this.trashArmed.force);
-      if (verdict === 'unpushed_work') {
-        this.trashArmed = { id, force: true };
-        this.pickerNotice = 'unpushed work [c] to confirm discard';
-      } else if (verdict === 'session_locked') {
-        this.trashArmed = null;
-        this.pickerNotice = 'in use elsewhere — a held session cannot be trashed';
-      } else {
-        this.trashArmed = null;
-        this.pickerNotice = undefined;
-        // The trash landed; a failed re-read must not report "could not trash".
-        await this.refreshPicker().catch(quiet('refresh the session list'));
-      }
-    } catch (e) {
-      this.pickerNotice = `could not trash session ${id}: ${(e as Error).message}`;
-    }
-    this.notify();
-  };
-
-  /** /trash, confirmed. The window lets the session go first — its own hold
-   *  would lock the purge — then the same DELETE as [t] on /resume runs. The
-   *  close stands even when the purge refuses: the confirm was already "done
-   *  with this", and the unpushed-work refusal asks ONCE more, at force, so
-   *  the second yes discards knowingly without the session back on screen. */
-  private trashActive = async (id: string, force = false): Promise<void> => {
-    if (this.sessions.has(id)) {
-      const r = await this.closeSession(id, true);
-      if ('error' in r) { this.note(`not trashed — ${r.error}`); return; }
+      if ('error' in r) { say.refuse(`not trashed — ${r.error}`); return; }
     }
     let verdict: 'ok' | 'unpushed_work' | 'session_locked';
     try { verdict = await this.purgeSession(id, force); }
-    catch (e) { this.note(`could not trash session ${id}: ${(e as Error).message}`); return; }
-    if (verdict === 'unpushed_work') {
-      if (await this.confirm('unpushed work — discard it?', 'commits on this branch never reached origin; they go with the session'))
-        await this.trashActive(id, true);
-    } else if (verdict === 'session_locked') {
-      this.note('in use elsewhere — a held session cannot be trashed');
-    } else this.setToast('Session trashed');
+    catch (e) { say.refuse(`could not trash session ${id}: ${(e as Error).message}`); return; }
+    if (verdict === 'unpushed_work') await this.trash(id, label, say, true);
+    else if (verdict === 'session_locked') say.refuse('in use elsewhere — a held session cannot be trashed');
+    else say.done();
   };
+
+  /** [t] on /resume. */
+  trashSession = (id: string): Promise<void> => {
+    const row = this.picker?.sessions.find((r) => r.id === id);
+    return this.trash(id, row?.name ?? row?.branch ?? id, {
+      refuse: (t) => { this.pickerNotice = t; this.notify(); },
+      done: () => {
+        this.pickerNotice = undefined;
+        // The trash landed; a failed re-read must not report "could not trash".
+        void this.refreshPicker().catch(quiet('refresh the session list'));
+      },
+    });
+  };
+
+  /** /trash in the chat: the session on screen. */
+  private trashActive = (e: LoadedSession): Promise<void> =>
+    this.trash(e.id, this.labelOf(e), { refuse: this.note, done: () => this.setToast('Session trashed') });
 
   /** ctrl+n: the sessions open in this window. It shows FIRST and fills the
    *  workspace names in behind — the rows read fine as ids until they land. */
@@ -1476,7 +1485,6 @@ export class WindowStore {
     try {
       await this.refreshTasks();
       this.tasksNotice = undefined;
-      this.killArmed = null;
       this.showOverlay(tasksScreen(this));
     } catch (e) { this.note(`could not list tasks: ${(e as Error).message}`); }
   };
@@ -1518,18 +1526,12 @@ export class WindowStore {
     this.feeds.delete(id);
   }
 
-  /** [k] arms the kill, [c] confirms (TERM, a second, then KILL — the whole
-   *  tree). Armed per sid. */
+  /** [k] on /tasks: the dialog asks, then TERM, a second, then KILL — the
+   *  whole tree. */
   killTask = async (sid: string, command: string): Promise<void> => {
     const id = this.sessions.activeId;
     if (!id) return;
-    if (this.killArmed !== sid) {
-      this.killArmed = sid;
-      this.tasksNotice = `kill "${command}"? [c] to confirm`;
-      this.notify();
-      return;
-    }
-    this.killArmed = null;
+    if (!(await this.confirm(`kill "${command}"?`, 'TERM, a second, then KILL — the whole process tree'))) return;
     try {
       await this.api('DELETE', `/sessions/${id}/tasks/${sid}`);
       this.tasksNotice = undefined;
@@ -1873,12 +1875,10 @@ export class WindowStore {
         } catch (e) { this.note(`could not duplicate: ${(e as Error).message}`); }
         return;
       }
-      case 'trash': {
+      case 'trash':
         if (!session) { this.note('no session is open — nothing to trash'); return; }
-        if (await this.confirm(`trash "${this.labelOf(session)}" for good?`,
-          'the row, the transcript, the files — gone for good')) await this.trashActive(session.id);
+        await this.trashActive(session);
         return;
-      }
       case 'workspace': await this.openPicker('workspace'); return;
       case 'rename': {
         if (!session) { this.note('no session is open — nothing to rename'); return; }

@@ -9,7 +9,8 @@
 // (global first, then each workspace by name); edit — name and layer are
 // the row's identity and sit fixed in the header, description and value
 // edit (value re-entered whole: the server never hands a secret back).
-import { Box, useInput } from 'ink';
+import { Box } from 'ink';
+import { useInput } from './useInput.js';
 import { Text } from './Text.js';
 import { useRef, useState } from 'react';
 import { isMouseInput } from '../mouse.js';

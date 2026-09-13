@@ -5,13 +5,14 @@
 // THE ONE LAYOUT RULE: `windowStore.overlay` says what is on top of the chat.
 // A FULL overlay takes the WHOLE column — the board, a card's editor, and
 // every menu (/settings, /model, /workspace, /resume, the session switcher …)
-// are all built in screens.tsx. An INLINE overlay (a confirmation) takes the
-// prompt zone only, with the conversation still above it. The menus used to
-// replace the prompt under the live conversation, each at its own height;
-// that split (and the flicker defenses it needed) is gone. While any overlay
-// is up, this component's own useInput is switched off: Ink delivers a
-// keypress to every active handler, so esc would otherwise close the screen
-// and interrupt the running turn in the same stroke.
+// are all built in screens.tsx. A THIRD overlay (/tasks, the duplicate's
+// model pick) takes the bottom third where the prompt was, with the
+// conversation still above it. A DIALOG (`windowStore.dialog`, the one
+// yes/no) sits at the bottom of the column on top of either, and the
+// component under it stops taking keys (components/useInput.ts). While any
+// of these is up, this component's own useInput is switched off: Ink
+// delivers a keypress to every active handler, so esc would otherwise close
+// the screen and interrupt the running turn in the same stroke.
 //
 // The chat screen: the conversation pane (a clipped viewport anchored at the
 // bottom, scrolled by rows), then under it the block still being written, the
@@ -57,6 +58,7 @@ import { StatusLine } from './components/StatusLine.js';
 import { Toolbar, type ToolbarGroup, type ToolbarPart } from './components/Toolbar.js';
 import { WORK } from './components/Launcher.js';
 import { SizeContext, keyLine } from './components/Screen.js';
+import { InputGate } from './components/useInput.js';
 import { Pane } from './components/Pane.js';
 import { Boundary } from './components/Boundary.js';
 import { Banner } from './components/Banner.js';
@@ -453,9 +455,11 @@ export function App({
     if (!windowStore.hasOverlay && input) { clearInput(); return; }
     if (ctrlC) { windowStore.quit(); return; }
     if (session?.busy) store.abortTurn(session.id);
-    // Break out of whatever is on screen first: the second press then lands
-    // on the prompt, where the toolbar is showing what it will do.
-    if (windowStore.hasOverlay) windowStore.dismissOverlay();
+    // Break out of whatever is on screen first — the question before the
+    // screen under it: the second press then lands on the prompt, where the
+    // toolbar is showing what it will do.
+    if (windowStore.dialog) windowStore.dismissDialog();
+    else if (windowStore.overlay) windowStore.dismissOverlay();
     setCtrlC(true); setTimeout(() => setCtrlC(false), 1500);
   });
 
@@ -599,25 +603,43 @@ export function App({
       .filter((g) => g.length);
 
   // THE ONE LAYOUT RULE (see the header): what owns the main column. A full
-  // overlay takes it whole; anything else is the chat, with an inline
-  // overlay standing in for the prompt when one is up.
+  // overlay takes it whole; anything else is the chat, with a third overlay
+  // standing in for the prompt when one is up. A dialog rides at the bottom
+  // of either and takes its rows from whatever is above it.
   const fullOverlay = windowStore.overlay?.size === 'full' ? windowStore.overlay : null;
-  const inlineOverlay = windowStore.overlay?.size === 'inline' ? windowStore.overlay : null;
+  const thirdOverlay = windowStore.overlay?.size === 'third' ? windowStore.overlay : null;
+  const dialog = windowStore.dialog;
+  const dialogRows = dialog?.rows ?? 0;
+  const thirdRows = Math.max(6, Math.floor(screenRows / 3));
+  const dialogBox = dialog && (
+    <Boundary name="dialog" resetKey={dialog} onError={(m) => { windowStore.note(`${m} — the question closed; the stack is in ~/.phantom-cli/cli.log`); windowStore.dismissDialog(); }}>
+      <Box flexShrink={0} height={dialogRows}>{dialog.render()}</Box>
+    </Boundary>
+  );
 
   return (
     <SizeContext.Provider value={{ rows: screenRows, cols: screenCols }}>
     <Box flexDirection="row" width={repaint ? 0 : screenCols} height={repaint ? 0 : screenRows} overflow="hidden">
     <Box flexDirection="column" width={mainCols} height={screenRows} overflow="hidden">
-      {fullOverlay ? (
-        // A full overlay owns the whole column while it is up (screens.tsx).
-        // The conversation keeps streaming underneath; closing it draws the
-        // chat again from the store. ONE Boundary slot for every full
-        // overlay, so swapping one for another that draws the same component
-        // (the board with and without a card open) keeps it mounted.
+      {fullOverlay ? (<>
+        {/* A full overlay owns the whole column while it is up (screens.tsx).
+            The conversation keeps streaming underneath; closing it draws the
+            chat again from the store. ONE Boundary slot for every full
+            overlay, so swapping one for another that draws the same component
+            (the board with and without a card open) keeps it mounted. A
+            dialog takes its rows off the bottom — the screen lays out by the
+            rows it is told it has. */}
+        <InputGate.Provider value={!dialog}>
+        <SizeContext.Provider value={{ rows: screenRows - dialogRows, cols: screenCols }}>
+        <Box flexDirection="column" height={screenRows - dialogRows} overflow="hidden">
         <Boundary name={fullOverlay.name} resetKey={fullOverlay.name} onError={(m) => { windowStore.note(`${m} — ${fullOverlay.name} closed; the stack is in ~/.phantom-cli/cli.log`); windowStore.dismissOverlay(); }}>
-          {fullOverlay.render({ width: mainCols, height: screenRows })}
+          {fullOverlay.render({ width: mainCols, height: screenRows - dialogRows })}
         </Boundary>
-      ) : (<>
+        </Box>
+        </SizeContext.Provider>
+        </InputGate.Provider>
+        {dialogBox}
+      </>) : (<>
       {/* keyFor: a part's own id, so the height the pane measured for it
           survives the list being rebuilt (a refresh reseats the whole
           conversation) and switching between sessions. */}
@@ -663,16 +685,24 @@ export function App({
         )}
         </>)}
 
-        <Boundary name="prompt" resetKey={inlineOverlay} onError={(m) => { windowStore.note(`${m} — the prompt stopped drawing; the stack is in ~/.phantom-cli/cli.log`); windowStore.dismissOverlay(); }}>
+        <Boundary name="prompt" resetKey={windowStore.overlay} onError={(m) => { windowStore.note(`${m} — the prompt stopped drawing; the stack is in ~/.phantom-cli/cli.log`); windowStore.dismissOverlay(); }}>
           <>
-            {inlineOverlay ? (
-              // An inline overlay stands in for the slash menu and the prompt.
-              // The conversation stays above; the overlay owns the keyboard.
-              <Boundary name={inlineOverlay.name} resetKey={inlineOverlay}
-                onError={(m) => { windowStore.note(`${m} — ${inlineOverlay.name} closed; the stack is in ~/.phantom-cli/cli.log`); windowStore.dismissOverlay(); }}>
-                {inlineOverlay.render({ width: mainCols, height: screenRows })}
+            {thirdOverlay ? (
+              // A third overlay stands in for the slash menu and the prompt:
+              // the bottom third, laid out by the rows it is told it has.
+              // The conversation stays above; the overlay owns the keyboard
+              // unless a dialog is up over it.
+              <InputGate.Provider value={!dialog}>
+              <SizeContext.Provider value={{ rows: thirdRows, cols: screenCols }}>
+              <Box flexDirection="column" height={thirdRows} flexShrink={0} overflow="hidden">
+              <Boundary name={thirdOverlay.name} resetKey={thirdOverlay.name}
+                onError={(m) => { windowStore.note(`${m} — ${thirdOverlay.name} closed; the stack is in ~/.phantom-cli/cli.log`); windowStore.dismissOverlay(); }}>
+                {thirdOverlay.render({ width: mainCols, height: thirdRows })}
               </Boundary>
-            ) : suggestions.length > 0 ? (
+              </Box>
+              </SizeContext.Provider>
+              </InputGate.Provider>
+            ) : dialog ? null : suggestions.length > 0 ? (
               // One height however many commands match. The menu sits under a
               // bottom-anchored pane, so a box that resized as the list
               // narrowed shifted the whole conversation on every keystroke —
@@ -705,7 +735,8 @@ export function App({
                 ])}`}</Text>
               </Box>
             ) : null}
-            {!inlineOverlay && <Prompt value={input} onChange={(v) => { setInput(v); setSuggestAt(0); }}
+            {dialogBox}
+            {!windowStore.hasOverlay && <Prompt value={input} onChange={(v) => { setInput(v); setSuggestAt(0); }}
               onSubmit={(text) => { void windowStore.submit(text, suggestAt, () => { clearInput(); setScroll(0); }); }} onMeasure={setPromptTop}
               pastes={windowStore.pastes} onFileDrop={(paths) => windowStore.dropFiles(paths)} updateReady={windowStore.updateReady}
               columns={promptCols} onBoundary={onBoundary} />}

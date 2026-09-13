@@ -15,7 +15,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { SelectList } from './SelectList.js';
 import { SecretEditor, type SecretDraft, type SecretTarget } from './SecretEditor.js';
 import { Screen } from './Screen.js';
-import { useInput } from 'ink';
+import { useInput } from './useInput.js';
 import type { Api } from '../settings.js';
 
 const GLOBAL_TAG = 'global';

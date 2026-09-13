@@ -10,6 +10,10 @@ import { Box, useInput } from 'ink';
 import { Text } from './Text.js';
 import { keyLine } from './Screen.js';
 
+/** Rows the dialog draws with neither `who` nor `message`: the margins,
+ *  the title, the gap, the keys. Each optional line adds one. */
+export const CONFIRM_ROWS = 5;
+
 export function Confirm({ title, message, who, onResult }: {
   title: string;
   message?: string;

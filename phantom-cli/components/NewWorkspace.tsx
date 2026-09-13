@@ -16,7 +16,8 @@
 // Each step renders Screen directly. A local Frame component defined inside
 // the render was a new component type on every render, so React remounted the
 // whole step per keystroke — TextInput's cursor-at-end behaviour hid it.
-import { Box, useInput } from 'ink';
+import { Box } from 'ink';
+import { useInput } from './useInput.js';
 import { FixedText, Text } from './Text.js';
 import { useEffect, useState } from 'react';
 import { TextInput } from './TextInput.js';

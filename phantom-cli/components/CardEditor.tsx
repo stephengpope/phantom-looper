@@ -25,7 +25,8 @@
 // user's text. Every action is enter/space on its row (or a click): letter
 // shortcuts were tried and dropped — a focused text row owns every letter,
 // so the key meant "archive" on one row and typed into the Title on another.
-import { Box, measureElement, useInput, type DOMElement } from 'ink';
+import { Box, measureElement, type DOMElement } from 'ink';
+import { useInput } from './useInput.js';
 import { Text } from './Text.js';
 import { useEffect, useRef, useState } from 'react';
 import { isMouseInput, parseMouse } from '../mouse.js';

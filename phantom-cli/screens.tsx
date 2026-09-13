@@ -1,9 +1,10 @@
-// Every overlay, in one place. An overlay is what shows on top of the chat:
-// a FULL one owns the main column (every menu, the board), an INLINE one
-// swaps in for the prompt zone with the conversation still above (a
-// confirmation). Each is built here as a plain `Overlay` — what to draw,
-// what to do when it goes — and the window shows it with `w.showOverlay`.
-// Closing is one thing everywhere: `w.dismissOverlay(result)`.
+// Every overlay, in one place. An overlay is a screen on top of the chat: a
+// FULL one owns the main column (every menu, the board), a THIRD takes the
+// bottom third with the conversation still above (the glance lists). Each
+// is built here as a plain `Overlay` — what to draw, what to do when it goes
+// — and the window shows it with `w.showOverlay`. Closing is one thing
+// everywhere: `w.dismissOverlay(result)`. The one thing that goes ON TOP of
+// an overlay is the confirm dialog, built here too.
 //
 // Adding a screen: a builder here, and the store method or slash command
 // that shows it (window.ts). There is no third place.
@@ -15,7 +16,7 @@
 // that refreshes /tasks or a page appended to /resume lands on screen
 // without any screen re-opening.
 import type { ConfigKey } from './config.js';
-import type { Overlay, WindowStore } from './window.js';
+import type { Dialog, Overlay, WindowStore } from './window.js';
 import type { Api } from './request.js';
 import { Settings } from './components/Settings.js';
 import { Launcher } from './components/Launcher.js';
@@ -29,7 +30,7 @@ import { Secrets } from './components/Secrets.js';
 import { Presets } from './components/Presets.js';
 import { DuplicateModel } from './components/DuplicateModel.js';
 import { Board } from './components/Board.js';
-import { Confirm } from './components/Confirm.js';
+import { Confirm, CONFIRM_ROWS } from './components/Confirm.js';
 import { quiet } from './request.js';
 import type { WorkspaceInfo } from './components/Launcher.js';
 
@@ -40,16 +41,18 @@ const offline: Api = async () => ({});
 
 const full = (name: string, render: Overlay['render'], rest: Partial<Overlay> = {}): Overlay =>
   ({ size: 'full', name, render, ...rest });
+const third = (name: string, render: Overlay['render'], rest: Partial<Overlay> = {}): Overlay =>
+  ({ size: 'third', name, render, ...rest });
 
-// ── inline ────────────────────────────────────────────────────────────────
+// ── the dialog ────────────────────────────────────────────────────────────
 
-/** A yes/no in the prompt zone. enter = true, esc = false; anything that
- *  replaces it (another overlay, ctrl+c) answers false too — a question
+/** THE yes/no. enter = true, esc = false; anything that takes it down
+ *  (ctrl+c, the screen under it leaving) answers false too — a question
  *  taken off the screen was not answered yes. `who` names an agent asking. */
-export const confirmScreen = (w: WindowStore, title: string, message: string | undefined,
-  who: string | undefined, resolve: (yes: boolean) => void): Overlay => ({
-  size: 'inline', name: 'confirm',
-  render: () => <Confirm title={title} message={message} who={who} onResult={w.dismissOverlay} />,
+export const confirmDialog = (w: WindowStore, title: string, message: string | undefined,
+  who: string | undefined, resolve: (yes: boolean) => void): Dialog => ({
+  render: () => <Confirm title={title} message={message} who={who} onResult={w.dismissDialog} />,
+  rows: CONFIRM_ROWS + (who ? 1 : 0) + (message ? 1 : 0),
   onDismiss: (yes) => resolve(yes === true),
 });
 
@@ -68,6 +71,7 @@ export const boardScreen = (w: WindowStore, workspaceId: string,
   full(card?.back === 'chat' ? 'card' : 'board', ({ width, height }) => (
     <Board store={w.boardFor(workspaceId)} width={width} height={height} isActive
       card={card?.seq}
+      confirm={(t, m) => w.confirm(t, m)}
       onOpenCard={(seq) => w.openCard(seq, 'board')}
       onCloseCard={() => { if (card?.back === 'board') w.openBoard(); else w.dismissOverlay(); }}
       onClose={w.dismissOverlay}
@@ -138,6 +142,7 @@ export const localSettingsScreen = (w: WindowStore, which: 'model' | 'server'): 
  *  agents both land in the CLI the user is back at. */
 export const presetsScreen = (w: WindowStore): Overlay => full('presets', () => (
   <Presets key={`presets-${w.settingsVersion}`} api={w.api}
+    confirm={(t, m) => w.confirm(t, m)}
     onApplied={(name) => {
       w.note(`preset applied: ${name}`);
       w.settingChanged('provider' as ConfigKey);
@@ -149,7 +154,7 @@ export const presetsScreen = (w: WindowStore): Overlay => full('presets', () => 
  *  read fresh: a settings change moves the "keep current" row's label). esc
  *  drops it: no copy is made. */
 export const duplicateModelScreen = (w: WindowStore): Overlay =>
-  full('duplicateModel', () => (
+  third('duplicateModel', () => (
     w.duplicating ? <DuplicateModel presets={w.duplicating.presets} current={w.duplicating.current}
       onPick={(presetId) => { void w.finishDuplicate(presetId); }}
       onCancel={w.dismissOverlay} /> : null
@@ -188,7 +193,7 @@ export const archivedScreen = (w: WindowStore, workspaceId: string): Overlay => 
 
 /** /tasks — what is running in the session's container. Re-read on the
  *  poll while up: rows come and go on their own. */
-export const tasksScreen = (w: WindowStore): Overlay => full('tasks', () => (
+export const tasksScreen = (w: WindowStore): Overlay => third('tasks', () => (
   w.tasks ? <Tasks view={w.tasks} notice={w.tasksNotice}
     onKill={(sid, cmd) => { void w.killTask(sid, cmd); }}
     onCancel={w.dismissOverlay} /> : null

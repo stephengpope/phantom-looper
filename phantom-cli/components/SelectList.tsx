@@ -14,7 +14,8 @@ import { HIGHLIGHT_BG, HIGHLIGHT_FG } from './Parts.js';
 // screen. The row window is sized from the page budget, the more-line is
 // always one row, and the hint block is exactly HINT_ROWS whether the hint is
 // long, short or absent.
-import { Box, useInput } from 'ink';
+import { Box } from 'ink';
+import { useInput } from './useInput.js';
 import { Text } from './Text.js';
 import Spinner from 'ink-spinner';
 import { turnAgeColor } from '../turnAge.js';

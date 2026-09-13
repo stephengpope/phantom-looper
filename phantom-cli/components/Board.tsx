@@ -5,7 +5,8 @@
 // press+move drags it (hit-testing via measureElement against the live
 // layout, which in the alternate screen IS the viewport); events right of
 // `width` belong to the voice pane and are ignored here.
-import { Box, measureElement, useInput, type DOMElement } from 'ink';
+import { Box, measureElement, type DOMElement } from 'ink';
+import { useInput } from './useInput.js';
 import { Text } from './Text.js';
 import Spinner from 'ink-spinner';
 import { useEffect, useRef, useState } from 'react';
@@ -19,9 +20,11 @@ const HEADER_ROWS = 3; // column top border + header line + blank line, above th
 
 interface Drag { cardId: number; toCol: string; toRow: number; moved: boolean }
 
-export function Board({ store, width, height, isActive, onClose, card, onOpenCard, onCloseCard,
+export function Board({ store, width, height, isActive, onClose, card, confirm, onOpenCard, onCloseCard,
   onOpenSession, onArchived }: {
   store: BoardStore; width: number; height: number; isActive: boolean; onClose: () => void;
+  /** THE yes/no (the window's dialog) — [a] asks through it before archiving. */
+  confirm: (title: string, message?: string) => Promise<boolean>;
   /** The card whose editor is open, by seq. The window owns this: it also
    *  knows where esc leaves the editor, which is the only thing that ever
    *  differed between a card opened here and one opened from the chat. */
@@ -57,9 +60,6 @@ export function Board({ store, width, height, isActive, onClose, card, onOpenCar
   // of it is followed, with no second selection to keep in step.
   const [zoom, setZoom] = useState(false);
   const colRefs = useRef(new Map<string, DOMElement>());
-  // [a] archive confirmation — the killArmed/trashArmed pattern: first press
-  // arms (shows the prompt), second press on the same card archives.
-  const archiveArmed = useRef<number | null>(null);
 
   const { columns, prefix, loaded, workspace, error } = store.state;
   const focusColName = columns[Math.min(focus.col, Math.max(0, columns.length - 1))];
@@ -140,12 +140,8 @@ export function Board({ store, width, height, isActive, onClose, card, onOpenCar
       return;
     }
     // --- keys ---
-    // Any key that is not `a` or `c` disarms the archive confirmation —
-    // cleared up front so every branch below gets a clean slate.
-    const wasArmed = archiveArmed.current;
-    if (ch !== 'a' && ch !== 'c') archiveArmed.current = null;
-    // esc is one level back: armed → disarm; drag → columns; expanded → columns; columns → chat.
-    if (key.escape) { if (wasArmed != null) { bump((n) => n + 1); } else if (drag) setDrag(null); else if (zoom) setZoom(false); else onClose(); return; }
+    // esc is one level back: drag → columns; expanded → columns; columns → chat.
+    if (key.escape) { if (drag) setDrag(null); else if (zoom) setZoom(false); else onClose(); return; }
     // Selection is the arrows alone (vim's h/l/j/k selection synonyms were
     // dropped — two ways to say the same thing made the footer unreadable);
     // tab/shift+tab move the card between columns, j/k (either case) within
@@ -166,13 +162,13 @@ export function Board({ store, width, height, isActive, onClose, card, onOpenCar
     else if (key.return && focusCard) openEdit(focusCard);
     else if (ch === 'n') setAdding('');
     else if (ch === 'p' && focusCard) void store.update(focusCard.id, { pinned: !focusCard.pinned });
-    else if (ch === 'a' && focusCard && wasArmed == null) {
-      archiveArmed.current = focusCard.id; bump((n) => n + 1);
-    }
-    else if (ch === 'c' && focusCard && wasArmed === focusCard.id) {
-      archiveArmed.current = null;
-      void store.update(focusCard.id, { archived: true });
-      setFocus((f) => ({ ...f, row: clampRow(f.col, f.row) }));
+    else if (ch === 'a' && focusCard) {
+      const t = focusCard;
+      void confirm(`archive #${t.seq} ${t.title}?`, '[v] shows archived cards; [r] there restores it').then((yes) => {
+        if (!yes) return;
+        void store.update(t.id, { archived: true });
+        setFocus((f) => ({ ...f, row: clampRow(f.col, f.row) }));
+      });
     }
     else if (ch === 'e' && focusColName) setZoom((z) => !z);
     else if (ch === 'v') onArchived?.();
@@ -261,8 +257,6 @@ export function Board({ store, width, height, isActive, onClose, card, onOpenCar
           <Text>new card in {focusColName?.replace(/_/g, ' ')}: <Text inverse>{adding || ' '}</Text><Text dimColor>  (enter to add, esc to cancel)</Text></Text>
         ) : dragging ? (
           <Text color="green">moving #{dragging.seq} → {drag!.toCol.replace(/_/g, ' ')} (release to drop, esc to cancel)</Text>
-        ) : archiveArmed.current != null && focusCard ? (
-          <Text color="yellow">archive #{focusCard.seq}-{focusCard.title}? [c] to confirm, [esc] to cancel</Text>
         ) : (
           <Text dimColor>↑ ↓ ← →  [esc]  [enter] open  [tab/shift+tab] move  [j/k] sort  [n]ew  [p]in  [a]rchive  {zoom ? '[e] collapse' : '[e]xpand'}  [v]iew archived</Text>
         )}

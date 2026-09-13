@@ -2,13 +2,16 @@
 
 ## What this is
 
-One field on the window store, `overlay`, says what is on top of the chat.
-Nothing else does. An overlay is `{ size, name, render, onDismiss?, poll? }`
-(window.ts). `size: 'inline'` stands in for the prompt zone with the
-conversation still above it (a confirmation); `size: 'full'` takes the whole
-column (every menu, the board, a card's editor). Every overlay is built in
-`screens.tsx`; the store shows one with `showOverlay(...)` and everything
-closes the same way: `dismissOverlay(result)`.
+One field on the window store, `overlay`, says which screen is on top of
+the chat. An overlay is `{ size, name, render, onDismiss?, poll? }`
+(window.ts). `size: 'full'` takes the whole column (every menu, the board,
+a card's editor); `size: 'third'` takes the bottom third with the
+conversation still above it (/tasks, the duplicate's model pick). One more
+field, `dialog`, is THE yes/no — it sits at the bottom of the column on top
+of whatever is there, and the screen under it stops taking keys
+(components/useInput.ts). Every overlay and the dialog are built in
+`screens.tsx`; the store shows them with `showOverlay` / `confirm(...)` and
+everything closes the same way: `dismissOverlay` / `dismissDialog`.
 
 ## Why
 
@@ -35,9 +38,10 @@ two places to read "is the board up". Now there is one of each.
   opened FROM the board is still named `board` (esc goes back to the
   columns, `boardUp` stays true for the Assistant); a card opened from the
   chat or the archive is named `card` (esc goes to the chat).
-- In-screen confirmations ([t]/[c] on /resume, [k]/[c] on /tasks, [a]/[c] on
-  the board) stay as they are: they are the screen's own notice line, not a
-  second overlay, and one overlay is up at a time.
+- Every destructive key asks the same way: `/trash`, `/restart`, [t] on
+  /resume, [k] on /tasks, [a] on the board, [enter] on /presets and the
+  agent's `session_code_mode` all go through `confirm()`. enter is yes, esc
+  is no; ctrl+c or the screen under it leaving answers no.
 
 ## What was removed
 
@@ -45,7 +49,8 @@ two places to read "is the board up". Now there is one of each.
 `closeCard`, `menuClock`, `editing`, `cancelDuplicate`,
 `closeWorkspaceSettings`, `promptTrashArmed`, `promptRestartArmed` and the
 two typed-`c` blocks in `submit()`, the `MenuScreen` switch, App's three-way
-column branch.
+column branch, and the four in-screen "[c] to confirm" arms (`trashArmed`,
+`killArmed`, `archiveArmed`, `applyArmed`).
 
 ## Adding a screen
 

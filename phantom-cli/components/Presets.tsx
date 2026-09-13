@@ -18,7 +18,8 @@
 // clear, absent keys are untouched. Clear is the default: a new preset
 // starts with every key null, and leave-unchanged is the deliberate opt-out.
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Box, useInput } from 'ink';
+import { Box } from 'ink';
+import { useInput } from './useInput.js';
 import { FixedText, Text } from './Text.js';
 import { SelectList, type Choice } from './SelectList.js';
 import { tableChoices, type TableRow } from './table.js';
@@ -127,8 +128,10 @@ function hintForKey(state: KeyState, value: unknown): string {
   return 'leave unchanged — apply won\'t touch this setting';
 }
 
-export function Presets({ api, onApplied, onClose }: {
+export function Presets({ api, confirm, onApplied, onClose }: {
   api: Api;
+  /** THE yes/no (the window's dialog) — [enter] asks through it before applying. */
+  confirm: (title: string, message?: string) => Promise<boolean>;
   /** Fired after a preset is applied so the app can rebuild agents and
    *  confirm the switch — the screen closes on apply, so the confirmation
    *  has to live where the user lands: the CLI. */
@@ -142,8 +145,6 @@ export function Presets({ api, onApplied, onClose }: {
   const [notice, setNotice] = useState<string | undefined>();
   const [last, setLast] = useState<string | undefined>();
   const [nameText, setNameText] = useState('');
-  /** The armed-to-apply preset id. [enter] arms, [c] confirms. */
-  const [applyArmed, setApplyArmed] = useState<string | null>(null);
 
   // Server settings — needed to filter provider choices to keyed providers.
   const [serverCfg, setServerCfg] = useState<Record<string, ConfigValue> | null>(null);
@@ -389,8 +390,7 @@ export function Presets({ api, onApplied, onClose }: {
       sub={presets.length ? 'switch all agents at once' : 'no presets yet — [n] to create one'}
       notice={notice} busy={busy}
       footer={[
-        { key: 'c', does: 'confirm apply', when: !!applyArmed },
-        { key: 'enter', does: 'apply', when: !!presets.length && !applyArmed },
+        { key: 'enter', does: 'apply', when: !!presets.length },
         { key: 'e', does: 'edit', when: !!presets.length },
         { key: 'n', does: 'new' },
         { key: 'd', does: 'delete', when: !!presets.length },
@@ -404,22 +404,14 @@ export function Presets({ api, onApplied, onClose }: {
           initial={last}
           choices={listChoices}
           onSelect={(id) => {
-            // [enter] arms the apply; notice tells the user to [c]onfirm.
             if (!id) return;         // the table header carries null
             const p = presets.find((x) => x.id === id);
             if (!p) return;
-            setApplyArmed(id);
-            setNotice(`apply "${p.name}"? [c] to confirm`);
+            void confirm(`apply "${p.name}"?`, 'every session with nothing said yet moves to its model')
+              .then((yes) => { if (yes) void applyPreset(p); });
           }}
-          onCancel={() => { setApplyArmed(null); onClose(); }}
+          onCancel={onClose}
           onKey={(ch, id) => {
-            // Any key other than c disarms and clears the confirm notice.
-            if (ch !== 'c') { setApplyArmed(null); setNotice(undefined); }
-            if (ch === 'c' && applyArmed) {
-              const p = presets.find((x) => x.id === applyArmed);
-              if (p) { setApplyArmed(null); void applyPreset(p); }
-              return;
-            }
             if (ch === 'n') { setNameText(''); setView({ at: 'name' }); return; }
             if (!id) return;
             const p = presets.find((x) => x.id === id);
