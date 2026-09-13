@@ -39,6 +39,7 @@ export const MENU: Record<TelegramMode, Cmd[]> = {
     { command: 'code', description: 'Talk to the coding agent' },
     { command: 'workspaces', description: 'List or switch workspaces' },
     { command: 'sessions', description: 'List or switch sessions' },
+    { command: 'stop', description: 'Stop a running session' },
     { command: 'status', description: 'Server, workspace and session overview' },
     { command: 'presets', description: 'List or apply model presets' },
     { command: 'restart', description: 'Restart the server (or one service)' },
@@ -345,24 +346,48 @@ export async function handleCommand(
     }
 
     case 'stop': {
-      // One rule everywhere: the runner stops its own turn; to stop someone
-      // else's you send the interrupt for the session and the runner hears it
-      // on the session feed (the cli's esc-esc posts the same route).
-      if (acc.mode === 'code' && acc.activeSessionId) {
-        const own = engine.stop(acc.activeSessionId);   // our turn: abort now
-        if (!own) {
-          const s = await sessionRow(engine, acc.activeSessionId);
-          if (!s?.locked) { await reply('ℹ️ Nothing is running.'); return; }
+      // /stop — stop the active session
+      // /stop n — stop session n from the /sessions list
+      // /stop all — stop every locked (running) coding session
+      // Works from both assistant and code mode. Never touches the
+      // active-session pointer — it's a remote kill.
+
+      if (arg === 'all') {
+        const j = await (await engine.call('/sessions?typed=true&supervisor=false&limit=50')).json();
+        const locked = j.ok ? (j.data.sessions ?? []).filter((s: any) => s.locked) : [];
+        if (!locked.length) { await reply('ℹ️ Nothing is running.'); return; }
+        const names: string[] = [];
+        for (const s of locked) {
+          engine.stop(s.id);
+          await engine.call(`/sessions/${s.id}/interrupt`, { method: 'POST' });
+          names.push(s.name ?? 'untitled');
         }
-        // The route does the rest of the stop, whoever runs the turn: it kills
-        // the session's foreground commands (our own turn's bash included —
-        // injectFetch has no socket to close, so no other kill reaches it)
-        // and signals every other listener. Idempotent against the abort above.
-        await engine.call(`/sessions/${acc.activeSessionId}/interrupt`, { method: 'POST' });
-        await reply('🛑 Stopping.');
+        await reply(`🛑 Stopped ${names.length}: ${names.map((n) => `'${n}'`).join(', ')}.`);
         return;
       }
-      await reply(engine.stop('assistant') ? '🛑 Stopping.' : 'ℹ️ Nothing is running.');
+
+      // /stop n — a specific session by its number from /sessions.
+      if (arg !== undefined) {
+        const id = listedSession(dm, arg);
+        if (!id) { await reply('⚠️ Send /sessions first to see the list, then /stop <number>.'); return; }
+        const s = await sessionRow(engine, id);
+        if (!s) { await reply('⚠️ That session no longer exists — /sessions for a fresh list.'); return; }
+        if (!s.locked) { await reply(`ℹ️ ${s.name ?? 'untitled'} isn't running.`); return; }
+        engine.stop(id);
+        await engine.call(`/sessions/${id}/interrupt`, { method: 'POST' });
+        await reply(`🛑 Stopping '${s.name ?? 'untitled'}'.`);
+        return;
+      }
+
+      // Bare /stop — the active session.
+      if (!acc.activeSessionId) { await reply('⚠️ No active session — /sessions to pick one, or /stop all.'); return; }
+      const own = engine.stop(acc.activeSessionId);
+      if (!own) {
+        const s = await sessionRow(engine, acc.activeSessionId);
+        if (!s?.locked) { await reply('ℹ️ Nothing is running.'); return; }
+      }
+      await engine.call(`/sessions/${acc.activeSessionId}/interrupt`, { method: 'POST' });
+      await reply('🛑 Stopping.');
       return;
     }
 
@@ -510,7 +535,9 @@ const HELP = [
   '/plan — Toggle plan mode',
   '/auto_push — Push this session to base',
   '/auto_pull — Pull base into this session',
-  '/stop — Stop the running task',
+  '/stop — Stop the active session',
+  '/stop 2 — Stop session 2',
+  '/stop all — Stop every running session',
   '',
   'Model',
   '/presets — List or apply model presets',
