@@ -548,12 +548,12 @@ export function App({
   const menuBelow = suggestions.length - menuFrom - menuRows.length;
 
   // The toolbar's mode mark — ALWAYS on while a session is on screen: the
-  // line says which mode you are in before you type, 'planning' or
-  // 'coding'. The » prefix (or 📌 when pinned) is rendered by the Toolbar
+  // line says which mode you are in before you type, 'plan' or
+  // 'code'. The » prefix (or 📌 when pinned) is rendered by the Toolbar
   // itself on the far left. A supervisor record has no modes — you cannot
   // chat there at all.
   const modeMark = session && !session.readonly
-    ? (session.planMode ? 'planning' : 'coding')
+    ? (session.planMode ? 'plan' : 'code')
     : undefined;
   // Which card this session is building — the board's own name for it
   // (`PHA-7`), so the line you read while typing answers "what am I working
@@ -565,10 +565,10 @@ export function App({
   // same WORK map the /resume table draws from (Launcher.tsx), so the three
   // places the state shows — /resume, this line, the board — cannot disagree.
   const workMark: ToolbarPart | undefined = session?.work ? WORK[session.work] : undefined;
-  // The bg task count — shown only when > 0. A zero is not news; it appearing
+  // The task count — shown only when > 0. A zero is not news; it appearing
   // and vanishing is the signal that something started or stopped.
   const taskMark = session && windowStore.taskCount != null && windowStore.taskCount > 0
-    ? `${windowStore.taskCount} bg task${windowStore.taskCount === 1 ? '' : 's'}`
+    ? `${windowStore.taskCount} ${windowStore.taskCount === 1 ? 'task' : 'tasks'}`
     : undefined;
   // The model this session is running on — always shown so you know what you
   // are talking to. Before the first message it follows /model and /presets;
@@ -597,9 +597,9 @@ export function App({
   const nameMark = trimmedName ? `· ${trimmedName}` : undefined;
   // Order: the mode, the card, the session's name, the git work dot (red =
   // not pushed, yellow = not merged, green = merged), the model with its
-  // token meter, the bg tasks, a notice pinned last. The model and its meter
+  // token meter, the tasks, a notice pinned last. The model and its meter
   // answer ONE question so they ride in one group — the line reads
-  // `coding · PHA-7 my session • not pushed · gpt-5 ↑ 48.2k (84%) ↓ 12.4k`,
+  // `code · PHA-7 my session • not pushed · gpt-5 ↑ 48.2k (84%) ↓ 12.4k`,
   // facts separated by ` · `, not a flat list of fields.
   const withMode = (rest?: string): ToolbarGroup[] =>
     [[modeMark], [cardMark, nameMark, workMark], [modelMark, tokensMark], [taskMark], [rest]]

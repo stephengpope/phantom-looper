@@ -1,5 +1,5 @@
-// The one line under the typing area: the mode mark — '» planning' or
-// '» coding' (📌 replaces » when the session is pinned), ALWAYS shown while
+// The one line under the typing area: the mode mark — '» plan' or
+// '» code' (📌 replaces » when the session is pinned), ALWAYS shown while
 // a session is on screen so you know which before you type — with the
 // transient notices (ctrl+c's "again to quit")
 // composed after it by App. Padded one cell to align with the `> ` prompt
