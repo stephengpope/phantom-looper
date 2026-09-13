@@ -47,9 +47,9 @@ import { logger, errStr } from './log.js';
 
 const log = logger('boot');
 const VERSION = process.env.APP_VERSION ?? 'dev';
-/** Host part of the in-process fetch shim's URLs — injectFetch ignores it, the
- *  same way the looper's 'http://looper' is ignored. */
-const TURN_BASE = 'http://auto-push';
+/** Fake base URL for in-process API calls via injectFetch — the host part is
+ *  discarded, only the /api path prefix matters. */
+const INTERNAL_API = 'http://internal/api';
 
 async function main() {
   const env = readEnv();
@@ -103,7 +103,7 @@ async function main() {
     // hold, and any other id would find the session locked by us.
     let opened: OpenedSession;
     try {
-      opened = await openSession({ baseUrl: TURN_BASE, apiKey: env.apiKey, clientId: GIT_CLIENT_ID,
+      opened = await openSession({ baseUrl: INTERNAL_API, apiKey: env.apiKey, clientId: GIT_CLIENT_ID,
         label: 'resolving a conflict', fetch: f, lock: true, sessionId: session.id });
     } catch (e) {
       if (e instanceof SessionLockedError) {
@@ -112,7 +112,7 @@ async function main() {
       }
       throw e;
     }
-    const deps = { f, apiKey: env.apiKey, base: TURN_BASE, sessionEvents: sessionEvents,
+    const deps = { f, apiKey: env.apiKey, base: INTERNAL_API, sessionEvents: sessionEvents,
       backdoor,
       client: GIT_CLIENT_ID, onRetry: (t: string) => log.warn({ session: session.id }, t) };
     try {
@@ -172,7 +172,7 @@ async function main() {
     const f = injectFetch(app);
     let opened: OpenedSession;
     try {
-      opened = await openSession({ baseUrl: TURN_BASE, apiKey: env.apiKey, clientId: GIT_CLIENT_ID,
+      opened = await openSession({ baseUrl: INTERNAL_API, apiKey: env.apiKey, clientId: GIT_CLIENT_ID,
         label: 'recording sync summary', fetch: f, lock: true, sessionId: session.id });
     } catch { return; }
     try {
@@ -198,7 +198,7 @@ async function main() {
     const card = await cards.bySeq(workspace, loop.card).catch(() => undefined);
     if (!card) return;
     const f = injectFetch(app);
-    await f(`${TURN_BASE}/workspaces/${workspace.id}/cards/${card.id}`, {
+    await f(`${INTERNAL_API}/workspaces/${workspace.id}/cards/${card.id}`, {
       method: 'PATCH',
       headers: { authorization: `Bearer ${env.apiKey}`, 'content-type': 'application/json' },
       body: JSON.stringify({ status: 'blocked', blocked_reason: reason, resolution: null }),

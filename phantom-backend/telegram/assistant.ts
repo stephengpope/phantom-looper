@@ -30,7 +30,7 @@ import { webTools } from '../../core/llm/tools/web.js';
 import { parseTranscript, usageEvent, type Transcript } from '../../core/llm/transcript.js';
 import type { TelegramSink } from './sink.js';
 
-const BASE = 'http://looper';
+const BASE = 'http://looper/api';
 
 export interface AssistantDeps {
   f: typeof fetch;

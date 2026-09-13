@@ -61,7 +61,7 @@ import { logger, errStr } from '../log.js';
 
 const log = logger('looper');
 const CLIENT_ID = LOOP_CLIENT_ID;
-const BASE = 'http://looper';
+const BASE = 'http://looper/api';
 
 export interface LooperDeps {
   sessions: Sessions;

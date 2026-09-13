@@ -528,7 +528,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       const f = injectFetch(app);
       let opened;
       try {
-        opened = await openSession({ baseUrl: 'http://looper', apiKey: ctx.apiKey,
+        opened = await openSession({ baseUrl: 'http://looper/api', apiKey: ctx.apiKey,
           clientId: client, label: client, sessionId: req.params.id, fetch: f, lock: true });
       } catch (e) {
         if (e instanceof SessionLockedError) {
@@ -556,7 +556,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       });
       try {
         const { text } = await runCodingTurn(
-          { f, apiKey: ctx.apiKey, base: 'http://looper', modelFetch: ctx.modelFetch,
+          { f, apiKey: ctx.apiKey, base: 'http://looper/api', modelFetch: ctx.modelFetch,
             sessionEvents: ctx.sessionEvents, client, backdoor: ctx.backdoor },
           opened, opened.session.workspaceId, req.body.message, req.body.plan === true);
         line({ type: 'result', text });

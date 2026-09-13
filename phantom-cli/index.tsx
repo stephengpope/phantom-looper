@@ -226,7 +226,7 @@ setInterval(versionWatch, CHECK_INTERVAL_MS).unref();
 export async function autoPushSession(sessionId: string, onStep?: (label: string) => void) {
   const { base, key } = connection();
   await trustSavedCa(base);
-  return corePush({ baseUrl: base, apiKey: key, sessionId, clientId: CLIENT_ID }, onStep);
+  return corePush({ baseUrl: `${base}/api`, apiKey: key, sessionId, clientId: CLIENT_ID }, onStep);
 }
 
 /** POST /git/auto-pull for one session — core's client over the same stream
@@ -235,7 +235,7 @@ export async function autoPushSession(sessionId: string, onStep?: (label: string
 export async function autoPullSession(sessionId: string, onStep?: (label: string) => void) {
   const { base, key } = connection();
   await trustSavedCa(base);
-  return corePull({ baseUrl: base, apiKey: key, sessionId, clientId: CLIENT_ID }, onStep);
+  return corePull({ baseUrl: `${base}/api`, apiKey: key, sessionId, clientId: CLIENT_ID }, onStep);
 }
 
 /** GET a server stream (ND-JSON) as records — the board's live feed. Open
@@ -246,7 +246,7 @@ export async function stream(path: string, signal: AbortSignal): Promise<AsyncIt
   await trustSavedCa(base);
   let r: Response;
   try {
-    r = await fetch(`${base}${path}`, {
+    r = await fetch(`${base}/api${path}`, {
       headers: { authorization: `Bearer ${key}`, 'x-phantom-looper-client': CLIENT_ID }, signal });
   } catch (e) { throw requestError('GET', path, base, e); }
   if ((r.headers.get('content-type') ?? '').includes('application/json')) {
@@ -266,7 +266,7 @@ export async function api(method: string, path: string, body?: unknown) {
   let r: Response;
   let j: { ok: boolean; data?: unknown; error?: { code?: string; message?: string } };
   try {
-    r = await fetch(`${base}${path}`, {
+    r = await fetch(`${base}/api${path}`, {
       method,
       headers: { authorization: `Bearer ${key}`, 'x-phantom-looper-client': CLIENT_ID,
         ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
@@ -304,11 +304,11 @@ const resumeId = flag('--resume', '-r');
 // `plan` is /plan's switch: the readonly preset on the mutating kits — the
 // same rule the server's turn route applies for plan: true.
 const skillKit = (id: string, plan?: boolean, planMode?: () => boolean) =>
-  skillTools({ baseUrl: connection().base, apiKey: connection().key, sessionId: id, planMode, ...(plan ? { pick: 'readonly' as const } : {}) });
-const webKit = (id: string) => webTools({ baseUrl: connection().base, apiKey: connection().key, sessionId: id });
+  skillTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, sessionId: id, planMode, ...(plan ? { pick: 'readonly' as const } : {}) });
+const webKit = (id: string) => webTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, sessionId: id });
 // Workspace-bound, not session-bound: the workspace's secrets shadow global
 // ones by name, and only App knows which workspace a session is in.
-const secretKit = (ws: string) => secretTools({ baseUrl: connection().base, apiKey: connection().key, workspaceId: ws });
+const secretKit = (ws: string) => secretTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, workspaceId: ws });
 // The session you quit from is not necessarily the one you started in — /new,
 // /resume, /workspace and tab all move it — so track the live one and print
 // THAT id on the way out. One line, for the session you were actually in:
@@ -407,9 +407,9 @@ const app = render(
     autoPush={autoPushSession}
     autoPull={autoPullSession}
     boot={{ ...(resumeId ? { resumeId } : {}) }}
-    newTools={(id, plan, ws, planMode) => phantomTools({ baseUrl: connection().base, apiKey: connection().key, sessionId: id, planMode, ...(plan ? { pick: 'readonly' as const } : {}) })
+    newTools={(id, plan, ws, planMode) => phantomTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, sessionId: id, planMode, ...(plan ? { pick: 'readonly' as const } : {}) })
       .then((t) => ({ ...t, ...skillKit(id, plan, planMode), ...webKit(id), ...(ws ? secretKit(ws) : {}) }))}
-    newAssistantTools={(id) => phantomTools({ baseUrl: connection().base, apiKey: connection().key, sessionId: id, pick: 'readonly' })
+    newAssistantTools={(id) => phantomTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, sessionId: id, pick: 'readonly' })
       .then((t) => ({ ...t, ...webKit(id) }))}
     onSession={(s) => { currentId = s.id; openedIds.add(s.id); }}
     onWindow={(w) => { windowStore = w; if (installedVersion) w.setUpdateReady(installedVersion); }}

@@ -152,60 +152,67 @@ export async function buildApp(ctx: AppCtx) {
   // which is for ever here; the clients reconnect on their own (follow.ts).
   const app = Fastify({ logger: false, forceCloseConnections: true });
 
-  // Authenticated like every other route. It was anonymous, which handed the
-  // running version to anyone deciding whether this host was worth an exploit;
-  // behind the token the version is safe to keep, and POST /update needs it
-  // (that is how you see the upgrade land). The container's own HEALTHCHECK
-  // sends the key — it runs beside the API and reads the same API_KEY.
-  app.get('/health', { schema: { tags: ['meta'], summary: 'Liveness',
-    description: 'Requires the bearer token. Returns the running version — watch it change after POST /update — ' +
-      'and `loops_running`, the cards with a round in flight (a restart cuts those rounds off and blocks the cards).' } },
-  async () => ({ ok: true, version: ctx.version, loops_running: ctx.looper?.runningCount() ?? 0 }));
+  // ── outer shell: reveal nothing ────────────────────────────────────────
+  // Any request that lands outside /api gets a bare 401 with no body — no
+  // envelope, no framework fingerprint, no confirmation that anything exists.
+  // Scanners and probes learn nothing.
+  app.setNotFoundHandler((_req, reply) => { reply.code(401).send(); });
+  app.setErrorHandler((_e, _req, reply) => { reply.code(401).send(); });
 
-  app.addHook('onRequest', async (req, reply) => {
-    // The Telegram webhook is public: Telegram cannot send our bearer, and its
-    // own secret-token header (timing-safe-checked in the engine) is the auth.
-    if (req.url === '/telegram/webhook') return;
-    const auth = req.headers.authorization ?? '';
-    if (auth !== `Bearer ${ctx.apiKey}`) {
-      return reply.code(401).send(err('unauthorized', 'missing or invalid bearer token'));
-    }
-  });
+  // ── /api: the real surface ─────────────────────────────────────────────
+  await app.register(async (api) => {
+    api.get('/health', { schema: { tags: ['meta'], summary: 'Liveness',
+      description: 'Requires the bearer token. Returns the running version — watch it change after POST /update — ' +
+        'and `loops_running`, the cards with a round in flight (a restart cuts those rounds off and blocks the cards).' } },
+    async () => ({ ok: true, version: ctx.version, loops_running: ctx.looper?.runningCount() ?? 0 }));
 
-  // Unknown routes speak the envelope too — the model may probe a tool name
-  // that does not exist and must get {ok:false,error:{code:'not_found'}}.
-  app.setNotFoundHandler((req, reply) => {
-    reply.code(404).send(err('not_found', `no route ${req.method} ${req.url}`));
-  });
+    api.addHook('onRequest', async (req, reply) => {
+      // The Telegram webhook is public: Telegram cannot send our bearer, and
+      // its own secret-token header (timing-safe-checked in the engine) is the
+      // auth.
+      if (req.url === '/api/telegram/webhook') return;
+      const auth = req.headers.authorization ?? '';
+      if (auth !== `Bearer ${ctx.apiKey}`) {
+        return reply.code(401).send();
+      }
+    });
 
-  app.setErrorHandler((e: unknown, _req, reply) => {
-    // Schema validation failures speak the same envelope as everything else —
-    // the model reads {ok:false,error:{...}}, never a framework error shape.
-    const fe = e as { validation?: unknown; message?: string };
-    if (fe.validation) {
-      return reply.code(400).send(err('invalid_args', fe.message ?? 'invalid arguments'));
-    }
-    reply.code(500).send(err('internal', e instanceof Error ? e.message : String(e)));
-  });
+    // Unknown routes inside /api speak the envelope — the model may probe a
+    // tool name that does not exist and must get {ok:false,error:{code:'not_found'}}.
+    api.setNotFoundHandler((req, reply) => {
+      reply.code(404).send(err('not_found', `no route ${req.method} ${req.url}`));
+    });
 
-  ctx.sessionEvents ??= new SessionEvents();
-  ctx.settingsEvents ??= new SettingsEvents();
-  ctx.activeTurns ??= new Map();
-  ctx.foreground ??= new ForegroundCommands();
-  ctx.backdoor ??= new BackdoorQueue();
-  settingsRoutes(app, ctx);
-  secretsRoutes(app, ctx);
-  workspaceRoutes(app, ctx);
-  sessionRoutes(app, ctx);
-  if (ctx.fs) fsRoutes(app, ctx, ctx.fs);
-  if (ctx.fs) tasksRoutes(app, ctx, ctx.fs);
-  if (ctx.fs) skillsRoutes(app, ctx, ctx.fs);
-  if (ctx.fs && ctx.engine) gitRoutes(app, ctx, ctx.fs, ctx.engine);
-  webRoutes(app, ctx);
-  ctx.events ??= new BoardEvents();
-  kanbanRoutes(app, ctx);
-  systemRoutes(app, ctx);
-  presetRoutes(app, ctx);
-  telegramRoutes(app, ctx);
+    api.setErrorHandler((e: unknown, _req, reply) => {
+      // Schema validation failures speak the same envelope as everything else —
+      // the model reads {ok:false,error:{...}}, never a framework error shape.
+      const fe = e as { validation?: unknown; message?: string };
+      if (fe.validation) {
+        return reply.code(400).send(err('invalid_args', fe.message ?? 'invalid arguments'));
+      }
+      reply.code(500).send(err('internal', e instanceof Error ? e.message : String(e)));
+    });
+
+    ctx.sessionEvents ??= new SessionEvents();
+    ctx.settingsEvents ??= new SettingsEvents();
+    ctx.activeTurns ??= new Map();
+    ctx.foreground ??= new ForegroundCommands();
+    ctx.backdoor ??= new BackdoorQueue();
+    settingsRoutes(api, ctx);
+    secretsRoutes(api, ctx);
+    workspaceRoutes(api, ctx);
+    sessionRoutes(api, ctx);
+    if (ctx.fs) fsRoutes(api, ctx, ctx.fs);
+    if (ctx.fs) tasksRoutes(api, ctx, ctx.fs);
+    if (ctx.fs) skillsRoutes(api, ctx, ctx.fs);
+    if (ctx.fs && ctx.engine) gitRoutes(api, ctx, ctx.fs, ctx.engine);
+    webRoutes(api, ctx);
+    ctx.events ??= new BoardEvents();
+    kanbanRoutes(api, ctx);
+    systemRoutes(api, ctx);
+    presetRoutes(api, ctx);
+    telegramRoutes(api, ctx);
+  }, { prefix: '/api' });
+
   return app;
 }

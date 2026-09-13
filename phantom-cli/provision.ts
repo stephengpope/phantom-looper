@@ -234,7 +234,7 @@ export async function readServerCa(t: Target, opts: SshOpts = {}): Promise<strin
 export function apiFor(base: string, key: string, ca?: string) {
   return (method: string, path: string, body?: unknown) =>
     new Promise<unknown>((resolvePromise, reject) => {
-      const u = new URL(path, base);
+      const u = new URL(`/api${path}`, base);
       const req = (u.protocol === 'https:' ? httpsRequest : httpRequest)(u, {
         method,
         headers: {
@@ -274,7 +274,7 @@ export function verifyFromHere(url: string, key: string, ca?: string, timeoutMs 
     let u: URL;
     try { u = new URL(url); } catch { return resolvePromise({ ok: false, reason: `not a URL: ${url}` }); }
     const req = (u.protocol === 'https:' ? httpsRequest : httpRequest)(
-      new URL('/health', u),
+      new URL('/api/health', u),
       { headers: { authorization: `Bearer ${key}` }, timeout: timeoutMs, ...(ca ? { ca } : {}) },
       (res) => {
         let body = '';

@@ -49,7 +49,7 @@ import { autoPushSession, autoPullSession, type AutoPushOutcome, type AutoPullOu
 
 
 const log = logger('telegram');
-const BASE = 'http://looper';
+const BASE = 'http://looper/api';
 const CLIENT_ID = 'telegram';
 
 // Progress on a voice message itself. WRITTEN AS ESCAPES — Telegram's reaction
@@ -317,7 +317,7 @@ export class TelegramEngine {
     const addr = this.deps.publicAddress?.trim();
     if (!addr) return null;
     const host = addr.replace(/^https?:\/\//, '').replace(/\/$/, '');
-    return `https://${host}/telegram/webhook`;
+    return `https://${host}/api/telegram/webhook`;
   }
 
   private async token(): Promise<string> {
