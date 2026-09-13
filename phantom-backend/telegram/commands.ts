@@ -561,7 +561,7 @@ const HELP = [
   '/models — List or switch models',
   '',
   'Server',
-  '/status — Server health, workspace, session and what\'s running',
+  '/status — Server health and what\'s running',
   '/restart — Restart the server; /restart postgres restarts one service',
   '/update — Check for updates',
   '',

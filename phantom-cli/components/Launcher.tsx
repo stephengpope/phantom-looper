@@ -409,7 +409,7 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
           { key: 'd', does: 'duplicate', when: canCopy }, { key: 'x', does: 'close', when: canCopy },
           { key: 't', does: 'trash', when: canCopy },
           { key: 'p', does: 'pin', when: canPin },
-          { key: 's', does: 'supervised', when: canCopy },
+          { key: 's', does: 'supervised', when: canCopy, active: showSupervised },
           { key: '/', does: 'filter', when: canFilter }, { key: 'esc', does: 'close' },
         ])}>
       <SelectList
