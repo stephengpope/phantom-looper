@@ -287,12 +287,21 @@ export class SessionStore {
     this.notify();
   }
 
-  /** The next session round the ring, or undefined when there is only one. */
+  /** The next session round the ring, or undefined when there is nowhere to
+   *  go. Sessions that have never been spoken to (`lastMessageAt === 0`) are
+   *  skipped — they sit in the open list but stay out of the tab ring until
+   *  someone says something to them. */
   next(dir: 1 | -1 = 1): LoadedSession | undefined {
     const order = this.list();
     if (order.length < 2) return undefined;
     const at = order.findIndex((e) => e.id === this.activeId);
-    return order[((at < 0 ? 0 : at) + dir + order.length) % order.length];
+    const n = order.length;
+    let idx = at < 0 ? 0 : at;
+    for (let i = 0; i < n - 1; i++) {
+      idx = (idx + dir + n) % n;
+      if (order[idx].lastMessageAt > 0) return order[idx];
+    }
+    return undefined;
   }
 
   /** A one-line note in a session's transcript view (never in its history). */
