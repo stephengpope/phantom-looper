@@ -4,15 +4,14 @@ import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { and, desc, eq } from 'drizzle-orm';
-import { workspaces, commands, type SessionRow } from '../../db/schema.js';
+import type { SessionRow } from '../../db/schema.js';
+import type { CommandRow, CommandEnd } from '../../commands.js';
 import { newId } from '../../../core/ids.js';
 import { sessionDir } from '../../pool/paths.js';
 import { logger, errStr } from '../../log.js';
 import { Sandbox } from '../../workspace/sandbox.js';
 import { TOOLS, type ToolCtx } from '../../tools/registry.js';
 import { ToolError } from '../../tools/envelope.js';
-import { resolveMany } from '../../settings.js';
 import { ok, err, type AppCtx } from '../app.js';
 import { killProcessGroup } from '../foreground.js';
 import { SESSION_HEADER } from '../sessionHeader.js';
@@ -138,7 +137,7 @@ export const commandOf = (argv: unknown): string => {
   return a.length === 3 && a[0] === '/bin/sh' && a[1] === '-c' ? a[2] : a.join(' ');
 };
 
-export type CmdRow = typeof commands.$inferSelect;
+export type CmdRow = CommandRow;
 
 /** Rows still marked running with no live process are provably dead — the
  *  final write was lost (server restart mid-command). Close them on read:
@@ -154,10 +153,7 @@ export async function reconcileRunning(
   for (const row of running) {
     if (row.sid && live.has(row.sid)) continue;
     if (!row.sid && now - row.startedAt.getTime() < SID_CAPTURE_GRACE_MS) continue;
-    await ctx.db.update(commands)
-      .set({ status: 'exited', exitCode: null, endedAt: new Date() })
-      .where(and(eq(commands.id, row.id), eq(commands.status, 'running')))
-      .catch(() => {});
+    await ctx.commands.finish(row.id, 'exited', null).catch(() => {});
     row.status = 'exited';
   }
 }
@@ -180,7 +176,7 @@ async function runBash(
   // No timeout by default: a command runs until it finishes. The tool's
   // timeout argument sets one per call; bash_timeout_ms sets a default and
   // bash_timeout_max_ms a ceiling (default two minutes and no ceiling).
-  const limits = await resolveMany(ctx.db,
+  const limits = await ctx.settings.resolveMany(
     ['bash_timeout_ms', 'bash_timeout_max_ms', 'max_bash_output_bytes']);
   const defaultMs = limits.bash_timeout_ms == null ? undefined : Number(limits.bash_timeout_ms);
   const maxMs = limits.bash_timeout_max_ms == null ? undefined : Number(limits.bash_timeout_max_ms);
@@ -263,9 +259,7 @@ async function runBash(
   const cmdId = newId();
   const logPath = path.join(sessionDir(ctx.paths, session.folderId ?? session.id), 'logs', `${cmdId}.ndjson`);
   await fsp.mkdir(path.dirname(logPath), { recursive: true });
-  await ctx.db.insert(commands).values({
-    id: cmdId, sessionId: session.id, argv, status: 'running', logPath,
-  });
+  await ctx.commands.start({ id: cmdId, sessionId: session.id, argv, logPath });
   deps.containers.commandStarted(session.id);
   // The same $$-to-pidfile idiom as unary above (pid == sid, runc setsids the
   // exec); `exec` keeps one process so the leader stays the command and the
@@ -276,7 +270,7 @@ async function runBash(
   void (async () => {
     const out = fs.createWriteStream(logPath);
     let exitCode: number | null = null;
-    let status = 'exited';
+    let status: CommandEnd = 'exited';
     try {
       for await (const rec of ws.runStream(wrapped, { cwd: args.cwd })) {
         out.write(JSON.stringify(rec) + '\n');
@@ -294,15 +288,13 @@ async function runBash(
       // Conditional on still-running: the tasks route's 'killed' and the
       // reconciler's 'exited' are final — a late stream teardown must not
       // overwrite them.
-      await ctx.db.update(commands).set({ status, exitCode, endedAt: new Date() })
-        .where(and(eq(commands.id, cmdId), eq(commands.status, 'running'))).catch(() => {});
+      await ctx.commands.finish(cmdId, status, exitCode).catch(() => {});
       // The exit message rides the session's NEXT turn through the backdoor
       // message queue (backdoor.ts) — no turn is started for it. Read the
       // row's final word rather than the local `status`: a kill from /tasks
       // or task_kill marks the row first, and the row is the truth.
-      const final = await ctx.db.select().from(commands).where(eq(commands.id, cmdId))
-        .catch(() => [] as CmdRow[]);
-      if (final[0]) ctx.backdoor?.push(session.id, noticeOf(final[0]));
+      const final = await ctx.commands.get(cmdId).catch(() => undefined);
+      if (final) ctx.backdoor?.push(session.id, noticeOf(final));
     }
   })();
   // Sid capture, fire-and-forget beside the stream: retry-read the pidfile
@@ -315,7 +307,7 @@ async function runBash(
       'rm -f "$0"; printf %s "$s"';
     const r = await ws.run(['/bin/sh', '-c', script, sidfile], { timeoutMs: 10_000 });
     const sid = r.stdout.toString('utf8').trim();
-    if (/^\d+$/.test(sid)) await ctx.db.update(commands).set({ sid }).where(eq(commands.id, cmdId));
+    if (/^\d+$/.test(sid)) await ctx.commands.setSid(cmdId, sid);
   })().catch((e) => log.warn({ cmdId, err: errStr(e) }, 'detached sid capture failed'));
   // log_file is the CONTAINER path — the one place the agent can actually
   // read it (the /commands/:id/logs HTTP route is for API clients, which the
@@ -345,9 +337,7 @@ const shapeCommand = (r: CmdRow) => ({
 });
 
 async function taskList(ctx: AppCtx, ws: Sandbox, session: SessionRow): Promise<unknown> {
-  const rows: CmdRow[] = await ctx.db.select().from(commands)
-    .where(eq(commands.sessionId, session.id))
-    .orderBy(desc(commands.startedAt)).limit(20);
+  const rows = await ctx.commands.listForSession(session.id, 20);
   const running = rows.filter((r) => r.status === 'running');
   if (running.length) {
     // Reconcile on read so `running` is the truth. A failed ps SKIPS it —
@@ -364,10 +354,9 @@ async function taskList(ctx: AppCtx, ws: Sandbox, session: SessionRow): Promise<
 
 /** One command row of THIS session, or a not_found the model can act on. */
 async function ownCommand(ctx: AppCtx, session: SessionRow, cmdId: string): Promise<CmdRow> {
-  const rows: CmdRow[] = await ctx.db.select().from(commands)
-    .where(and(eq(commands.id, cmdId), eq(commands.sessionId, session.id)));
-  if (!rows[0]) throw new ToolError('not_found', `no task ${cmdId} in this session — task_list shows what is running`);
-  return rows[0];
+  const row = await ctx.commands.getInSession(cmdId, session.id);
+  if (!row) throw new ToolError('not_found', `no task ${cmdId} in this session — task_list shows what is running`);
+  return row;
 }
 
 /** task_wait's ceiling: the tool call is one HTTP request — long, never
@@ -396,8 +385,7 @@ async function taskKill(ctx: AppCtx, ws: Sandbox, session: SessionRow, cmdId: st
   // Mark first: the detached stream's terminal write is conditioned on
   // status='running', so 'killed' set here is final even if the stream's
   // exit lands a moment later. The same order as the /tasks route's kill.
-  await ctx.db.update(commands).set({ status: 'killed', endedAt: new Date() })
-    .where(and(eq(commands.id, row.id), eq(commands.status, 'running')));
+  await ctx.commands.markKilled(row.id);
   await killSid(ws, row.sid);
   return { cmd_id: row.id, status: 'killed' };
 }
@@ -458,10 +446,10 @@ export function fsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
       if (!session) return reply.code(404).send(err('session_not_found', `no session ${sessionId}`));
       if (session.status !== 'active') return reply.code(410).send(err('session_destroyed', `session is ${session.status}`));
 
-      const workspaceRows = await ctx.db.select().from(workspaces).where(eq(workspaces.id, session.workspaceId));
+      const workspace = await ctx.workspaces.get(session.workspaceId);
       let container;
       try {
-        container = await deps.containers.ensure(ctx.db, session, workspaceRows[0]);
+        container = await deps.containers.ensure(session, workspace);
       } catch (e) {
         return reply.code(503).send(err('container_start_failed', (e as Error).message, true));
       }
@@ -475,7 +463,7 @@ export function fsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
       // writableFinished is true and nothing aborts.
       const ac = new AbortController();
       reply.raw.on('close', () => { if (!reply.raw.writableFinished) ac.abort(); });
-      const readLimits = await resolveMany(ctx.db, ['max_read_bytes', 'max_search_results']);
+      const readLimits = await ctx.settings.resolveMany(['max_read_bytes', 'max_search_results']);
       const toolCtx: ToolCtx = {
         ws,
         sessionId,

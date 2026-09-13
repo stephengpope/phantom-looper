@@ -7,19 +7,17 @@
 // the call itself. The wrapper catches and logs recording errors.
 import { generateText } from 'ai';
 import { languageModel, type ModelConfig } from '../core/llm/createAgent.js';
-import { helperLlmUsage } from './db/schema.js';
-import { newId } from '../core/ids.js';
 import { logger } from './log.js';
-import type { Db } from './db/client.js';
+import type { HelperUsage, HelperKind } from './helperUsage.js';
 
 const log = logger('helper-call');
 
-export type HelperKind = 'title' | 'commit_message' | 'session_digest' | 'compaction';
+export type { HelperKind };
 
 export interface HelperCallOpts {
-  /** The database to record usage in. When absent, the call runs normally but
+  /** Where usage is recorded. When absent, the call runs normally but
    *  usage is not recorded — for callers outside the server process. */
-  db?: Db;
+  usage?: HelperUsage;
   config: ModelConfig;
   kind: HelperKind;
   /** The session this call serves — null when not tied to one. */
@@ -58,21 +56,10 @@ export async function helperCall(opts: HelperCallOpts): Promise<HelperCallResult
     cache_write: usage.inputTokenDetails?.cacheWriteTokens ?? 0,
   };
   // Best-effort: a failed insert must never break the caller.
-  if (!opts.db) return { text, usage: u };
+  if (!opts.usage) return { text, usage: u };
   try {
-    await opts.db.insert(helperLlmUsage).values({
-      id: newId(),
-      kind: opts.kind,
-      sessionId: opts.sessionId ?? null,
-      provider: opts.config.provider,
-      model: opts.config.model,
-      systemPrompt: opts.system ?? null,
-      userPrompt: opts.prompt,
-      tokensInput: u.input,
-      tokensOutput: u.output,
-      tokensCacheRead: u.cache_read,
-      tokensCacheWrite: u.cache_write,
-    });
+    await opts.usage.record({ kind: opts.kind, sessionId: opts.sessionId, provider: opts.config.provider,
+      model: opts.config.model, systemPrompt: opts.system, userPrompt: opts.prompt, tokens: u });
   } catch (e) {
     log.warn({ kind: opts.kind, session: opts.sessionId, err: (e as Error).message },
       'could not record helper LLM usage');

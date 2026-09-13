@@ -3,9 +3,8 @@
 // event, never a data event. It boots on the first tool call, dies after
 // container_idle_ms of no calls, and is recreated transparently.
 import type Docker from 'dockerode';
-import type { Db } from '../db/client.js';
 import type { WorkspaceRow, SessionRow } from '../db/schema.js';
-import { resolve, resolveMany } from '../settings.js';
+import type { Settings } from '../settings.js';
 import { resolveAuth } from '../pool/pool.js';
 import type { Paths } from '../pool/paths.js';
 import { sessionDir } from '../pool/paths.js';
@@ -77,9 +76,10 @@ export interface ContainerOpts {
    *  ONLY its session via volume subpath — mount-level isolation, verified
    *  live. Unset (dev/tests) falls back to a bind mount of the session dir. */
   volume?: string;
-  /** Needed only to decrypt the PAT for `agent_git_credentials`. Absent (tests)
-   *  means the container never gets a token, whatever the setting says. */
-  encryptionKey?: Buffer;
+  /** Where the container's limits, image and credential switch are read.
+   *  Absent (tests) means the container never gets a token, whatever the
+   *  setting says. */
+  settings?: Settings;
 }
 
 export class ContainerManager {
@@ -114,7 +114,7 @@ export class ContainerManager {
 
   /** The running container for a session, created if absent. Serialized per
    *  session so two simultaneous tool calls cannot double-create. */
-  async ensure(db: Db, session: SessionRow, workspace: WorkspaceRow | undefined): Promise<Docker.Container> {
+  async ensure(session: SessionRow, workspace: WorkspaceRow | undefined): Promise<Docker.Container> {
     // Containers belong to FOLDERS (they mount the checkout). A session that
     // borrows another's folder (the supervisor) shares that folder's
     // container; for owners folderId === id and nothing changes.
@@ -122,12 +122,12 @@ export class ContainerManager {
     this.touch(key);
     const existing = this.inflight.get(key);
     if (existing) return existing;
-    const p = this.ensureInner(db, session, workspace).finally(() => this.inflight.delete(key));
+    const p = this.ensureInner(session, workspace).finally(() => this.inflight.delete(key));
     this.inflight.set(key, p);
     return p;
   }
 
-  private async ensureInner(db: Db, session: SessionRow, workspace: WorkspaceRow | undefined): Promise<Docker.Container> {
+  private async ensureInner(session: SessionRow, workspace: WorkspaceRow | undefined): Promise<Docker.Container> {
     const c = this.docker.getContainer(this.name(session.folderId ?? session.id));
     try {
       const info = await c.inspect();
@@ -137,11 +137,12 @@ export class ContainerManager {
       await c.remove({ force: true, v: true }).catch(() => {});
     } catch { /* no such container */ }
 
-    const limits = await resolveMany(db,
+    if (!this.opts.settings) throw new Error('ContainerManager needs settings to create a container');
+    const limits = await this.opts.settings.resolveMany(
       ['container_image', 'container_memory_mb', 'container_cpus', 'container_pids_limit', 'container_docker'],
       { workspace });
     const image = limits.container_image;
-    const Env = await this.credentialEnv(db, workspace);
+    const Env = await this.credentialEnv(workspace);
     const key = session.folderId ?? session.id;
     const spec = buildContainerSpec({
       name: this.name(key),
@@ -185,10 +186,10 @@ export class ContainerManager {
    *
    *  Env is fixed at create, so a rotated token takes effect when the container
    *  is next recreated (container_idle_ms, or an explicit remove). */
-  private async credentialEnv(db: Db, workspace: WorkspaceRow | undefined): Promise<string[]> {
-    if (!workspace || !this.opts.encryptionKey) return [];
-    if (!(await resolve(db, 'agent_git_credentials', { workspace }))) return [];
-    const { pat } = await resolveAuth(db, workspace, this.opts.encryptionKey);
+  private async credentialEnv(workspace: WorkspaceRow | undefined): Promise<string[]> {
+    if (!workspace || !this.opts.settings) return [];
+    if (!(await this.opts.settings.resolve('agent_git_credentials', { workspace }))) return [];
+    const { pat } = await resolveAuth(this.opts.settings, workspace);
     if (!pat) {
       log.warn({ workspace: workspace.name }, 'agent_git_credentials is on but no PAT resolved — container gets none');
       return [];

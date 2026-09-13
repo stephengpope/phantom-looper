@@ -11,7 +11,6 @@ import Fastify from 'fastify';
 declare module 'fastify' {
   interface FastifySchema { tags?: readonly string[]; summary?: string; description?: string }
 }
-import type { Db } from '../db/client.js';
 import type { Paths } from '../pool/paths.js';
 import { settingsRoutes } from './routes/settings.js';
 import { secretsRoutes } from './routes/secrets.js';
@@ -24,8 +23,15 @@ import type { GitEngine } from '../git/engine.js';
 import { BoardEvents } from './boardEvents.js';
 import { SessionEvents } from './sessionEvents.js';
 import type { Sessions } from '../sessions.js';
+import type { Settings } from '../settings.js';
+import type { Workspaces } from '../workspaces.js';
+import type { Folders } from '../folders.js';
+import type { Loops } from '../loops.js';
+import type { Cards } from '../cards.js';
+import type { Commands } from '../commands.js';
+import type { Presets } from '../presets.js';
+import type { HelperUsage } from '../helperUsage.js';
 import { SettingsEvents } from './settingsEvents.js';
-import { writeSettings, type SettingsWriteLayer } from '../settings.js';
 import { ForegroundCommands } from './foreground.js';
 import { BackdoorQueue } from './backdoor.js';
 import type { AutoPushResult, AutoPushEvent } from '../git/autoPush.js';
@@ -40,13 +46,20 @@ import { telegramRoutes } from './routes/telegram.js';
 import { presetRoutes } from './routes/presets.js';
 
 export interface AppCtx {
-  db: Db;
-  /** The session table's one owner (sessions.ts): every session-row read
-   *  and write in the routes goes through it. */
+  // The row owners — one object per table, each the ONLY door to its rows.
+  // A route parses, checks, calls one method, shapes the reply; the rules
+  // (and every change notice) live in the object.
+  settings: Settings;
+  workspaces: Workspaces;
+  folders: Folders;
+  loops: Loops;
+  cards: Cards;
   sessions: Sessions;
+  commands: Commands;
+  presets: Presets;
+  helperUsage: HelperUsage;
   paths: Paths;
   apiKey: string;
-  encryptionKey: Buffer;
   version: string;
   /** Docker wiring; absent in DB-only tests, and /fs then 404s. */
   fs?: FsDeps;
@@ -78,11 +91,6 @@ export interface AppCtx {
   /** Settings write notifications. The event names the scope only; listeners
    *  re-read the settings route rather than receiving a second copy. */
   settingsEvents?: SettingsEvents;
-  /** THE writer every settings route uses: validates, stores, then announces
-   *  the scope. Wired at registration so a route cannot store without the
-   *  change notice listeners rely on. */
-  settingsWrite?: (layer: SettingsWriteLayer, scope: string,
-    values: Record<string, unknown>, client?: string) => Promise<string[]>;
   /** Active server-side turns, keyed by session id. The interrupt route aborts
    *  the controller; the turn runner registers on entry and removes on exit.
    *  Absent only in tests that never run a turn. */
@@ -182,11 +190,6 @@ export async function buildApp(ctx: AppCtx) {
 
   ctx.sessionEvents ??= new SessionEvents();
   ctx.settingsEvents ??= new SettingsEvents();
-  ctx.settingsWrite = async (layer, scope, values, client) => {
-    const updated = await writeSettings(ctx.db, ctx.encryptionKey, layer, scope, values);
-    if (updated.length) ctx.settingsEvents!.publish(scope, client);
-    return updated;
-  };
   ctx.activeTurns ??= new Map();
   ctx.foreground ??= new ForegroundCommands();
   ctx.backdoor ??= new BackdoorQueue();
@@ -200,7 +203,7 @@ export async function buildApp(ctx: AppCtx) {
   if (ctx.fs && ctx.engine) gitRoutes(app, ctx, ctx.fs, ctx.engine);
   webRoutes(app, ctx);
   ctx.events ??= new BoardEvents();
-  kanbanRoutes(app, ctx, { pgPool: ctx.pgPool });
+  kanbanRoutes(app, ctx);
   systemRoutes(app, ctx);
   presetRoutes(app, ctx);
   telegramRoutes(app, ctx);

@@ -20,17 +20,28 @@ export interface TelegramAccountRow {
 }
 
 /** The account row, minted on first read — one row, id pinned 1. */
-export async function getAccount(db: Db, key: Buffer): Promise<TelegramAccountRow> {
-  const rows = await db.select().from(telegramAccount).where(eq(telegramAccount.id, 1));
+export const MODE_MESSAGE: Record<TelegramMode, string> = {
+  code: "🤖 You're now talking to the coding agent.",
+  assistant: "🏠 You're now talking to the assistant.",
+};
+
+export interface SentOrigin { kind: 'assistant' | 'session'; sessionId?: string }
+
+export class TelegramState {
+  constructor(private readonly db: Db, private readonly encryptionKey: Buffer) {}
+
+  /** The one account row (id 1), created on first read. */
+  async account(): Promise<TelegramAccountRow> {
+  const rows = await this.db.select().from(telegramAccount).where(eq(telegramAccount.id, 1));
   if (!rows.length) {
-    await db.insert(telegramAccount).values({ id: 1 }).onConflictDoNothing();
+    await this.db.insert(telegramAccount).values({ id: 1 }).onConflictDoNothing();
     return { mode: 'assistant', activeSessionId: null, activeWorkspaceId: null,
       webhookSecret: null, webhookUrl: null, botUsername: null };
   }
   const r = rows[0];
   let webhookSecret: string | null = null;
   if (r.webhookSecretEnc) {
-    try { webhookSecret = decrypt(key, r.webhookSecretEnc); } catch { /* re-mint on next register */ }
+    try { webhookSecret = decrypt(this.encryptionKey, r.webhookSecretEnc); } catch { /* re-mint on next register */ }
   }
   return {
     mode: r.mode === 'code' ? 'code' : 'assistant',
@@ -39,17 +50,13 @@ export async function getAccount(db: Db, key: Buffer): Promise<TelegramAccountRo
   };
 }
 
-async function patch(db: Db, values: Partial<typeof telegramAccount.$inferInsert>): Promise<void> {
-  await db.insert(telegramAccount).values({ id: 1, ...values })
+  private async patch(values: Partial<typeof telegramAccount.$inferInsert>): Promise<void> {
+  await this.db.insert(telegramAccount).values({ id: 1, ...values })
     .onConflictDoUpdate({ target: telegramAccount.id, set: values });
 }
 
 /** The transition announcements — ONE fixed line per direction, sent only
  *  when the mode actually changes. Command replies are separate. */
-export const MODE_MESSAGE: Record<TelegramMode, string> = {
-  code: "🤖 You're now talking to the coding agent.",
-  assistant: "🏠 You're now talking to the assistant.",
-};
 
 /** WHO answers a plain message — the mode, and only the mode. WHICH session
  *  is `setActiveSession`; the two are independent knobs, never written
@@ -57,12 +64,12 @@ export const MODE_MESSAGE: Record<TelegramMode, string> = {
  *  returns whether it did. Pass `message` to override the default
  *  MODE_MESSAGE — enterMode does this for code mode so the line carries
  *  session context. */
-export async function setMode(db: Db, mode: TelegramMode,
-  announce: (text: string) => Promise<unknown>, message?: string): Promise<boolean> {
-  const rows = await db.select({ mode: telegramAccount.mode }).from(telegramAccount)
+  /** Switch who a message goes to; says the switch aloud when it changed. */
+  async setMode(mode: TelegramMode, announce: (text: string) => Promise<unknown>, message?: string): Promise<boolean> {
+  const rows = await this.db.select({ mode: telegramAccount.mode }).from(telegramAccount)
     .where(eq(telegramAccount.id, 1));
   const before: TelegramMode = rows[0]?.mode === 'code' ? 'code' : 'assistant';
-  await patch(db, { mode });
+  await this.patch({ mode });
   if (before !== mode) await announce(message ?? MODE_MESSAGE[mode]);
   return before !== mode;
 }
@@ -70,42 +77,39 @@ export async function setMode(db: Db, mode: TelegramMode,
 /** WHICH session the account points at — read by the Assistant's file tools
  *  in assistant mode and by the coding turn in code mode. Changes the pointer
  *  only; the mode is untouched. */
-export async function setActiveSession(db: Db, sessionId: string): Promise<void> {
-  await patch(db, { activeSessionId: sessionId });
+  async setActiveSession(sessionId: string): Promise<void> {
+  await this.patch({ activeSessionId: sessionId });
 }
 
-export async function setActiveWorkspace(db: Db, workspaceId: string | null): Promise<void> {
-  await patch(db, { activeWorkspaceId: workspaceId });
+  async setActiveWorkspace(workspaceId: string | null): Promise<void> {
+  await this.patch({ activeWorkspaceId: workspaceId });
 }
 
-export async function saveRegistration(
-  db: Db, key: Buffer, secret: string, url: string, botUsername: string | null,
-): Promise<void> {
-  await patch(db, { webhookSecretEnc: encrypt(key, secret), webhookUrl: url, botUsername });
+  /** The webhook is registered: its secret (encrypted at rest), URL and bot. */
+  async saveRegistration(secret: string, url: string, botUsername: string | null): Promise<void> {
+  await this.patch({ webhookSecretEnc: encrypt(this.encryptionKey, secret), webhookUrl: url, botUsername });
 }
 
-export async function clearRegistration(db: Db): Promise<void> {
-  await patch(db, { webhookSecretEnc: null, webhookUrl: null });
+  async clearRegistration(): Promise<void> {
+  await this.patch({ webhookSecretEnc: null, webhookUrl: null });
 }
 
 /** True the FIRST time an update id is seen — Telegram retries deliveries,
  *  and the second insert loses on the primary key. Old rows are pruned in
  *  passing (they exist only to answer this). */
-export async function markUpdate(db: Db, updateId: number): Promise<boolean> {
+  async markUpdate(updateId: number): Promise<boolean> {
   if (!Number.isFinite(updateId)) return true;
-  const r = await db.insert(telegramUpdate).values({ updateId }).onConflictDoNothing().returning();
+  const r = await this.db.insert(telegramUpdate).values({ updateId }).onConflictDoNothing().returning();
   // Best-effort prune: ids are monotonic per bot, so anything far behind is done.
-  db.delete(telegramUpdate).where(lt(telegramUpdate.updateId, updateId - 10_000))
+  this.db.delete(telegramUpdate).where(lt(telegramUpdate.updateId, updateId - 10_000))
     .catch(() => { /* housekeeping */ });
   return r.length > 0;
 }
 
-export interface SentOrigin { kind: 'assistant' | 'session'; sessionId?: string }
 
-export async function recordSent(
-  db: Db, chatId: number, messageId: number, content: string, origin: SentOrigin,
-): Promise<void> {
-  await db.insert(telegramSent)
+  /** A message the bot sent, remembered so a reply to it can be traced. */
+  async recordSent(chatId: number, messageId: number, content: string, origin: SentOrigin): Promise<void> {
+  await this.db.insert(telegramSent)
     .values({ chatId, messageId, content, origin: origin.kind, originSessionId: origin.sessionId ?? null })
     .onConflictDoUpdate({
       target: [telegramSent.chatId, telegramSent.messageId],
@@ -113,14 +117,13 @@ export async function recordSent(
     });
 }
 
-export async function deleteSent(db: Db, chatId: number, messageId: number): Promise<void> {
-  await db.delete(telegramSent)
+  async deleteSent(chatId: number, messageId: number): Promise<void> {
+  await this.db.delete(telegramSent)
     .where(and(eq(telegramSent.chatId, chatId), eq(telegramSent.messageId, messageId)));
 }
 
-export async function getSent(db: Db, chatId: number, messageId: number):
-Promise<{ content: string; origin: SentOrigin } | null> {
-  const rows = await db.select().from(telegramSent)
+  async getSent(chatId: number, messageId: number): Promise<{ content: string; origin: SentOrigin } | null> {
+  const rows = await this.db.select().from(telegramSent)
     .where(and(eq(telegramSent.chatId, chatId), eq(telegramSent.messageId, messageId)));
   if (!rows.length) return null;
   const r = rows[0];
@@ -130,4 +133,5 @@ Promise<{ content: string; origin: SentOrigin } | null> {
       ? { kind: 'session', sessionId: r.originSessionId }
       : { kind: 'assistant' },
   };
+}
 }

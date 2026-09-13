@@ -12,9 +12,13 @@
 // afterward is simply the next pull.
 import type { WorkspaceRow, SessionRow } from '../db/schema.js';
 import type { Paths } from '../pool/paths.js';
-import type { Db } from '../db/client.js';
 import { syncBranch, type SyncEvent, type SyncDeps } from './sync.js';
 import type { Sessions } from '../sessions.js';
+import type { Folders } from '../folders.js';
+import type { Loops } from '../loops.js';
+import type { Cards } from '../cards.js';
+import type { Settings } from '../settings.js';
+import type { HelperUsage } from '../helperUsage.js';
 
 export type AutoPullEvent = SyncEvent;
 
@@ -36,10 +40,13 @@ export interface AutoPullResult {
 }
 
 export interface AutoPullDeps {
-  db: Db;
   sessions: Sessions;
+  folders: Folders;
+  loops: Loops;
+  cards: Cards;
+  settings: Settings;
+  helperUsage: HelperUsage;
   paths: Paths;
-  encryptionKey: Buffer;
   resolve?: SyncDeps['resolve'];
   recordSummary?: SyncDeps['recordSummary'];
   messageConfig?: SyncDeps['messageConfig'];

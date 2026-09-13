@@ -3,8 +3,7 @@
 // under workspace/, where the next push's add -A would commit them.
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import fsp from 'node:fs/promises';
-import { eq } from 'drizzle-orm';
-import { workspaces, commands, type SessionRow, type WorkspaceRow } from '../../db/schema.js';
+import type { SessionRow, WorkspaceRow } from '../../db/schema.js';
 import { ToolError } from '../../tools/envelope.js';
 import { ok, err, type AppCtx } from '../app.js';
 import { SESSION_HEADER } from '../sessionHeader.js';
@@ -34,10 +33,10 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
     const session = sessionId ? await ctx.sessions.get(sessionId) : undefined;
     if (!session) throw new ToolError('session_not_found', sessionId || `missing ${SESSION_HEADER}`);
     if (session.status !== 'active') throw new ToolError('session_destroyed', `session is ${session.status}`);
-    const workspaceRows = await ctx.db.select().from(workspaces).where(eq(workspaces.id, session.workspaceId));
-    if (!workspaceRows.length) throw new ToolError('not_found', 'workspace vanished');
+    const workspace = await ctx.workspaces.get(session.workspaceId);
+    if (!workspace) throw new ToolError('not_found', 'workspace vanished');
     void ctx.sessions.touch(session.id);
-    return { session, workspace: workspaceRows[0] };
+    return { session, workspace };
   }
 
   const send = (reply: { code: (n: number) => { send: (b: unknown) => unknown } }, e: unknown) => {
@@ -152,16 +151,15 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
     description: 'ND-JSON: replays what the command has written, then follows until it ends. Records are {seq, stream: stdout|stderr, data} with exactly one terminal {event: exit|error} record.',
     params: { type: 'object', properties: { cmdId: { type: 'string' } }, required: ['cmdId'] } } },
   async (req, reply) => {
-    const rows = await ctx.db.select().from(commands).where(eq(commands.id, req.params.cmdId));
-    if (!rows.length) return reply.code(404).send(err('not_found', `no command ${req.params.cmdId}`));
-    const cmd = rows[0];
+    const cmd = await ctx.commands.get(req.params.cmdId);
+    if (!cmd) return reply.code(404).send(err('not_found', `no command ${req.params.cmdId}`));
     reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
     let offset = 0;
     for (;;) {
       const buf = await fsp.readFile(cmd.logPath).catch(() => Buffer.alloc(0));
       if (buf.length > offset) { reply.raw.write(buf.subarray(offset)); offset = buf.length; }
-      const [row] = await ctx.db.select().from(commands).where(eq(commands.id, cmd.id));
-      if (row.status !== 'running') {
+      const row = await ctx.commands.get(cmd.id);
+      if (row?.status !== 'running') {
         const rest = await fsp.readFile(cmd.logPath).catch(() => Buffer.alloc(0));
         if (rest.length > offset) reply.raw.write(rest.subarray(offset));
         break;

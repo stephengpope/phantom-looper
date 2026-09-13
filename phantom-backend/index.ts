@@ -4,7 +4,17 @@ import { makeDb } from './db/client.js';
 import { migrate } from './db/migrate.js';
 import { makePaths } from './pool/paths.js';
 import { bootCleanup, tick } from './pool/pool.js';
-import { Sessions, loopOf, getFolder } from './sessions.js';
+import { Sessions } from './sessions.js';
+import { Settings } from './settings.js';
+import { Workspaces } from './workspaces.js';
+import { Folders } from './folders.js';
+import { Loops } from './loops.js';
+import { Cards } from './cards.js';
+import { Commands } from './commands.js';
+import { Presets } from './presets.js';
+import { HelperUsage } from './helperUsage.js';
+import { TelegramState } from './telegram/store.js';
+import { SettingsEvents } from './api/settingsEvents.js';
 import { idleBackupSweep, pressureSweep } from './disk.js';
 import { buildApp, type AppCtx } from './api/app.js';
 import { BoardEvents } from './api/boardEvents.js';
@@ -30,7 +40,7 @@ import type { SyncDeps, SyncEvent } from './git/sync.js';
 import type { WorkspaceRow, SessionRow } from './db/schema.js';
 import { LooperEngine } from './looper/engine.js';
 import { TelegramEngine } from './telegram/engine.js';
-import { resolve, resolveMany, resolveCredential, credentialForProvider } from './settings.js';
+import { credentialForProvider } from './settings.js';
 import { cascade } from '../core/llm/agentConfig.js';
 import { refreshWorkState } from './git/workRefresh.js';
 import { logger, errStr } from './log.js';
@@ -48,18 +58,30 @@ async function main() {
   await migrateAllWorkspaceSchemas(pgPool);
   const paths = makePaths(env.workspaceRoot);
   await bootCleanup(paths);
-  const docker = makeDocker();
-  const containers = new ContainerManager(docker, paths, {
-    volume: process.env.WORKSPACE_VOLUME, encryptionKey: env.encryptionKey,
-  });
-  await containers.bootCleanup();
 
-  // The event buses, then the session table's one owner over them — built
-  // before anything that writes a session row, so every writer publishes
-  // through the same object.
+  // The event buses, then THE ROW OWNERS over them — one object per table,
+  // built once here in dependency order and handed to everything else. No
+  // module below reads or writes a table any other way, so every rule and
+  // every change notice has exactly one home.
   const events = new BoardEvents();
   const sessionEvents = new SessionEvents();
-  const sessions = new Sessions(db, paths, env.encryptionKey, sessionEvents);
+  const settingsEvents = new SettingsEvents();
+  const settings = new Settings(db, env.encryptionKey, settingsEvents);
+  const workspaces = new Workspaces(db, settings, settingsEvents);
+  const folders = new Folders(db);
+  const loops = new Loops(db);
+  const cards = new Cards(pgPool, events);
+  const sessions = new Sessions(db, paths, settings, workspaces, folders, sessionEvents);
+  const commands = new Commands(db);
+  const presets = new Presets(db);
+  const helperUsage = new HelperUsage(db);
+  const telegramState = new TelegramState(db, env.encryptionKey);
+
+  const docker = makeDocker();
+  const containers = new ContainerManager(docker, paths, {
+    volume: process.env.WORKSPACE_VOLUME, settings,
+  });
+  await containers.bootCleanup();
   // THE CONFLICT RESOLVER — the session's own coding agent, not a separate
   // fixer. Shared by auto-push, auto-pull and the manual /git/pull.
   //
@@ -117,11 +139,11 @@ async function main() {
   // event); onRetry is what makes the retry loop's waits VISIBLE — without
   // it the call retried in silence, which was the original bug.
   const messageConfig: SyncDeps['messageConfig'] = async (report) => {
-    const cfg = await resolveMany(db,
+    const cfg = await settings.resolveMany(
       ['provider', 'model', 'base_url', 'assistant_provider', 'assistant_model', 'assistant_base_url']);
     const c = cascade(cfg, 'assistant'); // a bad pair throws with the fix in the message
     if (!isProvider(c.provider)) return null;
-    const apiKey = await resolveCredential(db, env.encryptionKey, credentialForProvider(c.provider));
+    const apiKey = await settings.credential(credentialForProvider(c.provider));
     const onRetry = (note: string) => { log.warn(`commit message: ${note}`); report?.(note); };
     return { ...c, provider: c.provider, apiKey, onRetry };
   };
@@ -136,8 +158,8 @@ async function main() {
       { event: 'sync', op, step: e.step, detail: e.detail });
   // The manual /git/pull has no stream of its own — the feed is how anyone
   // sees it run, so its steps publish under the git client (no caller to echo).
-  const engine = new GitEngine(db, sessions, paths, env.encryptionKey, resolveConflict, messageConfig,
-    (sessionId, e) => publishSync(sessionId, 'pull')(e));
+  const engine = new GitEngine({ sessions, folders, loops, cards, settings, helperUsage, paths,
+    resolve: resolveConflict, messageConfig }, (sessionId, e) => publishSync(sessionId, 'pull')(e));
 
   // After a successful sync, drop a summary into the session's transcript so
   // the coding agent knows what happened on its next turn. Same lock, same
@@ -171,11 +193,9 @@ async function main() {
   // is blocked deterministically — the system decides, not the agent. The patch
   // goes through the API so board events fire and the UI updates.
   const blockCardOnConflict = async (session: SessionRow, workspace: WorkspaceRow, reason: string) => {
-    const loop = await loopOf(db, session.id).catch(() => undefined);
+    const loop = await loops.of(session.id).catch(() => undefined);
     if (!loop) return;
-    const r = await pgPool.query(
-      `select id from "${workspace.schemaName}".cards where seq = $1`, [loop.card]);
-    const card = r.rows[0] as { id: number } | undefined;
+    const card = await cards.bySeq(workspace, loop.card).catch(() => undefined);
     if (!card) return;
     const f = injectFetch(app);
     await f(`${TURN_BASE}/workspaces/${workspace.id}/cards/${card.id}`, {
@@ -184,7 +204,7 @@ async function main() {
       body: JSON.stringify({ status: 'blocked', blocked_reason: reason, resolution: null }),
     }).catch((e) => log.warn({ session: session.id, err: errStr(e) }, 'could not block card after unresolved conflict'));
   };
-  const syncDeps = { db, sessions, paths, encryptionKey: env.encryptionKey,
+  const syncDeps = { sessions, folders, loops, cards, settings, helperUsage, paths,
     resolve: resolveConflict, recordSummary, messageConfig };
   const autoPushFn = async (session: SessionRow, workspace: WorkspaceRow,
     onEvent?: (e: AutoPushEvent) => void | Promise<void>, by?: string) => {
@@ -212,12 +232,12 @@ async function main() {
   let stopped = false;
   (async () => {
     while (!stopped) {
-      await tick(db, paths, env.encryptionKey).catch((e) => log.error({ err: errStr(e) }, 'pool tick threw'));
-      await idleBackupSweep(db, sessions, engine).catch((e) => log.error({ err: errStr(e) }, 'idle backup sweep threw'));
-      const idleMs = await resolve(db, 'container_idle_ms').catch(() => 30 * 60_000);
+      await tick(workspaces, settings, paths).catch((e) => log.error({ err: errStr(e) }, 'pool tick threw'));
+      await idleBackupSweep(workspaces, sessions, engine).catch((e) => log.error({ err: errStr(e) }, 'idle backup sweep threw'));
+      const idleMs = await settings.resolve('container_idle_ms').catch(() => 30 * 60_000);
       await containers.reap(Number(idleMs)).catch((e) => log.error({ err: errStr(e) }, 'container reap threw'));
-      await pressureSweep(db, sessions, paths, docker, containers, engine).catch((e) => log.error({ err: errStr(e) }, 'pressure sweep threw'));
-      const ms = await resolve(db, 'maintenance_interval_ms').catch(() => 60_000);
+      await pressureSweep(settings, workspaces, sessions, paths, docker, containers, engine).catch((e) => log.error({ err: errStr(e) }, 'pressure sweep threw'));
+      const ms = await settings.resolve('maintenance_interval_ms').catch(() => 60_000);
       await new Promise((r) => setTimeout(r, Number(ms)));
     }
   })();
@@ -230,7 +250,7 @@ async function main() {
   (async () => {
     while (!stopped) {
       await new Promise((r) => setTimeout(r, 10_000));
-      await refreshWorkState({ db, sessions, paths, containers, events })
+      await refreshWorkState({ sessions, workspaces, folders, loops, paths, containers, events })
         .catch((e) => log.error({ err: errStr(e) }, 'work-state refresh threw'));
     }
   })();
@@ -239,7 +259,8 @@ async function main() {
   // app exists — the engine is a headless client of this app, so it is built
   // second; routes read ctx.looper per request, so the late set is seen.
   const ctx: AppCtx = {
-    db, sessions, paths, apiKey: env.apiKey, encryptionKey: env.encryptionKey, version: VERSION,
+    settings, workspaces, folders, loops, cards, sessions, commands, presets, helperUsage,
+    paths, apiKey: env.apiKey, version: VERSION,
     fs: { docker, containers, engine },
     engine,
     autoPush: autoPushFn,
@@ -247,6 +268,7 @@ async function main() {
     pgPool,
     events,
     sessionEvents,
+    settingsEvents,
     backdoor,
     updateTriggerDir: process.env.UPDATE_TRIGGER_DIR || undefined,
   };
@@ -258,7 +280,7 @@ async function main() {
   // client of this server's own surface, and its rounds assume the routes
   // are answering. Event-driven: routes poke it through ctx.looper; start()
   // is ONE recovery sweep, not a poll.
-  const looper = new LooperEngine({ db, sessions, pgPool, app, apiKey: env.apiKey, events: ctx.events,
+  const looper = new LooperEngine({ sessions, workspaces, loops, cards, settings, app, apiKey: env.apiKey, events: ctx.events,
     sessionEvents: ctx.sessionEvents, activeTurns: ctx.activeTurns, backdoor: ctx.backdoor });
   ctx.looper = looper;
   looper.start();
@@ -268,7 +290,7 @@ async function main() {
   // profile runs on); with no address, telegram stays off. Reconcile at boot
   // re-registers a stale webhook and pushes the command menu.
   const telegram = new TelegramEngine({
-    db, sessions, paths, app, apiKey: env.apiKey, encryptionKey: env.encryptionKey,
+    state: telegramState, settings, sessions, loops, helperUsage, paths, app, apiKey: env.apiKey,
     events: ctx.events, backdoor: ctx.backdoor,
     sessionEvents: ctx.sessionEvents, publicAddress: process.env.PHANTOM_BACKEND_ADDRESS,
   });
@@ -278,8 +300,8 @@ async function main() {
   // Session idle digest — a periodic notification listing sessions that
   // finished. Standalone timer, no dependency on the engine's turn machinery.
   const digest = new SessionDigest({
-    db, sessions, encryptionKey: env.encryptionKey,
-    channels: [telegramChannel(db, env.encryptionKey)],
+    sessions, loops, settings, helperUsage,
+    channels: [telegramChannel(settings)],
   });
   void digest.start();
 
@@ -290,7 +312,7 @@ async function main() {
   // change takes effect without a restart. 0 disables the check.
   (async () => {
     while (!stopped) {
-      const ms = await resolve(db, 'update_check_interval_ms').catch(() => 86_400_000);
+      const ms = await settings.resolve('update_check_interval_ms').catch(() => 86_400_000);
       if (Number(ms) <= 0) { await new Promise((r) => setTimeout(r, 60_000)); continue; }
       await new Promise((r) => setTimeout(r, Number(ms)));
       if (stopped) break;

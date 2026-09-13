@@ -13,7 +13,6 @@ import type { FastifyInstance } from 'fastify';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { sessionDir } from '../../pool/paths.js';
-import { resolveCredential } from '../../settings.js';
 import { ok, err, type AppCtx } from '../app.js';
 import { SESSION_HEADER } from '../sessionHeader.js';
 
@@ -110,7 +109,7 @@ export function webRoutes(app: FastifyInstance, ctx: AppCtx) {
       },
     },
   }, async (req, reply) => {
-    const key = await resolveCredential(ctx.db, ctx.encryptionKey, 'firecrawl_api_key');
+    const key = await ctx.settings.credential('firecrawl_api_key');
     if (!key) return reply.code(400).send(err('credential_required', NO_KEY));
     // A filter left out is left out upstream — Firecrawl's defaults, not ours.
     const b = req.body;
@@ -161,7 +160,7 @@ export function webRoutes(app: FastifyInstance, ctx: AppCtx) {
     const session = await ctx.sessions.get(sessionId);
     if (!session) return reply.code(404).send(err('session_not_found', `no session ${sessionId}`));
     if (session.status !== 'active') return reply.code(410).send(err('session_destroyed', `session is ${session.status}`));
-    const key = await resolveCredential(ctx.db, ctx.encryptionKey, 'firecrawl_api_key');
+    const key = await ctx.settings.credential('firecrawl_api_key');
     if (!key) return reply.code(400).send(err('credential_required', NO_KEY));
     void ctx.sessions.touch(sessionId);
 

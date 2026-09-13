@@ -10,12 +10,7 @@
 //   GET    /secrets/:name      the decrypted value, workspace → global
 //   DELETE /secrets/:name      remove at one layer
 import type { FastifyInstance } from 'fastify';
-import { eq } from 'drizzle-orm';
-import { workspaces } from '../../db/schema.js';
-import {
-  listSecrets, listAllSecrets, readSecretValue, putSecret, dropSecret,
-  GLOBAL, workspaceScope,
-} from '../../store.js';
+import { GLOBAL, workspaceScope } from '../../store.js';
 import { ok, err, type AppCtx } from '../app.js';
 
 const TAG = { tags: ['secrets'] };
@@ -33,8 +28,7 @@ export function secretsRoutes(app: FastifyInstance, ctx: AppCtx) {
   async function scopesOf(q: { workspace?: string }):
   Promise<{ error: string } | { chain: string[]; write: string; label: 'global' | 'workspace' }> {
     if (!q.workspace) return { chain: [GLOBAL], write: GLOBAL, label: 'global' };
-    const rows = await ctx.db.select().from(workspaces).where(eq(workspaces.id, q.workspace));
-    if (!rows.length) return { error: `no workspace ${q.workspace}` };
+    if (!await ctx.workspaces.get(q.workspace)) return { error: `no workspace ${q.workspace}` };
     return { chain: [GLOBAL, workspaceScope(q.workspace)], write: workspaceScope(q.workspace), label: 'workspace' };
   }
 
@@ -47,8 +41,8 @@ export function secretsRoutes(app: FastifyInstance, ctx: AppCtx) {
       const sc = await scopesOf(req.query);
       if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
       const raw = req.query.workspace
-        ? await listSecrets(ctx.db, sc.chain)
-        : await listAllSecrets(ctx.db);
+        ? await ctx.settings.listSecrets(sc.chain)
+        : await ctx.settings.listAllSecrets();
       const secrets = raw.map((s) => ({
         name: s.name, description: s.description,
         scope: s.scope === GLOBAL ? 'global' : 'workspace',
@@ -77,7 +71,7 @@ export function secretsRoutes(app: FastifyInstance, ctx: AppCtx) {
       }
       const sc = await scopesOf(req.query);
       if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
-      await putSecret(ctx.db, ctx.encryptionKey, sc.write, name,
+      await ctx.settings.putSecret(sc.write, name,
         String(req.body?.description ?? ''), value);
       return ok({ name, scope: sc.label });
     });
@@ -90,9 +84,9 @@ export function secretsRoutes(app: FastifyInstance, ctx: AppCtx) {
     async (req, reply) => {
       const sc = await scopesOf(req.query);
       if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
-      const value = await readSecretValue(ctx.db, ctx.encryptionKey, req.params.name, sc.chain);
+      const value = await ctx.settings.readSecretValue(req.params.name, sc.chain);
       if (value === undefined) {
-        const names = (await listSecrets(ctx.db, sc.chain)).map((s) => s.name);
+        const names = (await ctx.settings.listSecrets(sc.chain)).map((s) => s.name);
         return reply.code(404).send(err('not_found',
           `no secret named "${req.params.name}" — stored: ${names.length ? names.join(', ') : '(none)'}`));
       }
@@ -107,7 +101,7 @@ export function secretsRoutes(app: FastifyInstance, ctx: AppCtx) {
     async (req, reply) => {
       const sc = await scopesOf(req.query);
       if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
-      const gone = await dropSecret(ctx.db, sc.write, req.params.name);
+      const gone = await ctx.settings.dropSecret(sc.write, req.params.name);
       if (!gone) {
         return reply.code(404).send(err('not_found',
           `no secret named "${req.params.name}" at the ${sc.label} layer`));

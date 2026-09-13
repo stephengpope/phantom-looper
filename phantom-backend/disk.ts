@@ -15,9 +15,9 @@
 // every session, and a full one cleans itself. One setting, 0 disables.
 import fs from 'node:fs/promises';
 import type Docker from 'dockerode';
-import type { Db } from './db/client.js';
-import { workspaces, type SessionRow, type WorkspaceRow } from './db/schema.js';
-import { resolve } from './settings.js';
+import type { SessionRow, WorkspaceRow } from './db/schema.js';
+import type { Settings } from './settings.js';
+import type { Workspaces } from './workspaces.js';
 import type { Sessions } from './sessions.js';
 import { drainReady } from './pool/pool.js';
 import type { Paths } from './pool/paths.js';
@@ -50,9 +50,9 @@ async function diskUsedPercent(root: string): Promise<number> {
 /** Active sessions that own their folder (only owners hold disk), each with
  *  its workspace row. Fails CLOSED like every sweep: an unreadable list
  *  aborts the run — not knowing what is protected never licenses deletion. */
-async function folderOwners(db: Db, sessions: Sessions): Promise<Array<{ s: SessionRow; w: WorkspaceRow }>> {
+async function folderOwners(workspaces: Workspaces, sessions: Sessions): Promise<Array<{ s: SessionRow; w: WorkspaceRow }>> {
   const rows = await sessions.listActive();
-  const byId = new Map((await db.select().from(workspaces)).map((w) => [w.id, w]));
+  const byId = new Map((await workspaces.list()).map((w) => [w.id, w]));
   return rows
     .filter((s) => s.folderId === s.id)
     .flatMap((s) => {
@@ -71,9 +71,9 @@ const backupOf = async (engine: GitEngine, s: SessionRow, w: WorkspaceRow): Prom
  *  time itself) can never strand work that exists only on this disk. The gate
  *  `lastPushAt < lastUsedAt` means a session with nothing new since its last
  *  push is never touched — the common case costs no lock, no git, no push. */
-export async function idleBackupSweep(db: Db, sessions: Sessions, engine: GitEngine): Promise<void> {
+export async function idleBackupSweep(workspaces: Workspaces, sessions: Sessions, engine: GitEngine): Promise<void> {
   let owners: Array<{ s: SessionRow; w: WorkspaceRow }>;
-  try { owners = await folderOwners(db, sessions); } catch (e) {
+  try { owners = await folderOwners(workspaces, sessions); } catch (e) {
     log.warn({ err: errStr(e) }, 'skipping idle backup — could not read state');
     return;
   }
@@ -101,9 +101,9 @@ const API_IMAGE_CURRENT = (() => {
 /** Dangling layers, plus every tag of the session and api images' repos
  *  except the ones in use — a release pulls a new tag and nothing ever
  *  removed the old ones. A tag Docker refuses (in use) is logged and left. */
-async function pruneImages(db: Db, docker: Docker): Promise<void> {
+async function pruneImages(settings: Settings, docker: Docker): Promise<void> {
   await docker.pruneImages();
-  const currents = [String(await resolve(db, 'container_image')), API_IMAGE_CURRENT];
+  const currents = [String(await settings.resolve('container_image')), API_IMAGE_CURRENT];
   const stale = new Set<string>();
   for (const img of await docker.listImages()) {
     for (const tag of img.RepoTags ?? []) {
@@ -126,9 +126,9 @@ async function pruneImages(db: Db, docker: Docker): Promise<void> {
  *  moment enough is freed. A session whose backup does not complete is left
  *  exactly as it was; the run ends loud when only live work remains. */
 export async function pressureSweep(
-  db: Db, sessions: Sessions, p: Paths, docker: Docker, containers: ContainerManager, engine: GitEngine,
+  settings: Settings, workspaces: Workspaces, sessions: Sessions, p: Paths, docker: Docker, containers: ContainerManager, engine: GitEngine,
 ): Promise<void> {
-  const pct = Number(await resolve(db, 'disk_cleanup_percent'));
+  const pct = Number(await settings.resolve('disk_cleanup_percent'));
   if (pct <= 0) return;
   const used = () => diskUsedPercent(p.root);
   if ((await used()) < pct) return;
@@ -142,14 +142,14 @@ export async function pressureSweep(
   await drainReady(p);
 
   // 3 — image weight that serves nothing running.
-  await pruneImages(db, docker)
+  await pruneImages(settings, docker)
     .catch((e) => log.warn({ err: errStr(e) }, 'image prune failed'));
 
   // 4 — sessions, oldest-used first: back the branch up, then the container
   // goes DOWN (nothing left writing to the directory), then the files.
   // Locked or unbacked sessions are skipped.
   let owners: Array<{ s: SessionRow; w: WorkspaceRow }>;
-  try { owners = await folderOwners(db, sessions); } catch (e) {
+  try { owners = await folderOwners(workspaces, sessions); } catch (e) {
     log.warn({ err: errStr(e) }, 'pressure cleanup stopped — could not read sessions');
     return;
   }

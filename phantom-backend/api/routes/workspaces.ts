@@ -1,20 +1,17 @@
-import type { FastifyInstance } from 'fastify';
-import { eq } from 'drizzle-orm';
-import { workspaces, settings as settingsTable } from '../../db/schema.js';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { WorkspaceRow } from '../../db/schema.js';
 import { parseRepoRef, remoteUrl } from '../../git/remote.js';
 import { createRepo, listRepos, whoami } from '../../git/github.js';
 import { initializeRemote, classifyGitFailure } from '../../git/git.js';
-import { settingsBlock, resolveCredential, SettingsWriteError } from '../../settings.js';
-import { readKey, workspaceScope } from '../../store.js';
+import { SettingsWriteError } from '../../settings.js';
+import { workspaceScope } from '../../store.js';
 import { newId } from '../../../core/ids.js';
 import { ensureWorkspaceSchema, dropWorkspaceSchema } from '../../db/workspaceSchema.js';
-import { prefixOf } from './kanban.js';
-import { resolveAuth } from '../../pool/pool.js';
 import { ok, err, type AppCtx } from '../app.js';
 
 /** What leaves the API. The credential is no longer a column — it is
  *  `github_token` at this workspace's scope, so hasCredential is a lookup. */
-function publicWorkspace(r: typeof workspaces.$inferSelect, hasCredential = false) {
+function publicWorkspace(r: WorkspaceRow, hasCredential = false) {
   const { displayName, ...rest } = r;
   // displayName: what humans call it; falls back to the GitHub name.
   return { ...rest, displayName: displayName ?? r.name, hasCredential };
@@ -22,6 +19,10 @@ function publicWorkspace(r: typeof workspaces.$inferSelect, hasCredential = fals
 
 const TAG = { tags: ['workspaces'] };
 const idParam = { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] };
+// Who wrote: the x-phantom-looper-client header every client sends, so the
+// writer's own window ignores the change echo.
+const writerOf = (req: FastifyRequest): string | undefined =>
+  String(req.headers['x-phantom-looper-client'] ?? '') || undefined;
 
 export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
   // The stored github_token, checked against GitHub itself — what the /keys
@@ -34,7 +35,7 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
     description: 'Resolves the global github_token and asks GitHub whose it is. ' +
       '404 when none is stored; the classified error when GitHub rejects it.' } },
   async (_req, reply) => {
-    const pat = await resolveCredential(ctx.db, ctx.encryptionKey, 'github_token');
+    const pat = await ctx.settings.credential('github_token');
     if (!pat) return reply.code(404).send(err('not_set', 'no github_token stored'));
     const who = await whoami(pat);
     if (!who.ok) {
@@ -55,25 +56,24 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
       'whether a workspace is already registered for it. 404 when no token is stored; the classified error ' +
       'when GitHub rejects it.' } },
   async (_req, reply) => {
-    const pat = await resolveCredential(ctx.db, ctx.encryptionKey, 'github_token');
+    const pat = await ctx.settings.credential('github_token');
     if (!pat) return reply.code(404).send(err('not_set', 'no github_token stored'));
     const listed = await listRepos(pat);
     if (!listed.ok) {
       return reply.code(listed.code === 'upstream_unreachable' ? 502 : 400)
         .send(err(listed.code, listed.message, listed.code === 'upstream_unreachable'));
     }
-    const have = new Set((await ctx.db.select({ owner: workspaces.owner, name: workspaces.name }).from(workspaces))
-      .map((w) => `${w.owner}/${w.name}`.toLowerCase()));
+    const have = new Set((await ctx.workspaces.list()).map((w) => `${w.owner}/${w.name}`.toLowerCase()));
     return ok(listed.repos.map((r) => ({ ...r, added: have.has(`${r.owner}/${r.name}`.toLowerCase()) })));
   });
 
   app.get('/workspaces', { schema: { ...TAG, summary: 'List workspaces',
     description: 'All registered workspaces with hasCredential flags and `cardPrefix` (the resolved card ' +
       'number prefix, e.g. "PHA"). Credentials are never returned by any route.' } }, async () => {
-    const rows = await ctx.db.select().from(workspaces);
+    const rows = await ctx.workspaces.list();
     return ok(await Promise.all(rows.map(async (r) => ({
-      ...publicWorkspace(r, !!await readKey(ctx.db, ctx.encryptionKey, 'github_token', workspaceScope(r.id))),
-      cardPrefix: await prefixOf(ctx.db, r),
+      ...publicWorkspace(r, await ctx.settings.hasAt('github_token', workspaceScope(r.id))),
+      cardPrefix: await ctx.workspaces.prefixOf(r),
     }))));
   });
 
@@ -117,7 +117,7 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
 
       let ownToken: string | undefined;
       if (req.body.create) {
-        const pat = req.body.token ?? await resolveCredential(ctx.db, ctx.encryptionKey, 'github_token');
+        const pat = req.body.token ?? await ctx.settings.credential('github_token');
         if (!pat) return reply.code(400).send(err('credential_required', 'create needs `token` or the github_token credential'));
         if (!owner) {
           const who = await whoami(pat);
@@ -157,20 +157,12 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
         branchPrefix: req.body.branch_prefix ?? 'agent',
         schemaName: `wsp_${id}`,
       };
-      await ctx.db.insert(workspaces).values(row);
+      const created = await ctx.workspaces.create(row, writerOf(req));
       // A token handed to create= belongs to this workspace: `github_token` at
       // its own scope, the same key the global one uses one layer down.
-      if (ownToken) {
-        await ctx.settingsWrite!('workspace', workspaceScope(id), { github_token: ownToken },
-          String(req.headers['x-phantom-looper-client'] ?? '') || undefined);
-      }
+      if (ownToken) await ctx.settings.write('workspace', workspaceScope(id), { github_token: ownToken }, writerOf(req));
       await ensureWorkspaceSchema(ctx.pgPool, id, row.schemaName);
-      const created = await ctx.db.select().from(workspaces).where(eq(workspaces.id, id));
-      // A workspace row changing IS a settings-shaped fact to every client
-      // (the list, the prefixes, the scopes): the settings feed is how they
-      // learn to re-read /workspaces — create, patch and delete all say so.
-      ctx.settingsEvents?.publish(workspaceScope(id), String(req.headers['x-phantom-looper-client'] ?? '') || undefined);
-      return reply.code(201).send(ok(publicWorkspace(created[0], !!ownToken)));
+      return reply.code(201).send(ok(publicWorkspace(created, !!ownToken)));
     });
 
   app.get<{ Params: { id: string } }>('/workspaces/:id', { schema: { ...TAG,
@@ -183,16 +175,15 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
       'from this one call. `overridable: false` means global-only: PATCH will not accept it. ' +
       'The first question to ask when the pool misbehaves.',
     params: idParam } }, async (req, reply) => {
-    const rows = await ctx.db.select().from(workspaces).where(eq(workspaces.id, req.params.id));
-    if (!rows.length) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
+    const w = await ctx.workspaces.get(req.params.id);
+    if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
     return ok({
-      ...publicWorkspace(rows[0],
-        !!await readKey(ctx.db, ctx.encryptionKey, 'github_token', workspaceScope(rows[0].id))),
+      ...publicWorkspace(w, await ctx.settings.hasAt('github_token', workspaceScope(w.id))),
       // Same fact, same name as GET /workspaces: a client that reads one
       // workspace (the cli, opening a session) must not have to list them all
       // to learn how this workspace names its cards.
-      cardPrefix: await prefixOf(ctx.db, rows[0]),
-      settings: await settingsBlock(ctx.db, { workspace: rows[0] }) });
+      cardPrefix: await ctx.workspaces.prefixOf(w),
+      settings: await ctx.settings.block({ workspace: w }) });
   });
 
   app.patch<{ Params: { id: string }; Body: Record<string, unknown> }>(
@@ -214,8 +205,7 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
         card_prefix: { type: ['string', 'null'],
           description: 'Kanban card number prefix ("PHA-7"). null reverts to the default: the first 3 letters of the repo name.' } } } } },
     async (req, reply) => {
-      const rows0 = await ctx.db.select().from(workspaces).where(eq(workspaces.id, req.params.id));
-      if (!rows0.length) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
+      if (!await ctx.workspaces.get(req.params.id)) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
       const body = req.body ?? {};
 
       // Three fields are the workspace's OWN — no global to fall back to, so
@@ -227,8 +217,8 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
       const settingEntries = Object.entries(body).filter(([k]) => !(k in OWN));
 
 
-      const patch: Record<string, unknown> = {};
-      for (const [k, column] of Object.entries(OWN)) if (k in body) patch[column] = body[k];
+      const patch: Partial<Pick<WorkspaceRow, 'displayName' | 'baseBranch' | 'branchPrefix'>> = {};
+      for (const [k, column] of Object.entries(OWN) as Array<[string, keyof typeof patch]>) if (k in body) patch[column] = body[k] as never;
       if (patch.displayName === '') patch.displayName = null; // empty reverts to the default
       // Fastify runs ajv with coerceTypes, which turns null into "" for a
       // `type: 'string'` field — so "clear the base branch" would land as a
@@ -243,26 +233,19 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (!Object.keys(patch).length && !settingEntries.length) {
         return reply.code(400).send(err('empty_patch', 'nothing to update'));
       }
-      if (Object.keys(patch).length) {
-        await ctx.db.update(workspaces).set(patch).where(eq(workspaces.id, req.params.id));
-        ctx.settingsEvents?.publish(workspaceScope(req.params.id),
-          String(req.headers['x-phantom-looper-client'] ?? '') || undefined);
-      }
+      await ctx.workspaces.update(req.params.id, patch, writerOf(req));
       // The SAME settings writer PATCH /settings runs: null clears, and a
       // key this workspace may not override is refused here too.
       if (settingEntries.length) {
         try {
-          await ctx.settingsWrite!('workspace', workspaceScope(req.params.id),
-            Object.fromEntries(settingEntries),
-            String(req.headers['x-phantom-looper-client'] ?? '') || undefined);
+          await ctx.settings.write('workspace', workspaceScope(req.params.id), Object.fromEntries(settingEntries), writerOf(req));
         } catch (e) {
           if (e instanceof SettingsWriteError) return reply.code(400).send(err(e.code, e.message));
           throw e;
         }
       }
-      const rows = await ctx.db.select().from(workspaces).where(eq(workspaces.id, req.params.id));
-      return ok(publicWorkspace(rows[0],
-        !!await readKey(ctx.db, ctx.encryptionKey, 'github_token', workspaceScope(req.params.id))));
+      const updated = (await ctx.workspaces.get(req.params.id))!;
+      return ok(publicWorkspace(updated, await ctx.settings.hasAt('github_token', workspaceScope(req.params.id))));
     });
 
   // Refuses while sessions exist — the schema and workspaces it would orphan
@@ -277,19 +260,14 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
     async (req, reply) => {
       const live = await ctx.sessions.listActiveIn(req.params.id);
       if (live.length) return reply.code(409).send(err('sessions_exist', `workspace ${req.params.id} still has ${live.length} active session(s) — close them first`));
-      const rows = await ctx.db.select().from(workspaces).where(eq(workspaces.id, req.params.id));
-      if (rows.length && req.query.confirm === 'true') {
-        await dropWorkspaceSchema(ctx.pgPool, rows[0].schemaName);
-      } else if (rows.length) {
+      const w = await ctx.workspaces.get(req.params.id);
+      if (w && req.query.confirm === 'true') {
+        await dropWorkspaceSchema(ctx.pgPool, w.schemaName);
+      } else if (w) {
         return reply.code(409).send(err('confirm_required',
           'deleting a workspace drops its schema and every agent table in it — pass ?confirm=true'));
       }
-      // Its overrides and its own token go with it — a scope whose workspace is
-      // gone is a row nothing will ever read again.
-      await ctx.db.delete(settingsTable).where(eq(settingsTable.scope, workspaceScope(req.params.id)));
-      ctx.settingsEvents?.publish(workspaceScope(req.params.id),
-        String(req.headers['x-phantom-looper-client'] ?? '') || undefined);
-      await ctx.db.delete(workspaces).where(eq(workspaces.id, req.params.id));
+      await ctx.workspaces.remove(req.params.id, writerOf(req));
       return ok({ deleted: req.params.id });
     });
 

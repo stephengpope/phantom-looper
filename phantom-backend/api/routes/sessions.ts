@@ -1,17 +1,15 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { eq, desc, or, inArray } from 'drizzle-orm';
-import { workspaces, folders, loops, type SessionRow } from '../../db/schema.js';
-import { getFolder, SessionError, heldByOther, assertDuplicable, conversationOnly } from '../../sessions.js';
+import type { SessionRow } from '../../db/schema.js';
+import { SessionError, heldByOther, assertDuplicable, conversationOnly } from '../../sessions.js';
 import { GIT_CLIENT_ID } from '../../git/git.js';
 import { repoDir, sessionDir } from '../../pool/paths.js';
 
 import { scanSkills, mergeSkills } from '../../../core/skills/skills.js';
 import { systemSkills } from '../../systemSkills.js';
 import { environmentFacts } from '../../environment.js';
-import { resolve, resolveMany, settingsBlock } from '../../settings.js';
-import { listSecrets, GLOBAL, workspaceScope } from '../../store.js';
+import { GLOBAL, workspaceScope } from '../../store.js';
 import { ok, err, type AppCtx } from '../app.js';
 import { openSession, SessionLockedError } from '../../../core/session.js';
 import { injectFetch } from '../../looper/injectFetch.js';
@@ -62,9 +60,7 @@ const lockedErr = (s: SessionRow) =>
  *  forget: a failed lookup never blocks the lock route. */
 async function publishBoardLock(ctx: AppCtx, sessionId: string, locked: boolean): Promise<void> {
   try {
-    const [row] = await ctx.db.select({ card: loops.card, workspaceId: loops.workspaceId })
-      .from(loops).where(eq(loops.codingSessionId, sessionId))
-      .orderBy(desc(loops.createdAt)).limit(1);
+    const row = await ctx.loops.byCodingSession(sessionId);
     if (row) ctx.events?.publish(row.workspaceId,
       { event: 'session_lock', card: row.card, id: sessionId, locked });
   } catch { /* best-effort — the board refreshes on reconnect anyway */ }
@@ -94,14 +90,13 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     if (!req.body?.workspace_id) return reply.code(400).send(err('missing_workspace', 'body.workspace_id required'));
     try {
       const s = await ctx.sessions.create(req.body.workspace_id, { id: req.body.id });
-      const wsRows = await ctx.db.select().from(workspaces).where(eq(workspaces.id, s.workspaceId));
-      const workspace = wsRows[0];
+      const workspace = await ctx.workspaces.get(s.workspaceId);
       // Two tiers, merged here so every client (cli, looper) freezes the same
       // list: the repo's — scanned AFTER Sessions.create returns, when the
       // checkout is on the SESSION's branch (a claim sits on base until
       // checkoutBranch; scanning at claim would read the wrong branch, worst
       // on restart) — and the image's system tier, repo shadowing system.
-      const creation = await resolveMany(ctx.db, ['container_image', 'agent_git_credentials'], { workspace });
+      const creation = await ctx.settings.resolveMany(['container_image', 'agent_git_credentials'], { workspace });
       const image = creation.container_image;
       const skills = mergeSkills(
         await scanSkills(repoDir(ctx.paths, s.id)),
@@ -113,7 +108,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       // descriptions only, global + this workspace, workspace shadowing
       // global by name. secret_list is the live view.
       const byName = new Map<string, { name: string; description: string }>();
-      for (const sec of await listSecrets(ctx.db, [GLOBAL, workspaceScope(s.workspaceId)])) {
+      for (const sec of await ctx.settings.listSecrets([GLOBAL, workspaceScope(s.workspaceId)])) {
         if (sec.scope === GLOBAL && byName.has(sec.name)) continue;
         byName.set(sec.name, { name: sec.name, description: sec.description });
       }
@@ -190,18 +185,11 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       const arr = byWs.get(r.workspaceId);
       if (arr) arr.push(r.card); else byWs.set(r.workspaceId, [r.card]);
     }
-    if (byWs.size) {
-      const wsRows = await ctx.db.select({ id: workspaces.id, schemaName: workspaces.schemaName })
-        .from(workspaces).where(inArray(workspaces.id, [...byWs.keys()]));
-      const schemaOf = new Map(wsRows.map((w) => [w.id, w.schemaName]));
-      await Promise.all([...byWs.entries()].map(async ([wsId, cards]) => {
-        const schema = schemaOf.get(wsId);
-        if (!schema) return;
-        const { rows: cardRows } = await ctx.pgPool.query(
-          `select seq, status from "${schema}".cards where seq = any($1::int[])`, [cards]);
-        for (const c of cardRows) cardStatusMap.set(`${wsId}:${c.seq}`, c.status);
-      }));
-    }
+    await Promise.all([...byWs.entries()].map(async ([wsId, cards]) => {
+      const w = await ctx.workspaces.get(wsId);
+      if (!w) return;
+      for (const [seq, status] of await ctx.cards.statusOf(w, cards)) cardStatusMap.set(`${wsId}:${seq}`, status);
+    }));
     // `work` is a stored column on the session row, updated by the server's
     // periodic git-state refresh (workRefresh.ts). It rides every response
     // in the ...r spread — no on-read computation, no git=true flag.
@@ -244,7 +232,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (ctx.activeTurns?.has(s.id) && s.lockedBy && s.lockedBy !== client) {
         return reply.code(409).send(lockedErr(s));
       }
-      const ttl = await resolve(ctx.db, 'session_lock_ttl_ms');
+      const ttl = await ctx.settings.resolve('session_lock_ttl_ms');
       const expires = await ctx.sessions.acquireLock(s, client, Number(ttl), req.body?.label);
       if (!expires) return reply.code(409).send(lockedErr(s));
       ctx.sessionEvents?.publish(s.id, client, lockEvent(s, { locked: true, by: client,
@@ -364,7 +352,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       const saved = await ctx.sessions.saveTranscript(s, data, client);
       const { stamp, agent } = saved;
       if (client && s.lockedBy === client) {
-        const ttl = await resolve(ctx.db, 'session_lock_ttl_ms');
+        const ttl = await ctx.settings.resolve('session_lock_ttl_ms');
         const expires = await ctx.sessions.renewLock(s.id, client, Number(ttl));
         ctx.sessionEvents?.publish(s.id, client, lockEvent({ ...s, agent }, { locked: true, expires }));
       }
@@ -372,7 +360,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       // failure leaves the old name (or null) standing. A manual name
       // (/rename) turns the titler off for the session.
       if (!saved.nameManual && shouldName(saved.name, saved.turnCount))
-        void nameSession(ctx.db, ctx.sessions, ctx.encryptionKey, s.id, titleContext(data), ctx.modelFetch);
+        void nameSession(ctx, s.id, titleContext(data), ctx.modelFetch);
       return ok({ saved: true, bytes: Buffer.byteLength(data), updated_at: stamp.toISOString() });
     });
 
@@ -512,7 +500,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (!firstMessage) return;
       // The row publishes the name under no client id, so the window running
       // the turn hears it too (the feed drops a client's own events).
-      await nameSession(ctx.db, ctx.sessions, ctx.encryptionKey, sessionId, firstMessageContext(e.message), ctx.modelFetch);
+      await nameSession(ctx, sessionId, firstMessageContext(e.message), ctx.modelFetch);
     }).catch((err) => log.warn({ session: sessionId, err: errStr(err) }, 'turn-start hook failed'));
   });
 
@@ -662,21 +650,21 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       // idle session while its turn is still streaming — duplicating would
       // flush a tree the live turn is halfway through writing.
       if (ctx.activeTurns?.has(src.id) && src.lockedBy) return reply.code(409).send(lockedErr(src));
-      const ttl = await resolve(ctx.db, 'session_lock_ttl_ms');
+      const ttl = await ctx.settings.resolve('session_lock_ttl_ms');
       const expires = await ctx.sessions.acquireLock(src, GIT_CLIENT_ID, Number(ttl), 'duplicate');
       if (!expires) return reply.code(409).send(lockedErr(src));
       ctx.sessionEvents?.publish(src.id, GIT_CLIENT_ID, lockEvent(src, { locked: true, by: GIT_CLIENT_ID,
         label: 'duplicate', expires }));
       void publishBoardLock(ctx, src.id, true);
       try {
-        const srcFolder = src.folderId ? await getFolder(ctx.db, src.folderId) : undefined;
+        const srcFolder = src.folderId ? await ctx.folders.get(src.folderId) : undefined;
         // The flush, while the lock keeps every writer out: the copy is cut
         // from what origin has AFTER this, so nothing the source did is lost.
         // A destroyed session has no checkout — its branch on origin is the
         // record, and the cut below fails clearly if even that is gone.
         if (src.status === 'active' && ctx.engine && srcFolder) {
-          const workspace = (await ctx.db.select().from(workspaces).where(eq(workspaces.id, src.workspaceId)))[0];
-          const r = await ctx.engine.push(src, workspace);
+          const workspace = await ctx.workspaces.get(src.workspaceId);
+          const r = await ctx.engine.push(src, workspace!);
           if (r !== 'pushed' && r !== 'nothing') {
             return reply.code(502).send(err('flush_failed',
               `could not push the session's work to origin first (push ${r}) — the copy was not made`, true));
@@ -716,12 +704,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     params: idParam } }, async (req, reply) => {
     const s = await ctx.sessions.get(req.params.id);
     if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
-    const wsRows = await ctx.db.select().from(workspaces).where(eq(workspaces.id, s.workspaceId));
-    const settingsOut = await settingsBlock(ctx.db, { workspace: wsRows[0], session: s });
-    const folder = s.folderId
-      ? (await ctx.db.select().from(folders).where(eq(folders.id, s.folderId)))[0] : undefined;
-    const loop = (await ctx.db.select().from(loops)
-      .where(or(eq(loops.codingSessionId, s.id), eq(loops.supervisorSessionId, s.id))).limit(1))[0];
+    const settingsOut = await ctx.settings.block({ workspace: await ctx.workspaces.get(s.workspaceId), session: s });
+    const folder = s.folderId ? await ctx.folders.get(s.folderId) : undefined;
+    const loop = await ctx.loops.of(s.id);
     return ok({ ...s, branch: folder?.branch ?? null, card: loop?.card ?? null,
       settings: settingsOut,
       // Computed like the list's, and for the same reason: the cli polls this
@@ -809,9 +794,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (!purge && s.status !== 'active') return ok({ already: s.status });
       // A conversation-only session has no checkout: nothing to push first.
       if (s.status === 'active' && ctx.engine && !conversationOnly(s)) {
-        const workspaceRows = await ctx.db.select().from(workspaces).where(eq(workspaces.id, s.workspaceId));
-        if (workspaceRows.length) {
-          await ctx.engine.push(s, workspaceRows[0]).catch((e: Error) => {
+        const workspace = await ctx.workspaces.get(s.workspaceId);
+        if (workspace) {
+          await ctx.engine.push(s, workspace).catch((e: Error) => {
             log.warn({ session: s.id, err: e.message }, 'push before delete failed — deleting anyway');
           });
         }

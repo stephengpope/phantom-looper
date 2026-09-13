@@ -3,30 +3,11 @@
 // owns the writes. The column list and the card prefix are workspace fields
 // (PATCH /workspaces/:id); defaults live here in code, the DB stores overrides.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { eq } from 'drizzle-orm';
-import type pg from 'pg';
-import { workspaces, type WorkspaceRow } from '../../db/schema.js';
-import { currentLoop } from '../../sessions.js';
+import type { WorkspaceRow } from '../../db/schema.js';
+import { columnsOf } from '../../workspaces.js';
+import { CardError, CARD_FIELDS, CARD_JSON_FIELDS, type CardFields, type ItemOp } from '../../cards.js';
 import { logger, errStr } from '../../log.js';
 import { ok, err, type AppCtx } from '../app.js';
-import { resolve, resolveWithSource } from '../../settings.js';
-import type { Db } from '../../db/client.js';
-
-import { DEFAULT_COLUMNS, keyedItems, newKey, normalizeKey, type ChecklistItem } from '../../../core/kanban.js';
-export { DEFAULT_COLUMNS };
-
-/** First 3 letters of the repo name, uppercased — "phantom-looper" → "PHA". */
-export function defaultPrefix(name: string): string {
-  const letters = name.replace(/[^a-zA-Z]/g, '');
-  return (letters || 'TSK').slice(0, 3).toUpperCase();
-}
-
-export const columnsOf = (w: WorkspaceRow): string[] =>
-  (Array.isArray(w.kanbanColumns) && w.kanbanColumns.length ? w.kanbanColumns : DEFAULT_COLUMNS);
-// card_prefix is a setting (workspace-scoped), so this resolves rather than
-// reading a column. Unset falls through to the repo name, as it always did.
-export const prefixOf = async (db: Db, w: WorkspaceRow): Promise<string> =>
-  (await resolve(db, 'card_prefix', { workspace: w })) ?? defaultPrefix(w.name);
 
 const TAG = { tags: ['kanban'] };
 // Who wrote: the x-phantom-looper-client header every client sends (the
@@ -36,11 +17,6 @@ const writerOf = (req: FastifyRequest): string | undefined => {
   const h = req.headers['x-phantom-looper-client'];
   return typeof h === 'string' && h ? h : undefined;
 };
-// THE card field list — create, update, and the schema all derive from it.
-// It was three hand-kept lists once; create's copy silently lacked
-// `supervised`, so a card born armed landed unarmed. Never again: one list.
-const FIELDS = ['title', 'details', 'status', 'pos', 'blocked_reason', 'resolution', 'auto_plan', 'auto_build', 'pinned', 'archived'] as const;
-const JSON_FIELDS = ['requirements'] as const;
 
 // A whole-list write replaces the list: send it back with each item's key so
 // identity survives a reword or reorder; keyless items are new and the server
@@ -73,26 +49,20 @@ const itemsSchema = { type: 'array', minItems: 1, items: { type: 'object', addit
   description: 'Change named requirements only — add/edit/remove/tick, each touching one item; the rest ' +
     'of the list is untouched. Applied in order, all-or-nothing. Cannot be combined with replacing the list.' };
 
-interface ItemOp { op: 'add' | 'edit' | 'remove' | 'tick'; key?: string; text?: string; done?: boolean }
-
-// The schema must cover THE list — a field added to FIELDS without a schema
-// entry would be silently stripped by validation. Checked at module load.
-for (const f of [...FIELDS, ...JSON_FIELDS]) {
+// The schema must cover THE list (cards.ts) — a field added there without a
+// schema entry would be silently stripped by validation. Checked at load.
+for (const f of [...CARD_FIELDS, ...CARD_JSON_FIELDS]) {
   if (!(f in cardBodyProps)) throw new Error(`cardBodyProps is missing '${f}' — the one field list must cover it`);
 }
 
-export interface KanbanDeps { pgPool: pg.Pool }
-
-export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps) {
-  const pool = deps.pgPool;
+export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
   const log = logger('kanban');
-  // Every write below publishes — see boardEvents.ts. app.ts guarantees the bus.
-  const events = ctx.events!;
-
-  async function workspaceOf(id: string): Promise<WorkspaceRow | undefined> {
-    const rows = await ctx.db.select().from(workspaces).where(eq(workspaces.id, id));
-    return rows[0];
-  }
+  const workspaceOf = (id: string) => ctx.workspaces.get(id);
+  /** A card's own refusal, as the API's answer. */
+  const cardErr = (reply: { code: (n: number) => { send: (b: unknown) => unknown } }, e: unknown) => {
+    if (!(e instanceof CardError)) throw e;
+    return reply.code(e.code === 'not_found' ? 404 : 400).send(err(e.code, e.message));
+  };
 
   /** Archiving a DONE card auto-pushes its session's work, when
    *  `auto_push_on_archive` says so. Archiving a card in any other column is
@@ -104,10 +74,10 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
    *  blocked, with the reason. */
   async function autoPushArchivedCard(w: WorkspaceRow, seq: number): Promise<void> {
     if (!ctx.autoPush) return;
-    const loop = await currentLoop(ctx.db, w.id, seq);
+    const loop = await ctx.loops.current(w.id, seq);
     const session = loop ? await ctx.sessions.get(loop.codingSessionId) : undefined;
     if (!session || session.status !== 'active') return;
-    if (await resolve(ctx.db, 'auto_push_on_archive', { workspace: w, session }) !== true) return;
+    if (await ctx.settings.resolve('auto_push_on_archive', { workspace: w, session }) !== true) return;
     // The session lock may be held (a turn mid-flight, a tool call): wait it
     // out rather than blocking the card over a moment's contention.
     let result: Awaited<ReturnType<NonNullable<typeof ctx.autoPush>>> | undefined;
@@ -124,11 +94,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
       return;
     }
     log.warn({ workspace: w.name, card: seq, result }, 'auto-push on archive failed — card un-archived into blocked');
-    await pool.query(
-      `update ${cardsTable(w)} set archived = false, status = 'blocked', blocked_reason = $1, updated_at = now()
-       where seq = $2 returning *`,
-      [`auto-push failed: ${result.reason ?? result.result}`, seq])
-      .then(({ rows }) => { if (rows[0]) events.publish(w.id, { event: 'card', card: rows[0] }); })
+    await ctx.cards.unarchiveAsBlocked(w, seq, `auto-push failed: ${result.reason ?? result.result}`)
       .catch((e) =>
         log.error({ card: seq, err: errStr(e) }, 'could not mark the card blocked after a failed auto-push'));
   }
@@ -138,30 +104,30 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
   // from ('override' at the store level means the global row). One pair per
   // switch: auto_plan gates the plan column, auto_build gates in_progress.
   const board = async (w: WorkspaceRow) => {
-    const plan = await resolveWithSource(ctx.db, 'auto_plan', { workspace: w });
-    const build = await resolveWithSource(ctx.db, 'auto_build', { workspace: w });
+    const plan = await ctx.settings.resolveWithSource('auto_plan', { workspace: w });
+    const build = await ctx.settings.resolveWithSource('auto_build', { workspace: w });
     const src = (s: { source: string }) => s.source === 'override' ? 'global' : s.source;
-    return { prefix: await prefixOf(ctx.db, w), columns: columnsOf(w),
+    return { prefix: await ctx.workspaces.prefixOf(w), columns: columnsOf(w),
       workspace: w.displayName ?? w.name,
       auto_plan_default: Boolean(plan.value), auto_plan_source: src(plan),
       auto_build_default: Boolean(build.value), auto_build_source: src(build) };
   };
-  const cardsTable = (w: WorkspaceRow) => `"${w.schemaName}".cards`;
 
-  // Each card's CURRENT loop's coding session — the newest loop row per card,
-  // the same ordering currentLoop() uses. Rides the board GET so the card
-  // editor can name the session and open it; one query for the whole board.
-  // `locked` is computed here (same logic as GET /sessions) so the board can
-  // show a spinner on cards whose session is actively running.
+  // Each card's CURRENT loop's coding session — the newest loop row per card.
+  // Rides the board GET so the card editor can name the session and open it.
+  // `locked` is computed here (same rule as GET /sessions) so the board can
+  // show a spinner on cards whose session is actively running; `work` is
+  // the stored column the 10s refresh job maintains.
   const cardSessions = async (w: WorkspaceRow) => {
-    const { rows } = await pool.query(
-      `select distinct on (l.card) l.card, l.coding_session_id as id, s.name,
-              (s.locked_by is not null and s.lock_expires_at > now()) as locked
-       from phantom_looper.loops l
-       left join phantom_looper.sessions s on s.id = l.coding_session_id
-       where l.workspace_id = $1
-       order by l.card, l.created_at desc`, [w.id]);
-    return rows as { card: number; id: string; name: string | null; locked: boolean }[];
+    const latest = await ctx.loops.latestPerCard(w.id);
+    const rows = await ctx.sessions.getMany(latest.map((l) => l.codingSessionId));
+    const now = Date.now();
+    return latest.map((l) => {
+      const s = rows.get(l.codingSessionId);
+      return { card: l.card, id: l.codingSessionId, name: s?.name ?? null,
+        locked: !!s?.lockedBy && !!s.lockExpiresAt && s.lockExpiresAt.getTime() > now,
+        work: s?.work ?? null };
+    });
   };
 
   app.get<{ Params: { id: string };
@@ -183,48 +149,23 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
       const w = await workspaceOf(req.params.id);
       if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
       if (req.query.seq !== undefined) {
-        const { rows } = await pool.query(
-          `select * from ${cardsTable(w)} where seq = $1`, [req.query.seq]);
-        return ok({ ...await board(w), cards: rows });
+        const card = await ctx.cards.bySeq(w, req.query.seq);
+        return ok({ ...await board(w), cards: card ? [card] : [] });
       }
       if (req.query.archived === 'only') {
-        // No archived_at column exists; updated_at is the order — archiving
-        // touches it, and an archived card is rarely edited after.
-        const values: unknown[] = [];
-        let where = 'where archived';
-        if (req.query.before !== undefined && req.query.before_id !== undefined) {
-          values.push(req.query.before, req.query.before_id);
-          where += ' and (updated_at, id) < ($1::timestamptz, $2::bigint)';
-        }
-        let limitSql = '';
-        if (req.query.limit !== undefined) {
-          values.push(req.query.limit);
-          limitSql = ` limit $${values.length}`;
-        }
-        // `total` counts the whole archive, so a page knows how long the
-        // list is — /archived's "N more" is the truth, not the rows loaded.
-        const [{ rows }, { rows: [{ total }] }] = await Promise.all([
-          pool.query(`select * from ${cardsTable(w)} ${where} order by updated_at desc, id desc${limitSql}`, values),
-          pool.query(`select count(*)::int as total from ${cardsTable(w)} where archived`),
-        ]);
-        return ok({ ...await board(w), cards: rows, total });
+        const { cards, total } = await ctx.cards.listArchived(w,
+          { limit: req.query.limit, before: req.query.before, beforeId: req.query.before_id });
+        return ok({ ...await board(w), cards, total });
       }
-      const where = req.query.archived === 'true' ? '' : 'where not archived';
-      const { rows } = await pool.query(
-        `select * from ${cardsTable(w)} ${where} order by status, pinned desc, pos, id`);
+      const rows = await ctx.cards.list(w, { includeArchived: req.query.archived === 'true' });
       const cs = await cardSessions(w);
-      // card_work: the git work state per card, read from the card's coding
-      // session row — the stored column the 10s refresh job maintains.
+      // card_work: the git work state per card; card_locked: whether the
+      // card's coding session is held right now.
       const cardWork: Record<number, string | null> = {};
-      // card_locked: whether the card's coding session is held right now.
       const cardLocked: Record<number, boolean> = {};
-      if (cs.length) {
-        const sIds = cs.map((c) => c.id);
-        const workOf = await ctx.sessions.workOf(sIds);
-        for (const c of cs) { const w = workOf.get(c.id); if (w) cardWork[c.card] = w; }
-        for (const c of cs) { if (c.locked) cardLocked[c.card] = true; }
-      }
-      return ok({ ...await board(w), cards: rows, card_sessions: cs, card_work: cardWork, card_locked: cardLocked });
+      for (const c of cs) { if (c.work) cardWork[c.card] = c.work; if (c.locked) cardLocked[c.card] = true; }
+      return ok({ ...await board(w), cards: rows, card_sessions: cs.map(({ work: _w, ...c }) => c),
+        card_work: cardWork, card_locked: cardLocked });
     });
 
   app.post<{ Params: { id: string }; Body: Record<string, unknown> }>(
@@ -236,28 +177,13 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
     async (req, reply) => {
       const w = await workspaceOf(req.params.id);
       if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
-      const cols = columnsOf(w);
-      const status = String(req.body.status ?? cols[0]);
-      if (!cols.includes(status)) return reply.code(400).send(err('invalid_args', `status must be one of: ${cols.join(', ')}`));
-      const names: string[] = ['status', 'title'];
-      const values: unknown[] = [status, String(req.body.title)];
-      // Every card field, from THE list — status/pos/title handled above.
-      for (const f of FIELDS)
-        if (f !== 'status' && f !== 'pos' && f !== 'title' && f in req.body) { names.push(f); values.push(req.body[f]); }
-      for (const f of JSON_FIELDS)
-        if (f in req.body) { names.push(f); values.push(JSON.stringify(keyedItems(req.body[f] as ChecklistItem[]))); }
-      const params = values.map((_, i) => `$${i + 1}`);
-      const pos = 'pos' in req.body
-        ? String(Number(req.body.pos))
-        : `(select coalesce(max(pos), 0) + 1 from ${cardsTable(w)} where status = $1)`;
-      const { rows } = await pool.query(
-        `insert into ${cardsTable(w)} (${names.join(', ')}, pos)
-         values (${params.join(', ')}, ${pos}) returning *`, values);
+      let card;
+      try { card = await ctx.cards.create(w, req.body as CardFields & { title: string }, writerOf(req)); }
+      catch (e) { return cardErr(reply, e); }
       // The looper runs on card writes, not on a clock: a card born straight
       // into a loop column starts here. Eligibility is the engine's to judge.
-      ctx.looper?.runLoop(w.id, Number(rows[0].seq));
-      events.publish(w.id, { event: 'card', card: rows[0], client: writerOf(req) });
-      return ok({ ...await board(w), card: rows[0] });
+      ctx.looper?.runLoop(w.id, card.seq);
+      return ok({ ...await board(w), card });
     });
 
   app.patch<{ Params: { id: string; cardId: string }; Body: Record<string, unknown> }>(
@@ -271,95 +197,20 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
     async (req, reply) => {
       const w = await workspaceOf(req.params.id);
       if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
-      const cols = columnsOf(w);
-      if ('status' in req.body && !cols.includes(String(req.body.status)))
-        return reply.code(400).send(err('invalid_args', `status must be one of: ${cols.join(', ')}`));
-      const ops = req.body.items as ItemOp[] | undefined;
-      for (const o of ops ?? []) {
-        const bad = o.op === 'add' ? (o.text === undefined ? 'add needs text' : null)
-          : o.key === undefined ? `${o.op} needs key`
-          : o.op === 'tick' && o.done === undefined ? 'tick needs done'
-          : o.op === 'edit' && o.text === undefined && o.done === undefined ? 'edit needs text or done' : null;
-        if (bad) return reply.code(400).send(err('invalid_args', bad));
+      const { items, ...fields } = req.body as CardFields & { items?: ItemOp[] };
+      let written;
+      try { written = await ctx.cards.update(w, Number(req.params.cardId), fields, items, writerOf(req)); }
+      catch (e) { return cardErr(reply, e); }
+      const { card, wasArchived } = written;
+      if (req.body.archived === true && wasArchived === false && card.status === 'done') {
+        void autoPushArchivedCard(w, card.seq).catch((e) =>
+          log.error({ card: card.seq, err: errStr(e) }, 'auto-push on archive threw'));
       }
-      const sets: string[] = []; const values: unknown[] = [];
-      for (const f of FIELDS)
-        if (f in req.body) { values.push(req.body[f]); sets.push(`${f} = $${values.length}`); }
-      if ('requirements' in req.body) {
-        if (ops) return reply.code(400).send(err('invalid_args', 'item ops or replace requirements, not both'));
-        values.push(JSON.stringify(keyedItems(req.body.requirements as ChecklistItem[])));
-        sets.push(`requirements = $${values.length}`);
-      }
-      if (!sets.length && !ops) return reply.code(400).send(err('invalid_args', 'no fields to update'));
-
-      // Two triggers need the TRANSITION, not the value: auto-push fires only
-      // on archived false -> true (re-saving an archived card must not
-      // re-fire), and the card event carries the status BEFORE the write so
-      // a listener can tell a move from an edit. One read serves both.
-      const prior = await pool.query(
-        `select archived, status from ${cardsTable(w)} where id = $1`, [Number(req.params.cardId)]);
-      const wasArchived: boolean | undefined = prior.rows.length ? Boolean(prior.rows[0].archived) : undefined;
-      const wasStatus: string | undefined = prior.rows.length ? String(prior.rows[0].status) : undefined;
-
-      // Item ops read the list under the row lock and change named items
-      // only, so two agents working different items both land — nothing is
-      // replaced. All-or-nothing: one bad key refuses every op.
-      const client = ops ? await pool.connect() : undefined;
-      try {
-        if (ops && client) {
-          await client.query('begin');
-          const cur = await client.query(
-            `select requirements from ${cardsTable(w)} where id = $1 for update`,
-            [Number(req.params.cardId)]);
-          if (!cur.rows.length) { await client.query('rollback'); return reply.code(404).send(err('not_found', `no card ${req.params.cardId} in workspace ${req.params.id}`)); }
-          let list: { key: string; text: string; done: boolean }[] = [...cur.rows[0].requirements];
-          // Both sides normalized: a model echoes a key cased — that must
-          // land, not retry.
-          const at = (o: ItemOp) => list.findIndex((e) => normalizeKey(e.key) === normalizeKey(o.key!));
-          const missing = ops.filter((o) => o.op !== 'add' && at(o) < 0);
-          if (missing.length) {
-            await client.query('rollback');
-            return reply.code(400).send(err('invalid_args',
-              missing.map((o) => `no "${o.key}" in requirements — the keys: ${list.map((e) => e.key).join(', ') || '(empty)'}`).join('; ')));
-          }
-          for (const o of ops) {
-            if (o.op === 'add') {
-              let key = newKey();
-              while (list.some((e) => e.key === key)) key = newKey();
-              list = [...list, { key, text: o.text!, done: o.done ?? false }];
-            } else if (o.op === 'remove') {
-              list = list.filter((_, i) => i !== at(o));
-            } else {
-              const i = at(o);
-              list = list.map((e, j) => j !== i ? e
-                : { ...e, ...(o.text !== undefined ? { text: o.text } : {}), ...(o.done !== undefined ? { done: o.done } : {}) });
-            }
-          }
-          values.push(JSON.stringify(list)); sets.push(`requirements = $${values.length}`);
-        }
-        values.push(Number(req.params.cardId));
-        const run = client ?? pool;
-        const { rows } = await run.query(
-          `update ${cardsTable(w)} set ${sets.join(', ')}, updated_at = now()
-           where id = $${values.length} returning *`, values);
-        if (client) await client.query('commit');
-        if (!rows.length) return reply.code(404).send(err('not_found', `no card ${req.params.cardId} in workspace ${req.params.id}`));
-        if (req.body.archived === true && wasArchived === false && rows[0].status === 'done') {
-          void autoPushArchivedCard(w, Number(rows[0].seq)).catch((e) =>
-            log.error({ card: rows[0].seq, err: errStr(e) }, 'auto-push on archive threw'));
-        }
-        // Every card write runs the looper — a move into a loop column, an
-        // auto_plan/auto_build flip, an unblock. The engine re-reads the row
-        // and checks canTurn itself, so an irrelevant edit is a cheap no-op.
-        ctx.looper?.runLoop(w.id, Number(rows[0].seq));
-        events.publish(w.id, { event: 'card', card: rows[0], from: wasStatus, client: writerOf(req) });
-        return ok({ ...await board(w), card: rows[0] });
-      } catch (e) {
-        if (client) await client.query('rollback').catch(() => {});
-        throw e;
-      } finally {
-        client?.release();
-      }
+      // Every card write runs the looper — a move into a loop column, an
+      // auto_plan/auto_build flip, an unblock. The engine re-reads the row
+      // and checks canTurn itself, so an irrelevant edit is a cheap no-op.
+      ctx.looper?.runLoop(w.id, card.seq);
+      return ok({ ...await board(w), card });
     });
 
   app.get<{ Params: { id: string }; Querystring: { card: number; limit: number } }>(
@@ -374,10 +225,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
     async (req, reply) => {
       const w = await workspaceOf(req.params.id);
       if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
-      const { rows } = await pool.query(
-        `select op, changed, changed_at from "${w.schemaName}".card_revisions
-         where seq = $1 order by id desc limit $2`, [req.query.card, req.query.limit]);
-      return ok({ card: req.query.card, revisions: rows });
+      return ok({ card: req.query.card, revisions: await ctx.cards.revisions(w, req.query.card, req.query.limit) });
     });
 
   app.delete<{ Params: { id: string; cardId: string } }>(
@@ -387,10 +235,8 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
     async (req, reply) => {
       const w = await workspaceOf(req.params.id);
       if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
-      const { rowCount } = await pool.query(
-        `delete from ${cardsTable(w)} where id = $1`, [Number(req.params.cardId)]);
-      if (!rowCount) return reply.code(404).send(err('not_found', `no card ${req.params.cardId} in workspace ${req.params.id}`));
-      events.publish(w.id, { event: 'deleted', id: Number(req.params.cardId) });
+      if (!await ctx.cards.remove(w, Number(req.params.cardId)))
+        return reply.code(404).send(err('not_found', `no card ${req.params.cardId} in workspace ${req.params.id}`));
       return ok({ deleted: true });
     });
 
@@ -412,7 +258,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
       reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
       const write = (o: unknown) => { reply.raw.write(`${JSON.stringify(o)}\n`); };
       const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
-      const unsubscribe = events.subscribe(w.id, write);
+      const unsubscribe = ctx.events!.subscribe(w.id, write);
       write({ event: 'heartbeat' });
       await new Promise<void>((resolve) => reply.raw.on('close', resolve));
       clearInterval(heartbeat);

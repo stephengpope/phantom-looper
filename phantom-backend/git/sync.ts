@@ -35,11 +35,15 @@
 // THE LOCK is the only concurrency test. The sync takes the session lock and
 // fails when it cannot; it never inspects whether anything is running. Same
 // single lock the rest of the system uses — no new mutex.
-import type { Db } from '../db/client.js';
 import type { WorkspaceRow, SessionRow } from '../db/schema.js';
 import { resolveAuth } from '../pool/pool.js';
 import { repoDir, type Paths } from '../pool/paths.js';
-import { getFolder, cardIntentFor, type Sessions } from '../sessions.js';
+import type { Sessions } from '../sessions.js';
+import type { Folders } from '../folders.js';
+import type { Loops } from '../loops.js';
+import type { Cards } from '../cards.js';
+import type { Settings } from '../settings.js';
+import type { HelperUsage } from '../helperUsage.js';
 import {
   git, fetchBase, squashToMergeBase, commitStaged, rebaseOntoBase, rebaseAbort,
   landingProblems, pushSession, pushSessionForced, pushToBase, hasWorkToLand, GIT_CLIENT_ID,
@@ -94,11 +98,35 @@ export interface SyncResult {
   pushed?: boolean;
 }
 
+/** The card a coding session is building, as one line for the commit
+ *  message: "title — first line of details". A diff says what changed and
+ *  never why, and this is the cheapest statement of why the system holds.
+ *
+ *  Fails open to the session's name — a manual session has no loop row, a
+ *  workspace schema can be missing, and NONE of that may stop work from
+ *  landing. The commit message simply loses its intent line. */
+async function cardIntentFor(deps: SyncDeps, session: SessionRow, workspace: WorkspaceRow): Promise<string> {
+  try {
+    const loop = await deps.loops.byCodingSession(session.id);
+    if (!loop) return session.name ?? '';
+    const card = await deps.cards.bySeq(workspace, loop.card);
+    if (!card?.title) return session.name ?? '';
+    const firstLine = (card.details ?? '').trim().split('\n')[0] ?? '';
+    return firstLine ? `${card.title} — ${firstLine}` : card.title;
+  } catch (e) {
+    log.debug({ session: session.id, err: errStr(e) }, 'card intent unavailable — commit message goes without it');
+    return session.name ?? '';
+  }
+}
+
 export interface SyncDeps {
-  db: Db;
   sessions: Sessions;
+  folders: Folders;
+  loops: Loops;
+  cards: Cards;
+  settings: Settings;
+  helperUsage: HelperUsage;
   paths: Paths;
-  encryptionKey: Buffer;
   /** Hand the stopped rebase to the session's own coding agent, as a turn in
    *  its own transcript. Resolves, stages and continues the rebase; the sync
    *  verifies against the repo afterward. Absent -> a conflict blocks.
@@ -137,11 +165,11 @@ export interface SyncOptions {
 export async function syncBranch(
   deps: SyncDeps, session: SessionRow, workspace: WorkspaceRow, opts: SyncOptions,
 ): Promise<SyncResult> {
-  const folder = session.folderId ? await getFolder(deps.db, session.folderId) : undefined;
+  const folder = session.folderId ? await deps.folders.get(session.folderId) : undefined;
   if (!folder) return { outcome: 'error', reason: 'session has no folder — nothing to sync' };
   const dir = repoDir(deps.paths, folder.id);
   const base = workspace.baseBranch;
-  const auth = await resolveAuth(deps.db, workspace, deps.encryptionKey);
+  const auth = await resolveAuth(deps.settings, workspace);
   const ev = async (step: SyncStep, detail?: string) => { await deps.onEvent?.({ step, detail }); };
   const rounds = opts.landOnBase ? ROUNDS : 1;
 
@@ -196,8 +224,8 @@ export async function syncBranch(
         const config = deps.messageConfig
           ? await deps.messageConfig((note) => { void ev('commit', note); })
           : null;
-        const card = await cardIntentFor(deps.db, session, workspace);
-        const msg = await commitMessageFor(dir, config, card, mb.trim(), deps.db, session.id);
+        const card = await cardIntentFor(deps, session, workspace);
+        const msg = await commitMessageFor(dir, config, card, mb.trim(), deps.helperUsage, session.id);
         await squashToMergeBase(dir, mb.trim());
         await commitStaged(dir, `${msg}\n\nPhantom-Session: ${session.id}`);
       } catch (e) {

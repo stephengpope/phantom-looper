@@ -23,10 +23,10 @@ import type { TelegramClient } from './client.js';
 import { titled } from './client.js';
 import { toTelegram } from './entities.js';
 import type { TelegramEngine } from './engine.js';
-import type { TelegramMode } from './store.js';
+import { MODE_MESSAGE, type TelegramMode } from './store.js';
 import { PROVIDERS } from '../../core/llm/createAgent.js';
 import { hasCatalog, latestModel, modelsFor } from '../models.js';
-import { resolveMany, resolveCredential, credentialForProvider } from '../settings.js';
+import { credentialForProvider } from '../settings.js';
 
 interface Cmd { command: string; description: string }
 
@@ -83,7 +83,7 @@ export async function handleCommand(
   const cmd = raw.toLowerCase().split('@')[0];
   const arg = rest[0];
   const reply = (m: string) => client.sendMessage(dm, m);
-  const acc = await engine.store.getAccount(engine.db, engine.key);
+  const acc = await engine.state.account();
 
   switch (cmd) {
     case 'start':
@@ -94,7 +94,7 @@ export async function handleCommand(
     case 'assistant':
       // The switch line IS the reply; repeat it when there was nothing to switch.
       if (!await engine.enterMode(client, dm, 'assistant')) {
-        await reply(engine.store.MODE_MESSAGE.assistant);
+        await reply(MODE_MESSAGE.assistant);
       }
       return;
 
@@ -150,7 +150,7 @@ export async function handleCommand(
           return;
         }
         const w = list.find((x) => x.id === ids[n - 1]);
-        await engine.store.setActiveWorkspace(engine.db, ids[n - 1]);
+        await engine.state.setActiveWorkspace(ids[n - 1]);
         await reply(`📁 Active workspace: ${w?.name ?? ids[n - 1]}`);
         return;
       }
@@ -167,7 +167,7 @@ export async function handleCommand(
       if (!j.ok) { await reply(`⚠️ Couldn't start a session: ${j.error?.message}`); return; }
       // Create + point at it. The mode is untouched: from home the assistant
       // keeps the conversation; in code mode the next message starts the coder.
-      await engine.store.setActiveSession(engine.db, j.data.id);
+      await engine.state.setActiveSession(j.data.id);
       await reply(acc.mode === 'code'
         ? '🆕 New session. Send your first message to begin.'
         : '🆕 New session is active — /code to start coding in it.');
@@ -255,7 +255,7 @@ export async function handleCommand(
       // The same PROVIDERS list the cli's /model offers; each row names the
       // catalog's newest model — what an unset `model` resolves to. Switching
       // clears `model` so it follows that default (the cli's /model rule).
-      const { provider: current } = await resolveMany(engine.db, ['provider']);
+      const { provider: current } = await engine.settings.resolveMany(['provider']);
       if (arg !== undefined) {
         const p = listed(providerList, dm, arg);
         if (!p) { await reply('⚠️ Send /providers first to see the list, then /providers <number>.'); return; }
@@ -274,7 +274,7 @@ export async function handleCommand(
       const keyed: string[] = [];
       for (const p of PROVIDERS) {
         if (p === current) { keyed.push(p); continue; }          // always show the active one
-        const v = await resolveCredential(engine.db, engine.key, credentialForProvider(p));
+        const v = await engine.settings.credential(credentialForProvider(p));
         if (v) keyed.push(p);
       }
       if (!keyed.length) {
@@ -297,7 +297,7 @@ export async function handleCommand(
     case 'models': {
       // The catalog's top 10 for the current provider. The list is a
       // convenience, never a fence — any other id can be typed in the cli.
-      const { provider, model } = await resolveMany(engine.db, ['provider', 'model']);
+      const { provider, model } = await engine.settings.resolveMany(['provider', 'model']);
       if (!provider) { await reply('⚠️ No provider yet — pick one with /providers.'); return; }
       const models = modelsFor(provider).slice(0, 10);
       if (!models.length) {
@@ -333,7 +333,7 @@ export async function handleCommand(
         const p = list.find((x) => x.id === id)!;
         const applied = await (await engine.call('/settings', { method: 'PATCH', body: p.values })).json();
         if (!applied.ok) { await reply(`⚠️ Couldn't apply "${p.name}": ${applied.error?.message}`); return; }
-        const { provider, model } = await resolveMany(engine.db, ['provider', 'model']);
+        const { provider, model } = await engine.settings.resolveMany(['provider', 'model']);
         await client.sendMarkdown(dm, titled(
           `✅ Applied preset "${p.name}" — ${provider ?? 'no provider'}${model ? ` / ${model}` : ''}.`,
           'See the top models with /models; switch with /models <number>.'));

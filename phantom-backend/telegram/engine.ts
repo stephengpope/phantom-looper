@@ -14,14 +14,15 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { ModelMessage } from 'ai';
-import type { Db } from '../db/client.js';
 import type { Paths } from '../pool/paths.js';
 import { sessionDir } from '../pool/paths.js';
 import { injectFetch } from '../looper/injectFetch.js';
 import { runCodingTurn, settingsValues, type TurnDeps } from '../looper/turn.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
-import { currentLoop, loopOf, type Sessions } from '../sessions.js';
-import { resolveCredential } from '../settings.js';
+import type { Sessions } from '../sessions.js';
+import type { Loops } from '../loops.js';
+import type { Settings } from '../settings.js';
+import type { HelperUsage } from '../helperUsage.js';
 import { helperCall } from '../helperCall.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
 import type { BackdoorQueue } from '../api/backdoor.js';
@@ -42,7 +43,7 @@ import { compact, shouldCompact, getStrategy, isSummaryMessage } from '../../cor
 import { contextWindowFor } from '../models.js';
 import { Approvals, type Ask } from './approvals.js';
 import { UpgradeChecker } from './upgrade.js';
-import * as store from './store.js';
+import type { TelegramState, SentOrigin, TelegramAccountRow, TelegramMode } from './store.js';
 import { menuFor, handleCommand } from './commands.js';
 import { autoPushSession, autoPullSession, type AutoPushOutcome, type AutoPullOutcome } from '../../core/llm/tools/git.js';
 
@@ -72,12 +73,15 @@ function timingSafeEqualStr(a: string, b: string): boolean {
 }
 
 export interface TelegramEngineDeps {
-  db: Db;
+  /** Telegram's own rows: the account, the sent-bubble map, update dedup. */
+  state: TelegramState;
+  settings: Settings;
   sessions: Sessions;
+  loops: Loops;
+  helperUsage: HelperUsage;
   paths: Paths;
   app: FastifyInstance;
   apiKey: string;
-  encryptionKey: Buffer;
   sessionEvents?: SessionEvents;
   /** The board bus — the auto build alerts listen on it (alerts.ts). */
   events?: BoardEvents;
@@ -203,7 +207,7 @@ export class TelegramEngine {
       summarizePct,
       call: async (system, prompt) => {
         const r = await helperCall({
-          db: this.deps.db, config: model, kind: 'compaction',
+          usage: this.deps.helperUsage, config: model, kind: 'compaction',
           system, prompt, ...(maxTokens ? { maxTokens } : {}),
         });
         return r.text;
@@ -261,8 +265,8 @@ export class TelegramEngine {
         return Number.isFinite(dm) && dm ? dm : null;
       },
       makeClient: (token, dm) => new TelegramClient(token,
-        (id, text) => { store.recordSent(deps.db, dm, id, text, { kind: 'assistant' }).catch(() => {}); },
-        (id) => { store.deleteSent(deps.db, dm, id).catch(() => {}); }),
+        (id, text) => { this.deps.state.recordSent(dm, id, text, { kind: 'assistant' }).catch(() => {}); },
+        (id) => { this.deps.state.deleteSent(dm, id).catch(() => {}); }),
     });
     // Every card write in the system, all workspaces; alerts.ts decides which
     // are the loop's moves. Fire-and-forget: an alert that fails is logged,
@@ -294,12 +298,12 @@ export class TelegramEngine {
     if (!dm || !Number.isFinite(dm)) return;
     const token = await this.token();
     if (!token) return;
-    const loop = await currentLoop(this.deps.db, workspaceId, alert.seq);
-    const origin: store.SentOrigin = loop
+    const loop = await this.deps.loops.current(workspaceId, alert.seq);
+    const origin: SentOrigin = loop
       ? { kind: 'session', sessionId: loop.codingSessionId } : { kind: 'assistant' };
     const client = new TelegramClient(token,
-      (id, text) => { store.recordSent(this.deps.db, dm, id, text, origin).catch(() => {}); },
-      (id) => { store.deleteSent(this.deps.db, dm, id).catch(() => {}); });
+      (id, text) => { this.deps.state.recordSent(dm, id, text, origin).catch(() => {}); },
+      (id) => { this.deps.state.deleteSent(dm, id).catch(() => {}); });
     await client.sendMessage(dm, alert.text);
     log.info({ workspace: workspaceId, card: alert.seq, status: alert.status }, 'auto build alert sent');
   }
@@ -315,7 +319,7 @@ export class TelegramEngine {
   }
 
   private async token(): Promise<string> {
-    return (await resolveCredential(this.deps.db, this.deps.encryptionKey, 'telegram_bot_token')) ?? '';
+    return (await this.deps.settings.credential('telegram_bot_token')) ?? '';
   }
 
   /** Reconcile the webhook + command menu against desired state. Run at boot
@@ -328,12 +332,12 @@ export class TelegramEngine {
       const enabled = values.telegram_enabled === true;
       const token = await this.token().catch(() => '');
       const url = this.webhookUrl();
-      const acc = await store.getAccount(this.deps.db, this.deps.encryptionKey);
+      const acc = await this.deps.state.account();
 
       if (!enabled || !token || !url) {
         if (acc.webhookUrl) {
           if (token) await new TelegramClient(token).deleteWebhook().catch(() => {});
-          await store.clearRegistration(this.deps.db);
+          await this.deps.state.clearRegistration();
           log.info({ enabled, hasToken: !!token, hasUrl: !!url }, 'telegram disabled — webhook torn down');
         }
         return;
@@ -349,7 +353,7 @@ export class TelegramEngine {
         && ALLOWED_UPDATES.every((u) => (info?.allowed_updates ?? []).includes(u));
       if (!registered || acc.webhookSecret !== secret) {
         await client.setWebhook(url, secret, { dropPending: false });
-        await store.saveRegistration(this.deps.db, this.deps.encryptionKey, secret, url, me?.username ?? null);
+        await this.deps.state.saveRegistration(secret, url, me?.username ?? null);
         log.info({ url }, 'telegram webhook registered');
       }
       // The menu follows the mode: the global default is home's, and the
@@ -370,8 +374,7 @@ export class TelegramEngine {
 
   /** Fast-ack the update, then run out-of-band. Returns the HTTP status. */
   async handleUpdate(secretHeader: string, update: any): Promise<number> {
-    const { db, encryptionKey } = this.deps;
-    const acc = await store.getAccount(db, encryptionKey);
+    const acc = await this.deps.state.account();
     const values = await settingsValues(this.turnDeps()).catch(() => ({} as Record<string, unknown>));
     if (values.telegram_enabled !== true) return 200;
     if (!acc.webhookSecret || !timingSafeEqualStr(secretHeader, acc.webhookSecret)) return 403;
@@ -383,7 +386,7 @@ export class TelegramEngine {
     const reaction = update.message_reaction;
     if (reaction) {
       if (String(reaction.user?.id) !== authorized) return 200;
-      if (!(await store.markUpdate(db, update.update_id))) return 200;
+      if (!(await this.deps.state.markUpdate(update.update_id))) return 200;
       if (hasEmoji(reaction.new_reaction, REACT_SPEAK) && !hasEmoji(reaction.old_reaction, REACT_SPEAK)) {
         this.speakReacted(reaction, dm).catch((e) => log.warn({ err: errStr(e) }, 'speak-reacted failed'));
       }
@@ -394,7 +397,7 @@ export class TelegramEngine {
     const tap = update.callback_query;
     if (tap) {
       if (String(tap.from?.id) !== authorized) return 200;
-      if (!(await store.markUpdate(db, update.update_id))) return 200;
+      if (!(await this.deps.state.markUpdate(update.update_id))) return 200;
       const client = new TelegramClient(await this.token());
       const q = { id: String(tap.id), data: tap.data as string | undefined };
       if (UpgradeChecker.isUpgradeCallback(tap.data)) {
@@ -409,7 +412,7 @@ export class TelegramEngine {
 
     const msg = update.message;
     if (!msg || String(msg.from?.id) !== authorized) return 200;
-    if (!(await store.markUpdate(db, update.update_id))) return 200;
+    if (!(await this.deps.state.markUpdate(update.update_id))) return 200;
 
     // An album (several photos sent at once) arrives as SEPARATE updates
     // sharing a media_group_id. Collect them briefly and run as one turn,
@@ -434,15 +437,14 @@ export class TelegramEngine {
   // ── the turn ─────────────────────────────────────────────────────────────
 
   private async run(dm: number, msgs: any[], values: Record<string, unknown>): Promise<void> {
-    const { db, encryptionKey } = this.deps;
     const msg = msgs[0];
     const token = await this.token();
     // The client records every bubble it sends, tagged with the current mode's
     // origin, so a reply or a reaction can find its conversation.
-    let origin: store.SentOrigin = { kind: 'assistant' };
+    let origin: SentOrigin = { kind: 'assistant' };
     const client = new TelegramClient(token,
-      (id, text) => { store.recordSent(db, dm, id, text, origin).catch(() => {}); },
-      (id) => { store.deleteSent(db, dm, id).catch(() => {}); });
+      (id, text) => { this.deps.state.recordSent(dm, id, text, origin).catch(() => {}); },
+      (id) => { this.deps.state.deleteSent(dm, id).catch(() => {}); });
 
     try {
       // Show life immediately — before resolveInput (voice download +
@@ -461,7 +463,7 @@ export class TelegramEngine {
         return;
       }
 
-      const acc = await store.getAccount(db, encryptionKey);
+      const acc = await this.deps.state.account();
       origin = acc.mode === 'code' && acc.activeSessionId
         ? { kind: 'session', sessionId: acc.activeSessionId }
         : { kind: 'assistant' };
@@ -501,7 +503,6 @@ export class TelegramEngine {
    *  assistant keeps the conversation; /code is how the user hands it over. */
   private async assistantTurn(client: TelegramClient, dm: number, message: string,
     values: Record<string, unknown>): Promise<void> {
-    const { db } = this.deps;
     this.assistantValues = values;
     this.assistantChat = { client, dm };
     this.loadAssistant();
@@ -509,7 +510,7 @@ export class TelegramEngine {
     const abort = new AbortController();
     const busyKey = 'assistant';
     this.busy.set(busyKey, { queue: [], abort });
-    const acc = await store.getAccount(db, this.deps.encryptionKey);
+    const acc = await this.deps.state.account();
     // The assistant can deliver a file it names from the active session's work
     // dir (its file tools are read-only, but it can point at one the coder made).
     const voiceOnly = String(values.telegram_reply_mode ?? 'text') === 'voice';
@@ -532,10 +533,10 @@ export class TelegramEngine {
       // A new workspace: make it active and open a session in it — what /new
       // does, so the user lands talking to the coder like the cli's "on screen".
       const onWorkspaceCreated = async (workspaceId: string) => {
-        await store.setActiveWorkspace(db, workspaceId);
+        await this.deps.state.setActiveWorkspace(workspaceId);
         const j = await (await this.call('/sessions', { method: 'POST', body: { workspace_id: workspaceId } })).json();
         if (!j.ok) return { error: j.error?.message as string };
-        await store.setActiveSession(db, j.data.id);
+        await this.deps.state.setActiveSession(j.data.id);
         await this.enterMode(client, dm, 'code');
         await client.sendMessage(dm, '🆕 New session in the new workspace. Send your first message to begin.');
         return { session: j.data.id as string };
@@ -576,7 +577,6 @@ export class TelegramEngine {
    *  streamed from the session feed into the bubble. */
   private async codeTurn(client: TelegramClient, dm: number, sessionId: string,
     message: string, values: Record<string, unknown>): Promise<void> {
-    const { db } = this.deps;
     let opened: OpenedSession;
     try {
       opened = await openSession({ baseUrl: BASE, apiKey: this.deps.apiKey, clientId: CLIENT_ID,
@@ -652,7 +652,7 @@ export class TelegramEngine {
     if (mode !== 'voice' && mode !== 'both') return;
     const say = (text ?? '').trim();
     if (!say) return;
-    const apiKey = (await resolveCredential(this.deps.db, this.deps.encryptionKey, 'deepgram_api_key').catch(() => '')) ?? '';
+    const apiKey = (await this.deps.settings.credential('deepgram_api_key').catch(() => '')) ?? '';
     if (!apiKey) {
       if (mode === 'voice') await client.sendMarkdown(dm, say).catch(() => {});
       return;
@@ -704,7 +704,7 @@ export class TelegramEngine {
   // ── input: voice, attachments, text ──────────────────────────────────────
 
   private async resolveInput(client: TelegramClient, dm: number, msgs: any[],
-    values: Record<string, unknown>, acc: store.TelegramAccountRow): Promise<string | null> {
+    values: Record<string, unknown>, acc: TelegramAccountRow): Promise<string | null> {
     const msg = msgs[0];
     // Telegram puts the caption on only one album item.
     const typed = msgs.map((m) => String(m.text ?? m.caption ?? '').trim()).find(Boolean) ?? '';
@@ -719,7 +719,7 @@ export class TelegramEngine {
       }
       // The key first (a millisecond, read at point of use like every
       // credential): without one there is nothing to download for.
-      const apiKey = (await resolveCredential(this.deps.db, this.deps.encryptionKey, 'deepgram_api_key').catch(() => '')) ?? '';
+      const apiKey = (await this.deps.settings.credential('deepgram_api_key').catch(() => '')) ?? '';
       if (!apiKey) { await client.sendMessage(dm, NOT_HEARD.no_key); return null; }
       // The ✍ and the download are independent — one round-trip each, so
       // they run together rather than the reaction gating the download.
@@ -743,7 +743,7 @@ export class TelegramEngine {
         await client.sendMessage(dm, "⚠️ That video note is over Telegram's 20 MB limit for bots.");
         return null;
       }
-      const apiKey = (await resolveCredential(this.deps.db, this.deps.encryptionKey, 'deepgram_api_key').catch(() => '')) ?? '';
+      const apiKey = (await this.deps.settings.credential('deepgram_api_key').catch(() => '')) ?? '';
       if (!apiKey) { await client.sendMessage(dm, NOT_HEARD.no_key); return null; }
       const [, audio] = await Promise.all([react(REACT_TRANSCRIBING), client.downloadFile(videoNote.file_id)])
         .catch(async (e) => { await react(); throw e; });
@@ -789,9 +789,9 @@ export class TelegramEngine {
   private async switchForReply(client: TelegramClient, dm: number, msg: any): Promise<void> {
     const replied = msg.reply_to_message;
     if (!replied?.message_id) return;
-    const stored = await store.getSent(this.deps.db, dm, Number(replied.message_id));
+    const stored = await this.deps.state.getSent(dm, Number(replied.message_id));
     if (!stored) return;
-    const acc = await store.getAccount(this.deps.db, this.deps.encryptionKey);
+    const acc = await this.deps.state.account();
     if (stored.origin.kind === 'session' && stored.origin.sessionId) {
       if (acc.activeSessionId === stored.origin.sessionId && acc.mode === 'code') return;
       if (acc.activeSessionId !== stored.origin.sessionId) {
@@ -815,7 +815,7 @@ export class TelegramEngine {
   Promise<{ id: string; title: string | null } | { error: string }> {
     const s = await this.deps.sessions.get(id);
     if (!s) return { error: `no session ${id}` };
-    await store.setActiveSession(this.deps.db, id);
+    await this.deps.state.setActiveSession(id);
     await client.sendMessage(dm, `🔀 Active session: ${s.name ?? 'untitled'}`);
     return { id, title: s.name ?? null };
   }
@@ -824,11 +824,11 @@ export class TelegramEngine {
    *  changed and swaps the chat's command menu to the mode's list. Returns
    *  whether the mode changed. Code mode presumes an active session — the
    *  caller checks (/code) or has just switched (a reply to a coder's bubble). */
-  async enterMode(client: TelegramClient, dm: number, mode: store.TelegramMode): Promise<boolean> {
+  async enterMode(client: TelegramClient, dm: number, mode: TelegramMode): Promise<boolean> {
     const msg = mode === 'code'
       ? await this.codeModeLabel()
       : undefined;
-    const changed = await store.setMode(this.deps.db, mode, (t) => client.sendMessage(dm, t), msg);
+    const changed = await this.deps.state.setMode(mode, (t) => client.sendMessage(dm, t), msg);
     await client.setMyCommands(menuFor(mode), dm).catch(() => {});
     return changed;
   }
@@ -836,11 +836,11 @@ export class TelegramEngine {
   /** The short line sent when entering code mode — workspace prefix, card ID,
    *  session name. One function, used by enterMode and the /code echo. */
   async codeModeLabel(): Promise<string> {
-    const acc = await store.getAccount(this.deps.db, this.deps.encryptionKey);
+    const acc = await this.deps.state.account();
     if (!acc.activeSessionId) return '🤖 Coding agent';
     const s = await this.deps.sessions.get(acc.activeSessionId);
     if (!s) return '🤖 Coding agent';
-    const loop = await loopOf(this.deps.db, acc.activeSessionId);
+    const loop = await this.deps.loops.of(acc.activeSessionId);
     const ws = await (await this.call(`/workspaces/${s.workspaceId}`)).json().catch(() => null);
     const prefix: string | undefined = ws?.ok ? ws.data.cardPrefix : undefined;
     const parts: string[] = ['🤖 Coding agent'];
@@ -855,11 +855,11 @@ export class TelegramEngine {
     const chatId = Number(reaction.chat?.id);
     const messageId = Number(reaction.message_id);
     if (!Number.isFinite(chatId) || !Number.isFinite(messageId)) return;
-    const stored = await store.getSent(this.deps.db, chatId, messageId);
+    const stored = await this.deps.state.getSent(chatId, messageId);
     if (!stored) return;
     const token = await this.token();
     const client = new TelegramClient(token);
-    const apiKey = (await resolveCredential(this.deps.db, this.deps.encryptionKey, 'deepgram_api_key').catch(() => '')) ?? '';
+    const apiKey = (await this.deps.settings.credential('deepgram_api_key').catch(() => '')) ?? '';
     const values = await settingsValues(this.turnDeps()).catch(() => ({} as Record<string, unknown>));
     client.sendChatAction(dm, 'record_voice').catch(() => {});
     const audio = await speakVoice(apiKey, String(values.voice_spoken_voice ?? ''),
@@ -883,9 +883,8 @@ export class TelegramEngine {
     return true;
   }
 
-  get store() { return store; }
-  get db() { return this.deps.db; }
-  get key() { return this.deps.encryptionKey; }
+  get state() { return this.deps.state; }
+  get settings() { return this.deps.settings; }
   assistantReset() { this.assistantHistory = []; }
 
   /** The approval gate, for slash commands that need a confirm (today:

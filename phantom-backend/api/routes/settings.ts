@@ -12,19 +12,18 @@
 // Secrets are returned decrypted; which keys are secret is declared in code
 // (CREDENTIALS), never decided by a write.
 import type { FastifyInstance } from 'fastify';
+import type { FastifyRequest } from 'fastify';
 import {
   CREDENTIALS, CREDENTIAL_NAMES,
   isWorkspaceOverridable, isCredentialWorkspaceScoped, isGlobalSettable,
-  settingsLayers, SettingsWriteError, type SettingKey,
+  SettingsWriteError, type SettingKey,
   DEFAULTS, DESCRIPTIONS, META,
 } from '../../settings.js';
-import {
-  readStore,
-  GLOBAL, workspaceScope, sessionScope,
-} from '../../store.js';
-import { workspaces } from '../../db/schema.js';
-import { eq } from 'drizzle-orm';
+import { GLOBAL, workspaceScope, sessionScope } from '../../store.js';
 import { ok, err, type AppCtx } from '../app.js';
+
+const writerOf = (req: FastifyRequest): string | undefined =>
+  String(req.headers['x-phantom-looper-client'] ?? '') || undefined;
 
 const TAG = { tags: ['settings'] };
 /** The looper's two switches: a write or clear of either re-examines the board. */
@@ -47,13 +46,12 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
     if (q.session) {
       const s = await ctx.sessions.get(q.session);
       if (!s) return { error: `no session ${q.session}` };
-      const ws = await ctx.db.select().from(workspaces).where(eq(workspaces.id, s.workspaceId));
+      const ws = await ctx.workspaces.get(s.workspaceId);
       return { write: sessionScope(q.session), kind: 'session' as const,
-        chain: [GLOBAL, ...(ws[0] ? [workspaceScope(ws[0].id)] : []), sessionScope(q.session)] };
+        chain: [GLOBAL, ...(ws ? [workspaceScope(ws.id)] : []), sessionScope(q.session)] };
     }
     if (q.workspace) {
-      const rows = await ctx.db.select().from(workspaces).where(eq(workspaces.id, q.workspace));
-      if (!rows.length) return { error: `no workspace ${q.workspace}` };
+      if (!await ctx.workspaces.get(q.workspace)) return { error: `no workspace ${q.workspace}` };
       return { write: workspaceScope(q.workspace), kind: 'workspace' as const,
         chain: [GLOBAL, workspaceScope(q.workspace)] };
     }
@@ -68,13 +66,11 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
     async (req, reply) => {
       const sc = await scopeOf(req.query);
       if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
-      const byScope = await readStore(ctx.db, ctx.encryptionKey, sc.chain);
-      const at = (scope: string, k: string) => byScope.get(scope)?.get(k);
-
-      const wsRow = req.query.workspace
-        ? (await ctx.db.select().from(workspaces).where(eq(workspaces.id, req.query.workspace)))[0] : undefined;
+      const wsRow = req.query.workspace ? await ctx.workspaces.get(req.query.workspace) : undefined;
       const sRow = req.query.session ? await ctx.sessions.get(req.query.session) : undefined;
-      const layers = await settingsLayers(ctx.db, { workspace: wsRow, session: sRow }, byScope);
+      const resolveCtx = { workspace: wsRow, session: sRow };
+      const layers = await ctx.settings.layers(resolveCtx);
+      const creds = await ctx.settings.credentialLayers(resolveCtx);
       const out: Record<string, unknown> = {};
       for (const key of Object.keys(DEFAULTS) as SettingKey[]) {
         // A workspace-only key has no global meaning — the global list omits it.
@@ -84,8 +80,8 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
       }
       // Credentials are keys of the same store — same table, same chain.
       for (const name of CREDENTIAL_NAMES) {
-        const g = at(GLOBAL, name)?.value ?? null;
-        const w = sc.kind !== 'global' ? at(workspaceScope(req.query.workspace ?? ''), name)?.value ?? null : null;
+        const g = creds[name].global;
+        const w = sc.kind !== 'global' ? creds[name].workspace : null;
         out[name] = {
           default: null, global: g, workspace: w, session: null,
           value: w ?? g, source: w != null ? 'workspace' : g != null ? 'override' : 'default',
@@ -111,8 +107,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
       if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
       let updated: string[];
       try {
-        updated = await ctx.settingsWrite!(sc.kind, sc.write, req.body ?? {},
-          String(req.headers['x-phantom-looper-client'] ?? '') || undefined);
+        updated = await ctx.settings.write(sc.kind, sc.write, req.body ?? {}, writerOf(req));
       } catch (e) {
         if (e instanceof SettingsWriteError) return reply.code(400).send(err(e.code, e.message));
         throw e;
@@ -139,8 +134,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
       const sc = await scopeOf(req.query);
       if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
       try {
-        await ctx.settingsWrite!(sc.kind, sc.write, { [req.params.key]: null },
-          String(req.headers['x-phantom-looper-client'] ?? '') || undefined);
+        await ctx.settings.write(sc.kind, sc.write, { [req.params.key]: null }, writerOf(req));
       } catch (e) {
         if (e instanceof SettingsWriteError) return reply.code(400).send(err(e.code, e.message));
         throw e;

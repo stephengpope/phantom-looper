@@ -29,13 +29,15 @@
 // and to CREATE the supervisor's conversation-only session rows (no checkout;
 // the loop is their sole creator).
 import type { FastifyInstance } from 'fastify';
-import { eq } from 'drizzle-orm';
-import type pg from 'pg';
+
+
 import type { ModelMessage } from 'ai';
-import type { Db } from '../db/client.js';
-import { workspaces as workspacesTable, type WorkspaceRow } from '../db/schema.js';
-import { currentLoop, loopOf, createLoop, LOOP_CLIENT_ID, type Sessions } from '../sessions.js';
-import { resolveMany } from '../settings.js';
+import type { WorkspaceRow } from '../db/schema.js';
+import { LOOP_CLIENT_ID, type Sessions } from '../sessions.js';
+import type { Workspaces } from '../workspaces.js';
+import type { Loops } from '../loops.js';
+import type { Cards } from '../cards.js';
+import type { Settings } from '../settings.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
 import { memoryRecorder, serializeTranscript, type TranscriptHeader } from '../../core/llm/transcript.js';
 import { agentModelConfig, agentMaxSteps, pinnedModel, sessionPin } from '../../core/llm/agentConfig.js';
@@ -58,9 +60,11 @@ const CLIENT_ID = LOOP_CLIENT_ID;
 const BASE = 'http://looper';
 
 export interface LooperDeps {
-  db: Db;
   sessions: Sessions;
-  pgPool: pg.Pool;
+  workspaces: Workspaces;
+  loops: Loops;
+  cards: Cards;
+  settings: Settings;
   app: FastifyInstance;
   apiKey: string;
   /** The board's event bus (api/boardEvents.ts): the engine's card writes go
@@ -120,17 +124,12 @@ export class LooperEngine {
    *  supervision setting changed) or all of them (boot). `canTurn` is
    *  re-checked before every turn off fresh rows, so over-calling is harmless. */
   async runAllLoops(workspaceId?: string): Promise<void> {
-    const { db, pgPool } = this.deps;
-    const rows = workspaceId
-      ? await db.select().from(workspacesTable).where(eq(workspacesTable.id, workspaceId))
-      : await db.select().from(workspacesTable);
+    const one = workspaceId ? await this.deps.workspaces.get(workspaceId) : undefined;
+    const rows = workspaceId ? (one ? [one] : []) : await this.deps.workspaces.list();
     for (const workspace of rows) {
       let cards: CardRow[];
       try {
-        const r = await pgPool.query(
-          `select * from "${workspace.schemaName}".cards
-           where status = any($1) and not archived`, [[...LOOP_COLUMNS]]);
-        cards = r.rows as CardRow[];
+        cards = await this.deps.cards.listInColumns(workspace, LOOP_COLUMNS);
       } catch (e) {
         // Its loops never start this sweep — a card sitting in plan or
         // in_progress with nothing happening; the log is the only trace.
@@ -148,7 +147,7 @@ export class LooperEngine {
   async runLoopOfSession(sessionId: string, releasedBy: string): Promise<void> {
     if (releasedBy === CLIENT_ID) return;
     let loop;
-    try { loop = await loopOf(this.deps.db, sessionId); }
+    try { loop = await this.deps.loops.of(sessionId); }
     catch (e) {
       log.error({ session: sessionId, err: (e as Error).message }, 'could not look up the session\'s loop — its round did not run');
       return;
@@ -164,7 +163,6 @@ export class LooperEngine {
    *  card with the reason — the failure lands on the board and the loop is
    *  over; nothing retries a failed turn. */
   async runLoop(workspaceId: string, seq: number): Promise<void> {
-    const { db, pgPool } = this.deps;
     const claim = `${workspaceId}:${seq}`;
     if (this.running.has(claim)) { this.pending.add(claim); return; }
     this.running.add(claim);
@@ -184,14 +182,11 @@ export class LooperEngine {
         let workspace: WorkspaceRow | undefined;
         let card: CardRow | undefined;
         try {
-          [workspace] = await db.select().from(workspacesTable)
-            .where(eq(workspacesTable.id, workspaceId));
+          workspace = await this.deps.workspaces.get(workspaceId);
           if (!workspace) continue;
-          const auto = await resolveMany(db, ['auto_plan', 'auto_build'], { workspace })
+          const auto = await this.deps.settings.resolveMany(['auto_plan', 'auto_build'], { workspace })
             .catch(() => ({ auto_plan: false, auto_build: false }));
-          const r = await pgPool.query(
-            `select * from "${workspace.schemaName}".cards where seq = $1 and not archived`, [seq]);
-          card = r.rows[0] as CardRow | undefined;
+          card = await this.deps.cards.activeBySeq(workspace, seq);
           if (!card || !canTurn(card, { plan: Boolean(auto.auto_plan), build: Boolean(auto.auto_build) })) continue;
         } catch (e) {
           log.warn({ card: seq, err: errStr(e) }, 'looper could not read the card');
@@ -235,20 +230,17 @@ export class LooperEngine {
    *  files are; its board powers are bound to THE card.
    *  Throws on failure — runLoop turns that into a blocked card. */
   async runTurn(workspace: WorkspaceRow, card: CardRow, budget: Budget): Promise<TurnOutcome> {
-    const { db, pgPool, apiKey } = this.deps;
+    const { apiKey } = this.deps;
     const cfg = await this.settings();
 
     // The card's current LOOP — the pairing row, written once per run. It
     // names the coder and the supervisor outright; nothing is derived.
-    const loop = await currentLoop(db, workspace.id, card.seq);
+    const loop = await this.deps.loops.current(workspace.id, card.seq);
 
     // Entering plan is a NEW loop, always — the revision history is the
     // transition clock (logic.ts).
-    const lastMove = await pgPool.query(
-      `select changed_at from "${workspace.schemaName}".card_revisions
-       where seq = $1 and changed ? 'status' order by id desc limit 1`, [card.seq]);
     const fresh = needsFreshSession(card.status, loop?.createdAt ?? null,
-      lastMove.rows[0]?.changed_at ?? null);
+      await this.deps.cards.lastMovedAt(workspace, card.seq));
 
     let opened: OpenedSession;
     let supervisorSessionId: string;
@@ -269,7 +261,7 @@ export class LooperEngine {
         });
         const sup = await this.deps.sessions.createSupervisor(workspace.id,
           String(opened.session.folderId ?? opened.session.id));
-        await createLoop(db, workspace.id, card.seq, opened.session.id, sup.id);
+        await this.deps.loops.create(workspace.id, card.seq, opened.session.id, sup.id);
         // The coder's session is named after its card from birth — /resume
         // never shows a nameless row while the first (long) plan turn runs.
         await this.deps.sessions.nameIfUnnamed(opened.session.id, card.title);
@@ -307,7 +299,7 @@ export class LooperEngine {
       // ── the token budget — seeded once per loop, checked before every
       // turn, each turn's own numbers added as they land. Breach is a card
       // state a human can see, like every other loop exit. ─────────────────
-      const b = await resolveMany(db, ['loop_budget_tokens'], { workspace })
+      const b = await this.deps.settings.resolveMany(['loop_budget_tokens'], { workspace })
         .catch(() => ({ loop_budget_tokens: null }));
       const limit = b.loop_budget_tokens == null ? null : Number(b.loop_budget_tokens);
       if (!budget.seeded) {

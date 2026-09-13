@@ -23,14 +23,18 @@
 import fs from 'node:fs/promises';
 import { and, desc, eq, gte, ilike, inArray, isNull, isNotNull, lt, ne, or, count, sql as sqlRaw } from 'drizzle-orm';
 import type { Db } from './db/client.js';
-import { workspaces, sessions, sessionColumns, folders, loops, settings as settingsRows,
-  type WorkspaceRow, type SessionRow, type FolderRow, type LoopRow } from './db/schema.js';
-import { resolve } from './settings.js';
+// `folders` and `loops` appear here for ONE reason: the list is a JOIN (a
+// row's branch and card ride it, and the filter reaches the branch). They
+// are read through the join only; their rows are Folders' and Loops' to write.
+import { sessions, sessionColumns, folders, loops, type SessionRow } from './db/schema.js';
+import type { Settings } from './settings.js';
+import type { Workspaces } from './workspaces.js';
+import type { Folders } from './folders.js';
 import { git, cloneFresh, checkoutBranch, classifyGitFailure, localState } from './git/git.js';
 import { claimSlot, resolveAuth } from './pool/pool.js';
 import { sessionDir, repoDir, type Paths } from './pool/paths.js';
 import { newId } from '../core/ids.js';
-import { logger, errStr } from './log.js';
+import { logger } from './log.js';
 import { lastUserFromJsonl, headerModelFromJsonl, sumUsageFromJsonl, stripUsageFromJsonl } from '../core/llm/transcript.js';
 import { sessionScope } from './store.js';
 import type { SessionEvents } from './api/sessionEvents.js';
@@ -143,7 +147,9 @@ export class Sessions {
   constructor(
     private readonly db: Db,
     private readonly paths: Paths,
-    private readonly encryptionKey: Buffer,
+    private readonly settings: Settings,
+    private readonly workspaces: Workspaces,
+    private readonly folders: Folders,
     /** The per-session feed; absent in tests that have no watchers. */
     private readonly events?: SessionEvents,
   ) {}
@@ -242,12 +248,12 @@ export class Sessions {
     }).from(sessions).where(inArray(sessions.id, ids));
   }
 
-  /** Where each session's work stands, for the board's card rows. */
-  async workOf(ids: string[]): Promise<Map<string, string | null>> {
+  /** A batch of rows by id — the board names each card's session, its hold
+   *  and its work state off these. */
+  async getMany(ids: string[]): Promise<Map<string, SessionRow>> {
     if (!ids.length) return new Map();
-    const rows = await this.db.select({ id: sessions.id, work: sessions.work })
-      .from(sessions).where(inArray(sessions.id, ids));
-    return new Map(rows.map((r) => [r.id, r.work]));
+    const rows = await this.db.select(sessionColumns).from(sessions).where(inArray(sessions.id, ids));
+    return new Map(rows.map((r) => [r.id, r]));
   }
 
   /** Sessions that finished and went quiet: a record exists, nobody holds
@@ -302,9 +308,8 @@ export class Sessions {
    *  the caller flushed the source to origin first, so absent means something
    *  is wrong, and a copy that quietly starts at base loses the work. */
   async create(workspaceId: string, opts: { id?: string; fromBranch?: string } = {}): Promise<SessionFull> {
-    const workspaceRows = await this.db.select().from(workspaces).where(eq(workspaces.id, workspaceId));
-    if (!workspaceRows.length) throw new SessionError('not_found', `no workspace ${workspaceId}`);
-    const workspace = workspaceRows[0];
+    const workspace = await this.workspaces.get(workspaceId);
+    if (!workspace) throw new SessionError('not_found', `no workspace ${workspaceId}`);
 
     const prior = opts.id
       ? (await this.db.select(sessionColumns).from(sessions).where(eq(sessions.id, opts.id)))[0]
@@ -331,12 +336,10 @@ export class Sessions {
     const id = prior?.id ?? opts.id ?? newId();
     const dest = sessionDir(this.paths, id);
     const dir = repoDir(this.paths, id);
-    const auth = await resolveAuth(this.db, workspace, this.encryptionKey);
+    const auth = await resolveAuth(this.settings, workspace);
     // A restart uses the branch the FOLDER remembers — the work is on it. The
     // folder shares the session's id, so directories keep their names.
-    const priorFolder = prior?.folderId
-      ? (await this.db.select().from(folders).where(eq(folders.id, prior.folderId)))[0]
-      : undefined;
+    const priorFolder = prior?.folderId ? await this.folders.get(prior.folderId) : undefined;
     const branch = priorFolder?.branch ?? `${workspace.branchPrefix}/${id}`;
 
     // Everything from here to the checkout talks to the remote, and a remote
@@ -354,7 +357,7 @@ export class Sessions {
         await git(dir, ['fetch', 'origin', workspace.baseBranch], auth);
         await git(dir, ['reset', '--hard', `origin/${workspace.baseBranch}`]);
       } else {
-        const depth = await resolve(this.db, 'initial_history_depth', { workspace });
+        const depth = await this.settings.resolve('initial_history_depth', { workspace });
         await cloneFresh(dir, auth, workspace.baseBranch, depth);
         await fs.mkdir(`${dest}/scratch`, { recursive: true });
       }
@@ -408,7 +411,7 @@ export class Sessions {
 
     // The folder (the checkout's identity: branch + claim) and the session (the
     // conversation) are born together, sharing the id.
-    await this.db.insert(folders).values({ id, workspaceId, branch, claimSha, createdAt: new Date() });
+    await this.folders.create({ id, workspaceId, branch, claimSha });
     await this.db.insert(sessions).values({ id, workspaceId, status: 'active', folderId: id });
     const row = (await this.db.select(sessionColumns).from(sessions).where(eq(sessions.id, id)))[0];
     log.info({ session: id, workspace: `${workspace.owner}/${workspace.name}`, branch, found, claimed, claimSha },
@@ -479,7 +482,7 @@ export class Sessions {
       this.changed(session.id);
       return;
     }
-    const folder = await getFolder(this.db, session.folderId);
+    const folder = await this.folders.get(session.folderId);
     const dir = repoDir(this.paths, session.id);
     const state = folder
       ? await localState(dir, folder.branch).catch(() => 'unknown' as const)
@@ -497,7 +500,7 @@ export class Sessions {
   /** The row goes for good — its overrides with it, the transcript on it.
    *  Only its pushed branch on origin survives. Files first (`destroy`). */
   async purge(id: string): Promise<void> {
-    await this.db.delete(settingsRows).where(eq(settingsRows.scope, sessionScope(id)));
+    await this.settings.dropScope(sessionScope(id));
     await this.db.delete(sessions).where(eq(sessions.id, id));
     this.changed(id);
   }
@@ -721,65 +724,4 @@ export class Sessions {
       .where(and(eq(sessions.id, id), eq(sessions.lockedBy, client)));
     return expires;
   }
-}
-
-// ── Folders and loops — the rows beside a session, not the session ──────────
-
-export async function getFolder(db: Db, id: string): Promise<FolderRow | undefined> {
-  const rows = await db.select().from(folders).where(eq(folders.id, id));
-  return rows[0];
-}
-
-/** The current loop for a card: the newest row. Old rows are history. */
-export async function currentLoop(db: Db, workspaceId: string, card: number): Promise<LoopRow | undefined> {
-  const rows = await db.select().from(loops)
-    .where(and(eq(loops.workspaceId, workspaceId), eq(loops.card, card)))
-    .orderBy(desc(loops.createdAt)).limit(1);
-  return rows[0];
-}
-
-/** The card a coding session is building, as one line for the auto-push commit
- *  message: "title — description". A diff says what changed and never why, and
- *  this is the cheapest statement of why the system already holds.
- *
- *  Fails open to '' — a manual session has no loop row, a workspace schema can
- *  be missing, and NONE of that may stop work from landing. The commit message
- *  simply loses its intent line (fill drops the line whole when it is empty). */
-export async function cardIntentFor(
-  db: Db, session: SessionRow, workspace: WorkspaceRow,
-): Promise<string> {
-  try {
-    const rows = await db.select().from(loops)
-      .where(and(eq(loops.workspaceId, session.workspaceId), eq(loops.codingSessionId, session.id)))
-      .orderBy(desc(loops.createdAt)).limit(1);
-    const seq: number | undefined = rows[0]?.card;
-    if (seq === undefined) return session.name ?? '';
-    const r = await db.execute(
-      sqlRaw.raw(`select title, description from "${workspace.schemaName}".cards where seq = ${Number(seq)}`));
-    const card = (r as unknown as { rows: { title?: string; description?: string }[] }).rows?.[0];
-    if (!card?.title) return session.name ?? '';
-    const firstLine = (card.description ?? '').trim().split('\n')[0] ?? '';
-    return firstLine ? `${card.title} — ${firstLine}` : card.title;
-  } catch (e) {
-    log.debug({ session: session.id, err: errStr(e) }, 'card intent unavailable — commit message goes without it');
-    return session.name ?? '';
-  }
-}
-
-/** The pairing, written ONCE when a card enters the loop. Immutable — this
- *  row is the permanent record of who reviews what. */
-export async function createLoop(
-  db: Db, workspaceId: string, card: number, codingSessionId: string, supervisorSessionId: string,
-): Promise<LoopRow> {
-  const id = newId();
-  await db.insert(loops).values({ id, workspaceId, card, codingSessionId, supervisorSessionId });
-  return (await db.select().from(loops).where(eq(loops.id, id)))[0];
-}
-
-/** Which card a session belongs to, if any — via its loop, either seat. */
-export async function loopOf(db: Db, sessionId: string): Promise<LoopRow | undefined> {
-  const rows = await db.select().from(loops)
-    .where(or(eq(loops.codingSessionId, sessionId), eq(loops.supervisorSessionId, sessionId)))
-    .orderBy(desc(loops.createdAt)).limit(1);
-  return rows[0];
 }

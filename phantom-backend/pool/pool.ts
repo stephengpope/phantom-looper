@@ -11,10 +11,10 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { Db } from '../db/client.js';
-import { workspaces, type WorkspaceRow } from '../db/schema.js';
+import type { WorkspaceRow } from '../db/schema.js';
+import type { Workspaces } from '../workspaces.js';
 
-import { resolveCredential, resolveMany } from '../settings.js';
+import type { Settings } from '../settings.js';
 import { cloneFresh, refreshPristine, type GitAuth } from '../git/git.js';
 import { newId, idTime } from '../../core/ids.js';
 import { slotPrefix, slotUlid, type Paths } from './paths.js';
@@ -37,8 +37,8 @@ const rm = (p: string) => fs.rm(p, { recursive: true, force: true }).catch(() =>
 // The chain — this workspace's token, else the global one, else unauthenticated
 // — is no longer written out here. It is `github_token` resolved through the
 // same layers every other setting uses.
-export async function resolveAuth(db: Db, r: WorkspaceRow, encryptionKey: Buffer): Promise<GitAuth> {
-  return { url: r.url, pat: await resolveCredential(db, encryptionKey, 'github_token', { workspace: r }) };
+export async function resolveAuth(settings: Settings, r: WorkspaceRow): Promise<GitAuth> {
+  return { url: r.url, pat: await settings.credential('github_token', { workspace: r }) };
 }
 
 /** Claim a ready slot for a workspace into `dest`. The claim is a RENAME and nothing
@@ -70,7 +70,7 @@ let ticking = false;
 /** Reconcile the pool to what it should be. Everything that is not claiming
  *  happens here; claiming has no side effects, so a session can never be
  *  slowed by maintenance work. */
-export async function tick(db: Db, p: Paths, encryptionKey: Buffer): Promise<void> {
+export async function tick(workspaces: Workspaces, settings: Settings, p: Paths): Promise<void> {
   if (ticking) return;
   ticking = true;
   try {
@@ -78,7 +78,7 @@ export async function tick(db: Db, p: Paths, encryptionKey: Buffer): Promise<voi
     // but with no list we cannot distinguish "workspace removed" from "db down",
     // so we also must not delete anything. Just stop.
     let workspaceRows: WorkspaceRow[];
-    try { workspaceRows = await db.select().from(workspaces); } catch (e) {
+    try { workspaceRows = await workspaces.list(); } catch (e) {
       log.warn({ err: errStr(e) }, 'skipping pool tick — could not read workspaces');
       return;
     }
@@ -102,12 +102,12 @@ export async function tick(db: Db, p: Paths, encryptionKey: Buffer): Promise<voi
     // Per-workspace maintenance, concurrently across workspaces — one at a time globally
     // would take workspaces × target ticks to fill from cold.
     await Promise.all([...wanted.entries()].map(async ([prefix, workspace]) => {
-      const cfg = await resolveMany(db,
+      const cfg = await settings.resolveMany(
         ['spare_clones', 'spare_clone_refresh_ms', 'spare_clone_max_age_ms', 'initial_history_depth'],
         { workspace });
       const { spare_clones: target, spare_clone_refresh_ms: refreshMs,
         spare_clone_max_age_ms: maxAgeMs, initial_history_depth: depth } = cfg;
-      const auth = await resolveAuth(db, workspace, encryptionKey);
+      const auth = await resolveAuth(settings, workspace);
 
       let mine = ready.filter((s) => s.startsWith(prefix));
 

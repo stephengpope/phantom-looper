@@ -5,10 +5,9 @@
 // the disk sweeps fire it unattended, so it holds the session lock while a
 // person-driven push/pull relies on git's own index.lock to error a true
 // simultaneous op.
-import type { Db } from '../db/client.js';
 import type { WorkspaceRow, SessionRow } from '../db/schema.js';
 import { git, commitAll, pushSession, GIT_CLIENT_ID, type PushResult, type PullResult, type GitAuth } from './git.js';
-import { getFolder, type Sessions } from '../sessions.js';
+import type { Sessions } from '../sessions.js';
 import type { FolderRow } from '../db/schema.js';
 import { resolveAuth } from '../pool/pool.js';
 import { repoDir, type Paths } from '../pool/paths.js';
@@ -26,37 +25,29 @@ export class GitEngine {
   private arrivals = new Map<string, Arrival[]>();
 
   constructor(
-    private db: Db,
-    private sessions: Sessions,
-    private paths: Paths,
-    private encryptionKey: Buffer,
-    /** Hand a stopped merge to the session's own coding agent — the same hook
-     *  auto-push and auto-pull use. Runs over a tree whose merge is still in
-     *  progress; resolves + commits, holding no credentials, and the engine
-     *  verifies and pushes afterward. Absent -> conflicts abort. */
-    private resolveConflict?: (
-      session: SessionRow, workspace: WorkspaceRow, dir: string, ctx: ConflictContext,
-    ) => Promise<boolean>,
-    /** Model for the pull's commit message — the same one auto-push and
-     *  auto-pull use. Absent -> a pull with work to commit fails with the
-     *  reason; there is no file-name fallback anywhere. */
-    private messageConfig?: SyncDeps['messageConfig'],
+    /** The SAME deps auto-push and auto-pull sync with — the row owners, the
+     *  conflict resolver (the session's own coding agent) and the commit
+     *  message model — so the system has one answer to every git question. */
+    private deps: Omit<SyncDeps, 'onEvent' | 'recordSummary'>,
     /** Every sync step of a manual pull, for the session's live feed — the
      *  pull's route is unary, so this is the only way a watcher sees it run
      *  (a commit-message retry included). Absent -> the pull runs quiet. */
     private onSyncEvent?: (sessionId: string, e: SyncEvent) => void,
   ) {}
 
+  private get sessions(): Sessions { return this.deps.sessions; }
+  private get paths(): Paths { return this.deps.paths; }
+
   async detach(sessionId: string): Promise<void> {
     this.arrivals.delete(sessionId);
   }
 
-  private auth(workspace: WorkspaceRow): Promise<GitAuth> { return resolveAuth(this.db, workspace, this.encryptionKey); }
+  private auth(workspace: WorkspaceRow): Promise<GitAuth> { return resolveAuth(this.deps.settings, workspace); }
 
   /** Git operates on FOLDERS — the branch and the directory live there. A
    *  session with no folder has nothing git-shaped to do. */
   private async folderOf(s: SessionRow): Promise<FolderRow> {
-    const folder = s.folderId ? await getFolder(this.db, s.folderId) : undefined;
+    const folder = s.folderId ? await this.deps.folders.get(s.folderId) : undefined;
     if (!folder) throw new Error(`session ${s.id} has no folder — nothing to push or pull`);
     return folder;
   }
@@ -110,9 +101,7 @@ export class GitEngine {
    *  It takes the session (sync does), which is why `busy` is a result here. */
   async pull(s: SessionRow, workspace: WorkspaceRow): Promise<PullResult | 'busy'> {
     const r = await syncBranch(
-      { db: this.db, sessions: this.sessions, paths: this.paths, encryptionKey: this.encryptionKey,
-        resolve: this.resolveConflict, messageConfig: this.messageConfig,
-        onEvent: (e) => this.onSyncEvent?.(s.id, e) },
+      { ...this.deps, onEvent: (e) => this.onSyncEvent?.(s.id, e) },
       s, workspace, { landOnBase: false, label: 'pull' });
     if (r.outcome === 'ok') {
       const list = this.arrivals.get(s.id) ?? [];

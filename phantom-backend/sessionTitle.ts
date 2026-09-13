@@ -8,16 +8,15 @@
 // (core/llm/prompts/helpers/); the model is the Assistant's config, and
 // a half-set assistant pair falls back silently to the coding agent's. Never throws — on any failure the old name (or null) stands (the
 // commitMessage.ts pattern).
-import { eq } from 'drizzle-orm';
 import { isProvider, type ModelConfig } from '../core/llm/createAgent.js';
 import { helperCall } from './helperCall.js';
 import { cascade } from '../core/llm/agentConfig.js';
 import { titleRequest, type TitleContext } from '../core/llm/prompts/helpers/wiring.js';
 import { parseTranscript } from '../core/llm/transcript.js';
-import { resolveMany, resolveCredential, credentialForProvider } from './settings.js';
-import { loops } from './db/schema.js';
-import type { Db } from './db/client.js';
+import { credentialForProvider, type Settings } from './settings.js';
 import type { Sessions } from './sessions.js';
+import type { Loops } from './loops.js';
+import type { HelperUsage } from './helperUsage.js';
 import { logger, errStr } from './log.js';
 
 const log = logger('session-title');
@@ -99,8 +98,8 @@ export function cleanTitle(raw: string): string | null {
 /** The Assistant's trio cascading to the coding agent's (core rule); a bad
  *  pair falls back to the coding config outright — a title is never worth an
  *  error. null = no usable config (unknown provider, no model): skip. */
-async function titleConfig(db: Db, encryptionKey: Buffer): Promise<ModelConfig | null> {
-  const cfg = await resolveMany(db, ['provider', 'model', 'base_url',
+async function titleConfig(settings: Settings): Promise<ModelConfig | null> {
+  const cfg = await settings.resolveMany(['provider', 'model', 'base_url',
     'assistant_provider', 'assistant_model', 'assistant_base_url']);
   let c: { provider: string; model: string | null; baseUrl: string | null };
   try {
@@ -112,7 +111,7 @@ async function titleConfig(db: Db, encryptionKey: Buffer): Promise<ModelConfig |
     return null;
   }
   if (!isProvider(c.provider) || !c.model) return null;
-  const apiKey = await resolveCredential(db, encryptionKey, credentialForProvider(c.provider));
+  const apiKey = await settings.credential(credentialForProvider(c.provider));
   // A missing key is languageModel's problem, not ours: the SDK fails fast
   // and locally, and the tries below swallow it — commitMessage's "no key"
   // case exactly.
@@ -124,18 +123,17 @@ async function titleConfig(db: Db, encryptionKey: Buffer): Promise<ModelConfig |
  *  nothing was written. Never throws. `modelFetch` is the test seam
  *  (createAgent's own), threaded from AppCtx like the turn route's. */
 export async function nameSession(
-  db: Db, sessions: Sessions, encryptionKey: Buffer, sessionId: string, context: TitleContext, modelFetch?: typeof fetch,
+  deps: { settings: Settings; sessions: Sessions; loops: Loops; helperUsage: HelperUsage },
+  sessionId: string, context: TitleContext, modelFetch?: typeof fetch,
 ): Promise<string | null> {
   try {
     // A card's coding session already carries the customer's own objective:
     // the card title. It stays the session title until a person clears it.
-    const cardSeat = await db.select({ id: loops.id }).from(loops)
-      .where(eq(loops.codingSessionId, sessionId)).limit(1);
-    if (cardSeat.length) {
-      if ((await sessions.get(sessionId))?.name !== null) return null;
+    if (await deps.loops.byCodingSession(sessionId)) {
+      if ((await deps.sessions.get(sessionId))?.name !== null) return null;
     }
 
-    const config = await titleConfig(db, encryptionKey);
+    const config = await titleConfig(deps.settings);
     if (!config) return null;
     config.fetch = modelFetch;
     if (!context.userMessages.trim()) return null;
@@ -143,13 +141,13 @@ export async function nameSession(
     for (let attempt = 1; attempt <= TRIES; attempt++) {
       try {
         const { text } = await helperCall({
-          db, config, kind: 'title', sessionId, system, prompt,
+          usage: deps.helperUsage, config, kind: 'title', sessionId, system, prompt,
         });
         const title = cleanTitle(text);
         if (title) {
           // A /rename that landed while this call was in flight wins: the
           // titler never writes over a manual name.
-          return (await sessions.setAutoTitle(sessionId, title)) ? title : null;
+          return (await deps.sessions.setAutoTitle(sessionId, title)) ? title : null;
         }
       } catch (e) {
         log.warn({ session: sessionId, attempt, err: errStr(e) }, 'session title attempt failed');

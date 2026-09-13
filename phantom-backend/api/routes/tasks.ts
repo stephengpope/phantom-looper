@@ -7,8 +7,6 @@
 // /containers/:id/top reports HOST pids (verified live) and is deliberately
 // not used — its numbers can never meet a `pkill` in the container.
 import type { FastifyInstance } from 'fastify';
-import { and, desc, eq } from 'drizzle-orm';
-import { commands } from '../../db/schema.js';
 import { Sandbox } from '../../workspace/sandbox.js';
 import { ok, err, type AppCtx } from '../app.js';
 import {
@@ -57,9 +55,7 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
       }
     }
 
-    const rows: CmdRow[] = await ctx.db.select().from(commands)
-      .where(eq(commands.sessionId, session.id))
-      .orderBy(desc(commands.startedAt)).limit(50);
+    const rows: CmdRow[] = await ctx.commands.listForSession(session.id, 50);
     const running = rows.filter((r) => r.status === 'running');
 
     const bySid = new Map(running.filter((r) => r.sid).map((r) => [r.sid as string, r]));
@@ -123,12 +119,8 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
     // Mark first: the detached stream's terminal write is conditioned on
     // status='running', so 'killed' set here is final even if the stream's
     // exit lands a moment later.
-    const marked = await ctx.db.update(commands)
-      .set({ status: 'killed', endedAt: new Date() })
-      .where(and(eq(commands.sessionId, session.id), eq(commands.sid, req.params.sid),
-        eq(commands.status, 'running')))
-      .returning({ id: commands.id });
+    const marked = await ctx.commands.markKilledBySid(session.id, req.params.sid);
     await killSid(ws, req.params.sid);
-    return ok({ sid: req.params.sid, cmd_id: marked[0]?.id ?? null });
+    return ok({ sid: req.params.sid, cmd_id: marked });
   });
 }

@@ -5,10 +5,16 @@
 //
 // Read at the point of use, never cached at boot: a settings change must take
 // effect without a restart or the config API lies.
+import { and, eq, inArray } from 'drizzle-orm';
 import type { Db } from './db/client.js';
-import type { WorkspaceRow, SessionRow } from './db/schema.js';
-import { readStore, putScoped, dropKey, GLOBAL, workspaceScope, sessionScope } from './store.js';
+import { settings, type WorkspaceRow, type SessionRow } from './db/schema.js';
+import { GLOBAL, workspaceScope, sessionScope } from './store.js';
+import { encrypt, decrypt } from './crypto.js';
 import { latestModel } from './models.js';
+import { logger } from './log.js';
+import type { SettingsEvents } from './api/settingsEvents.js';
+
+const log = logger('settings');
 
 // Plain settings are never encrypted, so resolving one asks for plain values
 // only (null key) — a credential is read by resolveCredential, which is handed
@@ -383,44 +389,6 @@ export class SettingsWriteError extends Error {
 
 export type SettingsWriteLayer = 'global' | 'workspace' | 'session';
 
-/** THE settings writer. Every route that changes a setting — global, workspace
- *  or session — goes through this one validation + store path, so a second
- *  door cannot accept a value the first refused. null clears; it is never
- *  stored. Returns the keys written, so the caller can fan out the change. */
-export async function writeSettings(
-  db: Db, encryptionKey: Buffer,
-  layer: SettingsWriteLayer, scope: string,
-  values: Record<string, unknown>,
-): Promise<string[]> {
-  const entries = Object.entries(values);
-  const bad = entries.filter(([k]) => !isSettingKey(k) && !isCredential(k)).map(([k]) => k);
-  if (bad.length) throw new SettingsWriteError('unknown_setting', `unknown settings: ${bad.join(', ')}`);
-  const invalid = validatePatch(entries.filter(([k]) => !isCredential(k)));
-  if (invalid.length) throw new SettingsWriteError('invalid_setting', invalid.join('; '));
-  for (const [k] of entries) {
-    if (layer === 'global') {
-      if (isSettingKey(k) && !isGlobalSettable(k)) {
-        throw new SettingsWriteError('not_overridable', `${k} is a fact about one workspace — set it there`);
-      }
-      continue;
-    }
-    const okHere = isCredential(k)
-      ? layer === 'workspace' && isCredentialWorkspaceScoped(k)
-      : layer === 'workspace' ? isWorkspaceOverridable(k as SettingKey)
-        : isSessionOverridable(k as SettingKey);
-    if (!okHere) throw new SettingsWriteError('not_overridable', `${k} cannot be set per ${layer}`);
-  }
-  for (const [k, value] of entries) {
-    if (value === null) { await dropKey(db, k, scope); continue; }
-    const secret = isCredential(k);
-    if (secret && typeof value !== 'string') {
-      throw new SettingsWriteError('invalid_args', `${k} must be a string to be stored as a secret`);
-    }
-    await putScoped(db, encryptionKey, scope, k, value, secret);
-  }
-  return entries.map(([k]) => k);
-}
-
 export type SettingKey = keyof typeof DEFAULTS;
 export type SettingValue = (typeof DEFAULTS)[SettingKey];
 
@@ -526,13 +494,28 @@ function layersFrom(byScope: Map<string, Map<string, { value: unknown }>>, ctx: 
   };
 }
 
-type ByScope = Awaited<ReturnType<typeof readStore>>;
+export type SettingEntry = SettingLayers & {
+  description: string; meta: SettingMeta; overridable: boolean;
+};
 
-/** computeLayers plus the one default that is not a constant: `model` unset
- *  resolves to the newest model the catalog lists for the resolved provider
- *  (models.ts), reported as the `default` layer so a client can say so. Every
- *  reader below goes through here, so GET /settings, resolveMany and the
- *  looper's cfg all see the same id. */
+type ByScope = Map<string, Map<string, Stored>>;
+
+/** One stored value, decrypted. `secret` says which column it came out of. */
+export interface Stored { value: unknown; secret: boolean }
+
+/** A secret as listed — name and description, NEVER the value. */
+export interface SecretMeta { name: string; description: string; scope: string }
+
+const GENERAL = 'general';
+const SECRET_NS = 'secret';
+
+const secretMeta = (r: { key: string; scope: string; value: unknown }): SecretMeta => ({
+  name: r.key, scope: r.scope,
+  description: String((r.value as { description?: unknown } | null)?.description ?? ''),
+});
+const sortSecrets = (s: SecretMeta[]) => s.sort((a, b) =>
+  (a.scope === b.scope ? a.name.localeCompare(b.name) : a.scope === GLOBAL ? -1 : a.scope.localeCompare(b.scope)));
+
 function computeLayersFor(key: SettingKey, byScope: ByScope, ctx: ResolveCtx): SettingLayers {
   const l = computeLayers(key, layersFrom(byScope, ctx, key));
   if (key !== 'model' || l.value != null) return l;
@@ -541,71 +524,235 @@ function computeLayersFor(key: SettingKey, byScope: ByScope, ctx: ResolveCtx): S
   return { ...l, default: d, value: d };
 }
 
-export async function resolveWithSource<K extends SettingKey>(
-  db: Db, key: K, ctx: ResolveCtx = {},
-): Promise<{ value: unknown; source: Source }> {
-  const byScope = await readStore(db, null, scopesFor(ctx));
-  const { value, source } = computeLayersFor(key, byScope, ctx);
-  return { value, source };
-}
+// ── The object ───────────────────────────────────────────────────────────────
+// ONE store for settings and secrets — a row is (scope, namespace, key).
+// `namespace` separates the declared settings world ('general' — every key
+// declared in code) from user-named secrets ('secret' — free names, token in
+// value_enc, description in plain value). This is the only file that touches
+// the table; every reader resolves through it, every writer writes through
+// it, and a write announces its scope on the settings feed.
 
-export async function resolve<K extends SettingKey>(
-  db: Db, key: K, ctx: ResolveCtx = {},
-): Promise<(typeof DEFAULTS)[K]> {
-  return (await resolveWithSource(db, key, ctx)).value as (typeof DEFAULTS)[K];
-}
+export class Settings {
+  constructor(
+    private readonly db: Db,
+    private readonly encryptionKey: Buffer,
+    /** The settings feed; absent in tests with no listeners. */
+    private readonly events?: SettingsEvents,
+  ) {}
 
-/** Several settings from ONE read. `resolve` per key was one query per key, and
- *  the hot paths ask for three to five at a time — a tool call, a pool tick, an
- *  auto-push tick. */
-export async function resolveMany<K extends SettingKey>(
-  db: Db, keys: readonly K[], ctx: ResolveCtx = {},
-): Promise<{ [P in K]: (typeof DEFAULTS)[P] }> {
-  const byScope = await readStore(db, null, scopesFor(ctx));
-  const out = {} as { [P in K]: (typeof DEFAULTS)[P] };
-  for (const k of keys) out[k] = computeLayersFor(k, byScope, ctx).value as (typeof DEFAULTS)[K] as never;
-  return out;
-}
+  // ── the table, privately ───────────────────────────────────────────────────
 
-/** A credential, resolved through the SAME chain: workspace -> global -> none.
- *  The GitHub credential chain used to be written out by hand in pool.ts; it is
- *  this call now. */
-export async function resolveCredential(
-  db: Db, key: Buffer, name: CredentialName, ctx: ResolveCtx = {},
-): Promise<string | undefined> {
-  const byScope = await readStore(db, key, scopesFor(ctx));
-  const l = layersFrom(byScope as never, ctx, name);
-  const v = l.session ?? l.workspace ?? l.global;
-  return typeof v === 'string' && v.length ? v : undefined;
-}
-
-/** Every setting's layers for one context, from ONE read. */
-export async function settingsLayers(
-  db: Db, ctx: ResolveCtx, alreadyRead?: ByScope,
-): Promise<Record<SettingKey, SettingLayers>> {
-  const byScope = alreadyRead ?? await readStore(db, null, scopesFor(ctx));
-  const out = {} as Record<SettingKey, SettingLayers>;
-  for (const key of Object.keys(DEFAULTS) as SettingKey[]) {
-    out[key] = computeLayersFor(key, byScope, ctx);
+  /** Every row at the scopes asked for, as scope -> key -> value. ONE query:
+   *  resolving 30 settings must not be 30 round trips.
+   *
+   *  `secrets` false means PLAIN VALUES ONLY — secret rows are skipped, not
+   *  decrypted. Resolving `spare_clones` has no business touching a credential,
+   *  and decrypting every stored secret on every ordinary read logged a
+   *  warning per row (found by running it). */
+  private async readStore(scopes: string[], secrets: boolean): Promise<ByScope> {
+    const out: ByScope = new Map();
+    for (const s of scopes) out.set(s, new Map());
+    const rows = await this.db.select().from(settings).where(and(
+      inArray(settings.scope, scopes), eq(settings.namespace, GENERAL)));
+    for (const r of rows) {
+      // A row that will not decrypt is KEPT and reported, never treated as
+      // unset — unset is what a caller deletes, and one bad row must not lose
+      // the rest.
+      let value: unknown;
+      if (r.secret) {
+        if (!secrets) continue;
+        try { value = decrypt(this.encryptionKey, Buffer.from(r.valueEnc as Buffer)); }
+        catch { log.warn({ scope: r.scope, key: r.key }, 'stored secret could not be decrypted — kept, not deleted'); continue; }
+      } else value = r.value;
+      out.get(r.scope)?.set(r.key, { value, secret: r.secret });
+    }
+    return out;
   }
-  return out;
-}
 
-/** A setting's layers PLUS what a client needs to render it. The one shape
- *  every route serving settings returns. */
-export type SettingEntry = SettingLayers & {
-  description: string; meta: SettingMeta; overridable: boolean;
-};
-
-/** Layers + description + meta + overridable, for every setting. */
-export async function settingsBlock(
-  db: Db, ctx: ResolveCtx,
-): Promise<Record<SettingKey, SettingEntry>> {
-  const layers = await settingsLayers(db, ctx);
-  const out = {} as Record<SettingKey, SettingEntry>;
-  for (const key of Object.keys(DEFAULTS) as SettingKey[]) {
-    out[key] = { ...layers[key], description: DESCRIPTIONS[key], meta: META[key],
-      overridable: isWorkspaceOverridable(key) };
+  /** Write one value at a scope. A secret goes in the encrypted column — and
+   *  a secret is always a string, because that is what a cipher takes. */
+  private async putScoped(scope: string, k: string, value: unknown, secret: boolean): Promise<void> {
+    const row = secret
+      ? { value: null, valueEnc: encrypt(this.encryptionKey, typeof value === 'string' ? value : JSON.stringify(value)), secret: true }
+      : { value: value as never, valueEnc: null, secret: false };
+    await this.db.insert(settings)
+      .values({ scope, namespace: GENERAL, key: k, ...row })
+      .onConflictDoUpdate({
+        target: [settings.scope, settings.namespace, settings.key],
+        set: { ...row, updatedAt: new Date() },
+      });
   }
-  return out;
+
+  private async dropKey(k: string, scope: string): Promise<void> {
+    await this.db.delete(settings).where(and(
+      eq(settings.scope, scope), eq(settings.namespace, GENERAL), eq(settings.key, k)));
+  }
+
+  // ── reads ──────────────────────────────────────────────────────────────────
+
+  async resolveWithSource<K extends SettingKey>(key: K, ctx: ResolveCtx = {}): Promise<{ value: unknown; source: Source }> {
+    const byScope = await this.readStore(scopesFor(ctx), false);
+    const { value, source } = computeLayersFor(key, byScope, ctx);
+    return { value, source };
+  }
+
+  async resolve<K extends SettingKey>(key: K, ctx: ResolveCtx = {}): Promise<(typeof DEFAULTS)[K]> {
+    return (await this.resolveWithSource(key, ctx)).value as (typeof DEFAULTS)[K];
+  }
+
+  async resolveMany<K extends SettingKey>(keys: readonly K[], ctx: ResolveCtx = {}): Promise<{ [P in K]: (typeof DEFAULTS)[P] }> {
+    const byScope = await this.readStore(scopesFor(ctx), false);
+    const out = {} as { [P in K]: (typeof DEFAULTS)[P] };
+    for (const k of keys) out[k] = computeLayersFor(k, byScope, ctx).value as (typeof DEFAULTS)[K] as never;
+    return out;
+  }
+
+  /** A credential, most specific layer first — the ONE path that decrypts a
+   *  declared secret. undefined = unset at every layer. */
+  async credential(name: CredentialName, ctx: ResolveCtx = {}): Promise<string | undefined> {
+    const byScope = await this.readStore(scopesFor(ctx), true);
+    const l = layersFrom(byScope, ctx, name);
+    const v = l.session ?? l.workspace ?? l.global;
+    return typeof v === 'string' && v.length ? v : undefined;
+  }
+
+  /** Every credential's stored value at the global and workspace layers,
+   *  decrypted — what the settings editor shows (flagged secret there). */
+  async credentialLayers(ctx: ResolveCtx): Promise<Record<CredentialName, { global: string | null; workspace: string | null }>> {
+    const byScope = await this.readStore(scopesFor(ctx), true);
+    const out = {} as Record<CredentialName, { global: string | null; workspace: string | null }>;
+    for (const name of CREDENTIAL_NAMES) {
+      const l = layersFrom(byScope, ctx, name);
+      out[name] = { global: typeof l.global === 'string' ? l.global : null,
+        workspace: typeof l.workspace === 'string' ? l.workspace : null };
+    }
+    return out;
+  }
+
+  /** Is a credential set at exactly this scope (not inherited)? The
+   *  workspace list's `hasCredential` flag. */
+  async hasAt(name: CredentialName, scope: string): Promise<boolean> {
+    const rows = await this.db.select({ key: settings.key }).from(settings).where(and(
+      eq(settings.scope, scope), eq(settings.namespace, GENERAL), eq(settings.key, name)));
+    return rows.length > 0;
+  }
+
+  /** Every setting with its layers for a context. */
+  async layers(ctx: ResolveCtx): Promise<Record<SettingKey, SettingLayers>> {
+    const byScope = await this.readStore(scopesFor(ctx), false);
+    const out = {} as Record<SettingKey, SettingLayers>;
+    for (const key of Object.keys(DEFAULTS) as SettingKey[]) out[key] = computeLayersFor(key, byScope, ctx);
+    return out;
+  }
+
+  /** The layers plus each key's description, meta and overridability — what
+   *  an editor renders from one call. */
+  async block(ctx: ResolveCtx): Promise<Record<SettingKey, SettingEntry>> {
+    const layers = await this.layers(ctx);
+    const out = {} as Record<SettingKey, SettingEntry>;
+    for (const key of Object.keys(DEFAULTS) as SettingKey[]) {
+      out[key] = { ...layers[key], description: DESCRIPTIONS[key], meta: META[key],
+        overridable: isWorkspaceOverridable(key) };
+    }
+    return out;
+  }
+
+  // ── writes ─────────────────────────────────────────────────────────────────
+
+  /** THE settings writer. Every route that changes a setting — global,
+   *  workspace or session — goes through this one validation + store path,
+   *  so a second door cannot accept a value the first refused. null clears;
+   *  it is never stored. Announces the scope when anything was written.
+   *  Returns the keys written. `by` is the writer's client id, so its own
+   *  window ignores the echo. */
+  async write(layer: SettingsWriteLayer, scope: string, values: Record<string, unknown>, by?: string): Promise<string[]> {
+    const entries = Object.entries(values);
+    const bad = entries.filter(([k]) => !isSettingKey(k) && !isCredential(k)).map(([k]) => k);
+    if (bad.length) throw new SettingsWriteError('unknown_setting', `unknown settings: ${bad.join(', ')}`);
+    const invalid = validatePatch(entries.filter(([k]) => !isCredential(k)));
+    if (invalid.length) throw new SettingsWriteError('invalid_setting', invalid.join('; '));
+    for (const [k] of entries) {
+      if (layer === 'global') {
+        if (isSettingKey(k) && !isGlobalSettable(k)) {
+          throw new SettingsWriteError('not_overridable', `${k} is a fact about one workspace — set it there`);
+        }
+        continue;
+      }
+      const okHere = isCredential(k)
+        ? layer === 'workspace' && isCredentialWorkspaceScoped(k)
+        : layer === 'workspace' ? isWorkspaceOverridable(k as SettingKey)
+          : isSessionOverridable(k as SettingKey);
+      if (!okHere) throw new SettingsWriteError('not_overridable', `${k} cannot be set per ${layer}`);
+    }
+    for (const [k, value] of entries) {
+      if (value === null) { await this.dropKey(k, scope); continue; }
+      const secret = isCredential(k);
+      if (secret && typeof value !== 'string') {
+        throw new SettingsWriteError('invalid_args', `${k} must be a string to be stored as a secret`);
+      }
+      await this.putScoped(scope, k, value, secret);
+    }
+    if (entries.length) this.events?.publish(scope, by);
+    return entries.map(([k]) => k);
+  }
+
+  /** A whole scope goes — a workspace or session that no longer exists. Both
+   *  namespaces: its overrides and its secrets. */
+  async dropScope(scope: string): Promise<void> {
+    await this.db.delete(settings).where(eq(settings.scope, scope));
+  }
+
+  // ── secrets — the `secret` namespace ───────────────────────────────────────
+  // One row per secret: token encrypted in value_enc, description in plain
+  // value. Listing reads the plain column only and never decrypts.
+
+  /** Every secret at the scopes asked for — names and descriptions, NEVER
+   *  values. Ordered global-first, then by name, so a merged list is stable. */
+  async listSecrets(scopes: string[] = [GLOBAL]): Promise<SecretMeta[]> {
+    const rows = await this.db.select().from(settings).where(and(
+      inArray(settings.scope, scopes), eq(settings.namespace, SECRET_NS)));
+    return sortSecrets(rows.map(secretMeta));
+  }
+
+  /** EVERY secret, every layer — the cli's list, which offers every workspace
+   *  as a save target and so must show every workspace's rows. */
+  async listAllSecrets(): Promise<SecretMeta[]> {
+    const rows = await this.db.select().from(settings).where(eq(settings.namespace, SECRET_NS));
+    return sortSecrets(rows.map(secretMeta));
+  }
+
+  /** One secret's value, most-specific-first over the scopes given (pass
+   *  [GLOBAL, workspaceScope(id)] — workspace wins). undefined = no such
+   *  secret, or it would not decrypt. */
+  async readSecretValue(name: string, scopes: string[] = [GLOBAL]): Promise<string | undefined> {
+    const rows = await this.db.select().from(settings).where(and(
+      inArray(settings.scope, scopes), eq(settings.namespace, SECRET_NS), eq(settings.key, name)));
+    const byScope = new Map(rows.map((r) => [r.scope, r]));
+    for (const s of [...scopes].reverse()) {
+      const r = byScope.get(s);
+      if (!r) continue;
+      try { return decrypt(this.encryptionKey, Buffer.from(r.valueEnc as Buffer)); }
+      catch { log.warn({ scope: s, name }, 'stored secret could not be decrypted — kept, not deleted'); return undefined; }
+    }
+    return undefined;
+  }
+
+  /** Create or overwrite one secret at ONE scope. */
+  async putSecret(scope: string, name: string, description: string, value: string): Promise<void> {
+    const row = { value: { description } as never, valueEnc: encrypt(this.encryptionKey, value), secret: true };
+    await this.db.insert(settings)
+      .values({ scope, namespace: SECRET_NS, key: name, ...row })
+      .onConflictDoUpdate({
+        target: [settings.scope, settings.namespace, settings.key],
+        set: { ...row, updatedAt: new Date() },
+      });
+  }
+
+  /** Delete one secret at ONE scope. Returns whether a row was there. */
+  async dropSecret(scope: string, name: string): Promise<boolean> {
+    const gone = await this.db.delete(settings).where(and(
+      eq(settings.scope, scope), eq(settings.namespace, SECRET_NS), eq(settings.key, name)))
+      .returning({ key: settings.key });
+    return gone.length > 0;
+  }
 }

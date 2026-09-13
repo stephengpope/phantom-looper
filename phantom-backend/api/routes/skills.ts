@@ -7,8 +7,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { eq } from 'drizzle-orm';
-import { workspaces, type SessionRow } from '../../db/schema.js';
+import type { SessionRow } from '../../db/schema.js';
 import { repoDir } from '../../pool/paths.js';
 import { Sandbox } from '../../workspace/sandbox.js';
 import { ToolError } from '../../tools/envelope.js';
@@ -18,7 +17,6 @@ import { SESSION_HEADER } from '../sessionHeader.js';
 import type { FsDeps } from './fs.js';
 import { SKILLS_DIR, mergeSkills, parseDescription, scanSkills } from '../../../core/skills/skills.js';
 import { systemSkills, systemSkillTree } from '../../systemSkills.js';
-import { resolve } from '../../settings.js';
 import {
   MAX_FILE_BYTES, lintSkillMd, validateFilePath, validateSkillMd, validateSkillName,
 } from '../../../core/skills/validate.js';
@@ -98,8 +96,8 @@ export function skillsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
 
   /** The session's workspace image — the system skill tier lives inside it. */
   const imageFor = async (session: SessionRow): Promise<string> => {
-    const rows = await ctx.db.select().from(workspaces).where(eq(workspaces.id, session.workspaceId));
-    return String(await resolve(ctx.db, 'container_image', { workspace: rows[0] }));
+    const workspace = await ctx.workspaces.get(session.workspaceId);
+    return String(await ctx.settings.resolve('container_image', { workspace }));
   };
 
   // List — live scan of the session's working tree, merged with the image's
@@ -183,10 +181,10 @@ export function skillsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
       const nameErr = validateSkillName(req.body.name);
       if (nameErr) throw new ToolError('invalid_args', nameErr);
 
-      const workspaceRows = await ctx.db.select().from(workspaces).where(eq(workspaces.id, session.workspaceId));
+      const workspace = await ctx.workspaces.get(session.workspaceId);
       let container;
       try {
-        container = await deps.containers.ensure(ctx.db, session, workspaceRows[0]);
+        container = await deps.containers.ensure(session, workspace);
       } catch (e) {
         throw new ToolError('container_start_failed', (e as Error).message, true);
       }

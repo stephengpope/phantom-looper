@@ -7,13 +7,12 @@
 // After reporting, each session is stamped so it's never reported twice for the
 // same activity. If it runs again and finishes again, it'll be reported again.
 
-import { eq } from 'drizzle-orm';
-import type { Db } from '../db/client.js';
-import { loops } from '../db/schema.js';
 import type { Sessions } from '../sessions.js';
+import type { Loops } from '../loops.js';
+import type { Settings } from '../settings.js';
+import type { HelperUsage } from '../helperUsage.js';
 import { helperCall } from '../helperCall.js';
 import { agentModelConfig } from '../../core/llm/agentConfig.js';
-import { resolve } from '../settings.js';
 import { lastAssistantFromJsonl } from './transcriptHelper.js';
 import type { NotificationChannel } from './channel.js';
 import { titled } from '../telegram/client.js';
@@ -26,9 +25,10 @@ const TITLE = (n: number) => `📋 ${n} turn${n === 1 ? '' : 's'} completed:`;
 const SYSTEM = `You summarize completed coding session turns as a bullet list. For each session you receive, write one line starting with • — the session name and a few words about what happened. Under 100 characters per line. No title, no extra text, just the bullets.`;
 
 export interface DigestDeps {
-  db: Db;
   sessions: Sessions;
-  encryptionKey: Buffer;
+  loops: Loops;
+  settings: Settings;
+  helperUsage: HelperUsage;
   channels: NotificationChannel[];
 }
 
@@ -59,7 +59,7 @@ export class SessionDigest {
 
   private async intervalMs(): Promise<number> {
     try {
-      const min = Number(await resolve(this.deps.db, 'session_digest_interval').catch(() => 5));
+      const min = Number(await this.deps.settings.resolve('session_digest_interval').catch(() => 5));
       if (!Number.isFinite(min) || min <= 0) return 0;
       return min * 60_000;
     } catch { return 0; }
@@ -73,7 +73,6 @@ export class SessionDigest {
   }
 
   private async run(): Promise<void> {
-    const { db } = this.deps;
     const interval = await this.intervalMs();
     if (!interval) return;
 
@@ -96,11 +95,8 @@ export class SessionDigest {
 
       // Check if this session has a card (via loops table).
       let cardStatus: string | undefined;
-      const loopRows = await db.select().from(loops)
-        .where(eq(loops.codingSessionId, s.id));
-      if (loopRows.length) {
-        cardStatus = `card #${loopRows[0].card}`;
-      }
+      const loop = await this.deps.loops.byCodingSession(s.id);
+      if (loop) cardStatus = `card #${loop.card}`;
 
       items.push({
         name: s.name ?? 'untitled',
@@ -123,17 +119,17 @@ export class SessionDigest {
       // Read the assistant model config from settings for the summary call.
       const values: Record<string, unknown> = {};
       for (const key of ['assistant_provider', 'assistant_model', 'assistant_base_url'] as const) {
-        values[key] = await resolve(db, key).catch(() => undefined);
+        values[key] = await this.deps.settings.resolve(key).catch(() => undefined);
       }
       // Fall back to the coding agent's model if no assistant model is set.
       for (const key of ['provider', 'model', 'base_url'] as const) {
-        values[key] = await resolve(db, key).catch(() => undefined);
+        values[key] = await this.deps.settings.resolve(key).catch(() => undefined);
       }
       const config = (() => { try { return agentModelConfig(values, 'assistant'); } catch { return undefined; } })();
       if (!config) { log.warn('no model configured — skipping digest'); return; }
 
       const { text } = await helperCall({
-        db, config, kind: 'session_digest',
+        usage: this.deps.helperUsage, config, kind: 'session_digest',
         system: SYSTEM,
         prompt: `Sessions that finished:\n\n${prompt}`,
       });

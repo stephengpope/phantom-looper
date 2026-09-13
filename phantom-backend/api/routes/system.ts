@@ -16,8 +16,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
 import type Docker from 'dockerode';
-import { gte, sql, count } from 'drizzle-orm';
-import { helperLlmUsage } from '../../db/schema.js';
 import type { AppCtx } from '../app.js';
 import { err, ok } from '../app.js';
 import { logger, errStr } from '../../log.js';
@@ -312,18 +310,7 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
     const sumTokens = (since: Date) => ctx.sessions.tokenUsageByModel(since);
 
     // Helper calls (titles, commit messages) — from the helper_llm_usage table.
-    const sumHelpers = (since: Date) => ctx.db
-      .select({
-        kind: helperLlmUsage.kind,
-        input: sql<number>`coalesce(sum(${helperLlmUsage.tokensInput}), 0)`.as('h_input'),
-        output: sql<number>`coalesce(sum(${helperLlmUsage.tokensOutput}), 0)`.as('h_output'),
-        cacheRead: sql<number>`coalesce(sum(${helperLlmUsage.tokensCacheRead}), 0)`.as('h_cache_read'),
-        cacheWrite: sql<number>`coalesce(sum(${helperLlmUsage.tokensCacheWrite}), 0)`.as('h_cache_write'),
-        calls: count().as('h_calls'),
-      })
-      .from(helperLlmUsage)
-      .where(gte(helperLlmUsage.createdAt, since))
-      .groupBy(helperLlmUsage.kind);
+    const sumHelpers = (since: Date) => ctx.helperUsage.totalsByKind(since);
 
     const [todayRows, weekRows, todayHelpers, weekHelpers] = await Promise.all([
       sumTokens(todayStart),
