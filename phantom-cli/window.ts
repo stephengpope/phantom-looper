@@ -580,29 +580,25 @@ export class WindowStore {
     };
   }
 
-  /** Flip a loaded session's plan mode: rebuild the kit (readonly preset on,
-   *  full set off) and the agent over it, then move mode and tools together.
-   *  /plan calls this after its PATCH lands; the feed calls it when the server
-   *  says another window flipped it. A turn already streaming keeps the agent
-   *  it started with. No-op while nothing changed; a supervisor record never
-   *  flips. */
+  /** Flip a loaded session's plan mode flag. The toolkit is always the full
+   *  set — the planMode callback each tool closes over reads this flag, so
+   *  flipping it is all that is needed for the gate to change. No kit rebuild,
+   *  no agent rebuild. /plan calls this after its PATCH lands; the feed calls
+   *  it when the server says another window flipped it. A turn already
+   *  streaming sees the flip immediately through the callback. No-op while
+   *  nothing changed; a supervisor record never flips. */
   applyPlanMode = async (id: string, on: boolean): Promise<void> => {
     const e = this.sessions.get(id);
     if (!e || e.readonly || e.planMode === on) return;
-    const tools = await this.codingKit(id, on, e.workspaceId);
-    // Plan mode changes the KIT, never the model: the row's pin, read now,
-    // keeps a flip from quietly moving a conversation onto /model's latest.
-    const pin = await this.readSessionPin(id);
-    const { agent, summary } = this.buildFor(
-      tools, pinnedCfg(await this.readSettings(), pin), e.instructions, id);
-    this.sessions.setPlanMode(id, on, tools, agent, summary);
+    this.sessions.setPlanMode(id, on);
   };
 
-  /** The coding agent's whole kit for one session: the file tools the caller
-   *  builds, plus the two the window owns. */
-  private async codingKit(sessionId: string, plan: boolean, workspaceId: string): Promise<Record<string, Tool>> {
+  /** The coding agent's whole kit for one session: always the full set.
+   *  Plan mode is a runtime gate (the planMode callback), not a structural
+   *  one, so the kit never changes between modes. */
+  private async codingKit(sessionId: string, workspaceId: string): Promise<Record<string, Tool>> {
     return {
-      ...await this.opts.newTools(sessionId, plan, workspaceId,
+      ...await this.opts.newTools(sessionId, false, workspaceId,
         () => this.sessions.get(sessionId)?.planMode === true),
       ...codingKanbanTool(this.codingKanbanHandler(workspaceId)),
       ...screenModeTools(this.screenOps(sessionId)),
@@ -967,7 +963,7 @@ export class WindowStore {
       // The row's plan_mode seeds the mode AND picks the kit — the two must
       // never disagree, so they read the same fact.
       const planMode = row.planMode === true;
-      const tools = await this.codingKit(row.id, planMode, row.workspaceId);
+      const tools = await this.codingKit(row.id, row.workspaceId);
       // Same freeze rule as launch: the transcript's stored prompt wins; a
       // session without one gets a fresh stack, with the skill and secret
       // indexes the create response froze.

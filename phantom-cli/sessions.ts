@@ -481,17 +481,14 @@ export class SessionStore {
     this.notify();
   }
 
-  /** /plan flipped: the mode and the toolset move together — the caller built
-   *  the new kit (readonly or full) and the agent over it. A turn already
-   *  streaming keeps the agent it started with (runTurn holds its own
-   *  reference), so the switch lands on the next turn — /model's rule. */
-  setPlanMode(id: string, on: boolean, tools: Record<string, Tool>, agent: Agent, summary: AgentSummary): void {
+  /** /plan flipped: the toolkit is always the full set — the planMode callback
+   *  each tool closes over reads this flag, so flipping it is all that is
+   *  needed. No kit rebuild, no agent rebuild. A turn already streaming sees
+   *  the flip immediately through the callback. */
+  setPlanMode(id: string, on: boolean): void {
     const e = this.get(id);
-    if (!e) return;
+    if (!e || e.planMode === on) return;
     e.planMode = on;
-    e.tools = tools;
-    e.agent = agent;
-    e.summary = summary;
     this.notify();
   }
 

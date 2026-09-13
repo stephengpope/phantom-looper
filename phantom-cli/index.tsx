@@ -301,10 +301,10 @@ const resumeId = flag('--resume', '-r');
 // `boot` prop; App's boot effect does the rest.
 
 // The coding kit factories: the seven file tools + the skill tools + web.
-// `plan` is /plan's switch: the readonly preset on the mutating kits — the
-// same rule the server's turn route applies for plan: true.
-const skillKit = (id: string, plan?: boolean, planMode?: () => boolean) =>
-  skillTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, sessionId: id, planMode, ...(plan ? { pick: 'readonly' as const } : {}) });
+// Plan mode is a runtime gate (the planMode callback), never a structural
+// one: the tools are always present so a mid-turn mode flip works both ways.
+const skillKit = (id: string, planMode?: () => boolean) =>
+  skillTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, sessionId: id, planMode });
 const webKit = (id: string) => webTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, sessionId: id });
 // Workspace-bound, not session-bound: the workspace's secrets shadow global
 // ones by name, and only App knows which workspace a session is in.
@@ -407,8 +407,8 @@ const app = render(
     autoPush={autoPushSession}
     autoPull={autoPullSession}
     boot={{ ...(resumeId ? { resumeId } : {}) }}
-    newTools={(id, plan, ws, planMode) => phantomTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, sessionId: id, planMode, ...(plan ? { pick: 'readonly' as const } : {}) })
-      .then((t) => ({ ...t, ...skillKit(id, plan, planMode), ...webKit(id), ...(ws ? secretKit(ws) : {}) }))}
+    newTools={(id, _plan, ws, planMode) => phantomTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, sessionId: id, planMode })
+      .then((t) => ({ ...t, ...skillKit(id, planMode), ...webKit(id), ...(ws ? secretKit(ws) : {}) }))}
     newAssistantTools={(id) => phantomTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, sessionId: id, pick: 'readonly' })
       .then((t) => ({ ...t, ...webKit(id) }))}
     onSession={(s) => { currentId = s.id; openedIds.add(s.id); }}
