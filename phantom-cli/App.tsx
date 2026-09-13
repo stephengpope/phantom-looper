@@ -420,6 +420,16 @@ export function App({
       if (ev.button === 0) return;
       const step = 3 * ev.button;   // +down scrolls toward the tail (offset shrinks)
       scrollBy(inVoice ? 'voice' : 'chat', -step);
+      // Scrolling during a drag-select: content shifts on screen so the
+      // anchor (the press point) now sits on different text. Adjust its y by
+      // the scroll step so the selection tracks the original content and the
+      // user can extend across multiple pages.
+      const sel = selection.current;
+      if (sel) {
+        sel.anchor.y += step;
+        sel.head = { x: ev.x, y: ev.y };
+        screen?.highlight(selectionRanges(sel));
+      }
       return;
     }
     if (ev.button !== 0) return;   // left button only

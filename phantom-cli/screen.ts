@@ -88,8 +88,20 @@ export function createScreen(real: NodeJS.WriteStream,
   };
 
   const paint = (): void => {
-    // Put back what was highlighted (plain text — Ink's next frame restores
-    // colours), then draw the current ranges in reverse video.
+    // When clearing the highlight with no new ranges to draw, skip the manual
+    // restore — writing plain text with \x1b[0m strips every SGR attribute
+    // (foreground colour, bold, dim …) and Ink never repaints those rows
+    // because nothing changed in React state. Instead, null out `painted` and
+    // ask Ink for a full repaint via the drift callback (one collapsed frame,
+    // same mechanism resize and the cursor audit already use).
+    if (!ranges && painted) {
+      painted = null;
+      screen.onDrift?.();
+      return;
+    }
+    // Active highlight: draw the current ranges in reverse video.  The
+    // previous ranges are overwritten by Ink's frame (the callback on line
+    // term.write below), so we only need to paint the new ones.
     let seq = '\x1b7';
     for (const r of painted ?? []) seq += `\x1b[${r.y + 1};${r.x0 + 1}H\x1b[0m${cellText(r.y, r.x0, r.x1)}`;
     for (const r of ranges ?? []) seq += `\x1b[${r.y + 1};${r.x0 + 1}H\x1b[0;7m${cellText(r.y, r.x0, r.x1)}\x1b[0m`;
