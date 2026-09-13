@@ -64,7 +64,7 @@ export async function settingsValues(deps: TurnDeps): Promise<Record<string, unk
 export async function runCodingTurn(
   deps: TurnDeps, opened: OpenedSession, workspaceId: string,
   message: string, planMode: boolean, cfg?: Record<string, unknown>,
-): Promise<{ text: string; tokens: number; interrupted?: boolean }> {
+): Promise<{ text: string; tokens: number; inputTokens: number; interrupted?: boolean }> {
   const values = cfg ?? await settingsValues(deps);
   const pick = planMode ? ('readonly' as const) : undefined;
   const common = { baseUrl: deps.base, apiKey: deps.apiKey, sessionId: opened.session.id, fetch: deps.f };
@@ -160,7 +160,7 @@ export async function runCodingTurn(
     restoreNotes();
     throw e;
   }
-  return { text, tokens: sumTokens(turnEvents), interrupted };
+  return { text, tokens: sumTokens(turnEvents), inputTokens: sumInputTokens(turnEvents), interrupted };
 }
 
 /** Read a turn's stream to the end, handing every part to `onPart`, and
@@ -195,6 +195,17 @@ export function sumTokens(events: { event: Record<string, unknown> }[]): number 
       const v = event[k];
       if (typeof v === 'number' && Number.isFinite(v)) n += v;
     }
+  }
+  return n;
+}
+
+/** Input tokens only — what shouldCompact compares against the context window. */
+export function sumInputTokens(events: { event: Record<string, unknown> }[]): number {
+  let n = 0;
+  for (const { event } of events) {
+    if (event.type !== 'usage') continue;
+    const v = event.input;
+    if (typeof v === 'number' && Number.isFinite(v)) n += v;
   }
   return n;
 }

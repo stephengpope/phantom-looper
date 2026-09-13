@@ -39,6 +39,7 @@ export const MENU: Record<TelegramMode, Cmd[]> = {
     { command: 'code', description: 'Talk to the coding agent' },
     { command: 'workspaces', description: 'List or switch workspaces' },
     { command: 'sessions', description: 'List or switch sessions' },
+    { command: 'compact', description: 'Summarize older messages to free space' },
     { command: 'stop', description: 'Stop a running session' },
     { command: 'status', description: 'Server, workspace and session overview' },
     { command: 'presets', description: 'List or apply model presets' },
@@ -345,6 +346,16 @@ export async function handleCommand(
       return;
     }
 
+    case 'compact': {
+      try {
+        const compacted = await engine.runCompaction();
+        if (!compacted) await reply('ℹ️ Nothing to compact — the conversation is short enough.');
+      } catch (e) {
+        await reply(`⚠️ Compaction failed: ${(e as Error).message}`);
+      }
+      return;
+    }
+
     case 'stop': {
       // /stop — stop the active session
       // /stop n — stop session n from the /sessions list
@@ -538,6 +549,9 @@ const HELP = [
   '/stop — Stop the active session',
   '/stop 2 — Stop session 2',
   '/stop all — Stop every running session',
+  '',
+  'Chat',
+  '/compact — Summarize older messages to free space',
   '',
   'Model',
   '/presets — List or apply model presets',

@@ -23,22 +23,20 @@ import { Transcript, adoptServerCopy, syncTranscriptUp, type TranscriptHeader } 
 import { parseTranscript, sumUsageFromJsonl } from '../core/llm/transcript.js';
 import { agentModelConfig, pinnedCfg, sessionPin, type ModelPin } from '../core/llm/agentConfig.js';
 import { contextWindowFor } from '../phantom-backend/models.js';
-import { compact, getStrategy } from '../core/llm/compaction.js';
+import { compact, getStrategy, CompactionLock, resolveCompactSetting, resolveContextWindow } from '../core/llm/compaction.js';
 
 /** Build the compaction settings from a config read for setCompaction. */
 function compactionSettings(cfg: Record<string, ConfigValue>) {
-  const pct = Number(cfg.assistant_compact_on_max_tokens ?? 50);
-  let cw = 0;
-  try {
-    const mc = agentModelConfig(cfg, 'assistant');
-    cw = contextWindowFor(mc.provider, mc.model);
-  } catch { /* no model configured — compaction stays off */ }
+  const pct = Number(resolveCompactSetting(cfg as Record<string, unknown>, 'assistant', 'threshold_pct', 0));
+  const cw = resolveContextWindow(
+    cfg as Record<string, unknown>, 'assistant', contextWindowFor, agentModelConfig) ?? 0;
+  const maxTokens = resolveCompactSetting<number | null>(cfg as Record<string, unknown>, 'assistant', 'max_tokens', null);
   return {
     pct,
     contextWindow: cw,
-    summarizePct: Number(cfg.compact_summarize_pct ?? 75),
-    strategy: String(cfg.assistant_compact_strategy ?? cfg.compact_strategy ?? 'fast'),
-    ...(cfg.compact_max_tokens != null ? { maxTokens: Number(cfg.compact_max_tokens) } : {}),
+    summarizePct: Number(resolveCompactSetting(cfg as Record<string, unknown>, 'assistant', 'summarize_pct', 75)),
+    strategy: String(resolveCompactSetting(cfg as Record<string, unknown>, 'assistant', 'strategy', 'fast')),
+    ...(maxTokens != null ? { maxTokens: Number(maxTokens) } : {}),
   };
 }
 import { openSession as coreOpenSession } from '../core/session.js';
@@ -1741,7 +1739,7 @@ export class WindowStore {
         built = make(await buildAssistantKit(this, this.assistantDeps), cfg);
       } catch (e) { this.note(`assistant not started: ${(e as Error).message}`); return; }
       this.voice.setAgent(built.agent, built.summary);
-      this.voice.setCompaction(agentModelConfig(cfg, 'assistant'), compactionSettings(cfg));
+      this.voice.setCompaction(agentModelConfig(cfg, 'supervisor'), compactionSettings(cfg));
       void this.voice.start(sidecarEnv(cfg));
     })();
   }
@@ -1755,7 +1753,7 @@ export class WindowStore {
       const cfg = current ?? await this.readSettings();
       const kit = await buildAssistantKit(this, this.assistantDeps);
       this.voice.setAgent(make(kit, cfg).agent);
-      this.voice.setCompaction(agentModelConfig(cfg, 'assistant'), compactionSettings(cfg));
+      this.voice.setCompaction(agentModelConfig(cfg, 'supervisor'), compactionSettings(cfg));
     } catch (e) { this.note(`assistant not rebuilt for this session: ${(e as Error).message}`); }
   }
 
@@ -1980,32 +1978,46 @@ export class WindowStore {
       case 'compact': {
         if (!session) { this.note('no session is open — nothing to compact'); return; }
         if (session.readonly) { this.note("this is the supervisor's record — read-only"); return; }
-        const strategyName = args || 'fast';
-        const cfg = await this.readSettings();
-        const summarizePct = Number(cfg.compact_summarize_pct ?? 75);
-        let model;
-        try { model = agentModelConfig(cfg, 'supervisor'); } catch {
-          try { model = agentModelConfig(cfg, 'assistant'); } catch {
-            this.note('no model configured for compaction'); return;
-          }
+        // The assistant has runCompaction(); coding sessions compact the same
+        // way through the shared compact() + supervisor model.
+        if (this.voice.running && this.voice.history === session.history) {
+          this.note('compacting assistant — summarizing older messages in the background');
+          void this.voice.runCompaction()
+            .then((ok) => { if (!ok) this.note('nothing to compact'); })
+            .catch((err) => { this.note(`compaction failed: ${(err as Error).message}`); });
+          return;
         }
+        const cfg = await this.readSettings();
+        const model = agentModelConfig(cfg, 'supervisor');
+        const strategyName = String(resolveCompactSetting(cfg as Record<string, unknown>, '', 'strategy', 'fast'));
+        const summarizePct = Number(resolveCompactSetting(cfg as Record<string, unknown>, '', 'summarize_pct', 75));
+        const maxTokens = resolveCompactSetting<number | null>(cfg as Record<string, unknown>, '', 'max_tokens', null);
+        if (!session.compactionLock) session.compactionLock = new CompactionLock();
         this.note('compacting — summarizing older messages in the background');
-        compact({
-          history: session.history,
-          strategy: getStrategy(strategyName),
-          summarizePct,
-          call: async (system, prompt) => {
-            const { generateText } = await import('ai');
-            const { languageModel } = await import('../core/llm/createAgent.js');
-            const r = await generateText({ model: languageModel(model), maxRetries: 0, system, prompt });
-            return r.text;
-          },
-          onCompacted: () => {
-            this.note('chat compacted — older messages summarized');
-            this.uploadTranscript(session);
-          },
-          onFailed: (err) => { this.note(`compaction failed: ${err.message}`); },
-        });
+        void (async () => {
+          try {
+            const result = await compact(session.compactionLock!, {
+              history: session.history,
+              strategy: getStrategy(strategyName),
+              summarizePct,
+              call: async (system, prompt) => {
+                const { generateText } = await import('ai');
+                const { languageModel } = await import('../core/llm/createAgent.js');
+                const r = await generateText({
+                  model: languageModel(model), maxRetries: 0, system, prompt,
+                  ...(maxTokens != null ? { maxTokens: Number(maxTokens) } : {}),
+                });
+                return r.text;
+              },
+            });
+            if (result) {
+              this.note('chat compacted — older messages summarized');
+              this.uploadTranscript(session);
+            } else {
+              this.note('nothing to compact');
+            }
+          } catch (err) { this.note(`compaction failed: ${(err as Error).message}`); }
+        })();
         return;
       }
       case 'auto-push':

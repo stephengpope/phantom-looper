@@ -39,7 +39,7 @@ import { runAssistantTurn, type AssistantDeps } from './assistant.js';
 import { agentModelConfig } from '../../core/llm/agentConfig.js';
 import { assistantInstructions } from '../../core/llm/agents/assistant.js';
 import { loadTranscriptFile, newestTranscriptFile, Transcript, transcriptStamp } from '../../core/llm/transcript.js';
-import { compact, shouldCompact, getStrategy, isSummaryMessage } from '../../core/llm/compaction.js';
+import { compact, shouldCompact, getStrategy, isSummaryMessage, CompactionLock, resolveContextWindow, resolveCompactSetting } from '../../core/llm/compaction.js';
 import { contextWindowFor } from '../models.js';
 import { Approvals, type Ask } from './approvals.js';
 import { UpgradeChecker } from './upgrade.js';
@@ -120,8 +120,8 @@ export class TelegramEngine {
    *  source and where the compaction notice goes. */
   private assistantValues: Record<string, unknown> = {};
   private assistantChat: { client: TelegramClient; dm: number } | null = null;
-  /** Whether a background compaction is in flight — only one at a time. */
-  private compacting = false;
+  /** Lock: at most one compaction at a time on the assistant history. */
+  private compactionLock = new CompactionLock();
 
   /** The Assistant's transcript directory: one live file (the newest), older
    *  ones the archive compaction left behind. Under the data root, outside
@@ -174,60 +174,62 @@ export class TelegramEngine {
   }
 
   /** Kick compaction if the last turn's input tokens crossed the threshold.
-   *  Runs in the background — the next turn proceeds against the old history
-   *  while the summary is being generated. */
+   *  Fire-and-forget — the next turn proceeds on the current history while
+   *  the summary is being generated in the background. */
   private kickCompaction(inputTokens: number): void {
-    if (this.compacting) return;
+    if (this.compactionLock.active) return;
     const values = this.assistantValues;
-    const pct = Number(values.assistant_compact_on_max_tokens ?? 50);
+    const pct = Number(resolveCompactSetting(values, 'assistant', 'threshold_pct', 0));
     if (pct <= 0) return;
 
-    // Look up the model's context window from the catalog.
-    let contextWindow = 0;
-    try {
-      const mc = agentModelConfig(values, 'assistant');
-      contextWindow = contextWindowFor(mc.provider, mc.model);
-    } catch { return; }
-
+    const contextWindow = resolveContextWindow(
+      values, 'assistant', contextWindowFor, agentModelConfig,
+      (msg) => log.warn(msg));
+    if (!contextWindow) return;
     if (!shouldCompact(inputTokens, contextWindow, pct)) return;
 
-    const strategyName = String(values.assistant_compact_strategy ?? values.compact_strategy ?? 'fast');
-    const summarizePct = Number(values.compact_summarize_pct ?? 75);
-    const maxTokens = values.compact_max_tokens != null ? Number(values.compact_max_tokens) : undefined;
+    void this.runCompaction().catch((err) => {
+      log.warn({ err: (err as Error).message }, 'assistant compaction failed — will retry after a later turn');
+      const chat = this.assistantChat;
+      if (chat) void chat.client.sendMessage(chat.dm, `⚠️ Auto-compaction failed: ${(err as Error).message}`).catch(() => {});
+    });
+  }
 
-    let model;
-    try { model = agentModelConfig(values, 'supervisor'); } catch {
-      try { model = agentModelConfig(values, 'assistant'); } catch { return; }
-    }
+  /** Run compaction on the assistant history. Used by both auto-trigger
+   *  (kickCompaction) and the manual /compact command. */
+  async runCompaction(): Promise<boolean> {
+    const values = this.assistantValues;
+    const strategyName = String(resolveCompactSetting(values, 'assistant', 'strategy', 'fast'));
+    const summarizePct = Number(resolveCompactSetting(values, 'assistant', 'summarize_pct', 75));
+    const maxTokens = resolveCompactSetting<number | null>(values, 'assistant', 'max_tokens', null);
+    const maxTokensOpt = maxTokens != null ? Number(maxTokens) : undefined;
 
-    this.compacting = true;
-    compact({
+    const model = agentModelConfig(values, 'supervisor');
+
+    const result = await compact(this.compactionLock, {
       history: this.assistantHistory,
       strategy: getStrategy(strategyName),
       summarizePct,
       call: async (system, prompt) => {
         const r = await helperCall({
           usage: this.deps.helperUsage, config: model, kind: 'compaction',
-          system, prompt, ...(maxTokens ? { maxTokens } : {}),
+          system, prompt, ...(maxTokensOpt ? { maxTokens: maxTokensOpt } : {}),
         });
         return r.text;
       },
-      onCompacted: ({ summary }) => {
-        this.compacting = false;
-        // Rewrite the transcript in place with the compacted history.
-        if (this.assistantTranscript) {
-          this.assistantTranscript = null;
-          this.transcript().appendAll([...this.assistantHistory]);
-        }
-        const chat = this.assistantChat;
-        if (chat) void chat.client.sendMessage(chat.dm, '🧠 Chat compacted — older messages are summarized.').catch(() => {});
-        log.info({ summaryLen: summary.length, historyLen: this.assistantHistory.length }, 'assistant compacted');
-      },
-      onFailed: (err) => {
-        this.compacting = false;
-        log.warn({ err: err.message }, 'assistant compaction failed — will retry after a later turn');
-      },
     });
+
+    if (!result) return false;
+
+    // Rewrite the transcript with the compacted history.
+    if (this.assistantTranscript) {
+      this.assistantTranscript = null;
+      this.transcript().appendAll([...this.assistantHistory]);
+    }
+    const chat = this.assistantChat;
+    if (chat) void chat.client.sendMessage(chat.dm, '🧠 Chat compacted — older messages are summarized.').catch(() => {});
+    log.info({ summaryLen: result.summary.length, historyLen: this.assistantHistory.length }, 'assistant compacted');
+    return true;
   }
   /** The approval gate — gated tools ask the user here (approvals.ts). */
   private approvals = new Approvals();

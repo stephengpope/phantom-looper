@@ -185,11 +185,13 @@ export interface CompactionOpts {
   /** The LLM call. Abstracted so compaction has no dependency on helperCall,
    *  the database, or any server concept. The caller wires it. */
   call: (system: string, prompt: string) => Promise<string>;
-  /** Called after the summary is spliced in. The caller rewrites the
-   *  transcript, updates the session, etc. */
-  onCompacted?: (opts: { summary: string; removed: number; removedMessages: ModelMessage[] }) => void;
-  /** Called when the summary call fails — the history is untouched. */
-  onFailed?: (err: Error) => void;
+}
+
+/** The result of a successful compaction. */
+export interface CompactionResult {
+  summary: string;
+  removed: number;
+  removedMessages: ModelMessage[];
 }
 
 /**
@@ -206,57 +208,73 @@ function userAssistantIndices(history: ModelMessage[], startFrom: number): numbe
 }
 
 /**
- * Run compaction. Returns true if it kicked (async, background).
- * Returns false if there's nothing to compact.
+ * A lock over one history array. Guarantees at most one compaction at a time;
+ * released on every exit path (success, failure, nothing to compact).
+ * Callers acquire through `compact()` and never touch the flag themselves.
  */
-export function compact(opts: CompactionOpts): boolean {
-  const { history, strategy, summarizePct } = opts;
-  if (history.length === 0) return false;
+export class CompactionLock {
+  private held = false;
 
-  // Position 0 might be a prior summary — extract it, don't include in the
-  // conversation being serialized.
+  /** True when a compaction is in flight. */
+  get active(): boolean { return this.held; }
+
+  acquire(): boolean {
+    if (this.held) return false;
+    this.held = true;
+    return true;
+  }
+
+  release(): void { this.held = false; }
+}
+
+/**
+ * Prepare compaction — validate there is enough to compact and build the
+ * summary prompt. Returns null when there is nothing to compact.
+ * Pure: no mutation, no async.
+ */
+function prepareCompaction(history: ModelMessage[], strategy: CompactionStrategy, summarizePct: number) {
+  if (history.length === 0) return null;
+
   const hasPrior = isSummaryMessage(history[0]);
   const priorSummary = hasPrior ? summaryText(history[0]) ?? undefined : undefined;
   const startFrom = hasPrior ? 1 : 0;
 
-  // Count user+assistant messages after the summary (if any).
   const uaIndices = userAssistantIndices(history, startFrom);
-  if (uaIndices.length < 2) return false; // nothing meaningful to compact
+  if (uaIndices.length < 2) return null;
 
-  // Take the first summarizePct% of user+assistant messages.
   const takeCount = Math.max(1, Math.floor(uaIndices.length * summarizePct / 100));
   const lastUAIndex = uaIndices[takeCount - 1];
-
-  // The removal range: everything from 0 to lastUAIndex (inclusive).
-  // This includes the prior summary (if any), all user/assistant/tool
-  // messages in between.
   const removeEnd = lastUAIndex + 1;
   const removedMessages = history.slice(0, removeEnd);
-
-  // The messages the strategy receives: the removal range (full, including
-  // tool messages). The strategy decides what to extract.
   const toSummarize = hasPrior ? removedMessages.slice(1) : removedMessages;
-
-  if (toSummarize.length === 0) return false;
+  if (toSummarize.length === 0) return null;
 
   const { system, prompt } = strategy.build(toSummarize, priorSummary);
+  return { system, prompt, removeEnd, removedMessages };
+}
 
-  // Fire and forget — the caller's onCompacted handles persistence.
-  void (async () => {
-    try {
-      const text = await opts.call(system, prompt);
-      const trimmed = text.trim();
-      if (!trimmed) throw new Error('the model returned an empty summary');
+/**
+ * Run compaction. Acquires the lock, summarizes, splices history, releases
+ * the lock. Returns the result on success, null when there was nothing to
+ * compact. Throws on LLM failure — the caller decides how to surface it.
+ * The lock is released on EVERY exit path.
+ */
+export async function compact(lock: CompactionLock, opts: CompactionOpts): Promise<CompactionResult | null> {
+  if (!lock.acquire()) return null;        // another compaction in flight
+  try {
+    const prep = prepareCompaction(opts.history, opts.strategy, opts.summarizePct);
+    if (!prep) return null;                // nothing to compact
 
-      const msg = summaryMessage(trimmed, strategy.name);
-      history.splice(0, removeEnd, msg);
-      opts.onCompacted?.({ summary: trimmed, removed: removeEnd, removedMessages });
-    } catch (e) {
-      opts.onFailed?.(e as Error);
-    }
-  })();
+    const text = await opts.call(prep.system, prep.prompt);
+    const trimmed = text.trim();
+    if (!trimmed) throw new Error('the model returned an empty summary');
 
-  return true;
+    const msg = summaryMessage(trimmed, opts.strategy.name);
+    opts.history.splice(0, prep.removeEnd, msg);
+    return { summary: trimmed, removed: prep.removeEnd, removedMessages: prep.removedMessages };
+  } finally {
+    lock.release();
+  }
 }
 
 /**
@@ -269,4 +287,46 @@ export function shouldCompact(lastInputTokens: number, contextWindow: number, pc
   if (!Number.isFinite(lastInputTokens) || lastInputTokens <= 0) return false;
   const threshold = Math.floor(contextWindow * pct / 100);
   return lastInputTokens >= threshold;
+}
+
+// ---------------------------------------------------------------------------
+// Context window resolution
+// ---------------------------------------------------------------------------
+
+/** Resolve the context window for an agent. The chain:
+ *  1. The model catalog (contextWindowFor)
+ *  2. `<prefix>_context_window` setting (per-agent override)
+ *  3. `context_window` setting (general fallback)
+ *  4. null — unknown, auto-compaction cannot fire.
+ *  Never returns 0; never silent. */
+export function resolveContextWindow(
+  cfg: Record<string, unknown>,
+  prefix: string,
+  catalogLookup: (provider: string, model: string) => number,
+  modelLookup: (cfg: Record<string, unknown>, prefix: string) => { provider: string; model: string },
+  log?: (msg: string) => void,
+): number | null {
+  try {
+    const mc = modelLookup(cfg, prefix);
+    const cw = catalogLookup(mc.provider, mc.model);
+    if (cw > 0) return cw;
+    log?.(`compaction: model ${mc.provider}/${mc.model} has no context window in the catalog`);
+  } catch (e) {
+    log?.(`compaction: can't resolve ${prefix} model: ${(e as Error).message}`);
+  }
+  // Per-agent override, then general fallback.
+  for (const key of [`${prefix}_context_window`, 'context_window']) {
+    const v = cfg[key];
+    if (v != null && Number(v) > 0) return Number(v);
+  }
+  return null;
+}
+
+/** Resolve a cascaded compaction setting: `<prefix>_<name>` → `<name>`. */
+export function resolveCompactSetting<T>(cfg: Record<string, unknown>, prefix: string, name: string, fallback: T): T {
+  const v = cfg[`${prefix}_compact_${name}`];
+  if (v != null) return v as T;
+  const g = cfg[`compact_${name}`];
+  if (g != null) return g as T;
+  return fallback;
 }

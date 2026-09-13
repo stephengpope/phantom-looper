@@ -46,7 +46,10 @@ import { webTools } from '../../core/llm/tools/web.js';
 import {
   kanbanReadTool, loopSupervisorTools, loopBlockTool, type LoopColumn, type LoopCardConfig,
 } from '../../core/llm/tools/kanban.js';
-import { runCodingTurn, drain, settingsValues, sumTokens } from './turn.js';
+import { runCodingTurn, drain, settingsValues, sumTokens, sumInputTokens } from './turn.js';
+import { shouldCompact, resolveContextWindow, resolveCompactSetting, CompactionLock, compact, getStrategy } from '../../core/llm/compaction.js';
+import { contextWindowFor } from '../models.js';
+import { helperCall } from '../helperCall.js';
 import { supervisorAgent, supervisorInstructions } from '../../core/llm/agents/supervisor.js';
 import { canTurn, unsentKickoff, nextStep, needsFreshSession, heldBy, LOOP_COLUMNS, type CardRow } from './logic.js';
 import { injectFetch } from './injectFetch.js';
@@ -334,6 +337,7 @@ export class LooperEngine {
       if (opener) {
         const t = await runCodingTurn(coderDeps, opened, workspace.id, opener.text, opener.planMode, cfg);
         budget.spent += t.tokens;
+        if (!t.interrupted) this.kickCodingCompaction(opened.session.id, t.inputTokens, opened.messages, cfg);
         return t.interrupted ? 'interrupted' : 'turn';
       }
 
@@ -421,6 +425,7 @@ export class LooperEngine {
         step.text, card.status === 'plan', cfg);
       budget.spent += t.tokens;
       if (t.interrupted) return 'interrupted';
+      this.kickCodingCompaction(opened.session.id, t.inputTokens, opened.messages, cfg);
       if (step.kind === 'return' && (card.blocked_reason || card.resolution)) {
         await this.patchCard(workspace.id, card.id, { blocked_reason: null, resolution: null });
       }
@@ -438,6 +443,48 @@ export class LooperEngine {
   /** One session's spend so far, the budget's coin: input + output tokens
    *  from the token API (summed from the transcript's usage lines, cached by
    *  stamp server-side). */
+  /** Per-session compaction locks — one compaction at a time per session. */
+  private compactionLocks = new Map<string, CompactionLock>();
+
+  /** Fire-and-forget compaction check after a coding turn. Uses the general
+   *  (coding agent) compaction settings; the supervisor model runs the LLM call. */
+  private kickCodingCompaction(
+    sessionId: string, inputTokens: number, history: ModelMessage[],
+    cfg: Record<string, unknown>,
+  ): void {
+    const pct = Number(resolveCompactSetting(cfg, '', 'threshold_pct', 0));
+    if (pct <= 0) return;
+    const cw = resolveContextWindow(cfg, '', contextWindowFor, agentModelConfig,
+      (msg) => log.warn(msg));
+    if (!cw || !shouldCompact(inputTokens, cw, pct)) return;
+
+    let lock = this.compactionLocks.get(sessionId);
+    if (!lock) { lock = new CompactionLock(); this.compactionLocks.set(sessionId, lock); }
+    if (lock.active) return;
+
+    const model = agentModelConfig(cfg, 'supervisor');
+    const strategyName = String(resolveCompactSetting(cfg, '', 'strategy', 'fast'));
+    const summarizePct = Number(resolveCompactSetting(cfg, '', 'summarize_pct', 75));
+    const maxTokens = resolveCompactSetting<number | null>(cfg, '', 'max_tokens', null);
+
+    void compact(lock, {
+      history,
+      strategy: getStrategy(strategyName),
+      summarizePct,
+      call: async (system, prompt) => {
+        const r = await helperCall({
+          db: this.deps.db, config: model, kind: 'compaction',
+          system, prompt, ...(maxTokens != null ? { maxTokens: Number(maxTokens) } : {}),
+        });
+        return r.text;
+      },
+    }).then((result) => {
+      if (result) log.info({ session: sessionId, removed: result.removed }, 'coding session compacted');
+    }).catch((err) => {
+      log.warn({ session: sessionId, err: (err as Error).message }, 'coding session compaction failed');
+    });
+  }
+
   private async tokensOf(sessionId: string): Promise<number> {
     const r = await this.f(`${BASE}/sessions/${sessionId}/token-usage`, {
       headers: { authorization: `Bearer ${this.deps.apiKey}` } });

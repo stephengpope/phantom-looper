@@ -69,15 +69,24 @@ export const DEFAULTS = {
   assistant_reasoning: null as string | null,
   assistant_max_steps: null as number | null,
   // Compaction: auto-summarize when the session approaches the model's
-  // context window. Per-agent `<prefix>_compact_on_max_tokens` (% of model
-  // context window, 0 = off) and `<prefix>_compact_strategy`. Global
-  // settings control the summarization itself.
-  compact_on_max_tokens: 0 as number,           // coding agent: off by default
-  compact_strategy: 'fast' as string,           // coding agent strategy
-  compact_summarize_pct: 75 as number,          // % of user+assistant messages to summarize
-  compact_max_tokens: null as number | null,     // output cap for the summary; null = model decides
-  assistant_compact_on_max_tokens: 50 as number, // assistant: 50% of context window
+  // context window. Every setting cascades: general → `assistant_` → `supervisor_`.
+  context_window: null as number | null,              // fallback when the catalog doesn't know the model
+  compact_threshold_pct: 0 as number,                 // % of context window that triggers compaction; 0 = off
+  compact_strategy: 'fast' as string,
+  compact_summarize_pct: 75 as number,                // % of user+assistant messages to summarize
+  compact_max_tokens: null as number | null,          // output cap for the summary; null = model decides
+  // Assistant overrides.
+  assistant_context_window: null as number | null,
+  assistant_compact_threshold_pct: 50 as number,      // on by default for the assistant
   assistant_compact_strategy: 'fast' as string,
+  assistant_compact_summarize_pct: null as number | null,
+  assistant_compact_max_tokens: null as number | null,
+  // Supervisor overrides.
+  supervisor_context_window: null as number | null,
+  supervisor_compact_threshold_pct: null as number | null,
+  supervisor_compact_strategy: null as string | null,
+  supervisor_compact_summarize_pct: null as number | null,
+  supervisor_compact_max_tokens: null as number | null,
   // The Assistant's pane — rendered by the cli, stored here so every cli you
   // open is the same one.
   voice_enabled: false as boolean,
@@ -194,12 +203,21 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   assistant_base_url: 'Endpoint when the Assistant\'s provider is openai-compatible. Empty inherits the coding agent\'s only while the provider matches.',
   assistant_reasoning: 'How much the Assistant thinks before answering. Empty = the coding agent\'s reasoning level.',
   assistant_max_steps: 'Tool calls allowed per turn for the Assistant. Empty = unlimited.',
-  compact_on_max_tokens: 'Percentage of the model\'s context window that triggers auto-compaction for the coding agent. 0 = off. Checked after every turn using the last turn\'s input token count.',
-  compact_strategy: 'The compaction strategy for the coding agent. fast = user/assistant text only.',
+  context_window: 'Context window size in tokens — fallback for when the model catalog doesn\'t know your model. Empty = use the catalog (the normal path).',
+  compact_threshold_pct: 'Percentage of the model\'s context window that triggers auto-compaction. 0 = off. Checked after every turn.',
+  compact_strategy: 'The compaction strategy. fast = user/assistant text only.',
   compact_summarize_pct: 'Percentage of user+assistant messages to summarize when compaction fires. The rest stay as-is.',
   compact_max_tokens: 'Output token cap for the compaction summary. Empty = the model decides how long the summary is.',
-  assistant_compact_on_max_tokens: 'Percentage of the model\'s context window that triggers auto-compaction for the Assistant. 0 = off. Default 50%.',
-  assistant_compact_strategy: 'The compaction strategy for the Assistant. fast = user/assistant text only.',
+  assistant_context_window: 'Context window override for the Assistant. Empty = the general context_window.',
+  assistant_compact_threshold_pct: 'Auto-compaction threshold for the Assistant. 0 = off. Default 50%.',
+  assistant_compact_strategy: 'Compaction strategy for the Assistant. Empty = the general compact_strategy.',
+  assistant_compact_summarize_pct: 'Summarize % for the Assistant. Empty = the general compact_summarize_pct.',
+  assistant_compact_max_tokens: 'Summary output cap for the Assistant. Empty = the general compact_max_tokens.',
+  supervisor_context_window: 'Context window override for the Supervisor. Empty = the general context_window.',
+  supervisor_compact_threshold_pct: 'Auto-compaction threshold for the Supervisor. Empty = the general compact_threshold_pct.',
+  supervisor_compact_strategy: 'Compaction strategy for the Supervisor. Empty = the general compact_strategy.',
+  supervisor_compact_summarize_pct: 'Summarize % for the Supervisor. Empty = the general compact_summarize_pct.',
+  supervisor_compact_max_tokens: 'Summary output cap for the Supervisor. Empty = the general compact_max_tokens.',
   voice_enabled: 'Start the Assistant with the cli. It listens on the mic, answers out loud and in the voice pane (ctrl+g), and can act on the cli through its tools.',
   sidebar_width: 'Width of the voice pane as a percent of the terminal.',
   voice_spoken_voice: 'Deepgram Aura voice the Assistant speaks with, e.g. aura-2-thalia-en, aura-2-orion-en.',
@@ -299,12 +317,21 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
   assistant_reasoning: { type: 'string', label: 'assistant reasoning', group: 'voice', nullable: true,
     choices: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
   assistant_max_steps: { type: 'number', label: 'assistant steps per turn', group: 'voice', unit: 'count', min: 1, nullable: true },
-  compact_on_max_tokens: { type: 'number', label: 'auto-compact threshold %', group: 'model', unit: 'count', min: 0, max: 100 },
+  context_window: { type: 'number', label: 'context window', group: 'model', unit: 'count', min: 1, nullable: true },
+  compact_threshold_pct: { type: 'number', label: 'auto-compact threshold %', group: 'model', unit: 'count', min: 0, max: 100 },
   compact_strategy: { type: 'string', label: 'compact strategy', group: 'model', choices: ['fast'] },
   compact_summarize_pct: { type: 'number', label: 'compact summarize %', group: 'model', unit: 'count', min: 1, max: 100 },
   compact_max_tokens: { type: 'number', label: 'compact output cap', group: 'model', unit: 'count', min: 1, nullable: true },
-  assistant_compact_on_max_tokens: { type: 'number', label: 'assistant auto-compact threshold %', group: 'voice', unit: 'count', min: 0, max: 100 },
+  assistant_context_window: { type: 'number', label: 'assistant context window', group: 'voice', unit: 'count', min: 1, nullable: true },
+  assistant_compact_threshold_pct: { type: 'number', label: 'assistant auto-compact threshold %', group: 'voice', unit: 'count', min: 0, max: 100 },
   assistant_compact_strategy: { type: 'string', label: 'assistant compact strategy', group: 'voice', choices: ['fast'] },
+  assistant_compact_summarize_pct: { type: 'number', label: 'assistant compact summarize %', group: 'voice', unit: 'count', min: 1, max: 100, nullable: true },
+  assistant_compact_max_tokens: { type: 'number', label: 'assistant compact output cap', group: 'voice', unit: 'count', min: 1, nullable: true },
+  supervisor_context_window: { type: 'number', label: 'supervisor context window', group: 'board', unit: 'count', min: 1, nullable: true },
+  supervisor_compact_threshold_pct: { type: 'number', label: 'supervisor auto-compact threshold %', group: 'board', unit: 'count', min: 0, max: 100, nullable: true },
+  supervisor_compact_strategy: { type: 'string', label: 'supervisor compact strategy', group: 'board', choices: ['fast'], nullable: true },
+  supervisor_compact_summarize_pct: { type: 'number', label: 'supervisor compact summarize %', group: 'board', unit: 'count', min: 1, max: 100, nullable: true },
+  supervisor_compact_max_tokens: { type: 'number', label: 'supervisor compact output cap', group: 'board', unit: 'count', min: 1, nullable: true },
   voice_enabled: { type: 'boolean', label: 'assistant', group: 'voice' },
   sidebar_width: { type: 'number', label: 'voice pane width', group: 'voice', unit: 'count', min: 10 },
   voice_spoken_voice: { type: 'string', label: 'spoken voice', group: 'voice' },

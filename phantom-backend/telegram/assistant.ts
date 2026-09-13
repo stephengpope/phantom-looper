@@ -290,24 +290,21 @@ export async function runAssistantTurn(
   // Accumulate usage across all steps in this turn.
   const usage = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
 
-  // The user message joins the history now; the turn's produced messages
-  // (assistant + tool) append after it. Cache marks are createAgent's and ride
-  // COPIES — the stored history stays clean, the same rule the coding turn
-  // follows.
+  // The user message is NOT added to history until the turn succeeds — a
+  // failed turn (prompt too long, auth error, anything) never touches the
+  // stored conversation. The model sees it in the messages copy below.
   const user: ModelMessage = { role: 'user', content: message };
-  history.push(user);
-  transcript?.append(user);
   let text = '';
-  let success = false;
   try {
-    // A COPY: compaction may swap the stored history mid-turn (its splice
-    // keeps appends intact), and the turn in flight must finish on the
+    // A COPY with the user message appended: compaction may splice the
+    // stored history mid-turn, and the turn in flight must finish on the
     // conversation it started with — also the warm cached prefix.
     // The `record` seam writes each step's messages AND its usage line to the
     // transcript — the same per-step recording the voice assistant and coding
     // sessions use. No step is lost, no usage is missed.
+    const messages = [...history, user];
     const r = await agent.stream({
-      messages: [...history], abortSignal,
+      messages, abortSignal,
       record: transcript ? {
         appendStep: (msgs, u) => {
           transcript.appendStep(msgs, u);
@@ -333,15 +330,11 @@ export async function runAssistantTurn(
       throw failure instanceof Error ? failure : new Error(String(failure));
     }
     const resp = await r.response;
-    history.push(...(resp.messages as ModelMessage[]));
-    success = true;
+    // Success: commit the user message and the turn's response to history.
+    history.push(user, ...(resp.messages as ModelMessage[]));
+    transcript?.append(user);
   } catch (e) {
-    // Remove the user message so the history stays usable — a "prompt too
-    // long" rejection must not permanently poison the session.
-    if (!success) {
-      const idx = history.lastIndexOf(user);
-      if (idx >= 0) history.splice(idx, 1);
-    }
+    // History is untouched — the user message was never added.
     await sink.dispose();
     throw e;
   }

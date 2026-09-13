@@ -31,7 +31,7 @@ import { CONFIG_DIR, type ConfigValue } from './config.js';
 import { applyPart, finalize, nextId, type Part, type StreamPart } from './state.js';
 import { FLUSH_MS, runTurn, type Agent } from './agent.js';
 import { loadTranscriptFile, newestTranscriptFile, Transcript, transcriptStamp, usageEvent } from '../core/llm/transcript.js';
-import { compact, shouldCompact, getStrategy, isSummaryMessage } from '../core/llm/compaction.js';
+import { compact, shouldCompact, getStrategy, isSummaryMessage, CompactionLock, resolveContextWindow } from '../core/llm/compaction.js';
 import { assistantInstructions } from '../core/llm/agents/assistant.js';
 import type { ModelConfig } from '../core/llm/createAgent.js';
 
@@ -407,7 +407,7 @@ export class VoiceClient {
     pct: number; contextWindow: number; summarizePct: number;
     strategy: string; maxTokens?: number;
   } = { pct: 0, contextWindow: 0, summarizePct: 75, strategy: 'fast' };
-  private compacting = false;
+  private compactionLock = new CompactionLock();
   private resumed = false;
 
   /** The Assistant's compaction config — set alongside setAgent (same settings
@@ -431,6 +431,30 @@ export class VoiceClient {
       if (t) t.appendAll([...this.history]);
     }
     this.note({ kind: 'note', id: nextId('vnote'), text: 'chat compacted — older messages summarized' });
+  }
+
+  /** Run compaction on the assistant history. Used by both auto-trigger
+   *  (the finally block) and the manual /compact command. */
+  async runCompaction(): Promise<boolean> {
+    if (!this.compactionModel) return false;
+    const result = await compact(this.compactionLock, {
+      history: this.history,
+      strategy: getStrategy(this.compactionSettings.strategy),
+      summarizePct: this.compactionSettings.summarizePct,
+      call: async (system, prompt) => {
+        const { generateText } = await import('ai');
+        const { languageModel } = await import('../core/llm/createAgent.js');
+        const r = await generateText({
+          model: languageModel(this.compactionModel!), maxRetries: 0,
+          system, prompt,
+          ...(this.compactionSettings.maxTokens ? { maxTokens: this.compactionSettings.maxTokens } : {}),
+        });
+        return r.text;
+      },
+    });
+    if (!result) return false;
+    this.onCompacted(result.removed);
+    return true;
   }
 
   /** Resume the conversation from the newest transcript — once per process,
@@ -636,25 +660,10 @@ export class VoiceClient {
         })();
       }
       // Long chat? Summarize it in the background — turns never wait on it.
-      if (!this.compacting && this.compactionModel
+      if (!this.compactionLock.active && this.compactionModel
         && shouldCompact(turnUsage.input, this.compactionSettings.contextWindow, this.compactionSettings.pct)) {
-        this.compacting = true;
-        compact({
-          history: this.history,
-          strategy: getStrategy(this.compactionSettings.strategy),
-          summarizePct: this.compactionSettings.summarizePct,
-          call: async (system, prompt) => {
-            const { generateText } = await import('ai');
-            const { languageModel } = await import('../core/llm/createAgent.js');
-            const r = await generateText({
-              model: languageModel(this.compactionModel!), maxRetries: 0,
-              system, prompt,
-              ...(this.compactionSettings.maxTokens ? { maxTokens: this.compactionSettings.maxTokens } : {}),
-            });
-            return r.text;
-          },
-          onCompacted: ({ removed }) => { this.compacting = false; this.onCompacted(removed); },
-          onFailed: () => { this.compacting = false; },
+        void this.runCompaction().catch((err) => {
+          this.note({ kind: 'error', id: nextId('verr'), message: `compaction failed: ${(err as Error).message}` });
         });
       }
     }

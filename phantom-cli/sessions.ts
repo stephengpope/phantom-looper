@@ -18,6 +18,7 @@ import type { AgentSummary } from './agentFromConfig.js';
 import type { ModelPin } from '../core/llm/agentConfig.js';
 import { Transcript } from './session.js';
 import type { UsageTotals } from '../core/llm/transcript.js';
+import type { CompactionLock } from '../core/llm/compaction.js';
 import { applyPart, applyTokens, finalize, nextId, takeCompleted, tokenCount, NO_TOKENS, type Part, type StreamPart, type TurnTokens } from './state.js';
 
 export interface LoadedSession {
@@ -35,6 +36,8 @@ export interface LoadedSession {
    *  board names it (`PHA-7`). Absent when the session belongs to no card —
    *  anything you started yourself. */
   card?: string;
+  /** The compaction lock for /compact on coding sessions. */
+  compactionLock?: CompactionLock;
   /** Per session: the adapter derives them from the session's own /tools. */
   tools: Record<string, Tool>;
   agent: Agent;
