@@ -7,9 +7,10 @@
 // After reporting, each session is stamped so it's never reported twice for the
 // same activity. If it runs again and finishes again, it'll be reported again.
 
-import { and, eq, isNull, lt, or, sql as sqlRaw } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { sessions, sessionColumns, loops } from '../db/schema.js';
+import { loops } from '../db/schema.js';
+import type { Sessions } from '../sessions.js';
 import { helperCall } from '../helperCall.js';
 import { agentModelConfig } from '../../core/llm/agentConfig.js';
 import { resolve } from '../settings.js';
@@ -26,6 +27,7 @@ const SYSTEM = `You summarize completed coding session turns as a bullet list. F
 
 export interface DigestDeps {
   db: Db;
+  sessions: Sessions;
   encryptionKey: Buffer;
   channels: NotificationChannel[];
 }
@@ -82,25 +84,14 @@ export class SessionDigest {
     // 2. Are not locked (lockedBy is null — the turn finished)
     // 3. Have been idle longer than the interval
     // 4. Haven't been digested since their last activity
-    const rows = await db.select(sessionColumns).from(sessions).where(
-      and(
-        isNull(sessions.lockedBy),
-        lt(sessions.transcriptUpdatedAt, threshold),
-        or(
-          isNull(sessions.digestNotifiedAt),
-          sqlRaw`${sessions.transcriptUpdatedAt} > ${sessions.digestNotifiedAt}`,
-        ),
-      ),
-    );
+    const rows = await this.deps.sessions.listIdleSince(threshold);
 
     if (!rows.length) return;
 
     // For each session, get the last assistant message and card info.
     const items: Array<{ name: string; lastMessage: string; cardStatus?: string }> = [];
     for (const s of rows) {
-      const transcriptRows = await db.select({ data: sessions.transcript })
-        .from(sessions).where(eq(sessions.id, s.id));
-      const transcript = transcriptRows[0]?.data ?? '';
+      const transcript = (await this.deps.sessions.transcript(s.id)) ?? '';
       const lastMsg = lastAssistantFromJsonl(transcript);
 
       // Check if this session has a card (via loops table).
@@ -130,7 +121,6 @@ export class SessionDigest {
     let message: string;
     try {
       // Read the assistant model config from settings for the summary call.
-      const settingsRows = await db.select().from(sessions).limit(0); // just need the resolve
       const values: Record<string, unknown> = {};
       for (const key of ['assistant_provider', 'assistant_model', 'assistant_base_url'] as const) {
         values[key] = await resolve(db, key).catch(() => undefined);
@@ -166,10 +156,7 @@ export class SessionDigest {
 
     // Mark all as digested.
     const now = new Date();
-    for (const s of rows) {
-      await db.update(sessions).set({ digestNotifiedAt: now })
-        .where(eq(sessions.id, s.id));
-    }
+    for (const s of rows) await this.deps.sessions.markDigested(s.id, now);
 
     log.info({ sessions: rows.length, channels: this.deps.channels.length }, 'digest sent');
   }

@@ -6,8 +6,12 @@
 // setting, off by default): the sessions list already records where you were,
 // so the pick comes off the newest session the user drove — never a pinned
 // workspace id, which goes stale the moment you switch.
+import { Box, useInput } from 'ink';
+import { useState } from 'react';
 import { SelectList, type Choice } from './SelectList.js';
 import { Screen, type FooterKey } from './Screen.js';
+import { TextInput } from './TextInput.js';
+import { FixedText } from './Text.js';
 import { tableChoices, type TableRow, type Cell } from './table.js';
 import { formatTokensIn, formatTokensOut, cachePct } from '../state.js';
 
@@ -145,6 +149,7 @@ export function sessionChoices(
   loaded: (sessionId: string) => boolean = () => false,
   clientId = '',
   showSupervised = false,
+  query = '',
 ): Choice<Launch | null>[] {
   const byId = new Map(workspaces.map((w) => [w.id, w]));
   // WHICH sessions are listed is the server's call (`GET /sessions?typed=
@@ -165,6 +170,7 @@ export function sessionChoices(
     || Number(inMotion(b)) - Number(inMotion(a))
     || Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt));
   if (!sessions.length) {
+    if (query.trim()) return [{ value: null, label: `no sessions match “${query.trim()}”`, heading: true }];
     return showSupervised
       ? [{ value: null, label: 'no sessions yet', detail: 'start one with /workspace', heading: true }]
       : [{ value: null, label: 'no sessions yet',
@@ -296,8 +302,17 @@ export function workspaceChoices(workspaces: WorkspaceInfo[], canAdd = true): Ch
 /** One list, two uses. `mode` decides which — sessions for /resume, workspaces
  *  for a fresh start. Deliberately not both at once: launching means "start
  *  work", reopening is a different intent with its own command. */
-export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clientId, onPick, onEdit, onDuplicate, onPin, onClose, onTrash, onCancel, onNearEnd, showSupervised, onToggleSupervised, now, title, footer, notice, canAdd }: {
+export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clientId, onPick, onEdit, onDuplicate, onPin, onClose, onTrash, onCancel, onNearEnd, showSupervised, onToggleSupervised, query = '', rowsQuery = query, onQuery, now, title, footer, notice, canAdd }: {
   mode: 'sessions' | 'workspaces';
+  /** [/] on /resume: the filter line's text, and where it goes. The list
+   *  is the server's answer to it (WindowStore.pickerQuery); this screen
+   *  only owns whether the line is OPEN. Absent = no filter offered. */
+  query?: string;
+  /** The filter `sessions` ANSWER — the live text runs ahead of the rows
+   *  by one read, and the empty state must name what the rows are for, or
+   *  esc on a zero-match filter draws "no sessions yet" for a frame. */
+  rowsQuery?: string;
+  onQuery?: (q: string) => void;
   workspaces: WorkspaceInfo[];
   sessions?: SessionInfo[];
   /** How many sessions the whole list holds (the server's count for the
@@ -345,10 +360,41 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
   const canEdit = mode === 'workspaces' && !!onEdit;
   const canCopy = mode === 'sessions' && !!onDuplicate;
   const canPin = mode === 'sessions' && !!onPin;
+  const canFilter = mode === 'sessions' && !!onQuery;
+  // FILTER MODE is one state: [/] opens the line and the cursor lives in it;
+  // type to narrow, ↑↓ to move, enter to open — nothing else. esc clears
+  // the text AND closes the line, so the list comes back exactly as it was
+  // with its letter keys. Key ownership is the combobox split (ValueInput):
+  // TextInput takes the letters and, given no onSubmit, ignores enter;
+  // SelectList takes ↑↓/enter and, given no onKey, ignores the letters.
+  const [filtering, setFiltering] = useState(false);
+  const leaveFilter = () => { setFiltering(false); onQuery?.(''); };
+  useInput((_ch, key) => { if (key.escape) leaveFilter(); }, { isActive: filtering });
   // The looper's card sessions are hidden by default; [s] toggles them in.
   const choices = mode === 'sessions'
-    ? sessionChoices(workspaces, sessions ?? [], now, busy, loaded, clientId, showSupervised ?? false)
+    ? sessionChoices(workspaces, sessions ?? [], now, busy, loaded, clientId, showSupervised ?? false, rowsQuery)
     : workspaceChoices(workspaces, canAdd ?? true);
+  if (filtering) {
+    return (
+      <Screen title={title ?? 'resume'} notice={notice}
+        footer={[{ key: 'type', does: 'filter' }, { key: '↑↓', does: 'move' },
+          { key: 'enter', does: 'open' }, { key: 'esc', does: 'clear' }]}>
+        <Box marginBottom={1}>
+          <FixedText color="cyan">{'  / '}</FixedText>
+          <TextInput value={query} onChange={(q) => onQuery!(q)} placeholder="name, last message or branch…" />
+        </Box>
+        <SelectList
+          // Remount per keystroke: the highlight lands on the first match.
+          key={query}
+          choices={choices}
+          reserve={2}
+          onNearEnd={onNearEnd}
+          total={total}
+          onSelect={(v) => { if (v) onPick(v); }}
+        />
+      </Screen>
+    );
+  }
   return (
     <Screen title={title ?? (mode === 'sessions' ? 'resume' : 'workspace')}
       notice={notice}
@@ -360,7 +406,8 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
           { key: 'd', does: 'duplicate', when: canCopy }, { key: 'x', does: 'close', when: canCopy },
           { key: 't', does: 'trash', when: canCopy },
           { key: 'p', does: 'pin', when: canPin },
-          { key: 's', does: 'supervised', when: canCopy }, { key: 'esc', does: 'close' },
+          { key: 's', does: 'supervised', when: canCopy },
+          { key: '/', does: 'filter', when: canFilter }, { key: 'esc', does: 'close' },
         ])}>
       <SelectList
         choices={choices}
@@ -374,6 +421,7 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
           // The same act as the "add a workspace…" row, one key from any row.
           else if (ch === 'n' && (canAdd ?? true)) onPick({ kind: 'add' });
         } : mode === 'sessions' ? (ch, v) => {
+          if (ch === '/' && canFilter) { setFiltering(true); return; }
           if (ch === 's') { onToggleSupervised?.(); return; }
           if (v?.kind !== 'resume') return;
           if (ch === 'd') onDuplicate?.(v.sessionId);

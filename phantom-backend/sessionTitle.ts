@@ -8,15 +8,16 @@
 // (core/llm/prompts/helpers/); the model is the Assistant's config, and
 // a half-set assistant pair falls back silently to the coding agent's. Never throws — on any failure the old name (or null) stands (the
 // commitMessage.ts pattern).
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { isProvider, type ModelConfig } from '../core/llm/createAgent.js';
 import { helperCall } from './helperCall.js';
 import { cascade } from '../core/llm/agentConfig.js';
 import { titleRequest, type TitleContext } from '../core/llm/prompts/helpers/wiring.js';
 import { parseTranscript } from '../core/llm/transcript.js';
 import { resolveMany, resolveCredential, credentialForProvider } from './settings.js';
-import { loops, sessions } from './db/schema.js';
+import { loops } from './db/schema.js';
 import type { Db } from './db/client.js';
+import type { Sessions } from './sessions.js';
 import { logger, errStr } from './log.js';
 
 const log = logger('session-title');
@@ -119,11 +120,11 @@ async function titleConfig(db: Db, encryptionKey: Buffer): Promise<ModelConfig |
 }
 
 /** Write the session's name from the selected user messages; returns the
- *  title written so the caller can put it on the session feed, null when
+ *  title written (the row publishes it on the session feed), null when
  *  nothing was written. Never throws. `modelFetch` is the test seam
  *  (createAgent's own), threaded from AppCtx like the turn route's. */
 export async function nameSession(
-  db: Db, encryptionKey: Buffer, sessionId: string, context: TitleContext, modelFetch?: typeof fetch,
+  db: Db, sessions: Sessions, encryptionKey: Buffer, sessionId: string, context: TitleContext, modelFetch?: typeof fetch,
 ): Promise<string | null> {
   try {
     // A card's coding session already carries the customer's own objective:
@@ -131,9 +132,7 @@ export async function nameSession(
     const cardSeat = await db.select({ id: loops.id }).from(loops)
       .where(eq(loops.codingSessionId, sessionId)).limit(1);
     if (cardSeat.length) {
-      const named = await db.select({ name: sessions.name }).from(sessions)
-        .where(eq(sessions.id, sessionId)).limit(1);
-      if (named[0]?.name !== null) return null;
+      if ((await sessions.get(sessionId))?.name !== null) return null;
     }
 
     const config = await titleConfig(db, encryptionKey);
@@ -150,9 +149,7 @@ export async function nameSession(
         if (title) {
           // A /rename that landed while this call was in flight wins: the
           // titler never writes over a manual name.
-          await db.update(sessions).set({ name: title })
-            .where(and(eq(sessions.id, sessionId), eq(sessions.nameManual, false)));
-          return title;
+          return (await sessions.setAutoTitle(sessionId, title)) ? title : null;
         }
       } catch (e) {
         log.warn({ session: sessionId, attempt, err: errStr(e) }, 'session title attempt failed');

@@ -3,36 +3,31 @@
 // tracks, recomputes workState() and writes the row when the value changes.
 // A change publishes on the board event stream as `session_work` so the
 // kanban board hears it live.
-import { eq, and, inArray, desc } from 'drizzle-orm';
+import { inArray } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { sessions, workspaces, folders, loops } from '../db/schema.js';
+import { workspaces, folders, loops } from '../db/schema.js';
+import type { Sessions } from '../sessions.js';
 import { workState, type WorkState } from './git.js';
 import { repoDir, type Paths } from '../pool/paths.js';
 import type { ContainerManager } from '../workspace/container.js';
 import type { BoardEvents } from '../api/boardEvents.js';
-import type { SessionEvents } from '../api/sessionEvents.js';
 import { logger, errStr } from '../log.js';
 
 const log = logger('work-refresh');
 
 export interface WorkRefreshDeps {
-  db: Db; paths: Paths;
+  db: Db; sessions: Sessions; paths: Paths;
   containers: ContainerManager;
   events: BoardEvents;
-  /** The same feed used by lock and turn publishers; absent for board-only callers. */
-  sessionEvents?: SessionEvents;
 }
 
-export async function refreshWorkState({ db, paths, containers, events, sessionEvents }: WorkRefreshDeps): Promise<void> {
+export async function refreshWorkState({ db, sessions, paths, containers, events }: WorkRefreshDeps): Promise<void> {
   const active = containers.activeSessions();
   if (!active.length) return;
 
   // Load the session rows that have containers. Only active sessions with a
   // folder (a checkout on disk) can have a work state.
-  const rows = await db.select({
-    id: sessions.id, folderId: sessions.folderId,
-    workspaceId: sessions.workspaceId, work: sessions.work,
-  }).from(sessions).where(and(inArray(sessions.id, active)));
+  const rows = await sessions.listForWorkRefresh(active);
 
   if (!rows.length) return;
 
@@ -74,12 +69,11 @@ export async function refreshWorkState({ db, paths, containers, events, sessionE
 
     // Only write and publish when the value actually changed.
     if (work === r.work) return;
-    await db.update(sessions).set({ work }).where(eq(sessions.id, r.id));
+    // The row write publishes on the session stream too, so a window
+    // watching this session sees the work-state dot update without polling.
+    await sessions.setWork(r.id, work);
     // Publish on the board stream so the kanban board picks it up.
     const card = cardOf.get(r.id) ?? 0;
     events.publish(r.workspaceId, { event: 'session_work', card, id: r.id, work });
-    // Publish on the session stream so a window watching this session
-    // sees the work-state dot update without polling.
-    sessionEvents?.publish(r.id, '', { event: 'session', work });
   }));
 }

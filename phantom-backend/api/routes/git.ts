@@ -5,7 +5,6 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import fsp from 'node:fs/promises';
 import { eq } from 'drizzle-orm';
 import { workspaces, commands, type SessionRow, type WorkspaceRow } from '../../db/schema.js';
-import { getSession, touchSession } from '../../sessions.js';
 import { ToolError } from '../../tools/envelope.js';
 import { ok, err, type AppCtx } from '../app.js';
 import { SESSION_HEADER } from '../sessionHeader.js';
@@ -32,12 +31,12 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
   async function resolveSession(req: { headers: Record<string, unknown> }):
     Promise<{ session: SessionRow; workspace: WorkspaceRow }> {
     const sessionId = String(req.headers[SESSION_HEADER] ?? '');
-    const session = sessionId ? await getSession(ctx.db, sessionId) : undefined;
+    const session = sessionId ? await ctx.sessions.get(sessionId) : undefined;
     if (!session) throw new ToolError('session_not_found', sessionId || `missing ${SESSION_HEADER}`);
     if (session.status !== 'active') throw new ToolError('session_destroyed', `session is ${session.status}`);
     const workspaceRows = await ctx.db.select().from(workspaces).where(eq(workspaces.id, session.workspaceId));
     if (!workspaceRows.length) throw new ToolError('not_found', 'workspace vanished');
-    void touchSession(ctx.db, session.id);
+    void ctx.sessions.touch(session.id);
     return { session, workspace: workspaceRows[0] };
   }
 

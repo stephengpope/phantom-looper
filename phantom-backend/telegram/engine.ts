@@ -20,7 +20,7 @@ import { sessionDir } from '../pool/paths.js';
 import { injectFetch } from '../looper/injectFetch.js';
 import { runCodingTurn, settingsValues, type TurnDeps } from '../looper/turn.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
-import { getSession, currentLoop, loopOf, createAssistantSession, addSessionUsage, updateSessionPointers } from '../sessions.js';
+import { currentLoop, loopOf, type Sessions } from '../sessions.js';
 import { resolveCredential } from '../settings.js';
 import { helperCall } from '../helperCall.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
@@ -73,6 +73,7 @@ function timingSafeEqualStr(a: string, b: string): boolean {
 
 export interface TelegramEngineDeps {
   db: Db;
+  sessions: Sessions;
   paths: Paths;
   app: FastifyInstance;
   apiKey: string;
@@ -163,7 +164,7 @@ export class TelegramEngine {
   private async ensureAssistantSession(workspaceId: string | null, folderId?: string | null): Promise<string> {
     if (this.assistantSessionId) return this.assistantSessionId;
     if (!workspaceId) throw new Error('no active workspace — /workspaces to pick one');
-    const row = await createAssistantSession(this.deps.db, workspaceId, folderId);
+    const row = await this.deps.sessions.createAssistant(workspaceId, folderId);
     this.assistantSessionId = row.id;
     return row.id;
   }
@@ -553,7 +554,7 @@ export class TelegramEngine {
       replyText = result.text;
       // Record this turn's token usage on the session row.
       const model = (() => { try { return agentModelConfig(values, 'assistant'); } catch { return undefined; } })();
-      await addSessionUsage(db, sessionId, result.usage,
+      await this.deps.sessions.addUsage(sessionId, result.usage,
         model ? { provider: model.provider, model: model.model } : undefined).catch(
         (e) => log.warn({ err: errStr(e) }, 'assistant session usage update failed'));
       // Long chat? Summarize it in the background — turns never wait on it.
@@ -582,7 +583,7 @@ export class TelegramEngine {
         label: CLIENT_ID, fetch: this.f, lock: true, sessionId });
     } catch (e) {
       if (e instanceof SessionLockedError) {
-        const s = await getSession(db, sessionId);
+        const s = await this.deps.sessions.get(sessionId);
         await client.sendMessage(dm, `🔒 That session is busy${s?.lockedLabel ? ` (${s.lockedLabel})` : ''} — try again in a moment.`);
         return;
       }
@@ -607,7 +608,7 @@ export class TelegramEngine {
     });
 
     try {
-      const s = await getSession(db, sessionId);
+      const s = await this.deps.sessions.get(sessionId);
       const workspaceId = s?.workspaceId ?? '';
       const planMode = s?.planMode === true;
       // The agent's deliberate "DM the user" tool — sends through this chat,
@@ -812,7 +813,7 @@ export class TelegramEngine {
    *  accident. Announces the switch; the ONE place the 🔀 line is sent. */
   async switchSession(client: TelegramClient, dm: number, id: string):
   Promise<{ id: string; title: string | null } | { error: string }> {
-    const s = await getSession(this.deps.db, id);
+    const s = await this.deps.sessions.get(id);
     if (!s) return { error: `no session ${id}` };
     await store.setActiveSession(this.deps.db, id);
     await client.sendMessage(dm, `🔀 Active session: ${s.name ?? 'untitled'}`);
@@ -837,7 +838,7 @@ export class TelegramEngine {
   async codeModeLabel(): Promise<string> {
     const acc = await store.getAccount(this.deps.db, this.deps.encryptionKey);
     if (!acc.activeSessionId) return '🤖 Coding agent';
-    const s = await getSession(this.deps.db, acc.activeSessionId);
+    const s = await this.deps.sessions.get(acc.activeSessionId);
     if (!s) return '🤖 Coding agent';
     const loop = await loopOf(this.deps.db, acc.activeSessionId);
     const ws = await (await this.call(`/workspaces/${s.workspaceId}`)).json().catch(() => null);

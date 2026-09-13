@@ -9,7 +9,6 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import { workspaces, type SessionRow } from '../../db/schema.js';
-import { getSession, touchSession } from '../../sessions.js';
 import { repoDir } from '../../pool/paths.js';
 import { Sandbox } from '../../workspace/sandbox.js';
 import { ToolError } from '../../tools/envelope.js';
@@ -46,10 +45,10 @@ export interface ManageBody {
 async function requireSession(ctx: AppCtx, headers: Record<string, unknown>): Promise<SessionRow> {
   const id = String(headers[SESSION_HEADER] ?? '');
   if (!id) throw new ToolError('session_not_found', `missing ${SESSION_HEADER} header`);
-  const session = await getSession(ctx.db, id);
+  const session = await ctx.sessions.get(id);
   if (!session) throw new ToolError('session_not_found', id);
   if (session.status !== 'active') throw new ToolError('session_destroyed', `session is ${session.status}`);
-  void touchSession(ctx.db, id);
+  void ctx.sessions.touch(id);
   return session;
 }
 

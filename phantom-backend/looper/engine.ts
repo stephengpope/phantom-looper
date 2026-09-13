@@ -34,7 +34,7 @@ import type pg from 'pg';
 import type { ModelMessage } from 'ai';
 import type { Db } from '../db/client.js';
 import { workspaces as workspacesTable, type WorkspaceRow } from '../db/schema.js';
-import { currentLoop, loopOf, stampAgent, createSupervisorSession, createLoop, nameIfUnnamed, LOOP_CLIENT_ID } from '../sessions.js';
+import { currentLoop, loopOf, createLoop, LOOP_CLIENT_ID, type Sessions } from '../sessions.js';
 import { resolveMany } from '../settings.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
 import { memoryRecorder, serializeTranscript, type TranscriptHeader } from '../../core/llm/transcript.js';
@@ -59,6 +59,7 @@ const BASE = 'http://looper';
 
 export interface LooperDeps {
   db: Db;
+  sessions: Sessions;
   pgPool: pg.Pool;
   app: FastifyInstance;
   apiKey: string;
@@ -266,12 +267,12 @@ export class LooperEngine {
           baseUrl: BASE, apiKey, clientId: CLIENT_ID, label: heldBy('coding', card.status),
           fetch: this.f, lock: true, workspaceId: workspace.id,
         });
-        const sup = await createSupervisorSession(db, workspace.id,
+        const sup = await this.deps.sessions.createSupervisor(workspace.id,
           String(opened.session.folderId ?? opened.session.id));
         await createLoop(db, workspace.id, card.seq, opened.session.id, sup.id);
         // The coder's session is named after its card from birth — /resume
         // never shows a nameless row while the first (long) plan turn runs.
-        await nameIfUnnamed(db, opened.session.id, card.title);
+        await this.deps.sessions.nameIfUnnamed(opened.session.id, card.title);
         // The lock announcement rides RIGHT AFTER the pairing because it is a
         // fact — openSession locked the session above and close() releases it.
         // The lock route's own board publish found no loop row yet (createLoop
@@ -297,7 +298,7 @@ export class LooperEngine {
       // /resume reads `coder` while it lasts — not only once the save lands.
       // A person who typed into it since (agent null) handed it back by
       // moving the card.
-      await stampAgent(db, opened.session.id, 'coding');
+      await this.deps.sessions.stampAgent(opened.session.id, 'coding');
       // The lock event went out before stampAgent, so its agent field was
       // stale.  Publish the corrected seat so a watching window shows
       // "coding agent" immediately rather than after the next lock renew.

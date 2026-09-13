@@ -146,6 +146,8 @@ export interface Dialog {
  *  scroll-to-the-bottom. Comfortably more than a screenful, small enough that
  *  a list of thousands never rides one response. */
 export const PICKER_PAGE = 30;
+/** How long after the last keystroke in /resume's filter line the list re-reads. */
+const PICKER_FILTER_DEBOUNCE_MS = 150;
 /** How long the picker's workspace list serves before its poll re-reads it. */
 const WORKSPACES_TTL_MS = 60_000;
 
@@ -1178,7 +1180,9 @@ export class WindowStore {
   /** The names the Assistant speaks with — the same cache, shared. */
   readonly workspaces: WorkspaceDirectory;
 
-  picker: { workspaces: WorkspaceInfo[]; sessions: SessionInfo[]; total: number; end: boolean } | null = null;
+  /** `query` is the filter text these rows ANSWER (the screen's empty
+   *  state reads it) — the live text is `pickerQuery`, which runs ahead. */
+  picker: { workspaces: WorkspaceInfo[]; sessions: SessionInfo[]; total: number; end: boolean; query: string } | null = null;
   pickerNotice: string | undefined;
   /** A duplicate waiting on its one question — which model the copy runs on.
    *  Dropped with its screen. */
@@ -1186,6 +1190,13 @@ export class WindowStore {
   /** [s] on /resume: the looper's supervisor seats in the list or not. A fetch
    *  parameter, not a filter — the server decides what the list is. */
   showSupervised = false;
+  /** [/] on /resume: the filter line's text — like showSupervised, a fetch
+   *  parameter the server applies (one substring, anywhere in the name,
+   *  the last message or the branch), never a local sieve over a page.
+   *  Empty = no filter; cleared when the picker opens and when filter mode
+   *  ends. */
+  pickerQuery = '';
+  private pickerQueryClock: ReturnType<typeof setTimeout> | null = null;
   private morePickerInFlight = false;
 
   tasks: TasksView | null = null;
@@ -1210,7 +1221,29 @@ export class WindowStore {
   /** The list's FILTERS are the server's (`typed`, `supervisor`): a page is a
    *  page on screen, and `total` is the count for exactly these filters. */
   private listQuery(): string {
-    return `typed=true${this.showSupervised ? '' : '&supervisor=false'}`;
+    return `typed=true${this.showSupervised ? '' : '&supervisor=false'}`
+      + (this.pickerQuery.trim() ? `&q=${encodeURIComponent(this.pickerQuery.trim())}` : '');
+  }
+
+  /** The filter line changed. The list re-reads a beat after the last
+   *  keystroke, not on every one — a word typed at speed is one request.
+   *  Clearing (esc) re-reads at once: the filtered rows with no filter
+   *  would draw as an empty list for the length of the wait. */
+  setPickerQuery(q: string): void {
+    if (this.pickerQuery === q) return;
+    this.pickerQuery = q;
+    this.notify();
+    if (this.pickerQueryClock) clearTimeout(this.pickerQueryClock);
+    const read = () => { this.pickerQueryClock = null; void this.refreshPicker().catch(quiet('refresh the session list')); };
+    if (!q) read();
+    else this.pickerQueryClock = setTimeout(read, PICKER_FILTER_DEBOUNCE_MS);
+  }
+
+  /** Does an open-here row pass the filter? The server's rule (one
+   *  substring, case-insensitive) applied to the two facts such a row has. */
+  private matchesPickerQuery(e: LoadedSession): boolean {
+    const q = this.pickerQuery.trim().toLowerCase();
+    return !q || (e.name ?? '').toLowerCase().includes(q) || e.branch.toLowerCase().includes(q);
   }
 
   /** The one addition only this window can make: sessions open HERE that the
@@ -1219,7 +1252,7 @@ export class WindowStore {
   private withOpenHere(rows: SessionInfo[], total: number) {
     const seen = new Set(rows.map((s) => s.id));
     const extras: SessionInfo[] = this.sessions.list()
-      .filter((e) => !seen.has(e.id) && !e.readonly)
+      .filter((e) => !seen.has(e.id) && !e.readonly && this.matchesPickerQuery(e))
       .map((e) => ({
         id: e.id, workspaceId: e.workspaceId, branch: e.branch, status: 'active', agent: null,
         model: e.summary.model, pinned: e.pinned,
@@ -1237,7 +1270,14 @@ export class WindowStore {
    *  refresh re-reads however many rows are loaded, so what is on screen stays
    *  live however deep you have scrolled. A short page = the end. */
   refreshPicker = async (): Promise<void> => {
-    const want = Math.max(this.picker?.sessions.length ?? 0, PICKER_PAGE);
+    // Reads overlap (the poll, the filter line, a keypress) and the network
+    // does not keep them in order: only the newest read may land, or a slow
+    // answer to "auth" would overwrite the list for "auth refactor".
+    const seq = ++this.pickerSeq;
+    // A changed filter is a new list: one page of it, not however deep the
+    // old list was scrolled. The same filter re-reads what is loaded.
+    const want = this.pickerQuery !== (this.picker?.query ?? '')
+      ? PICKER_PAGE : Math.max(this.picker?.sessions.length ?? 0, PICKER_PAGE);
     // Sessions move every tick; workspaces almost never. On the poll the
     // workspace list is re-read once a minute, the session list every time.
     const wsFresh = this.picker && Date.now() - this.workspacesReadAt < WORKSPACES_TTL_MS;
@@ -1245,12 +1285,14 @@ export class WindowStore {
       wsFresh ? this.picker!.workspaces : this.api('GET', '/workspaces') as Promise<WorkspaceInfo[]>,
       this.api('GET', `/sessions?${this.listQuery()}&limit=${want}`),
     ]);
+    if (seq !== this.pickerSeq) return;
     if (!wsFresh) { this.workspacesReadAt = Date.now(); this.seeWorkspaces(ws); }
     const { sessions: ss, total } = got as { sessions: SessionInfo[]; total: number };
-    this.picker = { workspaces: ws, ...this.withOpenHere(ss, total), end: ss.length < want };
+    this.picker = { workspaces: ws, ...this.withOpenHere(ss, total), end: ss.length < want, query: this.pickerQuery };
     this.notify();
   };
   private workspacesReadAt = 0;
+  private pickerSeq = 0;
 
   /** The next page, appended in place. The cursor is the last SERVER row as
    *  this client saw it (the open-here extras carry no server position); a
@@ -1285,6 +1327,7 @@ export class WindowStore {
   openPicker = async (which: 'workspace' | 'resume'): Promise<void> => {
     try {
       this.workspacesReadAt = 0;   // an OPEN always reads both lists fresh; only the poll spares one
+      this.pickerQuery = '';
       await this.refreshPicker();
       this.pickerNotice = undefined;
       this.showOverlay(pickerScreen(this, which));

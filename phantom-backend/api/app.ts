@@ -23,6 +23,7 @@ import { webRoutes } from './routes/web.js';
 import type { GitEngine } from '../git/engine.js';
 import { BoardEvents } from './boardEvents.js';
 import { SessionEvents } from './sessionEvents.js';
+import type { Sessions } from '../sessions.js';
 import { SettingsEvents } from './settingsEvents.js';
 import { writeSettings, type SettingsWriteLayer } from '../settings.js';
 import { ForegroundCommands } from './foreground.js';
@@ -40,6 +41,9 @@ import { presetRoutes } from './routes/presets.js';
 
 export interface AppCtx {
   db: Db;
+  /** The session table's one owner (sessions.ts): every session-row read
+   *  and write in the routes goes through it. */
+  sessions: Sessions;
   paths: Paths;
   apiKey: string;
   encryptionKey: Buffer;

@@ -14,6 +14,7 @@ import type { WorkspaceRow, SessionRow } from '../db/schema.js';
 import type { Paths } from '../pool/paths.js';
 import type { Db } from '../db/client.js';
 import { syncBranch, type SyncEvent, type SyncDeps } from './sync.js';
+import type { Sessions } from '../sessions.js';
 
 export type AutoPullEvent = SyncEvent;
 
@@ -36,6 +37,7 @@ export interface AutoPullResult {
 
 export interface AutoPullDeps {
   db: Db;
+  sessions: Sessions;
   paths: Paths;
   encryptionKey: Buffer;
   resolve?: SyncDeps['resolve'];

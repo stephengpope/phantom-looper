@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
-import { eq, and } from 'drizzle-orm';
-import { workspaces, sessions, sessionColumns, settings as settingsTable } from '../../db/schema.js';
+import { eq } from 'drizzle-orm';
+import { workspaces, settings as settingsTable } from '../../db/schema.js';
 import { parseRepoRef, remoteUrl } from '../../git/remote.js';
 import { createRepo, listRepos, whoami } from '../../git/github.js';
 import { initializeRemote, classifyGitFailure } from '../../git/git.js';
@@ -269,8 +269,7 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
       description: 'Refuses while sessions are active. Dropping the schema destroys every agent table in it, so the drop additionally requires ?confirm=true.',
       params: idParam, querystring: { type: 'object', properties: { confirm: { type: 'string', enum: ['true'] } } } } },
     async (req, reply) => {
-      const live = await ctx.db.select(sessionColumns).from(sessions)
-        .where(and(eq(sessions.workspaceId, req.params.id), eq(sessions.status, 'active')));
+      const live = await ctx.sessions.listActiveIn(req.params.id);
       if (live.length) return reply.code(409).send(err('sessions_exist', `workspace ${req.params.id} still has ${live.length} active session(s) — close them first`));
       const rows = await ctx.db.select().from(workspaces).where(eq(workspaces.id, req.params.id));
       if (rows.length && req.query.confirm === 'true') {

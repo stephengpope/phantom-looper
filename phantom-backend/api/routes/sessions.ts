@@ -1,20 +1,17 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { eq, ne, desc, and, or, isNull, isNotNull, lt, sql, count, inArray } from 'drizzle-orm';
-import { sessions, sessionColumns, workspaces, folders, loops, settings as settingsRows, type SessionRow } from '../../db/schema.js';
-import { createSession, getSession, getFolder, destroySession, touchSession, SessionError,
-  heldByOther, acquireLock, releaseLock, renewLock, assertDuplicable, conversationOnly, agentAfterSave,
-  turnStarted, LAST_MESSAGE_CHARS, createAssistantSession, addSessionUsage } from '../../sessions.js';
+import { eq, desc, or, inArray } from 'drizzle-orm';
+import { workspaces, folders, loops, type SessionRow } from '../../db/schema.js';
+import { getFolder, SessionError, heldByOther, assertDuplicable, conversationOnly } from '../../sessions.js';
 import { GIT_CLIENT_ID } from '../../git/git.js';
 import { repoDir, sessionDir } from '../../pool/paths.js';
 
 import { scanSkills, mergeSkills } from '../../../core/skills/skills.js';
 import { systemSkills } from '../../systemSkills.js';
 import { environmentFacts } from '../../environment.js';
-import { lastUserFromJsonl, headerModelFromJsonl, sumUsageFromJsonl, stripUsageFromJsonl } from '../../../core/llm/transcript.js';
 import { resolve, resolveMany, settingsBlock } from '../../settings.js';
-import { sessionScope, listSecrets, GLOBAL, workspaceScope } from '../../store.js';
+import { listSecrets, GLOBAL, workspaceScope } from '../../store.js';
 import { ok, err, type AppCtx } from '../app.js';
 import { openSession, SessionLockedError } from '../../../core/session.js';
 import { injectFetch } from '../../looper/injectFetch.js';
@@ -60,30 +57,6 @@ const clientOf = (req: FastifyRequest): string => {
 const lockedErr = (s: SessionRow) =>
   err('session_locked', `session is in use${s.lockedLabel ? ` on ${s.lockedLabel}` : ''} — release it there, or wait for the hold to expire`, true);
 
-/** The first line of a transcript is its header; a duplicate keeps the frozen
- *  system prompt but is a different session on a different branch, so those
- *  two fields are rewritten — and the model fields are DROPPED (a key patched
- *  to undefined serializes away), because the copy is born unpinned: it
- *  follows /model and presets until its first new message, exactly like a
- *  fresh session — because its ROW carries no pin, which is the only place a
- *  pin lives. The header travels WHOLE: it records what the source ran, and
- *  the copy's first message rewrites it to what the copy ran. An unparsable
- *  first line is left alone — the loader skips what it cannot parse, same as
- *  everywhere. */
-export function rewriteTranscriptHeader(
-  data: string,
-  patch: { session_id: string; branch: string },
-): string {
-  const nl = data.indexOf('\n');
-  const first = nl < 0 ? data : data.slice(0, nl);
-  try {
-    const h = JSON.parse(first) as { type?: string };
-    if (h.type !== 'session') return data;
-    const line = JSON.stringify({ ...h, ...patch });
-    return nl < 0 ? line : line + data.slice(nl);
-  } catch { return data; }
-}
-
 /** Look up the card linked to a session via the loops table, then publish a
  *  board lock event so the kanban board can show/hide the spinner. Fire-and-
  *  forget: a failed lookup never blocks the lock route. */
@@ -120,12 +93,11 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       } } } }, async (req, reply) => {
     if (!req.body?.workspace_id) return reply.code(400).send(err('missing_workspace', 'body.workspace_id required'));
     try {
-      const s = await createSession(ctx.db, ctx.paths, ctx.encryptionKey, req.body.workspace_id,
-        { id: req.body.id });
+      const s = await ctx.sessions.create(req.body.workspace_id, { id: req.body.id });
       const wsRows = await ctx.db.select().from(workspaces).where(eq(workspaces.id, s.workspaceId));
       const workspace = wsRows[0];
       // Two tiers, merged here so every client (cli, looper) freezes the same
-      // list: the repo's — scanned AFTER createSession returns, when the
+      // list: the repo's — scanned AFTER Sessions.create returns, when the
       // checkout is on the SESSION's branch (a claim sits on base until
       // checkoutBranch; scanning at claim would read the wrong branch, worst
       // on restart) — and the image's system tier, repo shadowing system.
@@ -167,7 +139,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   // and the launcher wants the ended ones too so it can grey them out rather
   // than infer their fate from whether a local transcript happens to exist.
   app.get<{ Querystring: { limit?: number; before?: string; before_id?: string; before_pinned?: boolean; git?: string;
-    typed?: boolean; supervisor?: boolean } }>(
+    typed?: boolean; supervisor?: boolean; q?: string } }>(
     '/sessions', { schema: { ...TAG,
     summary: 'List sessions',
     description: 'Every session, pinned first then newest activity first, including destroyed ones (status says which). ' +
@@ -183,9 +155,12 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       '`git=true` adds `work` per row — where the session\'s work stands: not_pushed (only on ' +
       'this server\'s disk), not_merged (on origin\'s branch, not in base), merged (in base), or ' +
       'null (nothing to measure: no checkout, or not this session\'s own). Read from each ' +
-      'checkout on disk — real work per row, so ask only when a screen will show it.',
+      'checkout on disk — real work per row, so ask only when a screen will show it.\n\n' +
+      '`q` filters: the text as ONE substring, case-insensitive, anywhere in the name, the last ' +
+      'user message or the branch. It is part of the list\'s WHERE, so paging and `total` follow it.',
     querystring: { type: 'object', additionalProperties: false, properties: {
       limit: { type: 'integer', minimum: 1, maximum: 500, description: 'Page size; omitted = everything.' },
+      q: { type: 'string', maxLength: 200, description: 'Substring to match (case-insensitive) in name, last user message or branch.' },
       typed: { type: 'boolean', description: 'true = only sessions something was typed into (a last message exists).' },
       supervisor: { type: 'boolean', description: 'false = leave out the looper\'s supervisor seats.' },
       before: { type: 'string', description: 'A row\'s last_used_at (ISO) — return only older activity.' },
@@ -193,49 +168,17 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       before_pinned: { type: 'boolean', description: 'That row\'s pinned flag — pinned sorts ahead of activity, so the cursor carries it or a pinned page boundary leaks unpinned rows into the pinned block (and vice versa).' },
       git: { type: 'string', enum: ['true'], description: 'Compute `work` per row from the checkout.' } } } } },
   async (req) => {
-    // last_user_message rides the list; the transcript blob NEVER does —
-    // sessionColumns leaves it out, which is what keeps this list cheap.
-    // branch comes from the session's FOLDER, card from its LOOP (either
-    // seat) — sessions carry neither themselves.
-    const { limit, before, before_id: beforeId, before_pinned: beforePinned } = req.query;
-    const cut = before ? new Date(before) : undefined;
-    // What the list IS is decided here, once — the filters and the count
-    // share one WHERE, so `total` is exactly the rows the pages add up to.
-    // The cli used to drop never-typed and supervisor rows itself, which left
-    // every page half empty on screen and made its "more" count a guess.
-    const filters = [];
-    if (req.query.typed === true) filters.push(isNotNull(sessions.lastUserMessage));
-    if (req.query.supervisor === false) filters.push(or(isNull(sessions.agent), ne(sessions.agent, 'supervisor')));
-    // Assistant sessions are tracked for tokens, not for the session list —
-    // always excluded from the list the user sees.
-    filters.push(or(isNull(sessions.agent), ne(sessions.agent, 'assistant')));
-    let q = ctx.db
-      .select({ ...sessionColumns, branch: folders.branch, card: loops.card })
-      .from(sessions)
-      .leftJoin(folders, eq(folders.id, sessions.folderId))
-      .leftJoin(loops, or(eq(loops.codingSessionId, sessions.id), eq(loops.supervisorSessionId, sessions.id)))
-      // Pinned rows sit ahead of all activity ordering (018). id descends
-      // too: a page boundary between rows sharing a timestamp must cut the
-      // same way every time or the next page skips or repeats.
-      .orderBy(desc(sessions.pinned), desc(sessions.lastUsedAt), desc(sessions.id))
-      .$dynamic();
-    // The cursor is the whole sort key of the last row the client saw:
-    // pinned first (a pinned tail means only unpinned rows follow), then
-    // the (last_used_at, id) pair as ever.
-    const cursor = cut && !isNaN(cut.getTime())
-      ? or(
-        beforePinned === true ? eq(sessions.pinned, false) : undefined,
-        and(eq(sessions.pinned, beforePinned === true),
-          beforeId
-            ? or(lt(sessions.lastUsedAt, cut), and(eq(sessions.lastUsedAt, cut), lt(sessions.id, beforeId)))
-            : lt(sessions.lastUsedAt, cut)))
-      : undefined;
-    if (filters.length || cursor) q = q.where(and(...filters, ...(cursor ? [cursor] : [])));
-    if (limit) q = q.limit(limit);
-    const [rows, [{ total }]] = await Promise.all([
-      q,
-      ctx.db.select({ total: count() }).from(sessions).where(filters.length ? and(...filters) : undefined),
-    ]);
+    // The list IS the object's (Sessions.list): filters, cursor and count in
+    // one place. branch comes from the session's FOLDER, card from its LOOP
+    // (either seat) — sessions carry neither themselves.
+    const { rows, total } = await (async () => {
+      const r = await ctx.sessions.list({
+        typed: req.query.typed, supervisor: req.query.supervisor, q: req.query.q, limit: req.query.limit,
+        before: req.query.before ? new Date(req.query.before) : undefined,
+        beforeId: req.query.before_id, beforePinned: req.query.before_pinned,
+      });
+      return { rows: r.sessions, total: r.total };
+    })();
     const now = Date.now();
     // Card status: the card's column on the board. Cards live in per-workspace
     // schemas, so one raw query per workspace that has cards in this page.
@@ -289,7 +232,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     async (req, reply) => {
       const client = clientOf(req);
       if (!client) return reply.code(400).send(err('missing_client', 'x-phantom-looper-client header required'));
-      const s = await getSession(ctx.db, req.params.id);
+      const s = await ctx.sessions.get(req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       // A running server turn is the truth the clock is not. `activeTurns`
       // holds the live turn's abort controller IN THIS PROCESS, so it cannot
@@ -302,7 +245,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         return reply.code(409).send(lockedErr(s));
       }
       const ttl = await resolve(ctx.db, 'session_lock_ttl_ms');
-      const expires = await acquireLock(ctx.db, s, client, Number(ttl), req.body?.label);
+      const expires = await ctx.sessions.acquireLock(s, client, Number(ttl), req.body?.label);
       if (!expires) return reply.code(409).send(lockedErr(s));
       ctx.sessionEvents?.publish(s.id, client, lockEvent(s, { locked: true, by: client,
         label: req.body?.label ?? s.lockedLabel ?? null, expires }));
@@ -313,10 +256,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       // The transcript's stamp rides along so a turn can tell whether its
       // memory is current WITHOUT downloading anything: stamp unchanged =
       // run on memory; moved = someone advanced it, pull once first.
-      const t = await ctx.db.select({ updatedAt: sessions.transcriptUpdatedAt }).from(sessions)
-        .where(eq(sessions.id, s.id));
+      const stamp = await ctx.sessions.transcriptStamp(s.id);
       return ok({ locked: true, expires_at: expires.toISOString(),
-        transcript_updated_at: t[0]?.updatedAt?.toISOString() ?? null });
+        transcript_updated_at: stamp?.toISOString() ?? null });
     });
 
   app.delete<{ Params: { id: string } }>(
@@ -327,8 +269,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     async (req, reply) => {
       const client = clientOf(req);
       if (!client) return reply.code(400).send(err('missing_client', 'x-phantom-looper-client header required'));
-      const s = await getSession(ctx.db, req.params.id);
-      const released = await releaseLock(ctx.db, req.params.id, client);
+      const s = await ctx.sessions.get(req.params.id);
+      const released = await ctx.sessions.releaseLock(req.params.id, client);
       if (released && s) ctx.sessionEvents?.publish(s.id, client, lockEvent(s, { locked: false }));
       if (released) void publishBoardLock(ctx, req.params.id, false);
       // A freed session is the event a skipped looper round waits on — e.g.
@@ -383,12 +325,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         'running session is safe; only writes need the lock.',
       params: idParam } },
     async (req, reply) => {
-      const s = await getSession(ctx.db, req.params.id);
+      const s = await ctx.sessions.get(req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
-      // The one read that names the blob on purpose.
-      const rows = await ctx.db.select({ data: sessions.transcript })
-        .from(sessions).where(eq(sessions.id, s.id));
-      return ok({ data: rows[0]?.data ?? null, updated_at: s.transcriptUpdatedAt ?? null });
+      return ok({ data: await ctx.sessions.transcript(s.id), updated_at: s.transcriptUpdatedAt ?? null });
     });
 
   app.put<{ Params: { id: string }; Body: { data: string } }>(
@@ -406,7 +345,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
           properties: { data: { type: 'string' } } } } },
     async (req, reply) => {
       const client = clientOf(req);
-      const s = await getSession(ctx.db, req.params.id);
+      const s = await ctx.sessions.get(req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (heldByOther(s, client)) return reply.code(409).send(lockedErr(s));
       // The same ground truth as the lock route: an expired hold is not an
@@ -417,57 +356,23 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         return reply.code(409).send(lockedErr(s));
       }
       const data = req.body.data;
-      // A list preview, not the record: the UI shows a few dozen characters,
-      // and an uncapped copy of a pasted wall of text would ride every
-      // GET /sessions response for the life of the session.
-      const lastUserMessage = lastUserFromJsonl(data)?.slice(0, LAST_MESSAGE_CHARS) ?? null;
-      // The PIN, written ONCE. The first save names the model this session
-      // runs on for the rest of its life; no later save moves it. That is what
-      // makes the rule enforceable everywhere else: a session with a pin never
-      // reads the global settings again, whoever runs the turn.
-      const head = headerModelFromJsonl(data);
-      const pinning = s.provider == null && s.model == null
-        && head.provider != null && head.model != null;
-      const stamp = new Date();
-      // The token totals ride the save: the whole record is already in memory
-      // here, so summing its usage lines costs one pass, and the row's cache
-      // lands in the SAME statement as the text it sums — the two can never
-      // disagree, and no read ever has to recompute.
-      const tokens = sumUsageFromJsonl(data);
-      // Every save is one turn: the counter that paces session naming.
-      // Who drove it is read off the writer: a person's turn into the loop's
-      // coding session takes the session over (sessions.ts agentAfterSave).
-      const agent = agentAfterSave(s.agent, client);
-      const [saved] = await ctx.db.update(sessions)
-        .set({ transcript: data, lastUserMessage, transcriptUpdatedAt: stamp,
-          turnCount: sql`${sessions.turnCount} + 1`, agent,
-          tokensInput: tokens.input, tokensOutput: tokens.output,
-          tokensCacheRead: tokens.cache_read, tokensCacheWrite: tokens.cache_write,
-          tokensAsOf: stamp,
-          ...(pinning ? { provider: head.provider, model: head.model, baseUrl: head.baseUrl } : {}),
-        })
-        .where(eq(sessions.id, s.id))
-        .returning({ name: sessions.name, turnCount: sessions.turnCount, nameManual: sessions.nameManual });
-      // Saving a turn is activity: the session stays off the idle sweep and
-      // the holder's lock slides forward without a separate renew call.
-      await touchSession(ctx.db, s.id);
-      // The record landed: the one moment a client can trust that the server's
-      // copy moved. Watchers pull the transcript on this. `by` is the writer,
-      // so the window that just uploaded its OWN turn ignores the echo instead
-      // of re-pulling and repainting the reply it already drew.
-      ctx.sessionEvents?.publish(s.id, client, { event: 'transcript', updated_at: stamp.toISOString(), by: client });
-      if (agent !== s.agent) ctx.sessionEvents?.publish(s.id, client, { event: 'session', agent });
+      // One statement lands the record, its preview, its token sums, the
+      // turn count and — on the first save — the pin (Sessions.saveTranscript);
+      // the record event goes out with it. Who drove it is read off the
+      // writer: a person's turn into the loop's coding session takes the
+      // session over (agentAfterSave).
+      const saved = await ctx.sessions.saveTranscript(s, data, client);
+      const { stamp, agent } = saved;
       if (client && s.lockedBy === client) {
         const ttl = await resolve(ctx.db, 'session_lock_ttl_ms');
-        const expires = await renewLock(ctx.db, s.id, client, Number(ttl));
+        const expires = await ctx.sessions.renewLock(s.id, client, Number(ttl));
         ctx.sessionEvents?.publish(s.id, client, lockEvent({ ...s, agent }, { locked: true, expires }));
       }
       // Naming rides the save but never blocks it — fire-and-forget; any
       // failure leaves the old name (or null) standing. A manual name
       // (/rename) turns the titler off for the session.
-      if (saved && !saved.nameManual && shouldName(saved.name, saved.turnCount))
-        void nameSession(ctx.db, ctx.encryptionKey, s.id, titleContext(data), ctx.modelFetch)
-          .then((name) => { if (name) ctx.sessionEvents?.publish(s.id, '', { event: 'session', name }); });
+      if (!saved.nameManual && shouldName(saved.name, saved.turnCount))
+        void nameSession(ctx.db, ctx.sessions, ctx.encryptionKey, s.id, titleContext(data), ctx.modelFetch);
       return ok({ saved: true, bytes: Buffer.byteLength(data), updated_at: stamp.toISOString() });
     });
 
@@ -515,7 +420,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       });
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       try {
-        const s = await getSession(ctx.db, req.params.id);
+        const s = await ctx.sessions.get(req.params.id);
         if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
         if (reply.raw.destroyed) return reply;
         reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
@@ -557,7 +462,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     async (req, reply) => {
       const client = clientOf(req);
       if (!client) return reply.code(400).send(err('missing_client', 'x-phantom-looper-client header required'));
-      const s = await getSession(ctx.db, req.params.id);
+      const s = await ctx.sessions.get(req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (s.lockedBy !== client) {
         return reply.code(409).send(s.lockedBy ? lockedErr(s)
@@ -579,13 +484,11 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   // to say what is being built. Best effort, off the request path.
   ctx.sessionEvents!.subscribeAll((sessionId, e) => {
     if (e.event !== 'turn-start' || e.agent !== 'coding') return;
-    void turnStarted(ctx.db, sessionId, e.message).then(async ({ firstMessage }) => {
+    void ctx.sessions.turnStarted(sessionId, e.message).then(async ({ firstMessage }) => {
       if (!firstMessage) return;
-      const name = await nameSession(ctx.db, ctx.encryptionKey, sessionId, firstMessageContext(e.message), ctx.modelFetch);
-      // The server authored this name — published with no client id, so the
-      // window running the turn hears it too (the feed drops a client's own
-      // events, and this name belongs to no client).
-      if (name) ctx.sessionEvents?.publish(sessionId, '', { event: 'session', name });
+      // The row publishes the name under no client id, so the window running
+      // the turn hears it too (the feed drops a client's own events).
+      await nameSession(ctx.db, ctx.sessions, ctx.encryptionKey, sessionId, firstMessageContext(e.message), ctx.modelFetch);
     }).catch((err) => log.warn({ session: sessionId, err: errStr(err) }, 'turn-start hook failed'));
   });
 
@@ -617,7 +520,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
           clientId: client, label: client, sessionId: req.params.id, fetch: f, lock: true });
       } catch (e) {
         if (e instanceof SessionLockedError) {
-          const s = await getSession(ctx.db, req.params.id);
+          const s = await ctx.sessions.get(req.params.id);
           return reply.code(409).send(s ? lockedErr(s) : err('session_locked', `session ${req.params.id} is in use`, true));
         }
         if ((e as Error).message.includes('session_not_found') || (e as Error).message.includes('not_found')) {
@@ -689,7 +592,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       // screenshot.
       bodyLimit: Math.ceil(MAX_ATTACHMENT_BYTES * 4 / 3) + 1024 },
     async (req, reply) => {
-      const session = await getSession(ctx.db, req.params.id);
+      const session = await ctx.sessions.get(req.params.id);
       if (!session) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       const data = Buffer.from(req.body.data, 'base64');
       if (!data.length) return reply.code(400).send(err('invalid_args', 'the file is empty', true));
@@ -723,7 +626,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         'the flush — its branch on origin is the record. A failed flush aborts the copy with the error.',
       params: idParam } },
     async (req, reply) => {
-      const src = await getSession(ctx.db, req.params.id);
+      const src = await ctx.sessions.get(req.params.id);
       if (!src) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       try {
         assertDuplicable(src);
@@ -736,7 +639,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       // flush a tree the live turn is halfway through writing.
       if (ctx.activeTurns?.has(src.id) && src.lockedBy) return reply.code(409).send(lockedErr(src));
       const ttl = await resolve(ctx.db, 'session_lock_ttl_ms');
-      const expires = await acquireLock(ctx.db, src, GIT_CLIENT_ID, Number(ttl), 'duplicate');
+      const expires = await ctx.sessions.acquireLock(src, GIT_CLIENT_ID, Number(ttl), 'duplicate');
       if (!expires) return reply.code(409).send(lockedErr(src));
       ctx.sessionEvents?.publish(src.id, GIT_CLIENT_ID, lockEvent(src, { locked: true, by: GIT_CLIENT_ID,
         label: 'duplicate', expires }));
@@ -756,37 +659,16 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
           }
           // The clone below can outrun the hold's clock; slide it forward so
           // nobody else takes the source mid-copy.
-          await renewLock(ctx.db, src.id, GIT_CLIENT_ID, Number(ttl));
+          await ctx.sessions.renewLock(src.id, GIT_CLIENT_ID, Number(ttl));
         }
-        const copy = await createSession(ctx.db, ctx.paths, ctx.encryptionKey, src.workspaceId,
-          srcFolder ? { fromBranch: srcFolder.branch } : {});
+        const copy = await ctx.sessions.create(src.workspaceId, srcFolder ? { fromBranch: srcFolder.branch } : {});
         // Copy the source's scratch pad into the copy's folder — same filenames,
         // the copy's container mounts them at the same /workspace/scratch/ path,
         // so every reference in the transcript works without rewriting.
         const srcScratch = path.join(sessionDir(ctx.paths, src.folderId ?? src.id), 'scratch');
         const dstScratch = path.join(sessionDir(ctx.paths, copy.id), 'scratch');
         await fs.cp(srcScratch, dstScratch, { recursive: true }).catch(() => {});
-        const t = await ctx.db.select({ data: sessions.transcript })
-          .from(sessions).where(eq(sessions.id, src.id));
-        const stamp = new Date();
-        await ctx.db.update(sessions).set({
-          planMode: src.planMode,
-          // The name travels; turn_count stays 0 — the copy renames on its own
-          // clock. NO pin, and that is the whole mechanism: the pin lives in
-          // the ROW and the copy's row has none, so it follows the model
-          // settings until its first new message saves one. The conversation
-          // travels untouched — the header still names what the SOURCE ran,
-          // and the first new message rewrites it to what the copy ran. NO
-          // token totals: the usage lines are stripped below, so the copy
-          // counts its own spend from birth.
-          ...(t[0]?.data != null ? {
-            transcript: stripUsageFromJsonl(rewriteTranscriptHeader(t[0].data, {
-              session_id: copy.id, branch: copy.branch,
-            })),
-            lastUserMessage: src.lastUserMessage, name: src.name, nameManual: src.nameManual,
-            transcriptUpdatedAt: stamp,
-          } : {}),
-        }).where(eq(sessions.id, copy.id));
+        await ctx.sessions.seedCopy(copy, src);
         return reply.code(201).send(ok({ ...copy, copied_from: src.id }));
       } catch (e) {
         if (e instanceof SessionError) {
@@ -795,7 +677,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         }
         throw e;
       } finally {
-        await releaseLock(ctx.db, src.id, GIT_CLIENT_ID);
+        await ctx.sessions.releaseLock(src.id, GIT_CLIENT_ID);
         ctx.sessionEvents?.publish(src.id, GIT_CLIENT_ID, lockEvent(src, { locked: false }));
         void publishBoardLock(ctx, src.id, false);
       }
@@ -808,7 +690,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       'scope, so this is the only view where a session override (auto_push_on_archive) shows resolved. ' +
       'The workspace container is runtime state and has no field here.',
     params: idParam } }, async (req, reply) => {
-    const s = await getSession(ctx.db, req.params.id);
+    const s = await ctx.sessions.get(req.params.id);
     if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
     const wsRows = await ctx.db.select().from(workspaces).where(eq(workspaces.id, s.workspaceId));
     const settingsOut = await settingsBlock(ctx.db, { workspace: wsRows[0], session: s });
@@ -842,18 +724,11 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         'the save-time write is backfilled on this read. All zeros when nothing was ever recorded.',
       params: idParam } },
     async (req, reply) => {
-      const s = await getSession(ctx.db, req.params.id);
+      const s = await ctx.sessions.get(req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       // A row older than the save-time write: backfill once from the record.
       if (s.tokensInput == null && s.transcriptUpdatedAt) {
-        const rows = await ctx.db.select({ data: sessions.transcript })
-          .from(sessions).where(eq(sessions.id, s.id));
-        const totals = sumUsageFromJsonl(rows[0]?.data ?? '');
-        await ctx.db.update(sessions).set({
-          tokensInput: totals.input, tokensOutput: totals.output,
-          tokensCacheRead: totals.cache_read, tokensCacheWrite: totals.cache_write,
-          tokensAsOf: s.transcriptUpdatedAt,
-        }).where(eq(sessions.id, s.id));
+        const totals = await ctx.sessions.backfillTokens({ ...s, transcriptUpdatedAt: s.transcriptUpdatedAt });
         return ok({ input: totals.input, output: totals.output,
           cache_read: totals.cache_read, cache_write: totals.cache_write,
           as_of: s.transcriptUpdatedAt.toISOString(), cached: false });
@@ -874,29 +749,20 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       body: { type: 'object', additionalProperties: false,
         properties: { name: { type: ['string', 'null'], maxLength: 80 },
           plan_mode: { type: 'boolean' }, pinned: { type: 'boolean' } } } } }, async (req, reply) => {
-      const s = await getSession(ctx.db, req.params.id);
+      const s = await ctx.sessions.get(req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (req.body?.name !== undefined) {
         const name = req.body.name === null ? null : req.body.name.trim();
         if (name === '') return reply.code(400).send(err('invalid_name', 'a name cannot be blank — null clears it'));
-        await ctx.db.update(sessions)
-          .set({ name, nameManual: name !== null })
-          .where(eq(sessions.id, s.id));
-        ctx.sessionEvents?.publish(s.id, clientOf(req), { event: 'session', name });
+        await ctx.sessions.rename(s.id, name, clientOf(req));
       }
       if (req.body?.plan_mode !== undefined) {
-        await ctx.db.update(sessions)
-          .set({ planMode: req.body.plan_mode })
-          .where(eq(sessions.id, s.id));
-        ctx.sessionEvents?.publish(s.id, clientOf(req),
-          { event: 'session', planMode: req.body.plan_mode });
+        await ctx.sessions.setPlanMode(s.id, req.body.plan_mode, clientOf(req));
       }
       if (req.body?.pinned !== undefined) {
-        await ctx.db.update(sessions)
-          .set({ pinned: req.body.pinned })
-          .where(eq(sessions.id, s.id));
+        await ctx.sessions.setPinned(s.id, req.body.pinned);
       }
-      return ok(await getSession(ctx.db, s.id));
+      return ok(await ctx.sessions.get(s.id));
     });
 
   // Delete = push + teardown: the flush-before-destroy rule. force=true
@@ -912,7 +778,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       params: idParam, querystring: { type: 'object', properties: {
         force: { type: 'string', enum: ['true'] }, purge: { type: 'string', enum: ['true'] } } } } },
     async (req, reply) => {
-      const s = await getSession(ctx.db, req.params.id);
+      const s = await ctx.sessions.get(req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       const purge = req.query.purge === 'true';
       if (purge && heldByOther(s, clientOf(req))) return reply.code(409).send(lockedErr(s));
@@ -928,14 +794,13 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       }
       try {
         if (s.status === 'active') {
-          await destroySession(ctx.db, ctx.paths, s, { force: req.query.force === 'true' });
+          await ctx.sessions.destroy(s, { force: req.query.force === 'true' });
           await ctx.engine?.detach(s.id);
           await ctx.fs?.containers.remove(s.id);
         }
         if (!purge) return ok({ destroyed: s.id });
         // The row goes last: its overrides with it, the transcript on it.
-        await ctx.db.delete(settingsRows).where(eq(settingsRows.scope, sessionScope(s.id)));
-        await ctx.db.delete(sessions).where(eq(sessions.id, s.id));
+        await ctx.sessions.purge(s.id);
         return ok({ purged: s.id });
       } catch (e) {
         if (e instanceof SessionError) return reply.code(409).send(err(e.code, e.message));
@@ -957,7 +822,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         folder_id: { type: ['string', 'null'] },
       } } } },
     async (req) => {
-      const row = await createAssistantSession(ctx.db, req.body.workspace_id, req.body.folder_id);
+      const row = await ctx.sessions.createAssistant(req.body.workspace_id, req.body.folder_id);
       return ok({ id: row.id });
     });
 
@@ -973,10 +838,10 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         } },
       } } } },
     async (req, reply) => {
-      const s = await getSession(ctx.db, req.params.id);
+      const s = await ctx.sessions.get(req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (s.agent !== 'assistant') return reply.code(400).send(err('not_assistant', 'this route is for assistant sessions only'));
-      await addSessionUsage(ctx.db, s.id, req.body.usage);
+      await ctx.sessions.addUsage(s.id, req.body.usage);
       return ok({});
     });
 }

@@ -3,10 +3,10 @@
 // owns the writes. The column list and the card prefix are workspace fields
 // (PATCH /workspaces/:id); defaults live here in code, the DB stores overrides.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { eq, inArray } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type pg from 'pg';
-import { workspaces, sessions, type WorkspaceRow } from '../../db/schema.js';
-import { currentLoop, getSession } from '../../sessions.js';
+import { workspaces, type WorkspaceRow } from '../../db/schema.js';
+import { currentLoop } from '../../sessions.js';
 import { logger, errStr } from '../../log.js';
 import { ok, err, type AppCtx } from '../app.js';
 import { resolve, resolveWithSource } from '../../settings.js';
@@ -105,7 +105,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
   async function autoPushArchivedCard(w: WorkspaceRow, seq: number): Promise<void> {
     if (!ctx.autoPush) return;
     const loop = await currentLoop(ctx.db, w.id, seq);
-    const session = loop ? await getSession(ctx.db, loop.codingSessionId) : undefined;
+    const session = loop ? await ctx.sessions.get(loop.codingSessionId) : undefined;
     if (!session || session.status !== 'active') return;
     if (await resolve(ctx.db, 'auto_push_on_archive', { workspace: w, session }) !== true) return;
     // The session lock may be held (a turn mid-flight, a tool call): wait it
@@ -220,9 +220,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx, deps: KanbanDeps
       const cardLocked: Record<number, boolean> = {};
       if (cs.length) {
         const sIds = cs.map((c) => c.id);
-        const sRows = await ctx.db.select({ id: sessions.id, work: sessions.work })
-          .from(sessions).where(inArray(sessions.id, sIds));
-        const workOf = new Map(sRows.map((s) => [s.id, s.work]));
+        const workOf = await ctx.sessions.workOf(sIds);
         for (const c of cs) { const w = workOf.get(c.id); if (w) cardWork[c.card] = w; }
         for (const c of cs) { if (c.locked) cardLocked[c.card] = true; }
       }

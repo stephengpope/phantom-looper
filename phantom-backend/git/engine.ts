@@ -5,11 +5,10 @@
 // the disk sweeps fire it unattended, so it holds the session lock while a
 // person-driven push/pull relies on git's own index.lock to error a true
 // simultaneous op.
-import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { sessions, type WorkspaceRow, type SessionRow } from '../db/schema.js';
+import type { WorkspaceRow, SessionRow } from '../db/schema.js';
 import { git, commitAll, pushSession, GIT_CLIENT_ID, type PushResult, type PullResult, type GitAuth } from './git.js';
-import { getFolder, acquireLock, releaseLock, renewLock } from '../sessions.js';
+import { getFolder, type Sessions } from '../sessions.js';
 import type { FolderRow } from '../db/schema.js';
 import { resolveAuth } from '../pool/pool.js';
 import { repoDir, type Paths } from '../pool/paths.js';
@@ -28,6 +27,7 @@ export class GitEngine {
 
   constructor(
     private db: Db,
+    private sessions: Sessions,
     private paths: Paths,
     private encryptionKey: Buffer,
     /** Hand a stopped merge to the session's own coding agent — the same hook
@@ -68,16 +68,16 @@ export class GitEngine {
    *  written from the whole diff, so backup messages never reach base).
    *  'busy' = the session is being driven; nothing was written. */
   async backup(s: SessionRow, workspace: WorkspaceRow): Promise<PushResult | 'busy'> {
-    if (!(await acquireLock(this.db, s, GIT_CLIENT_ID, LOCK_TTL_MS, 'backup'))) return 'busy';
+    if (!(await this.sessions.acquireLock(s, GIT_CLIENT_ID, LOCK_TTL_MS, 'backup'))) return 'busy';
     const heartbeat = setInterval(() => {
-      void renewLock(this.db, s.id, GIT_CLIENT_ID, LOCK_TTL_MS)
+      void this.sessions.renewLock(s.id, GIT_CLIENT_ID, LOCK_TTL_MS)
         .catch((e) => log.warn({ session: s.id, err: errStr(e) }, 'backup lock renewal failed'));
     }, RENEW_MS);
     try {
       return await this.push(s, workspace);
     } finally {
       clearInterval(heartbeat);
-      await releaseLock(this.db, s.id, GIT_CLIENT_ID);
+      await this.sessions.releaseLock(s.id, GIT_CLIENT_ID);
     }
   }
 
@@ -93,7 +93,7 @@ export class GitEngine {
       if (!committed && Number(ahead.trim()) === 0) return 'nothing';
       const r = await pushSession(dir, folder.branch, await this.auth(workspace));
       if (r !== 'pushed') return r;
-      await this.db.update(sessions).set({ lastPushAt: new Date() }).where(eq(sessions.id, s.id));
+      await this.sessions.markPushed(s.id);
       log.info({ session: s.id, branch: folder.branch }, 'pushed');
       return 'pushed';
     } catch (e) {
@@ -110,7 +110,7 @@ export class GitEngine {
    *  It takes the session (sync does), which is why `busy` is a result here. */
   async pull(s: SessionRow, workspace: WorkspaceRow): Promise<PullResult | 'busy'> {
     const r = await syncBranch(
-      { db: this.db, paths: this.paths, encryptionKey: this.encryptionKey,
+      { db: this.db, sessions: this.sessions, paths: this.paths, encryptionKey: this.encryptionKey,
         resolve: this.resolveConflict, messageConfig: this.messageConfig,
         onEvent: (e) => this.onSyncEvent?.(s.id, e) },
       s, workspace, { landOnBase: false, label: 'pull' });

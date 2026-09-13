@@ -35,12 +35,11 @@
 // THE LOCK is the only concurrency test. The sync takes the session lock and
 // fails when it cannot; it never inspects whether anything is running. Same
 // single lock the rest of the system uses — no new mutex.
-import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { sessions, type WorkspaceRow, type SessionRow } from '../db/schema.js';
+import type { WorkspaceRow, SessionRow } from '../db/schema.js';
 import { resolveAuth } from '../pool/pool.js';
 import { repoDir, type Paths } from '../pool/paths.js';
-import { getFolder, acquireLock, releaseLock, renewLock, cardIntentFor } from '../sessions.js';
+import { getFolder, cardIntentFor, type Sessions } from '../sessions.js';
 import {
   git, fetchBase, squashToMergeBase, commitStaged, rebaseOntoBase, rebaseAbort,
   landingProblems, pushSession, pushSessionForced, pushToBase, hasWorkToLand, GIT_CLIENT_ID,
@@ -97,6 +96,7 @@ export interface SyncResult {
 
 export interface SyncDeps {
   db: Db;
+  sessions: Sessions;
   paths: Paths;
   encryptionKey: Buffer;
   /** Hand the stopped rebase to the session's own coding agent, as a turn in
@@ -148,11 +148,11 @@ export async function syncBranch(
   // 0 — the lock IS the concurrency test. Held by someone else means someone
   // else is writing this checkout; there is nothing further to check.
   await ev('lock');
-  if (!(await acquireLock(deps.db, session, GIT_CLIENT_ID, LOCK_TTL_MS, opts.label))) {
+  if (!(await deps.sessions.acquireLock(session, GIT_CLIENT_ID, LOCK_TTL_MS, opts.label))) {
     return { outcome: 'busy', reason: 'the session is busy — try again when its turn finishes' };
   }
   const heartbeat = setInterval(() => {
-    void renewLock(deps.db, session.id, GIT_CLIENT_ID, LOCK_TTL_MS)
+    void deps.sessions.renewLock(session.id, GIT_CLIENT_ID, LOCK_TTL_MS)
       .catch((e) => log.warn({ session: session.id, err: errStr(e) }, 'lock renewal failed'));
   }, RENEW_MS);
 
@@ -258,7 +258,7 @@ export async function syncBranch(
       await ev('push_branch');
       const pushed = await pushSessionForced(dir, folder.branch, auth);
       if (pushed === 'pushed') {
-        await deps.db.update(sessions).set({ lastPushAt: new Date() }).where(eq(sessions.id, session.id));
+        await deps.sessions.markPushed(session.id);
       } else if (opts.landOnBase) {
         // The backup must exist before base is touched.
         return { outcome: 'error', reason: `branch push failed (${pushed})`, rounds: round };
@@ -305,6 +305,6 @@ export async function syncBranch(
     return { outcome: 'error', reason: (e as Error).message };
   } finally {
     clearInterval(heartbeat);
-    await releaseLock(deps.db, session.id, GIT_CLIENT_ID);
+    await deps.sessions.releaseLock(session.id, GIT_CLIENT_ID);
   }
 }

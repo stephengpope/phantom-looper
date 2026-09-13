@@ -22,7 +22,7 @@ import {
   readStore,
   GLOBAL, workspaceScope, sessionScope,
 } from '../../store.js';
-import { workspaces, sessions, sessionColumns } from '../../db/schema.js';
+import { workspaces } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { ok, err, type AppCtx } from '../app.js';
 
@@ -45,9 +45,9 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
   type Scope = { error: string } | { write: string; kind: 'global' | 'workspace' | 'session'; chain: string[] };
   async function scopeOf(q: { workspace?: string; session?: string }): Promise<Scope> {
     if (q.session) {
-      const rows = await ctx.db.select(sessionColumns).from(sessions).where(eq(sessions.id, q.session));
-      if (!rows.length) return { error: `no session ${q.session}` };
-      const ws = await ctx.db.select().from(workspaces).where(eq(workspaces.id, rows[0].workspaceId));
+      const s = await ctx.sessions.get(q.session);
+      if (!s) return { error: `no session ${q.session}` };
+      const ws = await ctx.db.select().from(workspaces).where(eq(workspaces.id, s.workspaceId));
       return { write: sessionScope(q.session), kind: 'session' as const,
         chain: [GLOBAL, ...(ws[0] ? [workspaceScope(ws[0].id)] : []), sessionScope(q.session)] };
     }
@@ -73,8 +73,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
 
       const wsRow = req.query.workspace
         ? (await ctx.db.select().from(workspaces).where(eq(workspaces.id, req.query.workspace)))[0] : undefined;
-      const sRow = req.query.session
-        ? (await ctx.db.select(sessionColumns).from(sessions).where(eq(sessions.id, req.query.session)))[0] : undefined;
+      const sRow = req.query.session ? await ctx.sessions.get(req.query.session) : undefined;
       const layers = await settingsLayers(ctx.db, { workspace: wsRow, session: sRow }, byScope);
       const out: Record<string, unknown> = {};
       for (const key of Object.keys(DEFAULTS) as SettingKey[]) {

@@ -7,6 +7,7 @@ import type { Paths } from '../pool/paths.js';
 import type { Db } from '../db/client.js';
 import type { ModelConfig } from '../../core/llm/createAgent.js';
 import { syncBranch, type SyncEvent, type SyncDeps, type ConflictContext } from './sync.js';
+import type { Sessions } from '../sessions.js';
 
 export { LOCK_TTL_MS, RENEW_MS, type ConflictContext } from './sync.js';
 
@@ -22,6 +23,7 @@ export interface AutoPushResult {
 
 export interface AutoPushDeps {
   db: Db;
+  sessions: Sessions;
   paths: Paths;
   encryptionKey: Buffer;
   resolve?: SyncDeps['resolve'];

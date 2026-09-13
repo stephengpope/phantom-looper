@@ -13,7 +13,6 @@ import type { FastifyInstance } from 'fastify';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { sessionDir } from '../../pool/paths.js';
-import { getSession, touchSession } from '../../sessions.js';
 import { resolveCredential } from '../../settings.js';
 import { ok, err, type AppCtx } from '../app.js';
 import { SESSION_HEADER } from '../sessionHeader.js';
@@ -159,12 +158,12 @@ export function webRoutes(app: FastifyInstance, ctx: AppCtx) {
   }, async (req, reply) => {
     const sessionId = String(req.headers[SESSION_HEADER] ?? '');
     if (!sessionId) return reply.code(400).send(err('session_not_found', `missing ${SESSION_HEADER} header`));
-    const session = await getSession(ctx.db, sessionId);
+    const session = await ctx.sessions.get(sessionId);
     if (!session) return reply.code(404).send(err('session_not_found', `no session ${sessionId}`));
     if (session.status !== 'active') return reply.code(410).send(err('session_destroyed', `session is ${session.status}`));
     const key = await resolveCredential(ctx.db, ctx.encryptionKey, 'firecrawl_api_key');
     if (!key) return reply.code(400).send(err('credential_required', NO_KEY));
-    void touchSession(ctx.db, sessionId);
+    void ctx.sessions.touch(sessionId);
 
     const hostDir = path.join(sessionDir(ctx.paths, session.folderId ?? session.id), 'web');
     await fsp.mkdir(hostDir, { recursive: true });

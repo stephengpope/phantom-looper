@@ -9,7 +9,6 @@
 import type { FastifyInstance } from 'fastify';
 import { and, desc, eq } from 'drizzle-orm';
 import { commands } from '../../db/schema.js';
-import { getSession } from '../../sessions.js';
 import { Sandbox } from '../../workspace/sandbox.js';
 import { ok, err, type AppCtx } from '../app.js';
 import {
@@ -45,7 +44,7 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
       'Reads the container fresh on every call; never starts one.',
     params: idParam } },
   async (req, reply) => {
-    const session = await getSession(ctx.db, req.params.id);
+    const session = await ctx.sessions.get(req.params.id);
     if (!session) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
 
     const { state, container } = await probe(session.folderId ?? session.id);
@@ -110,7 +109,7 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
     params: { type: 'object', properties: { id: { type: 'string' }, sid: { type: 'string' } },
       required: ['id', 'sid'] } } },
   async (req, reply) => {
-    const session = await getSession(ctx.db, req.params.id);
+    const session = await ctx.sessions.get(req.params.id);
     if (!session) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
     const { container } = await probe(session.folderId ?? session.id);
     if (!container) return reply.code(404).send(err('no_such_task', 'nothing is running — the container is not up'));

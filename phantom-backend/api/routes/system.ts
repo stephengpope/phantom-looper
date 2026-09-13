@@ -16,8 +16,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
 import type Docker from 'dockerode';
-import { and, ne, gte, sql, count } from 'drizzle-orm';
-import { sessions, helperLlmUsage } from '../../db/schema.js';
+import { gte, sql, count } from 'drizzle-orm';
+import { helperLlmUsage } from '../../db/schema.js';
 import type { AppCtx } from '../app.js';
 import { err, ok } from '../app.js';
 import { logger, errStr } from '../../log.js';
@@ -309,19 +309,7 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
     const dayOfWeek = weekStart.getDay();  // 0=Sun … 6=Sat
     weekStart.setDate(weekStart.getDate() - ((dayOfWeek + 6) % 7));
 
-    const notDestroyed = ne(sessions.status, 'destroyed');
-    const sumTokens = (since: Date) => ctx.db
-      .select({
-        provider: sessions.provider,
-        model: sessions.model,
-        input: sql<number>`coalesce(sum(${sessions.tokensInput}), 0)`.as('input'),
-        output: sql<number>`coalesce(sum(${sessions.tokensOutput}), 0)`.as('output'),
-        cacheRead: sql<number>`coalesce(sum(${sessions.tokensCacheRead}), 0)`.as('cache_read'),
-        cacheWrite: sql<number>`coalesce(sum(${sessions.tokensCacheWrite}), 0)`.as('cache_write'),
-      })
-      .from(sessions)
-      .where(and(notDestroyed, gte(sessions.lastUsedAt, since)))
-      .groupBy(sessions.provider, sessions.model);
+    const sumTokens = (since: Date) => ctx.sessions.tokenUsageByModel(since);
 
     // Helper calls (titles, commit messages) — from the helper_llm_usage table.
     const sumHelpers = (since: Date) => ctx.db
