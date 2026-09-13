@@ -249,13 +249,16 @@ export function sessionChoices(
       cells: [wsCol(s), cardCol, workCol, nameCol, s.model ?? '·', tokensCol, whenCol],
       busy: running,
       dot: open && !running,
-      hint: dead
-        ? `Ended — reopening restarts it.`
-        : held
-          ? `A turn is running (${s.lockedLabel || 'another machine'}); read freely — sends are refused while it runs.`
-          : open
-            ? 'Loaded in this window — enter switches to it.'
-            : sup ? `The looper's rounds and verdicts for card ${s.card ?? '?'} — read-only.` : undefined,
+      hint: [
+        s.name ?? undefined,
+        dead
+          ? `Ended — reopening restarts it.`
+          : held
+            ? `A turn is running (${s.lockedLabel || 'another machine'}); read freely — sends are refused while it runs.`
+            : open
+              ? 'Loaded in this window — enter switches to it.'
+              : sup ? `The looper's rounds and verdicts for card ${s.card ?? '?'} — read-only.` : undefined,
+      ].filter(Boolean).join('\n') || undefined,
     };
   });
   const table = tableChoices('ws', [
