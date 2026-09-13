@@ -192,7 +192,7 @@ export async function handleCommand(
     }
 
     case 'status': {
-      // Four lines: workspace, session + state, mode, server (compact).
+      // Workspace, session + state, agent, mode (code only), server.
       const w = acc.activeWorkspaceId ? await workspaceRow(engine, acc.activeWorkspaceId) : null;
       const s = acc.activeSessionId ? await sessionRow(engine, acc.activeSessionId) : null;
 
@@ -207,7 +207,8 @@ export async function handleCommand(
       const lines = [
         `Workspace: ${w?.name ?? acc.activeWorkspaceId ?? 'none — /workspaces'}`,
         `Session: ${sessionLine}`,
-        `Mode: ${acc.mode}`,
+        `Agent: ${acc.mode}`,
+        ...(acc.mode === 'code' && s ? [`Mode: ${s.planMode ? 'plan' : 'code'}`] : []),
       ];
 
       // Server stats condensed to one line.
