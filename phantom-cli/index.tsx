@@ -303,8 +303,8 @@ const resumeId = flag('--resume', '-r');
 // The coding kit factories: the seven file tools + the skill tools + web.
 // `plan` is /plan's switch: the readonly preset on the mutating kits — the
 // same rule the server's turn route applies for plan: true.
-const skillKit = (id: string, plan?: boolean) =>
-  skillTools({ baseUrl: connection().base, apiKey: connection().key, sessionId: id, ...(plan ? { pick: 'readonly' as const } : {}) });
+const skillKit = (id: string, plan?: boolean, planMode?: () => boolean) =>
+  skillTools({ baseUrl: connection().base, apiKey: connection().key, sessionId: id, planMode, ...(plan ? { pick: 'readonly' as const } : {}) });
 const webKit = (id: string) => webTools({ baseUrl: connection().base, apiKey: connection().key, sessionId: id });
 // Workspace-bound, not session-bound: the workspace's secrets shadow global
 // ones by name, and only App knows which workspace a session is in.
@@ -407,8 +407,8 @@ const app = render(
     autoPush={autoPushSession}
     autoPull={autoPullSession}
     boot={{ ...(resumeId ? { resumeId } : {}) }}
-    newTools={(id, plan, ws) => phantomTools({ baseUrl: connection().base, apiKey: connection().key, sessionId: id, ...(plan ? { pick: 'readonly' as const } : {}) })
-      .then((t) => ({ ...t, ...skillKit(id, plan), ...webKit(id), ...(ws ? secretKit(ws) : {}) }))}
+    newTools={(id, plan, ws, planMode) => phantomTools({ baseUrl: connection().base, apiKey: connection().key, sessionId: id, planMode, ...(plan ? { pick: 'readonly' as const } : {}) })
+      .then((t) => ({ ...t, ...skillKit(id, plan, planMode), ...webKit(id), ...(ws ? secretKit(ws) : {}) }))}
     newAssistantTools={(id) => phantomTools({ baseUrl: connection().base, apiKey: connection().key, sessionId: id, pick: 'readonly' })
       .then((t) => ({ ...t, ...webKit(id) }))}
     onSession={(s) => { currentId = s.id; openedIds.add(s.id); }}

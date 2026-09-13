@@ -157,8 +157,11 @@ export interface WindowOptions {
    *  workspace's `/events` through it. Absent (tests): boards load once. */
   stream?: Stream;
   /** Tools are per session, so every session that joins needs a fresh set.
-   *  `plan` builds the plan-mode kit: the readonly preset on the mutating kits. */
-  newTools: (sessionId: string, plan?: boolean, workspaceId?: string) => Promise<Record<string, Tool>>;
+   *  `plan` builds the plan-mode kit: the readonly preset on the mutating kits.
+   *  `planMode` reads the session's mode live: the mutating tools refuse
+   *  while it is on, so a /plan mid-turn stops the turn's writes. */
+  newTools: (sessionId: string, plan?: boolean, workspaceId?: string,
+    planMode?: () => boolean) => Promise<Record<string, Tool>>;
   configPath?: string;
   initial?: Initial;
   /** What launching wants: resume a named session, or find a workspace and
@@ -599,7 +602,8 @@ export class WindowStore {
    *  builds, plus the two the window owns. */
   private async codingKit(sessionId: string, plan: boolean, workspaceId: string): Promise<Record<string, Tool>> {
     return {
-      ...await this.opts.newTools(sessionId, plan, workspaceId),
+      ...await this.opts.newTools(sessionId, plan, workspaceId,
+        () => this.sessions.get(sessionId)?.planMode === true),
       ...codingKanbanTool(this.codingKanbanHandler(workspaceId)),
       ...screenModeTools(this.screenOps(sessionId)),
     };

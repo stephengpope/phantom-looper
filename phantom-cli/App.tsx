@@ -139,8 +139,10 @@ export function App({
   boot?: { resumeId?: string };
   /** Tools are per-session, so every session that joins needs a fresh set.
    *  `plan` builds the plan-mode kit instead: the readonly preset on the
-   *  mutating kits — /plan swaps between the two. */
-  newTools: (sessionId: string, plan?: boolean, workspaceId?: string) => Promise<Record<string, Tool>>;
+   *  mutating kits — /plan swaps between the two. `planMode` reads the
+   *  session's mode live: the mutating tools refuse while it is on. */
+  newTools: (sessionId: string, plan?: boolean, workspaceId?: string,
+    planMode?: () => boolean) => Promise<Record<string, Tool>>;
   configPath?: string;
   /** Test seam: the real one reads the config chain and builds a live model. */
   makeAgent?: typeof buildAgent;

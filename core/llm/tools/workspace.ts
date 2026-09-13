@@ -28,6 +28,10 @@ export interface PhantomConfig {
    *  set). Absent = the whole kit. An unknown name is an error — a silently
    *  missing tool is how an agent loses a capability without anyone noticing. */
   pick?: string[] | 'readonly';
+  /** Is the session in plan mode right now? A turn keeps the kit it started
+   *  with, so a /plan mid-turn leaves the mutating tools in its hands — each
+   *  one asks this before it runs and refuses while it says yes. */
+  planMode?: () => boolean;
   fetch?: typeof fetch;
 }
 
@@ -73,6 +77,10 @@ export async function phantomTools(cfg: PhantomConfig): Promise<Record<string, T
       // disconnect. Without it an ignored signal holds the whole turn until
       // the tool settles — bash has no timeout by default.
       execute: async (args: unknown, opts?: { abortSignal?: AbortSignal }) => {
+        if (def.mutates && cfg.planMode?.()) {
+          return { ok: false, error: { code: 'plan_mode', retryable: false,
+            message: `in plan mode — ${def.name} is off until the user switches back to code mode` } };
+        }
         const r = await f(`${cfg.baseUrl}/tools/${def.name}`, {
           method: 'POST',
           headers: {
