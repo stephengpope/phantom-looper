@@ -2,8 +2,8 @@
 // '» coding' (📌 replaces » when the session is pinned), ALWAYS shown while
 // a session is on screen so you know which before you type — with the
 // transient notices (ctrl+c's "again to quit")
-// composed after it by App. Padded two cells to clear the `> ` prompt gutter
-// above it.
+// composed after it by App. Padded one cell to align with the `> ` prompt
+// gutter above it.
 //
 // `spin` is the session working somewhere else (the loop's turn, another
 // window): who is working, the spinner, and ONE word for the work —
@@ -44,7 +44,7 @@ export function Toolbar({ groups = [], spin, spinWho, spinSince, toast, pinned }
   pinned?: boolean }) {
   const { cols } = useContext(SizeContext);
   if (toast) return (
-    <Box paddingLeft={2} width={cols} overflow="hidden"><Text backgroundColor={toast.bg} color="white" bold>{` ${toast.text} `}</Text></Box>
+    <Box paddingLeft={1} width={cols} overflow="hidden"><Text backgroundColor={toast.bg} color="white" bold>{` ${toast.text} `}</Text></Box>
   );
   const shown = groups
     .map((g) => g.filter((p) => (typeof p === 'string' ? p : p.text)))
@@ -52,10 +52,10 @@ export function Toolbar({ groups = [], spin, spinWho, spinSince, toast, pinned }
   if (!shown.length && !spin) return (
     // The held blank row — same shape as the real line, one cell of content
     // so yoga keeps the height.
-    <Box paddingLeft={2} width={cols} overflow="hidden"><Text> </Text></Box>
+    <Box paddingLeft={1} width={cols} overflow="hidden"><Text> </Text></Box>
   );
   return (
-    <Box paddingLeft={2} width={cols} overflow="hidden">
+    <Box paddingLeft={1} width={cols} overflow="hidden">
       <Text color="yellow">{pinned ? '📌 ' : '» '}</Text>
       {shown.map((g, gi) => (
         <Text key={gi} color="yellow">
