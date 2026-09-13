@@ -91,7 +91,7 @@ export async function autoUpdateCycle(d: AutoUpdateDeps): Promise<CycleResult> {
 // and no lock is ever taken by a build that is about to be replaced.
 //
 // The target is ALWAYS the latest published release: a version mismatch
-// (from /health) forces the GitHub check, and the daily stamp gates it when
+// (from /api/health) forces the GitHub check, and the daily stamp gates it when
 // the versions agree, so ordinary launches never wait on the network. When
 // the client half landed, the gate re-execs into it — the "next launch" the
 // install message names is this one.

@@ -10,10 +10,10 @@
 // (quitNotice), in either direction.
 //
 // The server half waits: POST /update returns as soon as the tag is handed to
-// the updater sidecar, and the observable result is GET /health's version
+// the updater sidecar, and the observable result is GET /api/health's version
 // changing (the api restarts in between and is unreachable for a moment —
 // those polls just miss). A restart cuts off every loop round in flight and
-// blocks those cards, so `loops_running` from /health gates a confirmation.
+// blocks those cards, so `loops_running` from /api/health gates a confirmation.
 //
 // Everything reaches this module through `deps`, so a caller can script a
 // release, a server and a clock without a network or a terminal.
@@ -55,7 +55,7 @@ export function bare(v: string): string { return v.replace(/^v/, ''); }
 
 export interface Health { version?: string; loops_running?: number }
 
-/** GET /health, null when the server cannot be reached. Exported for the
+/** GET /api/health, null when the server cannot be reached. Exported for the
  *  launch gate (autoUpdate.ts), which reconciles versions before the app opens. */
 export async function readHealth(server: ServerLink): Promise<Health | null> {
   try { return await server.call('GET', '/health') as Health; } catch { return null; }
@@ -74,19 +74,26 @@ function minutes(ms: number): string {
   return m === 1 ? '1 minute' : `${m} minutes`;
 }
 
-/** Poll /health until it reports `version`, or the timeout passes. */
+/** Poll /api/health until it reports `version`, or the timeout passes.
+ *  The tick message reflects what the server is doing:
+ *    - health responds (old version) → downloading images
+ *    - health unreachable            → restarting
+ *    - health responds (new version) → done                       */
 async function waitForVersion(d: UpdateDeps, server: ServerLink, version: string):
   Promise<{ ok: true; ms: number } | { ok: false; last: string | null }> {
   const start = d.now();
   const timeout = d.timeoutMs ?? TIMEOUT_MS;
   let last: string | null = null;
+  let serverWentDown = false;
   for (;;) {
     const ms = d.now() - start;
     if (ms >= timeout) return { ok: false, last };
-    d.tick?.(`  Waiting... ${elapsed(ms)}`);
+    const phase = serverWentDown ? 'Waiting for server to come back up' : 'Downloading images';
+    d.tick?.(`  ${phase}... ${elapsed(ms)}`);
     await d.sleep(d.pollMs ?? POLL_MS);
     const h = await readHealth(server);
-    if (h?.version) {
+    if (!h) { serverWentDown = true; continue; }
+    if (h.version) {
       last = bare(String(h.version));
       if (last === version) return { ok: true, ms: d.now() - start };
     }
