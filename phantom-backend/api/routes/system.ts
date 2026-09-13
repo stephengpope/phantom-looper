@@ -1,14 +1,12 @@
-// Server-level operations. Today: the remote upgrade.
+// Server-level operations: the remote upgrade (with streamed pull progress),
+// container logs, system status, and token usage.
 //
-// POST /update {tag} drops the requested release tag where the updater
-// sidecar polls for it (UPDATE_TRIGGER_DIR, a volume shared with the `updater`
-// compose service). The sidecar pulls that tag's images, refreshes the host
-// files out of the api image, pins the tag in .env and recreates the stack —
-// see updater/. This process never touches docker for that: it only sees the
-// socket proxy, which refuses everything compose needs, and that is the point
-// (the thing holding the real socket has no network surface). The route
-// returns as soon as the trigger is written; the restart that follows is the
-// observable result (GET /health's version changes).
+// POST /update {tag} pulls the new images via dockerode (streamed per-image
+// download progress as ND-JSON), then hands the release tag to the updater
+// sidecar which extracts host files and recreates the stack. The pull happens
+// inside the API process (the socket proxy allows IMAGES + POST), so progress
+// is observable. The sidecar still owns compose — the API never holds the raw
+// docker socket.
 import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs/promises';
 import { statfsSync } from 'node:fs';
@@ -21,6 +19,7 @@ import { err, ok } from '../app.js';
 import { logger, errStr } from '../../log.js';
 import { catalog, modelsFor } from '../../models.js';
 import { PROVIDERS, isProvider } from '../../../core/llm/createAgent.js';
+import { startUpdate, subscribe, isRunning, type UpdateListener } from '../updateTask.js';
 
 const log = logger('system');
 
@@ -91,16 +90,14 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
   app.post('/update', {
     schema: {
       tags: ['meta'],
-      summary: 'Upgrade this server to a release',
-      description: 'Hands a release tag to the updater sidecar, which pulls that version\'s images, ' +
-        'refreshes the deploy files on the host from the image, and recreates the stack. Returns as soon as ' +
-        'the request is handed over — the upgrade itself takes a minute or two, during which the API ' +
-        'restarts (in-flight bash commands are cut off; sessions resume on their next call). ' +
-        'Watch GET /health `version` change. While a card has a loop round in flight the route refuses ' +
-        '(409 `loops_running`) unless the caller passes `restart_anyway` — the guard lives HERE so no ' +
-        'client can kill running cards by forgetting to check. `updater_unavailable` (503) means this ' +
-        'server was started without the sidecar (a dev `docker compose up`, or an install older than ' +
-        'it): re-run install.sh once.',
+      summary: 'Upgrade this server to a release (streamed progress)',
+      description: 'Pulls the new images via dockerode and streams ND-JSON progress events: ' +
+        '`{event:"pulling", image, percent}` per image, `{event:"pulled"}`, `{event:"restarting"}`, ' +
+        'then the stream closes and the sidecar restarts the stack. If an update is already in progress, ' +
+        'the stream attaches to it and replays current state. Heartbeats keep the connection alive. ' +
+        'While a card has a loop round in flight the route refuses (409 `loops_running`) unless the ' +
+        'caller passes `restart_anyway`. `updater_unavailable` (503) means this server has no updater ' +
+        'sidecar (UPDATE_TRIGGER_DIR unset) — re-run install.sh once.',
       body: {
         type: 'object', required: ['tag'], additionalProperties: false,
         properties: {
@@ -111,6 +108,8 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
     },
   }, async (req, reply) => {
     const { tag, restart_anyway: restartAnyway } = req.body as { tag: string; restart_anyway?: boolean };
+    const docker = ctx.fs?.docker;
+
     // THE guard: a restart cuts every loop round in flight and blocks those
     // cards, so a request that has not been explicitly told to restart anyway
     // is refused while any card is mid-round.
@@ -122,14 +121,46 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
     if (!ctx.updateTriggerDir) {
       return reply.code(503).send(err('updater_unavailable', 'this server has no updater sidecar (UPDATE_TRIGGER_DIR unset) — re-run install.sh once'));
     }
-    try {
-      await fs.writeFile(path.join(ctx.updateTriggerDir, 'request'), `${tag}\n`);
-    } catch (e) {
-      log.error({ err: errStr(e), tag }, 'update trigger failed');
-      return reply.code(503).send(err('updater_unavailable', `could not hand the request to the updater: ${errStr(e)}`));
+    if (!docker) {
+      return reply.code(503).send(err('updater_unavailable', 'this server has no docker access'));
     }
-    log.info({ tag }, 'update requested');
-    return ok({ tag, requested: true });
+
+    const apiImage = process.env.API_IMAGE ?? 'ghcr.io/stephengpope/phantom-backend-api';
+    const sessionImage = 'ghcr.io/stephengpope/phantom-backend-session';
+
+    // Start the task (or attach to an existing one).
+    if (!isRunning()) {
+      startUpdate(docker, tag, ctx.updateTriggerDir, apiImage, sessionImage);
+    }
+
+    // Stream ND-JSON progress to the client.
+    reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
+    const write = (o: unknown) => { reply.raw.write(`${JSON.stringify(o)}\n`); };
+    const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
+
+    const listener: UpdateListener = (e) => {
+      write(e);
+      // After "restarting" or "error", close the stream.
+      if (e.event === 'restarting' || e.event === 'error') {
+        clearInterval(heartbeat);
+        reply.raw.end();
+      }
+    };
+
+    const unsub = subscribe(listener);
+    if (!unsub) {
+      // Task already finished (race — very unlikely).
+      clearInterval(heartbeat);
+      write({ event: 'error', message: 'no update in progress' });
+      reply.raw.end();
+      return reply;
+    }
+
+    // Wait for the client to disconnect or the stream to end.
+    await new Promise<void>((resolve) => reply.raw.on('close', resolve));
+    clearInterval(heartbeat);
+    unsub();
+    return reply;
   });
 
   app.post<{ Body: { service?: string; tail?: number; since?: string; grep?: string } }>('/system/logs', {

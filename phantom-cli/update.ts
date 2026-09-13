@@ -9,11 +9,10 @@
 // Skipping a half is allowed; the next quit names whatever is still behind
 // (quitNotice), in either direction.
 //
-// The server half waits: POST /update returns as soon as the tag is handed to
-// the updater sidecar, and the observable result is GET /api/health's version
-// changing (the api restarts in between and is unreachable for a moment —
-// those polls just miss). A restart cuts off every loop round in flight and
-// blocks those cards, so `loops_running` from /api/health gates a confirmation.
+// The server half streams: POST /update returns ND-JSON progress events as the
+// server pulls images, then a "restarting" event before the server goes down.
+// The CLI shows per-image download percentage, then health-polls until the
+// server comes back on the new version.
 //
 // Everything reaches this module through `deps`, so a caller can script a
 // release, a server and a clock without a network or a terminal.
@@ -24,6 +23,9 @@ export type Target = 'both' | 'client' | 'server';
 export interface ServerLink {
   url: string;
   call(method: string, path: string, body?: unknown): Promise<unknown>;
+  /** Open a streaming POST and call `onEvent` for each ND-JSON line.
+   *  Resolves when the stream closes. */
+  stream(path: string, body: unknown, onEvent: (event: unknown) => void): Promise<void>;
 }
 
 export interface UpdateDeps {
@@ -74,30 +76,64 @@ function minutes(ms: number): string {
   return m === 1 ? '1 minute' : `${m} minutes`;
 }
 
-/** Poll /api/health until it reports `version`, or the timeout passes.
- *  The tick message reflects what the server is doing:
- *    - health responds (old version) → downloading images
- *    - health unreachable            → restarting
- *    - health responds (new version) → done                       */
+/** Poll /api/health until it reports `version`, or the timeout passes. */
 async function waitForVersion(d: UpdateDeps, server: ServerLink, version: string):
   Promise<{ ok: true; ms: number } | { ok: false; last: string | null }> {
   const start = d.now();
   const timeout = d.timeoutMs ?? TIMEOUT_MS;
   let last: string | null = null;
-  let serverWentDown = false;
   for (;;) {
     const ms = d.now() - start;
     if (ms >= timeout) return { ok: false, last };
-    const phase = serverWentDown ? 'Waiting for server to come back up' : 'Downloading images';
-    d.tick?.(`  ${phase}... ${elapsed(ms)}`);
+    d.tick?.(`  Waiting for server...  ${elapsed(ms)}`);
     await d.sleep(d.pollMs ?? POLL_MS);
     const h = await readHealth(server);
-    if (!h) { serverWentDown = true; continue; }
+    if (!h) continue;
     if (h.version) {
       last = bare(String(h.version));
       if (last === version) return { ok: true, ms: d.now() - start };
     }
   }
+}
+
+/** Stream progress from POST /update. Updates two tick lines showing per-image
+ *  download percentage. Resolves with 'restarting' when the server says it's
+ *  going down, or 'error' if the stream reports a failure. */
+type UpdateEvent = { event: string; image?: string; percent?: number; message?: string };
+
+async function streamUpdateProgress(d: UpdateDeps, server: ServerLink, tag: string):
+  Promise<'restarting' | 'error'> {
+  const progress: Record<string, number> = {};
+  let result: 'restarting' | 'error' = 'error';
+
+  try {
+    await server.stream('/update', { tag, restart_anyway: true }, (raw) => {
+      const e = raw as UpdateEvent;
+      if (e.event === 'pulling') {
+        progress[e.image!] = e.percent ?? 0;
+        const lines = Object.entries(progress)
+          .map(([img, pct]) => `  Pulling ${img} image...  ${pct}%`)
+          .join('\n');
+        d.tick?.(lines);
+      } else if (e.event === 'pulled') {
+        const lines = Object.keys(progress)
+          .map((img) => `  Pulling ${img} image...  done`)
+          .join('\n');
+        d.tick?.(lines);
+      } else if (e.event === 'restarting') {
+        result = 'restarting';
+        d.tick?.('  Restarting...');
+      } else if (e.event === 'error') {
+        result = 'error';
+        d.out(`  Update failed: ${e.message ?? 'unknown error'}`);
+      }
+      // heartbeat events are silently ignored
+    });
+  } catch (e) {
+    d.out(`  Update stream failed: ${errorText(e)}`);
+    return 'error';
+  }
+  return result;
 }
 
 /** The command. Returns the process exit code. */
@@ -167,22 +203,17 @@ export async function runUpdate(target: Target, d: UpdateDeps): Promise<number> 
           return code;
         }
       }
-      try {
-        // restart_anyway: running the command IS the yes — and when cards are
-        // mid-round the guard above already asked its explicit question.
-        await d.server.call('POST', '/update', { tag: latest, restart_anyway: true });
-      } catch (e) {
-        d.out(`  The update could not be requested: ${errorText(e)}`);
-        return 1;
-      }
-      d.out('  The server is downloading the update and restarting. Sessions pause for about a minute.');
+      // Stream pull progress, then wait for the restart to land.
+      const outcome = await streamUpdateProgress(d, d.server, latest);
+      if (outcome === 'error') return 1;
+      // The server sent "restarting" — wait for it to come back on the new version.
+      d.out('');
       const r = await waitForVersion(d, d.server, v);
       if (!r.ok) {
         d.out(`  Waited ${minutes(d.timeoutMs ?? TIMEOUT_MS)} and the server still reports ${r.last ?? serverVersion}. The update did not finish.`);
         d.out('  Log in to the server and run: docker logs phantom-update-run');
         return 1;
       }
-      d.out(`  Waiting... ${elapsed(r.ms)}`);
       d.out(`  Server is on ${v}.`);
     }
   }

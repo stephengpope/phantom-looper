@@ -263,6 +263,52 @@ export function apiFor(base: string, key: string, ca?: string) {
     });
 }
 
+/** A streaming POST client — reads ND-JSON lines and calls `onEvent` for each.
+ *  Resolves when the stream closes. No timeout — the stream lives as long as
+ *  the server keeps it open (heartbeats keep it alive). */
+export function streamFor(base: string, key: string, ca?: string) {
+  return (path: string, body: unknown, onEvent: (event: unknown) => void) =>
+    new Promise<void>((resolve, reject) => {
+      const u = new URL(`/api${path}`, base);
+      const req = (u.protocol === 'https:' ? httpsRequest : httpRequest)(u, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${key}`,
+          'content-type': 'application/json',
+        },
+        ...(ca ? { ca } : {}),
+      }, (res) => {
+        if (res.statusCode && res.statusCode >= 400) {
+          let text = '';
+          res.on('data', (c) => { text += c; });
+          res.on('end', () => {
+            try {
+              const j = JSON.parse(text) as { error?: { message?: string; code?: string } };
+              reject(new Error(j.error?.message ?? `POST ${path}: HTTP ${res.statusCode}`));
+            } catch { reject(new Error(`POST ${path}: HTTP ${res.statusCode}`)); }
+          });
+          return;
+        }
+        let buf = '';
+        res.on('data', (chunk: string | Buffer) => {
+          buf += String(chunk);
+          let nl: number;
+          while ((nl = buf.indexOf('\n')) !== -1) {
+            const line = buf.slice(0, nl).trim();
+            buf = buf.slice(nl + 1);
+            if (!line) continue;
+            try { onEvent(JSON.parse(line)); } catch {}
+          }
+        });
+        res.on('end', resolve);
+        res.on('error', reject);
+      });
+      req.on('error', reject);
+      req.write(JSON.stringify(body));
+      req.end();
+    });
+}
+
 /** Verify the pairing FROM THIS MACHINE — the path the app will actually use.
  *  The installer's own checks run on the box and cannot speak for the route
  *  from here (cloud firewalls, NAT). Plain node http(s) rather than fetch so

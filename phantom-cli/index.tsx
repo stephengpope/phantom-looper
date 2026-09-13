@@ -34,7 +34,7 @@ import { CONFIG_DIR } from './config.js';
 import { CLI_LOG_PATH, logLine } from './cliLog.js';
 import { resolveLocal, localValues } from './local.js';
 import { ndjson } from '../core/ndjson.js';
-import { apiFor, savedCaFor } from './provision.js';
+import { apiFor, streamFor, savedCaFor } from './provision.js';
 import { APP_VERSION, checkLatest, selfUpdate } from './selfUpdate.js';
 import { CHECK_INTERVAL_MS, autoUpdateCycle, dueForCheck, prelaunchReconcile, stampChecked } from './autoUpdate.js';
 import { quitNotice, runUpdate, versionLines } from './update.js';
@@ -64,7 +64,9 @@ function pairedServer(): ServerLink | null {
   const l = localValues();
   if (!l.server_key || !l.server_url) return null;
   const url = String(l.server_url);
-  return { url, call: apiFor(url, String(l.server_key), savedCaFor(url)) };
+  const ca = savedCaFor(url);
+  const key = String(l.server_key);
+  return { url, call: apiFor(url, key, ca), stream: streamFor(url, key, ca) };
 }
 
 if (firstArg === '--version' || firstArg === '-v') {
@@ -81,15 +83,32 @@ if (firstArg === 'update') {
   if (bad) die(`unknown option ${bad}\nusage: phantom-cli update [--client] [--server]`);
   const target: Target = flags.includes('--client') && !flags.includes('--server') ? 'client'
     : flags.includes('--server') && !flags.includes('--client') ? 'server' : 'both';
-  // The ticking wait rewrites its line; every real line clears it first.
+  // The ticking wait rewrites its line(s); `out` clears first, `tick` repaints
+  // in place. Multi-line ticks (image pull progress) move the cursor up to
+  // overwrite all of them.
+  let tickLines = 0;
   const code = await runUpdate(target, {
     appVersion: APP_VERSION,
     latest: checkLatest,
     server: pairedServer(),
     installClient: selfUpdate,
     confirm: askYesNo,
-    out: (line) => { process.stdout.write(TTY_CLEAR + line + '\n'); },
-    tick: process.stdout.isTTY ? (line) => { process.stdout.write(TTY_CLEAR + line); } : undefined,
+    out: (line) => {
+      // Clear any tick lines before printing a permanent line.
+      if (tickLines > 0) {
+        process.stdout.write(`\x1b[${tickLines}A\x1b[0J`);
+        tickLines = 0;
+      }
+      process.stdout.write(line + '\n');
+    },
+    tick: process.stdout.isTTY ? (text) => {
+      // Move up to overwrite previous tick, clear from cursor down, reprint.
+      if (tickLines > 0) {
+        process.stdout.write(`\x1b[${tickLines}A\x1b[0J`);
+      }
+      process.stdout.write(text);
+      tickLines = text.split('\n').length;
+    } : undefined,
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     now: Date.now,
   });

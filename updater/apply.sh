@@ -9,11 +9,9 @@
 #   sh apply.sh v1.2.3
 #
 # Steps (each aborts the upgrade and leaves the running stack untouched):
-#   1. Pull the tag's api image. Nothing on disk changes until it is on the
-#      box, so a failed pull can't leave .env pinned to an image that doesn't
-#      exist. The workspace image at the same tag is pulled too, best-effort:
-#      the api pulls it on demand if this misses, so it is a warm-up, not a
-#      requirement.
+#   1. Verify the images are already present (the API pulled them before
+#      writing the trigger file). If missing, abort — the API handles pulls
+#      with progress streaming, this script only needs the result.
 #   2. Copy the host files OUT of the api image into a staging dir.
 #   3. mv them into place (rename — never cp: this very script is one of the
 #      files, and an in-place overwrite would corrupt the copy the shell is
@@ -36,7 +34,6 @@ set -eu
 TAG="${1:?usage: apply.sh <tag>}"
 PHANTOM_BACKEND_DIR="${PHANTOM_BACKEND_DIR:-/opt/phantom-looper}"
 API_IMAGE="${PHANTOM_BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend-api}"
-SESSION_IMAGE="${PHANTOM_BACKEND_SESSION_IMAGE:-ghcr.io/stephengpope/phantom-backend-session}"
 # Where the image keeps the host files (Dockerfile). Mirrors the install
 # directory's layout, so extraction is a straight copy.
 IMAGE_HOST_DIR=/host-files
@@ -50,24 +47,11 @@ ENV_FILE="$PHANTOM_BACKEND_DIR/.env"
 
 echo "apply: upgrading to $TAG (image: $API_IMAGE:$TAG)"
 
-# ── 1. Pull the new images in parallel (disk still untouched) ────────────────
-# A failed pull is tolerated only when the image is ALREADY on the box (pulled
-# by hand, or a registry blip on a re-run); otherwise nothing has changed and
-# nothing will. Both pulls run concurrently to halve download time.
-docker pull "$SESSION_IMAGE:$TAG" \
-  && echo "apply: workspace image pulled" \
-  || echo "apply: workspace image pull failed — the api will pull it on first use" &
-SESSION_PID=$!
-
-if docker pull "$API_IMAGE:$TAG"; then
-  echo "apply: api image pulled"
-elif docker image inspect "$API_IMAGE:$TAG" >/dev/null 2>&1; then
-  echo "apply: pull failed but $API_IMAGE:$TAG is already present — using it"
-else
-  wait "$SESSION_PID" 2>/dev/null || true
-  echo "apply: image pull failed and $API_IMAGE:$TAG is not on this machine — aborting, nothing changed"; exit 1
+# ── 1. Verify the api image is present (pulled by the API process) ───────────
+if ! docker image inspect "$API_IMAGE:$TAG" >/dev/null 2>&1; then
+  echo "apply: $API_IMAGE:$TAG is not on this machine — aborting, nothing changed"; exit 1
 fi
-wait "$SESSION_PID" 2>/dev/null || true
+echo "apply: api image verified"
 
 # ── 2. Copy the host files out of the api image ─────────────────────────────
 # The staging dir sits INSIDE the install dir on purpose: step 3 has to be a

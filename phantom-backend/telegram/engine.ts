@@ -247,13 +247,40 @@ export class TelegramEngine {
           return r.ok ? r : null;
         } catch { return null; }
       },
-      triggerUpdate: async (tag) => {
+      triggerUpdate: async (tag, onEvent) => {
         try {
           // restart_anyway: the approval DM already warns that running turns
           // are stopped and loop cards blocked — a tap on Approve is the
           // informed yes the /update guard asks for.
-          const r = await (await this.call('/update', { method: 'POST', body: { tag, restart_anyway: true } })).json();
-          return r.ok ? { ok: true } : { ok: false, error: r.error?.message ?? 'unknown' };
+          const res = await this.callRaw('/update', { method: 'POST', body: { tag, restart_anyway: true } });
+          if (!res.ok) {
+            const j = await res.json().catch(() => ({ error: { message: `HTTP ${res.status}` } }));
+            return { ok: false, error: j.error?.message ?? `HTTP ${res.status}` };
+          }
+          // Read ND-JSON stream.
+          const reader = res.body?.getReader();
+          if (!reader) return { ok: true };
+          const decoder = new TextDecoder();
+          let buf = '';
+          let lastEvent: string | undefined;
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            let nl: number;
+            while ((nl = buf.indexOf('\n')) !== -1) {
+              const line = buf.slice(0, nl).trim();
+              buf = buf.slice(nl + 1);
+              if (!line) continue;
+              try {
+                const e = JSON.parse(line);
+                lastEvent = e.event;
+                onEvent?.(e);
+              } catch {}
+            }
+          }
+          if (lastEvent === 'error') return { ok: false, error: 'update failed' };
+          return { ok: true };
         } catch (e) { return { ok: false, error: (e as Error).message }; }
       },
       setting: async (key) => {
@@ -916,6 +943,17 @@ export class TelegramEngine {
       ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
     });
     return { json: () => r.json(), text: () => r.text() };
+  }
+
+  /** Like call() but returns the raw fetch Response — for streaming endpoints. */
+  async callRaw(path: string, init?: { method?: string; body?: unknown }): Promise<Response> {
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${this.deps.apiKey}`, 'x-phantom-looper-client': CLIENT_ID };
+    if (init?.body !== undefined) headers['content-type'] = 'application/json';
+    return this.f(`${BASE}${path}`, {
+      method: init?.method ?? 'GET', headers,
+      ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+    });
   }
 
   /** `/auto_push` and `/auto_pull` — core's one client of each git route, as

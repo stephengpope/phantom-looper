@@ -29,8 +29,9 @@ export interface UpgradeCheckerDeps {
   version: string;
   /** Read the health endpoint for loops_running. */
   health(): Promise<{ loops_running?: number } | null>;
-  /** Trigger the upgrade (POST /update {tag}). */
-  triggerUpdate(tag: string): Promise<{ ok: boolean; error?: string }>;
+  /** Trigger the upgrade (POST /update {tag}). Calls onEvent for each ND-JSON
+   *  progress event from the server. */
+  triggerUpdate(tag: string, onEvent?: (event: { event: string; image?: string; percent?: number; message?: string }) => void): Promise<{ ok: boolean; error?: string }>;
   /** Resolve a setting by key. */
   setting(key: string): Promise<unknown>;
   /** Get the bot token. */
@@ -166,17 +167,31 @@ export class UpgradeChecker {
         `✅ Update to ${v} approved.`).catch(() => {});
     }
 
-    // Trigger the upgrade.
-    const r = await this.deps.triggerUpdate(tag);
+    // Send a progress message that we'll edit as events arrive.
+    const msg = await client.sendMessage(dm, `⬆️ Updating to ${v}...`);
+    const msgId = msg?.message_id ?? null;
+
+    const r = await this.deps.triggerUpdate(tag, (event) => {
+      if (!msgId) return;
+      if (event.event === 'pulling') {
+        const text = `⬆️ Updating to ${v}...\n` +
+          `Pulling ${event.image} image... ${event.percent ?? 0}%`;
+        client.editMessageText(dm, msgId, text).catch(() => {});
+      } else if (event.event === 'pulled') {
+        client.editMessageText(dm, msgId, `⬆️ Updating to ${v}...\nImages pulled. Restarting...`).catch(() => {});
+      } else if (event.event === 'restarting') {
+        client.editMessageText(dm, msgId,
+          `⬆️ Updating to ${v}...\nRestarting — any running turns are stopped and loop cards are blocked.`).catch(() => {});
+      }
+    });
+
     if (!r.ok) {
-      await client.sendMessage(dm,
-        `⚠️ Could not start the update: ${r.error ?? 'unknown error'}`);
+      const errText = `⚠️ Update to ${v} failed: ${r.error ?? 'unknown error'}`;
+      if (msgId) { await client.editMessageText(dm, msgId, errText).catch(() => {}); }
+      else { await client.sendMessage(dm, errText); }
       return;
     }
 
-    await client.sendMessage(dm,
-      `⬆️ Updating to ${v}... The server will restart shortly — ` +
-      'any running turns are stopped and loop cards are blocked.');
     log.info({ tag }, 'upgrade triggered via Telegram');
   }
 }
