@@ -689,6 +689,13 @@ export class WindowStore {
     // This window's own turn, relayed as it runs, so any watcher sees it
     // stream exactly like a turn the server runs.
     s.relay = async (id, events) => { await this.api('POST', `/sessions/${id}/events`, { events }); };
+    // Per-step token recording — the CLI calls POST /token-usage.
+    s.recordStepTokens = (sessionId, usage, provider, model, responseId) => {
+      void this.api('POST', '/token-usage', {
+        session_id: sessionId, kind: 'coding', provider, model, response_id: responseId,
+        input: usage.input, output: usage.output, cache_read: usage.cache_read, cache_write: usage.cache_write,
+      }).catch(() => {});
+    };
     if (this.opts.initial) this.seat(s, this.opts.initial);
     return s;
   }
@@ -2017,6 +2024,14 @@ export class WindowStore {
                   model: languageModel(model), maxRetries: 0, system, prompt,
                   ...(maxTokens != null ? { maxTokens: Number(maxTokens) } : {}),
                 });
+                // Record compaction tokens — these were previously untracked.
+                void this.api('POST', '/token-usage', {
+                  session_id: session.id, kind: 'compaction',
+                  provider: model.provider, model: model.model,
+                  input: r.usage.inputTokens ?? 0, output: r.usage.outputTokens ?? 0,
+                  cache_read: r.usage.inputTokenDetails?.cacheReadTokens ?? 0,
+                  cache_write: r.usage.inputTokenDetails?.cacheWriteTokens ?? 0,
+                }).catch(() => {});
                 return r.text;
               },
             });

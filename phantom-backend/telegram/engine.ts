@@ -473,7 +473,7 @@ export class TelegramEngine {
         onSwitch,
         approve: (ask, signal) => this.approvals.request(client, dm, ask, signal),
         onWorkspaceCreated,
-      }, abort.signal, conv.getTranscript());
+      }, abort.signal, conv.getTranscript(), this.deps.tokenUsage, sessionId);
       replyText = result.text;
       // Record this turn's token usage on the session row.
       const model = (() => { try { return agentModelConfig(values, 'assistant'); } catch { return undefined; } })();

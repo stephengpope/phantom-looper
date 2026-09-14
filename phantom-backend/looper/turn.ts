@@ -13,6 +13,8 @@ import { webTools } from '../../core/llm/tools/web.js';
 import { secretTools } from '../../core/llm/tools/secrets.js';
 import { kanbanReadTool } from '../../core/llm/tools/kanban.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
+import type { TokenUsage } from '../tokenUsage.js';
+import { usageEvent, type StepRecord } from '../../core/llm/transcript.js';
 import type { BackdoorQueue } from '../api/backdoor.js';
 
 export interface TurnDeps {
@@ -41,6 +43,8 @@ export interface TurnDeps {
   /** The backdoor message queue (api/backdoor.ts): drained into the turn's
    *  messages below, restored if the turn fails before they are saved. */
   backdoor?: BackdoorQueue;
+  /** The unified token_usage table writer — per-step recording. */
+  tokenUsage?: TokenUsage;
 }
 
 /** The resolved settings as plain values — the same rows every client reads,
@@ -103,7 +107,19 @@ export async function runCodingTurn(
   // `record` is createAgent's step seam: each step's messages and usage line
   // collect here for the turn-end save — the WHOLE turn, where the SDK's
   // turn-end response carries only the final step.
-  const { record, events: turnEvents, messages: turnMessages } = memoryRecorder(messages.length);
+  // The onStepTokens callback records each step's tokens to the table.
+  const stepTokens: StepRecord['onStepTokens'] = deps.tokenUsage
+    ? (usage, responseId) => {
+        const ev = usageEvent(usage);
+        deps.tokenUsage!.record({
+          sessionId: opened.session.id, kind: 'coding',
+          provider: model.provider, model: model.model, responseId,
+          input: ev.input as number, output: ev.output as number,
+          cacheRead: ev.cache_read as number, cacheWrite: ev.cache_write as number,
+        }).catch(() => {});
+      }
+    : undefined;
+  const { record, events: turnEvents, messages: turnMessages } = memoryRecorder(messages.length, stepTokens);
   const feed = deps.sessionEvents;
   const id = opened.session.id;
   let text = '';

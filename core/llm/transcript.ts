@@ -39,6 +39,9 @@ export interface TranscriptHeader {
 
 export class Transcript {
   private started: boolean;
+  /** Set by the caller to record each step's tokens — the onStepTokens hook
+   *  that spliceTurn calls after every step. */
+  onStepTokens?: StepRecord['onStepTokens'];
 
   constructor(private header: TranscriptHeader, readonly path: string) {
     this.started = existsSync(this.path);
@@ -275,7 +278,8 @@ export interface StepRecord {
  *  live: the coder's block turn saved as its closing text alone). `startAt`
  *  = how many messages the conversation holds before this turn's first
  *  step lands. */
-export function memoryRecorder(startAt: number):
+export function memoryRecorder(startAt: number,
+  onStepTokens?: StepRecord['onStepTokens']):
 { record: StepRecord; events: TranscriptEvent[]; messages: ModelMessage[] } {
   let at = startAt;
   const events: TranscriptEvent[] = [];
@@ -289,6 +293,7 @@ export function memoryRecorder(startAt: number):
         at += stepMessages.length;
         events.push({ at, event: usageEvent(usage) });
       },
+      onStepTokens,
     },
   };
 }

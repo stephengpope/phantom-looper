@@ -17,7 +17,7 @@ import { runTurn } from './agent.js';
 import type { AgentSummary } from './agentFromConfig.js';
 import type { ModelPin } from '../core/llm/agentConfig.js';
 import { Transcript } from './session.js';
-import type { UsageTotals } from '../core/llm/transcript.js';
+import { usageEvent, type UsageTotals } from '../core/llm/transcript.js';
 import type { CompactionLock } from '../core/llm/compaction.js';
 import { applyPart, applyTokens, finalize, nextId, takeCompleted, tokenCount, NO_TOKENS, type Part, type StreamPart, type TurnTokens } from './state.js';
 
@@ -185,6 +185,10 @@ export class SessionStore {
    *  the next turn ahead of the typed text. A failure loses nothing: the
    *  server drops only what it answered, so they wait for the next send. */
   drainBackdoor?: (id: string) => Promise<string[]>;
+  /** Record one step's token usage to the server's token_usage table (App
+   *  wires `POST /token-usage`). Best-effort — a failure never breaks the turn. */
+  recordStepTokens?: (sessionId: string, usage: { input: number; output: number; cache_read: number; cache_write: number },
+    provider: string, model: string, responseId?: string) => void;
   /** The relay: this window's own turn, published to the server as it runs
    *  (App wires `POST /sessions/:id/events`), so a watcher anywhere sees it
    *  exactly as they see a turn the server runs — one feed, whoever drives.
@@ -560,6 +564,18 @@ export class SessionStore {
     e.tokens = NO_TOKENS;
     const ac = new AbortController();
     e.abort = ac;
+    // Wire per-step token recording on the transcript so spliceTurn fires it.
+    if (this.recordStepTokens) {
+      const rec = this.recordStepTokens;
+      const sid = e.id;
+      const { provider, model } = e.summary;
+      e.transcript.onStepTokens = (usage, responseId) => {
+        const ev = usageEvent(usage);
+        rec(sid, { input: ev.input as number, output: ev.output as number,
+          cache_read: ev.cache_read as number, cache_write: ev.cache_write as number },
+          provider, model, responseId);
+      };
+    }
     this.notify();
 
     // The relay chain: every batch waits for the one before it, so records
