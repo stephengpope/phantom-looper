@@ -256,6 +256,10 @@ export async function assistantKit(deps: AssistantDeps, ctx: AssistantCtx): Prom
     ...gitAutoPullTool(gitAutoPullHandler(deps, activeSession)),
     ...dockerLogsTool(dockerLogsHandler(deps)),
   };
+  // Tools that exist in the shared kit but do nothing on Telegram — remove
+  // them so the model never wastes a call on a dead end.
+  delete kit.kanban_screen;
+  delete kit.session_close;
   const session = activeSession();
   if (session) {
     const common = { baseUrl: BASE, apiKey: deps.apiKey, sessionId: session, fetch: deps.f };
