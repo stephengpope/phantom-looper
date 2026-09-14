@@ -43,6 +43,7 @@ export const MENU: Record<TelegramMode, Cmd[]> = {
     { command: 'stop', description: 'Stop a running session' },
     { command: 'status', description: 'Server, workspace and session overview' },
     { command: 'presets', description: 'List or apply model presets' },
+    { command: 'update', description: 'Check for updates' },
     { command: 'restart', description: 'Restart the server (or one service)' },
     { command: 'help', description: 'List commands' },
   ],
