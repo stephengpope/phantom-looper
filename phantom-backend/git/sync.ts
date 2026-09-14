@@ -44,6 +44,7 @@ import type { Loops } from '../loops.js';
 import type { Cards } from '../cards.js';
 import type { Settings } from '../settings.js';
 import type { HelperUsage } from '../helperUsage.js';
+import type { TokenUsage } from '../tokenUsage.js';
 import {
   git, fetchBase, squashToMergeBase, commitStaged, rebaseOntoBase, rebaseAbort,
   landingProblems, pushSession, pushSessionForced, pushToBase, hasWorkToLand, GIT_CLIENT_ID,
@@ -126,6 +127,7 @@ export interface SyncDeps {
   cards: Cards;
   settings: Settings;
   helperUsage: HelperUsage;
+  tokenUsage?: TokenUsage;
   paths: Paths;
   /** Hand the stopped rebase to the session's own coding agent, as a turn in
    *  its own transcript. Resolves, stages and continues the rebase; the sync
@@ -225,7 +227,7 @@ export async function syncBranch(
           ? await deps.messageConfig((note) => { void ev('commit', note); })
           : null;
         const card = await cardIntentFor(deps, session, workspace);
-        const msg = await commitMessageFor(dir, config, card, mb.trim(), deps.helperUsage, session.id);
+        const msg = await commitMessageFor(dir, config, card, mb.trim(), deps.helperUsage, session.id, deps.tokenUsage);
         await squashToMergeBase(dir, mb.trim());
         await commitStaged(dir, `${msg}\n\nPhantom-Session: ${session.id}`);
       } catch (e) {

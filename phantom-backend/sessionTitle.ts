@@ -17,6 +17,7 @@ import { credentialForProvider, type Settings } from './settings.js';
 import type { Sessions } from './sessions.js';
 import type { Loops } from './loops.js';
 import type { HelperUsage } from './helperUsage.js';
+import type { TokenUsage } from './tokenUsage.js';
 import { logger, errStr } from './log.js';
 
 const log = logger('session-title');
@@ -123,7 +124,7 @@ async function titleConfig(settings: Settings): Promise<ModelConfig | null> {
  *  nothing was written. Never throws. `modelFetch` is the test seam
  *  (createAgent's own), threaded from AppCtx like the turn route's. */
 export async function nameSession(
-  deps: { settings: Settings; sessions: Sessions; loops: Loops; helperUsage: HelperUsage },
+  deps: { settings: Settings; sessions: Sessions; loops: Loops; helperUsage: HelperUsage; tokenUsage?: TokenUsage },
   sessionId: string, context: TitleContext, modelFetch?: typeof fetch,
 ): Promise<string | null> {
   try {
@@ -141,7 +142,7 @@ export async function nameSession(
     for (let attempt = 1; attempt <= TRIES; attempt++) {
       try {
         const { text } = await helperCall({
-          usage: deps.helperUsage, config, kind: 'title', sessionId, system, prompt,
+          usage: deps.helperUsage, tokenUsage: deps.tokenUsage, config, kind: 'title', sessionId, system, prompt,
         });
         const title = cleanTitle(text);
         if (title) {

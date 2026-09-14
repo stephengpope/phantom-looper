@@ -229,6 +229,23 @@ export const helperLlmUsage = phantomLooper.table('helper_llm_usage', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Unified token usage (migration 022): one row per LLM call — agent steps
+// AND helper calls alike. Replaces both the session row's tokens_* cache and
+// the helper_llm_usage table as the single source of truth for all spend.
+export const tokenUsage = phantomLooper.table('token_usage', {
+  id: text('id').primaryKey(),
+  sessionId: text('session_id'),
+  kind: text('kind').notNull(),
+  provider: text('provider'),
+  model: text('model'),
+  responseId: text('response_id'),
+  tokensInput: bigint('tokens_input', { mode: 'number' }).notNull().default(0),
+  tokensOutput: bigint('tokens_output', { mode: 'number' }).notNull().default(0),
+  tokensCacheRead: bigint('tokens_cache_read', { mode: 'number' }).notNull().default(0),
+  tokensCacheWrite: bigint('tokens_cache_write', { mode: 'number' }).notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type WorkspaceRow = typeof workspaces.$inferSelect;
 /** A session as reads return it — sessionColumns' shape, blob excluded. */
 export type SessionRow = Omit<typeof sessions.$inferSelect, 'transcript'>;

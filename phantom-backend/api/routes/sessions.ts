@@ -364,6 +364,34 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       return ok({ saved: true, bytes: Buffer.byteLength(data), updated_at: stamp.toISOString() });
     });
 
+  // Step-level save: updates the transcript and renews the lock, but does NOT
+  // bump turn count, trigger naming, pin the model, or publish a transcript
+  // event. The lightweight per-step counterpart to the full turn-end PUT above.
+  app.post<{ Params: { id: string }; Body: { data: string } }>(
+    '/sessions/:id/step', {
+      bodyLimit: 64 * 1024 * 1024,
+      schema: { ...TAG,
+        summary: 'Step-level transcript save',
+        description: 'Saves the transcript and renews the lock without the turn-end ceremony ' +
+          '(turn count, naming, pinning, events). 409 if the caller does not hold the lock.',
+        params: idParam,
+        body: { type: 'object', required: ['data'], additionalProperties: false,
+          properties: { data: { type: 'string' } } } } },
+    async (req, reply) => {
+      const client = clientOf(req);
+      const s = await ctx.sessions.get(req.params.id);
+      if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
+      // The lock must be held by THIS client — the step save is part of a turn.
+      if (!s.lockedBy || s.lockedBy !== client) {
+        return reply.code(409).send(err('session_locked', 'step save requires the lock'));
+      }
+      const stamp = await ctx.sessions.stepSave(s.id, req.body.data);
+      // Renew the lock — a long turn with many steps must not expire mid-turn.
+      const ttl = await ctx.settings.resolve('session_lock_ttl_ms');
+      await ctx.sessions.renewLock(s.id, client, Number(ttl));
+      return ok({ saved: true, updated_at: stamp.toISOString() });
+    });
+
   // The LIST's feed: every session's row changes, as notices. No rows ride it
   // — the list is the server's query (Sessions.list: filters, cursor, pinned
   // block), so a listener re-reads GET /sessions rather than adopting a
@@ -719,32 +747,19 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   });
 
   // ---- token usage ---------------------------------------------------------
-  // The totals are written by the transcript SAVE, in the same statement as
-  // the text they sum — so this route only reads the row. Rows saved before
-  // that write existed (and a duplicate's copy, whose usage lines were
-  // stripped) carry nulls: compute from the record once, backfill, and never
-  // again.
+  // Token totals from the token_usage table — one row per LLM call.
   app.get<{ Params: { id: string } }>(
     '/sessions/:id/token-usage', { schema: { ...TAG,
-      summary: 'A session\'s token totals, summed from its transcript',
-      description: 'The row\'s cache of the transcript\'s usage-line sum (one per model call — input, output, ' +
-        'cache read/write tokens as the provider reported them), written by the transcript save. `as_of` is ' +
-        'the transcript\'s stamp when the sum was computed; `cached` is false only when a row older than ' +
-        'the save-time write is backfilled on this read. All zeros when nothing was ever recorded.',
+      summary: 'A session\'s token totals from the token_usage table',
+      description: 'Summed from per-step rows in the token_usage table — agent steps and helper calls alike. ' +
+        'All zeros when nothing was ever recorded.',
       params: idParam } },
     async (req, reply) => {
       const s = await ctx.sessions.get(req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
-      // A row older than the save-time write: backfill once from the record.
-      if (s.tokensInput == null && s.transcriptUpdatedAt) {
-        const totals = await ctx.sessions.backfillTokens({ ...s, transcriptUpdatedAt: s.transcriptUpdatedAt });
-        return ok({ input: totals.input, output: totals.output,
-          cache_read: totals.cache_read, cache_write: totals.cache_write,
-          as_of: s.transcriptUpdatedAt.toISOString(), cached: false });
-      }
-      return ok({ input: s.tokensInput ?? 0, output: s.tokensOutput ?? 0,
-        cache_read: s.tokensCacheRead ?? 0, cache_write: s.tokensCacheWrite ?? 0,
-        as_of: s.tokensAsOf?.toISOString() ?? null, cached: true });
+      const t = await ctx.tokenUsage.sessionTotals(req.params.id);
+      return ok({ input: t.input, output: t.output,
+        cache_read: t.cacheRead, cache_write: t.cacheWrite });
     });
 
   app.patch<{ Params: { id: string }; Body: { name?: string | null; plan_mode?: boolean; pinned?: boolean } }>(
@@ -851,6 +866,31 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (s.agent !== 'assistant') return reply.code(400).send(err('not_assistant', 'this route is for assistant sessions only'));
       await ctx.sessions.addUsage(s.id, req.body.usage);
+      return ok({});
+    });
+
+  // General token usage recording — any caller (CLI compaction, CLI voice
+  // assistant, etc.) that needs to record tokens from outside the server process.
+  app.post<{ Body: { session_id?: string; kind: string; provider?: string; model?: string;
+    response_id?: string; input: number; output: number; cache_read: number; cache_write: number } }>(
+    '/token-usage', { schema: { ...TAG,
+      summary: 'Record a token usage entry',
+      description: 'Inserts one row into the token_usage table. For CLI-side LLM calls that cannot write to the DB directly.',
+      body: { type: 'object', required: ['kind', 'input', 'output', 'cache_read', 'cache_write'],
+        properties: {
+          session_id: { type: 'string' }, kind: { type: 'string' },
+          provider: { type: 'string' }, model: { type: 'string' },
+          response_id: { type: 'string' },
+          input: { type: 'number' }, output: { type: 'number' },
+          cache_read: { type: 'number' }, cache_write: { type: 'number' },
+        } } } },
+    async (req) => {
+      const b = req.body;
+      await ctx.tokenUsage.record({
+        sessionId: b.session_id, kind: b.kind as import('../../tokenUsage.js').TokenKind,
+        provider: b.provider, model: b.model, responseId: b.response_id,
+        input: b.input, output: b.output, cacheRead: b.cache_read, cacheWrite: b.cache_write,
+      });
       return ok({});
     });
 }

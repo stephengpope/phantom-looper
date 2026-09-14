@@ -529,19 +529,14 @@ export class Sessions {
     const pinning = s.provider == null && s.model == null
       && head.provider != null && head.model != null;
     const stamp = new Date();
-    // The token totals ride the save: the whole record is already in memory
-    // here, so summing its usage lines costs one pass, and the row's cache
-    // lands in the SAME statement as the text it sums — the two can never
-    // disagree, and no read ever has to recompute.
-    const tokens = sumUsageFromJsonl(data);
+    // Token totals are now per-step rows in the token_usage table — no
+    // re-parsing needed. The session row's tokens_* columns are left alone
+    // (they'll be phased out in a later migration).
     // Every save is one turn: the counter that paces session naming.
     const agent = agentAfterSave(s.agent, client);
     const [saved] = await this.db.update(sessions)
       .set({ transcript: data, lastUserMessage, transcriptUpdatedAt: stamp,
         turnCount: sqlRaw`${sessions.turnCount} + 1`, agent,
-        tokensInput: tokens.input, tokensOutput: tokens.output,
-        tokensCacheRead: tokens.cache_read, tokensCacheWrite: tokens.cache_write,
-        tokensAsOf: stamp,
         // Saving a turn is activity: the session stays off the idle sweep.
         lastUsedAt: stamp,
         ...(pinning ? { provider: head.provider, model: head.model, baseUrl: head.baseUrl } : {}),
@@ -555,6 +550,17 @@ export class Sessions {
     this.events?.publish(s.id, client, { event: 'transcript', updated_at: stamp.toISOString(), by: client });
     if (agent !== s.agent) this.events?.publish(s.id, client, { event: 'session', agent });
     return { stamp, agent, name: saved.name, turnCount: saved.turnCount, nameManual: saved.nameManual };
+  }
+
+  /** Step-level save: updates ONLY the transcript text and lastUsedAt.
+   *  No turn count bump, no naming, no model pinning, no transcript event.
+   *  The lightweight per-step counterpart to saveTranscript. */
+  async stepSave(id: string, data: string): Promise<Date> {
+    const stamp = new Date();
+    await this.db.update(sessions)
+      .set({ transcript: data, transcriptUpdatedAt: stamp, lastUsedAt: stamp })
+      .where(eq(sessions.id, id));
+    return stamp;
   }
 
   /** A turn began on the session with `message` — the moment the list's

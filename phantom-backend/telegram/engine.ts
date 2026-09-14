@@ -22,6 +22,7 @@ import type { Sessions } from '../sessions.js';
 import type { Loops } from '../loops.js';
 import type { Settings } from '../settings.js';
 import type { HelperUsage } from '../helperUsage.js';
+import type { TokenUsage } from '../tokenUsage.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
 import type { BackdoorQueue } from '../api/backdoor.js';
 import type { BoardEvents, BoardEvent } from '../api/boardEvents.js';
@@ -74,6 +75,7 @@ export interface TelegramEngineDeps {
   sessions: Sessions;
   loops: Loops;
   helperUsage: HelperUsage;
+  tokenUsage?: TokenUsage;
   paths: Paths;
   app: FastifyInstance;
   apiKey: string;
@@ -118,6 +120,7 @@ export class TelegramEngine {
       dataRoot: deps.paths.root,
       sessions: deps.sessions,
       helperUsage: deps.helperUsage,
+      tokenUsage: deps.tokenUsage,
     });
     this.upgradeChecker = new UpgradeChecker({
       version: process.env.APP_VERSION ?? 'dev',

@@ -385,9 +385,12 @@ function spliceTurn<T extends { onStepEnd?: (step: never) => unknown }>(
     const prior = out.onStepEnd as ((step: unknown) => unknown) | undefined;
     out = {
       ...out,
-      onStepEnd: (step: { response: { messages: unknown[] }; usage?: unknown }) => {
+      onStepEnd: (step: { response: { messages: unknown[]; id?: string }; usage?: unknown }) => {
         record.appendStep(step.response.messages as ModelMessage[],
           step.usage as Parameters<StepRecord['appendStep']>[1]);
+        record.onStepTokens?.(
+          step.usage as Parameters<StepRecord['appendStep']>[1],
+          step.response.id);
         return prior?.(step);
       },
     } as unknown as T;

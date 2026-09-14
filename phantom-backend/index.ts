@@ -13,6 +13,7 @@ import { Cards } from './cards.js';
 import { Commands } from './commands.js';
 import { Presets } from './presets.js';
 import { HelperUsage } from './helperUsage.js';
+import { TokenUsage } from './tokenUsage.js';
 import { TelegramState } from './telegram/store.js';
 import { SettingsEvents } from './api/settingsEvents.js';
 import { idleBackupSweep, pressureSweep } from './disk.js';
@@ -75,6 +76,7 @@ async function main() {
   const commands = new Commands(db);
   const presets = new Presets(db);
   const helperUsage = new HelperUsage(db);
+  const tokenUsage = new TokenUsage(db);
   const telegramState = new TelegramState(db, env.encryptionKey);
 
   const docker = makeDocker();
@@ -158,7 +160,7 @@ async function main() {
       { event: 'sync', op, step: e.step, detail: e.detail });
   // The manual /git/pull has no stream of its own — the feed is how anyone
   // sees it run, so its steps publish under the git client (no caller to echo).
-  const engine = new GitEngine({ sessions, folders, loops, cards, settings, helperUsage, paths,
+  const engine = new GitEngine({ sessions, folders, loops, cards, settings, helperUsage, tokenUsage, paths,
     resolve: resolveConflict, messageConfig }, (sessionId, e) => publishSync(sessionId, 'pull')(e));
 
   // After a successful sync, drop a summary into the session's transcript so
@@ -204,7 +206,7 @@ async function main() {
       body: JSON.stringify({ status: 'blocked', blocked_reason: reason, resolution: null }),
     }).catch((e) => log.warn({ session: session.id, err: errStr(e) }, 'could not block card after unresolved conflict'));
   };
-  const syncDeps = { sessions, folders, loops, cards, settings, helperUsage, paths,
+  const syncDeps = { sessions, folders, loops, cards, settings, helperUsage, tokenUsage, paths,
     resolve: resolveConflict, recordSummary, messageConfig };
   const autoPushFn = async (session: SessionRow, workspace: WorkspaceRow,
     onEvent?: (e: AutoPushEvent) => void | Promise<void>, by?: string) => {
@@ -259,7 +261,7 @@ async function main() {
   // app exists — the engine is a headless client of this app, so it is built
   // second; routes read ctx.looper per request, so the late set is seen.
   const ctx: AppCtx = {
-    settings, workspaces, folders, loops, cards, sessions, commands, presets, helperUsage,
+    settings, workspaces, folders, loops, cards, sessions, commands, presets, helperUsage, tokenUsage,
     paths, apiKey: env.apiKey, version: VERSION,
     fs: { docker, containers, engine },
     engine,
@@ -281,7 +283,7 @@ async function main() {
   // are answering. Event-driven: routes poke it through ctx.looper; start()
   // is ONE recovery sweep, not a poll.
   const looper = new LooperEngine({ sessions, workspaces, loops, cards, settings, app, apiKey: env.apiKey, events: ctx.events,
-    sessionEvents: ctx.sessionEvents, activeTurns: ctx.activeTurns, backdoor: ctx.backdoor, helperUsage });
+    sessionEvents: ctx.sessionEvents, activeTurns: ctx.activeTurns, backdoor: ctx.backdoor, helperUsage, tokenUsage });
   ctx.looper = looper;
   looper.start();
 
@@ -290,7 +292,7 @@ async function main() {
   // profile runs on); with no address, telegram stays off. Reconcile at boot
   // re-registers a stale webhook and pushes the command menu.
   const telegram = new TelegramEngine({
-    state: telegramState, settings, sessions, loops, helperUsage, paths, app, apiKey: env.apiKey,
+    state: telegramState, settings, sessions, loops, helperUsage, tokenUsage, paths, app, apiKey: env.apiKey,
     events: ctx.events, backdoor: ctx.backdoor,
     sessionEvents: ctx.sessionEvents, publicAddress: process.env.PHANTOM_BACKEND_ADDRESS,
   });
@@ -300,7 +302,7 @@ async function main() {
   // Session idle digest — a periodic notification listing sessions that
   // finished. Standalone timer, no dependency on the engine's turn machinery.
   const digest = new SessionDigest({
-    sessions, loops, cards, settings, workspaces, helperUsage,
+    sessions, loops, cards, settings, workspaces, helperUsage, tokenUsage,
     channels: [telegramChannel(settings)],
   });
   void digest.start();

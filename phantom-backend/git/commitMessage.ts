@@ -19,6 +19,7 @@ import { helperCall } from '../helperCall.js';
 import { git } from './git.js';
 import { logger } from '../log.js';
 import type { HelperUsage } from '../helperUsage.js';
+import type { TokenUsage } from '../tokenUsage.js';
 
 const log = logger('auto-push');
 
@@ -36,7 +37,7 @@ const TRIES = 3;
  *  message can be produced: the sync's answer is to fail, not to guess. */
 export async function commitMessageFor(
   dir: string, config: ModelConfig | null, card = '', base?: string,
-  usage?: HelperUsage, sessionId?: string,
+  usage?: HelperUsage, sessionId?: string, tokenUsage?: TokenUsage,
 ): Promise<string> {
   if (!config) {
     throw new Error('no model configured to write the commit message — set one on /model (phantom-cli), or PATCH /settings {provider, model}');
@@ -49,7 +50,7 @@ export async function commitMessageFor(
   for (let attempt = 1; attempt <= TRIES; attempt++) {
     try {
       const { text } = await helperCall({
-        usage, config, kind: 'commit_message', sessionId, prompt,
+        usage, tokenUsage, config, kind: 'commit_message', sessionId, prompt,
       });
       const msg = text.trim();
       if (msg && msg.length <= 2000) return msg;

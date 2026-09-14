@@ -247,16 +247,23 @@ export function usageEvent(u?: {
   };
 }
 
+/** The normalized usage the AI SDK hands us at each step end. */
+export type StepUsage = Parameters<typeof usageEvent>[0];
+
 /** What createAgent's `record` option writes through: one step, messages +
  *  usage. `Transcript` satisfies this (file-backed agents hand their
  *  transcript over); memoryRecorder builds one for the serialize-at-turn-end
  *  callers. */
 export interface StepRecord {
-  appendStep(messages: ModelMessage[], usage?: Parameters<typeof usageEvent>[0]): void;
+  appendStep(messages: ModelMessage[], usage?: StepUsage): void;
   /** A non-message marker (Transcript has one; memory recorders need none).
    *  runTurn writes `{type:'interrupted'}` after a step it recorded because
    *  esc cut it before the SDK could. */
   appendEvent?(event: Record<string, unknown> & { type: string }): void;
+  /** Called by spliceTurn after every step with the provider's response id
+   *  and the usage — the hook that records to the token_usage table.
+   *  Optional: a consumer that does not track tokens omits it. */
+  onStepTokens?(usage: StepUsage | undefined, responseId: string | undefined): void;
 }
 
 /** A StepRecord for memory-backed turn runners (the looper's rounds, the

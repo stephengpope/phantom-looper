@@ -31,6 +31,7 @@ import type { Cards } from '../cards.js';
 import type { Commands } from '../commands.js';
 import type { Presets } from '../presets.js';
 import type { HelperUsage } from '../helperUsage.js';
+import type { TokenUsage } from '../tokenUsage.js';
 import { SettingsEvents } from './settingsEvents.js';
 import { ForegroundCommands } from './foreground.js';
 import { BackdoorQueue } from './backdoor.js';
@@ -58,6 +59,7 @@ export interface AppCtx {
   commands: Commands;
   presets: Presets;
   helperUsage: HelperUsage;
+  tokenUsage: TokenUsage;
   paths: Paths;
   apiKey: string;
   version: string;

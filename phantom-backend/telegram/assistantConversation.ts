@@ -8,6 +8,7 @@ import path from 'node:path';
 import type { ModelMessage } from 'ai';
 import type { Sessions } from '../sessions.js';
 import type { HelperUsage } from '../helperUsage.js';
+import type { TokenUsage } from '../tokenUsage.js';
 import { helperCall } from '../helperCall.js';
 import { agentModelConfig } from '../../core/llm/agentConfig.js';
 import { assistantInstructions } from '../../core/llm/agents/assistant.js';
@@ -24,6 +25,7 @@ export interface AssistantConversationDeps {
   dataRoot: string;
   sessions: Sessions;
   helperUsage: HelperUsage;
+  tokenUsage?: TokenUsage;
 }
 
 /** Who to notify about compaction events — set before each turn. */
@@ -138,7 +140,7 @@ export class AssistantConversation {
       summarizePct,
       call: async (system, prompt) => {
         const r = await helperCall({
-          usage: this.deps.helperUsage, config: model, kind: 'compaction',
+          usage: this.deps.helperUsage, tokenUsage: this.deps.tokenUsage, config: model, kind: 'compaction',
           system, prompt, ...(maxTokensOpt ? { maxTokens: maxTokensOpt } : {}),
         });
         return r.text;

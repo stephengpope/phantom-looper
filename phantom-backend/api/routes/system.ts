@@ -312,19 +312,13 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
   // ---- token usage report ---------------------------------------------------
   // Sums the cached token columns across non-destroyed sessions for today and
   // the current week (Monday–now), total and per provider/model. The columns
-  // are written by the transcript save, so they are never stale — no need to
-  // re-parse transcripts here. Rows with null tokens (pre-migration) count as
-  // zero. `last_used_at` is the session's clock: a turn saves the transcript
-  // AND touches lastUsedAt in the same statement, so the two agree. Using it
-  // (instead of createdAt) means a session that ran today shows up today, even
-  // if it was created last week — which is how a person thinks about "tokens I
-  // used today".
+  // All token usage from the token_usage table — one table, one query per
+  // window, correct date filtering (created_at = when the call happened).
   app.get('/system/token-usage', {
     schema: {
       tags: ['meta'],
-      summary: 'Token usage report — today, this week, by provider/model',
-      description: 'Sums token columns across sessions whose last activity falls inside the window. ' +
-        'Answers as preformatted `text` — render it as-is (the cli\'s /status does).',
+      summary: 'Token usage report — today, this week, by provider/model and kind',
+      description: 'Sums per-step rows from the token_usage table. Answers as preformatted `text`.',
     },
   }, async () => {
     const now = new Date();
@@ -338,23 +332,18 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
     const dayOfWeek = weekStart.getDay();  // 0=Sun … 6=Sat
     weekStart.setDate(weekStart.getDate() - ((dayOfWeek + 6) % 7));
 
-    const sumTokens = (since: Date) => ctx.sessions.tokenUsageByModel(since);
-
-    // Helper calls (titles, commit messages) — from the helper_llm_usage table.
-    const sumHelpers = (since: Date) => ctx.helperUsage.totalsByKind(since);
-
-    const [todayRows, weekRows, todayHelpers, weekHelpers] = await Promise.all([
-      sumTokens(todayStart),
-      sumTokens(weekStart),
-      sumHelpers(todayStart),
-      sumHelpers(weekStart),
+    const [todayByModel, weekByModel, todayByKind, weekByKind] = await Promise.all([
+      ctx.tokenUsage.totalsByModel(todayStart),
+      ctx.tokenUsage.totalsByModel(weekStart),
+      ctx.tokenUsage.totalsByKind(todayStart),
+      ctx.tokenUsage.totalsByKind(weekStart),
     ]);
 
     const k = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M`
       : n >= 1_000 ? `${(n / 1_000).toFixed(1)}k`
       : String(n);
 
-    const totalOf = (rows: typeof todayRows) => rows.reduce(
+    const totalOf = (rows: typeof todayByModel) => rows.reduce(
       (a, r) => ({ input: a.input + Number(r.input), output: a.output + Number(r.output),
         cacheRead: a.cacheRead + Number(r.cacheRead), cacheWrite: a.cacheWrite + Number(r.cacheWrite) }),
       { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
@@ -362,9 +351,8 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
     const fmtTotal = (t: ReturnType<typeof totalOf>) =>
       `↑ ${k(t.input)} in · ↓ ${k(t.output)} out · cache ${k(t.cacheRead)} read / ${k(t.cacheWrite)} write`;
 
-    const fmtBreakdown = (rows: typeof todayRows) => {
+    const fmtByModel = (rows: typeof todayByModel) => {
       if (!rows.length) return '  (none)';
-      // Sort by total descending so the biggest consumer is first.
       const sorted = [...rows].sort((a, b) =>
         (Number(b.input) + Number(b.output)) - (Number(a.input) + Number(a.output)));
       return sorted.map((r) => {
@@ -374,39 +362,34 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
       }).join('\n');
     };
 
-    const fmtHelpers = (rows: typeof todayHelpers) => {
+    const fmtByKind = (rows: typeof todayByKind) => {
       if (!rows.length) return '  (none)';
-      const t = rows.reduce(
-        (a, r) => ({ input: a.input + Number(r.input), output: a.output + Number(r.output), calls: a.calls + Number(r.calls) }),
-        { input: 0, output: 0, calls: 0 });
       const sorted = [...rows].sort((a, b) =>
         (Number(b.input) + Number(b.output)) - (Number(a.input) + Number(a.output)));
-      const lines = [
-        `↑ ${k(t.input)} in · ↓ ${k(t.output)} out · ${t.calls} call${t.calls === 1 ? '' : 's'}`,
-        ...sorted.map((r) => {
-          const label = String(r.kind).replace(/_/g, ' ');
-          const calls = Number(r.calls);
-          return `  ${label}: ↑ ${k(Number(r.input))} in · ↓ ${k(Number(r.output))} out · ${calls} call${calls === 1 ? '' : 's'}`;
-        }),
-      ];
-      return lines.join('\n');
+      return sorted.map((r) => {
+        const label = String(r.kind).replace(/_/g, ' ');
+        const calls = Number(r.calls);
+        return `  ${label}: ↑ ${k(Number(r.input))} in · ↓ ${k(Number(r.output))} out · ${calls} call${calls === 1 ? '' : 's'}`;
+      }).join('\n');
     };
 
-    const todayTotal = totalOf(todayRows);
-    const weekTotal = totalOf(weekRows);
+    const todayTotal = totalOf(todayByModel);
+    const weekTotal = totalOf(weekByModel);
 
     const text = [
       `== today (${todayStart.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}) ==`,
       fmtTotal(todayTotal),
-      fmtBreakdown(todayRows),
+      fmtByModel(todayByModel),
       '',
       `== this week (Mon–today) ==`,
       fmtTotal(weekTotal),
-      fmtBreakdown(weekRows),
+      fmtByModel(weekByModel),
       '',
-      '== helper calls ==',
-      `today: ${fmtHelpers(todayHelpers)}`,
-      `week:  ${fmtHelpers(weekHelpers)}`,
+      '== by kind (today) ==',
+      fmtByKind(todayByKind),
+      '',
+      '== by kind (week) ==',
+      fmtByKind(weekByKind),
     ].join('\n');
 
     return ok({ text });

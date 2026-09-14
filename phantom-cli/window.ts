@@ -20,7 +20,7 @@ import { BoardStore, type Card, type Stream } from './board.js';
 import { VoiceClient, sidecarEnv, codingKanbanTool, screenModeTools,
   type KanbanArgs, type ScreenModeHandler } from './voice.js';
 import { Transcript, adoptServerCopy, syncTranscriptUp, type TranscriptHeader } from './session.js';
-import { parseTranscript, sumUsageFromJsonl } from '../core/llm/transcript.js';
+import { parseTranscript } from '../core/llm/transcript.js';
 import { agentModelConfig, pinnedCfg, sessionPin, type ModelPin } from '../core/llm/agentConfig.js';
 import { contextWindowFor } from '../phantom-backend/models.js';
 import { compact, getStrategy, CompactionLock, resolveCompactSetting, resolveContextWindow } from '../core/llm/compaction.js';
@@ -778,13 +778,18 @@ export class WindowStore {
       void syncTranscriptUp(this.api, id).then((stamp) => this.sessions.setStamp(id, stamp),
         quiet(`upload unsaved steps for session ${id}`));
     }
+    // Token totals from the table — never re-parse the transcript.
+    const usage = await this.api('GET', `/sessions/${id}/token-usage`)
+      .then((r) => { const u = r as { input?: number; output?: number; cache_read?: number; cache_write?: number };
+        return { input: u.input ?? 0, output: u.output ?? 0, cache_read: u.cache_read ?? 0, cache_write: u.cache_write ?? 0 }; })
+      .catch(() => undefined);
     // keepScreen: the feed showed us this whole turn as it happened, so the
     // record brings the history and the stamp and the screen keeps what it
     // drew — richer than a transcript replay, and no repaint to jump through.
     this.sessions.reseat(id, parsed.messages, keepScreen ? null : [
       { kind: 'note', id: nextId('note'), text: 'refreshed — this session moved forward elsewhere' } as Part,
       ...messagesToParts(parsed.messages),
-    ], t.updated_at ?? server, sumUsageFromJsonl(seated.text));
+    ], t.updated_at ?? server, usage);
   };
 
   // ── what is on screen ─────────────────────────────────────────────────────
@@ -940,6 +945,8 @@ export class WindowStore {
       const row = opened.session as { id: string; branch: string; workspaceId: string;
         name?: string | null; agent?: string | null; card?: number | null; planMode?: boolean; pinned?: boolean;
         provider?: string | null; model?: string | null;
+        tokensInput?: number | null; tokensOutput?: number | null;
+        tokensCacheRead?: number | null; tokensCacheWrite?: number | null;
         skills?: SkillMeta[]; secrets?: SecretIndexEntry[]; agent_git_credentials?: boolean };
       // The server record IS the conversation — unless this machine holds
       // unsaved steps on top of it (a window that died mid-turn); then the
@@ -1025,10 +1032,14 @@ export class WindowStore {
         pin,
         planMode,
         pinned: row.pinned === true,
-        // The toolbar's lifetime token totals: the seated file is the
-        // record's working copy, so its usage lines are the exact sums —
-        // including any unsaved local steps adoptServerCopy kept.
-        usage: sumUsageFromJsonl(seated.text),
+        // The toolbar's lifetime token totals: read from the session row's
+        // cached columns (still populated for existing sessions) or default
+        // to zero. The token_usage table is the source of truth; these seed
+        // the in-memory accumulator until the first reseat corrects it.
+        usage: {
+          input: row.tokensInput ?? 0, output: row.tokensOutput ?? 0,
+          cache_read: row.tokensCacheRead ?? 0, cache_write: row.tokensCacheWrite ?? 0,
+        },
         ...(card ? { card } : {}),
         ...(row.agent === 'supervisor' ? { readonly: true } : {}),
         done: [

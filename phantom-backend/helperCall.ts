@@ -9,15 +9,18 @@ import { generateText } from 'ai';
 import { languageModel, type ModelConfig } from '../core/llm/createAgent.js';
 import { logger } from './log.js';
 import type { HelperUsage, HelperKind } from './helperUsage.js';
+import type { TokenUsage, TokenKind } from './tokenUsage.js';
 
 const log = logger('helper-call');
 
 export type { HelperKind };
 
 export interface HelperCallOpts {
-  /** Where usage is recorded. When absent, the call runs normally but
+  /** Where usage is recorded (legacy). When absent, the call runs normally but
    *  usage is not recorded — for callers outside the server process. */
   usage?: HelperUsage;
+  /** The unified token_usage table writer. Preferred over `usage`. */
+  tokenUsage?: TokenUsage;
   config: ModelConfig;
   kind: HelperKind;
   /** The session this call serves — null when not tied to one. */
@@ -56,13 +59,29 @@ export async function helperCall(opts: HelperCallOpts): Promise<HelperCallResult
     cache_write: usage.inputTokenDetails?.cacheWriteTokens ?? 0,
   };
   // Best-effort: a failed insert must never break the caller.
-  if (!opts.usage) return { text, usage: u };
-  try {
-    await opts.usage.record({ kind: opts.kind, sessionId: opts.sessionId, provider: opts.config.provider,
-      model: opts.config.model, systemPrompt: opts.system, userPrompt: opts.prompt, tokens: u });
-  } catch (e) {
-    log.warn({ kind: opts.kind, session: opts.sessionId, err: (e as Error).message },
-      'could not record helper LLM usage');
+  // Record to the unified token_usage table (new path).
+  if (opts.tokenUsage) {
+    try {
+      await opts.tokenUsage.record({
+        sessionId: opts.sessionId, kind: opts.kind as TokenKind,
+        provider: opts.config.provider, model: opts.config.model,
+        input: u.input, output: u.output,
+        cacheRead: u.cache_read, cacheWrite: u.cache_write,
+      });
+    } catch (e) {
+      log.warn({ kind: opts.kind, session: opts.sessionId, err: (e as Error).message },
+        'could not record token usage');
+    }
+  }
+  // Legacy path — still runs alongside until helper_llm_usage is dropped.
+  if (opts.usage) {
+    try {
+      await opts.usage.record({ kind: opts.kind, sessionId: opts.sessionId, provider: opts.config.provider,
+        model: opts.config.model, systemPrompt: opts.system, userPrompt: opts.prompt, tokens: u });
+    } catch (e) {
+      log.warn({ kind: opts.kind, session: opts.sessionId, err: (e as Error).message },
+        'could not record helper LLM usage');
+    }
   }
   return { text, usage: u };
 }
