@@ -43,6 +43,7 @@ export const MENU: Record<TelegramMode, Cmd[]> = {
     { command: 'stop', description: 'Stop a running session' },
     { command: 'status', description: 'Server, workspace and session overview' },
     { command: 'presets', description: 'List or apply model presets' },
+    { command: 'tokens', description: 'Token usage — today, this week, by model' },
     { command: 'update', description: 'Check for updates' },
     { command: 'restart', description: 'Restart the server (or one service)' },
     { command: 'help', description: 'List commands' },
@@ -58,6 +59,7 @@ export const MENU: Record<TelegramMode, Cmd[]> = {
     { command: 'stop', description: 'Stop the running task' },
     { command: 'status', description: 'Server, session and what\'s running' },
     { command: 'presets', description: 'List or apply model presets' },
+    { command: 'tokens', description: 'Token usage — today, this week, by model' },
     { command: 'update', description: 'Check for updates' },
     { command: 'restart', description: 'Restart the server (or one service)' },
     { command: 'help', description: 'List commands' },
@@ -420,6 +422,14 @@ export async function handleCommand(
       return;
     }
 
+    case 'tokens': {
+      const j = await (await engine.api('/system/token-usage')).json().catch(() => null);
+      if (!j?.ok) { await reply(`⚠️ Couldn't read token usage: ${j?.error?.message ?? 'no answer from the server'}`); return; }
+      const text = String(j.data.text ?? '');
+      await client.sendMarkdown(dm, titled('📊 Token usage', text || '(no usage data)'));
+      return;
+    }
+
     case 'restart': {
       // Accept/decline first — restarting the api cuts every in-flight turn.
       // The gate's bubble records the verdict, so a decline needs no reply.
@@ -564,6 +574,7 @@ const HELP = [
   '',
   'Server',
   '/status — Server health and what\'s running',
+  '/tokens — Token usage — today, this week, by model',
   '/restart — Restart the server; /restart postgres restarts one service',
   '/update — Check for updates',
   '',
