@@ -640,7 +640,12 @@ export class VoiceClient {
         } },
       );
     } catch (e) {
-      if (!t.abort.signal.aborted && !streamErrored) this.reply = [...this.reply, { kind: 'error', id: nextId('verr'), message: (e as Error).message }];
+      if (!t.abort.signal.aborted && !streamErrored) {
+        const msg = (e as Error).message;
+        const isPromptTooLong = /prompt is too long|request too large/i.test(msg);
+        this.reply = [...this.reply, { kind: 'error', id: nextId('verr'),
+          message: isPromptTooLong ? 'Chat history exceeds the model\'s limit — run /compact assistant to free space' : msg }];
+      }
     } finally {
       if (this.cur === t) this.cur = null;
       if (this.liveTimer) { clearTimeout(this.liveTimer); this.liveTimer = null; this.liveDirty = false; }

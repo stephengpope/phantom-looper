@@ -1976,17 +1976,16 @@ export class WindowStore {
         return;
       }
       case 'compact': {
-        if (!session) { this.note('no session is open — nothing to compact'); return; }
-        if (session.readonly) { this.note("this is the supervisor's record — read-only"); return; }
-        // The assistant has runCompaction(); coding sessions compact the same
-        // way through the shared compact() + supervisor model.
-        if (this.voice.running && this.voice.history === session.history) {
+        if (args.trim().toLowerCase() === 'assistant') {
+          if (!this.voice.history.length) { this.note('assistant has no conversation — nothing to compact'); return; }
           this.note('compacting assistant — summarizing older messages in the background');
           void this.voice.runCompaction()
             .then((ok) => { if (!ok) this.note('nothing to compact'); })
             .catch((err) => { this.note(`compaction failed: ${(err as Error).message}`); });
           return;
         }
+        if (!session) { this.note('no session is open — nothing to compact'); return; }
+        if (session.readonly) { this.note("this is the supervisor's record — read-only"); return; }
         const cfg = await this.readSettings();
         const model = agentModelConfig(cfg, 'supervisor');
         const strategyName = String(resolveCompactSetting(cfg as Record<string, unknown>, '', 'strategy', 'fast'));

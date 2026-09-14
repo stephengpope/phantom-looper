@@ -488,8 +488,12 @@ export class TelegramEngine {
     } catch (e) {
       this.inFlight.delete(busyKey);
       typing.stop();
+      const msg = (e as Error).message;
+      const isPromptTooLong = /prompt is too long|request too large/i.test(msg);
       log.error({ err: errStr(e) }, 'assistant turn failed');
-      await client.sendMessage(dm, `⚠️ ${(e as Error).message}`).catch(() => {});
+      await client.sendMessage(dm, isPromptTooLong
+        ? '⚠️ Chat history exceeds the model\'s limit — send /compact to free space, then try again.'
+        : `⚠️ ${msg}`).catch(() => {});
     }
   }
 
