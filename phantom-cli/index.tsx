@@ -54,10 +54,6 @@ if (configError) console.error(configError);
 // one half. The messages, the wait and the loop guard live in update.ts.
 const firstArg = process.argv[2];
 
-// Clears the current terminal line before reprinting it — the ticking waits
-// (the update command's, the launch gate's) rewrite one line instead of
-// scrolling. Empty off a TTY: there is no line to clear in a pipe.
-const TTY_CLEAR = process.stdout.isTTY ? '\r\x1b[2K' : '';
 
 /** The paired server as update.ts sees it — null when nothing is paired. */
 function pairedServer(): ServerLink | null {
@@ -210,14 +206,27 @@ function versionWatch(): void {
 // runUpdate) — no session is open yet, so nothing is interrupted and no lock
 // is ever taken by a build that is about to be replaced. A client half that
 // landed re-execs into the new build.
+let reconcileTickLines = 0;
 await prelaunchReconcile({
   appVersion: APP_VERSION,
   latest: checkLatest,
   server: pairedServer(),
   installClient: selfUpdate,
   confirm: askYesNo,
-  out: (line) => { process.stdout.write(TTY_CLEAR + line + '\n'); },
-  tick: process.stdout.isTTY ? (line) => { process.stdout.write(TTY_CLEAR + line); } : undefined,
+  out: (line) => {
+    if (reconcileTickLines > 0) {
+      process.stdout.write(`\x1b[${reconcileTickLines}A\x1b[0J`);
+      reconcileTickLines = 0;
+    }
+    process.stdout.write(line + '\n');
+  },
+  tick: process.stdout.isTTY ? (text) => {
+    if (reconcileTickLines > 0) {
+      process.stdout.write(`\x1b[${reconcileTickLines}A\x1b[0J`);
+    }
+    process.stdout.write(text);
+    reconcileTickLines = text.split('\n').length;
+  } : undefined,
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   now: Date.now,
   reexec: (version) => {
