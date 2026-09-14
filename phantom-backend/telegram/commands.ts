@@ -131,7 +131,7 @@ export async function handleCommand(
         return;
       }
       // Bare: list them.
-      const j = await (await engine.call('/sessions?typed=true&supervisor=false&limit=10')).json();
+      const j = await (await engine.api('/sessions?typed=true&supervisor=false&limit=10')).json();
       if (!j.ok || !j.data.sessions.length) { await reply('ℹ️ No sessions yet. /new starts one.'); return; }
       sessionList.set(dm, j.data.sessions.map((s: any) => s.id));
       const rows = j.data.sessions.map((s: any, i: number) =>
@@ -142,7 +142,7 @@ export async function handleCommand(
     }
 
     case 'workspaces': {
-      const j = await (await engine.call('/workspaces')).json();
+      const j = await (await engine.api('/workspaces')).json();
       const list: any[] = j.ok ? (j.data.workspaces ?? j.data) : [];
       if (!Array.isArray(list) || !list.length) { await reply('ℹ️ No workspaces yet — add one in phantom-cli.'); return; }
       // With a number: switch.
@@ -167,7 +167,7 @@ export async function handleCommand(
     case 'new': {
       const ws = acc.activeWorkspaceId;
       if (!ws) { await reply('⚠️ No active workspace — /workspaces to pick one first.'); return; }
-      const j = await (await engine.call('/sessions', { method: 'POST', body: { workspace_id: ws } })).json();
+      const j = await (await engine.api('/sessions', { method: 'POST', body: { workspace_id: ws } })).json();
       if (!j.ok) { await reply(`⚠️ Couldn't start a session: ${j.error?.message}`); return; }
       // Create + point at it. The mode is untouched: from home the assistant
       // keeps the conversation; in code mode the next message starts the coder.
@@ -185,7 +185,7 @@ export async function handleCommand(
       const s = await sessionRow(engine, acc.activeSessionId);
       if (!s) { await reply('⚠️ That session no longer exists — /sessions for a fresh list.'); return; }
       const next = !s.pinned;
-      await engine.call(`/sessions/${acc.activeSessionId}`, { method: 'PATCH', body: { pinned: next } });
+      await engine.api(`/sessions/${acc.activeSessionId}`, { method: 'PATCH', body: { pinned: next } });
       await reply(next
         ? `📌 Pinned ${s.name ?? 'untitled'} — it sits at the top of the session list.`
         : `Unpinned ${s.name ?? 'untitled'}.`);
@@ -213,7 +213,7 @@ export async function handleCommand(
       ];
 
       // Server stats condensed to one line.
-      const sysJ = await (await engine.call('/system/status')).json().catch(() => null);
+      const sysJ = await (await engine.api('/system/status')).json().catch(() => null);
       if (sysJ?.ok) {
         const raw = String(sysJ.data.text ?? '');
         const cpu = raw.match(/(\d+)% busy/)?.[1];
@@ -235,7 +235,7 @@ export async function handleCommand(
       if (acc.mode !== 'code' || !acc.activeSessionId) { await reply('⚠️ Plan mode belongs to the coding agent — /code first.'); return; }
       const s = await sessionRow(engine, acc.activeSessionId);
       const next = !s?.planMode;
-      await engine.call(`/sessions/${acc.activeSessionId}`, { method: 'PATCH', body: { plan_mode: next } });
+      await engine.api(`/sessions/${acc.activeSessionId}`, { method: 'PATCH', body: { plan_mode: next } });
       await reply(next ? '📝 Plan mode on — file tools are read-only.' : '🔧 Plan mode off — full tools.');
       return;
     }
@@ -264,7 +264,7 @@ export async function handleCommand(
       if (arg !== undefined) {
         const p = listed(providerList, dm, arg);
         if (!p) { await reply('⚠️ Send /providers first to see the list, then /providers <number>.'); return; }
-        const j = await (await engine.call('/settings', { method: 'PATCH', body: { provider: p, model: null } })).json();
+        const j = await (await engine.api('/settings', { method: 'PATCH', body: { provider: p, model: null } })).json();
         if (!j.ok) { await reply(`⚠️ Couldn't switch provider: ${j.error?.message}`); return; }
         const model = latestModel(p);
         await client.sendMarkdown(dm, titled(
@@ -312,7 +312,7 @@ export async function handleCommand(
       if (arg !== undefined) {
         const id = listed(modelList, dm, arg);
         if (!id) { await reply('⚠️ Send /models first to see the list, then /models <number>.'); return; }
-        const j = await (await engine.call('/settings', { method: 'PATCH', body: { model: id } })).json();
+        const j = await (await engine.api('/settings', { method: 'PATCH', body: { model: id } })).json();
         if (!j.ok) { await reply(`⚠️ Couldn't switch model: ${j.error?.message}`); return; }
         await reply(`✅ Model: ${id}`);
         return;
@@ -329,14 +329,14 @@ export async function handleCommand(
       // Saved model configurations. Applying one is the cli's rule: the
       // preset's keys become a PATCH /settings body — set keys write their
       // value, clear keys null the setting, absent keys stay untouched.
-      const j = await (await engine.call('/presets')).json();
+      const j = await (await engine.api('/presets')).json();
       const list: Array<{ id: string; name: string; values: Record<string, unknown> }> = j.ok ? j.data : [];
       if (!list.length) { await reply('ℹ️ No presets saved yet — save one in the cli under /presets.'); return; }
       if (arg !== undefined) {
         const id = listed(presetList, dm, arg);
         if (!id) { await reply('⚠️ Send /presets first to see the list, then /presets <number>.'); return; }
         const p = list.find((x) => x.id === id)!;
-        const applied = await (await engine.call('/settings', { method: 'PATCH', body: p.values })).json();
+        const applied = await (await engine.api('/settings', { method: 'PATCH', body: p.values })).json();
         if (!applied.ok) { await reply(`⚠️ Couldn't apply "${p.name}": ${applied.error?.message}`); return; }
         const { provider, model } = await engine.settings.resolveMany(['provider', 'model']);
         await client.sendMarkdown(dm, titled(
@@ -352,7 +352,7 @@ export async function handleCommand(
 
     case 'compact': {
       try {
-        const compacted = await engine.runCompaction();
+        const compacted = await engine.conversation.runCompaction();
         if (!compacted) await reply('ℹ️ Nothing to compact — the conversation is short enough.');
       } catch (e) {
         await reply(`⚠️ Compaction failed: ${(e as Error).message}`);
@@ -368,13 +368,13 @@ export async function handleCommand(
       // active-session pointer — it's a remote kill.
 
       if (arg === 'all') {
-        const j = await (await engine.call('/sessions?typed=true&supervisor=false&limit=50')).json();
+        const j = await (await engine.api('/sessions?typed=true&supervisor=false&limit=50')).json();
         const locked = j.ok ? (j.data.sessions ?? []).filter((s: any) => s.locked) : [];
         if (!locked.length) { await reply('ℹ️ Nothing is running.'); return; }
         const names: string[] = [];
         for (const s of locked) {
           engine.stop(s.id);
-          await engine.call(`/sessions/${s.id}/interrupt`, { method: 'POST' });
+          await engine.api(`/sessions/${s.id}/interrupt`, { method: 'POST' });
           names.push(s.name ?? 'untitled');
         }
         await reply(`🛑 Stopped ${names.length}: ${names.map((n) => `'${n}'`).join(', ')}.`);
@@ -389,7 +389,7 @@ export async function handleCommand(
         if (!s) { await reply('⚠️ That session no longer exists — /sessions for a fresh list.'); return; }
         if (!s.locked) { await reply(`ℹ️ ${s.name ?? 'untitled'} isn't running.`); return; }
         engine.stop(id);
-        await engine.call(`/sessions/${id}/interrupt`, { method: 'POST' });
+        await engine.api(`/sessions/${id}/interrupt`, { method: 'POST' });
         await reply(`🛑 Stopping '${s.name ?? 'untitled'}'.`);
         return;
       }
@@ -401,7 +401,7 @@ export async function handleCommand(
         const s = await sessionRow(engine, acc.activeSessionId);
         if (!s?.locked) { await reply('ℹ️ Nothing is running.'); return; }
       }
-      await engine.call(`/sessions/${acc.activeSessionId}/interrupt`, { method: 'POST' });
+      await engine.api(`/sessions/${acc.activeSessionId}/interrupt`, { method: 'POST' });
       await reply('🛑 Stopping.');
       return;
     }
@@ -413,7 +413,7 @@ export async function handleCommand(
 
     case 'cpu': {
       // Legacy alias — folded into /status but still answered if typed.
-      const j = await (await engine.call('/system/status')).json().catch(() => null);
+      const j = await (await engine.api('/system/status')).json().catch(() => null);
       if (!j?.ok) { await reply(`⚠️ Couldn't read the server status: ${j?.error?.message ?? 'no answer from the server'}`); return; }
       const text = String(j.data.text ?? '');
       await client.sendMarkdown(dm, titled('🖥 Server status', text + '\n\nℹ️ /cpu is now part of /status'));
@@ -431,7 +431,7 @@ export async function handleCommand(
           : 'the api — the whole server is offline for a few seconds (in-flight replies are cut)',
       });
       if (!accepted) return;
-      const j = await (await engine.call('/system/restart',
+      const j = await (await engine.api('/system/restart',
         { method: 'POST', body: service ? { service } : {} })).json().catch(() => null);
       if (!j?.ok) { await reply(`⚠️ Couldn't restart: ${j?.error?.message ?? 'no answer from the server'}`); return; }
       await reply(service
@@ -511,7 +511,7 @@ function presetSummary(values: Record<string, unknown>): string {
 }
 
 async function workspaceRow(engine: TelegramEngine, id: string): Promise<{ name?: string } | null> {
-  const j = await (await engine.call(`/workspaces/${id}`)).json();
+  const j = await (await engine.api(`/workspaces/${id}`)).json();
   return j.ok ? j.data : null;
 }
 
@@ -525,7 +525,7 @@ async function sessionRow(engine: TelegramEngine, id: string): Promise<{
   name?: string | null; planMode?: boolean; pinned?: boolean; branch?: string | null; card?: number | null;
   locked?: boolean; lockedLabel?: string | null; lastUserMessage?: string | null;
 } | null> {
-  const j = await (await engine.call(`/sessions/${id}`)).json();
+  const j = await (await engine.api(`/sessions/${id}`)).json();
   return j.ok ? j.data : null;
 }
 

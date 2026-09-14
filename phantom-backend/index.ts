@@ -300,7 +300,7 @@ async function main() {
   // Session idle digest — a periodic notification listing sessions that
   // finished. Standalone timer, no dependency on the engine's turn machinery.
   const digest = new SessionDigest({
-    sessions, loops, settings, helperUsage,
+    sessions, loops, cards, settings, workspaces, helperUsage,
     channels: [telegramChannel(settings)],
   });
   void digest.start();

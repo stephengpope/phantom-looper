@@ -13,7 +13,6 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
-import type { ModelMessage } from 'ai';
 import type { Paths } from '../pool/paths.js';
 import { sessionDir } from '../pool/paths.js';
 import { injectFetch } from '../looper/injectFetch.js';
@@ -23,7 +22,6 @@ import type { Sessions } from '../sessions.js';
 import type { Loops } from '../loops.js';
 import type { Settings } from '../settings.js';
 import type { HelperUsage } from '../helperUsage.js';
-import { helperCall } from '../helperCall.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
 import type { BackdoorQueue } from '../api/backdoor.js';
 import type { BoardEvents, BoardEvent } from '../api/boardEvents.js';
@@ -37,15 +35,12 @@ import { transcribeVoice, speakVoice, splitForSpeech, SPEAK_MAX_CHARS, type Tran
 import { writeAttachment, composeMessage, MAX_INBOUND_BYTES, type StoredAttachment } from './attachments.js';
 import { runAssistantTurn, type AssistantDeps } from './assistant.js';
 import { agentModelConfig } from '../../core/llm/agentConfig.js';
-import { assistantInstructions } from '../../core/llm/agents/assistant.js';
-import { loadTranscriptFile, newestTranscriptFile, Transcript, transcriptStamp } from '../../core/llm/transcript.js';
-import { compact, shouldCompact, getStrategy, isSummaryMessage, CompactionLock, resolveContextWindow, resolveCompactSetting } from '../../core/llm/compaction.js';
-import { contextWindowFor } from '../models.js';
 import { Approvals, type Ask } from './approvals.js';
 import { UpgradeChecker } from './upgrade.js';
 import type { TelegramState, SentOrigin, TelegramAccountRow, TelegramMode } from './store.js';
 import { menuFor, handleCommand } from './commands.js';
 import { autoPushSession, autoPullSession, type AutoPushOutcome, type AutoPullOutcome } from '../../core/llm/tools/git.js';
+import { AssistantConversation } from './assistantConversation.js';
 
 
 const log = logger('telegram');
@@ -100,150 +95,35 @@ export interface TelegramEngineDeps {
  *  turn's AbortController rides into runCodingTurn and is aborted two ways:
  *  /stop through this map, a remote interrupt through the turn's feed
  *  subscription; the assistant's stop is local (it is not a session). */
-interface Busy { queue: string[]; abort: AbortController }
+interface InFlightTurn { queue: string[]; abort: AbortController }
 
 export class TelegramEngine {
-  private f: typeof fetch;
-  private busy = new Map<string, Busy>();
+  private fetch: typeof globalThis.fetch;
+  private inFlight = new Map<string, InFlightTurn>();
   /** Album debounce: Telegram sends multi-photo sends as separate updates
    *  sharing a `media_group_id`. A short timer collects them and runs once. */
   private albums = new Map<string, { msgs: any[]; timer: NodeJS.Timeout }>();
-  /** The Assistant's ONE conversation — backed by the newest transcript file
-   *  in assistantDir, loaded back on the first turn after a boot. */
-  private assistantHistory: ModelMessage[] = [];
-  private assistantTranscript: Transcript | null = null;
-  private assistantLoaded = false;
-  /** The assistant's session row id — created on first turn, rolled on
-   *  compaction. Token usage accumulates on this row. */
-  private assistantSessionId: string | null = null;
-  /** The last turn's settings read and chat — the compactor's model/limit
-   *  source and where the compaction notice goes. */
-  private assistantValues: Record<string, unknown> = {};
-  private assistantChat: { client: TelegramClient; dm: number } | null = null;
-  /** Lock: at most one compaction at a time on the assistant history. */
-  private compactionLock = new CompactionLock();
 
-  /** The Assistant's transcript directory: one live file (the newest), older
-   *  ones the archive compaction left behind. Under the data root, outside
-   *  any session's work dir — the Assistant is not a session. */
-  private assistantDir(): string {
-    return path.join(this.deps.paths.root, 'assistant');
-  }
+  /** The Assistant's conversation — history, transcript, compaction. */
+  readonly conversation: AssistantConversation;
 
-  /** The live transcript, created on first write. The header names the
-   *  current assistant model best-effort — it records what wrote the file. */
-  private transcript(): Transcript {
-    if (!this.assistantTranscript) {
-      let provider = 'unknown', model = 'unknown';
-      try {
-        const c = agentModelConfig(this.assistantValues, 'assistant');
-        provider = c.provider; model = c.model;
-      } catch { /* no model configured yet — the header says unknown */ }
-      this.assistantTranscript = new Transcript({
-        type: 'session', agent: 'assistant', provider, model,
-        created_at: new Date().toISOString(), system_prompt: assistantInstructions(),
-      }, path.join(this.assistantDir(), `${transcriptStamp()}.jsonl`));
-    }
-    return this.assistantTranscript;
-  }
-
-  /** Resume the conversation from the newest transcript — once per boot, on
-   *  the first assistant turn. The file keeps appending from there. */
-  private loadAssistant(): void {
-    if (this.assistantLoaded) return;
-    this.assistantLoaded = true;
-    const file = newestTranscriptFile(this.assistantDir());
-    if (!file) return;
-    const loaded = loadTranscriptFile(file);
-    if (!loaded.messages.length) return;
-    this.assistantHistory.push(...loaded.messages);
-    this.assistantTranscript = new Transcript(loaded.header ?? {
-      type: 'session', agent: 'assistant', provider: 'unknown', model: 'unknown',
-      created_at: new Date().toISOString(), system_prompt: assistantInstructions(),
-    }, file);
-  }
-
-  /** Ensure the assistant has a session row. Created on first turn; after
-   *  compaction a new one replaces it (the old row keeps its frozen totals). */
-  private async ensureAssistantSession(workspaceId: string | null, folderId?: string | null): Promise<string> {
-    if (this.assistantSessionId) return this.assistantSessionId;
-    if (!workspaceId) throw new Error('no active workspace — /workspaces to pick one');
-    const row = await this.deps.sessions.createAssistant(workspaceId, folderId);
-    this.assistantSessionId = row.id;
-    return row.id;
-  }
-
-  /** Kick compaction if the last turn's input tokens crossed the threshold.
-   *  Fire-and-forget — the next turn proceeds on the current history while
-   *  the summary is being generated in the background. */
-  private kickCompaction(inputTokens: number): void {
-    if (this.compactionLock.active) return;
-    const values = this.assistantValues;
-    const pct = Number(resolveCompactSetting(values, 'assistant', 'threshold_pct', 0));
-    if (pct <= 0) return;
-
-    const contextWindow = resolveContextWindow(
-      values, 'assistant', contextWindowFor, agentModelConfig,
-      (msg) => log.warn(msg));
-    if (!contextWindow) return;
-    if (!shouldCompact(inputTokens, contextWindow, pct)) return;
-
-    void this.runCompaction().catch((err) => {
-      log.warn({ err: (err as Error).message }, 'assistant compaction failed — will retry after a later turn');
-      const chat = this.assistantChat;
-      if (chat) void chat.client.sendMessage(chat.dm, `⚠️ Auto-compaction failed: ${(err as Error).message}`).catch(() => {});
-    });
-  }
-
-  /** Run compaction on the assistant history. Used by both auto-trigger
-   *  (kickCompaction) and the manual /compact command. */
-  async runCompaction(): Promise<boolean> {
-    const values = this.assistantValues;
-    const strategyName = String(resolveCompactSetting(values, 'assistant', 'strategy', 'fast'));
-    const summarizePct = Number(resolveCompactSetting(values, 'assistant', 'summarize_pct', 75));
-    const maxTokens = resolveCompactSetting<number | null>(values, 'assistant', 'max_tokens', null);
-    const maxTokensOpt = maxTokens != null ? Number(maxTokens) : undefined;
-
-    const model = agentModelConfig(values, 'supervisor');
-
-    const result = await compact(this.compactionLock, {
-      history: this.assistantHistory,
-      strategy: getStrategy(strategyName),
-      summarizePct,
-      call: async (system, prompt) => {
-        const r = await helperCall({
-          usage: this.deps.helperUsage, config: model, kind: 'compaction',
-          system, prompt, ...(maxTokensOpt ? { maxTokens: maxTokensOpt } : {}),
-        });
-        return r.text;
-      },
-    });
-
-    if (!result) return false;
-
-    // Rewrite the transcript with the compacted history.
-    if (this.assistantTranscript) {
-      this.assistantTranscript = null;
-      this.transcript().appendAll([...this.assistantHistory]);
-    }
-    const chat = this.assistantChat;
-    if (chat) void chat.client.sendMessage(chat.dm, '🧠 Chat compacted — older messages are summarized.').catch(() => {});
-    log.info({ summaryLen: result.summary.length, historyLen: this.assistantHistory.length }, 'assistant compacted');
-    return true;
-  }
   /** The approval gate — gated tools ask the user here (approvals.ts). */
   private approvals = new Approvals();
   /** The upgrade checker — periodic GitHub release check + Telegram notification. */
   upgradeChecker: UpgradeChecker;
 
-
   constructor(private deps: TelegramEngineDeps) {
-    this.f = injectFetch(deps.app);
+    this.fetch = injectFetch(deps.app);
+    this.conversation = new AssistantConversation({
+      dataRoot: deps.paths.root,
+      sessions: deps.sessions,
+      helperUsage: deps.helperUsage,
+    });
     this.upgradeChecker = new UpgradeChecker({
       version: process.env.APP_VERSION ?? 'dev',
       health: async () => {
         try {
-          const r = await (await this.call('/health')).json();
+          const r = await (await this.api('/health')).json();
           return r.ok ? r : null;
         } catch { return null; }
       },
@@ -252,7 +132,7 @@ export class TelegramEngine {
           // restart_anyway: the approval DM already warns that running turns
           // are stopped and loop cards blocked — a tap on Approve is the
           // informed yes the /update guard asks for.
-          const res = await this.callRaw('/update', { method: 'POST', body: { tag, restart_anyway: true } });
+          const res = await this.apiRaw('/update', { method: 'POST', body: { tag, restart_anyway: true } });
           if (!res.ok) {
             const j = await res.json().catch(() => ({ error: { message: `HTTP ${res.status}` } }));
             return { ok: false, error: j.error?.message ?? `HTTP ${res.status}` };
@@ -293,9 +173,7 @@ export class TelegramEngine {
         const dm = Number(values.telegram_authorized_user ?? '');
         return Number.isFinite(dm) && dm ? dm : null;
       },
-      makeClient: (token, dm) => new TelegramClient(token,
-        (id, text) => { this.deps.state.recordSent(dm, id, text, { kind: 'assistant' }).catch(() => {}); },
-        (id) => { this.deps.state.deleteSent(dm, id).catch(() => {}); }),
+      makeClient: (token, dm) => this.trackedClient(token, dm, () => ({ kind: 'assistant' })),
     });
     // Every card write in the system, all workspaces; alerts.ts decides which
     // are the loop's moves. Fire-and-forget: an alert that fails is logged,
@@ -303,6 +181,19 @@ export class TelegramEngine {
     deps.events?.subscribeAll((workspaceId, e) => {
       this.alert(workspaceId, e).catch((err) => log.warn({ err: errStr(err) }, 'auto build alert failed'));
     });
+  }
+
+  // ── client factory ────────────────────────────────────────────────────────
+
+  /** A TelegramClient that records every sent/deleted message via the state
+   *  store. `origin` is a function so it can track a mutable pointer (e.g.
+   *  the active session changes mid-turn). */
+  private trackedClient(token: string, dm: number, origin: () => SentOrigin): TelegramClient {
+    return new TelegramClient(token,
+      (id, text) => { this.deps.state.recordSent(dm, id, text, origin()).catch(
+        (e) => log.warn({ err: errStr(e) }, 'recordSent failed')); },
+      (id) => { this.deps.state.deleteSent(dm, id).catch(
+        (e) => log.warn({ err: errStr(e) }, 'deleteSent failed')); });
   }
 
   // ── auto build alerts ────────────────────────────────────────────────────
@@ -315,26 +206,24 @@ export class TelegramEngine {
   private async alert(workspaceId: string, e: BoardEvent): Promise<void> {
     if (e.event !== 'card' || !e.from || e.from === e.card.status) return;   // the cheap test first — no I/O
     // One read: prefix + the setting resolved at this workspace's layer.
-    const ws = await (await this.call(`/workspaces/${workspaceId}`)).json()
+    const ws = await (await this.api(`/workspaces/${workspaceId}`)).json()
       .catch((err: Error) => { log.warn({ workspace: workspaceId, err: err.message }, 'workspace read failed — no board alert'); return null; }) as { ok: boolean; data?: { cardPrefix: string;
         settings: Record<string, { value: unknown }> } } | null;
     if (!ws?.ok || !ws.data) return;
-    const alert = autoBuildAlert(e, ws.data.cardPrefix);
-    if (!alert) return;
+    const alertMsg = autoBuildAlert(e, ws.data.cardPrefix);
+    if (!alertMsg) return;
     if (ws.data.settings.telegram_auto_build_notifications?.value !== true) return;
     if (ws.data.settings.telegram_enabled?.value !== true) return;
     const dm = Number(ws.data.settings.telegram_authorized_user?.value ?? '');
     if (!dm || !Number.isFinite(dm)) return;
     const token = await this.token();
     if (!token) return;
-    const loop = await this.deps.loops.current(workspaceId, alert.seq);
+    const loop = await this.deps.loops.current(workspaceId, alertMsg.seq);
     const origin: SentOrigin = loop
       ? { kind: 'session', sessionId: loop.codingSessionId } : { kind: 'assistant' };
-    const client = new TelegramClient(token,
-      (id, text) => { this.deps.state.recordSent(dm, id, text, origin).catch(() => {}); },
-      (id) => { this.deps.state.deleteSent(dm, id).catch(() => {}); });
-    await client.sendMessage(dm, alert.text);
-    log.info({ workspace: workspaceId, card: alert.seq, status: alert.status }, 'auto build alert sent');
+    const client = this.trackedClient(token, dm, () => origin);
+    await client.sendMessage(dm, alertMsg.text);
+    log.info({ workspace: workspaceId, card: alertMsg.seq, status: alertMsg.status }, 'auto build alert sent');
   }
 
   // ── setup ─────────────────────────────────────────────────────────────
@@ -361,10 +250,10 @@ export class TelegramEngine {
       const enabled = values.telegram_enabled === true;
       const token = await this.token().catch(() => '');
       const url = this.webhookUrl();
-      const acc = await this.deps.state.account();
+      const account = await this.deps.state.account();
 
       if (!enabled || !token || !url) {
-        if (acc.webhookUrl) {
+        if (account.webhookUrl) {
           if (token) await new TelegramClient(token).deleteWebhook().catch(() => {});
           await this.deps.state.clearRegistration();
           log.info({ enabled, hasToken: !!token, hasUrl: !!url }, 'telegram disabled — webhook torn down');
@@ -374,13 +263,13 @@ export class TelegramEngine {
 
       const client = new TelegramClient(token);
       const me = await client.getMe().catch((e: Error) => { log.warn({ err: e.message }, 'getMe failed — the bot has no name this boot'); return null; });
-      const secret = acc.webhookSecret ?? crypto.randomBytes(32).toString('hex');
+      const secret = account.webhookSecret ?? crypto.randomBytes(32).toString('hex');
       // A read on every boot after the first: only re-register when the URL or
       // the subscription drifted (dropPending:false keeps queued messages).
       const info = await client.getWebhookInfo().catch((e: Error) => { log.warn({ err: e.message }, 'getWebhookInfo failed — re-registering'); return null; });
       const registered = info?.url === url
         && ALLOWED_UPDATES.every((u) => (info?.allowed_updates ?? []).includes(u));
-      if (!registered || acc.webhookSecret !== secret) {
+      if (!registered || account.webhookSecret !== secret) {
         await client.setWebhook(url, secret, { dropPending: false });
         await this.deps.state.saveRegistration(secret, url, me?.username ?? null);
         log.info({ url }, 'telegram webhook registered');
@@ -393,7 +282,7 @@ export class TelegramEngine {
       // command existed still gets it.
       await client.setMyCommands(menuFor('assistant')).catch(() => {});
       const dm = Number(values.telegram_authorized_user ?? '');
-      if (Number.isFinite(dm) && dm) await client.setMyCommands(menuFor(acc.mode), dm).catch(() => {});
+      if (Number.isFinite(dm) && dm) await client.setMyCommands(menuFor(account.mode), dm).catch(() => {});
     } catch (e) {
       log.warn({ err: errStr(e) }, 'telegram reconcile failed');
     }
@@ -403,10 +292,10 @@ export class TelegramEngine {
 
   /** Fast-ack the update, then run out-of-band. Returns the HTTP status. */
   async handleUpdate(secretHeader: string, update: any): Promise<number> {
-    const acc = await this.deps.state.account();
+    const account = await this.deps.state.account();
     const values = await settingsValues(this.turnDeps()).catch(() => ({} as Record<string, unknown>));
     if (values.telegram_enabled !== true) return 200;
-    if (!acc.webhookSecret || !timingSafeEqualStr(secretHeader, acc.webhookSecret)) return 403;
+    if (!account.webhookSecret || !timingSafeEqualStr(secretHeader, account.webhookSecret)) return 403;
 
     const authorized = String(values.telegram_authorized_user ?? '');
     const dm = Number(authorized);
@@ -453,27 +342,27 @@ export class TelegramEngine {
       clearTimeout(entry.timer);
       entry.timer = setTimeout(() => {
         this.albums.delete(groupId);
-        this.run(dm, entry.msgs, values).catch((e) => log.error({ err: errStr(e) }, 'telegram turn failed'));
+        this.handleMessage(dm, entry.msgs, values).catch((e) => log.error({ err: errStr(e) }, 'telegram turn failed'));
       }, 800);
       this.albums.set(groupId, entry);
       return 200;
     }
 
-    this.run(dm, [msg], values).catch((e) => log.error({ err: errStr(e) }, 'telegram turn failed'));
+    this.handleMessage(dm, [msg], values).catch((e) => log.error({ err: errStr(e) }, 'telegram turn failed'));
     return 200;
   }
 
   // ── the turn ─────────────────────────────────────────────────────────────
 
-  private async run(dm: number, msgs: any[], values: Record<string, unknown>): Promise<void> {
+  private async handleMessage(dm: number, msgs: any[], values: Record<string, unknown>): Promise<void> {
     const msg = msgs[0];
     const token = await this.token();
-    // The client records every bubble it sends, tagged with the current mode's
-    // origin, so a reply or a reaction can find its conversation.
+    // The origin tracks which conversation a sent bubble belongs to. It is a
+    // function so the tracked client always records the CURRENT value — the
+    // origin changes from 'assistant' to a specific session once the account
+    // row is read, and the closure follows it.
     let origin: SentOrigin = { kind: 'assistant' };
-    const client = new TelegramClient(token,
-      (id, text) => { this.deps.state.recordSent(dm, id, text, origin).catch(() => {}); },
-      (id) => { this.deps.state.deleteSent(dm, id).catch(() => {}); });
+    const client = this.trackedClient(token, dm, () => origin);
 
     try {
       // Show life immediately — before resolveInput (voice download +
@@ -492,12 +381,12 @@ export class TelegramEngine {
         return;
       }
 
-      const acc = await this.deps.state.account();
-      origin = acc.mode === 'code' && acc.activeSessionId
-        ? { kind: 'session', sessionId: acc.activeSessionId }
+      const account = await this.deps.state.account();
+      origin = account.mode === 'code' && account.activeSessionId
+        ? { kind: 'session', sessionId: account.activeSessionId }
         : { kind: 'assistant' };
 
-      const input = await this.resolveInput(client, dm, msgs, values, acc);
+      const input = await this.resolveInput(client, dm, msgs, values, account);
       if (input === null) return;
 
       // A question standing: the exact word answers it and is nothing else;
@@ -507,17 +396,17 @@ export class TelegramEngine {
       // Busy: queue the message into the SAME key's running turn. Code-mode
       // turns key by sessionId, so switching sessions starts independently;
       // the assistant is one conversation, so it stays one key.
-      const busyKey = acc.mode === 'code' && acc.activeSessionId
-        ? acc.activeSessionId : 'assistant';
-      const running = this.busy.get(busyKey);
+      const busyKey = account.mode === 'code' && account.activeSessionId
+        ? account.activeSessionId : 'assistant';
+      const running = this.inFlight.get(busyKey);
       if (running) {
         running.queue.push(input);
         await client.sendMessage(dm, '⌛ Got it — after this turn.', { replyToMessageId: msg.message_id });
         return;
       }
 
-      if (acc.mode === 'code' && acc.activeSessionId) {
-        await this.codeTurn(client, dm, acc.activeSessionId, input, values);
+      if (account.mode === 'code' && account.activeSessionId) {
+        await this.codeTurn(client, dm, account.activeSessionId, input, values);
       } else {
         await this.assistantTurn(client, dm, input, values);
       }
@@ -532,24 +421,25 @@ export class TelegramEngine {
    *  assistant keeps the conversation; /code is how the user hands it over. */
   private async assistantTurn(client: TelegramClient, dm: number, message: string,
     values: Record<string, unknown>): Promise<void> {
-    this.assistantValues = values;
-    this.assistantChat = { client, dm };
-    this.loadAssistant();
+    const conv = this.conversation;
+    conv.values = values;
+    conv.chat = { client, dm };
+    conv.load();
     const typing = startTyping(client, dm);
     const abort = new AbortController();
     const busyKey = 'assistant';
-    this.busy.set(busyKey, { queue: [], abort });
-    const acc = await this.deps.state.account();
+    this.inFlight.set(busyKey, { queue: [], abort });
+    const account = await this.deps.state.account();
     // The assistant can deliver a file it names from the active session's work
     // dir (its file tools are read-only, but it can point at one the coder made).
     const voiceOnly = String(values.telegram_reply_mode ?? 'text') === 'voice';
     const sink = makeTelegramSink(client, dm,
-      acc.activeSessionId ? this.deliverConfig(acc.activeSessionId) : undefined,
+      account.activeSessionId ? this.deliverConfig(account.activeSessionId) : undefined,
       { voiceOnly });
-    const deps: AssistantDeps = { f: this.f, apiKey: this.deps.apiKey, modelFetch: this.deps.modelFetch };
+    const deps: AssistantDeps = { f: this.fetch, apiKey: this.deps.apiKey, modelFetch: this.deps.modelFetch };
     let replyText = '';
     // The pointer as this turn sees it — live across a switch within the turn.
-    let active = acc.activeSessionId ?? null;
+    let active = account.activeSessionId ?? null;
     try {
       const onSwitch = async (id: string) => {
         const r = await this.switchSession(client, dm, id);
@@ -563,7 +453,7 @@ export class TelegramEngine {
       // does, so the user lands talking to the coder like the cli's "on screen".
       const onWorkspaceCreated = async (workspaceId: string) => {
         await this.deps.state.setActiveWorkspace(workspaceId);
-        const j = await (await this.call('/sessions', { method: 'POST', body: { workspace_id: workspaceId } })).json();
+        const j = await (await this.api('/sessions', { method: 'POST', body: { workspace_id: workspaceId } })).json();
         if (!j.ok) return { error: j.error?.message as string };
         await this.deps.state.setActiveSession(j.data.id);
         await this.enterMode(client, dm, 'code');
@@ -571,16 +461,16 @@ export class TelegramEngine {
         return { session: j.data.id as string };
       };
       // Ensure the assistant has a session row for token tracking.
-      const sessionId = await this.ensureAssistantSession(
-        acc.activeWorkspaceId, acc.activeSessionId);
-      const result = await runAssistantTurn(deps, this.assistantHistory, message, sink, {
+      const sessionId = await conv.ensureSession(
+        account.activeWorkspaceId, account.activeSessionId);
+      const result = await runAssistantTurn(deps, conv.history, message, sink, {
         settings: values,
-        workspaceId: () => acc.activeWorkspaceId ?? null,
+        workspaceId: () => account.activeWorkspaceId ?? null,
         activeSession: () => active,
         onSwitch,
         approve: (ask, signal) => this.approvals.request(client, dm, ask, signal),
         onWorkspaceCreated,
-      }, abort.signal, this.transcript());
+      }, abort.signal, conv.getTranscript());
       replyText = result.text;
       // Record this turn's token usage on the session row.
       const model = (() => { try { return agentModelConfig(values, 'assistant'); } catch { return undefined; } })();
@@ -588,16 +478,17 @@ export class TelegramEngine {
         model ? { provider: model.provider, model: model.model } : undefined).catch(
         (e) => log.warn({ err: errStr(e) }, 'assistant session usage update failed'));
       // Long chat? Summarize it in the background — turns never wait on it.
-      this.kickCompaction(result.usage.input);
+      conv.kickCompaction(result.usage.input);
       // Any messages queued while we ran go out as one follow-up turn.
-      const queued = this.busy.get(busyKey)?.queue ?? [];
-      this.busy.delete(busyKey);
+      const queued = this.inFlight.get(busyKey)?.queue ?? [];
+      this.inFlight.delete(busyKey);
       await this.maybeSpeak(client, dm, values, replyText, typing);
       typing.stop();
       if (queued.length) await this.assistantTurn(client, dm, queued.join('\n\n'), values);
     } catch (e) {
-      this.busy.delete(busyKey);
+      this.inFlight.delete(busyKey);
       typing.stop();
+      log.error({ err: errStr(e) }, 'assistant turn failed');
       await client.sendMessage(dm, `⚠️ ${(e as Error).message}`).catch(() => {});
     }
   }
@@ -609,7 +500,7 @@ export class TelegramEngine {
     let opened: OpenedSession;
     try {
       opened = await openSession({ baseUrl: BASE, apiKey: this.deps.apiKey, clientId: CLIENT_ID,
-        label: CLIENT_ID, fetch: this.f, lock: true, sessionId });
+        label: CLIENT_ID, fetch: this.fetch, lock: true, sessionId });
     } catch (e) {
       if (e instanceof SessionLockedError) {
         const s = await this.deps.sessions.get(sessionId);
@@ -621,7 +512,7 @@ export class TelegramEngine {
 
     const typing = startTyping(client, dm);
     const abort = new AbortController();
-    this.busy.set(sessionId, { queue: [], abort });
+    this.inFlight.set(sessionId, { queue: [], abort });
     // Files the agent names in its reply are delivered from this session's work
     // dir; the agent writes /workspace/... container paths, which map there.
     const voiceOnly = String(values.telegram_reply_mode ?? 'text') === 'voice';
@@ -644,15 +535,15 @@ export class TelegramEngine {
       // reading the reply mode at the delivery end.
       const send = sendMessageTool((text) => this.sendDm(client, dm, values, text));
       // `signal` is what makes the turn stoppable at all: /stop aborts this
-      // controller through the busy map, a remote interrupt through the feed
+      // controller through the inFlight map, a remote interrupt through the feed
       // subscription above — runCodingTurn ends it cleanly (interrupted, not
       // failed) either way.
       const deps: TurnDeps = { ...this.turnDeps(), extraTools: send, signal: abort.signal };
       const r = await runCodingTurn(deps, opened, workspaceId, message, planMode, values);
       unsubscribe?.();
       await sink.done(r.text);
-      const queued = this.busy.get(sessionId)?.queue ?? [];
-      this.busy.delete(sessionId);
+      const queued = this.inFlight.get(sessionId)?.queue ?? [];
+      this.inFlight.delete(sessionId);
       await opened.close();
       await this.maybeSpeak(client, dm, values, r.text, typing);
       typing.stop();
@@ -661,9 +552,10 @@ export class TelegramEngine {
     } catch (e) {
       unsubscribe?.();
       await sink.dispose();
-      this.busy.delete(sessionId);
+      this.inFlight.delete(sessionId);
       await opened.close().catch(() => {});
       typing.stop();
+      log.error({ err: errStr(e) }, 'code turn failed');
       await client.sendMessage(dm, `⚠️ ${(e as Error).message}`).catch(() => {});
     }
   }
@@ -730,70 +622,55 @@ export class TelegramEngine {
     }
   }
 
-  // ── input: voice, attachments, text ──────────────────────────────────────
+  // ── input: voice, video notes, attachments, text ────────────────────────
+
+  /** Transcribe an inbound voice or video note: download, react, transcribe.
+   *  Returns the text or null when it couldn't be heard. */
+  private async transcribeInbound(
+    client: TelegramClient, dm: number, msg: any,
+    file: { file_id: string; file_size?: number },
+    values: Record<string, unknown>,
+  ): Promise<string | null> {
+    const react = (emoji?: string) => client.setMessageReaction(dm, msg.message_id, emoji).catch(() => {});
+    if (file.file_size && file.file_size > MAX_INBOUND_BYTES) {
+      await client.sendMessage(dm, "⚠️ That voice note is over Telegram's 20 MB limit for bots.");
+      return null;
+    }
+    const apiKey = (await this.deps.settings.credential('deepgram_api_key').catch(() => '')) ?? '';
+    if (!apiKey) { await client.sendMessage(dm, NOT_HEARD.no_key); return null; }
+    const [, audio] = await Promise.all([react(REACT_TRANSCRIBING), client.downloadFile(file.file_id)])
+      .catch(async (e) => { await react(); throw e; });
+    const heard = await transcribeVoice(apiKey, audio, String(values.voice_stt_model ?? ''));
+    if ('error' in heard) { await react(); await client.sendMessage(dm, NOT_HEARD[heard.error]); return null; }
+    if (!heard.text) { await react(); await client.sendMessage(dm, "🎤 I couldn't make out any speech in that."); return null; }
+    await react(REACT_HEARD);
+    if (values.telegram_transcript_echo === true) await client.sendMessage(dm, `🎤 "${heard.text}"`);
+    return heard.text;
+  }
 
   private async resolveInput(client: TelegramClient, dm: number, msgs: any[],
-    values: Record<string, unknown>, acc: TelegramAccountRow): Promise<string | null> {
+    values: Record<string, unknown>, account: TelegramAccountRow): Promise<string | null> {
     const msg = msgs[0];
     // Telegram puts the caption on only one album item.
     const typed = msgs.map((m) => String(m.text ?? m.caption ?? '').trim()).find(Boolean) ?? '';
 
     // A voice note is the message itself (never `audio` — an mp3 is a file).
-    const voice = msg.voice;
-    if (voice && !typed) {
-      const react = (emoji?: string) => client.setMessageReaction(dm, msg.message_id, emoji).catch(() => {});
-      if (voice.file_size && voice.file_size > MAX_INBOUND_BYTES) {
-        await client.sendMessage(dm, "⚠️ That voice note is over Telegram's 20 MB limit for bots.");
-        return null;
-      }
-      // The key first (a millisecond, read at point of use like every
-      // credential): without one there is nothing to download for.
-      const apiKey = (await this.deps.settings.credential('deepgram_api_key').catch(() => '')) ?? '';
-      if (!apiKey) { await client.sendMessage(dm, NOT_HEARD.no_key); return null; }
-      // The ✍ and the download are independent — one round-trip each, so
-      // they run together rather than the reaction gating the download.
-      const [, audio] = await Promise.all([react(REACT_TRANSCRIBING), client.downloadFile(voice.file_id)])
-        .catch(async (e) => { await react(); throw e; });   // run() reports it; the ✍ must not outlive it
-      const heard = await transcribeVoice(apiKey, audio, String(values.voice_stt_model ?? ''));
-      if ('error' in heard) { await react(); await client.sendMessage(dm, NOT_HEARD[heard.error]); return null; }
-      if (!heard.text) { await react(); await client.sendMessage(dm, "🎤 I couldn't make out any speech in that."); return null; }
-      // Transcription succeeded — the 👍 replaces the ✍ as immediate feedback.
-      await react(REACT_HEARD);
-      if (values.telegram_transcript_echo === true) await client.sendMessage(dm, `🎤 "${heard.text}"`);
-      return heard.text;
-    }
+    if (msg.voice && !typed) return this.transcribeInbound(client, dm, msg, msg.voice, values);
 
-    // A round video message (video_note) is treated like a voice note for now:
-    // download, extract audio, transcribe. Full video processing later.
-    const videoNote = msg.video_note;
-    if (videoNote && !typed) {
-      const react = (emoji?: string) => client.setMessageReaction(dm, msg.message_id, emoji).catch(() => {});
-      if (videoNote.file_size && videoNote.file_size > MAX_INBOUND_BYTES) {
-        await client.sendMessage(dm, "⚠️ That video note is over Telegram's 20 MB limit for bots.");
-        return null;
-      }
-      const apiKey = (await this.deps.settings.credential('deepgram_api_key').catch(() => '')) ?? '';
-      if (!apiKey) { await client.sendMessage(dm, NOT_HEARD.no_key); return null; }
-      const [, audio] = await Promise.all([react(REACT_TRANSCRIBING), client.downloadFile(videoNote.file_id)])
-        .catch(async (e) => { await react(); throw e; });
-      const heard = await transcribeVoice(apiKey, audio, String(values.voice_stt_model ?? ''));
-      if ('error' in heard) { await react(); await client.sendMessage(dm, NOT_HEARD[heard.error]); return null; }
-      if (!heard.text) { await react(); await client.sendMessage(dm, "🎤 I couldn't make out any speech in that."); return null; }
-      await react(REACT_HEARD);
-      if (values.telegram_transcript_echo === true) await client.sendMessage(dm, `🎤 "${heard.text}"`);
-      return heard.text;
-    }
+    // A round video message (video_note) is treated like a voice note:
+    // download, extract audio, transcribe.
+    if (msg.video_note && !typed) return this.transcribeInbound(client, dm, msg, msg.video_note, values);
 
     // Everything else file-bearing: save to the session's scratch, describe it.
     // Attachments only land in code mode (there is a session's scratch to use).
     // Collect from ALL messages — an album sends each photo as a separate update.
     const files = msgs.flatMap(collectFiles);
     if (files.length) {
-      if (acc.mode !== 'code' || !acc.activeSessionId) {
+      if (account.mode !== 'code' || !account.activeSessionId) {
         await client.sendMessage(dm, "⚠️ Files go into the session you're coding in — /code to enter one first.");
         return typed || null;
       }
-      const scratch = sessionDir(this.deps.paths, acc.activeSessionId) + '/scratch';
+      const scratch = sessionDir(this.deps.paths, account.activeSessionId) + '/scratch';
       const stored: StoredAttachment[] = [];
       for (const { file, kind } of files) {
         if (file.file_size && file.file_size > MAX_INBOUND_BYTES) {
@@ -820,16 +697,16 @@ export class TelegramEngine {
     if (!replied?.message_id) return;
     const stored = await this.deps.state.getSent(dm, Number(replied.message_id));
     if (!stored) return;
-    const acc = await this.deps.state.account();
+    const account = await this.deps.state.account();
     if (stored.origin.kind === 'session' && stored.origin.sessionId) {
-      if (acc.activeSessionId === stored.origin.sessionId && acc.mode === 'code') return;
-      if (acc.activeSessionId !== stored.origin.sessionId) {
+      if (account.activeSessionId === stored.origin.sessionId && account.mode === 'code') return;
+      if (account.activeSessionId !== stored.origin.sessionId) {
         const r = await this.switchSession(client, dm, stored.origin.sessionId, { silent: true });
         if ('error' in r) { await client.sendMessage(dm, '⚠️ That session no longer exists.'); return; }
       }
       await this.enterMode(client, dm, 'code');
     } else {
-      if (acc.mode === 'assistant') return;
+      if (account.mode === 'assistant') return;
       // The switch line is the whole message here.
       await this.enterMode(client, dm, 'assistant');
     }
@@ -869,12 +746,12 @@ export class TelegramEngine {
    *  function, used by enterMode and the /code echo. Pass `dm` to include the
    *  last agent message (the switch announcement); omit it for a bare label. */
   async codeModeLabel(dm?: number): Promise<string> {
-    const acc = await this.deps.state.account();
-    if (!acc.activeSessionId) return '🤖 Coding agent';
-    const s = await this.deps.sessions.get(acc.activeSessionId);
+    const account = await this.deps.state.account();
+    if (!account.activeSessionId) return '🤖 Coding agent';
+    const s = await this.deps.sessions.get(account.activeSessionId);
     if (!s) return '🤖 Coding agent';
-    const loop = await this.deps.loops.of(acc.activeSessionId);
-    const ws = await (await this.call(`/workspaces/${s.workspaceId}`)).json().catch(() => null);
+    const loop = await this.deps.loops.of(account.activeSessionId);
+    const ws = await (await this.api(`/workspaces/${s.workspaceId}`)).json().catch(() => null);
     const prefix: string | undefined = ws?.ok ? ws.data.cardPrefix : undefined;
     const parts: string[] = ['🤖 Coding agent'];
     if (prefix) parts.push(prefix);
@@ -883,7 +760,7 @@ export class TelegramEngine {
     parts.push(s.name ?? 'untitled');
     const title = parts.join(' · ');
     if (dm != null) {
-      const last = await this.deps.state.getLastSentForSession(dm, acc.activeSessionId).catch(() => null);
+      const last = await this.deps.state.getLastSentForSession(dm, account.activeSessionId).catch(() => null);
       if (last) return titled(title, last);
     }
     return title;
@@ -909,12 +786,12 @@ export class TelegramEngine {
 
   // ── /stop and command support (used by commands.ts) ──────────────────────
 
-  /** Stop the in-flight turn for the given busy key (a sessionId in code mode,
+  /** Stop the in-flight turn for the given key (a sessionId in code mode,
    *  'assistant' in assistant mode). Returns whether one was running. OUR
    *  turn only: stopping someone else's is the interrupt route's job, and
    *  commands.ts calls it for exactly that. */
   stop(key: string): boolean {
-    const b = this.busy.get(key);
+    const b = this.inFlight.get(key);
     if (!b) return false;
     b.queue.length = 0;
     b.abort.abort();
@@ -923,7 +800,6 @@ export class TelegramEngine {
 
   get state() { return this.deps.state; }
   get settings() { return this.deps.settings; }
-  assistantReset() { this.assistantHistory = []; }
 
   /** The approval gate, for slash commands that need a confirm (today:
    *  /restart). Same gate gated tools use — one question per chat. */
@@ -933,24 +809,24 @@ export class TelegramEngine {
 
   /** A JSON call to this server's own surface, as the telegram client — the
    *  one door commands.ts reaches the routes through. */
-  async call(path: string, init?: { method?: string; body?: unknown; session?: string }): Promise<any> {
+  async api(path: string, init?: { method?: string; body?: unknown; session?: string }): Promise<any> {
     const headers: Record<string, string> = {
       authorization: `Bearer ${this.deps.apiKey}`, 'x-phantom-looper-client': CLIENT_ID };
     if (init?.body !== undefined) headers['content-type'] = 'application/json';
     if (init?.session) headers['x-phantom-looper-session'] = init.session;
-    const r = await this.f(`${BASE}${path}`, {
+    const r = await this.fetch(`${BASE}${path}`, {
       method: init?.method ?? 'GET', headers,
       ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
     });
     return { json: () => r.json(), text: () => r.text() };
   }
 
-  /** Like call() but returns the raw fetch Response — for streaming endpoints. */
-  async callRaw(path: string, init?: { method?: string; body?: unknown }): Promise<Response> {
+  /** Like api() but returns the raw fetch Response — for streaming endpoints. */
+  async apiRaw(path: string, init?: { method?: string; body?: unknown }): Promise<Response> {
     const headers: Record<string, string> = {
       authorization: `Bearer ${this.deps.apiKey}`, 'x-phantom-looper-client': CLIENT_ID };
     if (init?.body !== undefined) headers['content-type'] = 'application/json';
-    return this.f(`${BASE}${path}`, {
+    return this.fetch(`${BASE}${path}`, {
       method: init?.method ?? 'GET', headers,
       ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
     });
@@ -960,16 +836,16 @@ export class TelegramEngine {
    *  the telegram client; every step reaches `onStep` in words, so the command
    *  can show them. Never throws: a refusal is a result too. */
   async autoPush(session: string, onStep?: (label: string) => void): Promise<AutoPushOutcome> {
-    try { return await autoPushSession({ baseUrl: BASE, apiKey: this.deps.apiKey, sessionId: session, fetch: this.f, clientId: CLIENT_ID }, onStep); }
+    try { return await autoPushSession({ baseUrl: BASE, apiKey: this.deps.apiKey, sessionId: session, fetch: this.fetch, clientId: CLIENT_ID }, onStep); }
     catch (e) { return { result: 'error', reason: (e as Error).message }; }
   }
   async autoPull(session: string, onStep?: (label: string) => void): Promise<AutoPullOutcome> {
-    try { return await autoPullSession({ baseUrl: BASE, apiKey: this.deps.apiKey, sessionId: session, fetch: this.f, clientId: CLIENT_ID }, onStep); }
+    try { return await autoPullSession({ baseUrl: BASE, apiKey: this.deps.apiKey, sessionId: session, fetch: this.fetch, clientId: CLIENT_ID }, onStep); }
     catch (e) { return { result: 'error', reason: (e as Error).message }; }
   }
 
   private turnDeps(): TurnDeps {
-    return { f: this.f, apiKey: this.deps.apiKey, base: BASE,
+    return { f: this.fetch, apiKey: this.deps.apiKey, base: BASE,
       modelFetch: this.deps.modelFetch, sessionEvents: this.deps.sessionEvents, client: CLIENT_ID,
       backdoor: this.deps.backdoor };
   }
