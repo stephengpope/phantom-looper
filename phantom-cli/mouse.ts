@@ -78,9 +78,11 @@ export interface Range { y: number; x0: number; x1: number }
  *  on screen — rows outside the viewport produce no Range entries. */
 export function selectionRanges(sel: Selection, scroll: number, screenRows: number): Range[] {
   const { region } = sel;
-  // Convert content coords to screen coords.
-  let a = { x: sel.anchor.x, y: sel.anchor.contentY - scroll };
-  let b = { x: sel.head.x, y: sel.head.contentY - scroll };
+  // Convert content coords to screen coords.  When the pane's scroll offset
+  // grows the viewport moves up and content shifts DOWN on screen, so
+  // screenY = contentY + scroll.
+  let a = { x: sel.anchor.x, y: sel.anchor.contentY + scroll };
+  let b = { x: sel.head.x, y: sel.head.contentY + scroll };
   if (b.y < a.y || (b.y === a.y && b.x < a.x)) [a, b] = [b, a];
   const clamp = (x: number) => Math.min(region.right, Math.max(region.left, x));
   const out: Range[] = [];

@@ -480,7 +480,7 @@ export function App({
       // it tracks the text automatically — just re-render with the new scroll.
       const sel = selection.current;
       if (sel) {
-        sel.head = { x: ev.x, contentY: ev.y + selScroll(sel.pane) };
+        sel.head = { x: ev.x, contentY: ev.y - selScroll(sel.pane) };
         highlightSel(sel);
       }
       return;
@@ -492,8 +492,8 @@ export function App({
       const curScroll = selScroll(pane);
       const region = inVoice ? { left: mainCols + 1, right: screenCols - 1 } : { left: 0, right: mainCols - 1 };
       selection.current = {
-        anchor: { x: ev.x, contentY: ev.y + curScroll },
-        head:   { x: ev.x, contentY: ev.y + curScroll },
+        anchor: { x: ev.x, contentY: ev.y - curScroll },
+        head:   { x: ev.x, contentY: ev.y - curScroll },
         region, pane,
       };
       screen?.highlight(null);
@@ -509,10 +509,10 @@ export function App({
         const sc = selScroll(sel.pane);
         if (dir > 0) {
           // Scrolling up (into history): head → top of viewport
-          sel.head = { x: sel.region.left, contentY: sc + 0 };
+          sel.head = { x: sel.region.left, contentY: 0 - sc };
         } else {
           // Scrolling down (toward tail): head → bottom of viewport
-          sel.head = { x: sel.region.right, contentY: sc + screenRows - 1 };
+          sel.head = { x: sel.region.right, contentY: (screenRows - 1) - sc };
         }
         highlightSel(sel);
       }, 50);
@@ -521,7 +521,7 @@ export function App({
     const sel = selection.current;
     if (!sel) return;
     if (ev.kind === 'drag') {
-      sel.head = { x: ev.x, contentY: ev.y + selScroll(sel.pane) };
+      sel.head = { x: ev.x, contentY: ev.y - selScroll(sel.pane) };
       // Detect edge: set the auto-scroll direction.
       if (ev.y <= 0) dragScrollDir.current = 1;        // at top → scroll up (into history, offset grows)
       else if (ev.y >= screenRows - 1) dragScrollDir.current = -1;  // at bottom → scroll down
@@ -532,7 +532,7 @@ export function App({
     // release
     stopDragScroll();
     const curScroll = selScroll(sel.pane);
-    sel.head = { x: ev.x, contentY: ev.y + curScroll };
+    sel.head = { x: ev.x, contentY: ev.y - curScroll };
     const moved = sel.anchor.x !== sel.head.x || sel.anchor.contentY !== sel.head.contentY;
     selection.current = null;
     if (!moved || !screen) { screen?.highlight(null); return; }
