@@ -788,7 +788,9 @@ export class WindowStore {
     // Token totals from the table — never re-parse the transcript.
     const usage = await this.api('GET', `/sessions/${id}/token-usage`)
       .then((r) => { const u = r as { input?: number; output?: number; cache_read?: number; cache_write?: number };
-        return { input: u.input ?? 0, output: u.output ?? 0, cache_read: u.cache_read ?? 0, cache_write: u.cache_write ?? 0 }; })
+        // Coerce: PostgreSQL bigint sums arrive as strings through JSON.
+        return { input: Number(u.input ?? 0), output: Number(u.output ?? 0),
+          cache_read: Number(u.cache_read ?? 0), cache_write: Number(u.cache_write ?? 0) }; })
       .catch(() => undefined);
     // keepScreen: the feed showed us this whole turn as it happened, so the
     // record brings the history and the stamp and the screen keeps what it
@@ -1044,8 +1046,8 @@ export class WindowStore {
         // to zero. The token_usage table is the source of truth; these seed
         // the in-memory accumulator until the first reseat corrects it.
         usage: {
-          input: row.tokensInput ?? 0, output: row.tokensOutput ?? 0,
-          cache_read: row.tokensCacheRead ?? 0, cache_write: row.tokensCacheWrite ?? 0,
+          input: Number(row.tokensInput ?? 0), output: Number(row.tokensOutput ?? 0),
+          cache_read: Number(row.tokensCacheRead ?? 0), cache_write: Number(row.tokensCacheWrite ?? 0),
         },
         ...(card ? { card } : {}),
         ...(row.agent === 'supervisor' ? { readonly: true } : {}),

@@ -56,7 +56,11 @@ export class TokenUsage {
       })
       .from(tokenUsage)
       .where(eq(tokenUsage.sessionId, sessionId));
-    return row ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    if (!row) return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    // PostgreSQL sum() on bigint returns numeric, which pg sends as a string.
+    // Drizzle's sql<number> is a TS-only assertion — coerce at the boundary.
+    return { input: Number(row.input), output: Number(row.output),
+      cacheRead: Number(row.cacheRead), cacheWrite: Number(row.cacheWrite) };
   }
 
   /** Token totals per provider/model since `since` — the /tokens report.
@@ -65,7 +69,7 @@ export class TokenUsage {
     provider: string | null; model: string | null;
     input: number; output: number; cacheRead: number; cacheWrite: number;
   }>> {
-    return this.db
+    const rows = await this.db
       .select({
         provider: tokenUsage.provider,
         model: tokenUsage.model,
@@ -77,6 +81,8 @@ export class TokenUsage {
       .from(tokenUsage)
       .where(gte(tokenUsage.createdAt, since))
       .groupBy(tokenUsage.provider, tokenUsage.model);
+    return rows.map((r) => ({ ...r, input: Number(r.input), output: Number(r.output),
+      cacheRead: Number(r.cacheRead), cacheWrite: Number(r.cacheWrite) }));
   }
 
   /** Token totals per kind since `since` — helpers + agent types. */
@@ -84,7 +90,7 @@ export class TokenUsage {
     kind: string; input: number; output: number;
     cacheRead: number; cacheWrite: number; calls: number;
   }>> {
-    return this.db
+    const rows = await this.db
       .select({
         kind: tokenUsage.kind,
         input: sql<number>`coalesce(sum(${tokenUsage.tokensInput}), 0)`.as('input'),
@@ -96,5 +102,7 @@ export class TokenUsage {
       .from(tokenUsage)
       .where(gte(tokenUsage.createdAt, since))
       .groupBy(tokenUsage.kind);
+    return rows.map((r) => ({ ...r, input: Number(r.input), output: Number(r.output),
+      cacheRead: Number(r.cacheRead), cacheWrite: Number(r.cacheWrite), calls: Number(r.calls) }));
   }
 }

@@ -30,7 +30,7 @@ export class HelperUsage {
   /** Token totals per helper kind since `since` — /system/token-usage. */
   async totalsByKind(since: Date): Promise<Array<{ kind: string; input: number; output: number;
     cacheRead: number; cacheWrite: number; calls: number }>> {
-    return this.db
+    const rows = await this.db
       .select({
         kind: helperLlmUsage.kind,
         input: sql<number>`coalesce(sum(${helperLlmUsage.tokensInput}), 0)`.as('h_input'),
@@ -42,5 +42,7 @@ export class HelperUsage {
       .from(helperLlmUsage)
       .where(gte(helperLlmUsage.createdAt, since))
       .groupBy(helperLlmUsage.kind);
+    return rows.map((r) => ({ ...r, input: Number(r.input), output: Number(r.output),
+      cacheRead: Number(r.cacheRead), cacheWrite: Number(r.cacheWrite), calls: Number(r.calls) }));
   }
 }

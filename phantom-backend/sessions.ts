@@ -275,7 +275,7 @@ export class Sessions {
    *  (destroyed rows left out) — /system/token-usage. */
   async tokenUsageByModel(since: Date): Promise<Array<{ provider: string | null; model: string | null;
     input: number; output: number; cacheRead: number; cacheWrite: number }>> {
-    return this.db
+    const rows = await this.db
       .select({
         provider: sessions.provider,
         model: sessions.model,
@@ -287,6 +287,9 @@ export class Sessions {
       .from(sessions)
       .where(and(ne(sessions.status, 'destroyed'), gte(sessions.lastUsedAt, since)))
       .groupBy(sessions.provider, sessions.model);
+    // PostgreSQL sum() on bigint → string; coerce at the boundary.
+    return rows.map((r) => ({ ...r, input: Number(r.input), output: Number(r.output),
+      cacheRead: Number(r.cacheRead), cacheWrite: Number(r.cacheWrite) }));
   }
 
   // ── lifecycle ──────────────────────────────────────────────────────────────
