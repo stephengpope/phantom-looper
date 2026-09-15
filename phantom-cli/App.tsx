@@ -227,11 +227,29 @@ export function App({
   // as the pane last said it can show. The wheel and the two keys differ only
   // in how many rows they ask for — they used to each clamp for themselves,
   // three copies of one rule that could drift apart.
+  // Scroll offsets and their maxima as refs — the auto-scroll interval and
+  // mouse handlers need the live values without re-registering on every change.
+  // scrollBy eagerly updates scrollRef/voiceScrollRef before React re-renders
+  // so highlight computation sees the new scroll immediately.
+  const scrollRef = useRef(scroll);
+  scrollRef.current = scroll;
+  const voiceScrollRef = useRef(voiceScroll);
+  voiceScrollRef.current = voiceScroll;
+  const scrollMaxRef = useRef(scrollMax);
+  scrollMaxRef.current = scrollMax;
+  const voiceScrollMaxRef = useRef(voiceScrollMax);
+  voiceScrollMaxRef.current = voiceScrollMax;
   const scrollBy = useCallback((pane: 'chat' | 'voice', rows: number) => {
-    const [set, max] = pane === 'chat'
-      ? [setScroll, scrollMax] as const : [setVoiceScroll, voiceScrollMax] as const;
-    set((s) => Math.max(0, Math.min(max, s + rows)));
-  }, [scrollMax, voiceScrollMax]);
+    const [set, ref, maxRef] = pane === 'chat'
+      ? [setScroll, scrollRef, scrollMaxRef] as const
+      : [setVoiceScroll, voiceScrollRef, voiceScrollMaxRef] as const;
+    // Eagerly update the ref so callers reading scroll immediately after
+    // (the auto-scroll interval, wheel-during-drag) see the new value
+    // before React re-renders.
+    const next = Math.max(0, Math.min(maxRef.current, ref.current + rows));
+    ref.current = next;
+    set(next);
+  }, []);
   // Where the prompt's two rules are, as screen rows, so the divider can draw
   // a junction where they meet it. Measured, not computed from the bottom:
   // the toolbar notice and the command menu move the prompt. The bottom block
@@ -246,12 +264,6 @@ export function App({
   // pane it started in; on release its text is copied. Kept in a ref — the
   // events arrive faster than a render.
   const selection = useRef<Selection | null>(null);
-  // The scroll offset as a ref — the auto-scroll interval and mouse handlers
-  // need the live value without re-registering on every scroll change.
-  const scrollRef = useRef(scroll);
-  scrollRef.current = scroll;
-  const voiceScrollRef = useRef(voiceScroll);
-  voiceScrollRef.current = voiceScroll;
   // Auto-scroll during drag-to-select: when the mouse reaches the top or
   // bottom edge of the pane, a 50ms interval scrolls and extends the
   // selection continuously — the xterm.js pattern (SelectionService's
@@ -440,6 +452,15 @@ export function App({
     if (dragScrollTimer.current) { clearInterval(dragScrollTimer.current); dragScrollTimer.current = null; }
     dragScrollDir.current = 0;
   };
+
+  // After React re-renders with a new scroll (from the wheel or auto-scroll),
+  // Ink redraws the pane and screen.ts repaints the saved ranges — but those
+  // ranges were computed for the old scroll. Re-highlight with the correct
+  // scroll so the selection tracks the content.
+  useEffect(() => {
+    const sel = selection.current;
+    if (sel) highlightSel(sel);
+  }, [scroll, voiceScroll]);
 
   useInput((ch) => {
     if (!isMouseInput(ch)) return;
