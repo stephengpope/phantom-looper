@@ -40,7 +40,11 @@ import { Approvals, type Ask } from './approvals.js';
 import { UpgradeChecker } from './upgrade.js';
 import type { TelegramState, SentOrigin, TelegramAccountRow, TelegramMode } from './store.js';
 import { menuFor, handleCommand } from './commands.js';
-import { autoPushSession, autoPullSession, type AutoPushOutcome, type AutoPullOutcome } from '../../core/llm/tools/git.js';
+import { AUTO_PUSH_STEPS, AUTO_PULL_STEPS, type AutoPushOutcome, type AutoPullOutcome } from '../../core/llm/tools/git.js';
+import type { AutoPushEvent } from '../git/autoPush.js';
+import type { AutoPullEvent } from '../git/autoPull.js';
+import type { SessionRow, WorkspaceRow } from '../db/schema.js';
+import type { Workspaces } from '../workspaces.js';
 import { AssistantConversation } from './assistantConversation.js';
 
 
@@ -73,6 +77,7 @@ export interface TelegramEngineDeps {
   state: TelegramState;
   settings: Settings;
   sessions: Sessions;
+  workspaces: Workspaces;
   loops: Loops;
   helperUsage: HelperUsage;
   tokenUsage?: TokenUsage;
@@ -88,6 +93,12 @@ export interface TelegramEngineDeps {
   modelFetch?: typeof fetch;
   /** https://PHANTOM_BACKEND_ADDRESS — the only source of the webhook URL. */
   publicAddress?: string;
+  /** Direct auto-push / auto-pull — bypasses injectFetch so onEvent fires
+   *  as each step completes instead of all at once after the stream ends. */
+  autoPush?: (session: SessionRow, workspace: WorkspaceRow,
+    onEvent?: (e: AutoPushEvent) => void | Promise<void>, by?: string) => Promise<AutoPushOutcome>;
+  autoPull?: (session: SessionRow, workspace: WorkspaceRow,
+    onEvent?: (e: AutoPullEvent) => void | Promise<void>, by?: string) => Promise<AutoPullOutcome>;
 }
 
 /** A turn in flight on THIS server, keyed per session (code mode) or
@@ -839,16 +850,35 @@ export class TelegramEngine {
     });
   }
 
-  /** `/auto_push` and `/auto_pull` — core's one client of each git route, as
-   *  the telegram client; every step reaches `onStep` in words, so the command
-   *  can show them. Never throws: a refusal is a result too. */
-  async autoPush(session: string, onStep?: (label: string) => void): Promise<AutoPushOutcome> {
-    try { return await autoPushSession({ baseUrl: BASE, apiKey: this.deps.apiKey, sessionId: session, fetch: this.fetch, clientId: CLIENT_ID }, onStep); }
-    catch (e) { return { result: 'error', reason: (e as Error).message }; }
+  /** `/auto_push` and `/auto_pull` — called directly (not through the HTTP
+   *  route) so onStep fires live as each step completes. injectFetch buffers
+   *  the full response before returning, which killed the progressive UI. */
+  async autoPush(sessionId: string, onStep?: (label: string) => void): Promise<AutoPushOutcome> {
+    return this.runSync('push', sessionId, AUTO_PUSH_STEPS, this.deps.autoPush, onStep);
   }
-  async autoPull(session: string, onStep?: (label: string) => void): Promise<AutoPullOutcome> {
-    try { return await autoPullSession({ baseUrl: BASE, apiKey: this.deps.apiKey, sessionId: session, fetch: this.fetch, clientId: CLIENT_ID }, onStep); }
-    catch (e) { return { result: 'error', reason: (e as Error).message }; }
+  async autoPull(sessionId: string, onStep?: (label: string) => void): Promise<AutoPullOutcome> {
+    return this.runSync('pull', sessionId, AUTO_PULL_STEPS, this.deps.autoPull, onStep);
+  }
+
+  private async runSync<T extends AutoPushOutcome | AutoPullOutcome>(
+    label: string,
+    sessionId: string,
+    steps: Record<string, string>,
+    fn: ((s: SessionRow, w: WorkspaceRow, onEvent?: (e: { step: string; detail?: string }) => void | Promise<void>, by?: string) => Promise<T>) | undefined,
+    onStep?: (label: string) => void,
+  ): Promise<T> {
+    if (!fn) return { result: 'error', reason: `auto-${label} is not available on this server` } as T;
+    try {
+      const session = await this.deps.sessions.get(sessionId);
+      if (!session) return { result: 'error', reason: 'session not found' } as T;
+      const workspace = await this.deps.workspaces.get(session.workspaceId);
+      if (!workspace) return { result: 'error', reason: 'workspace not found' } as T;
+      return await fn(session, workspace, (e) => {
+        const text = steps[e.step] ?? e.step;
+        const detail = e.detail ? ` — ${e.detail}` : '';
+        onStep?.(`${text}${detail}`);
+      }, CLIENT_ID);
+    } catch (e) { return { result: 'error', reason: (e as Error).message } as T; }
   }
 
   private turnDeps(): TurnDeps {

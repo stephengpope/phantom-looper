@@ -292,9 +292,10 @@ async function main() {
   // profile runs on); with no address, telegram stays off. Reconcile at boot
   // re-registers a stale webhook and pushes the command menu.
   const telegram = new TelegramEngine({
-    state: telegramState, settings, sessions, loops, helperUsage, tokenUsage, paths, app, apiKey: env.apiKey,
+    state: telegramState, settings, sessions, workspaces, loops, helperUsage, tokenUsage, paths, app, apiKey: env.apiKey,
     events: ctx.events, backdoor: ctx.backdoor,
     sessionEvents: ctx.sessionEvents, publicAddress: process.env.PHANTOM_BACKEND_ADDRESS,
+    autoPush: autoPushFn, autoPull: autoPullFn,
   });
   ctx.telegram = telegram;
   void telegram.reconcile();
