@@ -40,7 +40,7 @@ export const MENU: Record<TelegramMode, Cmd[]> = {
     { command: 'workspaces', description: 'List or switch workspaces' },
     { command: 'sessions', description: 'List or switch sessions' },
     { command: 'compact', description: 'Summarize older messages to free space' },
-    { command: 'stop', description: 'Stop a running session' },
+    { command: 'stop', description: 'Stop the assistant' },
     { command: 'status', description: 'Server, workspace and session overview' },
     { command: 'presets', description: 'List or apply model presets' },
     { command: 'tokens', description: 'Token usage — today, this week, by model' },
@@ -56,7 +56,7 @@ export const MENU: Record<TelegramMode, Cmd[]> = {
     { command: 'plan', description: 'Toggle plan mode' },
     { command: 'auto_push', description: 'Push this session to base' },
     { command: 'auto_pull', description: 'Pull base into this session' },
-    { command: 'stop', description: 'Stop the running task' },
+    { command: 'stop', description: 'Stop the running coding session' },
     { command: 'status', description: 'Server, session and what\'s running' },
     { command: 'presets', description: 'List or apply model presets' },
     { command: 'tokens', description: 'Token usage — today, this week, by model' },
@@ -363,11 +363,12 @@ export async function handleCommand(
     }
 
     case 'stop': {
-      // /stop — stop the active session
-      // /stop n — stop session n from the /sessions list
-      // /stop all — stop every locked (running) coding session
-      // Works from both assistant and code mode. Never touches the
-      // active-session pointer — it's a remote kill.
+      // /stop — mode-aware:
+      //   assistant mode → stop the assistant turn
+      //   code mode      → stop the active coding session
+      // /stop n — stop session n from the /sessions list (either mode)
+      // /stop all — stop every locked (running) coding session (either mode)
+      // Never touches the active-session pointer — it's a remote kill.
 
       if (arg === 'all') {
         const j = await (await engine.api('/sessions?typed=true&supervisor=false&limit=50')).json();
@@ -396,7 +397,16 @@ export async function handleCommand(
         return;
       }
 
-      // Bare /stop — the active session.
+      // Bare /stop — assistant mode stops the assistant; code mode stops
+      // the active coding session.
+      if (acc.mode === 'assistant') {
+        const stopped = engine.stop('assistant');
+        if (!stopped) { await reply('ℹ️ The assistant isn\'t running.'); return; }
+        await reply('🛑 Stopping the assistant.');
+        return;
+      }
+
+      // Code mode — stop the active coding session.
       if (!acc.activeSessionId) { await reply('⚠️ No active session — /sessions to pick one, or /stop all.'); return; }
       const own = engine.stop(acc.activeSessionId);
       if (!own) {
@@ -560,7 +570,7 @@ const HELP = [
   '/plan — Toggle plan mode',
   '/auto_push — Push this session to base',
   '/auto_pull — Pull base into this session',
-  '/stop — Stop the active session',
+  '/stop — Stop the assistant or active coding session (mode-aware)',
   '/stop 2 — Stop session 2',
   '/stop all — Stop every running session',
   '',
