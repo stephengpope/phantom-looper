@@ -143,7 +143,7 @@ export class UpgradeChecker {
     const current = bare(this.deps.version);
     const client = existingClient ?? this.deps.makeClient(token, dm);
     const m = await client.sendMarkdown(dm, titled(`⬆️ ${v} is available — you're on ${current}.`,
-      'Updating restarts the server — any running turns are stopped and loop cards are blocked.\n\n' +
+      'Updating restarts the server — any running turns are interrupted and resume after the restart.\n\n' +
       'Update?'), {
       replyMarkup: { inline_keyboard: [[
         { text: '✅ Approve', callback_data: `${PREFIX}:${id}:y` },
@@ -181,7 +181,7 @@ export class UpgradeChecker {
         client.editMessageText(dm, msgId, `⬆️ Updating to ${v}...\nImages pulled. Restarting...`).catch(() => {});
       } else if (event.event === 'restarting') {
         client.editMessageText(dm, msgId,
-          `⬆️ Updating to ${v}...\nRestarting — any running turns are stopped and loop cards are blocked.`).catch(() => {});
+          `⬆️ Updating to ${v}...\nRestarting — any running turns are interrupted and resume after the restart.`).catch(() => {});
       }
     });
 

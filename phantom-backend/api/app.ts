@@ -165,7 +165,7 @@ export async function buildApp(ctx: AppCtx) {
   await app.register(async (api) => {
     api.get('/health', { schema: { tags: ['meta'], summary: 'Liveness',
       description: 'Requires the bearer token. Returns the running version — watch it change after POST /update — ' +
-        'and `loops_running`, the cards with a round in flight (a restart cuts those rounds off and blocks the cards).' } },
+        'and `loops_running`, the cards with a round in flight (a restart interrupts those rounds; they resume after boot).' } },
     async () => ({ ok: true, version: ctx.version, loops_running: ctx.looper?.runningCount() ?? 0 }));
 
     api.addHook('onRequest', async (req, reply) => {

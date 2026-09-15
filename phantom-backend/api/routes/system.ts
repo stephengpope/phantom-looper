@@ -102,7 +102,7 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
         type: 'object', required: ['tag'], additionalProperties: false,
         properties: {
           tag: { type: 'string', pattern: RELEASE_TAG.source, description: 'Release tag, e.g. v0.2.0 (no prereleases)' },
-          restart_anyway: { type: 'boolean', description: 'Update even with loop rounds in flight — they are cut off and their cards blocked. Only a caller whose human was warned should send this.' },
+          restart_anyway: { type: 'boolean', description: 'Update even with loop rounds in flight — they are interrupted and resume after the restart. Only a caller whose human was warned should send this.' },
         },
       },
     },
@@ -110,13 +110,13 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
     const { tag, restart_anyway: restartAnyway } = req.body as { tag: string; restart_anyway?: boolean };
     const docker = ctx.fs?.docker;
 
-    // THE guard: a restart cuts every loop round in flight and blocks those
-    // cards, so a request that has not been explicitly told to restart anyway
-    // is refused while any card is mid-round.
+    // THE guard: a restart interrupts every loop round in flight (they resume
+    // after boot), so a request that has not been explicitly told to restart
+    // anyway is refused while any card is mid-round.
     const loops = ctx.looper?.runningCount() ?? 0;
     if (loops > 0 && !restartAnyway) {
       return reply.code(409).send(err('loops_running',
-        `${loops === 1 ? '1 card has' : `${loops} cards have`} a round in flight — updating now would stop ${loops === 1 ? 'it' : 'them'} and block the ${loops === 1 ? 'card' : 'cards'}; send restart_anyway: true to update anyway`, true));
+        `${loops === 1 ? '1 card has' : `${loops} cards have`} a round in flight — updating now would interrupt ${loops === 1 ? 'it' : 'them'} (${loops === 1 ? 'it resumes' : 'they resume'} after the restart); send restart_anyway: true to update anyway`, true));
     }
     if (!ctx.updateTriggerDir) {
       return reply.code(503).send(err('updater_unavailable', 'this server has no updater sidecar (UPDATE_TRIGGER_DIR unset) — re-run install.sh once'));

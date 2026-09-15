@@ -123,8 +123,8 @@ export class LooperEngine {
   stop(): void {
     this.stopped = true;
   }
-  /** Cards with a round in flight right now — what an api restart would cut
-   *  off (and block). GET /health carries it so `phantom-cli update` can warn. */
+  /** Cards with a round in flight right now — what an api restart would
+   *  interrupt (they resume after boot). GET /health carries it so callers can warn. */
   runningCount(): number { return this.running.size; }
 
   /** Run the loop on every card in a loop column, for one workspace (a
