@@ -39,9 +39,9 @@ export interface UpdateDeps {
   installClient(tag: string): Promise<unknown>;
   /** Ask the person a yes/no question. */
   confirm(question: string): Promise<boolean>;
-  /** Print one line. */
+  /** Print one line (terminated, moves to the next line). */
   out(line: string): void;
-  /** Rewrite the current line — the ticking wait. Absent: ticks are not shown. */
+  /** Overwrite the current line in place (\r). Absent = non-TTY, ticks skip. */
   tick?(line: string): void;
   sleep(ms: number): Promise<void>;
   now(): number;
@@ -85,7 +85,8 @@ async function waitForVersion(d: UpdateDeps, server: ServerLink, version: string
   for (;;) {
     const ms = d.now() - start;
     if (ms >= timeout) return { ok: false, last };
-    d.tick?.(`  Waiting for server...  ${elapsed(ms)}`);
+    const tick = `  Waiting for server...  ${elapsed(ms)}`;
+    d.tick ? d.tick(tick) : d.out(tick);
     await d.sleep(d.pollMs ?? POLL_MS);
     const h = await readHealth(server);
     if (!h) continue;
@@ -96,9 +97,10 @@ async function waitForVersion(d: UpdateDeps, server: ServerLink, version: string
   }
 }
 
-/** Stream progress from POST /update. Updates two tick lines showing per-image
- *  download percentage. Resolves with 'restarting' when the server says it's
- *  going down, or 'error' if the stream reports a failure. */
+/** Stream progress from POST /update. One line, updated in place:
+ *    Downloading server images:  api 42%  session 17%
+ *  Resolves with 'restarting' when the server says it's going down, or 'error'
+ *  if the stream reports a failure. */
 type UpdateEvent = { event: string; image?: string; percent?: number; message?: string };
 
 async function streamUpdateProgress(d: UpdateDeps, server: ServerLink, tag: string):
@@ -106,23 +108,24 @@ async function streamUpdateProgress(d: UpdateDeps, server: ServerLink, tag: stri
   const progress: Record<string, number> = {};
   let result: 'restarting' | 'error' = 'error';
 
+  const renderLine = () => {
+    const parts = Object.entries(progress)
+      .map(([img, pct]) => `${img} ${pct}%`).join('  ');
+    return `  Downloading server images:  ${parts}`;
+  };
+
   try {
     await server.stream('/update', { tag, restart_anyway: true }, (raw) => {
       const e = raw as UpdateEvent;
       if (e.event === 'pulling') {
         progress[e.image!] = e.percent ?? 0;
-        const lines = Object.entries(progress)
-          .map(([img, pct]) => `  Pulling ${img} image...  ${pct}%`)
-          .join('\n');
-        d.tick?.(lines);
+        const line = renderLine();
+        d.tick ? d.tick(line) : d.out(line);
       } else if (e.event === 'pulled') {
-        const lines = Object.keys(progress)
-          .map((img) => `  Pulling ${img} image...  done`)
-          .join('\n');
-        d.tick?.(lines);
+        d.out('  Server images downloaded.');
       } else if (e.event === 'restarting') {
         result = 'restarting';
-        d.tick?.('  Restarting...');
+        d.out('  Restarting...');
       } else if (e.event === 'error') {
         result = 'error';
         d.out(`  Update failed: ${e.message ?? 'unknown error'}`);

@@ -206,7 +206,6 @@ function versionWatch(): void {
 // runUpdate) — no session is open yet, so nothing is interrupted and no lock
 // is ever taken by a build that is about to be replaced. A client half that
 // landed re-execs into the new build.
-let reconcileTickLines = 0;
 await prelaunchReconcile({
   appVersion: APP_VERSION,
   latest: checkLatest,
@@ -214,18 +213,12 @@ await prelaunchReconcile({
   installClient: selfUpdate,
   confirm: askYesNo,
   out: (line) => {
-    if (reconcileTickLines > 0) {
-      process.stdout.write(`\x1b[${reconcileTickLines}A\x1b[0J`);
-      reconcileTickLines = 0;
-    }
+    // Clear any in-progress tick before printing a permanent line.
+    if (process.stdout.isTTY) process.stdout.write('\r\x1b[K');
     process.stdout.write(line + '\n');
   },
-  tick: process.stdout.isTTY ? (text) => {
-    if (reconcileTickLines > 0) {
-      process.stdout.write(`\x1b[${reconcileTickLines}A\x1b[0J`);
-    }
-    process.stdout.write(text);
-    reconcileTickLines = text.split('\n').length;
+  tick: process.stdout.isTTY ? (line) => {
+    process.stdout.write(`\r\x1b[K${line}`);
   } : undefined,
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   now: Date.now,
