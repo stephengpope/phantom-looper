@@ -23,6 +23,18 @@ export interface WorkRefreshDeps {
 
 export async function refreshWorkState({ sessions, workspaces, folders, loops, paths, containers, events }: WorkRefreshDeps): Promise<void> {
   const active = containers.activeSessions();
+
+  // Clear stale work states: sessions that still show a git status but whose
+  // container is gone. The value is unverifiable, so null it out.
+  const stale = await sessions.listStaleWork(active);
+  if (stale.length) {
+    const cardOf = await loops.cardsOf(stale.map((r) => r.id));
+    await Promise.all(stale.map(async (r) => {
+      await sessions.setWork(r.id, null);
+      events.publish(r.workspaceId, { event: 'session_work', card: cardOf.get(r.id) ?? 0, id: r.id, work: null });
+    }));
+  }
+
   if (!active.length) return;
 
   // Load the session rows that have containers. Only active sessions with a

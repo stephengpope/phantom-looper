@@ -267,6 +267,29 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       return ok({ released });
     });
 
+  // ---- wake a container -----------------------------------------------------
+  // Start the session's container so the periodic git-status check can read
+  // it again. The caller sees `work` update within ~10s via the board event
+  // stream. 503 when Docker is not wired (DB-only test environments).
+  app.post<{ Params: { id: string } }>(
+    '/sessions/:id/wake', { schema: { ...TAG,
+      summary: 'Wake the session container',
+      description: 'Starts the session\u2019s container if it is not already running. ' +
+        'The periodic git-status refresh picks it up within ~10 seconds and ' +
+        'publishes the result on the board event stream. 503 when Docker is not wired.',
+      params: idParam,
+      body: { type: 'object', additionalProperties: false } } },
+    async (req, reply) => {
+      if (!ctx.fs) return reply.code(503).send(err('unavailable', 'containers are not wired on this server', false));
+      const s = await ctx.sessions.get(req.params.id);
+      if (!s) return reply.code(404).send(err('not_found', 'session not found'));
+      if (s.status !== 'active') return reply.code(400).send(err('session_ended', `session is ${s.status}`));
+      const workspace = await ctx.workspaces.get(s.workspaceId);
+      if (!workspace) return reply.code(404).send(err('not_found', 'workspace not found'));
+      await ctx.fs.containers.ensure(s, workspace);
+      return ok({ woken: true });
+    });
+
   // ---- interrupt a running turn ---------------------------------------------
   // THE stop signal, one route for every client (esc-esc in the cli, /stop on
   // telegram). Three doors, one effect — the turn stops and so does what it

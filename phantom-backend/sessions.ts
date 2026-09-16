@@ -21,7 +21,7 @@
 // their callers: a hold means different things to a window (its spinner) and
 // to a git sync (nothing to show), so the caller says.
 import fs from 'node:fs/promises';
-import { and, desc, eq, gte, ilike, inArray, isNull, isNotNull, lt, ne, or, count, sql as sqlRaw } from 'drizzle-orm';
+import { and, desc, eq, gte, ilike, inArray, isNull, isNotNull, lt, ne, not, or, count, sql as sqlRaw } from 'drizzle-orm';
 import type { Db } from './db/client.js';
 // `folders` and `loops` appear here for ONE reason: the list is a JOIN (a
 // row's branch and card ride it, and the filter reaches the branch). They
@@ -246,6 +246,17 @@ export class Sessions {
     return this.db.select({
       id: sessions.id, folderId: sessions.folderId, workspaceId: sessions.workspaceId, work: sessions.work,
     }).from(sessions).where(inArray(sessions.id, ids));
+  }
+
+  /** Sessions whose `work` is stale: non-null but no longer backed by a
+   *  running container. The refresh clears these to null. */
+  async listStaleWork(activeIds: string[]): Promise<Pick<SessionRow, 'id' | 'workspaceId' | 'work'>[]> {
+    const where = activeIds.length
+      ? and(isNotNull(sessions.work), not(inArray(sessions.id, activeIds)))
+      : isNotNull(sessions.work);
+    return this.db.select({
+      id: sessions.id, workspaceId: sessions.workspaceId, work: sessions.work,
+    }).from(sessions).where(where);
   }
 
   /** A batch of rows by id — the board names each card's session, its hold

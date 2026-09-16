@@ -665,7 +665,10 @@ export function App({
   // of the words: red = not pushed, yellow = not merged, green = merged. The
   // same WORK map the /resume table draws from (Launcher.tsx), so the three
   // places the state shows — /resume, this line, the board — cannot disagree.
-  const workMark: ToolbarPart | undefined = session?.work ? WORK[session.work] : undefined;
+  // Null + history means the container is off and we can't verify — "unknown".
+  const workMark: ToolbarPart | undefined = session?.work
+    ? WORK[session.work]
+    : session?.history.length ? { text: 'unknown', mark: 'gray' } : undefined;
   // The task count — shown only when > 0. A zero is not news; it appearing
   // and vanishing is the signal that something started or stopped.
   const taskMark = session && windowStore.taskCount != null && windowStore.taskCount > 0

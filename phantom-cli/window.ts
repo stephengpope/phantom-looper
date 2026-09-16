@@ -1383,6 +1383,18 @@ export class WindowStore {
     this.notify();
   };
 
+  /** [w] on /resume: start the session's container so its git status can be
+   *  checked again. The server's periodic refresh updates the column live. */
+  wakeSession = async (id: string): Promise<void> => {
+    try {
+      await this.api('POST', `/sessions/${id}/wake`);
+      this.pickerNotice = 'waking container — git status updates shortly';
+    } catch (e) {
+      this.pickerNotice = `could not wake session: ${(e as Error).message}`;
+    }
+    this.notify();
+  };
+
   /** /resume follows the session list feed while up: any row moving
    *  anywhere re-reads the loaded rows (coalesced); a reconnect re-reads
    *  too, since notices were missed. No stream (tests) = the list stands

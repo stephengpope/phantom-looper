@@ -220,6 +220,7 @@ export const pickerScreen = (w: WindowStore, which: 'workspace' | 'resume'): Ove
     onEdit={(id) => w.editWorkspace(id)}
     onDuplicate={(id) => { void w.startDuplicate(id); }}
     onPin={(id) => { void w.pinFromPicker(id); }}
+    onWake={(id) => { void w.wakeSession(id); }}
     onClose={w.closeFromPicker}
     onTrash={(id) => { void w.trashSession(id); }}
     onCancel={w.dismissOverlay}
