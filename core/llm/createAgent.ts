@@ -19,6 +19,7 @@
 //   on haiku-4-5, 'minimal' would switch thinking ON.
 import { ToolLoopAgent, isStepCount, type LanguageModel, type ModelMessage, type Tool } from 'ai';
 import type { StepRecord } from './transcript.js';
+import type { NudgeQueue } from './nudgeQueue.js';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
@@ -365,21 +366,20 @@ export interface AgentSpec {
  *  and each step's messages + usage line land through it — no agent
  *  re-implements the bookkeeping.
  *
- *  `queued` is the nudge seam: a LIVE array of user texts typed while the
- *  turn runs. Before every model call the whole array is drained IN PLACE
- *  and appended to that call's messages — a typed word reaches the very
- *  next LLM call mid-turn, the way pi's steering and opencode's stream
- *  append work. Drained texts are recorded like any step and reported
- *  through `onNudge` so the caller can mirror them into its own history
- *  and screen. Whatever is still queued when the turn ends (typed during
+ *  `nudgeQueue` is the nudge seam: a NudgeQueue whose `drain()` is called
+ *  before every model call. Ready entries are pulled out and appended to
+ *  that call's messages — a typed word (or transcribed voice note) reaches
+ *  the very next LLM call mid-turn. The queue's own `onDrain` callback
+ *  fires so the caller can mirror the texts into its own history and
+ *  screen. Whatever is still queued when the turn ends (typed during
  *  the final answer — there is no next call to ride) is the caller's to
  *  run as the next turn. A per-call prepareStep REPLACES the constructor's
  *  (ToolLoopAgent merges call options over settings), so the cache marks
  *  are re-applied here rather than assumed. */
 function spliceTurn<T extends { onStepEnd?: (step: never) => unknown }>(
-  o: T & { record?: StepRecord; queued?: string[]; onNudge?: (texts: string[]) => void },
+  o: T & { record?: StepRecord; nudgeQueue?: NudgeQueue },
 ): T {
-  const { record, queued, onNudge, ...rest } = o;
+  const { record, nudgeQueue, ...rest } = o;
   let out = rest as T;
   if (record) {
     const prior = out.onStepEnd as ((step: unknown) => unknown) | undefined;
@@ -395,15 +395,14 @@ function spliceTurn<T extends { onStepEnd?: (step: never) => unknown }>(
       },
     } as unknown as T;
   }
-  if (queued) {
+  if (nudgeQueue) {
     out = {
       ...out,
       prepareStep: ({ messages }: { messages: ModelMessage[] }) => {
-        const nudges = queued.splice(0);
+        const nudges = nudgeQueue.drain();
         if (nudges.length) {
           const userMessages = nudges.map((content) => ({ role: 'user', content }) as ModelMessage);
           record?.appendStep(userMessages);
-          onNudge?.(nudges);
           return { messages: withCacheBreakpoints([...messages, ...userMessages]) };
         }
         return { messages: withCacheBreakpoints(messages) };
@@ -415,11 +414,11 @@ function spliceTurn<T extends { onStepEnd?: (step: never) => unknown }>(
 
 class RecordingAgent<TOOLS extends Record<string, Tool>> extends ToolLoopAgent<never, TOOLS> {
   override stream(o: Parameters<ToolLoopAgent<never, TOOLS>['stream']>[0] &
-    { record?: StepRecord; queued?: string[]; onNudge?: (texts: string[]) => void }) {
+    { record?: StepRecord; nudgeQueue?: NudgeQueue }) {
     return super.stream(spliceTurn(o));
   }
   override generate(o: Parameters<ToolLoopAgent<never, TOOLS>['generate']>[0] &
-    { record?: StepRecord; queued?: string[]; onNudge?: (texts: string[]) => void }) {
+    { record?: StepRecord; nudgeQueue?: NudgeQueue }) {
     return super.generate(spliceTurn(o));
   }
 }

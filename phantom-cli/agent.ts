@@ -5,6 +5,7 @@ import type { AssistantContent, ModelMessage, ToolCallPart, ToolContent, ToolRes
 import type { StreamPart } from './state.js';
 import type { Agent } from '../core/llm/createAgent.js';
 import type { StepRecord } from '../core/llm/transcript.js';
+import type { NudgeQueue } from '../core/llm/nudgeQueue.js';
 
 export {
   createAgent, isAnthropicOAuth, withClaudeCodeIdentity, withCacheBreakpoints,
@@ -36,18 +37,17 @@ export async function runTurn(
   // Where the turn is recorded (createAgent's usage seam): each step's
   // messages AND its usage line land through this — pass the transcript.
   record?: StepRecord,
-  // The session's live queue (createAgent's nudge seam): before every model
-  // call the whole queue is drained into that call, so a message typed
-  // mid-turn reaches the very next LLM call. `onNudge` fires with what was
-  // drained, so the store can mirror it into history and on screen.
-  nudge?: { queued: string[]; onNudge?: (texts: string[]) => void },
+  // The session's nudge queue (createAgent's nudge seam): before every model
+  // call the queue is drained into that call, so a message typed mid-turn
+  // reaches the very next LLM call. The queue's onDrain callback fires so
+  // the store can mirror it into history and on screen.
+  nudgeQueue?: NudgeQueue,
 ): Promise<ModelMessage[]> {
   const result = await agent.stream({
     messages,
     abortSignal: signal,
     record,
-    queued: nudge?.queued,
-    onNudge: nudge?.onNudge,
+    nudgeQueue,
     onStepEnd: (step) => onStep?.(step.response.messages as ModelMessage[]),
   });
 

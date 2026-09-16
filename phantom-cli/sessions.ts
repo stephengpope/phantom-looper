@@ -19,6 +19,7 @@ import type { ModelPin } from '../core/llm/agentConfig.js';
 import { Transcript } from './session.js';
 import { usageEvent, type UsageTotals } from '../core/llm/transcript.js';
 import type { CompactionLock } from '../core/llm/compaction.js';
+import { NudgeQueue } from '../core/llm/nudgeQueue.js';
 import { applyPart, applyTokens, finalize, nextId, takeCompleted, tokenCount, NO_TOKENS, type Part, type StreamPart, type TurnTokens } from './state.js';
 
 export interface LoadedSession {
@@ -99,13 +100,11 @@ export interface LoadedSession {
    *  next seat recomputes. */
   usage: UsageTotals;
   abort: AbortController | null;
-  /** Typed while a turn is running. The turn drains it whole into the very
-   *  next model call (the nudge seam — a typed word steers the agent
-   *  mid-turn); whatever is still here when the turn ends starts its own
-   *  turn, one message at a time. ONE array per session, mutated in place —
-   *  the running turn holds its reference. Per session: what you queued for
-   *  one is not said to another. */
-  queue: string[];
+  /** Typed while a turn is running. The turn drains it into the very next
+   *  model call (the nudge seam — a typed word steers the agent mid-turn);
+   *  whatever is still here when the turn ends starts its own turn. Per
+   *  session: what you queued for one is not said to another. */
+  nudgeQueue: NudgeQueue;
   /** Finished (or failed) while you were looking somewhere else. */
   unseen: boolean;
   /** Drives cycle order. 0 until the first message is sent. */
@@ -247,7 +246,8 @@ export class SessionStore {
       pin: s.pin ?? null,
       live: [], turn: [],
       busy: false, remoteBusy: false, held: null, startedAt: 0, tokens: NO_TOKENS,
-      usage: s.usage ?? { input: 0, output: 0, cache_read: 0, cache_write: 0 }, abort: null, queue: [],
+      usage: s.usage ?? { input: 0, output: 0, cache_read: 0, cache_write: 0 }, abort: null,
+      nudgeQueue: new NudgeQueue(),
       // A session with history AND a pin has its model settled. History with
       // NO pin is a duplicate's copy: its messages came from the source, so
       // they do not settle it — it follows /model and presets until its first
@@ -450,25 +450,25 @@ export class SessionStore {
     const e = this.get(id);
     if (!e) return;
     if (!e.busy) { void this.send(id, text); return; }
-    e.queue.push(text);
+    e.nudgeQueue.add(text);
     this.notify();
   }
 
   /** Drop everything queued — the backing method for `/pop all`. */
   clearQueue(id: string): void {
     const e = this.get(id);
-    if (!e || !e.queue.length) return;
-    e.queue.length = 0;
+    if (!e || !e.nudgeQueue.length) return;
+    e.nudgeQueue.clear();
     this.notify();
   }
 
   /** Take the last queued message back — the backing method for `/pop`. */
   unqueue(id: string): string | undefined {
     const e = this.get(id);
-    if (!e || !e.queue.length) return undefined;
-    const last = e.queue.pop();
+    if (!e || !e.nudgeQueue.length) return undefined;
+    const popped = e.nudgeQueue.pop();
     this.notify();
-    return last;
+    return popped?.text ?? undefined;
   }
 
   /** Every turn, everywhere — what quitting does. Without it a turn running in
@@ -618,13 +618,19 @@ export class SessionStore {
         // model call mid-turn (what stays queued at turn end starts its own
         // turn below, as ever). Whatever was poured lands in the transcript
         // through the record seam; here it joins history and the screen.
-        { queued: e.queue, onNudge: (texts) => {
-          for (const t of texts) {
-            e.done = [...e.done, { kind: 'user', id: nextId('user'), text: t }];
-            e.history.push({ role: 'user', content: t });
-          }
-          this.notify();
-        } },
+        // Wire onDrain for this turn's context.
+        (() => {
+          e.nudgeQueue.setCallbacks({
+            onDrain: (entries) => {
+              for (const entry of entries) {
+                e.done = [...e.done, { kind: 'user', id: nextId('user'), text: entry.text! }];
+                e.history.push({ role: 'user', content: entry.text! });
+              }
+              this.notify();
+            },
+          });
+          return e.nudgeQueue;
+        })(),
       );
     } catch (err) {
       if (!ac.signal.aborted && !streamErrored) {
@@ -663,12 +669,16 @@ export class SessionStore {
       // whole file to the server in the background.
       try { this.onTurnEnd?.(e); }
       catch (err) { this.note(e.id, `transcript sync failed (kept locally): ${(err as Error).message}`); }
-      // Whatever was typed while this ran goes next — one message per turn,
-      // whether the turn ended on its own or was interrupted. Esc becomes
-      // "skip to next": abort fires, the front message starts immediately.
-      if (e.queue.length) {
-        const next = e.queue.shift()!;
-        void this.send(e.id, next);
+      // Whatever was typed while this ran goes next — all leftovers in one
+      // turn. Esc becomes "skip to next": abort fires, the front message
+      // starts immediately.
+      if (e.nudgeQueue.length) {
+        const leftovers = e.nudgeQueue.drain();
+        if (leftovers.length) {
+          void this.send(e.id, leftovers.join('\n\n'));
+        }
+        // If entries remain (pending transcriptions), onSettled will fire
+        // and the caller can drain again — no polling needed.
       }
     }
   }

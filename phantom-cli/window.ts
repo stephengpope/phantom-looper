@@ -2117,9 +2117,9 @@ export class WindowStore {
         return;
       case 'pop': {
         if (!session) { this.note('no session is open'); return; }
-        if (!session.queue.length) { this.note('the queue is empty — nothing to pop'); return; }
+        if (!session.nudgeQueue.length) { this.note('the queue is empty — nothing to pop'); return; }
         if (args === 'all') {
-          const all = session.queue.join('\n\n');
+          const all = session.nudgeQueue.all().map(e => e.text ?? '').filter(Boolean).join('\n\n');
           this.sessions.clearQueue(session.id);
           this.setPrompt(all);
           return;

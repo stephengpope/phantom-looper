@@ -780,13 +780,13 @@ export function App({
         {(session?.busy || session?.remoteBusy) && <StatusLine phase={phaseLabel(session.live)}
           startedAt={session.startedAt} tokens={tokenCount(session.tokens)}
           escHint={session.busy
-            ? (session.queue.length ? '[esc] skip to next' : '[esc] to interrupt')
+            ? (session.nudgeQueue.length ? '[esc] skip to next' : '[esc] to interrupt')
             : interruptArmed ? '[esc] again to interrupt' : '[esc] to interrupt'} />}
-        {session && session.queue.length > 0 && (
+        {session && session.nudgeQueue.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
             <Text dimColor>{`  queued — esc sends next · /pop edits last`}</Text>
-            {session.queue.map((q, i) => (
-              <UserMessage key={i} text={q} width={width} />
+            {session.nudgeQueue.all().map((entry) => (
+              <UserMessage key={entry.id} text={entry.text ?? '(transcribing…)'} width={width} />
             ))}
           </Box>
         )}
