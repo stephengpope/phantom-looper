@@ -7,7 +7,7 @@
 // screen when it was built.
 import type { Tool } from 'ai';
 import { sessionsTool, assistantKanbanTool, workspaceCreateTool, gitAutoPushTool,
-  gitAutoPullTool, screenModeTools, kebabName, renderRead, renderRaw, dockerLogsTool,
+  gitAutoPullTool, assistantModeTool, kebabName, renderRead, renderRaw, dockerLogsTool,
   type SessionsArgs, type KanbanArgs, type WorkspaceCreateArgs,
   type GitAutoPushArgs, type GitAutoPullArgs, type DockerLogsArgs } from './voice.js';
 import { isRunning, whoDrives, ago, type SessionInfo, type WorkspaceInfo } from './components/Launcher.js';
@@ -288,7 +288,7 @@ export async function buildAssistantKit(win: WindowStore, deps: {
     ...workspaceCreateTool(workspaceCreateHandler(win, deps.api)),
     ...gitAutoPushTool(git.push),
     ...gitAutoPullTool(git.pull),
-    ...screenModeTools(win.screenOps()),
+    ...assistantModeTool(win.screenOps()),
     ...dockerLogsTool(dockerLogsHandler(deps.api)),
     ...(sessionId ? await deps.newAssistantTools(sessionId).catch(() => ({} as Record<string, Tool>)) : {}),
   };

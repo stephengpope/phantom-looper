@@ -371,6 +371,9 @@ export interface ScreenModeHandler {
   /** Ask the USER to approve leaving plan mode. Resolves with the answer;
    *  an aborted turn answers "declined" so nothing waits on a dead call. */
   askCodeMode: (reason: string | undefined, opts: { abortSignal?: AbortSignal }) => Promise<unknown>;
+  /** Switch to code mode directly — no approval. The Assistant acts on the
+   *  user's behalf, so it does not need to ask. */
+  enterCode?: () => Promise<unknown>;
 }
 
 export function screenModeTools(handler: ScreenModeHandler): Record<string, Tool> {
@@ -383,7 +386,7 @@ export function screenModeTools(handler: ScreenModeHandler): Record<string, Tool
     }),
     session_plan_mode: tool({
       description: 'Switch the cli to plan mode: the file tools become read-only. Use this when ' +
-        'asked to plan something. The user returns the cli to code mode with /plan, or by ' +
+        'asked to plan something. The user returns the cli to code mode with /code, or by ' +
         'approving your session_code_mode request.',
       inputSchema: z.object({}),
       execute: async () => handler.enterPlan(),
@@ -396,6 +399,30 @@ export function screenModeTools(handler: ScreenModeHandler): Record<string, Tool
         reason: z.string().optional().describe('one line: what you will build once in code mode'),
       }),
       execute: async (args, opts) => handler.askCodeMode(args.reason, { abortSignal: opts?.abortSignal }),
+    }),
+  };
+}
+
+/** The Assistant's single mode tool: switch the session's mode directly,
+ *  no approval needed (the Assistant acts on the user's behalf). */
+export function assistantModeTool(handler: ScreenModeHandler): Record<string, Tool> {
+  return {
+    session_set_mode: tool({
+      description: "Set the session's mode to plan or code. Plan mode makes the coding agent's " +
+        'file tools read-only; code mode gives it full tools. Use when the user asks to ' +
+        'switch modes, plan something, or start coding.',
+      inputSchema: z.object({
+        mode: z.enum(['plan', 'code']).describe('the mode to switch to'),
+      }),
+      execute: async (args) => {
+        if (args.mode === 'plan') return handler.enterPlan();
+        // Code mode: read current state and flip if needed.
+        const current = await handler.getMode() as { mode?: string; error?: string };
+        if (current.error) return { ok: false, error: current.error };
+        if (current.mode === 'code') return { ok: true, mode: 'code', note: 'already in code mode' };
+        // The Assistant switches directly — no approval dialog.
+        return handler.enterCode!();
+      },
     }),
   };
 }

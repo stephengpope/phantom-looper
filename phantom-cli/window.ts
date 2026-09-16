@@ -530,8 +530,9 @@ export class WindowStore {
    *  open in the background could answer from a copy the looper or another
    *  window has since changed. Having read the row it FOLLOWS it, so the
    *  answer and this window's kit converge. enterPlan is the agents' one-way
-   *  on-switch; only the user's /plan comes back. Bound to a session id for
-   *  the coding agent; unbound = the session on screen, for the Assistant. */
+   *  on-switch; the user's /code or the Assistant's enterCode comes back.
+   *  Bound to a session id for the coding agent; unbound = the session on
+   *  screen, for the Assistant. */
   screenOps(sessionId?: string): ScreenModeHandler {
     const at = () => (sessionId ? this.sessions.get(sessionId) : this.sessions.active());
     return {
@@ -559,9 +560,19 @@ export class WindowStore {
         await this.applyPlanMode(e.id, true);
         return { ok: true };
       },
-      // The one way an agent LEAVES plan mode: through the user. The ask is
-      // an inline overlay in the chat, named as the agent's, tied to the
-      // turn's abort. The flip is the same record-first write /plan makes;
+      // Direct code mode: the Assistant switches without approval.
+      enterCode: async () => {
+        const e = at();
+        if (!e) return { ok: false, error: 'no session is open' };
+        if (e.readonly) return { ok: false, error: 'a supervisor record has no modes' };
+        if (!e.planMode) return { ok: false, error: 'already in code mode' };
+        await this.api('PATCH', `/sessions/${e.id}`, { plan_mode: false });
+        await this.applyPlanMode(e.id, false);
+        return { ok: true, mode: 'code', note: 'code mode is now active' };
+      },
+      // The one way the CODING agent LEAVES plan mode: through the user. The
+      // ask is an inline overlay in the chat, named as the agent's, tied to
+      // the turn's abort. The flip is the same record-first write /code makes;
       // a turn already streaming keeps the kit it started with, so code mode
       // is real from the next turn — the answer says so.
       askCodeMode: async (reason, { abortSignal }) => {
@@ -1995,16 +2006,23 @@ export class WindowStore {
         return;
       case 'tasks': await this.openTasks(); return;
       case 'plan': {
-        // The server row first (the record every window reads), then this
-        // window's kit. A failed rebuild reports it; the next feed snapshot
-        // reads the saved mode again.
         if (!session) { this.note('no session is open — nothing to switch'); return; }
         if (session.readonly) { this.note("this is the supervisor's record — read-only"); return; }
-        const on = !session.planMode;
+        if (session.planMode) { this.note('already in plan mode'); return; }
         try {
-          await this.api('PATCH', `/sessions/${session.id}`, { plan_mode: on });
-          await this.applyPlanMode(session.id, on);
-        } catch (e) { this.note(`could not switch plan mode ${on ? 'on' : 'off'}: ${(e as Error).message}`); }
+          await this.api('PATCH', `/sessions/${session.id}`, { plan_mode: true });
+          await this.applyPlanMode(session.id, true);
+        } catch (e) { this.note(`could not enter plan mode: ${(e as Error).message}`); }
+        return;
+      }
+      case 'code': {
+        if (!session) { this.note('no session is open — nothing to switch'); return; }
+        if (session.readonly) { this.note("this is the supervisor's record — read-only"); return; }
+        if (!session.planMode) { this.note('already in code mode'); return; }
+        try {
+          await this.api('PATCH', `/sessions/${session.id}`, { plan_mode: false });
+          await this.applyPlanMode(session.id, false);
+        } catch (e) { this.note(`could not enter code mode: ${(e as Error).message}`); }
         return;
       }
       case 'compact': {
