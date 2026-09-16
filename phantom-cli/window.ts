@@ -1283,8 +1283,24 @@ export class WindowStore {
 
   /** The one addition only this window can make: sessions open HERE that the
    *  server would leave out (nothing typed yet). Merged in, counted in — the
-   *  switcher must never hide an open session. */
+   *  switcher must never hide an open session. Server rows that ARE loaded
+   *  locally get enriched: this window's in-memory model and tokens are
+   *  fresher than the server's cached columns (the row updates async). */
   private withOpenHere(rows: SessionInfo[], total: number) {
+    const local = new Map(this.sessions.list().map((e) => [e.id, e]));
+    // Enrich server rows with live local data — the server's token and
+    // model columns lag behind the in-memory state (the upload is async).
+    const enriched = rows.map((s) => {
+      const e = local.get(s.id);
+      if (!e) return s;
+      return { ...s,
+        model: s.model || e.summary.model,
+        tokensInput: e.usage.input || s.tokensInput,
+        tokensOutput: e.usage.output || s.tokensOutput,
+        tokensCacheRead: e.usage.cache_read || s.tokensCacheRead,
+        tokensCacheWrite: e.usage.cache_write || s.tokensCacheWrite,
+      };
+    });
     const seen = new Set(rows.map((s) => s.id));
     const extras: SessionInfo[] = this.sessions.list()
       .filter((e) => !seen.has(e.id) && !e.readonly && this.matchesPickerQuery(e))
@@ -1296,7 +1312,7 @@ export class WindowStore {
         // Nothing typed = no activity: it sorts LAST, never ahead of real work.
         lastUsedAt: new Date(e.lastMessageAt || 0).toISOString(), locked: false, lastUserMessage: null,
       }));
-    return { sessions: [...rows, ...extras], total: total + extras.length };
+    return { sessions: [...enriched, ...extras], total: total + extras.length };
   }
 
   /** THE picker fetch — the only place the two lists are read. Throws on

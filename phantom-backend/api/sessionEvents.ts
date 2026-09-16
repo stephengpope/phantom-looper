@@ -30,7 +30,8 @@ import { EventEmitter } from 'node:events';
 export type SessionEvent =
   /** A server-side turn began: the text it is answering, so a watcher sees
    *  the question and not just a reply out of nowhere. */
-  | { event: 'turn-start'; agent: 'coding' | 'supervisor'; message: string }
+  | { event: 'turn-start'; agent: 'coding' | 'supervisor'; message: string;
+      provider?: string; model?: string }
   /** One AI SDK stream part, verbatim (tool results capped — see CAP_BYTES). */
   | { event: 'part'; part: Record<string, unknown> }
   | { event: 'turn-end' }

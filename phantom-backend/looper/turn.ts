@@ -124,7 +124,8 @@ export async function runCodingTurn(
   const id = opened.session.id;
   let text = '';
   let interrupted = false;
-  feed?.publish(id, deps.client, { event: 'turn-start', agent: 'coding', message });
+  feed?.publish(id, deps.client, { event: 'turn-start', agent: 'coding', message,
+    provider: model.provider, model: model.model });
   try {
     const r = await agent.stream({ messages, record, abortSignal: deps.signal });
     await drain(r, (part) => {

@@ -547,7 +547,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   // to say what is being built. Best effort, off the request path.
   ctx.sessionEvents!.subscribeAll((sessionId, e) => {
     if (e.event !== 'turn-start' || e.agent !== 'coding') return;
-    void ctx.sessions.turnStarted(sessionId, e.message).then(async ({ firstMessage }) => {
+    const model = e.provider && e.model ? { provider: e.provider as string, model: e.model as string } : undefined;
+    void ctx.sessions.turnStarted(sessionId, e.message, model).then(async ({ firstMessage }) => {
       if (!firstMessage) return;
       // The row publishes the name under no client id, so the window running
       // the turn hears it too (the feed drops a client's own events).

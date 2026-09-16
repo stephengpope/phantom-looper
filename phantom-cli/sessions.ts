@@ -590,7 +590,8 @@ export class SessionStore {
       chain = chain.then(() => { if (relaying) return this.relay!(id, events); })
         .catch(() => { relaying = false; });
     };
-    relay([{ event: 'turn-start', agent: 'coding', message: texts.join('\n\n') }]);
+    relay([{ event: 'turn-start', agent: 'coding', message: texts.join('\n\n'),
+      provider: e.summary.provider, model: e.summary.model }]);
 
     // ONE failure, ONE line. The SDK reports a failed call through two doors:
     // an `error` event in the stream (rendered in place by applyPart) AND the

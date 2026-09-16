@@ -26,7 +26,7 @@ import type { Db } from './db/client.js';
 // `folders` and `loops` appear here for ONE reason: the list is a JOIN (a
 // row's branch and card ride it, and the filter reaches the branch). They
 // are read through the join only; their rows are Folders' and Loops' to write.
-import { sessions, sessionColumns, folders, loops, type SessionRow } from './db/schema.js';
+import { sessions, sessionColumns, folders, loops, tokenUsage, type SessionRow } from './db/schema.js';
 import type { Settings } from './settings.js';
 import type { Workspaces } from './workspaces.js';
 import type { Folders } from './folders.js';
@@ -209,12 +209,22 @@ export class Sessions {
             ? or(lt(sessions.lastUsedAt, cut), and(eq(sessions.lastUsedAt, cut), lt(sessions.id, q.beforeId)))
             : lt(sessions.lastUsedAt, cut)))
       : undefined;
+    // Token totals: LEFT JOIN token_usage and SUM — the table is the single
+    // source of truth, the session row's cached columns are being phased out.
     let page = this.db
-      .select({ ...sessionColumns, branch: folders.branch, card: loops.card })
+      .select({
+        ...sessionColumns, branch: folders.branch, card: loops.card,
+        tokensInput: sqlRaw<number>`coalesce(sum(${tokenUsage.tokensInput}), 0)`.as('tokens_input'),
+        tokensOutput: sqlRaw<number>`coalesce(sum(${tokenUsage.tokensOutput}), 0)`.as('tokens_output'),
+        tokensCacheRead: sqlRaw<number>`coalesce(sum(${tokenUsage.tokensCacheRead}), 0)`.as('tokens_cache_read'),
+        tokensCacheWrite: sqlRaw<number>`coalesce(sum(${tokenUsage.tokensCacheWrite}), 0)`.as('tokens_cache_write'),
+      })
       .from(sessions)
       .leftJoin(folders, eq(folders.id, sessions.folderId))
       .leftJoin(loops, or(eq(loops.codingSessionId, sessions.id), eq(loops.supervisorSessionId, sessions.id)))
+      .leftJoin(tokenUsage, eq(tokenUsage.sessionId, sessions.id))
       .where(and(...filters, ...(cursor ? [cursor] : [])))
+      .groupBy(sessions.id, folders.branch, loops.card)
       .orderBy(desc(sessions.pinned), desc(sessions.lastUsedAt), desc(sessions.id))
       .$dynamic();
     if (q.limit) page = page.limit(q.limit);
@@ -543,9 +553,8 @@ export class Sessions {
     const pinning = s.provider == null && s.model == null
       && head.provider != null && head.model != null;
     const stamp = new Date();
-    // Token totals are now per-step rows in the token_usage table — no
-    // re-parsing needed. The session row's tokens_* columns are left alone
-    // (they'll be phased out in a later migration).
+    // Token totals are per-step rows in the token_usage table — the list
+    // query JOINs that table directly. No re-parsing, no row cache.
     // Every save is one turn: the counter that paces session naming.
     const agent = agentAfterSave(s.agent, client);
     const [saved] = await this.db.update(sessions)
@@ -584,10 +593,21 @@ export class Sessions {
    *  session's first message is the loop's fixed kickoff text, which would
    *  name every card's session after the kickoff; those are named off the
    *  save, where the reply is in). Manual names are never in play here — a
-   *  renamed session is never unnamed. */
-  async turnStarted(id: string, message: string): Promise<{ firstMessage: boolean }> {
+   *  renamed session is never unnamed.
+   *
+   *  `model` pins the session's provider/model on the row the moment the
+   *  turn starts — before the transcript is uploaded. Without this, /resume
+   *  shows a blank model column until the turn ends and saveTranscript runs. */
+  async turnStarted(id: string, message: string,
+    model?: { provider: string; model: string }): Promise<{ firstMessage: boolean }> {
+    // Pin the model if the row has none yet and the caller supplied one.
+    const s = model ? await this.get(id) : undefined;
+    const pinning = s && s.provider == null && s.model == null;
     const rows = await this.db.update(sessions)
-      .set({ lastUserMessage: message.slice(0, LAST_MESSAGE_CHARS) })
+      .set({
+        lastUserMessage: message.slice(0, LAST_MESSAGE_CHARS),
+        ...(pinning ? { provider: model!.provider, model: model!.model } : {}),
+      })
       .where(eq(sessions.id, id))
       .returning({ name: sessions.name, turnCount: sessions.turnCount, agent: sessions.agent });
     const r = rows[0];
