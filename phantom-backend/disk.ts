@@ -127,6 +127,7 @@ async function pruneImages(settings: Settings, docker: Docker): Promise<void> {
  *  exactly as it was; the run ends loud when only live work remains. */
 export async function pressureSweep(
   settings: Settings, workspaces: Workspaces, sessions: Sessions, p: Paths, docker: Docker, containers: ContainerManager, engine: GitEngine,
+  idleSessions: (idleMs: number) => Promise<string[]>,
 ): Promise<void> {
   const pct = Number(await settings.resolve('disk_cleanup_percent'));
   if (pct <= 0) return;
@@ -136,7 +137,7 @@ export async function pressureSweep(
 
   // 1 — idle session containers: stateless, so removal is free and frees the
   // per-session docker graph volume with them (reap(0) = no idle wait).
-  await containers.reap(0);
+  await containers.reap(0, idleSessions);
 
   // 2 — spare clones: pure cache; the pool restocks on the next ticks.
   await drainReady(p);

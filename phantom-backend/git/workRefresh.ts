@@ -22,7 +22,7 @@ export interface WorkRefreshDeps {
 }
 
 export async function refreshWorkState({ sessions, workspaces, folders, loops, paths, containers, events }: WorkRefreshDeps): Promise<void> {
-  const active = containers.activeSessions();
+  const active = await containers.activeSessions();
 
   // Clear stale work states: sessions that still show a git status but whose
   // container is gone. The value is unverifiable, so null it out.

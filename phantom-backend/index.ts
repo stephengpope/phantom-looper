@@ -83,7 +83,6 @@ async function main() {
   const containers = new ContainerManager(docker, paths, {
     volume: process.env.WORKSPACE_VOLUME, settings,
   });
-  await containers.bootCleanup();
   // THE CONFLICT RESOLVER — the session's own coding agent, not a separate
   // fixer. Shared by auto-push, auto-pull and the manual /git/pull.
   //
@@ -231,14 +230,23 @@ async function main() {
 
   // One loop drives both the pool tick and the session sweep. The interval is a
   // SETTING read per tick, so a change takes effect without a restart.
+  // Sessions with a running container whose lastUsedAt is past the threshold
+  // and have no running detached commands — the set safe to reap.
+  const idleContainerSessions = async (ms: number): Promise<string[]> => {
+    const active = await containers.activeSessions();
+    const idle = await sessions.listIdle(active, ms);
+    const busy = await commands.sessionsWithRunning(idle);
+    return idle.filter((id) => !busy.has(id));
+  };
+
   let stopped = false;
   (async () => {
     while (!stopped) {
       await tick(workspaces, settings, paths).catch((e) => log.error({ err: errStr(e) }, 'pool tick threw'));
       await idleBackupSweep(workspaces, sessions, engine).catch((e) => log.error({ err: errStr(e) }, 'idle backup sweep threw'));
       const idleMs = await settings.resolve('container_idle_ms').catch(() => 30 * 60_000);
-      await containers.reap(Number(idleMs)).catch((e) => log.error({ err: errStr(e) }, 'container reap threw'));
-      await pressureSweep(settings, workspaces, sessions, paths, docker, containers, engine).catch((e) => log.error({ err: errStr(e) }, 'pressure sweep threw'));
+      await containers.reap(Number(idleMs), idleContainerSessions).catch((e) => log.error({ err: errStr(e) }, 'container reap threw'));
+      await pressureSweep(settings, workspaces, sessions, paths, docker, containers, engine, idleContainerSessions).catch((e) => log.error({ err: errStr(e) }, 'pressure sweep threw'));
       const ms = await settings.resolve('maintenance_interval_ms').catch(() => 60_000);
       await new Promise((r) => setTimeout(r, Number(ms)));
     }

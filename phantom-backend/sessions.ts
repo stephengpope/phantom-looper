@@ -243,6 +243,17 @@ export class Sessions {
     return this.db.select(sessionColumns).from(sessions).where(eq(sessions.status, 'active'));
   }
 
+  /** Among `candidates`, return the IDs whose lastUsedAt is older than `idleMs`
+   *  ago — the idle set. The caller intersects this with running containers and
+   *  running commands to decide what to reap. */
+  async listIdle(candidates: string[], idleMs: number): Promise<string[]> {
+    if (!candidates.length) return [];
+    const cutoff = new Date(Date.now() - idleMs);
+    const rows = await this.db.select({ id: sessions.id }).from(sessions)
+      .where(and(inArray(sessions.id, candidates), lt(sessions.lastUsedAt, cutoff)));
+    return rows.map((r) => r.id);
+  }
+
   /** A workspace's active sessions — what stands in the way of deleting it. */
   async listActiveIn(workspaceId: string): Promise<SessionRow[]> {
     return this.db.select(sessionColumns).from(sessions)

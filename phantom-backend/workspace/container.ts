@@ -2,6 +2,12 @@
 // workspace/, scratch/, logs/ live on the shared volume — so removal is a latency
 // event, never a data event. It boots on the first tool call, dies after
 // container_idle_ms of no calls, and is recreated transparently.
+//
+// No in-memory tracking: idle time comes from the session row's lastUsedAt
+// (already updated by every tool call, turn save, and touch); running-command
+// status comes from the commands table. Both survive a process restart, so
+// containers are never wiped at boot — they stay up and the normal idle reaper
+// handles them.
 import type Docker from 'dockerode';
 import type { WorkspaceRow, SessionRow } from '../db/schema.js';
 import type { Settings } from '../settings.js';
@@ -83,13 +89,6 @@ export interface ContainerOpts {
 }
 
 export class ContainerManager {
-  /** Last tool-call time per session — runtime state, deliberately not a DB
-   *  table (a row can disagree with dockerd; this cannot outlive the process
-   *  that owns it, and boot removes every phantom container anyway). */
-  private lastUsed = new Map<string, number>();
-  /** Detached commands currently running, per session. A running command IS
-   *  activity — the idle clock does not tick while one is live. */
-  private running = new Map<string, number>();
   private inflight = new Map<string, Promise<Docker.Container>>();
 
   constructor(
@@ -100,16 +99,11 @@ export class ContainerManager {
 
   name(sessionId: string): string { return `phantom-looper-ws-${sessionId}`; }
 
-  touch(sessionId: string): void { this.lastUsed.set(sessionId, Date.now()); }
-  /** Session ids that have a container (tracked by ensure/remove). */
-  activeSessions(): string[] { return [...this.lastUsed.keys()]; }
-  commandStarted(sessionId: string): void {
-    this.running.set(sessionId, (this.running.get(sessionId) ?? 0) + 1);
-  }
-  commandEnded(sessionId: string): void {
-    const n = (this.running.get(sessionId) ?? 1) - 1;
-    if (n <= 0) this.running.delete(sessionId); else this.running.set(sessionId, n);
-    this.touch(sessionId);
+  /** Session ids that have a running container, read from Docker. */
+  async activeSessions(): Promise<string[]> {
+    const list = await this.docker.listContainers({ filters: { label: [SESSION_LABEL], status: ['running'] } })
+      .catch((e) => { log.warn({ err: errStr(e) }, 'could not list containers'); return []; });
+    return list.map((c) => c.Labels?.[SESSION_LABEL]).filter((id): id is string => !!id);
   }
 
   /** The running container for a session, created if absent. Serialized per
@@ -119,7 +113,6 @@ export class ContainerManager {
     // borrows another's folder (the supervisor) shares that folder's
     // container; for owners folderId === id and nothing changes.
     const key = session.folderId ?? session.id;
-    this.touch(key);
     const existing = this.inflight.get(key);
     if (existing) return existing;
     const p = this.ensureInner(session, workspace).finally(() => this.inflight.delete(key));
@@ -217,29 +210,15 @@ export class ContainerManager {
 
   async remove(sessionId: string): Promise<void> {
     await this.docker.getContainer(this.name(sessionId)).remove({ force: true, v: true }).catch(() => {});
-    this.lastUsed.delete(sessionId);
-    this.running.delete(sessionId);
   }
 
-  /** Kill idle containers. A live detached command counts as activity. */
-  async reap(idleMs: number): Promise<void> {
-    const now = Date.now();
-    for (const [sessionId, last] of this.lastUsed) {
-      if (this.running.has(sessionId)) continue;
-      if (now - last < idleMs) continue;
+  /** Kill idle containers. Uses the session's lastUsedAt from the DB and checks
+   *  the commands table for running detached commands — no in-memory state. */
+  async reap(idleMs: number, idleSessions: (idleMs: number) => Promise<string[]>): Promise<void> {
+    const stale = await idleSessions(idleMs);
+    for (const sessionId of stale) {
       await this.remove(sessionId);
       log.info({ session: sessionId }, 'idle workspace container removed');
     }
-  }
-
-  /** Boot: every phantom container predates this process. They are stateless,
-   *  so removal is free — and it is the only way memory and dockerd agree. */
-  async bootCleanup(): Promise<void> {
-    const list = await this.docker.listContainers({ all: true, filters: { label: [SESSION_LABEL] } })
-      .catch((e) => { log.warn({ err: errStr(e) }, 'could not list containers at boot'); return []; });
-    for (const c of list) {
-      await this.docker.getContainer(c.Id).remove({ force: true, v: true }).catch(() => {});
-    }
-    if (list.length) log.info({ removed: list.length }, 'boot: cleared stale workspace containers');
   }
 }

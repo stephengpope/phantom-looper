@@ -187,7 +187,6 @@ async function runBash(
   if (!args.detached) {
     if (signal?.aborted) throw new ToolError('interrupted', 'client disconnected before the command started', false);
     // No lock: tools take none — the session/turn lock is the whole story.
-    deps.containers.commandStarted(session.id);
     // A docker exec's process is already a session leader (runc setsids it —
     // verified: pid == sid in the container), so $$ in the pidfile IS the
     // sid of the whole command tree. NOT the setsid binary: a group leader
@@ -248,10 +247,6 @@ async function runBash(
     } finally {
       signal?.removeEventListener('abort', onAbort);
       ctx.foreground?.remove(session.id, pidfile);
-      deps.containers.commandEnded(session.id);
-      // A long command is the one gap in the idle clock: it touches at start
-      // and runs for hours inside this one call. Touch at end too, so the
-      // disk sweep's idle gates see the activity the session actually had.
       void ctx.sessions.touch(session.id);
     }
   }
@@ -260,7 +255,6 @@ async function runBash(
   const logPath = path.join(sessionDir(ctx.paths, session.folderId ?? session.id), 'logs', `${cmdId}.ndjson`);
   await fsp.mkdir(path.dirname(logPath), { recursive: true });
   await ctx.commands.start({ id: cmdId, sessionId: session.id, argv, logPath });
-  deps.containers.commandStarted(session.id);
   // The same $$-to-pidfile idiom as unary above (pid == sid, runc setsids the
   // exec); `exec` keeps one process so the leader stays the command and the
   // exit code passes through the stream untouched. The row keeps the ORIGINAL
@@ -283,7 +277,6 @@ async function runBash(
       log.warn({ cmdId, err: errStr(e) }, 'detached stream died');
     } finally {
       out.end();
-      deps.containers.commandEnded(session.id);
       void ctx.sessions.touch(session.id); // a long detached command is activity, seen only here at its end
       // Conditional on still-running: the tasks route's 'killed' and the
       // reconciler's 'exited' are final — a late stream teardown must not
