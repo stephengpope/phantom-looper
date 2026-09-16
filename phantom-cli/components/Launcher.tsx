@@ -409,12 +409,14 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
           { key: 'n', does: 'new workspace', when: canAdd ?? true }, { key: 'esc', does: 'close' }]
         : [
           { key: 'enter', does: 'open' },
-          { key: 'd', does: 'duplicate', when: canCopy }, { key: 'x', does: 'close', when: canCopy },
-          { key: 't', does: 'trash', when: canCopy },
+          { key: '/', does: 'filter', when: canFilter },
           { key: 'p', does: 'pin', when: canPin },
+          { key: 'x', does: 'close', when: canCopy },
+          { key: 'd', does: 'duplicate', when: canCopy },
+          { key: 't', does: 'trash', when: canCopy },
           { key: 'w', does: 'wake', when: canWake },
           { key: 's', does: 'supervised', when: canCopy, active: showSupervised },
-          { key: '/', does: 'filter', when: canFilter }, { key: 'esc', does: 'close' },
+          { key: 'esc', does: 'exit' },
         ])}>
       <SelectList
         choices={choices}

@@ -1414,7 +1414,7 @@ export class WindowStore {
    *  checked again. The server's periodic refresh updates the column live. */
   wakeSession = async (id: string): Promise<void> => {
     try {
-      await this.api('POST', `/sessions/${id}/wake`);
+      await this.api('POST', `/sessions/${id}/wake`, {});
       this.pickerNotice = 'waking container — git status updates shortly';
     } catch (e) {
       this.pickerNotice = `could not wake session: ${(e as Error).message}`;
