@@ -38,7 +38,7 @@ import { apiFor, streamFor, savedCaFor } from './provision.js';
 import { APP_VERSION, checkLatest, selfUpdate } from './selfUpdate.js';
 import { CHECK_INTERVAL_MS, autoUpdateCycle, dueForCheck, prelaunchReconcile, stampChecked } from './autoUpdate.js';
 import { quitNotice, runUpdate, versionLines } from './update.js';
-import type { ServerLink, Target } from './update.js';
+import type { ServerLink, Target, UpdateDeps } from './update.js';
 import { requestError } from './request.js';
 
 // The connection comes from the file, synchronously: it is how we REACH the
@@ -79,36 +79,36 @@ if (firstArg === 'update') {
   if (bad) die(`unknown option ${bad}\nusage: phantom-cli update [--client] [--server]`);
   const target: Target = flags.includes('--client') && !flags.includes('--server') ? 'client'
     : flags.includes('--server') && !flags.includes('--client') ? 'server' : 'both';
-  // The ticking wait rewrites its line(s); `out` clears first, `tick` repaints
-  // in place. Multi-line ticks (image pull progress) move the cursor up to
-  // overwrite all of them.
-  let tickLines = 0;
   const code = await runUpdate(target, {
     appVersion: APP_VERSION,
     latest: checkLatest,
     server: pairedServer(),
     installClient: selfUpdate,
     confirm: askYesNo,
-    out: (line) => {
-      // Clear any tick lines before printing a permanent line.
-      if (tickLines > 0) {
-        process.stdout.write(`\x1b[${tickLines}A\x1b[0J`);
-        tickLines = 0;
-      }
-      process.stdout.write(line + '\n');
-    },
-    tick: process.stdout.isTTY ? (text) => {
-      // Move up to overwrite previous tick, clear from cursor down, reprint.
-      if (tickLines > 0) {
-        process.stdout.write(`\x1b[${tickLines}A\x1b[0J`);
-      }
-      process.stdout.write(text);
-      tickLines = text.split('\n').length;
-    } : undefined,
+    ...progressLines(),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     now: Date.now,
   });
   process.exit(code);
+}
+
+/** The terminal half of runUpdate's output (update.ts): `out` prints a
+ *  permanent line, `tick` repaints ONE status line in place. The cursor never
+ *  leaves the current row — `\r` returns to its start, the text is written,
+ *  then the tail is cleared (cli-progress's order: no blank frame between
+ *  clear and redraw, so no flicker). A tick is cut to the terminal's width
+ *  because a wrapped line is two rows and `\r` only reaches the last one —
+ *  every repaint would then leave a row behind. No TTY: no tick, runUpdate
+ *  prints permanent lines instead. */
+function progressLines(): Pick<UpdateDeps, 'out' | 'tick'> {
+  const tty = process.stdout.isTTY;
+  return {
+    out: (line) => process.stdout.write(`${tty ? '\r\x1b[K' : ''}${line}\n`),
+    tick: tty ? (line) => {
+      const width = Math.max(1, (process.stdout.columns || 80) - 1);
+      process.stdout.write(`\r${line.slice(0, width)}\x1b[K`);
+    } : undefined,
+  };
 }
 
 /** One yes/no question on the terminal itself. No terminal — the answer is no. */
@@ -212,14 +212,7 @@ await prelaunchReconcile({
   server: pairedServer(),
   installClient: selfUpdate,
   confirm: askYesNo,
-  out: (line) => {
-    // Clear any in-progress tick before printing a permanent line.
-    if (process.stdout.isTTY) process.stdout.write('\r\x1b[K');
-    process.stdout.write(line + '\n');
-  },
-  tick: process.stdout.isTTY ? (line) => {
-    process.stdout.write(`\r\x1b[K${line}`);
-  } : undefined,
+  ...progressLines(),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   now: Date.now,
   reexec: (version) => {
