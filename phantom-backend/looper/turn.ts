@@ -80,11 +80,9 @@ export async function runCodingTurn(
     ...kanbanReadTool({ baseUrl: deps.base, apiKey: deps.apiKey, workspaceId, fetch: deps.f }),
     ...deps.extraTools,
   };
-  // THE rule, the same one the app applies: a session that has said anything
-  // runs on its pin — the row's model, and only the row's. The global settings
-  // reach a session with nothing said yet and nothing else, so a /model change
-  // cannot land mid-conversation just because the turn happened to be run by
-  // the server.
+  // THE rule, the same one the app applies: the session runs on its ROW's
+  // model, and only the row's (Sessions.followModelSettings owns when the
+  // row may move). The settings supply everything else — keys, reasoning.
   const pinned = pinnedCfg(values, sessionPin(
     opened.session as { provider?: string | null; model?: string | null; baseUrl?: string | null }));
   const model = modelConfigFrom(pinned);
@@ -138,24 +136,13 @@ export async function runCodingTurn(
     feed?.publish(id, deps.client, { event: 'turn-end' });
   }
 
-  // The header records what RAN. While the row carries no pin (a fresh
-  // session, a duplicate's copy) this save is what pins the session, so the
-  // header must be brought to the model that actually ran — not whatever an
-  // earlier pick, or a copied conversation, left in it. Once the row is
-  // pinned the header is history and stays untouched. The frozen prompt and
-  // the header's other fields travel either way.
-  const rowPinned = sessionPin(
-    opened.session as { provider?: string | null; model?: string | null; baseUrl?: string | null });
-  // base_url: undefined OVERRIDES an old endpoint (JSON.stringify drops the
-  // key) — a provider switch must not inherit the last model's endpoint.
-  const running = { provider: model.provider, model: model.model, base_url: model.baseUrl ?? undefined };
-  const header: TranscriptHeader = opened.header && rowPinned ? opened.header : {
-    ...(opened.header ?? {
-      type: 'session' as const, agent: 'coding',
-      created_at: new Date().toISOString(), system_prompt: opened.instructions,
-      session_id: opened.session.id, workspace: workspaceId, branch: opened.session.branch,
-    }),
-    ...running,
+  // The header is a record; a first turn writes one naming what ran. The
+  // row decides the model — nothing reads the header's back.
+  const header: TranscriptHeader = opened.header ?? {
+    type: 'session' as const, agent: 'coding',
+    created_at: new Date().toISOString(), system_prompt: opened.instructions,
+    session_id: opened.session.id, workspace: workspaceId, branch: opened.session.branch,
+    provider: model.provider, model: model.model, ...(model.baseUrl ? { base_url: model.baseUrl } : {}),
   };
   try {
     await opened.saveTranscript(serializeTranscript(header,

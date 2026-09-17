@@ -19,7 +19,7 @@ import { SessionsFeed } from './sessionsFeed.js';
 import { BoardStore, type Card, type Stream } from './board.js';
 import { VoiceClient, sidecarEnv, codingKanbanTool, screenModeTools,
   type KanbanArgs, type ScreenModeHandler } from './voice.js';
-import { Transcript, adoptServerCopy, syncTranscriptUp, type TranscriptHeader } from './session.js';
+import { Transcript, adoptServerCopy, syncTranscriptUp, stepSaveUp, type TranscriptHeader } from './session.js';
 import { parseTranscript } from '../core/llm/transcript.js';
 import { agentModelConfig, pinnedCfg, sessionPin, type ModelPin } from '../core/llm/agentConfig.js';
 import { contextWindowFor } from '../phantom-backend/models.js';
@@ -51,12 +51,11 @@ import { REMOTE_DEFAULTS, VOICE_BOOT_KEYS, ASSISTANT_MODEL_KEYS,
 import { makeSettings } from './settings.js';
 import { lastWorkspaceId, type SessionInfo, type WorkspaceInfo } from './components/Launcher.js';
 import type { TasksView } from './components/Tasks.js';
-import type { Preset } from './components/Presets.js';
 import type { NewWorkspaceRequest } from './components/NewWorkspace.js';
 import { COMMANDS, matches, parse } from './commands.js';
 import { WorkspaceDirectory, buildAssistantKit } from './assistantKit.js';
 import { confirmDialog, boardScreen, switcherScreen, settingsScreen, keysScreen, secretsScreen,
-  voiceScreen, localSettingsScreen, presetsScreen, duplicateModelScreen, workspaceSettingsScreen,
+  voiceScreen, localSettingsScreen, presetsScreen, workspaceSettingsScreen,
   addWorkspaceScreen, archivedScreen, tasksScreen, pickerScreen } from './screens.js';
 import type { SkillMeta } from '../core/skills/skills.js';
 import type { SecretIndexEntry, GitFacts } from '../core/llm/prompts/coding/wiring.js';
@@ -94,7 +93,7 @@ export interface Initial {
 /** What opening resolves to. core's openSession turns each into the same
  *  create / restart / attach path. */
 export type OpenTarget = { kind: 'new'; workspaceId: string } | { kind: 'open'; id: string }
-  | { kind: 'duplicate'; id: string; modelOverride?: Record<string, ConfigValue> };
+  | { kind: 'duplicate'; id: string };
 
 /** An ask standing in the Assistant's pane, and the promise its tool is
  *  parked on. */
@@ -109,7 +108,7 @@ export type CloseResult = { ok: true; closed: string; on_screen: string; opened_
 // One field, one concept: a screen is showing on top of the chat, or not.
 // A FULL overlay replaces the whole column (every menu, the board); a THIRD
 // takes the bottom third with the conversation still above it (the glance
-// lists: /tasks, the duplicate's model pick). The component inside owns its
+// lists: /tasks). The component inside owns its
 // drawing and its keyboard; the window just puts it on screen and delivers
 // the result when it goes. Every overlay is built in screens.tsx.
 //
@@ -629,18 +628,28 @@ export class WindowStore {
   }
 
   /** Build the agent a turn is about to use from the server, right now: the
-   *  session row supplies its locked model trio; current settings supply
-   *  everything else. The result replaces the previous disposable agent. */
+   *  session ROW supplies the model trio; current settings supply everything
+   *  else. The result replaces the previous disposable agent. */
   private async refreshAgentForTurn(id: string): Promise<void> {
     const e = this.sessions.get(id);
     if (!e || e.readonly) return;
     const pin = await this.readSessionPin(id);
     const cfg = await this.readSettings();
-    const modelCfg = pinnedCfg(cfg, pin);
-    const { agent, summary } = this.buildFor(e.tools, modelCfg, e.instructions, id);
-    if (!pin) e.transcript.setModel({ provider: summary.provider, model: summary.model,
-      base_url: modelCfg.base_url ? String(modelCfg.base_url) : null });
+    const { agent, summary } = this.buildFor(e.tools, pinnedCfg(cfg, pin), e.instructions, id);
     this.sessions.setAgent(id, agent, summary, pin);
+  }
+
+  /** The feed said this session's row model moved (a settings change reached
+   *  a session nothing has been said to yet): the agent and the toolbar
+   *  follow the row, and the pane says so. */
+  private async followRowModel(id: string, pin: ModelPin): Promise<void> {
+    const e = this.sessions.get(id);
+    if (!e || e.readonly) return;
+    const cfg = await this.readSettings();
+    const { agent, summary } = this.buildFor(e.tools, pinnedCfg(cfg, pin), e.instructions, id);
+    const moved = summary.provider !== e.summary.provider || summary.model !== e.summary.model;
+    this.sessions.setAgent(id, agent, summary, pin);
+    if (moved) this.sessions.note(id, `model → ${summary.provider}/${summary.model}`);
   }
 
   // ── the session store, and the turn's two ends ────────────────────────────
@@ -955,7 +964,7 @@ export class WindowStore {
         this.notify();
       }
       const sessionId = target.kind === 'duplicate'
-        ? ((await this.api('POST', `/sessions/${target.id}/duplicate`, {}) as { id: string }).id)
+        ? ((await this.api('POST', `/sessions/${target.id}/duplicate`) as { id: string }).id)
         : target.kind === 'open' ? target.id : undefined;
       const opened = await coreOpenSession({ call: this.api, label: hostname(),
         ...(sessionId ? { sessionId } : { workspaceId: (target as { workspaceId: string }).workspaceId }) });
@@ -996,20 +1005,12 @@ export class WindowStore {
           row.agent_git_credentials === undefined ? undefined
             : { credentials: row.agent_git_credentials },
           row.secrets ?? []);
-      // THE rule (core agentConfig): a session that has said anything runs on
-      // its pin — the ROW's provider/model/endpoint, and only the row's.
-      // Global settings reach a session with nothing said yet and nothing
-      // else. The pin is kept on the entry so every later rebuild (plan mode,
-      // /model) resolves the same way instead of reading the settings again.
-      const pin = resumed.length > 0 ? sessionPin(row) : null;
-      // A duplicate can carry a one-shot model override (the preset the user
-      // picked on the duplicate screen). It is NOT a settings change — global
-      // settings stay untouched. The override is layered on top of the current
-      // settings for this open only, exactly as a pin would be.
-      const baseCfg = await this.readSettings();
-      const modelCfg = target.kind === 'duplicate' && target.modelOverride
-        ? { ...baseCfg, ...target.modelOverride }
-        : pinnedCfg(baseCfg, pin);
+      // THE rule (core agentConfig): the session runs on its ROW's model, and
+      // only the row's. The pin is kept on the entry so every later rebuild
+      // (plan mode, a settings change) resolves the same way; the feed moves
+      // it when the server does (followRowModel).
+      const pin = sessionPin(row);
+      const modelCfg = pinnedCfg(await this.readSettings(), pin);
       const { agent, summary } = this.buildFor(tools, modelCfg, instructions, row.id);
       const transcript = (this.opts.makeTranscript ?? ((h: TranscriptHeader) => new Transcript(h)))({
         type: 'session', session_id: row.id, workspace: row.workspaceId, branch: row.branch,
@@ -1019,14 +1020,6 @@ export class WindowStore {
         created_at: new Date().toISOString(),
         system_prompt: instructions,
       });
-      // An unpinned session's header model is PROVISIONAL: a duplicate's copy
-      // arrives carrying the SOURCE's model in line 1, which is not what the
-      // copy will run — so line 1 is brought to what is in effect NOW (and
-      // /model keeps moving it until the first new message). The copy is
-      // unpinned because its ROW is, never because its header was emptied.
-      // The first save pins whatever it then says.
-      if (!pin) transcript.setModel({ provider: summary.provider, model: summary.model,
-        base_url: modelCfg.base_url ? String(modelCfg.base_url) : null });
       // The card this session builds, named the way the board names it
       // (`PHA-7`), resolved ONCE here where both facts are in hand.
       const ws = await this.wsFacts(row.workspaceId);
@@ -1089,23 +1082,18 @@ export class WindowStore {
     }
   };
 
-  /** [d] on a session row: duplicate it. Presets get a say first — the copy
-   *  is born unpinned, so this is the one moment "this conversation, another
-   *  model" is possible: a preset is applied as a one-shot override on the
-   *  copy only — global settings stay untouched. No presets, no question.
+  /** [d] on a session row: duplicate it. The copy opens on the source's
+   *  model; /model or a preset moves it until its first message, exactly as
+   *  for a new session — one door for "this conversation, another model".
    *
    *  The list's own lock marker is the gate: a row the server said is held
-   *  is refused HERE, on the picker — no menu close, no preset question, no
-   *  dead round-trip. The marker can be a poll behind, so this is only the
-   *  shortcut: a stale "held" self-heals on the next refresh (kicked off
-   *  right away), a stale "free" meets the server's 409 as before. */
-  startDuplicate = async (id: string): Promise<void> => {
+   *  is refused HERE, on the picker — no menu close, no dead round-trip. The
+   *  marker can be a poll behind, so this is only the shortcut: a stale
+   *  "held" self-heals on the next refresh (kicked off right away), a stale
+   *  "free" meets the server's 409 as before. */
+  duplicateFromPicker = async (id: string): Promise<void> => {
     const row = this.picker?.sessions.find((s) => s.id === id);
     if (row?.locked) {
-      // The server's own words, whichever side the hold is on — the marker
-      // can be a poll behind, so this is only the shortcut: a stale "held"
-      // self-heals on the refresh kicked here, a stale "free" meets the
-      // server's 409 saying the same.
       this.pickerNotice = 'session is in use — stop it first, or wait for it to complete';
       this.notify();
       void this.refreshPicker().catch(quiet('refresh the session list'));
@@ -1113,48 +1101,7 @@ export class WindowStore {
     }
     this.pickerNotice = undefined;   // the gate passed — no refusal to show
     this.dismissOverlay();
-    try {
-      const presets = await this.api('GET', '/presets') as Preset[];
-      if (!presets.length) { await this.openSession({ kind: 'duplicate', id }); return; }
-      // "Keep current model" shows the SOURCE session's model when it has one
-      // (pinned = has spoken), else the global settings — so the first row
-      // names what THIS conversation runs on, not whatever was last set globally.
-      const srcProvider = row?.provider as string | undefined;
-      const srcModel = row?.model as string | undefined;
-      let current: { provider: string; model: string };
-      if (srcProvider && srcModel) {
-        current = { provider: srcProvider, model: srcModel };
-      } else {
-        const cfg = await this.readSettings();
-        current = { provider: String(cfg.provider ?? ''), model: String(cfg.model ?? '') };
-      }
-      this.duplicating = { id, presets, current };
-      this.showOverlay(duplicateModelScreen(this));
-    } catch (e) {
-      this.note(`could not duplicate session ${id}: ${(e as Error).message}`);
-    }
-  };
-
-  /** The duplicate prompt's answer: a preset id (apply its model values as a
-   *  one-shot override on the copy) or null (copy on the current settings).
-   *  Global settings are NEVER changed — the preset is scoped to this
-   *  duplicate only. */
-  finishDuplicate = async (presetId: string | null): Promise<void> => {
-    const d = this.duplicating;
-    this.dismissOverlay();   // drops `duplicating` — read above first
-    if (!d) return;
-    try {
-      let modelOverride: Record<string, ConfigValue> | undefined;
-      if (presetId) {
-        const p = d.presets.find((x) => x.id === presetId);
-        if (!p) throw new Error('that preset is gone');
-        modelOverride = {};
-        for (const [k, v] of Object.entries(p.values)) modelOverride[k] = v as ConfigValue;
-      }
-      await this.openSession({ kind: 'duplicate', id: d.id, modelOverride });
-    } catch (e) {
-      this.note(`could not duplicate session ${d.id}: ${(e as Error).message}`);
-    }
+    await this.openSession({ kind: 'duplicate', id });
   };
 
   /** What the window CALLS a session when it must name one: the server name
@@ -1216,9 +1163,6 @@ export class WindowStore {
    *  state reads it) — the live text is `pickerQuery`, which runs ahead. */
   picker: { sessions: SessionInfo[]; total: number; end: boolean; query: string } | null = null;
   pickerNotice: string | undefined;
-  /** A duplicate waiting on its one question — which model the copy runs on.
-   *  Dropped with its screen. */
-  duplicating: { id: string; presets: Preset[]; current: { provider: string; model: string } } | null = null;
   /** [s] on /resume: the looper's supervisor seats in the list or not. A fetch
    *  parameter, not a filter — the server decides what the list is. */
   showSupervised = false;
@@ -1281,17 +1225,15 @@ export class WindowStore {
   /** The one addition only this window can make: sessions open HERE that the
    *  server would leave out (nothing typed yet). Merged in, counted in — the
    *  switcher must never hide an open session. Server rows that ARE loaded
-   *  locally get enriched: this window's in-memory model and tokens are
-   *  fresher than the server's cached columns (the row updates async). */
+   *  locally get their tokens from this window's running count, which is
+   *  ahead of the table while a turn's upload is in flight. The model is the
+   *  row's, always — never a local guess over it. */
   private withOpenHere(rows: SessionInfo[], total: number) {
     const local = new Map(this.sessions.list().map((e) => [e.id, e]));
-    // Enrich server rows with live local data — the server's token and
-    // model columns lag behind the in-memory state (the upload is async).
     const enriched = rows.map((s) => {
       const e = local.get(s.id);
       if (!e) return s;
       return { ...s,
-        model: s.model || e.summary.model,
         tokensInput: e.usage.input || s.tokensInput,
         tokensOutput: e.usage.output || s.tokensOutput,
         tokensCacheRead: e.usage.cache_read || s.tokensCacheRead,
@@ -1303,7 +1245,7 @@ export class WindowStore {
       .filter((e) => !seen.has(e.id) && !e.readonly && this.matchesPickerQuery(e))
       .map((e) => ({
         id: e.id, workspaceId: e.workspaceId, branch: e.branch, status: 'active', agent: null,
-        model: e.summary.model, pinned: e.pinned,
+        model: e.pin?.model ?? null, pinned: e.pinned,
         tokensInput: e.usage.input || null, tokensOutput: e.usage.output || null,
         tokensCacheRead: e.usage.cache_read || null, tokensCacheWrite: e.usage.cache_write || null,
         // Nothing typed = no activity: it sorts LAST, never ahead of real work.
@@ -1629,6 +1571,7 @@ export class WindowStore {
       onRecordLanded: (updatedAt, keepScreen) =>
         this.refreshIfMoved(id, updatedAt || null, keepScreen),
       onPlanModeChanged: (on) => this.applyPlanMode(id, on),
+      onModelChanged: (pin) => this.followRowModel(id, pin),
     });
     this.feeds.set(id, feed);
     feed.start();
@@ -1843,33 +1786,14 @@ export class WindowStore {
       catch (e) { this.note(`could not read settings: ${(e as Error).message}`); return; }
       this.voiceEnabled = Boolean(cfg.voice_enabled);
       this.sidebarWidth = Number(cfg.sidebar_width) || (this.opts.sidebarPercent ?? 20);
-      if (this.duplicating) {
-        this.duplicating = { ...this.duplicating,
-          current: { provider: String(cfg.provider ?? ''), model: String(cfg.model ?? '') } };
-      }
 
+      // Every session's agent re-reads the settings (keys, reasoning, max
+      // steps) over its ROW's model. A model setting never reaches a session
+      // from here: the server moves the rows it may (nothing said yet) and
+      // the session feed brings that in (followRowModel).
       const make = this.opts.makeAgent ?? buildAgent;
-      const buildSession = (e: LoadedSession) =>
-        make(e.tools, pinnedCfg(cfg, e.pin), e.instructions,
-          (t) => this.sessions.note(e.id, t));
-      const session = this.sessions.active();
-      if (session) {
-        const before = session.summary;
-        const next = buildSession(session).summary;
-        if (next.provider !== before.provider || next.model !== before.model) {
-          if (session.lastMessageAt === 0) {
-            // Unpinned: the switch must reach the header, whose model the
-            // first save pins — the event alone would leave the OLD pick
-            // frozen into line 1.
-            session.transcript.setModel({ provider: next.provider, model: next.model,
-              base_url: cfg.base_url ? String(cfg.base_url) : null });
-            session.transcript.appendEvent({ type: 'model', provider: next.provider, model: next.model,
-              at: new Date().toISOString() });
-            this.note(`model → ${next.provider}/${next.model}`);
-          }
-        }
-      }
-      this.sessions.rebuildAgents(buildSession);
+      this.sessions.rebuildAgents((e: LoadedSession) =>
+        make(e.tools, pinnedCfg(cfg, e.pin), e.instructions, (t) => this.sessions.note(e.id, t)));
 
       // The Assistant follows its settings: on/off starts and stops it; an
       // audio value (the Deepgram key, the devices) restarts the sidecar,
@@ -1966,29 +1890,14 @@ export class WindowStore {
         }
         return;
       }
-      case 'duplicate': {
+      case 'duplicate':
         if (!session) { this.note('no session is open — nothing to duplicate'); return; }
         if (session.busy || session.remoteBusy) {
           this.note('a turn is running — wait for it to finish, then /duplicate');
           return;
         }
-        try {
-          const presets = await this.api('GET', '/presets') as Preset[];
-          if (!presets.length) { await this.openSession({ kind: 'duplicate', id: session.id }); return; }
-          const srcProvider = session.pin?.provider;
-          const srcModel = session.pin?.model;
-          let current: { provider: string; model: string };
-          if (srcProvider && srcModel) {
-            current = { provider: srcProvider, model: srcModel };
-          } else {
-            const cfg = await this.readSettings();
-            current = { provider: String(cfg.provider ?? ''), model: String(cfg.model ?? '') };
-          }
-          this.duplicating = { id: session.id, presets, current };
-          this.showOverlay(duplicateModelScreen(this));
-        } catch (e) { this.note(`could not duplicate: ${(e as Error).message}`); }
+        await this.openSession({ kind: 'duplicate', id: session.id });
         return;
-      }
       case 'trash':
         if (!session) { this.note('no session is open — nothing to trash'); return; }
         await this.trashActive(session);

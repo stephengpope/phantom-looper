@@ -493,7 +493,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         // lock: clear any previous remote holder rather than suppressing it.
         write(lockEvent(s, s.lockedBy === client ? { locked: false } : {}));
         write({ event: 'session', agent: s.agent ?? null, planMode: s.planMode, work: s.work ?? null,
-          name: s.name ?? null, transcript_updated_at: s.transcriptUpdatedAt?.toISOString() ?? null });
+          name: s.name ?? null, transcript_updated_at: s.transcriptUpdatedAt?.toISOString() ?? null,
+          provider: s.provider ?? null, model: s.model ?? null, base_url: s.baseUrl ?? null });
         for (const e of pending) write(e);
         pending = null;
         await new Promise<void>((resolve) => reply.raw.on('close', resolve));
@@ -547,8 +548,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   // to say what is being built. Best effort, off the request path.
   ctx.sessionEvents!.subscribeAll((sessionId, e) => {
     if (e.event !== 'turn-start' || e.agent !== 'coding') return;
-    const model = e.provider && e.model ? { provider: e.provider as string, model: e.model as string } : undefined;
-    void ctx.sessions.turnStarted(sessionId, e.message, model).then(async ({ firstMessage }) => {
+    void ctx.sessions.turnStarted(sessionId, e.message).then(async ({ firstMessage }) => {
       if (!firstMessage) return;
       // The row publishes the name under no client id, so the window running
       // the turn hears it too (the feed drops a client's own events).
@@ -670,10 +670,10 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     });
 
   // ---- duplicate -----------------------------------------------------------
-  // THE way to fork a session — above all, to switch its model: a pinned
-  // session never changes model, but its copy is born UNPINNED and follows
-  // /model and presets until its first new message, exactly like a fresh
-  // session. The whole operation runs under the source's lock (held as every
+  // THE way to fork a session — above all, to switch its model: a session
+  // that has spoken never changes model, but its copy is a newborn (turn_count
+  // 0) on the source's model, so /model and presets reach it until its first
+  // new message. The whole operation runs under the source's lock (held as every
   // git operation holds it, labelled 'duplicate'): the lock, then the flush
   // (everything outstanding committed and pushed to the source's branch on
   // origin), then the copy cut FROM that branch — so the copy holds all of
@@ -684,9 +684,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       description: 'Takes the source\'s lock (409 while another client holds it), commits and pushes ' +
         'everything outstanding to the source\'s branch on origin, then creates a NEW session whose own ' +
         'branch is cut FROM that branch — the copy starts with all of the source\'s work. The transcript ' +
-        'travels whole minus its usage lines: the copy is born unpinned (its ROW carries no model, so it ' +
-        'follows the model settings until its first new message, like a fresh session) and its token ' +
-        'totals count its own spend from birth. The frozen system prompt, name and plan mode travel. A destroyed source skips ' +
+        'travels whole minus its usage lines, so the copy\'s token totals count its own spend from birth. ' +
+        'The frozen system prompt, name, plan mode and model travel; the copy is a newborn (turn_count 0), ' +
+        'so /model and presets move its model until its first new message. A destroyed source skips ' +
         'the flush — its branch on origin is the record. A failed flush aborts the copy with the error.',
       params: idParam } },
     async (req, reply) => {

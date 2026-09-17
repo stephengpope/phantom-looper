@@ -108,31 +108,20 @@ export function buildCodingAgent(
 }
 
 // --- the session's pin -------------------------------------------------------
-// One rule, one place, for every caller that runs a coding turn: a session that
-// has said anything runs on the model it already ran on. Global settings reach
-// a session with nothing said yet, and nothing else. The pin is written once
-// (the transcript save route, from the first header) and never moves, so
-// changing /model can no longer reach a conversation in progress — not from the
-// app, not from the looper, not from Telegram, not from a plan-mode flip.
+// One rule, one place, for every caller that runs a coding turn: a session runs
+// on its ROW's model. The server writes the row when the session is born and
+// moves it only while nothing has been said (Sessions.followModelSettings); no
+// runner — not the app, not the looper, not Telegram — ever computes a model.
 
 /** What a session is pinned to: its row's columns, and nothing else. */
 export interface ModelPin { provider?: string | null; model?: string | null; baseUrl?: string | null }
 
 /** The pin for one session — THE ROW, whole or not at all. Never mixed field
  *  by field: a provider from one source and an endpoint from another is
- *  exactly the split this prevents.
- *
- *  The header is NOT a fallback. It records what ran; the row decides what
- *  runs. When the header could also pin, a duplicate had to be stripped of
- *  its model to be born unpinned — the copy would otherwise inherit the
- *  source's pin from the very transcript it copied, which is the opposite of
- *  what duplicating is for. One home for the fact, and that whole problem is
- *  gone: a copy carries its conversation untouched and is unpinned because
- *  its ROW is.
- *
- *  A session old enough to carry a model in its header but not in its row
- *  reads as unpinned and follows the settings for one turn, which then pins
- *  it from what actually ran. */
+ *  exactly the split this prevents. The transcript header is NOT a fallback:
+ *  it records what ran; the row decides what runs. A row with no model (born
+ *  before the column, or on a server with no provider set) reads as null and
+ *  the caller falls through to the settings. */
 export function sessionPin(
   row?: { provider?: string | null; model?: string | null; baseUrl?: string | null } | null,
 ): ModelPin | null {
@@ -144,8 +133,7 @@ export function sessionPin(
 
 /** The settings a session's turn builds from: the resolved global values with
  *  the session's pin laid over them, as a COPY (the caller's values still feed
- *  the other agents' cascade). No pin — a session with nothing said yet —
- *  returns them untouched.
+ *  the other agents' cascade). No pin returns them untouched.
  *
  *  The endpoint rides the pin, because a provider and a model name do not say
  *  where to send the request: a session pinned to one provider must not inherit

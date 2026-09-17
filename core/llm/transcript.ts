@@ -16,7 +16,7 @@
 // resumed from), the Assistant (~/.phantom-cli/voice/, one per engine
 // start), and the server's one-shot helpers (work/<session>/logs/ —
 // outside repo/ so auto-push never commits it).
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { ModelMessage } from 'ai';
 
@@ -79,28 +79,6 @@ export class Transcript {
    *  safe to add without a format version. */
   appendEvent(event: Record<string, unknown> & { type: string }): void {
     this.append(event as never);
-  }
-
-  /** Re-point the header's model fields. Only meaningful while the session is
-   *  UNPINNED (nothing said yet — a fresh session, or a duplicate's copy):
-   *  until the first turn saves, the header's provider/model/base_url are
-   *  provisional and follow /model and presets; the first save pins whatever
-   *  the header then names. Line 1 on disk and this header move together;
-   *  the file's other header fields (the frozen prompt, created_at) are kept. */
-  setModel(model: { provider: string; model: string; base_url?: string | null }): void {
-    const patch = { provider: model.provider, model: model.model,
-      ...(model.base_url ? { base_url: model.base_url } : { base_url: undefined }) };
-    this.header = { ...this.header, ...patch };
-    if (!this.started) return;   // nothing on disk yet — the first append writes it
-    const text = readFileSync(this.path, 'utf8');
-    const nl = text.indexOf('\n');
-    const first = nl < 0 ? text : text.slice(0, nl);
-    try {
-      const h = JSON.parse(first) as { type?: string };
-      if (h.type !== 'session') return;
-      const line = JSON.stringify({ ...h, ...patch });
-      writeFileSync(this.path, nl < 0 ? line : line + text.slice(nl), { mode: 0o600 });
-    } catch { /* an unparsable first line is left alone — the loader skips it too */ }
   }
 }
 
@@ -200,27 +178,6 @@ export function lastUserFromJsonl(text: string): string | undefined {
     if (t.trim()) last = t.trim().replace(/\s+/g, ' ');
   }
   return last;
-}
-
-/** The model a JSONL transcript's header line names — provider, model and the
- *  endpoint it was called at, the three fields that only mean anything
- *  together. Returns nulls when the first line is not a session header or
- *  cannot be parsed — callers leave the columns unchanged. Cheap: reads only to
- *  the first newline. */
-export function headerModelFromJsonl(text: string):
-{ provider: string | null; model: string | null; baseUrl: string | null } {
-  const none = { provider: null, model: null, baseUrl: null };
-  const nl = text.indexOf('\n');
-  const first = nl < 0 ? text : text.slice(0, nl);
-  try {
-    const h = JSON.parse(first) as { type?: string; provider?: string; model?: string; base_url?: string };
-    if (h.type !== 'session') return none;
-    return {
-      provider: typeof h.provider === 'string' ? h.provider : null,
-      model: typeof h.model === 'string' ? h.model : null,
-      baseUrl: typeof h.base_url === 'string' ? h.base_url : null,
-    };
-  } catch { return none; }
 }
 
 // --- token usage -------------------------------------------------------------

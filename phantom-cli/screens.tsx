@@ -28,7 +28,6 @@ import { Tasks } from './components/Tasks.js';
 import { Archived } from './components/Archived.js';
 import { Secrets } from './components/Secrets.js';
 import { Presets } from './components/Presets.js';
-import { DuplicateModel } from './components/DuplicateModel.js';
 import { Board } from './components/Board.js';
 import { Confirm, CONFIRM_ROWS } from './components/Confirm.js';
 import { quiet } from './request.js';
@@ -150,16 +149,6 @@ export const presetsScreen = (w: WindowStore): Overlay => full('presets', () => 
     onClose={w.dismissOverlay} />
 ));
 
-/** A duplicate's one question — which model the copy runs on (`w.duplicating`,
- *  read fresh: a settings change moves the "keep current" row's label). esc
- *  drops it: no copy is made. */
-export const duplicateModelScreen = (w: WindowStore): Overlay =>
-  third('duplicateModel', () => (
-    w.duplicating ? <DuplicateModel presets={w.duplicating.presets} current={w.duplicating.current}
-      onPick={(presetId) => { void w.finishDuplicate(presetId); }}
-      onCancel={w.dismissOverlay} /> : null
-  ), { onDismiss: () => { w.duplicating = null; } });
-
 /** `e` on a /workspace row: that workspace's settings. Closing goes back to
  *  the list it was opened from, refreshed — a rename there has to show up. */
 export const workspaceSettingsScreen = (w: WindowStore, workspace: WorkspaceInfo): Overlay =>
@@ -218,7 +207,7 @@ export const pickerScreen = (w: WindowStore, which: 'workspace' | 'resume'): Ove
     notice={w.pickerNotice}
     onNearEnd={which === 'resume' ? () => { void w.morePicker(); } : undefined}
     onEdit={(id) => w.editWorkspace(id)}
-    onDuplicate={(id) => { void w.startDuplicate(id); }}
+    onDuplicate={(id) => { void w.duplicateFromPicker(id); }}
     onPin={(id) => { void w.pinFromPicker(id); }}
     onWake={(id) => { void w.wakeSession(id); }}
     onClose={w.closeFromPicker}

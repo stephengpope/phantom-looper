@@ -247,11 +247,7 @@ export class SessionStore {
       busy: false, remoteBusy: false, held: null, startedAt: 0, tokens: NO_TOKENS,
       usage: s.usage ?? { input: 0, output: 0, cache_read: 0, cache_write: 0 }, abort: null,
       nudgeQueue: new NudgeQueue(),
-      // A session with history AND a pin has its model settled. History with
-      // NO pin is a duplicate's copy: its messages came from the source, so
-      // they do not settle it — it follows /model and presets until its first
-      // NEW message, exactly like a fresh session (rebuildAgents reads this).
-      unseen: false, lastMessageAt: s.history?.length && s.pin ? Date.now() : 0, addedAt: ++this.seq, work: null, draft: s.draft ?? '',
+      unseen: false, lastMessageAt: s.history?.length ? Date.now() : 0, addedAt: ++this.seq, work: null, draft: s.draft ?? '',
     };
     this.entries.push(entry);
     this.activeId = entry.id;

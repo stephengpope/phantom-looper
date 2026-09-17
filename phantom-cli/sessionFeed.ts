@@ -16,6 +16,7 @@ import { AUTO_PUSH_STEPS } from '../core/llm/tools/git.js';
 import { followStream, type Stream } from './follow.js';
 import type { SessionStore, LoadedSession } from './sessions.js';
 import type { StreamPart } from './state.js';
+import type { ModelPin } from '../core/llm/agentConfig.js';
 
 export interface FeedHooks {
   /** The session's record was saved (by anyone). `keepScreen` is true when
@@ -28,6 +29,9 @@ export interface FeedHooks {
   /** Plan mode changed on the server (another window's /plan, or a looper
    *  round flipping it). The App rebuilds the agent kit around this. */
   onPlanModeChanged?: (on: boolean) => Promise<void> | void;
+  /** The row's model moved (a settings change reached a session nothing has
+   *  been said to yet). The window rebuilds the agent on it. */
+  onModelChanged?: (pin: ModelPin) => Promise<void> | void;
 }
 
 const agentName = (agent: string): string | undefined =>
@@ -171,6 +175,10 @@ export class SessionFeed {
         }
         if (typeof rec.planMode === 'boolean') {
           await this.hooks.onPlanModeChanged?.(rec.planMode);
+        }
+        if (typeof rec.provider === 'string' && typeof rec.model === 'string') {
+          await this.hooks.onModelChanged?.({ provider: rec.provider, model: rec.model,
+            baseUrl: typeof rec.base_url === 'string' ? rec.base_url : null });
         }
         if (rec.work !== undefined) {
           this.store.setWork(this.sessionId, rec.work as LoadedSession['work']);

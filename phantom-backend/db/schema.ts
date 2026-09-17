@@ -140,11 +140,12 @@ export const sessions = phantomLooper.table('sessions', {
   // Updated by the server's periodic git-state refresh for sessions with
   // an active container. Null = never checked or no checkout. (013)
   work: text('work'),
-  // The model this session runs on, PINNED: written once from the first
-  // transcript header and never moved, so a conversation cannot change model
-  // mid-life. Null = nothing said yet, and only then do the global settings
-  // apply. The endpoint rides along because the three only mean anything
-  // together. (015, 016)
+  // THE model this session runs on. Written at birth from the settings (a
+  // duplicate takes its source's), moved by a settings write only while
+  // turn_count is 0, frozen after — so a conversation cannot change model
+  // mid-life. Every runner reads these three; nothing computes a model. The
+  // endpoint rides along because the three only mean anything together.
+  // (015, 016; Sessions.birthModel / followModelSettings)
   provider: text('provider'),
   model: text('model'),
   baseUrl: text('base_url'),

@@ -72,7 +72,10 @@ export type SessionEvent =
    *  the author, and the window running the turn — whose own events the
    *  feed drops — is exactly the one watching for the title. */
   | { event: 'session'; agent?: string | null; planMode?: boolean; work?: string | null;
-    name?: string | null; transcript_updated_at?: string | null };
+    name?: string | null; transcript_updated_at?: string | null;
+    /** The row's model — the one the session runs on. Moves only while
+     *  nothing has been said (a settings change reaches a newborn). */
+    provider?: string | null; model?: string | null; base_url?: string | null };
 
 /** How much of a tool result rides the live feed. The screen shows a 5-row
  *  tail of an output and the whole thing arrives with the turn-end transcript

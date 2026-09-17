@@ -35,7 +35,8 @@ import { claimSlot, resolveAuth } from './pool/pool.js';
 import { sessionDir, repoDir, type Paths } from './pool/paths.js';
 import { newId } from '../core/ids.js';
 import { logger } from './log.js';
-import { lastUserFromJsonl, headerModelFromJsonl, sumUsageFromJsonl, stripUsageFromJsonl } from '../core/llm/transcript.js';
+import { lastUserFromJsonl, sumUsageFromJsonl, stripUsageFromJsonl } from '../core/llm/transcript.js';
+import { cascade } from '../core/llm/agentConfig.js';
 import { sessionScope } from './store.js';
 import type { SessionEvents } from './api/sessionEvents.js';
 
@@ -119,14 +120,8 @@ export function agentAfterSave(current: string | null, client: string): 'coding'
 
 /** The first line of a transcript is its header; a duplicate keeps the frozen
  *  system prompt but is a different session on a different branch, so those
- *  two fields are rewritten — and the model fields are DROPPED (a key patched
- *  to undefined serializes away), because the copy is born unpinned: it
- *  follows /model and presets until its first new message, exactly like a
- *  fresh session — because its ROW carries no pin, which is the only place a
- *  pin lives. The header travels WHOLE: it records what the source ran, and
- *  the copy's first message rewrites it to what the copy ran. An unparsable
- *  first line is left alone — the loader skips what it cannot parse, same as
- *  everywhere. */
+ *  two fields are rewritten. An unparsable first line is left alone — the
+ *  loader skips what it cannot parse, same as everywhere. */
 export function rewriteTranscriptHeader(
   data: string,
   patch: { session_id: string; branch: string },
@@ -157,6 +152,44 @@ export class Sessions {
   /** The row moved in a way no richer event names: the list re-reads. Under
    *  no client, so every listener hears it (the feed drops a client's own). */
   private changed(id: string): void { this.events?.publish(id, '', { event: 'session' }); }
+
+  // ── the model ──────────────────────────────────────────────────────────────
+  // THE RULE: a session's model is its row's provider/model/base_url, and
+  // nothing else. Written when the session is born (from the settings, per
+  // workspace; a duplicate takes its source's). While nothing has been said —
+  // turn_count 0 — the row follows the settings, so /model and a preset reach
+  // a session you have not spoken to yet. The first saved turn moves the
+  // count to 1 and the row never changes again. Every runner reads the row.
+
+  /** What a session born in this workspace runs on right now. `agent` picks
+   *  the cascade (the supervisor's / assistant's trio, else the coding one). */
+  private async birthModel(workspaceId: string, agent: 'supervisor' | 'assistant' | null = null):
+  Promise<{ provider: string | null; model: string | null; baseUrl: string | null }> {
+    const workspace = await this.workspaces.get(workspaceId);
+    const cfg = await this.settings.resolveMany(['provider', 'model', 'base_url',
+      'supervisor_provider', 'supervisor_model', 'supervisor_base_url',
+      'assistant_provider', 'assistant_model', 'assistant_base_url'], workspace ? { workspace } : {});
+    if (agent) {
+      try { return cascade(cfg, agent); } catch { /* nothing usable yet — the row stays empty */ }
+    }
+    return { provider: cfg.provider ?? null, model: cfg.model ?? null, baseUrl: cfg.base_url ?? null };
+  }
+
+  /** A setting changed: every session with nothing said yet (and no turn in
+   *  flight) takes the settings' model now. The row change goes out on the
+   *  session feed, so a window showing that session repaints from it. */
+  async followModelSettings(): Promise<void> {
+    const rows = await this.db.select(sessionColumns).from(sessions)
+      .where(and(eq(sessions.status, 'active'), eq(sessions.turnCount, 0)));
+    const now = Date.now();
+    for (const s of rows) {
+      if (s.lockedBy && s.lockExpiresAt && s.lockExpiresAt.getTime() > now) continue;
+      const m = await this.birthModel(s.workspaceId, s.agent as 'supervisor' | 'assistant' | null);
+      if (m.provider === s.provider && m.model === s.model && m.baseUrl === s.baseUrl) continue;
+      await this.db.update(sessions).set(m).where(eq(sessions.id, s.id));
+      this.events?.publish(s.id, '', { event: 'session', provider: m.provider, model: m.model, base_url: m.baseUrl });
+    }
+  }
 
   // ── reads ──────────────────────────────────────────────────────────────────
 
@@ -447,7 +480,8 @@ export class Sessions {
     // The folder (the checkout's identity: branch + claim) and the session (the
     // conversation) are born together, sharing the id.
     await this.folders.create({ id, workspaceId, branch, claimSha });
-    await this.db.insert(sessions).values({ id, workspaceId, status: 'active', folderId: id });
+    await this.db.insert(sessions).values({ id, workspaceId, status: 'active', folderId: id,
+      ...await this.birthModel(workspaceId) });
     const row = (await this.db.select(sessionColumns).from(sessions).where(eq(sessions.id, id)))[0];
     log.info({ session: id, workspace: `${workspace.owner}/${workspace.name}`, branch, found, claimed, claimSha },
       'session created');
@@ -465,6 +499,7 @@ export class Sessions {
     await this.db.insert(sessions).values({
       id, workspaceId, status: 'active', agent: opts.agent,
       ...(opts.folderId ? { folderId: opts.folderId } : {}),
+      ...await this.birthModel(workspaceId, opts.agent),
     });
     this.changed(id);
     return (await this.get(id))!;
@@ -483,18 +518,17 @@ export class Sessions {
   }
 
   /** What travels from a source into its freshly created copy (the duplicate
-   *  route): the conversation minus its usage lines, the preview, the name and
-   *  plan mode. NO pin — the pin lives in the ROW and the copy's row has none,
-   *  so it follows the model settings until its first new message saves one.
-   *  NO token totals — the usage lines are stripped, so the copy counts its
-   *  own spend from birth. turn_count stays 0 — the copy renames on its own
-   *  clock. The header still names what the SOURCE ran; the copy's first
-   *  message rewrites it. */
+   *  route): the conversation minus its usage lines, the preview, the name,
+   *  plan mode and the MODEL — the copy runs on what the source ran on, and
+   *  can be moved with /model or a preset until its first new message
+   *  (turn_count 0, like any newborn). NO token totals — the usage lines are
+   *  stripped, so the copy counts its own spend from birth. */
   async seedCopy(copy: SessionFull, src: SessionRow): Promise<void> {
     const data = await this.transcript(src.id);
     const stamp = new Date();
     await this.db.update(sessions).set({
       planMode: src.planMode,
+      ...(src.provider && src.model ? { provider: src.provider, model: src.model, baseUrl: src.baseUrl } : {}),
       ...(data != null ? {
         transcript: stripUsageFromJsonl(rewriteTranscriptHeader(data, { session_id: copy.id, branch: copy.branch })),
         lastUserMessage: src.lastUserMessage, name: src.name, nameManual: src.nameManual,
@@ -543,8 +577,8 @@ export class Sessions {
   // ── the record ─────────────────────────────────────────────────────────────
 
   /** A client's turn ended and the whole transcript lands: one statement
-   *  writes the text, the list preview, the token sums and the turn count,
-   *  and — on the FIRST save — the pin. `client` is who wrote it: the agent
+   *  writes the text, the list preview and the turn count (the count leaving
+   *  0 is what freezes the row's model). `client` is who wrote it: the agent
    *  seat follows the writer (agentAfterSave), and the record event carries
    *  the id so the writer ignores its own echo. Returns what the naming
    *  decision needs. */
@@ -556,13 +590,6 @@ export class Sessions {
     // and an uncapped copy of a pasted wall of text would ride every
     // GET /sessions response for the life of the session.
     const lastUserMessage = lastUserFromJsonl(data)?.slice(0, LAST_MESSAGE_CHARS) ?? null;
-    // The PIN, written ONCE. The first save names the model this session
-    // runs on for the rest of its life; no later save moves it. That is what
-    // makes the rule enforceable everywhere else: a session with a pin never
-    // reads the global settings again, whoever runs the turn.
-    const head = headerModelFromJsonl(data);
-    const pinning = s.provider == null && s.model == null
-      && head.provider != null && head.model != null;
     const stamp = new Date();
     // Token totals are per-step rows in the token_usage table — the list
     // query JOINs that table directly. No re-parsing, no row cache.
@@ -573,7 +600,6 @@ export class Sessions {
         turnCount: sqlRaw`${sessions.turnCount} + 1`, agent,
         // Saving a turn is activity: the session stays off the idle sweep.
         lastUsedAt: stamp,
-        ...(pinning ? { provider: head.provider, model: head.model, baseUrl: head.baseUrl } : {}),
       })
       .where(eq(sessions.id, s.id))
       .returning({ name: sessions.name, turnCount: sessions.turnCount, nameManual: sessions.nameManual });
@@ -587,7 +613,7 @@ export class Sessions {
   }
 
   /** Step-level save: updates ONLY the transcript text and lastUsedAt.
-   *  No turn count bump, no naming, no model pinning, no transcript event.
+   *  No turn count bump, no naming, no transcript event.
    *  The lightweight per-step counterpart to saveTranscript. */
   async stepSave(id: string, data: string): Promise<Date> {
     const stamp = new Date();
@@ -604,21 +630,10 @@ export class Sessions {
    *  session's first message is the loop's fixed kickoff text, which would
    *  name every card's session after the kickoff; those are named off the
    *  save, where the reply is in). Manual names are never in play here — a
-   *  renamed session is never unnamed.
-   *
-   *  `model` pins the session's provider/model on the row the moment the
-   *  turn starts — before the transcript is uploaded. Without this, /resume
-   *  shows a blank model column until the turn ends and saveTranscript runs. */
-  async turnStarted(id: string, message: string,
-    model?: { provider: string; model: string }): Promise<{ firstMessage: boolean }> {
-    // Pin the model if the row has none yet and the caller supplied one.
-    const s = model ? await this.get(id) : undefined;
-    const pinning = s && s.provider == null && s.model == null;
+   *  renamed session is never unnamed. */
+  async turnStarted(id: string, message: string): Promise<{ firstMessage: boolean }> {
     const rows = await this.db.update(sessions)
-      .set({
-        lastUserMessage: message.slice(0, LAST_MESSAGE_CHARS),
-        ...(pinning ? { provider: model!.provider, model: model!.model } : {}),
-      })
+      .set({ lastUserMessage: message.slice(0, LAST_MESSAGE_CHARS) })
       .where(eq(sessions.id, id))
       .returning({ name: sessions.name, turnCount: sessions.turnCount, agent: sessions.agent });
     const r = rows[0];
@@ -642,14 +657,11 @@ export class Sessions {
 
   /** Add a turn's token usage to a session's running totals. Incremental — each
    *  call adds to the existing sums, so turns update the row without re-reading
-   *  the whole transcript. Also touches lastUsedAt and pins the model on the
-   *  first call (same rule as the coding transcript save). */
-  async addUsage(id: string, usage: TokenUsage,
-    model?: { provider: string; model: string; baseUrl?: string | null }): Promise<void> {
+   *  the whole transcript. Also touches lastUsedAt and counts the turn. */
+  async addUsage(id: string, usage: TokenUsage): Promise<void> {
     const stamp = new Date();
     const s = await this.get(id);
     if (!s) return;
-    const pinning = s.provider == null && s.model == null && model;
     await this.db.update(sessions).set({
       tokensInput: (s.tokensInput ?? 0) + usage.input,
       tokensOutput: (s.tokensOutput ?? 0) + usage.output,
@@ -658,7 +670,6 @@ export class Sessions {
       tokensAsOf: stamp,
       lastUsedAt: stamp,
       turnCount: sqlRaw`${sessions.turnCount} + 1`,
-      ...(pinning ? { provider: model.provider, model: model.model, baseUrl: model.baseUrl } : {}),
     }).where(eq(sessions.id, id));
     this.changed(id);
   }

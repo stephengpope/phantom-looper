@@ -75,6 +75,11 @@ async function main() {
   const loops = new Loops(db);
   const cards = new Cards(pgPool, events);
   const sessions = new Sessions(db, paths, settings, workspaces, folders, sessionEvents);
+  // A settings write reaches every session nothing has been said to yet: its
+  // row takes the settings' model (Sessions.followModelSettings — THE rule).
+  settingsEvents.subscribe(() => {
+    sessions.followModelSettings().catch((e) => log.warn({ err: (e as Error).message }, 'newborn sessions could not follow the model settings'));
+  });
   const commands = new Commands(db);
   const presets = new Presets(db);
   const helperUsage = new HelperUsage(db);

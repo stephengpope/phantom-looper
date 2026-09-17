@@ -6,7 +6,7 @@ One field on the window store, `overlay`, says which screen is on top of
 the chat. An overlay is `{ size, name, render, onDismiss?, poll? }`
 (window.ts). `size: 'full'` takes the whole column (every menu, the board,
 a card's editor); `size: 'third'` takes the bottom third with the
-conversation still above it (/tasks, the duplicate's model pick). One more
+conversation still above it (/tasks). One more
 field, `dialog`, is THE yes/no — it sits at the bottom of the column on top
 of whatever is there, and the screen under it stops taking keys
 (components/useInput.ts). Every overlay and the dialog are built in

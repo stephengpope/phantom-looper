@@ -35,7 +35,6 @@ import { sendMessageTool } from './sendMessageTool.js';
 import { transcribeVoice, speakVoice, splitForSpeech, SPEAK_MAX_CHARS, type Transcription } from './deepgram.js';
 import { writeAttachment, composeMessage, MAX_INBOUND_BYTES, type StoredAttachment } from './attachments.js';
 import { runAssistantTurn, type AssistantDeps } from './assistant.js';
-import { agentModelConfig } from '../../core/llm/agentConfig.js';
 import { Approvals, type Ask } from './approvals.js';
 import { UpgradeChecker } from './upgrade.js';
 import type { TelegramState, SentOrigin, TelegramAccountRow, TelegramMode } from './store.js';
@@ -487,9 +486,7 @@ export class TelegramEngine {
       }, abort.signal, conv.getTranscript());
       replyText = result.text;
       // Record this turn's token usage on the session row.
-      const model = (() => { try { return agentModelConfig(values, 'assistant'); } catch { return undefined; } })();
-      await this.deps.sessions.addUsage(sessionId, result.usage,
-        model ? { provider: model.provider, model: model.model } : undefined).catch(
+      await this.deps.sessions.addUsage(sessionId, result.usage).catch(
         (e) => log.warn({ err: errStr(e) }, 'assistant session usage update failed'));
       // Long chat? Summarize it in the background — turns never wait on it.
       conv.kickCompaction(result.usage.input);
