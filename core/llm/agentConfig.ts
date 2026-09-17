@@ -88,14 +88,17 @@ export function modelConfigFrom(cfg: SettingsValues, modelOverride?: string | nu
   };
 }
 
-/** The coding agent from resolved settings. null/unset max_steps = unlimited
- *  (the turn ends when the agent is done); a positive number is a cap.
- *  `onRetry` receives each failed model attempt as it happens (withRetry). */
+/** The coding agent from resolved settings, for one session. null/unset
+ *  max_steps = unlimited (the turn ends when the agent is done); a positive
+ *  number is a cap. `onRetry` receives each failed model attempt as it
+ *  happens (withRetry). Every call the agent makes is billed to `sessionId`. */
 export function buildCodingAgent(
-  cfg: SettingsValues, tools: Record<string, Tool>, instructions?: string,
-  modelFetch?: typeof fetch, onRetry?: (note: string) => void,
+  cfg: SettingsValues, tools: Record<string, Tool>, sessionId: string,
+  o: { instructions?: string; modelFetch?: typeof fetch; onRetry?: (note: string) => void } = {},
 ): { agent: Agent; summary: { provider: string; model: string; reasoning: string; maxSteps: number | null } } {
+  const { instructions, modelFetch, onRetry } = o;
   const model = modelConfigFrom(cfg);
+  model.usage = { kind: 'coding', sessionId };
   if (modelFetch) model.fetch = modelFetch;
   if (onRetry) model.onRetry = onRetry;
   const n = cfg.max_steps == null ? null : Number(cfg.max_steps);

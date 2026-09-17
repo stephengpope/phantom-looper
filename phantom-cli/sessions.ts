@@ -559,9 +559,6 @@ export class SessionStore {
     e.tokens = NO_TOKENS;
     const ac = new AbortController();
     e.abort = ac;
-    // Token context on the transcript — spliceTurn passes it to the module-level recorder.
-    e.transcript.tokenContext = { sessionId: e.id, kind: 'coding',
-      provider: e.summary.provider, model: e.summary.model };
     // Step-level transcript save — push the local file to the server per step.
     if (this.stepSave) {
       const save = this.stepSave;

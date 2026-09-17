@@ -192,15 +192,9 @@ export function App({
   // in the initialiser, like the session store it replaces, so the banner is
   // on screen for the first frame. This component is a view over it.
   const [windowStore] = useState(() => {
-    // Every agent step records tokens automatically via the server API.
-    setTokenRecorder((usage, responseId, ctx) => {
-      void api('POST', '/token-usage', {
-        session_id: ctx?.sessionId, kind: ctx?.kind ?? 'coding',
-        provider: ctx?.provider, model: ctx?.model, response_id: responseId,
-        input: usage.input, output: usage.output,
-        cache_read: usage.cache_read, cache_write: usage.cache_write,
-      }).catch(() => {});
-    });
+    // Every model call this process makes records here (core languageModel);
+    // the server's TokenUsage is the one writer, so the record goes to it.
+    setTokenRecorder((r) => { void api('POST', '/token-usage', r).catch(quiet('record token usage')); });
     return new WindowStore({
       api, stream, newTools, configPath, initial, boot,
       makeAgent, makeTranscript, run, makeVoice, onSession, exit,

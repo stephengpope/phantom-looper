@@ -39,9 +39,6 @@ export interface TranscriptHeader {
 
 export class Transcript {
   private started: boolean;
-  /** Context for automatic token recording — set before a turn, read by
-   *  spliceTurn's module-level recorder. */
-  tokenContext?: import('./createAgent.js').TokenContext;
   /** Step-level transcript save — set before a turn, called by spliceTurn. */
   onStepSaved?: () => void;
 
@@ -222,10 +219,6 @@ export interface StepRecord {
    *  runTurn writes `{type:'interrupted'}` after a step it recorded because
    *  esc cut it before the SDK could. */
   appendEvent?(event: Record<string, unknown> & { type: string }): void;
-  /** Context for automatic token recording — session id, kind (coding /
-   *  supervisor / assistant), provider and model. Set once when building the
-   *  record; spliceTurn passes it to the module-level token recorder. */
-  tokenContext?: import('./createAgent.js').TokenContext;
   /** Called after each step to save the transcript to the server. Best-effort
    *  — a failure never blocks the turn. Set by the consumer. */
   onStepSaved?: () => void;
@@ -259,36 +252,14 @@ export function memoryRecorder(startAt: number):
 }
 
 /** A transcript without its usage lines — what a duplicate seats: the copy's
- *  token totals are its own spend from birth, and the row's cache is summed
- *  from this text, so the lines must not travel. Same line-tolerant reading
- *  as sumUsageFromJsonl: anything unparsable is kept. */
+ *  spend is its own from birth (token_usage rows are per session), so the
+ *  lines must not travel. Line-tolerant: anything unparsable is kept. */
 export function stripUsageFromJsonl(text: string): string {
   return text.split('\n').filter((line) => {
     if (!line.includes('"usage"')) return true;
     try { return (JSON.parse(line) as { type?: string }).type !== 'usage'; }
     catch { return true; }
   }).join('\n');
-}
-
-/** Sum every usage line in a transcript's raw JSONL — the on-demand totals
- *  the API serves. Same line-tolerant reading as everything else here. */
-export function sumUsageFromJsonl(text: string): UsageTotals {
-  const t: UsageTotals = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
-  for (const line of text.split('\n')) {
-    // Cheap gate before the parse: a transcript is mostly fat message lines
-    // (~17MB observed), and every usage line literally contains "usage", so a
-    // substring scan skips them without building an object per line. A rare
-    // false positive (a tool result mentioning usage) parses and falls through.
-    if (!line.includes('"usage"')) continue;
-    let e: { type?: string; input?: unknown; output?: unknown; cache_read?: unknown; cache_write?: unknown };
-    try { e = JSON.parse(line); } catch { continue; }
-    if (e.type !== 'usage') continue;
-    for (const k of ['input', 'output', 'cache_read', 'cache_write'] as const) {
-      const n = e[k];
-      if (typeof n === 'number' && Number.isFinite(n)) t[k] += n;
-    }
-  }
-  return t;
 }
 
 /** Every tool call needs its result or the next request is rejected (Anthropic

@@ -13,7 +13,6 @@ import { webTools } from '../../core/llm/tools/web.js';
 import { secretTools } from '../../core/llm/tools/secrets.js';
 import { kanbanReadTool } from '../../core/llm/tools/kanban.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
-import type { TokenUsage } from '../tokenUsage.js';
 import { usageEvent, type StepRecord } from '../../core/llm/transcript.js';
 import type { BackdoorQueue } from '../api/backdoor.js';
 
@@ -44,7 +43,6 @@ export interface TurnDeps {
    *  messages below, restored if the turn fails before they are saved. */
   backdoor?: BackdoorQueue;
   /** The unified token_usage table writer — per-step recording. */
-  tokenUsage?: TokenUsage;
 }
 
 /** The resolved settings as plain values — the same rows every client reads,
@@ -86,7 +84,8 @@ export async function runCodingTurn(
   const pinned = pinnedCfg(values, sessionPin(
     opened.session as { provider?: string | null; model?: string | null; baseUrl?: string | null }));
   const model = modelConfigFrom(pinned);
-  const { agent } = buildCodingAgent(pinned, tools, opened.instructions, deps.modelFetch, deps.onRetry);
+  const { agent } = buildCodingAgent(pinned, tools, opened.session.id,
+    { instructions: opened.instructions, modelFetch: deps.modelFetch, onRetry: deps.onRetry });
   // Pending backdoor messages ride this turn as their own user messages,
   // AHEAD of the one that started it — they are the older facts. They are
   // restored if the turn dies before they are saved: a failed turn must not
@@ -106,8 +105,6 @@ export async function runCodingTurn(
   // collect here for the turn-end save — the WHOLE turn, where the SDK's
   // turn-end response carries only the final step.
   const { record, events: turnEvents, messages: turnMessages } = memoryRecorder(messages.length);
-  record.tokenContext = { sessionId: opened.session.id, kind: 'coding',
-    provider: model.provider, model: model.model };
   const feed = deps.sessionEvents;
   const id = opened.session.id;
   let text = '';

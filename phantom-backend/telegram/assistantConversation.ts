@@ -7,9 +7,7 @@
 import path from 'node:path';
 import type { ModelMessage } from 'ai';
 import type { Sessions } from '../sessions.js';
-import type { HelperUsage } from '../helperUsage.js';
-import type { TokenUsage } from '../tokenUsage.js';
-import { helperCall } from '../helperCall.js';
+import { helperCall } from '../../core/llm/helperCall.js';
 import { agentModelConfig } from '../../core/llm/agentConfig.js';
 import { assistantInstructions } from '../../core/llm/agents/assistant.js';
 import { loadTranscriptFile, newestTranscriptFile, Transcript, transcriptStamp } from '../../core/llm/transcript.js';
@@ -24,8 +22,6 @@ export interface AssistantConversationDeps {
   /** The data root — the transcript dir lives under `<root>/assistant/`. */
   dataRoot: string;
   sessions: Sessions;
-  helperUsage: HelperUsage;
-  tokenUsage?: TokenUsage;
 }
 
 /** Who to notify about compaction events — set before each turn. */
@@ -36,8 +32,8 @@ export class AssistantConversation {
   readonly history: ModelMessage[] = [];
   private transcript: Transcript | null = null;
   private loaded = false;
-  /** Session row for token tracking — created on first turn. */
-  private sessionId: string | null = null;
+  /** The assistant's session row — what its calls are billed to. */
+  sessionId: string | null = null;
   private compactionLock = new CompactionLock();
 
   /** Set by the engine before each turn so compaction can read the model config
@@ -86,11 +82,17 @@ export class AssistantConversation {
 
   // ── session row ──────────────────────────────────────────────────────────
 
-  /** Ensure a session row exists for token tracking. Created on first turn. */
-  async ensureSession(workspaceId: string | null, folderId?: string | null): Promise<string> {
-    if (this.sessionId) return this.sessionId;
+  /** The assistant's session row, pointed at what the user is looking at —
+   *  created the first time, re-pointed (workspace + folder) every turn
+   *  after, since the active session moves between turns. Called BEFORE the
+   *  turn's agent is built, so the model already knows what to bill. */
+  async ensureSession(workspaceId: string | null, activeSessionId?: string | null): Promise<string> {
     if (!workspaceId) throw new Error('no active workspace — /workspaces to pick one');
-    const row = await this.deps.sessions.createAssistant(workspaceId, folderId);
+    if (this.sessionId) {
+      await this.deps.sessions.follow(this.sessionId, workspaceId, activeSessionId);
+      return this.sessionId;
+    }
+    const row = await this.deps.sessions.createAssistant(workspaceId, activeSessionId);
     this.sessionId = row.id;
     return row.id;
   }
@@ -140,7 +142,7 @@ export class AssistantConversation {
       summarizePct,
       call: async (system, prompt) => {
         const r = await helperCall({
-          usage: this.deps.helperUsage, config: model, kind: 'compaction',
+          config: model, usage: { kind: 'compaction', sessionId: this.sessionId },
           system, prompt, ...(maxTokensOpt ? { maxTokens: maxTokensOpt } : {}),
         });
         return r.text;

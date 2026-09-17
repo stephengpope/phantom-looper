@@ -17,16 +17,17 @@ export type Cfg = Record<string, ConfigValue>;
 
 export interface AgentSummary { provider: string; model: string; reasoning: string; maxSteps: number | null }
 
-/** The coding agent. `instructions` is the session's FROZEN prompt (from its
+/** The coding agent for one session — every call it makes is billed to
+ *  `sessionId`. `instructions` is the session's FROZEN prompt (from its
  *  transcript header); absent — a brand-new session — a fresh stack is
  *  assembled, and the caller stores what `codingInstructions()` returned.
  *  `onRetry` receives each failed model attempt as it happens — App notes it
  *  into that session's conversation (the retry loop itself lives in core's
  *  languageModel; no caller wires its own). */
-export function buildAgent(tools: Record<string, Tool>, cfg: Cfg, instructions?: string,
+export function buildAgent(tools: Record<string, Tool>, cfg: Cfg, sessionId: string, instructions?: string,
   onRetry?: (note: string) => void):
 { agent: Agent; summary: AgentSummary } {
-  return buildCodingAgent(cfg, tools, instructions, undefined, onRetry);
+  return buildCodingAgent(cfg, tools, sessionId, { instructions, onRetry });
 }
 
 export { codingInstructions };
@@ -34,10 +35,12 @@ export { codingInstructions };
 /** The Assistant: its own provider/model/base_url/reasoning/max_steps, each
  *  cascading to the coding agent's while the provider matches (core
  *  agentModelConfig). Reasoning defaults to 'none' in the agent builder when
- *  no override is set. */
-export function buildAssistantAgent(tools: Record<string, Tool>, cfg: Cfg):
+ *  no override is set. Its calls are billed to `sessionId` — the assistant's
+ *  own session row, which exists before this is built. */
+export function buildAssistantAgent(tools: Record<string, Tool>, cfg: Cfg, sessionId: string | null):
 { agent: Agent; summary: AgentSummary } {
   const model = agentModelConfig(cfg, 'assistant');
+  model.usage = { kind: 'assistant', sessionId };
   const maxSteps = agentMaxSteps(cfg, 'assistant');
   return {
     agent: assistantAgent(model, tools, { maxSteps }),

@@ -9,15 +9,13 @@
 // a half-set assistant pair falls back silently to the coding agent's. Never throws — on any failure the old name (or null) stands (the
 // commitMessage.ts pattern).
 import { isProvider, type ModelConfig } from '../core/llm/createAgent.js';
-import { helperCall } from './helperCall.js';
+import { helperCall } from '../core/llm/helperCall.js';
 import { cascade } from '../core/llm/agentConfig.js';
 import { titleRequest, type TitleContext } from '../core/llm/prompts/helpers/wiring.js';
 import { parseTranscript } from '../core/llm/transcript.js';
 import { credentialForProvider, type Settings } from './settings.js';
 import type { Sessions } from './sessions.js';
 import type { Loops } from './loops.js';
-import type { HelperUsage } from './helperUsage.js';
-import type { TokenUsage } from './tokenUsage.js';
 import { logger, errStr } from './log.js';
 
 const log = logger('session-title');
@@ -124,7 +122,7 @@ async function titleConfig(settings: Settings): Promise<ModelConfig | null> {
  *  nothing was written. Never throws. `modelFetch` is the test seam
  *  (createAgent's own), threaded from AppCtx like the turn route's. */
 export async function nameSession(
-  deps: { settings: Settings; sessions: Sessions; loops: Loops; helperUsage: HelperUsage; tokenUsage?: TokenUsage },
+  deps: { settings: Settings; sessions: Sessions; loops: Loops },
   sessionId: string, context: TitleContext, modelFetch?: typeof fetch,
 ): Promise<string | null> {
   try {
@@ -142,7 +140,7 @@ export async function nameSession(
     for (let attempt = 1; attempt <= TRIES; attempt++) {
       try {
         const { text } = await helperCall({
-          usage: deps.helperUsage, config, kind: 'title', sessionId, system, prompt,
+          config, usage: { kind: 'title', sessionId }, system, prompt,
         });
         const title = cleanTitle(text);
         if (title) {

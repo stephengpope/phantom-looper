@@ -15,11 +15,9 @@
 // spends a model when nothing conflicts.
 import type { ModelConfig } from '../../core/llm/createAgent.js';
 import { commitMessagePrompt } from '../../core/llm/prompts/autoPush/wiring.js';
-import { helperCall } from '../helperCall.js';
+import { helperCall } from '../../core/llm/helperCall.js';
 import { git } from './git.js';
 import { logger } from '../log.js';
-import type { HelperUsage } from '../helperUsage.js';
-import type { TokenUsage } from '../tokenUsage.js';
 
 const log = logger('auto-push');
 
@@ -36,8 +34,7 @@ const TRIES = 3;
  *  caller has staged everything but rewritten nothing). Throws when no real
  *  message can be produced: the sync's answer is to fail, not to guess. */
 export async function commitMessageFor(
-  dir: string, config: ModelConfig | null, card = '', base?: string,
-  usage?: HelperUsage, sessionId?: string,
+  dir: string, config: ModelConfig | null, card = '', base?: string, sessionId?: string,
 ): Promise<string> {
   if (!config) {
     throw new Error('no model configured to write the commit message — set one on /model (phantom-cli), or PATCH /settings {provider, model}');
@@ -50,7 +47,7 @@ export async function commitMessageFor(
   for (let attempt = 1; attempt <= TRIES; attempt++) {
     try {
       const { text } = await helperCall({
-        usage, config, kind: 'commit_message', sessionId, prompt,
+        config, usage: { kind: 'commit_message', sessionId }, prompt,
       });
       const msg = text.trim();
       if (msg && msg.length <= 2000) return msg;

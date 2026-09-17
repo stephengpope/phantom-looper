@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import type { SessionRow } from '../../db/schema.js';
+import type { TokenRecord } from '../../tokenUsage.js';
 import { SessionError, heldByOther, assertDuplicable, conversationOnly } from '../../sessions.js';
 import { GIT_CLIENT_ID } from '../../git/git.js';
 import { repoDir, sessionDir } from '../../pool/paths.js';
@@ -856,65 +857,71 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       }
     });
 
-  // ---- assistant session management ----------------------------------------
-  // The voice assistant (TUI) creates and updates assistant sessions through
-  // these two routes. The Telegram assistant uses the same functions directly
-  // (it lives in the server process).
+  // ---- the assistant's session -----------------------------------------------
+  // The voice assistant (TUI) opens its session through this route; the
+  // Telegram assistant calls createAssistant directly (it lives in the
+  // server process).
 
-  app.post<{ Body: { workspace_id: string; folder_id?: string | null } }>(
+  const target = { type: 'object', required: ['workspace_id'], properties: {
+    workspace_id: { type: 'string' },
+    session_id: { type: ['string', 'null'], description: 'the session on screen — the assistant reads its files' },
+  } } as const;
+
+  app.post<{ Body: { workspace_id: string; session_id?: string | null } }>(
     '/sessions/assistant', { schema: { ...TAG,
       summary: 'Create an assistant session',
-      description: 'Creates a conversation-only session for the assistant, tracked for token usage.',
-      body: { type: 'object', required: ['workspace_id'], properties: {
-        workspace_id: { type: 'string' },
-        folder_id: { type: ['string', 'null'] },
-      } } } },
+      description: 'Creates a conversation-only session for the assistant: no checkout of its own, its ' +
+        'folder is the on-screen session\'s. Its model calls are billed to it.',
+      body: target } },
     async (req) => {
-      const row = await ctx.sessions.createAssistant(req.body.workspace_id, req.body.folder_id);
+      const row = await ctx.sessions.createAssistant(req.body.workspace_id, req.body.session_id);
       return ok({ id: row.id });
     });
 
-  app.post<{ Params: { id: string }; Body: { usage: { input: number; output: number; cache_read: number; cache_write: number } } }>(
-    '/sessions/:id/assistant-usage', { schema: { ...TAG,
-      summary: 'Add token usage to an assistant session',
-      description: 'Increments the session row\'s token totals by the given amounts.',
-      params: idParam,
-      body: { type: 'object', required: ['usage'], properties: {
-        usage: { type: 'object', required: ['input', 'output', 'cache_read', 'cache_write'], properties: {
-          input: { type: 'number' }, output: { type: 'number' },
-          cache_read: { type: 'number' }, cache_write: { type: 'number' },
-        } },
-      } } } },
+  app.post<{ Params: { id: string }; Body: { workspace_id: string; session_id?: string | null } }>(
+    '/sessions/:id/follow', { schema: { ...TAG,
+      summary: 'Point an assistant session at the session on screen',
+      description: 'Re-points the assistant row\'s workspace and folder at what the user is looking at, ' +
+        'so its tools read that session\'s files. Assistant sessions only.',
+      params: idParam, body: target } },
     async (req, reply) => {
       const s = await ctx.sessions.get(req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (s.agent !== 'assistant') return reply.code(400).send(err('not_assistant', 'this route is for assistant sessions only'));
-      await ctx.sessions.addUsage(s.id, req.body.usage);
+      await ctx.sessions.follow(s.id, req.body.workspace_id, req.body.session_id);
       return ok({});
     });
 
-  // General token usage recording — any caller (CLI compaction, CLI voice
-  // assistant, etc.) that needs to record tokens from outside the server process.
-  app.post<{ Body: { session_id?: string; kind: string; provider?: string; model?: string;
-    response_id?: string; input: number; output: number; cache_read: number; cache_write: number } }>(
+  app.post<{ Params: { id: string } }>(
+    '/sessions/:id/turn-ended', { schema: { ...TAG,
+      summary: 'A turn ended on an assistant session',
+      description: 'Bumps the turn count (leaving 0 freezes the row\'s model) and touches last_used_at.',
+      params: idParam } },
+    async (req, reply) => {
+      const s = await ctx.sessions.get(req.params.id);
+      if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
+      if (s.agent !== 'assistant') return reply.code(400).send(err('not_assistant', 'this route is for assistant sessions only'));
+      await ctx.sessions.turnEnded(s.id);
+      return ok({});
+    });
+
+  // The CLI's door to the token_usage table: core's languageModel records
+  // every call the CLI process makes, and the CLI's recorder posts it here —
+  // the same TokenUsage.record the server's own calls land in.
+  app.post<{ Body: TokenRecord }>(
     '/token-usage', { schema: { ...TAG,
-      summary: 'Record a token usage entry',
-      description: 'Inserts one row into the token_usage table. For CLI-side LLM calls that cannot write to the DB directly.',
-      body: { type: 'object', required: ['kind', 'input', 'output', 'cache_read', 'cache_write'],
+      summary: 'Record one model call',
+      description: 'Inserts one row into token_usage. For model calls made in the CLI process.',
+      body: { type: 'object', required: ['kind', 'provider', 'model', 'input', 'output', 'cache_read', 'cache_write'],
         properties: {
-          session_id: { type: 'string' }, kind: { type: 'string' },
+          sessionId: { type: ['string', 'null'] }, kind: { type: 'string' },
           provider: { type: 'string' }, model: { type: 'string' },
-          response_id: { type: 'string' },
+          responseId: { type: 'string' },
           input: { type: 'number' }, output: { type: 'number' },
           cache_read: { type: 'number' }, cache_write: { type: 'number' },
         } } } },
     async (req) => {
-      const b = req.body;
-      await ctx.tokenUsage.record({
-        sessionId: b.session_id, kind: b.kind as import('../../tokenUsage.js').TokenKind,
-        provider: b.provider, model: b.model, responseId: b.response_id,
-        input: b.input, output: b.output, cacheRead: b.cache_read, cacheWrite: b.cache_write,
-      });
+      await ctx.tokenUsage.record(req.body);
       return ok({});
     });
 }

@@ -17,24 +17,11 @@
 //   'none' becomes 'minimal' (adaptive thinking at effort "low") for that
 //   family and stays 'none' (no thinking at all) for every other model —
 //   on haiku-4-5, 'minimal' would switch thinking ON.
-import { ToolLoopAgent, isStepCount, type LanguageModel, type ModelMessage, type SystemModelMessage, type Tool } from 'ai';
-import { usageEvent, type StepRecord } from './transcript.js';
+import { ToolLoopAgent, isStepCount, wrapLanguageModel, type LanguageModel, type LanguageModelMiddleware,
+  type ModelMessage, type SystemModelMessage, type Tool } from 'ai';
+import type { LanguageModelV4Usage } from '@ai-sdk/provider';
+import type { StepRecord } from './transcript.js';
 import type { NudgeQueue } from './nudgeQueue.js';
-
-// ── automatic token recording ─────────────────────────────────────────────
-// Set once at boot. Every agent step records here automatically — no caller
-// involvement. The server sets a direct DB writer; the CLI sets an API caller.
-// When null (tests, before boot), steps silently skip recording.
-// `context` carries the session/kind/provider/model from the StepRecord — the
-// caller sets it once when building the record, spliceTurn passes it through.
-export interface TokenContext {
-  sessionId?: string; kind?: string; provider?: string; model?: string;
-}
-type TokenRecorderFn = (usage: { input: number; output: number; cache_read: number; cache_write: number },
-  responseId: string | undefined, context?: TokenContext) => void;
-let _tokenRecorder: TokenRecorderFn | null = null;
-/** Set the module-level token recorder. Called once at server/CLI boot. */
-export function setTokenRecorder(fn: TokenRecorderFn): void { _tokenRecorder = fn; }
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
@@ -51,11 +38,69 @@ export const PROVIDERS = ['anthropic', 'openai', 'openai-codex', 'google', 'deep
 export type Provider = typeof PROVIDERS[number];
 export type Reasoning = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
+// ── token recording ───────────────────────────────────────────────────────
+// Every model handle in the tree is built by `languageModel()` below, and
+// every one is wrapped so that every call — an agent step, a one-shot
+// generateText, anything — records its usage here. There is no way to call
+// a model without going through this, so there is nothing to forget.
+// The sink is set once at boot: the server writes the token_usage table
+// directly (TokenUsage.record); the CLI posts to the server, which does the
+// same. Null (tests, before boot) = calls run, nothing is recorded.
+
+/** What a call is billed to — the session it serves and what kind of work. */
+export type TokenKind = 'coding' | 'supervisor' | 'assistant'
+  | 'title' | 'commit_message' | 'compaction' | 'session_digest';
+export interface TokenUsageContext { kind: TokenKind; sessionId?: string | null }
+
+export interface TokenRecord extends TokenUsageContext {
+  provider: string; model: string; responseId?: string;
+  input: number; output: number; cache_read: number; cache_write: number;
+}
+let _tokenRecorder: ((r: TokenRecord) => void) | null = null;
+/** The one sink. Called once at server / CLI boot. */
+export function setTokenRecorder(fn: (r: TokenRecord) => void): void { _tokenRecorder = fn; }
+
+/** The middleware that does the recording — one per model handle. Usage is
+ *  read where the SDK reads it: the generate result, or the stream's `finish`
+ *  part; the response id from the result / the `response-metadata` part. */
+function recordUsage(c: ModelConfig): LanguageModelMiddleware {
+  const emit = (u: LanguageModelV4Usage, responseId?: string) => {
+    if (!_tokenRecorder || !c.usage) return;
+    _tokenRecorder({
+      ...c.usage, provider: c.provider, model: c.model, responseId,
+      input: u.inputTokens.total ?? 0, output: u.outputTokens.total ?? 0,
+      cache_read: u.inputTokens.cacheRead ?? 0, cache_write: u.inputTokens.cacheWrite ?? 0,
+    });
+  };
+  return {
+    specificationVersion: 'v4',
+    wrapGenerate: async ({ doGenerate }) => {
+      const r = await doGenerate();
+      emit(r.usage, r.response?.id);
+      return r;
+    },
+    wrapStream: async ({ doStream }) => {
+      const r = await doStream();
+      let responseId: string | undefined;
+      return { ...r, stream: r.stream.pipeThrough(new TransformStream({
+        transform(part, controller) {
+          if (part.type === 'response-metadata') responseId = part.id ?? responseId;
+          else if (part.type === 'finish') emit(part.usage, responseId);
+          controller.enqueue(part);
+        },
+      })) };
+    },
+  };
+}
+
 export interface ModelConfig {
   provider: Provider;
   model: string;
   baseUrl?: string | null;
   apiKey?: string | null;
+  /** What this model's calls are billed to. Absent = the calls are not
+   *  recorded (tests, a probe). Every production caller sets it. */
+  usage?: TokenUsageContext;
   /** The portable AI SDK knob; each provider maps it to its own setting. Omit
    *  to leave the provider's default. */
   reasoning?: Reasoning;
@@ -149,7 +194,7 @@ function anthropicProvider(c: ModelConfig) {
  *  When ~/.codex/auth.json is missing or has no valid token, the library throws
  *  on the first request. We catch that in a fetch wrapper and rethrow with a
  *  message that names the fix (`npx @openai/codex login`). */
-function openaiCodexModel(c: ModelConfig): LanguageModel {
+function openaiCodexModel(c: ModelConfig): Exclude<LanguageModel, string> {
   const creds = openaiCredentials();
   const transport = createOpenAIOAuthTransport({
     auth: () => creds.getSession().catch(() => {
@@ -197,6 +242,10 @@ export function languageModel(cfg: ModelConfig): LanguageModel {
   // default provider — see phantom-backend/settings.ts.
   if (!c.provider) return unsetModel(NO_PROVIDER);
   if (!c.model) return unsetModel(`no model set for ${c.provider} — ${PICK_MODEL}`);
+  return wrapLanguageModel({ model: providerModel(c), middleware: recordUsage(c) });
+}
+
+function providerModel(c: ModelConfig): Exclude<LanguageModel, string> {
   switch (c.provider) {
     case 'anthropic': return anthropicProvider(c)(c.model);
     case 'openai': return createOpenAI({ apiKey: c.apiKey ?? undefined, baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
@@ -410,14 +459,6 @@ function spliceTurn<T extends { onStepEnd?: (step: never) => unknown }>(
       onStepEnd: (step: { response: { messages: unknown[]; id?: string }; usage?: unknown }) => {
         record.appendStep(step.response.messages as ModelMessage[],
           step.usage as Parameters<StepRecord['appendStep']>[1]);
-        // Automatic token recording — fires for every agent step in the system.
-        if (_tokenRecorder) {
-          const ev = usageEvent(step.usage as Parameters<StepRecord['appendStep']>[1]);
-          _tokenRecorder(
-            { input: ev.input as number, output: ev.output as number,
-              cache_read: ev.cache_read as number, cache_write: ev.cache_write as number },
-            step.response.id, record.tokenContext);
-        }
         // Step-level transcript save — best-effort, never blocks.
         record.onStepSaved?.();
         return prior?.(step);

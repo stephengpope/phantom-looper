@@ -123,15 +123,6 @@ export const sessions = phantomLooper.table('sessions', {
   transcript: text('transcript'),
   lastUserMessage: text('last_user_message'),
   transcriptUpdatedAt: timestamp('transcript_updated_at', { withTimezone: true }),
-  // CACHE of the transcript's usage-line sum (core/llm/transcript.ts),
-  // written by the transcript save in the same statement as the text it sums
-  // — never stale by construction. Null only on rows saved before that write;
-  // the token-usage route backfills those once.
-  tokensInput: bigint('tokens_input', { mode: 'number' }),
-  tokensOutput: bigint('tokens_output', { mode: 'number' }),
-  tokensCacheRead: bigint('tokens_cache_read', { mode: 'number' }),
-  tokensCacheWrite: bigint('tokens_cache_write', { mode: 'number' }),
-  tokensAsOf: timestamp('tokens_as_of', { withTimezone: true }),
   // When this session was last included in the idle digest notification.
   // Null = never notified. A session is eligible when transcriptUpdatedAt >
   // digestNotifiedAt AND it has been idle > the configured threshold. (021)
@@ -212,27 +203,9 @@ export const presets = phantomLooper.table('presets', {
 
 export type PresetRow = typeof presets.$inferSelect;
 
-// Helper LLM calls (migration 020): one-shot generateText calls that are not
-// part of any agent turn — session titles, commit messages. Token usage here
-// completes the picture: coding + assistant sessions + these = 100% of spend.
-export const helperLlmUsage = phantomLooper.table('helper_llm_usage', {
-  id: text('id').primaryKey(),
-  kind: text('kind').notNull(),
-  sessionId: text('session_id'),
-  provider: text('provider').notNull(),
-  model: text('model').notNull(),
-  systemPrompt: text('system_prompt'),
-  userPrompt: text('user_prompt'),
-  tokensInput: bigint('tokens_input', { mode: 'number' }).notNull().default(0),
-  tokensOutput: bigint('tokens_output', { mode: 'number' }).notNull().default(0),
-  tokensCacheRead: bigint('tokens_cache_read', { mode: 'number' }).notNull().default(0),
-  tokensCacheWrite: bigint('tokens_cache_write', { mode: 'number' }).notNull().default(0),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
-
-// Unified token usage (migration 022): one row per LLM call — agent steps
-// AND helper calls alike. Replaces both the session row's tokens_* cache and
-// the helper_llm_usage table as the single source of truth for all spend.
+// Token usage (migrations 022, 023): one row per model call — agent steps
+// and one-shot helper calls alike. The one store for all spend; TokenUsage
+// (tokenUsage.ts) is its one writer.
 export const tokenUsage = phantomLooper.table('token_usage', {
   id: text('id').primaryKey(),
   sessionId: text('session_id'),

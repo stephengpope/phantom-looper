@@ -49,9 +49,7 @@ import {
 import { runCodingTurn, drain, settingsValues, sumTokens, sumInputTokens } from './turn.js';
 import { shouldCompact, resolveContextWindow, resolveCompactSetting, CompactionLock, compact, getStrategy } from '../../core/llm/compaction.js';
 import { contextWindowFor } from '../models.js';
-import { helperCall } from '../helperCall.js';
-import type { HelperUsage } from '../helperUsage.js';
-import type { TokenUsage } from '../tokenUsage.js';
+import { helperCall } from '../../core/llm/helperCall.js';
 import { supervisorAgent, supervisorInstructions } from '../../core/llm/agents/supervisor.js';
 import { canTurn, unsentKickoff, nextStep, needsFreshSession, heldBy, LOOP_COLUMNS, type CardRow } from './logic.js';
 import { injectFetch } from './injectFetch.js';
@@ -70,8 +68,6 @@ export interface LooperDeps {
   loops: Loops;
   cards: Cards;
   settings: Settings;
-  helperUsage: HelperUsage;
-  tokenUsage?: TokenUsage;
   app: FastifyInstance;
   apiKey: string;
   /** The board's event bus (api/boardEvents.ts): the engine's card writes go
@@ -372,6 +368,7 @@ export class LooperEngine {
             baseUrl?: string | null }));
         const supMaxSteps = agentMaxSteps(cfg, 'supervisor');
         model.fetch = this.deps.modelFetch;
+        model.usage = { kind: 'supervisor', sessionId: supOpened.session.id };
         model.onRetry = (t) => log.warn({ card: card.seq, agent: 'supervisor' }, t);
         const tools = {
           ...await phantomTools({ baseUrl: BASE, apiKey, sessionId: opened.session.id,
@@ -390,8 +387,6 @@ export class LooperEngine {
         // step seam collects the WHOLE turn (tool calls included — the step
         // rule reads terminal turns off this record).
         const { record, events, messages: turnMessages } = memoryRecorder(messages.length);
-        record.tokenContext = { sessionId: supOpened!.session.id, kind: 'supervisor',
-          provider: model.provider, model: model.model };
         // Streamed, not generated, for one reason: a supervisor session is
         // openable read-only from /resume, and the review half of a run
         // should be watchable as it happens like the coding half. The record
@@ -479,7 +474,7 @@ export class LooperEngine {
       summarizePct,
       call: async (system, prompt) => {
         const r = await helperCall({
-          usage: this.deps.helperUsage, config: model, kind: 'compaction', sessionId,
+          config: model, usage: { kind: 'compaction', sessionId },
           system, prompt, ...(maxTokens != null ? { maxTokens: Number(maxTokens) } : {}),
         });
         return r.text;

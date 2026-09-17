@@ -20,10 +20,11 @@ import { BoardStore, type Card, type Stream } from './board.js';
 import { VoiceClient, sidecarEnv, codingKanbanTool, screenModeTools,
   type KanbanArgs, type ScreenModeHandler } from './voice.js';
 import { Transcript, adoptServerCopy, syncTranscriptUp, stepSaveUp, type TranscriptHeader } from './session.js';
-import { parseTranscript } from '../core/llm/transcript.js';
+import { parseTranscript, type UsageTotals } from '../core/llm/transcript.js';
 import { agentModelConfig, pinnedCfg, sessionPin, type ModelPin } from '../core/llm/agentConfig.js';
 import { contextWindowFor } from '../phantom-backend/models.js';
 import { compact, getStrategy, CompactionLock, resolveCompactSetting, resolveContextWindow } from '../core/llm/compaction.js';
+import { helperCall } from '../core/llm/helperCall.js';
 
 /** Build the compaction settings from a config read for setCompaction. */
 function compactionSettings(cfg: Record<string, ConfigValue>) {
@@ -456,21 +457,13 @@ export class WindowStore {
     this.settingsFeed?.start();
     this.workspaces = new WorkspaceDirectory(this.api);
     this.voice = (opts.makeVoice ?? (() => new VoiceClient(undefined, undefined, opts.run ?? runTurn)))();
-    // Wire session tracking: the voice client creates and updates assistant
-    // session rows through this window's API connection.
-    this.voice.sessionOps = {
-      create: async () => {
-        const active = this.sessions.active();
-        const workspaceId = active?.workspaceId;
-        if (!workspaceId) throw new Error('no workspace');
-        const r = await this.api('POST', '/sessions/assistant', {
-          workspace_id: workspaceId,
-        }) as { id: string };
-        return r.id;
-      },
-      addUsage: async (sessionId, usage) => {
-        await this.api('POST', `/sessions/${sessionId}/assistant-usage`, { usage });
-      },
+    // A turn ended on the assistant's session: the row's turn count and
+    // last used move, as they do for a coding session's save.
+    this.voice.onTurnEnded = () => {
+      const id = this.voice.sessionId;
+      if (!id) return;
+      void this.api('POST', `/sessions/${id}/turn-ended`, {})
+        .catch(quiet('update the assistant session'));
     };
     this.splash = opts.initial ? opts.initial.resumed.length === 0 : !opts.boot?.resumeId;
     // Defaults only until readChrome's first server read lands.
@@ -616,9 +609,9 @@ export class WindowStore {
   }
 
   private buildFor(tools: Record<string, Tool>, cfg: Record<string, ConfigValue>,
-    instructions: string | undefined, noteInto: string) {
+    instructions: string | undefined, sessionId: string) {
     const make = this.opts.makeAgent ?? buildAgent;
-    return make(tools, cfg, instructions, (t) => this.sessions.note(noteInto, t));
+    return make(tools, cfg, sessionId, instructions, (t) => this.sessions.note(sessionId, t));
   }
 
   private async readSessionPin(id: string): Promise<ModelPin | null> {
@@ -764,7 +757,7 @@ export class WindowStore {
     const tools = { ...initial.tools, ...codingKanbanTool(this.codingKanbanHandler(initial.workspaceId)),
       ...screenModeTools(this.screenOps(initial.sessionId)) };
     const make = this.opts.makeAgent ?? buildAgent;
-    const { agent, summary } = make(tools, REMOTE_DEFAULTS, instructions,
+    const { agent, summary } = make(tools, REMOTE_DEFAULTS, initial.sessionId, instructions,
       (t) => s.note(initial.sessionId, t));
     const transcript = (this.opts.makeTranscript ?? ((h: TranscriptHeader) => new Transcript(h)))({
       type: 'session', session_id: initial.sessionId, workspace: initial.workspaceId,
@@ -782,6 +775,22 @@ export class WindowStore {
       ],
     });
     this.watchSession(initial.sessionId, s);
+  }
+
+  /** A session's lifetime token totals — the token_usage table's sums, the
+   *  toolbar's numbers. Zeros when the server cannot answer: the toolbar
+   *  shows what it has, and the next reseat corrects it. */
+  private async sessionUsage(id: string): Promise<UsageTotals> {
+    try {
+      const u = await this.api('GET', `/sessions/${id}/token-usage`) as
+        { input?: number; output?: number; cache_read?: number; cache_write?: number };
+      // Coerce: PostgreSQL bigint sums arrive as strings through JSON.
+      return { input: Number(u.input ?? 0), output: Number(u.output ?? 0),
+        cache_read: Number(u.cache_read ?? 0), cache_write: Number(u.cache_write ?? 0) };
+    } catch (e) {
+      quiet(`read token totals for session ${id}`)(e);
+      return { input: 0, output: 0, cache_read: 0, cache_write: 0 };
+    }
   }
 
   /** Compare the server's transcript stamp with what memory matches; when it
@@ -802,13 +811,7 @@ export class WindowStore {
       void syncTranscriptUp(this.api, id).then((stamp) => this.sessions.setStamp(id, stamp),
         quiet(`upload unsaved steps for session ${id}`));
     }
-    // Token totals from the table — never re-parse the transcript.
-    const usage = await this.api('GET', `/sessions/${id}/token-usage`)
-      .then((r) => { const u = r as { input?: number; output?: number; cache_read?: number; cache_write?: number };
-        // Coerce: PostgreSQL bigint sums arrive as strings through JSON.
-        return { input: Number(u.input ?? 0), output: Number(u.output ?? 0),
-          cache_read: Number(u.cache_read ?? 0), cache_write: Number(u.cache_write ?? 0) }; })
-      .catch(() => undefined);
+    const usage = await this.sessionUsage(id);
     // keepScreen: the feed showed us this whole turn as it happened, so the
     // record brings the history and the stamp and the screen keeps what it
     // drew — richer than a transcript replay, and no repaint to jump through.
@@ -971,8 +974,6 @@ export class WindowStore {
       const row = opened.session as { id: string; branch: string; workspaceId: string;
         name?: string | null; agent?: string | null; card?: number | null; planMode?: boolean; pinned?: boolean;
         provider?: string | null; model?: string | null;
-        tokensInput?: number | null; tokensOutput?: number | null;
-        tokensCacheRead?: number | null; tokensCacheWrite?: number | null;
         skills?: SkillMeta[]; secrets?: SecretIndexEntry[]; agent_git_credentials?: boolean };
       // The server record IS the conversation — unless this machine holds
       // unsaved steps on top of it (a window that died mid-turn); then the
@@ -1042,14 +1043,8 @@ export class WindowStore {
         pin,
         planMode,
         pinned: row.pinned === true,
-        // The toolbar's lifetime token totals: read from the session row's
-        // cached columns (still populated for existing sessions) or default
-        // to zero. The token_usage table is the source of truth; these seed
-        // the in-memory accumulator until the first reseat corrects it.
-        usage: {
-          input: Number(row.tokensInput ?? 0), output: Number(row.tokensOutput ?? 0),
-          cache_read: Number(row.tokensCacheRead ?? 0), cache_write: Number(row.tokensCacheWrite ?? 0),
-        },
+        // The toolbar's lifetime token totals, from the token_usage table.
+        usage: await this.sessionUsage(row.id),
         ...(card ? { card } : {}),
         ...(row.agent === 'supervisor' ? { readonly: true } : {}),
         done: [
@@ -1735,12 +1730,32 @@ export class WindowStore {
       let cfg: Record<string, ConfigValue>;
       try {
         cfg = current ?? await this.readSettings();
-        built = make(await buildAssistantKit(this, this.assistantDeps), cfg);
+        built = make(await buildAssistantKit(this, this.assistantDeps), cfg, await this.assistantSession());
       } catch (e) { this.note(`assistant not started: ${(e as Error).message}`); return; }
       this.voice.setAgent(built.agent, built.summary);
       this.voice.setCompaction(agentModelConfig(cfg, 'supervisor'), compactionSettings(cfg));
       void this.voice.start(sidecarEnv(cfg));
     })();
+  }
+
+  /** The assistant's own session row — the supervisor pattern: no checkout,
+   *  its folder the session on screen's, so its tools read that session's
+   *  files and its model calls are billed to it. Opened ONCE per window, the
+   *  first time a session is on screen (null before — the assistant can start
+   *  before any session opens); re-pointed on every rebuild after, which App
+   *  fires on every switch. Runs BEFORE the agent is built — the model needs
+   *  the id. */
+  private async assistantSession(): Promise<string | null> {
+    const active = this.sessions.active();
+    if (!active) return this.voice.sessionId;
+    const target = { workspace_id: active.workspaceId, session_id: active.id };
+    if (this.voice.sessionId) {
+      await this.api('POST', `/sessions/${this.voice.sessionId}/follow`, target);
+      return this.voice.sessionId;
+    }
+    const r = await this.api('POST', '/sessions/assistant', target) as { id: string };
+    this.voice.sessionId = r.id;
+    return r.id;
   }
 
   /** The read tools follow the session on screen: switching rebuilds the kit
@@ -1751,7 +1766,7 @@ export class WindowStore {
     try {
       const cfg = current ?? await this.readSettings();
       const kit = await buildAssistantKit(this, this.assistantDeps);
-      this.voice.setAgent(make(kit, cfg).agent);
+      this.voice.setAgent(make(kit, cfg, await this.assistantSession()).agent);
       this.voice.setCompaction(agentModelConfig(cfg, 'supervisor'), compactionSettings(cfg));
     } catch (e) { this.note(`assistant not rebuilt for this session: ${(e as Error).message}`); }
   }
@@ -1793,7 +1808,7 @@ export class WindowStore {
       // the session feed brings that in (followRowModel).
       const make = this.opts.makeAgent ?? buildAgent;
       this.sessions.rebuildAgents((e: LoadedSession) =>
-        make(e.tools, pinnedCfg(cfg, e.pin), e.instructions, (t) => this.sessions.note(e.id, t)));
+        make(e.tools, pinnedCfg(cfg, e.pin), e.id, e.instructions, (t) => this.sessions.note(e.id, t)));
 
       // The Assistant follows its settings: on/off starts and stops it; an
       // audio value (the Deepgram key, the devices) restarts the sidecar,
@@ -1972,20 +1987,10 @@ export class WindowStore {
               strategy: getStrategy(strategyName),
               summarizePct,
               call: async (system, prompt) => {
-                const { generateText } = await import('ai');
-                const { languageModel } = await import('../core/llm/createAgent.js');
-                const r = await generateText({
-                  model: languageModel(model), maxRetries: 0, system, prompt,
+                const r = await helperCall({
+                  config: model, usage: { kind: 'compaction', sessionId: session.id }, system, prompt,
                   ...(maxTokens != null ? { maxTokens: Number(maxTokens) } : {}),
                 });
-                // Record compaction tokens — these were previously untracked.
-                void this.api('POST', '/token-usage', {
-                  session_id: session.id, kind: 'compaction',
-                  provider: model.provider, model: model.model,
-                  input: r.usage.inputTokens ?? 0, output: r.usage.outputTokens ?? 0,
-                  cache_read: r.usage.inputTokenDetails?.cacheReadTokens ?? 0,
-                  cache_write: r.usage.inputTokenDetails?.cacheWriteTokens ?? 0,
-                }).catch(() => {});
                 return r.text;
               },
             });

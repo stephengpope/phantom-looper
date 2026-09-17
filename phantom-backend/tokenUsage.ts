@@ -1,45 +1,32 @@
-// The ONE owner of token recording and querying for every LLM call in the
-// system — agent steps (coding, supervisor, assistant) and helper calls
-// (titles, commit messages, compaction, digests) alike. Every writer and
-// reader goes through this class; nothing else touches the token_usage table.
+// The token_usage table's one owner. Every LLM call in the system lands here
+// as one row — core's languageModel() records each call it makes (see
+// createAgent.ts) and this is the sink: the server hands it TokenUsage.record
+// directly; the CLI posts to /token-usage, which calls the same method.
+// Nothing else writes the table; readers join it freely.
 import { gte, eq, sql } from 'drizzle-orm';
 import type { Db } from './db/client.js';
 import { tokenUsage } from './db/schema.js';
 import { newId } from '../core/ids.js';
+import type { TokenRecord } from '../core/llm/createAgent.js';
 
-/** The kinds that live in the table — agent turns and helper calls. */
-export type TokenKind =
-  | 'coding' | 'supervisor' | 'assistant'
-  | 'title' | 'commit_message' | 'compaction' | 'session_digest';
-
-export interface TokenRecord {
-  sessionId?: string | null;
-  kind: TokenKind;
-  provider?: string | null;
-  model?: string | null;
-  responseId?: string | null;
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-}
+export type { TokenRecord };
 
 export class TokenUsage {
   constructor(private readonly db: Db) {}
 
-  /** Record one LLM call — one agent step or one helper call. */
+  /** Record one LLM call. */
   async record(r: TokenRecord): Promise<void> {
     await this.db.insert(tokenUsage).values({
       id: newId(),
       sessionId: r.sessionId ?? null,
       kind: r.kind,
-      provider: r.provider ?? null,
-      model: r.model ?? null,
+      provider: r.provider,
+      model: r.model,
       responseId: r.responseId ?? null,
       tokensInput: r.input,
       tokensOutput: r.output,
-      tokensCacheRead: r.cacheRead,
-      tokensCacheWrite: r.cacheWrite,
+      tokensCacheRead: r.cache_read,
+      tokensCacheWrite: r.cache_write,
     });
   }
 

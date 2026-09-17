@@ -21,8 +21,6 @@ import { openSession, SessionLockedError, type OpenedSession } from '../../core/
 import type { Sessions } from '../sessions.js';
 import type { Loops } from '../loops.js';
 import type { Settings } from '../settings.js';
-import type { HelperUsage } from '../helperUsage.js';
-import type { TokenUsage } from '../tokenUsage.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
 import type { BackdoorQueue } from '../api/backdoor.js';
 import type { BoardEvents, BoardEvent } from '../api/boardEvents.js';
@@ -78,8 +76,6 @@ export interface TelegramEngineDeps {
   sessions: Sessions;
   workspaces: Workspaces;
   loops: Loops;
-  helperUsage: HelperUsage;
-  tokenUsage?: TokenUsage;
   paths: Paths;
   app: FastifyInstance;
   apiKey: string;
@@ -129,7 +125,6 @@ export class TelegramEngine {
     this.conversation = new AssistantConversation({
       dataRoot: deps.paths.root,
       sessions: deps.sessions,
-      helperUsage: deps.helperUsage,
 
     });
     this.upgradeChecker = new UpgradeChecker({
@@ -473,7 +468,8 @@ export class TelegramEngine {
         await client.sendMessage(dm, '🆕 New session in the new workspace. Send your first message to begin.');
         return { session: j.data.id as string };
       };
-      // Ensure the assistant has a session row for token tracking.
+      // The assistant's session row exists BEFORE its agent is built: the
+      // model records every call against it.
       const sessionId = await conv.ensureSession(
         account.activeWorkspaceId, account.activeSessionId);
       const result = await runAssistantTurn(deps, conv.history, message, sink, {
@@ -483,11 +479,10 @@ export class TelegramEngine {
         onSwitch,
         approve: (ask, signal) => this.approvals.request(client, dm, ask, signal),
         onWorkspaceCreated,
-      }, abort.signal, conv.getTranscript());
+      }, abort.signal, conv.getTranscript(), sessionId);
       replyText = result.text;
-      // Record this turn's token usage on the session row.
-      await this.deps.sessions.addUsage(sessionId, result.usage).catch(
-        (e) => log.warn({ err: errStr(e) }, 'assistant session usage update failed'));
+      await this.deps.sessions.turnEnded(sessionId).catch(
+        (e) => log.warn({ err: errStr(e) }, 'assistant session update failed'));
       // Long chat? Summarize it in the background — turns never wait on it.
       conv.kickCompaction(result.usage.input);
       // Any messages queued while we ran go out as one follow-up turn.

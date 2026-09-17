@@ -271,7 +271,7 @@ export async function assistantKit(deps: AssistantDeps, ctx: AssistantCtx): Prom
 }
 
 /** The result of one assistant turn — the reply text and the token usage
- *  across all steps, for the session row's running totals. */
+ *  across all steps (the compaction trigger reads the input size). */
 export interface AssistantTurnResult {
   text: string;
   usage: { input: number; output: number; cache_read: number; cache_write: number };
@@ -284,12 +284,14 @@ export interface AssistantTurnResult {
  *  session_switch fires — the caller moves the active-session pointer. */
 export async function runAssistantTurn(
   deps: AssistantDeps, history: ModelMessage[], message: string, sink: TelegramSink,
-  ctx: AssistantCtx, abortSignal?: AbortSignal, transcript?: Transcript,
+  ctx: AssistantCtx, abortSignal: AbortSignal | undefined, transcript: Transcript | undefined,
+  sessionId: string,
 ): Promise<AssistantTurnResult> {
   const model = agentModelConfig(ctx.settings, 'assistant');
   const maxSteps = agentMaxSteps(ctx.settings, 'assistant');
   const tools = await assistantKit(deps, ctx);
-  const agent = assistantAgent({ ...model, fetch: deps.modelFetch }, tools, { maxSteps });
+  const agent = assistantAgent({ ...model, fetch: deps.modelFetch, usage: { kind: 'assistant', sessionId } },
+    tools, { maxSteps });
 
   // Accumulate usage across all steps in this turn.
   const usage = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
@@ -318,8 +320,6 @@ export async function runAssistantTurn(
           usage.cache_read += ev.cache_read as number;
           usage.cache_write += ev.cache_write as number;
         },
-        tokenContext: { kind: 'assistant',
-          provider: model.provider, model: model.model },
       } : undefined,
     });
     let failure: unknown;

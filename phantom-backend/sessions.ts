@@ -35,7 +35,7 @@ import { claimSlot, resolveAuth } from './pool/pool.js';
 import { sessionDir, repoDir, type Paths } from './pool/paths.js';
 import { newId } from '../core/ids.js';
 import { logger } from './log.js';
-import { lastUserFromJsonl, sumUsageFromJsonl, stripUsageFromJsonl } from '../core/llm/transcript.js';
+import { lastUserFromJsonl, stripUsageFromJsonl } from '../core/llm/transcript.js';
 import { cascade } from '../core/llm/agentConfig.js';
 import { sessionScope } from './store.js';
 import type { SessionEvents } from './api/sessionEvents.js';
@@ -59,7 +59,6 @@ export const LAST_MESSAGE_CHARS = 200;
  *  transcript save reads who drove the turn off it. */
 export const LOOP_CLIENT_ID = 'supervisor';
 
-export type TokenUsage = { input: number; output: number; cache_read: number; cache_write: number };
 export type WorkState = 'not_pushed' | 'not_merged' | 'merged';
 
 /** What GET /sessions accepts — the object owns what the list IS: the
@@ -336,27 +335,6 @@ export class Sessions {
     );
   }
 
-  /** Token totals per provider/model over every session used since `since`
-   *  (destroyed rows left out) — /system/token-usage. */
-  async tokenUsageByModel(since: Date): Promise<Array<{ provider: string | null; model: string | null;
-    input: number; output: number; cacheRead: number; cacheWrite: number }>> {
-    const rows = await this.db
-      .select({
-        provider: sessions.provider,
-        model: sessions.model,
-        input: sqlRaw<number>`coalesce(sum(${sessions.tokensInput}), 0)`.as('input'),
-        output: sqlRaw<number>`coalesce(sum(${sessions.tokensOutput}), 0)`.as('output'),
-        cacheRead: sqlRaw<number>`coalesce(sum(${sessions.tokensCacheRead}), 0)`.as('cache_read'),
-        cacheWrite: sqlRaw<number>`coalesce(sum(${sessions.tokensCacheWrite}), 0)`.as('cache_write'),
-      })
-      .from(sessions)
-      .where(and(ne(sessions.status, 'destroyed'), gte(sessions.lastUsedAt, since)))
-      .groupBy(sessions.provider, sessions.model);
-    // PostgreSQL sum() on bigint → string; coerce at the boundary.
-    return rows.map((r) => ({ ...r, input: Number(r.input), output: Number(r.output),
-      cacheRead: Number(r.cacheRead), cacheWrite: Number(r.cacheWrite) }));
-  }
-
   // ── lifecycle ──────────────────────────────────────────────────────────────
 
   /** Create a session: claim a warm slot or clone directly — one way to obtain a
@@ -511,10 +489,32 @@ export class Sessions {
     return this.createConversation(workspaceId, { agent: 'supervisor', folderId });
   }
 
-  /** The assistant's conversation-only session: workspace and folder track
-   *  whatever the user is looking at, updated as they switch. */
-  createAssistant(workspaceId: string, folderId?: string | null): Promise<SessionRow> {
-    return this.createConversation(workspaceId, { agent: 'assistant', folderId });
+  /** Where the assistant's row points: the workspace, and the folder of the
+   *  session on screen (its own folderId — a coder owns its folder, a
+   *  supervisor borrows the coder's). No session on screen = the workspace
+   *  alone. The same resolution for creating the row and re-pointing it. */
+  private async assistantTarget(workspaceId: string, activeSessionId?: string | null) {
+    const active = activeSessionId ? await this.get(activeSessionId) : undefined;
+    return { workspaceId, folderId: active ? active.folderId ?? active.id : null };
+  }
+
+  /** The assistant's conversation-only session, pointed at what the user is
+   *  looking at. */
+  async createAssistant(workspaceId: string, activeSessionId?: string | null): Promise<SessionRow> {
+    const t = await this.assistantTarget(workspaceId, activeSessionId);
+    return this.createConversation(t.workspaceId, { agent: 'assistant', folderId: t.folderId });
+  }
+
+  /** The assistant's row follows the session on screen: its tools read that
+   *  session's files, so its workspace and folder are re-pointed at it on
+   *  every switch. Assistant rows only; a no-op when nothing moved. */
+  async follow(id: string, workspaceId: string, activeSessionId?: string | null): Promise<void> {
+    const s = await this.get(id);
+    if (!s || s.agent !== 'assistant') return;
+    const t = await this.assistantTarget(workspaceId, activeSessionId);
+    if (s.workspaceId === t.workspaceId && s.folderId === t.folderId) return;
+    await this.db.update(sessions).set(t).where(eq(sessions.id, id));
+    this.changed(id);
   }
 
   /** What travels from a source into its freshly created copy (the duplicate
@@ -641,34 +641,13 @@ export class Sessions {
     return { firstMessage: !!r && r.name === null && r.turnCount === 0 && r.agent === null };
   }
 
-  /** A row older than the save-time token write (or a duplicate's copy,
-   *  whose usage lines were stripped) carries nulls: sum the record once,
-   *  write the sums, and never again. Returns what was written. */
-  async backfillTokens(s: SessionRow & { transcriptUpdatedAt: Date }): Promise<TokenUsage> {
-    const totals = sumUsageFromJsonl((await this.transcript(s.id)) ?? '');
+  /** A turn ended on a conversation-only session (the assistant's): bump the
+   *  turn count (leaving 0 is what freezes the row's model) and touch
+   *  lastUsedAt. Tokens are not here — every model call records its own row
+   *  in token_usage. */
+  async turnEnded(id: string): Promise<void> {
     await this.db.update(sessions).set({
-      tokensInput: totals.input, tokensOutput: totals.output,
-      tokensCacheRead: totals.cache_read, tokensCacheWrite: totals.cache_write,
-      tokensAsOf: s.transcriptUpdatedAt,
-    }).where(eq(sessions.id, s.id));
-    this.changed(s.id);
-    return totals;
-  }
-
-  /** Add a turn's token usage to a session's running totals. Incremental — each
-   *  call adds to the existing sums, so turns update the row without re-reading
-   *  the whole transcript. Also touches lastUsedAt and counts the turn. */
-  async addUsage(id: string, usage: TokenUsage): Promise<void> {
-    const stamp = new Date();
-    const s = await this.get(id);
-    if (!s) return;
-    await this.db.update(sessions).set({
-      tokensInput: (s.tokensInput ?? 0) + usage.input,
-      tokensOutput: (s.tokensOutput ?? 0) + usage.output,
-      tokensCacheRead: (s.tokensCacheRead ?? 0) + usage.cache_read,
-      tokensCacheWrite: (s.tokensCacheWrite ?? 0) + usage.cache_write,
-      tokensAsOf: stamp,
-      lastUsedAt: stamp,
+      lastUsedAt: new Date(),
       turnCount: sqlRaw`${sessions.turnCount} + 1`,
     }).where(eq(sessions.id, id));
     this.changed(id);

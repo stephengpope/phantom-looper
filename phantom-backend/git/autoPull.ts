@@ -18,7 +18,6 @@ import type { Folders } from '../folders.js';
 import type { Loops } from '../loops.js';
 import type { Cards } from '../cards.js';
 import type { Settings } from '../settings.js';
-import type { HelperUsage } from '../helperUsage.js';
 
 export type AutoPullEvent = SyncEvent;
 
@@ -45,7 +44,6 @@ export interface AutoPullDeps {
   loops: Loops;
   cards: Cards;
   settings: Settings;
-  helperUsage: HelperUsage;
   paths: Paths;
   resolve?: SyncDeps['resolve'];
   recordSummary?: SyncDeps['recordSummary'];
