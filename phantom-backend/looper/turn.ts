@@ -107,19 +107,9 @@ export async function runCodingTurn(
   // `record` is createAgent's step seam: each step's messages and usage line
   // collect here for the turn-end save — the WHOLE turn, where the SDK's
   // turn-end response carries only the final step.
-  // The onStepTokens callback records each step's tokens to the table.
-  const stepTokens: StepRecord['onStepTokens'] = deps.tokenUsage
-    ? (usage, responseId) => {
-        const ev = usageEvent(usage);
-        deps.tokenUsage!.record({
-          sessionId: opened.session.id, kind: 'coding',
-          provider: model.provider, model: model.model, responseId,
-          input: ev.input as number, output: ev.output as number,
-          cacheRead: ev.cache_read as number, cacheWrite: ev.cache_write as number,
-        }).catch(() => {});
-      }
-    : undefined;
-  const { record, events: turnEvents, messages: turnMessages } = memoryRecorder(messages.length, stepTokens);
+  const { record, events: turnEvents, messages: turnMessages } = memoryRecorder(messages.length);
+  record.tokenContext = { sessionId: opened.session.id, kind: 'coding',
+    provider: model.provider, model: model.model };
   const feed = deps.sessionEvents;
   const id = opened.session.id;
   let text = '';

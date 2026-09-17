@@ -1,7 +1,7 @@
 // The one wrapper for every one-shot LLM call outside the agent loop — session
 // titles, commit messages, and anything future that calls generateText directly.
-// Records the call's full context and usage to helper_llm_usage, so /status
-// accounts for 100% of LLM spend.
+// Automatically records every call's tokens — set once at boot with
+// initHelperTokens, then every helperCall records without the caller knowing.
 //
 // The callers are fire-and-forget by nature: a failed recording must never fail
 // the call itself. The wrapper catches and logs recording errors.
@@ -15,12 +15,13 @@ const log = logger('helper-call');
 
 export type { HelperKind };
 
+// Module-level — set once at server boot. Every helperCall records automatically.
+let _tokenUsage: TokenUsage | null = null;
+export function initHelperTokens(tu: TokenUsage): void { _tokenUsage = tu; }
+
 export interface HelperCallOpts {
-  /** Where usage is recorded (legacy). When absent, the call runs normally but
-   *  usage is not recorded — for callers outside the server process. */
+  /** Where usage is recorded (legacy). */
   usage?: HelperUsage;
-  /** The unified token_usage table writer. Preferred over `usage`. */
-  tokenUsage?: TokenUsage;
   config: ModelConfig;
   kind: HelperKind;
   /** The session this call serves — null when not tied to one. */
@@ -58,11 +59,10 @@ export async function helperCall(opts: HelperCallOpts): Promise<HelperCallResult
     cache_read: usage.inputTokenDetails?.cacheReadTokens ?? 0,
     cache_write: usage.inputTokenDetails?.cacheWriteTokens ?? 0,
   };
-  // Best-effort: a failed insert must never break the caller.
-  // Record to the unified token_usage table (new path).
-  if (opts.tokenUsage) {
+  // Automatic token recording — always fires when the module is initialized.
+  if (_tokenUsage) {
     try {
-      await opts.tokenUsage.record({
+      await _tokenUsage.record({
         sessionId: opts.sessionId, kind: opts.kind as TokenKind,
         provider: opts.config.provider, model: opts.config.model,
         input: u.input, output: u.output,

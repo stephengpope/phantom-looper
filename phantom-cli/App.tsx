@@ -47,6 +47,7 @@ import { Transcript, type TranscriptHeader } from './session.js';
 import { complete, matches } from './commands.js';
 import { quiet, type Api } from './request.js';
 import { WindowStore, type Initial } from './window.js';
+import { setTokenRecorder } from '../core/llm/createAgent.js';
 
 export type { Initial };
 
@@ -190,12 +191,23 @@ export function App({
   // is on screen — everything with a caller that is not a React event. Built
   // in the initialiser, like the session store it replaces, so the banner is
   // on screen for the first frame. This component is a view over it.
-  const [windowStore] = useState(() => new WindowStore({
-    api, stream, newTools, configPath, initial, boot,
-    makeAgent, makeTranscript, run, makeVoice, onSession, exit,
-    autoPush, autoPull, clientId, pollMs, taskPollMs,
-    makeAssistantAgent, newAssistantTools, sidebarPercent,
-  }));
+  const [windowStore] = useState(() => {
+    // Every agent step records tokens automatically via the server API.
+    setTokenRecorder((usage, responseId, ctx) => {
+      void api('POST', '/token-usage', {
+        session_id: ctx?.sessionId, kind: ctx?.kind ?? 'coding',
+        provider: ctx?.provider, model: ctx?.model, response_id: responseId,
+        input: usage.input, output: usage.output,
+        cache_read: usage.cache_read, cache_write: usage.cache_write,
+      }).catch(() => {});
+    });
+    return new WindowStore({
+      api, stream, newTools, configPath, initial, boot,
+      makeAgent, makeTranscript, run, makeVoice, onSession, exit,
+      autoPush, autoPull, clientId, pollMs, taskPollMs,
+      makeAssistantAgent, newAssistantTools, sidebarPercent,
+    });
+  });
   const store = windowStore.sessions;
   const voice = windowStore.voice;
   // The window is mutable and lives outside React; this is the re-render

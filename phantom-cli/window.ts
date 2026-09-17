@@ -700,12 +700,9 @@ export class WindowStore {
     // This window's own turn, relayed as it runs, so any watcher sees it
     // stream exactly like a turn the server runs.
     s.relay = async (id, events) => { await this.api('POST', `/sessions/${id}/events`, { events }); };
-    // Per-step token recording — the CLI calls POST /token-usage.
-    s.recordStepTokens = (sessionId, usage, provider, model, responseId) => {
-      void this.api('POST', '/token-usage', {
-        session_id: sessionId, kind: 'coding', provider, model, response_id: responseId,
-        input: usage.input, output: usage.output, cache_read: usage.cache_read, cache_write: usage.cache_write,
-      }).catch(() => {});
+    // Step-level transcript save — lighter than the turn-end PUT.
+    s.stepSave = (id) => {
+      stepSaveUp(this.api, id);
     };
     if (this.opts.initial) this.seat(s, this.opts.initial);
     return s;

@@ -39,9 +39,11 @@ export interface TranscriptHeader {
 
 export class Transcript {
   private started: boolean;
-  /** Set by the caller to record each step's tokens — the onStepTokens hook
-   *  that spliceTurn calls after every step. */
-  onStepTokens?: StepRecord['onStepTokens'];
+  /** Context for automatic token recording — set before a turn, read by
+   *  spliceTurn's module-level recorder. */
+  tokenContext?: import('./createAgent.js').TokenContext;
+  /** Step-level transcript save — set before a turn, called by spliceTurn. */
+  onStepSaved?: () => void;
 
   constructor(private header: TranscriptHeader, readonly path: string) {
     this.started = existsSync(this.path);
@@ -263,10 +265,13 @@ export interface StepRecord {
    *  runTurn writes `{type:'interrupted'}` after a step it recorded because
    *  esc cut it before the SDK could. */
   appendEvent?(event: Record<string, unknown> & { type: string }): void;
-  /** Called by spliceTurn after every step with the provider's response id
-   *  and the usage — the hook that records to the token_usage table.
-   *  Optional: a consumer that does not track tokens omits it. */
-  onStepTokens?(usage: StepUsage | undefined, responseId: string | undefined): void;
+  /** Context for automatic token recording — session id, kind (coding /
+   *  supervisor / assistant), provider and model. Set once when building the
+   *  record; spliceTurn passes it to the module-level token recorder. */
+  tokenContext?: import('./createAgent.js').TokenContext;
+  /** Called after each step to save the transcript to the server. Best-effort
+   *  — a failure never blocks the turn. Set by the consumer. */
+  onStepSaved?: () => void;
 }
 
 /** A StepRecord for memory-backed turn runners (the looper's rounds, the
@@ -278,8 +283,7 @@ export interface StepRecord {
  *  live: the coder's block turn saved as its closing text alone). `startAt`
  *  = how many messages the conversation holds before this turn's first
  *  step lands. */
-export function memoryRecorder(startAt: number,
-  onStepTokens?: StepRecord['onStepTokens']):
+export function memoryRecorder(startAt: number):
 { record: StepRecord; events: TranscriptEvent[]; messages: ModelMessage[] } {
   let at = startAt;
   const events: TranscriptEvent[] = [];
@@ -293,7 +297,6 @@ export function memoryRecorder(startAt: number,
         at += stepMessages.length;
         events.push({ at, event: usageEvent(usage) });
       },
-      onStepTokens,
     },
   };
 }

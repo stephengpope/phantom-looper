@@ -142,7 +142,7 @@ export async function nameSession(
     for (let attempt = 1; attempt <= TRIES; attempt++) {
       try {
         const { text } = await helperCall({
-          usage: deps.helperUsage, tokenUsage: deps.tokenUsage, config, kind: 'title', sessionId, system, prompt,
+          usage: deps.helperUsage, config, kind: 'title', sessionId, system, prompt,
         });
         const title = cleanTitle(text);
         if (title) {

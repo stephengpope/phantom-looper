@@ -13,6 +13,8 @@ import { Cards } from './cards.js';
 import { Commands } from './commands.js';
 import { Presets } from './presets.js';
 import { HelperUsage } from './helperUsage.js';
+import { initHelperTokens } from './helperCall.js';
+import { setTokenRecorder } from '../core/llm/createAgent.js';
 import { TokenUsage } from './tokenUsage.js';
 import { TelegramState } from './telegram/store.js';
 import { SettingsEvents } from './api/settingsEvents.js';
@@ -77,6 +79,16 @@ async function main() {
   const presets = new Presets(db);
   const helperUsage = new HelperUsage(db);
   const tokenUsage = new TokenUsage(db);
+  initHelperTokens(tokenUsage);
+  // Every agent step records tokens automatically through the module-level recorder.
+  setTokenRecorder((usage, responseId, ctx) => {
+    tokenUsage.record({
+      sessionId: ctx?.sessionId, kind: (ctx?.kind ?? 'coding') as import('./tokenUsage.js').TokenKind,
+      provider: ctx?.provider, model: ctx?.model, responseId,
+      input: usage.input, output: usage.output,
+      cacheRead: usage.cache_read, cacheWrite: usage.cache_write,
+    }).catch((e) => log.warn({ err: (e as Error).message }, 'token recording failed'));
+  });
   const telegramState = new TelegramState(db, env.encryptionKey);
 
   const docker = makeDocker();

@@ -637,7 +637,10 @@ export class VoiceClient {
             turnUsage.cache_read += ev.cache_read as number;
             turnUsage.cache_write += ev.cache_write as number;
           }
-        } },
+        },
+        tokenContext: { kind: 'assistant',
+          provider: this.modelInfo.provider, model: this.modelInfo.model },
+        },
       );
     } catch (e) {
       if (!t.abort.signal.aborted && !streamErrored) {

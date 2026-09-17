@@ -93,6 +93,13 @@ export async function syncTranscriptUp(api: Api, sessionId: string, file = trans
   return r?.updated_at ?? null;
 }
 
+/** Step-level save — lighter than the turn-end PUT. Updates the transcript
+ *  and renews the lock but skips turn count, naming, pinning, events. */
+export function stepSaveUp(api: Api, sessionId: string, file = transcriptPath(sessionId)): void {
+  if (!existsSync(file)) return;
+  void api('POST', `/sessions/${sessionId}/step`, { data: readFileSync(file, 'utf8') }).catch(() => {});
+}
+
 /** Session ids that have a transcript on this machine. */
 export function localSessionIds(): Set<string> {
   if (!existsSync(SESSIONS_DIR)) return new Set();

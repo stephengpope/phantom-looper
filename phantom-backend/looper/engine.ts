@@ -389,18 +389,9 @@ export class LooperEngine {
         // its own prefix back each turn; the transcript stays clean. The
         // step seam collects the WHOLE turn (tool calls included — the step
         // rule reads terminal turns off this record).
-        const supStepTokens: import('../../core/llm/transcript.js').StepRecord['onStepTokens'] = this.deps.tokenUsage
-          ? (usage, responseId) => {
-              const ev = usageEvent(usage);
-              this.deps.tokenUsage!.record({
-                sessionId: supOpened!.session.id, kind: 'supervisor',
-                provider: model.provider, model: model.model, responseId,
-                input: ev.input as number, output: ev.output as number,
-                cacheRead: ev.cache_read as number, cacheWrite: ev.cache_write as number,
-              }).catch(() => {});
-            }
-          : undefined;
-        const { record, events, messages: turnMessages } = memoryRecorder(messages.length, supStepTokens);
+        const { record, events, messages: turnMessages } = memoryRecorder(messages.length);
+        record.tokenContext = { sessionId: supOpened!.session.id, kind: 'supervisor',
+          provider: model.provider, model: model.model };
         // Streamed, not generated, for one reason: a supervisor session is
         // openable read-only from /resume, and the review half of a run
         // should be watchable as it happens like the coding half. The record
@@ -488,7 +479,7 @@ export class LooperEngine {
       summarizePct,
       call: async (system, prompt) => {
         const r = await helperCall({
-          usage: this.deps.helperUsage, tokenUsage: this.deps.tokenUsage, config: model, kind: 'compaction', sessionId,
+          usage: this.deps.helperUsage, config: model, kind: 'compaction', sessionId,
           system, prompt, ...(maxTokens != null ? { maxTokens: Number(maxTokens) } : {}),
         });
         return r.text;
@@ -522,7 +513,7 @@ export class LooperEngine {
   private turnDeps(card?: number, signal?: AbortSignal) {
     return { f: this.f, apiKey: this.deps.apiKey, base: BASE,
       modelFetch: this.deps.modelFetch, sessionEvents: this.deps.sessionEvents, client: CLIENT_ID,
-      backdoor: this.deps.backdoor, tokenUsage: this.deps.tokenUsage,
+      backdoor: this.deps.backdoor,
       onRetry: (t: string) => log.warn({ card, agent: 'coding' }, t),
       signal };
   }

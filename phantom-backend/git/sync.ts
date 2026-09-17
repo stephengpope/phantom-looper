@@ -227,7 +227,7 @@ export async function syncBranch(
           ? await deps.messageConfig((note) => { void ev('commit', note); })
           : null;
         const card = await cardIntentFor(deps, session, workspace);
-        const msg = await commitMessageFor(dir, config, card, mb.trim(), deps.helperUsage, session.id, deps.tokenUsage);
+        const msg = await commitMessageFor(dir, config, card, mb.trim(), deps.helperUsage, session.id);
         await squashToMergeBase(dir, mb.trim());
         await commitStaged(dir, `${msg}\n\nPhantom-Session: ${session.id}`);
       } catch (e) {

@@ -201,7 +201,7 @@ export class SessionDigest {
     const config = agentModelConfig(values, 'assistant');
 
     const { text } = await helperCall({
-      usage: this.deps.helperUsage, tokenUsage: this.deps.tokenUsage, config, kind: 'session_digest',
+      usage: this.deps.helperUsage, config, kind: 'session_digest',
       system: SYSTEM,
       prompt: JSON.stringify(payload),
     });

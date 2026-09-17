@@ -140,7 +140,7 @@ export class AssistantConversation {
       summarizePct,
       call: async (system, prompt) => {
         const r = await helperCall({
-          usage: this.deps.helperUsage, tokenUsage: this.deps.tokenUsage, config: model, kind: 'compaction',
+          usage: this.deps.helperUsage, config: model, kind: 'compaction',
           system, prompt, ...(maxTokensOpt ? { maxTokens: maxTokensOpt } : {}),
         });
         return r.text;

@@ -131,7 +131,7 @@ export class TelegramEngine {
       dataRoot: deps.paths.root,
       sessions: deps.sessions,
       helperUsage: deps.helperUsage,
-      tokenUsage: deps.tokenUsage,
+
     });
     this.upgradeChecker = new UpgradeChecker({
       version: process.env.APP_VERSION ?? 'dev',
@@ -484,7 +484,7 @@ export class TelegramEngine {
         onSwitch,
         approve: (ask, signal) => this.approvals.request(client, dm, ask, signal),
         onWorkspaceCreated,
-      }, abort.signal, conv.getTranscript(), this.deps.tokenUsage, sessionId);
+      }, abort.signal, conv.getTranscript());
       replyText = result.text;
       // Record this turn's token usage on the session row.
       const model = (() => { try { return agentModelConfig(values, 'assistant'); } catch { return undefined; } })();

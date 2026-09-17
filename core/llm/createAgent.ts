@@ -18,8 +18,23 @@
 //   family and stays 'none' (no thinking at all) for every other model —
 //   on haiku-4-5, 'minimal' would switch thinking ON.
 import { ToolLoopAgent, isStepCount, type LanguageModel, type ModelMessage, type SystemModelMessage, type Tool } from 'ai';
-import type { StepRecord } from './transcript.js';
+import { usageEvent, type StepRecord } from './transcript.js';
 import type { NudgeQueue } from './nudgeQueue.js';
+
+// ── automatic token recording ─────────────────────────────────────────────
+// Set once at boot. Every agent step records here automatically — no caller
+// involvement. The server sets a direct DB writer; the CLI sets an API caller.
+// When null (tests, before boot), steps silently skip recording.
+// `context` carries the session/kind/provider/model from the StepRecord — the
+// caller sets it once when building the record, spliceTurn passes it through.
+export interface TokenContext {
+  sessionId?: string; kind?: string; provider?: string; model?: string;
+}
+type TokenRecorderFn = (usage: { input: number; output: number; cache_read: number; cache_write: number },
+  responseId: string | undefined, context?: TokenContext) => void;
+let _tokenRecorder: TokenRecorderFn | null = null;
+/** Set the module-level token recorder. Called once at server/CLI boot. */
+export function setTokenRecorder(fn: TokenRecorderFn): void { _tokenRecorder = fn; }
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
@@ -395,9 +410,16 @@ function spliceTurn<T extends { onStepEnd?: (step: never) => unknown }>(
       onStepEnd: (step: { response: { messages: unknown[]; id?: string }; usage?: unknown }) => {
         record.appendStep(step.response.messages as ModelMessage[],
           step.usage as Parameters<StepRecord['appendStep']>[1]);
-        record.onStepTokens?.(
-          step.usage as Parameters<StepRecord['appendStep']>[1],
-          step.response.id);
+        // Automatic token recording — fires for every agent step in the system.
+        if (_tokenRecorder) {
+          const ev = usageEvent(step.usage as Parameters<StepRecord['appendStep']>[1]);
+          _tokenRecorder(
+            { input: ev.input as number, output: ev.output as number,
+              cache_read: ev.cache_read as number, cache_write: ev.cache_write as number },
+            step.response.id, record.tokenContext);
+        }
+        // Step-level transcript save — best-effort, never blocks.
+        record.onStepSaved?.();
         return prior?.(step);
       },
     } as unknown as T;

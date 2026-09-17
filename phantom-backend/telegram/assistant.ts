@@ -285,7 +285,6 @@ export interface AssistantTurnResult {
 export async function runAssistantTurn(
   deps: AssistantDeps, history: ModelMessage[], message: string, sink: TelegramSink,
   ctx: AssistantCtx, abortSignal?: AbortSignal, transcript?: Transcript,
-  tokenUsage?: import('../tokenUsage.js').TokenUsage, sessionId?: string,
 ): Promise<AssistantTurnResult> {
   const model = agentModelConfig(ctx.settings, 'assistant');
   const maxSteps = agentMaxSteps(ctx.settings, 'assistant');
@@ -319,15 +318,8 @@ export async function runAssistantTurn(
           usage.cache_read += ev.cache_read as number;
           usage.cache_write += ev.cache_write as number;
         },
-        onStepTokens: tokenUsage ? (u, responseId) => {
-          const ev = usageEvent(u);
-          tokenUsage.record({
-            sessionId, kind: 'assistant',
-            provider: model.provider, model: model.model, responseId,
-            input: ev.input as number, output: ev.output as number,
-            cacheRead: ev.cache_read as number, cacheWrite: ev.cache_write as number,
-          }).catch(() => {});
-        } : undefined,
+        tokenContext: { kind: 'assistant',
+          provider: model.provider, model: model.model },
       } : undefined,
     });
     let failure: unknown;
