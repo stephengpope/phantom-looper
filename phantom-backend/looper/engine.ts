@@ -39,18 +39,18 @@ import type { Loops } from '../loops.js';
 import type { Cards } from '../cards.js';
 import type { Settings } from '../settings.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
-import { memoryRecorder, serializeTranscript, usageEvent, type TranscriptHeader } from '../../core/llm/transcript.js';
+import { memoryRecorder, serializeTranscript } from '../../core/llm/transcript.js';
 import { agentModelConfig, agentMaxSteps, pinnedModel, sessionPin } from '../../core/llm/agentConfig.js';
 import { phantomTools } from '../../core/llm/tools/workspace.js';
 import { webTools } from '../../core/llm/tools/web.js';
 import {
   kanbanReadTool, loopSupervisorTools, loopBlockTool, type LoopColumn, type LoopCardConfig,
 } from '../../core/llm/tools/kanban.js';
-import { runCodingTurn, drain, settingsValues, sumTokens, sumInputTokens } from './turn.js';
+import { runCodingTurn, drain, settingsValues, sumTokens } from './turn.js';
 import { shouldCompact, resolveContextWindow, resolveCompactSetting, CompactionLock, compact, getStrategy } from '../../core/llm/compaction.js';
 import { contextWindowFor } from '../models.js';
 import { helperCall } from '../../core/llm/helperCall.js';
-import { supervisorAgent, supervisorInstructions } from '../../core/llm/agents/supervisor.js';
+import { supervisorAgent } from '../../core/llm/agents/supervisor.js';
 import { canTurn, unsentKickoff, nextStep, needsFreshSession, heldBy, LOOP_COLUMNS, type CardRow } from './logic.js';
 import { injectFetch } from './injectFetch.js';
 import type { BoardEvents } from '../api/boardEvents.js';
@@ -405,13 +405,7 @@ export class LooperEngine {
         } finally {
           feed?.publish(supId, CLIENT_ID, { event: 'turn-end' });
         }
-        const supHeader: TranscriptHeader = supOpened.header ?? {
-          type: 'session', agent: CLIENT_ID, provider: model.provider, model: model.model,
-          ...(model.baseUrl ? { base_url: model.baseUrl } : {}),
-          created_at: new Date().toISOString(), system_prompt: supervisorInstructions(),
-          session_id: supOpened.session.id, card: card.number,
-        };
-        await supOpened.saveTranscript(serializeTranscript(supHeader,
+        await supOpened.saveTranscript(serializeTranscript(
           [...messages, ...turnMessages],
           [...supOpened.events, ...events]));
         budget.spent += sumTokens(events);

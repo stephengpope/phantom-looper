@@ -4,7 +4,7 @@
 // agentFromConfig delegates here; the looper calls it directly.
 import type { Tool } from 'ai';
 import { NO_PROVIDER, type Agent, type ModelConfig, type Provider, type Reasoning } from './createAgent.js';
-import { codingAgent } from './agents/coding.js';
+import { codingAgent, type CodingPrompt } from './agents/coding.js';
 
 /** One API key per provider, named the way each vendor names it — the same
  *  rows the Git Fixer and the Assistant read. */
@@ -91,12 +91,13 @@ export function modelConfigFrom(cfg: SettingsValues, modelOverride?: string | nu
 /** The coding agent from resolved settings, for one session. null/unset
  *  max_steps = unlimited (the turn ends when the agent is done); a positive
  *  number is a cap. `onRetry` receives each failed model attempt as it
- *  happens (withRetry). Every call the agent makes is billed to `sessionId`. */
+ *  happens (withRetry). Every call the agent makes is billed to `sessionId`.
+ *  `prompt` is the session's FROZEN system prompt (its row's). */
 export function buildCodingAgent(
   cfg: SettingsValues, tools: Record<string, Tool>, sessionId: string,
-  o: { instructions?: string; modelFetch?: typeof fetch; onRetry?: (note: string) => void } = {},
+  o: { prompt: CodingPrompt; modelFetch?: typeof fetch; onRetry?: (note: string) => void },
 ): { agent: Agent; summary: { provider: string; model: string; reasoning: string; maxSteps: number | null } } {
-  const { instructions, modelFetch, onRetry } = o;
+  const { prompt, modelFetch, onRetry } = o;
   const model = modelConfigFrom(cfg);
   model.usage = { kind: 'coding', sessionId };
   if (modelFetch) model.fetch = modelFetch;
@@ -104,7 +105,7 @@ export function buildCodingAgent(
   const n = cfg.max_steps == null ? null : Number(cfg.max_steps);
   const maxSteps = n != null && Number.isFinite(n) && n > 0 ? n : null;
   return {
-    agent: codingAgent(model, tools, { maxSteps, instructions }),
+    agent: codingAgent(model, tools, { maxSteps, prompt }),
     summary: { provider: model.provider || 'unset', model: model.model || 'unset',
       reasoning: String(cfg.reasoning ?? ''), maxSteps },
   };
@@ -121,8 +122,7 @@ export interface ModelPin { provider?: string | null; model?: string | null; bas
 
 /** The pin for one session — THE ROW, whole or not at all. Never mixed field
  *  by field: a provider from one source and an endpoint from another is
- *  exactly the split this prevents. The transcript header is NOT a fallback:
- *  it records what ran; the row decides what runs. A row with no model (born
+ *  exactly the split this prevents. A row with no model (born
  *  before the column, or on a server with no provider set) reads as null and
  *  the caller falls through to the settings. */
 export function sessionPin(
@@ -140,9 +140,9 @@ export function sessionPin(
  *
  *  The endpoint rides the pin, because a provider and a model name do not say
  *  where to send the request: a session pinned to one provider must not inherit
- *  an endpoint someone set for another. A pin carrying no endpoint (an old
- *  header) inherits the global one only while the provider matches — the same
- *  compatibility rule as `cascade`. */
+ *  an endpoint someone set for another. A pin carrying no endpoint (a row
+ *  from before base_url) inherits the global one only while the provider
+ *  matches — the same compatibility rule as `cascade`. */
 /** The same rule for an agent whose model comes from the cascade (the
  *  supervisor's `supervisor_*` trio): its resolved config, with the session's
  *  pin — provider, model, endpoint and that provider's key — laid over it.

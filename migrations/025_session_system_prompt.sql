@@ -1,0 +1,12 @@
+-- The coding session's frozen system prompt moves onto its row, in the two
+-- pieces the prompt cache sends: {"base": "...", "workspace": "..."} — the
+-- agent itself, shared by every session; this session's workspace facts.
+--
+-- It used to be one glued string on the first line of the transcript (the
+-- `{"type":"session", ...}` header, alongside fields nothing ever read), cut
+-- back into its two pieces on every turn by matching the shared prefix. Now
+-- the server freezes the pieces at creation and every runner sends them
+-- verbatim. Sessions born before this get theirs frozen from live facts the
+-- first time they are opened (routes/sessions.ts freezeSystemPrompt); their
+-- old header line stays in the transcript and the parser skips it.
+alter table phantom_looper.sessions add column system_prompt jsonb;

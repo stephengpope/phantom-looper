@@ -1,5 +1,5 @@
 // The folder row's one owner. A folder is a checkout's identity — the branch
-// and where base was when it was cut. The directory on disk is named by this
+// and the commit it was cut from. The directory on disk is named by this
 // id (which equals the owning session's id). The row is permanent: it is what
 // remembers the branch; the FILES can be deleted and re-cloned from it.
 import { eq, inArray } from 'drizzle-orm';
@@ -23,8 +23,8 @@ export class Folders {
   }
 
   /** Born with its session, sharing the id: the branch it was cut on and the
-   *  base commit it was cut from. */
-  async create(folder: { id: string; workspaceId: string; branch: string; claimSha: string }): Promise<void> {
+   *  commit it was cut from. */
+  async create(folder: { id: string; workspaceId: string; branch: string; cutFromSha: string }): Promise<void> {
     await this.db.insert(folders).values({ ...folder, createdAt: new Date() });
   }
 }

@@ -184,12 +184,7 @@ async function main() {
     } catch { return; }
     try {
       const messages = [...opened.messages, { role: 'user' as const, content: message }];
-      const header = opened.header ?? {
-        type: 'session' as const, agent: 'coding' as const,
-        provider: '', model: '', created_at: new Date().toISOString(),
-        session_id: session.id, workspace: workspace.id, branch: session.folderId ?? '',
-      };
-      await opened.saveTranscript(serializeTranscript(header, messages, opened.events));
+      await opened.saveTranscript(serializeTranscript(messages, opened.events));
     } finally {
       await opened.close().catch(() => {});
     }

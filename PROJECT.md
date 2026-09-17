@@ -45,7 +45,7 @@ and reviews each table's behavior while it is in our heads.
 | # | table | object | status |
 |---|---|---|---|
 | 1 | ~~`workspace_schema_state`~~ | — | **done** — deleted |
-| 2 | `folders` | `Folders` (folders.ts) | |
+| 2 | `folders` | `Folders` (folders.ts) | **done** |
 | 3 | `loops` | `Loops` (loops.ts) | |
 | 4 | `presets` | `Presets` (presets.ts) | |
 | 5 | `commands` | `Commands` (commands.ts) | |
@@ -88,28 +88,40 @@ field, cli, agent tools, prompt blank `{{number}}`. `card_revisions.seq` →
 trigger then tried to record each deletion for a workspace that was already
 gone → FK error. The trigger now skips when the workspace no longer exists.
 
-## Insights from table 1
+## Table 2 — `folders` (done)
 
-- **Step 1 is not a grep count.** The first pass reported "queries are
-  contained" from counting hits. The real leak (a route running DDL) was
-  only visible after reading each hit. Report file:line, or do not report.
-- **Step 2 can change the whole job.** This table could not be "protected";
-  it could only be deleted, and deleting it meant fixing `cards`. Know which
-  kind of table you have before proposing anything.
-- **Seed the old shape, not the new one.** The migration test seeded two
-  workspaces with colliding ids, a deleted card and a moved card. That is
-  what found the trigger bug; reading the code never would have.
-- **Rename before the behavior review, not after.** Parking the rename as a
-  "raised item" was step 8 skipped. The builder caught it. Do it in the pass.
-- **Words mean what they say.** "Create a cards table" when one exists is
-  wrong; "move the cards into one table" is right. Sloppy words cost trust.
-- **Prove over HTTP too.** Object tests passed; the route walk found my own
-  helper sending `content-type: json` on a bodiless DELETE. Not a product
-  bug, but the live layer is the only one that catches the live layer.
-- **Test scaffolding lives outside the repo** (`/workspace/scratch/`), and
-  `tsx` needs the scripts inside the repo tree to resolve `node_modules` —
-  copy them into a gitignored `scratch-tmp/` for the run, move them out
-  after.
+**What it is.** A checkout's identity: the branch, and the commit it was
+cut from. Shares its session's id (directories keep their names). The row
+outlives the files so destroy/restart and duplicate know the branch.
+
+**State found.** Clean: one writer (`Sessions.create`), every read through
+`Folders`, the one join in `Sessions.list` (allowed). Nothing to untangle.
+
+**Renamed.** `claim_sha` → `cut_from_sha` — it is `HEAD` right after the
+checkout (base's tip for a new session, the source branch's tip for a
+duplicate), read once by `/git/status` to count base's commits since.
+"Claim" named the pool mechanism, not the fact. API: `cutFromSha`,
+`/git/status` field `sinceClaim` → `sinceCut`. Migration 026.
+
+**Bug the proof found.** `sessions`, `folders` and `loops` all said
+`on delete restrict` to workspaces, so a workspace with ANY session row —
+destroyed included — could never be deleted: the route refused only ACTIVE
+sessions, then hit the FK and 500ed. Now cascade (026), like cards already
+did. The route still refuses while sessions are active.
+
+**Found on the way, fixed first (own pass).** Reading `folders` callers
+turned up the transcript header: nine hand-built copies of a line-1 record
+nobody read except `system_prompt`, one copy writing a folder id where a
+branch went, one freezing an empty prompt. The prompt was one glued string
+cut back into its two cache pieces by prefix-matching on every turn. Now
+`sessions.system_prompt = { base, workspace }` (025), frozen once at
+create, sent verbatim; the header, its type and all nine builders are gone.
+
+## Insights
+
+What each table taught, written as reusable rules, lives in
+[INSIGHTS.md](INSIGHTS.md) — the source for the value system's prompts
+later. Add to it in the same pass that earns the lesson.
 
 ## How to test
 

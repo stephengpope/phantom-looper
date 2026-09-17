@@ -43,8 +43,7 @@ export interface SessionInfo {
    *  the server's disk, not_merged = on origin's branch but not in base,
    *  merged = in base. null/absent = nothing to measure. */
   work?: 'not_pushed' | 'not_merged' | 'merged' | null;
-  /** The model that drives (or drove) this session, from the transcript
-   *  header — stored on the session row at each transcript save. */
+  /** The model that drives (or drove) this session — the row's pin. */
   model?: string | null;
   /** The provider that model belongs to, pinned on the row alongside it. */
   provider?: string | null;

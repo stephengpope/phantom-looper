@@ -1,7 +1,9 @@
 // The one transcript format, for every agent. A transcript is a JSONL file:
-// line 1 is the header — which agent, what model, the FROZEN system prompt,
-// when it began — and every line after it is one ModelMessage exactly as it
-// went to the model.
+// one ModelMessage per line, exactly as it went to the model, with usage
+// lines and other markers between them. The conversation and nothing else —
+// who the session is, which branch, which model, its frozen prompt all live
+// on the session row. (Files from before carry a `{type:'session'}` header
+// line; the parser skips it like any other non-message line.)
 //
 // Appended the moment a message exists — the user message on submit, each
 // step's messages when that step ends — never batched to the end of a turn,
@@ -20,41 +22,18 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from
 import { dirname, join } from 'node:path';
 import type { ModelMessage } from 'ai';
 
-/** Line 1. Written once; resume reads the messages and ignores the rest —
- *  provider/model record what wrote the transcript, not what will replay it.
- *  Extra fields are welcome (the coding header carries session/workspace/
- *  branch). */
-export interface TranscriptHeader {
-  type: 'session';
-  /** Which agent wrote this ('coding' | 'assistant' | 'supervisor'). Absent on
-   *  coding transcripts from before the field existed. */
-  agent?: string;
-  provider: string;
-  model: string;
-  created_at: string;
-  /** The frozen system prompt (see agents/coding.ts). Absent on old files. */
-  system_prompt?: string;
-  [extra: string]: unknown;
-}
-
 export class Transcript {
-  private started: boolean;
   /** Step-level transcript save — set before a turn, called by spliceTurn. */
   onStepSaved?: () => void;
 
-  constructor(private header: TranscriptHeader, readonly path: string) {
-    this.started = existsSync(this.path);
-  }
+  constructor(readonly path: string) {}
 
   /** Append one message. Synchronous by design: the write must land before the
-   *  next one is produced, and these are a few hundred bytes. */
+   *  next one is produced, and these are a few hundred bytes. The file (and
+   *  its directory) is created on first write, so a run nobody spoke to
+   *  leaves no file. */
   append(message: ModelMessage): void {
-    if (!this.started) {
-      // Created on first write, so a run nobody spoke to leaves no file.
-      mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
-      appendFileSync(this.path, `${JSON.stringify(this.header)}\n`);
-      this.started = true;
-    }
+    mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
     appendFileSync(this.path, `${JSON.stringify(message)}\n`);
   }
 
@@ -71,9 +50,9 @@ export class Transcript {
     this.appendEvent(usageEvent(usage));
   }
 
-  /** A non-message marker (a model switch, say). loadTranscript keeps only the
-   *  header and anything with a `role`, so these are invisible to replay and
-   *  safe to add without a format version. */
+  /** A non-message marker (a model switch, say). loadTranscript replays only
+   *  lines with a `role`, so these are invisible to the model and safe to add
+   *  without a format version. */
   appendEvent(event: Record<string, unknown> & { type: string }): void {
     this.append(event as never);
   }
@@ -87,15 +66,12 @@ export interface TranscriptEvent {
   event: Record<string, unknown> & { type: string };
 }
 
-/** A whole conversation as JSONL text — header line first — the inverse of
- *  parseTranscript. What a memory-backed caller (the looper, the turn route)
- *  PUTs as the record. `events` (usage marks and the like) are re-interleaved
- *  at their `at` positions, so a rebuild from parsed messages does not lose
- *  them. */
-export function serializeTranscript(
-  header: TranscriptHeader, messages: ModelMessage[], events: TranscriptEvent[] = [],
-): string {
-  const lines: string[] = [JSON.stringify(header)];
+/** A whole conversation as JSONL text — the inverse of parseTranscript.
+ *  What a memory-backed caller (the looper, the turn route) PUTs as the
+ *  record. `events` (usage marks and the like) are re-interleaved at their
+ *  `at` positions, so a rebuild from parsed messages does not lose them. */
+export function serializeTranscript(messages: ModelMessage[], events: TranscriptEvent[] = []): string {
+  const lines: string[] = [];
   const sorted = [...events].sort((a, b) => a.at - b.at);
   let ei = 0;
   for (let i = 0; i <= messages.length; i++) {
@@ -106,7 +82,6 @@ export function serializeTranscript(
 }
 
 export interface LoadedTranscript {
-  header?: TranscriptHeader;
   messages: ModelMessage[];
   /** Non-message lines that survived the parse, in file order, each pinned to
    *  its position in `messages`. A memory-backed caller carries these back
@@ -125,9 +100,10 @@ export function parseTranscript(text: string): LoadedTranscript {
     let entry: unknown;
     try { entry = JSON.parse(line); } catch { continue; }
     const e = entry as { type?: string; role?: string };
-    if (e.type === 'session') out.header = entry as TranscriptHeader;
-    else if (e.role) out.messages.push(entry as ModelMessage);
-    else if (e.type) out.events.push({ at: out.messages.length, event: entry as TranscriptEvent['event'] });
+    if (e.role) out.messages.push(entry as ModelMessage);
+    // The old header line (`type: 'session'`) is dropped here: what it held
+    // now lives on the session row, and re-serializing must not carry it on.
+    else if (e.type && e.type !== 'session') out.events.push({ at: out.messages.length, event: entry as TranscriptEvent['event'] });
   }
   out.messages = dropDanglingToolCall(out.messages);
   // Events that sat after a trimmed dangling tool call describe cut content.

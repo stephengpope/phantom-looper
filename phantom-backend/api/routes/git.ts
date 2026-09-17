@@ -71,7 +71,7 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
 
   app.get('/git/status', { schema: { tags: ['git'], headers: sessionHeader,
     summary: 'What moved on base',
-    description: 'Read-only: commits and files on base not yet merged into this session, the count since claim, and what previous pulls brought in.' } },
+    description: 'Read-only: commits and files on base not yet merged into this session, how many commits base has gained since this checkout was cut, and what previous pulls brought in.' } },
   async (req, reply) => {
     try {
       const { session, workspace } = await resolveSession(req);

@@ -122,7 +122,8 @@ export class GitEngine {
   /** What moved on base — read-only, changes nothing in the tree. */
   async status(s: SessionRow, workspace: WorkspaceRow): Promise<{
     pending: { commits: string[]; files: string[] };
-    sinceClaim: number;
+    /** Commits base has gained since this checkout was cut. */
+    sinceCut: number;
     pulled: Arrival[];
   }> {
     const folder = await this.folderOf(s);
@@ -132,13 +133,13 @@ export class GitEngine {
     });
     const { stdout: commits } = await git(dir, ['log', '--format=%h %s', `HEAD..origin/${workspace.baseBranch}`]).catch(() => ({ stdout: '' }));
     const { stdout: files } = await git(dir, ['diff', '--name-only', `HEAD...origin/${workspace.baseBranch}`]).catch(() => ({ stdout: '' }));
-    const { stdout: since } = await git(dir, ['rev-list', '--count', `${folder.claimSha}..origin/${workspace.baseBranch}`]).catch(() => ({ stdout: '0' }));
+    const { stdout: since } = await git(dir, ['rev-list', '--count', `${folder.cutFromSha}..origin/${workspace.baseBranch}`]).catch(() => ({ stdout: '0' }));
     return {
       pending: {
         commits: commits.trim().split('\n').filter(Boolean),
         files: files.trim().split('\n').filter(Boolean),
       },
-      sinceClaim: Number(since.trim()),
+      sinceCut: Number(since.trim()),
       pulled: this.arrivals.get(s.id) ?? [],
     };
   }

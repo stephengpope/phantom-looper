@@ -6,7 +6,7 @@
 import type { Tool } from 'ai';
 import type { Agent } from '../core/llm/createAgent.js';
 import { buildCodingAgent, agentModelConfig, agentMaxSteps } from '../core/llm/agentConfig.js';
-import { codingInstructions } from '../core/llm/agents/coding.js';
+import type { CodingPrompt } from '../core/llm/agents/coding.js';
 import { assistantAgent } from '../core/llm/agents/assistant.js';
 import type { ConfigValue } from './config.js';
 
@@ -18,19 +18,15 @@ export type Cfg = Record<string, ConfigValue>;
 export interface AgentSummary { provider: string; model: string; reasoning: string; maxSteps: number | null }
 
 /** The coding agent for one session — every call it makes is billed to
- *  `sessionId`. `instructions` is the session's FROZEN prompt (from its
- *  transcript header); absent — a brand-new session — a fresh stack is
- *  assembled, and the caller stores what `codingInstructions()` returned.
+ *  `sessionId`. `prompt` is the session's FROZEN prompt (its row's).
  *  `onRetry` receives each failed model attempt as it happens — App notes it
  *  into that session's conversation (the retry loop itself lives in core's
  *  languageModel; no caller wires its own). */
-export function buildAgent(tools: Record<string, Tool>, cfg: Cfg, sessionId: string, instructions?: string,
+export function buildAgent(tools: Record<string, Tool>, cfg: Cfg, sessionId: string, prompt: CodingPrompt,
   onRetry?: (note: string) => void):
 { agent: Agent; summary: AgentSummary } {
-  return buildCodingAgent(cfg, tools, sessionId, { instructions, onRetry });
+  return buildCodingAgent(cfg, tools, sessionId, { prompt, onRetry });
 }
-
-export { codingInstructions };
 
 /** The Assistant: its own provider/model/base_url/reasoning/max_steps, each
  *  cascading to the coding agent's while the provider matches (core

@@ -9,7 +9,6 @@ import type { ModelMessage } from 'ai';
 import type { Sessions } from '../sessions.js';
 import { helperCall } from '../../core/llm/helperCall.js';
 import { agentModelConfig } from '../../core/llm/agentConfig.js';
-import { assistantInstructions } from '../../core/llm/agents/assistant.js';
 import { loadTranscriptFile, newestTranscriptFile, Transcript, transcriptStamp } from '../../core/llm/transcript.js';
 import { compact, shouldCompact, getStrategy, CompactionLock, resolveContextWindow, resolveCompactSetting } from '../../core/llm/compaction.js';
 import { contextWindowFor } from '../models.js';
@@ -52,15 +51,7 @@ export class AssistantConversation {
   /** The live transcript file, created on first write. */
   getTranscript(): Transcript {
     if (!this.transcript) {
-      let provider = 'unknown', model = 'unknown';
-      try {
-        const c = agentModelConfig(this.values, 'assistant');
-        provider = c.provider; model = c.model;
-      } catch { /* no model configured yet — the header says unknown */ }
-      this.transcript = new Transcript({
-        type: 'session', agent: 'assistant', provider, model,
-        created_at: new Date().toISOString(), system_prompt: assistantInstructions(),
-      }, path.join(this.dir(), `${transcriptStamp()}.jsonl`));
+      this.transcript = new Transcript(path.join(this.dir(), `${transcriptStamp()}.jsonl`));
     }
     return this.transcript;
   }
@@ -74,10 +65,7 @@ export class AssistantConversation {
     const loaded = loadTranscriptFile(file);
     if (!loaded.messages.length) return;
     this.history.push(...loaded.messages);
-    this.transcript = new Transcript(loaded.header ?? {
-      type: 'session', agent: 'assistant', provider: 'unknown', model: 'unknown',
-      created_at: new Date().toISOString(), system_prompt: assistantInstructions(),
-    }, file);
+    this.transcript = new Transcript(file);
   }
 
   // ── session row ──────────────────────────────────────────────────────────

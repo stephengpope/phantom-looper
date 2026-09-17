@@ -21,7 +21,7 @@
 // their callers: a hold means different things to a window (its spinner) and
 // to a git sync (nothing to show), so the caller says.
 import fs from 'node:fs/promises';
-import { and, desc, eq, gte, ilike, inArray, isNull, isNotNull, lt, ne, not, or, count, sql as sqlRaw } from 'drizzle-orm';
+import { and, desc, eq, ilike, inArray, isNull, isNotNull, lt, ne, not, or, count, sql as sqlRaw } from 'drizzle-orm';
 import type { Db } from './db/client.js';
 // `folders` and `loops` appear here for ONE reason: the list is a JOIN (a
 // row's branch and card ride it, and the filter reaches the branch). They
@@ -36,6 +36,7 @@ import { sessionDir, repoDir, type Paths } from './pool/paths.js';
 import { newId } from '../core/ids.js';
 import { logger } from './log.js';
 import { lastUserFromJsonl, stripUsageFromJsonl } from '../core/llm/transcript.js';
+import type { CodingPrompt } from '../core/llm/agents/coding.js';
 import { cascade } from '../core/llm/agentConfig.js';
 import { sessionScope } from './store.js';
 import type { SessionEvents } from './api/sessionEvents.js';
@@ -48,7 +49,7 @@ export class SessionError extends Error {
 
 /** A session with its folder's facts joined in — what the API serves, so
  *  clients keep seeing `branch` even though sessions no longer carry it. */
-export type SessionFull = SessionRow & { branch: string; claimSha: string };
+export type SessionFull = SessionRow & { branch: string; cutFromSha: string };
 
 /** The list's preview of the last thing the user typed: a few dozen
  *  characters on screen, so this many stored — never the record. */
@@ -115,24 +116,6 @@ export const heldByOther = (s: SessionRow, client: string): boolean =>
 export function agentAfterSave(current: string | null, client: string): 'coding' | 'supervisor' | null {
   if (current === 'supervisor') return 'supervisor';
   return client === LOOP_CLIENT_ID ? 'coding' : null;
-}
-
-/** The first line of a transcript is its header; a duplicate keeps the frozen
- *  system prompt but is a different session on a different branch, so those
- *  two fields are rewritten. An unparsable first line is left alone — the
- *  loader skips what it cannot parse, same as everywhere. */
-export function rewriteTranscriptHeader(
-  data: string,
-  patch: { session_id: string; branch: string },
-): string {
-  const nl = data.indexOf('\n');
-  const first = nl < 0 ? data : data.slice(0, nl);
-  try {
-    const h = JSON.parse(first) as { type?: string };
-    if (h.type !== 'session') return data;
-    const line = JSON.stringify({ ...h, ...patch });
-    return nl < 0 ? line : line + data.slice(nl);
-  } catch { return data; }
 }
 
 // ── The object ───────────────────────────────────────────────────────────────
@@ -202,6 +185,24 @@ export class Sessions {
   async transcript(id: string): Promise<string | null> {
     const rows = await this.db.select({ data: sessions.transcript }).from(sessions).where(eq(sessions.id, id));
     return rows[0]?.data ?? null;
+  }
+
+  /** The frozen system prompt, or null when the row has none (a
+   *  conversation-only session, or one born before 025 and not yet opened).
+   *  The other read that names a blob on purpose. */
+  async systemPrompt(id: string): Promise<CodingPrompt | null> {
+    const rows = await this.db.select({ prompt: sessions.systemPrompt }).from(sessions).where(eq(sessions.id, id));
+    return rows[0]?.prompt ?? null;
+  }
+
+  /** Write the prompt once: only a row with none takes it, so a restart or a
+   *  re-open can never move a running session's prompt. Returns what the row
+   *  holds afterwards. */
+  async freezeSystemPrompt(id: string, prompt: CodingPrompt): Promise<CodingPrompt> {
+    const rows = await this.db.update(sessions).set({ systemPrompt: prompt })
+      .where(and(eq(sessions.id, id), isNull(sessions.systemPrompt)))
+      .returning({ prompt: sessions.systemPrompt });
+    return rows[0]?.prompt ?? (await this.systemPrompt(id))!;
   }
 
   /** When the record last moved — the stamp a turn compares before running. */
@@ -340,7 +341,7 @@ export class Sessions {
   /** Create a session: claim a warm slot or clone directly — one way to obtain a
    *  workspace, not a fast path for some callers and a slow one for others. The
    *  claim fetch is what makes the result CORRECT; pool refresh only makes it
-   *  small. Record where base was (claim_sha) for `/git/status`.
+   *  small. Record the commit it was cut from (cut_from_sha) for `/git/status`.
    *
    *  Passing `id` restarts an existing session. Destroy deletes a session's FILES
    *  and nothing else — the row keeps its id and its branch — so a restart needs
@@ -393,7 +394,7 @@ export class Sessions {
     // cannot see, GitHub unreachable. Classified into a SessionError so the API
     // answers with that meaning; anything unrecognised keeps its own error.
     let found: 'existing' | 'new';
-    let claimSha: string;
+    let cutFromSha: string;
     let claimed: boolean;
     try {
       claimed = await claimSlot(this.paths, workspace.owner, workspace.name, workspace.baseBranch, dest);
@@ -439,7 +440,7 @@ export class Sessions {
         found = await checkoutBranch(dir, branch, auth);
       }
       const { stdout } = await git(dir, ['rev-parse', 'HEAD']);
-      claimSha = stdout.trim();
+      cutFromSha = stdout.trim();
     } catch (e) {
       const why = classifyGitFailure(e, { hadToken: !!auth.pat });
       if (why) throw new SessionError(why.code, `cannot check out ${workspace.owner}/${workspace.name}: ${why.message}`, why.retryable);
@@ -452,19 +453,19 @@ export class Sessions {
       log.info({ session: id, branch, found }, 'session restarted');
       this.changed(prior.id);
       const row = (await this.db.select(sessionColumns).from(sessions).where(eq(sessions.id, prior.id)))[0];
-      return { ...row, branch, claimSha: priorFolder?.claimSha ?? claimSha };
+      return { ...row, branch, cutFromSha: priorFolder?.cutFromSha ?? cutFromSha };
     }
 
-    // The folder (the checkout's identity: branch + claim) and the session (the
+    // The folder (the checkout's identity: branch + the commit it was cut from) and the session (the
     // conversation) are born together, sharing the id.
-    await this.folders.create({ id, workspaceId, branch, claimSha });
+    await this.folders.create({ id, workspaceId, branch, cutFromSha });
     await this.db.insert(sessions).values({ id, workspaceId, status: 'active', folderId: id,
       ...await this.birthModel(workspaceId) });
     const row = (await this.db.select(sessionColumns).from(sessions).where(eq(sessions.id, id)))[0];
-    log.info({ session: id, workspace: `${workspace.owner}/${workspace.name}`, branch, found, claimed, claimSha },
+    log.info({ session: id, workspace: `${workspace.owner}/${workspace.name}`, branch, found, claimed, cutFromSha },
       'session created');
     this.changed(id);
-    return { ...row, branch, claimSha };
+    return { ...row, branch, cutFromSha };
   }
 
   /** A conversation-only session: no checkout of its own — `folderId` points at
@@ -519,18 +520,19 @@ export class Sessions {
 
   /** What travels from a source into its freshly created copy (the duplicate
    *  route): the conversation minus its usage lines, the preview, the name,
-   *  plan mode and the MODEL — the copy runs on what the source ran on, and
-   *  can be moved with /model or a preset until its first new message
-   *  (turn_count 0, like any newborn). NO token totals — the usage lines are
-   *  stripped, so the copy counts its own spend from birth. */
+   *  plan mode, the frozen PROMPT and the MODEL — the copy runs on what the
+   *  source ran on, and can be moved with /model or a preset until its first
+   *  new message (turn_count 0, like any newborn). NO token totals — the
+   *  usage lines are stripped, so the copy counts its own spend from birth. */
   async seedCopy(copy: SessionFull, src: SessionRow): Promise<void> {
     const data = await this.transcript(src.id);
     const stamp = new Date();
     await this.db.update(sessions).set({
       planMode: src.planMode,
+      systemPrompt: await this.systemPrompt(src.id),
       ...(src.provider && src.model ? { provider: src.provider, model: src.model, baseUrl: src.baseUrl } : {}),
       ...(data != null ? {
-        transcript: stripUsageFromJsonl(rewriteTranscriptHeader(data, { session_id: copy.id, branch: copy.branch })),
+        transcript: stripUsageFromJsonl(data),
         lastUserMessage: src.lastUserMessage, name: src.name, nameManual: src.nameManual,
         transcriptUpdatedAt: stamp,
       } : {}),

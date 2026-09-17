@@ -8,19 +8,16 @@
 //   3  pull      the SERVER transcript is the record; what comes back is the
 //                working memory the next model call is built from. Nothing
 //                flows upward except turn-end saves.
-//   4  prompt    the header's frozen system_prompt, verbatim; a first open
-//                assembles from the create response's skills + git facts and
-//                freezes on the first save
+//   4  prompt    the row's frozen system prompt, verbatim — the server froze
+//                it when the session was created
 //
 // Steps 5–6 (agent build, turns) are the caller's to drive: the cli streams
 // its agent into a screen, the looper drains turns headless — both build from
 // the same core assembly (agentConfig.ts) and save through saveTranscript()
 // here, which is what renews the lock.
 import type { ModelMessage } from 'ai';
-import { parseTranscript, type TranscriptEvent, type TranscriptHeader } from './llm/transcript.js';
-import { codingInstructions } from './llm/agents/coding.js';
-import type { GitFacts, SecretIndexEntry } from './llm/prompts/coding/wiring.js';
-import type { SkillMeta } from './skills/skills.js';
+import { parseTranscript, type TranscriptEvent } from './llm/transcript.js';
+import type { CodingPrompt } from './llm/agents/coding.js';
 
 export class SessionLockedError extends Error {
   constructor(message: string) { super(message); this.name = 'SessionLockedError'; }
@@ -57,8 +54,9 @@ export interface OpenSessionConfig {
 export interface SessionInfo {
   id: string; workspaceId: string; branch: string; status: string;
   agent?: string | null; card?: number | null;
-  /** Present on create/restart responses only. */
-  skills?: SkillMeta[]; secrets?: SecretIndexEntry[]; agent_git_credentials?: boolean;
+  /** The frozen system prompt, in its two cached pieces. Null on a
+   *  conversation-only session (a supervisor's, an assistant's). */
+  system_prompt: CodingPrompt | null;
   [k: string]: unknown;
 }
 
@@ -77,11 +75,9 @@ export interface OpenedSession {
   /** The server transcript's stamp at open (null when none saved yet) — the
    *  cheap is-my-memory-current token. */
   updatedAt: string | null;
-  header?: TranscriptHeader;
-  /** The frozen system prompt: the header's when one exists, else assembled
-   *  now from the session's facts — the caller freezes it by saving a
-   *  transcript whose header carries it. */
-  instructions: string;
+  /** The frozen system prompt, off the row. Null on a conversation-only
+   *  session (the supervisor's) — those build their prompt fresh. */
+  prompt: CodingPrompt | null;
   /** Save the conversation (JSONL text), whole — the turn-end write, which
    *  also renews the lock. One session, one transcript. The PUT starts
    *  immediately and the caller moves on; saves land in order, and close()
@@ -139,7 +135,7 @@ export async function openSession(cfg: OpenSessionConfig): Promise<OpenedSession
     } else {
       session = await guarded('POST', '/sessions',
         { workspace_id: existing.workspaceId, id: cfg.sessionId }) as SessionInfo;
-      created = true; // restarted: the create response shape, skills included
+      created = true;
     }
   }
 
@@ -156,33 +152,13 @@ export async function openSession(cfg: OpenSessionConfig): Promise<OpenedSession
     { data: string | null; updated_at?: string | null };
   const parsed = parseTranscript(t.data ?? '');
 
-  // 4 — the prompt: frozen header wins, always; else assemble from the facts
-  // the create/restart response carries. (Attaching to an active session with
-  // no transcript yet: assemble from a live skills scan — same facts, live.)
-  let instructions = parsed.header?.system_prompt;
-  if (instructions === undefined) {
-    // No frozen prompt: assemble from the facts the create/restart response
-    // carries. Attaching to an active session that never saved a transcript
-    // has no create response — the resolved settings supply the git facts and
-    // the skills index starts empty (skill_list is the live view anyway).
-    let git: GitFacts = { credentials: session.agent_git_credentials };
-    if (session.skills === undefined) {
-      const s = await guarded('GET', `/sessions/${session.id}`) as
-        { settings?: Record<string, { value: unknown }> };
-      git = { credentials: Boolean(s.settings?.agent_git_credentials?.value) };
-    }
-    // The secrets index rides the create response like skills; with none
-    // (attach path) it starts empty — secret_list is the live view anyway.
-    instructions = codingInstructions(session.skills ?? [], git, session.secrets ?? []);
-  }
-
   // The one in-flight save chain: saves never block their caller, only the
   // lock release (close) waits for the tail of this chain.
   let pendingSave: Promise<void> = Promise.resolve();
 
   return {
     session, created, messages: parsed.messages, events: parsed.events, raw: t.data,
-    updatedAt: t.updated_at ?? null, header: parsed.header, instructions,
+    updatedAt: t.updated_at ?? null, prompt: session.system_prompt ?? null,
     saveTranscript: (data: string) => {
       // The PUT starts now; the caller does not wait on it. Chaining keeps
       // saves in order; the stray .catch keeps a failure from being an

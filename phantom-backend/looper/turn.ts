@@ -5,7 +5,7 @@
 // same parts every client uses.
 import type { ModelMessage } from 'ai';
 import type { OpenedSession } from '../../core/session.js';
-import { memoryRecorder, serializeTranscript, type TranscriptHeader } from '../../core/llm/transcript.js';
+import { memoryRecorder, serializeTranscript } from '../../core/llm/transcript.js';
 import { buildCodingAgent, modelConfigFrom, pinnedCfg, sessionPin } from '../../core/llm/agentConfig.js';
 import { phantomTools } from '../../core/llm/tools/workspace.js';
 import { skillTools } from '../../core/llm/tools/skills.js';
@@ -13,7 +13,6 @@ import { webTools } from '../../core/llm/tools/web.js';
 import { secretTools } from '../../core/llm/tools/secrets.js';
 import { kanbanReadTool } from '../../core/llm/tools/kanban.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
-import { usageEvent, type StepRecord } from '../../core/llm/transcript.js';
 import type { BackdoorQueue } from '../api/backdoor.js';
 
 export interface TurnDeps {
@@ -84,8 +83,9 @@ export async function runCodingTurn(
   const pinned = pinnedCfg(values, sessionPin(
     opened.session as { provider?: string | null; model?: string | null; baseUrl?: string | null }));
   const model = modelConfigFrom(pinned);
+  if (!opened.prompt) throw new Error(`session ${opened.session.id} has no system prompt — not a coding session`);
   const { agent } = buildCodingAgent(pinned, tools, opened.session.id,
-    { instructions: opened.instructions, modelFetch: deps.modelFetch, onRetry: deps.onRetry });
+    { prompt: opened.prompt, modelFetch: deps.modelFetch, onRetry: deps.onRetry });
   // Pending backdoor messages ride this turn as their own user messages,
   // AHEAD of the one that started it — they are the older facts. They are
   // restored if the turn dies before they are saved: a failed turn must not
@@ -133,16 +133,8 @@ export async function runCodingTurn(
     feed?.publish(id, deps.client, { event: 'turn-end' });
   }
 
-  // The header is a record; a first turn writes one naming what ran. The
-  // row decides the model — nothing reads the header's back.
-  const header: TranscriptHeader = opened.header ?? {
-    type: 'session' as const, agent: 'coding',
-    created_at: new Date().toISOString(), system_prompt: opened.instructions,
-    session_id: opened.session.id, workspace: workspaceId, branch: opened.session.branch,
-    provider: model.provider, model: model.model, ...(model.baseUrl ? { base_url: model.baseUrl } : {}),
-  };
   try {
-    await opened.saveTranscript(serializeTranscript(header,
+    await opened.saveTranscript(serializeTranscript(
       [...messages, ...turnMessages],
       [...opened.events, ...turnEvents,
         ...(interrupted ? [{ at: messages.length + turnMessages.length, event: { type: 'interrupted' } }] : [])]));

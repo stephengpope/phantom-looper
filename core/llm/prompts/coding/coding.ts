@@ -2,25 +2,24 @@
 // only, zero logic. The blanks are filled by ./wiring.ts.
 
 // ═══ SYSTEM PROMPT — the coding agent itself ═══════════════════════════════
-// Split into two pieces for prompt caching:
-//   SYSTEM_STATIC  — identical across all workspaces and sessions; gets an
-//                    Anthropic cache breakpoint so every session shares it.
-//   SYSTEM_WORKSPACE — per-workspace: env facts, skills, secrets, credentials.
-//                    Gets its own breakpoint, cached across sessions in the
-//                    same workspace.
-//   SYSTEM         — the combined template (STATIC + workspace blanks), used
-//                    to produce the single frozen string stored in the
-//                    transcript header. At agent-build time, codingAgent
-//                    splits it back by stripping the known static prefix.
+// Two pieces, each its own prompt-cache block:
+//   SYSTEM_BASE      — the agent itself: identity, stakeholders, values,
+//                      communication, environment. Identical across all
+//                      workspaces and sessions; gets an Anthropic cache
+//                      breakpoint so every session shares it.
+//   SYSTEM_WORKSPACE — per-workspace: skills, secrets, credentials. Gets its
+//                      own breakpoint, cached across sessions in the same
+//                      workspace.
 //
 // Blanks: {{stakeholders}} {{values}} {{communication}} {{environment}}
-// {{sending}} (static); {{skills}} {{secrets}} {{credentials}} (workspace).
-// Assembled once at session creation, frozen with it.
+// {{sending}} (base); {{skills}} {{secrets}} {{credentials}} (workspace).
+// Filled once at session creation and stored AS TWO PIECES on the session
+// row (sessions.system_prompt); every agent build sends them verbatim.
 
-// ── STATIC — identical across every workspace, every session ────────────────
+// ── BASE — the agent itself; identical across every workspace, every session ─
 // Blanks: {{stakeholders}} {{values}} {{communication}} {{environment}}
 // {{sending}}.
-export const SYSTEM_STATIC = `You are a value-based coding agent running inside the phantom looper cli.
+export const SYSTEM_BASE = `You are a value-based coding agent running inside the phantom looper cli.
 
 {{stakeholders}}
 
@@ -44,20 +43,6 @@ Anything meant to keep running — a dev server, a watcher — is started with t
 // Blanks: {{skills}} {{secrets}} {{credentials}}. The current date is
 // appended at agent-build time (withCurrentDate), not frozen here.
 export const SYSTEM_WORKSPACE = `{{skills}}
-
-{{secrets}}
-
-Git operations are normally covered for you — committing, pushing, and merging into the base branch happen automatically.
-
-{{credentials}}`;
-
-// ── Combined (for storage / backward compat) ────────────────────────────────
-// The full system prompt as a single string, frozen in the transcript header.
-// Mirrors SYSTEM_STATIC verbatim (so the combined output starts with the
-// identical static prefix), then appends the workspace blanks.
-export const SYSTEM = `${SYSTEM_STATIC}
-
-{{skills}}
 
 {{secrets}}
 

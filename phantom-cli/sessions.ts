@@ -18,13 +18,14 @@ import type { AgentSummary } from './agentFromConfig.js';
 import type { ModelPin } from '../core/llm/agentConfig.js';
 import { Transcript } from './session.js';
 import type { UsageTotals } from '../core/llm/transcript.js';
+import type { CodingPrompt } from '../core/llm/agents/coding.js';
 import type { CompactionLock } from '../core/llm/compaction.js';
 import { NudgeQueue } from '../core/llm/nudgeQueue.js';
 import { applyPart, applyTokens, finalize, nextId, takeCompleted, tokenCount, NO_TOKENS, type Part, type StreamPart, type TurnTokens } from './state.js';
 
 export interface LoadedSession {
-  /** The frozen system prompt this session was created with, if stored. */
-  instructions?: string;
+  /** The row's frozen system prompt; null on a record-only session. */
+  prompt: CodingPrompt | null;
   id: string;
   branch: string;
   workspaceId: string;
@@ -137,9 +138,9 @@ export interface NewSession {
   tools: Record<string, Tool>;
   agent: Agent; summary: AgentSummary;
   transcript: Transcript;
-  /** The session's FROZEN system prompt (see TranscriptHeader.system_prompt).
-   *  Kept so a model change rebuilds the agent with the same instructions. */
-  instructions?: string;
+  /** The row's FROZEN system prompt — kept so a model change rebuilds the
+   *  agent on the same prompt. Null on a record-only session. */
+  prompt: CodingPrompt | null;
   /** Replayed from a transcript when resuming; empty otherwise. */
   history?: ModelMessage[];
   /** The banner and the replayed conversation, already rendered to parts. */
@@ -235,7 +236,7 @@ export class SessionStore {
     const entry: LoadedSession = {
       id: s.id, branch: s.branch, workspaceId: s.workspaceId, name: s.name ?? null, card: s.card,
       tools: s.tools, agent: s.agent, summary: s.summary, transcript: s.transcript,
-      instructions: s.instructions,
+      prompt: s.prompt,
       history: [...(s.history ?? [])],
       done: [...(s.done ?? [])],
       readonly: s.readonly ?? false,

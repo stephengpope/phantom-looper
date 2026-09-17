@@ -11,7 +11,7 @@ import type { ReactNode } from 'react';
 import { hostname } from 'node:os';
 import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
-import type { ModelMessage, Tool } from 'ai';
+import type { Tool } from 'ai';
 import { SessionStore, activeHold, type LoadedSession } from './sessions.js';
 import { SessionFeed } from './sessionFeed.js';
 import { SettingsFeed } from './settingsFeed.js';
@@ -19,7 +19,7 @@ import { SessionsFeed } from './sessionsFeed.js';
 import { BoardStore, type Card, type Stream } from './board.js';
 import { VoiceClient, sidecarEnv, codingKanbanTool, screenModeTools,
   type KanbanArgs, type ScreenModeHandler } from './voice.js';
-import { Transcript, adoptServerCopy, syncTranscriptUp, stepSaveUp, type TranscriptHeader } from './session.js';
+import { Transcript, transcriptPath, adoptServerCopy, syncTranscriptUp, stepSaveUp } from './session.js';
 import { parseTranscript, type UsageTotals } from '../core/llm/transcript.js';
 import { agentModelConfig, pinnedCfg, sessionPin, type ModelPin } from '../core/llm/agentConfig.js';
 import { contextWindowFor } from '../phantom-backend/models.js';
@@ -41,7 +41,8 @@ function compactionSettings(cfg: Record<string, ConfigValue>) {
   };
 }
 import { openSession as coreOpenSession } from '../core/session.js';
-import { buildAgent, buildAssistantAgent, codingInstructions } from './agentFromConfig.js';
+import { buildAgent, buildAssistantAgent } from './agentFromConfig.js';
+import { codingPrompt, type CodingPrompt } from '../core/llm/agents/coding.js';
 import { runTurn } from './agent.js';
 import { messagesToParts, nextId, type Part } from './state.js';
 import { kanbanOps } from './kanban.js';
@@ -58,38 +59,11 @@ import { WorkspaceDirectory, buildAssistantKit } from './assistantKit.js';
 import { confirmDialog, boardScreen, switcherScreen, settingsScreen, keysScreen, secretsScreen,
   voiceScreen, localSettingsScreen, presetsScreen, workspaceSettingsScreen,
   addWorkspaceScreen, archivedScreen, tasksScreen, pickerScreen } from './screens.js';
-import type { SkillMeta } from '../core/skills/skills.js';
-import type { SecretIndexEntry, GitFacts } from '../core/llm/prompts/coding/wiring.js';
 
 /** What the window remembers about a workspace: the banner's display name and
  *  the prefix its cards are named with (`PHA` → `PHA-7`). `error` says why a
  *  lookup fell back to the id, so a bare id never passes for a name. */
 export interface WsFacts { label: string; cardPrefix?: string; error?: string }
-
-/** A session seated on the first frame. The real launch passes `boot` instead
- *  and the window opens EMPTY: it must come up whatever is wrong, because the
- *  screens that fix a dead token or a bad address are all inside it. */
-export interface Initial {
-  sessionId: string; branch: string; workspaceId: string;
-  /** The workspace's display name for the banner; the id stands in when the
-   *  lookup failed — it still identifies the workspace. */
-  workspace?: string;
-  /** The workspace's card number prefix (`PHA`). The toolbar shows it when
-   *  no card is attached, so you always know which project you are in. */
-  cardPrefix?: string;
-  tools: Record<string, Tool>; resumed: ModelMessage[];
-  card?: number | null;
-  /** True when this is a supervisor session — a read-only record. */
-  readonly?: boolean;
-  /** The stored system prompt when resuming (transcript header). Absent — a
-   *  new session, or an old transcript — a fresh stack is assembled. */
-  instructions?: string;
-  /** The skill index for a NEW session's prompt. Unused on resume: the frozen
-   *  prompt wins. */
-  skills?: SkillMeta[];
-  /** The workspace's git facts for a NEW session's prompt. Unused on resume. */
-  git?: GitFacts;
-}
 
 /** What opening resolves to. core's openSession turns each into the same
  *  create / restart / attach path. */
@@ -163,12 +137,11 @@ export interface WindowOptions {
   newTools: (sessionId: string, plan?: boolean, workspaceId?: string,
     planMode?: () => boolean) => Promise<Record<string, Tool>>;
   configPath?: string;
-  initial?: Initial;
   /** What launching wants: resume a named session, or find a workspace and
    *  start. A resume has history coming, so it never opens on the splash. */
   boot?: { resumeId?: string };
   makeAgent?: typeof buildAgent;
-  makeTranscript?: (header: TranscriptHeader) => Transcript;
+  makeTranscript?: (sessionId: string) => Transcript;
   run?: typeof runTurn;
   makeVoice?: () => VoiceClient;
   /** POST /git/auto-push for one session, consuming its ND-JSON stream:
@@ -466,14 +439,10 @@ export class WindowStore {
       void this.api('POST', `/sessions/${id}/turn-ended`, {})
         .catch(quiet('update the assistant session'));
     };
-    this.splash = opts.initial ? opts.initial.resumed.length === 0 : !opts.boot?.resumeId;
+    this.splash = !opts.boot?.resumeId;
     // Defaults only until readChrome's first server read lands.
     this.voiceEnabled = false;
     this.sidebarWidth = opts.sidebarPercent ?? 20;
-    if (opts.initial?.workspace) {
-      this.wsNames.set(opts.initial.workspaceId, { label: opts.initial.workspace,
-        ...(opts.initial.cardPrefix ? { cardPrefix: opts.initial.cardPrefix } : {}) });
-    }
     this.sessions = this.newSessionStore();
     // One subscription for the view: the window forwards what its parts say.
     this.sessions.subscribe(() => this.notify());
@@ -609,10 +578,13 @@ export class WindowStore {
     };
   }
 
+  /** `prompt` is the row's frozen prompt. A record-only session (the
+   *  supervisor's) has none and never runs a turn here; its entry still
+   *  carries an agent, built on the default prompt. */
   private buildFor(tools: Record<string, Tool>, cfg: Record<string, ConfigValue>,
-    instructions: string | undefined, sessionId: string) {
+    prompt: CodingPrompt | null, sessionId: string) {
     const make = this.opts.makeAgent ?? buildAgent;
-    return make(tools, cfg, sessionId, instructions, (t) => this.sessions.note(sessionId, t));
+    return make(tools, cfg, sessionId, prompt ?? codingPrompt(), (t) => this.sessions.note(sessionId, t));
   }
 
   private async readSessionPin(id: string): Promise<ModelPin | null> {
@@ -629,7 +601,7 @@ export class WindowStore {
     if (!e || e.readonly) return;
     const pin = await this.readSessionPin(id);
     const cfg = await this.readSettings();
-    const { agent, summary } = this.buildFor(e.tools, pinnedCfg(cfg, pin), e.instructions, id);
+    const { agent, summary } = this.buildFor(e.tools, pinnedCfg(cfg, pin), e.prompt, id);
     this.sessions.setAgent(id, agent, summary, pin);
   }
 
@@ -640,7 +612,7 @@ export class WindowStore {
     const e = this.sessions.get(id);
     if (!e || e.readonly) return;
     const cfg = await this.readSettings();
-    const { agent, summary } = this.buildFor(e.tools, pinnedCfg(cfg, pin), e.instructions, id);
+    const { agent, summary } = this.buildFor(e.tools, pinnedCfg(cfg, pin), e.prompt, id);
     const moved = summary.provider !== e.summary.provider || summary.model !== e.summary.model;
     this.sessions.setAgent(id, agent, summary, pin);
     if (moved) this.sessions.note(id, `model → ${summary.provider}/${summary.model}`);
@@ -707,7 +679,6 @@ export class WindowStore {
     s.stepSave = (id) => {
       stepSaveUp(this.api, id);
     };
-    if (this.opts.initial) this.seat(s, this.opts.initial);
     return s;
   }
 
@@ -749,34 +720,6 @@ export class WindowStore {
     this.overlay?.poll?.();
     this.note('back in touch with the server — everything re-synced');
   };
-
-  /** The seeded session, on the first frame. The prompt is assembled ONCE
-   *  here and frozen into the transcript header, so this session keeps these
-   *  instructions for life. */
-  private seat(s: SessionStore, initial: Initial): void {
-    const instructions = initial.instructions ?? codingInstructions(initial.skills ?? [], initial.git);
-    const tools = { ...initial.tools, ...codingKanbanTool(this.codingKanbanHandler(initial.workspaceId)),
-      ...screenModeTools(this.screenOps(initial.sessionId)) };
-    const make = this.opts.makeAgent ?? buildAgent;
-    const { agent, summary } = make(tools, REMOTE_DEFAULTS, initial.sessionId, instructions,
-      (t) => s.note(initial.sessionId, t));
-    const transcript = (this.opts.makeTranscript ?? ((h: TranscriptHeader) => new Transcript(h)))({
-      type: 'session', session_id: initial.sessionId, workspace: initial.workspaceId,
-      branch: initial.branch, provider: summary.provider, model: summary.model,
-      created_at: new Date().toISOString(), system_prompt: instructions,
-    });
-    s.add({
-      id: initial.sessionId, branch: initial.branch, workspaceId: initial.workspaceId,
-      tools, agent, summary, transcript, instructions,
-      history: initial.resumed,
-      ...(initial.readonly ? { readonly: true } : {}),
-      done: [
-        ...bannerParts({ workspace: initial.workspace ?? initial.workspaceId, branch: initial.branch }, summary),
-        ...messagesToParts(initial.resumed),
-      ],
-    });
-    this.watchSession(initial.sessionId, s);
-  }
 
   /** A session's lifetime token totals — the token_usage table's sums, the
    *  toolbar's numbers. Zeros when the server cannot answer: the toolbar
@@ -974,20 +917,16 @@ export class WindowStore {
         ...(sessionId ? { sessionId } : { workspaceId: (target as { workspaceId: string }).workspaceId }) });
       const row = opened.session as { id: string; branch: string; workspaceId: string;
         name?: string | null; agent?: string | null; card?: number | null; planMode?: boolean; pinned?: boolean;
-        provider?: string | null; model?: string | null;
-        skills?: SkillMeta[]; secrets?: SecretIndexEntry[]; agent_git_credentials?: boolean };
+        provider?: string | null; model?: string | null };
       // The server record IS the conversation — unless this machine holds
       // unsaved steps on top of it (a window that died mid-turn); then the
       // local file is the fuller copy, opens here, and goes up now.
       const seated = adoptServerCopy(row.id, opened.raw);
       let resumed = opened.messages;
-      let header = opened.header;
       let syncStamp = opened.updatedAt;
       let seatNote: string | null = null; // under the banner: what happened to the file
       if (seated.localKept) {
-        const parsed = parseTranscript(seated.text);
-        resumed = parsed.messages;
-        header = parsed.header as TranscriptHeader | undefined;
+        resumed = parseTranscript(seated.text).messages;
         try {
           syncStamp = await syncTranscriptUp(this.api, row.id);
           seatNote = 'unsaved steps found on this machine — uploaded';
@@ -999,29 +938,14 @@ export class WindowStore {
       // never disagree, so they read the same fact.
       const planMode = row.planMode === true;
       const tools = await this.codingKit(row.id, row.workspaceId);
-      // Same freeze rule as launch: the transcript's stored prompt wins; a
-      // session without one gets a fresh stack, with the skill and secret
-      // indexes the create response froze.
-      const instructions = header?.system_prompt
-        ?? codingInstructions(row.skills ?? [],
-          row.agent_git_credentials === undefined ? undefined
-            : { credentials: row.agent_git_credentials },
-          row.secrets ?? []);
       // THE rule (core agentConfig): the session runs on its ROW's model, and
       // only the row's. The pin is kept on the entry so every later rebuild
       // (plan mode, a settings change) resolves the same way; the feed moves
       // it when the server does (followRowModel).
       const pin = sessionPin(row);
       const modelCfg = pinnedCfg(await this.readSettings(), pin);
-      const { agent, summary } = this.buildFor(tools, modelCfg, instructions, row.id);
-      const transcript = (this.opts.makeTranscript ?? ((h: TranscriptHeader) => new Transcript(h)))({
-        type: 'session', session_id: row.id, workspace: row.workspaceId, branch: row.branch,
-        provider: summary.provider, model: summary.model,
-        // The endpoint is part of what ran: it pins with the pair (016).
-        ...(modelCfg.base_url ? { base_url: String(modelCfg.base_url) } : {}),
-        created_at: new Date().toISOString(),
-        system_prompt: instructions,
-      });
+      const { agent, summary } = this.buildFor(tools, modelCfg, opened.prompt, row.id);
+      const transcript = (this.opts.makeTranscript ?? ((id: string) => new Transcript(transcriptPath(id))))(row.id);
       // The card this session builds, named the way the board names it
       // (`PHA-7`), resolved ONCE here where both facts are in hand.
       const ws = await this.wsFacts(row.workspaceId);
@@ -1038,7 +962,7 @@ export class WindowStore {
         ...(target.kind === 'new' ? { draft: onScreen } : {}),
         id: row.id, branch: row.branch, workspaceId: row.workspaceId,
         name: row.name ?? null,
-        tools, agent, summary, transcript, instructions,
+        tools, agent, summary, transcript, prompt: opened.prompt,
         history: resumed,
         syncStamp,
         pin,
@@ -1733,7 +1657,7 @@ export class WindowStore {
         cfg = current ?? await this.readSettings();
         built = make(await buildAssistantKit(this, this.assistantDeps), cfg, await this.assistantSession());
       } catch (e) { this.note(`assistant not started: ${(e as Error).message}`); return; }
-      this.voice.setAgent(built.agent, built.summary);
+      this.voice.setAgent(built.agent);
       this.voice.setCompaction(agentModelConfig(cfg, 'supervisor'), compactionSettings(cfg));
       void this.voice.start(sidecarEnv(cfg));
     })();
@@ -1809,7 +1733,7 @@ export class WindowStore {
       // the session feed brings that in (followRowModel).
       const make = this.opts.makeAgent ?? buildAgent;
       this.sessions.rebuildAgents((e: LoadedSession) =>
-        make(e.tools, pinnedCfg(cfg, e.pin), e.id, e.instructions, (t) => this.sessions.note(e.id, t)));
+        make(e.tools, pinnedCfg(cfg, e.pin), e.id, e.prompt ?? codingPrompt(), (t) => this.sessions.note(e.id, t)));
 
       // The Assistant follows its settings: on/off starts and stops it; an
       // audio value (the Deepgram key, the devices) restarts the sidecar,

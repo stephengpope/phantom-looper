@@ -12,6 +12,7 @@ import { systemSkills } from '../../systemSkills.js';
 import { GLOBAL, workspaceScope } from '../../store.js';
 import { ok, err, type AppCtx } from '../app.js';
 import { openSession, SessionLockedError } from '../../../core/session.js';
+import { codingPrompt, type CodingPrompt } from '../../../core/llm/agents/coding.js';
 import { injectFetch } from '../../looper/injectFetch.js';
 import { runCodingTurn } from '../../looper/turn.js';
 import { writeAttachment } from '../../telegram/attachments.js';
@@ -37,6 +38,35 @@ import { logger, errStr } from '../../log.js';
 
 const TAG = { tags: ['sessions'] };
 const idParam = { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] };
+
+/** The session's system prompt, frozen ONCE from this moment's facts: the
+ *  skills (the repo's .agents/skills/ on the session's branch — scanned AFTER
+ *  the checkout, since a claim sits on base until checkoutBranch — merged
+ *  with the image's baked /opt/skills, repo shadowing system), the secrets
+ *  index (names + descriptions, global + workspace, workspace shadowing
+ *  global), and the workspace's resolved agent_git_credentials. A row that
+ *  already holds a prompt keeps it (Sessions.freezeSystemPrompt) — a restart
+ *  or a re-open never moves a running session's prompt. Called at creation
+ *  and, for sessions born before the column, on their first open. */
+async function freezeSystemPrompt(ctx: AppCtx, s: SessionRow): Promise<CodingPrompt> {
+  const workspace = await ctx.workspaces.get(s.workspaceId);
+  const resolved = await ctx.settings.resolveMany(['container_image', 'agent_git_credentials'], { workspace });
+  const skills = mergeSkills(
+    await scanSkills(repoDir(ctx.paths, s.folderId ?? s.id)),
+    ctx.fs ? await systemSkills(ctx.fs.docker, String(resolved.container_image)) : []);
+  const byName = new Map<string, { name: string; description: string }>();
+  for (const sec of await ctx.settings.listSecrets([GLOBAL, workspaceScope(s.workspaceId)])) {
+    if (sec.scope === GLOBAL && byName.has(sec.name)) continue;
+    byName.set(sec.name, { name: sec.name, description: sec.description });
+  }
+  const secrets = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return ctx.sessions.freezeSystemPrompt(s.id,
+    codingPrompt(skills, { credentials: Boolean(resolved.agent_git_credentials) }, secrets));
+}
+
+/** A session that runs the CODING agent — the only kind with a frozen prompt.
+ *  Supervisor and assistant sessions build theirs fresh every turn. */
+const runsCodingAgent = (s: SessionRow) => s.agent !== 'supervisor' && s.agent !== 'assistant';
 
 /** An attached file's ceiling (attachments route) — ours, unlike telegram's
  *  20MB bot-API ceiling: a screencast should fit, a disk image should not. */
@@ -76,11 +106,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       'Pass `id` to RESTART a session that was destroyed. Destroying a session deletes its files and ' +
       'nothing else — the row keeps its id and its branch — so a restart re-clones, finds that branch on ' +
       'origin, and carries on exactly where it stopped. Restarting a session that is still active is refused.\n\n' +
-      'The response carries `skills` — the repo\'s .agents/skills/ (scanned from the session\'s branch ' +
-      'AFTER checkout) merged with the workspace image\'s baked /opt/skills, repo shadowing system — so a ' +
-      'client can put them in the agent\'s system prompt before its first turn. GET /skills is the live view.\n\n' +
-      'It also carries `agent_git_credentials` — the workspace\'s resolved value at ' +
-      'creation — so a client can state that fact in the same frozen prompt.',
+      'The response carries `system_prompt` — the coding agent\'s prompt in its two cached pieces ' +
+      '(`base`, `workspace`), frozen on the row at creation from that moment\'s skills, secrets and ' +
+      'git facts, and sent verbatim on every turn. A restart keeps the prompt the session was born with.',
     body: { type: 'object', required: ['workspace_id'], additionalProperties: false,
       examples: [{ workspace_id: 'paste the id from POST /workspaces' }],
       properties: {
@@ -90,30 +118,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     if (!req.body?.workspace_id) return reply.code(400).send(err('missing_workspace', 'body.workspace_id required'));
     try {
       const s = await ctx.sessions.create(req.body.workspace_id, { id: req.body.id });
-      const workspace = await ctx.workspaces.get(s.workspaceId);
-      // Two tiers, merged here so every client (cli, looper) freezes the same
-      // list: the repo's — scanned AFTER Sessions.create returns, when the
-      // checkout is on the SESSION's branch (a claim sits on base until
-      // checkoutBranch; scanning at claim would read the wrong branch, worst
-      // on restart) — and the image's system tier, repo shadowing system.
-      const creation = await ctx.settings.resolveMany(['container_image', 'agent_git_credentials'], { workspace });
-      const image = creation.container_image;
-      const skills = mergeSkills(
-        await scanSkills(repoDir(ctx.paths, s.id)),
-        ctx.fs ? await systemSkills(ctx.fs.docker, String(image)) : []);
-      // The workspace fact a client states in the frozen prompt: resolved
-      // NOW (default -> override -> workspace), same name as the setting.
-      const agent_git_credentials = creation.agent_git_credentials;
-      // The secrets index, frozen the same way as skills: names +
-      // descriptions only, global + this workspace, workspace shadowing
-      // global by name. secret_list is the live view.
-      const byName = new Map<string, { name: string; description: string }>();
-      for (const sec of await ctx.settings.listSecrets([GLOBAL, workspaceScope(s.workspaceId)])) {
-        if (sec.scope === GLOBAL && byName.has(sec.name)) continue;
-        byName.set(sec.name, { name: sec.name, description: sec.description });
-      }
-      const secrets = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
-      return reply.code(201).send(ok({ ...s, skills, secrets, agent_git_credentials }));
+      return reply.code(201).send(ok({ ...s, system_prompt: await freezeSystemPrompt(ctx, s) }));
     } catch (e) {
       if (e instanceof SessionError) {
         const status = e.code === 'already_active' ? 409
@@ -328,7 +333,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   app.get<{ Params: { id: string } }>(
     '/sessions/:id/transcript', { schema: { ...TAG,
       summary: 'Read a session\'s transcript',
-      description: 'The stored conversation (JSONL, header line first), or data: null when none was ever saved. ' +
+      description: 'The stored conversation (JSONL, one message per line), or data: null when none was ever saved. ' +
         'One session, one transcript. Reads are allowed while another client holds the session — watching a ' +
         'running session is safe; only writes need the lock.',
       params: idParam } },
@@ -746,7 +751,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
 
   app.get<{ Params: { id: string } }>('/sessions/:id', { schema: { ...TAG,
     summary: 'Session metadata, settings resolved',
-    description: 'Status, branch, claim_sha, timestamps, plus `settings`: every setting with its layers ' +
+    description: 'Status, branch, timestamps, `system_prompt` (the frozen prompt a coding session ' +
+      'runs on; null for a supervisor\'s or assistant\'s), plus `settings`: every setting with its layers ' +
       '(default/global/workspace/session) and the computed value + source — the SESSION is the deepest ' +
       'scope, so this is the only view where a session override (auto_push_on_archive) shows resolved. ' +
       'The workspace container is runtime state and has no field here.',
@@ -756,8 +762,12 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     const settingsOut = await ctx.settings.block({ workspace: await ctx.workspaces.get(s.workspaceId), session: s });
     const folder = s.folderId ? await ctx.folders.get(s.folderId) : undefined;
     const loop = await ctx.loops.of(s.id);
+    // A coding session born before the column (025) gets its prompt frozen
+    // the first time it is opened — the one write this read makes, once.
+    let system_prompt = await ctx.sessions.systemPrompt(s.id);
+    if (!system_prompt && runsCodingAgent(s)) system_prompt = await freezeSystemPrompt(ctx, s);
     return ok({ ...s, branch: folder?.branch ?? null, card: loop?.card ?? null,
-      settings: settingsOut,
+      system_prompt, settings: settingsOut,
       // Computed like the list's, and for the same reason: the cli polls this
       // route while a session runs elsewhere (lock state + stamp, one GET)
       // and must not compare clocks with the server.

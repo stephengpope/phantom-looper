@@ -1,38 +1,20 @@
 // The coding session's transcript, on the shared format (core/llm/transcript.ts):
 // one JSONL file per phantom session under CONFIG_DIR/sessions/. This file
-// keeps only what is TUI-specific — where the files live, the coding header
-// shape, and the resume-list helpers; the format itself (header line + one
-// ModelMessage per line, torn-line tolerance, dangling-tool-call trim) lives
-// with the other agents' transcript code.
+// keeps only what is TUI-specific — where the files live and the resume-list
+// helpers; the format itself (one ModelMessage per line, torn-line
+// tolerance, dangling-tool-call trim) lives with the other agents'
+// transcript code.
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CONFIG_DIR } from './config.js';
 import {
-  Transcript as BaseTranscript, loadTranscriptFile, dropDanglingToolCall, lastUserFromJsonl,
-  type LoadedTranscript, type TranscriptHeader as BaseHeader,
+  Transcript, dropDanglingToolCall, lastUserFromJsonl, type LoadedTranscript,
 } from '../core/llm/transcript.js';
 
-export { dropDanglingToolCall, type LoadedTranscript };
-
-/** The coding session's header: the shared shape plus the session's identity. */
-export interface TranscriptHeader extends BaseHeader {
-  session_id: string;
-  workspace: string;
-  branch: string;
-}
+export { Transcript, dropDanglingToolCall, type LoadedTranscript };
 
 export const SESSIONS_DIR = join(CONFIG_DIR, 'sessions');
 export const transcriptPath = (sessionId: string) => join(SESSIONS_DIR, `${sessionId}.jsonl`);
-
-export class Transcript extends BaseTranscript {
-  constructor(header: TranscriptHeader, path = transcriptPath(header.session_id)) {
-    super({ agent: 'coding', ...header }, path);
-  }
-}
-
-export function loadTranscript(sessionId: string, file = transcriptPath(sessionId)): LoadedTranscript & { header?: TranscriptHeader } {
-  return loadTranscriptFile(file) as LoadedTranscript & { header?: TranscriptHeader };
-}
 
 /** The last thing the user typed in a session, for the launcher's resume list.
  *  Read from the local transcript: cheaper than a title, always accurate, and
@@ -63,12 +45,7 @@ export interface Seated { text: string; localKept: boolean }
  *  ones win) — is replaced by the server's copy.
  *
  *  A session that has said NOTHING has no transcript, and this writes no file
- *  for it. The file is the conversation; there is not one yet. Writing an
- *  empty one cost a session its model: Transcript takes an existing file to
- *  mean its header is already in it, so line 1 became the first user message,
- *  the header was never written, and the save had nothing to pin from — that
- *  session ran turn after turn on the global settings with a blank model in
- *  /resume. Nothing to misread if nothing is there. */
+ *  for it. The file is the conversation; there is not one yet. */
 export function adoptServerCopy(sessionId: string, raw: string | null, file = transcriptPath(sessionId)): Seated {
   const server = raw ?? '';
   mkdirSync(SESSIONS_DIR, { recursive: true, mode: 0o700 });

@@ -43,13 +43,12 @@ import { runTurn } from './agent.js';
 import { buildAgent, buildAssistantAgent } from './agentFromConfig.js';
 import { phaseLabel, tokenCount, formatTokensIn, formatTokensOut, cachePct } from './state.js';
 import { activeHold } from './sessions.js';
-import { Transcript, type TranscriptHeader } from './session.js';
+import { Transcript, transcriptPath } from './session.js';
 import { complete, matches } from './commands.js';
 import { quiet, type Api } from './request.js';
-import { WindowStore, type Initial } from './window.js';
+import { WindowStore } from './window.js';
 import { setTokenRecorder } from '../core/llm/createAgent.js';
 
-export type { Initial };
 
 /** Rows the slash menu shows at once; the window slides to follow the cursor. */
 const MENU_ROWS = 8;
@@ -72,14 +71,14 @@ import { copyToClipboard, isMouseInput, parseMouse, selectionRanges, type Select
 import type { Screen } from './screen.js';
 
 export function App({
-  api, stream, initial, boot, newTools, configPath, onSession, onWindow,
+  api, stream, boot, newTools, configPath, onSession, onWindow,
   autoPush,
   autoPull,
   clientId = '',
   pollMs = 3_000,
   taskPollMs = 60_000,
   makeAgent = buildAgent,
-  makeTranscript = (h: TranscriptHeader) => new Transcript(h),
+  makeTranscript = (id: string) => new Transcript(transcriptPath(id)),
   run = runTurn,
   sidebarPercent = 20,
   makeVoice,
@@ -133,7 +132,6 @@ export function App({
    *  launch passes `boot` instead and the window opens EMPTY: the app must
    *  come up whatever is wrong (a dead token, an unreachable server), because
    *  the screens that fix those problems are all in here. */
-  initial?: Initial;
   /** What launching wants: resume a named session, or find a workspace and
    *  start — the same flow /new and /workspace run, so a failure lands as
    *  words in the pane instead of a stack trace before the app exists. */
@@ -148,7 +146,7 @@ export function App({
   /** Test seam: the real one reads the config chain and builds a live model. */
   makeAgent?: typeof buildAgent;
   /** Test seam. A factory, not an instance — there is one per open session. */
-  makeTranscript?: (header: TranscriptHeader) => Transcript;
+  makeTranscript?: (sessionId: string) => Transcript;
   /** Test seam: the turn runner the store drives. */
   run?: typeof runTurn;
   /** Fired whenever the live session changes — /new, /resume, /workspace and
@@ -196,7 +194,7 @@ export function App({
     // the server's TokenUsage is the one writer, so the record goes to it.
     setTokenRecorder((r) => { void api('POST', '/token-usage', r).catch(quiet('record token usage')); });
     return new WindowStore({
-      api, stream, newTools, configPath, initial, boot,
+      api, stream, newTools, configPath, boot,
       makeAgent, makeTranscript, run, makeVoice, onSession, exit,
       autoPush, autoPull, clientId, pollMs, taskPollMs,
       makeAssistantAgent, newAssistantTools, sidebarPercent,

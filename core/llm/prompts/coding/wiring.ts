@@ -6,7 +6,7 @@ import { VALUES } from '../values.js';
 import { COMMUNICATION } from '../communication.js';
 import { ENVIRONMENT } from '../environment.js';
 import { SENDING_FILES } from '../sending.js';
-import { SYSTEM, SYSTEM_STATIC, SKILLS, SECRETS, CREDENTIALS_FACT } from './coding.js';
+import { SYSTEM_BASE, SYSTEM_WORKSPACE, SKILLS, SECRETS, CREDENTIALS_FACT } from './coding.js';
 import type { SkillMeta } from '../../../skills/skills.js';
 
 /** One stored secret as the prompt (and the create response) carries it —
@@ -40,34 +40,29 @@ export function secretsIndex(secrets: SecretIndexEntry[]): string {
   return fill(SECRETS, { secretsList: secrets.map((s) => `- ${s.name}: ${clip(s.description)}`).join('\n') });
 }
 
-/** The full system prompt as a single string — what gets frozen in the
- *  transcript header. The combined template interpolates SYSTEM_STATIC
- *  (stakeholders, values, communication, environment, sending) and adds the
- *  per-workspace blanks after it. */
-export function systemPrompt(
-  skills: SkillMeta[] = [], git: GitFacts = {}, secrets: SecretIndexEntry[] = [],
-): string {
-  return fill(SYSTEM, {
-    stakeholders: STAKEHOLDERS,
-    values: VALUES,
-    communication: COMMUNICATION,
-    environment: ENVIRONMENT,
-    sending: SENDING_FILES,
-    skills: skillsIndex(skills),
-    secrets: secretsIndex(secrets),
-    credentials: git.credentials ? CREDENTIALS_FACT : '',
-  });
-}
+/** The coding agent's system prompt, in the two pieces the prompt cache
+ *  wants: `base` is the agent itself, identical for every session;
+ *  `workspace` carries this session's facts. Built once at session creation, stored on the row
+ *  (sessions.system_prompt) and sent verbatim on every turn — so a prompt
+ *  file edit reaches NEW sessions only, and a running session's cache never
+ *  moves under it. */
+export interface CodingPrompt { base: string; workspace: string }
 
-/** The static system prompt block — identical across every workspace and
- *  session. No per-workspace inputs. This is the prefix that gets cached
- *  globally via an Anthropic breakpoint. */
-export function staticSystemPrompt(): string {
-  return fill(SYSTEM_STATIC, {
-    stakeholders: STAKEHOLDERS,
-    values: VALUES,
-    communication: COMMUNICATION,
-    environment: ENVIRONMENT,
-    sending: SENDING_FILES,
-  });
+export function codingPrompt(
+  skills: SkillMeta[] = [], git: GitFacts = {}, secrets: SecretIndexEntry[] = [],
+): CodingPrompt {
+  return {
+    base: fill(SYSTEM_BASE, {
+      stakeholders: STAKEHOLDERS,
+      values: VALUES,
+      communication: COMMUNICATION,
+      environment: ENVIRONMENT,
+      sending: SENDING_FILES,
+    }),
+    workspace: fill(SYSTEM_WORKSPACE, {
+      skills: skillsIndex(skills),
+      secrets: secretsIndex(secrets),
+      credentials: git.credentials ? CREDENTIALS_FACT : '',
+    }),
+  };
 }

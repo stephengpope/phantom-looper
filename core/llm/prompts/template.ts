@@ -3,8 +3,8 @@
 // that fill them. fill() is the whole mechanism.
 //
 // A prompt is assembled ONCE, when its agent's chat begins, and the result is
-// frozen with that chat (the TUI stores it in the transcript header; a voice
-// run keeps it for the sidecar's life; a Git Fixer run is one conversation).
+// frozen with that chat (a coding session stores it on its row; a voice run
+// keeps it for the sidecar's life; a Git Fixer run is one conversation).
 // Editing a prompt file changes NEW chats only — that is the point, not a
 // limitation. Anything a model must always see current belongs in a tool's
 // description, which reaches every chat, never in here.
@@ -49,8 +49,8 @@ export function firstLineOf(template: string, vars: Record<string, string | numb
   return fill(line, vars);
 }
 
-/** The frozen prompt plus today's date — recomputed at every agent build
- *  (launch, resume, model change), so the stored text never moves. */
+/** A frozen prompt piece plus today's date — recomputed at every agent
+ *  build (launch, resume, model change), so the stored text never moves. */
 export function withCurrentDate(instructions: string, now = new Date()): string {
   const day = now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: '2-digit' });
   return `${instructions}\n\nCurrent date: ${day}.`;

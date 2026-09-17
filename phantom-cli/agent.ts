@@ -12,8 +12,6 @@ export {
   CLAUDE_CODE_SYSTEM, PROVIDERS,
   type Agent, type Provider, type Reasoning, type ModelConfig,
 } from '../core/llm/createAgent.js';
-export { codingInstructions } from '../core/llm/agents/coding.js';
-
 
 // Deltas arrive many times per second; a setState per token is the classic
 // Ink flicker. Buffer deltas and flush every FLUSH_MS (Nanocoder's rule);

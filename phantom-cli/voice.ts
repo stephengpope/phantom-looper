@@ -31,8 +31,7 @@ import { CONFIG_DIR, type ConfigValue } from './config.js';
 import { applyPart, finalize, nextId, type Part, type StreamPart } from './state.js';
 import { FLUSH_MS, runTurn, type Agent } from './agent.js';
 import { loadTranscriptFile, newestTranscriptFile, Transcript, transcriptStamp, usageEvent } from '../core/llm/transcript.js';
-import { compact, shouldCompact, getStrategy, isSummaryMessage, CompactionLock, resolveContextWindow } from '../core/llm/compaction.js';
-import { assistantInstructions } from '../core/llm/agents/assistant.js';
+import { compact, shouldCompact, getStrategy, isSummaryMessage, CompactionLock } from '../core/llm/compaction.js';
 import type { ModelConfig } from '../core/llm/createAgent.js';
 import { helperCall } from '../core/llm/helperCall.js';
 
@@ -394,7 +393,6 @@ export class VoiceClient {
     for (const fn of this.subs) fn();
   }
 
-  private modelInfo = { provider: 'unknown', model: 'unknown' };
   private transcript: Transcript | null = null;
   /** Compaction config, supplied with the agent (setCompaction) since both
    *  come from the same settings read. */
@@ -462,34 +460,25 @@ export class VoiceClient {
     const loaded = loadTranscriptFile(file);
     if (!loaded.messages.length) return;
     this.history.push(...loaded.messages);
-    this.transcript = new Transcript(loaded.header ?? {
-      type: 'session', agent: 'assistant', provider: this.modelInfo.provider, model: this.modelInfo.model,
-      created_at: new Date().toISOString(), system_prompt: assistantInstructions(),
-    }, file);
+    this.transcript = new Transcript(file);
     this.set({ done: [...this.snap.done, ...partsFromHistory(loaded.messages)] });
   }
 
   /** The brain. Set before start, and again whenever the model config changes
-   *  (the history stays; only the next turn sees the new model). `info` names
-   *  what will answer — recorded in the transcript header. */
-  setAgent(agent: Agent, info?: { provider: string; model: string }): void {
+   *  (the history stays; only the next turn sees the new model). */
+  setAgent(agent: Agent): void {
     this.agent = agent;
-    if (info) this.modelInfo = info;
   }
 
   /** The conversation's record, on the shared format (core/llm/transcript.ts):
-   *  header + one ModelMessage per line, one file per voice conversation
+   *  one ModelMessage per line, one file per voice conversation
    *  (engine start), created on the first message. Same format as the coding
    *  sessions and the git fixer; never replayed — a restart is a fresh
    *  conversation, the file is the record. */
   private log(): Transcript | null {
     if (!this.transcriptDir) return null;
     if (!this.transcript) {
-      const stamp = transcriptStamp();
-      this.transcript = new Transcript({
-        type: 'session', agent: 'assistant', provider: this.modelInfo.provider, model: this.modelInfo.model,
-        created_at: new Date().toISOString(), system_prompt: assistantInstructions(),
-      }, join(this.transcriptDir, `${stamp}.jsonl`));
+      this.transcript = new Transcript(join(this.transcriptDir, `${transcriptStamp()}.jsonl`));
     }
     return this.transcript;
   }

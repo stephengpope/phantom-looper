@@ -90,15 +90,17 @@ export const cardRevisions = phantomLooper.table('card_revisions', {
   changed_at: timestamp('changed_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-// A checkout: the branch and where base was when it was cut. The directory on
+// A checkout: the branch and the commit it was cut from. The directory on
 // disk is named by this id (which equals the owning session's id). The row is
 // permanent — it is what remembers the branch; the FILES can be deleted and
-// re-cloned from it.
+// re-cloned from it. Goes with its workspace (cascade, 026).
 export const folders = phantomLooper.table('folders', {
   id: text('id').primaryKey(),
   workspaceId: text('workspace_id').notNull(),
   branch: text('branch').notNull(),
-  claimSha: text('claim_sha').notNull(),
+  // HEAD right after the checkout: base's tip for a new session, the source
+  // branch's tip for a duplicate. /git/status counts base's commits since it.
+  cutFromSha: text('cut_from_sha').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -180,12 +182,21 @@ export const sessions = phantomLooper.table('sessions', {
   provider: text('provider'),
   model: text('model'),
   baseUrl: text('base_url'),
+  // THE system prompt this session runs on, in the two pieces the prompt
+  // cache wants (core/llm/prompts/coding/wiring.ts CodingPrompt). Frozen at
+  // birth from that moment's facts — skills, secrets, credentials — and never
+  // rewritten, so a prompt edit reaches new sessions only and a running
+  // session's cache never moves. A duplicate takes its source's. Null on a
+  // conversation-only session (supervisor, assistant): those build fresh.
+  // (025; Sessions.systemPrompt / freezeSystemPrompt)
+  systemPrompt: jsonb('system_prompt').$type<{ base: string; workspace: string }>(),
 });
 
-// Every sessions read selects THESE, never the bare table: the one column
-// left out is the blob, so no list or lookup hauls conversations through
-// Postgres by accident. The transcript routes name the blob explicitly.
-const { transcript: _transcriptBlob, ...withoutBlob } = getTableColumns(sessions);
+// Every sessions read selects THESE, never the bare table: the columns left
+// out are the blobs — the conversation and the frozen prompt — so no list or
+// lookup hauls them through Postgres by accident. The transcript routes and
+// the one-session view name them explicitly.
+const { transcript: _transcriptBlob, systemPrompt: _promptBlob, ...withoutBlob } = getTableColumns(sessions);
 export const sessionColumns = withoutBlob;
 
 // Telegram (migration 012): ONE account row (id pinned 1), the sent-bubble
@@ -262,7 +273,7 @@ export const tokenUsage = phantomLooper.table('token_usage', {
 
 export type WorkspaceRow = typeof workspaces.$inferSelect;
 export type CardRow = typeof cards.$inferSelect;
-/** A session as reads return it — sessionColumns' shape, blob excluded. */
-export type SessionRow = Omit<typeof sessions.$inferSelect, 'transcript'>;
+/** A session as reads return it — sessionColumns' shape, blobs excluded. */
+export type SessionRow = Omit<typeof sessions.$inferSelect, 'transcript' | 'systemPrompt'>;
 export type FolderRow = typeof folders.$inferSelect;
 export type LoopRow = typeof loops.$inferSelect;
