@@ -13,7 +13,9 @@ import { BackgroundTasks } from './backgroundTasks.js';
 import { Presets } from './presets.js';
 import { setTokenRecorder } from '../core/llm/createAgent.js';
 import { LogTokens } from './logTokens.js';
-import { TelegramState } from './telegram/store.js';
+import { TelegramBotState } from './telegram/botState.js';
+import { TelegramSentMessages } from './telegram/sentMessages.js';
+import { TelegramHandledUpdates } from './telegram/handledUpdates.js';
 import { SettingsEvents } from './api/settingsEvents.js';
 import { idleBackupSweep, pressureSweep } from './disk.js';
 import { buildApp, type AppCtx } from './api/app.js';
@@ -81,7 +83,9 @@ async function main() {
   setTokenRecorder((r) => {
     logTokens.record(r).catch((e) => log.warn({ err: (e as Error).message }, 'token recording failed'));
   });
-  const telegramState = new TelegramState(db, env.encryptionKey);
+  const telegramBotState = new TelegramBotState(db, env.encryptionKey);
+  const telegramSentMessages = new TelegramSentMessages(db);
+  const telegramHandledUpdates = new TelegramHandledUpdates(db);
 
   const docker = makeDocker();
   const containers = new ContainerManager(docker, paths, {
@@ -296,7 +300,8 @@ async function main() {
   // profile runs on); with no address, telegram stays off. Reconcile at boot
   // re-registers a stale webhook and pushes the command menu.
   const telegram = new TelegramEngine({
-    state: telegramState, settings, sessions, cards, workspaces, paths, app, apiKey: env.apiKey,
+    botState: telegramBotState, sentMessages: telegramSentMessages, handledUpdates: telegramHandledUpdates,
+    settings, sessions, cards, workspaces, paths, app, apiKey: env.apiKey,
     events: ctx.events, backdoor: ctx.backdoor,
     sessionEvents: ctx.sessionEvents, publicAddress: process.env.PHANTOM_BACKEND_ADDRESS,
     autoPush: autoPushFn, autoPull: autoPullFn,

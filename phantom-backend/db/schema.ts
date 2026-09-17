@@ -193,12 +193,17 @@ export const sessions = phantomLooper.table('sessions', {
 const { transcript: _transcriptBlob, systemPrompt: _promptBlob, ...withoutBlob } = getTableColumns(sessions);
 export const sessionColumns = withoutBlob;
 
-// Telegram (migration 012): ONE account row (id pinned 1), the sent-bubble
-// map, and webhook dedup. See phantom-backend/telegram/.
-export const telegramAccount = phantomLooper.table('telegram_account', {
+// Telegram (migrations 012, 031). Three tables, three owners in
+// phantom-backend/telegram/: TelegramBotState, TelegramSentMessages,
+// TelegramHandledUpdates.
+
+// The ONE row (id pinned 1): who answers a plain message, which session and
+// workspace are active, and the webhook registration.
+export const telegramBotState = phantomLooper.table('telegram_bot_state', {
   id: integer('id').primaryKey().default(1),
   // 'assistant' (home) | 'code' (messages run coding turns on activeSessionId).
   mode: text('mode').notNull().default('assistant'),
+  // Keyed to sessions / workspaces, cleared when the row goes (031).
   activeSessionId: text('active_session_id'),
   activeWorkspaceId: text('active_workspace_id'),
   webhookSecretEnc: bytea('webhook_secret_enc'),
@@ -206,18 +211,21 @@ export const telegramAccount = phantomLooper.table('telegram_account', {
   botUsername: text('bot_username'),
 });
 
-export const telegramSent = phantomLooper.table('telegram_sent', {
+// One row per message the bot sent — a reply or reaction to it carries only
+// (chat, message id), and this says which conversation it belongs to.
+export const telegramSentMessages = phantomLooper.table('telegram_sent_messages', {
   chatId: bigint('chat_id', { mode: 'number' }).notNull(),
   messageId: bigint('message_id', { mode: 'number' }).notNull(),
   content: text('content').notNull(),
-  // 'assistant' | 'session' — which conversation the bubble belongs to, so a
-  // reply to it switches there (a session's also carries originSessionId).
-  origin: text('origin').notNull().default('assistant'),
-  originSessionId: text('origin_session_id'),
+  // The session the bubble came from; null = the assistant's. Keyed, gone
+  // with its session (031).
+  sessionId: text('session_id'),
   sentAt: timestamp('sent_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [primaryKey({ columns: [t.chatId, t.messageId] })]);
 
-export const telegramUpdate = phantomLooper.table('telegram_update', {
+// One row per Telegram update_id already handled: Telegram re-delivers, the
+// repeat loses the insert and is dropped.
+export const telegramHandledUpdates = phantomLooper.table('telegram_handled_updates', {
   updateId: bigint('update_id', { mode: 'number' }).primaryKey(),
   seenAt: timestamp('seen_at', { withTimezone: true }).notNull().defaultNow(),
 });

@@ -1,6 +1,6 @@
 // Telegram slash commands. Answered from the database — a command runs NO
 // agent turn. Two independent knobs, each with its own commands: WHICH session
-// the account points at (`/sessions n`, `/new` — pointer only) and WHO answers
+// the bot points at (`/sessions n`, `/new` — pointer only) and WHO answers
 // a plain message (`/code`, `/assistant` — the only two doors between modes).
 //
 // The menus are per mode (chat scope, swapped by enterMode). Each mode shows
@@ -16,14 +16,14 @@
 // `/auto_push` and `/auto_pull` are the project's `/auto-push` / `/auto-pull`
 // under Telegram's command law (lowercase letters, digits, underscores — a
 // hyphen fails the whole setMyCommands call). Code mode only, like /plan: they
-// act on the coding session the account points at. Each runs as ONE bubble
+// act on the coding session the bot points at. Each runs as ONE bubble
 // edited in place — a line per step as it happens, the result on the last line.
 
 import type { TelegramClient } from './client.js';
 import { titled } from './client.js';
 import { toTelegram } from './entities.js';
 import type { TelegramEngine } from './engine.js';
-import { MODE_MESSAGE, type TelegramMode } from './store.js';
+import { MODE_MESSAGE, type TelegramMode } from './botState.js';
 import { PROVIDERS } from '../../core/llm/createAgent.js';
 import { hasCatalog, latestModel, modelsFor } from '../models.js';
 import { credentialForProvider } from '../settings.js';
@@ -87,7 +87,7 @@ export async function handleCommand(
   const cmd = raw.toLowerCase().split('@')[0];
   const arg = rest[0];
   const reply = (m: string) => client.sendMessage(dm, m);
-  const acc = await engine.state.account();
+  const bot = await engine.botState.read();
 
   switch (cmd) {
     case 'start':
@@ -112,7 +112,7 @@ export async function handleCommand(
         if (!id) { await reply('⚠️ Send /sessions first to see the list, then /code <number>.'); return; }
         const r = await engine.switchSession(client, dm, id, { silent: true });
         if ('error' in r) { await reply('⚠️ That session no longer exists — /sessions for a fresh list.'); return; }
-      } else if (!acc.activeSessionId) {
+      } else if (!bot.activeSessionId) {
         await reply('⚠️ Pick a session first — /sessions or /new.');
         return;
       }
@@ -137,7 +137,7 @@ export async function handleCommand(
       if (!j.ok || !j.data.sessions.length) { await reply('ℹ️ No sessions yet. /new starts one.'); return; }
       sessionList.set(dm, j.data.sessions.map((s: any) => s.id));
       const rows = j.data.sessions.map((s: any, i: number) =>
-        `${i + 1}. ${s.pinned ? '📌 ' : ''}${s.name ?? 'untitled'}${s.id === acc.activeSessionId ? ' (active)' : ''}${s.locked ? ' (busy)' : ''}`);
+        `${i + 1}. ${s.pinned ? '📌 ' : ''}${s.name ?? 'untitled'}${s.id === bot.activeSessionId ? ' (active)' : ''}${s.locked ? ' (busy)' : ''}`);
       await client.sendMarkdown(dm, titled('📋 Sessions:', [...rows, '',
         'Pick one with /sessions <number>; /code <number> talks to its coding agent'].join('\n')));
       return;
@@ -156,25 +156,25 @@ export async function handleCommand(
           return;
         }
         const w = list.find((x) => x.id === ids[n - 1]);
-        await engine.state.setActiveWorkspace(ids[n - 1]);
+        await engine.botState.setActiveWorkspace(ids[n - 1]);
         await reply(`📁 Active workspace: ${w?.name ?? ids[n - 1]}`);
         return;
       }
       workspaceList.set(dm, list.map((w) => w.id));
-      const rows = list.map((w, i) => `${i + 1}. ${w.name}${w.id === acc.activeWorkspaceId ? ' (active)' : ''}`);
+      const rows = list.map((w, i) => `${i + 1}. ${w.name}${w.id === bot.activeWorkspaceId ? ' (active)' : ''}`);
       await client.sendMarkdown(dm, titled('📋 Workspaces:', [...rows, '', 'Switch with /workspaces <number>'].join('\n')));
       return;
     }
 
     case 'new': {
-      const ws = acc.activeWorkspaceId;
+      const ws = bot.activeWorkspaceId;
       if (!ws) { await reply('⚠️ No active workspace — /workspaces to pick one first.'); return; }
       const j = await (await engine.api('/sessions', { method: 'POST', body: { workspace_id: ws } })).json();
       if (!j.ok) { await reply(`⚠️ Couldn't start a session: ${j.error?.message}`); return; }
       // Create + point at it. The mode is untouched: from home the assistant
       // keeps the conversation; in code mode the next message starts the coder.
-      await engine.state.setActiveSession(j.data.id);
-      await reply(acc.mode === 'code'
+      await engine.botState.setActiveSession(j.data.id);
+      await reply(bot.mode === 'code'
         ? '🆕 New session. Send your first message to begin.'
         : '🆕 New session is active — /code to start coding in it.');
       return;
@@ -183,11 +183,11 @@ export async function handleCommand(
     case 'pin': {
       // The pointer's flag, whoever is answering — like /sessions, not a
       // coding-agent act. Toggles; the row says which way.
-      if (!acc.activeSessionId) { await reply('⚠️ Pick a session first — /sessions or /new.'); return; }
-      const s = await sessionRow(engine, acc.activeSessionId);
+      if (!bot.activeSessionId) { await reply('⚠️ Pick a session first — /sessions or /new.'); return; }
+      const s = await sessionRow(engine, bot.activeSessionId);
       if (!s) { await reply('⚠️ That session no longer exists — /sessions for a fresh list.'); return; }
       const next = !s.pinned;
-      await engine.api(`/sessions/${acc.activeSessionId}`, { method: 'PATCH', body: { pinned: next } });
+      await engine.api(`/sessions/${bot.activeSessionId}`, { method: 'PATCH', body: { pinned: next } });
       await reply(next
         ? `📌 Pinned ${s.name ?? 'untitled'} — it sits at the top of the session list.`
         : `Unpinned ${s.name ?? 'untitled'}.`);
@@ -196,8 +196,8 @@ export async function handleCommand(
 
     case 'status': {
       // Workspace, session + state, agent, mode (code only), server.
-      const w = acc.activeWorkspaceId ? await workspaceRow(engine, acc.activeWorkspaceId) : null;
-      const s = acc.activeSessionId ? await sessionRow(engine, acc.activeSessionId) : null;
+      const w = bot.activeWorkspaceId ? await workspaceRow(engine, bot.activeWorkspaceId) : null;
+      const s = bot.activeSessionId ? await sessionRow(engine, bot.activeSessionId) : null;
 
       let sessionLine: string;
       if (s) {
@@ -208,10 +208,10 @@ export async function handleCommand(
       }
 
       const lines = [
-        `Workspace: ${w?.name ?? acc.activeWorkspaceId ?? 'none — /workspaces'}`,
+        `Workspace: ${w?.name ?? bot.activeWorkspaceId ?? 'none — /workspaces'}`,
         `Session: ${sessionLine}`,
-        `Agent: ${acc.mode}`,
-        ...(acc.mode === 'code' && s ? [`Mode: ${s.planMode ? 'plan' : 'code'}`] : []),
+        `Agent: ${bot.mode}`,
+        ...(bot.mode === 'code' && s ? [`Mode: ${s.planMode ? 'plan' : 'code'}`] : []),
       ];
 
       // Server stats condensed to one line.
@@ -234,10 +234,10 @@ export async function handleCommand(
     }
 
     case 'plan': {
-      if (acc.mode !== 'code' || !acc.activeSessionId) { await reply('⚠️ Plan mode belongs to the coding agent — /code first.'); return; }
-      const s = await sessionRow(engine, acc.activeSessionId);
+      if (bot.mode !== 'code' || !bot.activeSessionId) { await reply('⚠️ Plan mode belongs to the coding agent — /code first.'); return; }
+      const s = await sessionRow(engine, bot.activeSessionId);
       const next = !s?.planMode;
-      await engine.api(`/sessions/${acc.activeSessionId}`, { method: 'PATCH', body: { plan_mode: next } });
+      await engine.api(`/sessions/${bot.activeSessionId}`, { method: 'PATCH', body: { plan_mode: next } });
       await reply(next ? '📝 Plan mode on — file tools are read-only.' : '🔧 Plan mode off — full tools.');
       return;
     }
@@ -246,14 +246,14 @@ export async function handleCommand(
     case 'auto_pull': {
       const pull = cmd === 'auto_pull';
       const name = pull ? 'Auto-pull' : 'Auto-push';
-      if (acc.mode !== 'code' || !acc.activeSessionId) {
+      if (bot.mode !== 'code' || !bot.activeSessionId) {
         await reply(`⚠️ ${name} runs on the coding session — /code first.`);
         return;
       }
       const bubble = await stepBubble(client, dm, `${pull ? '⬇️' : '🚀'} ${name}`);
       const r = pull
-        ? await engine.autoPull(acc.activeSessionId, bubble.step)
-        : await engine.autoPush(acc.activeSessionId, bubble.step);
+        ? await engine.autoPull(bot.activeSessionId, bubble.step)
+        : await engine.autoPush(bot.activeSessionId, bubble.step);
       await bubble.end(outcomeLine(pull, r));
       return;
     }
@@ -399,7 +399,7 @@ export async function handleCommand(
 
       // Bare /stop — assistant mode stops the assistant; code mode stops
       // the active coding session.
-      if (acc.mode === 'assistant') {
+      if (bot.mode === 'assistant') {
         const stopped = engine.stop('assistant');
         if (!stopped) { await reply('ℹ️ The assistant isn\'t running.'); return; }
         await reply('🛑 Stopping the assistant.');
@@ -407,13 +407,13 @@ export async function handleCommand(
       }
 
       // Code mode — stop the active coding session.
-      if (!acc.activeSessionId) { await reply('⚠️ No active session — /sessions to pick one, or /stop all.'); return; }
-      const own = engine.stop(acc.activeSessionId);
+      if (!bot.activeSessionId) { await reply('⚠️ No active session — /sessions to pick one, or /stop all.'); return; }
+      const own = engine.stop(bot.activeSessionId);
       if (!own) {
-        const s = await sessionRow(engine, acc.activeSessionId);
+        const s = await sessionRow(engine, bot.activeSessionId);
         if (!s?.locked) { await reply('ℹ️ Nothing is running.'); return; }
       }
-      await engine.api(`/sessions/${acc.activeSessionId}/interrupt`, { method: 'POST' });
+      await engine.api(`/sessions/${bot.activeSessionId}/interrupt`, { method: 'POST' });
       await reply('🛑 Stopping.');
       return;
     }

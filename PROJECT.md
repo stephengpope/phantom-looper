@@ -50,9 +50,9 @@ and reviews each table's behavior while it is in our heads.
 | 4 | `presets` | `Presets` (presets.ts) | **done** |
 | 5 | ~~`commands`~~ `background_tasks` | `BackgroundTasks` (backgroundTasks.ts) | **done** — renamed |
 | 6 | ~~`token_usage`~~ `log_tokens` | `LogTokens` (logTokens.ts) | **done** — renamed |
-| 7 | `telegram_update` | `TelegramStore` (telegram/store.ts) | |
-| 8 | `telegram_sent` | `TelegramStore` (telegram/store.ts) | |
-| 9 | `telegram_account` | `TelegramStore` (telegram/store.ts) | |
+| 7 | ~~`telegram_update`~~ `telegram_handled_updates` | `TelegramHandledUpdates` (telegram/handledUpdates.ts) | **done** — renamed |
+| 8 | ~~`telegram_sent`~~ `telegram_sent_messages` | `TelegramSentMessages` (telegram/sentMessages.ts) | **done** — renamed |
+| 9 | ~~`telegram_account`~~ `telegram_bot_state` | `TelegramBotState` (telegram/botState.ts) | **done** — renamed |
 | 10 | `workspaces` | `Workspaces` (workspaces.ts) | |
 | 11 | `card_revisions` | `Cards` (cards.ts) | moved + renamed in #1; keyed by `card_id` in #3; review still owed |
 | 12 | `cards` | `Cards` (cards.ts) | moved + renamed in #1; review still owed |
@@ -282,6 +282,74 @@ the kind off the class name. Proved with a fake provider: all seven
 kinds landed one row each with the right kind, session and tokens
 (commit message end to end over a real staged diff); a `ReviewAgent` and
 a `SummaryHelper` (no such kinds) are refused at construction.
+
+## Tables 7–9 — the Telegram tables (done)
+
+**What they are.** You text the bot from your phone; it answers as the
+assistant or as a coding session's agent. Three tables carry that:
+
+- `telegram_account` → **`telegram_bot_state`**: the ONE row (id pinned 1)
+  — who answers a plain message (`mode`), the active session and workspace,
+  and the webhook registration (secret encrypted at rest, URL, bot name).
+- `telegram_sent` → **`telegram_sent_messages`**: one row per message the
+  bot sent. A reply or reaction carries only (chat, message id); this says
+  which conversation the bubble belongs to and what it said.
+- `telegram_update` → **`telegram_handled_updates`**: one row per Telegram
+  `update_id` already handled. Telegram re-delivers an update it did not
+  get acknowledged; the repeat loses the insert and is dropped. "Update"
+  is Telegram's own name for the envelope (message, reaction, button tap).
+
+**State found.** Clean on the rules — one object (`TelegramState`,
+`store.ts`) wrote all three, DB lib contained, no joins. The names said
+"Telegram" and nothing about what a row is; PROJECT.md called the object
+`TelegramStore` and the code `TelegramState`. Two real problems under
+them:
+
+- **Dangling pointers.** `active_session_id`, `active_workspace_id` and
+  `origin_session_id` were bare text. A deleted session or workspace left
+  the pointer standing; five readers re-checked "does it still exist?" and
+  `/new` could post into a deleted workspace.
+- **One fact, two columns.** `telegram_sent.origin` (`'assistant' |
+  'session'`) plus `origin_session_id`; the read already collapsed them.
+
+**What we did (031).** Three tables, three objects, one per table like
+tables 2–6: `TelegramBotState` (`read`, `setMode`, `setActiveSession`,
+`setActiveWorkspace`, `saveRegistration`, `clearRegistration`),
+`TelegramSentMessages` (`record`, `delete`, `get`, `lastForSession`),
+`TelegramHandledUpdates` (`markHandled`). The pointers are foreign keys:
+session and workspace delete clear `telegram_bot_state`'s (`set null`); a
+session's bubbles go with it (`cascade`) — a reply to one answers nothing
+to switch to. `origin` is dropped; `session_id` alone, null = the
+assistant's bubble. Index on `(session_id, sent_at desc)` for the
+last-message read and the cascade. `setMode` reads through `read()`
+instead of its own query. The engine's `SentOrigin {kind, sessionId?}` is
+`string | null`; locals named `account`/`acc` are `bot`.
+
+**Kept.** `mode` with `'assistant' | 'code'` — `/code` and `/assistant`
+are the customer's shortcuts and the column reads as they do.
+`webhook_secret_enc` — `_enc` is the convention `settings.value_enc` set.
+
+**Proof.** 031 on 030-shape rows: a pointer at a session and a workspace
+that no longer exist (cleared), a `'session'` bubble with no id and an
+`'assistant'` bubble carrying one (both now null), a bubble for a session
+that was gone (dropped), a bubble for a destroyed session (kept — the row
+outlives the files); constraint and index names follow the tables. Every
+object method (33 checks) including the foreign keys refusing an unknown
+session/workspace, a secret stored under a rotated key reading as null,
+the one-row check, upsert, prune, and the two cascades. Live over HTTP
+with a fake Telegram API preloaded into the server (19 checks): reconcile
+registers and saves the webhook; wrong/missing secret 403; a stranger
+ignored; the same `update_id` twice answered once; `/workspaces 1`,
+`/new`, `/code`, `/assistant` move the row; a reply to a coder bubble
+switches into its session; session purge clears the pointer and drops the
+bubble, and a reply to that bubble afterwards is just a plain command;
+workspace delete clears its pointer; disabling tears the webhook down and
+the route goes quiet. Nothing found wrong in the code beyond the above.
+
+**Found on the way, not ours.** Telegram's `/sessions` lists only sessions
+something was typed into (`?typed=true`), so a session just created over
+the API is invisible to it until its first message; `/new` is the
+Telegram path. By design as far as the code says; noted, not changed.
 
 ## Insights
 

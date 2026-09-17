@@ -1,13 +1,13 @@
 // The Telegram engine: the bot as a client of this server. Started after
 // listen (like the looper), reaching the routes through injectFetch. One
 // authorized user, DM-only, webhook (never polling). Two modes on one sticky
-// account row: ASSISTANT (home — the Assistant answers, board/cards/sessions)
+// bot state row: ASSISTANT (home — the Assistant answers, board/cards/sessions)
 // and CODE (inside a session — a plain message runs a coding turn on it).
 //
 // Design is phantom-looper's, not shockwave's: sessions are explicit and
 // long-lived (no lazy chat minting, no per-message checkout prep), the
 // Assistant is the primary agent, work lands only through /auto_push, and voice
-// is Deepgram-only. Mechanisms (the streaming bubble, entities, telegram_sent,
+// is Deepgram-only. Mechanisms (the streaming bubble, entities, telegram_sent_messages,
 // attachments, the escape-spelled reactions) are ported from ../shockwave.
 
 import crypto from 'node:crypto';
@@ -35,7 +35,9 @@ import { writeAttachment, composeMessage, MAX_INBOUND_BYTES, type StoredAttachme
 import { runAssistantTurn, type AssistantDeps } from './assistant.js';
 import { Approvals, type Ask } from './approvals.js';
 import { UpgradeChecker } from './upgrade.js';
-import type { TelegramState, SentOrigin, TelegramAccountRow, TelegramMode } from './store.js';
+import type { TelegramBotState, TelegramBotStateRow, TelegramMode } from './botState.js';
+import type { TelegramSentMessages } from './sentMessages.js';
+import type { TelegramHandledUpdates } from './handledUpdates.js';
 import { menuFor, handleCommand } from './commands.js';
 import { AUTO_PUSH_STEPS, AUTO_PULL_STEPS, type AutoPushOutcome, type AutoPullOutcome } from '../../core/llm/tools/git.js';
 import type { AutoPushEvent } from '../git/autoPush.js';
@@ -70,8 +72,10 @@ function timingSafeEqualStr(a: string, b: string): boolean {
 }
 
 export interface TelegramEngineDeps {
-  /** Telegram's own rows: the account, the sent-bubble map, update dedup. */
-  state: TelegramState;
+  /** Telegram's own rows — one owner per table (see each file). */
+  botState: TelegramBotState;
+  sentMessages: TelegramSentMessages;
+  handledUpdates: TelegramHandledUpdates;
   settings: Settings;
   sessions: Sessions;
   cards: Cards;
@@ -181,7 +185,7 @@ export class TelegramEngine {
         const dm = Number(values.telegram_authorized_user ?? '');
         return Number.isFinite(dm) && dm ? dm : null;
       },
-      makeClient: (token, dm) => this.trackedClient(token, dm, () => ({ kind: 'assistant' })),
+      makeClient: (token, dm) => this.trackedClient(token, dm, () => null),
     });
     // Every card write in the system, all workspaces; alerts.ts decides which
     // are the loop's moves. Fire-and-forget: an alert that fails is logged,
@@ -193,15 +197,15 @@ export class TelegramEngine {
 
   // ── client factory ────────────────────────────────────────────────────────
 
-  /** A TelegramClient that records every sent/deleted message via the state
-   *  store. `origin` is a function so it can track a mutable pointer (e.g.
-   *  the active session changes mid-turn). */
-  private trackedClient(token: string, dm: number, origin: () => SentOrigin): TelegramClient {
+  /** A TelegramClient that records every sent/deleted message in
+   *  sentMessages. `sessionId` is a function so it can track a mutable
+   *  pointer (the active session changes mid-turn); null = the assistant's. */
+  private trackedClient(token: string, dm: number, sessionId: () => string | null): TelegramClient {
     return new TelegramClient(token,
-      (id, text) => { this.deps.state.recordSent(dm, id, text, origin()).catch(
-        (e) => log.warn({ err: errStr(e) }, 'recordSent failed')); },
-      (id) => { this.deps.state.deleteSent(dm, id).catch(
-        (e) => log.warn({ err: errStr(e) }, 'deleteSent failed')); });
+      (id, text) => { this.deps.sentMessages.record(dm, id, text, sessionId()).catch(
+        (e) => log.warn({ err: errStr(e) }, 'sent message not recorded')); },
+      (id) => { this.deps.sentMessages.delete(dm, id).catch(
+        (e) => log.warn({ err: errStr(e) }, 'sent message not forgotten')); });
   }
 
   // ── auto build alerts ────────────────────────────────────────────────────
@@ -227,9 +231,7 @@ export class TelegramEngine {
     const token = await this.token();
     if (!token) return;
     const coder = await this.deps.sessions.coderOf(workspaceId, alertMsg.number);
-    const origin: SentOrigin = coder
-      ? { kind: 'session', sessionId: coder.id } : { kind: 'assistant' };
-    const client = this.trackedClient(token, dm, () => origin);
+    const client = this.trackedClient(token, dm, () => coder?.id ?? null);
     await client.sendMessage(dm, alertMsg.text);
     log.info({ workspace: workspaceId, card: alertMsg.number, status: alertMsg.status }, 'auto build alert sent');
   }
@@ -258,12 +260,12 @@ export class TelegramEngine {
       const enabled = values.telegram_enabled === true;
       const token = await this.token().catch(() => '');
       const url = this.webhookUrl();
-      const account = await this.deps.state.account();
+      const bot = await this.deps.botState.read();
 
       if (!enabled || !token || !url) {
-        if (account.webhookUrl) {
+        if (bot.webhookUrl) {
           if (token) await new TelegramClient(token).deleteWebhook().catch(() => {});
-          await this.deps.state.clearRegistration();
+          await this.deps.botState.clearRegistration();
           log.info({ enabled, hasToken: !!token, hasUrl: !!url }, 'telegram disabled — webhook torn down');
         }
         return;
@@ -271,15 +273,15 @@ export class TelegramEngine {
 
       const client = new TelegramClient(token);
       const me = await client.getMe().catch((e: Error) => { log.warn({ err: e.message }, 'getMe failed — the bot has no name this boot'); return null; });
-      const secret = account.webhookSecret ?? crypto.randomBytes(32).toString('hex');
+      const secret = bot.webhookSecret ?? crypto.randomBytes(32).toString('hex');
       // A read on every boot after the first: only re-register when the URL or
       // the subscription drifted (dropPending:false keeps queued messages).
       const info = await client.getWebhookInfo().catch((e: Error) => { log.warn({ err: e.message }, 'getWebhookInfo failed — re-registering'); return null; });
       const registered = info?.url === url
         && ALLOWED_UPDATES.every((u) => (info?.allowed_updates ?? []).includes(u));
-      if (!registered || account.webhookSecret !== secret) {
+      if (!registered || bot.webhookSecret !== secret) {
         await client.setWebhook(url, secret, { dropPending: false });
-        await this.deps.state.saveRegistration(secret, url, me?.username ?? null);
+        await this.deps.botState.saveRegistration(secret, url, me?.username ?? null);
         log.info({ url }, 'telegram webhook registered');
       }
       // The menu follows the mode: the global default is home's, and the
@@ -290,7 +292,7 @@ export class TelegramEngine {
       // command existed still gets it.
       await client.setMyCommands(menuFor('assistant')).catch(() => {});
       const dm = Number(values.telegram_authorized_user ?? '');
-      if (Number.isFinite(dm) && dm) await client.setMyCommands(menuFor(account.mode), dm).catch(() => {});
+      if (Number.isFinite(dm) && dm) await client.setMyCommands(menuFor(bot.mode), dm).catch(() => {});
     } catch (e) {
       log.warn({ err: errStr(e) }, 'telegram reconcile failed');
     }
@@ -300,10 +302,10 @@ export class TelegramEngine {
 
   /** Fast-ack the update, then run out-of-band. Returns the HTTP status. */
   async handleUpdate(secretHeader: string, update: any): Promise<number> {
-    const account = await this.deps.state.account();
+    const bot = await this.deps.botState.read();
     const values = await settingsValues(this.turnDeps()).catch(() => ({} as Record<string, unknown>));
     if (values.telegram_enabled !== true) return 200;
-    if (!account.webhookSecret || !timingSafeEqualStr(secretHeader, account.webhookSecret)) return 403;
+    if (!bot.webhookSecret || !timingSafeEqualStr(secretHeader, bot.webhookSecret)) return 403;
 
     const authorized = String(values.telegram_authorized_user ?? '');
     const dm = Number(authorized);
@@ -312,7 +314,7 @@ export class TelegramEngine {
     const reaction = update.message_reaction;
     if (reaction) {
       if (String(reaction.user?.id) !== authorized) return 200;
-      if (!(await this.deps.state.markUpdate(update.update_id))) return 200;
+      if (!(await this.deps.handledUpdates.markHandled(update.update_id))) return 200;
       if (hasEmoji(reaction.new_reaction, REACT_SPEAK) && !hasEmoji(reaction.old_reaction, REACT_SPEAK)) {
         this.speakReacted(reaction, dm).catch((e) => log.warn({ err: errStr(e) }, 'speak-reacted failed'));
       }
@@ -323,7 +325,7 @@ export class TelegramEngine {
     const tap = update.callback_query;
     if (tap) {
       if (String(tap.from?.id) !== authorized) return 200;
-      if (!(await this.deps.state.markUpdate(update.update_id))) return 200;
+      if (!(await this.deps.handledUpdates.markHandled(update.update_id))) return 200;
       const client = new TelegramClient(await this.token());
       const q = { id: String(tap.id), data: tap.data as string | undefined };
       if (UpgradeChecker.isUpgradeCallback(tap.data)) {
@@ -338,7 +340,7 @@ export class TelegramEngine {
 
     const msg = update.message;
     if (!msg || String(msg.from?.id) !== authorized) return 200;
-    if (!(await this.deps.state.markUpdate(update.update_id))) return 200;
+    if (!(await this.deps.handledUpdates.markHandled(update.update_id))) return 200;
 
     // An album (several photos sent at once) arrives as SEPARATE updates
     // sharing a media_group_id. Collect them briefly and run as one turn,
@@ -365,12 +367,11 @@ export class TelegramEngine {
   private async handleMessage(dm: number, msgs: any[], values: Record<string, unknown>): Promise<void> {
     const msg = msgs[0];
     const token = await this.token();
-    // The origin tracks which conversation a sent bubble belongs to. It is a
-    // function so the tracked client always records the CURRENT value — the
-    // origin changes from 'assistant' to a specific session once the account
-    // row is read, and the closure follows it.
-    let origin: SentOrigin = { kind: 'assistant' };
-    const client = this.trackedClient(token, dm, () => origin);
+    // Which conversation a sent bubble belongs to. A function so the tracked
+    // client always records the CURRENT value — it moves from the assistant
+    // (null) to a session once the bot state is read, and the closure follows.
+    let sessionId: string | null = null;
+    const client = this.trackedClient(token, dm, () => sessionId);
 
     try {
       // Show life immediately — before resolveInput (voice download +
@@ -389,12 +390,10 @@ export class TelegramEngine {
         return;
       }
 
-      const account = await this.deps.state.account();
-      origin = account.mode === 'code' && account.activeSessionId
-        ? { kind: 'session', sessionId: account.activeSessionId }
-        : { kind: 'assistant' };
+      const bot = await this.deps.botState.read();
+      sessionId = bot.mode === 'code' ? bot.activeSessionId : null;
 
-      const input = await this.resolveInput(client, dm, msgs, values, account);
+      const input = await this.resolveInput(client, dm, msgs, values, bot);
       if (input === null) return;
 
       // A question standing: the exact word answers it and is nothing else;
@@ -404,8 +403,8 @@ export class TelegramEngine {
       // Busy: queue the message into the SAME key's running turn. Code-mode
       // turns key by sessionId, so switching sessions starts independently;
       // the assistant is one conversation, so it stays one key.
-      const busyKey = account.mode === 'code' && account.activeSessionId
-        ? account.activeSessionId : 'assistant';
+      const busyKey = bot.mode === 'code' && bot.activeSessionId
+        ? bot.activeSessionId : 'assistant';
       const running = this.inFlight.get(busyKey);
       if (running) {
         running.queue.push(input);
@@ -413,8 +412,8 @@ export class TelegramEngine {
         return;
       }
 
-      if (account.mode === 'code' && account.activeSessionId) {
-        await this.codeTurn(client, dm, account.activeSessionId, input, values);
+      if (bot.mode === 'code' && bot.activeSessionId) {
+        await this.codeTurn(client, dm, bot.activeSessionId, input, values);
       } else {
         await this.assistantTurn(client, dm, input, values);
       }
@@ -437,17 +436,17 @@ export class TelegramEngine {
     const abort = new AbortController();
     const busyKey = 'assistant';
     this.inFlight.set(busyKey, { queue: [], abort });
-    const account = await this.deps.state.account();
+    const bot = await this.deps.botState.read();
     // The assistant can deliver a file it names from the active session's work
     // dir (its file tools are read-only, but it can point at one the coder made).
     const voiceOnly = String(values.telegram_reply_mode ?? 'text') === 'voice';
     const sink = makeTelegramSink(client, dm,
-      account.activeSessionId ? this.deliverConfig(account.activeSessionId) : undefined,
+      bot.activeSessionId ? this.deliverConfig(bot.activeSessionId) : undefined,
       { voiceOnly });
     const deps: AssistantDeps = { f: this.fetch, apiKey: this.deps.apiKey, modelFetch: this.deps.modelFetch };
     let replyText = '';
     // The pointer as this turn sees it — live across a switch within the turn.
-    let active = account.activeSessionId ?? null;
+    let active = bot.activeSessionId ?? null;
     try {
       const onSwitch = async (id: string) => {
         const r = await this.switchSession(client, dm, id);
@@ -460,10 +459,10 @@ export class TelegramEngine {
       // A new workspace: make it active and open a session in it — what /new
       // does, so the user lands talking to the coder like the cli's "on screen".
       const onWorkspaceCreated = async (workspaceId: string) => {
-        await this.deps.state.setActiveWorkspace(workspaceId);
+        await this.deps.botState.setActiveWorkspace(workspaceId);
         const j = await (await this.api('/sessions', { method: 'POST', body: { workspace_id: workspaceId } })).json();
         if (!j.ok) return { error: j.error?.message as string };
-        await this.deps.state.setActiveSession(j.data.id);
+        await this.deps.botState.setActiveSession(j.data.id);
         await this.enterMode(client, dm, 'code');
         await client.sendMessage(dm, '🆕 New session in the new workspace. Send your first message to begin.');
         return { session: j.data.id as string };
@@ -471,10 +470,10 @@ export class TelegramEngine {
       // The assistant's session row exists BEFORE its agent is built: the
       // model records every call against it.
       const sessionId = await conv.ensureSession(
-        account.activeWorkspaceId, account.activeSessionId);
+        bot.activeWorkspaceId, bot.activeSessionId);
       const result = await runAssistantTurn(deps, conv.history, message, sink, {
         settings: values,
-        workspaceId: () => account.activeWorkspaceId ?? null,
+        workspaceId: () => bot.activeWorkspaceId ?? null,
         activeSession: () => active,
         onSwitch,
         approve: (ask, signal) => this.approvals.request(client, dm, ask, signal),
@@ -659,7 +658,7 @@ export class TelegramEngine {
   }
 
   private async resolveInput(client: TelegramClient, dm: number, msgs: any[],
-    values: Record<string, unknown>, account: TelegramAccountRow): Promise<string | null> {
+    values: Record<string, unknown>, bot: TelegramBotStateRow): Promise<string | null> {
     const msg = msgs[0];
     // Telegram puts the caption on only one album item.
     const typed = msgs.map((m) => String(m.text ?? m.caption ?? '').trim()).find(Boolean) ?? '';
@@ -676,11 +675,11 @@ export class TelegramEngine {
     // Collect from ALL messages — an album sends each photo as a separate update.
     const files = msgs.flatMap(collectFiles);
     if (files.length) {
-      if (account.mode !== 'code' || !account.activeSessionId) {
+      if (bot.mode !== 'code' || !bot.activeSessionId) {
         await client.sendMessage(dm, "⚠️ Files go into the session you're coding in — /code to enter one first.");
         return typed || null;
       }
-      const scratch = sessionDir(this.deps.paths, account.activeSessionId) + '/scratch';
+      const scratch = sessionDir(this.deps.paths, bot.activeSessionId) + '/scratch';
       const stored: StoredAttachment[] = [];
       for (const { file, kind } of files) {
         if (file.file_size && file.file_size > MAX_INBOUND_BYTES) {
@@ -700,23 +699,25 @@ export class TelegramEngine {
     return null;
   }
 
-  // ── telegram_sent: reply-switch and reaction-speak ───────────────────────
+  // ── sent messages: reply-switch and reaction-speak ───────────────────────
 
   private async switchForReply(client: TelegramClient, dm: number, msg: any): Promise<void> {
     const replied = msg.reply_to_message;
     if (!replied?.message_id) return;
-    const stored = await this.deps.state.getSent(dm, Number(replied.message_id));
+    const stored = await this.deps.sentMessages.get(dm, Number(replied.message_id));
     if (!stored) return;
-    const account = await this.deps.state.account();
-    if (stored.origin.kind === 'session' && stored.origin.sessionId) {
-      if (account.activeSessionId === stored.origin.sessionId && account.mode === 'code') return;
-      if (account.activeSessionId !== stored.origin.sessionId) {
-        const r = await this.switchSession(client, dm, stored.origin.sessionId, { silent: true });
+    const bot = await this.deps.botState.read();
+    if (stored.sessionId) {
+      if (bot.activeSessionId === stored.sessionId && bot.mode === 'code') return;
+      if (bot.activeSessionId !== stored.sessionId) {
+        // The bubble goes with its session (cascade), so this only fails on a
+        // delete racing the reply. A destroyed session keeps its row.
+        const r = await this.switchSession(client, dm, stored.sessionId, { silent: true });
         if ('error' in r) { await client.sendMessage(dm, '⚠️ That session no longer exists.'); return; }
       }
       await this.enterMode(client, dm, 'code');
     } else {
-      if (account.mode === 'assistant') return;
+      if (bot.mode === 'assistant') return;
       // The switch line is the whole message here.
       await this.enterMode(client, dm, 'assistant');
     }
@@ -724,7 +725,7 @@ export class TelegramEngine {
 
   // ── the two transitions: WHICH session, WHO answers ──────────────────────
 
-  /** Point the account at a session. The pointer only — the mode is untouched,
+  /** Point the bot at a session. The pointer only — the mode is untouched,
    *  so the assistant keeps the conversation and a coder is never entered by
    *  accident. Announces the switch unless `silent` — callers that immediately
    *  follow with enterMode('code') pass silent because the code-mode label
@@ -733,7 +734,7 @@ export class TelegramEngine {
   Promise<{ id: string; title: string | null } | { error: string }> {
     const s = await this.deps.sessions.get(id);
     if (!s) return { error: `no session ${id}` };
-    await this.deps.state.setActiveSession(id);
+    await this.deps.botState.setActiveSession(id);
     if (!opts?.silent) await client.sendMessage(dm, `🔀 Active session: ${s.name ?? 'untitled'}`);
     return { id, title: s.name ?? null };
   }
@@ -746,7 +747,7 @@ export class TelegramEngine {
     const msg = mode === 'code'
       ? await this.codeModeLabel(dm)
       : undefined;
-    const changed = await this.deps.state.setMode(mode, (t) => client.sendMessage(dm, t), msg);
+    const changed = await this.deps.botState.setMode(mode, (t) => client.sendMessage(dm, t), msg);
     await client.setMyCommands(menuFor(mode), dm).catch(() => {});
     return changed;
   }
@@ -756,11 +757,11 @@ export class TelegramEngine {
    *  function, used by enterMode and the /code echo. Pass `dm` to include the
    *  last agent message (the switch announcement); omit it for a bare label. */
   async codeModeLabel(dm?: number): Promise<string> {
-    const account = await this.deps.state.account();
-    if (!account.activeSessionId) return '🤖 Coding agent';
-    const s = await this.deps.sessions.get(account.activeSessionId);
+    const bot = await this.deps.botState.read();
+    if (!bot.activeSessionId) return '🤖 Coding agent';
+    const s = await this.deps.sessions.get(bot.activeSessionId);
     if (!s) return '🤖 Coding agent';
-    const card = (await this.deps.cards.ofSession(account.activeSessionId))?.number;
+    const card = (await this.deps.cards.ofSession(bot.activeSessionId))?.number;
     const ws = await (await this.api(`/workspaces/${s.workspaceId}`)).json().catch(() => null);
     const prefix: string | undefined = ws?.ok ? ws.data.cardPrefix : undefined;
     const parts: string[] = ['🤖 Coding agent'];
@@ -770,7 +771,7 @@ export class TelegramEngine {
     parts.push(s.name ?? 'untitled');
     const title = parts.join(' · ');
     if (dm != null) {
-      const last = await this.deps.state.getLastSentForSession(dm, account.activeSessionId).catch(() => null);
+      const last = await this.deps.sentMessages.lastForSession(dm, bot.activeSessionId).catch(() => null);
       if (last) return titled(title, last);
     }
     return title;
@@ -780,7 +781,7 @@ export class TelegramEngine {
     const chatId = Number(reaction.chat?.id);
     const messageId = Number(reaction.message_id);
     if (!Number.isFinite(chatId) || !Number.isFinite(messageId)) return;
-    const stored = await this.deps.state.getSent(chatId, messageId);
+    const stored = await this.deps.sentMessages.get(chatId, messageId);
     if (!stored) return;
     const token = await this.token();
     const client = new TelegramClient(token);
@@ -808,7 +809,7 @@ export class TelegramEngine {
     return true;
   }
 
-  get state() { return this.deps.state; }
+  get botState() { return this.deps.botState; }
   get settings() { return this.deps.settings; }
 
   /** The approval gate, for slash commands that need a confirm (today:

@@ -12,7 +12,7 @@
 // and the old ones stay as the archive.
 //
 // Board and sessions are the Assistant's job (create/move cards, list/read
-// sessions); the file tools + web are bound to the account's active session,
+// sessions); the file tools + web are bound to the bot's active session,
 // so "what does the auth code look like?" works from home. session_switch
 // moves that pointer and nothing else — the Assistant keeps the conversation.
 // It never SENDS into a session — /code (code mode) is how you talk to a coder.
@@ -122,7 +122,7 @@ function boardHandler(deps: AssistantDeps, workspaceId: () => string | null) {
 
 /** The sessions handler. LIST is the server's list (typed, no supervisor
  *  seats); READ pulls a transcript and renders it; SWITCH is what the caller
- *  wires to "point the account at this session" (the pointer only — never a
+ *  wires to "point the bot at this session" (the pointer only — never a
  *  mode change); GET_ACTIVE is that pointer; close has no telegram job here. */
 function sessionsHandler(
   deps: AssistantDeps, activeSession: () => string | null,

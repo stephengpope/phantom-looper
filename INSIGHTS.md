@@ -58,6 +58,15 @@ general, short, and true.
 - **Storage links use the primary key; people use the handle.** Two tables
   linked to cards by number. The number is what PHA-7 means to a person and
   an agent; the key is what a foreign key is for. *(table 3)*
+- **A link that is not a foreign key is a check every reader carries.**
+  Three bare-text session/workspace pointers; five readers each asked "does
+  it still exist?" and one path did not. The key answers once, on delete,
+  and the guards go. *(tables 7–9)*
+- **A name that says the vendor says nothing.** `telegram_update`,
+  `telegram_sent`, `telegram_account` — the builder could not tell what a
+  row was from any of them. The vendor's word is fine when it IS the thing
+  (Telegram calls the envelope an Update — checked in their docs, not from
+  memory); the rest of the name says what we keep and why. *(tables 7–9)*
 
 ## Simplicity
 
@@ -116,7 +125,14 @@ general, short, and true.
 - **A harness that dies mid-way must clean up on its next run.** Two
   reruns failed on the previous run's leftovers, not on the code. The live
   phase starts by deleting what an earlier run left, through the routes.
-  *(table 5)*
+  *(table 5)* Again on tables 7–9: a dedup table remembered the harness's
+  fixed update ids across runs and "dropped" its second run. Ids the
+  system dedups on must be fresh per run.
+- **A vendor API can be faked in-process for a live proof.** Telegram's
+  URL is hardcoded in the client; a `--import` preload that patches
+  `globalThis.fetch` for that host answered getMe/setWebhook/sendMessage
+  and logged every call. The whole customer path ran over the real webhook
+  route with no bot token. *(tables 7–9)*
 - **When a proof step fails, ask which side is wrong.** Three failures were
   the harness (201 not 200; `seq` on the exit record; a second kill is
   idempotent by design). Read the code's rule before "fixing" it. *(table 5)*
@@ -137,6 +153,10 @@ general, short, and true.
   writers (`log_session_tokens` — helpers write it too). The builder's
   own words: "stand up for the code." Say what the code does, then
   discuss the name. *(table 6)*
+- **Cut off is not understood.** Over a phone the builder saw half a
+  table and said "can't follow"; I re-explained instead of shortening. When
+  the reply is "not following", the first fix is fewer words, then plainer
+  ones — eight per item was what landed. *(tables 7–9)*
 - **Answer the question asked, only that.** Asked "how does it work now?",
   the right reply was two sentences on the cut; each extra paragraph on
   caching, options, or history read as not knowing. *(header pass)*
