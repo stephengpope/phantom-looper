@@ -245,12 +245,13 @@ export class WindowStore {
   notes: Part[] = [];
 
   /** A timed message on the status bar — white text on a colored background,
-   *  auto-cleared after a few seconds. Used for confirmations that need to be
-   *  visible without polluting the pane — e.g. "Session closed". */
+   *  auto-cleared after 1.75s. Used for things that need to be seen without
+   *  polluting the pane. The background says the kind: red = something was
+   *  removed ("Session closed"), cyan = just information ("only session"). */
   toast: { text: string; bg: string } | null = null;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
 
-  setToast(text: string, bg = 'red', ms = 3000): void {
+  setToast(text: string, bg: 'red' | 'cyan' = 'red', ms = 1750): void {
     if (this.toastTimer) clearTimeout(this.toastTimer);
     this.toast = { text, bg };
     this.toastTimer = setTimeout(() => { this.toast = null; this.toastTimer = null; this.notify(); }, ms);
@@ -895,7 +896,7 @@ export class WindowStore {
   /** tab and shift+tab: the next session in the ring. */
   cycle(dir: 1 | -1): void {
     const target = this.sessions.next(dir);
-    if (!target) { this.note('this is the only session open — /new or /resume opens another'); return; }
+    if (!target) { this.setToast('this is the only session open — /new or /resume opens another', 'cyan'); return; }
     this.switchTo(target.id);
   }
 
@@ -1133,7 +1134,7 @@ export class WindowStore {
       // The screen changed underfoot — say so, in the pane of the session
       // now on screen. AFTER the switch/open above: the note lands in
       // whatever those seated.
-      if (!quiet) this.setToast('Session closed', 'red', 1750);
+      if (!quiet) this.setToast('Session closed');
     }
     return { ok: true, closed: target, on_screen: this.sessions.activeId, opened_new };
   };
