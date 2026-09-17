@@ -35,6 +35,14 @@ general, short, and true.
 - **A fact lives on the thing it describes.** The card a session works on
   sat on the looper's pairing row, so it existed only while a loop did.
   Ask "whose fact is this?" — the answer names the table. *(table 3)*
+- **A column another table's writer moves is that table's method, in the
+  caller's transaction.** `Cards.create` bumped `workspaces.next_card_number`
+  itself. The fix is not "forbid the write" but `claimCardNumber(id, tx)`:
+  the owner does the write, the caller keeps its atomicity. *(table 10)*
+- **A stored value the code always computes is a second truth.** `url` was
+  `remoteUrl(owner, name)` at every write and read by one clone. Ask of
+  each column: could a function of the other columns replace it? If yes,
+  the column is drift waiting. *(table 10)*
 - **A one-to-one link is a column, not a table.** With the card moved off
   it, `loops` held one link. A table + an object + a migration to carry one
   column is complexity with no payoff. *(table 3)*
@@ -167,6 +175,11 @@ general, short, and true.
   cache window" was the fact. Say the number. *(header pass)*
 - **Words mean what they say.** "Create a cards table" when one exists is
   wrong; "move the cards into one table" is right. *(table 1)*
+- **When the answer is already in the builder's sentence, read it again
+  before asking.** "Might as well leave that" was the decision (keep the
+  column); I asked twice and earned "read what I said". A clarifying
+  question costs the builder a turn — spend it only when two readings
+  lead to different work. *(table 10)*
 - **When the builder pastes a specific list, that list is the scope.** Fixing
   the six unused imports was the ask; folders was not. *(cleanup)*
 - **Nothing raised, nothing deferred.** "Next steps" with work still open

@@ -6,8 +6,8 @@
 // client a workspace changing IS a settings-shaped fact (the list, the
 // prefixes, the scopes), and the settings feed is what they already follow to
 // re-read /workspaces. One bus, not a second one saying the same thing.
-import { eq } from 'drizzle-orm';
-import { isUniqueViolation, type Db } from './db/client.js';
+import { eq, sql } from 'drizzle-orm';
+import { isUniqueViolation, type Db, type Tx } from './db/client.js';
 import { workspaces, type WorkspaceRow } from './db/schema.js';
 import { DEFAULT_COLUMNS } from '../core/kanban.js';
 import type { Settings } from './settings.js';
@@ -29,7 +29,7 @@ export const columnsOf = (w: WorkspaceRow): string[] =>
 /** What a new workspace is registered with — the route resolved the URL and
  *  (for create=true) made the repository first. */
 export interface NewWorkspace {
-  id: string; url: string; owner: string; name: string;
+  id: string; owner: string; name: string;
   displayName: string | null; baseBranch: string; branchPrefix: string;
 }
 
@@ -81,9 +81,20 @@ export class Workspaces {
     this.events?.publish(workspaceScope(id), by);
   }
 
+  /** Hand out the next card number and move the counter, in the caller's
+   *  transaction so the number and the card land together. Numbers are
+   *  never reused: a deleted card's stays taken. */
+  async claimCardNumber(id: string, tx: Tx | Db = this.db): Promise<number> {
+    const [{ number }] = await tx.update(workspaces)
+      .set({ nextCardNumber: sql`${workspaces.nextCardNumber} + 1` })
+      .where(eq(workspaces.id, id)).returning({ number: sql<number>`${workspaces.nextCardNumber} - 1` });
+    return number;
+  }
+
   /** The row goes; its settings layer (overrides, its own token) went first
-   *  — a scope whose workspace is gone is a row nothing will ever read. The
-   *  schema drop is the caller's, gated by its own confirm. */
+   *  — a scope whose workspace is gone is a row nothing will ever read. Its
+   *  cards, history, sessions and folders cascade; the route gates that
+   *  behind its own confirm. */
   async remove(id: string, by?: string): Promise<void> {
     await this.settings.dropScope(workspaceScope(id));
     await this.db.delete(workspaces).where(eq(workspaces.id, id));

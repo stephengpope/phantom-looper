@@ -37,9 +37,10 @@ export const settings = phantomLooper.table('settings', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [primaryKey({ columns: [t.scope, t.namespace, t.key] })]);
 
+// A registered GitHub repository. Its clone URL is derived from owner + name
+// (git/remote.ts remoteUrl), not stored (032).
 export const workspaces = phantomLooper.table('workspaces', {
   id: text('id').primaryKey(),
-  url: text('url').notNull(),
   owner: text('owner').notNull(),
   name: text('name').notNull(),
   displayName: text('display_name'),
@@ -47,7 +48,7 @@ export const workspaces = phantomLooper.table('workspaces', {
   branchPrefix: text('branch_prefix').notNull().default('agent'),
   kanbanColumns: jsonb('kanban_columns').$type<string[]>(),
   // The next card number this workspace hands out. Numbers are never reused:
-  // a deleted card's stays taken. (024; Cards.create moves it.)
+  // a deleted card's stays taken. (024; Workspaces.claimCardNumber moves it.)
   nextCardNumber: integer('next_card_number').notNull().default(1),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });

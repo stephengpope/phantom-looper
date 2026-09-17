@@ -15,8 +15,9 @@ function publicWorkspace(r: WorkspaceRow, hasCredential = false) {
   // nextCardNumber is the server's card-number counter, not a fact about the
   // workspace anyone edits or displays.
   const { displayName, nextCardNumber: _counter, ...rest } = r;
-  // displayName: what humans call it; falls back to the GitHub name.
-  return { ...rest, displayName: displayName ?? r.name, hasCredential };
+  // displayName: what humans call it; falls back to the GitHub name. url is
+  // derived from owner + name, not stored.
+  return { ...rest, url: remoteUrl(r.owner, r.name), displayName: displayName ?? r.name, hasCredential };
 }
 
 const TAG = { tags: ['workspaces'] };
@@ -82,7 +83,7 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
   app.post<{ Body: { url: string; base_branch?: string; branch_prefix?: string;
     display_name?: string; create?: boolean; private?: boolean; description?: string; token?: string } }>(
     '/workspaces', { schema: { ...TAG, summary: 'Register a workspace (optionally creating it on GitHub)',
-      description: 'Creates the workspace row, its SQL schema (files/links + agent tables), and makes it a pool target. ' +
+      description: 'Creates the workspace row and makes it a pool target. ' +
         '`url` takes a plain GitHub URL or owner/name — embedded credentials are rejected. With create=true the repository is ' +
         'CREATED on GitHub first and seeded with an initial commit on base_branch; if it already exists the call ' +
         'fails (already_exists) — this is create, not create-if-missing. Creation uses `token` (stored as the ' +
@@ -153,7 +154,7 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
 
       const id = newId();
       const row = {
-        id, url: remoteUrl(owner, name), owner, name,
+        id, owner, name,
         displayName: req.body.display_name?.trim() || null,
         baseBranch,
         branchPrefix: req.body.branch_prefix ?? 'agent',
@@ -263,10 +264,10 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
       description: 'Refuses while sessions are active. Deleting a workspace deletes its board — every card and its history — so it additionally requires ?confirm=true.',
       params: idParam, querystring: { type: 'object', properties: { confirm: { type: 'string', enum: ['true'] } } } } },
     async (req, reply) => {
+      if (!await ctx.workspaces.get(req.params.id)) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
       const live = await ctx.sessions.listActiveIn(req.params.id);
       if (live.length) return reply.code(409).send(err('sessions_exist', `workspace ${req.params.id} still has ${live.length} active session(s) — close them first`));
-      const w = await ctx.workspaces.get(req.params.id);
-      if (w && req.query.confirm !== 'true') {
+      if (req.query.confirm !== 'true') {
         return reply.code(409).send(err('confirm_required',
           'deleting a workspace deletes its board — every card and its history — pass ?confirm=true'));
       }

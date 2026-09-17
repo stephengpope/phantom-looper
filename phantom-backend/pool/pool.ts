@@ -15,6 +15,7 @@ import type { WorkspaceRow } from '../db/schema.js';
 import type { Workspaces } from '../workspaces.js';
 
 import type { Settings } from '../settings.js';
+import { remoteUrl } from '../git/remote.js';
 import { cloneFresh, refreshPristine, type GitAuth } from '../git/git.js';
 import { newId, idTime } from '../../core/ids.js';
 import { slotPrefix, slotUlid, type Paths } from './paths.js';
@@ -38,7 +39,7 @@ const rm = (p: string) => fs.rm(p, { recursive: true, force: true }).catch(() =>
 // — is no longer written out here. It is `github_token` resolved through the
 // same layers every other setting uses.
 export async function resolveAuth(settings: Settings, r: WorkspaceRow): Promise<GitAuth> {
-  return { url: r.url, pat: await settings.credential('github_token', { workspace: r }) };
+  return { url: remoteUrl(r.owner, r.name), pat: await settings.credential('github_token', { workspace: r }) };
 }
 
 /** Claim a ready slot for a workspace into `dest`. The claim is a RENAME and nothing

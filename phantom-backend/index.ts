@@ -69,7 +69,7 @@ async function main() {
   const settings = new Settings(db, env.encryptionKey, settingsEvents);
   const workspaces = new Workspaces(db, settings, settingsEvents);
   const folders = new Folders(db);
-  const cards = new Cards(db, events);
+  const cards = new Cards(db, workspaces, events);
   const sessions = new Sessions(db, paths, settings, workspaces, folders, sessionEvents);
   // A settings write reaches every session nothing has been said to yet: its
   // row takes the settings' model (Sessions.followModelSettings — THE rule).

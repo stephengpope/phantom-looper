@@ -53,7 +53,7 @@ and reviews each table's behavior while it is in our heads.
 | 7 | ~~`telegram_update`~~ `telegram_handled_updates` | `TelegramHandledUpdates` (telegram/handledUpdates.ts) | **done** — renamed |
 | 8 | ~~`telegram_sent`~~ `telegram_sent_messages` | `TelegramSentMessages` (telegram/sentMessages.ts) | **done** — renamed |
 | 9 | ~~`telegram_account`~~ `telegram_bot_state` | `TelegramBotState` (telegram/botState.ts) | **done** — renamed |
-| 10 | `workspaces` | `Workspaces` (workspaces.ts) | |
+| 10 | `workspaces` | `Workspaces` (workspaces.ts) | **done** |
 | 11 | `card_revisions` | `Cards` (cards.ts) | moved + renamed in #1; keyed by `card_id` in #3; review still owed |
 | 12 | `cards` | `Cards` (cards.ts) | moved + renamed in #1; review still owed |
 | 13 | `settings` | `Settings` (settings.ts) | |
@@ -350,6 +350,51 @@ the route goes quiet. Nothing found wrong in the code beyond the above.
 something was typed into (`?typed=true`), so a session just created over
 the API is invisible to it until its first message; `/new` is the
 Telegram path. By design as far as the code says; noted, not changed.
+
+## Table 10 — `workspaces` (done)
+
+**What it is.** One row per registered GitHub repository: owner, name,
+human label, base branch, the prefix for session branches, the board's
+column list, and the card-number counter. Stays.
+
+**State found.** Every read through `Workspaces`, names already
+descriptive. Three things under that:
+
+- **A second writer.** `Cards.create` moved `next_card_number` itself
+  (`cards.ts:136`). Now `Workspaces.claimCardNumber(id, tx)` — in the
+  caller's transaction so the number and the card land together; `Cards`
+  holds a `Workspaces`.
+- **Two truths.** `url` was always `https://github.com/{owner}/{name}.git`,
+  written from owner and name at registration, read by one place (the
+  clone's auth). Dropped (032); the API response and `resolveAuth` derive
+  it with `remoteUrl(owner, name)`.
+- **`DELETE /workspaces/:id` of a workspace that did not exist returned
+  200 `{deleted}`** — the confirm gate only ran when the row existed.
+  Now 404 first.
+
+**Kept.** `kanban_columns` — nothing writes it yet (the board always
+shows the default list); the builder's call: editable columns are a
+planned feature without an interface, the column stays for it.
+
+**Stale.** POST's description still said it created a per-workspace SQL
+schema (gone since table 1); `remove`'s comment said the schema drop was
+the caller's.
+
+**Proof.** 032 on 031-shape rows (two repos, one with a card and a moved
+counter): column gone, rows intact, clone URL derived with case kept.
+Every method (14 checks): the counter hands out and moves on, a
+rolled-back transaction leaves it alone, a deleted card's number is never
+reused, duplicate owner/name refused, cascade to cards. Live (13 checks):
+register (url in the response), duplicate 409, GET one and list, PATCH
+own field + setting, `base_branch` uncleareable, cards numbered 1, 2,
+delete 2, next 3, a session cloned through the derived URL, DELETE
+unknown 404, with a session 409, without confirm 409, with confirm 200,
+then 404.
+
+**For table 12.** The card routes take `:cardId` = `cards.id` (`DELETE
+/workspaces/:id/cards/:cardId`, `cards.remove(w, id)`), while the rule
+since table 3 is that people address cards by number. Owed to the cards
+review.
 
 ## Insights
 

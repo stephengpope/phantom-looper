@@ -11,8 +11,8 @@ import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from './db/client.js';
 // `sessions` is here for ONE read: the card a session works on is a join on
 // sessions.card_id. Read through the join only; the row is Sessions' to write.
-import { cards, cardRevisions, sessions, workspaces, type CardRow, type WorkspaceRow } from './db/schema.js';
-import { columnsOf } from './workspaces.js';
+import { cards, cardRevisions, sessions, type CardRow, type WorkspaceRow } from './db/schema.js';
+import { columnsOf, type Workspaces } from './workspaces.js';
 import { keyedItems, newKey, normalizeKey, type ChecklistItem } from '../core/kanban.js';
 import type { BoardEvents } from './api/boardEvents.js';
 
@@ -36,7 +36,7 @@ export interface ItemOp { op: 'add' | 'edit' | 'remove' | 'tick'; key?: string; 
 type Requirement = CardRow['requirements'][number];
 
 export class Cards {
-  constructor(private readonly db: Db, private readonly events?: BoardEvents) {}
+  constructor(private readonly db: Db, private readonly workspaces: Workspaces, private readonly events?: BoardEvents) {}
 
   private publish(w: WorkspaceRow, card: CardRow, extra: { from?: string; client?: string } = {}): void {
     this.events?.publish(w.id, { event: 'card', card: card as unknown as Record<string, unknown>, ...extra });
@@ -133,9 +133,7 @@ export class Cards {
       if (f !== 'status' && f !== 'pos' && f !== 'title' && f in fields) values[f] = fields[f] as never;
     if ('requirements' in fields) values.requirements = keyedItems(fields.requirements as ChecklistItem[]);
     const card = await this.db.transaction(async (tx) => {
-      const [{ number }] = await tx.update(workspaces)
-        .set({ nextCardNumber: sql`${workspaces.nextCardNumber} + 1` })
-        .where(eq(workspaces.id, w.id)).returning({ number: sql<number>`${workspaces.nextCardNumber} - 1` });
+      const number = await this.workspaces.claimCardNumber(w.id, tx);
       const pos = 'pos' in fields
         ? Number(fields.pos)
         : sql`(select coalesce(max(${cards.pos}), 0) + 1 from ${cards} where ${cards.workspace_id} = ${w.id} and ${cards.status} = ${status})`;
