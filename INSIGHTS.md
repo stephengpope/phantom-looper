@@ -100,6 +100,11 @@ general, short, and true.
   remembers); the right fix removed it. When a value can be derived, the
   question is never "how do we make callers pass it" but "why are they
   passing it at all". *(table 6)*
+- **A rule set on one sibling applies to all of them, now.** "The name
+  is the kind" was built for agents and left helpers still passing
+  `kind` by hand until the builder asked why. When a rule lands, list
+  everything of the same shape and apply it in the same pass.
+  *(table 6)*
 - **A callback "so X has no dependency on Y" that every caller fills in
   the same way is Y's code, copied.** Compaction's `call` seam was the
   same seven lines at four sites. *(table 6)*
