@@ -47,7 +47,7 @@ and reviews each table's behavior while it is in our heads.
 | 1 | ~~`workspace_schema_state`~~ | — | **done** — deleted |
 | 2 | `folders` | `Folders` (folders.ts) | **done** |
 | 3 | ~~`loops`~~ | — | **done** — deleted; the card moved onto `sessions` |
-| 4 | `presets` | `Presets` (presets.ts) | |
+| 4 | `presets` | `Presets` (presets.ts) | **done** |
 | 5 | `commands` | `Commands` (commands.ts) | |
 | 6 | `token_usage` | `TokenUsage` (tokenUsage.ts) | |
 | 7 | `telegram_update` | `TelegramStore` (telegram/store.ts) | |
@@ -155,6 +155,27 @@ read) is gone, as are revisions of cards already deleted.
 **Token totals are numbers.** The session list's `SUM` over `token_usage`
 came back from pg as text (`"200"`) under a `number` type; the cli only
 worked by coercion. `mapWith(Number)` at the query.
+
+## Table 4 — `presets` (done)
+
+**What it is.** A named snapshot of the 15 model keys (provider / model /
+base_url / reasoning / max_steps, for the coding agent, the assistant and
+the supervisor). Each key is set, `null` = clear, or absent = leave alone.
+Applying is the client's move: it sends `values` as the body of
+`PATCH /settings` — one write path, one set of rules (cli `Presets.tsx`,
+Telegram `/presets`).
+
+**State found.** Clean: `Presets` is the only importer of the table, the
+three routes go through it, nothing joins it. Names already say what they
+are. No migration, no rename.
+
+**Bug the proof found.** `name` is unique, and `save` did not know it: a
+new preset (or a rename) with a name already taken hit the constraint and
+came back **500** with `duplicate key value violates unique constraint
+"presets_name_key"`. Now `PresetError('duplicate_preset_name')` → 400, and
+the cli shows `a preset named "fast" already exists`.
+
+**Stale.** The cli said "the 11 model keys" in four places; there are 15.
 
 ## Insights
 

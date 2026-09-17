@@ -4,7 +4,7 @@
 // Three views:
 //   list    the saved presets, with [enter] apply, [e] edit, [n] new, [d] delete
 //   name    naming a new preset (TextInput on a Screen)
-//   editor  the 11 model keys for one preset (SelectList + ValueInput, same
+//   editor  the 15 model keys for one preset (SelectList + ValueInput, same
 //           pattern as /model and /settings)
 //
 // Each key in a preset has three states:
@@ -35,7 +35,9 @@ import {
 import type { Api } from '../request.js';
 import { newId } from '../../core/ids.js';
 
-/** The 11 model keys a preset may hold, in display order, grouped. */
+/** The 15 model keys a preset may hold (five per agent), in display order,
+ *  grouped. Mirrors PRESET_KEYS in phantom-backend/presets.ts; the server
+ *  refuses anything else. */
 const PRESET_GROUPS: Array<{ heading: string; keys: Array<{ key: string; label: string; choices?: readonly string[] }> }> = [
   { heading: 'coding agent', keys: [
     { key: 'provider', label: 'provider', choices: PROVIDERS },
@@ -107,7 +109,7 @@ function displayValue(state: KeyState, value: unknown): string {
   return String(value);
 }
 
-/** The full hint for the list's hint block: all 11 keys laid out. */
+/** The full hint for the list's hint block: all 15 keys laid out. */
 function presetHint(p: Preset): string {
   const lines: string[] = [];
   for (const g of PRESET_GROUPS) {
@@ -305,7 +307,7 @@ export function Presets({ api, confirm, onApplied, onClose }: {
     );
   }
 
-  // ── Preset editor (the 11 keys) ───────────────────────────────────────────
+  // ── Preset editor (the 15 keys) ───────────────────────────────────────────
   if (view.at === 'editor') {
     const p = view.preset;
     // Merge preset values with server cfg so providerChoices can see API keys.

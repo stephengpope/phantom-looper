@@ -19,7 +19,7 @@ export const PRESET_KEYS = [
 const PRESET_KEY_SET = new Set<string>(PRESET_KEYS);
 
 export class PresetError extends Error {
-  constructor(readonly code: 'unknown_preset_key' | 'invalid_preset_value', message: string) { super(message); }
+  constructor(readonly code: 'unknown_preset_key' | 'invalid_preset_value' | 'duplicate_preset_name', message: string) { super(message); }
 }
 
 export class Presets {
@@ -32,8 +32,9 @@ export class Presets {
 
   /** Create or overwrite. Three states per key: present with a value = "set";
    *  present with null = "clear" (apply nulls the setting, the cascade takes
-   *  over); absent = "leave unchanged". Unknown keys and invalid values are
-   *  refused. Returns the values as stored. */
+   *  over); absent = "leave unchanged". Unknown keys, invalid values and a
+   *  name another preset already has are refused. Returns the values as
+   *  stored. */
   async save(id: string, name: string, values: Record<string, unknown>): Promise<Record<string, unknown>> {
     const bad = Object.keys(values).filter((k) => !PRESET_KEY_SET.has(k));
     if (bad.length) throw new PresetError('unknown_preset_key', `presets may only hold model keys; unknown: ${bad.join(', ')}`);
@@ -48,9 +49,16 @@ export class Presets {
       clean[k] = v;
     }
     const now = new Date();
-    await this.db.insert(presets)
-      .values({ id, name, values: clean, createdAt: now, updatedAt: now })
-      .onConflictDoUpdate({ target: [presets.id], set: { name, values: clean, updatedAt: now } });
+    try {
+      await this.db.insert(presets)
+        .values({ id, name, values: clean, createdAt: now, updatedAt: now })
+        .onConflictDoUpdate({ target: [presets.id], set: { name, values: clean, updatedAt: now } });
+    } catch (e) {
+      // Postgres unique_violation — the only unique here besides the key is
+      // `name`. Surfaced as a 400, not a 500, so the client can say "taken".
+      if ((e as { code?: string }).code === '23505') throw new PresetError('duplicate_preset_name', `a preset named "${name}" already exists`);
+      throw e;
+    }
     return clean;
   }
 

@@ -76,6 +76,14 @@ general, short, and true.
   500ed left a lock held; the next round was skipped and "reused the pair"
   passed trivially. When a live check passes suspiciously fast, read the
   server log for the round it claims ran. *(table 3)*
+- **Every constraint in the schema is a path the object must answer for.**
+  `name unique` sat in the migration; the object validated keys and values
+  and let the constraint 500. Read the `create table` and ask, for each
+  `unique` / `check` / FK: what does the caller see when it trips?
+  *(table 4)*
+- **Prove the "was" as well as the "is".** The report said "was 500"; a
+  stash-and-curl made it a fact with the exact message, in under a minute.
+  *(table 4)*
 - **Two joins that each multiply rows multiply each other.** `loops` on
   either seat × `token_usage`, then SUM: a session in two loop rows
   doubled its tokens. Aggregate over one join, or in a subquery. *(table 3)*
