@@ -17,7 +17,7 @@
 //   'none' becomes 'minimal' (adaptive thinking at effort "low") for that
 //   family and stays 'none' (no thinking at all) for every other model —
 //   on haiku-4-5, 'minimal' would switch thinking ON.
-import { ToolLoopAgent, isStepCount, type LanguageModel, type ModelMessage, type Tool } from 'ai';
+import { ToolLoopAgent, isStepCount, type LanguageModel, type ModelMessage, type SystemModelMessage, type Tool } from 'ai';
 import type { StepRecord } from './transcript.js';
 import type { NudgeQueue } from './nudgeQueue.js';
 import { createAnthropic } from '@ai-sdk/anthropic';
@@ -291,30 +291,34 @@ export function withRetry(
 }
 
 /**
- * Prompt caching. Anthropic caches everything *before* a breakpoint, so two
- * marks cover a growing conversation: one on the first message (tools + system
- * + that message — the prefix that never changes) and a rolling one on the
- * last, which the next call reads back as its cached prefix. Without them
- * every call re-bills the whole history — and the cache lives at Anthropic,
- * keyed on the byte-identical prefix, so a session resumed on another machine
- * (or a looper round after a cli turn) still hits it within the TTL. Other
- * providers cache automatically and ignore the anthropic options block. The
- * marks go on copies: history is what we persist and replay, and it stays
- * clean.
+ * Prompt caching — three breakpoints, three cache lifetimes:
  *
- * This runs before EVERY step (createAgent's prepareStep), not once per turn.
- * Anthropic only looks ~20 content blocks back from a breakpoint for a usable
- * prefix, so a mark left where the turn STARTED goes stale the moment the tool
- * loop appends more than that: the steps in between cache nothing, and the
- * next turn misses everything past tools + system and re-writes the whole
- * prefix at the write rate. Measured on a real session: turns of 8 steps or
- * fewer read the full prefix back, turns of 9 or more read 8,208 tokens and
- * re-wrote up to 982,860. Re-marking each step keeps the rolling breakpoint
- * within a block or two of the end, so the chain never breaks.
+ *  1. Static system block — identical across every workspace and session.
+ *     Set on the first SystemModelMessage in the instructions array, by the
+ *     agent builder (e.g. codingAgent's splitInstructions). Cached globally.
+ *  2. Workspace system block — per-workspace (skills, secrets, credentials,
+ *     env facts, current date). Set on the second SystemModelMessage.
+ *     Cached across sessions in the same workspace.
+ *  3. Last conversation message — the rolling mark placed here by
+ *     withCacheBreakpoints, before every step. The backward walk from it
+ *     finds the best prior prefix (the previous step's write, or on a new
+ *     session the workspace block's write).
  *
- * Re-marking means the messages arriving here may already carry a mark this
- * function made (an override carries forward into later steps), and Anthropic
- * caps a request at four breakpoints — so every stale mark comes off first.
+ * Anthropic: explicit breakpoints, 4 max — we use 3. The backward walk
+ * (20-block lookback per breakpoint) finds prior writes automatically.
+ * OpenAI / Gemini: cache automatically, ignore the anthropic provider
+ * options.
+ *
+ * The marks go on copies: history is what we persist and replay, and it
+ * stays clean. This runs before EVERY step (createAgent's prepareStep),
+ * not once per turn — Anthropic only looks ~20 content blocks back from a
+ * breakpoint, so a mark left where the turn started goes stale once the
+ * tool loop grows past that. Re-marking each step keeps the rolling
+ * breakpoint within a block or two of the end.
+ *
+ * Re-marking means messages may already carry a mark from a prior step
+ * (overrides carry forward), and Anthropic caps at 4 breakpoints — so
+ * every stale mark comes off first.
  */
 const unmark = (m: ModelMessage): ModelMessage => {
   // Nothing else in the tree writes a message's anthropic provider options,
@@ -332,7 +336,7 @@ const unmark = (m: ModelMessage): ModelMessage => {
  *  is only ever the delta past the last breakpoint (a few hundred tokens once
  *  the prefix is warm), so the premium is paid on scraps and the saved
  *  re-writes are the whole conversation. */
-const CACHE_TTL = '1h';
+export const CACHE_TTL = '1h';
 
 const mark = (m: ModelMessage): ModelMessage => ({
   ...m,
@@ -345,14 +349,17 @@ const mark = (m: ModelMessage): ModelMessage => ({
 export function withCacheBreakpoints(messages: ModelMessage[]): ModelMessage[] {
   if (messages.length === 0) return messages;
   const out = messages.map(unmark);
-  out[0] = mark(out[0]);
+  // Only the last message gets a rolling breakpoint — the system prompt blocks
+  // carry their own breakpoints (set in the instructions array), and the
+  // backward walk from this mark finds the best prior prefix automatically.
   out[out.length - 1] = mark(out[out.length - 1]);
   return out;
 }
 
 export interface AgentSpec {
-  /** The system prompt. */
-  instructions: string;
+  /** The system prompt — a single string, or an array of SystemModelMessages
+   *  for per-block cache control (static block + workspace block). */
+  instructions: string | SystemModelMessage[];
   tools: Record<string, Tool>;
   /** Tool-call rounds per turn. `null`/undefined = unlimited: the turn ends
    *  only when the model stops calling tools (an abort signal still ends it).

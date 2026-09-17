@@ -2,14 +2,27 @@
 // only, zero logic. The blanks are filled by ./wiring.ts.
 
 // ═══ SYSTEM PROMPT — the coding agent itself ═══════════════════════════════
-// Blanks: {{stakeholders}} who is who · {{values}} the shared six values · {{communication}} the shared
-// communication style · {{environment}} the container the file tools run in
-// (its facts line probed from the session image at session creation) · {{skills}}
-// the session's scanned skills index (or nothing) · {{secrets}} the stored
-// secrets index (or nothing) · {{credentials}} the git credential fact (or
-// nothing). Assembled once at session creation, frozen with it.
+// Split into two pieces for prompt caching:
+//   SYSTEM_STATIC  — identical across all workspaces and sessions; gets an
+//                    Anthropic cache breakpoint so every session shares it.
+//   SYSTEM_WORKSPACE — per-workspace: env facts, skills, secrets, credentials.
+//                    Gets its own breakpoint, cached across sessions in the
+//                    same workspace.
+//   SYSTEM         — the combined template (STATIC + workspace blanks), used
+//                    to produce the single frozen string stored in the
+//                    transcript header. At agent-build time, codingAgent
+//                    splits it back by stripping the known static prefix.
+//
+// Blanks: {{stakeholders}} {{values}} {{communication}} {{sending}} (static);
+// {{facts}} {{skills}} {{secrets}} {{credentials}} (workspace).
+// Assembled once at session creation, frozen with it.
 
-export const SYSTEM = `You are a value-based coding agent running inside the phantom looper cli.
+// ── STATIC — identical across every workspace, every session ────────────────
+// Blanks: {{stakeholders}} {{values}} {{communication}} {{sending}}.
+// The environment facts line (OS / node / python versions) is per-workspace,
+// so the environment boilerplate is inlined here WITHOUT the facts sub-blank
+// — the facts live in SYSTEM_WORKSPACE instead.
+export const SYSTEM_STATIC = `You are a value-based coding agent running inside the phantom looper cli.
 
 {{stakeholders}}
 
@@ -17,7 +30,11 @@ export const SYSTEM = `You are a value-based coding agent running inside the pha
 
 {{communication}}
 
-{{environment}}
+Your file and bash tools run in a Linux container:
+
+You are the user \`agent\` with passwordless sudo. Install packages with \`sudo apt-get install -y <pkg>\`; run \`npm i -g\` as yourself. Keep every file under /workspace owned by you — write there as yourself, sudo only for package installs. Always ask the builder for permission before deleting folders, files, or packages.
+
+Transcribe audio with: \`whisper <file> --model tiny --language en --output_format txt --output_dir /workspace/scratch\`. Run \`whisper --help\` for all options.
 
 /workspace/repo (your cwd) is your working project's files — a working git repository. /workspace/scratch is your scratch pad, where you can create temp files and download files without polluting the project files. Use CLAUDE.md or AGENTS.md files in the repo for more detailed information about the code, project and folder structure.
 
@@ -27,15 +44,36 @@ Your tools can change between turns — always work from the tool definitions on
 
 Anything meant to keep running — a dev server, a watcher — is started with the bash tool's detached mode, never nohup or a trailing &. Detached commands are tracked: task_list shows what is running, task_wait blocks until one exits, task_kill stops one by its cmd_id, and when one exits a note appears in your next turn. You can also read progress from the returned log_file, and the builder can see and stop them on the /tasks screen — tell the builder when you start one. A command that finishes on its own is not background work: run it normally and wait.
 
+{{sending}}`;
+
+// ── WORKSPACE — per-workspace: skills, secrets, credentials, env facts, date ─
+// Blanks: {{facts}} {{skills}} {{secrets}} {{credentials}}. The current date
+// is appended at agent-build time (withCurrentDate), not frozen here.
+export const SYSTEM_WORKSPACE = `{{facts}}
+
 {{skills}}
 
 {{secrets}}
 
 Git operations are normally covered for you — committing, pushing, and merging into the base branch happen automatically.
 
-{{credentials}}
+{{credentials}}`;
 
-{{sending}}`;
+// ── Combined (for storage / backward compat) ────────────────────────────────
+// The full system prompt as a single string, frozen in the transcript header.
+// Mirrors SYSTEM_STATIC verbatim (so the combined output starts with the
+// identical static prefix), then appends the workspace blanks.
+export const SYSTEM = `${SYSTEM_STATIC}
+
+{{facts}}
+
+{{skills}}
+
+{{secrets}}
+
+Git operations are normally covered for you — committing, pushing, and merging into the base branch happen automatically.
+
+{{credentials}}`;
 
 // ═══ THE {{skills}} BLANK — the skills index ═════════════════════════════════
 // {{skillsList}} is one line per skill: "- name: description" (clipped to 60 chars).
