@@ -37,7 +37,6 @@ import { BackdoorQueue } from './backdoor.js';
 import type { AutoPushResult, AutoPushEvent } from '../git/autoPush.js';
 import type { AutoPullResult, AutoPullEvent } from '../git/autoPull.js';
 import type { WorkspaceRow, SessionRow } from '../db/schema.js';
-import type pg from 'pg';
 import { workspaceRoutes } from './routes/workspaces.js';
 import { sessionRoutes } from './routes/sessions.js';
 import { systemRoutes } from './routes/system.js';
@@ -76,7 +75,6 @@ export interface AppCtx {
    *  in DB-only tests: the auto-pull route answers 503. */
   autoPull?: (session: SessionRow, workspace: WorkspaceRow,
     onEvent?: (e: AutoPullEvent) => void | Promise<void>, by?: string) => Promise<AutoPullResult>;
-  pgPool: pg.Pool;
   /** The board's event bus (boardEvents.ts) — the card routes publish, the
    *  events route streams, the looper engine publishes its pairings. index.ts
    *  makes one and hands it to both; a ctx built without one gets its own at
@@ -118,7 +116,7 @@ export interface AppCtx {
    *  call site guards with `?.`. */
   looper?: {
     /** A card was written — run its loop while it canTurn. */
-    runLoop(workspaceId: string, seq: number): void;
+    runLoop(workspaceId: string, cardNumber: number): void;
     /** A session lock was released — its card, if any, may be runnable.
      *  `releasedBy` is the releasing client id: the engine ignores its own
      *  releases (every turn ends in one — reacting would spin). */

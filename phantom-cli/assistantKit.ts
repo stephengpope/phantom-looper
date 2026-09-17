@@ -210,7 +210,7 @@ export function kanbanHandler(win: WindowStore) {
       if (args.show === 'card') {
         const up = win.boardUp;
         if (args.card === undefined) return { error: 'show card needs the card number', screen: up ? 'board' : 'chat' };
-        if (!b.bySeq(args.card)) return { error: `no card ${args.card}`, screen: up ? 'board' : 'chat' };
+        if (!b.byNumber(args.card)) return { error: `no card ${args.card}`, screen: up ? 'board' : 'chat' };
         // Where esc will go is decided HERE, once: back to the columns when
         // the board was already up, back to the chat when it was not.
         win.openCard(args.card, up ? 'board' : 'chat');

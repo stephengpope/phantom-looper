@@ -185,7 +185,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     await Promise.all([...byWs.entries()].map(async ([wsId, cards]) => {
       const w = await ctx.workspaces.get(wsId);
       if (!w) return;
-      for (const [seq, status] of await ctx.cards.statusOf(w, cards)) cardStatusMap.set(`${wsId}:${seq}`, status);
+      for (const [number, status] of await ctx.cards.statusOf(w, cards)) cardStatusMap.set(`${wsId}:${number}`, status);
     }));
     // `work` is a stored column on the session row, updated by the server's
     // periodic git-state refresh (workRefresh.ts). It rides every response

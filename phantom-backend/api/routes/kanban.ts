@@ -1,6 +1,5 @@
-// Kanban, workspace-scoped: cards live in the workspace's own schema
-// (workspaceSchema.ts) and are written ONLY through these routes — the API
-// owns the writes. The column list and the card prefix are workspace fields
+// Kanban, workspace-scoped: cards (cards.ts) are written ONLY through these
+// routes — the API owns the writes. The column list and the card prefix are workspace fields
 // (PATCH /workspaces/:id); defaults live here in code, the DB stores overrides.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { WorkspaceRow } from '../../db/schema.js';
@@ -72,9 +71,9 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
    *  session; a card with no loop has nothing to push.
    *  Failure surfaces on the board: the card comes back un-archived, in
    *  blocked, with the reason. */
-  async function autoPushArchivedCard(w: WorkspaceRow, seq: number): Promise<void> {
+  async function autoPushArchivedCard(w: WorkspaceRow, number: number): Promise<void> {
     if (!ctx.autoPush) return;
-    const loop = await ctx.loops.current(w.id, seq);
+    const loop = await ctx.loops.current(w.id, number);
     const session = loop ? await ctx.sessions.get(loop.codingSessionId) : undefined;
     if (!session || session.status !== 'active') return;
     if (await ctx.settings.resolve('auto_push_on_archive', { workspace: w, session }) !== true) return;
@@ -90,13 +89,13 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
     }
     result ??= { result: 'error', reason: 'session stayed busy — auto-push never ran' };
     if (result.result === 'pushed' || result.result === 'nothing') {
-      log.info({ workspace: w.name, card: seq, result: result.result }, 'auto-push on archive');
+      log.info({ workspace: w.name, card: number, result: result.result }, 'auto-push on archive');
       return;
     }
-    log.warn({ workspace: w.name, card: seq, result }, 'auto-push on archive failed — card un-archived into blocked');
-    await ctx.cards.unarchiveAsBlocked(w, seq, `auto-push failed: ${result.reason ?? result.result}`)
+    log.warn({ workspace: w.name, card: number, result }, 'auto-push on archive failed — card un-archived into blocked');
+    await ctx.cards.unarchiveAsBlocked(w, number, `auto-push failed: ${result.reason ?? result.result}`)
       .catch((e) =>
-        log.error({ card: seq, err: errStr(e) }, 'could not mark the card blocked after a failed auto-push'));
+        log.error({ card: number, err: errStr(e) }, 'could not mark the card blocked after a failed auto-push'));
   }
 
   // The resolved looper defaults ride every board payload so the card editor
@@ -131,25 +130,25 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
   };
 
   app.get<{ Params: { id: string };
-    Querystring: { archived?: 'true' | 'false' | 'only'; seq?: number; limit?: number; before?: string; before_id?: number } }>(
+    Querystring: { archived?: 'true' | 'false' | 'only'; number?: number; limit?: number; before?: string; before_id?: number } }>(
     '/workspaces/:id/cards', { schema: { ...TAG, summary: 'The board: columns, card prefix, cards',
       description: 'Everything a board render needs in one call. Cards are ordered by column position; ' +
         'archived cards are excluded (archived=true includes them; archived=only lists JUST the archive, ' +
         'newest change first, keyset-paged like GET /sessions — limit/before/before_id, `total` = the whole archive, a short page = the ' +
-        'end). seq returns the one card with that number, archived or not — the lookup for a card that is ' +
+        'end). number returns the one card with that number, archived or not — the lookup for a card that is ' +
         'off the board.',
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       querystring: { type: 'object', properties: {
         archived: { type: 'string', enum: ['true', 'false', 'only'], default: 'false' },
-        seq: { type: 'integer', description: 'card number — return just that card, archived or not' },
+        number: { type: 'integer', description: 'card number — return just that card, archived or not' },
         limit: { type: 'integer', minimum: 1, maximum: 500, description: 'archived=only: page size; omitted = everything' },
         before: { type: 'string', description: "archived=only: a row's updated_at (ISO) — return only older changes" },
         before_id: { type: 'integer', description: "that row's id, breaking updated_at ties" } } } } },
     async (req, reply) => {
       const w = await workspaceOf(req.params.id);
       if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
-      if (req.query.seq !== undefined) {
-        const card = await ctx.cards.bySeq(w, req.query.seq);
+      if (req.query.number !== undefined) {
+        const card = await ctx.cards.byNumber(w, req.query.number);
         return ok({ ...await board(w), cards: card ? [card] : [] });
       }
       if (req.query.archived === 'only') {
@@ -171,7 +170,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
   app.post<{ Params: { id: string }; Body: Record<string, unknown> }>(
     '/workspaces/:id/cards', { schema: { ...TAG, summary: 'Create a card',
       description: 'New card. status defaults to the first column; pos defaults to the end of that column. ' +
-        'The card number (seq) is assigned by the workspace\'s own sequence and never reused.',
+        'The card number is the workspace\'s next and is never reused.',
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       body: { type: 'object', additionalProperties: false, required: ['title'], properties: cardBodyProps } } },
     async (req, reply) => {
@@ -182,7 +181,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
       catch (e) { return cardErr(reply, e); }
       // The looper runs on card writes, not on a clock: a card born straight
       // into a loop column starts here. Eligibility is the engine's to judge.
-      ctx.looper?.runLoop(w.id, card.seq);
+      ctx.looper?.runLoop(w.id, card.number);
       return ok({ ...await board(w), card });
     });
 
@@ -203,13 +202,13 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
       catch (e) { return cardErr(reply, e); }
       const { card, wasArchived } = written;
       if (req.body.archived === true && wasArchived === false && card.status === 'done') {
-        void autoPushArchivedCard(w, card.seq).catch((e) =>
-          log.error({ card: card.seq, err: errStr(e) }, 'auto-push on archive threw'));
+        void autoPushArchivedCard(w, card.number).catch((e) =>
+          log.error({ card: card.number, err: errStr(e) }, 'auto-push on archive threw'));
       }
       // Every card write runs the looper — a move into a loop column, an
       // auto_plan/auto_build flip, an unblock. The engine re-reads the row
       // and checks canTurn itself, so an irrelevant edit is a cheap no-op.
-      ctx.looper?.runLoop(w.id, card.seq);
+      ctx.looper?.runLoop(w.id, card.number);
       return ok({ ...await board(w), card });
     });
 
@@ -217,7 +216,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
     '/workspaces/:id/revisions', { schema: { ...TAG, summary: "A card's revision history",
       description: 'What changed on a card and when, newest first — written by a trigger, so edits made ' +
         'over SQL are recorded too. An update holds the OLD values of the keys that changed; a delete ' +
-        'holds the whole card as it last stood. card is the seq number, so deleted cards still answer.',
+        'holds the whole card as it last stood. card is the card number, so deleted cards still answer.',
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       querystring: { type: 'object', required: ['card'], properties: {
         card: { type: 'integer', description: 'card number — PHA-7 is card 7' },

@@ -54,10 +54,10 @@ async function api(deps: AssistantDeps, path: string,
 
 /** Map a card number to its row id via the board list — the PATCH/move/items
  *  routes take the row id, reads and creates take the number. */
-async function cardIdOf(deps: AssistantDeps, workspaceId: string, seq: number): Promise<number | null> {
+async function cardIdOf(deps: AssistantDeps, workspaceId: string, number: number): Promise<number | null> {
   const j = await api(deps, `/workspaces/${workspaceId}/cards?archived=true`);
   if (!j.ok) return null;
-  const card = (j.data.cards as Array<{ id: number; seq: number }>).find((c) => c.seq === seq);
+  const card = (j.data.cards as Array<{ id: number; number: number }>).find((c) => c.number === number);
   return card?.id ?? null;
 }
 
@@ -76,12 +76,12 @@ function boardHandler(deps: AssistantDeps, workspaceId: () => string | null) {
         if (!j.ok) return { error: j.error?.message };
         return {
           prefix: j.data.prefix,
-          cards: (j.data.cards as Array<{ seq: number; title: string; status: string }>)
-            .map((c) => ({ card: c.seq, title: c.title, status: c.status })),
+          cards: (j.data.cards as Array<{ number: number; title: string; status: string }>)
+            .map((c) => ({ card: c.number, title: c.title, status: c.status })),
         };
       }
       case 'read': {
-        const j = await api(deps, `/workspaces/${ws}/cards?seq=${args.card}`);
+        const j = await api(deps, `/workspaces/${ws}/cards?number=${args.card}`);
         if (!j.ok) return { error: j.error?.message };
         const c = j.data.cards[0];
         return c ?? { error: `no card ${args.card}` };

@@ -103,7 +103,7 @@ interface Budget { seeded: boolean; spent: number }
 
 export class LooperEngine {
   private stopped = false;
-  private running = new Set<string>();          // workspaceId:seq — one live loop per card
+  private running = new Set<string>();          // workspaceId:cardNumber — one live loop per card
   private pending = new Set<string>();          // called while running — go again after
   private f: typeof fetch;
 
@@ -139,7 +139,7 @@ export class LooperEngine {
         log.error({ workspace: workspace.id, err: (e as Error).message }, 'could not read the workspace\'s cards — its loops did not run');
         continue;
       }
-      for (const card of cards) void this.runLoop(workspace.id, card.seq);
+      for (const card of cards) void this.runLoop(workspace.id, card.number);
     }
   }
 
@@ -165,8 +165,8 @@ export class LooperEngine {
    *  write that changes nothing loop-shaped. A turn that throws blocks the
    *  card with the reason — the failure lands on the board and the loop is
    *  over; nothing retries a failed turn. */
-  async runLoop(workspaceId: string, seq: number): Promise<void> {
-    const claim = `${workspaceId}:${seq}`;
+  async runLoop(workspaceId: string, cardNumber: number): Promise<void> {
+    const claim = `${workspaceId}:${cardNumber}`;
     if (this.running.has(claim)) { this.pending.add(claim); return; }
     this.running.add(claim);
     // One ledger per loop: seeded on the first turn that needs it, carried
@@ -189,10 +189,10 @@ export class LooperEngine {
           if (!workspace) continue;
           const auto = await this.deps.settings.resolveMany(['auto_plan', 'auto_build'], { workspace })
             .catch(() => ({ auto_plan: false, auto_build: false }));
-          card = await this.deps.cards.activeBySeq(workspace, seq);
+          card = await this.deps.cards.activeByNumber(workspace, cardNumber);
           if (!card || !canTurn(card, { plan: Boolean(auto.auto_plan), build: Boolean(auto.auto_build) })) continue;
         } catch (e) {
-          log.warn({ card: seq, err: errStr(e) }, 'looper could not read the card');
+          log.warn({ card: cardNumber, err: errStr(e) }, 'looper could not read the card');
           continue;
         }
 
@@ -200,10 +200,10 @@ export class LooperEngine {
         try {
           outcome = await this.runTurn(workspace, card, budget);
         } catch (e) {
-          log.warn({ workspace: workspace.name, card: seq, err: errStr(e) },
+          log.warn({ workspace: workspace.name, card: cardNumber, err: errStr(e) },
             'looper turn failed — blocking the card');
           await this.blockCard(workspace.id, card.id, errStr(e)).catch((be) =>
-            log.error({ card: seq, err: errStr(be) }, 'could not block the failed card'));
+            log.error({ card: cardNumber, err: errStr(be) }, 'could not block the failed card'));
           continue;
         }
         // A turn just ran — the next step is owed now, not on the next
@@ -238,12 +238,12 @@ export class LooperEngine {
 
     // The card's current LOOP — the pairing row, written once per run. It
     // names the coder and the supervisor outright; nothing is derived.
-    const loop = await this.deps.loops.current(workspace.id, card.seq);
+    const loop = await this.deps.loops.current(workspace.id, card.number);
 
     // Entering plan is a NEW loop, always — the revision history is the
     // transition clock (logic.ts).
     const fresh = needsFreshSession(card.status, loop?.createdAt ?? null,
-      await this.deps.cards.lastMovedAt(workspace, card.seq));
+      await this.deps.cards.lastMovedAt(workspace, card.number));
 
     let opened: OpenedSession;
     let supervisorSessionId: string;
@@ -264,7 +264,7 @@ export class LooperEngine {
         });
         const sup = await this.deps.sessions.createSupervisor(workspace.id,
           String(opened.session.folderId ?? opened.session.id));
-        await this.deps.loops.create(workspace.id, card.seq, opened.session.id, sup.id);
+        await this.deps.loops.create(workspace.id, card.number, opened.session.id, sup.id);
         // The coder's session is named after its card from birth — /resume
         // never shows a nameless row while the first (long) plan turn runs.
         await this.deps.sessions.nameIfUnnamed(opened.session.id, card.title);
@@ -274,14 +274,14 @@ export class LooperEngine {
         // just ran), so without this the board's spinner missed the whole
         // first turn.
         this.deps.events?.publish(workspace.id,
-          { event: 'session', card: card.seq, id: opened.session.id, name: card.title });
+          { event: 'session', card: card.number, id: opened.session.id, name: card.title });
         this.deps.events?.publish(workspace.id,
-          { event: 'session_lock', card: card.seq, id: opened.session.id, locked: true });
+          { event: 'session_lock', card: card.number, id: opened.session.id, locked: true });
         supervisorSessionId = sup.id;
       }
     } catch (e) {
       if (e instanceof SessionLockedError) {
-        log.info({ card: card.seq }, 'card session held elsewhere — skipped; the lock release will re-run the loop');
+        log.info({ card: card.number }, 'card session held elsewhere — skipped; the lock release will re-run the loop');
         return 'skipped';
       }
       throw e;
@@ -318,7 +318,7 @@ export class LooperEngine {
           blocked_reason: `token budget exhausted: ${budget.spent} of ${limit} tokens used`,
           resolution: null,
         });
-        log.info({ card: card.seq, spent: budget.spent, limit }, 'looper budget exhausted');
+        log.info({ card: card.number, spent: budget.spent, limit }, 'looper budget exhausted');
         return 'moved';
       }
 
@@ -326,12 +326,12 @@ export class LooperEngine {
       // move + items. Bound at build time — no card input, so neither agent
       // can ever act on a card other than the one it is running.
       const cardCfg: LoopCardConfig = { baseUrl: BASE, apiKey, workspaceId: workspace.id,
-        cardId: card.id, seq: card.seq, fetch: this.f, clientId: CLIENT_ID };
+        cardId: card.id, number: card.number, fetch: this.f, clientId: CLIENT_ID };
       // The interrupt controller: registered so POST /sessions/:id/interrupt
       // can abort this turn. Deregistered in finally (below the close calls).
       const ac = new AbortController();
       this.deps.activeTurns?.set(opened.session.id, ac);
-      const coderDeps = { ...this.turnDeps(card.seq, ac.signal), extraTools: loopBlockTool(cardCfg) };
+      const coderDeps = { ...this.turnDeps(card.number, ac.signal), extraTools: loopBlockTool(cardCfg) };
 
       const opener = unsentKickoff(card, opened.messages);
       if (opener) {
@@ -348,7 +348,7 @@ export class LooperEngine {
         });
       } catch (e) {
         if (e instanceof SessionLockedError) {
-          log.info({ card: card.seq }, 'supervisor session held elsewhere — skipped; the lock release will re-run the loop');
+          log.info({ card: card.number }, 'supervisor session held elsewhere — skipped; the lock release will re-run the loop');
           return 'skipped';
         }
         throw e;
@@ -369,7 +369,7 @@ export class LooperEngine {
         const supMaxSteps = agentMaxSteps(cfg, 'supervisor');
         model.fetch = this.deps.modelFetch;
         model.usage = { kind: 'supervisor', sessionId: supOpened.session.id };
-        model.onRetry = (t) => log.warn({ card: card.seq, agent: 'supervisor' }, t);
+        model.onRetry = (t) => log.warn({ card: card.number, agent: 'supervisor' }, t);
         const tools = {
           ...await phantomTools({ baseUrl: BASE, apiKey, sessionId: opened.session.id,
             pick: 'readonly', fetch: this.f }),
@@ -409,7 +409,7 @@ export class LooperEngine {
           type: 'session', agent: CLIENT_ID, provider: model.provider, model: model.model,
           ...(model.baseUrl ? { base_url: model.baseUrl } : {}),
           created_at: new Date().toISOString(), system_prompt: supervisorInstructions(),
-          session_id: supOpened.session.id, card: card.seq,
+          session_id: supOpened.session.id, card: card.number,
         };
         await supOpened.saveTranscript(serializeTranscript(supHeader,
           [...messages, ...turnMessages],

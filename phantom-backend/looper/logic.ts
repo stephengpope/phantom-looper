@@ -69,13 +69,13 @@ export function wasSent(messages: ModelMessage[], firstLine: string): boolean {
  */
 export function unsentKickoff(card: CardShape, messages: ModelMessage[]): { text: string; planMode: boolean } | null {
   if (card.status === 'plan') {
-    return wasSent(messages, firstLine.planCard(card.seq))
+    return wasSent(messages, firstLine.planCard(card.number))
       ? null : { text: toCodingAgent.planCard(card), planMode: true };
   }
   if (card.status === 'in_progress') {
-    if (wasSent(messages, firstLine.buildFromPlan(card.seq))
-      || wasSent(messages, firstLine.buildFromCard(card.seq))) return null;
-    return wasSent(messages, firstLine.planCard(card.seq))
+    if (wasSent(messages, firstLine.buildFromPlan(card.number))
+      || wasSent(messages, firstLine.buildFromCard(card.number))) return null;
+    return wasSent(messages, firstLine.planCard(card.number))
       ? { text: toCodingAgent.buildFromPlan(card), planMode: false }
       : { text: toCodingAgent.buildFromCard(card), planMode: false };
   }
@@ -156,12 +156,12 @@ function unsentBriefings(card: CardShape, coder: ModelMessage[], supervisor: Mod
   const supTexts = userTexts(supervisor);
   const has = (line: string) => supTexts.some((t) => t.startsWith(line));
   const seeds: string[] = [];
-  const planned = wasSent(coder, firstLine.planCard(card.seq));
-  if (planned && !has(firstLine.reviewingPlan(card.seq)))
+  const planned = wasSent(coder, firstLine.planCard(card.number));
+  if (planned && !has(firstLine.reviewingPlan(card.number)))
     seeds.push(toSupervisor.reviewingPlan(card));
-  const building = wasSent(coder, firstLine.buildFromPlan(card.seq))
-    || wasSent(coder, firstLine.buildFromCard(card.seq));
-  if (building && !has(firstLine.reviewingWork(card.seq)))
+  const building = wasSent(coder, firstLine.buildFromPlan(card.number))
+    || wasSent(coder, firstLine.buildFromCard(card.number));
+  if (building && !has(firstLine.reviewingWork(card.number)))
     seeds.push(toSupervisor.reviewingWork(card, { planned }));
   return seeds;
 }

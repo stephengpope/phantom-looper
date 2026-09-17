@@ -385,10 +385,10 @@ export class WindowStore {
 
   /** A card's editor, and where esc leaves it: opened from the board it goes
    *  back to the columns; from anywhere else, to the chat. */
-  openCard(seq: number, back: 'chat' | 'board' = 'chat'): void {
+  openCard(number: number, back: 'chat' | 'board' = 'chat'): void {
     const e = this.sessions.active();
     if (!e) return;
-    this.showOverlay(boardScreen(this, e.workspaceId, { seq, back }));
+    this.showOverlay(boardScreen(this, e.workspaceId, { number, back }));
   }
 
   /** The open list's re-read clock (`Overlay.poll`), unref'd so it never
@@ -1638,7 +1638,7 @@ export class WindowStore {
     try {
       await this.api('PATCH', `/workspaces/${workspaceId}/cards/${card.id}`, { archived: false });
       this.archived = this.archived.filter((x) => x.id !== card.id);
-      this.archivedNotice = `restored ${card.seq}-${card.title} → ${card.status.replace(/_/g, ' ')}`;
+      this.archivedNotice = `restored ${card.number}-${card.title} → ${card.status.replace(/_/g, ' ')}`;
       void this.boardFor(workspaceId).load();   // the card is back on the board
     } catch (e) { this.archivedNotice = `restore failed: ${(e as Error).message}`; }
     this.notify();
@@ -1650,7 +1650,7 @@ export class WindowStore {
     this.boardFor(workspaceId).adoptCard(card);
     // esc from here is the chat: the archive screen it came from is a menu,
     // and going "back" to a board the user never opened would be a surprise.
-    this.openCard(card.seq, 'chat');
+    this.openCard(card.number, 'chat');
   };
 
   // ── git ───────────────────────────────────────────────────────────────────

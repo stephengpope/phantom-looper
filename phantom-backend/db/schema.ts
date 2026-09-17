@@ -1,7 +1,7 @@
 // Drizzle mirror of migrations/*.sql. The SQL files are the source of truth
 // (applied by server/db/migrate.ts); this file exists for typed queries.
 import { getTableColumns } from 'drizzle-orm';
-import { pgSchema, text, jsonb, timestamp, integer, bigint, boolean, customType, primaryKey } from 'drizzle-orm/pg-core';
+import { pgSchema, text, jsonb, timestamp, integer, bigint, boolean, real, customType, primaryKey, unique } from 'drizzle-orm/pg-core';
 
 const bytea = customType<{ data: Buffer }>({ dataType: () => 'bytea' });
 
@@ -45,9 +45,49 @@ export const workspaces = phantomLooper.table('workspaces', {
   displayName: text('display_name'),
   baseBranch: text('base_branch').notNull(),
   branchPrefix: text('branch_prefix').notNull().default('agent'),
-  schemaName: text('schema_name').notNull(),
   kanbanColumns: jsonb('kanban_columns').$type<string[]>(),
+  // The next card number this workspace hands out. Numbers are never reused:
+  // a deleted card's stays taken. (024; Cards.create moves it.)
+  nextCardNumber: integer('next_card_number').notNull().default(1),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// The board (024: one table, every workspace). Status is a plain string
+// matched against the workspace's column list (workspaces.kanban_columns,
+// default in code) — columns are data, not DDL. `auto_plan`/`auto_build` are
+// the per-card looper switches: null inherits the workspace setting of the
+// same name. `requirements` is the ONE checklist — {key, text, done}, done
+// meaning VERIFIED. Column keys are snake_case on purpose: a card row IS the
+// API's card, sent as stored to the cli and the agents' kanban tools.
+export const cards = phantomLooper.table('cards', {
+  id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+  workspace_id: text('workspace_id').notNull(),
+  number: integer('number').notNull(),  // PHA-7 is card 7 — the permanent handle, never reused
+  status: text('status').notNull().default('backlog'),
+  pos: real('pos').notNull(),
+  title: text('title').notNull(),
+  details: text('details').notNull().default(''),
+  requirements: jsonb('requirements').$type<{ key: string; text: string; done: boolean }[]>().notNull().default([]),
+  blocked_reason: text('blocked_reason'),
+  resolution: text('resolution'),
+  auto_plan: boolean('auto_plan'),
+  auto_build: boolean('auto_build'),
+  pinned: boolean('pinned').notNull().default(false),
+  archived: boolean('archived').notNull().default(false),
+  created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [unique().on(t.workspace_id, t.number)]);
+
+// A card's history, written by a trigger on every update/delete (024) so
+// edits made over SQL are recorded too. Keyed by (workspace_id, card_number)
+// — the card's permanent handle — so a deleted card still answers.
+export const cardRevisions = phantomLooper.table('card_revisions', {
+  id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+  workspace_id: text('workspace_id').notNull(),
+  card_number: integer('card_number').notNull(),
+  op: text('op').notNull(),
+  changed: jsonb('changed').notNull(),
+  changed_at: timestamp('changed_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 // A checkout: the branch and where base was when it was cut. The directory on
@@ -221,6 +261,7 @@ export const tokenUsage = phantomLooper.table('token_usage', {
 });
 
 export type WorkspaceRow = typeof workspaces.$inferSelect;
+export type CardRow = typeof cards.$inferSelect;
 /** A session as reads return it — sessionColumns' shape, blob excluded. */
 export type SessionRow = Omit<typeof sessions.$inferSelect, 'transcript'>;
 export type FolderRow = typeof folders.$inferSelect;

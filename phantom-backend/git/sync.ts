@@ -101,14 +101,13 @@ export interface SyncResult {
  *  message: "title — first line of details". A diff says what changed and
  *  never why, and this is the cheapest statement of why the system holds.
  *
- *  Fails open to the session's name — a manual session has no loop row, a
- *  workspace schema can be missing, and NONE of that may stop work from
- *  landing. The commit message simply loses its intent line. */
+ *  Fails open to the session's name — a manual session has no loop row, the
+ *  card may be deleted, and NONE of that may stop work from landing. The commit message simply loses its intent line. */
 async function cardIntentFor(deps: SyncDeps, session: SessionRow, workspace: WorkspaceRow): Promise<string> {
   try {
     const loop = await deps.loops.byCodingSession(session.id);
     if (!loop) return session.name ?? '';
-    const card = await deps.cards.bySeq(workspace, loop.card);
+    const card = await deps.cards.byNumber(workspace, loop.card);
     if (!card?.title) return session.name ?? '';
     const firstLine = (card.details ?? '').trim().split('\n')[0] ?? '';
     return firstLine ? `${card.title} — ${firstLine}` : card.title;

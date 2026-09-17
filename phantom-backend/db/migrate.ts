@@ -1,6 +1,5 @@
-// Plain SQL migrations keyed by filename order. Same mechanism the per-workspace
-// schemas use (db/workspaceSchema.ts): ordinary SQL, a version table, no
-// generator in the loop.
+// Plain SQL migrations keyed by filename order: ordinary SQL, a version
+// table, no generator in the loop.
 import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';

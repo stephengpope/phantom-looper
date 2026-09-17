@@ -187,9 +187,9 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
   draftRef.current = draft;
   const rowRefs = useRef(new Map<string, DOMElement>());
 
-  // The current loop's coding session, off the board payload — by seq, so a
+  // The current loop's coding session, off the board payload — by number, so a
   // refresh replacing the card objects cannot orphan it.
-  const cardSession = store.state.sessions?.[card.seq];
+  const cardSession = store.state.sessions?.[card.number];
 
   const rows = buildRows(draft, card.status);
   const at = Math.min(atRef.current, rows.length - 1);
@@ -390,7 +390,7 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
   return (
     <Box flexDirection="column" width={width} height={height} borderStyle="round" borderColor="cyan" paddingX={1} overflow="hidden">
       <Box justifyContent="space-between">
-        <Text bold color="cyan">{prefix}-{card.seq}  <Text dimColor>{card.status.replace(/_/g, ' ')}</Text></Text>
+        <Text bold color="cyan">{prefix}-{card.number}  <Text dimColor>{card.status.replace(/_/g, ' ')}</Text></Text>
         {saveState === 'saving' ? <Text color="yellow">saving…</Text>
           : saveState === 'saved' ? <Text color="green">saved ✓</Text>
           : saveState === 'failed' ? <Text color="red">save failed — edit to retry</Text>

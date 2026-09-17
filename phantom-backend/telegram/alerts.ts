@@ -16,7 +16,7 @@ export const ALERT_STATUSES: Record<string, string> = {
   done: '✅',
 };
 
-export interface Alert { seq: number; status: string; text: string }
+export interface Alert { number: number; status: string; text: string }
 
 /** The alert for a board event, or null when it is not one: not a card write,
  *  not the loop's, not a status change, or not into an alert status. */
@@ -26,10 +26,10 @@ export function autoBuildAlert(e: BoardEvent, prefix: string): Alert | null {
   if (!e.from || e.from === status) return null;
   const glyph = ALERT_STATUSES[status];
   if (!glyph) return null;
-  const seq = Number(e.card.seq);
+  const number = Number(e.card.number);
   const title = String(e.card.title ?? '').trim();
   const reason = status === 'blocked' ? String(e.card.blocked_reason ?? '').trim() : '';
   const tail = reason || title;
-  return { seq, status,
-    text: `${glyph} ${prefix}-${seq} → ${status.replace('_', ' ')}${tail ? `  ${tail}` : ''}` };
+  return { number, status,
+    text: `${glyph} ${prefix}-${number} → ${status.replace('_', ' ')}${tail ? `  ${tail}` : ''}` };
 }

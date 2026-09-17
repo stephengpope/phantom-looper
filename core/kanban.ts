@@ -1,10 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
-// knack's status set (kanbanStatus in ../knack/lib/db/schema.ts) reshaped:
-// leftmost renamed 'backlog' (not knack's 'todo'), 'plan' added after it,
-// 'review' removed (workspace schema v10 moved its cards). The one default
-// column list, shared by the server route and the kanban tool schemas so the
-// model can only send a real column name.
+// The one default column list, shared by the server route and the kanban
+// tool schemas so the model can only send a real column name.
 export const DEFAULT_COLUMNS = ['backlog', 'plan', 'in_progress', 'blocked', 'done'];
 
 // Checklist items ({key, text, done}) are addressed by key: ticking names the

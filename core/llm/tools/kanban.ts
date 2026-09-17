@@ -32,7 +32,7 @@ export interface LoopCardConfig extends KanbanToolsConfig {
   /** The card's row id (the PATCH route's handle). */
   cardId: number;
   /** The card's number — what the descriptions call it. */
-  seq: number;
+  number: number;
   /** Sent as x-phantom-looper-client on every write, so the server knows the
    *  LOOP moved the card (the looper passes its own id). Without it a
    *  supervisor's move is indistinguishable from a person's. */
@@ -53,7 +53,7 @@ export const SUPERVISOR_MOVES = {
 export type LoopColumn = keyof typeof SUPERVISOR_MOVES;
 
 interface CardRow {
-  seq: number; title: string; status: string; details: string;
+  number: number; title: string; status: string; details: string;
   requirements: { key: string; text: string; done: boolean }[];
   blocked_reason: string | null; archived: boolean;
 }
@@ -61,7 +61,7 @@ interface CardRow {
 /** The same read shape the cli's handler returns, so a transcript reads the
  *  same whichever side served the tool. */
 export function renderCard(t: CardRow) {
-  return { card: t.seq, title: t.title, status: t.status,
+  return { card: t.number, title: t.title, status: t.status,
     details: t.details, requirements: t.requirements,
     blocked_reason: t.blocked_reason, archived: t.archived };
 }
@@ -92,8 +92,8 @@ export function kanbanReadTool(cfg: KanbanToolsConfig): Record<string, Tool> {
         'truth, not your memory of it. Cards are numbered: PHA-7 is card 7.',
       inputSchema: z.object({ card: z.number().int().describe('card number — PHA-7 is card 7') }),
       execute: async ({ card }) => {
-        // The seq lookup, not the board list: one card back, archived or not.
-        const r = await f(`${cfg.baseUrl}/workspaces/${cfg.workspaceId}/cards?seq=${card}`, {
+        // The number lookup, not the board list: one card back, archived or not.
+        const r = await f(`${cfg.baseUrl}/workspaces/${cfg.workspaceId}/cards?number=${card}`, {
           headers: headers(cfg),
         });
         const j = await r.json() as { ok: boolean; data?: { cards: CardRow[] }; error?: unknown };
@@ -116,7 +116,7 @@ export function loopSupervisorTools(cfg: LoopCardConfig, column: LoopColumn): Re
     : '"done" declares you verified EVERY requirement yourself against the repo; ';
   return {
     kanban_card_move: tool({
-      description: `Move card ${cfg.seq}. THIS ENDS THE RUN — the moment you call this, the ` +
+      description: `Move card ${cfg.number}. THIS ENDS THE RUN — the moment you call this, the ` +
         'conversation with the coding agent is over and no further message passes in either ' +
         'direction. This is your verdict, not a status update: ' + verdictLine +
         '"blocked" hands the card to a human with your reason. Call it only when your verdict ' +
@@ -134,7 +134,7 @@ export function loopSupervisorTools(cfg: LoopCardConfig, column: LoopColumn): Re
       }),
     }),
     kanban_card_items: tool({
-      description: `Change requirements on card ${cfg.seq} — add, edit (reword), remove, tick — each op ` +
+      description: `Change requirements on card ${cfg.number} — add, edit (reword), remove, tick — each op ` +
         'touches ONE item, named by its key; the rest of the list cannot be touched. Keys come back from ' +
         'kanban_card_read and every write result — copy them from there, never invent one. add needs only ' +
         'text (the server assigns the key, returned in the result). Ops apply in order, all-or-nothing. ' +
@@ -158,7 +158,7 @@ export function loopSupervisorTools(cfg: LoopCardConfig, column: LoopColumn): Re
 export function loopBlockTool(cfg: LoopCardConfig): Record<string, Tool> {
   return {
     kanban_card_block: tool({
-      description: `Block card ${cfg.seq} for a human decision. THIS ENDS THE RUN — the conversation ` +
+      description: `Block card ${cfg.number} for a human decision. THIS ENDS THE RUN — the conversation ` +
         'with your supervisor stops and the card lands on the board with your reason. This is your ' +
         'only board power, for one situation: a genuine human call — a broken premise or a preference ' +
         'no agent owns. A problem you can fix, or a question your supervisor can answer, is never a ' +

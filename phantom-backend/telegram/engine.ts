@@ -226,12 +226,12 @@ export class TelegramEngine {
     if (!dm || !Number.isFinite(dm)) return;
     const token = await this.token();
     if (!token) return;
-    const loop = await this.deps.loops.current(workspaceId, alertMsg.seq);
+    const loop = await this.deps.loops.current(workspaceId, alertMsg.number);
     const origin: SentOrigin = loop
       ? { kind: 'session', sessionId: loop.codingSessionId } : { kind: 'assistant' };
     const client = this.trackedClient(token, dm, () => origin);
     await client.sendMessage(dm, alertMsg.text);
-    log.info({ workspace: workspaceId, card: alertMsg.seq, status: alertMsg.status }, 'auto build alert sent');
+    log.info({ workspace: workspaceId, card: alertMsg.number, status: alertMsg.status }, 'auto build alert sent');
   }
 
   // ── setup ─────────────────────────────────────────────────────────────

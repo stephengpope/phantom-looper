@@ -8,7 +8,7 @@ import type { KanbanArgs } from './voice.js';
 /** What a card looks like in a tool result: the line you would read off the
  *  board. `get` returns the whole card instead. */
 const cardSummary = (t: Card) =>
-  ({ card: t.seq, title: t.title, status: t.status,
+  ({ card: t.number, title: t.title, status: t.status,
     ...(t.pinned ? { pinned: true } : {}),
     ...(t.blocked_reason ? { blocked: t.blocked_reason } : {}) });
 
@@ -55,23 +55,23 @@ export async function kanbanOps(board: BoardStore, args: KanbanArgs): Promise<un
     } catch (e) { return { error: (e as Error).message }; }
   }
   if (args.action === 'history') {
-    // By seq straight to the server, not bySeq: a deleted card is not on the
+    // By number straight to the server, not byNumber: a deleted card is not on the
     // board, and reading one that is gone is what history is for.
     if (args.card === undefined) return { error: 'history needs the card number' };
     try { return { card: args.card, revisions: await board.revisions(args.card, args.limit) }; }
     catch (e) { return { error: (e as Error).message }; }
   }
-  // The board GET excludes archived cards, so a bySeq miss asks the server
+  // The board GET excludes archived cards, so a byNumber miss asks the server
   // for that number directly — "read card 7" / "restore card 7" must work on
   // a card that is off the board. The fetch adopts the card into the store.
-  let t = args.card !== undefined ? board.bySeq(args.card) : undefined;
+  let t = args.card !== undefined ? board.byNumber(args.card) : undefined;
   if (!t && args.card !== undefined) {
     try { t = await board.fetchCard(args.card); }
     catch (e) { return { error: `could not read card ${args.card}: ${(e as Error).message}` }; }
   }
   if (!t) return { error: `no card ${args.card ?? '(none given)'} — pass the card number` };
   if (args.action === 'read') {
-    return { card: t.seq, title: t.title, status: t.status,
+    return { card: t.number, title: t.title, status: t.status,
     details: t.details, requirements: t.requirements,
     blocked_reason: t.blocked_reason, archived: t.archived };
   }

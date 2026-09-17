@@ -6,13 +6,14 @@ import { initializeRemote, classifyGitFailure } from '../../git/git.js';
 import { SettingsWriteError } from '../../settings.js';
 import { workspaceScope } from '../../store.js';
 import { newId } from '../../../core/ids.js';
-import { ensureWorkspaceSchema, dropWorkspaceSchema } from '../../db/workspaceSchema.js';
 import { ok, err, type AppCtx } from '../app.js';
 
 /** What leaves the API. The credential is no longer a column — it is
  *  `github_token` at this workspace's scope, so hasCredential is a lookup. */
 function publicWorkspace(r: WorkspaceRow, hasCredential = false) {
-  const { displayName, ...rest } = r;
+  // nextCardNumber is the server's card-number counter, not a fact about the
+  // workspace anyone edits or displays.
+  const { displayName, nextCardNumber: _counter, ...rest } = r;
   // displayName: what humans call it; falls back to the GitHub name.
   return { ...rest, displayName: displayName ?? r.name, hasCredential };
 }
@@ -155,13 +156,11 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
         displayName: req.body.display_name?.trim() || null,
         baseBranch,
         branchPrefix: req.body.branch_prefix ?? 'agent',
-        schemaName: `wsp_${id}`,
       };
       const created = await ctx.workspaces.create(row, writerOf(req));
       // A token handed to create= belongs to this workspace: `github_token` at
       // its own scope, the same key the global one uses one layer down.
       if (ownToken) await ctx.settings.write('workspace', workspaceScope(id), { github_token: ownToken }, writerOf(req));
-      await ensureWorkspaceSchema(ctx.pgPool, id, row.schemaName);
       return reply.code(201).send(ok(publicWorkspace(created, !!ownToken)));
     });
 
@@ -248,24 +247,21 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
       return ok(publicWorkspace(updated, await ctx.settings.hasAt('github_token', workspaceScope(req.params.id))));
     });
 
-  // Refuses while sessions exist — the schema and workspaces it would orphan
-  // are the agent's accumulated work, not cleanup.
-  // Dropping the schema destroys the agent's accumulated tables — refuse while
-  // sessions exist, and require the explicit confirm flag for the drop itself.
+  // Refuses while sessions exist — they are the agent's accumulated work, not
+  // cleanup. The row's cards and their history go with it (cascade), so the
+  // delete itself needs the explicit confirm flag.
   app.delete<{ Params: { id: string }; Querystring: { confirm?: string } }>(
     '/workspaces/:id', { schema: { ...TAG,
       summary: 'Delete a workspace',
-      description: 'Refuses while sessions are active. Dropping the schema destroys every agent table in it, so the drop additionally requires ?confirm=true.',
+      description: 'Refuses while sessions are active. Deleting a workspace deletes its board — every card and its history — so it additionally requires ?confirm=true.',
       params: idParam, querystring: { type: 'object', properties: { confirm: { type: 'string', enum: ['true'] } } } } },
     async (req, reply) => {
       const live = await ctx.sessions.listActiveIn(req.params.id);
       if (live.length) return reply.code(409).send(err('sessions_exist', `workspace ${req.params.id} still has ${live.length} active session(s) — close them first`));
       const w = await ctx.workspaces.get(req.params.id);
-      if (w && req.query.confirm === 'true') {
-        await dropWorkspaceSchema(ctx.pgPool, w.schemaName);
-      } else if (w) {
+      if (w && req.query.confirm !== 'true') {
         return reply.code(409).send(err('confirm_required',
-          'deleting a workspace drops its schema and every agent table in it — pass ?confirm=true'));
+          'deleting a workspace deletes its board — every card and its history — pass ?confirm=true'));
       }
       await ctx.workspaces.remove(req.params.id, writerOf(req));
       return ok({ deleted: req.params.id });

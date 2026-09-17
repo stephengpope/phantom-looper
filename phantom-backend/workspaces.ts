@@ -1,6 +1,6 @@
 // The workspace row's one owner: a registered repository, its base branch,
-// its branch prefix, its own SQL schema (the board lives there), and the two
-// board facts the row carries — the column list and the card prefix.
+// its branch prefix, and the board facts the row carries — the column list,
+// the card prefix and the next card number.
 //
 // Every workspace-row change announces itself on the settings feed: to every
 // client a workspace changing IS a settings-shaped fact (the list, the
@@ -30,7 +30,7 @@ export const columnsOf = (w: WorkspaceRow): string[] =>
  *  (for create=true) made the repository first. */
 export interface NewWorkspace {
   id: string; url: string; owner: string; name: string;
-  displayName: string | null; baseBranch: string; branchPrefix: string; schemaName: string;
+  displayName: string | null; baseBranch: string; branchPrefix: string;
 }
 
 export class Workspaces {

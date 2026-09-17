@@ -16,7 +16,7 @@ import { followStream, type Stream } from './follow.js';
 export interface CardStep { key?: string; text: string; done: boolean }
 export interface ItemOp { op: 'add' | 'edit' | 'remove' | 'tick'; key?: string; text?: string; done?: boolean }
 export interface Card {
-  id: number; seq: number; status: string; pos: number;
+  id: number; number: number; status: string; pos: number;
   title: string; details: string;
   requirements: CardStep[];
   blocked_reason: string | null; resolution?: string | null;
@@ -35,14 +35,14 @@ export type CardPatch = Partial<Pick<Card, 'title' | 'details' | 'status' | 'pos
 export interface CardSession { id: string; name: string | null }
 export interface BoardState {
   prefix: string; columns: string[]; cards: Card[]; loaded: boolean; workspace?: string; error?: string;
-  /** By card seq: the CURRENT loop's coding session, from the board GET.
-   *  Absent seq = the card never entered the loop. */
+  /** By card number: the CURRENT loop's coding session, from the board GET.
+   *  Absent number = the card never entered the loop. */
   sessions?: Record<number, CardSession>;
-  /** By card seq: the git work state (not_pushed / not_merged / merged),
+  /** By card number: the git work state (not_pushed / not_merged / merged),
    *  from the card's coding session row. Absent = no session or never checked. */
   cardWork?: Record<number, string>;
-  /** By card seq: WHEN the card's coding session was seen to start running
-   *  (epoch ms), so the board can age a turn as well as show one. Absent seq =
+  /** By card number: WHEN the card's coding session was seen to start running
+   *  (epoch ms), so the board can age a turn as well as show one. Absent number =
    *  not locked or no session. A turn that has run a long time is the thing a
    *  person needs to notice, so the value is a clock, not a flag. */
   cardLocked?: Record<number, number>;
@@ -128,15 +128,15 @@ export class BoardStore {
       .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || a.pos - b.pos || a.id - b.id);
   }
   /** Find by the number people use ("7" of PHA-7). */
-  bySeq(seq: number): Card | undefined { return this.state.cards.find((t) => t.seq === seq); }
+  byNumber(number: number): Card | undefined { return this.state.cards.find((t) => t.number === number); }
 
   /** One card by number, straight from the server — archived or not. The
-   *  board GET excludes archived cards, so a miss on bySeq comes here
+   *  board GET excludes archived cards, so a miss on byNumber comes here
    *  ("restore card 7", /archived's editor). The answer is adopted into
    *  state (cardsIn filters archived, so the board is untouched);
    *  undefined = no such card. */
-  async fetchCard(seq: number): Promise<Card | undefined> {
-    const d = await this.api('GET', `/workspaces/${this.workspaceId}/cards?seq=${seq}`) as Record<string, unknown>;
+  async fetchCard(number: number): Promise<Card | undefined> {
+    const d = await this.api('GET', `/workspaces/${this.workspaceId}/cards?number=${number}`) as Record<string, unknown>;
     const card = (d.cards as Card[] | undefined)?.[0];
     if (!card) return undefined;
     this.adoptCard(card);
@@ -173,7 +173,7 @@ export class BoardStore {
       for (const s of (d.card_sessions as { card: number; id: string; name: string | null }[] | undefined) ?? [])
         sessions[s.card] = { id: s.id, name: s.name };
       // The board GET excludes archived cards, so absence from the response
-      // says nothing about a card this store learned of by seq (fetchCard —
+      // says nothing about a card this store learned of by number (fetchCard —
       // an open archived card's editor): those survive a reload (the one
       // after a reconnect), or it would close the editor mid-edit. A card restored elsewhere
       // arrives in `fresh` unarchived and replaces its kept copy.
@@ -202,7 +202,7 @@ export class BoardStore {
 
   async create(fields: { title: string } & Partial<Pick<Card,
     'status' | 'details' | 'requirements'>>): Promise<Card> {
-    // Server-first: it assigns seq and pos. One round-trip, then on screen.
+    // Server-first: it assigns number and pos. One round-trip, then on screen.
     // The server publishes the new row on the event stream BEFORE it answers
     // this POST, so the card is usually already here by the time the answer
     // lands — seat it (replace by id), never append, or the board shows two.
@@ -278,10 +278,10 @@ export class BoardStore {
   }
 
   /** A card's revision history, newest first — read-through, touches no
-   *  state. By seq, not id: a deleted card is not on the board, and reading
+   *  state. By number, not id: a deleted card is not on the board, and reading
    *  one that is gone is the point. */
-  async revisions(seq: number, limit?: number): Promise<unknown[]> {
-    const d = await this.api('GET', `/workspaces/${this.workspaceId}/revisions?card=${seq}` +
+  async revisions(number: number, limit?: number): Promise<unknown[]> {
+    const d = await this.api('GET', `/workspaces/${this.workspaceId}/revisions?card=${number}` +
       (limit !== undefined ? `&limit=${limit}` : '')) as Record<string, unknown>;
     return d.revisions as unknown[];
   }

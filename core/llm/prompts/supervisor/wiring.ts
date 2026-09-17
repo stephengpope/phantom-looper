@@ -12,7 +12,7 @@ import {
 } from './supervisor.js';
 
 export interface CardShape {
-  seq: number; title: string; status: string; details: string;
+  number: number; title: string; status: string; details: string;
   requirements: { key: string; text: string; done: boolean }[];
   blocked_reason?: string | null;
   /** The human's reply to a block — why the card came back. */
@@ -21,7 +21,7 @@ export interface CardShape {
 
 /** The {card} blank: the card as JSON, requirement keys included (ticks go by key). */
 const cardJson = (card: CardShape) =>
-  JSON.stringify({ card: card.seq, title: card.title,
+  JSON.stringify({ card: card.number, title: card.title,
     details: card.details, requirements: card.requirements }, null, 1);
 
 export function systemPrompt(): string {
@@ -31,24 +31,24 @@ export function systemPrompt(): string {
 /** The frozen first lines, derived from the templates' own line 1 — what the
  *  loop matches against the conversations to know what was already sent. */
 export const firstLine = {
-  planCard: (seq: number) => firstLineOf(PLAN_CARD, { seq }),
-  buildFromPlan: (seq: number) => firstLineOf(BUILD_FROM_PLAN, { seq }),
-  buildFromCard: (seq: number) => firstLineOf(BUILD_FROM_CARD, { seq }),
-  reviewingPlan: (seq: number) => firstLineOf(IMPLANTED_REVIEWING_PLAN, { seq }),
-  reviewingWork: (seq: number) => firstLineOf(IMPLANTED_REVIEWING_WORK, { seq }),
-  cardIsBack: (seq: number) => firstLineOf(CARD_IS_BACK, { seq }),
+  planCard: (number: number) => firstLineOf(PLAN_CARD, { number }),
+  buildFromPlan: (number: number) => firstLineOf(BUILD_FROM_PLAN, { number }),
+  buildFromCard: (number: number) => firstLineOf(BUILD_FROM_CARD, { number }),
+  reviewingPlan: (number: number) => firstLineOf(IMPLANTED_REVIEWING_PLAN, { number }),
+  reviewingWork: (number: number) => firstLineOf(IMPLANTED_REVIEWING_WORK, { number }),
+  cardIsBack: (number: number) => firstLineOf(CARD_IS_BACK, { number }),
 };
 
 /** The messages the loop sends the coding agent — each starts a real coding
  *  turn (see the document for which fires when). */
 export const toCodingAgent = {
-  planCard: (card: CardShape) => fill(PLAN_CARD, { seq: card.seq, card: cardJson(card), planFormat: PLAN_FORMAT }),
-  buildFromPlan: (card: CardShape) => fill(BUILD_FROM_PLAN, { seq: card.seq, card: cardJson(card), reportFormat: REPORT_FORMAT }),
-  buildFromCard: (card: CardShape) => fill(BUILD_FROM_CARD, { seq: card.seq, card: cardJson(card), reportFormat: REPORT_FORMAT }),
+  planCard: (card: CardShape) => fill(PLAN_CARD, { number: card.number, card: cardJson(card), planFormat: PLAN_FORMAT }),
+  buildFromPlan: (card: CardShape) => fill(BUILD_FROM_PLAN, { number: card.number, card: cardJson(card), reportFormat: REPORT_FORMAT }),
+  buildFromCard: (card: CardShape) => fill(BUILD_FROM_CARD, { number: card.number, card: cardJson(card), reportFormat: REPORT_FORMAT }),
   /** The card came back from blocked (the builder's answer rides along) or
    *  from done (no answer — the line vanishes). */
   cardIsBack: (card: CardShape) => fill(CARD_IS_BACK,
-    { seq: card.seq, resolution: card.resolution ?? '' }),
+    { number: card.number, resolution: card.resolution ?? '' }),
 };
 
 /** The implanted briefings — one per phase, written into the supervisor's
@@ -59,9 +59,9 @@ export const toCodingAgent = {
  *  contract line names — the model never infers the phase. */
 export const toSupervisor = {
   reviewingPlan: (card: CardShape) =>
-    fill(IMPLANTED_REVIEWING_PLAN, { seq: card.seq, card: cardJson(card), planFormat: PLAN_FORMAT }),
+    fill(IMPLANTED_REVIEWING_PLAN, { number: card.number, card: cardJson(card), planFormat: PLAN_FORMAT }),
   reviewingWork: (card: CardShape, opts: { planned: boolean }) =>
-    fill(IMPLANTED_REVIEWING_WORK, { seq: card.seq, reportFormat: REPORT_FORMAT,
+    fill(IMPLANTED_REVIEWING_WORK, { number: card.number, reportFormat: REPORT_FORMAT,
       cardSection: opts.planned ? '' : `The card:\n${cardJson(card)}`,
       contract: opts.planned
         ? 'the plan approved earlier in this conversation, as finally revised, beside the card'

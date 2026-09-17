@@ -32,11 +32,11 @@ Your read-only tools run in the coding agent's Linux container; /workspace/repo 
 `;
 
 // ═══ FIRST MESSAGE → coding agent · card enters `plan` ═════════════════════
-// New session, tools read-only. Blanks: {{seq}} card number, {{card}} card
+// New session, tools read-only. Blanks: {{number}} card number, {{card}} card
 // JSON, {{planFormat}} the shared PLAN_FORMAT block.
 // The wording is deliberate — this file is the source; don't polish it.
 
-export const PLAN_CARD = `Plan card {{seq}}.
+export const PLAN_CARD = `Plan card {{number}}.
 
 Your tools are read-only in this phase — do not modify any files.
 
@@ -98,7 +98,7 @@ export const PLAN_FORMAT = `
 // don't polish it. The completion report is the coder's final reply — what
 // the supervisor reviews.
 
-export const BUILD_FROM_PLAN = `The plan you produced earlier for card {{seq}} was reviewed and approved; implement it in it's final state according to our value system.
+export const BUILD_FROM_PLAN = `The plan you produced earlier for card {{number}} was reviewed and approved; implement it in it's final state according to our value system.
 
 "Done" means demonstrated, not assumed:
 
@@ -124,7 +124,7 @@ The card:
 // ({{reportFormat}} = the shared REPORT_FORMAT block) — the coder's final reply is
 // what the supervisor reviews.
 
-export const BUILD_FROM_CARD = `Build card {{seq}}.
+export const BUILD_FROM_CARD = `Build card {{number}}.
 
 # Build the card
 
@@ -190,7 +190,7 @@ export const REPORT_FORMAT = `
 // names what the work is matched against — the loop knows whether a plan
 // happened, so the model never infers it.
 
-export const IMPLANTED_REVIEWING_PLAN = `You are reviewing the coding agent's plan for card {{seq}}.
+export const IMPLANTED_REVIEWING_PLAN = `You are reviewing the coding agent's plan for card {{number}}.
 
 The card:
 {{card}}
@@ -207,7 +207,7 @@ Rules for this review:
 
 `;
 
-export const IMPLANTED_REVIEWING_WORK = `You are reviewing the coding agent's work on card {{seq}}.
+export const IMPLANTED_REVIEWING_WORK = `You are reviewing the coding agent's work on card {{number}}.
 
 {{cardSection}}
 
@@ -229,7 +229,7 @@ Rules for this review:
 // answer rides along as {{resolution}}) or out of done. Delivered like any
 // other message; the resolution line vanishes when there is no answer.
 
-export const CARD_IS_BACK = `Card {{seq}} is back to you.
+export const CARD_IS_BACK = `Card {{number}} is back to you.
 
 The builder's answer: {{resolution}}
 

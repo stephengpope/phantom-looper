@@ -12,7 +12,7 @@ import { tableChoices, type TableRow } from './table.js';
 import { ago } from './Launcher.js';
 import type { Card } from '../board.js';
 
-/** Rows for the archive table — the board's own row shape (`<seq>-<title>`),
+/** Rows for the archive table — the board's own row shape (`<number>-<title>`),
  *  then the column it was archived from and when. No archived_at column
  *  exists; updated_at is the proxy (archiving touches it, and an archived
  *  card is rarely edited after). */
@@ -20,7 +20,7 @@ export function archivedChoices(cards: Card[], now = Date.now()): Choice<Card | 
   if (!cards.length) return [{ value: null, heading: true, label: 'nothing archived — [a] on the board archives a card' }];
   const rows = cards.map((t): TableRow<Card> => ({
     value: t,
-    cells: [`${t.seq}-${t.title}`, t.status.replace(/_/g, ' '), ago(t.updated_at, now)],
+    cells: [`${t.number}-${t.title}`, t.status.replace(/_/g, ' '), ago(t.updated_at, now)],
     hint: t.details || undefined,
   }));
   return tableChoices('card', [{ title: 'was in' }, { title: 'when' }], rows);

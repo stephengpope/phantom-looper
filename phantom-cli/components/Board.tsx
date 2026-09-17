@@ -25,13 +25,13 @@ export function Board({ store, width, height, isActive, onClose, card, confirm, 
   store: BoardStore; width: number; height: number; isActive: boolean; onClose: () => void;
   /** THE yes/no (the window's dialog) — [a] asks through it before archiving. */
   confirm: (title: string, message?: string) => Promise<boolean>;
-  /** The card whose editor is open, by seq. The window owns this: it also
+  /** The card whose editor is open, by number. The window owns this: it also
    *  knows where esc leaves the editor, which is the only thing that ever
    *  differed between a card opened here and one opened from the chat. */
   card?: number;
   /** enter or a click on a card. The window opens it, marked as coming from
    *  the board, so esc comes back to these columns. */
-  onOpenCard: (seq: number) => void;
+  onOpenCard: (number: number) => void;
   /** esc out of the editor — the window sends it back where it came from. */
   onCloseCard: () => void;
   /** The card editor's Session row — open that session in the chat view. */
@@ -81,7 +81,7 @@ export function Board({ store, width, height, isActive, onClose, card, confirm, 
     return null;
   };
 
-  const openEdit = (t: Card) => onOpenCard(t.seq);
+  const openEdit = (t: Card) => onOpenCard(t.number);
   const clampRow = (ci: number, row: number) =>
     Math.max(0, Math.min(store.cardsIn(columns[ci]).length - 1, row));
   // A screen asked for from outside (the Assistant's "open card 7" / "expand
@@ -164,7 +164,7 @@ export function Board({ store, width, height, isActive, onClose, card, confirm, 
     else if (ch === 'p' && focusCard) void store.update(focusCard.id, { pinned: !focusCard.pinned });
     else if (ch === 'a' && focusCard) {
       const t = focusCard;
-      void confirm(`archive #${t.seq} ${t.title}?`, '[v] shows archived cards; [r] there restores it').then((yes) => {
+      void confirm(`archive #${t.number} ${t.title}?`, '[v] shows archived cards; [r] there restores it').then((yes) => {
         if (!yes) return;
         void store.update(t.id, { archived: true });
         setFocus((f) => ({ ...f, row: clampRow(f.col, f.row) }));
@@ -181,11 +181,11 @@ export function Board({ store, width, height, isActive, onClose, card, confirm, 
   // board (archived elsewhere, a bad number) closes its editor — from an
   // effect, not mid-render: closing repaints the window, and React refuses
   // a state change while it is drawing this component.
-  const gone = card !== undefined && loaded && !store.bySeq(card);
+  const gone = card !== undefined && loaded && !store.byNumber(card);
   useEffect(() => { if (gone) onCloseCard(); }, [gone]);
   if (card !== undefined) {
     if (!loaded) return null;   // no column flash while the data loads
-    const open = store.bySeq(card);
+    const open = store.byNumber(card);
     if (!open) return null;
     return (
       <CardEditor key={open.id} store={store} card={open} width={width} height={height}
@@ -224,10 +224,10 @@ export function Board({ store, width, height, isActive, onClose, card, confirm, 
                 // The two-cell gutter: the drag ghost's ▸ first, else a
                 // spinner when the card's session is actively running, else a
                 // colored • for the git work state (red/yellow/green).
-                const lockedSince = store.state.cardLocked?.[t.seq];
+                const lockedSince = store.state.cardLocked?.[t.number];
                 const locked = lockedSince != null;
                 const spinColor = turnAgeColor(lockedSince);
-                const work = store.state.cardWork?.[t.seq];
+                const work = store.state.cardWork?.[t.number];
                 const WORK_COLOR: Record<string, string> = { not_pushed: 'red', not_merged: 'yellow', merged: 'green' };
                 const dotColor = work ? WORK_COLOR[work] : undefined;
                 const selected = ci === focus.col && ri === focus.row && !dragging;
@@ -240,7 +240,7 @@ export function Board({ store, width, height, isActive, onClose, card, confirm, 
                       ? <><Text color={spinColor}><Spinner type="dots" /></Text>{' '}</>
                       : dotColor
                         ? <><Text color={dotColor} inverse={selected}>{'•'}</Text>{' '}</>
-                        : '  '}{t.seq}-{t.title}{t.pinned ? ' 📌' : ''}
+                        : '  '}{t.number}-{t.title}{t.pinned ? ' 📌' : ''}
                   </Text>
                 );
               })}
@@ -256,7 +256,7 @@ export function Board({ store, width, height, isActive, onClose, card, confirm, 
         {adding !== null ? (
           <Text>new card in {focusColName?.replace(/_/g, ' ')}: <Text inverse>{adding || ' '}</Text><Text dimColor>  (enter to add, esc to cancel)</Text></Text>
         ) : dragging ? (
-          <Text color="green">moving #{dragging.seq} → {drag!.toCol.replace(/_/g, ' ')} (release to drop, esc to cancel)</Text>
+          <Text color="green">moving #{dragging.number} → {drag!.toCol.replace(/_/g, ' ')} (release to drop, esc to cancel)</Text>
         ) : (
           <Text dimColor>↑ ↓ ← →  [esc]  [enter] open  [tab/shift+tab] move  [j/k] sort  [n]ew  [p]in  [a]rchive  {zoom ? '[e] collapse' : '[e]xpand'}  [v]iew archived</Text>
         )}

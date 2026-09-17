@@ -22,7 +22,6 @@ import { BoardEvents } from './api/boardEvents.js';
 import { SessionEvents } from './api/sessionEvents.js';
 import { BackdoorQueue } from './api/backdoor.js';
 import { makeDocker } from './docker.js';
-import { migrateAllWorkspaceSchemas } from './db/workspaceSchema.js';
 import { ContainerManager } from './workspace/container.js';
 import { GitEngine } from './git/engine.js';
 import { autoPush, type AutoPushEvent } from './git/autoPush.js';
@@ -56,7 +55,6 @@ async function main() {
   const env = readEnv();
   const { pool: pgPool, db } = makeDb(env.databaseUrl);
   await migrate(pgPool);
-  await migrateAllWorkspaceSchemas(pgPool);
   const paths = makePaths(env.workspaceRoot);
   await bootCleanup(paths);
 
@@ -71,7 +69,7 @@ async function main() {
   const workspaces = new Workspaces(db, settings, settingsEvents);
   const folders = new Folders(db);
   const loops = new Loops(db);
-  const cards = new Cards(pgPool, events);
+  const cards = new Cards(db, events);
   const sessions = new Sessions(db, paths, settings, workspaces, folders, sessionEvents);
   // A settings write reaches every session nothing has been said to yet: its
   // row takes the settings' model (Sessions.followModelSettings — THE rule).
@@ -204,7 +202,7 @@ async function main() {
   const blockCardOnConflict = async (session: SessionRow, workspace: WorkspaceRow, reason: string) => {
     const loop = await loops.of(session.id).catch(() => undefined);
     if (!loop) return;
-    const card = await cards.bySeq(workspace, loop.card).catch(() => undefined);
+    const card = await cards.byNumber(workspace, loop.card).catch(() => undefined);
     if (!card) return;
     const f = injectFetch(app);
     await f(`${INTERNAL_API}/workspaces/${workspace.id}/cards/${card.id}`, {
@@ -283,7 +281,6 @@ async function main() {
     engine,
     autoPush: autoPushFn,
     autoPull: autoPullFn,
-    pgPool,
     events,
     sessionEvents,
     settingsEvents,

@@ -64,14 +64,14 @@ export const confirmDialog = (w: WindowStore, title: string, message: string | u
  *  from anywhere else (the archive, the Assistant) — because that is the only
  *  thing that ever differed between the two. */
 export const boardScreen = (w: WindowStore, workspaceId: string,
-  card?: { seq: number; back: 'chat' | 'board' }): Overlay =>
+  card?: { number: number; back: 'chat' | 'board' }): Overlay =>
   // The name says what is on screen for the Assistant's "is the board up":
   // a card opened FROM the board is still the board.
   full(card?.back === 'chat' ? 'card' : 'board', ({ width, height }) => (
     <Board store={w.boardFor(workspaceId)} width={width} height={height} isActive
-      card={card?.seq}
+      card={card?.number}
       confirm={(t, m) => w.confirm(t, m)}
-      onOpenCard={(seq) => w.openCard(seq, 'board')}
+      onOpenCard={(number) => w.openCard(number, 'board')}
       onCloseCard={() => { if (card?.back === 'board') w.openBoard(); else w.dismissOverlay(); }}
       onClose={w.dismissOverlay}
       // The card editor's Session row: back to chat, then the one open
