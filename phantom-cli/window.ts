@@ -1194,7 +1194,7 @@ export class WindowStore {
       // The screen changed underfoot — say so, in the pane of the session
       // now on screen. AFTER the switch/open above: the note lands in
       // whatever those seated.
-      if (!quiet) this.setToast('Session closed');
+      if (!quiet) this.setToast('Session closed', 'red', 1750);
     }
     return { ok: true, closed: target, on_screen: this.sessions.activeId, opened_new };
   };
