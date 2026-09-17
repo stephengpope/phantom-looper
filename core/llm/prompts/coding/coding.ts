@@ -13,15 +13,13 @@
 //                    transcript header. At agent-build time, codingAgent
 //                    splits it back by stripping the known static prefix.
 //
-// Blanks: {{stakeholders}} {{values}} {{communication}} {{sending}} (static);
-// {{facts}} {{skills}} {{secrets}} {{credentials}} (workspace).
+// Blanks: {{stakeholders}} {{values}} {{communication}} {{environment}}
+// {{sending}} (static); {{skills}} {{secrets}} {{credentials}} (workspace).
 // Assembled once at session creation, frozen with it.
 
 // ── STATIC — identical across every workspace, every session ────────────────
-// Blanks: {{stakeholders}} {{values}} {{communication}} {{sending}}.
-// The environment facts line (OS / node / python versions) is per-workspace,
-// so the environment boilerplate is inlined here WITHOUT the facts sub-blank
-// — the facts live in SYSTEM_WORKSPACE instead.
+// Blanks: {{stakeholders}} {{values}} {{communication}} {{environment}}
+// {{sending}}.
 export const SYSTEM_STATIC = `You are a value-based coding agent running inside the phantom looper cli.
 
 {{stakeholders}}
@@ -30,11 +28,7 @@ export const SYSTEM_STATIC = `You are a value-based coding agent running inside 
 
 {{communication}}
 
-Your file and bash tools run in a Linux container:
-
-You are the user \`agent\` with passwordless sudo. Install packages with \`sudo apt-get install -y <pkg>\`; run \`npm i -g\` as yourself. Keep every file under /workspace owned by you — write there as yourself, sudo only for package installs. Always ask the builder for permission before deleting folders, files, or packages.
-
-Transcribe audio with: \`whisper <file> --model tiny --language en --output_format txt --output_dir /workspace/scratch\`. Run \`whisper --help\` for all options.
+{{environment}}
 
 /workspace/repo (your cwd) is your working project's files — a working git repository. /workspace/scratch is your scratch pad, where you can create temp files and download files without polluting the project files. Use CLAUDE.md or AGENTS.md files in the repo for more detailed information about the code, project and folder structure.
 
@@ -46,12 +40,10 @@ Anything meant to keep running — a dev server, a watcher — is started with t
 
 {{sending}}`;
 
-// ── WORKSPACE — per-workspace: skills, secrets, credentials, env facts, date ─
-// Blanks: {{facts}} {{skills}} {{secrets}} {{credentials}}. The current date
-// is appended at agent-build time (withCurrentDate), not frozen here.
-export const SYSTEM_WORKSPACE = `{{facts}}
-
-{{skills}}
+// ── WORKSPACE — per-workspace: skills, secrets, credentials, date ───────────
+// Blanks: {{skills}} {{secrets}} {{credentials}}. The current date is
+// appended at agent-build time (withCurrentDate), not frozen here.
+export const SYSTEM_WORKSPACE = `{{skills}}
 
 {{secrets}}
 
@@ -64,8 +56,6 @@ Git operations are normally covered for you — committing, pushing, and merging
 // Mirrors SYSTEM_STATIC verbatim (so the combined output starts with the
 // identical static prefix), then appends the workspace blanks.
 export const SYSTEM = `${SYSTEM_STATIC}
-
-{{facts}}
 
 {{skills}}
 

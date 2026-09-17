@@ -4,6 +4,7 @@ import { fill } from '../template.js';
 import { STAKEHOLDERS } from '../stakeholders.js';
 import { VALUES } from '../values.js';
 import { COMMUNICATION } from '../communication.js';
+import { ENVIRONMENT } from '../environment.js';
 import { SENDING_FILES } from '../sending.js';
 import { SYSTEM, SYSTEM_STATIC, SKILLS, SECRETS, CREDENTIALS_FACT } from './coding.js';
 import type { SkillMeta } from '../../../skills/skills.js';
@@ -41,18 +42,17 @@ export function secretsIndex(secrets: SecretIndexEntry[]): string {
 
 /** The full system prompt as a single string — what gets frozen in the
  *  transcript header. The combined template interpolates SYSTEM_STATIC
- *  (stakeholders, values, communication, environment boilerplate, sending
- *  are all baked in) and adds the per-workspace blanks after it. */
+ *  (stakeholders, values, communication, environment, sending) and adds the
+ *  per-workspace blanks after it. */
 export function systemPrompt(
   skills: SkillMeta[] = [], git: GitFacts = {}, secrets: SecretIndexEntry[] = [],
-  facts = '',
 ): string {
   return fill(SYSTEM, {
     stakeholders: STAKEHOLDERS,
     values: VALUES,
     communication: COMMUNICATION,
+    environment: ENVIRONMENT,
     sending: SENDING_FILES,
-    facts,
     skills: skillsIndex(skills),
     secrets: secretsIndex(secrets),
     credentials: git.credentials ? CREDENTIALS_FACT : '',
@@ -60,14 +60,14 @@ export function systemPrompt(
 }
 
 /** The static system prompt block — identical across every workspace and
- *  session. No per-workspace inputs; the environment facts line is
- *  per-workspace and lives in the workspace block instead. This is the
- *  prefix that gets cached globally via an Anthropic breakpoint. */
+ *  session. No per-workspace inputs. This is the prefix that gets cached
+ *  globally via an Anthropic breakpoint. */
 export function staticSystemPrompt(): string {
   return fill(SYSTEM_STATIC, {
     stakeholders: STAKEHOLDERS,
     values: VALUES,
     communication: COMMUNICATION,
+    environment: ENVIRONMENT,
     sending: SENDING_FILES,
   });
 }

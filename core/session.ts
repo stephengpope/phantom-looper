@@ -59,8 +59,6 @@ export interface SessionInfo {
   agent?: string | null; card?: number | null;
   /** Present on create/restart responses only. */
   skills?: SkillMeta[]; secrets?: SecretIndexEntry[]; agent_git_credentials?: boolean;
-  /** The session image's probed facts line ("Debian …, arm64 · Node …"). */
-  environment?: string;
   [k: string]: unknown;
 }
 
@@ -175,8 +173,7 @@ export async function openSession(cfg: OpenSessionConfig): Promise<OpenedSession
     }
     // The secrets index rides the create response like skills; with none
     // (attach path) it starts empty — secret_list is the live view anyway.
-    instructions = codingInstructions(session.skills ?? [], git, session.secrets ?? [],
-      session.environment ?? '');
+    instructions = codingInstructions(session.skills ?? [], git, session.secrets ?? []);
   }
 
   // The one in-flight save chain: saves never block their caller, only the

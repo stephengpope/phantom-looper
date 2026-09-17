@@ -10,7 +10,7 @@
 // Prompt caching: the system prompt is split into two blocks at agent-build
 // time (not at storage time — the transcript header stores the combined
 // string). Block 1 (static) is identical across all workspaces and sessions;
-// block 2 (workspace) varies by skills/secrets/credentials/env. Each gets
+// block 2 (workspace) varies by skills/secrets/credentials. Each gets
 // an Anthropic cache breakpoint, plus the last conversation message — 3 of
 // 4 allowed. Other providers ignore the Anthropic-namespaced options and
 // cache automatically.
@@ -26,15 +26,13 @@ import { systemPrompt, staticSystemPrompt, type GitFacts, type SecretIndexEntry 
 import type { SkillMeta } from '../../skills/skills.js';
 
 /** The frozen string: skills are scanned before the session's first build and
- *  FROZEN with the rest; `git` is the workspace's resolved facts, `secrets`
- *  the stored secrets index (names + descriptions, never values), and
- *  `environment` the session image's probed facts line — POST /sessions carries
- *  all four, frozen the same way. */
+ *  FROZEN with the rest; `git` is the workspace's resolved facts and `secrets`
+ *  the stored secrets index (names + descriptions, never values) — POST
+ *  /sessions carries all three, frozen the same way. */
 export function codingInstructions(
   skills: SkillMeta[] = [], git?: GitFacts, secrets: SecretIndexEntry[] = [],
-  environment = '',
 ): string {
-  return systemPrompt(skills, git, secrets, environment);
+  return systemPrompt(skills, git, secrets);
 }
 
 /** The static system prompt block — identical across every workspace and
@@ -49,8 +47,7 @@ function getStaticBlock(): string {
  *  templates); the workspace portion is whatever follows it in the combined
  *  string. The current date is appended to the workspace block.
  *
- *  Old sessions (frozen before this change) embed env facts in a different
- *  position, so the prefix won't match. In that case we fall back to a
+ *  Old sessions (frozen with different static text) won't match the prefix. In that case we fall back to a
  *  single unsplit block — no cross-session static cache, but no duplication
  *  either. The last-message breakpoint still provides within-session caching. */
 function splitInstructions(combined: string): SystemModelMessage[] {

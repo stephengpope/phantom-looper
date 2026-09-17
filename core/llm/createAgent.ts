@@ -361,7 +361,7 @@ export function withRetry(
  *     Set on the first SystemModelMessage in the instructions array, by the
  *     agent builder (e.g. codingAgent's splitInstructions). Cached globally.
  *  2. Workspace system block — per-workspace (skills, secrets, credentials,
- *     env facts, current date). Set on the second SystemModelMessage.
+ *     current date). Set on the second SystemModelMessage.
  *     Cached across sessions in the same workspace.
  *  3. Last conversation message — the rolling mark placed here by
  *     withCacheBreakpoints, before every step. The backward walk from it
