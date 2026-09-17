@@ -38,6 +38,19 @@ general, short, and true.
 - **A one-to-one link is a column, not a table.** With the card moved off
   it, `loops` held one link. A table + an object + a migration to carry one
   column is complexity with no payoff. *(table 3)*
+- **A word already taken is not a name.** `commands` was the table, the
+  cli's slash commands and the Telegram bot's commands. The storage name
+  says what the row IS (`background_tasks`); the edges keep their
+  shortcuts. *(table 5)*
+- **"Same ten lines twice" is the signal, not the fix.** The reusable part
+  of a repeated catch was one fact (pg code 23505 = unique violation); the
+  rest — which code, which message — was each table's own. Extract the
+  fact, keep the rule local. *(tables 4, 5)*
+- **"Names to the edge" means the thing's name, not every handle.** I
+  proposed renaming `/tasks` and `task_*` to match the table; the builder
+  stopped it. The customer's shortcut is unambiguous where it sits and
+  carries muscle memory; rename the storage and the wire, leave the
+  shortcuts. *(table 5)*
 - **Storage links use the primary key; people use the handle.** Two tables
   linked to cards by number. The number is what PHA-7 means to a person and
   an agent; the key is what a foreign key is for. *(table 3)*
@@ -81,6 +94,13 @@ general, short, and true.
   and let the constraint 500. Read the `create table` and ask, for each
   `unique` / `check` / FK: what does the caller see when it trips?
   *(table 4)*
+- **A harness that dies mid-way must clean up on its next run.** Two
+  reruns failed on the previous run's leftovers, not on the code. The live
+  phase starts by deleting what an earlier run left, through the routes.
+  *(table 5)*
+- **When a proof step fails, ask which side is wrong.** Three failures were
+  the harness (201 not 200; `seq` on the exit record; a second kill is
+  idempotent by design). Read the code's rule before "fixing" it. *(table 5)*
 - **Prove the "was" as well as the "is".** The report said "was 500"; a
   stash-and-curl made it a fact with the exact message, in under a minute.
   *(table 4)*

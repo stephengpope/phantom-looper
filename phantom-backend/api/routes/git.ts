@@ -2,7 +2,6 @@
 // unary. Detached logs are ND-JSON on the volume at work/<id>/logs/ — NEVER
 // under workspace/, where the next push's add -A would commit them.
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import fsp from 'node:fs/promises';
 import type { SessionRow, WorkspaceRow } from '../../db/schema.js';
 import { ToolError } from '../../tools/envelope.js';
 import { ok, err, type AppCtx } from '../app.js';
@@ -141,32 +140,5 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
     const autoPull = ctx.autoPull;
     if (!autoPull) return reply.code(503).send(err('unavailable', 'auto-pull is not wired on this server', true));
     return streamRun(reply, 'auto-pull', session.id, (onStep) => autoPull(session, workspace, onStep, clientOf(req)));
-  });
-
-  // ── exec ───────────────────────────────────────────────────────────────────
-
-  // ND-JSON stream: replays the log, then follows until the command ends.
-  app.get<{ Params: { cmdId: string } }>('/commands/:cmdId/logs', { schema: { tags: ['commands'],
-    summary: 'Detached command log stream',
-    description: 'ND-JSON: replays what the command has written, then follows until it ends. Records are {seq, stream: stdout|stderr, data} with exactly one terminal {event: exit|error} record.',
-    params: { type: 'object', properties: { cmdId: { type: 'string' } }, required: ['cmdId'] } } },
-  async (req, reply) => {
-    const cmd = await ctx.commands.get(req.params.cmdId);
-    if (!cmd) return reply.code(404).send(err('not_found', `no command ${req.params.cmdId}`));
-    reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
-    let offset = 0;
-    for (;;) {
-      const buf = await fsp.readFile(cmd.logPath).catch(() => Buffer.alloc(0));
-      if (buf.length > offset) { reply.raw.write(buf.subarray(offset)); offset = buf.length; }
-      const row = await ctx.commands.get(cmd.id);
-      if (row?.status !== 'running') {
-        const rest = await fsp.readFile(cmd.logPath).catch(() => Buffer.alloc(0));
-        if (rest.length > offset) reply.raw.write(rest.subarray(offset));
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 250));
-    }
-    reply.raw.end();
-    return reply;
   });
 }

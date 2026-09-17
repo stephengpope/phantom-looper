@@ -7,12 +7,14 @@
 // /containers/:id/top reports HOST pids (verified live) and is deliberately
 // not used — its numbers can never meet a `pkill` in the container.
 import type { FastifyInstance } from 'fastify';
+import fsp from 'node:fs/promises';
 import { Sandbox } from '../../workspace/sandbox.js';
 import { ok, err, type AppCtx } from '../app.js';
 import {
   killSid, probeGroups, reconcileRunning, commandOf, elapsedSeconds,
-  type CmdRow, type LiveGroup, type FsDeps,
+  type LiveGroup, type FsDeps,
 } from './fs.js';
+import type { BackgroundTaskRow } from '../../backgroundTasks.js';
 import { logger, errStr } from '../../log.js';
 
 const log = logger('tasks');
@@ -37,8 +39,8 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
 
   app.get<{ Params: { id: string } }>('/sessions/:id/tasks', { schema: { ...TAG,
     summary: 'What is running in the session container right now',
-    description: 'Live process trees grouped one-per-started-command, matched to detached-command ' +
-      'rows (cmd_id + logs when tracked), plus recent finished commands with exit codes. ' +
+    description: 'Live process trees grouped one-per-started-command, matched to ' +
+      'background_tasks rows (background_task_id + logs when tracked), plus recent finished tasks with exit codes. ' +
       'Reads the container fresh on every call; never starts one.',
     params: idParam } },
   async (req, reply) => {
@@ -55,7 +57,7 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
       }
     }
 
-    const rows: CmdRow[] = await ctx.commands.listForSession(session.id, 50);
+    const rows: BackgroundTaskRow[] = await ctx.backgroundTasks.listForSession(session.id, 50);
     const running = rows.filter((r) => r.status === 'running');
 
     const bySid = new Map(running.filter((r) => r.sid).map((r) => [r.sid as string, r]));
@@ -67,8 +69,8 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
       return {
         sid: g.sid,
         command: row ? commandOf(row.argv) : g.command,
-        cmd_id: row?.id ?? null,
-        logs: row ? `/commands/${row.id}/logs` : null,
+        background_task_id: row?.id ?? null,
+        logs: row ? `/background-tasks/${row.id}/logs` : null,
         log_file: row ? `/workspace/logs/${row.id}.ndjson` : null,
         started_at: row?.startedAt ?? (secs == null ? null : new Date(Date.now() - secs * 1000)),
         elapsed: g.elapsed,
@@ -80,18 +82,18 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
     // when the container is absent or stopped — nothing survives either.
     await reconcileRunning(ctx, running, groups);
 
-    const liveIds = new Set(tasks.map((t) => t.cmd_id).filter(Boolean));
+    const liveIds = new Set(tasks.map((t) => t.background_task_id).filter(Boolean));
     const recent = rows
       .filter((r) => r.status !== 'running' && !liveIds.has(r.id))
       .slice(0, 10)
       .map((r) => ({
-        cmd_id: r.id,
+        background_task_id: r.id,
         command: commandOf(r.argv),
         status: r.status,
         exit_code: r.exitCode,
         started_at: r.startedAt,
         ended_at: r.endedAt,
-        logs: `/commands/${r.id}/logs`,
+        logs: `/background-tasks/${r.id}/logs`,
         log_file: `/workspace/logs/${r.id}.ndjson`,
       }));
 
@@ -101,7 +103,7 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
   app.delete<{ Params: { id: string; sid: string } }>('/sessions/:id/tasks/:sid', { schema: { ...TAG,
     summary: 'Kill one task by its process-session id',
     description: 'TERM, one second, then KILL — the whole process tree. The sid must name a live, ' +
-      'non-baseline group in the container (listed by GET); a tracked command row is marked killed.',
+      'non-baseline group in the container (listed by GET); a tracked background_tasks row is marked killed.',
     params: { type: 'object', properties: { id: { type: 'string' }, sid: { type: 'string' } },
       required: ['id', 'sid'] } } },
   async (req, reply) => {
@@ -119,8 +121,34 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
     // Mark first: the detached stream's terminal write is conditioned on
     // status='running', so 'killed' set here is final even if the stream's
     // exit lands a moment later.
-    const marked = await ctx.commands.markKilledBySid(session.id, req.params.sid);
+    const marked = await ctx.backgroundTasks.markKilledBySid(session.id, req.params.sid);
     await killSid(ws, req.params.sid);
-    return ok({ sid: req.params.sid, cmd_id: marked });
+    return ok({ sid: req.params.sid, background_task_id: marked });
+  });
+
+  // ND-JSON stream: replays the log, then follows until the task ends. For
+  // API clients — the agent reads its log_file straight off disk.
+  app.get<{ Params: { id: string } }>('/background-tasks/:id/logs', { schema: { ...TAG,
+    summary: 'Background task log stream',
+    description: 'ND-JSON: replays what the task has written, then follows until it ends. Records are {seq, stream: stdout|stderr, data} with exactly one terminal {event: exit|error} record.',
+    params: idParam } },
+  async (req, reply) => {
+    const task = await ctx.backgroundTasks.get(req.params.id);
+    if (!task) return reply.code(404).send(err('not_found', `no background task ${req.params.id}`));
+    reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
+    let offset = 0;
+    for (;;) {
+      const buf = await fsp.readFile(task.logPath).catch(() => Buffer.alloc(0));
+      if (buf.length > offset) { reply.raw.write(buf.subarray(offset)); offset = buf.length; }
+      const row = await ctx.backgroundTasks.get(task.id);
+      if (row?.status !== 'running') {
+        const rest = await fsp.readFile(task.logPath).catch(() => Buffer.alloc(0));
+        if (rest.length > offset) reply.raw.write(rest.subarray(offset));
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    reply.raw.end();
+    return reply;
   });
 }

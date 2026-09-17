@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type { SessionRow } from '../../db/schema.js';
-import type { CommandRow, CommandEnd } from '../../commands.js';
+import type { BackgroundTaskRow, BackgroundTaskEnd } from '../../backgroundTasks.js';
 import { newId } from '../../../core/ids.js';
 import { sessionDir } from '../../pool/paths.js';
 import { logger, errStr } from '../../log.js';
@@ -38,7 +38,7 @@ const STATUS: Record<string, number> = {
  *  builtin on alpine, procps in the workspace image — `kill -- -pgid` is NOT
  *  portable, busybox kill rejects `--`). The killer is its own exec in its
  *  own session — never inside what it kills. The tasks route kills by sid
- *  from the commands row; killProcessGroup (api/foreground.ts) reads it from
+ *  from the background_tasks row; killProcessGroup (api/foreground.ts) reads it from
  *  a pidfile. */
 export function killSid(ws: Sandbox, sid: string): Promise<unknown> {
   const script =
@@ -137,7 +137,6 @@ export const commandOf = (argv: unknown): string => {
   return a.length === 3 && a[0] === '/bin/sh' && a[1] === '-c' ? a[2] : a.join(' ');
 };
 
-export type CmdRow = CommandRow;
 
 /** Rows still marked running with no live process are provably dead — the
  *  final write was lost (server restart mid-command). Close them on read:
@@ -146,14 +145,14 @@ export type CmdRow = CommandRow;
 const SID_CAPTURE_GRACE_MS = 15_000;
 
 export async function reconcileRunning(
-  ctx: AppCtx, running: CmdRow[], groups: LiveGroup[],
+  ctx: AppCtx, running: BackgroundTaskRow[], groups: LiveGroup[],
 ): Promise<void> {
   const live = new Set(groups.map((g) => g.sid));
   const now = Date.now();
   for (const row of running) {
     if (row.sid && live.has(row.sid)) continue;
     if (!row.sid && now - row.startedAt.getTime() < SID_CAPTURE_GRACE_MS) continue;
-    await ctx.commands.finish(row.id, 'exited', null).catch(() => {});
+    await ctx.backgroundTasks.finish(row.id, 'exited', null).catch(() => {});
     row.status = 'exited';
   }
 }
@@ -251,20 +250,20 @@ async function runBash(
     }
   }
 
-  const cmdId = newId();
-  const logPath = path.join(sessionDir(ctx.paths, session.folderId ?? session.id), 'logs', `${cmdId}.ndjson`);
+  const taskId = newId();
+  const logPath = path.join(sessionDir(ctx.paths, session.folderId ?? session.id), 'logs', `${taskId}.ndjson`);
   await fsp.mkdir(path.dirname(logPath), { recursive: true });
-  await ctx.commands.start({ id: cmdId, sessionId: session.id, argv, logPath });
+  await ctx.backgroundTasks.start({ id: taskId, sessionId: session.id, argv, logPath });
   // The same $$-to-pidfile idiom as unary above (pid == sid, runc setsids the
   // exec); `exec` keeps one process so the leader stays the command and the
   // exit code passes through the stream untouched. The row keeps the ORIGINAL
   // argv — the wrapper is plumbing, not what the user ran.
-  const sidfile = `/tmp/.phantom-cmd-${cmdId}.sid`;
+  const sidfile = `/tmp/.phantom-cmd-${taskId}.sid`;
   const wrapped = ['/bin/sh', '-c', 'echo $$ >"$0"; exec /bin/sh -c "$1"', sidfile, args.cmd];
   void (async () => {
     const out = fs.createWriteStream(logPath);
     let exitCode: number | null = null;
-    let status: CommandEnd = 'exited';
+    let status: BackgroundTaskEnd = 'exited';
     try {
       for await (const rec of ws.runStream(wrapped, { cwd: args.cwd })) {
         out.write(JSON.stringify(rec) + '\n');
@@ -274,19 +273,19 @@ async function runBash(
     } catch (e) {
       status = 'orphaned';
       out.write(JSON.stringify({ seq: -1, event: 'error', reason: 'container_gone' }) + '\n');
-      log.warn({ cmdId, err: errStr(e) }, 'detached stream died');
+      log.warn({ taskId, err: errStr(e) }, 'detached stream died');
     } finally {
       out.end();
       void ctx.sessions.touch(session.id); // a long detached command is activity, seen only here at its end
       // Conditional on still-running: the tasks route's 'killed' and the
       // reconciler's 'exited' are final — a late stream teardown must not
       // overwrite them.
-      await ctx.commands.finish(cmdId, status, exitCode).catch(() => {});
+      await ctx.backgroundTasks.finish(taskId, status, exitCode).catch(() => {});
       // The exit message rides the session's NEXT turn through the backdoor
       // message queue (backdoor.ts) — no turn is started for it. Read the
       // row's final word rather than the local `status`: a kill from /tasks
       // or task_kill marks the row first, and the row is the truth.
-      const final = await ctx.commands.get(cmdId).catch(() => undefined);
+      const final = await ctx.backgroundTasks.get(taskId).catch(() => undefined);
       if (final) ctx.backdoor?.push(session.id, noticeOf(final));
     }
   })();
@@ -300,21 +299,21 @@ async function runBash(
       'rm -f "$0"; printf %s "$s"';
     const r = await ws.run(['/bin/sh', '-c', script, sidfile], { timeoutMs: 10_000 });
     const sid = r.stdout.toString('utf8').trim();
-    if (/^\d+$/.test(sid)) await ctx.commands.setSid(cmdId, sid);
-  })().catch((e) => log.warn({ cmdId, err: errStr(e) }, 'detached sid capture failed'));
+    if (/^\d+$/.test(sid)) await ctx.backgroundTasks.setSid(taskId, sid);
+  })().catch((e) => log.warn({ taskId, err: errStr(e) }, 'detached sid capture failed'));
   // log_file is the CONTAINER path — the one place the agent can actually
-  // read it (the /commands/:id/logs HTTP route is for API clients, which the
+  // read it (the /background-tasks/:id/logs HTTP route is for API clients, which the
   // agent is not). Same mapping as the unary spill file above.
-  return { cmd_id: cmdId, log_file: `/workspace/logs/${cmdId}.ndjson` };
+  return { background_task_id: taskId, log_file: `/workspace/logs/${taskId}.ndjson` };
 }
 
 // ---- the task tools ----------------------------------------------------------
-// The agent's own view of its detached commands, over the SAME commands rows
+// The agent's own view of its background tasks, over the SAME background_tasks rows
 // the /tasks screen reads — one truth, two readers. Injected into the
 // registry's task_* tools; the registry stays free of db and docker plumbing.
 
 /** The one-line notice a finished detached command leaves for the next turn. */
-function noticeOf(row: CmdRow): string {
+function noticeOf(row: BackgroundTaskRow): string {
   const cmd = commandOf(row.argv);
   const short = cmd.length > 120 ? `${cmd.slice(0, 120)}…` : cmd;
   const what = row.status === 'killed' ? 'was killed'
@@ -323,14 +322,14 @@ function noticeOf(row: CmdRow): string {
   return `[background] task ${row.id} ${what} — "${short}"`;
 }
 
-const shapeCommand = (r: CmdRow) => ({
-  cmd_id: r.id, command: commandOf(r.argv), status: r.status,
+const shapeBackgroundTask = (r: BackgroundTaskRow) => ({
+  background_task_id: r.id, command: commandOf(r.argv), status: r.status,
   exit_code: r.exitCode, started_at: r.startedAt, ended_at: r.endedAt,
   log_file: `/workspace/logs/${r.id}.ndjson`,
 });
 
 async function taskList(ctx: AppCtx, ws: Sandbox, session: SessionRow): Promise<unknown> {
-  const rows = await ctx.commands.listForSession(session.id, 20);
+  const rows = await ctx.backgroundTasks.listForSession(session.id, 20);
   const running = rows.filter((r) => r.status === 'running');
   if (running.length) {
     // Reconcile on read so `running` is the truth. A failed ps SKIPS it —
@@ -340,15 +339,15 @@ async function taskList(ctx: AppCtx, ws: Sandbox, session: SessionRow): Promise<
     catch (e) { log.warn({ err: errStr(e) }, 'task_list reconcile skipped — ps failed'); }
   }
   return {
-    running: rows.filter((r) => r.status === 'running').map(shapeCommand),
-    recent: rows.filter((r) => r.status !== 'running').slice(0, 10).map(shapeCommand),
+    running: rows.filter((r) => r.status === 'running').map(shapeBackgroundTask),
+    recent: rows.filter((r) => r.status !== 'running').slice(0, 10).map(shapeBackgroundTask),
   };
 }
 
 /** One command row of THIS session, or a not_found the model can act on. */
-async function ownCommand(ctx: AppCtx, session: SessionRow, cmdId: string): Promise<CmdRow> {
-  const row = await ctx.commands.getInSession(cmdId, session.id);
-  if (!row) throw new ToolError('not_found', `no task ${cmdId} in this session — task_list shows what is running`);
+async function ownBackgroundTask(ctx: AppCtx, session: SessionRow, taskId: string): Promise<BackgroundTaskRow> {
+  const row = await ctx.backgroundTasks.getInSession(taskId, session.id);
+  if (!row) throw new ToolError('not_found', `no task ${taskId} in this session — task_list shows what is running`);
   return row;
 }
 
@@ -356,31 +355,31 @@ async function ownCommand(ctx: AppCtx, session: SessionRow, cmdId: string): Prom
  *  unbounded. */
 const WAIT_MAX_MS = 300_000;
 
-async function taskWait(ctx: AppCtx, session: SessionRow, cmdId: string, timeoutMs: number): Promise<unknown> {
-  let row = await ownCommand(ctx, session, cmdId);
+async function taskWait(ctx: AppCtx, session: SessionRow, taskId: string, timeoutMs: number): Promise<unknown> {
+  let row = await ownBackgroundTask(ctx, session, taskId);
   const deadline = Date.now() + Math.min(Math.max(0, timeoutMs), WAIT_MAX_MS);
   while (row.status === 'running' && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 1_000));
-    row = await ownCommand(ctx, session, cmdId);
+    row = await ownBackgroundTask(ctx, session, taskId);
   }
   if (row.status === 'running') {
-    return { ...shapeCommand(row), hint: 'still running — call task_wait again to keep waiting' };
+    return { ...shapeBackgroundTask(row), hint: 'still running — call task_wait again to keep waiting' };
   }
-  return { ...shapeCommand(row), tail: await tailLog(row.logPath, 10) };
+  return { ...shapeBackgroundTask(row), tail: await tailLog(row.logPath, 10) };
 }
 
-async function taskKill(ctx: AppCtx, ws: Sandbox, session: SessionRow, cmdId: string): Promise<unknown> {
-  const row = await ownCommand(ctx, session, cmdId);
-  if (row.status !== 'running') return { ...shapeCommand(row), note: 'not running — nothing to kill' };
+async function taskKill(ctx: AppCtx, ws: Sandbox, session: SessionRow, taskId: string): Promise<unknown> {
+  const row = await ownBackgroundTask(ctx, session, taskId);
+  if (row.status !== 'running') return { ...shapeBackgroundTask(row), note: 'not running — nothing to kill' };
   if (!row.sid) {
-    throw new ToolError('not_ready', `task ${cmdId} has no process id yet (just started) — retry in a moment`, true);
+    throw new ToolError('not_ready', `task ${taskId} has no process id yet (just started) — retry in a moment`, true);
   }
   // Mark first: the detached stream's terminal write is conditioned on
   // status='running', so 'killed' set here is final even if the stream's
   // exit lands a moment later. The same order as the /tasks route's kill.
-  await ctx.commands.markKilled(row.id);
+  await ctx.backgroundTasks.markKilled(row.id);
   await killSid(ws, row.sid);
-  return { cmd_id: row.id, status: 'killed' };
+  return { background_task_id: row.id, status: 'killed' };
 }
 
 /** The last `lines` records of a detached command's ND-JSON log, read bounded
@@ -467,8 +466,8 @@ export function fsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
         runBash: (args) => runBash(ctx, deps, ws, session, args, ac.signal),
         tasks: {
           list: () => taskList(ctx, ws, session),
-          wait: (cmdId, timeoutMs) => taskWait(ctx, session, cmdId, timeoutMs),
-          kill: (cmdId) => taskKill(ctx, ws, session, cmdId),
+          wait: (taskId, timeoutMs) => taskWait(ctx, session, taskId, timeoutMs),
+          kill: (taskId) => taskKill(ctx, ws, session, taskId),
         },
       };
       try {

@@ -4,6 +4,7 @@ import { parseRepoRef, remoteUrl } from '../../git/remote.js';
 import { createRepo, listRepos, whoami } from '../../git/github.js';
 import { initializeRemote, classifyGitFailure } from '../../git/git.js';
 import { SettingsWriteError } from '../../settings.js';
+import { WorkspaceError } from '../../workspaces.js';
 import { workspaceScope } from '../../store.js';
 import { newId } from '../../../core/ids.js';
 import { ok, err, type AppCtx } from '../app.js';
@@ -157,7 +158,13 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
         baseBranch,
         branchPrefix: req.body.branch_prefix ?? 'agent',
       };
-      const created = await ctx.workspaces.create(row, writerOf(req));
+      let created;
+      try {
+        created = await ctx.workspaces.create(row, writerOf(req));
+      } catch (e) {
+        if (e instanceof WorkspaceError) return reply.code(409).send(err(e.code, e.message));
+        throw e;
+      }
       // A token handed to create= belongs to this workspace: `github_token` at
       // its own scope, the same key the global one uses one layer down.
       if (ownToken) await ctx.settings.write('workspace', workspaceScope(id), { github_token: ownToken }, writerOf(req));

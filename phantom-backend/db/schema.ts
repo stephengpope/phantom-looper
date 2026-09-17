@@ -222,13 +222,16 @@ export const telegramUpdate = phantomLooper.table('telegram_update', {
   seenAt: timestamp('seen_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const commands = phantomLooper.table('commands', {
+// Background tasks (migration 029, was `commands`): one row per detached
+// bash command a session's agent runs — the /tasks screen and the task_*
+// tools read it. BackgroundTasks (backgroundTasks.ts) is its one writer.
+export const backgroundTasks = phantomLooper.table('background_tasks', {
   id: text('id').primaryKey(),
   sessionId: text('session_id').notNull(),
   argv: jsonb('argv').notNull(),
   status: text('status').notNull(),
   exitCode: integer('exit_code'),
-  // Container-namespace session id of the command's process tree (pid == sid;
+  // Container-namespace session id of the task's process tree (pid == sid;
   // runc setsids every exec) — captured at spawn, null until it lands.
   sid: text('sid'),
   logPath: text('log_path').notNull(),

@@ -25,8 +25,8 @@ export interface ToolCtx {
    *  same rows the /tasks screen reads. */
   tasks: {
     list: () => Promise<unknown>;
-    wait: (cmdId: string, timeoutMs: number) => Promise<unknown>;
-    kill: (cmdId: string) => Promise<unknown>;
+    wait: (backgroundTaskId: string, timeoutMs: number) => Promise<unknown>;
+    kill: (backgroundTaskId: string) => Promise<unknown>;
   };
 }
 
@@ -114,14 +114,14 @@ export const TOOLS: ToolDef[] = [
       'it when long (full_output: /workspace/logs/bash-<id>.out).\n\n' +
       'A command with no timeout of its own is killed after 2 minutes.\n\n' +
       'detached=true is for commands meant to keep running (dev servers, watchers): it returns ' +
-      '{cmd_id, log_file} at once. The log holds output records and ends with ' +
+      '{background_task_id, log_file} at once. The log holds output records and ends with ' +
       '{"event":"exit","code":N} when the command stops. The user sees and can kill detached ' +
       'commands on /tasks — tell them when you start one. Never use nohup or &.',
     input: obj({
       cmd: str('The command, run via /bin/sh -c.'),
       cwd: str('Working directory (default /workspace/repo).'),
       timeout: int('Milliseconds before the command is killed. Unset = the 2-minute default.'),
-      detached: bool('true = background: return {cmd_id, log_file} now and keep the command running.'),
+      detached: bool('true = background: return {background_task_id, log_file} now and keep the command running.'),
     }, ['cmd']),
     mutates: true, streaming: false,
     async execute(ctx, a) {
@@ -135,7 +135,7 @@ export const TOOLS: ToolDef[] = [
     name: 'task_list',
     summary: "List this session's background (detached) commands.",
     description: 'Every detached bash command of this session: `running` now, plus the 10 most ' +
-      'recent finished ones with exit codes. Each entry carries its cmd_id and log_file. Rows ' +
+      'recent finished ones with exit codes. Each entry carries its background_task_id and log_file. Rows ' +
       'whose process is gone are reconciled on read, so `running` is the truth.',
     input: obj({}, []),
     mutates: false, streaming: false,
@@ -151,26 +151,26 @@ export const TOOLS: ToolDef[] = [
       'returns still-running and you decide — call again to keep waiting. Prefer this over ' +
       'sleep loops.',
     input: obj({
-      cmd_id: str('The cmd_id a detached bash call returned (or one from task_list).'),
+      background_task_id: str('The background_task_id a detached bash call returned (or one from task_list).'),
       timeout: int('Milliseconds to wait (default 30000, max 300000).', 30000),
-    }, ['cmd_id']),
+    }, ['background_task_id']),
     mutates: false, streaming: false,
     async execute(ctx, a) {
-      return ctx.tasks.wait(s(a.cmd_id), a.timeout === undefined ? 30_000 : Number(a.timeout));
+      return ctx.tasks.wait(s(a.background_task_id), a.timeout === undefined ? 30_000 : Number(a.timeout));
     },
   },
   {
     name: 'task_kill',
-    summary: 'Kill a running background command by its cmd_id.',
+    summary: 'Kill a running background task by its background_task_id.',
     description: "TERM, a second, then KILL — the command's whole process tree, named by the " +
-      'cmd_id a detached bash call returned. Kills by id, never by name matching. The exit is ' +
+      'background_task_id a detached bash call returned. Kills by id, never by name matching. The exit is ' +
       'then reported like any other: the task leaves `running` and the next turn hears of it.',
     input: obj({
-      cmd_id: str('The cmd_id of the running task (from task_list).'),
-    }, ['cmd_id']),
+      background_task_id: str('The background_task_id of the running task (from task_list).'),
+    }, ['background_task_id']),
     mutates: true, streaming: false,
     async execute(ctx, a) {
-      return ctx.tasks.kill(s(a.cmd_id));
+      return ctx.tasks.kill(s(a.background_task_id));
     },
   },
   {

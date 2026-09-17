@@ -27,7 +27,7 @@ import type { Settings } from '../settings.js';
 import type { Workspaces } from '../workspaces.js';
 import type { Folders } from '../folders.js';
 import type { Cards } from '../cards.js';
-import type { Commands } from '../commands.js';
+import type { BackgroundTasks } from '../backgroundTasks.js';
 import type { Presets } from '../presets.js';
 import type { TokenUsage } from '../tokenUsage.js';
 import { SettingsEvents } from './settingsEvents.js';
@@ -52,7 +52,7 @@ export interface AppCtx {
   folders: Folders;
   cards: Cards;
   sessions: Sessions;
-  commands: Commands;
+  backgroundTasks: BackgroundTasks;
   presets: Presets;
   tokenUsage: TokenUsage;
   paths: Paths;

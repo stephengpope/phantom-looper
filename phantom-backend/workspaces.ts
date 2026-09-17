@@ -7,7 +7,7 @@
 // prefixes, the scopes), and the settings feed is what they already follow to
 // re-read /workspaces. One bus, not a second one saying the same thing.
 import { eq } from 'drizzle-orm';
-import type { Db } from './db/client.js';
+import { isUniqueViolation, type Db } from './db/client.js';
 import { workspaces, type WorkspaceRow } from './db/schema.js';
 import { DEFAULT_COLUMNS } from '../core/kanban.js';
 import type { Settings } from './settings.js';
@@ -33,6 +33,11 @@ export interface NewWorkspace {
   displayName: string | null; baseBranch: string; branchPrefix: string;
 }
 
+/** A write the table refuses, with the API's error code already chosen. */
+export class WorkspaceError extends Error {
+  constructor(readonly code: 'already_registered', message: string) { super(message); }
+}
+
 export class Workspaces {
   constructor(
     private readonly db: Db,
@@ -55,8 +60,14 @@ export class Workspaces {
     return (await this.settings.resolve('card_prefix', { workspace: w })) ?? defaultPrefix(w.name);
   }
 
+  /** Refuses a repo that is already a workspace (`owner, name` is unique). */
   async create(row: NewWorkspace, by?: string): Promise<WorkspaceRow> {
-    await this.db.insert(workspaces).values(row);
+    try {
+      await this.db.insert(workspaces).values(row);
+    } catch (e) {
+      if (isUniqueViolation(e)) throw new WorkspaceError('already_registered', `${row.owner}/${row.name} is already a workspace`);
+      throw e;
+    }
     this.events?.publish(workspaceScope(row.id), by);
     return (await this.get(row.id))!;
   }

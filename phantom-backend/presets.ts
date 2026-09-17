@@ -3,7 +3,7 @@
 // as one gesture. The values a preset may hold, and how each is validated,
 // are decided here — the same rules PATCH /settings applies.
 import { eq } from 'drizzle-orm';
-import type { Db } from './db/client.js';
+import { isUniqueViolation, type Db } from './db/client.js';
 import { presets, type PresetRow } from './db/schema.js';
 import { isSettingKey, validateSetting } from './settings.js';
 
@@ -54,9 +54,8 @@ export class Presets {
         .values({ id, name, values: clean, createdAt: now, updatedAt: now })
         .onConflictDoUpdate({ target: [presets.id], set: { name, values: clean, updatedAt: now } });
     } catch (e) {
-      // Postgres unique_violation — the only unique here besides the key is
-      // `name`. Surfaced as a 400, not a 500, so the client can say "taken".
-      if ((e as { code?: string }).code === '23505') throw new PresetError('duplicate_preset_name', `a preset named "${name}" already exists`);
+      // The only unique here besides the key is `name`.
+      if (isUniqueViolation(e)) throw new PresetError('duplicate_preset_name', `a preset named "${name}" already exists`);
       throw e;
     }
     return clean;

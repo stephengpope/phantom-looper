@@ -9,7 +9,7 @@ import { Settings } from './settings.js';
 import { Workspaces } from './workspaces.js';
 import { Folders } from './folders.js';
 import { Cards } from './cards.js';
-import { Commands } from './commands.js';
+import { BackgroundTasks } from './backgroundTasks.js';
 import { Presets } from './presets.js';
 import { setTokenRecorder } from '../core/llm/createAgent.js';
 import { TokenUsage } from './tokenUsage.js';
@@ -74,7 +74,7 @@ async function main() {
   settingsEvents.subscribe(() => {
     sessions.followModelSettings().catch((e) => log.warn({ err: (e as Error).message }, 'newborn sessions could not follow the model settings'));
   });
-  const commands = new Commands(db);
+  const backgroundTasks = new BackgroundTasks(db);
   const presets = new Presets(db);
   const tokenUsage = new TokenUsage(db);
   // Every model call in this process records here (core languageModel).
@@ -228,11 +228,11 @@ async function main() {
   // One loop drives both the pool tick and the session sweep. The interval is a
   // SETTING read per tick, so a change takes effect without a restart.
   // Sessions with a running container whose lastUsedAt is past the threshold
-  // and have no running detached commands — the set safe to reap.
+  // and have no running background tasks — the set safe to reap.
   const idleContainerSessions = async (ms: number): Promise<string[]> => {
     const active = await containers.activeSessions();
     const idle = await sessions.listIdle(active, ms);
-    const busy = await commands.sessionsWithRunning(idle);
+    const busy = await backgroundTasks.sessionsWithRunning(idle);
     return idle.filter((id) => !busy.has(id));
   };
 
@@ -266,7 +266,7 @@ async function main() {
   // app exists — the engine is a headless client of this app, so it is built
   // second; routes read ctx.looper per request, so the late set is seen.
   const ctx: AppCtx = {
-    settings, workspaces, folders, cards, sessions, commands, presets, tokenUsage,
+    settings, workspaces, folders, cards, sessions, backgroundTasks, presets, tokenUsage,
     paths, apiKey: env.apiKey, version: VERSION,
     fs: { docker, containers, engine },
     engine,

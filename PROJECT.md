@@ -48,7 +48,7 @@ and reviews each table's behavior while it is in our heads.
 | 2 | `folders` | `Folders` (folders.ts) | **done** |
 | 3 | ~~`loops`~~ | — | **done** — deleted; the card moved onto `sessions` |
 | 4 | `presets` | `Presets` (presets.ts) | **done** |
-| 5 | `commands` | `Commands` (commands.ts) | |
+| 5 | ~~`commands`~~ `background_tasks` | `BackgroundTasks` (backgroundTasks.ts) | **done** — renamed |
 | 6 | `token_usage` | `TokenUsage` (tokenUsage.ts) | |
 | 7 | `telegram_update` | `TelegramStore` (telegram/store.ts) | |
 | 8 | `telegram_sent` | `TelegramStore` (telegram/store.ts) | |
@@ -176,6 +176,49 @@ came back **500** with `duplicate key value violates unique constraint
 the cli shows `a preset named "fast" already exists`.
 
 **Stale.** The cli said "the 11 model keys" in four places; there are 15.
+
+## Table 5 — `commands` → `background_tasks` (done)
+
+**What it is.** One row per detached bash command a session's agent runs:
+what it ran (`argv`), its log file, its process-tree id (`sid`), and how it
+ended (`running` → `exited` / `killed` / `orphaned`). The customer sees
+these on `/tasks`; the agent reaches them through `task_list` /
+`task_wait` / `task_kill`. Stays.
+
+**State found.** Clean on the rules: one object, one writer, no joins, DB
+lib contained. The name was the problem: "command" already meant the cli's
+slash commands (`phantom-cli/commands.ts`) and the Telegram bot's commands
+(`telegram/commands.ts`) — three meanings, one word — and the storage said
+`commands` / `cmd_id` while every edge said task.
+
+**Renamed (029).** Table `background_tasks`; object `BackgroundTasks`
+(`backgroundTasks.ts`); `CommandRow` / `CmdRow` / `CommandEnd` →
+`BackgroundTaskRow` / `BackgroundTaskEnd`; `cmd_id` → `background_task_id`
+in the `bash` detached result, `task_list` / `task_wait` / `task_kill`
+(input and output), the `/tasks` payloads, the cli's `Tasks.tsx` and the
+coding prompt; the log stream `/commands/:cmdId/logs` →
+`/background-tasks/:id/logs`, moved out of `routes/git.ts` (where it never
+belonged) into `routes/tasks.ts`. Constraint names follow the table.
+
+**Kept.** `/tasks`, the `task_*` tool names and `/sessions/:id/tasks` —
+the customer's and the agent's shortcuts, unambiguous where they sit.
+`sid` — a real Unix term, documented as such.
+
+**Proof.** 029 on 028-shape rows in every state (running with and without
+a sid, exited, killed, orphaned, on a destroyed session) — rows, cascade
+and constraint names intact. Every object method, including the
+first-terminal-write-wins rule. Live: a real session container, detached
+`bash` → `{background_task_id, log_file}`, `task_list`, `task_wait` (done /
+running / unknown / old field name refused), `/tasks`, the log stream (old
+path 404s), kill by sid, `task_kill` (second kill idempotent), session
+delete cascades the rows. Nothing found wrong in this table.
+
+**Found on the way, fixed.** `POST /workspaces` for a repo already
+registered → 500 `workspaces_owner_name_key`. Same class as table 4's bug.
+The one reusable fact — "this pg error is a unique violation" — is now
+`isUniqueViolation` in `db/client.ts`; presets and workspaces both use it,
+each with its own refusal (`duplicate_preset_name` 400,
+`already_registered` 409).
 
 ## Insights
 

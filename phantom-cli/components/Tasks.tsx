@@ -12,11 +12,11 @@ import { tableChoices, type TableRow } from './table.js';
 // The wire shapes, declared here like Launcher's SessionInfo — the cli talks
 // HTTP only and never imports server code.
 export interface TaskInfo {
-  sid: string; command: string; cmd_id: string | null; logs: string | null;
+  sid: string; command: string; background_task_id: string | null; logs: string | null;
   log_file: string | null; started_at: string | null; elapsed: string; pids: number;
 }
 export interface RecentInfo {
-  cmd_id: string; command: string; status: string; exit_code: number | null;
+  background_task_id: string; command: string; status: string; exit_code: number | null;
   started_at: string; ended_at: string | null; logs: string; log_file: string;
 }
 export interface TasksView {
@@ -26,7 +26,7 @@ export interface TasksView {
 }
 
 /** What a row stands for. Only live rows can be killed. */
-export type TaskPick = { kind: 'live'; sid: string; command: string } | { kind: 'done'; cmdId: string };
+export type TaskPick = { kind: 'live'; sid: string; command: string } | { kind: 'done'; backgroundTaskId: string };
 
 // Fixed widths: this is a status list refreshing in place — columns must not
 // jitter as statuses flip and clocks tick (table.ts's rule, /resume's too).
@@ -55,7 +55,7 @@ export function taskChoices(view: TasksView, now = Date.now()): Choice<TaskPick 
       : 'not started by a tracked command — [k] still kills it',
   }));
   const done = view.recent.map((r): TableRow<TaskPick | null> => ({
-    value: { kind: 'done', cmdId: r.cmd_id },
+    value: { kind: 'done', backgroundTaskId: r.background_task_id },
     cells: [r.command,
       r.status === 'exited' && r.exit_code != null ? `exited (${r.exit_code})` : r.status,
       started(r.started_at),
