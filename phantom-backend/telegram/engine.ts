@@ -19,7 +19,7 @@ import { injectFetch } from '../looper/injectFetch.js';
 import { runCodingTurn, settingsValues, type TurnDeps } from '../looper/turn.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
 import type { Sessions } from '../sessions.js';
-import type { Loops } from '../loops.js';
+import type { Cards } from '../cards.js';
 import type { Settings } from '../settings.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
 import type { BackdoorQueue } from '../api/backdoor.js';
@@ -74,8 +74,8 @@ export interface TelegramEngineDeps {
   state: TelegramState;
   settings: Settings;
   sessions: Sessions;
+  cards: Cards;
   workspaces: Workspaces;
-  loops: Loops;
   paths: Paths;
   app: FastifyInstance;
   apiKey: string;
@@ -226,9 +226,9 @@ export class TelegramEngine {
     if (!dm || !Number.isFinite(dm)) return;
     const token = await this.token();
     if (!token) return;
-    const loop = await this.deps.loops.current(workspaceId, alertMsg.number);
-    const origin: SentOrigin = loop
-      ? { kind: 'session', sessionId: loop.codingSessionId } : { kind: 'assistant' };
+    const coder = await this.deps.sessions.coderOf(workspaceId, alertMsg.number);
+    const origin: SentOrigin = coder
+      ? { kind: 'session', sessionId: coder.id } : { kind: 'assistant' };
     const client = this.trackedClient(token, dm, () => origin);
     await client.sendMessage(dm, alertMsg.text);
     log.info({ workspace: workspaceId, card: alertMsg.number, status: alertMsg.status }, 'auto build alert sent');
@@ -760,13 +760,13 @@ export class TelegramEngine {
     if (!account.activeSessionId) return '🤖 Coding agent';
     const s = await this.deps.sessions.get(account.activeSessionId);
     if (!s) return '🤖 Coding agent';
-    const loop = await this.deps.loops.of(account.activeSessionId);
+    const card = (await this.deps.cards.ofSession(account.activeSessionId))?.number;
     const ws = await (await this.api(`/workspaces/${s.workspaceId}`)).json().catch(() => null);
     const prefix: string | undefined = ws?.ok ? ws.data.cardPrefix : undefined;
     const parts: string[] = ['🤖 Coding agent'];
     if (prefix) parts.push(prefix);
-    if (prefix && loop?.card != null) parts.push(`${prefix}-${loop.card}`);
-    else if (loop?.card != null) parts.push(`#${loop.card}`);
+    if (prefix && card != null) parts.push(`${prefix}-${card}`);
+    else if (card != null) parts.push(`#${card}`);
     parts.push(s.name ?? 'untitled');
     const title = parts.join(' · ');
     if (dm != null) {

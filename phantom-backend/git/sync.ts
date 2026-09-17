@@ -40,7 +40,6 @@ import { resolveAuth } from '../pool/pool.js';
 import { repoDir, type Paths } from '../pool/paths.js';
 import type { Sessions } from '../sessions.js';
 import type { Folders } from '../folders.js';
-import type { Loops } from '../loops.js';
 import type { Cards } from '../cards.js';
 import type { Settings } from '../settings.js';
 import {
@@ -101,13 +100,12 @@ export interface SyncResult {
  *  message: "title — first line of details". A diff says what changed and
  *  never why, and this is the cheapest statement of why the system holds.
  *
- *  Fails open to the session's name — a manual session has no loop row, the
- *  card may be deleted, and NONE of that may stop work from landing. The commit message simply loses its intent line. */
-async function cardIntentFor(deps: SyncDeps, session: SessionRow, workspace: WorkspaceRow): Promise<string> {
+ *  Fails open to the session's name — a session may be on no card, the card
+ *  may be deleted, and NONE of that may stop work from landing. The commit
+ *  message simply loses its intent line. */
+async function cardIntentFor(deps: SyncDeps, session: SessionRow): Promise<string> {
   try {
-    const loop = await deps.loops.byCodingSession(session.id);
-    if (!loop) return session.name ?? '';
-    const card = await deps.cards.byNumber(workspace, loop.card);
+    const card = await deps.cards.ofSession(session.id);
     if (!card?.title) return session.name ?? '';
     const firstLine = (card.details ?? '').trim().split('\n')[0] ?? '';
     return firstLine ? `${card.title} — ${firstLine}` : card.title;
@@ -120,7 +118,6 @@ async function cardIntentFor(deps: SyncDeps, session: SessionRow, workspace: Wor
 export interface SyncDeps {
   sessions: Sessions;
   folders: Folders;
-  loops: Loops;
   cards: Cards;
   settings: Settings;
   paths: Paths;
@@ -221,7 +218,7 @@ export async function syncBranch(
         const config = deps.messageConfig
           ? await deps.messageConfig((note) => { void ev('commit', note); })
           : null;
-        const card = await cardIntentFor(deps, session, workspace);
+        const card = await cardIntentFor(deps, session);
         const msg = await commitMessageFor(dir, config, card, mb.trim(), session.id);
         await squashToMergeBase(dir, mb.trim());
         await commitStaged(dir, `${msg}\n\nPhantom-Session: ${session.id}`);

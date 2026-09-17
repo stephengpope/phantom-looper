@@ -1,4 +1,4 @@
-// Boot: env -> db -> migrations -> workspace dirs -> loops -> HTTP.
+// Boot: env -> db -> migrations -> workspace dirs -> looper -> HTTP.
 import { readEnv } from './env.js';
 import { makeDb } from './db/client.js';
 import { migrate } from './db/migrate.js';
@@ -8,7 +8,6 @@ import { Sessions } from './sessions.js';
 import { Settings } from './settings.js';
 import { Workspaces } from './workspaces.js';
 import { Folders } from './folders.js';
-import { Loops } from './loops.js';
 import { Cards } from './cards.js';
 import { Commands } from './commands.js';
 import { Presets } from './presets.js';
@@ -68,7 +67,6 @@ async function main() {
   const settings = new Settings(db, env.encryptionKey, settingsEvents);
   const workspaces = new Workspaces(db, settings, settingsEvents);
   const folders = new Folders(db);
-  const loops = new Loops(db);
   const cards = new Cards(db, events);
   const sessions = new Sessions(db, paths, settings, workspaces, folders, sessionEvents);
   // A settings write reaches every session nothing has been said to yet: its
@@ -165,7 +163,7 @@ async function main() {
       { event: 'sync', op, step: e.step, detail: e.detail });
   // The manual /git/pull has no stream of its own — the feed is how anyone
   // sees it run, so its steps publish under the git client (no caller to echo).
-  const engine = new GitEngine({ sessions, folders, loops, cards, settings, paths,
+  const engine = new GitEngine({ sessions, folders, cards, settings, paths,
     resolve: resolveConflict, messageConfig }, (sessionId, e) => publishSync(sessionId, 'pull')(e));
 
   // After a successful sync, drop a summary into the session's transcript so
@@ -195,9 +193,7 @@ async function main() {
   // is blocked deterministically — the system decides, not the agent. The patch
   // goes through the API so board events fire and the UI updates.
   const blockCardOnConflict = async (session: SessionRow, workspace: WorkspaceRow, reason: string) => {
-    const loop = await loops.of(session.id).catch(() => undefined);
-    if (!loop) return;
-    const card = await cards.byNumber(workspace, loop.card).catch(() => undefined);
+    const card = await cards.ofSession(session.id).catch(() => undefined);
     if (!card) return;
     const f = injectFetch(app);
     await f(`${INTERNAL_API}/workspaces/${workspace.id}/cards/${card.id}`, {
@@ -206,7 +202,7 @@ async function main() {
       body: JSON.stringify({ status: 'blocked', blocked_reason: reason, resolution: null }),
     }).catch((e) => log.warn({ session: session.id, err: errStr(e) }, 'could not block card after unresolved conflict'));
   };
-  const syncDeps = { sessions, folders, loops, cards, settings, paths,
+  const syncDeps = { sessions, folders, cards, settings, paths,
     resolve: resolveConflict, recordSummary, messageConfig };
   const autoPushFn = async (session: SessionRow, workspace: WorkspaceRow,
     onEvent?: (e: AutoPushEvent) => void | Promise<void>, by?: string) => {
@@ -261,7 +257,7 @@ async function main() {
   (async () => {
     while (!stopped) {
       await new Promise((r) => setTimeout(r, 10_000));
-      await refreshWorkState({ sessions, workspaces, folders, loops, paths, containers, events })
+      await refreshWorkState({ sessions, workspaces, folders, paths, containers, events })
         .catch((e) => log.error({ err: errStr(e) }, 'work-state refresh threw'));
     }
   })();
@@ -270,7 +266,7 @@ async function main() {
   // app exists — the engine is a headless client of this app, so it is built
   // second; routes read ctx.looper per request, so the late set is seen.
   const ctx: AppCtx = {
-    settings, workspaces, folders, loops, cards, sessions, commands, presets, tokenUsage,
+    settings, workspaces, folders, cards, sessions, commands, presets, tokenUsage,
     paths, apiKey: env.apiKey, version: VERSION,
     fs: { docker, containers, engine },
     engine,
@@ -290,7 +286,7 @@ async function main() {
   // client of this server's own surface, and its rounds assume the routes
   // are answering. Event-driven: routes poke it through ctx.looper; start()
   // is ONE recovery sweep, not a poll.
-  const looper = new LooperEngine({ sessions, workspaces, loops, cards, settings, app, apiKey: env.apiKey, events: ctx.events,
+  const looper = new LooperEngine({ sessions, workspaces, cards, settings, app, apiKey: env.apiKey, events: ctx.events,
     sessionEvents: ctx.sessionEvents, activeTurns: ctx.activeTurns, backdoor: ctx.backdoor });
   ctx.looper = looper;
   looper.start();
@@ -300,7 +296,7 @@ async function main() {
   // profile runs on); with no address, telegram stays off. Reconcile at boot
   // re-registers a stale webhook and pushes the command menu.
   const telegram = new TelegramEngine({
-    state: telegramState, settings, sessions, workspaces, loops, paths, app, apiKey: env.apiKey,
+    state: telegramState, settings, sessions, cards, workspaces, paths, app, apiKey: env.apiKey,
     events: ctx.events, backdoor: ctx.backdoor,
     sessionEvents: ctx.sessionEvents, publicAddress: process.env.PHANTOM_BACKEND_ADDRESS,
     autoPush: autoPushFn, autoPull: autoPullFn,
@@ -311,7 +307,7 @@ async function main() {
   // Session idle digest — a periodic notification listing sessions that
   // finished. Standalone timer, no dependency on the engine's turn machinery.
   const digest = new SessionDigest({
-    sessions, loops, cards, settings, workspaces,
+    sessions, cards, settings, workspaces,
     channels: [telegramChannel(settings)],
   });
   void digest.start();

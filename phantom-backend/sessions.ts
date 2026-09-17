@@ -23,10 +23,12 @@
 import fs from 'node:fs/promises';
 import { and, desc, eq, ilike, inArray, isNull, isNotNull, lt, ne, not, or, count, sql as sqlRaw } from 'drizzle-orm';
 import type { Db } from './db/client.js';
-// `folders` and `loops` appear here for ONE reason: the list is a JOIN (a
-// row's branch and card ride it, and the filter reaches the branch). They
-// are read through the join only; their rows are Folders' and Loops' to write.
-import { sessions, sessionColumns, folders, loops, tokenUsage, type SessionRow } from './db/schema.js';
+import type { PgColumn } from 'drizzle-orm/pg-core';
+// `folders` and `cards` appear here for ONE reason: a session's branch and
+// card number are JOINs (the list carries both, the filter reaches the
+// branch, the card reads take a number). Read through the join only; their
+// rows are Folders' and Cards' to write.
+import { sessions, sessionColumns, folders, cards, tokenUsage, type SessionRow } from './db/schema.js';
 import type { Settings } from './settings.js';
 import type { Workspaces } from './workspaces.js';
 import type { Folders } from './folders.js';
@@ -80,9 +82,13 @@ export interface ListQuery {
   beforePinned?: boolean;
 }
 
-/** A list row: the session plus the two facts it does not carry itself —
- *  its folder's branch and its loop's card. */
-export type ListedSession = SessionRow & { branch: string | null; card: number | null };
+/** A list row: the session plus the facts it does not carry itself — its
+ *  folder's branch, its card's number and the card's column. */
+export type ListedSession = SessionRow & { branch: string | null; card: number | null; cardStatus: string | null };
+
+/** A session on a card, with the card's number — what the board and the
+ *  work-state refresh name their events by. */
+export type CardSession = SessionRow & { card: number | null };
 
 // ── Pure rules — no row in hand, nothing to await ────────────────────────────
 
@@ -91,6 +97,11 @@ export type ListedSession = SessionRow & { branch: string | null; card: number |
  *  (the voice/Telegram conversation) are both this shape. */
 export const conversationOnly = (s: SessionRow): boolean =>
   s.agent === 'supervisor' || s.agent === 'assistant';
+
+/** The rows that are coding sessions: a coder's seat ('coding') or a
+ *  person's (null) — never a supervisor's record or the assistant's. The
+ *  SQL twin of `!conversationOnly`. */
+const isCodingSession = or(isNull(sessions.agent), not(inArray(sessions.agent, ['supervisor', 'assistant'])));
 
 /** Duplicating copies a conversation into a fresh checkout — meaningless for
  *  a record that has no checkout and belongs to its card's run. */
@@ -244,20 +255,23 @@ export class Sessions {
       : undefined;
     // Token totals: LEFT JOIN token_usage and SUM — the table is the single
     // source of truth, the session row's cached columns are being phased out.
+    // A bigint SUM comes back from pg as text; mapWith(Number) makes it the
+    // number the type says it is.
+    const sum = (col: PgColumn) => sqlRaw<number>`coalesce(sum(${col}), 0)`.mapWith(Number);
     let page = this.db
       .select({
-        ...sessionColumns, branch: folders.branch, card: loops.card,
-        tokensInput: sqlRaw<number>`coalesce(sum(${tokenUsage.tokensInput}), 0)`.as('tokens_input'),
-        tokensOutput: sqlRaw<number>`coalesce(sum(${tokenUsage.tokensOutput}), 0)`.as('tokens_output'),
-        tokensCacheRead: sqlRaw<number>`coalesce(sum(${tokenUsage.tokensCacheRead}), 0)`.as('tokens_cache_read'),
-        tokensCacheWrite: sqlRaw<number>`coalesce(sum(${tokenUsage.tokensCacheWrite}), 0)`.as('tokens_cache_write'),
+        ...sessionColumns, branch: folders.branch, card: cards.number, cardStatus: cards.status,
+        tokensInput: sum(tokenUsage.tokensInput).as('tokens_input'),
+        tokensOutput: sum(tokenUsage.tokensOutput).as('tokens_output'),
+        tokensCacheRead: sum(tokenUsage.tokensCacheRead).as('tokens_cache_read'),
+        tokensCacheWrite: sum(tokenUsage.tokensCacheWrite).as('tokens_cache_write'),
       })
       .from(sessions)
       .leftJoin(folders, eq(folders.id, sessions.folderId))
-      .leftJoin(loops, or(eq(loops.codingSessionId, sessions.id), eq(loops.supervisorSessionId, sessions.id)))
+      .leftJoin(cards, eq(cards.id, sessions.cardId))
       .leftJoin(tokenUsage, eq(tokenUsage.sessionId, sessions.id))
       .where(and(...filters, ...(cursor ? [cursor] : [])))
-      .groupBy(sessions.id, folders.branch, loops.card)
+      .groupBy(sessions.id, folders.branch, cards.number, cards.status)
       .orderBy(desc(sessions.pinned), desc(sessions.lastUsedAt), desc(sessions.id))
       .$dynamic();
     if (q.limit) page = page.limit(q.limit);
@@ -294,23 +308,71 @@ export class Sessions {
   }
 
   /** The rows the work-state refresh walks: the sessions named, with the
-   *  facts the walk needs and nothing else. */
-  async listForWorkRefresh(ids: string[]): Promise<Pick<SessionRow, 'id' | 'folderId' | 'workspaceId' | 'work'>[]> {
+   *  facts the walk needs and nothing else — the card number is what its
+   *  board event is named by. */
+  async listForWorkRefresh(ids: string[]): Promise<Pick<CardSession, 'id' | 'folderId' | 'workspaceId' | 'work' | 'card'>[]> {
     if (!ids.length) return [];
     return this.db.select({
       id: sessions.id, folderId: sessions.folderId, workspaceId: sessions.workspaceId, work: sessions.work,
-    }).from(sessions).where(inArray(sessions.id, ids));
+      card: cards.number,
+    }).from(sessions).leftJoin(cards, eq(cards.id, sessions.cardId)).where(inArray(sessions.id, ids));
   }
 
   /** Sessions whose `work` is stale: non-null but no longer backed by a
    *  running container. The refresh clears these to null. */
-  async listStaleWork(activeIds: string[]): Promise<Pick<SessionRow, 'id' | 'workspaceId' | 'work'>[]> {
+  async listStaleWork(activeIds: string[]): Promise<Pick<CardSession, 'id' | 'workspaceId' | 'work' | 'card'>[]> {
     const where = activeIds.length
       ? and(isNotNull(sessions.work), not(inArray(sessions.id, activeIds)))
       : isNotNull(sessions.work);
     return this.db.select({
-      id: sessions.id, workspaceId: sessions.workspaceId, work: sessions.work,
-    }).from(sessions).where(where);
+      id: sessions.id, workspaceId: sessions.workspaceId, work: sessions.work, card: cards.number,
+    }).from(sessions).leftJoin(cards, eq(cards.id, sessions.cardId)).where(where);
+  }
+
+  // ── the card ───────────────────────────────────────────────────────────────────────
+  // THE RULE: a session's card is its row's card_id. A card's coder is its
+  // newest coding session; its supervisor is its newest supervisor session.
+  // Nothing stores the pairing — it is read off the two newest rows. The
+  // card is addressed by its number here, the handle the whole app uses;
+  // the row holds the key.
+
+  /** The newest session of `agent` kind on the card, any status — a
+   *  destroyed coder is still the card's coder (the looper restarts it). */
+  private async newestOnCard(workspaceId: string, cardNumber: number, kind: 'coding' | 'supervisor'):
+  Promise<SessionRow | undefined> {
+    const rows = await this.db.select(sessionColumns).from(sessions)
+      .innerJoin(cards, eq(cards.id, sessions.cardId))
+      .where(and(eq(cards.workspace_id, workspaceId), eq(cards.number, cardNumber),
+        kind === 'coding' ? isCodingSession : eq(sessions.agent, 'supervisor')))
+      .orderBy(desc(sessions.createdAt)).limit(1);
+    return rows[0];
+  }
+
+  /** The card's coding session — the one building it. */
+  coderOf(workspaceId: string, cardNumber: number): Promise<SessionRow | undefined> {
+    return this.newestOnCard(workspaceId, cardNumber, 'coding');
+  }
+
+  /** The card's supervisor session — the looper's verdict record. */
+  supervisorOf(workspaceId: string, cardNumber: number): Promise<SessionRow | undefined> {
+    return this.newestOnCard(workspaceId, cardNumber, 'supervisor');
+  }
+
+  /** Every card's coding session in a workspace — the newest per card, the
+   *  same rule `coderOf` uses. One query for the whole board. */
+  async codersByCard(workspaceId: string): Promise<Array<SessionRow & { card: number }>> {
+    return this.db.selectDistinctOn([sessions.cardId], { ...sessionColumns, card: cards.number })
+      .from(sessions)
+      .innerJoin(cards, eq(cards.id, sessions.cardId))
+      .where(and(eq(cards.workspace_id, workspaceId), isCodingSession))
+      .orderBy(sessions.cardId, desc(sessions.createdAt));
+  }
+
+  /** Put the session on a card. The looper's write when it opens a round's
+   *  coder; a session born of a person has none until something sets it. */
+  async setCard(id: string, cardId: number): Promise<void> {
+    await this.db.update(sessions).set({ cardId }).where(eq(sessions.id, id));
+    this.changed(id);
   }
 
   /** A batch of rows by id — the board names each card's session, its hold
@@ -472,22 +534,24 @@ export class Sessions {
    *  another session's folder (the files it can read), or is null when there is
    *  nothing to read. The shared base for supervisor and assistant sessions. */
   async createConversation(
-    workspaceId: string, opts: { agent: 'supervisor' | 'assistant'; folderId?: string | null },
+    workspaceId: string, opts: { agent: 'supervisor' | 'assistant'; folderId?: string | null; cardId?: number },
   ): Promise<SessionRow> {
     const id = newId();
     await this.db.insert(sessions).values({
       id, workspaceId, status: 'active', agent: opts.agent,
       ...(opts.folderId ? { folderId: opts.folderId } : {}),
+      ...(opts.cardId ? { cardId: opts.cardId } : {}),
       ...await this.birthModel(workspaceId, opts.agent),
     });
     this.changed(id);
     return (await this.get(id))!;
   }
 
-  /** The supervisor's conversation-only session: no folder of its own — its
-   *  folder_id points at the coder's, which is where the files are. */
-  createSupervisor(workspaceId: string, folderId: string): Promise<SessionRow> {
-    return this.createConversation(workspaceId, { agent: 'supervisor', folderId });
+  /** The supervisor's conversation-only session, on its coder's card: no
+   *  folder of its own — its folder_id points at the coder's, which is where
+   *  the files are. */
+  createSupervisor(workspaceId: string, folderId: string, cardId: number): Promise<SessionRow> {
+    return this.createConversation(workspaceId, { agent: 'supervisor', folderId, cardId });
   }
 
   /** Where the assistant's row points: the workspace, and the folder of the

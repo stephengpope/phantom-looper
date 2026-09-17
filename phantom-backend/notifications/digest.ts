@@ -8,7 +8,6 @@
 // same activity. If it runs again and finishes again, it'll be reported again.
 
 import type { Sessions } from '../sessions.js';
-import type { Loops } from '../loops.js';
 import type { Cards } from '../cards.js';
 import type { Settings } from '../settings.js';
 import type { Workspaces } from '../workspaces.js';
@@ -53,7 +52,6 @@ Example output:
 
 export interface DigestDeps {
   sessions: Sessions;
-  loops: Loops;
   cards: Cards;
   settings: Settings;
   workspaces: Workspaces;
@@ -118,11 +116,9 @@ export class SessionDigest {
     // ── resolve workspace prefixes ───────────────────────────────────────────
 
     const wsIds = [...new Set(rows.map((r) => r.workspaceId))];
-    const wsByIdMap = new Map<string, Awaited<ReturnType<Workspaces['get']>>>();
     const prefixByWsId = new Map<string, string>();
     for (const wsId of wsIds) {
       const ws = await this.deps.workspaces.get(wsId);
-      wsByIdMap.set(wsId, ws);
       if (ws) prefixByWsId.set(wsId, await this.deps.workspaces.prefixOf(ws));
       else prefixByWsId.set(wsId, wsId.slice(0, 3).toUpperCase());
     }
@@ -141,15 +137,10 @@ export class SessionDigest {
 
       let card: number | undefined;
       let icon: string | undefined;
-      const loop = await this.deps.loops.byCodingSession(s.id);
-      if (loop) {
-        card = loop.card;
-        const ws = wsByIdMap.get(s.workspaceId);
-        if (ws) {
-          const statuses = await this.deps.cards.statusOf(ws, [loop.card]);
-          const col = statuses.get(loop.card);
-          if (col) icon = STATUS_ICON[col] ?? col;
-        }
+      const onCard = await this.deps.cards.ofSession(s.id);
+      if (onCard) {
+        card = onCard.number;
+        icon = STATUS_ICON[onCard.status] ?? onCard.status;
       }
 
       items.push({

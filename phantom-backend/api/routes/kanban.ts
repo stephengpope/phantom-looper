@@ -67,14 +67,13 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
    *  `auto_push_on_archive` says so. Archiving a card in any other column is
    *  just archiving — it disappears from the board, nothing fires; that is the
    *  discard gesture. Detached — the PATCH answers at once; an auto-push can
-   *  run for minutes. The card's session is its newest loop row's coding
-   *  session; a card with no loop has nothing to push.
+   *  run for minutes. The card's session is its newest coding session; a
+   *  card with none has nothing to push.
    *  Failure surfaces on the board: the card comes back un-archived, in
    *  blocked, with the reason. */
   async function autoPushArchivedCard(w: WorkspaceRow, number: number): Promise<void> {
     if (!ctx.autoPush) return;
-    const loop = await ctx.loops.current(w.id, number);
-    const session = loop ? await ctx.sessions.get(loop.codingSessionId) : undefined;
+    const session = await ctx.sessions.coderOf(w.id, number);
     if (!session || session.status !== 'active') return;
     if (await ctx.settings.resolve('auto_push_on_archive', { workspace: w, session }) !== true) return;
     // The session lock may be held (a turn mid-flight, a tool call): wait it
@@ -112,21 +111,17 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
       auto_build_default: Boolean(build.value), auto_build_source: src(build) };
   };
 
-  // Each card's CURRENT loop's coding session — the newest loop row per card.
+  // Each card's coding session — the newest per card (Sessions.codersByCard).
   // Rides the board GET so the card editor can name the session and open it.
   // `locked` is computed here (same rule as GET /sessions) so the board can
   // show a spinner on cards whose session is actively running; `work` is
   // the stored column the 10s refresh job maintains.
   const cardSessions = async (w: WorkspaceRow) => {
-    const latest = await ctx.loops.latestPerCard(w.id);
-    const rows = await ctx.sessions.getMany(latest.map((l) => l.codingSessionId));
     const now = Date.now();
-    return latest.map((l) => {
-      const s = rows.get(l.codingSessionId);
-      return { card: l.card, id: l.codingSessionId, name: s?.name ?? null,
-        locked: !!s?.lockedBy && !!s.lockExpiresAt && s.lockExpiresAt.getTime() > now,
-        work: s?.work ?? null };
-    });
+    return (await ctx.sessions.codersByCard(w.id)).map((s) => ({
+      card: s.card, id: s.id, name: s.name,
+      locked: !!s.lockedBy && !!s.lockExpiresAt && s.lockExpiresAt.getTime() > now,
+      work: s.work }));
   };
 
   app.get<{ Params: { id: string };
@@ -215,8 +210,8 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
   app.get<{ Params: { id: string }; Querystring: { card: number; limit: number } }>(
     '/workspaces/:id/revisions', { schema: { ...TAG, summary: "A card's revision history",
       description: 'What changed on a card and when, newest first — written by a trigger, so edits made ' +
-        'over SQL are recorded too. An update holds the OLD values of the keys that changed; a delete ' +
-        'holds the whole card as it last stood. card is the card number, so deleted cards still answer.',
+        'over SQL are recorded too. Each entry holds the OLD values of the keys that changed. History ' +
+        'goes with its card: a deleted card has none.',
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       querystring: { type: 'object', required: ['card'], properties: {
         card: { type: 'integer', description: 'card number — PHA-7 is card 7' },

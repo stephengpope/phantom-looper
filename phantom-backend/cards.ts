@@ -9,7 +9,9 @@
 // it), how checklist items are edited by key, and what a move publishes.
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from './db/client.js';
-import { cards, cardRevisions, workspaces, type CardRow, type WorkspaceRow } from './db/schema.js';
+// `sessions` is here for ONE read: the card a session works on is a join on
+// sessions.card_id. Read through the join only; the row is Sessions' to write.
+import { cards, cardRevisions, sessions, workspaces, type CardRow, type WorkspaceRow } from './db/schema.js';
 import { columnsOf } from './workspaces.js';
 import { keyedItems, newKey, normalizeKey, type ChecklistItem } from '../core/kanban.js';
 import type { BoardEvents } from './api/boardEvents.js';
@@ -48,6 +50,15 @@ export class Cards {
     return rows[0];
   }
 
+  /** The card a session works on — either seat, a coder or its supervisor —
+   *  archived or not. Undefined when the session is on no card. */
+  async ofSession(sessionId: string): Promise<CardRow | undefined> {
+    const rows = await this.db.select({ card: cards }).from(sessions)
+      .innerJoin(cards, eq(cards.id, sessions.cardId))
+      .where(eq(sessions.id, sessionId));
+    return rows[0]?.card;
+  }
+
   /** The card with this number, only while it is on the board. */
   async activeByNumber(w: WorkspaceRow, number: number): Promise<CardRow | undefined> {
     const rows = await this.db.select().from(cards)
@@ -84,29 +95,24 @@ export class Cards {
       .where(and(eq(cards.workspace_id, w.id), inArray(cards.status, [...statuses]), eq(cards.archived, false)));
   }
 
-  /** Each card's column, for a batch of numbers — the session list's status icon. */
-  async statusOf(w: WorkspaceRow, numbers: number[]): Promise<Map<number, string>> {
-    if (!numbers.length) return new Map();
-    const rows = await this.db.select({ number: cards.number, status: cards.status }).from(cards)
-      .where(and(eq(cards.workspace_id, w.id), inArray(cards.number, numbers)));
-    return new Map(rows.map((r) => [r.number, r.status]));
-  }
-
   /** What changed on a card and when, newest first — written by a trigger,
-   *  so edits made over SQL are recorded too. */
+   *  so edits made over SQL are recorded too. Empty for a card that does not
+   *  exist: history goes with its card. */
   async revisions(w: WorkspaceRow, number: number, limit: number): Promise<Array<{ op: string; changed: unknown; changed_at: Date }>> {
     return this.db.select({ op: cardRevisions.op, changed: cardRevisions.changed, changed_at: cardRevisions.changed_at })
       .from(cardRevisions)
-      .where(and(eq(cardRevisions.workspace_id, w.id), eq(cardRevisions.card_number, number)))
+      .innerJoin(cards, eq(cards.id, cardRevisions.card_id))
+      .where(and(eq(cards.workspace_id, w.id), eq(cards.number, number)))
       .orderBy(desc(cardRevisions.id)).limit(limit);
   }
 
   /** When the card last changed column — the revision trigger's record of
    *  the newest status write. null = never moved. The looper's transition
-   *  clock: entering plan is a NEW loop, always. */
+   *  clock: entering plan is a NEW run, always. */
   async lastMovedAt(w: WorkspaceRow, number: number): Promise<Date | null> {
     const rows = await this.db.select({ at: cardRevisions.changed_at }).from(cardRevisions)
-      .where(and(eq(cardRevisions.workspace_id, w.id), eq(cardRevisions.card_number, number), sql`${cardRevisions.changed} ? 'status'`))
+      .innerJoin(cards, eq(cards.id, cardRevisions.card_id))
+      .where(and(eq(cards.workspace_id, w.id), eq(cards.number, number), sql`${cardRevisions.changed} ? 'status'`))
       .orderBy(desc(cardRevisions.id)).limit(1);
     return rows[0]?.at ?? null;
   }

@@ -3,3 +3,4 @@ dist/
 .env
 .phantom-cli/
 dist-cli/
+scratch-tmp/

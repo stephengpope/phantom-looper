@@ -15,7 +15,6 @@ import type { Paths } from '../pool/paths.js';
 import { syncBranch, type SyncEvent, type SyncDeps } from './sync.js';
 import type { Sessions } from '../sessions.js';
 import type { Folders } from '../folders.js';
-import type { Loops } from '../loops.js';
 import type { Cards } from '../cards.js';
 import type { Settings } from '../settings.js';
 
@@ -41,7 +40,6 @@ export interface AutoPullResult {
 export interface AutoPullDeps {
   sessions: Sessions;
   folders: Folders;
-  loops: Loops;
   cards: Cards;
   settings: Settings;
   paths: Paths;

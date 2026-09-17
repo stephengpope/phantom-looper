@@ -26,6 +26,21 @@ general, short, and true.
 - **Structure thrown away at write time and rebuilt at read time is a bug
   waiting.** The prompt was stored glued and cut apart on every turn by
   prefix-matching. Store the parts you use. *(header pass)*
+- **Design from how it should work, not from how the code works today.**
+  "A session is on a card only if the looper put it there" was a true
+  description of the code and a wrong design; every answer that started
+  from the code re-described the wrong thing. State the model first (what
+  the things are, how they connect), then measure the code against it.
+  *(table 3)*
+- **A fact lives on the thing it describes.** The card a session works on
+  sat on the looper's pairing row, so it existed only while a loop did.
+  Ask "whose fact is this?" — the answer names the table. *(table 3)*
+- **A one-to-one link is a column, not a table.** With the card moved off
+  it, `loops` held one link. A table + an object + a migration to carry one
+  column is complexity with no payoff. *(table 3)*
+- **Storage links use the primary key; people use the handle.** Two tables
+  linked to cards by number. The number is what PHA-7 means to a person and
+  an agent; the key is what a foreign key is for. *(table 3)*
 
 ## Simplicity
 
@@ -57,6 +72,13 @@ general, short, and true.
   either side costs more than the script. *(header pass)*
 - **Prove from a `.ts` script, not a shell harness.** `echo` and `$(...)`
   mangle `\n` inside JSON and turn passes into noise. *(table 2)*
+- **A failed harness step can poison the next assertion.** A DELETE that
+  500ed left a lock held; the next round was skipped and "reused the pair"
+  passed trivially. When a live check passes suspiciously fast, read the
+  server log for the round it claims ran. *(table 3)*
+- **Two joins that each multiply rows multiply each other.** `loops` on
+  either seat × `token_usage`, then SUM: a session in two loop rows
+  doubled its tokens. Aggregate over one join, or in a subquery. *(table 3)*
 - **Scaffolding lives outside the repo,** copied into a gitignored
   `scratch-tmp/` only for the run, moved out after. *(table 1)*
 
@@ -76,3 +98,18 @@ general, short, and true.
   the six unused imports was the ask; folders was not. *(cleanup)*
 - **Nothing raised, nothing deferred.** "Next steps" with work still open
   reads as unfinished. Finish, then report. *(project rule)*
+- **A rule found in this pass is fixed in this pass, wherever it applies.**
+  "Storage links use the key" was set on `loops` and parked for
+  `card_revisions` as "table 11's". Same rule, same fix, ten minutes;
+  parking it was a step skipped. *(table 3)*
+- **A type that lies is a bug, not a note.** `sqlRaw<number>` over a bigint
+  SUM returned strings; it "worked" by coercion. Raising it as a later
+  table's concern was wrong — the number the type promises is the fix.
+  *(table 3)*
+- **When the builder says "I'm not following", show the rows.** Six
+  paragraphs of description failed; two before/after tables landed in one
+  message. A data change is explained with data. *(table 3)*
+- **Do not carry a scenario the builder did not ask for.** "Delete" was my
+  concern, raised as a finding; every later explanation dragged it along
+  and muddied the model. A raised concern is answered once, then dropped
+  unless picked up. *(table 3)*

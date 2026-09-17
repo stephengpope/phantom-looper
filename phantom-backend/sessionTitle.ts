@@ -15,7 +15,6 @@ import { titleRequest, type TitleContext } from '../core/llm/prompts/helpers/wir
 import { parseTranscript } from '../core/llm/transcript.js';
 import { credentialForProvider, type Settings } from './settings.js';
 import type { Sessions } from './sessions.js';
-import type { Loops } from './loops.js';
 import { logger, errStr } from './log.js';
 
 const log = logger('session-title');
@@ -122,15 +121,14 @@ async function titleConfig(settings: Settings): Promise<ModelConfig | null> {
  *  nothing was written. Never throws. `modelFetch` is the test seam
  *  (createAgent's own), threaded from AppCtx like the turn route's. */
 export async function nameSession(
-  deps: { settings: Settings; sessions: Sessions; loops: Loops },
+  deps: { settings: Settings; sessions: Sessions },
   sessionId: string, context: TitleContext, modelFetch?: typeof fetch,
 ): Promise<string | null> {
   try {
-    // A card's coding session already carries the customer's own objective:
-    // the card title. It stays the session title until a person clears it.
-    if (await deps.loops.byCodingSession(sessionId)) {
-      if ((await deps.sessions.get(sessionId))?.name !== null) return null;
-    }
+    // A session on a card already carries the customer's own objective: the
+    // card title. It stays the session title until a person clears it.
+    const s = await deps.sessions.get(sessionId);
+    if (s?.cardId != null && s.name !== null) return null;
 
     const config = await titleConfig(deps.settings);
     if (!config) return null;

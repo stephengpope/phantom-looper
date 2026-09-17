@@ -26,7 +26,6 @@ import type { Sessions } from '../sessions.js';
 import type { Settings } from '../settings.js';
 import type { Workspaces } from '../workspaces.js';
 import type { Folders } from '../folders.js';
-import type { Loops } from '../loops.js';
 import type { Cards } from '../cards.js';
 import type { Commands } from '../commands.js';
 import type { Presets } from '../presets.js';
@@ -51,7 +50,6 @@ export interface AppCtx {
   settings: Settings;
   workspaces: Workspaces;
   folders: Folders;
-  loops: Loops;
   cards: Cards;
   sessions: Sessions;
   commands: Commands;

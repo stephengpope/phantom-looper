@@ -78,13 +78,12 @@ export const cards = phantomLooper.table('cards', {
   updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [unique().on(t.workspace_id, t.number)]);
 
-// A card's history, written by a trigger on every update/delete (024) so
-// edits made over SQL are recorded too. Keyed by (workspace_id, card_number)
-// — the card's permanent handle — so a deleted card still answers.
+// A card's history, written by a trigger on every update (024, 028) so
+// edits made over SQL are recorded too. Linked by the card's key; goes with
+// the card (cascade).
 export const cardRevisions = phantomLooper.table('card_revisions', {
   id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
-  workspace_id: text('workspace_id').notNull(),
-  card_number: integer('card_number').notNull(),
+  card_id: bigint('card_id', { mode: 'number' }).notNull(),
   op: text('op').notNull(),
   changed: jsonb('changed').notNull(),
   changed_at: timestamp('changed_at', { withTimezone: true }).notNull().defaultNow(),
@@ -101,18 +100,6 @@ export const folders = phantomLooper.table('folders', {
   // HEAD right after the checkout: base's tip for a new session, the source
   // branch's tip for a duplicate. /git/status counts base's commits since it.
   cutFromSha: text('cut_from_sha').notNull(),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
-
-// The loop's pairing, written once when a card enters the loop: this coder,
-// this supervisor. Immutable; old rows are the permanent record of who
-// reviewed what. Current loop for a card = newest row.
-export const loops = phantomLooper.table('loops', {
-  id: text('id').primaryKey(),
-  workspaceId: text('workspace_id').notNull(),
-  card: integer('card').notNull(),
-  codingSessionId: text('coding_session_id').notNull(),
-  supervisorSessionId: text('supervisor_session_id').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -149,8 +136,15 @@ export const sessions = phantomLooper.table('sessions', {
   // WHICH FOLDER MY TOOLS OPEN. A session that owns its checkout points at
   // its own id; a supervisor session points at its coder's. Null = no files
   // (an orphaned record). This is plumbing — the coder/supervisor
-  // relationship lives on `loops`, never here.
+  // relationship is derived from `cardId`, never stored here.
   folderId: text('folder_id'),
+  // THE CARD THIS SESSION WORKS ON — the card's key (cards.id), null when it
+  // is on no card. A coder and its supervisor both carry it. The pairing is
+  // derived: a card's coder is its newest coding session, its supervisor its
+  // newest supervisor session (Sessions.coderOf / supervisorOf). Written by
+  // the looper when it opens a round's sessions (Sessions.setCard). A
+  // deleted card leaves its sessions unlinked (on delete set null). (027)
+  cardId: bigint('card_id', { mode: 'number' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   lastUsedAt: timestamp('last_used_at', { withTimezone: true }).notNull().defaultNow(),
   lastPushAt: timestamp('last_push_at', { withTimezone: true }),
@@ -276,4 +270,3 @@ export type CardRow = typeof cards.$inferSelect;
 /** A session as reads return it — sessionColumns' shape, blobs excluded. */
 export type SessionRow = Omit<typeof sessions.$inferSelect, 'transcript' | 'systemPrompt'>;
 export type FolderRow = typeof folders.$inferSelect;
-export type LoopRow = typeof loops.$inferSelect;

@@ -6,7 +6,6 @@
 import type { Sessions } from '../sessions.js';
 import type { Workspaces } from '../workspaces.js';
 import type { Folders } from '../folders.js';
-import type { Loops } from '../loops.js';
 import { workState, type WorkState } from './git.js';
 import { repoDir, type Paths } from '../pool/paths.js';
 import type { ContainerManager } from '../workspace/container.js';
@@ -16,22 +15,21 @@ import { logger, errStr } from '../log.js';
 const log = logger('work-refresh');
 
 export interface WorkRefreshDeps {
-  sessions: Sessions; workspaces: Workspaces; folders: Folders; loops: Loops; paths: Paths;
+  sessions: Sessions; workspaces: Workspaces; folders: Folders; paths: Paths;
   containers: ContainerManager;
   events: BoardEvents;
 }
 
-export async function refreshWorkState({ sessions, workspaces, folders, loops, paths, containers, events }: WorkRefreshDeps): Promise<void> {
+export async function refreshWorkState({ sessions, workspaces, folders, paths, containers, events }: WorkRefreshDeps): Promise<void> {
   const active = await containers.activeSessions();
 
   // Clear stale work states: sessions that still show a git status but whose
   // container is gone. The value is unverifiable, so null it out.
   const stale = await sessions.listStaleWork(active);
   if (stale.length) {
-    const cardOf = await loops.cardsOf(stale.map((r) => r.id));
     await Promise.all(stale.map(async (r) => {
       await sessions.setWork(r.id, null);
-      events.publish(r.workspaceId, { event: 'session_work', card: cardOf.get(r.id) ?? 0, id: r.id, work: null });
+      events.publish(r.workspaceId, { event: 'session_work', card: r.card ?? 0, id: r.id, work: null });
     }));
   }
 
@@ -48,10 +46,6 @@ export async function refreshWorkState({ sessions, workspaces, folders, loops, p
 
   // Resolve branches per folder.
   const branchOf = await folders.branchesOf(rows.map((r) => r.folderId).filter((f): f is string => f !== null));
-
-  // Look up card ↔ session pairings for publishing (the board event needs the
-  // card number so the board store can map it). One query for the batch.
-  const cardOf = await loops.cardsOf(rows.map((r) => r.id));
 
   // Check each session in parallel.
   await Promise.all(rows.map(async (r) => {
@@ -74,7 +68,7 @@ export async function refreshWorkState({ sessions, workspaces, folders, loops, p
     // watching this session sees the work-state dot update without polling.
     await sessions.setWork(r.id, work);
     // Publish on the board stream so the kanban board picks it up.
-    const card = cardOf.get(r.id) ?? 0;
+    const card = r.card ?? 0;
     events.publish(r.workspaceId, { event: 'session_work', card, id: r.id, work });
   }));
 }

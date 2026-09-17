@@ -46,7 +46,7 @@ and reviews each table's behavior while it is in our heads.
 |---|---|---|---|
 | 1 | ~~`workspace_schema_state`~~ | — | **done** — deleted |
 | 2 | `folders` | `Folders` (folders.ts) | **done** |
-| 3 | `loops` | `Loops` (loops.ts) | |
+| 3 | ~~`loops`~~ | — | **done** — deleted; the card moved onto `sessions` |
 | 4 | `presets` | `Presets` (presets.ts) | |
 | 5 | `commands` | `Commands` (commands.ts) | |
 | 6 | `token_usage` | `TokenUsage` (tokenUsage.ts) | |
@@ -54,7 +54,7 @@ and reviews each table's behavior while it is in our heads.
 | 8 | `telegram_sent` | `TelegramStore` (telegram/store.ts) | |
 | 9 | `telegram_account` | `TelegramStore` (telegram/store.ts) | |
 | 10 | `workspaces` | `Workspaces` (workspaces.ts) | |
-| 11 | `card_revisions` | `Cards` (cards.ts) | moved + renamed in #1; review still owed |
+| 11 | `card_revisions` | `Cards` (cards.ts) | moved + renamed in #1; keyed by `card_id` in #3; review still owed |
 | 12 | `cards` | `Cards` (cards.ts) | moved + renamed in #1; review still owed |
 | 13 | `settings` | `Settings` (settings.ts) | |
 | 14 | `sessions` | `Sessions` (sessions.ts) | |
@@ -116,6 +116,45 @@ branch went, one freezing an empty prompt. The prompt was one glued string
 cut back into its two cache pieces by prefix-matching on every turn. Now
 `sessions.system_prompt = { base, workspace }` (025), frozen once at
 create, sent verbatim; the header, its type and all nine builders are gone.
+
+## Table 3 — `loops` (done)
+
+**What it was.** One row per looper run: this card, this coding session,
+this supervisor session. Written only when the looper ran a round, so it was
+the ONLY link between a card and a session — a session could be on a card
+only because the looper put it there, and the card number rode a pairing
+row instead of the session. Linked by card number, not the card's key.
+
+**What we did.** `sessions.card_id` (027) — the card a session works on,
+keyed to `cards.id`, `on delete set null`. A coder and its supervisor both
+carry it. The pairing is derived, not stored: a card's coder is its newest
+coding session (`Sessions.coderOf`), its supervisor its newest supervisor
+session (`supervisorOf`); the board reads `codersByCard`. The looper puts
+the coder on the card at birth (`setCard`) and gives it a supervisor born
+for it — a supervisor older than the coder is replaced. `loops`, `Loops`
+and `loops.ts` are gone. The session API still says `card: 7` (the number),
+now read off the card row. Rule set here: **storage links use `cards.id`;
+people and agents address cards by number.**
+
+**Also.** The session list's card column (`cardStatus`) now rides the same
+join instead of one extra query per workspace; `Cards.statusOf` is gone.
+`autoPull`/`autoPush`/`sync`/`digest`/`sessionTitle` no longer take a
+`loops` dependency they never used or now do not need.
+
+**Bug the proof found.** The old list joined `loops` on either seat AND
+`token_usage`, then summed: a session in two loop rows (003-era data)
+doubled its token totals — 200 stored came back as 400. One card per
+session now; the seed proved 200.
+
+**Same rule, `card_revisions` (028).** It linked by `(workspace_id,
+card_number)`; now `card_id references cards(id) on delete cascade`, the
+two old columns dropped. History goes with its card — the trigger records
+updates only; the 'delete' revision (a whole card copied into a row nothing
+read) is gone, as are revisions of cards already deleted.
+
+**Token totals are numbers.** The session list's `SUM` over `token_usage`
+came back from pg as text (`"200"`) under a `number` type; the cli only
+worked by coercion. `mapWith(Number)` at the query.
 
 ## Insights
 

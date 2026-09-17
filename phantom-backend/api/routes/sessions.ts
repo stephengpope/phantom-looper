@@ -85,14 +85,14 @@ const clientOf = (req: FastifyRequest): string => {
 const lockedErr = (s: SessionRow) =>
   err('session_locked', `session is in use${s.lockedLabel ? ` on ${s.lockedLabel}` : ''} — release it there, or wait for the hold to expire`, true);
 
-/** Look up the card linked to a session via the loops table, then publish a
- *  board lock event so the kanban board can show/hide the spinner. Fire-and-
- *  forget: a failed lookup never blocks the lock route. */
+/** Look up the card the session works on, then publish a board lock event
+ *  so the kanban board can show/hide the spinner. Fire-and-forget: a failed
+ *  lookup never blocks the lock route. */
 async function publishBoardLock(ctx: AppCtx, sessionId: string, locked: boolean): Promise<void> {
   try {
-    const row = await ctx.loops.byCodingSession(sessionId);
-    if (row) ctx.events?.publish(row.workspaceId,
-      { event: 'session_lock', card: row.card, id: sessionId, locked });
+    const card = await ctx.cards.ofSession(sessionId);
+    if (card) ctx.events?.publish(card.workspace_id,
+      { event: 'session_lock', card: card.number, id: sessionId, locked });
   } catch { /* best-effort — the board refreshes on reconnect anyway */ }
 }
 
@@ -166,8 +166,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       git: { type: 'string', enum: ['true'], description: 'Compute `work` per row from the checkout.' } } } } },
   async (req) => {
     // The list IS the object's (Sessions.list): filters, cursor and count in
-    // one place. branch comes from the session's FOLDER, card from its LOOP
-    // (either seat) — sessions carry neither themselves.
+    // one place. branch comes from the session's FOLDER, the card number and
+    // its column from the CARD the row points at.
     const { rows, total } = await (async () => {
       const r = await ctx.sessions.list({
         typed: req.query.typed, supervisor: req.query.supervisor, q: req.query.q, limit: req.query.limit,
@@ -177,21 +177,6 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       return { rows: r.sessions, total: r.total };
     })();
     const now = Date.now();
-    // Card status: the card's column on the board. Cards live in per-workspace
-    // schemas, so one raw query per workspace that has cards in this page.
-    // Keyed by `workspaceId:card` for the map below.
-    const cardStatusMap = new Map<string, string>();
-    const byWs = new Map<string, number[]>();
-    for (const r of rows) {
-      if (r.card == null) continue;
-      const arr = byWs.get(r.workspaceId);
-      if (arr) arr.push(r.card); else byWs.set(r.workspaceId, [r.card]);
-    }
-    await Promise.all([...byWs.entries()].map(async ([wsId, cards]) => {
-      const w = await ctx.workspaces.get(wsId);
-      if (!w) return;
-      for (const [number, status] of await ctx.cards.statusOf(w, cards)) cardStatusMap.set(`${wsId}:${number}`, status);
-    }));
     // `work` is a stored column on the session row, updated by the server's
     // periodic git-state refresh (workRefresh.ts). It rides every response
     // in the ...r spread — no on-read computation, no git=true flag.
@@ -199,7 +184,6 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     // server; a client only compares locked_by with its own id.
     return ok({ total, sessions: rows.map((r) => ({
       ...r, locked: !!r.lockedBy && !!r.lockExpiresAt && r.lockExpiresAt.getTime() > now,
-      cardStatus: r.card != null ? (cardStatusMap.get(`${r.workspaceId}:${r.card}`) ?? null) : null,
     })) });
   });
 
@@ -761,12 +745,12 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
     const settingsOut = await ctx.settings.block({ workspace: await ctx.workspaces.get(s.workspaceId), session: s });
     const folder = s.folderId ? await ctx.folders.get(s.folderId) : undefined;
-    const loop = await ctx.loops.of(s.id);
+    const card = await ctx.cards.ofSession(s.id);
     // A coding session born before the column (025) gets its prompt frozen
     // the first time it is opened — the one write this read makes, once.
     let system_prompt = await ctx.sessions.systemPrompt(s.id);
     if (!system_prompt && runsCodingAgent(s)) system_prompt = await freezeSystemPrompt(ctx, s);
-    return ok({ ...s, branch: folder?.branch ?? null, card: loop?.card ?? null,
+    return ok({ ...s, branch: folder?.branch ?? null, card: card?.number ?? null,
       system_prompt, settings: settingsOut,
       // Computed like the list's, and for the same reason: the cli polls this
       // route while a session runs elsewhere (lock state + stamp, one GET)

@@ -26,8 +26,9 @@
 // clock), to STAMP sessions.agent — the loop marks its coder seat at every
 // turn START; the transcript save re-derives the column from the writer at
 // turn END (sessions.ts agentAfterSave), which is what makes it trustworthy —
-// and to CREATE the supervisor's conversation-only session rows (no checkout;
-// the loop is their sole creator).
+// to put the round's coder ON its card (sessions.card_id), and to CREATE the
+// supervisor's conversation-only session rows (no checkout; the loop is
+// their sole creator).
 import type { FastifyInstance } from 'fastify';
 
 
@@ -35,7 +36,6 @@ import type { ModelMessage } from 'ai';
 import type { WorkspaceRow } from '../db/schema.js';
 import { LOOP_CLIENT_ID, type Sessions } from '../sessions.js';
 import type { Workspaces } from '../workspaces.js';
-import type { Loops } from '../loops.js';
 import type { Cards } from '../cards.js';
 import type { Settings } from '../settings.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
@@ -65,15 +65,14 @@ const BASE = 'http://looper/api';
 export interface LooperDeps {
   sessions: Sessions;
   workspaces: Workspaces;
-  loops: Loops;
   cards: Cards;
   settings: Settings;
   app: FastifyInstance;
   apiKey: string;
   /** The board's event bus (api/boardEvents.ts): the engine's card writes go
    *  over HTTP and publish there by themselves; the one thing only the
-   *  engine knows is the pairing — a card and its coding session — published
-   *  the moment the loop row is written. */
+   *  engine knows is the link — a card and its coding session — published
+   *  the moment the session is put on the card. */
   events?: BoardEvents;
   /** The sessions' live feed (api/sessionEvents.ts), handed straight to every
    *  turn this engine runs: that is how a builder watching a card's session
@@ -144,18 +143,18 @@ export class LooperEngine {
   }
 
   /** A released session lock is the one event a skipped turn waits on: if
-   *  the session sits in a loop (either seat), its card's loop runs. The
+   *  the session is on a card (either seat), that card's loop runs. The
    *  engine's OWN releases — every turn ends in one — are ignored, or each
    *  turn's cleanup would refire the turn it just finished. */
   async runLoopOfSession(sessionId: string, releasedBy: string): Promise<void> {
     if (releasedBy === CLIENT_ID) return;
-    let loop;
-    try { loop = await this.deps.loops.of(sessionId); }
+    let card;
+    try { card = await this.deps.cards.ofSession(sessionId); }
     catch (e) {
-      log.error({ session: sessionId, err: (e as Error).message }, 'could not look up the session\'s loop — its round did not run');
+      log.error({ session: sessionId, err: (e as Error).message }, 'could not look up the session\'s card — its round did not run');
       return;
     }
-    if (loop) void this.runLoop(loop.workspaceId, loop.card);
+    if (card) void this.runLoop(card.workspace_id, card.number);
   }
 
   /** THE entry: run turns on one card while `canTurn` holds. Re-entrant
@@ -236,48 +235,52 @@ export class LooperEngine {
     const { apiKey } = this.deps;
     const cfg = await this.settings();
 
-    // The card's current LOOP — the pairing row, written once per run. It
-    // names the coder and the supervisor outright; nothing is derived.
-    const loop = await this.deps.loops.current(workspace.id, card.number);
+    // The card's coder — its newest coding session (Sessions.coderOf).
+    const coder = await this.deps.sessions.coderOf(workspace.id, card.number);
 
-    // Entering plan is a NEW loop, always — the revision history is the
+    // Entering plan is a NEW run, always — the revision history is the
     // transition clock (logic.ts).
-    const fresh = needsFreshSession(card.status, loop?.createdAt ?? null,
+    const fresh = needsFreshSession(card.status, coder?.createdAt ?? null,
       await this.deps.cards.lastMovedAt(workspace, card.number));
 
     let opened: OpenedSession;
     let supervisorSessionId: string;
     try {
-      if (loop && !fresh) {
+      if (coder && !fresh) {
         opened = await openSession({
           baseUrl: BASE, apiKey, clientId: CLIENT_ID, label: heldBy('coding', card.status),
-          fetch: this.f, lock: true, sessionId: loop.codingSessionId,
+          fetch: this.f, lock: true, sessionId: coder.id,
         });
-        supervisorSessionId = loop.supervisorSessionId;
+        // The supervisor: born for THIS coder. One older than the coder
+        // belonged to an earlier run — a fresh one is made.
+        const sup = await this.deps.sessions.supervisorOf(workspace.id, card.number);
+        supervisorSessionId = sup && sup.createdAt.getTime() >= coder.createdAt.getTime()
+          ? sup.id
+          : (await this.deps.sessions.createSupervisor(workspace.id, String(coder.folderId ?? coder.id), card.id)).id;
       } else {
-        // A new run: the coder (with its folder), the supervisor (a
-        // conversation on that same folder), and the loop row naming the
-        // pair — born together, so no seat can ever be missing or guessed.
+        // A new run: the coder (with its folder), put on the card the moment
+        // it exists.
         opened = await openSession({
           baseUrl: BASE, apiKey, clientId: CLIENT_ID, label: heldBy('coding', card.status),
           fetch: this.f, lock: true, workspaceId: workspace.id,
         });
-        const sup = await this.deps.sessions.createSupervisor(workspace.id,
-          String(opened.session.folderId ?? opened.session.id));
-        await this.deps.loops.create(workspace.id, card.number, opened.session.id, sup.id);
+        await this.deps.sessions.setCard(opened.session.id, card.id);
         // The coder's session is named after its card from birth — /resume
         // never shows a nameless row while the first (long) plan turn runs.
         await this.deps.sessions.nameIfUnnamed(opened.session.id, card.title);
-        // The lock announcement rides RIGHT AFTER the pairing because it is a
-        // fact — openSession locked the session above and close() releases it.
-        // The lock route's own board publish found no loop row yet (createLoop
-        // just ran), so without this the board's spinner missed the whole
-        // first turn.
+        // The lock announcement rides RIGHT AFTER the card link because it is
+        // a fact — openSession locked the session above and close() releases
+        // it. The lock route's own board publish found the session on no
+        // card yet (setCard had not run), so without this the board's
+        // spinner missed the whole first turn.
         this.deps.events?.publish(workspace.id,
           { event: 'session', card: card.number, id: opened.session.id, name: card.title });
         this.deps.events?.publish(workspace.id,
           { event: 'session_lock', card: card.number, id: opened.session.id, locked: true });
-        supervisorSessionId = sup.id;
+        // A new coder gets a new supervisor: a conversation on the coder's
+        // folder, on the same card.
+        supervisorSessionId = (await this.deps.sessions.createSupervisor(workspace.id,
+          String(opened.session.folderId ?? opened.session.id), card.id)).id;
       }
     } catch (e) {
       if (e instanceof SessionLockedError) {
