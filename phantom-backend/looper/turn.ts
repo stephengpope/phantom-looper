@@ -41,7 +41,6 @@ export interface TurnDeps {
   /** The backdoor message queue (api/backdoor.ts): drained into the turn's
    *  messages below, restored if the turn fails before they are saved. */
   backdoor?: BackdoorQueue;
-  /** The unified token_usage table writer — per-step recording. */
 }
 
 /** The resolved settings as plain values — the same rows every client reads,

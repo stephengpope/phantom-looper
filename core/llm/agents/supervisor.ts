@@ -8,7 +8,7 @@
 // decision call: the verdict IS the tool call, and the loop breaks on the
 // card's status change — never on the agent's word.
 import { type Tool } from 'ai';
-import { createAgent, type Agent, type ModelConfig } from '../createAgent.js';
+import { PhantomAgent, type ModelConfig } from '../createAgent.js';
 import { withCurrentDate } from '../prompts/template.js';
 import { systemPrompt } from '../prompts/supervisor/wiring.js';
 
@@ -19,14 +19,16 @@ export function supervisorInstructions(): string {
 /** The supervisor's agent. `tools` is the kit the caller assembled — the
  *  readonly inspection preset + card read + web, and the loop's two bound
  *  board tools — capabilities, never loop mechanics. */
-export function supervisorAgent(
-  model: ModelConfig, tools: Record<string, Tool>,
-  opts?: { maxSteps?: number | null; now?: Date },
-): Agent {
-  const now = opts?.now ?? new Date();
-  return createAgent(model, {
-    instructions: withCurrentDate(supervisorInstructions(), now),
-    tools,
-    maxSteps: opts?.maxSteps,
-  });
+export class SupervisorAgent extends PhantomAgent {
+  constructor(
+    model: ModelConfig, tools: Record<string, Tool>,
+    opts: { sessionId: string | null; maxSteps?: number | null; now?: Date },
+  ) {
+    const now = opts.now ?? new Date();
+    super(model, opts.sessionId, {
+      instructions: withCurrentDate(supervisorInstructions(), now),
+      tools,
+      maxSteps: opts.maxSteps,
+    });
+  }
 }

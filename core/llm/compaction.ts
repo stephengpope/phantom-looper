@@ -13,6 +13,8 @@
 // which agent is running.
 
 import type { ModelMessage } from 'ai';
+import type { ModelConfig } from './createAgent.js';
+import { PhantomHelper } from './helper.js';
 
 // ---------------------------------------------------------------------------
 // Strategy
@@ -182,9 +184,12 @@ export interface CompactionOpts {
   strategy: CompactionStrategy;
   /** What % of user+assistant messages to summarize (0-100). */
   summarizePct: number;
-  /** The LLM call. Abstracted so compaction has no dependency on helperCall,
-   *  the database, or any server concept. The caller wires it. */
-  call: (system: string, prompt: string) => Promise<string>;
+  /** The model that writes the summary, and the session the summary is
+   *  billed to (CompactionHelper). */
+  model: ModelConfig;
+  sessionId: string | null;
+  /** Output token cap for the summary. Unset = the model decides. */
+  maxTokens?: number | null;
 }
 
 /** The result of a successful compaction. */
@@ -253,6 +258,13 @@ function prepareCompaction(history: ModelMessage[], strategy: CompactionStrategy
   return { system, prompt, removeEnd, removedMessages };
 }
 
+/** The summary call. */
+class CompactionHelper extends PhantomHelper {
+  run(system: string, prompt: string, maxTokens?: number | null): Promise<string> {
+    return this.call({ system, prompt, maxTokens });
+  }
+}
+
 /**
  * Run compaction. Acquires the lock, summarizes, splices history, releases
  * the lock. Returns the result on success, null when there was nothing to
@@ -265,7 +277,7 @@ export async function compact(lock: CompactionLock, opts: CompactionOpts): Promi
     const prep = prepareCompaction(opts.history, opts.strategy, opts.summarizePct);
     if (!prep) return null;                // nothing to compact
 
-    const text = await opts.call(prep.system, prep.prompt);
+    const text = await new CompactionHelper(opts.model, opts.sessionId).run(prep.system, prep.prompt, opts.maxTokens);
     const trimmed = text.trim();
     if (!trimmed) throw new Error('the model returned an empty summary');
 

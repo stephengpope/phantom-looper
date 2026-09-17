@@ -251,10 +251,12 @@ export const presets = phantomLooper.table('presets', {
 
 export type PresetRow = typeof presets.$inferSelect;
 
-// Token usage (migrations 022, 023): one row per model call — agent steps
-// and one-shot helper calls alike. The one store for all spend; TokenUsage
-// (tokenUsage.ts) is its one writer.
-export const tokenUsage = phantomLooper.table('token_usage', {
+// Token log (migrations 022, 023, 030): one entry per model call — agent
+// steps and one-shot helper calls alike. The one store for all spend;
+// LogTokens (logTokens.ts) is its one writer. `session_id` is deliberately
+// not a foreign key: the spend report is by date and outlives the session.
+// Null for a helper call that serves no one session (the digest).
+export const logTokens = phantomLooper.table('log_tokens', {
   id: text('id').primaryKey(),
   sessionId: text('session_id'),
   kind: text('kind').notNull(),

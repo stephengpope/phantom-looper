@@ -33,7 +33,6 @@ import { FLUSH_MS, runTurn, type Agent } from './agent.js';
 import { loadTranscriptFile, newestTranscriptFile, Transcript, transcriptStamp, usageEvent } from '../core/llm/transcript.js';
 import { compact, shouldCompact, getStrategy, isSummaryMessage, CompactionLock } from '../core/llm/compaction.js';
 import type { ModelConfig } from '../core/llm/createAgent.js';
-import { helperCall } from '../core/llm/helperCall.js';
 
 export const SIDECAR_DIR = fileURLToPath(new URL('./sidecar/', import.meta.url));
 export const VOICE_DIR = join(CONFIG_DIR, 'voice');
@@ -435,14 +434,7 @@ export class VoiceClient {
       history: this.history,
       strategy: getStrategy(this.compactionSettings.strategy),
       summarizePct: this.compactionSettings.summarizePct,
-      call: async (system, prompt) => {
-        const r = await helperCall({
-          config: this.compactionModel!, usage: { kind: 'compaction', sessionId: this.sessionId },
-          system, prompt,
-          ...(this.compactionSettings.maxTokens ? { maxTokens: this.compactionSettings.maxTokens } : {}),
-        });
-        return r.text;
-      },
+      model: this.compactionModel, sessionId: this.sessionId, maxTokens: this.compactionSettings.maxTokens,
     });
     if (!result) return false;
     this.onCompacted(result.removed);

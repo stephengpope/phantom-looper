@@ -49,8 +49,7 @@ import {
 import { runCodingTurn, drain, settingsValues, sumTokens } from './turn.js';
 import { shouldCompact, resolveContextWindow, resolveCompactSetting, CompactionLock, compact, getStrategy } from '../../core/llm/compaction.js';
 import { contextWindowFor } from '../models.js';
-import { helperCall } from '../../core/llm/helperCall.js';
-import { supervisorAgent } from '../../core/llm/agents/supervisor.js';
+import { SupervisorAgent } from '../../core/llm/agents/supervisor.js';
 import { canTurn, unsentKickoff, nextStep, needsFreshSession, heldBy, LOOP_COLUMNS, type CardRow } from './logic.js';
 import { injectFetch } from './injectFetch.js';
 import type { BoardEvents } from '../api/boardEvents.js';
@@ -371,7 +370,6 @@ export class LooperEngine {
             baseUrl?: string | null }));
         const supMaxSteps = agentMaxSteps(cfg, 'supervisor');
         model.fetch = this.deps.modelFetch;
-        model.usage = { kind: 'supervisor', sessionId: supOpened.session.id };
         model.onRetry = (t) => log.warn({ card: card.number, agent: 'supervisor' }, t);
         const tools = {
           ...await phantomTools({ baseUrl: BASE, apiKey, sessionId: opened.session.id,
@@ -384,7 +382,7 @@ export class LooperEngine {
         };
         const incoming: ModelMessage[] = step.append.map((t) => ({ role: 'user', content: t }));
         const messages = [...supOpened.messages, ...incoming];
-        const agent = supervisorAgent(model, tools, { maxSteps: supMaxSteps });
+        const agent = new SupervisorAgent(model, tools, { sessionId: supOpened.session.id, maxSteps: supMaxSteps });
         // Cache marks on a copy — the supervisor's growing conversation reads
         // its own prefix back each turn; the transcript stays clean. The
         // step seam collects the WHOLE turn (tool calls included — the step
@@ -469,13 +467,7 @@ export class LooperEngine {
       history,
       strategy: getStrategy(strategyName),
       summarizePct,
-      call: async (system, prompt) => {
-        const r = await helperCall({
-          config: model, usage: { kind: 'compaction', sessionId },
-          system, prompt, ...(maxTokens != null ? { maxTokens: Number(maxTokens) } : {}),
-        });
-        return r.text;
-      },
+      model, sessionId, maxTokens: maxTokens != null ? Number(maxTokens) : null,
     }).then((result) => {
       if (result) log.info({ session: sessionId, removed: result.removed }, 'coding session compacted');
     }).catch((err) => {

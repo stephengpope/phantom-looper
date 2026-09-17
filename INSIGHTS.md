@@ -51,6 +51,10 @@ general, short, and true.
   stopped it. The customer's shortcut is unambiguous where it sits and
   carries muscle memory; rename the storage and the wire, leave the
   shortcuts. *(table 5)*
+- **Name the write, not the read.** `token_usage` named what a reader
+  sums; the table is appended one entry per call. A table's name says
+  what a row is and how it gets there — `log_` for an append-only record.
+  *(table 6)*
 - **Storage links use the primary key; people use the handle.** Two tables
   linked to cards by number. The number is what PHA-7 means to a person and
   an agent; the key is what a foreign key is for. *(table 3)*
@@ -89,6 +93,16 @@ general, short, and true.
   500ed left a lock held; the next round was skipped and "reused the pair"
   passed trivially. When a live check passes suspiciously fast, read the
   server log for the round it claims ran. *(table 3)*
+- **A fact the thing already knows is not a parameter.** `codingAgent`
+  knew it was the coding agent; every caller still typed `kind: 'coding'`.
+  The builder's rule: the object's name IS the kind — a base class reads
+  it, nobody passes it. First I made the parameter required (the compiler
+  remembers); the right fix removed it. When a value can be derived, the
+  question is never "how do we make callers pass it" but "why are they
+  passing it at all". *(table 6)*
+- **A callback "so X has no dependency on Y" that every caller fills in
+  the same way is Y's code, copied.** Compaction's `call` seam was the
+  same seven lines at four sites. *(table 6)*
 - **Every constraint in the schema is a path the object must answer for.**
   `name unique` sat in the migration; the object validated keys and values
   and let the constraint 500. Read the `create table` and ask, for each
@@ -112,6 +126,12 @@ general, short, and true.
 
 ## Communication
 
+- **Hold a position on the facts, or change it on the facts — never on
+  pressure.** I proposed three names in a row under pushback, each less
+  grounded than the last, then "conceded" to one that contradicted the
+  writers (`log_session_tokens` — helpers write it too). The builder's
+  own words: "stand up for the code." Say what the code does, then
+  discuss the name. *(table 6)*
 - **Answer the question asked, only that.** Asked "how does it work now?",
   the right reply was two sentences on the cut; each extra paragraph on
   caching, options, or history read as not knowing. *(header pass)*

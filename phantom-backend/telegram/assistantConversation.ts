@@ -7,7 +7,6 @@
 import path from 'node:path';
 import type { ModelMessage } from 'ai';
 import type { Sessions } from '../sessions.js';
-import { helperCall } from '../../core/llm/helperCall.js';
 import { agentModelConfig } from '../../core/llm/agentConfig.js';
 import { loadTranscriptFile, newestTranscriptFile, Transcript, transcriptStamp } from '../../core/llm/transcript.js';
 import { compact, shouldCompact, getStrategy, CompactionLock, resolveContextWindow, resolveCompactSetting } from '../../core/llm/compaction.js';
@@ -128,13 +127,7 @@ export class AssistantConversation {
       history: this.history,
       strategy: getStrategy(strategyName),
       summarizePct,
-      call: async (system, prompt) => {
-        const r = await helperCall({
-          config: model, usage: { kind: 'compaction', sessionId: this.sessionId },
-          system, prompt, ...(maxTokensOpt ? { maxTokens: maxTokensOpt } : {}),
-        });
-        return r.text;
-      },
+      model, sessionId: this.sessionId, maxTokens: maxTokensOpt,
     });
 
     if (!result) return false;

@@ -29,7 +29,7 @@ import type { Folders } from '../folders.js';
 import type { Cards } from '../cards.js';
 import type { BackgroundTasks } from '../backgroundTasks.js';
 import type { Presets } from '../presets.js';
-import type { TokenUsage } from '../tokenUsage.js';
+import type { LogTokens } from '../logTokens.js';
 import { SettingsEvents } from './settingsEvents.js';
 import { ForegroundCommands } from './foreground.js';
 import { BackdoorQueue } from './backdoor.js';
@@ -54,7 +54,7 @@ export interface AppCtx {
   sessions: Sessions;
   backgroundTasks: BackgroundTasks;
   presets: Presets;
-  tokenUsage: TokenUsage;
+  logTokens: LogTokens;
   paths: Paths;
   apiKey: string;
   version: string;

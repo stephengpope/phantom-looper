@@ -7,7 +7,7 @@ import type { Tool } from 'ai';
 import type { Agent } from '../core/llm/createAgent.js';
 import { buildCodingAgent, agentModelConfig, agentMaxSteps } from '../core/llm/agentConfig.js';
 import type { CodingPrompt } from '../core/llm/agents/coding.js';
-import { assistantAgent } from '../core/llm/agents/assistant.js';
+import { AssistantAgent } from '../core/llm/agents/assistant.js';
 import type { ConfigValue } from './config.js';
 
 /** The resolved settings: the local file's seven merged with the server's. The
@@ -36,10 +36,9 @@ export function buildAgent(tools: Record<string, Tool>, cfg: Cfg, sessionId: str
 export function buildAssistantAgent(tools: Record<string, Tool>, cfg: Cfg, sessionId: string | null):
 { agent: Agent; summary: AgentSummary } {
   const model = agentModelConfig(cfg, 'assistant');
-  model.usage = { kind: 'assistant', sessionId };
   const maxSteps = agentMaxSteps(cfg, 'assistant');
   return {
-    agent: assistantAgent(model, tools, { maxSteps }),
+    agent: new AssistantAgent(model, tools, { sessionId, maxSteps }),
     summary: { provider: model.provider, model: model.model,
       reasoning: model.reasoning ?? 'none', maxSteps },
   };

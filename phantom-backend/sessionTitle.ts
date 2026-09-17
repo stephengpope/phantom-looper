@@ -9,7 +9,7 @@
 // a half-set assistant pair falls back silently to the coding agent's. Never throws — on any failure the old name (or null) stands (the
 // commitMessage.ts pattern).
 import { isProvider, type ModelConfig } from '../core/llm/createAgent.js';
-import { helperCall } from '../core/llm/helperCall.js';
+import { PhantomHelper } from '../core/llm/helper.js';
 import { cascade } from '../core/llm/agentConfig.js';
 import { titleRequest, type TitleContext } from '../core/llm/prompts/helpers/wiring.js';
 import { parseTranscript } from '../core/llm/transcript.js';
@@ -116,6 +116,13 @@ async function titleConfig(settings: Settings): Promise<ModelConfig | null> {
   return { provider: c.provider, model: c.model, baseUrl: c.baseUrl ?? undefined, apiKey };
 }
 
+/** The title call: the selected user messages in, a candidate title out. */
+class TitleHelper extends PhantomHelper {
+  run(context: TitleContext): Promise<string> {
+    return this.call(titleRequest(context));
+  }
+}
+
 /** Write the session's name from the selected user messages; returns the
  *  title written (the row publishes it on the session feed), null when
  *  nothing was written. Never throws. `modelFetch` is the test seam
@@ -134,13 +141,10 @@ export async function nameSession(
     if (!config) return null;
     config.fetch = modelFetch;
     if (!context.userMessages.trim()) return null;
-    const { system, prompt } = titleRequest(context);
+    const helper = new TitleHelper(config, sessionId);
     for (let attempt = 1; attempt <= TRIES; attempt++) {
       try {
-        const { text } = await helperCall({
-          config, usage: { kind: 'title', sessionId }, system, prompt,
-        });
-        const title = cleanTitle(text);
+        const title = cleanTitle(await helper.run(context));
         if (title) {
           // A /rename that landed while this call was in flight wins: the
           // titler never writes over a manual name.

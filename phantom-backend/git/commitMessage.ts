@@ -15,7 +15,7 @@
 // spends a model when nothing conflicts.
 import type { ModelConfig } from '../../core/llm/createAgent.js';
 import { commitMessagePrompt } from '../../core/llm/prompts/autoPush/wiring.js';
-import { helperCall } from '../../core/llm/helperCall.js';
+import { PhantomHelper } from '../../core/llm/helper.js';
 import { git } from './git.js';
 import { logger } from '../log.js';
 
@@ -30,6 +30,13 @@ const TRIES = 3;
 // fired mid-recovery — the standard schedule's waits alone reach 29s — and
 // turned a rate limit every other call rides out into a failed sync.
 
+/** The subject-line call: the staged diff's stat + patch in, a message out. */
+class CommitMessageHelper extends PhantomHelper {
+  run(stat: string, diff: string, card: string): Promise<string> {
+    return this.call({ prompt: commitMessagePrompt(stat, diff, card) });
+  }
+}
+
 /** A subject line from the STAGED diff against `base` (the merge-base — the
  *  caller has staged everything but rewritten nothing). Throws when no real
  *  message can be produced: the sync's answer is to fail, not to guess. */
@@ -43,13 +50,10 @@ export async function commitMessageFor(
   const { stdout: stat } = await git(dir, ['diff', '--cached', '--stat', ...range]);
   const { stdout: patch } = await git(dir, ['diff', '--cached', ...range]);
   const diff = patch.length > MAX_DIFF_BYTES ? `${patch.slice(0, MAX_DIFF_BYTES)}\n… (truncated)` : patch;
-  const prompt = commitMessagePrompt(stat, diff, card);
+  const helper = new CommitMessageHelper(config, sessionId ?? null);
   for (let attempt = 1; attempt <= TRIES; attempt++) {
     try {
-      const { text } = await helperCall({
-        config, usage: { kind: 'commit_message', sessionId }, prompt,
-      });
-      const msg = text.trim();
+      const msg = (await helper.run(stat, diff, card)).trim();
       if (msg && msg.length <= 2000) return msg;
       log.warn({ dir, attempt }, 'commit message attempt answered nonsense — trying again');
     } catch (e) {

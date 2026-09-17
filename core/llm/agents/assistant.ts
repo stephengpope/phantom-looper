@@ -14,10 +14,10 @@
 // app supplies the handlers. The mutating tools are deliberately not granted.
 //
 // Reasoning defaults to 'none' — the Assistant should be fast — but can be
-// overridden via assistant_reasoning. createAgent turns 'none' into the
+// overridden via assistant_reasoning. PhantomAgent turns 'none' into the
 // lowest effort on a model that cannot stop thinking.
 import type { Tool } from 'ai';
-import { createAgent, type Agent, type ModelConfig } from '../createAgent.js';
+import { PhantomAgent, type ModelConfig } from '../createAgent.js';
 import { withCurrentDate } from '../prompts/template.js';
 import { systemPrompt } from '../prompts/assistant/wiring.js';
 
@@ -25,17 +25,17 @@ export function assistantInstructions(): string {
   return systemPrompt();
 }
 
-export function assistantAgent(
-  model: ModelConfig, tools: Record<string, Tool>,
-  opts?: { maxSteps?: number | null; now?: Date },
-): Agent {
-  const now = opts?.now ?? new Date();
-  // Reasoning: if the caller (agentModelConfig) resolved one, use it;
-  // otherwise default to 'none' for speed.
-  const reasoning = model.reasoning ?? 'none';
-  return createAgent(
-    { ...model, reasoning },
-    { instructions: withCurrentDate(assistantInstructions(), now), tools,
-      maxSteps: opts?.maxSteps },
-  );
+export class AssistantAgent extends PhantomAgent {
+  constructor(
+    model: ModelConfig, tools: Record<string, Tool>,
+    opts: { sessionId: string | null; maxSteps?: number | null; now?: Date },
+  ) {
+    const now = opts.now ?? new Date();
+    // Reasoning: if the caller (agentModelConfig) resolved one, use it;
+    // otherwise default to 'none' for speed.
+    super({ ...model, reasoning: model.reasoning ?? 'none' }, opts.sessionId, {
+      instructions: withCurrentDate(assistantInstructions(), now), tools,
+      maxSteps: opts.maxSteps,
+    });
+  }
 }

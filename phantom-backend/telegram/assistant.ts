@@ -1,6 +1,6 @@
 // The Assistant, server-side, for Telegram — assistant MODE, the home the bot
 // answers in by default. It is the SAME agent as the cli's side pane
-// (core assistantAgent: same prompt, same assistant_* provider/model cascade,
+// (core AssistantAgent: same prompt, same assistant_* provider/model cascade,
 // reasoning pinned none, maxSteps 10) — reached over the webhook instead of the
 // Python voice sidecar, with HEADLESS tool handlers hitting this server's own
 // routes instead of the app's BoardStore.
@@ -18,7 +18,7 @@
 // It never SENDS into a session — /code (code mode) is how you talk to a coder.
 
 import type { ModelMessage, Tool } from 'ai';
-import { assistantAgent } from '../../core/llm/agents/assistant.js';
+import { AssistantAgent } from '../../core/llm/agents/assistant.js';
 import { agentModelConfig, agentMaxSteps } from '../../core/llm/agentConfig.js';
 import { assistantKanbanTool, sessionsTool, workspaceCreateTool, gitAutoPushTool, gitAutoPullTool, renderRead, renderRaw, kebabName,
   dockerLogsTool,
@@ -290,8 +290,7 @@ export async function runAssistantTurn(
   const model = agentModelConfig(ctx.settings, 'assistant');
   const maxSteps = agentMaxSteps(ctx.settings, 'assistant');
   const tools = await assistantKit(deps, ctx);
-  const agent = assistantAgent({ ...model, fetch: deps.modelFetch, usage: { kind: 'assistant', sessionId } },
-    tools, { maxSteps });
+  const agent = new AssistantAgent({ ...model, fetch: deps.modelFetch }, tools, { sessionId, maxSteps });
 
   // Accumulate usage across all steps in this turn.
   const usage = { input: 0, output: 0, cache_read: 0, cache_write: 0 };

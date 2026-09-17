@@ -228,7 +228,7 @@ export function memoryRecorder(startAt: number):
 }
 
 /** A transcript without its usage lines — what a duplicate seats: the copy's
- *  spend is its own from birth (token_usage rows are per session), so the
+ *  spend is its own from birth (log_tokens entries are per session), so the
  *  lines must not travel. Line-tolerant: anything unparsable is kept. */
 export function stripUsageFromJsonl(text: string): string {
   return text.split('\n').filter((line) => {

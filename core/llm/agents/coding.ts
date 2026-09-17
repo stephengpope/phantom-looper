@@ -18,7 +18,7 @@
 // loop run, `kanban_card_block`. The caller builds them all (they need the
 // server, the session id, and — for the board — the window) and hands them in.
 import type { SystemModelMessage, Tool } from 'ai';
-import { createAgent, CACHE_TTL, type Agent, type ModelConfig } from '../createAgent.js';
+import { PhantomAgent, CACHE_TTL, type ModelConfig } from '../createAgent.js';
 import { withCurrentDate } from '../prompts/template.js';
 import type { CodingPrompt } from '../prompts/coding/wiring.js';
 
@@ -33,14 +33,16 @@ function systemBlocks(prompt: CodingPrompt): SystemModelMessage[] {
   ];
 }
 
-export function codingAgent(
-  model: ModelConfig,
-  tools: Record<string, Tool>,
-  opts: { maxSteps?: number | null; prompt: CodingPrompt },
-): Agent {
-  return createAgent(model, {
-    instructions: systemBlocks(opts.prompt),
-    tools,
-    maxSteps: opts.maxSteps,
-  });
+export class CodingAgent extends PhantomAgent {
+  constructor(
+    model: ModelConfig,
+    tools: Record<string, Tool>,
+    opts: { sessionId: string | null; maxSteps?: number | null; prompt: CodingPrompt },
+  ) {
+    super(model, opts.sessionId, {
+      instructions: systemBlocks(opts.prompt),
+      tools,
+      maxSteps: opts.maxSteps,
+    });
+  }
 }

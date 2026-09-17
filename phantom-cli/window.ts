@@ -24,7 +24,6 @@ import { parseTranscript, type UsageTotals } from '../core/llm/transcript.js';
 import { agentModelConfig, pinnedCfg, sessionPin, type ModelPin } from '../core/llm/agentConfig.js';
 import { contextWindowFor } from '../phantom-backend/models.js';
 import { compact, getStrategy, CompactionLock, resolveCompactSetting, resolveContextWindow } from '../core/llm/compaction.js';
-import { helperCall } from '../core/llm/helperCall.js';
 
 /** Build the compaction settings from a config read for setCompaction. */
 function compactionSettings(cfg: Record<string, ConfigValue>) {
@@ -721,7 +720,7 @@ export class WindowStore {
     this.note('back in touch with the server — everything re-synced');
   };
 
-  /** A session's lifetime token totals — the token_usage table's sums, the
+  /** A session's lifetime token totals — the log_tokens sums, the
    *  toolbar's numbers. Zeros when the server cannot answer: the toolbar
    *  shows what it has, and the next reseat corrects it. */
   private async sessionUsage(id: string): Promise<UsageTotals> {
@@ -968,7 +967,7 @@ export class WindowStore {
         pin,
         planMode,
         pinned: row.pinned === true,
-        // The toolbar's lifetime token totals, from the token_usage table.
+        // The toolbar's lifetime token totals, from log_tokens.
         usage: await this.sessionUsage(row.id),
         ...(card ? { card } : {}),
         ...(row.agent === 'supervisor' ? { readonly: true } : {}),
@@ -1911,13 +1910,7 @@ export class WindowStore {
               history: session.history,
               strategy: getStrategy(strategyName),
               summarizePct,
-              call: async (system, prompt) => {
-                const r = await helperCall({
-                  config: model, usage: { kind: 'compaction', sessionId: session.id }, system, prompt,
-                  ...(maxTokens != null ? { maxTokens: Number(maxTokens) } : {}),
-                });
-                return r.text;
-              },
+              model, sessionId: session.id, maxTokens: maxTokens != null ? Number(maxTokens) : null,
             });
             if (result) {
               this.note('chat compacted — older messages summarized');

@@ -310,15 +310,14 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
   });
 
   // ---- token usage report ---------------------------------------------------
-  // Sums the cached token columns across non-destroyed sessions for today and
-  // the current week (Monday–now), total and per provider/model. The columns
-  // All token usage from the token_usage table — one table, one query per
-  // window, correct date filtering (created_at = when the call happened).
+  // Token totals for today and the current week (Monday–now), per
+  // provider/model and per kind — one query per window over log_tokens,
+  // filtered by created_at (when the call happened).
   app.get('/system/token-usage', {
     schema: {
       tags: ['meta'],
       summary: 'Token usage report — today, this week, by provider/model and kind',
-      description: 'Sums per-step rows from the token_usage table. Answers as preformatted `text`.',
+      description: 'Sums the log_tokens entries. Answers as preformatted `text`.',
     },
   }, async () => {
     const now = new Date();
@@ -333,10 +332,10 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
     weekStart.setDate(weekStart.getDate() - ((dayOfWeek + 6) % 7));
 
     const [todayByModel, weekByModel, todayByKind, weekByKind] = await Promise.all([
-      ctx.tokenUsage.totalsByModel(todayStart),
-      ctx.tokenUsage.totalsByModel(weekStart),
-      ctx.tokenUsage.totalsByKind(todayStart),
-      ctx.tokenUsage.totalsByKind(weekStart),
+      ctx.logTokens.totalsByModel(todayStart),
+      ctx.logTokens.totalsByModel(weekStart),
+      ctx.logTokens.totalsByKind(todayStart),
+      ctx.logTokens.totalsByKind(weekStart),
     ]);
 
     const k = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M`
@@ -344,8 +343,8 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
       : String(n);
 
     const totalOf = (rows: typeof todayByModel) => rows.reduce(
-      (a, r) => ({ input: a.input + Number(r.input), output: a.output + Number(r.output),
-        cacheRead: a.cacheRead + Number(r.cacheRead), cacheWrite: a.cacheWrite + Number(r.cacheWrite) }),
+      (a, r) => ({ input: a.input + r.input, output: a.output + r.output,
+        cacheRead: a.cacheRead + r.cacheRead, cacheWrite: a.cacheWrite + r.cacheWrite }),
       { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 
     const fmtTotal = (t: ReturnType<typeof totalOf>) =>
@@ -354,22 +353,22 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
     const fmtByModel = (rows: typeof todayByModel) => {
       if (!rows.length) return '  (none)';
       const sorted = [...rows].sort((a, b) =>
-        (Number(b.input) + Number(b.output)) - (Number(a.input) + Number(a.output)));
+        (b.input + b.output) - (a.input + a.output));
       return sorted.map((r) => {
         const label = r.provider && r.model ? `${r.provider}/${r.model}`
           : r.provider || r.model || '(unknown)';
-        return `  ${label}: ↑ ${k(Number(r.input))} in · ↓ ${k(Number(r.output))} out`;
+        return `  ${label}: ↑ ${k(r.input)} in · ↓ ${k(r.output)} out`;
       }).join('\n');
     };
 
     const fmtByKind = (rows: typeof todayByKind) => {
       if (!rows.length) return '  (none)';
       const sorted = [...rows].sort((a, b) =>
-        (Number(b.input) + Number(b.output)) - (Number(a.input) + Number(a.output)));
+        (b.input + b.output) - (a.input + a.output));
       return sorted.map((r) => {
         const label = String(r.kind).replace(/_/g, ' ');
-        const calls = Number(r.calls);
-        return `  ${label}: ↑ ${k(Number(r.input))} in · ↓ ${k(Number(r.output))} out · ${calls} call${calls === 1 ? '' : 's'}`;
+        const calls = r.calls;
+        return `  ${label}: ↑ ${k(r.input)} in · ↓ ${k(r.output)} out · ${calls} call${calls === 1 ? '' : 's'}`;
       }).join('\n');
     };
 

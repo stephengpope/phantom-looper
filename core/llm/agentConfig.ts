@@ -4,7 +4,7 @@
 // agentFromConfig delegates here; the looper calls it directly.
 import type { Tool } from 'ai';
 import { NO_PROVIDER, type Agent, type ModelConfig, type Provider, type Reasoning } from './createAgent.js';
-import { codingAgent, type CodingPrompt } from './agents/coding.js';
+import { CodingAgent, type CodingPrompt } from './agents/coding.js';
 
 /** One API key per provider, named the way each vendor names it — the same
  *  rows the Git Fixer and the Assistant read. */
@@ -99,13 +99,12 @@ export function buildCodingAgent(
 ): { agent: Agent; summary: { provider: string; model: string; reasoning: string; maxSteps: number | null } } {
   const { prompt, modelFetch, onRetry } = o;
   const model = modelConfigFrom(cfg);
-  model.usage = { kind: 'coding', sessionId };
   if (modelFetch) model.fetch = modelFetch;
   if (onRetry) model.onRetry = onRetry;
   const n = cfg.max_steps == null ? null : Number(cfg.max_steps);
   const maxSteps = n != null && Number.isFinite(n) && n > 0 ? n : null;
   return {
-    agent: codingAgent(model, tools, { maxSteps, prompt }),
+    agent: new CodingAgent(model, tools, { sessionId, maxSteps, prompt }),
     summary: { provider: model.provider || 'unset', model: model.model || 'unset',
       reasoning: String(cfg.reasoning ?? ''), maxSteps },
   };

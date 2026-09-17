@@ -12,7 +12,7 @@ import { Cards } from './cards.js';
 import { BackgroundTasks } from './backgroundTasks.js';
 import { Presets } from './presets.js';
 import { setTokenRecorder } from '../core/llm/createAgent.js';
-import { TokenUsage } from './tokenUsage.js';
+import { LogTokens } from './logTokens.js';
 import { TelegramState } from './telegram/store.js';
 import { SettingsEvents } from './api/settingsEvents.js';
 import { idleBackupSweep, pressureSweep } from './disk.js';
@@ -76,10 +76,10 @@ async function main() {
   });
   const backgroundTasks = new BackgroundTasks(db);
   const presets = new Presets(db);
-  const tokenUsage = new TokenUsage(db);
+  const logTokens = new LogTokens(db);
   // Every model call in this process records here (core languageModel).
   setTokenRecorder((r) => {
-    tokenUsage.record(r).catch((e) => log.warn({ err: (e as Error).message }, 'token recording failed'));
+    logTokens.record(r).catch((e) => log.warn({ err: (e as Error).message }, 'token recording failed'));
   });
   const telegramState = new TelegramState(db, env.encryptionKey);
 
@@ -266,7 +266,7 @@ async function main() {
   // app exists — the engine is a headless client of this app, so it is built
   // second; routes read ctx.looper per request, so the late set is seen.
   const ctx: AppCtx = {
-    settings, workspaces, folders, cards, sessions, backgroundTasks, presets, tokenUsage,
+    settings, workspaces, folders, cards, sessions, backgroundTasks, presets, logTokens,
     paths, apiKey: env.apiKey, version: VERSION,
     fs: { docker, containers, engine },
     engine,

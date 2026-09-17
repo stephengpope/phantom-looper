@@ -1,6 +1,6 @@
 // The TUI's side of the agent: runTurn — one turn of an agent built by
-// core/llm (createAgent for the assembly; agents/coding for the prompt stack
-// and kit). The UI only sees batched stream parts.
+// core/llm (PhantomAgent for the assembly; agents/coding for the prompt
+// stack and kit). The UI only sees batched stream parts.
 import type { AssistantContent, ModelMessage, ToolCallPart, ToolContent, ToolResultPart } from 'ai';
 import type { StreamPart } from './state.js';
 import type { Agent } from '../core/llm/createAgent.js';
@@ -8,7 +8,7 @@ import type { StepRecord } from '../core/llm/transcript.js';
 import type { NudgeQueue } from '../core/llm/nudgeQueue.js';
 
 export {
-  createAgent, isAnthropicOAuth, withClaudeCodeIdentity, withCacheBreakpoints,
+  isAnthropicOAuth, withClaudeCodeIdentity, withCacheBreakpoints,
   CLAUDE_CODE_SYSTEM, PROVIDERS,
   type Agent, type Provider, type Reasoning, type ModelConfig,
 } from '../core/llm/createAgent.js';
@@ -32,10 +32,10 @@ export async function runTurn(
   // delta the moment it arrives (0 — still ordered: a non-delta part flushes
   // what is buffered ahead of it).
   flushMs = FLUSH_MS,
-  // Where the turn is recorded (createAgent's usage seam): each step's
+  // Where the turn is recorded (PhantomAgent's usage seam): each step's
   // messages AND its usage line land through this — pass the transcript.
   record?: StepRecord,
-  // The session's nudge queue (createAgent's nudge seam): before every model
+  // The session's nudge queue (PhantomAgent's nudge seam): before every model
   // call the queue is drained into that call, so a message typed mid-turn
   // reaches the very next LLM call. The queue's onDrain callback fires so
   // the store can mirror it into history and on screen.

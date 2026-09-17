@@ -28,7 +28,7 @@ import type { PgColumn } from 'drizzle-orm/pg-core';
 // card number are JOINs (the list carries both, the filter reaches the
 // branch, the card reads take a number). Read through the join only; their
 // rows are Folders' and Cards' to write.
-import { sessions, sessionColumns, folders, cards, tokenUsage, type SessionRow } from './db/schema.js';
+import { sessions, sessionColumns, folders, cards, logTokens, type SessionRow } from './db/schema.js';
 import type { Settings } from './settings.js';
 import type { Workspaces } from './workspaces.js';
 import type { Folders } from './folders.js';
@@ -253,23 +253,22 @@ export class Sessions {
             ? or(lt(sessions.lastUsedAt, cut), and(eq(sessions.lastUsedAt, cut), lt(sessions.id, q.beforeId)))
             : lt(sessions.lastUsedAt, cut)))
       : undefined;
-    // Token totals: LEFT JOIN token_usage and SUM — the table is the single
-    // source of truth, the session row's cached columns are being phased out.
+    // Token totals: LEFT JOIN log_tokens and SUM — the one store for spend.
     // A bigint SUM comes back from pg as text; mapWith(Number) makes it the
     // number the type says it is.
     const sum = (col: PgColumn) => sqlRaw<number>`coalesce(sum(${col}), 0)`.mapWith(Number);
     let page = this.db
       .select({
         ...sessionColumns, branch: folders.branch, card: cards.number, cardStatus: cards.status,
-        tokensInput: sum(tokenUsage.tokensInput).as('tokens_input'),
-        tokensOutput: sum(tokenUsage.tokensOutput).as('tokens_output'),
-        tokensCacheRead: sum(tokenUsage.tokensCacheRead).as('tokens_cache_read'),
-        tokensCacheWrite: sum(tokenUsage.tokensCacheWrite).as('tokens_cache_write'),
+        tokensInput: sum(logTokens.tokensInput).as('tokens_input'),
+        tokensOutput: sum(logTokens.tokensOutput).as('tokens_output'),
+        tokensCacheRead: sum(logTokens.tokensCacheRead).as('tokens_cache_read'),
+        tokensCacheWrite: sum(logTokens.tokensCacheWrite).as('tokens_cache_write'),
       })
       .from(sessions)
       .leftJoin(folders, eq(folders.id, sessions.folderId))
       .leftJoin(cards, eq(cards.id, sessions.cardId))
-      .leftJoin(tokenUsage, eq(tokenUsage.sessionId, sessions.id))
+      .leftJoin(logTokens, eq(logTokens.sessionId, sessions.id))
       .where(and(...filters, ...(cursor ? [cursor] : [])))
       .groupBy(sessions.id, folders.branch, cards.number, cards.status)
       .orderBy(desc(sessions.pinned), desc(sessions.lastUsedAt), desc(sessions.id))
@@ -657,7 +656,7 @@ export class Sessions {
     // GET /sessions response for the life of the session.
     const lastUserMessage = lastUserFromJsonl(data)?.slice(0, LAST_MESSAGE_CHARS) ?? null;
     const stamp = new Date();
-    // Token totals are per-step rows in the token_usage table — the list
+    // Token totals are per-call entries in log_tokens — the list
     // query JOINs that table directly. No re-parsing, no row cache.
     // Every save is one turn: the counter that paces session naming.
     const agent = agentAfterSave(s.agent, client);
@@ -710,7 +709,7 @@ export class Sessions {
   /** A turn ended on a conversation-only session (the assistant's): bump the
    *  turn count (leaving 0 is what freezes the row's model) and touch
    *  lastUsedAt. Tokens are not here — every model call records its own row
-   *  in token_usage. */
+   *  in log_tokens. */
   async turnEnded(id: string): Promise<void> {
     await this.db.update(sessions).set({
       lastUsedAt: new Date(),

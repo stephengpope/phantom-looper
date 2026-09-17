@@ -49,7 +49,7 @@ and reviews each table's behavior while it is in our heads.
 | 3 | ~~`loops`~~ | — | **done** — deleted; the card moved onto `sessions` |
 | 4 | `presets` | `Presets` (presets.ts) | **done** |
 | 5 | ~~`commands`~~ `background_tasks` | `BackgroundTasks` (backgroundTasks.ts) | **done** — renamed |
-| 6 | `token_usage` | `TokenUsage` (tokenUsage.ts) | |
+| 6 | ~~`token_usage`~~ `log_tokens` | `LogTokens` (logTokens.ts) | **done** — renamed |
 | 7 | `telegram_update` | `TelegramStore` (telegram/store.ts) | |
 | 8 | `telegram_sent` | `TelegramStore` (telegram/store.ts) | |
 | 9 | `telegram_account` | `TelegramStore` (telegram/store.ts) | |
@@ -219,6 +219,69 @@ The one reusable fact — "this pg error is a unique violation" — is now
 `isUniqueViolation` in `db/client.ts`; presets and workspaces both use it,
 each with its own refusal (`duplicate_preset_name` 400,
 `already_registered` 409).
+
+## Table 6 — `token_usage` → `log_tokens` (done)
+
+**What it is.** One entry appended per model call, by sessions and helpers
+alike (coding, supervisor, assistant, title, commit_message, compaction,
+session_digest): what it cost in tokens, which model, which session if
+any. Every model handle is wrapped in core (`createAgent.ts`) so no call
+can skip it. Server writes through `LogTokens.record`; the cli posts to
+`POST /log-tokens`, which calls the same method. `session_id` is
+deliberately not a foreign key: the spend report is by date and outlives
+the session.
+
+**State found.** Clean on the rules: one writer, readers through the
+object plus the sessions-list join. The name was wrong: `token_usage`
+reads like a total you look up; the table is a log you append to.
+
+**Renamed (030).** Table `log_tokens` (indexes follow); object `LogTokens`
+(`logTokens.ts`); `POST /token-usage` → `POST /log-tokens`. The two report
+routes (`/sessions/:id/token-usage`, `/system/token-usage`) keep their
+names — they are the reads. `TokenRecord` was half snake, half camel
+(`sessionId` … `cache_read`): now `cacheRead` / `cacheWrite`, through
+core's emit, the POST body and `record`.
+
+**Also.** One rule for bigint sums — `mapWith(Number)` at the query, as
+`Sessions.list` already did — replacing `sql<number>` + `Number()` after,
+three times in the object and again in the report route. Four stale
+comments gone (`turn.ts` orphan doc, `system.ts` pre-022 fragment,
+`sessions.ts` "cached columns being phased out", `schema.ts` now says why
+`session_id` is un-keyed).
+
+**Proof.** 030 on 029-shape rows (null session, a session that no longer
+exists, a 3-billion-token row, an old row outside the window): rows and
+index names intact. Every method, totals as numbers. Live: `POST
+/log-tokens` (old field names and old route refused), the session's
+totals, the list's totals, the report text, session delete leaving the
+spend in place. Nothing found wrong in this table.
+
+**Every model call is recorded, with nothing to remember.** Confirmed by
+trace: `languageModel()` (`core/llm/createAgent.ts`) is the only place a
+provider model is built and it wraps each one in the recording
+middleware; nothing else imports a provider SDK or calls
+`generateText`/`streamText`. Two doors reach it:
+
+- **Agents** are classes on one base, `PhantomAgent`, and the class name
+  is the billing kind: `class CodingAgent extends PhantomAgent` bills to
+  `coding`, read off the name at construction (`kindOf`). Before, the
+  three factories were functions and every caller typed `usage: { kind:
+  'coding', … }` by hand — a new agent that forgot recorded nothing,
+  silently. Now there is no kind field and nothing to pass but the
+  session id; a class whose name is not a `TokenKind` throws when built.
+- **Helpers** are classes on one base, `PhantomHelper`
+  (`core/llm/helper.ts`), the same way: `class TitleHelper extends
+  PhantomHelper` bills to `title`. Four exist — title, commit message,
+  session digest, compaction — each in the file that uses it. Compaction
+  used to be hand-wired at four call sites, each repeating the same call;
+  `compact()` owns it now. `helperCall` is gone.
+
+After this, nothing in the code hands a model a billing kind by hand:
+`languageModel()` has exactly two callers, the two bases, and both read
+the kind off the class name. Proved with a fake provider: all seven
+kinds landed one row each with the right kind, session and tokens
+(commit message end to end over a real staged diff); a `ReviewAgent` and
+a `SummaryHelper` (no such kinds) are refused at construction.
 
 ## Insights
 

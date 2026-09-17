@@ -191,8 +191,8 @@ export function App({
   // on screen for the first frame. This component is a view over it.
   const [windowStore] = useState(() => {
     // Every model call this process makes records here (core languageModel);
-    // the server's TokenUsage is the one writer, so the record goes to it.
-    setTokenRecorder((r) => { void api('POST', '/token-usage', r).catch(quiet('record token usage')); });
+    // the server's LogTokens is the one writer, so the record goes to it.
+    setTokenRecorder((r) => { void api('POST', '/log-tokens', r).catch(quiet('record token usage')); });
     return new WindowStore({
       api, stream, newTools, configPath, boot,
       makeAgent, makeTranscript, run, makeVoice, onSession, exit,

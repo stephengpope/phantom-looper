@@ -43,8 +43,8 @@ export type Reasoning = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
 // every one is wrapped so that every call — an agent step, a one-shot
 // generateText, anything — records its usage here. There is no way to call
 // a model without going through this, so there is nothing to forget.
-// The sink is set once at boot: the server writes the token_usage table
-// directly (TokenUsage.record); the CLI posts to the server, which does the
+// The sink is set once at boot: the server writes the log_tokens table
+// directly (LogTokens.record); the CLI posts to the server, which does the
 // same. Null (tests, before boot) = calls run, nothing is recorded.
 
 /** What a call is billed to — the session it serves and what kind of work. */
@@ -54,7 +54,7 @@ export interface TokenUsageContext { kind: TokenKind; sessionId?: string | null 
 
 export interface TokenRecord extends TokenUsageContext {
   provider: string; model: string; responseId?: string;
-  input: number; output: number; cache_read: number; cache_write: number;
+  input: number; output: number; cacheRead: number; cacheWrite: number;
 }
 let _tokenRecorder: ((r: TokenRecord) => void) | null = null;
 /** The one sink. Called once at server / CLI boot. */
@@ -69,7 +69,7 @@ function recordUsage(c: ModelConfig): LanguageModelMiddleware {
     _tokenRecorder({
       ...c.usage, provider: c.provider, model: c.model, responseId,
       input: u.inputTokens.total ?? 0, output: u.outputTokens.total ?? 0,
-      cache_read: u.inputTokens.cacheRead ?? 0, cache_write: u.inputTokens.cacheWrite ?? 0,
+      cacheRead: u.inputTokens.cacheRead ?? 0, cacheWrite: u.inputTokens.cacheWrite ?? 0,
     });
   };
   return {
@@ -98,8 +98,9 @@ export interface ModelConfig {
   model: string;
   baseUrl?: string | null;
   apiKey?: string | null;
-  /** What this model's calls are billed to. Absent = the calls are not
-   *  recorded (tests, a probe). Every production caller sets it. */
+  /** What this model's calls are billed to. Filled in from the class name by
+   *  PhantomAgent and PhantomHelper — the only two callers of languageModel.
+   *  Absent = not recorded. */
   usage?: TokenUsageContext;
   /** The portable AI SDK knob; each provider maps it to its own setting. Omit
    *  to leave the provider's default. */
@@ -110,6 +111,21 @@ export interface ModelConfig {
    *  answered 429 (rate limited) — retry 2/7 in 4s"). The cli notes it into
    *  the session's conversation, the looper logs it. Absent = silent retries. */
   onRetry?: (note: string) => void;
+}
+
+const TOKEN_KINDS: readonly TokenKind[] = ['coding', 'supervisor', 'assistant',
+  'title', 'commit_message', 'compaction', 'session_digest'];
+
+/** A class's billing kind, read off its name: CodingAgent → 'coding',
+ *  CommitMessageHelper → 'commit_message'. Throws at construction when the
+ *  name is not a TokenKind, so a misnamed agent or helper cannot run
+ *  unbilled. */
+export function kindOf(className: string): TokenKind {
+  const kind = className.replace(/(Agent|Helper)$/, '').replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
+  if (!(TOKEN_KINDS as readonly string[]).includes(kind)) {
+    throw new Error(`${className}: "${kind}" is not a TokenKind — name the class <Kind>Agent or <Kind>Helper, with Kind in TokenKind`);
+  }
+  return kind as TokenKind;
 }
 
 export function isProvider(s: string): s is Provider {
@@ -482,35 +498,39 @@ function spliceTurn<T extends { onStepEnd?: (step: never) => unknown }>(
   return out;
 }
 
-class RecordingAgent<TOOLS extends Record<string, Tool>> extends ToolLoopAgent<never, TOOLS> {
-  override stream(o: Parameters<ToolLoopAgent<never, TOOLS>['stream']>[0] &
+/** The base of every agent. A subclass is named for what it is —
+ *  `class CodingAgent extends PhantomAgent` — and that name, read here at
+ *  construction, is what its every model call is billed to (kindOf). There
+ *  is nothing else to declare: no kind field, no registration.
+ *
+ *  Talk to it with the AI SDK's own `agent.stream({messages, abortSignal,
+ *  onStepEnd})` / `agent.generate({prompt, abortSignal})` — plus the
+ *  `record` and `nudgeQueue` options (spliceTurn, above) on either. */
+export abstract class PhantomAgent extends ToolLoopAgent<never, Record<string, Tool>> {
+  constructor(c: ModelConfig, sessionId: string | null, spec: AgentSpec) {
+    const reasoning = effectiveReasoning(c.provider, c.model, c.reasoning);
+    super({
+      model: languageModel({ ...c, usage: { kind: kindOf(new.target.name), sessionId } }),
+      instructions: spec.instructions,
+      tools: spec.tools,
+      stopWhen: spec.maxSteps == null ? (() => false) : isStepCount(spec.maxSteps),
+      // The cache marks, re-placed before every step — see withCacheBreakpoints
+      // for why once per turn is not enough. This is the only place they are
+      // applied; callers hand `stream`/`generate` their clean history.
+      prepareStep: ({ messages }) => ({ messages: withCacheBreakpoints(messages) }),
+      // Retries are the fetch wrapper's (languageModel/withRetry) — never the
+      // SDK's fixed-doubling loop, and never both.
+      maxRetries: 0,
+      ...(reasoning ? { reasoning } : {}),
+    });
+  }
+  override stream(o: Parameters<ToolLoopAgent<never, Record<string, Tool>>['stream']>[0] &
     { record?: StepRecord; nudgeQueue?: NudgeQueue }) {
     return super.stream(spliceTurn(o));
   }
-  override generate(o: Parameters<ToolLoopAgent<never, TOOLS>['generate']>[0] &
+  override generate(o: Parameters<ToolLoopAgent<never, Record<string, Tool>>['generate']>[0] &
     { record?: StepRecord; nudgeQueue?: NudgeQueue }) {
     return super.generate(spliceTurn(o));
   }
 }
-
-/** Build the agent. Talk to it with the AI SDK's own `agent.stream({messages,
- *  abortSignal, onStepEnd})` / `agent.generate({prompt, abortSignal})` — plus
- *  the `record` option (above) on either. */
-export function createAgent(c: ModelConfig, spec: AgentSpec) {
-  const reasoning = effectiveReasoning(c.provider, c.model, c.reasoning);
-  return new RecordingAgent({
-    model: languageModel(c),
-    instructions: spec.instructions,
-    tools: spec.tools,
-    stopWhen: spec.maxSteps == null ? (() => false) : isStepCount(spec.maxSteps),
-    // The cache marks, re-placed before every step — see withCacheBreakpoints
-    // for why once per turn is not enough. This is the only place they are
-    // applied; callers hand `stream`/`generate` their clean history.
-    prepareStep: ({ messages }) => ({ messages: withCacheBreakpoints(messages) }),
-    // Retries are the fetch wrapper's (languageModel/withRetry) — never the
-    // SDK's fixed-doubling loop, and never both.
-    maxRetries: 0,
-    ...(reasoning ? { reasoning } : {}),
-  });
-}
-export type Agent = ReturnType<typeof createAgent>;
+export type Agent = PhantomAgent;

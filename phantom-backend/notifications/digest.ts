@@ -12,7 +12,7 @@ import type { Cards } from '../cards.js';
 import type { Settings } from '../settings.js';
 import type { Workspaces } from '../workspaces.js';
 import type { SessionRow } from '../db/schema.js';
-import { helperCall } from '../../core/llm/helperCall.js';
+import { PhantomHelper } from '../../core/llm/helper.js';
 import { agentModelConfig } from '../../core/llm/agentConfig.js';
 import { lastAssistantFromJsonl } from './transcriptHelper.js';
 import type { NotificationChannel } from './channel.js';
@@ -56,6 +56,14 @@ export interface DigestDeps {
   settings: Settings;
   workspaces: Workspaces;
   channels: NotificationChannel[];
+}
+
+/** The summary call: the grouped sessions in, the digest text out. It
+ *  serves every quiet session at once, so it belongs to no one session. */
+class SessionDigestHelper extends PhantomHelper {
+  run(payload: unknown): Promise<string> {
+    return this.call({ system: SYSTEM, prompt: JSON.stringify(payload) });
+  }
 }
 
 export class SessionDigest {
@@ -187,11 +195,7 @@ export class SessionDigest {
     }
     const config = agentModelConfig(values, 'assistant');
 
-    const { text } = await helperCall({
-      config, usage: { kind: 'session_digest' },
-      system: SYSTEM,
-      prompt: JSON.stringify(payload),
-    });
+    const text = await new SessionDigestHelper(config, null).run(payload);
     const message = titled(TITLE(rows.length), text.trim());
 
     if (!message) return;

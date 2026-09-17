@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import type { SessionRow } from '../../db/schema.js';
-import type { TokenRecord } from '../../tokenUsage.js';
+import type { TokenRecord } from '../../logTokens.js';
 import { SessionError, heldByOther, assertDuplicable, conversationOnly } from '../../sessions.js';
 import { GIT_CLIENT_ID } from '../../git/git.js';
 import { repoDir, sessionDir } from '../../pool/paths.js';
@@ -762,17 +762,17 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   });
 
   // ---- token usage ---------------------------------------------------------
-  // Token totals from the token_usage table — one row per LLM call.
+  // Token totals from log_tokens — one entry per LLM call.
   app.get<{ Params: { id: string } }>(
     '/sessions/:id/token-usage', { schema: { ...TAG,
-      summary: 'A session\'s token totals from the token_usage table',
-      description: 'Summed from per-step rows in the token_usage table — agent steps and helper calls alike. ' +
+      summary: 'A session\'s token totals from log_tokens',
+      description: 'Summed from the session\'s log_tokens entries — agent steps and helper calls alike. ' +
         'All zeros when nothing was ever recorded.',
       params: idParam } },
     async (req, reply) => {
       const s = await ctx.sessions.get(req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
-      const t = await ctx.tokenUsage.sessionTotals(req.params.id);
+      const t = await ctx.logTokens.sessionTotals(req.params.id);
       return ok({ input: t.input, output: t.output,
         cache_read: t.cacheRead, cache_write: t.cacheWrite });
     });
@@ -895,23 +895,23 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       return ok({});
     });
 
-  // The CLI's door to the token_usage table: core's languageModel records
-  // every call the CLI process makes, and the CLI's recorder posts it here —
-  // the same TokenUsage.record the server's own calls land in.
+  // The CLI's door to log_tokens: core's languageModel records every call
+  // the CLI process makes, and the CLI's recorder posts it here — the same
+  // LogTokens.record the server's own calls land in.
   app.post<{ Body: TokenRecord }>(
-    '/token-usage', { schema: { ...TAG,
+    '/log-tokens', { schema: { ...TAG,
       summary: 'Record one model call',
-      description: 'Inserts one row into token_usage. For model calls made in the CLI process.',
-      body: { type: 'object', required: ['kind', 'provider', 'model', 'input', 'output', 'cache_read', 'cache_write'],
+      description: 'Appends one log_tokens entry. For model calls made in the CLI process.',
+      body: { type: 'object', required: ['kind', 'provider', 'model', 'input', 'output', 'cacheRead', 'cacheWrite'],
         properties: {
           sessionId: { type: ['string', 'null'] }, kind: { type: 'string' },
           provider: { type: 'string' }, model: { type: 'string' },
           responseId: { type: 'string' },
           input: { type: 'number' }, output: { type: 'number' },
-          cache_read: { type: 'number' }, cache_write: { type: 'number' },
+          cacheRead: { type: 'number' }, cacheWrite: { type: 'number' },
         } } } },
     async (req) => {
-      await ctx.tokenUsage.record(req.body);
+      await ctx.logTokens.record(req.body);
       return ok({});
     });
 }
