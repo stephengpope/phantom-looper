@@ -47,14 +47,13 @@ async function diskUsedPercent(root: string): Promise<number> {
   return st.blocks === 0 ? 0 : ((st.blocks - st.bavail) / st.blocks) * 100;
 }
 
-/** Active sessions that own their folder (only owners hold disk), each with
+/** The sessions whose files are on disk (only owners hold disk), each with
  *  its workspace row. Fails CLOSED like every sweep: an unreadable list
  *  aborts the run — not knowing what is protected never licenses deletion. */
 async function folderOwners(workspaces: Workspaces, sessions: Sessions): Promise<Array<{ s: SessionRow; w: WorkspaceRow }>> {
-  const rows = await sessions.listActive();
+  const rows = await sessions.listOwnersOnDisk();
   const byId = new Map((await workspaces.list()).map((w) => [w.id, w]));
   return rows
-    .filter((s) => s.folderId === s.id)
     .flatMap((s) => {
       const w = byId.get(s.workspaceId);
       return w ? [{ s, w }] : [];
@@ -127,7 +126,7 @@ async function pruneImages(settings: Settings, docker: Docker): Promise<void> {
  *  exactly as it was; the run ends loud when only live work remains. */
 export async function pressureSweep(
   settings: Settings, workspaces: Workspaces, sessions: Sessions, p: Paths, docker: Docker, containers: ContainerManager, engine: GitEngine,
-  idleSessions: (idleMs: number) => Promise<string[]>,
+  idleFolders: (idleMs: number) => Promise<string[]>,
 ): Promise<void> {
   const pct = Number(await settings.resolve('disk_cleanup_percent'));
   if (pct <= 0) return;
@@ -137,7 +136,7 @@ export async function pressureSweep(
 
   // 1 — idle session containers: stateless, so removal is free and frees the
   // per-session docker graph volume with them (reap(0) = no idle wait).
-  await containers.reap(0, idleSessions);
+  await containers.reap(0, idleFolders);
 
   // 2 — spare clones: pure cache; the pool restocks on the next ticks.
   await drainReady(p);

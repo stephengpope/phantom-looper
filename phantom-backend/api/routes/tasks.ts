@@ -10,6 +10,7 @@ import type { FastifyInstance } from 'fastify';
 import fsp from 'node:fs/promises';
 import { Sandbox } from '../../workspace/sandbox.js';
 import { ok, err, type AppCtx } from '../app.js';
+import { folderOf } from '../../sessions.js';
 import {
   killSid, probeGroups, reconcileRunning, commandTextFromArgv, elapsedSeconds,
   type LiveGroup, type FsDeps,
@@ -46,8 +47,9 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
   async (req, reply) => {
     const session = await ctx.sessions.get(req.params.id);
     if (!session) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
+    if (!session.folderId) return reply.code(400).send(err('no_folder', 'this session has no files — nothing runs for it'));
 
-    const { state, container } = await probe(session.folderId ?? session.id);
+    const { state, container } = await probe(folderOf(session));
     let groups: LiveGroup[] = [];
     if (container) {
       try {
@@ -109,7 +111,8 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
   async (req, reply) => {
     const session = await ctx.sessions.get(req.params.id);
     if (!session) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
-    const { container } = await probe(session.folderId ?? session.id);
+    if (!session.folderId) return reply.code(400).send(err('no_folder', 'this session has no files — nothing runs for it'));
+    const { container } = await probe(folderOf(session));
     if (!container) return reply.code(404).send(err('no_such_task', 'nothing is running — the container is not up'));
 
     const ws = new Sandbox(deps.docker, container);

@@ -448,10 +448,17 @@ export class TelegramEngine {
     // The pointer as this turn sees it — live across a switch within the turn.
     let active = bot.activeSessionId ?? null;
     try {
+      // The assistant's session row exists BEFORE its agent is built: the
+      // turn runs on the row's model, its tools open the row's folder, and
+      // every call is billed to it.
+      const own = await conv.ensureSession(bot.activeWorkspaceId, bot.activeSessionId);
       const onSwitch = async (id: string) => {
         const r = await this.switchSession(client, dm, id);
         if ('error' in r) return r;
         active = r.id;
+        // The assistant's folder follows the switch mid-turn: its read tools
+        // open the row's folder, so the very next call sees the new files.
+        await this.deps.sessions.follow(own.id, bot.activeWorkspaceId!, r.id);
         return { active: r.id, title: r.title,
           note: "You are still the assistant — this session's files are now what your read tools see. " +
             'The user sends /code to talk to its coding agent; you never enter it.' };
@@ -467,10 +474,6 @@ export class TelegramEngine {
         await client.sendMessage(dm, '🆕 New session in the new workspace. Send your first message to begin.');
         return { session: j.data.id as string };
       };
-      // The assistant's session row exists BEFORE its agent is built: the
-      // model records every call against it.
-      const sessionId = await conv.ensureSession(
-        bot.activeWorkspaceId, bot.activeSessionId);
       const result = await runAssistantTurn(deps, conv.history, message, sink, {
         settings: values,
         workspaceId: () => bot.activeWorkspaceId ?? null,
@@ -478,9 +481,9 @@ export class TelegramEngine {
         onSwitch,
         approve: (ask, signal) => this.approvals.request(client, dm, ask, signal),
         onWorkspaceCreated,
-      }, abort.signal, conv.getTranscript(), sessionId);
+      }, abort.signal, conv.getTranscript(), own);
       replyText = result.text;
-      await this.deps.sessions.turnEnded(sessionId).catch(
+      await this.deps.sessions.turnEnded(own).catch(
         (e) => log.warn({ err: errStr(e) }, 'assistant session update failed'));
       // Long chat? Summarize it in the background — turns never wait on it.
       conv.kickCompaction(result.usage.input);

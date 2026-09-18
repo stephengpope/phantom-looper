@@ -14,7 +14,10 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { sessionDir } from '../../pool/paths.js';
 import { ok, err, type AppCtx } from '../app.js';
-import { SESSION_HEADER } from '../sessionHeader.js';
+import { SESSION_HEADER, toolSession } from '../sessionHeader.js';
+import { ToolError } from '../../tools/envelope.js';
+
+const STATUS: Record<string, number> = { session_not_found: 404, session_destroyed: 410, no_folder: 400 };
 
 const TAG = { tags: ['web'] };
 
@@ -155,16 +158,18 @@ export function webRoutes(app: FastifyInstance, ctx: AppCtx) {
       },
     },
   }, async (req, reply) => {
-    const sessionId = String(req.headers[SESSION_HEADER] ?? '');
-    if (!sessionId) return reply.code(400).send(err('session_not_found', `missing ${SESSION_HEADER} header`));
-    const session = await ctx.sessions.get(sessionId);
-    if (!session) return reply.code(404).send(err('session_not_found', `no session ${sessionId}`));
-    if (session.status !== 'active') return reply.code(410).send(err('session_destroyed', `session is ${session.status}`));
+    // The one gate (sessionHeader.ts): the session named, its files on
+    // disk, THE folder its tools open — and the checkout touched.
+    let folderId: string;
+    try { ({ folderId } = await toolSession(ctx.sessions, req.headers)); }
+    catch (e) {
+      if (e instanceof ToolError) return reply.code(STATUS[e.code] ?? 400).send(err(e.code, e.message, e.retryable));
+      throw e;
+    }
     const key = await ctx.settings.credential('firecrawl_api_key');
     if (!key) return reply.code(400).send(err('credential_required', NO_KEY));
-    void ctx.sessions.touch(sessionId);
 
-    const hostDir = path.join(sessionDir(ctx.paths, session.folderId ?? session.id), 'web');
+    const hostDir = path.join(sessionDir(ctx.paths, folderId), 'web');
     await fsp.mkdir(hostDir, { recursive: true });
     const taken = new Set<string>();
     // In input order; fetched in parallel — the slug set is claimed

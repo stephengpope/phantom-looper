@@ -34,7 +34,7 @@ import type { FastifyInstance } from 'fastify';
 
 import type { ModelMessage } from 'ai';
 import type { WorkspaceRow } from '../db/schema.js';
-import { LOOP_CLIENT_ID, type Sessions } from '../sessions.js';
+import { LOOP_CLIENT_ID, folderOf, type Sessions } from '../sessions.js';
 import type { Workspaces } from '../workspaces.js';
 import type { Cards } from '../cards.js';
 import type { Settings } from '../settings.js';
@@ -255,7 +255,7 @@ export class LooperEngine {
         const sup = await this.deps.sessions.supervisorOf(workspace.id, card.number);
         supervisorSessionId = sup && sup.createdAt.getTime() >= coder.createdAt.getTime()
           ? sup.id
-          : (await this.deps.sessions.createSupervisor(workspace.id, String(coder.folderId ?? coder.id), card.id)).id;
+          : (await this.deps.sessions.createSupervisor(workspace.id, folderOf(coder), card.id)).id;
       } else {
         // A new run: the coder (with its folder), put on the card the moment
         // it exists.
@@ -279,7 +279,7 @@ export class LooperEngine {
         // A new coder gets a new supervisor: a conversation on the coder's
         // folder, on the same card.
         supervisorSessionId = (await this.deps.sessions.createSupervisor(workspace.id,
-          String(opened.session.folderId ?? opened.session.id), card.id)).id;
+          folderOf(opened.session), card.id)).id;
       }
     } catch (e) {
       if (e instanceof SessionLockedError) {
@@ -371,13 +371,16 @@ export class LooperEngine {
         const supMaxSteps = agentMaxSteps(cfg, 'supervisor');
         model.fetch = this.deps.modelFetch;
         model.onRetry = (t) => log.warn({ card: card.number, agent: 'supervisor' }, t);
+        // The supervisor's tools run as the SUPERVISOR's session: the server
+        // opens its folder — the coder's — and the coder's checkout counts
+        // the activity. One rule for every session; no client picks a folder.
         const tools = {
-          ...await phantomTools({ baseUrl: BASE, apiKey, sessionId: opened.session.id,
+          ...await phantomTools({ baseUrl: BASE, apiKey, sessionId: supOpened.session.id,
             pick: 'readonly', fetch: this.f }),
           ...kanbanReadTool({ baseUrl: BASE, apiKey, workspaceId: workspace.id, fetch: this.f }),
           // Web search + fetch are capabilities, not mutations: fetched pages
           // land outside repo/, and a judge may need the docs the card cites.
-          ...webTools({ baseUrl: BASE, apiKey, sessionId: opened.session.id, fetch: this.f }),
+          ...webTools({ baseUrl: BASE, apiKey, sessionId: supOpened.session.id, fetch: this.f }),
           ...loopSupervisorTools(cardCfg, card.status as LoopColumn),
         };
         const incoming: ModelMessage[] = step.append.map((t) => ({ role: 'user', content: t }));
@@ -436,9 +439,6 @@ export class LooperEngine {
     }
   }
 
-  /** One session's spend so far, the budget's coin: input + output tokens
-   *  from the token API (summed from the transcript's usage lines, cached by
-   *  stamp server-side). */
   /** Per-session compaction locks — one compaction at a time per session. */
   private compactionLocks = new Map<string, CompactionLock>();
 
@@ -475,6 +475,8 @@ export class LooperEngine {
     });
   }
 
+  /** One session's spend so far, the budget's coin: input + output tokens
+   *  from the token API (log_tokens, summed per session). */
   private async tokensOf(sessionId: string): Promise<number> {
     const r = await this.f(`${BASE}/sessions/${sessionId}/token-usage`, {
       headers: { authorization: `Bearer ${this.deps.apiKey}` } });

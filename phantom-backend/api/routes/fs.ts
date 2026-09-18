@@ -14,7 +14,8 @@ import { TOOLS, type ToolCtx } from '../../tools/registry.js';
 import { ToolError } from '../../tools/envelope.js';
 import { ok, err, type AppCtx } from '../app.js';
 import { killProcessGroup } from '../foreground.js';
-import { SESSION_HEADER } from '../sessionHeader.js';
+import { SESSION_HEADER, toolSession } from '../sessionHeader.js';
+import { folderOf } from '../../sessions.js';
 import type { ContainerManager } from '../../workspace/container.js';
 import type Docker from 'dockerode';
 import type { GitEngine } from '../../git/engine.js';
@@ -24,7 +25,7 @@ const log = logger('bash');
 export interface FsDeps { docker: Docker; containers: ContainerManager; engine?: GitEngine }
 
 const STATUS: Record<string, number> = {
-  not_found: 404, session_not_found: 404, session_destroyed: 410,
+  not_found: 404, session_not_found: 404, session_destroyed: 410, no_folder: 400,
   invalid_args: 400, no_match: 422, not_unique: 422, binary_file: 422,
   is_directory: 400, not_a_directory: 400, too_large: 413,
   busy: 409, container_start_failed: 503, exec_timeout: 504,
@@ -208,7 +209,7 @@ async function runBash(
       const total = stdout.length + stderr.length;
       if (total > maxOut) {
         const spillName = `bash-${newId()}.out`;
-        const spillHost = path.join(sessionDir(ctx.paths, session.folderId ?? session.id), 'logs', spillName);
+        const spillHost = path.join(sessionDir(ctx.paths, folderOf(session)), 'logs', spillName);
         await fsp.mkdir(path.dirname(spillHost), { recursive: true });
         await fsp.writeFile(spillHost, Buffer.concat([
           stdout, Buffer.from('\n--- stderr ---\n'), stderr,
@@ -246,12 +247,12 @@ async function runBash(
     } finally {
       signal?.removeEventListener('abort', onAbort);
       ctx.foreground?.remove(session.id, pidfile);
-      void ctx.sessions.touch(session.id);
+      void ctx.sessions.touch(session);
     }
   }
 
   const taskId = newId();
-  const logPath = path.join(sessionDir(ctx.paths, session.folderId ?? session.id), 'logs', `${taskId}.ndjson`);
+  const logPath = path.join(sessionDir(ctx.paths, folderOf(session)), 'logs', `${taskId}.ndjson`);
   await fsp.mkdir(path.dirname(logPath), { recursive: true });
   await ctx.backgroundTasks.start({ id: taskId, sessionId: session.id, argv, logPath });
   // The same $$-to-pidfile idiom as unary above (pid == sid, runc setsids the
@@ -276,7 +277,7 @@ async function runBash(
       log.warn({ taskId, err: errStr(e) }, 'detached stream died');
     } finally {
       out.end();
-      void ctx.sessions.touch(session.id); // a long detached command is activity, seen only here at its end
+      void ctx.sessions.touch(session); // a long detached command is activity, seen only here at its end
       // Conditional on still-running: the tasks route's 'killed' and the
       // reconciler's 'exited' are final — a late stream teardown must not
       // overwrite them.
@@ -432,20 +433,22 @@ export function fsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
         body: def.input,
       },
     }, async (req, reply) => {
-      const sessionId = String(req.headers[SESSION_HEADER] ?? '');
-      if (!sessionId) return reply.code(400).send(err('session_not_found', `missing ${SESSION_HEADER} header`));
-      const session = await ctx.sessions.get(sessionId);
-      if (!session) return reply.code(404).send(err('session_not_found', `no session ${sessionId}`));
-      if (session.status !== 'active') return reply.code(410).send(err('session_destroyed', `session is ${session.status}`));
-
+      // The one gate (sessionHeader.ts): the session named, its files on
+      // disk, THE folder its tools open — and the checkout touched.
+      let session: SessionRow, folderId: string;
+      try { ({ session, folderId } = await toolSession(ctx.sessions, req.headers)); }
+      catch (e) {
+        if (e instanceof ToolError) return reply.code(STATUS[e.code] ?? 400).send(err(e.code, e.message, e.retryable));
+        throw e;
+      }
+      const sessionId = session.id;
       const workspace = await ctx.workspaces.get(session.workspaceId);
       let container;
       try {
-        container = await deps.containers.ensure(session, workspace);
+        container = await deps.containers.ensure(folderId, workspace);
       } catch (e) {
         return reply.code(503).send(err('container_start_failed', (e as Error).message, true));
       }
-      void ctx.sessions.touch(sessionId);
 
       const ws = new Sandbox(deps.docker, container);
       // The client aborting its fetch (esc) surfaces as the socket closing

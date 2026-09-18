@@ -7,6 +7,7 @@
 import path from 'node:path';
 import type { ModelMessage } from 'ai';
 import type { Sessions } from '../sessions.js';
+import type { SessionRow } from '../db/schema.js';
 import { agentModelConfig } from '../../core/llm/agentConfig.js';
 import { loadTranscriptFile, newestTranscriptFile, Transcript, transcriptStamp } from '../../core/llm/transcript.js';
 import { compact, shouldCompact, getStrategy, CompactionLock, resolveContextWindow, resolveCompactSetting } from '../../core/llm/compaction.js';
@@ -72,16 +73,19 @@ export class AssistantConversation {
   /** The assistant's session row, pointed at what the user is looking at —
    *  created the first time, re-pointed (workspace + folder) every turn
    *  after, since the active session moves between turns. Called BEFORE the
-   *  turn's agent is built, so the model already knows what to bill. */
-  async ensureSession(workspaceId: string | null, activeSessionId?: string | null): Promise<string> {
+   *  turn's agent is built: the turn runs on the row's model, its tools open
+   *  the row's folder, and every call is billed to it. */
+  async ensureSession(workspaceId: string | null, activeSessionId?: string | null): Promise<SessionRow> {
     if (!workspaceId) throw new Error('no active workspace — /workspaces to pick one');
     if (this.sessionId) {
       await this.deps.sessions.follow(this.sessionId, workspaceId, activeSessionId);
-      return this.sessionId;
+      const row = await this.deps.sessions.get(this.sessionId);
+      if (row) return row;
+      this.sessionId = null; // purged underneath us — make a new one
     }
     const row = await this.deps.sessions.createAssistant(workspaceId, activeSessionId);
     this.sessionId = row.id;
-    return row.id;
+    return row;
   }
 
   // ── compaction ───────────────────────────────────────────────────────────

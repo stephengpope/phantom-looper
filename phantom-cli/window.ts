@@ -22,6 +22,10 @@ import { VoiceClient, sidecarEnv, codingKanbanTool, screenModeTools,
 import { Transcript, transcriptPath, adoptServerCopy, syncTranscriptUp, stepSaveUp } from './session.js';
 import { parseTranscript, type UsageTotals } from '../core/llm/transcript.js';
 import { agentModelConfig, pinnedCfg, sessionPin, type ModelPin } from '../core/llm/agentConfig.js';
+
+/** The assistant's session row as the routes return it: what its agent is
+ *  built from (the pin) and what its file tools run as (id + folder). */
+type AssistantRow = { id: string; folderId: string | null } & ModelPin;
 import { contextWindowFor } from '../phantom-backend/models.js';
 import { compact, getStrategy, CompactionLock, resolveCompactSetting, resolveContextWindow } from '../core/llm/compaction.js';
 
@@ -726,7 +730,6 @@ export class WindowStore {
     try {
       const u = await this.api('GET', `/sessions/${id}/token-usage`) as
         { input?: number; output?: number; cache_read?: number; cache_write?: number };
-      // Coerce: PostgreSQL bigint sums arrive as strings through JSON.
       return { input: Number(u.input ?? 0), output: Number(u.output ?? 0),
         cache_read: Number(u.cache_read ?? 0), cache_write: Number(u.cache_write ?? 0) };
     } catch (e) {
@@ -1653,7 +1656,8 @@ export class WindowStore {
       let cfg: Record<string, ConfigValue>;
       try {
         cfg = current ?? await this.readSettings();
-        built = make(await buildAssistantKit(this, this.assistantDeps), cfg, await this.assistantSession());
+        const own = await this.assistantSession();
+        built = make(await buildAssistantKit(this, this.assistantDeps, own), cfg, own);
       } catch (e) { this.note(`assistant not started: ${(e as Error).message}`); return; }
       this.voice.setAgent(built.agent);
       this.voice.setCompaction(agentModelConfig(cfg, 'supervisor'), compactionSettings(cfg));
@@ -1663,22 +1667,21 @@ export class WindowStore {
 
   /** The assistant's own session row — the supervisor pattern: no checkout,
    *  its folder the session on screen's, so its tools read that session's
-   *  files and its model calls are billed to it. Opened ONCE per window, the
-   *  first time a session is on screen (null before — the assistant can start
-   *  before any session opens); re-pointed on every rebuild after, which App
-   *  fires on every switch. Runs BEFORE the agent is built — the model needs
-   *  the id. */
-  private async assistantSession(): Promise<string | null> {
+   *  files, it runs on the row's model, and its calls are billed to it.
+   *  Opened ONCE per window, the first time a session is on screen (null
+   *  before — the assistant can start before any session opens); re-pointed
+   *  on every rebuild after, which App fires on every switch. Runs BEFORE
+   *  the agent is built — the model needs the row. */
+  private async assistantSession(): Promise<AssistantRow | null> {
     const active = this.sessions.active();
-    if (!active) return this.voice.sessionId;
+    if (!active) return this.voice.sessionId ? await this.api('GET', `/sessions/${this.voice.sessionId}`) as AssistantRow : null;
     const target = { workspace_id: active.workspaceId, session_id: active.id };
     if (this.voice.sessionId) {
-      await this.api('POST', `/sessions/${this.voice.sessionId}/follow`, target);
-      return this.voice.sessionId;
+      return await this.api('POST', `/sessions/${this.voice.sessionId}/follow`, target) as AssistantRow;
     }
-    const r = await this.api('POST', '/sessions/assistant', target) as { id: string };
+    const r = await this.api('POST', '/sessions/assistant', target) as AssistantRow;
     this.voice.sessionId = r.id;
-    return r.id;
+    return r;
   }
 
   /** The read tools follow the session on screen: switching rebuilds the kit
@@ -1688,8 +1691,9 @@ export class WindowStore {
     const make = this.opts.makeAssistantAgent ?? buildAssistantAgent;
     try {
       const cfg = current ?? await this.readSettings();
-      const kit = await buildAssistantKit(this, this.assistantDeps);
-      this.voice.setAgent(make(kit, cfg, await this.assistantSession()).agent);
+      const own = await this.assistantSession();
+      const kit = await buildAssistantKit(this, this.assistantDeps, own);
+      this.voice.setAgent(make(kit, cfg, own).agent);
       this.voice.setCompaction(agentModelConfig(cfg, 'supervisor'), compactionSettings(cfg));
     } catch (e) { this.note(`assistant not rebuilt for this session: ${(e as Error).message}`); }
   }

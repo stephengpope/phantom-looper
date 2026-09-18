@@ -1,15 +1,17 @@
-// Per-session workspace container lifecycle. The container is STATELESS —
-// workspace/, scratch/, logs/ live on the shared volume — so removal is a latency
-// event, never a data event. It boots on the first tool call, dies after
-// container_idle_ms of no calls, and is recreated transparently.
+// Per-FOLDER workspace container lifecycle: one container per checkout,
+// shared by every session on it (the coder, its supervisor, the assistant).
+// The container is STATELESS — repo/, scratch/, logs/ live on the shared
+// volume — so removal is a latency event, never a data event. It boots on the
+// first tool call, dies after container_idle_ms of no calls, and is recreated
+// transparently.
 //
-// No in-memory tracking: idle time comes from the session row's lastUsedAt
-// (already updated by every tool call, turn save, and touch); running-command
-// status comes from the commands table. Both survive a process restart, so
+// No in-memory tracking: idle time comes from the folder's lastUsedAt
+// (moved by every tool call and turn save on any of its sessions); running-
+// task status comes from background_tasks. Both survive a process restart, so
 // containers are never wiped at boot — they stay up and the normal idle reaper
 // handles them.
 import type Docker from 'dockerode';
-import type { WorkspaceRow, SessionRow } from '../db/schema.js';
+import type { WorkspaceRow } from '../db/schema.js';
 import type { Settings } from '../settings.js';
 import { resolveAuth } from '../pool/pool.js';
 import type { Paths } from '../pool/paths.js';
@@ -18,7 +20,11 @@ import { logger, errStr } from '../log.js';
 
 const log = logger('container');
 
-export const SESSION_LABEL = 'phantom-looper.session';
+/** A container is named by the FOLDER it serves: `phantom-looper-ws-<folder
+ *  id>`. The name is the ONE key — it is what ensure/remove open and what the
+ *  running-container list reads the id back off. (A label used to carry the
+ *  same id under the old "session" name: two keys for one fact; gone.) */
+const NAME_PREFIX = 'phantom-looper-ws-';
 
 /** The mount that gives a docker-enabled container its OWN /var/lib/docker on a
  *  real filesystem. An anonymous volume (no Source) is disk-backed, so the inner
@@ -31,7 +37,6 @@ const DOCKER_GRAPH_MOUNT = { Type: 'volume', Target: '/var/lib/docker' } as cons
 interface SpecInput {
   name: string;
   image: string;
-  labelValue: string;
   env: string[];
   memMb: number | null;
   cpus: number | null;
@@ -70,7 +75,6 @@ export function buildContainerSpec(i: SpecInput): Record<string, unknown> {
     name: i.name,
     Image: i.image,
     Cmd: ['sleep', 'infinity'], // the command lives at run time, not in the image — any image works
-    Labels: { [SESSION_LABEL]: i.labelValue },
     ...(i.env.length ? { Env: i.env } : {}),
     WorkingDir: '/workspace/repo',
     HostConfig,
@@ -97,31 +101,35 @@ export class ContainerManager {
     private opts: ContainerOpts = {},
   ) {}
 
-  name(sessionId: string): string { return `phantom-looper-ws-${sessionId}`; }
+  name(folderId: string): string { return `${NAME_PREFIX}${folderId}`; }
 
-  /** Session ids that have a running container, read from Docker. */
-  async activeSessions(): Promise<string[]> {
-    const list = await this.docker.listContainers({ filters: { label: [SESSION_LABEL], status: ['running'] } })
+  /** Folder ids that have a running container, read from Docker off the
+   *  container names. (Docker's name filter is a substring match, so the
+   *  prefix is checked again here.) */
+  async activeFolders(): Promise<string[]> {
+    const list = await this.docker.listContainers({ filters: { name: [NAME_PREFIX], status: ['running'] } })
       .catch((e) => { log.warn({ err: errStr(e) }, 'could not list containers'); return []; });
-    return list.map((c) => c.Labels?.[SESSION_LABEL]).filter((id): id is string => !!id);
+    return list.flatMap((c) => (c.Names ?? [])
+      .map((n) => n.replace(/^\//, ''))
+      .filter((n) => n.startsWith(NAME_PREFIX))
+      .map((n) => n.slice(NAME_PREFIX.length)));
   }
 
-  /** The running container for a session, created if absent. Serialized per
-   *  session so two simultaneous tool calls cannot double-create. */
-  async ensure(session: SessionRow, workspace: WorkspaceRow | undefined): Promise<Docker.Container> {
-    // Containers belong to FOLDERS (they mount the checkout). A session that
-    // borrows another's folder (the supervisor) shares that folder's
-    // container; for owners folderId === id and nothing changes.
-    const key = session.folderId ?? session.id;
-    const existing = this.inflight.get(key);
+  /** The running container for a FOLDER, created if absent. Containers
+   *  belong to folders (they mount the checkout): every session on the
+   *  folder — the coder, its supervisor, the assistant — shares the one.
+   *  Serialized per folder so two simultaneous tool calls cannot
+   *  double-create. */
+  async ensure(folderId: string, workspace: WorkspaceRow | undefined): Promise<Docker.Container> {
+    const existing = this.inflight.get(folderId);
     if (existing) return existing;
-    const p = this.ensureInner(session, workspace).finally(() => this.inflight.delete(key));
-    this.inflight.set(key, p);
+    const p = this.ensureInner(folderId, workspace).finally(() => this.inflight.delete(folderId));
+    this.inflight.set(folderId, p);
     return p;
   }
 
-  private async ensureInner(session: SessionRow, workspace: WorkspaceRow | undefined): Promise<Docker.Container> {
-    const c = this.docker.getContainer(this.name(session.folderId ?? session.id));
+  private async ensureInner(key: string, workspace: WorkspaceRow | undefined): Promise<Docker.Container> {
+    const c = this.docker.getContainer(this.name(key));
     try {
       const info = await c.inspect();
       if (info.State.Running) return c;
@@ -136,11 +144,9 @@ export class ContainerManager {
       { workspace });
     const image = limits.container_image;
     const Env = await this.credentialEnv(workspace);
-    const key = session.folderId ?? session.id;
     const spec = buildContainerSpec({
       name: this.name(key),
       image: String(image),
-      labelValue: key,
       env: Env,
       memMb: limits.container_memory_mb,
       cpus: limits.container_cpus,
@@ -159,12 +165,12 @@ export class ContainerManager {
       // box (or one just upgraded) has nothing local until here. Any other
       // failure surfaces as-is.
       if ((e as { statusCode?: number }).statusCode !== 404) throw e;
-      log.info({ session: session.id, image }, 'workspace image not present — pulling');
+      log.info({ folder: key, image }, 'workspace image not present — pulling');
       await this.pullImage(String(image));
       created = await this.docker.createContainer(spec);
     }
     await created.start();
-    log.info({ session: session.id, image }, 'workspace container started');
+    log.info({ folder: key, image }, 'workspace container started');
     return created;
   }
 
@@ -208,17 +214,17 @@ export class ContainerManager {
     return p;
   }
 
-  async remove(sessionId: string): Promise<void> {
-    await this.docker.getContainer(this.name(sessionId)).remove({ force: true, v: true }).catch(() => {});
+  async remove(folderId: string): Promise<void> {
+    await this.docker.getContainer(this.name(folderId)).remove({ force: true, v: true }).catch(() => {});
   }
 
-  /** Kill idle containers. Uses the session's lastUsedAt from the DB and checks
-   *  the commands table for running detached commands — no in-memory state. */
-  async reap(idleMs: number, idleSessions: (idleMs: number) => Promise<string[]>): Promise<void> {
-    const stale = await idleSessions(idleMs);
-    for (const sessionId of stale) {
-      await this.remove(sessionId);
-      log.info({ session: sessionId }, 'idle workspace container removed');
+  /** Kill idle containers. `idleFolders` answers from the folder's lastUsedAt
+   *  and background_tasks — no in-memory state. */
+  async reap(idleMs: number, idleFolders: (idleMs: number) => Promise<string[]>): Promise<void> {
+    const stale = await idleFolders(idleMs);
+    for (const folderId of stale) {
+      await this.remove(folderId);
+      log.info({ folder: folderId }, 'idle workspace container removed');
     }
   }
 }

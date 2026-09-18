@@ -5,7 +5,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { SessionRow, WorkspaceRow } from '../../db/schema.js';
 import { ToolError } from '../../tools/envelope.js';
 import { ok, err, type AppCtx } from '../app.js';
-import { SESSION_HEADER } from '../sessionHeader.js';
+import { SESSION_HEADER, toolSession } from '../sessionHeader.js';
 import type { FsDeps } from './fs.js';
 import type { GitEngine } from '../../git/engine.js';
 import { logger, errStr } from '../../log.js';
@@ -26,21 +26,18 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
     return typeof h === 'string' ? h : '';
   };
 
+  /** The one gate (sessionHeader.ts), plus the workspace git needs. */
   async function resolveSession(req: { headers: Record<string, unknown> }):
     Promise<{ session: SessionRow; workspace: WorkspaceRow }> {
-    const sessionId = String(req.headers[SESSION_HEADER] ?? '');
-    const session = sessionId ? await ctx.sessions.get(sessionId) : undefined;
-    if (!session) throw new ToolError('session_not_found', sessionId || `missing ${SESSION_HEADER}`);
-    if (session.status !== 'active') throw new ToolError('session_destroyed', `session is ${session.status}`);
+    const { session } = await toolSession(ctx.sessions, req.headers);
     const workspace = await ctx.workspaces.get(session.workspaceId);
     if (!workspace) throw new ToolError('not_found', 'workspace vanished');
-    void ctx.sessions.touch(session.id);
     return { session, workspace };
   }
 
   const send = (reply: { code: (n: number) => { send: (b: unknown) => unknown } }, e: unknown) => {
     if (e instanceof ToolError) {
-      const status = e.code === 'busy' ? 409 : e.code.startsWith('session') ? 404 : 400;
+      const status = e.code === 'busy' ? 409 : e.code === 'session_destroyed' ? 410 : e.code.startsWith('session') ? 404 : 400;
       return reply.code(status).send(err(e.code, e.message, e.retryable));
     }
     throw e;

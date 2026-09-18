@@ -5,36 +5,34 @@
 // written once, a manual name the titler never overwrites, the lock's
 // conditional UPDATE) and what gives a future list feed one place to hang.
 //
-// A session binds to a workspace and a directory at creation and never
-// changes; the id names the directory and the branch.
-//
-// ONE branch, start to finish: it is checked out at creation, worked in,
-// committed to, and pushed back to. Nothing is ever pushed anywhere else. The
-// branch is always the session's own {prefix}/{id}, cut from the base branch,
-// and is recorded on the row, so it is decided once and never re-derived.
+// A session is a CONVERSATION. It uses one FOLDER (folder_id) — the
+// checkout: files, branch, container. A coder's folder is its own (same id),
+// a supervisor's is its coder's, the assistant's is the on-screen session's.
+// The checkout's facts — files present, last touched, last pushed, git state
+// — are the folder's (Folders); every read here joins them in (`view`), so
+// the row a caller gets carries `status`, `lastUsedAt`, `lastPushAt`,
+// `work` and `branch` as before. `folderOf` is the ONE answer to "which
+// folder does this session use".
 //
 // Events: a write that changes a fact a watcher draws (name, plan mode, agent,
-// work, the record landing) publishes it here, with the write; EVERY other
-// write publishes a bare `session` record — "this row moved" — which is what
-// the session LIST feed (GET /sessions/events) is built on, so no writer
-// anywhere has to remember to tell the list. Lock events proper stay with
-// their callers: a hold means different things to a window (its spinner) and
-// to a git sync (nothing to show), so the caller says.
-import fs from 'node:fs/promises';
+// the record landing) publishes it here, with the write; EVERY other write
+// publishes a bare `session` record — "this row moved" — which is what the
+// session LIST feed (GET /sessions/events) is built on, so no writer anywhere
+// has to remember to tell the list. The folder's writes (touch, work, push)
+// publish the same way under the folder's id (Folders). Lock events proper
+// stay with their callers: a hold means different things to a window (its
+// spinner) and to a git sync (nothing to show), so the caller says.
 import { and, desc, eq, ilike, inArray, isNull, isNotNull, lt, ne, not, or, count, sql as sqlRaw } from 'drizzle-orm';
 import type { Db } from './db/client.js';
 import type { PgColumn } from 'drizzle-orm/pg-core';
-// `folders` and `cards` appear here for ONE reason: a session's branch and
-// card number are JOINs (the list carries both, the filter reaches the
-// branch, the card reads take a number). Read through the join only; their
-// rows are Folders' and Cards' to write.
+// `folders` and `cards` appear here for JOINs only: every session read
+// carries its folder's checkout facts, the list carries the card number and
+// column, the card reads take a number. Their rows are Folders' and Cards'
+// to write.
 import { sessions, sessionColumns, folders, cards, logTokens, type SessionRow } from './db/schema.js';
 import type { Settings } from './settings.js';
 import type { Workspaces } from './workspaces.js';
 import type { Folders } from './folders.js';
-import { git, cloneFresh, checkoutBranch, classifyGitFailure, localState } from './git/git.js';
-import { claimSlot, resolveAuth } from './pool/pool.js';
-import { sessionDir, repoDir, type Paths } from './pool/paths.js';
 import { newId } from '../core/ids.js';
 import { logger } from './log.js';
 import { lastUserFromJsonl, stripUsageFromJsonl } from '../core/llm/transcript.js';
@@ -48,8 +46,8 @@ export class SessionError extends Error {
   constructor(public code: string, message: string, public retryable = false) { super(message); }
 }
 
-/** A session with its folder's facts joined in — what the API serves, so
- *  clients keep seeing `branch` even though sessions no longer carry it. */
+/** A freshly created session: its folder's branch is known and the commit
+ *  it was cut from rides along for the response. */
 export type SessionFull = SessionRow & { branch: string; cutFromSha: string };
 
 /** The list's preview of the last thing the user typed: a few dozen
@@ -60,8 +58,6 @@ export const LAST_MESSAGE_CHARS = 200;
  *  turns. The engine locks with it, the release hook ignores it, and the
  *  transcript save reads who drove the turn off it. */
 export const LOOP_CLIENT_ID = 'supervisor';
-
-export type WorkState = 'not_pushed' | 'not_merged' | 'merged';
 
 /** What GET /sessions accepts — the object owns what the list IS: the
  *  filters and the count share one WHERE, so `total` is exactly the rows the
@@ -81,13 +77,8 @@ export interface ListQuery {
   beforePinned?: boolean;
 }
 
-/** A list row: the session plus the facts it does not carry itself — its
- *  folder's branch, its card's number and the card's column. */
-export type ListedSession = SessionRow & { branch: string | null; card: number | null; cardStatus: string | null };
-
-/** A session on a card, with the card's number — what the board and the
- *  work-state refresh name their events by. */
-export type CardSession = SessionRow & { card: number | null };
+/** A list row: the session plus its card's number and the card's column. */
+export type ListedSession = SessionRow & { card: number | null; cardStatus: string | null };
 
 // ── Pure rules — no row in hand, nothing to await ────────────────────────────
 
@@ -111,10 +102,37 @@ export function assertDuplicable(s: SessionRow): void {
   }
 }
 
+/** THE folder this session's tools open. Null only on an assistant with no
+ *  session on screen yet — then there are no files, and a caller that needs
+ *  them is refused; nothing ever falls back to the session's own id. */
+export function folderOf(s: Pick<SessionRow, 'id' | 'folderId'>): string {
+  if (!s.folderId) throw new SessionError('no_folder', `session ${s.id} has no folder — nothing to read`);
+  return s.folderId;
+}
+
+/** Does the session own its files — is the folder its own? A coder does; a
+ *  supervisor and the assistant borrow another's. Only an owner has files to
+ *  destroy, restart, back up or sweep. */
+export const ownsFolder = (s: Pick<SessionRow, 'id' | 'folderId'>): boolean => s.folderId === s.id;
+
+/** Is the hold live right now — someone holds it and the clock has not run
+ *  out. THE rule every `locked` on the wire and every guard reads. */
+export const isHeld = (s: Pick<SessionRow, 'lockedBy' | 'lockExpiresAt'>, now = Date.now()): boolean =>
+  !!s.lockedBy && !!s.lockExpiresAt && s.lockExpiresAt.getTime() > now;
+
 /** Held right now by someone who is not `client`? An expired hold is no hold. */
 export const heldByOther = (s: SessionRow, client: string): boolean =>
-  !!s.lockedBy && s.lockedBy !== client
-  && !!s.lockExpiresAt && s.lockExpiresAt.getTime() > Date.now();
+  isHeld(s) && s.lockedBy !== client;
+
+/** A hold that ended by the clock alone. A holder RELEASES when its turn
+ *  ends; only a holder that died mid-turn — a crashed window, a killed
+ *  process — leaves its hold to expire. The row keeps who and when: that is
+ *  the evidence, read here. Null while free (released) or still held. */
+export function expiredHold(s: Pick<SessionRow, 'lockedBy' | 'lockedLabel' | 'lockExpiresAt'>, now = Date.now()):
+{ by: string; label: string | null; at: Date } | null {
+  if (!s.lockedBy || !s.lockExpiresAt || s.lockExpiresAt.getTime() > now) return null;
+  return { by: s.lockedBy, label: s.lockedLabel, at: s.lockExpiresAt };
+}
 
 /** `sessions.agent` after `client` saved a turn: WHO DROVE THE LAST TURN.
  *  The supervisor's record is the supervisor's for life (read-only in every
@@ -133,7 +151,6 @@ export function agentAfterSave(current: string | null, client: string): 'coding'
 export class Sessions {
   constructor(
     private readonly db: Db,
-    private readonly paths: Paths,
     private readonly settings: Settings,
     private readonly workspaces: Workspaces,
     private readonly folders: Folders,
@@ -144,6 +161,26 @@ export class Sessions {
   /** The row moved in a way no richer event names: the list re-reads. Under
    *  no client, so every listener hears it (the feed drops a client's own). */
   private changed(id: string): void { this.events?.publish(id, '', { event: 'session' }); }
+
+  // ── the view ───────────────────────────────────────────────────────────────
+  // A session read is the row plus its folder's checkout facts. ONE select
+  // shape and ONE join, used by every read below, so `status`, `lastUsedAt`,
+  // `lastPushAt`, `work` and `branch` mean the same thing everywhere.
+
+  /** The files' presence as the wire says it. No folder = nothing to have
+   *  destroyed, so active. */
+  private static readonly status = sqlRaw<'active' | 'destroyed'>`case when ${folders.id} is null or ${folders.onDisk} then 'active' else 'destroyed' end`;
+  /** A session with no folder has never touched a checkout: its birth is
+   *  its last activity. */
+  private static readonly lastUsedAt = sqlRaw<Date>`coalesce(${folders.lastUsedAt}, ${sessions.createdAt})`.mapWith((v) => new Date(v));
+  private static readonly view = {
+    ...sessionColumns, branch: folders.branch, status: Sessions.status, lastUsedAt: Sessions.lastUsedAt,
+    lastPushAt: folders.lastPushAt, work: folders.work,
+  };
+  /** `select view from sessions left join folders` — every read starts here. */
+  private from() {
+    return this.db.select(Sessions.view).from(sessions).leftJoin(folders, eq(folders.id, sessions.folderId));
+  }
 
   // ── the model ──────────────────────────────────────────────────────────────
   // THE RULE: a session's model is its row's provider/model/base_url, and
@@ -171,11 +208,10 @@ export class Sessions {
    *  flight) takes the settings' model now. The row change goes out on the
    *  session feed, so a window showing that session repaints from it. */
   async followModelSettings(): Promise<void> {
-    const rows = await this.db.select(sessionColumns).from(sessions)
-      .where(and(eq(sessions.status, 'active'), eq(sessions.turnCount, 0)));
+    const rows = await this.from().where(eq(sessions.turnCount, 0));
     const now = Date.now();
     for (const s of rows) {
-      if (s.lockedBy && s.lockExpiresAt && s.lockExpiresAt.getTime() > now) continue;
+      if (isHeld(s, now)) continue;
       const m = await this.birthModel(s.workspaceId, s.agent as 'supervisor' | 'assistant' | null);
       if (m.provider === s.provider && m.model === s.model && m.baseUrl === s.baseUrl) continue;
       await this.db.update(sessions).set(m).where(eq(sessions.id, s.id));
@@ -186,7 +222,7 @@ export class Sessions {
   // ── reads ──────────────────────────────────────────────────────────────────
 
   async get(id: string): Promise<SessionRow | undefined> {
-    const rows = await this.db.select(sessionColumns).from(sessions).where(eq(sessions.id, id));
+    const rows = await this.from().where(eq(sessions.id, id));
     return rows[0];
   }
 
@@ -249,8 +285,8 @@ export class Sessions {
         q.beforePinned === true ? eq(sessions.pinned, false) : undefined,
         and(eq(sessions.pinned, q.beforePinned === true),
           q.beforeId
-            ? or(lt(sessions.lastUsedAt, cut), and(eq(sessions.lastUsedAt, cut), lt(sessions.id, q.beforeId)))
-            : lt(sessions.lastUsedAt, cut)))
+            ? or(lt(Sessions.lastUsedAt, cut), and(eq(Sessions.lastUsedAt, cut), lt(sessions.id, q.beforeId)))
+            : lt(Sessions.lastUsedAt, cut)))
       : undefined;
     // Token totals: LEFT JOIN log_tokens and SUM — the one store for spend.
     // A bigint SUM comes back from pg as text; mapWith(Number) makes it the
@@ -258,7 +294,7 @@ export class Sessions {
     const sum = (col: PgColumn) => sqlRaw<number>`coalesce(sum(${col}), 0)`.mapWith(Number);
     let page = this.db
       .select({
-        ...sessionColumns, branch: folders.branch, card: cards.number, cardStatus: cards.status,
+        ...Sessions.view, card: cards.number, cardStatus: cards.status,
         tokensInput: sum(logTokens.tokensInput).as('tokens_input'),
         tokensOutput: sum(logTokens.tokensOutput).as('tokens_output'),
         tokensCacheRead: sum(logTokens.tokensCacheRead).as('tokens_cache_read'),
@@ -269,8 +305,8 @@ export class Sessions {
       .leftJoin(cards, eq(cards.id, sessions.cardId))
       .leftJoin(logTokens, eq(logTokens.sessionId, sessions.id))
       .where(and(...filters, ...(cursor ? [cursor] : [])))
-      .groupBy(sessions.id, folders.branch, cards.number, cards.status)
-      .orderBy(desc(sessions.pinned), desc(sessions.lastUsedAt), desc(sessions.id))
+      .groupBy(sessions.id, folders.id, cards.number, cards.status)
+      .orderBy(desc(sessions.pinned), desc(Sessions.lastUsedAt), desc(sessions.id))
       .$dynamic();
     if (q.limit) page = page.limit(q.limit);
     const [rows, [{ total }]] = await Promise.all([
@@ -283,48 +319,10 @@ export class Sessions {
     return { sessions: rows, total };
   }
 
-  /** Every active session — the disk sweep's protected set. */
-  async listActive(): Promise<SessionRow[]> {
-    return this.db.select(sessionColumns).from(sessions).where(eq(sessions.status, 'active'));
-  }
-
-  /** Among `candidates`, return the IDs whose lastUsedAt is older than `idleMs`
-   *  ago — the idle set. The caller intersects this with running containers and
-   *  running commands to decide what to reap. */
-  async listIdle(candidates: string[], idleMs: number): Promise<string[]> {
-    if (!candidates.length) return [];
-    const cutoff = new Date(Date.now() - idleMs);
-    const rows = await this.db.select({ id: sessions.id }).from(sessions)
-      .where(and(inArray(sessions.id, candidates), lt(sessions.lastUsedAt, cutoff)));
-    return rows.map((r) => r.id);
-  }
-
-  /** A workspace's active sessions — what stands in the way of deleting it. */
-  async listActiveIn(workspaceId: string): Promise<SessionRow[]> {
-    return this.db.select(sessionColumns).from(sessions)
-      .where(and(eq(sessions.workspaceId, workspaceId), eq(sessions.status, 'active')));
-  }
-
-  /** The rows the work-state refresh walks: the sessions named, with the
-   *  facts the walk needs and nothing else — the card number is what its
-   *  board event is named by. */
-  async listForWorkRefresh(ids: string[]): Promise<Pick<CardSession, 'id' | 'folderId' | 'workspaceId' | 'work' | 'card'>[]> {
-    if (!ids.length) return [];
-    return this.db.select({
-      id: sessions.id, folderId: sessions.folderId, workspaceId: sessions.workspaceId, work: sessions.work,
-      card: cards.number,
-    }).from(sessions).leftJoin(cards, eq(cards.id, sessions.cardId)).where(inArray(sessions.id, ids));
-  }
-
-  /** Sessions whose `work` is stale: non-null but no longer backed by a
-   *  running container. The refresh clears these to null. */
-  async listStaleWork(activeIds: string[]): Promise<Pick<CardSession, 'id' | 'workspaceId' | 'work' | 'card'>[]> {
-    const where = activeIds.length
-      ? and(isNotNull(sessions.work), not(inArray(sessions.id, activeIds)))
-      : isNotNull(sessions.work);
-    return this.db.select({
-      id: sessions.id, workspaceId: sessions.workspaceId, work: sessions.work, card: cards.number,
-    }).from(sessions).leftJoin(cards, eq(cards.id, sessions.cardId)).where(where);
+  /** The sessions that own files on disk — the disk sweeps' set: each is the
+   *  session whose folder is its own and present. */
+  async listOwnersOnDisk(): Promise<SessionRow[]> {
+    return this.from().where(and(eq(folders.id, sessions.id), eq(folders.onDisk, true)));
   }
 
   // ── the card ───────────────────────────────────────────────────────────────────────
@@ -338,7 +336,7 @@ export class Sessions {
    *  destroyed coder is still the card's coder (the looper restarts it). */
   private async newestOnCard(workspaceId: string, cardNumber: number, kind: 'coding' | 'supervisor'):
   Promise<SessionRow | undefined> {
-    const rows = await this.db.select(sessionColumns).from(sessions)
+    const rows = await this.from()
       .innerJoin(cards, eq(cards.id, sessions.cardId))
       .where(and(eq(cards.workspace_id, workspaceId), eq(cards.number, cardNumber),
         kind === 'coding' ? isCodingSession : eq(sessions.agent, 'supervisor')))
@@ -359,8 +357,9 @@ export class Sessions {
   /** Every card's coding session in a workspace — the newest per card, the
    *  same rule `coderOf` uses. One query for the whole board. */
   async codersByCard(workspaceId: string): Promise<Array<SessionRow & { card: number }>> {
-    return this.db.selectDistinctOn([sessions.cardId], { ...sessionColumns, card: cards.number })
+    return this.db.selectDistinctOn([sessions.cardId], { ...Sessions.view, card: cards.number })
       .from(sessions)
+      .leftJoin(folders, eq(folders.id, sessions.folderId))
       .innerJoin(cards, eq(cards.id, sessions.cardId))
       .where(and(eq(cards.workspace_id, workspaceId), isCodingSession))
       .orderBy(sessions.cardId, desc(sessions.createdAt));
@@ -373,20 +372,14 @@ export class Sessions {
     this.changed(id);
   }
 
-  /** A batch of rows by id — the board names each card's session, its hold
-   *  and its work state off these. */
-  async getMany(ids: string[]): Promise<Map<string, SessionRow>> {
-    if (!ids.length) return new Map();
-    const rows = await this.db.select(sessionColumns).from(sessions).where(inArray(sessions.id, ids));
-    return new Map(rows.map((r) => [r.id, r]));
-  }
-
-  /** Sessions that finished and went quiet: a record exists, nobody holds
-   *  them, idle past `threshold`, and not digested since they last moved. */
+  /** Sessions that went quiet: a record exists, nobody holds them NOW —
+   *  released, or a hold that ran out because its holder died (the digest
+   *  tells the two apart with `expiredHold`) — idle past `threshold`, and
+   *  not digested since they last moved. */
   async listIdleSince(threshold: Date): Promise<SessionRow[]> {
-    return this.db.select(sessionColumns).from(sessions).where(
+    return this.from().where(
       and(
-        isNull(sessions.lockedBy),
+        or(isNull(sessions.lockedBy), isNull(sessions.lockExpiresAt), lt(sessions.lockExpiresAt, new Date())),
         lt(sessions.transcriptUpdatedAt, threshold),
         or(
           isNull(sessions.digestNotifiedAt),
@@ -398,41 +391,30 @@ export class Sessions {
 
   // ── lifecycle ──────────────────────────────────────────────────────────────
 
-  /** Create a session: claim a warm slot or clone directly — one way to obtain a
-   *  workspace, not a fast path for some callers and a slow one for others. The
-   *  claim fetch is what makes the result CORRECT; pool refresh only makes it
-   *  small. Record the commit it was cut from (cut_from_sha) for `/git/status`.
-   *
-   *  Passing `id` restarts an existing session. Destroy deletes a session's FILES
-   *  and nothing else — the row keeps its id and its branch — so a restart needs
-   *  no extra state: the same id names the same branch, checkoutBranch finds it on
-   *  origin, and the session carries on exactly where it stopped.
-   *
-   *  `fromBranch` changes only the new branch's CUT POINT (the duplicate route):
-   *  the folder is still obtained the one way — pool claim or clone off base —
-   *  but the session branch is cut from origin's copy of `fromBranch` instead of
-   *  from base. A missing ref is a hard error, never a silent fall back to base:
-   *  the caller flushed the source to origin first, so absent means something
-   *  is wrong, and a copy that quietly starts at base loses the work. */
+  /** Create a session: a conversation born with its own checkout
+   *  (Folders.checkout), sharing the id. Passing `id` RESTARTS a session
+   *  whose files were removed: the folder remembers the branch, so the same
+   *  id comes back exactly where it stopped (Folders.restore). `fromBranch`
+   *  cuts a NEW session's branch from a source branch on origin instead of
+   *  base (the duplicate route). */
   async create(workspaceId: string, opts: { id?: string; fromBranch?: string } = {}): Promise<SessionFull> {
     const workspace = await this.workspaces.get(workspaceId);
     if (!workspace) throw new SessionError('not_found', `no workspace ${workspaceId}`);
 
-    const prior = opts.id
-      ? (await this.db.select(sessionColumns).from(sessions).where(eq(sessions.id, opts.id)))[0]
-      : undefined;
+    const prior = opts.id ? await this.get(opts.id) : undefined;
     if (prior && prior.workspaceId !== workspaceId) {
       throw new SessionError('workspace_mismatch', `session ${prior.id} belongs to another workspace`);
     }
-    // An active session still owns its directory; rebuilding it underneath would
-    // delete work that has not been pushed yet.
-    if (prior && prior.status === 'active') {
-      throw new SessionError('already_active', `session ${prior.id} is still active`);
-    }
-    // A conversation-only session has no files — there is nothing to restart.
-    if (prior && conversationOnly(prior)) {
+    // A session that does not own its folder has no files of its own — there
+    // is nothing to restart.
+    if (prior && !ownsFolder(prior)) {
       throw new SessionError('invalid_args',
         'a supervisor session holds only its conversation — there are no files to restart; the looper creates these');
+    }
+    // Files still on disk: rebuilding them underneath would delete work that
+    // has not been pushed yet.
+    if (prior && prior.status === 'active') {
+      throw new SessionError('already_active', `session ${prior.id} is still active`);
     }
     // A cut point belongs to a NEW session alone: a restart's start point is the
     // branch the folder remembers, never a second opinion.
@@ -440,103 +422,34 @@ export class Sessions {
       throw new SessionError('invalid_args', 'fromBranch cuts a NEW session\'s branch — a restart has its own');
     }
 
-    const id = prior?.id ?? opts.id ?? newId();
-    const dest = sessionDir(this.paths, id);
-    const dir = repoDir(this.paths, id);
-    const auth = await resolveAuth(this.settings, workspace);
-    // A restart uses the branch the FOLDER remembers — the work is on it. The
-    // folder shares the session's id, so directories keep their names.
-    const priorFolder = prior?.folderId ? await this.folders.get(prior.folderId) : undefined;
-    const branch = priorFolder?.branch ?? `${workspace.branchPrefix}/${id}`;
-
-    // Everything from here to the checkout talks to the remote, and a remote
-    // failure has a MEANING a person can act on — a dead token, a repo the token
-    // cannot see, GitHub unreachable. Classified into a SessionError so the API
-    // answers with that meaning; anything unrecognised keeps its own error.
-    let found: 'existing' | 'new';
-    let cutFromSha: string;
-    let claimed: boolean;
-    try {
-      claimed = await claimSlot(this.paths, workspace.owner, workspace.name, workspace.baseBranch, dest);
-      if (claimed) {
-        // Pool slots are pristine by construction, so the unguarded catch-up is
-        // safe — and mandatory: a slot stocked days ago is days behind.
-        await git(dir, ['fetch', 'origin', workspace.baseBranch], auth);
-        await git(dir, ['reset', '--hard', `origin/${workspace.baseBranch}`]);
-      } else {
-        const depth = await this.settings.resolve('initial_history_depth', { workspace });
-        await cloneFresh(dir, auth, workspace.baseBranch, depth);
-        await fs.mkdir(`${dest}/scratch`, { recursive: true });
-      }
-      await fs.mkdir(`${dest}/logs`, { recursive: true }); // detached exec logs — outside workspace/, or add -A commits them
-
-      // --depth implies --single-branch: the clone's fetch refspec covers ONLY the
-      // base branch, so without this a push to the session branch would update no
-      // tracking ref and every origin/<branch> ancestry check would read as
-      // no_upstream forever. One added refspec scopes tracking to exactly this
-      // session's branch; on base there is nothing to add.
-      if (branch !== workspace.baseBranch) {
-        await git(dir, ['config', '--add', 'remote.origin.fetch',
-          `+refs/heads/${branch}:refs/remotes/origin/${branch}`]);
-      }
-      if (opts.fromBranch) {
-        // Cut the session branch from origin's copy of the source branch. The
-        // duplicate route flushed it there first; "no such ref" therefore means
-        // the work never made it to origin, which is an error — checking out
-        // from base instead would silently lose it.
-        try {
-          await git(dir, ['fetch', 'origin', `+refs/heads/${opts.fromBranch}:refs/remotes/origin/${opts.fromBranch}`], auth);
-        } catch (e) {
-          const msg = String((e as { stderr?: string }).stderr ?? e);
-          if (/couldn't find remote ref|not found in upstream|no such ref/i.test(msg)) {
-            throw new SessionError('source_branch_gone',
-              `the source branch ${opts.fromBranch} is not on origin — its work never made it there, so there is nothing to copy`);
-          }
-          throw e;
-        }
-        await git(dir, ['checkout', '-B', branch, `refs/remotes/origin/${opts.fromBranch}`]);
-        found = 'new';
-      } else {
-        found = await checkoutBranch(dir, branch, auth);
-      }
-      const { stdout } = await git(dir, ['rev-parse', 'HEAD']);
-      cutFromSha = stdout.trim();
-    } catch (e) {
-      const why = classifyGitFailure(e, { hadToken: !!auth.pat });
-      if (why) throw new SessionError(why.code, `cannot check out ${workspace.owner}/${workspace.name}: ${why.message}`, why.retryable);
-      throw e;
-    }
-
     if (prior) {
-      await this.db.update(sessions).set({ status: 'active', lastUsedAt: new Date() })
-        .where(eq(sessions.id, prior.id));
-      log.info({ session: id, branch, found }, 'session restarted');
-      this.changed(prior.id);
-      const row = (await this.db.select(sessionColumns).from(sessions).where(eq(sessions.id, prior.id)))[0];
-      return { ...row, branch, cutFromSha: priorFolder?.cutFromSha ?? cutFromSha };
+      const folder = (await this.folders.get(prior.id))!;
+      await this.folders.restore(folder, workspace);
+      log.info({ session: prior.id, branch: folder.branch }, 'session restarted');
+      const row = (await this.get(prior.id))!;
+      return { ...row, branch: folder.branch, cutFromSha: folder.cutFromSha };
     }
 
-    // The folder (the checkout's identity: branch + the commit it was cut from) and the session (the
-    // conversation) are born together, sharing the id.
-    await this.folders.create({ id, workspaceId, branch, cutFromSha });
-    await this.db.insert(sessions).values({ id, workspaceId, status: 'active', folderId: id,
-      ...await this.birthModel(workspaceId) });
-    const row = (await this.db.select(sessionColumns).from(sessions).where(eq(sessions.id, id)))[0];
-    log.info({ session: id, workspace: `${workspace.owner}/${workspace.name}`, branch, found, claimed, cutFromSha },
-      'session created');
+    // The folder (the checkout) and the session (the conversation) are born
+    // together, sharing the id.
+    const id = opts.id ?? newId();
+    const folder = await this.folders.checkout(workspace, id, { fromBranch: opts.fromBranch });
+    await this.db.insert(sessions).values({ id, workspaceId, folderId: id, ...await this.birthModel(workspaceId) });
+    const row = (await this.get(id))!;
+    log.info({ session: id, branch: folder.branch }, 'session created');
     this.changed(id);
-    return { ...row, branch, cutFromSha };
+    return { ...row, branch: folder.branch, cutFromSha: folder.cutFromSha };
   }
 
   /** A conversation-only session: no checkout of its own — `folderId` points at
    *  another session's folder (the files it can read), or is null when there is
    *  nothing to read. The shared base for supervisor and assistant sessions. */
-  async createConversation(
+  private async createConversation(
     workspaceId: string, opts: { agent: 'supervisor' | 'assistant'; folderId?: string | null; cardId?: number },
   ): Promise<SessionRow> {
     const id = newId();
     await this.db.insert(sessions).values({
-      id, workspaceId, status: 'active', agent: opts.agent,
+      id, workspaceId, agent: opts.agent,
       ...(opts.folderId ? { folderId: opts.folderId } : {}),
       ...(opts.cardId ? { cardId: opts.cardId } : {}),
       ...await this.birthModel(workspaceId, opts.agent),
@@ -553,12 +466,13 @@ export class Sessions {
   }
 
   /** Where the assistant's row points: the workspace, and the folder of the
-   *  session on screen (its own folderId — a coder owns its folder, a
-   *  supervisor borrows the coder's). No session on screen = the workspace
-   *  alone. The same resolution for creating the row and re-pointing it. */
+   *  session on screen (that session's own folderId — a coder owns its
+   *  folder, a supervisor borrows the coder's). No session on screen = the
+   *  workspace alone, no folder. The same resolution for creating the row
+   *  and re-pointing it. */
   private async assistantTarget(workspaceId: string, activeSessionId?: string | null) {
     const active = activeSessionId ? await this.get(activeSessionId) : undefined;
-    return { workspaceId, folderId: active ? active.folderId ?? active.id : null };
+    return { workspaceId, folderId: active?.folderId ?? null };
   }
 
   /** The assistant's conversation-only session, pointed at what the user is
@@ -604,30 +518,14 @@ export class Sessions {
 
   /** Explicit delete honors the request even when work would be lost — that is
    *  the caller's decision to make. The automatic sweep (disk.ts) never does.
-   *  Deletes the session's FILES and nothing else — the row keeps its id and
-   *  its branch, so `create` with the same id restarts it where it stopped. */
+   *  Deletes the session's FILES and nothing else (Folders.removeFiles) — the
+   *  folder keeps the branch, so `create` with the same id restarts it where
+   *  it stopped. Only a session that owns its folder has files; a caller
+   *  checks `ownsFolder`. */
   async destroy(session: SessionRow, opts: { force: boolean }): Promise<void> {
-    // A session that does not OWN its folder (the supervisor's, an orphan) has
-    // no files of its own: mark it and stop.
-    if (session.folderId !== session.id) {
-      await this.db.update(sessions).set({ status: 'destroyed' }).where(eq(sessions.id, session.id));
-      log.info({ session: session.id }, 'conversation-only session destroyed (no files)');
-      this.changed(session.id);
-      return;
-    }
-    const folder = await this.folders.get(session.folderId);
-    const dir = repoDir(this.paths, session.id);
-    const state = folder
-      ? await localState(dir, folder.branch).catch(() => 'unknown' as const)
-      : 'clean' as const;
-    if (state !== 'clean' && !opts.force) {
-      log.warn({ session: session.id, state }, 'destroy would discard work — refusing (pass force)');
-      throw new SessionError('unpushed_work', `session holds ${state} work; delete with force=true to discard`);
-    }
-    await fs.rm(sessionDir(this.paths, session.id), { recursive: true, force: true });
-    await this.db.update(sessions).set({ status: 'destroyed' }).where(eq(sessions.id, session.id));
-    log.info({ session: session.id, state }, 'session destroyed');
-    this.changed(session.id);
+    if (!ownsFolder(session)) throw new SessionError('no_files', `session ${session.id} has no files of its own`);
+    await this.folders.removeFiles((await this.folders.get(session.id))!, opts);
+    log.info({ session: session.id }, 'session destroyed');
   }
 
   /** The row goes for good, the transcript on it. Only its pushed branch on
@@ -660,12 +558,11 @@ export class Sessions {
     const agent = agentAfterSave(s.agent, client);
     const [saved] = await this.db.update(sessions)
       .set({ transcript: data, lastUserMessage, transcriptUpdatedAt: stamp,
-        turnCount: sqlRaw`${sessions.turnCount} + 1`, agent,
-        // Saving a turn is activity: the session stays off the idle sweep.
-        lastUsedAt: stamp,
-      })
+        turnCount: sqlRaw`${sessions.turnCount} + 1`, agent })
       .where(eq(sessions.id, s.id))
       .returning({ name: sessions.name, turnCount: sessions.turnCount, nameManual: sessions.nameManual });
+    // Saving a turn is activity on the checkout: it stays off the idle sweep.
+    if (s.folderId) await this.folders.touch(s.folderId);
     // The record landed: the one moment a client can trust that the server's
     // copy moved. Watchers pull the transcript on this. `by` is the writer,
     // so the window that just uploaded its OWN turn ignores the echo instead
@@ -675,14 +572,15 @@ export class Sessions {
     return { stamp, agent, name: saved.name, turnCount: saved.turnCount, nameManual: saved.nameManual };
   }
 
-  /** Step-level save: updates ONLY the transcript text and lastUsedAt.
-   *  No turn count bump, no naming, no transcript event.
-   *  The lightweight per-step counterpart to saveTranscript. */
-  async stepSave(id: string, data: string): Promise<Date> {
+  /** Step-level save: updates ONLY the transcript text and touches the
+   *  checkout. No turn count bump, no naming, no transcript event. The
+   *  lightweight per-step counterpart to saveTranscript. */
+  async stepSave(s: SessionRow, data: string): Promise<Date> {
     const stamp = new Date();
     await this.db.update(sessions)
-      .set({ transcript: data, transcriptUpdatedAt: stamp, lastUsedAt: stamp })
-      .where(eq(sessions.id, id));
+      .set({ transcript: data, transcriptUpdatedAt: stamp })
+      .where(eq(sessions.id, s.id));
+    if (s.folderId) await this.folders.touch(s.folderId);
     return stamp;
   }
 
@@ -705,15 +603,13 @@ export class Sessions {
   }
 
   /** A turn ended on a conversation-only session (the assistant's): bump the
-   *  turn count (leaving 0 is what freezes the row's model) and touch
-   *  lastUsedAt. Tokens are not here — every model call records its own row
+   *  turn count (leaving 0 is what freezes the row's model) and touch its
+   *  checkout. Tokens are not here — every model call records its own row
    *  in log_tokens. */
-  async turnEnded(id: string): Promise<void> {
-    await this.db.update(sessions).set({
-      lastUsedAt: new Date(),
-      turnCount: sqlRaw`${sessions.turnCount} + 1`,
-    }).where(eq(sessions.id, id));
-    this.changed(id);
+  async turnEnded(s: SessionRow): Promise<void> {
+    await this.db.update(sessions).set({ turnCount: sqlRaw`${sessions.turnCount} + 1` }).where(eq(sessions.id, s.id));
+    if (s.folderId) await this.folders.touch(s.folderId);
+    this.changed(s.id);
   }
 
   // ── facts a person or a job sets ───────────────────────────────────────────
@@ -760,28 +656,16 @@ export class Sessions {
     this.changed(id);
   }
 
-  /** Where the session's work stands, as the git refresh measured it. A
-   *  watcher's work-state dot follows the event. */
-  async setWork(id: string, work: WorkState | null): Promise<void> {
-    await this.db.update(sessions).set({ work }).where(eq(sessions.id, id));
-    this.events?.publish(id, '', { event: 'session', work });
-  }
-
-  /** The branch reached origin. */
-  async markPushed(id: string): Promise<void> {
-    await this.db.update(sessions).set({ lastPushAt: new Date() }).where(eq(sessions.id, id));
-    this.changed(id);
-  }
-
   /** The idle digest mentioned this session. */
   async markDigested(id: string, at: Date): Promise<void> {
     await this.db.update(sessions).set({ digestNotifiedAt: at }).where(eq(sessions.id, id));
   }
 
-  /** Tool calls count as use; background jobs do not, or nothing ever goes cold. */
-  async touch(id: string): Promise<void> {
-    await this.db.update(sessions).set({ lastUsedAt: new Date() }).where(eq(sessions.id, id));
-    this.changed(id);
+  /** A tool call on the session: its CHECKOUT was used, whoever's session
+   *  it is — a supervisor's read keeps the coder's container warm the same
+   *  as the coder's own. Background jobs never touch, or nothing goes cold. */
+  async touch(s: SessionRow): Promise<void> {
+    if (s.folderId) await this.folders.touch(s.folderId);
   }
 
   /** Tag a conversation with who drives it. The loop stamps its coder seat at
@@ -806,8 +690,17 @@ export class Sessions {
         or(isNull(sessions.lockedBy), eq(sessions.lockedBy, client),
           isNull(sessions.lockExpiresAt), lt(sessions.lockExpiresAt, new Date()))))
       .returning({ id: sessions.id });
-    if (rows.length) this.changed(s.id);
-    return rows.length ? expires : null;
+    if (!rows.length) return null;
+    // Taking over a hold that ran out is the recovery path — and the one
+    // moment the previous holder's death is certain. Said in the log (docker
+    // logs, the docker_logs tool); the caller's lock event carries it too.
+    const died = expiredHold(s);
+    if (died && died.by !== client) {
+      log.warn({ session: s.id, diedOn: died.label ?? died.by, expiredAt: died.at.toISOString(), takenBy: client },
+        'previous turn died mid-turn — its hold expired without a release; session taken over');
+    }
+    this.changed(s.id);
+    return expires;
   }
 
   /** Release `client`'s hold. Idempotent — releasing what you do not hold

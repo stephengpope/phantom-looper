@@ -51,6 +51,8 @@ export class SessionFeed {
    *  is missing its tail here, so it repaints. */
   private whole = false;
   private ended = false;
+  /** The dead holder this window already told the person about. */
+  private diedOn: string | null = null;
 
   constructor(
     private stream: Stream,
@@ -146,7 +148,18 @@ export class SessionFeed {
         // WHO comes from the session's seat, WHAT from the holder's own
         // label; a holder that is not one of our agents leaves just its
         // label (a hostname).
-        if (!rec.locked) { this.store.setHeld(this.sessionId, null); return; }
+        if (!rec.locked) {
+          this.store.setHeld(this.sessionId, null);
+          // A hold that ran out on its own is a turn that died there — not
+          // one that ended. Said once, when this window first learns it.
+          if (rec.died_on && this.diedOn !== rec.died_on) {
+            this.diedOn = String(rec.died_on);
+            this.store.note(this.sessionId,
+              `the last turn here died on ${rec.died_on} — its hold expired without a release; the record may be missing that turn's end`);
+          }
+          return;
+        }
+        this.diedOn = null;
         const agent = String(rec.agent ?? '');
         this.store.setHeld(this.sessionId, {
           who: agentName(agent),

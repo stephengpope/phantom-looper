@@ -90,10 +90,11 @@ export const cardRevisions = phantomLooper.table('card_revisions', {
   changed_at: timestamp('changed_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-// A checkout: the branch and the commit it was cut from. The directory on
+// A checkout: the files on disk, the branch, the container. The directory on
 // disk is named by this id (which equals the owning session's id). The row is
 // permanent — it is what remembers the branch; the FILES can be deleted and
-// re-cloned from it. Goes with its workspace (cascade, 026).
+// re-cloned from it. Goes with its workspace (cascade, 026). Every fact about
+// the checkout lives here (036); a session reads them through its folder_id.
 export const folders = phantomLooper.table('folders', {
   id: text('id').primaryKey(),
   workspaceId: text('workspace_id').notNull(),
@@ -101,13 +102,26 @@ export const folders = phantomLooper.table('folders', {
   // HEAD right after the checkout: base's tip for a new session, the source
   // branch's tip for a duplicate. /git/status counts base's commits since it.
   cutFromSha: text('cut_from_sha').notNull(),
+  // Whether the files exist on this server right now. Destroy removes them
+  // and clears this; a restart re-clones the branch and sets it again.
+  onDisk: boolean('on_disk').notNull().default(true),
+  // When the checkout was last touched by ANY session on it — a tool call,
+  // a saved turn. Container reaping, the idle backup and the pressure sweep
+  // read it; the session list orders by it. Background jobs never move it.
+  lastUsedAt: timestamp('last_used_at', { withTimezone: true }).notNull().defaultNow(),
+  // When its branch last reached origin.
+  lastPushAt: timestamp('last_push_at', { withTimezone: true }),
+  // Its git state: not_pushed, not_merged, merged. Written by the periodic
+  // refresh for folders with a running container; null = never measured.
+  work: text('work'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+// A conversation. Its checkout facts — files present, last touched, last
+// pushed, git state — are its FOLDER's (036); reads join them in.
 export const sessions = phantomLooper.table('sessions', {
   id: text('id').primaryKey(),
   workspaceId: text('workspace_id').notNull(),
-  status: text('status').notNull(),
   // Who drove the last turn: 'coding'/'supervisor' for the loop's seats,
   // null = a person's. The loop stamps its coder seat at turn start; every
   // transcript save re-derives it from the writer's client id (sessions.ts
@@ -134,10 +148,10 @@ export const sessions = phantomLooper.table('sessions', {
   // sessions in motion. The row is the record so every client agrees. (018,
   // renamed from starred in 019)
   pinned: boolean('pinned').notNull().default(false),
-  // WHICH FOLDER MY TOOLS OPEN. A session that owns its checkout points at
-  // its own id; a supervisor session points at its coder's. Null = no files
-  // (an orphaned record). This is plumbing — the coder/supervisor
-  // relationship is derived from `cardId`, never stored here.
+  // WHICH FOLDER MY TOOLS OPEN. A coder points at its own id; a supervisor
+  // at its coder's; the assistant at the on-screen session's. Null only for
+  // an assistant with no session on screen yet (no files to read). Resolved
+  // in ONE place (Sessions.folderOf) — nothing falls back to the session id.
   folderId: text('folder_id'),
   // THE CARD THIS SESSION WORKS ON — the card's key (cards.id), null when it
   // is on no card. A coder and its supervisor both carry it. The pairing is
@@ -147,10 +161,11 @@ export const sessions = phantomLooper.table('sessions', {
   // deleted card leaves its sessions unlinked (on delete set null). (027)
   cardId: bigint('card_id', { mode: 'number' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  lastUsedAt: timestamp('last_used_at', { withTimezone: true }).notNull().defaultNow(),
-  lastPushAt: timestamp('last_push_at', { withTimezone: true }),
-  // The session lock: who holds the conversation, until when. Expiry is
-  // the recovery story — there is no takeover, only [d]uplicate.
+  // The session lock: who holds the conversation, until when. A hold ends by
+  // release; one that ends by the clock alone means the holder DIED mid-turn
+  // (crashed window, killed process) — the row keeps who and when as the
+  // evidence, the next taker logs it, and the digest reports it as a death,
+  // not a finished turn (Sessions.expiredHold).
   lockedBy: text('locked_by'),
   lockedLabel: text('locked_label'),
   lockExpiresAt: timestamp('lock_expires_at', { withTimezone: true }),
@@ -164,16 +179,13 @@ export const sessions = phantomLooper.table('sessions', {
   // Null = never notified. A session is eligible when transcriptUpdatedAt >
   // digestNotifiedAt AND it has been idle > the configured threshold. (021)
   digestNotifiedAt: timestamp('digest_notified_at', { withTimezone: true }),
-  // Where the session's code stands: not_pushed, not_merged, merged.
-  // Updated by the server's periodic git-state refresh for sessions with
-  // an active container. Null = never checked or no checkout. (013)
-  work: text('work'),
   // THE model this session runs on. Written at birth from the settings (a
   // duplicate takes its source's), moved by a settings write only while
   // turn_count is 0, frozen after — so a conversation cannot change model
-  // mid-life. Every runner reads these three; nothing computes a model. The
-  // endpoint rides along because the three only mean anything together.
-  // (015, 016; Sessions.birthModel / followModelSettings)
+  // mid-life. Every runner — coding, supervisor, assistant — reads these
+  // three; nothing computes a model. The endpoint rides along because the
+  // three only mean anything together. (015, 016; Sessions.birthModel /
+  // followModelSettings)
   provider: text('provider'),
   model: text('model'),
   baseUrl: text('base_url'),
@@ -187,10 +199,11 @@ export const sessions = phantomLooper.table('sessions', {
   systemPrompt: jsonb('system_prompt').$type<{ base: string; workspace: string }>(),
 });
 
-// Every sessions read selects THESE, never the bare table: the columns left
-// out are the blobs — the conversation and the frozen prompt — so no list or
-// lookup hauls them through Postgres by accident. The transcript routes and
-// the one-session view name them explicitly.
+// Every sessions read selects THESE (plus the folder's facts, joined —
+// Sessions.view), never the bare table: the columns left out are the blobs —
+// the conversation and the frozen prompt — so no list or lookup hauls them
+// through Postgres by accident. The transcript routes and the one-session
+// view name them explicitly.
 const { transcript: _transcriptBlob, systemPrompt: _promptBlob, ...withoutBlob } = getTableColumns(sessions);
 export const sessionColumns = withoutBlob;
 
@@ -281,6 +294,18 @@ export const logTokens = phantomLooper.table('log_tokens', {
 
 export type WorkspaceRow = typeof workspaces.$inferSelect;
 export type CardRow = typeof cards.$inferSelect;
-/** A session as reads return it — sessionColumns' shape, blobs excluded. */
-export type SessionRow = Omit<typeof sessions.$inferSelect, 'transcript' | 'systemPrompt'>;
 export type FolderRow = typeof folders.$inferSelect;
+/** The checkout's facts as a session carries them: joined from its folder
+ *  on every read. `status` says whether the files exist ('active' /
+ *  'destroyed' — the wire's words); a session with no folder reads as
+ *  active with nothing to measure. */
+export interface CheckoutFacts {
+  branch: string | null;
+  status: 'active' | 'destroyed';
+  lastUsedAt: Date;
+  lastPushAt: Date | null;
+  work: string | null;
+}
+/** A session as reads return it — sessionColumns' shape, blobs excluded,
+ *  its folder's facts joined in (Sessions.view). */
+export type SessionRow = Omit<typeof sessions.$inferSelect, 'transcript' | 'systemPrompt'> & CheckoutFacts;

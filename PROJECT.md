@@ -45,7 +45,7 @@ and reviews each table's behavior while it is in our heads.
 | # | table | object | status |
 |---|---|---|---|
 | 1 | ~~`workspace_schema_state`~~ | — | **done** — deleted |
-| 2 | `folders` | `Folders` (folders.ts) | **done** |
+| 2 | `folders` | `Folders` (folders.ts) | **done** — took the checkout facts in table 14 |
 | 3 | ~~`loops`~~ | — | **done** — deleted; the card moved onto `sessions` |
 | 4 | `presets` | `Presets` (presets.ts) | **done** |
 | 5 | ~~`commands`~~ `background_tasks` | `BackgroundTasks` (backgroundTasks.ts) | **done** — renamed |
@@ -57,7 +57,7 @@ and reviews each table's behavior while it is in our heads.
 | 11 | `card_revisions` | `Cards` (cards.ts) | **done** |
 | 12 | `cards` | `Cards` (cards.ts) | **done** |
 | 13 | `settings` | `Settings` (settings.ts) | **done** |
-| 14 | `sessions` | `Sessions` (sessions.ts) | |
+| 14 | `sessions` | `Sessions` (sessions.ts) | **done** |
 
 Main-schema migrations: `migrations/*.sql`, run by `phantom-backend/db/migrate.ts`.
 Drizzle mirror: `phantom-backend/db/schema.ts`. Objects are built once in
@@ -514,6 +514,96 @@ credential's name, workspace delete taking its layer, old key names
 refused, a preset round trip. The cli's screen rows composed from the live
 payload: heading order, `/model` and `/assistant` landing rows, this
 machine's rows under the assistant, `/server` alone.
+
+## Table 14 — `sessions` (done)
+
+**The model, stated first.** A **folder** is a checkout: files on disk, a
+branch, a container. A **session** is a conversation; its tools open ONE
+folder (`folder_id`) — a coder its own (same id), a supervisor its coder's,
+the assistant the on-screen session's. A fact lives on the thing it
+describes.
+
+**State found.** On the rules, clean: one owner, every write through it, one
+allowed join (`Cards.ofSession`), DB lib contained, names descriptive.
+Against the model, four checkout facts sat on the conversation — `status`
+(do the files exist), `last_used_at`, `last_push_at`, `work` — and the
+"which folder" answer was given three different ways: the row's `folder_id`
+on the server (`folderId ?? id`, 16 copies), and three clients quietly
+sending the CODER's id instead of their own (cli assistant, Telegram
+assistant, the looper's supervisor). That last one was the only reason
+reaping worked for a borrowed folder: the supervisor's activity landed on
+the coder's row by impersonation. And the assistant, unlike the other two
+agents, built its model from settings each turn instead of its row.
+
+**What we did (036).** The four facts moved to `folders` (`on_disk`,
+`last_used_at`, `last_push_at`, `work`); `last_used_at` carries over as the
+newest touch of ANY session on the folder. `Folders` owns them: `touch`,
+`markPushed`, `setWork`, `filesRemoved` / `filesRestored`, `listIdle`,
+`countOnDisk`, `listForWorkRefresh` / `listStaleWork` — and the checkout
+itself: `checkout` (claim a pool slot or clone, cut the branch, record the
+row), `restore` (a restart: the branch the row remembers, from origin) and
+`removeFiles` (the unpushed-work refusal, then `rm`), moved out of
+`Sessions.create` / `destroy` where they had been written; their refusals
+are `FolderError`, mapped by the two routes beside `SessionError`. The
+container's docker label (`phantom-looper.session=<id>`) is gone: the
+container NAME already carried the folder id and is what everything opens
+by, so the running list reads it off the name — old containers match too.
+Every session read
+is one select shape over one join (`Sessions.view`), so the wire still says
+`status`, `lastUsedAt`, `lastPushAt`, `work`, `branch` — shared by every
+session on the folder. `folderOf(s)` is the one answer to "which folder"
+(`no_folder` when there is none); `ownsFolder`, `isHeld` (was six copies)
+and `expiredHold` are the other pure rules. One tool gate
+(`api/sessionHeader.ts toolSession`) replaces four copies across fs, web,
+skills, git; `ContainerManager.ensure(folderId)`, `activeFolders()`.
+The three clients send their own session id; the Telegram assistant's
+folder follows a mid-turn switch. The assistant runs on its row's pin
+(`pinnedModel`) in both clients — frozen after its first turn like the
+other two. `POST /sessions/assistant` and `/follow` return the row.
+
+**A hold that ends by the clock is a death, not a finish** (the builder's
+rule). A holder releases when its turn ends; only a crashed window or a
+killed process leaves a hold to expire. Nothing hid it before: `heldByOther`
+read it as free and the digest skipped it forever. Now `expiredHold(s)`
+names who and when; taking over such a session logs a warning (docker
+logs); the lock event carries `died_on` / `died_at` on the free record and
+on the takeover, and the cli notes it once; the digest includes the session
+and tells the model to write it as “⚠️ died on …”, and logs it too.
+
+**Also.** `DELETE /sessions/:id` without purge on a session that owns no
+files answers `{already: 'no files'}` instead of marking a conversation
+"destroyed"; a supervisor's restart is refused by ownership, not by agent
+name. Workspace delete counts folders on disk (`Folders.countOnDisk`) —
+assistant and supervisor rows, which are never destroyed, no longer block
+it with nothing visible to close. Gone: `getMany`, `createConversation`
+(private now), `WorkState` defined twice, `runsCodingAgent`, `git=true` on
+`GET /sessions` (accepted, documented, ignored, never sent), the
+`branchesOf` walk in the work refresh. Stale comments in routes/sessions,
+looper/engine, digest, the cli's `SessionInfo` and `sessionUsage` fixed.
+
+**Proof.** 036 on 035-shape rows (11 checks): an active coder with a
+supervisor and an assistant on it — the folder's `last_used_at` is the
+assistant's later touch; a destroyed coder and its supervisor; an orphan
+folder with no owner row (off disk, `created_at` as its touch); an assistant
+with no folder; constraints intact. Every method and rule (42): the view
+for coder / supervisor / no-folder, a supervisor's touch moving the coder's
+folder and the coder's row reading it, files removed and restored read
+through every session on the folder, idle and on-disk counts, work and push
+through the folder, the list ordered and paged by the folder's touch,
+expired-vs-live holds through `listIdleSince`, `expiredHold`, `acquireLock`
+(warning logged) and the refusal of a live hold. Live over HTTP (36): a
+real clone; the assistant row returned whole; `git/status` AS the assistant
+opening the coder's folder and the touch landing on the coder; `follow` to
+nothing then `no_folder`; the tool gate's 404 / 404 / 410; a supervisor
+reading its coder's facts; an expired hold read as free, the feed's first
+record carrying `died_on`, the takeover succeeding and carrying it once, a
+release carrying none; destroy → every session on the folder reads
+destroyed; restart; workspace delete refused while files exist and allowed
+with only conversations left; a duplicate of a destroyed source whose
+branch never reached origin refused `source_branch_gone` (the checkout's
+own refusal through the route). Not exercised live: a container start
+(`ensure(folderId)`) and the name-based running list — no workspace image
+on this box; compile-checked.
 
 ## Insights
 

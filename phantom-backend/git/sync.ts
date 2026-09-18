@@ -280,7 +280,7 @@ export async function syncBranch(
       await ev('push_branch');
       const pushed = await pushSessionForced(dir, folder.branch, auth);
       if (pushed === 'pushed') {
-        await deps.sessions.markPushed(session.id);
+        await deps.folders.markPushed(folder.id);
       } else if (opts.landOnBase) {
         // The backup must exist before base is touched.
         return { outcome: 'error', reason: `branch push failed (${pushed})`, rounds: round };

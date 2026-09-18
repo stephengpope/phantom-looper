@@ -104,6 +104,28 @@ general, short, and true.
   cli drew groups in the order the server's DEFAULTS listed them; fixing
   the screen meant reordering the one source, not adding a sort table.
   *(table 13)*
+- **Read the table against the model, not against its callers.** I
+  traced every reader of every `sessions` column and found the code
+  "clean"; the builder asked whose fact `last_used_at` was and four
+  columns moved. Cataloguing readers proves the rules hold; only stating
+  what the things ARE (a folder is a checkout, a session is a conversation)
+  and asking "whose fact is this?" of each column finds what is on the
+  wrong table. *(table 14)*
+- **An unread fact is a missing reader as often as a dead column.** The
+  assistant row's folder and model were written and never read; I
+  proposed deleting the row. The design was right and three clients were
+  bypassing it. Before proposing to remove an unread fact, ask which is
+  wrong: the fact, or the readers that should be using it. *(table 14)*
+- **A client that sends another session's id is a rule being broken.**
+  The supervisor's and the assistant's tools ran as the CODER; it worked
+  by impersonation, and it hid that the checkout's facts were on the wrong
+  table. When a caller substitutes one handle for another to make things
+  work, the server is answering the wrong question. *(table 14)*
+- **A lock freed by the clock alone is an error, not a success.** The
+  builder's rule. Holders release; only a dead holder leaves a hold to
+  expire. Every place that read "expired = free" was hiding a crash — from
+  the log, the digest, the next window. Ask of every timeout: what does
+  it MEAN when it fires, and who is told. *(table 14)*
 - **A name that says the vendor says nothing.** `telegram_update`,
   `telegram_sent`, `telegram_account` — the builder could not tell what a
   row was from any of them. The vendor's word is fine when it IS the thing
@@ -248,6 +270,19 @@ general, short, and true.
   secrets split broke no rule; listing it with the bugs cost three rounds.
   Findings are rule violations with file:line; taste is not raised.
   *(table 13)*
+- **Options without context are not a choice.** "A or B?" earned "zero
+  context to make a choice". Each option is: what the customer sees today,
+  what changes, what it costs — or it is not an option yet. *(table 14)*
+- **Do not flip the conclusion when the facts did not move.** Told the
+  assistant row was real, I went from "delete it" to "keep it, drop the
+  finding" in one turn, and read as flip-flopping. The facts were the
+  same; only the fix changed. Say that: "the finding stands; the fix
+  changes from X to Y because Z." *(table 14)*
+- **When told "read everything", the answer is still the table's pass.**
+  Asked to see the optimal state, I came back with a whole-system
+  redesign and lost the builder ("this was about sessions"). The model is
+  the lens; the deliverable is still this table's list of changes.
+  *(table 14)*
 - **Do not carry a scenario the builder did not ask for.** "Delete" was my
   concern, raised as a finding; every later explanation dragged it along
   and muddied the model. A raised concern is answered once, then dropped

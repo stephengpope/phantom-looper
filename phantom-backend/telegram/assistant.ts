@@ -19,7 +19,8 @@
 
 import type { ModelMessage, Tool } from 'ai';
 import { AssistantAgent } from '../../core/llm/agents/assistant.js';
-import { agentModelConfig, agentMaxSteps } from '../../core/llm/agentConfig.js';
+import { agentModelConfig, agentMaxSteps, pinnedModel, sessionPin } from '../../core/llm/agentConfig.js';
+import type { SessionRow } from '../db/schema.js';
 import { assistantKanbanTool, sessionsTool, workspaceCreateTool, gitAutoPushTool, gitAutoPullTool, renderRead, renderRaw, kebabName,
   dockerLogsTool,
   type KanbanArgs, type SessionsArgs, type WorkspaceCreateArgs, type GitAutoPushArgs, type GitAutoPullArgs,
@@ -230,10 +231,12 @@ function dockerLogsHandler(deps: AssistantDeps) {
   };
 }
 
-/** The Assistant's whole kit for a telegram turn. File tools + web bind to the
- *  active session when there is one (read-only); board + sessions + the gated
- *  workspace_create_repo + git_auto_push + git_auto_pull + docker_logs always. */
-export async function assistantKit(deps: AssistantDeps, ctx: AssistantCtx): Promise<Record<string, Tool>> {
+/** The Assistant's whole kit for a telegram turn. File tools + web bind to
+ *  the assistant's OWN session — the server opens its folder, the on-screen
+ *  session's, re-pointed on every switch (Sessions.follow) — when it has one
+ *  (read-only); board + sessions + the gated workspace_create_repo +
+ *  git_auto_push + git_auto_pull + docker_logs always. */
+export async function assistantKit(deps: AssistantDeps, ctx: AssistantCtx, own: SessionRow): Promise<Record<string, Tool>> {
   const { workspaceId, activeSession, onSwitch } = ctx;
   const kit: Record<string, Tool> = {
     ...assistantKanbanTool(boardHandler(deps, workspaceId)),
@@ -247,9 +250,8 @@ export async function assistantKit(deps: AssistantDeps, ctx: AssistantCtx): Prom
   // them so the model never wastes a call on a dead end.
   delete kit.kanban_screen;
   delete kit.session_close;
-  const session = activeSession();
-  if (session) {
-    const common = { baseUrl: BASE, apiKey: deps.apiKey, sessionId: session, fetch: deps.f };
+  if (own.folderId) {
+    const common = { baseUrl: BASE, apiKey: deps.apiKey, sessionId: own.id, fetch: deps.f };
     Object.assign(kit,
       await phantomTools({ ...common, pick: 'readonly' }),
       webTools(common));
@@ -268,16 +270,19 @@ export interface AssistantTurnResult {
  *  sink. Appends the user + reply to `history` (and to `transcript`, the
  *  on-disk record, when given). Returns the reply text and the turn's
  *  accumulated token usage. `onSwitch` is called if the Assistant's
- *  session_switch fires — the caller moves the active-session pointer. */
+ *  session_switch fires — the caller moves the active-session pointer.
+ *  `own` is the assistant's session row: like every session it runs on ITS
+ *  ROW's model (the pin, frozen after its first turn), and its file tools
+ *  open its folder. */
 export async function runAssistantTurn(
   deps: AssistantDeps, history: ModelMessage[], message: string, sink: TelegramSink,
   ctx: AssistantCtx, abortSignal: AbortSignal | undefined, transcript: Transcript | undefined,
-  sessionId: string,
+  own: SessionRow,
 ): Promise<AssistantTurnResult> {
-  const model = agentModelConfig(ctx.settings, 'assistant');
+  const model = pinnedModel(agentModelConfig(ctx.settings, 'assistant'), ctx.settings, sessionPin(own));
   const maxSteps = agentMaxSteps(ctx.settings, 'assistant');
-  const tools = await assistantKit(deps, ctx);
-  const agent = new AssistantAgent({ ...model, fetch: deps.modelFetch }, tools, { sessionId, maxSteps });
+  const tools = await assistantKit(deps, ctx, own);
+  const agent = new AssistantAgent({ ...model, fetch: deps.modelFetch }, tools, { sessionId: own.id, maxSteps });
 
   // Accumulate usage across all steps in this turn.
   const usage = { input: 0, output: 0, cache_read: 0, cache_write: 0 };

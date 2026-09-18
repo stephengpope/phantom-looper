@@ -239,8 +239,11 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
       params: idParam, querystring: { type: 'object', properties: { confirm: { type: 'string', enum: ['true'] } } } } },
     async (req, reply) => {
       if (!await ctx.workspaces.get(req.params.id)) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
-      const live = await ctx.sessions.listActiveIn(req.params.id);
-      if (live.length) return reply.code(409).send(err('sessions_exist', `workspace ${req.params.id} still has ${live.length} active session(s) — close them first`));
+      // What stands in the way is files on disk (and their containers): the
+      // folders still checked out. A conversation with no files of its own
+      // — a supervisor's, the assistant's — blocks nothing.
+      const live = await ctx.folders.countOnDisk(req.params.id);
+      if (live) return reply.code(409).send(err('sessions_exist', `workspace ${req.params.id} still has ${live} active session(s) — close them first`));
       if (req.query.confirm !== 'true') {
         return reply.code(409).send(err('confirm_required',
           'deleting a workspace deletes its board — every card and its history — pass ?confirm=true'));

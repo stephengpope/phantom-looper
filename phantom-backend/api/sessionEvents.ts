@@ -60,9 +60,12 @@ export type SessionEvent =
    *  work (the loop's planning/building/reviewing, a window's hostname),
    *  `agent` the session's seat, `expires_at` when the hold lapses on its
    *  own if the holder dies — a watcher clears the spinner then without
-   *  being told. */
+   *  being told. A hold that DID lapse that way is a turn that died, not
+   *  one that finished: `died_on` (the dead holder's label) and `died_at`
+   *  ride the free record until someone takes the session again, so a
+   *  window can say so once. */
   | { event: 'lock'; locked: boolean; by: string | null; label: string | null;
-    agent: string | null; expires_at: string | null }
+    agent: string | null; expires_at: string | null; died_on?: string; died_at?: string }
   /** Session state changed — agent seat, plan mode, git work state, or the
    *  name (the auto-titler's or a /rename). Only the changed field(s) are
    *  present. Published on change AND as the initial state of every new

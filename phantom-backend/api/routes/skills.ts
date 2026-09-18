@@ -13,7 +13,7 @@ import { Sandbox } from '../../workspace/sandbox.js';
 import { ToolError } from '../../tools/envelope.js';
 import { fuzzyFindAndReplace, formatNoMatchHint } from '../../tools/fuzzy.js';
 import { ok, err, type AppCtx } from '../app.js';
-import { SESSION_HEADER } from '../sessionHeader.js';
+import { SESSION_HEADER, toolSession } from '../sessionHeader.js';
 import type { FsDeps } from './fs.js';
 import { SKILLS_DIR, mergeSkills, parseDescription, scanSkills } from '../../../core/skills/skills.js';
 import { systemSkills, systemSkillTree } from '../../systemSkills.js';
@@ -24,7 +24,7 @@ import {
 const TAG = { tags: ['skills'] };
 
 const STATUS: Record<string, number> = {
-  session_not_found: 404, session_destroyed: 410, skill_not_found: 404,
+  session_not_found: 404, session_destroyed: 410, no_folder: 400, skill_not_found: 404,
   invalid_args: 400, busy: 409, container_start_failed: 503,
 };
 
@@ -39,16 +39,6 @@ export interface ManageBody {
   file_content?: string;
 }
 
-/** Resolve the session from the header — same contract as the tool routes. */
-async function requireSession(ctx: AppCtx, headers: Record<string, unknown>): Promise<SessionRow> {
-  const id = String(headers[SESSION_HEADER] ?? '');
-  if (!id) throw new ToolError('session_not_found', `missing ${SESSION_HEADER} header`);
-  const session = await ctx.sessions.get(id);
-  if (!session) throw new ToolError('session_not_found', id);
-  if (session.status !== 'active') throw new ToolError('session_destroyed', `session is ${session.status}`);
-  void ctx.sessions.touch(id);
-  return session;
-}
 
 const skillDirHost = (ctx: AppCtx, sessionId: string, name: string) =>
   path.join(repoDir(ctx.paths, sessionId), SKILLS_DIR, name);
@@ -110,9 +100,9 @@ export function skillsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
         type: 'object', properties: { name: { type: 'string' }, description: { type: 'string' } } } } } } } } } } },
   async (req, reply) => {
     try {
-      const session = await requireSession(ctx, req.headers);
+      const { session, folderId } = await toolSession(ctx.sessions, req.headers);
       return ok({ skills: mergeSkills(
-        await scanSkills(repoDir(ctx.paths, session.folderId ?? session.id)),
+        await scanSkills(repoDir(ctx.paths, folderId)),
         await systemSkills(deps.docker, await imageFor(session))) });
     } catch (e) { return handle(reply, e); }
   });
@@ -126,12 +116,12 @@ export function skillsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
       querystring: { type: 'object', properties: { file: { type: 'string', description: 'bundled file to fetch instead (references/… etc.)' } } } } },
     async (req, reply) => {
       try {
-        const session = await requireSession(ctx, req.headers);
+        const { session, folderId } = await toolSession(ctx.sessions, req.headers);
         const name = req.params.name;
         const nameErr = validateSkillName(name);
         if (nameErr) throw new ToolError('invalid_args', nameErr);
-        const dir = skillDirHost(ctx, session.folderId ?? session.id, name);
-        if (!(await skillExists(ctx, session.folderId ?? session.id, name))) {
+        const dir = skillDirHost(ctx, folderId, name);
+        if (!(await skillExists(ctx, folderId, name))) {
           // Not in the repo — fall through to the image's system tier
           // (repo shadows system, so this only answers un-shadowed names).
           const sys = (await systemSkillTree(deps.docker, await imageFor(session))).get(name);
@@ -177,14 +167,14 @@ export function skillsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
     } } } },
   async (req, reply) => {
     try {
-      const session = await requireSession(ctx, req.headers);
+      const { session, folderId } = await toolSession(ctx.sessions, req.headers);
       const nameErr = validateSkillName(req.body.name);
       if (nameErr) throw new ToolError('invalid_args', nameErr);
 
       const workspace = await ctx.workspaces.get(session.workspaceId);
       let container;
       try {
-        container = await deps.containers.ensure(session, workspace);
+        container = await deps.containers.ensure(folderId, workspace);
       } catch (e) {
         throw new ToolError('container_start_failed', (e as Error).message, true);
       }
@@ -193,19 +183,19 @@ export function skillsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
       // Writes reach the REPO tier only. When the name exists solely in the
       // image's system tier, say so — "no skill" would gaslight an agent that
       // just saw it in skill_list.
-      const systemHas = !(await skillExists(ctx, session.folderId ?? session.id, req.body.name))
+      const systemHas = !(await skillExists(ctx, folderId, req.body.name))
         && (await systemSkillTree(deps.docker, await imageFor(session))).has(req.body.name);
-      const data = await manage(ctx, ws, session, req.body, systemHas);
+      const data = await manage(ctx, ws, folderId, req.body, systemHas);
       return ok(data);
     } catch (e) { return handle(reply, e); }
   });
 }
 
-async function manage(ctx: AppCtx, ws: Sandbox, session: SessionRow, body: ManageBody,
+async function manage(ctx: AppCtx, ws: Sandbox, folderId: string, body: ManageBody,
   systemHas = false): Promise<unknown> {
   const { action, name } = body;
-  const exists = await skillExists(ctx, session.folderId ?? session.id, name);
-  const hostDir = skillDirHost(ctx, session.folderId ?? session.id, name);
+  const exists = await skillExists(ctx, folderId, name);
+  const hostDir = skillDirHost(ctx, folderId, name);
   const notFound = () => new ToolError('skill_not_found', systemHas
     ? `'${name}' is a read-only system skill (baked into the workspace image). To change what the agent ` +
       `sees, create a repo skill named '${name}' — it shadows the system one.`

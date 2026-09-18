@@ -1,17 +1,21 @@
-// Session idle digest — a periodic notification listing sessions that finished
-// since the last check. Runs every N minutes (configurable, 0 = off). Each
-// session that has been idle longer than the interval and hasn't been reported
-// yet gets one line with its card number, status icon and a short LLM summary.
+// Session idle digest — a periodic notification listing sessions that went
+// quiet since the last check. Runs every N minutes (configurable, 0 = off).
+// Each session that has been idle longer than the interval and hasn't been
+// reported yet gets one line with its card number, status icon and a short
+// LLM summary.
 //
-// The query: unlocked, transcript updated, idle > threshold, not yet digested.
-// After reporting, each session is stamped so it's never reported twice for the
-// same activity. If it runs again and finishes again, it'll be reported again.
+// The query: not held now, transcript updated, idle > threshold, not yet
+// digested. "Not held now" includes a hold that ran out on its own — that is
+// a turn whose holder DIED (a crashed window, a killed process), not one that
+// finished, and the digest says so instead of summarizing it as done; the
+// server log carries the same fact. After reporting, each session is stamped
+// so it's never reported twice for the same activity. If it runs again and
+// finishes again, it'll be reported again.
 
-import type { Sessions } from '../sessions.js';
+import { expiredHold, type Sessions } from '../sessions.js';
 import type { Cards } from '../cards.js';
 import type { Settings } from '../settings.js';
 import type { Workspaces } from '../workspaces.js';
-import type { SessionRow } from '../db/schema.js';
 import { PhantomHelper } from '../../core/llm/helper.js';
 import { agentModelConfig } from '../../core/llm/agentConfig.js';
 import { lastAssistantFromJsonl } from './transcriptHelper.js';
@@ -36,6 +40,7 @@ You receive a JSON array of workspace groups, each with sessions sorted by last 
 
 For sessions with a card, use: #<card> <icon> — <description>
 For sessions without a card, use: • <description>
+A session with "died_on" did NOT finish: its last turn died on that machine (the process crashed or was killed). Write its line as ⚠️ died on <died_on> — <what it was doing>, never as completed work.
 
 Keep each description under 80 characters. No title, no extra text, just the workspace headings and lines.
 
@@ -114,7 +119,7 @@ export class SessionDigest {
 
     // Sessions that:
     // 1. Have a transcript (transcriptUpdatedAt is not null)
-    // 2. Are not locked (lockedBy is null — the turn finished)
+    // 2. Are not held now (released — or expired: the holder died mid-turn)
     // 3. Have been idle longer than the interval
     // 4. Haven't been digested since their last activity
     const rows = await this.deps.sessions.listIdleSince(threshold);
@@ -136,6 +141,8 @@ export class SessionDigest {
     type Item = {
       name: string; lastMessage: string; wsPrefix: string;
       card?: number; icon?: string;
+      /** The dead holder's label when the last turn died instead of ending. */
+      diedOn?: string;
       ranAt: number; // epoch ms, for sorting
     };
     const items: Item[] = [];
@@ -151,12 +158,21 @@ export class SessionDigest {
         icon = STATUS_ICON[onCard.status] ?? onCard.status;
       }
 
+      // A hold that ran out is a turn that died. Said here in the log too:
+      // the digest may be off or fail to send, and the death still happened.
+      const died = expiredHold(s);
+      if (died) {
+        log.warn({ session: s.id, name: s.name, diedOn: died.label ?? died.by, expiredAt: died.at.toISOString() },
+          'session turn died mid-turn — its hold expired without a release');
+      }
+
       items.push({
         name: s.name ?? 'untitled',
         lastMessage: lastMsg ?? s.lastUserMessage ?? '(no messages)',
         wsPrefix: prefixByWsId.get(s.workspaceId)!,
         card, icon,
-        ranAt: (s as SessionRow & { transcriptUpdatedAt: Date | null }).transcriptUpdatedAt?.getTime() ?? 0,
+        ...(died ? { diedOn: died.label ?? died.by } : {}),
+        ranAt: s.transcriptUpdatedAt?.getTime() ?? 0,
       });
     }
 
@@ -178,6 +194,7 @@ export class SessionDigest {
         const entry: Record<string, unknown> = {};
         if (item.card != null) entry.card = item.card;
         if (item.icon) entry.icon = item.icon;
+        if (item.diedOn) entry.died_on = item.diedOn;
         entry.name = item.name;
         entry.last = item.lastMessage.slice(0, 500);
         return entry;

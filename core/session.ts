@@ -52,7 +52,11 @@ export interface OpenSessionConfig {
 }
 
 export interface SessionInfo {
-  id: string; workspaceId: string; branch: string; status: string;
+  id: string; workspaceId: string; branch: string | null; status: string;
+  /** The folder this session's tools open — its own for a coder, the
+   *  coder's for a supervisor. Null only on an assistant with no session
+   *  on screen. */
+  folderId: string | null;
   agent?: string | null; card?: number | null;
   /** The frozen system prompt, in its two cached pieces. Null on a
    *  conversation-only session (a supervisor's, an assistant's). */

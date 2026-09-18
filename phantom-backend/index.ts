@@ -68,9 +68,9 @@ async function main() {
   const settingsEvents = new SettingsEvents();
   const settings = new Settings(db, env.encryptionKey, settingsEvents);
   const workspaces = new Workspaces(db, settings, settingsEvents);
-  const folders = new Folders(db);
+  const folders = new Folders(db, paths, settings, sessionEvents);
   const cards = new Cards(db, workspaces, events);
-  const sessions = new Sessions(db, paths, settings, workspaces, folders, sessionEvents);
+  const sessions = new Sessions(db, settings, workspaces, folders, sessionEvents);
   // A settings write reaches every session nothing has been said to yet: its
   // row takes the settings' model (Sessions.followModelSettings — THE rule).
   settingsEvents.subscribe(() => {
@@ -231,11 +231,12 @@ async function main() {
 
   // One loop drives both the pool tick and the session sweep. The interval is a
   // SETTING read per tick, so a change takes effect without a restart.
-  // Sessions with a running container whose lastUsedAt is past the threshold
-  // and have no running background tasks — the set safe to reap.
-  const idleContainerSessions = async (ms: number): Promise<string[]> => {
-    const active = await containers.activeSessions();
-    const idle = await sessions.listIdle(active, ms);
+  // Folders with a running container not touched for the threshold and with
+  // no running background task — the set safe to reap. A task's session is
+  // the folder's owner (only a coder has `bash`), so the ids line up.
+  const idleContainerFolders = async (ms: number): Promise<string[]> => {
+    const active = await containers.activeFolders();
+    const idle = await folders.listIdle(active, ms);
     const busy = await backgroundTasks.sessionsWithRunning(idle);
     return idle.filter((id) => !busy.has(id));
   };
@@ -246,8 +247,8 @@ async function main() {
       await tick(workspaces, settings, paths).catch((e) => log.error({ err: errStr(e) }, 'pool tick threw'));
       await idleBackupSweep(workspaces, sessions, engine).catch((e) => log.error({ err: errStr(e) }, 'idle backup sweep threw'));
       const idleMs = await settings.resolve('container_idle_ms').catch(() => 30 * 60_000);
-      await containers.reap(Number(idleMs), idleContainerSessions).catch((e) => log.error({ err: errStr(e) }, 'container reap threw'));
-      await pressureSweep(settings, workspaces, sessions, paths, docker, containers, engine, idleContainerSessions).catch((e) => log.error({ err: errStr(e) }, 'pressure sweep threw'));
+      await containers.reap(Number(idleMs), idleContainerFolders).catch((e) => log.error({ err: errStr(e) }, 'container reap threw'));
+      await pressureSweep(settings, workspaces, sessions, paths, docker, containers, engine, idleContainerFolders).catch((e) => log.error({ err: errStr(e) }, 'pressure sweep threw'));
       const ms = await settings.resolve('maintenance_interval_ms').catch(() => 60_000);
       await new Promise((r) => setTimeout(r, Number(ms)));
     }
@@ -255,13 +256,13 @@ async function main() {
 
   const backdoor = new BackdoorQueue();
 
-  // Work-state refresh: every 10s, recompute `work` for sessions with an
-  // active container. A change writes the row and publishes on the board
+  // Work-state refresh: every 10s, recompute `work` for folders with a
+  // running container. A change writes the row and publishes on the board
   // event stream so the kanban board and the toolbar hear it live.
   (async () => {
     while (!stopped) {
       await new Promise((r) => setTimeout(r, 10_000));
-      await refreshWorkState({ sessions, workspaces, folders, paths, containers, events })
+      await refreshWorkState({ folders, workspaces, paths, containers, events })
         .catch((e) => log.error({ err: errStr(e) }, 'work-state refresh threw'));
     }
   })();

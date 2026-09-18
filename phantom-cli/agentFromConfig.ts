@@ -5,7 +5,7 @@
 // file only adapts it to the app's Cfg shape.
 import type { Tool } from 'ai';
 import type { Agent } from '../core/llm/createAgent.js';
-import { buildCodingAgent, agentModelConfig, agentMaxSteps } from '../core/llm/agentConfig.js';
+import { buildCodingAgent, agentModelConfig, agentMaxSteps, pinnedModel, sessionPin, type ModelPin } from '../core/llm/agentConfig.js';
 import type { CodingPrompt } from '../core/llm/agents/coding.js';
 import { AssistantAgent } from '../core/llm/agents/assistant.js';
 import type { ConfigValue } from './config.js';
@@ -30,15 +30,17 @@ export function buildAgent(tools: Record<string, Tool>, cfg: Cfg, sessionId: str
 
 /** The Assistant: its own provider/model/base_url/reasoning/max_steps, each
  *  cascading to the coding agent's while the provider matches (core
- *  agentModelConfig). Reasoning defaults to 'none' in the agent builder when
- *  no override is set. Its calls are billed to `sessionId` — the assistant's
- *  own session row, which exists before this is built. */
-export function buildAssistantAgent(tools: Record<string, Tool>, cfg: Cfg, sessionId: string | null):
+ *  agentModelConfig) — with ITS ROW's model laid over, like every other
+ *  session (the pin freezes after its first turn). Reasoning defaults to
+ *  'none' in the agent builder when no override is set. `own` is the
+ *  assistant's session row, which exists before this is built: its calls are
+ *  billed to it. Null before any session is on screen (no row yet). */
+export function buildAssistantAgent(tools: Record<string, Tool>, cfg: Cfg, own: ({ id: string } & ModelPin) | null):
 { agent: Agent; summary: AgentSummary } {
-  const model = agentModelConfig(cfg, 'assistant');
+  const model = pinnedModel(agentModelConfig(cfg, 'assistant'), cfg, sessionPin(own));
   const maxSteps = agentMaxSteps(cfg, 'assistant');
   return {
-    agent: new AssistantAgent(model, tools, { sessionId, maxSteps }),
+    agent: new AssistantAgent(model, tools, { sessionId: own?.id ?? null, maxSteps }),
     summary: { provider: model.provider, model: model.model,
       reasoning: model.reasoning ?? 'none', maxSteps },
   };

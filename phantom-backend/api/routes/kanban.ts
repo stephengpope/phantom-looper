@@ -4,6 +4,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { WorkspaceRow } from '../../db/schema.js';
 import { columnsOf } from '../../workspaces.js';
+import { isHeld } from '../../sessions.js';
 import { CardError, CARD_FIELDS, CARD_JSON_FIELDS, type CardFields, type ItemOp } from '../../cards.js';
 import { logger, errStr } from '../../log.js';
 import { ok, err, type AppCtx } from '../app.js';
@@ -122,7 +123,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
     const now = Date.now();
     return (await ctx.sessions.codersByCard(w.id)).map((s) => ({
       card: s.card, id: s.id, name: s.name,
-      locked: !!s.lockedBy && !!s.lockExpiresAt && s.lockExpiresAt.getTime() > now,
+      locked: isHeld(s, now),
       work: s.work }));
   };
 

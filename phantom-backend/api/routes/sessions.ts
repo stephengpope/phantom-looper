@@ -3,7 +3,8 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import type { SessionRow } from '../../db/schema.js';
 import type { TokenRecord } from '../../logTokens.js';
-import { SessionError, heldByOther, assertDuplicable, conversationOnly } from '../../sessions.js';
+import { SessionError, heldByOther, isHeld, expiredHold, assertDuplicable, ownsFolder, folderOf } from '../../sessions.js';
+import { FolderError } from '../../folders.js';
 import { GIT_CLIENT_ID } from '../../git/git.js';
 import { repoDir, sessionDir } from '../../pool/paths.js';
 
@@ -22,16 +23,20 @@ const log = logger('sessions');
 
 /** The session's hold as a feed record — what a watcher's spinner reads.
  *  From the row when the feed opens (`s`), or from the write that just
- *  happened (the overrides). An expired hold reads as free. */
+ *  happened (the overrides). An expired hold reads as free — and says whose
+ *  turn died to leave it that way (`died_on`), so a window can tell the
+ *  person once instead of pretending the last turn ended cleanly. */
 function lockEvent(s: SessionRow, over: Partial<{ locked: boolean; by: string | null; label: string | null;
   expires: Date | null }> = {}): SessionEvent {
   const expires = over.expires !== undefined ? over.expires : s.lockExpiresAt ?? null;
-  const locked = over.locked ?? (!!s.lockedBy && !!expires && expires.getTime() > Date.now());
+  const locked = over.locked ?? isHeld({ lockedBy: s.lockedBy, lockExpiresAt: expires });
+  const died = expiredHold(s);
   return { event: 'lock', locked,
     by: locked ? (over.by !== undefined ? over.by : s.lockedBy) : null,
     label: locked ? (over.label !== undefined ? over.label : s.lockedLabel) : null,
     agent: s.agent ?? null,
-    expires_at: locked && expires ? expires.toISOString() : null };
+    expires_at: locked && expires ? expires.toISOString() : null,
+    ...(died ? { died_on: died.label ?? died.by, died_at: died.at.toISOString() } : {}) };
 }
 import { shouldName, nameSession, titleContext, firstMessageContext } from '../../sessionTitle.js';
 import { logger, errStr } from '../../log.js';
@@ -52,7 +57,7 @@ async function freezeSystemPrompt(ctx: AppCtx, s: SessionRow): Promise<CodingPro
   const workspace = await ctx.workspaces.get(s.workspaceId);
   const resolved = await ctx.settings.resolveMany(['container_image', 'agent_git_credentials'], { workspace });
   const skills = mergeSkills(
-    await scanSkills(repoDir(ctx.paths, s.folderId ?? s.id)),
+    await scanSkills(repoDir(ctx.paths, folderOf(s))),
     ctx.fs ? await systemSkills(ctx.fs.docker, String(resolved.container_image)) : []);
   const byName = new Map<string, { name: string; description: string }>();
   for (const sec of await ctx.settings.listSecrets([GLOBAL, workspaceScope(s.workspaceId)])) {
@@ -63,10 +68,6 @@ async function freezeSystemPrompt(ctx: AppCtx, s: SessionRow): Promise<CodingPro
   return ctx.sessions.freezeSystemPrompt(s.id,
     codingPrompt(skills, { credentials: Boolean(resolved.agent_git_credentials) }, secrets));
 }
-
-/** A session that runs the CODING agent — the only kind with a frozen prompt.
- *  Supervisor and assistant sessions build theirs fresh every turn. */
-const runsCodingAgent = (s: SessionRow) => s.agent !== 'supervisor' && s.agent !== 'assistant';
 
 /** An attached file's ceiling (attachments route) — ours, unlike telegram's
  *  20MB bot-API ceiling: a screencast should fit, a disk image should not. */
@@ -120,7 +121,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       const s = await ctx.sessions.create(req.body.workspace_id, { id: req.body.id });
       return reply.code(201).send(ok({ ...s, system_prompt: await freezeSystemPrompt(ctx, s) }));
     } catch (e) {
-      if (e instanceof SessionError) {
+      // The session's own refusals, and the checkout's (a dead token, a repo
+      // the token cannot see, GitHub unreachable — Folders.checkout).
+      if (e instanceof SessionError || e instanceof FolderError) {
         const status = e.code === 'already_active' ? 409
           : e.code === 'workspace_mismatch' || e.code === 'invalid_args'
             || e.code === 'credential_invalid' || e.code === 'credential_insufficient' ? 400
@@ -132,10 +135,10 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   });
 
   // Listing exists for clients that need to show what is open — the TUI
-  // launcher, above all. No filters: a deployment has a handful of sessions,
-  // and the launcher wants the ended ones too so it can grey them out rather
-  // than infer their fate from whether a local transcript happens to exist.
-  app.get<{ Querystring: { limit?: number; before?: string; before_id?: string; before_pinned?: boolean; git?: string;
+  // launcher, above all. The launcher wants the ended ones too so it can
+  // grey them out rather than infer their fate from whether a local
+  // transcript happens to exist.
+  app.get<{ Querystring: { limit?: number; before?: string; before_id?: string; before_pinned?: boolean;
     typed?: boolean; supervisor?: boolean; q?: string } }>(
     '/sessions', { schema: { ...TAG,
     summary: 'List sessions',
@@ -149,10 +152,11 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       'share a timestamp). A page shorter than `limit` is the end. The cursor is the values the ' +
       'client SAW, so a session used since simply moves to the top of a later refresh — pages ' +
       'never repeat a row.\n\n' +
-      '`git=true` adds `work` per row — where the session\'s work stands: not_pushed (only on ' +
-      'this server\'s disk), not_merged (on origin\'s branch, not in base), merged (in base), or ' +
-      'null (nothing to measure: no checkout, or not this session\'s own). Read from each ' +
-      'checkout on disk — real work per row, so ask only when a screen will show it.\n\n' +
+      '`work` rides every row — where the checkout\'s work stands: not_pushed (only on this ' +
+      'server\'s disk), not_merged (on origin\'s branch, not in base), merged (in base), or null ' +
+      '(never measured). The server\'s periodic git refresh keeps it current for sessions with a running ' +
+      'container. `status`, `lastUsedAt`, `lastPushAt` and `branch` are the checkout\'s too, shared by ' +
+      'every session on the same folder.\n\n' +
       '`q` filters: the text as ONE substring, case-insensitive, anywhere in the name, the last ' +
       'user message or the branch. It is part of the list\'s WHERE, so paging and `total` follow it.',
     querystring: { type: 'object', additionalProperties: false, properties: {
@@ -162,8 +166,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       supervisor: { type: 'boolean', description: 'false = leave out the looper\'s supervisor seats.' },
       before: { type: 'string', description: 'A row\'s last_used_at (ISO) — return only older activity.' },
       before_id: { type: 'string', description: 'That row\'s id, breaking last_used_at ties.' },
-      before_pinned: { type: 'boolean', description: 'That row\'s pinned flag — pinned sorts ahead of activity, so the cursor carries it or a pinned page boundary leaks unpinned rows into the pinned block (and vice versa).' },
-      git: { type: 'string', enum: ['true'], description: 'Compute `work` per row from the checkout.' } } } } },
+      before_pinned: { type: 'boolean', description: 'That row\'s pinned flag — pinned sorts ahead of activity, so the cursor carries it or a pinned page boundary leaks unpinned rows into the pinned block (and vice versa).' } } } } },
   async (req) => {
     // The list IS the object's (Sessions.list): filters, cursor and count in
     // one place. branch comes from the session's FOLDER, the card number and
@@ -177,14 +180,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       return { rows: r.sessions, total: r.total };
     })();
     const now = Date.now();
-    // `work` is a stored column on the session row, updated by the server's
-    // periodic git-state refresh (workRefresh.ts). It rides every response
-    // in the ...r spread — no on-read computation, no git=true flag.
     // `locked` is computed HERE so no client has to compare clocks with the
     // server; a client only compares locked_by with its own id.
-    return ok({ total, sessions: rows.map((r) => ({
-      ...r, locked: !!r.lockedBy && !!r.lockExpiresAt && r.lockExpiresAt.getTime() > now,
-    })) });
+    return ok({ total, sessions: rows.map((r) => ({ ...r, locked: isHeld(r, now) })) });
   });
 
   // ---- the session lock ----------------------------------------------------
@@ -272,7 +270,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (s.status !== 'active') return reply.code(400).send(err('session_ended', `session is ${s.status}`));
       const workspace = await ctx.workspaces.get(s.workspaceId);
       if (!workspace) return reply.code(404).send(err('not_found', 'workspace not found'));
-      await ctx.fs.containers.ensure(s, workspace);
+      await ctx.fs.containers.ensure(folderOf(s), workspace);
       return ok({ woken: true });
     });
 
@@ -353,8 +351,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         return reply.code(409).send(lockedErr(s));
       }
       const data = req.body.data;
-      // One statement lands the record, its preview, its token sums, the
-      // turn count and — on the first save — the pin (Sessions.saveTranscript);
+      // One statement lands the record, its preview and the turn count (the
+      // count leaving 0 is what freezes the row's model) — Sessions.saveTranscript;
       // the record event goes out with it. Who drove it is read off the
       // writer: a person's turn into the loop's coding session takes the
       // session over (agentAfterSave).
@@ -394,7 +392,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (!s.lockedBy || s.lockedBy !== client) {
         return reply.code(409).send(err('session_locked', 'step save requires the lock'));
       }
-      const stamp = await ctx.sessions.stepSave(s.id, req.body.data);
+      const stamp = await ctx.sessions.stepSave(s, req.body.data);
       // Renew the lock — a long turn with many steps must not expire mid-turn.
       const ttl = await ctx.settings.resolve('session_lock_ttl_ms');
       await ctx.sessions.renewLock(s.id, client, Number(ttl));
@@ -649,7 +647,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (data.length > MAX_ATTACHMENT_BYTES) {
         return reply.code(413).send(err('too_large', `file is over ${MAX_ATTACHMENT_BYTES / 1024 / 1024}MB`, true));
       }
-      const scratch = path.join(sessionDir(ctx.paths, session.folderId ?? session.id), 'scratch');
+      const scratch = path.join(sessionDir(ctx.paths, folderOf(session)), 'scratch');
       const a = await writeAttachment(scratch, data, { filename: req.body.name });
       if (!a) return reply.code(422).send(err('invalid_args', 'the file claims to be an image but is not one', true));
       return ok({ path: a.containerPath, kind: a.kind, name: a.displayName });
@@ -695,12 +693,11 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         label: 'duplicate', expires }));
       void publishBoardLock(ctx, src.id, true);
       try {
-        const srcFolder = src.folderId ? await ctx.folders.get(src.folderId) : undefined;
         // The flush, while the lock keeps every writer out: the copy is cut
         // from what origin has AFTER this, so nothing the source did is lost.
         // A destroyed session has no checkout — its branch on origin is the
         // record, and the cut below fails clearly if even that is gone.
-        if (src.status === 'active' && ctx.engine && srcFolder) {
+        if (src.status === 'active' && ctx.engine && src.branch) {
           const workspace = await ctx.workspaces.get(src.workspaceId);
           const r = await ctx.engine.push(src, workspace!);
           if (r !== 'pushed' && r !== 'nothing') {
@@ -711,17 +708,17 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
           // nobody else takes the source mid-copy.
           await ctx.sessions.renewLock(src.id, GIT_CLIENT_ID, Number(ttl));
         }
-        const copy = await ctx.sessions.create(src.workspaceId, srcFolder ? { fromBranch: srcFolder.branch } : {});
+        const copy = await ctx.sessions.create(src.workspaceId, src.branch ? { fromBranch: src.branch } : {});
         // Copy the source's scratch pad into the copy's folder — same filenames,
         // the copy's container mounts them at the same /workspace/scratch/ path,
         // so every reference in the transcript works without rewriting.
-        const srcScratch = path.join(sessionDir(ctx.paths, src.folderId ?? src.id), 'scratch');
+        const srcScratch = path.join(sessionDir(ctx.paths, folderOf(src)), 'scratch');
         const dstScratch = path.join(sessionDir(ctx.paths, copy.id), 'scratch');
         await fs.cp(srcScratch, dstScratch, { recursive: true }).catch(() => {});
         await ctx.sessions.seedCopy(copy, src);
         return reply.code(201).send(ok({ ...copy, copied_from: src.id }));
       } catch (e) {
-        if (e instanceof SessionError) {
+        if (e instanceof SessionError || e instanceof FolderError) {
           const status = e.code === 'source_branch_gone' ? 409 : 400;
           return reply.code(status).send(err(e.code, e.message, e.retryable));
         }
@@ -741,20 +738,21 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     params: idParam } }, async (req, reply) => {
     const s = await ctx.sessions.get(req.params.id);
     if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
-    const folder = s.folderId ? await ctx.folders.get(s.folderId) : undefined;
     const card = await ctx.cards.ofSession(s.id);
-    // A coding session born before the column (025) gets its prompt frozen
-    // the first time it is opened — the one write this read makes, once.
+    // A coding session (one that owns its folder) born before the column
+    // (025) gets its prompt frozen the first time it is opened — the one
+    // write this read makes, once.
     let system_prompt = await ctx.sessions.systemPrompt(s.id);
-    if (!system_prompt && runsCodingAgent(s)) system_prompt = await freezeSystemPrompt(ctx, s);
-    return ok({ ...s, branch: folder?.branch ?? null, card: card?.number ?? null,
+    if (!system_prompt && ownsFolder(s)) system_prompt = await freezeSystemPrompt(ctx, s);
+    return ok({ ...s, card: card?.number ?? null,
       system_prompt,
       // Computed like the list's, and for the same reason: the cli polls this
       // route while a session runs elsewhere (lock state + stamp, one GET)
       // and must not compare clocks with the server.
-      locked: !!s.lockedBy && !!s.lockExpiresAt && s.lockExpiresAt.getTime() > Date.now(),
+      locked: isHeld(s),
       // The transcript stamp, for cheap is-my-memory-current checks on
-      // switch — on the row since migration 005.
+      // switch. (`transcriptUpdatedAt` in the spread is the same value; the
+      // cli reads this name.)
       transcript_updated_at: s.transcriptUpdatedAt?.toISOString() ?? null });
   });
 
@@ -803,7 +801,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   // Delete = push + teardown: the flush-before-destroy rule. force=true
   // skips the safety only, never the flush attempt. purge=true goes further:
   // the row and the transcript go too — the session stops existing, only its
-  // pushed branch on origin survives.
+  // pushed branch on origin survives. Only a session that OWNS its folder
+  // has files to push and remove; a supervisor's or the assistant's has
+  // nothing to tear down, so without purge there is nothing to do.
   app.delete<{ Params: { id: string }; Querystring: { force?: string; purge?: string } }>(
     '/sessions/:id', { schema: { ...TAG,
       summary: 'Delete a session',
@@ -817,9 +817,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       const purge = req.query.purge === 'true';
       if (purge && heldByOther(s, clientOf(req))) return reply.code(409).send(lockedErr(s));
-      if (!purge && s.status !== 'active') return ok({ already: s.status });
-      // A conversation-only session has no checkout: nothing to push first.
-      if (s.status === 'active' && ctx.engine && !conversationOnly(s)) {
+      const hasFiles = ownsFolder(s) && s.status === 'active';
+      if (!purge && !hasFiles) return ok({ already: ownsFolder(s) ? s.status : 'no files' });
+      if (hasFiles && ctx.engine) {
         const workspace = await ctx.workspaces.get(s.workspaceId);
         if (workspace) {
           await ctx.engine.push(s, workspace).catch((e: Error) => {
@@ -828,7 +828,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         }
       }
       try {
-        if (s.status === 'active') {
+        if (hasFiles) {
           await ctx.sessions.destroy(s, { force: req.query.force === 'true' });
           await ctx.engine?.detach(s.id);
           await ctx.fs?.containers.remove(s.id);
@@ -838,7 +838,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         await ctx.sessions.purge(s.id);
         return ok({ purged: s.id });
       } catch (e) {
-        if (e instanceof SessionError) return reply.code(409).send(err(e.code, e.message));
+        // unpushed_work (Folders.removeFiles) — the caller's call to force.
+        if (e instanceof SessionError || e instanceof FolderError) return reply.code(409).send(err(e.code, e.message));
         throw e;
       }
     });
@@ -857,25 +858,23 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     '/sessions/assistant', { schema: { ...TAG,
       summary: 'Create an assistant session',
       description: 'Creates a conversation-only session for the assistant: no checkout of its own, its ' +
-        'folder is the on-screen session\'s. Its model calls are billed to it.',
+        'folder is the on-screen session\'s (its file tools run as this session and open that folder). ' +
+        'It runs on the row\'s model like every session, and its model calls are billed to it. Returns the row.',
       body: target } },
-    async (req) => {
-      const row = await ctx.sessions.createAssistant(req.body.workspace_id, req.body.session_id);
-      return ok({ id: row.id });
-    });
+    async (req) => ok(await ctx.sessions.createAssistant(req.body.workspace_id, req.body.session_id)));
 
   app.post<{ Params: { id: string }; Body: { workspace_id: string; session_id?: string | null } }>(
     '/sessions/:id/follow', { schema: { ...TAG,
       summary: 'Point an assistant session at the session on screen',
       description: 'Re-points the assistant row\'s workspace and folder at what the user is looking at, ' +
-        'so its tools read that session\'s files. Assistant sessions only.',
+        'so its tools read that session\'s files. Assistant sessions only. Returns the row.',
       params: idParam, body: target } },
     async (req, reply) => {
       const s = await ctx.sessions.get(req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (s.agent !== 'assistant') return reply.code(400).send(err('not_assistant', 'this route is for assistant sessions only'));
       await ctx.sessions.follow(s.id, req.body.workspace_id, req.body.session_id);
-      return ok({});
+      return ok(await ctx.sessions.get(s.id));
     });
 
   app.post<{ Params: { id: string } }>(
@@ -887,7 +886,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       const s = await ctx.sessions.get(req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (s.agent !== 'assistant') return reply.code(400).send(err('not_assistant', 'this route is for assistant sessions only'));
-      await ctx.sessions.turnEnded(s.id);
+      await ctx.sessions.turnEnded(s);
       return ok({});
     });
 

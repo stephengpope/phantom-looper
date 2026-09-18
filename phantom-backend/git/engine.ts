@@ -84,7 +84,7 @@ export class GitEngine {
       if (!committed && Number(ahead.trim()) === 0) return 'nothing';
       const r = await pushSession(dir, folder.branch, await this.auth(workspace));
       if (r !== 'pushed') return r;
-      await this.sessions.markPushed(s.id);
+      await this.deps.folders.markPushed(folder.id);
       log.info({ session: s.id, branch: folder.branch }, 'pushed');
       return 'pushed';
     } catch (e) {

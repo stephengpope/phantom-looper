@@ -38,19 +38,18 @@ export interface SessionInfo {
   /** The card's board column (plan, in_progress, blocked, done …), from the
    *  workspace's cards table. Null when no card is linked. */
   cardStatus?: string | null;
-  /** Where the session's work stands (server-computed from its checkout,
-   *  only when the list was fetched with git=true): not_pushed = only on
-   *  the server's disk, not_merged = on origin's branch but not in base,
-   *  merged = in base. null/absent = nothing to measure. */
+  /** Where the checkout's work stands (the server's periodic git refresh
+   *  keeps it current): not_pushed = only on the server's disk, not_merged =
+   *  on origin's branch but not in base, merged = in base. null = never
+   *  measured. */
   work?: 'not_pushed' | 'not_merged' | 'merged' | null;
   /** The model that drives (or drove) this session — the row's pin. */
   model?: string | null;
   /** The provider that model belongs to, pinned on the row alongside it. */
   provider?: string | null;
-  /** Lifetime token totals, the transcript save's own sums cached on the row.
-   *  Null on rows saved before the cache existed; zero = nothing said yet.
-   *  tokensOutput is the same number the status bar shows; the cache figures
-   *  feed state.ts's one hit-rate rule. */
+  /** Lifetime token totals, summed by the server from its token log; zero =
+   *  nothing said yet. tokensOutput is the same number the status bar shows;
+   *  the cache figures feed state.ts's one hit-rate rule. */
   tokensInput?: number | null;
   tokensOutput?: number | null;
   tokensCacheRead?: number | null;
