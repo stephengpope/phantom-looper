@@ -303,7 +303,7 @@ export function workspaceChoices(workspaces: WorkspaceInfo[], canAdd = true): Ch
 /** One list, two uses. `mode` decides which — sessions for /resume, workspaces
  *  for a fresh start. Deliberately not both at once: launching means "start
  *  work", reopening is a different intent with its own command. */
-export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clientId, onPick, onEdit, onDuplicate, onPin, onWake, onClose, onTrash, onCancel, onNearEnd, showSupervised, onToggleSupervised, query = '', rowsQuery = query, onQuery, now, title, footer, notice, canAdd }: {
+export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clientId, onPick, onEdit, onDuplicate, onPin, onPing, onClose, onTrash, onCancel, onNearEnd, showSupervised, onToggleSupervised, query = '', rowsQuery = query, onQuery, now, title, footer, notice, canAdd }: {
   mode: 'sessions' | 'workspaces';
   /** [/] on /resume: the filter line's text, and where it goes. The list
    *  is the server's answer to it (WindowStore.pickerQuery); this screen
@@ -339,8 +339,8 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
   onDuplicate?: (sessionId: string) => void;
   /** `p` on a session row: pin it to the top of the list (or take it down). */
   onPin?: (sessionId: string) => void;
-  /** `w` on a session row: wake the container so git status can be checked. */
-  onWake?: (sessionId: string) => void;
+  /** `i` on a session row: ping the container — start it and mark the checkout used — so git status can be checked. */
+  onPing?: (sessionId: string) => void;
   /** `x` on a session row: close it — out of local memory (the tab ring, the
    *  open-session list, the dot). The session stays on the server. */
   onClose?: (sessionId: string) => void;
@@ -363,7 +363,7 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
   const canEdit = mode === 'workspaces' && !!onEdit;
   const canCopy = mode === 'sessions' && !!onDuplicate;
   const canPin = mode === 'sessions' && !!onPin;
-  const canWake = mode === 'sessions' && !!onWake;
+  const canPing = mode === 'sessions' && !!onPing;
   const canFilter = mode === 'sessions' && !!onQuery;
   // FILTER MODE is one state: [/] opens the line and the cursor lives in it;
   // type to narrow, ↑↓ to move, enter to open — nothing else. esc clears
@@ -412,7 +412,7 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
           { key: 'x', does: 'close', when: canCopy },
           { key: 'd', does: 'duplicate', when: canCopy },
           { key: 't', does: 'trash', when: canCopy },
-          { key: 'w', does: 'wake', when: canWake },
+          { key: 'i', does: 'ping', when: canPing },
           { key: 's', does: 'supervised', when: canCopy, active: showSupervised },
           { key: 'esc', does: 'exit' },
         ])}>
@@ -433,7 +433,7 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
           if (v?.kind !== 'resume') return;
           if (ch === 'd') onDuplicate?.(v.sessionId);
           else if (ch === 'p') onPin?.(v.sessionId);
-          else if (ch === 'w') onWake?.(v.sessionId);
+          else if (ch === 'i') onPing?.(v.sessionId);
           else if (ch === 'x') onClose?.(v.sessionId);
           else if (ch === 't' || ch === 'c') onTrash?.(v.sessionId);
         } : undefined}

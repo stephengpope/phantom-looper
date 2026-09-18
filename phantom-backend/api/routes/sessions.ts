@@ -251,14 +251,20 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       return ok({ released });
     });
 
-  // ---- wake a container -----------------------------------------------------
+  // ---- ping a container -----------------------------------------------------
   // Start the session's container so the periodic git-status check can read
   // it again. The caller sees `work` update within ~10s via the board event
   // stream. 503 when Docker is not wired (DB-only test environments).
+  //
+  // The ping is activity: it touches the folder's lastUsedAt like a tool call
+  // does. Without that a session idle past container_idle_ms is started and
+  // then reaped again on the next maintenance tick — the reaper reads ONLY
+  // that stamp, so it never learned the container was wanted.
   app.post<{ Params: { id: string } }>(
-    '/sessions/:id/wake', { schema: { ...TAG,
-      summary: 'Wake the session container',
-      description: 'Starts the session\u2019s container if it is not already running. ' +
+    '/sessions/:id/ping', { schema: { ...TAG,
+      summary: 'Ping the session container',
+      description: 'Starts the session\u2019s container if it is not already running and marks the ' +
+        'checkout as used, so the idle reaper leaves it up for another container_idle_ms. ' +
         'The periodic git-status refresh picks it up within ~10 seconds and ' +
         'publishes the result on the board event stream. 503 when Docker is not wired.',
       params: idParam,
@@ -270,8 +276,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (s.status !== 'active') return reply.code(400).send(err('session_ended', `session is ${s.status}`));
       const workspace = await ctx.workspaces.get(s.workspaceId);
       if (!workspace) return reply.code(404).send(err('not_found', 'workspace not found'));
+      await ctx.sessions.touch(s);
       await ctx.fs.containers.ensure(folderOf(s), workspace);
-      return ok({ woken: true });
+      return ok({ pinged: true });
     });
 
   // ---- interrupt a running turn ---------------------------------------------

@@ -1270,14 +1270,15 @@ export class WindowStore {
     this.notify();
   };
 
-  /** [w] on /resume: start the session's container so its git status can be
-   *  checked again. The server's periodic refresh updates the column live. */
-  wakeSession = async (id: string): Promise<void> => {
+  /** [i] on /resume: ping the session — start its container and mark the
+   *  checkout used, so its git status can be checked again and the idle
+   *  reaper leaves it up. The server's periodic refresh updates the column live. */
+  pingSession = async (id: string): Promise<void> => {
     try {
-      await this.api('POST', `/sessions/${id}/wake`, {});
-      this.pickerNotice = 'waking container — git status updates shortly';
+      await this.api('POST', `/sessions/${id}/ping`, {});
+      this.pickerNotice = 'pinging container — git status updates shortly';
     } catch (e) {
-      this.pickerNotice = `could not wake session: ${(e as Error).message}`;
+      this.pickerNotice = `could not ping session: ${(e as Error).message}`;
     }
     this.notify();
   };
