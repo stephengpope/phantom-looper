@@ -664,7 +664,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   // the source's work, not base's. 409 while someone else holds the source.
   app.post<{ Params: { id: string } }>(
     '/sessions/:id/duplicate', { schema: { ...TAG,
-      summary: 'Copy a session',
+      summary: 'Duplicate a session',
       description: 'Takes the source\'s lock (409 while another client holds it), commits and pushes ' +
         'everything outstanding to the source\'s branch on origin, then creates a NEW session whose own ' +
         'branch is cut FROM that branch — the copy starts with all of the source\'s work. The transcript ' +

@@ -24,7 +24,7 @@ export const COMMANDS: Command[] = [
   // it, and [x] on /resume already teaches it.
   { name: 'compact', summary: 'compact this session, or /compact assistant', args: 'assistant' },
   { name: 'pop', summary: 'pull the last queued message into the prompt, or /pop all', args: 'all' },
-  { name: 'duplicate', summary: 'copy this session — transcript, branch, model; /model or /presets moves the copy until its first message' },
+  { name: 'duplicate', summary: 'duplicate this session — transcript, branch, model; /model or /presets moves the duplicate until its first message' },
   { name: 'close', summary: 'close this session — it stays on the server' },
   { name: 'trash', summary: 'trash this session for good — row, transcript, files' },
   { name: 'server', summary: 'the server url and api key, this machine only' },

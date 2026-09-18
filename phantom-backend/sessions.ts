@@ -102,6 +102,16 @@ export function assertDuplicable(s: SessionRow): void {
   }
 }
 
+/** The copy's name: the source's behind a `DUP: ` mark, so the two rows are
+ *  told apart in every list (and `/resume dup` finds every copy). One mark
+ *  only — a copy of a copy is still just a copy. An unnamed source leaves
+ *  the copy unnamed for the titler. */
+export const DUP_PREFIX = 'DUP: ';
+export function copyName(name: string | null): string | null {
+  if (name === null) return null;
+  return name.startsWith(DUP_PREFIX) ? name : `${DUP_PREFIX}${name}`;
+}
+
 /** THE folder this session's tools open. Null only on an assistant with no
  *  session on screen yet — then there are no files, and a caller that needs
  *  them is refused; nothing ever falls back to the session's own id. */
@@ -495,8 +505,9 @@ export class Sessions {
   }
 
   /** What travels from a source into its freshly created copy (the duplicate
-   *  route): the conversation minus its usage lines, the preview, the name,
-   *  plan mode, the frozen PROMPT and the MODEL — the copy runs on what the
+   *  route): the conversation minus its usage lines, the preview, the name
+   *  (prefixed `DUP: ` so the copy is told apart from its source in every
+   *  list — once, a copy of a copy does not stack), plan mode, the frozen PROMPT and the MODEL — the copy runs on what the
    *  source ran on, and can be moved with /model or a preset until its first
    *  new message (turn_count 0, like any newborn). NO token totals — the
    *  usage lines are stripped, so the copy counts its own spend from birth. */
@@ -509,7 +520,7 @@ export class Sessions {
       ...(src.provider && src.model ? { provider: src.provider, model: src.model, baseUrl: src.baseUrl } : {}),
       ...(data != null ? {
         transcript: stripUsageFromJsonl(data),
-        lastUserMessage: src.lastUserMessage, name: src.name, nameManual: src.nameManual,
+        lastUserMessage: src.lastUserMessage, name: copyName(src.name), nameManual: src.nameManual,
         transcriptUpdatedAt: stamp,
       } : {}),
     }).where(eq(sessions.id, copy.id));
