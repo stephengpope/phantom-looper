@@ -20,6 +20,7 @@ import { logger, errStr } from '../../log.js';
 import { catalog, modelsFor } from '../../models.js';
 import { PROVIDERS, isProvider } from '../../../core/llm/createAgent.js';
 import { startUpdate, subscribe, isRunning, type UpdateListener } from '../updateTask.js';
+import { formatTokenReport, reportWindows } from '../../tokenReport.js';
 
 const log = logger('system');
 
@@ -310,87 +311,17 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
   });
 
   // ---- token usage report ---------------------------------------------------
-  // Token totals for today and the current week (Monday–now), per
-  // provider/model and per kind — one query per window over log_tokens,
-  // filtered by created_at (when the call happened).
+  // One query over log_tokens for today / last 7 days / last 30 days, per
+  // kind × model; tokenReport.ts lays it out.
   app.get('/system/token-usage', {
     schema: {
       tags: ['meta'],
-      summary: 'Token usage report — today, this week, by provider/model and kind',
+      summary: 'Token usage report — today, last 7 days, last 30 days; agents and helpers by model',
       description: 'Sums the log_tokens entries. Answers as preformatted `text`.',
     },
   }, async () => {
     const now = new Date();
-
-    // Today: midnight in the server's timezone.
-    const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0);
-
-    // This week: Monday 00:00 in the server's timezone.
-    const weekStart = new Date(todayStart);
-    const dayOfWeek = weekStart.getDay();  // 0=Sun … 6=Sat
-    weekStart.setDate(weekStart.getDate() - ((dayOfWeek + 6) % 7));
-
-    const [todayByModel, weekByModel, todayByKind, weekByKind] = await Promise.all([
-      ctx.logTokens.totalsByModel(todayStart),
-      ctx.logTokens.totalsByModel(weekStart),
-      ctx.logTokens.totalsByKind(todayStart),
-      ctx.logTokens.totalsByKind(weekStart),
-    ]);
-
-    const k = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M`
-      : n >= 1_000 ? `${(n / 1_000).toFixed(1)}k`
-      : String(n);
-
-    const totalOf = (rows: typeof todayByModel) => rows.reduce(
-      (a, r) => ({ input: a.input + r.input, output: a.output + r.output,
-        cacheRead: a.cacheRead + r.cacheRead, cacheWrite: a.cacheWrite + r.cacheWrite }),
-      { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
-
-    const fmtTotal = (t: ReturnType<typeof totalOf>) =>
-      `↑ ${k(t.input)} in · ↓ ${k(t.output)} out · cache ${k(t.cacheRead)} read / ${k(t.cacheWrite)} write`;
-
-    const fmtByModel = (rows: typeof todayByModel) => {
-      if (!rows.length) return '  (none)';
-      const sorted = [...rows].sort((a, b) =>
-        (b.input + b.output) - (a.input + a.output));
-      return sorted.map((r) => {
-        const label = r.provider && r.model ? `${r.provider}/${r.model}`
-          : r.provider || r.model || '(unknown)';
-        return `  ${label}: ↑ ${k(r.input)} in · ↓ ${k(r.output)} out`;
-      }).join('\n');
-    };
-
-    const fmtByKind = (rows: typeof todayByKind) => {
-      if (!rows.length) return '  (none)';
-      const sorted = [...rows].sort((a, b) =>
-        (b.input + b.output) - (a.input + a.output));
-      return sorted.map((r) => {
-        const label = String(r.kind).replace(/_/g, ' ');
-        const calls = r.calls;
-        return `  ${label}: ↑ ${k(r.input)} in · ↓ ${k(r.output)} out · ${calls} call${calls === 1 ? '' : 's'}`;
-      }).join('\n');
-    };
-
-    const todayTotal = totalOf(todayByModel);
-    const weekTotal = totalOf(weekByModel);
-
-    const text = [
-      `== today (${todayStart.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}) ==`,
-      fmtTotal(todayTotal),
-      fmtByModel(todayByModel),
-      '',
-      `== this week (Mon–today) ==`,
-      fmtTotal(weekTotal),
-      fmtByModel(weekByModel),
-      '',
-      '== by kind (today) ==',
-      fmtByKind(todayByKind),
-      '',
-      '== by kind (week) ==',
-      fmtByKind(weekByKind),
-    ].join('\n');
-
-    return ok({ text });
+    const rows = await ctx.logTokens.report(reportWindows(now));
+    return ok({ text: formatTokenReport(rows, now) });
   });
 }

@@ -48,9 +48,16 @@ export type Reasoning = typeof REASONINGS[number];
 // directly (LogTokens.record); the CLI posts to the server, which does the
 // same. Null (tests, before boot) = calls run, nothing is recorded.
 
-/** What a call is billed to — the session it serves and what kind of work. */
-export type TokenKind = 'coding' | 'supervisor' | 'assistant'
-  | 'title' | 'commit_message' | 'compaction' | 'session_digest';
+/** What a call is billed to — the session it serves and what kind of work.
+ *  Kinds come in two groups, and the class name says which: agents
+ *  (`CodingAgent`) run tool loops for the user; helpers (`TitleHelper`) are
+ *  one-shot calls the system makes for itself. */
+export const AGENT_KINDS = ['coding', 'supervisor', 'assistant'] as const;
+export const HELPER_KINDS = ['title', 'commit_message', 'compaction', 'session_digest'] as const;
+export type AgentKind = typeof AGENT_KINDS[number];
+export type HelperKind = typeof HELPER_KINDS[number];
+export type TokenKind = AgentKind | HelperKind;
+export type TokenGroup = 'agent' | 'helper';
 export interface TokenUsageContext { kind: TokenKind; sessionId?: string | null }
 
 export interface TokenRecord extends TokenUsageContext {
@@ -114,17 +121,23 @@ export interface ModelConfig {
   onRetry?: (note: string) => void;
 }
 
-const TOKEN_KINDS: readonly TokenKind[] = ['coding', 'supervisor', 'assistant',
-  'title', 'commit_message', 'compaction', 'session_digest'];
+/** Which group a kind belongs to. Unknown kinds (a row written by an older
+ *  build) count as helpers so a report never drops them. */
+export function groupOf(kind: string): TokenGroup {
+  return (AGENT_KINDS as readonly string[]).includes(kind) ? 'agent' : 'helper';
+}
 
 /** A class's billing kind, read off its name: CodingAgent → 'coding',
  *  CommitMessageHelper → 'commit_message'. Throws at construction when the
- *  name is not a TokenKind, so a misnamed agent or helper cannot run
- *  unbilled. */
+ *  name is not a TokenKind, or its suffix disagrees with the kind's group,
+ *  so a misnamed agent or helper cannot run unbilled or land in the wrong
+ *  column of the report. */
 export function kindOf(className: string): TokenKind {
+  const suffix = className.endsWith('Agent') ? 'agent' : className.endsWith('Helper') ? 'helper' : null;
   const kind = className.replace(/(Agent|Helper)$/, '').replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
-  if (!(TOKEN_KINDS as readonly string[]).includes(kind)) {
-    throw new Error(`${className}: "${kind}" is not a TokenKind — name the class <Kind>Agent or <Kind>Helper, with Kind in TokenKind`);
+  const known = ([...AGENT_KINDS, ...HELPER_KINDS] as readonly string[]).includes(kind);
+  if (!known || suffix !== groupOf(kind)) {
+    throw new Error(`${className}: "${kind}" is not a TokenKind — name the class <Kind>Agent with Kind in AGENT_KINDS, or <Kind>Helper with Kind in HELPER_KINDS`);
   }
   return kind as TokenKind;
 }

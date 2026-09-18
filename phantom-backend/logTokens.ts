@@ -51,44 +51,36 @@ export class LogTokens {
     return row ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   }
 
-  /** Token totals per provider/model since `since` — the /tokens report.
-   *  Filters by created_at (when the call happened), not session activity. */
-  async totalsByModel(since: Date): Promise<Array<{
-    provider: string | null; model: string | null;
-    input: number; output: number; cacheRead: number; cacheWrite: number;
-  }>> {
+  /** The /tokens report's rows: one per kind × provider × model, each
+   *  carrying its sums for the three windows at once — `FILTER (WHERE …)`
+   *  splits per window inside one scan bounded by the widest. Filters by
+   *  created_at (when the call happened), not session activity. */
+  async report(since: Windows<Date>): Promise<ReportRow[]> {
+    const windowed = (col: PgColumn | null, from: Date) => sql<number>`coalesce(${
+      col ? sql`sum(${col})` : sql`count(*)`
+    } filter (where ${logTokens.createdAt} >= ${from}), 0)`.mapWith(Number);
+    const window = (from: Date) => ({
+      input: windowed(logTokens.tokensInput, from),
+      output: windowed(logTokens.tokensOutput, from),
+      cacheRead: windowed(logTokens.tokensCacheRead, from),
+      calls: windowed(null, from),
+    });
     const rows = await this.db
       .select({
-        provider: logTokens.provider,
-        model: logTokens.model,
-        input: sum(logTokens.tokensInput),
-        output: sum(logTokens.tokensOutput),
-        cacheRead: sum(logTokens.tokensCacheRead),
-        cacheWrite: sum(logTokens.tokensCacheWrite),
+        kind: logTokens.kind, provider: logTokens.provider, model: logTokens.model,
+        today: window(since.today), week: window(since.week), month: window(since.month),
       })
       .from(logTokens)
-      .where(gte(logTokens.createdAt, since))
-      .groupBy(logTokens.provider, logTokens.model);
+      .where(gte(logTokens.createdAt, since.month))
+      .groupBy(logTokens.kind, logTokens.provider, logTokens.model);
     return rows;
   }
+}
 
-  /** Token totals per kind since `since` — helpers + agent types. */
-  async totalsByKind(since: Date): Promise<Array<{
-    kind: string; input: number; output: number;
-    cacheRead: number; cacheWrite: number; calls: number;
-  }>> {
-    const rows = await this.db
-      .select({
-        kind: logTokens.kind,
-        input: sum(logTokens.tokensInput),
-        output: sum(logTokens.tokensOutput),
-        cacheRead: sum(logTokens.tokensCacheRead),
-        cacheWrite: sum(logTokens.tokensCacheWrite),
-        calls: sql<number>`count(*)`.mapWith(Number),
-      })
-      .from(logTokens)
-      .where(gte(logTokens.createdAt, since))
-      .groupBy(logTokens.kind);
-    return rows;
-  }
+/** The report's windows — today, and rolling 7 / 30 days. */
+export interface Windows<T> { today: T; week: T; month: T }
+/** One window's sums for one report row. */
+export interface WindowTotals { input: number; output: number; cacheRead: number; calls: number }
+export interface ReportRow extends Windows<WindowTotals> {
+  kind: string; provider: string | null; model: string | null;
 }

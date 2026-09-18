@@ -43,7 +43,7 @@ export const MENU: Record<TelegramMode, Cmd[]> = {
     { command: 'stop', description: 'Stop the assistant' },
     { command: 'status', description: 'Server, workspace and session overview' },
     { command: 'presets', description: 'List or apply model presets' },
-    { command: 'tokens', description: 'Token usage — today, this week, by model' },
+    { command: 'tokens', description: 'Token usage — today, 7 days, 30 days; agents and helpers by model' },
     { command: 'update', description: 'Check for updates' },
     { command: 'restart', description: 'Restart the server (or one service)' },
     { command: 'help', description: 'List commands' },
@@ -59,7 +59,7 @@ export const MENU: Record<TelegramMode, Cmd[]> = {
     { command: 'stop', description: 'Stop the running coding session' },
     { command: 'status', description: 'Server, session and what\'s running' },
     { command: 'presets', description: 'List or apply model presets' },
-    { command: 'tokens', description: 'Token usage — today, this week, by model' },
+    { command: 'tokens', description: 'Token usage — today, 7 days, 30 days; agents and helpers by model' },
     { command: 'update', description: 'Check for updates' },
     { command: 'restart', description: 'Restart the server (or one service)' },
     { command: 'help', description: 'List commands' },
@@ -435,8 +435,9 @@ export async function handleCommand(
     case 'tokens': {
       const j = await (await engine.api('/system/token-usage')).json().catch(() => null);
       if (!j?.ok) { await reply(`⚠️ Couldn't read token usage: ${j?.error?.message ?? 'no answer from the server'}`); return; }
+      // A code block: the report is a fixed-column table, monospace only.
       const text = String(j.data.text ?? '');
-      await client.sendMarkdown(dm, titled('📊 Token usage', text || '(no usage data)'));
+      await client.sendMarkdown(dm, titled('📊 Token usage', text ? '```\n' + text + '\n```' : '(no usage data)'));
       return;
     }
 
@@ -584,7 +585,7 @@ const HELP = [
   '',
   'Server',
   '/status — Server health and what\'s running',
-  '/tokens — Token usage — today, this week, by model',
+  '/tokens — Token usage — today, 7 days, 30 days; agents and helpers by model',
   '/restart — Restart the server; /restart postgres restarts one service',
   '/update — Check for updates',
   '',
