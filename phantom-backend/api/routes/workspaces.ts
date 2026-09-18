@@ -3,7 +3,6 @@ import type { WorkspaceRow } from '../../db/schema.js';
 import { parseRepoRef, remoteUrl } from '../../git/remote.js';
 import { createRepo, listRepos, whoami } from '../../git/github.js';
 import { initializeRemote, classifyGitFailure } from '../../git/git.js';
-import { SettingsWriteError } from '../../settings.js';
 import { WorkspaceError } from '../../workspaces.js';
 import { workspaceScope } from '../../store.js';
 import { newId } from '../../../core/ids.js';
@@ -193,40 +192,27 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
       settings: await ctx.settings.block({ workspace: w }) });
   });
 
-  app.patch<{ Params: { id: string }; Body: Record<string, unknown> }>(
-    '/workspaces/:id', { schema: { ...TAG, summary: 'Update workspace-level overrides',
-      description: 'Workspace values override global settings (pool size, idle timers, history depth, workspace image). ' +
-        'Every overridable field accepts null, which REMOVES the workspace value so the setting follows the global one ' +
-        'again — a different state from setting it to whatever the global value happens to be today. base_branch and ' +
-        'branch_prefix are the workspace\'s own, not overrides, and cannot be nulled.', params: idParam,
+  // The workspace's OWN three fields — no global to fall back to, so they
+  // are columns, not overrides, and cannot be cleared. Everything a workspace
+  // may DIFFER on (spare clones, image, the looper switches, its token…) is a
+  // setting at its layer: PATCH /settings?workspace=<id>, the one door. This
+  // route used to accept settings too, with its own list of which — a list
+  // that drifted from the real one and refused five of them.
+  app.patch<{ Params: { id: string }; Body: { display_name?: string; base_branch?: string; branch_prefix?: string } }>(
+    '/workspaces/:id', { schema: { ...TAG, summary: 'Update the workspace\'s own fields',
+      description: 'display_name, base_branch, branch_prefix — the workspace\'s own, not overrides. ' +
+        'base_branch and branch_prefix cannot be cleared; an empty display_name reverts to the repo name. ' +
+        'Settings a workspace overrides are written with PATCH /settings?workspace=<id>.', params: idParam,
       body: { type: 'object', additionalProperties: false, properties: {
         display_name: { type: 'string', description: 'Human label; empty string reverts to the workspace name.' },
-        base_branch: { type: 'string' }, branch_prefix: { type: 'string' },
-        spare_clones: { type: ['integer', 'null'] },
-        initial_history_depth: { type: ['string', 'null'], examples: ['7.days', 'full'] },
-        container_image: { type: ['string', 'null'] },
-        agent_git_credentials: { type: ['boolean', 'null'],
-          description: 'Put this workspace\'s GitHub PAT in the container so the agent\'s git and gh are authenticated.' },
-        auto_push_on_archive: { type: ['boolean', 'null'],
-          description: 'Whether archiving a done card auto-pushes its session\'s work to the base branch.' },
-        card_prefix: { type: ['string', 'null'],
-          description: 'Kanban card number prefix ("PHA-7"). null reverts to the default: the first 3 letters of the repo name.' } } } } },
+        base_branch: { type: 'string' }, branch_prefix: { type: 'string' } } } } },
     async (req, reply) => {
       if (!await ctx.workspaces.get(req.params.id)) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
       const body = req.body ?? {};
-
-      // Three fields are the workspace's OWN — no global to fall back to, so
-      // they are columns, not overrides, and cannot be cleared. Everything else
-      // is a setting at this workspace's layer.
-      const OWN: Record<string, string> = {
-        display_name: 'displayName', base_branch: 'baseBranch', branch_prefix: 'branchPrefix' };
-
-      const settingEntries = Object.entries(body).filter(([k]) => !(k in OWN));
-
-
       const patch: Partial<Pick<WorkspaceRow, 'displayName' | 'baseBranch' | 'branchPrefix'>> = {};
-      for (const [k, column] of Object.entries(OWN) as Array<[string, keyof typeof patch]>) if (k in body) patch[column] = body[k] as never;
-      if (patch.displayName === '') patch.displayName = null; // empty reverts to the default
+      if (body.display_name !== undefined) patch.displayName = body.display_name || null; // empty reverts to the default
+      if (body.base_branch !== undefined) patch.baseBranch = body.base_branch;
+      if (body.branch_prefix !== undefined) patch.branchPrefix = body.branch_prefix;
       // Fastify runs ajv with coerceTypes, which turns null into "" for a
       // `type: 'string'` field — so "clear the base branch" would land as a
       // workspace whose base branch is the empty string. Refuse it here, where
@@ -237,20 +223,8 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
             `${field} cannot be cleared — it is this workspace's own, not an override`));
         }
       }
-      if (!Object.keys(patch).length && !settingEntries.length) {
-        return reply.code(400).send(err('empty_patch', 'nothing to update'));
-      }
+      if (!Object.keys(patch).length) return reply.code(400).send(err('empty_patch', 'nothing to update'));
       await ctx.workspaces.update(req.params.id, patch, writerOf(req));
-      // The SAME settings writer PATCH /settings runs: null clears, and a
-      // key this workspace may not override is refused here too.
-      if (settingEntries.length) {
-        try {
-          await ctx.settings.write('workspace', workspaceScope(req.params.id), Object.fromEntries(settingEntries), writerOf(req));
-        } catch (e) {
-          if (e instanceof SettingsWriteError) return reply.code(400).send(err(e.code, e.message));
-          throw e;
-        }
-      }
       const updated = (await ctx.workspaces.get(req.params.id))!;
       return ok(publicWorkspace(updated, await ctx.settings.hasAt('github_token', workspaceScope(req.params.id))));
     });
@@ -278,12 +252,5 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
   // The workspace GitHub token, this workspace's own PAT and the global one are
   // ONE key at two layers — `github_token` global, `github_token` at
   // workspace:<id>. PATCH /settings?workspace=<id> writes it and null
-  // clears it, exactly like every other override. The two routes that used to
-  // do this by hand (PUT/DELETE /workspaces/:id/credential) are gone, and so is
-  // /secrets: settings were readable and secrets were not, which is the only
-  // reason they were ever two systems.
-
-  // The old GET /workspaces/:id/effective is gone: the plain GET above returns
-  // the resolved settings WITH their layers — the normal shape (git, VS Code:
-  // the default read is the effective one; raw layers ride along, not apart).
+  // clears it, exactly like every other override.
 }

@@ -44,7 +44,7 @@ export async function commitMessageFor(
   dir: string, config: ModelConfig | null, card = '', base?: string, sessionId?: string,
 ): Promise<string> {
   if (!config) {
-    throw new Error('no model configured to write the commit message — set one on /model (phantom-cli), or PATCH /settings {provider, model}');
+    throw new Error('no model configured to write the commit message — set one on /model (phantom-cli), or PATCH /settings {coding_provider, coding_model}');
   }
   const range = base ? [base] : [];
   const { stdout: stat } = await git(dir, ['diff', '--cached', '--stat', ...range]);

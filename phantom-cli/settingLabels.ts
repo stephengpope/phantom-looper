@@ -2,12 +2,12 @@
 // true. Presentation only.
 //
 // What a setting is called and what it does are NOT here. They live in
-// server/settings.ts (`META[key].label`, `META[key].choiceLabels`, `DESCRIPTIONS`)
-// and reach this client over the wire, in `meta` and `description` on every
-// entry of GET /settings and GET /workspaces/:id `settings`. There was briefly a
-// friendlier copy of all of it in this file; that made two places to write down
-// what a setting means, so every new setting needed both and the two would
-// drift. If a description reads badly here, fix it at the source.
+// phantom-backend/settings.ts (`META[key].label`, `META[key].choiceLabels`,
+// `DESCRIPTIONS`, `CREDENTIALS`) and reach this client over the wire, in `meta`
+// and `description` on every entry of GET /settings and GET /workspaces/:id
+// `settings`. A copy of it in this package made two places to write down what
+// a setting means, and the two drifted. If a description reads badly, fix it
+// at the source.
 
 /** The shape every settings screen gets back from the API. */
 export interface WireMeta {
@@ -15,6 +15,8 @@ export interface WireMeta {
   label?: string;
   /** The heading the server files this under; rows sharing one sit together. */
   group?: string;
+  /** The sub-heading inside an agent's group (model, compaction, voice). */
+  subgroup?: string;
   choices?: string[];
   choiceLabels?: Record<string, string>;
   nullable?: boolean;

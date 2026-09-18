@@ -1,56 +1,29 @@
 // The credentials the server holds — ONE place to set any of them, and one key
-// per provider so a key pasted here works for the Git Fixer, this TUI's coding
-// agent and the Assistant alike.
+// per provider so a key pasted here works for the commit-message writer, this
+// cli's coding agent and the Assistant alike.
 //
-// They used to be "secrets": write-only, never shown back, on their own screen
-// because settings were readable and these were not. They are settings now —
-// same table, same layers, same routes — so the only thing special left about
-// them is that they are stored encrypted, and the screen still masks them
-// because a terminal has scrollback.
-//
-// Named the way each vendor names the thing: GitHub says token, everyone else
-// says API key.
+// They are settings — same table, same layers, same routes — stored encrypted,
+// and the screen masks them because a terminal has scrollback. Which
+// credentials exist, what to call them, how they group and what each is for
+// all come from GET /settings (the entries flagged `secret`): the server is
+// the one place a credential is described, and this screen shows it verbatim.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { SelectList, type Choice } from './SelectList.js';
 import { ValueInput } from './ValueInput.js';
 import { Screen } from './Screen.js';
-import { makeSettings, type Api } from '../settings.js';
+import { makeSettings, type Api, type Entry } from '../settings.js';
+import { labelFor } from '../settingLabels.js';
 
-const NAMES = [
-  // git
-  { name: 'github_token', label: 'github token', group: 'git',
-    hint: 'Used for clones, pushes and pull requests. A workspace with its own token ignores this one.' },
-  // llm
-  { name: 'anthropic_api_key', label: 'anthropic key', group: 'llm',
-    hint: 'Used by every agent set to the anthropic provider.' },
-  { name: 'openai_api_key', label: 'openai key', group: 'llm', hint: 'Used by every agent set to the openai provider.' },
-  { name: 'google_api_key', label: 'google key', group: 'llm', hint: 'Used by every agent set to the google provider (Gemini).' },
-  { name: 'deepseek_api_key', label: 'deepseek key', group: 'llm', hint: 'Used by every agent set to the deepseek provider.' },
-  { name: 'kimi_api_key', label: 'kimi key', group: 'llm', hint: 'Used by every agent set to the kimi provider (Moonshot AI / Kimi).' },
-  { name: 'xai_api_key', label: 'xai key', group: 'llm', hint: 'Used by every agent set to the xai provider (Grok).' },
-  { name: 'mistral_api_key', label: 'mistral key', group: 'llm', hint: 'Used by every agent set to the mistral provider.' },
-  { name: 'groq_api_key', label: 'groq key', group: 'llm', hint: 'Used by every agent set to the groq provider.' },
-  { name: 'openai_compatible_api_key', label: 'openai-compatible key', group: 'llm',
-    hint: 'Used for an OpenAI-compatible endpoint: Ollama, vLLM, OpenRouter.' },
-  // voice
-  { name: 'deepgram_api_key', label: 'deepgram key', group: 'voice',
-    hint: 'Speech to text and text to speech for the Assistant. Without it the Assistant has no voice.' },
-  // search
-  { name: 'firecrawl_api_key', label: 'firecrawl key', group: 'search',
-    hint: 'Used by the web_search and web_fetch tools (firecrawl.dev). Without it web calls fail.' },
-  // chat
-  { name: 'telegram_bot_token', label: 'telegram bot token', group: 'chat',
-    hint: 'From @BotFather. With telegram enabled and an authorized user set (/settings), saving it registers the webhook.' },
-] as const;
-
-/** Build the flat choices array with group headings inserted where the group
- *  changes — the same pattern Settings uses. */
-function groupedChoices(stored: Set<string>) {
+/** The credential rows with a heading where the group changes — the same
+ *  pattern Settings uses. Order is the server's. */
+function groupedChoices(creds: Array<[string, Entry]>) {
   const out: Choice<string>[] = [];
   let last = '';
-  for (const n of NAMES) {
-    if (n.group !== last) { out.push({ value: `#${n.group}`, label: n.group, heading: true }); last = n.group; }
-    out.push({ value: n.name, label: n.label, detail: stored.has(n.name) ? 'stored' : 'not set', hint: n.hint });
+  for (const [name, e] of creds) {
+    const group = e.meta.group ?? '';
+    if (group !== last) { out.push({ value: `#${group}`, label: group, heading: true }); last = group; }
+    const stored = typeof e.value === 'string' && e.value.length > 0;
+    out.push({ value: name, label: labelFor(name, e.meta), detail: stored ? 'stored' : 'not set', hint: e.description });
   }
   return out;
 }
@@ -61,11 +34,11 @@ export function Keys({ api, onClose, onChanged }: {
    *  to reach the app the same way any other one does — the Assistant reads its
    *  Deepgram key at spawn, so without this you could save the key, watch the
    *  screen say it was stored, and still have voice fail with "needs a deepgram
-   *  key" until you restarted the TUI. */
+   *  key" until you restarted the cli. */
   onChanged?: (name: string) => void;
 }) {
   const settings = useMemo(() => makeSettings(api), [api]);
-  const [set, setSet] = useState<string[] | null>(null);
+  const [creds, setCreds] = useState<Array<[string, Entry]> | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   // The key last opened, so the list comes back with the cursor on it.
   const [last, setLast] = useState<string | undefined>();
@@ -75,15 +48,12 @@ export function Keys({ api, onClose, onChanged }: {
   const load = useCallback(async () => {
     setBusy(true);
     try {
-      // One read of the server's namespace; a credential comes back with its
+      // One read of the server's store; a credential comes back with its
       // value, and the screen masks it rather than the API hiding it.
       const all = await settings.all();
-      setSet(NAMES.map((n) => n.name).filter((n) => {
-        const v = all?.[n]?.value;
-        return typeof v === 'string' && v.length > 0;
-      }));
+      setCreds(Object.entries(all).filter(([, e]) => e.secret));
       setNotice(undefined);
-    } catch (e) { setNotice(`could not load: ${(e as Error).message}`); setSet([]); }
+    } catch (e) { setNotice(`could not load: ${(e as Error).message}`); setCreds([]); }
     finally { setBusy(false); }
   }, [settings]);
 
@@ -110,23 +80,24 @@ export function Keys({ api, onClose, onChanged }: {
     }
   };
 
+  const stored = new Set((creds ?? []).filter(([, e]) => typeof e.value === 'string' && e.value.length > 0).map(([n]) => n));
+
   if (editing) {
-    const row = NAMES.find((n) => n.name === editing)!;
+    const label = labelFor(editing, creds?.find(([n]) => n === editing)?.[1].meta);
     return (
       <ValueInput
-        spec={{ title: row.label, type: 'string', secret: true, current: '',
+        spec={{ title: label, type: 'string', secret: true, current: '',
           note: 'stored encrypted on the server · never shown back · empty cancels' }}
         onCancel={() => setEditing(null)}
         onSubmit={(v) => {
           if (v === null) { setEditing(null); return; }   // empty cancels rather than storing ""
           run(() => settings.patch({ [editing]: String(v) }),
-            editing === 'github_token' ? checkGithub : `${row.label} saved`, editing);
+            editing === 'github_token' ? checkGithub : `${label} saved`, editing);
         }}
       />
     );
   }
 
-  const stored = new Set(set ?? []);
   return (
     <Screen title="keys"
       sub="stored on the server, used by every agent"
@@ -136,7 +107,7 @@ export function Keys({ api, onClose, onChanged }: {
         { key: 'esc', does: 'close' },
       ]}>
       <SelectList
-        choices={groupedChoices(stored)}
+        choices={groupedChoices(creds ?? [])}
         initial={last}
         onSelect={(n) => { setLast(n); setEditing(n); }}
         onCancel={onClose}

@@ -261,12 +261,12 @@ export async function handleCommand(
     case 'providers': {
       // The same PROVIDERS list the cli's /model offers; each row names the
       // catalog's newest model — what an unset `model` resolves to. Switching
-      // clears `model` so it follows that default (the cli's /model rule).
-      const { provider: current } = await engine.settings.resolveMany(['provider']);
+      // clears `coding_model` so it follows that default (the cli's /model rule).
+      const { coding_provider: current } = await engine.settings.resolveMany(['coding_provider']);
       if (arg !== undefined) {
         const p = listed(providerList, dm, arg);
         if (!p) { await reply('⚠️ Send /providers first to see the list, then /providers <number>.'); return; }
-        const j = await (await engine.api('/settings', { method: 'PATCH', body: { provider: p, model: null } })).json();
+        const j = await (await engine.api('/settings', { method: 'PATCH', body: { coding_provider: p, coding_model: null } })).json();
         if (!j.ok) { await reply(`⚠️ Couldn't switch provider: ${j.error?.message}`); return; }
         const model = latestModel(p);
         await client.sendMarkdown(dm, titled(
@@ -304,7 +304,7 @@ export async function handleCommand(
     case 'models': {
       // The catalog's top 10 for the current provider. The list is a
       // convenience, never a fence — any other id can be typed in the cli.
-      const { provider, model } = await engine.settings.resolveMany(['provider', 'model']);
+      const { coding_provider: provider, coding_model: model } = await engine.settings.resolveMany(['coding_provider', 'coding_model']);
       if (!provider) { await reply('⚠️ No provider yet — pick one with /providers.'); return; }
       const models = modelsFor(provider).slice(0, 10);
       if (!models.length) {
@@ -314,7 +314,7 @@ export async function handleCommand(
       if (arg !== undefined) {
         const id = listed(modelList, dm, arg);
         if (!id) { await reply('⚠️ Send /models first to see the list, then /models <number>.'); return; }
-        const j = await (await engine.api('/settings', { method: 'PATCH', body: { model: id } })).json();
+        const j = await (await engine.api('/settings', { method: 'PATCH', body: { coding_model: id } })).json();
         if (!j.ok) { await reply(`⚠️ Couldn't switch model: ${j.error?.message}`); return; }
         await reply(`✅ Model: ${id}`);
         return;
@@ -340,7 +340,7 @@ export async function handleCommand(
         const p = list.find((x) => x.id === id)!;
         const applied = await (await engine.api('/settings', { method: 'PATCH', body: p.values })).json();
         if (!applied.ok) { await reply(`⚠️ Couldn't apply "${p.name}": ${applied.error?.message}`); return; }
-        const { provider, model } = await engine.settings.resolveMany(['provider', 'model']);
+        const { coding_provider: provider, coding_model: model } = await engine.settings.resolveMany(['coding_provider', 'coding_model']);
         await client.sendMarkdown(dm, titled(
           `✅ Applied preset "${p.name}" — ${provider ?? 'no provider'}${model ? ` / ${model}` : ''}.`,
           'See the top models with /models; switch with /models <number>.'));
@@ -526,7 +526,7 @@ const listedSession = (dm: number, arg: string) => listed(sessionList, dm, arg);
 
 /** A preset's provider / model as a short row suffix, when it sets them. */
 function presetSummary(values: Record<string, unknown>): string {
-  const bits = [values.provider, values.model].filter((v): v is string => typeof v === 'string');
+  const bits = [values.coding_provider, values.coding_model].filter((v): v is string => typeof v === 'string');
   return bits.length ? ` — ${bits.join(' / ')}` : '';
 }
 

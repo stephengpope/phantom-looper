@@ -97,7 +97,7 @@ export function cleanTitle(raw: string): string | null {
  *  pair falls back to the coding config outright — a title is never worth an
  *  error. null = no usable config (unknown provider, no model): skip. */
 async function titleConfig(settings: Settings): Promise<ModelConfig | null> {
-  const cfg = await settings.resolveMany(['provider', 'model', 'base_url',
+  const cfg = await settings.resolveMany(['coding_provider', 'coding_model', 'coding_base_url',
     'assistant_provider', 'assistant_model', 'assistant_base_url']);
   let c: { provider: string; model: string | null; baseUrl: string | null };
   try {

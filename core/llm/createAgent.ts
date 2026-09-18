@@ -36,7 +36,8 @@ import { openaiCredentials } from '@openai-oauth/local';
 
 export const PROVIDERS = ['anthropic', 'openai', 'openai-codex', 'google', 'deepseek', 'kimi', 'xai', 'mistral', 'groq', 'openai-compatible'] as const;
 export type Provider = typeof PROVIDERS[number];
-export type Reasoning = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+export const REASONINGS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+export type Reasoning = typeof REASONINGS[number];
 
 // ── token recording ───────────────────────────────────────────────────────
 // Every model handle in the tree is built by `languageModel()` below, and
@@ -273,13 +274,13 @@ function providerModel(c: ModelConfig): Exclude<LanguageModel, string> {
     case 'mistral': return createMistral({ apiKey: c.apiKey ?? undefined, baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
     case 'groq': return createGroq({ apiKey: c.apiKey ?? undefined, baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
     case 'openai-compatible':
-      if (!c.baseUrl) throw new Error(`provider is openai-compatible but base_url is not set — set the endpoint on /model (phantom-cli), or PATCH /settings {base_url}`);
+      if (!c.baseUrl) throw new Error(`provider is openai-compatible but base_url is not set — set the endpoint on /model (phantom-cli), or PATCH /settings {coding_base_url}`);
       return createOpenAICompatible({ name: 'phantom-looper', baseURL: c.baseUrl, apiKey: c.apiKey ?? 'none', fetch: c.fetch })(c.model);
     default: throw new Error(`provider "${String((c as { provider: string }).provider)}" is not one of ${PROVIDERS.join(', ')} — ${PICK_MODEL}`);
   }
 }
 
-const PICK_MODEL = 'pick one on /model (phantom-cli), or PATCH /settings {provider, model}';
+const PICK_MODEL = 'pick one on /model (phantom-cli), or PATCH /settings {coding_provider, coding_model}';
 export const NO_PROVIDER = `no provider set — ${PICK_MODEL}`;
 
 /** A model handle that fails every call with `reason`. */

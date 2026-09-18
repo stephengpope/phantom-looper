@@ -15,7 +15,6 @@
 // render, so a screen reads the store's CURRENT rows each time — the poll
 // that refreshes /tasks or a page appended to /resume lands on screen
 // without any screen re-opening.
-import type { ConfigKey } from './config.js';
 import type { Dialog, Overlay, WindowStore } from './window.js';
 import type { Api } from './request.js';
 import { Settings } from './components/Settings.js';
@@ -93,11 +92,19 @@ export const switcherScreen = (w: WindowStore): Overlay => full('sessions', () =
     onCancel={w.dismissOverlay} />
 ));
 
-/** /settings — the server's own settings; the screen's sub line says the scope. */
-export const settingsScreen = (w: WindowStore): Overlay => full('settings', () => (
-  <Settings key={`settings-${w.settingsVersion}`} api={w.api} configPath={w.configPath} startAt="api"
-    onClose={w.dismissOverlay} />
-));
+/** /settings — every server setting plus this machine's audio rows; /model
+ *  and /assistant open it at their group. Device rows offer what the voice
+ *  sidecar found; saving a boot-time key restarts it. */
+export const settingsScreen = (w: WindowStore, startAt?: 'coding' | 'assistant'): Overlay => full('settings', () => {
+  const vs = w.voice.snapshot();
+  return (
+    <Settings key={`settings-${w.settingsVersion}`} api={w.api} configPath={w.configPath} title="settings"
+      rows={{ server: true, local: 'voice' }} startAt={startAt}
+      suggestions={{ voice_mic_device: vs.devices.mics, voice_speaker_device: vs.devices.speakers }}
+      onOpenRow={(k) => { if (k === 'voice_mic_device' || k === 'voice_speaker_device') void w.voice.refreshDevices(); }}
+      onChange={w.settingChanged} onClose={w.dismissOverlay} />
+  );
+});
 
 /** /keys — its own screen so there is ONE place any credential is set. A
  *  saved key has to reach the app like any other setting change: the
@@ -105,7 +112,7 @@ export const settingsScreen = (w: WindowStore): Overlay => full('settings', () =
  *  build. */
 export const keysScreen = (w: WindowStore): Overlay => full('keys', () => (
   <Keys key={`keys-${w.settingsVersion}`} api={w.api} onClose={w.dismissOverlay}
-    onChanged={(name) => w.settingChanged(name as ConfigKey)} />
+    onChanged={w.settingChanged} />
 ));
 
 /** /secrets — the agent's secrets, not phantom's own credentials (/keys).
@@ -114,27 +121,11 @@ export const secretsScreen = (w: WindowStore): Overlay => full('secrets', () => 
   <Secrets api={w.api} onClose={w.dismissOverlay} />
 ));
 
-/** /assistant — the Assistant's settings: local, offline. Device rows offer
- *  what the sidecar found; saving a boot-time key restarts it. */
-export const voiceScreen = (w: WindowStore): Overlay => full('voice', () => {
-  const vs = w.voice.snapshot();
-  return (
-    <Settings key={`voice-settings-${w.settingsVersion}`}
-      api={w.api} configPath={w.configPath} startAt="local"
-      title="voice" groups={['voice']}
-      suggestions={{ voice_mic_device: vs.devices.mics, voice_speaker_device: vs.devices.speakers }}
-      onOpenRow={(k) => { if (k === 'voice_mic_device' || k === 'voice_speaker_device') void w.voice.refreshDevices(); }}
-      onLocalChange={w.settingChanged} onClose={w.dismissOverlay} />
-  );
-});
-
-/** /model and /server. /model writes to the server like every other
- *  setting screen; /server gets the offline api (see above). */
-export const localSettingsScreen = (w: WindowStore, which: 'model' | 'server'): Overlay => full(which, () => (
-  <Settings key={`local-settings-${w.settingsVersion}`}
-    api={which === 'server' ? offline : w.api} configPath={w.configPath} startAt="local"
-    title={which} groups={[which]}
-    onLocalChange={w.settingChanged} onClose={w.dismissOverlay} />
+/** /server — this machine's connection rows, on the offline api (see above). */
+export const serverScreen = (w: WindowStore): Overlay => full('server', () => (
+  <Settings key={`server-settings-${w.settingsVersion}`}
+    api={offline} configPath={w.configPath} title="server" rows={{ local: 'server' }}
+    onChange={w.settingChanged} onClose={w.dismissOverlay} />
 ));
 
 /** /presets. Applying closes the screen — the confirmation and the rebuilt
@@ -144,7 +135,7 @@ export const presetsScreen = (w: WindowStore): Overlay => full('presets', () => 
     confirm={(t, m) => w.confirm(t, m)}
     onApplied={(name) => {
       w.note(`preset applied: ${name}`);
-      w.settingChanged('provider' as ConfigKey);
+      w.settingChanged('provider');
     }}
     onClose={w.dismissOverlay} />
 ));

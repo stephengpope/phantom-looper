@@ -84,6 +84,26 @@ general, short, and true.
   `status` and `archived` first, then locked the row; two moves could
   both report the same `from`. A transition is one read and one write
   under one lock, or it is a guess. *(table 12)*
+- **Two lists of one fact will drift, and the second one is the bug.** A
+  route's allowed-body list and the settings' overridable list named the
+  same eleven keys; five were added to one and not the other, and the
+  customer's save failed with "nothing to update". Delete the second
+  list; the route asks the first. *(table 13)*
+- **A column the database can derive is stored twice.** `secret` was
+  forced equal to `value_enc is not null` by a CHECK. Read the CHECKs:
+  one that equates two columns names a column to drop. *(table 13)*
+- **A layer nobody writes is a lock every reader carries.** The session
+  scope: one key, zero writers, five call sites threading it through.
+  *(table 13)*
+- **Siblings share a naming rule or none of them has one.** Three agents;
+  two carried a prefix and the coding agent's keys were bare, so the
+  settings list could not say whose "provider" a row was. When one of N
+  like things is named differently, it is the one that is wrong, all the
+  way down to storage. *(table 13)*
+- **Screen order is declaration order — so declare in screen order.** The
+  cli drew groups in the order the server's DEFAULTS listed them; fixing
+  the screen meant reordering the one source, not adding a sort table.
+  *(table 13)*
 - **A name that says the vendor says nothing.** `telegram_update`,
   `telegram_sent`, `telegram_account` — the builder could not tell what a
   row was from any of them. The vendor's word is fine when it IS the thing
@@ -216,6 +236,18 @@ general, short, and true.
 - **When the builder says "I'm not following", show the rows.** Six
   paragraphs of description failed; two before/after tables landed in one
   message. A data change is explained with data. *(table 3)*
+- **Count the places the customer has to go.** Splitting settings by
+  topic gave four screens plus /keys and /server; the builder's test was
+  "how many places to set things up" — the answer was one screen with
+  headings, and two that must stay apart for a reason (masked, offline).
+  Propose the customer's count first, then the structure. *(table 13)*
+- **Say the item's size with its verdict.** "Not big, but not optional"
+  read as hedging; the builder lost the thread. One line: what it is, the
+  rule it breaks, the size of the fix. *(table 13)*
+- **A "preference" listed among problems is a false finding.** The
+  secrets split broke no rule; listing it with the bugs cost three rounds.
+  Findings are rule violations with file:line; taste is not raised.
+  *(table 13)*
 - **Do not carry a scenario the builder did not ask for.** "Delete" was my
   concern, raised as a finding; every later explanation dragged it along
   and muddied the model. A raised concern is answered once, then dropped

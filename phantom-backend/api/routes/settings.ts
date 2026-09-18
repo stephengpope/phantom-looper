@@ -1,4 +1,4 @@
-// The settings store, flat — no namespace dimension.
+// The settings store.
 //
 //   GET    /settings           every setting, resolved with its layers
 //   PATCH  /settings           write; null clears a key
@@ -6,20 +6,23 @@
 //   GET    /settings/events    change notices (no values — listeners re-read)
 //
 // Every key is declared in code (settings.ts) — defaults, types, descriptions,
-// which layers it accepts. Unknown keys are refused: a store where every key
-// is declared is what keeps a typo from becoming an override nothing reads.
+// whether a workspace may override it. Unknown keys are refused: a store
+// where every key is declared is what keeps a typo from becoming an override
+// nothing reads. `?workspace=<id>` reads or writes that workspace's layer —
+// THE door for workspace overrides (the cli's workspace screen, the token).
 //
-// Secrets are returned decrypted; which keys are secret is declared in code
-// (CREDENTIALS), never decided by a write.
+// Credentials are returned decrypted; which keys are credentials is declared
+// in code (CREDENTIALS), never decided by a write.
 import type { FastifyInstance } from 'fastify';
 import type { FastifyRequest } from 'fastify';
+import type { WorkspaceRow } from '../../db/schema.js';
 import {
   CREDENTIALS, CREDENTIAL_NAMES,
   isWorkspaceOverridable, isCredentialWorkspaceScoped, isGlobalSettable,
   SettingsWriteError, type SettingKey,
   DEFAULTS, DESCRIPTIONS, META,
 } from '../../settings.js';
-import { GLOBAL, workspaceScope, sessionScope } from '../../store.js';
+import { GLOBAL, workspaceScope } from '../../store.js';
 import { ok, err, type AppCtx } from '../app.js';
 
 const writerOf = (req: FastifyRequest): string | undefined =>
@@ -34,41 +37,31 @@ const TELEGRAM_SETTING_KEYS: readonly string[] = [
   'telegram_enabled', 'telegram_authorized_user', 'telegram_bot_token'];
 const scopeQuery = { type: 'object', properties: {
   workspace: { type: 'string', description: 'Read/write at this workspace\'s layer.' },
-  session: { type: 'string', description: 'Read/write at this session\'s layer.' },
 } };
 
 export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
-  /** The scope one request addresses, and the chain to read for it. Verifying
-   *  the id exists is what stops a typo becoming an override nothing will ever
-   *  read — the row would be perfectly valid and perfectly dead. */
-  type Scope = { error: string } | { write: string; kind: 'global' | 'workspace' | 'session'; chain: string[] };
-  async function scopeOf(q: { workspace?: string; session?: string }): Promise<Scope> {
-    if (q.session) {
-      const s = await ctx.sessions.get(q.session);
-      if (!s) return { error: `no session ${q.session}` };
-      const ws = await ctx.workspaces.get(s.workspaceId);
-      return { write: sessionScope(q.session), kind: 'session' as const,
-        chain: [GLOBAL, ...(ws ? [workspaceScope(ws.id)] : []), sessionScope(q.session)] };
-    }
+  /** The scope one request addresses. Verifying the workspace exists is what
+   *  stops a typo becoming an override nothing will ever read — the row would
+   *  be perfectly valid and perfectly dead. */
+  type Scope = { error: string } | { write: string; kind: 'global' | 'workspace'; workspace?: WorkspaceRow };
+  async function scopeOf(q: { workspace?: string }): Promise<Scope> {
     if (q.workspace) {
-      if (!await ctx.workspaces.get(q.workspace)) return { error: `no workspace ${q.workspace}` };
-      return { write: workspaceScope(q.workspace), kind: 'workspace' as const,
-        chain: [GLOBAL, workspaceScope(q.workspace)] };
+      const workspace = await ctx.workspaces.get(q.workspace);
+      if (!workspace) return { error: `no workspace ${q.workspace}` };
+      return { write: workspaceScope(q.workspace), kind: 'workspace' as const, workspace };
     }
-    return { write: GLOBAL, kind: 'global' as const, chain: [GLOBAL] };
+    return { write: GLOBAL, kind: 'global' as const };
   }
 
-  app.get<{ Querystring: { workspace?: string; session?: string } }>(
+  app.get<{ Querystring: { workspace?: string } }>(
     '/settings', { schema: { ...TAG,
       summary: 'Every setting, resolved',
-      description: 'Every setting with its LAYERS — `default` (code), `global`, `workspace`, `session` — plus the computed `value` and `source`, and `description`/`meta`/`overridable` so a client renders an editor from this one call. Pass ?workspace= or ?session= to fill in those layers. Credentials come back decrypted, flagged `secret`.',
+      description: 'Every setting with its LAYERS — `default` (code), `global`, `workspace` — plus the computed `value` and `source` (the layer it came from), and `description`/`meta`/`overridable` so a client renders an editor from this one call. Pass ?workspace= to fill in that layer. Credentials come back decrypted, flagged `secret`.',
       querystring: scopeQuery } },
     async (req, reply) => {
       const sc = await scopeOf(req.query);
       if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
-      const wsRow = req.query.workspace ? await ctx.workspaces.get(req.query.workspace) : undefined;
-      const sRow = req.query.session ? await ctx.sessions.get(req.query.session) : undefined;
-      const resolveCtx = { workspace: wsRow, session: sRow };
+      const resolveCtx = { workspace: sc.workspace };
       const layers = await ctx.settings.layers(resolveCtx);
       const creds = await ctx.settings.credentialLayers(resolveCtx);
       const out: Record<string, unknown> = {};
@@ -82,24 +75,24 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
       for (const name of CREDENTIAL_NAMES) {
         const g = creds[name].global;
         const w = sc.kind !== 'global' ? creds[name].workspace : null;
+        const { label, group, description } = CREDENTIALS[name];
         out[name] = {
-          default: null, global: g, workspace: w, session: null,
-          value: w ?? g, source: w != null ? 'workspace' : g != null ? 'override' : 'default',
-          secret: true, description: CREDENTIALS[name],
-          meta: { type: 'string', label: name.replace(/_/g, ' '), nullable: true },
+          default: null, global: g, workspace: w,
+          value: w ?? g, source: w != null ? 'workspace' : g != null ? 'global' : 'default',
+          secret: true, description,
+          meta: { type: 'string', label, group, nullable: true },
           overridable: isCredentialWorkspaceScoped(name),
         };
       }
       return ok(out);
     });
 
-  app.patch<{ Querystring: { workspace?: string; session?: string };
-    Body: Record<string, unknown> }>(
+  app.patch<{ Querystring: { workspace?: string }; Body: Record<string, unknown> }>(
     '/settings', { schema: { ...TAG,
       summary: 'Write settings',
       description: 'Body is {key: value}. null CLEARS a key — the same rule at every layer, and null is never a stored value. An empty string is a real empty string. ' +
-        'Which keys are secret is declared in code, so credentials are stored encrypted without any flag. Unknown keys are refused. ' +
-        'Pass ?workspace= or ?session= to write that layer.',
+        'Which keys are credentials is declared in code, so they are stored encrypted without any flag. Unknown keys are refused. ' +
+        'Pass ?workspace= to write that workspace\'s layer; a key the workspace may not override is refused.',
       querystring: scopeQuery,
       body: { type: 'object', additionalProperties: true } } },
     async (req, reply) => {
@@ -116,7 +109,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
       // affected workspace — or every one, when the global layer changed.
       // Event-driven, no poll.
       if (updated.some((k) => LOOP_SETTING_KEYS.includes(k))) {
-        ctx.looper?.runAllLoops(sc.kind === 'workspace' ? req.query.workspace : undefined);
+        ctx.looper?.runAllLoops(sc.workspace?.id);
       }
       if (updated.some((k) => TELEGRAM_SETTING_KEYS.includes(k))) {
         void ctx.telegram?.reconcile();
@@ -124,7 +117,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
       return ok({ updated });
     });
 
-  app.delete<{ Params: { key: string }; Querystring: { workspace?: string; session?: string } }>(
+  app.delete<{ Params: { key: string }; Querystring: { workspace?: string } }>(
     '/settings/:key', { schema: { ...TAG,
       summary: 'Clear one key',
       description: 'Identical to PATCH with null. The setting reverts to the code default and follows it if the default changes later — a different state from being set to the same value.',
@@ -140,7 +133,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
         throw e;
       }
       if (LOOP_SETTING_KEYS.includes(req.params.key)) {
-        ctx.looper?.runAllLoops(sc.kind === 'workspace' ? req.query.workspace : undefined);
+        ctx.looper?.runAllLoops(sc.workspace?.id);
       }
       if (TELEGRAM_SETTING_KEYS.includes(req.params.key)) void ctx.telegram?.reconcile();
       return ok({ cleared: req.params.key });

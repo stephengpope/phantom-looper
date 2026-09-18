@@ -186,13 +186,8 @@ export class SessionDigest {
 
     // ── LLM call ─────────────────────────────────────────────────────────────
 
-    const values: Record<string, unknown> = {};
-    for (const key of ['assistant_provider', 'assistant_model', 'assistant_base_url'] as const) {
-      values[key] = await this.deps.settings.resolve(key).catch(() => undefined);
-    }
-    for (const key of ['provider', 'model', 'base_url'] as const) {
-      values[key] = await this.deps.settings.resolve(key).catch(() => undefined);
-    }
+    const values = await this.deps.settings.resolveMany(
+      ['coding_provider', 'coding_model', 'coding_base_url', 'assistant_provider', 'assistant_model', 'assistant_base_url']);
     const config = agentModelConfig(values, 'assistant');
 
     const text = await new SessionDigestHelper(config, null).run(payload);

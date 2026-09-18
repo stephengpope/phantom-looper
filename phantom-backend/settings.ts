@@ -7,18 +7,19 @@
 // effect without a restart or the config API lies.
 import { and, eq, inArray } from 'drizzle-orm';
 import type { Db } from './db/client.js';
-import { settings, type WorkspaceRow, type SessionRow } from './db/schema.js';
-import { GLOBAL, workspaceScope, sessionScope } from './store.js';
+import { settings, type WorkspaceRow } from './db/schema.js';
+import { GLOBAL, workspaceScope } from './store.js';
 import { encrypt, decrypt } from './crypto.js';
 import { latestModel } from './models.js';
+import { PROVIDERS, REASONINGS } from '../core/llm/createAgent.js';
 import { logger } from './log.js';
 import type { SettingsEvents } from './api/settingsEvents.js';
 
 const log = logger('settings');
 
-// Plain settings are never encrypted, so resolving one asks for plain values
-// only (null key) — a credential is read by resolveCredential, which is handed
-// the key explicitly and is the only path that should be.
+// Plain settings are never encrypted, so resolving one reads plain values
+// only — a credential is read by `credential`, which is handed the name
+// explicitly and is the only path that decrypts one.
 
 // The workspace image default tracks THIS server's release: a tagged build
 // names the workspace image at the same tag (both are published together by
@@ -28,66 +29,41 @@ const APP_VERSION = process.env.APP_VERSION ?? 'dev';
 const SESSION_IMAGE_TAG = /^v\d+\.\d+\.\d+/.test(APP_VERSION) ? APP_VERSION : 'latest';
 
 export const DEFAULTS = {
-  spare_clones: 2,
-  maintenance_interval_ms: 60_000,
-  spare_clone_refresh_ms: 3_600_000,        // performance only — the claim fetch is the guarantee
-  spare_clone_max_age_ms: 7 * 24 * 3_600_000, // evict and re-stock rather than re-deepen
-  disk_cleanup_percent: 80,
-  container_idle_ms: 4320 * 60_000,
-  container_memory_mb: null as number | null, // unset => no cap (Docker default)
-  container_cpus: null as number | null,      // unset => no cap (Docker default)
-  container_pids_limit: null as number | null, // unset => no cap (Docker default)
-  initial_history_depth: '7.days',   // 'full' disables shallow
-  container_image: `ghcr.io/stephengpope/phantom-backend-session:${SESSION_IMAGE_TAG}` as string,
-  container_docker: true as boolean, // privileged + a graph-storage volume so the agent can run its OWN dockerd inside
-  bash_timeout_ms: 120_000 as number | null,   // two minutes, as OpenCode; the agent passes a longer one per command
-  bash_timeout_max_ms: null as number | null,
-  max_read_bytes: 262_144,
-  max_search_results: 200,
-  max_bash_output_bytes: 1_048_576,
-  session_lock_ttl_ms: 3_600_000,
-  auto_push_on_archive: true as boolean,
-  agent_git_credentials: false as boolean,
-  // The Assistant's model config: an agent trio (provider/model/base_url),
-  // null = the coding agent's, per the cascade rule (core agentModelConfig).
-  card_prefix: null as string | null,   // unset => derived from the repo name
-  // The coding agent's model config. ONE store now: the cli and the server's
-  // looper read the same rows, which is what makes "the experience is the
-  // same" literal. NO default provider: nothing runs until a person picks one
-  // (the wizard, /model). The model's default is not a constant either — unset,
-  // it resolves to the newest model the catalog lists for the provider
-  // (models.ts, applied in computeLayersFor), so it follows releases.
-  provider: null as string | null,
-  model: null as string | null,
-  base_url: null as string | null,
-  reasoning: 'medium' as string,
-  max_steps: null as number | null,
-  // The Assistant's settings — null = the coding agent's (cascade rule).
+  // Declaration order is screen order: the three agents, then the areas.
+  //
+  // ── coding agent ──────────────────────────────────────────────────────────
+  // ONE store: the cli and the server's looper read the same rows, which is
+  // what makes "the experience is the same" literal. NO default provider:
+  // nothing runs until a person picks one (the wizard, /model). The model's
+  // default is not a constant either — unset, it resolves to the newest
+  // model the catalog lists for the provider (models.ts, applied in
+  // computeLayersFor), so it follows releases.
+  coding_provider: null as string | null,
+  coding_model: null as string | null,
+  coding_base_url: null as string | null,
+  coding_reasoning: 'medium' as string,
+  coding_max_steps: null as number | null,
+  // Compaction: auto-summarize when the session approaches the model's
+  // context window. The assistant's and supervisor's fall back to the coding
+  // agent's, like their model.
+  coding_context_window: null as number | null,              // fallback when the catalog doesn't know the model
+  coding_compact_threshold_pct: 0 as number,                 // % of context window that triggers compaction; 0 = off
+  coding_compact_strategy: 'fast' as string,
+  coding_compact_summarize_pct: 75 as number,                // % of user+assistant messages to summarize
+  coding_compact_max_tokens: null as number | null,          // output cap for the summary; null = model decides
+  // ── the Assistant ─────────────────────────────────────────────────────────
+  // Its model — null = the coding agent's (cascade rule, core agentModelConfig).
   assistant_provider: null as string | null,
   assistant_model: null as string | null,
   assistant_base_url: null as string | null,
   assistant_reasoning: null as string | null,
   assistant_max_steps: null as number | null,
-  // Compaction: auto-summarize when the session approaches the model's
-  // context window. Every setting cascades: general → `assistant_` → `supervisor_`.
-  context_window: null as number | null,              // fallback when the catalog doesn't know the model
-  compact_threshold_pct: 0 as number,                 // % of context window that triggers compaction; 0 = off
-  compact_strategy: 'fast' as string,
-  compact_summarize_pct: 75 as number,                // % of user+assistant messages to summarize
-  compact_max_tokens: null as number | null,          // output cap for the summary; null = model decides
-  // Assistant overrides.
   assistant_context_window: null as number | null,
   assistant_compact_threshold_pct: 50 as number,      // on by default for the assistant
   assistant_compact_strategy: 'fast' as string,
   assistant_compact_summarize_pct: null as number | null,
   assistant_compact_max_tokens: null as number | null,
-  // Supervisor overrides.
-  supervisor_context_window: null as number | null,
-  supervisor_compact_threshold_pct: null as number | null,
-  supervisor_compact_strategy: null as string | null,
-  supervisor_compact_summarize_pct: null as number | null,
-  supervisor_compact_max_tokens: null as number | null,
-  // The Assistant's pane — rendered by the cli, stored here so every cli you
+  // Its voice and pane — rendered by the cli, stored here so every cli you
   // open is the same one.
   voice_enabled: false as boolean,
   sidebar_width: 20,
@@ -98,21 +74,54 @@ export const DEFAULTS = {
   voice_wake_word: false as boolean,
   voice_wake_words: 'computer' as string,
   voice_wake_timeout: 8,
-  // The looper: the supervisor loop over kanban cards — TWO switches, one per
-  // loop column (a card's own auto_plan/auto_build tri-state overrides them).
-  // The supervisor's settings — null = the coding agent's (cascade rule).
-  auto_plan: false as boolean,
-  auto_build: false as boolean,
-  loop_budget_tokens: null as number | null,   // null = no limit
+  // ── the supervisor ────────────────────────────────────────────────────────
+  // Its model — null = the coding agent's (cascade rule).
   supervisor_provider: null as string | null,
   supervisor_model: null as string | null,
   supervisor_base_url: null as string | null,
   supervisor_reasoning: null as string | null,
   supervisor_max_steps: null as number | null,
+  supervisor_context_window: null as number | null,
+  supervisor_compact_threshold_pct: null as number | null,
+  supervisor_compact_strategy: null as string | null,
+  supervisor_compact_summarize_pct: null as number | null,
+  supervisor_compact_max_tokens: null as number | null,
+  // ── board ─────────────────────────────────────────────────────────────────
+  // The looper: the supervisor loop over kanban cards — TWO switches, one per
+  // loop column (a card's own auto_plan/auto_build tri-state overrides them).
+  auto_plan: false as boolean,
+  auto_build: false as boolean,
+  loop_budget_tokens: null as number | null,   // null = no limit
+  card_prefix: null as string | null,   // unset => derived from the repo name; workspace-only
+  // ── sessions ──────────────────────────────────────────────────────────────
+  spare_clones: 2,
+  maintenance_interval_ms: 60_000,
+  spare_clone_refresh_ms: 3_600_000,        // performance only — the claim fetch is the guarantee
+  spare_clone_max_age_ms: 7 * 24 * 3_600_000, // evict and re-stock rather than re-deepen
+  disk_cleanup_percent: 80,
+  session_lock_ttl_ms: 3_600_000,
   // The cli's boot: skip the workspace picker, start where you last worked.
   boot_last_workspace: false as boolean,
-  // Telegram: the bot as a client of this server (phantom-backend/telegram/).
-  // The webhook URL is never a setting — it is always https://
+  // ── containers ────────────────────────────────────────────────────────────
+  container_idle_ms: 4320 * 60_000,
+  container_memory_mb: null as number | null, // unset => no cap (Docker default)
+  container_cpus: null as number | null,      // unset => no cap (Docker default)
+  container_pids_limit: null as number | null, // unset => no cap (Docker default)
+  container_image: `ghcr.io/stephengpope/phantom-backend-session:${SESSION_IMAGE_TAG}` as string,
+  container_docker: true as boolean, // privileged + a graph-storage volume so the agent can run its OWN dockerd inside
+  // ── git ───────────────────────────────────────────────────────────────────
+  initial_history_depth: '7.days',   // 'full' disables shallow
+  auto_push_on_archive: true as boolean,
+  agent_git_credentials: false as boolean,
+  // ── limits ────────────────────────────────────────────────────────────────
+  bash_timeout_ms: 120_000 as number | null,   // two minutes, as OpenCode; the agent passes a longer one per command
+  bash_timeout_max_ms: null as number | null,
+  max_read_bytes: 262_144,
+  max_search_results: 200,
+  max_bash_output_bytes: 1_048_576,
+  // ── telegram ──────────────────────────────────────────────────────────────
+  // The bot as a client of this server (phantom-backend/telegram/). The
+  // webhook URL is never a setting — it is always https://
   // PHANTOM_BACKEND_ADDRESS, the same fact the https profile runs on.
   telegram_enabled: false as boolean,
   telegram_authorized_user: null as string | null,
@@ -132,27 +141,35 @@ export const DEFAULTS = {
 
 /** The credentials the SERVER holds, declared here so nothing can store one in
  *  the clear by forgetting a flag. Named the way each vendor names it: GitHub
- *  says token, everyone else says API key.
+ *  says token, everyone else says API key. Label, group and description are
+ *  served by GET /settings — the ONE place a credential is described, as
+ *  DESCRIPTIONS is for settings; the cli's /keys renders them verbatim.
  *
  *  There is no per-agent api key. An agent holds a key FOR a provider, and
  *  which provider is its own `*_provider` setting — so it reads the key for
  *  whatever that says, the same row the TUI's own agent reads. One key per
  *  provider, one place to set it. */
+export interface CredentialMeta { label: string; group: 'git' | 'llm' | 'voice' | 'search' | 'chat'; description: string }
 export const CREDENTIALS = {
-  github_token: 'Lets phantom-looper manage GitHub repos: clone, push, and land work on the base branch. A workspace can hold its own token; otherwise this one is used.',
-  anthropic_api_key: 'Used by every agent set to the anthropic provider.',
-  openai_api_key: 'Used by every agent set to the openai provider.',
-  google_api_key: 'Used by every agent set to the google provider (Gemini).',
-  deepseek_api_key: 'Used by every agent set to the deepseek provider.',
-  kimi_api_key: 'Used by every agent set to the kimi provider (Moonshot AI / Kimi).',
-  xai_api_key: 'Used by every agent set to the xai provider (Grok).',
-  mistral_api_key: 'Used by every agent set to the mistral provider.',
-  groq_api_key: 'Used by every agent set to the groq provider.',
-  openai_compatible_api_key: 'For OpenAI-compatible endpoints — Ollama, vLLM, OpenRouter. Not the same key as OpenAI.',
-  deepgram_api_key: 'Speech to text and text to speech for the Assistant.',
-  telegram_bot_token: 'The Telegram bot\'s token from @BotFather. Saving it (with telegram settings enabled) registers the webhook.',
-  firecrawl_api_key: 'Powers the web_search and web_fetch tools; without it web calls fail. Keys at firecrawl.dev.',
-} as const;
+  github_token: { label: 'github token', group: 'git',
+    description: 'Lets phantom-looper manage GitHub repos: clone, push, and land work on the base branch. A workspace can hold its own token; otherwise this one is used.' },
+  anthropic_api_key: { label: 'anthropic key', group: 'llm', description: 'Used by every agent set to the anthropic provider.' },
+  openai_api_key: { label: 'openai key', group: 'llm', description: 'Used by every agent set to the openai provider.' },
+  google_api_key: { label: 'google key', group: 'llm', description: 'Used by every agent set to the google provider (Gemini).' },
+  deepseek_api_key: { label: 'deepseek key', group: 'llm', description: 'Used by every agent set to the deepseek provider.' },
+  kimi_api_key: { label: 'kimi key', group: 'llm', description: 'Used by every agent set to the kimi provider (Moonshot AI / Kimi).' },
+  xai_api_key: { label: 'xai key', group: 'llm', description: 'Used by every agent set to the xai provider (Grok).' },
+  mistral_api_key: { label: 'mistral key', group: 'llm', description: 'Used by every agent set to the mistral provider.' },
+  groq_api_key: { label: 'groq key', group: 'llm', description: 'Used by every agent set to the groq provider.' },
+  openai_compatible_api_key: { label: 'openai-compatible key', group: 'llm',
+    description: 'For OpenAI-compatible endpoints — Ollama, vLLM, OpenRouter. Not the same key as OpenAI.' },
+  deepgram_api_key: { label: 'deepgram key', group: 'voice',
+    description: 'Speech to text and text to speech for the Assistant. Without it the Assistant has no voice.' },
+  firecrawl_api_key: { label: 'firecrawl key', group: 'search',
+    description: 'Powers the web_search and web_fetch tools; without it web calls fail. Keys at firecrawl.dev.' },
+  telegram_bot_token: { label: 'telegram bot token', group: 'chat',
+    description: 'The Telegram bot\'s token from @BotFather. With telegram enabled and an authorized user set (/settings), saving it registers the webhook.' },
+} satisfies Record<string, CredentialMeta>;
 
 export type CredentialName = keyof typeof CREDENTIALS;
 export const CREDENTIAL_NAMES = Object.keys(CREDENTIALS) as CredentialName[];
@@ -193,31 +210,31 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   auto_push_on_archive: 'Archiving a done card auto-pushes its session\'s work to the base branch; a failed push un-archives the card into blocked. Archiving from any other column never pushes.',
   agent_git_credentials: 'Puts the GitHub token inside the container so the agent can run git and gh itself — the agent can then read it. Applies when the container restarts; off does not reclaim it from a running one.',
   card_prefix: 'The letters in front of every card number on this board — "PHA" gives PHA-7. Unset means the first three letters of the repo name.',
-  provider: 'The coding agent\'s LLM provider. Its key is set on /keys. Nothing runs until one is chosen.',
-  model: 'Model id for the chosen provider. Empty = the newest model the catalog lists for it, so it follows releases.',
-  base_url: 'Endpoint for openai / openai-compatible. Required by openai-compatible.',
-  reasoning: 'How much the model thinks before answering. Providers map this to their own setting.',
-  max_steps: 'Tool calls allowed per turn before the agent must stop and answer. Empty = unlimited.',
+  coding_provider: 'The coding agent\'s LLM provider. Its key is set on /keys. Nothing runs until one is chosen.',
+  coding_model: 'Model id for the chosen provider. Empty = the newest model the catalog lists for it, so it follows releases.',
+  coding_base_url: 'Endpoint for openai / openai-compatible. Required by openai-compatible.',
+  coding_reasoning: 'How much the model thinks before answering. Providers map this to their own setting.',
+  coding_max_steps: 'Tool calls allowed per turn before the agent must stop and answer. Empty = unlimited.',
   assistant_provider: 'The AI provider the Assistant answers on, on its key from /keys. Empty = the coding agent\'s provider.',
   assistant_model: 'Model the Assistant answers with. Empty = the coding agent\'s model; required when the provider differs from the coding agent\'s. A small fast model keeps replies quick.',
   assistant_base_url: 'Endpoint when the Assistant\'s provider is openai-compatible. Empty inherits the coding agent\'s only while the provider matches.',
   assistant_reasoning: 'How much the Assistant thinks before answering. Empty = the coding agent\'s reasoning level.',
   assistant_max_steps: 'Tool calls allowed per turn for the Assistant. Empty = unlimited.',
-  context_window: 'Context window size in tokens — fallback for when the model catalog doesn\'t know your model. Empty = use the catalog (the normal path).',
-  compact_threshold_pct: 'Percentage of the model\'s context window that triggers auto-compaction. 0 = off. Checked after every turn.',
-  compact_strategy: 'The compaction strategy. fast = user/assistant text only.',
-  compact_summarize_pct: 'Percentage of user+assistant messages to summarize when compaction fires. The rest stay as-is.',
-  compact_max_tokens: 'Output token cap for the compaction summary. Empty = the model decides how long the summary is.',
-  assistant_context_window: 'Context window override for the Assistant. Empty = the general context_window.',
+  coding_context_window: 'Context window size in tokens — fallback for when the model catalog doesn\'t know your model. Empty = use the catalog (the normal path).',
+  coding_compact_threshold_pct: 'Percentage of the model\'s context window that triggers auto-compaction. 0 = off. Checked after every turn.',
+  coding_compact_strategy: 'The compaction strategy. fast = user/assistant text only.',
+  coding_compact_summarize_pct: 'Percentage of user+assistant messages to summarize when compaction fires. The rest stay as-is.',
+  coding_compact_max_tokens: 'Output token cap for the compaction summary. Empty = the model decides how long the summary is.',
+  assistant_context_window: 'Context window override for the Assistant. Empty = the coding agent\'s context window.',
   assistant_compact_threshold_pct: 'Auto-compaction threshold for the Assistant. 0 = off. Default 50%.',
-  assistant_compact_strategy: 'Compaction strategy for the Assistant. Empty = the general compact_strategy.',
-  assistant_compact_summarize_pct: 'Summarize % for the Assistant. Empty = the general compact_summarize_pct.',
-  assistant_compact_max_tokens: 'Summary output cap for the Assistant. Empty = the general compact_max_tokens.',
-  supervisor_context_window: 'Context window override for the Supervisor. Empty = the general context_window.',
-  supervisor_compact_threshold_pct: 'Auto-compaction threshold for the Supervisor. Empty = the general compact_threshold_pct.',
-  supervisor_compact_strategy: 'Compaction strategy for the Supervisor. Empty = the general compact_strategy.',
-  supervisor_compact_summarize_pct: 'Summarize % for the Supervisor. Empty = the general compact_summarize_pct.',
-  supervisor_compact_max_tokens: 'Summary output cap for the Supervisor. Empty = the general compact_max_tokens.',
+  assistant_compact_strategy: 'Compaction strategy for the Assistant. Empty = the coding agent\'s strategy.',
+  assistant_compact_summarize_pct: 'Summarize % for the Assistant. Empty = the coding agent\'s summarize %.',
+  assistant_compact_max_tokens: 'Summary output cap for the Assistant. Empty = the coding agent\'s cap.',
+  supervisor_context_window: 'Context window override for the Supervisor. Empty = the coding agent\'s context window.',
+  supervisor_compact_threshold_pct: 'Auto-compaction threshold for the Supervisor. Empty = the coding agent\'s threshold.',
+  supervisor_compact_strategy: 'Compaction strategy for the Supervisor. Empty = the coding agent\'s strategy.',
+  supervisor_compact_summarize_pct: 'Summarize % for the Supervisor. Empty = the coding agent\'s summarize %.',
+  supervisor_compact_max_tokens: 'Summary output cap for the Supervisor. Empty = the coding agent\'s cap.',
   voice_enabled: 'Start the Assistant with the cli. It listens on the mic, answers out loud and in the voice pane (ctrl+g), and can act on the cli through its tools.',
   sidebar_width: 'Width of the voice pane as a percent of the terminal.',
   voice_spoken_voice: 'Deepgram Aura voice the Assistant speaks with, e.g. aura-2-thalia-en, aura-2-orion-en.',
@@ -250,12 +267,16 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
  *  PATCH validates against, so "banana" cannot be stored as a pool size. */
 export interface SettingMeta {
   type: 'number' | 'string' | 'boolean';
-  /** The heading a settings screen files this under. Lives here so every
-   *  client draws the same sections and a new setting must pick one. */
-  group: 'sessions' | 'containers' | 'limits' | 'git' | 'model' | 'voice' | 'board' | 'telegram';
+  /** The heading a settings screen files this under — an agent, or an
+   *  area. Lives here so every client draws the same sections and a new
+   *  setting must pick one. */
+  group: 'coding' | 'assistant' | 'supervisor' | 'board' | 'sessions' | 'containers' | 'git' | 'limits' | 'telegram';
+  /** The sub-heading inside an agent's group. */
+  subgroup?: 'model' | 'compaction' | 'voice';
   /** What to call this setting on screen. The key is the identifier — it is
    *  what the API and a bug report use — and this is the name a person
-   *  reads. It lives here so every client shows the same one. */
+   *  reads, under its group heading (so `coding_provider` is "provider"
+   *  under "coding"). It lives here so every client shows the same one. */
   label: string;
   /** Exhaustive legal values. Present => the client renders a picker. */
   choices?: readonly string[];
@@ -303,52 +324,46 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
   auto_push_on_archive: { type: 'boolean', label: 'auto-push on archive', group: 'git' },
   agent_git_credentials: { type: 'boolean', label: 'agent github access', group: 'git' },
   card_prefix: { type: 'string', label: 'card number prefix', group: 'board', nullable: true },
-  provider: { type: 'string', label: 'provider', group: 'model', nullable: true,
-    choices: ['anthropic', 'openai', 'google', 'deepseek', 'kimi', 'xai', 'mistral', 'groq', 'openai-compatible'] },
-  model: { type: 'string', label: 'model', group: 'model', nullable: true },
-  base_url: { type: 'string', label: 'endpoint', group: 'model', nullable: true },
-  reasoning: { type: 'string', label: 'reasoning', group: 'model',
-    choices: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
-  max_steps: { type: 'number', label: 'steps per turn', group: 'model', unit: 'count', min: 1, nullable: true },
-  assistant_provider: { type: 'string', label: 'assistant provider', group: 'voice', nullable: true,
-    choices: ['anthropic', 'openai', 'google', 'deepseek', 'kimi', 'xai', 'mistral', 'groq', 'openai-compatible'] },
-  assistant_model: { type: 'string', label: 'assistant model', group: 'voice', nullable: true },
-  assistant_base_url: { type: 'string', label: 'assistant endpoint', group: 'voice', nullable: true },
-  assistant_reasoning: { type: 'string', label: 'assistant reasoning', group: 'voice', nullable: true,
-    choices: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
-  assistant_max_steps: { type: 'number', label: 'assistant steps per turn', group: 'voice', unit: 'count', min: 1, nullable: true },
-  context_window: { type: 'number', label: 'context window', group: 'model', unit: 'count', min: 1, nullable: true },
-  compact_threshold_pct: { type: 'number', label: 'auto-compact threshold %', group: 'model', unit: 'count', min: 0, max: 100 },
-  compact_strategy: { type: 'string', label: 'compact strategy', group: 'model', choices: ['fast'] },
-  compact_summarize_pct: { type: 'number', label: 'compact summarize %', group: 'model', unit: 'count', min: 1, max: 100 },
-  compact_max_tokens: { type: 'number', label: 'compact output cap', group: 'model', unit: 'count', min: 1, nullable: true },
-  assistant_context_window: { type: 'number', label: 'assistant context window', group: 'voice', unit: 'count', min: 1, nullable: true },
-  assistant_compact_threshold_pct: { type: 'number', label: 'assistant auto-compact threshold %', group: 'voice', unit: 'count', min: 0, max: 100 },
-  assistant_compact_strategy: { type: 'string', label: 'assistant compact strategy', group: 'voice', choices: ['fast'] },
-  assistant_compact_summarize_pct: { type: 'number', label: 'assistant compact summarize %', group: 'voice', unit: 'count', min: 1, max: 100, nullable: true },
-  assistant_compact_max_tokens: { type: 'number', label: 'assistant compact output cap', group: 'voice', unit: 'count', min: 1, nullable: true },
-  supervisor_context_window: { type: 'number', label: 'supervisor context window', group: 'board', unit: 'count', min: 1, nullable: true },
-  supervisor_compact_threshold_pct: { type: 'number', label: 'supervisor auto-compact threshold %', group: 'board', unit: 'count', min: 0, max: 100, nullable: true },
-  supervisor_compact_strategy: { type: 'string', label: 'supervisor compact strategy', group: 'board', choices: ['fast'], nullable: true },
-  supervisor_compact_summarize_pct: { type: 'number', label: 'supervisor compact summarize %', group: 'board', unit: 'count', min: 1, max: 100, nullable: true },
-  supervisor_compact_max_tokens: { type: 'number', label: 'supervisor compact output cap', group: 'board', unit: 'count', min: 1, nullable: true },
-  voice_enabled: { type: 'boolean', label: 'assistant', group: 'voice' },
-  sidebar_width: { type: 'number', label: 'voice pane width', group: 'voice', unit: 'count', min: 10 },
-  voice_spoken_voice: { type: 'string', label: 'spoken voice', group: 'voice' },
-  voice_stt_model: { type: 'string', label: 'hearing model', group: 'voice' },
-  voice_wake_word: { type: 'boolean', label: 'wake word only', group: 'voice' },
-  voice_wake_words: { type: 'string', label: 'wake words', group: 'voice' },
-  voice_wake_timeout: { type: 'number', label: 'wake timeout', group: 'voice', unit: 'count', min: 1 },
+  coding_provider: { type: 'string', label: 'provider', group: 'coding', subgroup: 'model', nullable: true, choices: PROVIDERS },
+  coding_model: { type: 'string', label: 'model', group: 'coding', subgroup: 'model', nullable: true },
+  coding_base_url: { type: 'string', label: 'endpoint', group: 'coding', subgroup: 'model', nullable: true },
+  coding_reasoning: { type: 'string', label: 'reasoning', group: 'coding', subgroup: 'model', choices: REASONINGS },
+  coding_max_steps: { type: 'number', label: 'steps per turn', group: 'coding', subgroup: 'model', unit: 'count', min: 1, nullable: true },
+  assistant_provider: { type: 'string', label: 'provider', group: 'assistant', subgroup: 'model', nullable: true, choices: PROVIDERS },
+  assistant_model: { type: 'string', label: 'model', group: 'assistant', subgroup: 'model', nullable: true },
+  assistant_base_url: { type: 'string', label: 'endpoint', group: 'assistant', subgroup: 'model', nullable: true },
+  assistant_reasoning: { type: 'string', label: 'reasoning', group: 'assistant', subgroup: 'model', nullable: true, choices: REASONINGS },
+  assistant_max_steps: { type: 'number', label: 'steps per turn', group: 'assistant', subgroup: 'model', unit: 'count', min: 1, nullable: true },
+  coding_context_window: { type: 'number', label: 'context window', group: 'coding', subgroup: 'compaction', unit: 'count', min: 1, nullable: true },
+  coding_compact_threshold_pct: { type: 'number', label: 'auto-compact threshold %', group: 'coding', subgroup: 'compaction', unit: 'count', min: 0, max: 100 },
+  coding_compact_strategy: { type: 'string', label: 'compact strategy', group: 'coding', subgroup: 'compaction', choices: ['fast'] },
+  coding_compact_summarize_pct: { type: 'number', label: 'compact summarize %', group: 'coding', subgroup: 'compaction', unit: 'count', min: 1, max: 100 },
+  coding_compact_max_tokens: { type: 'number', label: 'compact output cap', group: 'coding', subgroup: 'compaction', unit: 'count', min: 1, nullable: true },
+  assistant_context_window: { type: 'number', label: 'context window', group: 'assistant', subgroup: 'compaction', unit: 'count', min: 1, nullable: true },
+  assistant_compact_threshold_pct: { type: 'number', label: 'auto-compact threshold %', group: 'assistant', subgroup: 'compaction', unit: 'count', min: 0, max: 100 },
+  assistant_compact_strategy: { type: 'string', label: 'compact strategy', group: 'assistant', subgroup: 'compaction', choices: ['fast'] },
+  assistant_compact_summarize_pct: { type: 'number', label: 'compact summarize %', group: 'assistant', subgroup: 'compaction', unit: 'count', min: 1, max: 100, nullable: true },
+  assistant_compact_max_tokens: { type: 'number', label: 'compact output cap', group: 'assistant', subgroup: 'compaction', unit: 'count', min: 1, nullable: true },
+  supervisor_context_window: { type: 'number', label: 'context window', group: 'supervisor', subgroup: 'compaction', unit: 'count', min: 1, nullable: true },
+  supervisor_compact_threshold_pct: { type: 'number', label: 'auto-compact threshold %', group: 'supervisor', subgroup: 'compaction', unit: 'count', min: 0, max: 100, nullable: true },
+  supervisor_compact_strategy: { type: 'string', label: 'compact strategy', group: 'supervisor', subgroup: 'compaction', choices: ['fast'], nullable: true },
+  supervisor_compact_summarize_pct: { type: 'number', label: 'compact summarize %', group: 'supervisor', subgroup: 'compaction', unit: 'count', min: 1, max: 100, nullable: true },
+  supervisor_compact_max_tokens: { type: 'number', label: 'compact output cap', group: 'supervisor', subgroup: 'compaction', unit: 'count', min: 1, nullable: true },
+  voice_enabled: { type: 'boolean', label: 'enabled', group: 'assistant', subgroup: 'voice' },
+  sidebar_width: { type: 'number', label: 'voice pane width', group: 'assistant', subgroup: 'voice', unit: 'count', min: 10 },
+  voice_spoken_voice: { type: 'string', label: 'spoken voice', group: 'assistant', subgroup: 'voice' },
+  voice_stt_model: { type: 'string', label: 'hearing model', group: 'assistant', subgroup: 'voice' },
+  voice_wake_word: { type: 'boolean', label: 'wake word only', group: 'assistant', subgroup: 'voice' },
+  voice_wake_words: { type: 'string', label: 'wake words', group: 'assistant', subgroup: 'voice' },
+  voice_wake_timeout: { type: 'number', label: 'wake timeout', group: 'assistant', subgroup: 'voice', unit: 'count', min: 1 },
   auto_plan: { type: 'boolean', label: 'auto plan', group: 'board' },
   auto_build: { type: 'boolean', label: 'auto build', group: 'board' },
   loop_budget_tokens: { type: 'number', label: 'loop token budget', group: 'board', unit: 'count', min: 1, nullable: true },
-  supervisor_provider: { type: 'string', label: 'supervisor provider', group: 'board', nullable: true,
-    choices: ['anthropic', 'openai', 'google', 'deepseek', 'kimi', 'xai', 'mistral', 'groq', 'openai-compatible'] },
-  supervisor_model: { type: 'string', label: 'supervisor model', group: 'board', nullable: true },
-  supervisor_base_url: { type: 'string', label: 'supervisor endpoint', group: 'board', nullable: true },
-  supervisor_reasoning: { type: 'string', label: 'supervisor reasoning', group: 'board', nullable: true,
-    choices: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
-  supervisor_max_steps: { type: 'number', label: 'supervisor steps per turn', group: 'board', unit: 'count', min: 1, nullable: true },
+  supervisor_provider: { type: 'string', label: 'provider', group: 'supervisor', subgroup: 'model', nullable: true, choices: PROVIDERS },
+  supervisor_model: { type: 'string', label: 'model', group: 'supervisor', subgroup: 'model', nullable: true },
+  supervisor_base_url: { type: 'string', label: 'endpoint', group: 'supervisor', subgroup: 'model', nullable: true },
+  supervisor_reasoning: { type: 'string', label: 'reasoning', group: 'supervisor', subgroup: 'model', nullable: true, choices: REASONINGS },
+  supervisor_max_steps: { type: 'number', label: 'steps per turn', group: 'supervisor', subgroup: 'model', unit: 'count', min: 1, nullable: true },
   boot_last_workspace: { type: 'boolean', label: 'boot into last workspace', group: 'sessions' },
   telegram_enabled: { type: 'boolean', label: 'telegram', group: 'telegram' },
   telegram_authorized_user: { type: 'string', label: 'authorized user id', group: 'telegram', nullable: true },
@@ -414,7 +429,7 @@ export class SettingsWriteError extends Error {
   constructor(readonly code: string, message: string) { super(message); }
 }
 
-export type SettingsWriteLayer = 'global' | 'workspace' | 'session';
+export type SettingsWriteLayer = 'global' | 'workspace';
 
 export type SettingKey = keyof typeof DEFAULTS;
 export type SettingValue = (typeof DEFAULTS)[SettingKey];
@@ -423,101 +438,82 @@ export function isSettingKey(k: string): k is SettingKey {
   return Object.prototype.hasOwnProperty.call(DEFAULTS, k);
 }
 
-// Which settings a workspace / session row can override, and through which
-// column. The chain is: code default -> settings row -> workspace -> session.
-/** Which scopes a setting may be set at, beyond `global`. It used to be two
- *  hand-kept maps from key to column; now a workspace override is a row like any
- *  other, so this is the whole declaration. A PATCH at a scope a key does not
- *  accept is refused. */
-const SCOPED: Partial<Record<SettingKey, Array<'workspace' | 'session'>>> = {
-  spare_clones: ['workspace'],
-  initial_history_depth: ['workspace'],
-  container_image: ['workspace'],
-  container_docker: ['workspace'],
-  auto_push_on_archive: ['workspace', 'session'],
-  agent_git_credentials: ['workspace'],
-  card_prefix: ['workspace'],
-  auto_plan: ['workspace'],
-  auto_build: ['workspace'],
-  loop_budget_tokens: ['workspace'],
-  telegram_auto_build_notifications: ['workspace'],
-};
-
-/** Which settings a single workspace can differ on. Derived from the same
- *  declaration resolve() acts on, so it cannot drift from it. */
-export const WORKSPACE_OVERRIDABLE = (Object.keys(SCOPED) as SettingKey[])
-  .filter((k) => SCOPED[k]!.includes('workspace'));
+/** The settings a single workspace may differ on. The chain is: code
+ *  default -> global row -> workspace row. THE one list: `write` refuses a
+ *  workspace write of any other key, GET /settings reports `overridable`
+ *  from it, and the cli's workspace screen draws its rows from that flag —
+ *  there is no second list of these keys anywhere (the workspace route used
+ *  to keep one, and it drifted). */
+const WORKSPACE_OVERRIDABLE: readonly SettingKey[] = [
+  'spare_clones', 'initial_history_depth', 'container_image', 'container_docker',
+  'auto_push_on_archive', 'agent_git_credentials', 'card_prefix',
+  'auto_plan', 'auto_build', 'loop_budget_tokens', 'telegram_auto_build_notifications',
+];
 
 /** Settings that are a fact about ONE workspace — a card prefix names one
  *  board — so a global value is meaningless. Never settable at the global
  *  layer, and GET /settings leaves them off the global list. */
 const WORKSPACE_ONLY: readonly SettingKey[] = ['card_prefix'];
 export const isGlobalSettable = (k: SettingKey) => !WORKSPACE_ONLY.includes(k);
-export const isWorkspaceOverridable = (k: SettingKey) => !!SCOPED[k]?.includes('workspace');
-export const isSessionOverridable = (k: SettingKey) => !!SCOPED[k]?.includes('session');
+export const isWorkspaceOverridable = (k: SettingKey) => WORKSPACE_OVERRIDABLE.includes(k);
 
 /** Credentials are scoped too: a workspace may hold its own GitHub token, which
  *  is what makes the credential chain (workspace -> global -> none) the SAME
  *  chain as every other setting rather than a hand-written copy of it. */
 export const isCredentialWorkspaceScoped = (k: string) => k === 'github_token';
 
-export type Source = 'default' | 'override' | 'workspace' | 'session';
+/** Where a value came from — the layer's own name. */
+export type Source = 'default' | 'global' | 'workspace';
 
-export interface ResolveCtx { workspace?: WorkspaceRow; session?: SessionRow }
+export interface ResolveCtx { workspace?: WorkspaceRow }
 
 /** One setting with its LAYERS exposed, not just the winner — what a client
  *  needs to render an editor (VS Code's inspect(), git's --show-origin):
  *  `default` (code), `global` (the settings row, null when unset), `workspace`
- *  and `session` (their overrides, null when unset or no such context), then
- *  the computed `value` + `source`. */
+ *  (its override, null when unset or no such context), then the computed
+ *  `value` + `source`. */
 export interface SettingLayers {
   default: unknown;
   global: unknown;
   workspace: unknown;
-  session: unknown;
   value: unknown;
   source: Source;
 }
 
-/** THE precedence rule, written once: default → settings row → workspace
- *  column → session column. Null is never stored at any layer (null in a
- *  PATCH clears; legacy stored nulls were purged long ago), so row presence
- *  and column non-null both simply mean "set". Everything that resolves a
- *  setting reads its answer off this. */
+/** THE precedence rule, written once: default → global row → workspace row.
+ *  Null is never stored at any layer (null in a PATCH clears), so row
+ *  presence simply means "set". Everything that resolves a setting reads
+ *  its answer off this. */
 function computeLayers(key: SettingKey, layers: RawLayers): SettingLayers {
   let value: unknown = DEFAULTS[key];
   let source: Source = 'default';
   // Row PRESENCE decides at every level — null is never a stored value,
   // so "there is a row" and "there is an override" are the same statement.
-  if (layers.global !== undefined) { value = layers.global; source = 'override'; }
+  if (layers.global !== undefined) { value = layers.global; source = 'global'; }
   if (layers.workspace !== undefined) { value = layers.workspace; source = 'workspace'; }
-  if (layers.session !== undefined) { value = layers.session; source = 'session'; }
   return {
     default: DEFAULTS[key],
     global: layers.global ?? null,
     workspace: layers.workspace ?? null,
-    session: layers.session ?? null,
     value, source,
   };
 }
 
-interface RawLayers { global?: unknown; workspace?: unknown; session?: unknown }
+interface RawLayers { global?: unknown; workspace?: unknown }
 
-/** The scopes to read for a context, in order. `resolve` and `settingsLayers`
- *  both go through here so neither can look at a different set. */
+/** The scopes to read for a context, in order. Every read goes through here
+ *  so none can look at a different set. */
 function scopesFor(ctx: ResolveCtx): string[] {
   const out = [GLOBAL];
   if (ctx.workspace) out.push(workspaceScope(ctx.workspace.id));
-  if (ctx.session) out.push(sessionScope(ctx.session.id));
   return out;
 }
 
-function layersFrom(byScope: Map<string, Map<string, { value: unknown }>>, ctx: ResolveCtx, key: string): RawLayers {
-  const at = (scope: string) => byScope.get(scope)?.get(key)?.value;
+function layersFrom(byScope: ByScope, ctx: ResolveCtx, key: string): RawLayers {
+  const at = (scope: string) => byScope.get(scope)?.get(key);
   return {
     global: at(GLOBAL),
     workspace: ctx.workspace ? at(workspaceScope(ctx.workspace.id)) : undefined,
-    session: ctx.session ? at(sessionScope(ctx.session.id)) : undefined,
   };
 }
 
@@ -525,10 +521,8 @@ export type SettingEntry = SettingLayers & {
   description: string; meta: SettingMeta; overridable: boolean;
 };
 
-type ByScope = Map<string, Map<string, Stored>>;
-
-/** One stored value, decrypted. `secret` says which column it came out of. */
-export interface Stored { value: unknown; secret: boolean }
+/** scope -> key -> stored value (decrypted where it was encrypted). */
+type ByScope = Map<string, Map<string, unknown>>;
 
 /** A secret as listed — name and description, NEVER the value. */
 export interface SecretMeta { name: string; description: string; scope: string }
@@ -545,8 +539,8 @@ const sortSecrets = (s: SecretMeta[]) => s.sort((a, b) =>
 
 function computeLayersFor(key: SettingKey, byScope: ByScope, ctx: ResolveCtx): SettingLayers {
   const l = computeLayers(key, layersFrom(byScope, ctx, key));
-  if (key !== 'model' || l.value != null) return l;
-  const provider = computeLayers('provider', layersFrom(byScope, ctx, 'provider')).value;
+  if (key !== 'coding_model' || l.value != null) return l;
+  const provider = computeLayers('coding_provider', layersFrom(byScope, ctx, 'coding_provider')).value;
   const d = latestModel(typeof provider === 'string' ? provider : null);
   return { ...l, default: d, value: d };
 }
@@ -554,7 +548,8 @@ function computeLayersFor(key: SettingKey, byScope: ByScope, ctx: ResolveCtx): S
 // ── The object ───────────────────────────────────────────────────────────────
 // ONE store for settings and secrets — a row is (scope, namespace, key).
 // `namespace` separates the declared settings world ('general' — every key
-// declared in code) from user-named secrets ('secret' — free names, token in
+// declared in code; a credential's value sits in value_enc, everything
+// else's in value) from user-named secrets ('secret' — free names, token in
 // value_enc, description in plain value). This is the only file that touches
 // the table; every reader resolves through it, every writer writes through
 // it, and a write announces its scope on the settings feed.
@@ -572,11 +567,11 @@ export class Settings {
   /** Every row at the scopes asked for, as scope -> key -> value. ONE query:
    *  resolving 30 settings must not be 30 round trips.
    *
-   *  `secrets` false means PLAIN VALUES ONLY — secret rows are skipped, not
-   *  decrypted. Resolving `spare_clones` has no business touching a credential,
-   *  and decrypting every stored secret on every ordinary read logged a
-   *  warning per row (found by running it). */
-  private async readStore(scopes: string[], secrets: boolean): Promise<ByScope> {
+   *  `credentials` false means PLAIN VALUES ONLY — encrypted rows are
+   *  skipped, not decrypted. Resolving `spare_clones` has no business touching
+   *  a credential, and decrypting every stored one on every ordinary read
+   *  logged a warning per row (found by running it). */
+  private async readStore(scopes: string[], credentials: boolean): Promise<ByScope> {
     const out: ByScope = new Map();
     for (const s of scopes) out.set(s, new Map());
     const rows = await this.db.select().from(settings).where(and(
@@ -586,22 +581,22 @@ export class Settings {
       // unset — unset is what a caller deletes, and one bad row must not lose
       // the rest.
       let value: unknown;
-      if (r.secret) {
-        if (!secrets) continue;
-        try { value = decrypt(this.encryptionKey, Buffer.from(r.valueEnc as Buffer)); }
-        catch { log.warn({ scope: r.scope, key: r.key }, 'stored secret could not be decrypted — kept, not deleted'); continue; }
+      if (r.valueEnc) {
+        if (!credentials) continue;
+        try { value = decrypt(this.encryptionKey, Buffer.from(r.valueEnc)); }
+        catch { log.warn({ scope: r.scope, key: r.key }, 'stored credential could not be decrypted — kept, not deleted'); continue; }
       } else value = r.value;
-      out.get(r.scope)?.set(r.key, { value, secret: r.secret });
+      out.get(r.scope)?.set(r.key, value);
     }
     return out;
   }
 
-  /** Write one value at a scope. A secret goes in the encrypted column — and
-   *  a secret is always a string, because that is what a cipher takes. */
-  private async putScoped(scope: string, k: string, value: unknown, secret: boolean): Promise<void> {
-    const row = secret
-      ? { value: null, valueEnc: encrypt(this.encryptionKey, typeof value === 'string' ? value : JSON.stringify(value)), secret: true }
-      : { value: value as never, valueEnc: null, secret: false };
+  /** Write one value at a scope. A credential goes in the encrypted column
+   *  (`write` has already made sure it is a string — what a cipher takes). */
+  private async putScoped(scope: string, k: string, value: unknown): Promise<void> {
+    const row = isCredential(k)
+      ? { value: null, valueEnc: encrypt(this.encryptionKey, value as string) }
+      : { value: value as never, valueEnc: null };
     await this.db.insert(settings)
       .values({ scope, namespace: GENERAL, key: k, ...row })
       .onConflictDoUpdate({
@@ -635,11 +630,11 @@ export class Settings {
   }
 
   /** A credential, most specific layer first — the ONE path that decrypts a
-   *  declared secret. undefined = unset at every layer. */
+   *  declared credential. undefined = unset at every layer. */
   async credential(name: CredentialName, ctx: ResolveCtx = {}): Promise<string | undefined> {
     const byScope = await this.readStore(scopesFor(ctx), true);
     const l = layersFrom(byScope, ctx, name);
-    const v = l.session ?? l.workspace ?? l.global;
+    const v = l.workspace ?? l.global;
     return typeof v === 'string' && v.length ? v : undefined;
   }
 
@@ -686,44 +681,40 @@ export class Settings {
 
   // ── writes ─────────────────────────────────────────────────────────────────
 
-  /** THE settings writer. Every route that changes a setting — global,
-   *  workspace or session — goes through this one validation + store path,
-   *  so a second door cannot accept a value the first refused. null clears;
-   *  it is never stored. Announces the scope when anything was written.
-   *  Returns the keys written. `by` is the writer's client id, so its own
-   *  window ignores the echo. */
+  /** THE settings writer. Every route that changes a setting — global or
+   *  workspace — goes through this one validation + store path, so a second
+   *  door cannot accept a value the first refused. null clears; it is never
+   *  stored. Announces the scope when anything was written. Returns the keys
+   *  written. `by` is the writer's client id, so its own window ignores the
+   *  echo. */
   async write(layer: SettingsWriteLayer, scope: string, values: Record<string, unknown>, by?: string): Promise<string[]> {
     const entries = Object.entries(values);
     const bad = entries.filter(([k]) => !isSettingKey(k) && !isCredential(k)).map(([k]) => k);
     if (bad.length) throw new SettingsWriteError('unknown_setting', `unknown settings: ${bad.join(', ')}`);
     const invalid = validatePatch(entries.filter(([k]) => !isCredential(k)));
     if (invalid.length) throw new SettingsWriteError('invalid_setting', invalid.join('; '));
-    for (const [k] of entries) {
+    for (const [k, value] of entries) {
+      if (isCredential(k) && value !== null && typeof value !== 'string') {
+        throw new SettingsWriteError('invalid_args', `${k} must be a string to be stored encrypted`);
+      }
       if (layer === 'global') {
         if (isSettingKey(k) && !isGlobalSettable(k)) {
           throw new SettingsWriteError('not_overridable', `${k} is a fact about one workspace — set it there`);
         }
         continue;
       }
-      const okHere = isCredential(k)
-        ? layer === 'workspace' && isCredentialWorkspaceScoped(k)
-        : layer === 'workspace' ? isWorkspaceOverridable(k as SettingKey)
-          : isSessionOverridable(k as SettingKey);
-      if (!okHere) throw new SettingsWriteError('not_overridable', `${k} cannot be set per ${layer}`);
+      const okHere = isCredential(k) ? isCredentialWorkspaceScoped(k) : isWorkspaceOverridable(k as SettingKey);
+      if (!okHere) throw new SettingsWriteError('not_overridable', `${k} cannot be set per workspace`);
     }
     for (const [k, value] of entries) {
-      if (value === null) { await this.dropKey(k, scope); continue; }
-      const secret = isCredential(k);
-      if (secret && typeof value !== 'string') {
-        throw new SettingsWriteError('invalid_args', `${k} must be a string to be stored as a secret`);
-      }
-      await this.putScoped(scope, k, value, secret);
+      if (value === null) await this.dropKey(k, scope);
+      else await this.putScoped(scope, k, value);
     }
     if (entries.length) this.events?.publish(scope, by);
     return entries.map(([k]) => k);
   }
 
-  /** A whole scope goes — a workspace or session that no longer exists. Both
+  /** A whole scope goes — a workspace that no longer exists. Both
    *  namespaces: its overrides and its secrets. */
   async dropScope(scope: string): Promise<void> {
     await this.db.delete(settings).where(eq(settings.scope, scope));
@@ -766,7 +757,7 @@ export class Settings {
 
   /** Create or overwrite one secret at ONE scope. */
   async putSecret(scope: string, name: string, description: string, value: string): Promise<void> {
-    const row = { value: { description } as never, valueEnc: encrypt(this.encryptionKey, value), secret: true };
+    const row = { value: { description } as never, valueEnc: encrypt(this.encryptionKey, value) };
     await this.db.insert(settings)
       .values({ scope, namespace: SECRET_NS, key: name, ...row })
       .onConflictDoUpdate({

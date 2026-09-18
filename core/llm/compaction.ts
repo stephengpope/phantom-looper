@@ -307,8 +307,8 @@ export function shouldCompact(lastInputTokens: number, contextWindow: number, pc
 
 /** Resolve the context window for an agent. The chain:
  *  1. The model catalog (contextWindowFor)
- *  2. `<prefix>_context_window` setting (per-agent override)
- *  3. `context_window` setting (general fallback)
+ *  2. `<prefix>_context_window` setting (the agent's own)
+ *  3. `coding_context_window` setting (the coding agent's — the fallback)
  *  4. null — unknown, auto-compaction cannot fire.
  *  Never returns 0; never silent. */
 export function resolveContextWindow(
@@ -327,18 +327,19 @@ export function resolveContextWindow(
     log?.(`compaction: can't resolve ${prefix} model: ${(e as Error).message}`);
   }
   // Per-agent override, then general fallback.
-  for (const key of [`${prefix}_context_window`, 'context_window']) {
+  for (const key of [`${prefix}_context_window`, 'coding_context_window']) {
     const v = cfg[key];
     if (v != null && Number(v) > 0) return Number(v);
   }
   return null;
 }
 
-/** Resolve a cascaded compaction setting: `<prefix>_<name>` → `<name>`. */
+/** Resolve a cascaded compaction setting: `<prefix>_compact_<name>` → the
+ *  coding agent's `coding_compact_<name>`. */
 export function resolveCompactSetting<T>(cfg: Record<string, unknown>, prefix: string, name: string, fallback: T): T {
   const v = cfg[`${prefix}_compact_${name}`];
   if (v != null) return v as T;
-  const g = cfg[`compact_${name}`];
+  const g = cfg[`coding_compact_${name}`];
   if (g != null) return g as T;
   return fallback;
 }

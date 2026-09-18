@@ -149,7 +149,7 @@ async function main() {
   // it the call retried in silence, which was the original bug.
   const messageConfig: SyncDeps['messageConfig'] = async (report) => {
     const cfg = await settings.resolveMany(
-      ['provider', 'model', 'base_url', 'assistant_provider', 'assistant_model', 'assistant_base_url']);
+      ['coding_provider', 'coding_model', 'coding_base_url', 'assistant_provider', 'assistant_model', 'assistant_base_url']);
     const c = cascade(cfg, 'assistant'); // a bad pair throws with the fix in the message
     if (!isProvider(c.provider)) return null;
     const apiKey = await settings.credential(credentialForProvider(c.provider));

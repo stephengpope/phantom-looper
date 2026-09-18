@@ -32,7 +32,8 @@ import {
 } from './provision.js';
 import { setLocal } from './local.js';
 import { makeSettings } from './settings.js';
-import { PROVIDERS, PROVIDER_KEY } from './config.js';
+import { PROVIDER_KEY } from './config.js';
+import { PROVIDERS } from '../core/llm/createAgent.js';
 
 /** The questions, as an interface: the wizard asks through it, tests script
  *  it. `undefined` is the person backing out (esc / ctrl-c). */
@@ -235,7 +236,7 @@ export async function runSetup(deps: SetupDeps = {}): Promise<void> {
   //    (written by `codex login`).
   if (provider === 'openai-codex') {
     try {
-      await settings.patch({ provider, model: model.trim() });
+      await settings.patch({ coding_provider: provider, coding_model: model.trim() });
       clack.log.success(`${provider} · ${model.trim()} — credentials from ~/.codex/auth.json`);
     } catch (e) {
       clack.log.error((e as Error).message);
@@ -248,7 +249,7 @@ export async function runSetup(deps: SetupDeps = {}): Promise<void> {
       if (!key.trim()) continue;
       try {
         await settings.patch({
-          provider, model: model.trim(), ...(baseUrl ? { base_url: baseUrl.trim() } : {}),
+          coding_provider: provider, coding_model: model.trim(), ...(baseUrl ? { coding_base_url: baseUrl.trim() } : {}),
           [PROVIDER_KEY[provider as keyof typeof PROVIDER_KEY]]: key.trim(),
         });
         clack.log.success(`${provider} · ${model.trim()} — key saved on the server`);

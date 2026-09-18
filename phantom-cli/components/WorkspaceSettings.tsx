@@ -5,8 +5,8 @@
 // them is how you end up changing a server-wide value believing it was local:
 //
 //   this workspace   its own identity — name, branch, prefix, its GitHub token
-//   settings         the seven that can differ here; every other setting is
-//                    global-only and lives on /settings
+//   settings         the ones the server says can differ here (`overridable`);
+//                    every other setting is global-only and lives on /settings
 //   danger           delete
 //
 // Every settings row says where its value came from — built-in, global, or
@@ -19,7 +19,9 @@
 // returns the row plus `settings`: every setting with its layers (default /
 // global / workspace), the computed value + source, description, meta and
 // overridable. Nothing here hardcodes what a setting is, so a new overridable
-// setting appears on its own.
+// setting appears on its own. Every override — the token included — is
+// written through PATCH /settings?workspace=, the one door for a workspace's
+// layer; only the three own fields go to PATCH /workspaces/:id.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { SelectList } from './SelectList.js';
 import { ValueInput, type EditSpec } from './ValueInput.js';
@@ -28,9 +30,10 @@ import type { Api } from './Settings.js';
 import type { WorkspaceInfo } from './Launcher.js';
 import { fit, human, labelFor, type WireMeta } from '../settingLabels.js';
 import { makeSettings } from '../settings.js';
+import type { ConfigValue } from '../config.js';
 
 interface Effective {
-  value: unknown; source: 'default' | 'override' | 'workspace' | 'session';
+  value: unknown; source: 'default' | 'global' | 'workspace';
   default?: unknown; global?: unknown; workspace?: unknown;
   description: string; overridable: boolean;
   meta: WireMeta;
@@ -47,8 +50,8 @@ type View =
   | { at: 'confirm' };
 
 // The right-hand column answers one question: is this workspace different from
-// the others? Two answers, not four — which settings row a value came from is
-// the wrong level of detail here, and "override" is the API's word anyway.
+// the others? Two answers, not three — whether the shared value is the code
+// default or a global row is the wrong level of detail here.
 const setHere = (source: string) => source === 'workspace';
 const WHENCE = (source: string) => setHere(source) ? 'changed here' : 'same as everywhere';
 
@@ -132,6 +135,10 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
             // github_token at this workspace's layer — the same key /keys writes globally.
             void write(() => settings.patch({ github_token: String(v) }, { workspace: workspace.id }),
               'this workspace now uses its own GitHub token');
+            return;
+          }
+          if (view.kind === 'setting') {
+            void write(() => settings.patch({ [view.key]: v as ConfigValue }, { workspace: workspace.id }));
             return;
           }
           void write(() => api('PATCH', `/workspaces/${workspace.id}`, { [view.key]: v }));
@@ -260,7 +267,7 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
           const s = eff[k];
           if (!s?.overridable) return;
           if (!setHere(s.source)) { setNotice(`"${labelFor(k, s.meta)}" is not set here — it already uses the shared value`); return; }
-          void write(() => api('PATCH', `/workspaces/${workspace.id}`, { [k]: null }));
+          void write(() => settings.patch({ [k]: null }, { workspace: workspace.id }));
         }}
       />
     </Screen>

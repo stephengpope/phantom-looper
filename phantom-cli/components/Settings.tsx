@@ -1,83 +1,94 @@
-// One settings screen, reached by three commands that each name their own
-// scope — there is no menu of scopes to walk through first.
+// ONE settings screen: every server setting, grouped the way the server
+// files them — the three agents first (coding, assistant, supervisor; each
+// with model and compaction sub-headings, the assistant its voice too), then
+// the areas (board, sessions, containers, git, limits, telegram). This
+// machine's own audio rows (mic, speaker, mutes) sit under the assistant as
+// "this machine". /model and /assistant open the same screen at that group.
 //
-//   /model       local: provider, model, reasoning, steps per turn, your key
-//   /connection  local: the api url and token
-//   /settings    the server's own settings, which apply to everyone
+// /server is the one other use of this component: this machine's connection
+// rows alone, with no network call — you edit the connection precisely when
+// the server is unreachable.
 //
 // Two more scopes exist and are deliberately NOT here: one workspace's own
 // values (WorkspaceSettings.tsx, `e` on a row in /workspace) and the server's
-// secrets (Keys.tsx, /keys). This screen marks the settings a workspace can
-// differ on with ↯ so the server-wide list points at them, but it never edits
-// them — changing something for everyone and changing it for one workspace
-// must not be two rows apart in the same list.
+// credentials (Keys.tsx, /keys). This screen marks the settings a workspace
+// can differ on with ↯ so the server-wide list points at them, but it never
+// edits them — changing something for everyone and changing it for one
+// workspace must not be two rows apart in the same list.
 //
-// Local and server settings never share a screen. The local screens never make
-// a network call, because you edit the connection precisely when the server is
-// unreachable.
+// A server row is rendered from what GET /settings sends — label, description,
+// type, choices, unit, which layer the value came from. Nothing about a server
+// key is declared in this package: the server is the one place a setting is
+// described, and this screen shows it verbatim. Only the local rows
+// (config.ts) are declared here, because they are this machine's.
 import { Text } from './Text.js';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  DEFAULTS, DESCRIPTIONS, META, CONFIG_PATH, PROVIDER_KEY, REMOTE_DEFAULTS,
-  mask, visibleKeys, hiddenKeyCount,
-  type ConfigKey, type ConfigValue,
+  DESCRIPTIONS, META, CONFIG_PATH, PROVIDER_KEY, LOCAL_KEYS,
+  mask, type LocalKey, type ConfigValue,
 } from '../config.js';
-import { resolveLocal, localValues } from '../local.js';
-import { makeSettings } from '../settings.js';
-import { SelectList } from './SelectList.js';
-import { human, labelFor, type WireMeta } from '../settingLabels.js';
+import { resolveLocal } from '../local.js';
+import { makeSettings, type Entry } from '../settings.js';
+import { SelectList, type Choice } from './SelectList.js';
+import { human, labelFor } from '../settingLabels.js';
 import { ValueInput, type EditSpec } from './ValueInput.js';
 import { Screen } from './Screen.js';
-import { PROVIDERS } from '../config.js';
+import { PROVIDERS } from '../../core/llm/createAgent.js';
 
 export type { Api } from '../request.js';
 import type { Api } from '../request.js';
 
-interface ServerSetting { value: unknown; source: string; description: string;
-  /** Whether one workspace can differ on it — see WorkspaceSettings.tsx. */
-  overridable?: boolean;
-  /** Credentials — never rendered here. /keys is their one screen. */
-  secret?: boolean;
-  meta: WireMeta }
+/** Which rows a screen shows: the server's settings, and/or one of this
+ *  machine's two local groups (the voice rows file under the assistant). */
+export interface Rows {
+  server?: boolean;
+  local?: 'server' | 'voice';
+}
 
 type View =
-  | { at: 'local'; showAllKeys?: boolean }
-  | { at: 'api' }
-  | { at: 'edit'; scope: 'local' | 'api'; key: string; spec: EditSpec };
+  | { at: 'list' }
+  | { at: 'edit'; kind: 'server' | 'local'; key: string; spec: EditSpec };
 
-type Group = 'model' | 'server' | 'voice';
-const GROUPS: Array<[Group, string]> = [
-  ['model', 'model'], ['server', 'server'], ['voice', 'voice'],
-];
+/** Rows that cannot apply right now, hidden rather than shown dead: an
+ *  endpoint for a provider that has none, wake words while wake is off.
+ *  Presentation only — the server still stores and returns them. */
+const usesBaseUrl = (p: unknown) => p === 'openai' || p === 'deepseek' || p === 'kimi' || p === 'openai-compatible';
+const set = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
+const HIDDEN: Record<string, (values: Record<string, unknown>) => boolean> = {
+  coding_base_url: (v) => !usesBaseUrl(v.coding_provider),
+  assistant_base_url: (v) => !usesBaseUrl(set(v.assistant_provider) ?? v.coding_provider),
+  supervisor_base_url: (v) => !usesBaseUrl(set(v.supervisor_provider) ?? v.coding_provider),
+  voice_wake_words: (v) => v.voice_wake_word !== true,
+  voice_wake_timeout: (v) => v.voice_wake_word !== true,
+};
 
-export function Settings({ api, onClose, onLocalChange, configPath = CONFIG_PATH, startAt, groups, title, suggestions, onOpenRow }: {
+export function Settings({ api, onClose, onChange, configPath = CONFIG_PATH, rows, title, startAt, suggestions, onOpenRow }: {
   api: Api;
   onClose: () => void;
-  /** Fired after any local write so the app can rebuild the agent. */
-  onLocalChange?: (key: ConfigKey) => void;
+  /** Fired after any write, naming the key, so the app re-reads what it
+   *  consumes — rebuilds an agent, restarts the sidecar, reloads a board. */
+  onChange?: (key: string) => void;
   configPath?: string;
-  /** Which scope this command opens. */
-  startAt: 'local' | 'api';
-  /** Narrow the local list to these groups — /model shows only `model`. */
-  groups?: ReadonlyArray<Group>;
-  /** Overrides the header when the screen is a shortcut rather than /settings. */
-  title?: string;
-  /** Values to offer for a key that has no fixed choices — the device names
-   *  the voice sidecar reported, for the mic and speaker rows. Read live, so a
-   *  list that arrives while the picker is open shows up in it. */
-  suggestions?: Partial<Record<ConfigKey, string[]>>;
+  rows: Rows;
+  title: string;
+  /** The group to open on — /model lands on `coding`, /assistant on `assistant`. */
+  startAt?: string;
+  /** Values to offer for a local key that has no fixed choices — the device
+   *  names the voice sidecar reported, for the mic and speaker rows. Read
+   *  live, so a list that arrives while the picker is open shows up in it. */
+  suggestions?: Partial<Record<LocalKey, string[]>>;
   /** Fired when a local row's editor opens — the voice rows use it to re-scan
    *  devices at the one moment a fresh list matters. */
-  onOpenRow?: (key: ConfigKey) => void;
+  onOpenRow?: (key: LocalKey) => void;
 }) {
-  const [view, setView] = useState<View>({ at: startAt });
-  const [tick, setTick] = useState(0);              // forces a re-read after a write
-  const [server, setServer] = useState<Record<string, ServerSetting> | null>(null);
+  const [view, setView] = useState<View>({ at: 'list' });
+  const [tick, setTick] = useState(0);              // forces a re-read after a local write
+  const [server, setServer] = useState<Record<string, Entry> | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | undefined>();
   // The row the list left from — the editor replaces the list, and when the
-  // list comes back its cursor returns HERE, not to the top. Also kept across
-  // the `a` toggle, which remounts the list with more rows.
+  // list comes back its cursor returns HERE, not to the top. Before any row
+  // was opened: the first row of the group the command asked for.
   const [last, setLast] = useState<string | undefined>();
 
   // Opening the screen is a READ, and so is every write's aftermath. The screen
@@ -85,32 +96,18 @@ export function Settings({ api, onClose, onLocalChange, configPath = CONFIG_PATH
   // since launch, which is what left the Assistant running on the settings it
   // was born with.
   const settings = useMemo(() => makeSettings(api, configPath), [api, configPath]);
-  const [remote, setRemote] = useState<Record<string, ConfigValue> | null>(null);
-  useEffect(() => {
-    if (startAt !== 'local') return;
-    let stale = false;
-    void settings.read()
-      .then((r: Record<string, ConfigValue>) => { if (!stale) setRemote(r); })
-      .catch((e: unknown) => { if (!stale) setNotice(`server unreachable: ${(e as Error).message}`); });
-    return () => { stale = true; };
-  }, [settings, startAt, tick]);
-
-  // The two homes, merged for display. Each row still says which it came from,
-  // which is what makes one screen over two stores safe to read.
-  const { config: localCfg, error: fileError } = resolveLocal(configPath);
-  const plain = { ...(remote ?? {}), ...localValues(configPath) } as Record<ConfigKey, ConfigValue>;
-  const config = { ...Object.fromEntries(Object.entries(remote ?? {}).map(
-    ([k, v]) => [k, { value: v, source: 'server' as const }])), ...localCfg } as
-    Record<ConfigKey, { value: ConfigValue; source: string; envVar?: string }>;
-
   const loadServer = useCallback(async () => {
     setBusy(true);
-    try { setServer(await settings.all() as unknown as Record<string, ServerSetting>); }
+    try { setServer(await settings.all()); setNotice(undefined); }
     catch (e) { setNotice(`server unreachable: ${(e as Error).message}`); setServer({}); }
     finally { setBusy(false); }
   }, [settings]);
+  useEffect(() => { if (rows.server) void loadServer(); }, [rows.server, loadServer]);
 
-  useEffect(() => { if (view.at === 'api' && !server) void loadServer(); }, [view, server, loadServer]);
+  // This machine's rows, read from the file on every render (a file read is
+  // cheap and synchronous); `tick` re-renders after a write.
+  const { config: local, error: fileError } = resolveLocal(configPath);
+  void tick;
 
   // The model catalog is the SERVER's (GET /models): one list for every
   // client and for the "newest model" default. Read when a model row's editor
@@ -126,290 +123,181 @@ export function Settings({ api, onClose, onLocalChange, configPath = CONFIG_PATH
       return [];
     }
   }, [api]);
-  /** The spec, plus the catalog for a model row and the keyed providers for a
-   *  provider row — the two shapes every model-ish row takes, on both screens. */
-  const finishSpec = async (key: string, spec: EditSpec, values: Record<string, unknown>): Promise<EditSpec> => {
+
+  const serverValues = (): Record<string, unknown> =>
+    Object.fromEntries(Object.entries(server ?? {}).map(([k, e]) => [k, e.value]));
+
+  const openServer = async (key: string) => {
+    const e = server![key];
+    setLast(key);
+    const values = serverValues();
+    const spec: EditSpec = {
+      title: `${labelFor(key, e.meta)} · everyone`,
+      choices: e.meta.choices, choiceLabels: e.meta.choiceLabels,
+      type: e.meta.type, current: e.value, unit: e.meta.unit,
+      note: e.meta.unit === 'ms' ? 'e.g. 30m, 2h, 3d · applies to everyone' : 'applies to everyone',
+    };
     const provider = providerForModelRow(key, values);
     const models = provider ? await loadModels(provider) : [];
-    return buildModelSpec(key, spec, values, models);
+    setView({ at: 'edit', kind: 'server', key, spec: buildModelSpec(key, spec, values, models) });
   };
 
-  // ONE writer. The settings object routes by where the key lives; after the
-  // write this screen re-reads and shows what was stored, never what was sent.
-  const writeLocal = (key: ConfigKey, v: ConfigValue) => {
-    void (async () => {
-      try {
-        await settings.write(key, v);
-        setNotice(undefined);
-        setTick((t) => t + 1);     // re-read: show what was STORED, not what we sent
-        onLocalChange?.(key);      // and let the app re-read too
-      } catch (e) { setNotice(`could not save: ${(e as Error).message}`); }
-    })();
+  const openLocal = (key: LocalKey) => {
+    setLast(key);
+    onOpenRow?.(key);
+    const m = META[key];
+    const spec: EditSpec = {
+      title: m.label, secret: m.secret, type: m.type,
+      current: m.secret ? '' : local[key].value,
+      note: local[key].envVar
+        ? `${local[key].envVar} is set in your shell and beats this file — unset it for a saved value to take effect`
+        : m.secret ? `saved to ${configPath}, mode 0600` : undefined,
+    };
+    // Device rows offer what the sidecar found; a name it did not list can
+    // still be typed (a device plugged in later, or a sidecar not running yet).
+    const suggest = suggestions?.[key];
+    if (suggest?.length) { spec.suggestions = suggest; spec.note = spec.note ?? 'devices found now · or type any device name'; }
+    setView({ at: 'edit', kind: 'local', key, spec });
   };
 
-  // Escape is owned by whatever is focused — the list closes the screen, the
-  // editor returns to the list. Handling it here as well fired both, so a
-  // single press closed the editor AND the screen. The letter shortcuts go
-  // through the list's onKey for the same reason, and because only the list
-  // knows which row is highlighted.
+  // ONE writer per home. After a write this screen re-reads and shows what was
+  // stored, never what was sent.
+  const writeServer = async (patch: Record<string, ConfigValue>) => {
+    setBusy(true);
+    try { await settings.patch(patch); await loadServer(); for (const k of Object.keys(patch)) onChange?.(k); }
+    catch (e) { setNotice((e as Error).message); }
+    finally { setBusy(false); }
+  };
+  const writeLocal = async (key: LocalKey, v: ConfigValue) => {
+    try { await settings.write(key, v); setNotice(undefined); setTick((t) => t + 1); onChange?.(key); }
+    catch (e) { setNotice(`could not save: ${(e as Error).message}`); }
+  };
 
-  // Until the read lands there is nothing true to show. Rendering the rows
-  // early painted them from the code defaults with no source beside them —
-  // which is the same lie as a cache, just a shorter one.
-  if (view.at === 'local' && remote === null) {
+  if (view.at === 'edit') {
+    // Suggestions are read live: a device list that arrives while the picker
+    // is open (the re-scan onOpenRow asked for) replaces the one captured.
+    const fresh = view.kind === 'local' ? suggestions?.[view.key as LocalKey] : undefined;
+    const spec = fresh?.length ? { ...view.spec, suggestions: fresh } : view.spec;
     return (
-      <Screen title={title ?? 'settings'} footer={[{ key: 'esc', does: 'close' }]}
-        notice={notice ?? fileError}
-        sub={notice ? undefined : 'reading settings…'} />
+      <ValueInput
+        spec={spec}
+        onCancel={() => setView({ at: 'list' })}
+        onSubmit={(v) => {
+          setView({ at: 'list' });
+          if (view.kind === 'local') { void writeLocal(view.key as LocalKey, v as ConfigValue); return; }
+          // A provider change invalidates its model — the old id belongs to
+          // the old provider's catalog. Clear it in the same write so the row
+          // shows "—" (= newest for the new provider) rather than a stale id.
+          const modelKey = MODEL_FOR_PROVIDER[view.key];
+          const patch: Record<string, ConfigValue> = { [view.key]: v as ConfigValue };
+          if (modelKey && v !== view.spec.current) patch[modelKey] = null;
+          void writeServer(patch);
+        }}
+      />
     );
   }
 
-  if (view.at === 'local') {
-    const rows = localRows(plain, view.showAllKeys, groups);
-    const hidden = hiddenKeyCount(plain);
-    return (
-      <Screen title={title ?? 'local'}
-        footer={[
-          { key: 'enter', does: 'change' }, { key: 'd', does: 'reset' },
-          { key: 'a', does: 'all keys', when: !!hidden }, { key: 'esc', does: 'close' },
-        ]}
-        notice={notice ?? fileError}
-        sub={hidden && !view.showAllKeys ? `${hidden} other provider key${hidden > 1 ? 's' : ''} stored` : undefined}>
+  // Until the read lands there is nothing true to show. Rendering the rows
+  // early painted them from defaults with no source beside them — which is the
+  // same lie as a cache, just a shorter one.
+  if (rows.server && server === null) {
+    return <Screen title={title} footer={[{ key: 'esc', does: 'close' }]}
+      notice={notice ?? fileError} sub={notice ? undefined : 'reading settings…'} />;
+  }
+
+  const choices = screenRows(rows, server ?? {}, local);
+  const first = startAt ? choices.find((c) => !c.heading && c.group === startAt)?.key : undefined;
+  return (
+    <Screen title={title}
+      footer={[
+        { key: 'enter', does: 'change' }, { key: 'd', does: 'reset' }, { key: 'esc', does: 'close' },
+      ]}
+      notice={notice ?? fileError}
+      sub={rows.server ? 'applies to everyone · "this machine" rows stay here · ↯ rows can also be set per workspace: /workspace, then e' : undefined}>
+      {busy && !choices.length ? <Text dimColor>{'  loading…'}</Text> : (
         <SelectList
-          key={`local-${view.showAllKeys ? 'all' : 'some'}`}
-          initial={last}
-          choices={rows.map((r) => r.heading
-            ? { value: r.key, label: r.label, heading: true }
-            : {
-              value: r.key,
-              label: r.label,
-              columns: [
-                { text: r.shown, width: 24 },
-                { text: `${config[r.key as ConfigKey].source}${config[r.key as ConfigKey].envVar ? ` (${config[r.key as ConfigKey].envVar})` : ''}` },
-              ],
-              hint: DESCRIPTIONS[r.key as ConfigKey],
-            })}
+          key={`rows-${rows.local ?? ''}`}
+          initial={last ?? first}
+          choices={choices.map((r): Choice<string> => r.heading
+            ? { value: `#${r.key}`, label: r.label, heading: true }
+            : { value: r.key, label: r.label, columns: [{ text: r.shown, width: 24 }, { text: r.source }], hint: r.hint })}
           onSelect={(k) => {
-            const key = k as ConfigKey;
-            setLast(key);
-            onOpenRow?.(key);
-            void finishSpec(key, localSpec(key, plain, config[key].envVar, suggestions?.[key]), plain)
-              .then((spec) => setView({ at: 'edit', scope: 'local', key, spec }));
+            if (server?.[k] && !isLocal(k)) void openServer(k);
+            else if (isLocal(k)) openLocal(k);
           }}
           onCancel={onClose}
           onKey={(ch: string, cursorValue?: string) => {
-            if (ch === 'a') {
-              setLast(cursorValue);
-              setView({ at: 'local', showAllKeys: !view.showAllKeys });
-              return;
-            }
-            if (ch !== 'd') return;
-            const key = cursorValue as ConfigKey;
-            if (key && (Object.keys(DEFAULTS) as string[]).includes(key)) writeLocal(key, null);
+            if (ch !== 'd' || !cursorValue) return;
+            if (isLocal(cursorValue)) { void writeLocal(cursorValue, null); return; }
+            if (server?.[cursorValue]) void writeServer({ [cursorValue]: null });
           }}
         />
-      </Screen>
-    );
-  }
-
-  if (view.at === 'api') {
-    // Nothing is on two screens. GET /settings carries everything, but the
-    // credentials (secret, /keys masks them) and the keys /model and /voice
-    // render (REMOTE_DEFAULTS — the same declaration that puts them there)
-    // are never rows here.
-    const entries = Object.entries(server ?? {})
-      .filter(([k, s]) => !s.secret && !(k in REMOTE_DEFAULTS));
-    return (
-      <Screen title={title ?? 'settings'}
-        footer={[
-          { key: 'enter', does: 'change' }, { key: 'd', does: 'undo your change' },
-          { key: 'esc', does: 'close' },
-        ]}
-        notice={notice}
-        sub="applies to everyone · ↯ rows can also be set per workspace: /workspace, then e">
-        {busy && !entries.length ? <Text dimColor>{'  loading…'}</Text> : (
-          <SelectList
-            key="api"
-            initial={last}
-            // ↯ marks the ones a single workspace can differ on. Without it the
-            // only reachable way to change them is server-wide, which is how
-            // you turn something on for everyone meaning to turn it on for one.
-            choices={serverRows(entries).map((r) => r.heading
-              ? { value: `#${r.key}`, label: r.key, heading: true }
-              : {
-                value: r.key, label: `${r.s!.overridable ? '↯ ' : '  '}${labelFor(r.key, r.s!.meta)}`,
-                columns: [
-                  { text: human(r.s!.value, r.s!.meta), width: 24 },
-                  { text: r.s!.source === 'override' ? 'custom' : 'default' },
-                ],
-                // The description alone. The pretty label and the ↯ rule used to
-                // stack under it as extra paragraphs; the sub says the rule once.
-                hint: r.s!.description,
-              })}
-            onSelect={(k) => {
-              const s = (server ?? {})[k as string];
-              setLast(k as string);
-              const values = Object.fromEntries(Object.entries(server ?? {}).map(([kk, v]) => [kk, v.value]));
-              void finishSpec(k as string, {
-                title: `${labelFor(k as string, s.meta)} · every workspace`,
-                choices: s.meta?.choices,
-                choiceLabels: s.meta?.choiceLabels,
-                type: (s.meta?.type as EditSpec['type']) ?? 'string',
-                current: s.value,
-                unit: s.meta?.unit,
-                note: s.meta?.unit === 'ms'
-                  ? 'e.g. 30m, 2h, 3d · applies to every workspace'
-                  : 'applies to every workspace',
-              }, values).then((spec) => setView({ at: 'edit', scope: 'api', key: k as string, spec }));
-            }}
-            onCancel={onClose}
-            onKey={async (ch: string, cursorValue?: string) => {
-              if (ch !== 'd' || !cursorValue) return;
-              setBusy(true);
-              try { await settings.clear(cursorValue); await loadServer(); }
-              catch (e) { setNotice((e as Error).message); }
-              finally { setBusy(false); }
-            }}
-          />
-        )}
-      </Screen>
-    );
-  }
-
-  // view.at === 'edit'
-  // Suggestions are read live: a device list that arrives while the picker is
-  // open (the re-scan onOpenRow asked for) replaces the one captured on open.
-  const fresh = view.scope === 'local' ? suggestions?.[view.key as ConfigKey] : undefined;
-  const spec = fresh?.length ? { ...view.spec, suggestions: fresh } : view.spec;
-  return (
-    <ValueInput
-      spec={spec}
-      onCancel={() => setView(view.scope === 'local' ? { at: 'local' } : { at: 'api' })}
-      onSubmit={async (v) => {
-        // A provider change invalidates its model — the old id belongs to the
-        // old provider's catalog.  Clear it in the same write so the row shows
-        // "—" (= newest for the new provider) rather than a stale, wrong id.
-        const modelKey = MODEL_FOR_PROVIDER[view.key];
-        const providerChanged = modelKey && v !== view.spec.current;
-
-        if (view.scope === 'local') {
-          if (providerChanged) {
-            // Batch provider + model-clear into one PATCH so the two are atomic.
-            void (async () => {
-              try {
-                await settings.patch({ [view.key]: v, [modelKey]: null });
-                setNotice(undefined);
-                setTick((t) => t + 1);
-                onLocalChange?.(view.key as ConfigKey);
-                onLocalChange?.(modelKey as ConfigKey);
-              } catch (e) { setNotice(`could not save: ${(e as Error).message}`); }
-            })();
-          } else {
-            writeLocal(view.key as ConfigKey, v);
-          }
-          setView({ at: 'local' });
-          return;
-        }
-        setBusy(true);
-        try {
-          const patch: Record<string, ConfigValue> = { [view.key]: v as ConfigValue };
-          if (providerChanged) patch[modelKey] = null;
-          await settings.patch(patch);
-          await loadServer();
-          setNotice(undefined);
-        } catch (e) { setNotice((e as Error).message); }
-        finally { setBusy(false); setView({ at: 'api' }); }
-      }}
-    />
+      )}
+    </Screen>
   );
 }
 
-interface Row { key: string; label: string; shown: string; heading?: boolean }
+const isLocal = (k: string): k is LocalKey => (LOCAL_KEYS as readonly string[]).includes(k);
 
-/** Rows for the server screen: the entries gathered under their wire `group`
- *  headings, groups in order of first appearance. Entries without one (an
- *  older server) gather unheaded where the first of them appeared. */
-export function serverRows(entries: Array<[string, ServerSetting]>):
-  Array<{ key: string; s?: ServerSetting; heading?: boolean }> {
-  const groups = new Map<string, Array<[string, ServerSetting]>>();
-  for (const [k, s] of entries) {
-    const g = s.meta?.group ?? '';
-    if (!groups.has(g)) groups.set(g, []);
-    groups.get(g)!.push([k, s]);
-  }
-  const out: Array<{ key: string; s?: ServerSetting; heading?: boolean }> = [];
-  for (const [g, rows] of groups) {
-    if (g) out.push({ key: g, heading: true });
-    for (const [k, s] of rows) out.push({ key: k, s });
-  }
-  return out;
-}
+interface Row { kind: 'server' | 'local'; key: string; label: string; shown: string; source: string; group: string; hint?: string; heading?: boolean }
 
-/** Rows for the local screen: grouped, with the inapplicable ones dropped. */
-export function localRows(
-  cfg: Record<ConfigKey, ConfigValue>, showAllKeys = false,
-  only?: ReadonlyArray<Group>,
-): Row[] {
-  const visible = new Set(visibleKeys(cfg));
-  if (showAllKeys) for (const k of Object.values(PROVIDER_KEY)) visible.add(k as unknown as ConfigKey);
+/** This machine's voice rows file under the assistant, as its last sub-heading. */
+const LOCAL_HOME: Record<'voice' | 'server', string> = { voice: 'assistant', server: '' };
+
+/** The rows a screen shows, in order: the server's settings grouped under the
+ *  wire `group`, sub-headed by `subgroup` (hidden-when rules applied), with
+ *  this machine's rows under "this machine" inside the group they belong to.
+ *  Headings only when there is more than one block — one block's heading
+ *  just repeats the title above it. */
+export function screenRows(rows: Rows, server: Record<string, Entry>, local: ReturnType<typeof resolveLocal>['config']): Row[] {
+  const values = Object.fromEntries(Object.entries(server).map(([k, e]) => [k, e.value]));
+  // group -> subgroup -> rows, in order of first appearance (the server's).
+  const groups = new Map<string, Map<string, Row[]>>();
+  const put = (g: string, sub: string, row: Row) => {
+    if (!groups.has(g)) groups.set(g, new Map());
+    const subs = groups.get(g)!;
+    if (!subs.has(sub)) subs.set(sub, []);
+    subs.get(sub)!.push(row);
+  };
+  if (rows.server) {
+    for (const [k, e] of Object.entries(server)) {
+      if (e.secret || isLocal(k)) continue;                   // credentials are /keys; a local key never comes from the server
+      if (HIDDEN[k]?.(values)) continue;
+      const g = e.meta?.group ?? '';
+      put(g, e.meta?.subgroup ?? '', { kind: 'server', key: k, group: g,
+        label: `${e.overridable ? '↯ ' : ''}${labelFor(k, e.meta)}`,
+        shown: human(e.value, e.meta), source: e.source, hint: e.description });
+    }
+  }
+  if (rows.local) {
+    const g = LOCAL_HOME[rows.local];
+    for (const k of LOCAL_KEYS.filter((k) => META[k].group === rows.local)) {
+      const r = local[k];
+      put(g, 'this machine', { kind: 'local', key: k, group: g, label: META[k].label,
+        shown: META[k].secret ? mask(r.value) : human(r.value),
+        source: `${r.source}${r.envVar ? ` (${r.envVar})` : ''}`, hint: DESCRIPTIONS[k] });
+    }
+  }
+  const blocks = [...groups.values()].reduce((n, subs) => n + subs.size, 0);
   const out: Row[] = [];
-  // With one group on screen the heading just repeats the title above it.
-  const showHeadings = !only || only.length > 1;
-  for (const [group, title] of GROUPS) {
-    if (only && !only.includes(group)) continue;
-    const keys = (Object.keys(DEFAULTS) as ConfigKey[])
-      .filter((k) => META[k].group === group && visible.has(k));
-    if (!keys.length) continue;
-    if (showHeadings) out.push({ key: `#${group}`, label: title, shown: '', heading: true });
-    for (const k of keys) {
-      const v = cfg[k];
-      out.push({
-        key: k,
-        label: localLabel(k),
-        shown: META[k].secret ? mask(v) : v === null || v === '' ? '—' : String(v),
-      });
+  for (const [g, subs] of groups) {
+    if (blocks > 1 && g) out.push({ kind: 'server', key: `g:${g}`, group: g, label: g, shown: '', source: '', heading: true });
+    for (const [sub, list] of subs) {
+      if (blocks > 1 && sub) out.push({ kind: 'server', key: `s:${g}:${sub}`, group: g, label: `  ${sub}`, shown: '', source: '', heading: true });
+      out.push(...list);
     }
   }
   return out;
 }
 
-/** A local setting's name on screen: META.label when it has one, else the key
- *  in words. Voice rows drop their `voice_` prefix: under the "voice" heading
- *  or title, `voice spoken voice` says nothing that `spoken voice` does not. */
-export const localLabel = (key: ConfigKey): string =>
-  META[key].label ?? (META[key].group === 'voice' ? key.replace(/^voice_/, '') : key).replace(/_/g, ' ');
-
-function localSpec(key: ConfigKey, cfg: Record<ConfigKey, ConfigValue>, envVar?: string, suggest?: string[]): EditSpec {
-  const m = META[key];
-  const spec: EditSpec = {
-    title: localLabel(key),
-    choices: m.choices,
-    secret: m.secret,
-    type: m.type,
-    current: m.secret ? '' : cfg[key],
-    note: envVar
-      ? `${envVar} is set in your shell and beats this file — unset it for a saved value to take effect`
-      : m.secret ? `saved to ${CONFIG_PATH}, mode 0600` : undefined,
-  };
-  // Device rows offer what the sidecar found; a name it did not list can still
-  // be typed (a device plugged in later, or a sidecar that is not running yet).
-  if (suggest?.length) {
-    spec.suggestions = suggest;
-    spec.note = spec.note ?? 'devices found now · or type any device name';
-  }
-  return spec;
-}
-
 /** One row of GET /models. */
 export interface CatalogModel { id: string; name: string }
-
-const set = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
 
 /** Every model row and the provider row it follows — its own when overridden,
  *  else the coding agent's it cascades to. The same picker on every screen:
  *  the three are the same kind of row. */
 export const MODEL_ROWS: Record<string, string> = {
-  model: 'provider', assistant_model: 'assistant_provider',
+  coding_model: 'coding_provider', assistant_model: 'assistant_provider',
   supervisor_model: 'supervisor_provider',
 };
 
@@ -423,25 +311,27 @@ export const MODEL_FOR_PROVIDER: Record<string, string> = Object.fromEntries(
  *  or no provider is set yet. */
 export function providerForModelRow(key: string, values: Record<string, unknown>): string | null {
   const p = MODEL_ROWS[key];
-  return p ? set(values[p]) ?? set(values.provider) : null;
+  return p ? set(values[p]) ?? set(values.coding_provider) : null;
 }
 
 /** A provider row lists only the providers with a key on /keys — a provider
- *  you cannot call is not a choice. With no key stored yet, every provider
- *  and a note saying where the key goes. null for any other row. */
+ *  you cannot call is not a choice (one that takes no key, openai-codex, is
+ *  always a choice). With no key stored yet, every provider and a note
+ *  saying where the key goes. null for any other row. */
 export function providerChoices(key: string, choices: readonly string[] | undefined,
   values: Record<string, unknown>): Pick<EditSpec, 'choices' | 'note'> | null {
   if (!PROVIDER_ROWS.has(key)) return null;
   const all = choices ?? PROVIDERS;
-  const keyed = all.filter((p) => set(values[PROVIDER_KEY[p as keyof typeof PROVIDER_KEY]]));
+  const keyField = (p: string) => PROVIDER_KEY[p as keyof typeof PROVIDER_KEY] as string | undefined;
+  const keyed = all.filter((p) => !keyField(p) || set(values[keyField(p)!]));
   return keyed.length
     ? { choices: keyed, note: 'providers with a key on /keys' }
     : { choices: all, note: 'no provider key on /keys yet — save one there first' };
 }
 
-/** The reusable core of `finishSpec` — enriches an EditSpec for a provider or
- *  model row with the keyed-provider filter or the model catalog. Pure: the
- *  caller supplies the catalog. Used by Settings (inline) and by Presets. */
+/** Enriches an EditSpec for a provider or model row with the keyed-provider
+ *  filter or the model catalog. Pure: the caller supplies the catalog. Used
+ *  by Settings and by Presets. */
 export function buildModelSpec(
   key: string, spec: EditSpec, values: Record<string, unknown>,
   models: CatalogModel[],

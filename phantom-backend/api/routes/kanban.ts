@@ -78,7 +78,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
     if (!ctx.autoPush) return;
     const session = await ctx.sessions.coderOf(w.id, number);
     if (!session || session.status !== 'active') return;
-    if (await ctx.settings.resolve('auto_push_on_archive', { workspace: w, session }) !== true) return;
+    if (await ctx.settings.resolve('auto_push_on_archive', { workspace: w }) !== true) return;
     // The session lock may be held (a turn mid-flight, a tool call): wait it
     // out rather than blocking the card over a moment's contention.
     let result: Awaited<ReturnType<NonNullable<typeof ctx.autoPush>>> | undefined;
@@ -101,17 +101,16 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
   }
 
   // The resolved looper defaults ride every board payload so the card editor
-  // can always show the REAL value a card inherits — and say where it came
-  // from ('override' at the store level means the global row). One pair per
-  // switch: auto_plan gates the plan column, auto_build gates in_progress.
+  // can always show the REAL value a card inherits — and say which layer it
+  // came from. One pair per switch: auto_plan gates the plan column,
+  // auto_build gates in_progress.
   const board = async (w: WorkspaceRow) => {
     const plan = await ctx.settings.resolveWithSource('auto_plan', { workspace: w });
     const build = await ctx.settings.resolveWithSource('auto_build', { workspace: w });
-    const src = (s: { source: string }) => s.source === 'override' ? 'global' : s.source;
     return { prefix: await ctx.workspaces.prefixOf(w), columns: columnsOf(w),
       workspace: w.displayName ?? w.name,
-      auto_plan_default: Boolean(plan.value), auto_plan_source: src(plan),
-      auto_build_default: Boolean(build.value), auto_build_source: src(build) };
+      auto_plan_default: Boolean(plan.value), auto_plan_source: plan.source,
+      auto_build_default: Boolean(build.value), auto_build_source: build.source };
   };
 
   // Each card's coding session — the newest per card (Sessions.codersByCard).

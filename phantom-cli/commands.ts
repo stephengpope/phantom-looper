@@ -17,7 +17,7 @@ export const COMMANDS: Command[] = [
   { name: 'code', summary: 'enter code mode — the coding agent has full tools' },
   { name: 'auto-push', summary: "push this session's work to the base branch" },
   { name: 'auto-pull', summary: "bring the base branch into this session's branch" },
-  { name: 'model', summary: 'provider, model, reasoning, steps per turn' },
+  { name: 'model', summary: 'settings, at the coding agent' },
   { name: 'presets', summary: 'saved provider configurations — switch all agents at once' },
   // First row under the fold (the live menu shows MENU_ROWS = 8): closing a
   // session is a real everyday act, but not more everyday than the eight above
@@ -34,7 +34,7 @@ export const COMMANDS: Command[] = [
   { name: 'settings', summary: "the server's settings, for everyone" },
   { name: 'keys', summary: 'the credentials the server holds' },
   { name: 'secrets', summary: "the coding agent's secrets — tokens it can read and use" },
-  { name: 'assistant', summary: 'the Assistant: model, voice, devices, wake word' },
+  { name: 'assistant', summary: 'settings, at the Assistant: model, voice, devices' },
   { name: 'mic', summary: 'the Assistant: stop/start listening' },
   { name: 'speaker', summary: 'the Assistant: stop/start speaking' },
   { name: 'headphones', summary: 'the Assistant: headphones mode on/off' },

@@ -27,7 +27,8 @@ import { ValueInput, type EditSpec } from './ValueInput.js';
 import { Screen } from './Screen.js';
 import { TextInput } from './TextInput.js';
 import { makeSettings } from '../settings.js';
-import { PROVIDERS, type ConfigValue } from '../config.js';
+import { type ConfigValue } from '../config.js';
+import { PROVIDERS, REASONINGS } from '../../core/llm/createAgent.js';
 import {
   buildModelSpec, providerForModelRow, MODEL_FOR_PROVIDER,
   type CatalogModel,
@@ -40,24 +41,24 @@ import { newId } from '../../core/ids.js';
  *  refuses anything else. */
 const PRESET_GROUPS: Array<{ heading: string; keys: Array<{ key: string; label: string; choices?: readonly string[] }> }> = [
   { heading: 'coding agent', keys: [
-    { key: 'provider', label: 'provider', choices: PROVIDERS },
-    { key: 'model', label: 'model' },
-    { key: 'base_url', label: 'endpoint' },
-    { key: 'reasoning', label: 'reasoning', choices: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
-    { key: 'max_steps', label: 'steps per turn' },
+    { key: 'coding_provider', label: 'provider', choices: PROVIDERS },
+    { key: 'coding_model', label: 'model' },
+    { key: 'coding_base_url', label: 'endpoint' },
+    { key: 'coding_reasoning', label: 'reasoning', choices: REASONINGS },
+    { key: 'coding_max_steps', label: 'steps per turn' },
   ] },
   { heading: 'assistant', keys: [
     { key: 'assistant_provider', label: 'provider', choices: PROVIDERS },
     { key: 'assistant_model', label: 'model' },
     { key: 'assistant_base_url', label: 'endpoint' },
-    { key: 'assistant_reasoning', label: 'reasoning', choices: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
+    { key: 'assistant_reasoning', label: 'reasoning', choices: REASONINGS },
     { key: 'assistant_max_steps', label: 'steps per turn' },
   ] },
   { heading: 'supervisor', keys: [
     { key: 'supervisor_provider', label: 'provider', choices: PROVIDERS },
     { key: 'supervisor_model', label: 'model' },
     { key: 'supervisor_base_url', label: 'endpoint' },
-    { key: 'supervisor_reasoning', label: 'reasoning', choices: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
+    { key: 'supervisor_reasoning', label: 'reasoning', choices: REASONINGS },
     { key: 'supervisor_max_steps', label: 'steps per turn' },
   ] },
 ];
@@ -92,7 +93,7 @@ const cell = (v: unknown): string => (typeof v === 'string' ? v : '·');
 export function presetChoices(presets: Preset[]): Choice<string | null>[] {
   const rows = presets.map((p): TableRow<string> => ({
     value: p.id,
-    cells: [p.name, cell(p.values.provider), cell(p.values.model), cell(p.values.reasoning)],
+    cells: [p.name, cell(p.values.coding_provider), cell(p.values.coding_model), cell(p.values.coding_reasoning)],
     hint: presetHint(p),
   }));
   return tableChoices('preset', [

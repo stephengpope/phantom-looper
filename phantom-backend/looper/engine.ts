@@ -448,9 +448,9 @@ export class LooperEngine {
     sessionId: string, inputTokens: number, history: ModelMessage[],
     cfg: Record<string, unknown>,
   ): void {
-    const pct = Number(resolveCompactSetting(cfg, '', 'threshold_pct', 0));
+    const pct = Number(resolveCompactSetting(cfg, 'coding', 'threshold_pct', 0));
     if (pct <= 0) return;
-    const cw = resolveContextWindow(cfg, '', contextWindowFor, agentModelConfig,
+    const cw = resolveContextWindow(cfg, 'coding', contextWindowFor, agentModelConfig,
       (msg) => log.warn(msg));
     if (!cw || !shouldCompact(inputTokens, cw, pct)) return;
 
@@ -459,8 +459,8 @@ export class LooperEngine {
     if (lock.active) return;
 
     const model = agentModelConfig(cfg, 'supervisor');
-    const strategyName = String(resolveCompactSetting(cfg, '', 'strategy', 'fast'));
-    const summarizePct = Number(resolveCompactSetting(cfg, '', 'summarize_pct', 75));
+    const strategyName = String(resolveCompactSetting(cfg, 'coding', 'strategy', 'fast'));
+    const summarizePct = Number(resolveCompactSetting(cfg, 'coding', 'summarize_pct', 75));
     const maxTokens = resolveCompactSetting<number | null>(cfg, '', 'max_tokens', null);
 
     void compact(lock, {

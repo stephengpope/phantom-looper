@@ -1,16 +1,8 @@
-// The settings that stay on this machine, and the file they live in.
+// The settings that stay on this machine (config.ts declares which and why),
+// and the file they live in. Nothing here makes a network call: you edit the
+// server's address precisely when it is unreachable.
 //
-// Two of them are how you REACH the server (`server_url`, `server_key`) — they
-// cannot live on the thing they are the address of, and you edit them precisely
-// when it is unreachable, so nothing here makes a network call. `auto_update`
-// is this machine's own update preference (the server would share one choice
-// across every TUI you open). The rest are facts about the machine you are
-// sitting at: which microphone, which
-// speaker, whether you are wearing headphones, whether you muted yourself here.
-// A device name is simply wrong on your other machine; so is the Deepgram address
-// that answers from here (the engine finds it, the app saves it).
-//
-// Everything else is on the server (settings.ts), so every TUI you open is the
+// Everything else is on the server (settings.ts), so every cli you open is the
 // same one. Reads here are synchronous because a file read is; a call site can
 // tell which kind it is by whether it awaits.
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -49,8 +41,8 @@ function envValue(key: LocalKey, env: NodeJS.ProcessEnv): { value: string; envVa
 }
 
 /** The whole local chain, with provenance. Env still wins so scripts and CI
- *  keep working — and it only reaches these seven, so a server-side value can
- *  never be shadowed by something in your shell. */
+ *  keep working — and it only reaches the local keys, so a server-side value
+ *  can never be shadowed by something in your shell. */
 export function resolveLocal(
   path = CONFIG_PATH, env: NodeJS.ProcessEnv = process.env,
 ): { config: Record<LocalKey, Resolved>; error?: string } {

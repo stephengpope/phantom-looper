@@ -10,7 +10,7 @@ import { isSettingKey, validateSetting } from './settings.js';
 /** The setting keys a preset may hold — the model trio, reasoning and max
  *  steps, for each of the three agents. Everything else is refused. */
 export const PRESET_KEYS = [
-  'provider', 'model', 'base_url', 'reasoning', 'max_steps',
+  'coding_provider', 'coding_model', 'coding_base_url', 'coding_reasoning', 'coding_max_steps',
   'assistant_provider', 'assistant_model', 'assistant_base_url',
   'assistant_reasoning', 'assistant_max_steps',
   'supervisor_provider', 'supervisor_model', 'supervisor_base_url',

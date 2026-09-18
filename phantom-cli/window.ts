@@ -47,8 +47,7 @@ import { messagesToParts, nextId, type Part } from './state.js';
 import { kanbanOps } from './kanban.js';
 import { PasteStore } from './paste.js';
 import { quiet, watchConnection, type Api } from './request.js';
-import { REMOTE_DEFAULTS, VOICE_BOOT_KEYS, ASSISTANT_MODEL_KEYS,
-  type ConfigKey, type ConfigValue } from './config.js';
+import { VOICE_BOOT_KEYS, ASSISTANT_MODEL_KEYS, type ConfigValue } from './config.js';
 import { makeSettings } from './settings.js';
 import { lastWorkspaceId, type SessionInfo, type WorkspaceInfo } from './components/Launcher.js';
 import type { TasksView } from './components/Tasks.js';
@@ -56,7 +55,7 @@ import type { NewWorkspaceRequest } from './components/NewWorkspace.js';
 import { COMMANDS, matches, parse } from './commands.js';
 import { WorkspaceDirectory, buildAssistantKit } from './assistantKit.js';
 import { confirmDialog, boardScreen, switcherScreen, settingsScreen, keysScreen, secretsScreen,
-  voiceScreen, localSettingsScreen, presetsScreen, workspaceSettingsScreen,
+  serverScreen, presetsScreen, workspaceSettingsScreen,
   addWorkspaceScreen, archivedScreen, tasksScreen, pickerScreen } from './screens.js';
 
 /** What the window remembers about a workspace: the banner's display name and
@@ -175,7 +174,7 @@ export interface WindowOptions {
 
 /** Each voice switch IS a setting: the toggle writes it, and the state holds
  *  across engine and TUI restarts. */
-const SWITCH_KEY: Record<'mic' | 'speaker' | 'headphones' | 'wake', ConfigKey> = {
+const SWITCH_KEY: Record<'mic' | 'speaker' | 'headphones' | 'wake', string> = {
   mic: 'voice_mic_muted', speaker: 'voice_speaker_muted',
   headphones: 'voice_headphones', wake: 'voice_wake_word',
 };
@@ -1718,7 +1717,7 @@ export class WindowStore {
    *  rebuilding an agent, restarting the sidecar, pushing a live switch.
    *  Nothing is recomputed from a copy taken earlier, which is what used to
    *  leave the Assistant running on the settings it was born with. */
-  settingChanged = (key?: ConfigKey): void => {
+  settingChanged = (key?: string): void => {
     void (async () => {
       let cfg: Record<string, ConfigValue>;
       try { cfg = await this.readSettings(); }
@@ -1899,8 +1898,8 @@ export class WindowStore {
         if (session.readonly) { this.note("this is the supervisor's record — read-only"); return; }
         const cfg = await this.readSettings();
         const model = agentModelConfig(cfg, 'supervisor');
-        const strategyName = String(resolveCompactSetting(cfg as Record<string, unknown>, '', 'strategy', 'fast'));
-        const summarizePct = Number(resolveCompactSetting(cfg as Record<string, unknown>, '', 'summarize_pct', 75));
+        const strategyName = String(resolveCompactSetting(cfg as Record<string, unknown>, 'coding', 'strategy', 'fast'));
+        const summarizePct = Number(resolveCompactSetting(cfg as Record<string, unknown>, 'coding', 'summarize_pct', 75));
         const maxTokens = resolveCompactSetting<number | null>(cfg as Record<string, unknown>, '', 'max_tokens', null);
         if (!session.compactionLock) session.compactionLock = new CompactionLock();
         this.note('compacting — summarizing older messages in the background');
@@ -1934,9 +1933,9 @@ export class WindowStore {
       case 'settings': this.showOverlay(settingsScreen(this)); return;
       case 'keys': this.showOverlay(keysScreen(this)); return;
       case 'secrets': this.showOverlay(secretsScreen(this)); return;
-      case 'model': this.showOverlay(localSettingsScreen(this, 'model')); return;
+      case 'model': this.showOverlay(settingsScreen(this, 'coding')); return;
       case 'presets': this.showOverlay(presetsScreen(this)); return;
-      case 'server': this.showOverlay(localSettingsScreen(this, 'server')); return;
+      case 'server': this.showOverlay(serverScreen(this)); return;
       case 'cpu': {
         try {
           const r = await this.api('GET', '/system/status') as { text?: string; warnings?: string };
@@ -1965,7 +1964,7 @@ export class WindowStore {
         return;
       }
       case 'assistant':
-        this.showOverlay(voiceScreen(this));
+        this.showOverlay(settingsScreen(this, 'assistant'));
         // The mic and speaker pickers want device names; with voice off, ask.
         void this.voice.refreshDevices();
         return;

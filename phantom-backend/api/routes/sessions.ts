@@ -734,16 +734,13 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     });
 
   app.get<{ Params: { id: string } }>('/sessions/:id', { schema: { ...TAG,
-    summary: 'Session metadata, settings resolved',
+    summary: 'Session metadata',
     description: 'Status, branch, timestamps, `system_prompt` (the frozen prompt a coding session ' +
-      'runs on; null for a supervisor\'s or assistant\'s), plus `settings`: every setting with its layers ' +
-      '(default/global/workspace/session) and the computed value + source — the SESSION is the deepest ' +
-      'scope, so this is the only view where a session override (auto_push_on_archive) shows resolved. ' +
-      'The workspace container is runtime state and has no field here.',
+      'runs on; null for a supervisor\'s or assistant\'s). A session runs on its workspace\'s settings — ' +
+      'GET /settings?workspace=. The workspace container is runtime state and has no field here.',
     params: idParam } }, async (req, reply) => {
     const s = await ctx.sessions.get(req.params.id);
     if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
-    const settingsOut = await ctx.settings.block({ workspace: await ctx.workspaces.get(s.workspaceId), session: s });
     const folder = s.folderId ? await ctx.folders.get(s.folderId) : undefined;
     const card = await ctx.cards.ofSession(s.id);
     // A coding session born before the column (025) gets its prompt frozen
@@ -751,7 +748,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     let system_prompt = await ctx.sessions.systemPrompt(s.id);
     if (!system_prompt && runsCodingAgent(s)) system_prompt = await freezeSystemPrompt(ctx, s);
     return ok({ ...s, branch: folder?.branch ?? null, card: card?.number ?? null,
-      system_prompt, settings: settingsOut,
+      system_prompt,
       // Computed like the list's, and for the same reason: the cli polls this
       // route while a session runs elsewhere (lock state + stamp, one GET)
       // and must not compare clocks with the server.
@@ -779,8 +776,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
 
   app.patch<{ Params: { id: string }; Body: { name?: string | null; plan_mode?: boolean; pinned?: boolean } }>(
     '/sessions/:id', { schema: { ...TAG, summary: 'Per-session overrides',
-      description: 'Session values sit at the end of the settings chain: default -> override -> workspace -> session. ' +
-        '`name` renames the session by hand — the auto-titler never writes over a manual name; null clears it and ' +
+      description: '`name` renames the session by hand — the auto-titler never writes over a manual name; null clears it and ' +
         'hands the session back to the titler. `plan_mode` is the cli\'s /plan switch: while true, clients build ' +
         'the coding agent\'s mutating kits with the readonly preset; every session starts false (code mode). ' +
         '`pinned` is the /pin switch: while true, the session pins to the top of every session list.',

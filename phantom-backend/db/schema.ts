@@ -23,17 +23,17 @@ export const phantomLooper = pgSchema('phantom_looper');
 
 // ONE store for settings and secrets — a row is (scope, namespace, key).
 // `namespace` separates the declared settings world ('general' — every key
-// declared in code) from user-named secrets ('secret' — free names, token in
+// declared in code; a credential is the same kind of row with its value in
+// value_enc) from user-named secrets ('secret' — free names, token in
 // value_enc, description in plain value). The CHECK constraints (in SQL, not
-// here) make a plaintext secret and an encrypted non-secret unrepresentable;
-// a secret-namespace row carries both columns by design (migration 010).
+// here) make a general row hold exactly one of the two columns and a secret
+// row both (migrations 010, 034).
 export const settings = phantomLooper.table('settings', {
-  scope: text('scope').notNull().default('global'),  // global | workspace:<id> | session:<id>
+  scope: text('scope').notNull().default('global'),  // global | workspace:<id>
   namespace: text('namespace').notNull().default('general'),  // general | secret
   key: text('key').notNull(),
   value: json('value'),
   valueEnc: bytea('value_enc'),
-  secret: boolean('secret').notNull().default(false),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [primaryKey({ columns: [t.scope, t.namespace, t.key] })]);
 

@@ -40,7 +40,6 @@ import { logger } from './log.js';
 import { lastUserFromJsonl, stripUsageFromJsonl } from '../core/llm/transcript.js';
 import type { CodingPrompt } from '../core/llm/agents/coding.js';
 import { cascade } from '../core/llm/agentConfig.js';
-import { sessionScope } from './store.js';
 import type { SessionEvents } from './api/sessionEvents.js';
 
 const log = logger('sessions');
@@ -159,13 +158,13 @@ export class Sessions {
   private async birthModel(workspaceId: string, agent: 'supervisor' | 'assistant' | null = null):
   Promise<{ provider: string | null; model: string | null; baseUrl: string | null }> {
     const workspace = await this.workspaces.get(workspaceId);
-    const cfg = await this.settings.resolveMany(['provider', 'model', 'base_url',
+    const cfg = await this.settings.resolveMany(['coding_provider', 'coding_model', 'coding_base_url',
       'supervisor_provider', 'supervisor_model', 'supervisor_base_url',
       'assistant_provider', 'assistant_model', 'assistant_base_url'], workspace ? { workspace } : {});
     if (agent) {
       try { return cascade(cfg, agent); } catch { /* nothing usable yet — the row stays empty */ }
     }
-    return { provider: cfg.provider ?? null, model: cfg.model ?? null, baseUrl: cfg.base_url ?? null };
+    return { provider: cfg.coding_provider ?? null, model: cfg.coding_model ?? null, baseUrl: cfg.coding_base_url ?? null };
   }
 
   /** A setting changed: every session with nothing said yet (and no turn in
@@ -631,10 +630,9 @@ export class Sessions {
     this.changed(session.id);
   }
 
-  /** The row goes for good — its overrides with it, the transcript on it.
-   *  Only its pushed branch on origin survives. Files first (`destroy`). */
+  /** The row goes for good, the transcript on it. Only its pushed branch on
+   *  origin survives. Files first (`destroy`). */
   async purge(id: string): Promise<void> {
-    await this.settings.dropScope(sessionScope(id));
     await this.db.delete(sessions).where(eq(sessions.id, id));
     this.changed(id);
   }

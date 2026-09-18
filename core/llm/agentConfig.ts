@@ -23,7 +23,8 @@ const set = (v: unknown): string | null =>
   typeof v === 'string' && v !== '' ? v : null;
 
 /** The cascade: a non-coding agent's provider/model/base_url from its three
- *  optional `<prefix>_*` settings, falling back to the coding agent's PER THE
+ *  optional `<prefix>_*` settings, falling back to the coding agent's
+ *  (`coding_*`) PER THE
  *  COMPATIBILITY RULE — a field inherits only while the resolved provider IS
  *  the coding provider. Overriding to a different provider makes the model
  *  required (a claude id on a google config is garbage) and stops base_url
@@ -34,18 +35,18 @@ const set = (v: unknown): string | null =>
  *  notice, an auto-push step). */
 export function cascade(cfg: SettingsValues, prefix: string):
 { provider: string; model: string; baseUrl: string | null } {
-  const coding = set(cfg.provider);
+  const coding = set(cfg.coding_provider);
   const provider = set(cfg[`${prefix}_provider`]) ?? coding;
   if (!provider) throw new Error(NO_PROVIDER);
   const inherits = provider === coding;
-  const model = set(cfg[`${prefix}_model`]) ?? (inherits ? set(cfg.model) : null);
+  const model = set(cfg[`${prefix}_model`]) ?? (inherits ? set(cfg.coding_model) : null);
   if (!model) {
     throw new Error(inherits
-      ? `no model set for ${provider} — pick one on /model (phantom-cli), or PATCH /settings {model}`
+      ? `no model set for ${provider} — pick one on /model (phantom-cli), or PATCH /settings {coding_model}`
       : `${prefix}_provider is ${provider} but ${prefix}_model is not set — ` +
         `a model from the coding agent's provider (${coding}) cannot carry over`);
   }
-  return { provider, model, baseUrl: set(cfg[`${prefix}_base_url`]) ?? (inherits ? set(cfg.base_url) : null) };
+  return { provider, model, baseUrl: set(cfg[`${prefix}_base_url`]) ?? (inherits ? set(cfg.coding_base_url) : null) };
 }
 
 /** A non-coding agent's ModelConfig from the same resolved settings values:
@@ -56,7 +57,7 @@ export function agentModelConfig(cfg: SettingsValues, prefix: string): ModelConf
   const c = cascade(cfg, prefix);
   const keyField = PROVIDER_KEY[c.provider as keyof typeof PROVIDER_KEY];
   // Reasoning cascades: per-agent override → coding agent's.
-  const reasoning = set(cfg[`${prefix}_reasoning`]) ?? (cfg.reasoning != null ? String(cfg.reasoning) : undefined);
+  const reasoning = set(cfg[`${prefix}_reasoning`]) ?? (cfg.coding_reasoning != null ? String(cfg.coding_reasoning) : undefined);
   return {
     provider: c.provider as Provider, model: c.model, baseUrl: c.baseUrl ?? undefined,
     apiKey: keyField ? set(cfg[keyField]) ?? undefined : undefined,
@@ -64,8 +65,8 @@ export function agentModelConfig(cfg: SettingsValues, prefix: string): ModelConf
   };
 }
 
-/** A non-coding agent's max_steps from its `<prefix>_max_steps` setting,
- *  defaulting to unlimited (null). */
+/** An agent's max_steps from its `<prefix>_max_steps` setting, defaulting
+ *  to unlimited (null). No cascade: a cap is per agent. */
 export function agentMaxSteps(cfg: SettingsValues, prefix: string): number | null {
   const n = cfg[`${prefix}_max_steps`] == null ? null : Number(cfg[`${prefix}_max_steps`]);
   return n != null && Number.isFinite(n) && n > 0 ? n : null;
@@ -77,14 +78,14 @@ export function agentMaxSteps(cfg: SettingsValues, prefix: string): number | nul
 export function modelConfigFrom(cfg: SettingsValues, modelOverride?: string | null): ModelConfig {
   // Unset stays '' here: languageModel builds a handle that fails with the
   // fix on its first call, so a session still opens on a bare server.
-  const provider = (set(cfg.provider) ?? '') as Provider;
+  const provider = (set(cfg.coding_provider) ?? '') as Provider;
   const keyField = PROVIDER_KEY[provider as keyof typeof PROVIDER_KEY];
   return {
     provider,
-    model: set(modelOverride) ?? set(cfg.model) ?? '',
-    baseUrl: (cfg.base_url as string | null) ?? undefined,
+    model: set(modelOverride) ?? set(cfg.coding_model) ?? '',
+    baseUrl: (cfg.coding_base_url as string | null) ?? undefined,
     apiKey: keyField ? (cfg[keyField] as string | null) ?? undefined : undefined,
-    reasoning: cfg.reasoning != null ? (String(cfg.reasoning) as Reasoning) : undefined,
+    reasoning: cfg.coding_reasoning != null ? (String(cfg.coding_reasoning) as Reasoning) : undefined,
   };
 }
 
@@ -101,12 +102,11 @@ export function buildCodingAgent(
   const model = modelConfigFrom(cfg);
   if (modelFetch) model.fetch = modelFetch;
   if (onRetry) model.onRetry = onRetry;
-  const n = cfg.max_steps == null ? null : Number(cfg.max_steps);
-  const maxSteps = n != null && Number.isFinite(n) && n > 0 ? n : null;
+  const maxSteps = agentMaxSteps(cfg, 'coding');
   return {
     agent: new CodingAgent(model, tools, { sessionId, maxSteps, prompt }),
     summary: { provider: model.provider || 'unset', model: model.model || 'unset',
-      reasoning: String(cfg.reasoning ?? ''), maxSteps },
+      reasoning: String(cfg.coding_reasoning ?? ''), maxSteps },
   };
 }
 
@@ -161,6 +161,6 @@ export function pinnedCfg<T extends SettingsValues>(cfg: T, pin?: ModelPin | nul
   const provider = set(pin?.provider);
   const model = set(pin?.model);
   if (!provider || !model) return cfg;
-  return { ...cfg, provider, model,
-    base_url: set(pin?.baseUrl) ?? (provider === set(cfg.provider) ? set(cfg.base_url) : null) };
+  return { ...cfg, coding_provider: provider, coding_model: model,
+    coding_base_url: set(pin?.baseUrl) ?? (provider === set(cfg.coding_provider) ? set(cfg.coding_base_url) : null) };
 }

@@ -56,7 +56,7 @@ and reviews each table's behavior while it is in our heads.
 | 10 | `workspaces` | `Workspaces` (workspaces.ts) | **done** |
 | 11 | `card_revisions` | `Cards` (cards.ts) | **done** |
 | 12 | `cards` | `Cards` (cards.ts) | **done** |
-| 13 | `settings` | `Settings` (settings.ts) | |
+| 13 | `settings` | `Settings` (settings.ts) | **done** |
 | 14 | `sessions` | `Sessions` (sessions.ts) | |
 
 Main-schema migrations: `migrations/*.sql`, run by `phantom-backend/db/migrate.ts`.
@@ -456,6 +456,64 @@ PATCH by number (an id-shaped number 404s, a non-integer 400s), items,
 history under its card (old route 404), `?number=` and `archived=only`,
 DELETE then 404 / no history / no PATCH / number not reused, the event
 stream carrying `from` and the writer. Nothing else found wrong.
+
+## Table 13 — `settings` (done)
+
+**What it is.** One row per explicit override, `(scope, namespace, key)`;
+defaults live in code. Chain: default → global → workspace. `general`
+holds the declared settings and credentials (value in `value`, or encrypted
+in `value_enc`); `secret` holds user-named tokens the agent reads. Stays,
+as one table: same shape, same scope rule, one delete clears a workspace's
+layer.
+
+**State found.** One owner, one writer, DB lib contained. Under that:
+
+- **cli bug.** The server allows 11 settings per workspace
+  (`WORKSPACE_OVERRIDABLE`); the workspace screen showed all 11 but saved
+  through `PATCH /workspaces/:id`, which kept its own list of 6. The other
+  5 (auto plan, auto build, loop token budget, docker, auto build alerts)
+  were stripped by the body schema and answered 400 `nothing to update`.
+  Proved on the old code.
+- **A column the DB derived.** `secret` was forced equal to
+  `value_enc is not null` by the 001 CHECK. Dropped (034).
+- **`source: 'override'`** for the global layer; two readers renamed it.
+  Now `'global'`.
+- **Session layer:** one key allowed it, nothing wrote it. Gone.
+- **Dead rows** for 7 keys removed from the code. Deleted (034).
+- **The cli's own copies** of 17 server settings' descriptions/defaults
+  and 13 credential descriptions, drifting. Deleted; every screen renders
+  from GET /settings. `openai-codex` was in the cli's provider list and the
+  wizard, and refused by the server's — both now use core's one list.
+
+**Renamed (035).** The coding agent's ten keys had no prefix while the
+other two agents' did: `provider` → `coding_provider`, and so on through
+`coding_compact_max_tokens`. Storage rows and the keys inside saved presets
+carry over; core's cascade, compaction fallback, the looper, Telegram, the
+wizard and the presets screen read the new names. Each setting now declares
+`group` (an agent or an area) and, inside an agent, `subgroup` (model /
+compaction / voice); labels drop the agent's name (`coding_provider` is
+"provider" under "coding"). The cli has ONE settings screen built from that
+— agents first, then the areas, this machine's audio rows under the
+assistant; `/model` and `/assistant` open it at their group. The old
+`/model` and `/assistant` pages, and the cli's own lists of which keys each
+showed, are gone. `/keys` and `/server` stay apart (masked; offline).
+
+**What we did.** 034. `PATCH /workspaces/:id` takes its 3 own fields only;
+workspace overrides go through `PATCH /settings?workspace=` — one door.
+`CREDENTIALS` carry label + group + description, served on the wire.
+GET /sessions/:id lost its `settings` block (nothing read it). Digest's six
+round trips → one `resolveMany`.
+
+**Proof.** 034 on 033-shape rows (11 seeded, 7 kept, column gone, 4 bad
+shapes refused); 035 on 034-shape rows at two layers plus three presets
+(renamed, nulls kept, others untouched). Every method (42), then the
+renamed keys through the object, core's cascade / pin / compaction fallback
+and presets (14). Live (44 + 10): the eleven through one route, the 3 own
+fields, sources by layer name, credentials at two layers, secrets sharing a
+credential's name, workspace delete taking its layer, old key names
+refused, a preset round trip. The cli's screen rows composed from the live
+payload: heading order, `/model` and `/assistant` landing rows, this
+machine's rows under the assistant, `/server` alone.
 
 ## Insights
 

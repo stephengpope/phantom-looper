@@ -8,47 +8,32 @@
 // more — every read below is a call, answered by the server, at the moment the
 // value is used.
 //
-// Server settings are ONE flat store (no namespaces): every key is declared in
-// the server's code with its default, so `all()` carries the resolved value.
-// Machine-local settings (local.ts) stay separate and are routed here, which
-// keeps /server usable exactly when the server itself is failing. A server
-// read that cannot reach the server THROWS rather than inventing values.
-import {
-  CONFIG_PATH, PROVIDER_KEY, isLocalKey,
-  type ConfigValue, type LocalKey,
-} from './config.js';
+// Server settings are ONE store: every key is declared in the server's code
+// with its default, label and description, so `all()` carries everything a
+// screen renders. Machine-local settings (local.ts) stay separate and are
+// routed here, which keeps /server usable exactly when the server itself is
+// failing. A server read that cannot reach the server THROWS rather than
+// inventing values.
+import { CONFIG_PATH, isLocalKey, type ConfigValue, type LocalKey } from './config.js';
 import { localValues, setLocal, clearLocal } from './local.js';
-
-export const CREDENTIAL_KEYS = [
-  'github_token',
-  ...Object.values(PROVIDER_KEY),
-  'deepgram_api_key',
-  'firecrawl_api_key',
-] as const;
-
-export const isCredential = (k: string): boolean =>
-  (CREDENTIAL_KEYS as readonly string[]).includes(k);
+import type { WireMeta } from './settingLabels.js';
 
 export type { Api } from './request.js';
 import type { Api } from './request.js';
 
-/** One entry as the API returns it: the layers, the winner, and whether it is
- *  stored encrypted. */
+/** One entry as the API returns it: the layers, the winner (`source` names
+ *  the layer it came from), whether it is stored encrypted, and what to
+ *  show for it. */
 export interface Entry {
-  default?: unknown; global?: unknown; workspace?: unknown; session?: unknown;
-  value: unknown; source?: string; secret?: boolean;
-  description?: string; meta?: unknown; overridable?: boolean;
+  default?: unknown; global?: unknown; workspace?: unknown;
+  value: unknown; source: 'default' | 'global' | 'workspace'; secret?: boolean;
+  description: string; meta: WireMeta; overridable?: boolean;
 }
 
-export interface Scope { workspace?: string; session?: string }
+/** `?workspace=` reads and writes that workspace's layer. */
+export interface Scope { workspace?: string }
 
-const q = (s: Scope = {}) => {
-  const p = new URLSearchParams();
-  if (s.workspace) p.set('workspace', s.workspace);
-  if (s.session) p.set('session', s.session);
-  const t = p.toString();
-  return t ? `?${t}` : '';
-};
+const q = (s: Scope = {}) => (s.workspace ? `?workspace=${encodeURIComponent(s.workspace)}` : '');
 
 /** The settings client: one door for server settings and this machine's local
  *  ones. A read always asks its store; a write always routes by where the key
