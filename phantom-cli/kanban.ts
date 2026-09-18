@@ -55,8 +55,8 @@ export async function kanbanOps(board: BoardStore, args: KanbanArgs): Promise<un
     } catch (e) { return { error: (e as Error).message }; }
   }
   if (args.action === 'history') {
-    // By number straight to the server, not byNumber: a deleted card is not on the
-    // board, and reading one that is gone is what history is for.
+    // By number straight to the server, not byNumber: an archived card is
+    // not on the board and its history still answers.
     if (args.card === undefined) return { error: 'history needs the card number' };
     try { return { card: args.card, revisions: await board.revisions(args.card, args.limit) }; }
     catch (e) { return { error: (e as Error).message }; }

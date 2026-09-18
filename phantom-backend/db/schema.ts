@@ -79,14 +79,14 @@ export const cards = phantomLooper.table('cards', {
   updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [unique().on(t.workspace_id, t.number)]);
 
-// A card's history, written by a trigger on every update (024, 028) so
-// edits made over SQL are recorded too. Linked by the card's key; goes with
-// the card (cascade).
+// A card's history, written by a trigger on every update (024, 028, 033) so
+// edits made over SQL are recorded too. `changed_from`: the keys that
+// changed and the value each had before the write. Linked by the card's
+// key; goes with the card (cascade).
 export const cardRevisions = phantomLooper.table('card_revisions', {
   id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
   card_id: bigint('card_id', { mode: 'number' }).notNull(),
-  op: text('op').notNull(),
-  changed: jsonb('changed').notNull(),
+  changed_from: jsonb('changed_from').notNull(),
   changed_at: timestamp('changed_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

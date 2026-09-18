@@ -9,6 +9,9 @@ import { logger, errStr } from '../../log.js';
 import { ok, err, type AppCtx } from '../app.js';
 
 const TAG = { tags: ['kanban'] };
+// Cards are addressed by number everywhere a person or an agent names one
+// (PHA-7 is card 7); the row id is storage's handle.
+const cardNumberParam = { type: 'integer', description: 'card number — PHA-7 is card 7' };
 // Who wrote: the x-phantom-looper-client header every client sends (the
 // session routes' lock reads the same one). Rides each card event so a
 // listener can tell the loop's moves from a person's.
@@ -180,20 +183,20 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
       return ok({ ...await board(w), card });
     });
 
-  app.patch<{ Params: { id: string; cardId: string }; Body: Record<string, unknown> }>(
-    '/workspaces/:id/cards/:cardId', { schema: { ...TAG, summary: 'Update a card',
+  app.patch<{ Params: { id: string; number: number }; Body: Record<string, unknown> }>(
+    '/workspaces/:id/cards/:number', { schema: { ...TAG, summary: 'Update a card',
       description: 'Any subset of fields; status+pos is a move. blocked_reason null unblocks; archived true hides ' +
         'the card from the board (archive instead of delete). items changes checklist items BY KEY ' +
         '(add/edit/remove/tick), touching nothing else — the way agents edit checklists; replacing a whole ' +
         'list is the form editor\'s path.',
-      params: { type: 'object', properties: { id: { type: 'string' }, cardId: { type: 'integer' } }, required: ['id', 'cardId'] },
+      params: { type: 'object', properties: { id: { type: 'string' }, number: cardNumberParam }, required: ['id', 'number'] },
       body: { type: 'object', additionalProperties: false, properties: { ...cardBodyProps, items: itemsSchema } } } },
     async (req, reply) => {
       const w = await workspaceOf(req.params.id);
       if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
       const { items, ...fields } = req.body as CardFields & { items?: ItemOp[] };
       let written;
-      try { written = await ctx.cards.update(w, Number(req.params.cardId), fields, items, writerOf(req)); }
+      try { written = await ctx.cards.update(w, req.params.number, fields, items, writerOf(req)); }
       catch (e) { return cardErr(reply, e); }
       const { card, wasArchived } = written;
       if (req.body.archived === true && wasArchived === false && card.status === 'done') {
@@ -207,30 +210,28 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
       return ok({ ...await board(w), card });
     });
 
-  app.get<{ Params: { id: string }; Querystring: { card: number; limit: number } }>(
-    '/workspaces/:id/revisions', { schema: { ...TAG, summary: "A card's revision history",
+  app.get<{ Params: { id: string; number: number }; Querystring: { limit: number } }>(
+    '/workspaces/:id/cards/:number/revisions', { schema: { ...TAG, summary: "A card's revision history",
       description: 'What changed on a card and when, newest first — written by a trigger, so edits made ' +
-        'over SQL are recorded too. Each entry holds the OLD values of the keys that changed. History ' +
+        'over SQL are recorded too. Each entry is {changed_from, changed_at}: the keys that changed and the value each had before. History ' +
         'goes with its card: a deleted card has none.',
-      params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
-      querystring: { type: 'object', required: ['card'], properties: {
-        card: { type: 'integer', description: 'card number — PHA-7 is card 7' },
-        limit: { type: 'integer', default: 20 } } } } },
+      params: { type: 'object', properties: { id: { type: 'string' }, number: cardNumberParam }, required: ['id', 'number'] },
+      querystring: { type: 'object', properties: { limit: { type: 'integer', default: 20 } } } } },
     async (req, reply) => {
       const w = await workspaceOf(req.params.id);
       if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
-      return ok({ card: req.query.card, revisions: await ctx.cards.revisions(w, req.query.card, req.query.limit) });
+      return ok({ card: req.params.number, revisions: await ctx.cards.revisions(w, req.params.number, req.query.limit) });
     });
 
-  app.delete<{ Params: { id: string; cardId: string } }>(
-    '/workspaces/:id/cards/:cardId', { schema: { ...TAG, summary: 'Delete a card permanently',
-      description: 'Hard delete. Prefer PATCH archived=true — archive keeps the card and its number.',
-      params: { type: 'object', properties: { id: { type: 'string' }, cardId: { type: 'integer' } }, required: ['id', 'cardId'] } } },
+  app.delete<{ Params: { id: string; number: number } }>(
+    '/workspaces/:id/cards/:number', { schema: { ...TAG, summary: 'Delete a card permanently',
+      description: 'Hard delete — the card, its number and its history. Prefer PATCH archived=true, which keeps all three.',
+      params: { type: 'object', properties: { id: { type: 'string' }, number: cardNumberParam }, required: ['id', 'number'] } } },
     async (req, reply) => {
       const w = await workspaceOf(req.params.id);
       if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
-      if (!await ctx.cards.remove(w, Number(req.params.cardId)))
-        return reply.code(404).send(err('not_found', `no card ${req.params.cardId} in workspace ${req.params.id}`));
+      if (!await ctx.cards.remove(w, req.params.number))
+        return reply.code(404).send(err('not_found', `no card ${req.params.number} in workspace ${req.params.id}`));
       return ok({ deleted: true });
     });
 

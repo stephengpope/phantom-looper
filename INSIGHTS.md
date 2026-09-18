@@ -70,6 +70,20 @@ general, short, and true.
   Three bare-text session/workspace pointers; five readers each asked "does
   it still exist?" and one path did not. The key answers once, on delete,
   and the guards go. *(tables 7–9)*
+- **A column with one possible value is a comment, not data.** `op` said
+  `'update'` on every row once the delete revision went; the schema kept
+  it and the tool kept returning it. After every migration ask of each
+  column: how many values can it still take? One means drop it.
+  *(table 11)*
+- **A translation step at one caller is the rule being broken.** The
+  Telegram assistant fetched the whole board to turn a number into an id
+  because the write routes took ids. The lookup was not the fix; the
+  route was. When a caller has to convert between two handles for the
+  same thing, the API has two handles — pick one. *(table 12)*
+- **Read the before-state inside the write's lock.** `update` read
+  `status` and `archived` first, then locked the row; two moves could
+  both report the same `from`. A transition is one read and one write
+  under one lock, or it is a guess. *(table 12)*
 - **A name that says the vendor says nothing.** `telegram_update`,
   `telegram_sent`, `telegram_account` — the builder could not tell what a
   row was from any of them. The vendor's word is fine when it IS the thing
@@ -161,6 +175,13 @@ general, short, and true.
   writers (`log_session_tokens` — helpers write it too). The builder's
   own words: "stand up for the code." Say what the code does, then
   discuss the name. *(table 6)*
+- **A checklist is followed, not summarized.** Asked to come up to speed
+  on PROJECT.md and propose next steps, I read the docs and announced
+  "up to speed" — the doc's own step 1 is "find every piece of code that
+  touches the table, file and line." The builder's words: "the docs are
+  a checklist, not a research document." A process doc tells you what
+  to DO; being up to speed on it means the first step is done, not
+  read. *(tables 11–12)*
 - **Cut off is not understood.** Over a phone the builder saw half a
   table and said "can't follow"; I re-explained instead of shortening. When
   the reply is "not following", the first fix is fewer words, then plainer

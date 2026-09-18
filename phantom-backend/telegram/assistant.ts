@@ -52,15 +52,6 @@ async function api(deps: AssistantDeps, path: string,
   return r.json() as Promise<Envelope>;
 }
 
-/** Map a card number to its row id via the board list — the PATCH/move/items
- *  routes take the row id, reads and creates take the number. */
-async function cardIdOf(deps: AssistantDeps, workspaceId: string, number: number): Promise<number | null> {
-  const j = await api(deps, `/workspaces/${workspaceId}/cards?archived=true`);
-  if (!j.ok) return null;
-  const card = (j.data.cards as Array<{ id: number; number: number }>).find((c) => c.number === number);
-  return card?.id ?? null;
-}
-
 /** The headless board handler — the same KanbanArgs the app's handler takes,
  *  answered over the card routes instead of a BoardStore. `screen` has no
  *  telegram meaning and says so. */
@@ -94,24 +85,20 @@ function boardHandler(deps: AssistantDeps, workspaceId: () => string | null) {
         return j.ok ? j.data.card : { error: j.error?.message };
       }
       case 'update': case 'move': {
-        const id = await cardIdOf(deps, ws, args.card!);
-        if (id == null) return { error: `no card ${args.card}` };
         const body: Record<string, unknown> = {};
         for (const k of ['title', 'details', 'status', 'blocked_reason',
           'archived', 'auto_plan', 'auto_build', 'pinned'] as const) {
           if (args[k] !== undefined) body[k] = args[k];
         }
-        const j = await api(deps, `/workspaces/${ws}/cards/${id}`, { method: 'PATCH', body });
+        const j = await api(deps, `/workspaces/${ws}/cards/${args.card}`, { method: 'PATCH', body });
         return j.ok ? j.data.card : { error: j.error?.message };
       }
       case 'items': {
-        const id = await cardIdOf(deps, ws, args.card!);
-        if (id == null) return { error: `no card ${args.card}` };
-        const j = await api(deps, `/workspaces/${ws}/cards/${id}`, { method: 'PATCH', body: { items: args.ops } });
+        const j = await api(deps, `/workspaces/${ws}/cards/${args.card}`, { method: 'PATCH', body: { items: args.ops } });
         return j.ok ? j.data.card : { error: j.error?.message };
       }
       case 'history': {
-        const j = await api(deps, `/workspaces/${ws}/revisions?card=${args.card}`);
+        const j = await api(deps, `/workspaces/${ws}/cards/${args.card}/revisions`);
         return j.ok ? j.data : { error: j.error?.message };
       }
       default:

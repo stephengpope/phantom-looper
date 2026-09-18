@@ -98,8 +98,8 @@ export class Cards {
   /** What changed on a card and when, newest first — written by a trigger,
    *  so edits made over SQL are recorded too. Empty for a card that does not
    *  exist: history goes with its card. */
-  async revisions(w: WorkspaceRow, number: number, limit: number): Promise<Array<{ op: string; changed: unknown; changed_at: Date }>> {
-    return this.db.select({ op: cardRevisions.op, changed: cardRevisions.changed, changed_at: cardRevisions.changed_at })
+  async revisions(w: WorkspaceRow, number: number, limit: number): Promise<Array<{ changed_from: unknown; changed_at: Date }>> {
+    return this.db.select({ changed_from: cardRevisions.changed_from, changed_at: cardRevisions.changed_at })
       .from(cardRevisions)
       .innerJoin(cards, eq(cards.id, cardRevisions.card_id))
       .where(and(eq(cards.workspace_id, w.id), eq(cards.number, number)))
@@ -112,7 +112,7 @@ export class Cards {
   async lastMovedAt(w: WorkspaceRow, number: number): Promise<Date | null> {
     const rows = await this.db.select({ at: cardRevisions.changed_at }).from(cardRevisions)
       .innerJoin(cards, eq(cards.id, cardRevisions.card_id))
-      .where(and(eq(cards.workspace_id, w.id), eq(cards.number, number), sql`${cardRevisions.changed} ? 'status'`))
+      .where(and(eq(cards.workspace_id, w.id), eq(cards.number, number), sql`${cardRevisions.changed_from} ? 'status'`))
       .orderBy(desc(cardRevisions.id)).limit(1);
     return rows[0]?.at ?? null;
   }
@@ -150,8 +150,8 @@ export class Cards {
    *  BEFORE the write (the event carries it so a listener can tell a move
    *  from an edit) and whether it was archived before (auto-push fires only
    *  on the false → true transition). */
-  async update(w: WorkspaceRow, id: number, fields: CardFields, items?: ItemOp[], by?: string):
-    Promise<{ card: CardRow; from: string | undefined; wasArchived: boolean | undefined }> {
+  async update(w: WorkspaceRow, number: number, fields: CardFields, items?: ItemOp[], by?: string):
+    Promise<{ card: CardRow; from: string; wasArchived: boolean }> {
     const cols = columnsOf(w);
     if ('status' in fields && !cols.includes(String(fields.status)))
       throw new CardError('invalid_args', `status must be one of: ${cols.join(', ')}`);
@@ -170,28 +170,21 @@ export class Cards {
     }
     if (!Object.keys(set).length && !items) throw new CardError('invalid_args', 'no fields to update');
 
-    const mine = and(eq(cards.workspace_id, w.id), eq(cards.id, id));
-    const notFound = () => new CardError('not_found', `no card ${id} in workspace ${w.id}`);
+    const mine = and(eq(cards.workspace_id, w.id), eq(cards.number, number));
 
-    // Two triggers need the TRANSITION, not the value: auto-push fires only
-    // on archived false -> true (re-saving an archived card must not
-    // re-fire), and the card event carries the status BEFORE the write so a
-    // listener can tell a move from an edit. One read serves both.
-    const [prior] = await this.db.select({ archived: cards.archived, status: cards.status }).from(cards).where(mine);
-    const wasArchived = prior?.archived;
-    const from = prior?.status;
-
-    // Item ops read the list under the row lock and change named items only.
-    // All-or-nothing: one bad key refuses every op.
-    const card = await this.db.transaction(async (tx) => {
-      if (items) {
-        const [cur] = await tx.select({ requirements: cards.requirements }).from(cards).where(mine).for('update');
-        if (!cur) throw notFound();
-        set.requirements = applyItemOps(cur.requirements, items);
-      }
+    // The row as it stood, read under the row lock so the transition this
+    // write reports is the one it made: auto-push fires only on archived
+    // false -> true (re-saving an archived card must not re-fire), and the
+    // card event carries the status BEFORE the write so a listener can tell
+    // a move from an edit. Item ops change named items of that same row —
+    // all-or-nothing, one bad key refuses every op.
+    const { card, from, wasArchived } = await this.db.transaction(async (tx) => {
+      const [prior] = await tx.select({ archived: cards.archived, status: cards.status, requirements: cards.requirements })
+        .from(cards).where(mine).for('update');
+      if (!prior) throw new CardError('not_found', `no card ${number} in workspace ${w.id}`);
+      if (items) set.requirements = applyItemOps(prior.requirements, items);
       const [row] = await tx.update(cards).set({ ...set, updated_at: new Date() }).where(mine).returning();
-      if (!row) throw notFound();
-      return row;
+      return { card: row, from: prior.status, wasArchived: prior.archived };
     });
     this.publish(w, card, { from, client: by });
     return { card, from, wasArchived };
@@ -207,11 +200,12 @@ export class Cards {
     return card;
   }
 
-  /** Hard delete. Archive is the normal path — it keeps the card and its number. */
-  async remove(w: WorkspaceRow, id: number): Promise<boolean> {
-    const gone = await this.db.delete(cards).where(and(eq(cards.workspace_id, w.id), eq(cards.id, id))).returning({ id: cards.id });
-    if (!gone.length) return false;
-    this.events?.publish(w.id, { event: 'deleted', id });
+  /** Hard delete — the card, its number and its history. Archive is the
+   *  normal path; it keeps all three. */
+  async remove(w: WorkspaceRow, number: number): Promise<boolean> {
+    const [gone] = await this.db.delete(cards).where(and(eq(cards.workspace_id, w.id), eq(cards.number, number))).returning({ id: cards.id });
+    if (!gone) return false;
+    this.events?.publish(w.id, { event: 'deleted', id: gone.id });
     return true;
   }
 }

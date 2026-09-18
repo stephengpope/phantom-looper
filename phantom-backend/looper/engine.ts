@@ -200,7 +200,7 @@ export class LooperEngine {
         } catch (e) {
           log.warn({ workspace: workspace.name, card: cardNumber, err: errStr(e) },
             'looper turn failed — blocking the card');
-          await this.blockCard(workspace.id, card.id, errStr(e)).catch((be) =>
+          await this.blockCard(workspace.id, card.number, errStr(e)).catch((be) =>
             log.error({ card: cardNumber, err: errStr(be) }, 'could not block the failed card'));
           continue;
         }
@@ -216,8 +216,8 @@ export class LooperEngine {
 
   /** Fail closed: the turn's error becomes the card's blocked_reason — the
    *  board says WHY, and blocked is not a loop column, so the loop ends. */
-  private async blockCard(workspaceId: string, cardId: number, reason: string): Promise<void> {
-    await this.patchCard(workspaceId, cardId, {
+  private async blockCard(workspaceId: string, cardNumber: number, reason: string): Promise<void> {
+    await this.patchCard(workspaceId, cardNumber, {
       status: 'blocked', blocked_reason: `looper turn failed: ${reason}`, resolution: null,
     });
   }
@@ -315,7 +315,7 @@ export class LooperEngine {
         budget.seeded = true;
       }
       if (limit != null && budget.spent >= limit) {
-        await this.patchCard(workspace.id, card.id, {
+        await this.patchCard(workspace.id, card.number, {
           status: 'blocked',
           blocked_reason: `token budget exhausted: ${budget.spent} of ${limit} tokens used`,
           resolution: null,
@@ -328,7 +328,7 @@ export class LooperEngine {
       // move + items. Bound at build time — no card input, so neither agent
       // can ever act on a card other than the one it is running.
       const cardCfg: LoopCardConfig = { baseUrl: BASE, apiKey, workspaceId: workspace.id,
-        cardId: card.id, number: card.number, fetch: this.f, clientId: CLIENT_ID };
+        number: card.number, fetch: this.f, clientId: CLIENT_ID };
       // The interrupt controller: registered so POST /sessions/:id/interrupt
       // can abort this turn. Deregistered in finally (below the close calls).
       const ac = new AbortController();
@@ -423,7 +423,7 @@ export class LooperEngine {
       if (t.interrupted) return 'interrupted';
       this.kickCodingCompaction(opened.session.id, t.inputTokens, opened.messages, cfg);
       if (step.kind === 'return' && (card.blocked_reason || card.resolution)) {
-        await this.patchCard(workspace.id, card.id, { blocked_reason: null, resolution: null });
+        await this.patchCard(workspace.id, card.number, { blocked_reason: null, resolution: null });
       }
       return 'turn';
     } finally {
@@ -483,8 +483,8 @@ export class LooperEngine {
     return (j.data.input ?? 0) + (j.data.output ?? 0);
   }
 
-  private async patchCard(workspaceId: string, cardId: number, body: unknown): Promise<void> {
-    const r = await this.f(`${BASE}/workspaces/${workspaceId}/cards/${cardId}`, {
+  private async patchCard(workspaceId: string, cardNumber: number, body: unknown): Promise<void> {
+    const r = await this.f(`${BASE}/workspaces/${workspaceId}/cards/${cardNumber}`, {
       method: 'PATCH',
       headers: { authorization: `Bearer ${this.deps.apiKey}`, 'content-type': 'application/json',
         'x-phantom-looper-client': CLIENT_ID },

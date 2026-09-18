@@ -200,7 +200,7 @@ async function main() {
     const card = await cards.ofSession(session.id).catch(() => undefined);
     if (!card) return;
     const f = injectFetch(app);
-    await f(`${INTERNAL_API}/workspaces/${workspace.id}/cards/${card.id}`, {
+    await f(`${INTERNAL_API}/workspaces/${workspace.id}/cards/${card.number}`, {
       method: 'PATCH',
       headers: { authorization: `Bearer ${env.apiKey}`, 'content-type': 'application/json' },
       body: JSON.stringify({ status: 'blocked', blocked_reason: reason, resolution: null }),

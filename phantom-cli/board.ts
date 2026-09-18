@@ -129,6 +129,9 @@ export class BoardStore {
   }
   /** Find by the number people use ("7" of PHA-7). */
   byNumber(number: number): Card | undefined { return this.state.cards.find((t) => t.number === number); }
+  /** The number of a card held by id — state is keyed by id, the routes by
+   *  number (PHA-7 is card 7). */
+  private numberOf(id: number): number | undefined { return this.state.cards.find((t) => t.id === id)?.number; }
 
   /** One card by number, straight from the server — archived or not. The
    *  board GET excludes archived cards, so a miss on byNumber comes here
@@ -216,11 +219,13 @@ export class BoardStore {
    *  message back (null = it stuck) — a tool must report the failure, not
    *  `ok`. UI callers fire-and-forget and just see the revert. */
   async update(id: number, patch: CardPatch): Promise<string | null> {
+    const number = this.numberOf(id);
+    if (number === undefined) return `no card ${id} on the board`;
     const before = this.state;
     this.state = { ...this.state, cards: this.state.cards.map((t) => t.id === id ? { ...t, ...patch } : t) };
     this.notify();
     try {
-      const d = await this.api('PATCH', `/workspaces/${this.workspaceId}/cards/${id}`, patch) as Record<string, unknown>;
+      const d = await this.api('PATCH', `/workspaces/${this.workspaceId}/cards/${number}`, patch) as Record<string, unknown>;
       this.adopt(d.card as Card | undefined);
       return null;
     }
@@ -250,6 +255,8 @@ export class BoardStore {
    *  case-forgiving, same as the server, or an op lands there but the open
    *  board does not repaint. */
   async items(id: number, ops: ItemOp[]): Promise<string | null> {
+    const number = this.numberOf(id);
+    if (number === undefined) return `no card ${id} on the board`;
     const before = this.state;
     const apply = (t: Card): Card => {
       const next = { ...t, requirements: [...t.requirements] };
@@ -266,7 +273,7 @@ export class BoardStore {
     this.state = { ...this.state, cards: this.state.cards.map((t) => t.id === id ? apply(t) : t) };
     this.notify();
     try {
-      const d = await this.api('PATCH', `/workspaces/${this.workspaceId}/cards/${id}`, { items: ops }) as Record<string, unknown>;
+      const d = await this.api('PATCH', `/workspaces/${this.workspaceId}/cards/${number}`, { items: ops }) as Record<string, unknown>;
       this.adopt(d.card as Card | undefined);
       return null;
     }
@@ -278,11 +285,11 @@ export class BoardStore {
   }
 
   /** A card's revision history, newest first — read-through, touches no
-   *  state. By number, not id: a deleted card is not on the board, and reading
-   *  one that is gone is the point. */
+   *  state. By number straight to the server: an archived card is not on
+   *  the board and its history still answers. */
   async revisions(number: number, limit?: number): Promise<unknown[]> {
-    const d = await this.api('GET', `/workspaces/${this.workspaceId}/revisions?card=${number}` +
-      (limit !== undefined ? `&limit=${limit}` : '')) as Record<string, unknown>;
+    const d = await this.api('GET', `/workspaces/${this.workspaceId}/cards/${number}/revisions` +
+      (limit !== undefined ? `?limit=${limit}` : '')) as Record<string, unknown>;
     return d.revisions as unknown[];
   }
 

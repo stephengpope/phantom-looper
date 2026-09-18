@@ -29,9 +29,7 @@ export interface KanbanToolsConfig {
 /** The loop builds act on ONE card — fixed at build time, no card input, so
  *  an agent can never move or block a card other than the one it is running. */
 export interface LoopCardConfig extends KanbanToolsConfig {
-  /** The card's row id (the PATCH route's handle). */
-  cardId: number;
-  /** The card's number — what the descriptions call it. */
+  /** The card's number — PHA-7 is card 7; the routes and the descriptions name it so. */
   number: number;
   /** Sent as x-phantom-looper-client on every write, so the server knows the
    *  LOOP moved the card (the looper passes its own id). Without it a
@@ -74,7 +72,7 @@ const headers = (cfg: KanbanToolsConfig, body?: boolean) => ({
 /** PATCH one card and hand the envelope's data (or error) back to the agent. */
 async function patchCard(cfg: LoopCardConfig, body: unknown): Promise<unknown> {
   const f = cfg.fetch ?? fetch;
-  const r = await f(`${cfg.baseUrl}/workspaces/${cfg.workspaceId}/cards/${cfg.cardId}`, {
+  const r = await f(`${cfg.baseUrl}/workspaces/${cfg.workspaceId}/cards/${cfg.number}`, {
     method: 'PATCH',
     headers: { ...headers(cfg, true), ...(cfg.clientId ? { 'x-phantom-looper-client': cfg.clientId } : {}) },
     body: JSON.stringify(body),

@@ -286,9 +286,9 @@ const autoSwitchTool = (handler: (args: KanbanArgs) => Promise<unknown>,
 /** `kanban_card_history`, the same in both builds: the revision record a
  *  trigger keeps on every card change. */
 const historyTool = (handler: (args: KanbanArgs) => Promise<unknown>) => tool({
-  description: "List a card's past revisions, newest first. Each revision is {op, changed, changed_at}: " +
-    'on an update, changed holds the old values of the fields that changed; on a delete, the whole ' +
-    "card as it last stood. A deleted card's history is still readable — pass its card number.",
+  description: "List a card's past revisions, newest first. Each revision is {changed_from, changed_at}: " +
+    'the fields that changed and the value each had before. An archived card still answers; ' +
+    'a deleted card has no history.',
   inputSchema: z.object({ card: cardNo,
     limit: z.number().int().optional().describe('revisions to return (default 20, newest first)') }),
   execute: async (args) => handler({ action: 'history', ...args }),

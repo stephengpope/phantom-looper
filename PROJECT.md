@@ -54,8 +54,8 @@ and reviews each table's behavior while it is in our heads.
 | 8 | ~~`telegram_sent`~~ `telegram_sent_messages` | `TelegramSentMessages` (telegram/sentMessages.ts) | **done** — renamed |
 | 9 | ~~`telegram_account`~~ `telegram_bot_state` | `TelegramBotState` (telegram/botState.ts) | **done** — renamed |
 | 10 | `workspaces` | `Workspaces` (workspaces.ts) | **done** |
-| 11 | `card_revisions` | `Cards` (cards.ts) | moved + renamed in #1; keyed by `card_id` in #3; review still owed |
-| 12 | `cards` | `Cards` (cards.ts) | moved + renamed in #1; review still owed |
+| 11 | `card_revisions` | `Cards` (cards.ts) | **done** |
+| 12 | `cards` | `Cards` (cards.ts) | **done** |
 | 13 | `settings` | `Settings` (settings.ts) | |
 | 14 | `sessions` | `Sessions` (sessions.ts) | |
 
@@ -395,6 +395,67 @@ then 404.
 /workspaces/:id/cards/:cardId`, `cards.remove(w, id)`), while the rule
 since table 3 is that people address cards by number. Owed to the cards
 review.
+
+## Tables 11–12 — `cards` and `card_revisions` (done)
+
+**What they are.** `cards`: the board — one row per card, numbered per
+workspace (PHA-7 is card 7, never reused), status a column name, the one
+requirements checklist, the per-card looper switches, archived or not.
+`card_revisions`: one row per update, written by a trigger so a SQL edit
+is recorded too — the OLD values of the keys that changed, when. Two
+readers: the history tool (`kanban_card_history`, cli and Telegram) and
+the looper's "entering plan is a new run" clock (`lastMovedAt`). Both
+stay.
+
+**State found.** One object; the only other importer is `Sessions` for
+its five joins (allowed); every write in the code goes over the routes
+(looper, `index.ts`, Telegram, cli). Under that:
+
+- **Two ways to name a card.** `Cards.update` / `remove` and the
+  `PATCH` / `DELETE` routes took `cards.id`; every other method and route
+  took the number. The Telegram assistant fetched the whole board,
+  archive included, on every write just to turn a number into an id;
+  `LoopCardConfig` carried both.
+- **`card_revisions.op` had one value.** Since 028 the trigger writes
+  updates only; every row said `'update'` and the history tool still
+  returned it.
+- **`update` read the before-state outside its transaction** — two
+  simultaneous moves could both report the same `from` on the board
+  event.
+- **Four stale docs said a deleted card keeps its history** (history
+  tool description, cli `kanban.ts`, `board.ts`). Not since 028.
+
+**What we did (033).** Routes `PATCH` / `DELETE /workspaces/:id/cards/:number`;
+`/workspaces/:id/revisions?card=7` → `/workspaces/:id/cards/7/revisions`.
+`Cards.update` / `remove` take the number. `cardIdOf` and its board
+fetch are gone from Telegram; `cardId` is gone from `LoopCardConfig`; the
+looper, `index.ts` and the cli's `BoardStore` send the number (the store
+keeps its state keyed by id — `numberOf(id)` at the call). `op` dropped;
+`changed` → `changed_from` (it read as the new values; it holds the keys
+that changed and what each changed from); a revision is `{changed_from,
+changed_at}`. `update` reads the prior row
+`for update` inside the transaction — one read for the transition, the
+item ops and the not-found. Docs fixed.
+
+**Kept.** `DELETE /cards/:number` — no caller in the code, reachable by
+hand; the `deleted` event still carries the row id (the cli keys its
+state on it).
+
+**Proof.** 033 on 032-shape rows (a never-moved card, a moved-and-edited
+one, an archived one; four `'update'` revisions): column gone, rows,
+index and FK names intact, the trigger still records old values only.
+Every method (50 checks): reads archived-or-not, the archive page and
+total, revisions newest-first with limit, `lastMovedAt` null then the
+newest status write, create's counter (a refused create takes no
+number), update by number with `from` / `wasArchived` (false → true
+once), item ops by case-insensitive key, a bad key refusing the batch,
+items + requirements refused, two concurrent moves reporting distinct
+`from`s, unarchive-as-blocked, remove taking the history, the number
+never reused, `ofSession`, workspace cascade. Live (27 checks): create,
+PATCH by number (an id-shaped number 404s, a non-integer 400s), items,
+history under its card (old route 404), `?number=` and `archived=only`,
+DELETE then 404 / no history / no PATCH / number not reused, the event
+stream carrying `from` and the writer. Nothing else found wrong.
 
 ## Insights
 
