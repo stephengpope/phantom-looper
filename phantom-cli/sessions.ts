@@ -660,16 +660,19 @@ export class SessionStore {
       // whole file to the server in the background.
       try { this.onTurnEnd?.(e); }
       catch (err) { this.note(e.id, `transcript sync failed (kept locally): ${(err as Error).message}`); }
-      // Whatever was typed while this ran goes next — all leftovers in one
-      // turn. Esc becomes "skip to next": abort fires, the front message
-      // starts immediately.
-      if (e.nudgeQueue.length) {
+      // The turn is over, so its mirror callbacks go with it: `send` below
+      // records the message itself — left wired, onDrain would put it in
+      // history a second time.
+      e.nudgeQueue.setCallbacks({});
+      // Esc is "skip to next": ONE queued message starts the next turn, the
+      // rest stay queued. A turn that ended on its own takes everything
+      // typed while it ran as one follow-up turn.
+      if (ac.signal.aborted) {
+        const one = await e.nudgeQueue.next();
+        if (one) void this.send(e.id, one.text);
+      } else {
         const leftovers = e.nudgeQueue.drain();
-        if (leftovers.length) {
-          void this.send(e.id, leftovers.join('\n\n'));
-        }
-        // If entries remain (pending transcriptions), onSettled will fire
-        // and the caller can drain again — no polling needed.
+        if (leftovers.length) void this.send(e.id, leftovers.join('\n\n'));
       }
     }
   }
