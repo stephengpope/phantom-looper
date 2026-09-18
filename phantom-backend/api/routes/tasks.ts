@@ -11,7 +11,7 @@ import fsp from 'node:fs/promises';
 import { Sandbox } from '../../workspace/sandbox.js';
 import { ok, err, type AppCtx } from '../app.js';
 import {
-  killSid, probeGroups, reconcileRunning, commandOf, elapsedSeconds,
+  killSid, probeGroups, reconcileRunning, commandTextFromArgv, elapsedSeconds,
   type LiveGroup, type FsDeps,
 } from './fs.js';
 import type { BackgroundTaskRow } from '../../backgroundTasks.js';
@@ -68,7 +68,7 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
       const secs = elapsedSeconds(g.elapsed);
       return {
         sid: g.sid,
-        command: row ? commandOf(row.argv) : g.command,
+        command: row ? commandTextFromArgv(row.argv) : g.command,
         background_task_id: row?.id ?? null,
         logs: row ? `/background-tasks/${row.id}/logs` : null,
         log_file: row ? `/workspace/logs/${row.id}.ndjson` : null,
@@ -88,7 +88,7 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
       .slice(0, 10)
       .map((r) => ({
         background_task_id: r.id,
-        command: commandOf(r.argv),
+        command: commandTextFromArgv(r.argv),
         status: r.status,
         exit_code: r.exitCode,
         started_at: r.startedAt,

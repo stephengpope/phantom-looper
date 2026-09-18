@@ -132,7 +132,7 @@ export async function probeGroups(ws: Sandbox): Promise<LiveGroup[]> {
 }
 
 /** The command a row ran, as the user typed it: argv is ['/bin/sh','-c',cmd]. */
-export const commandOf = (argv: unknown): string => {
+export const commandTextFromArgv = (argv: unknown): string => {
   const a = Array.isArray(argv) ? (argv as string[]) : [];
   return a.length === 3 && a[0] === '/bin/sh' && a[1] === '-c' ? a[2] : a.join(' ');
 };
@@ -312,18 +312,18 @@ async function runBash(
 // the /tasks screen reads — one truth, two readers. Injected into the
 // registry's task_* tools; the registry stays free of db and docker plumbing.
 
-/** The one-line notice a finished detached command leaves for the next turn. */
+/** The one-line notice a finished detached command leaves for the next turn.
+ *  Id and outcome only — the agent started the command, and task_list has
+ *  the full text if it needs it. */
 function noticeOf(row: BackgroundTaskRow): string {
-  const cmd = commandOf(row.argv);
-  const short = cmd.length > 120 ? `${cmd.slice(0, 120)}…` : cmd;
   const what = row.status === 'killed' ? 'was killed'
     : row.status === 'orphaned' ? 'died with its container'
     : `exited, code ${row.exitCode ?? '?'}`;
-  return `[background] task ${row.id} ${what} — "${short}"`;
+  return `[background] task ${row.id} ${what}`;
 }
 
 const shapeBackgroundTask = (r: BackgroundTaskRow) => ({
-  background_task_id: r.id, command: commandOf(r.argv), status: r.status,
+  background_task_id: r.id, command: commandTextFromArgv(r.argv), status: r.status,
   exit_code: r.exitCode, started_at: r.startedAt, ended_at: r.endedAt,
   log_file: `/workspace/logs/${r.id}.ndjson`,
 });
