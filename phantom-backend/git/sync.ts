@@ -47,6 +47,7 @@ import {
   landingProblems, pushSession, pushSessionForced, pushToBase, hasWorkToLand, GIT_CLIENT_ID,
 } from './git.js';
 import { commitMessageFor } from './commitMessage.js';
+import { newId } from '../../core/ids.js';
 import type { ModelConfig } from '../../core/llm/createAgent.js';
 import { logger, errStr } from '../log.js';
 
@@ -155,10 +156,11 @@ export interface SyncOptions {
   landOnBase: boolean;
   /** What a person sees while the session is held. */
   label: string;
-  /** Take the session for the run (default). False is instant sync's mode:
-   *  the sync runs whenever, turn or no turn, and hands nothing to the
-   *  session — so it must also run without `resolve`; a conflict is left
-   *  in progress and reported, never handed to a turn. */
+  /** Take the SESSION for the run (default) — no turn runs while the sync
+   *  does. False is instant sync's mode: the sync runs whenever, turn or no
+   *  turn, and hands nothing to the session — so it must also run without
+   *  `resolve`; a conflict is left in progress and reported, never handed to
+   *  a turn. The CHECKOUT lock is taken either way. */
   hold?: boolean;
 }
 
@@ -182,19 +184,28 @@ export async function syncBranch(
     return { outcome: 'blocked', reason: 'a rebase is in progress in this checkout — resolve it first' };
   }
 
-  // 0 — the lock IS the concurrency test. Held by someone else means someone
-  // else is writing this checkout; there is nothing further to check.
-  let heartbeat: NodeJS.Timeout | undefined;
-  if (hold) {
-    await ev('lock');
-    if (!(await deps.sessions.acquireLock(session, GIT_CLIENT_ID, LOCK_TTL_MS, opts.label))) {
-      return { outcome: 'busy', reason: 'the session is busy — try again when its turn finishes' };
-    }
-    heartbeat = setInterval(() => {
+  // 0 — the locks ARE the concurrency test. The CHECKOUT lock first, always:
+  // one sync writes a checkout at a time, whoever asked (Folders owns it;
+  // fresh id per run, never re-entered). Then, when holding, the SESSION
+  // lock: no turn runs under the sync. Held by someone else means someone
+  // else is writing; there is nothing further to check.
+  await ev('lock');
+  const holder = newId();
+  if (!(await deps.folders.acquireSyncLock(folder.id, holder, LOCK_TTL_MS))) {
+    return { outcome: 'busy', reason: 'another sync is writing this checkout — try again when it finishes' };
+  }
+  if (hold && !(await deps.sessions.acquireLock(session, GIT_CLIENT_ID, LOCK_TTL_MS, opts.label))) {
+    await deps.folders.releaseSyncLock(folder.id, holder);
+    return { outcome: 'busy', reason: 'the session is busy — try again when its turn finishes' };
+  }
+  const heartbeat = setInterval(() => {
+    void deps.folders.renewSyncLock(folder.id, holder, LOCK_TTL_MS)
+      .catch((e) => log.warn({ folder: folder.id, err: errStr(e) }, 'checkout lock renewal failed'));
+    if (hold) {
       void deps.sessions.renewLock(session.id, GIT_CLIENT_ID, LOCK_TTL_MS)
         .catch((e) => log.warn({ session: session.id, err: errStr(e) }, 'lock renewal failed'));
-    }, RENEW_MS);
-  }
+    }
+  }, RENEW_MS);
 
   try {
     // 1 — what is on base that we do not have. Collected before anything is
@@ -209,8 +220,12 @@ export async function syncBranch(
     if (idle) return { outcome: 'nothing', arrived };
 
     // 2 — the backup, BEFORE any rewrite. A rebase rewrites the branch and the
-    // push that follows forces; this plain push is the copy that force cannot
-    // reach, and it is also what gives --force-with-lease a fresh ref to hold.
+    // push that follows forces; this push is the copy of HEAD as it stands
+    // now. Plain when origin's copy is behind; forced (with the lease) when
+    // origin holds an OLDER REWRITE of this branch — a sync whose forced push
+    // never ran, or a rebase the agent finished itself after a conflict was
+    // left for it. Origin's copy is then history HEAD has already replaced;
+    // folding it back in (a merge) re-creates the conflict it came from.
     await ev('backup');
     const backed = await pushSession(dir, folder.branch, auth);
     if (backed === 'error') return { outcome: 'error', reason: 'could not back the branch up — nothing was rewritten' };
@@ -354,9 +369,8 @@ export async function syncBranch(
     await rebaseAbort(dir);
     return { outcome: 'error', reason: (e as Error).message };
   } finally {
-    if (hold) {
-      clearInterval(heartbeat);
-      await deps.sessions.releaseLock(session.id, GIT_CLIENT_ID);
-    }
+    clearInterval(heartbeat);
+    if (hold) await deps.sessions.releaseLock(session.id, GIT_CLIENT_ID);
+    await deps.folders.releaseSyncLock(folder.id, holder);
   }
 }

@@ -18,10 +18,12 @@ One beat per checkout, every pull interval, in order:
 | 1 | auto-pull — its first step is a plain `git fetch` of base; nothing new and it stops there | `instant_sync_pull_interval_ms` | 5 s |
 | 2 | auto-push — only when a file changed and the files have then been quiet for the debounce | `instant_sync_push_debounce_ms` | 30 s |
 
-The watcher does nothing but record when the last file changed. Step 2
-waits for step 1; the next beat waits for step 2 — one timer, so nothing
-overlaps and no flag or second lock is needed. A push lands on the first
-beat after the debounce: 30–35 s after the last edit.
+The watcher does nothing but record when the last file changed. The beat
+knows no git: it calls the two functions and logs a success; a refusal
+(the checkout held by a manual sync, a rebase left for the agent) comes
+back quietly and the next beat asks again. A push lands on the first beat
+after the debounce: 30–35 s after the last edit. A push refused because the
+checkout was held stays pending for the next beat.
 
 The switch is workspace-only (`/workspace` → `e`). The debounce and the
 interval are global settings (`/settings`) a workspace may override; empty
@@ -58,23 +60,53 @@ Telegram). A note already waiting is not queued again.
 The queue is in memory: a server restart drops a waiting note. The repo
 still holds the state.
 
+## The checkout lock
+
+A sync is a sequence of git commands; git's own `index.lock` guards one
+command, not the sequence. Two syncs on one checkout interleave and wreck
+the branch — and the session lock never prevented it: every sync took it
+under one shared id, which the lock lets back in, and instant sync cannot
+take it at all. So the lock sits on the checkout: `folders.sync_locked_by`
+/ `sync_lock_expires_at` (038), owned by `Folders`, taken inside
+`syncBranch` and `GitEngine.push` by **every** writer — instant, manual,
+card archive, idle backup — under a fresh id per run, so it is never
+re-entered. Manual sync takes it AND the session lock (no turn under the
+sync); instant sync takes it alone. That is the whole difference between
+them, said as locks.
+
 ## What is watched
 
 Folders with a **running container**, in a workspace with the switch on.
-Files only change through a container or through the sync itself. The set
-is reconciled every ten seconds on the work-state loop in `index.ts`.
+Files only change through a container or through the sync itself. The
+container tells instant sync as it happens: the watcher attaches inside the
+container start, before the tool call that started it returns, and lets go
+on removal. What no container event carries — the switch or a timing
+changed (the settings bus says so), containers already running when the
+server boots — runs one reconcile against the running containers. Never a
+poll.
 
 The watcher is `@parcel/watcher` (inotify). It ignores `.git` — every sync
 would otherwise trigger itself. Anything else that changes fires, and
 `hasWorkToLand` (`git status`) decides whether there is anything to push.
 
+## Two fixes this forced on the shared sync
+
+- **The backup push after a rewritten branch.** After the agent finishes a
+  stopped rebase, origin holds the old copy of the branch and the next
+  push's backup is rejected. `pushSession` used to fold origin's copy back
+  in with a merge — re-creating the conflict and leaving the tree unmerged.
+  One writer means origin is never newer, so a rejection means origin holds
+  an older rewrite: it now forces with the lease. Proven on the exact state.
+- **`GIT_EDITOR=true` in the workspace image.** `git rebase --continue`
+  without a terminal errors "unable to start editor" (proven) — the agent
+  could never finish a rebase, instant or manual.
+
 ## Known
 
-- A manual `/auto-push` and an instant sync can run on one checkout at the
-  same time. The session lock does not stop it (instant sync does not take
-  it, and every sync takes it under one name that re-enters). Left as is.
 - While a rebase is stopped in the checkout, no sync runs on it — instant
   or manual. Staging marker files would commit them as resolved.
+- A container that dies on its own (not removed) keeps its watcher until a
+  tool call recreates it; cost, one fetch per beat.
 
 ## What NOT to do
 
@@ -83,7 +115,7 @@ would otherwise trigger itself. Anything else that changes fires, and
   must never do.
 - Do not add retries or back-off. A result is a result; the next change or
   the next interval is the next attempt.
-- Do not add a second lock or a busy flag. One timer per checkout is what
-  keeps push and pull apart; a flag here once dropped pushes for a whole
-  extra debounce.
+- Do not add a busy flag or an in-process mutex here. The checkout lock is
+  the one thing that keeps syncs apart, and it lives with the sync. A flag
+  here once dropped pushes for a whole extra debounce.
 - Do not watch every folder on disk.

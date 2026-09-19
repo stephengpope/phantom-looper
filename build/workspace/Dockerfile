@@ -223,6 +223,10 @@ RUN git config --system 'credential.https://github.com.helper' \
       '!f() { echo username=x-access-token; echo password="$GITHUB_TOKEN"; }; f'
 # A missing credential must fail, never sit on a prompt no one can answer.
 ENV GIT_TERMINAL_PROMPT=0
+# No terminal, no editor: `git rebase --continue` after a resolved conflict
+# (the agent's own step) otherwise errors "unable to start editor" and the
+# rebase never finishes. `true` accepts git's prepared message as-is.
+ENV GIT_EDITOR=true
 
 # User-space npm globals: `npm i -g` works without sudo. Set AFTER the root
 # npm installs above, which belong in /usr/local.

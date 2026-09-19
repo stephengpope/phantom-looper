@@ -21,7 +21,7 @@
 // publishes on that session's feed — a bare `session` record ("this row
 // moved") for the list, `work` with its value for the watcher's dot.
 import fs from 'node:fs/promises';
-import { and, eq, inArray, isNotNull, lt, not, count } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, lt, not, or, count } from 'drizzle-orm';
 import type { Db } from './db/client.js';
 import { folders, sessions, cards, type FolderRow, type WorkspaceRow } from './db/schema.js';
 import type { SessionEvents } from './api/sessionEvents.js';
@@ -202,6 +202,36 @@ export class Folders {
     const rows = await this.db.select({ id: folders.id }).from(folders)
       .where(and(inArray(folders.id, candidates), lt(folders.lastUsedAt, cutoff)));
     return rows.map((r) => r.id);
+  }
+
+  // ── the checkout lock ──────────────────────────────────────────────────────
+  // One git sync writes a checkout at a time. A sync is a sequence of git
+  // commands; git's index.lock guards one command, not the sequence. Same
+  // conditional UPDATE as the session lock, on the row it guards. Callers
+  // take it under a FRESH id per run, so it is never re-entered.
+
+  /** Take the checkout for `holder`: free, or lapsed. Returns whether it
+   *  was taken. */
+  async acquireSyncLock(id: string, holder: string, ttlMs: number): Promise<boolean> {
+    const rows = await this.db.update(folders)
+      .set({ syncLockedBy: holder, syncLockExpiresAt: new Date(Date.now() + ttlMs) })
+      .where(and(eq(folders.id, id),
+        or(isNull(folders.syncLockedBy), isNull(folders.syncLockExpiresAt),
+          lt(folders.syncLockExpiresAt, new Date()))))
+      .returning({ id: folders.id });
+    return rows.length > 0;
+  }
+
+  /** Slide `holder`'s expiry forward. */
+  async renewSyncLock(id: string, holder: string, ttlMs: number): Promise<void> {
+    await this.db.update(folders).set({ syncLockExpiresAt: new Date(Date.now() + ttlMs) })
+      .where(and(eq(folders.id, id), eq(folders.syncLockedBy, holder)));
+  }
+
+  /** Release `holder`'s hold. Releasing what you do not hold changes nothing. */
+  async releaseSyncLock(id: string, holder: string): Promise<void> {
+    await this.db.update(folders).set({ syncLockedBy: null, syncLockExpiresAt: null })
+      .where(and(eq(folders.id, id), eq(folders.syncLockedBy, holder)));
   }
 
   // ── git ────────────────────────────────────────────────────────────────────

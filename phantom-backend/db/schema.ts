@@ -114,6 +114,10 @@ export const folders = phantomLooper.table('folders', {
   // Its git state: not_pushed, not_merged, merged. Written by the periodic
   // refresh for folders with a running container; null = never measured.
   work: text('work'),
+  // The checkout lock (038): the one git sync writing this checkout right
+  // now, and when its hold lapses. Fresh id per run, never re-entered.
+  syncLockedBy: text('sync_locked_by'),
+  syncLockExpiresAt: timestamp('sync_lock_expires_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

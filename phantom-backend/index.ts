@@ -94,8 +94,14 @@ async function main() {
   const telegramHandledUpdates = new TelegramHandledUpdates(db);
 
   const docker = makeDocker();
+  // Instant sync (built below, once auto-push exists) attaches its watcher
+  // inside the container start — before the tool call that started it
+  // returns, so the first write is seen — and lets go on removal. `instantSync`
+  // is captured lazily, like `app`: containers start long after boot.
   const containers = new ContainerManager(docker, paths, {
     volume: process.env.WORKSPACE_VOLUME, settings,
+    onStarted: (folderId, workspace) => instantSync.watchFolder(folderId, workspace),
+    onRemoved: (folderId) => instantSync.unwatchFolder(folderId),
   });
   // THE CONFLICT RESOLVER — the session's own coding agent, not a separate
   // fixer. Shared by auto-push, auto-pull and the manual /git/pull.
@@ -258,6 +264,15 @@ async function main() {
     autoPull: (session, workspace) => autoPull({ ...instantDeps, onEvent: publishSync(session.id, 'pull') },
       session, workspace, { hold: false }),
   });
+  // What the container events cannot say: the switch or a timing changed
+  // (the settings bus announces every write), and containers already running
+  // when this process came up (they outlive it). Each brings the watcher set
+  // in line with the running containers once — never on a clock.
+  const reconcileInstantSync = () => containers.activeFolders()
+    .then((active) => instantSync.reconcile(active))
+    .catch((e) => log.error({ err: errStr(e) }, 'instant sync reconcile threw'));
+  settingsEvents.subscribe(() => { void reconcileInstantSync(); });
+  void reconcileInstantSync();
 
   // One loop drives both the pool tick and the session sweep. The interval is a
   // SETTING read per tick, so a change takes effect without a restart.
@@ -288,16 +303,12 @@ async function main() {
 
   // Work-state refresh: every 10s, recompute `work` for folders with a
   // running container. A change writes the row and publishes on the board
-  // event stream so the kanban board and the toolbar hear it live. Instant
-  // sync brings its watcher set in line with the running containers on the
-  // same beat.
+  // event stream so the kanban board and the toolbar hear it live.
   (async () => {
     while (!stopped) {
       await new Promise((r) => setTimeout(r, 10_000));
       await refreshWorkState({ folders, workspaces, paths, containers, events })
         .catch((e) => log.error({ err: errStr(e) }, 'work-state refresh threw'));
-      await instantSync.reconcile(await containers.activeFolders())
-        .catch((e) => log.error({ err: errStr(e) }, 'instant sync reconcile threw'));
     }
   })();
 

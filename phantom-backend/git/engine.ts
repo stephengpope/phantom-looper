@@ -13,6 +13,7 @@ import type { FolderRow } from '../db/schema.js';
 import { resolveAuth } from '../pool/pool.js';
 import { repoDir, type Paths } from '../pool/paths.js';
 import { syncBranch, LOCK_TTL_MS, RENEW_MS, type ConflictContext, type SyncDeps, type SyncEvent } from './sync.js';
+import { newId } from '../../core/ids.js';
 import { logger, errStr } from '../log.js';
 
 const log = logger('git');
@@ -76,9 +77,13 @@ export class GitEngine {
   /** commit -> push the branch this session is on. That is the whole of it:
    *  one branch, checked out at creation, pushed back to here. Porcelain inside
    *  commitAll is the authoritative dirty check. */
-  async push(s: SessionRow, workspace: WorkspaceRow): Promise<PushResult> {
+  async push(s: SessionRow, workspace: WorkspaceRow): Promise<PushResult | 'busy'> {
     const folder = await this.folderOf(s);
     const dir = repoDir(this.paths, folder.id);
+    // The checkout lock: commit + push is a sequence too, and a sync may be
+    // rewriting this checkout right now. Short, so no renewal.
+    const holder = newId();
+    if (!(await this.deps.folders.acquireSyncLock(folder.id, holder, LOCK_TTL_MS))) return 'busy';
     try {
       const committed = await commitAll(dir, `phantom push ${new Date().toISOString()}\n\nPhantom-Session: ${s.id}`);
       const { stdout: ahead } = await git(dir, ['rev-list', '--count', `origin/${folder.branch}..HEAD`]).catch(() => ({ stdout: '1' }));
@@ -91,6 +96,8 @@ export class GitEngine {
     } catch (e) {
       log.error({ session: s.id, err: errStr(e) }, 'push failed');
       return 'error';
+    } finally {
+      await this.deps.folders.releaseSyncLock(folder.id, holder);
     }
   }
 

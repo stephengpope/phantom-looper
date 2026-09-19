@@ -274,34 +274,24 @@ export type PushResult = 'pushed' | 'nothing' | 'conflict' | 'error';
  *  errors — but the app still reads the union. */
 export type PullResult = 'clean' | 'merged' | 'conflict' | 'diverged' | 'dirty_tree' | 'error';
 
-const PUSH_ATTEMPTS = 3;
-
-/** Push the session branch. One writer means this cannot conflict by design;
- *  the fetch+merge retry is a backstop for a resumed session that diverged
- *  after a re-clone — not a conflict path to build on. */
+/** Push the session branch. One writer, so origin's copy is never NEWER than
+ *  HEAD — a rejection means origin holds an OLDER REWRITE of this branch: a
+ *  sync whose forced push never ran, or a rebase the agent finished itself
+ *  after a conflict was left for it. That history HEAD has already replaced,
+ *  so the answer is the forced push with the lease (pushSessionForced).
+ *  This used to fold origin's copy back in with a merge, which re-created
+ *  the very conflict the rewrite had resolved and left the tree unmerged. */
 export async function pushSession(dir: string, branch: string, auth: GitAuth): Promise<PushResult> {
   try {
-    for (let attempt = 0; attempt < PUSH_ATTEMPTS; attempt++) {
-      try {
-        await git(dir, ['push', '--no-verify', 'origin', `HEAD:${branch}`], auth);
-        return 'pushed';
-      } catch (e) {
-        if (!/non-fast-forward|fetch first|rejected/i.test(String((e as { stderr?: string }).stderr ?? e))) throw e;
-        log.warn({ dir, branch, attempt: attempt + 1 }, 'push rejected — folding remote in and retrying');
-        await git(dir, ['fetch', 'origin', branch], auth);
-        try {
-          await git(dir, ['merge', '--no-edit', '--no-verify', `origin/${branch}`]);
-        } catch {
-          const { stdout: unmerged } = await git(dir, ['diff', '--name-only', '--diff-filter=U']);
-          if (unmerged.trim()) return 'conflict';
-          throw e;
-        }
-      }
-    }
-    return 'conflict';
+    await git(dir, ['push', '--no-verify', 'origin', `HEAD:${branch}`], auth);
+    return 'pushed';
   } catch (e) {
-    log.error({ dir, branch, err: errStr(e) }, 'push failed');
-    return 'error';
+    if (!/non-fast-forward|fetch first|rejected/i.test(String((e as { stderr?: string }).stderr ?? e))) {
+      log.error({ dir, branch, err: errStr(e) }, 'push failed');
+      return 'error';
+    }
+    log.warn({ dir, branch }, 'push rejected — origin holds an older rewrite of this branch; forcing with the lease');
+    return pushSessionForced(dir, branch, auth);
   }
 }
 

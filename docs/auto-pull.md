@@ -63,10 +63,11 @@ are what agree after a rewrite.
 
 ## Still open
 
-- **`engine.push` takes no lock.** It runs `commitAll` and pushes the branch,
-  so under a running turn it commits a half-written tree. It only ever adds a
-  commit to the branch and never merges or rewrites, which is why it is smaller
-  than the pull hole was — but it is the same shape and the same fix.
+- **`engine.push` takes no session lock.** It runs `commitAll` and pushes the
+  branch, so under a running turn it commits a half-written tree. It only ever
+  adds a commit to the branch and never merges or rewrites, which is why it is
+  smaller than the pull hole was. It does take the checkout lock (038), so it
+  never interleaves with a sync — see instant-sync.md.
 - **A git-driven turn is attributed to nobody.** `agentAfterSave` maps the
   writer's client id to `coding` only for `LOOP_CLIENT_ID`; a conflict turn
   writes under `GIT_CLIENT_ID`, so the session's `agent` column comes back
@@ -79,9 +80,11 @@ are what agree after a rewrite.
 
 ## What NOT to do
 
-- Do not add a second lock or an operation mutex. The session lock is the only
-  one in the system, held under `GIT_CLIENT_ID` by every git operation so the
-  conflict turn can re-take its own hold.
+- Do not add an in-process mutex. Two locks, each on the thing it guards: the
+  session lock (held under `GIT_CLIENT_ID` by every git operation so the
+  conflict turn can re-take its own hold) keeps a turn and a sync apart; the
+  checkout lock on the folder (038, fresh id per run, never re-entered) keeps
+  two syncs apart — see instant-sync.md.
 - Do not give the pull its own resolver agent. One conversation per session is
   the point.
 - Do not verify by grepping for conflict markers. `verifyLanded` asks the

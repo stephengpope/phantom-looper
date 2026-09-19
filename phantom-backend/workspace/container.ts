@@ -97,6 +97,12 @@ export interface ContainerOpts {
    *  Absent (tests) means the container never gets a token, whatever the
    *  setting says. */
   settings?: Settings;
+  /** A container came up for this folder — awaited before `ensure` returns,
+   *  so whatever the caller does next (a file write) happens after the
+   *  listener is in place. Instant sync attaches its watcher here. */
+  onStarted?: (folderId: string, workspace: WorkspaceRow | undefined) => Promise<void>;
+  /** The folder's container was removed (idle reap, an explicit remove). */
+  onRemoved?: (folderId: string) => Promise<void>;
 }
 
 export class ContainerManager {
@@ -178,6 +184,8 @@ export class ContainerManager {
     }
     await created.start();
     log.info({ folder: key, image }, 'workspace container started');
+    await this.opts.onStarted?.(key, workspace)
+      .catch((e) => log.warn({ folder: key, err: errStr(e) }, 'onStarted listener failed — container is up regardless'));
     return created;
   }
 
@@ -223,6 +231,8 @@ export class ContainerManager {
 
   async remove(folderId: string): Promise<void> {
     await this.docker.getContainer(this.name(folderId)).remove({ force: true, v: true }).catch(() => {});
+    await this.opts.onRemoved?.(folderId)
+      .catch((e) => log.warn({ folder: folderId, err: errStr(e) }, 'onRemoved listener failed'));
   }
 
   /** Kill idle containers. `idleFolders` answers from the folder's lastUsedAt
