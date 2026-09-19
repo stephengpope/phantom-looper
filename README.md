@@ -117,6 +117,7 @@ The full product: voice, web, and the looper on autopilot. Row names are the one
 | `firecrawl key` | `/keys` | the agents can search and read the web |
 | `auto plan` + `auto build` on | `/settings` | cards in plan and in progress drive themselves |
 | `auto-push on archive` on | `/settings` | archiving a done card merges and pushes it |
+| `instant sync` on | `/workspace` → `e` | a notes or second-brain repo keeps itself in step: changes auto-push seconds after they settle, base is fetched and auto-pulled seconds after it moves |
 | `loop token budget` | `/settings` | a spend cap per card run |
 | `time zone` under crons | `/settings` | scheduled prompts fire in your zone, not UTC |
 | `boot into last workspace` on | `/settings` | skip the picker, start where you left off |

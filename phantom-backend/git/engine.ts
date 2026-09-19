@@ -1,7 +1,8 @@
 // The git engine — the MANUAL operations (/git/push, /git/pull, /git/status).
-// There is no background git any more: no watcher, no tick, no commit timers,
-// no periodic base merge. Work reaches base through auto-push (autoPush.ts);
-// push and pull remain as explicit calls. `backup` is the ONE locked caller:
+// No background git of its own: no tick, no commit timers, no periodic base
+// merge. Work reaches base through auto-push (autoPush.ts) — on demand, or
+// fired by instant sync (instantSync.ts) when a workspace opts in; push and
+// pull remain as explicit calls. `backup` is the ONE locked caller:
 // the disk sweeps fire it unattended, so it holds the session lock while a
 // person-driven push/pull relies on git's own index.lock to error a true
 // simultaneous op.

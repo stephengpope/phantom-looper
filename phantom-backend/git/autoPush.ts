@@ -37,9 +37,11 @@ export interface AutoPushDeps {
 
 export async function autoPush(
   deps: AutoPushDeps, session: SessionRow, workspace: WorkspaceRow,
+  /** `hold: false` — run without taking the session (instant sync; see sync.ts). */
+  opts: { hold?: boolean } = {},
 ): Promise<AutoPushResult> {
   const r = await syncBranch(deps, session, workspace,
-    { landOnBase: true, label: 'auto-push' });
+    { landOnBase: true, label: 'auto-push', ...opts });
   const { reason, rounds, sha } = r;
   if (r.outcome === 'ok') return { result: 'pushed', rounds, sha };
   return { result: r.outcome === 'nothing' ? 'nothing' : r.outcome, reason, rounds };

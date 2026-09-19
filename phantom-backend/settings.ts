@@ -121,6 +121,14 @@ export const DEFAULTS = {
   initial_history_depth: '7.days',   // 'full' disables shallow
   auto_push_on_archive: true as boolean,
   agent_git_credentials: false as boolean,
+  // Instant sync (git/instantSync.ts): a workspace switch that turns the
+  // on-demand auto-push / auto-pull into a continuous one — a file watcher
+  // pushes after a quiet spell, a timer pulls base in. The switch is
+  // workspace-only (a notes repo wants it, a code repo usually does not);
+  // the two timings are global with a workspace override.
+  instant_sync: false as boolean,
+  instant_sync_push_debounce_ms: 30_000,
+  instant_sync_pull_interval_ms: 5_000,
   // ── limits ────────────────────────────────────────────────────────────────
   bash_timeout_ms: 120_000 as number | null,   // two minutes, as OpenCode; the agent passes a longer one per command
   bash_timeout_max_ms: null as number | null,
@@ -218,6 +226,9 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   session_lock_ttl_ms: 'How long a session stays held after its holder goes quiet. A turn the server itself is running is never handed away on this clock — it is checked directly — so this only covers a client that died holding a session (a closed laptop, a killed window).',
   auto_push_on_archive: 'Archiving a done card auto-pushes its session\'s work to the base branch; a failed push un-archives the card into blocked. Archiving from any other column never pushes.',
   agent_git_credentials: 'Puts the GitHub token inside the container so the agent can run git and gh itself — the agent can then read it. Applies when the container restarts; off does not reclaim it from a running one.',
+  instant_sync: 'Keeps every running session in this workspace in step with the base branch on its own: a file change auto-pushes after the debounce, and base is checked with a plain git fetch on the pull interval and auto-pulled when it moved. Runs whether or not a turn is running and never fixes a conflict itself — the agent is told and resolves it. Best for a notes or second-brain repo. Takes effect within ten seconds.',
+  instant_sync_push_debounce_ms: 'How long the files must stay quiet after a change before instant sync pushes.',
+  instant_sync_pull_interval_ms: 'How often instant sync fetches the base branch to see whether it moved. A plain git fetch — it never touches the GitHub API rate limit. Shorter means other sessions\' work arrives sooner.',
   card_prefix: 'The letters in front of every card number on this board — "PHA" gives PHA-7. Unset means the first three letters of the repo name.',
   cron_enabled: 'Scheduled prompts (crons) for this workspace. Off: none fire, and the agents lose their cron tools; the crons themselves are kept. A slot missed while off is not made up.',
   cron_timezone: 'The time zone every cron schedule is read in — an IANA name like America/New_York or Europe/London. "0 9 * * *" is 9am in this zone.',
@@ -350,6 +361,9 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
   session_lock_ttl_ms: ms('session lock timeout', 'sessions', 1000),
   auto_push_on_archive: { type: 'boolean', label: 'auto-push on archive', group: 'git' },
   agent_git_credentials: { type: 'boolean', label: 'agent github access', group: 'agent' },
+  instant_sync: { type: 'boolean', label: 'instant sync', group: 'git' },
+  instant_sync_push_debounce_ms: ms('instant sync push debounce', 'git'),
+  instant_sync_pull_interval_ms: ms('instant sync pull interval', 'git'),
   card_prefix: { type: 'string', label: 'card number prefix', group: 'board', nullable: true },
   cron_enabled: { type: 'boolean', label: 'crons', group: 'crons' },
   cron_timezone: { type: 'string', label: 'time zone', group: 'crons', check: checkTimezone, suggestions: TIMEZONES },
@@ -477,6 +491,7 @@ export function isSettingKey(k: string): k is SettingKey {
 const WORKSPACE_OVERRIDABLE: readonly SettingKey[] = [
   'spare_clones', 'initial_history_depth', 'container_image', 'container_docker', 'agent_database',
   'auto_push_on_archive', 'agent_git_credentials', 'card_prefix',
+  'instant_sync', 'instant_sync_push_debounce_ms', 'instant_sync_pull_interval_ms',
   'auto_plan', 'auto_build', 'loop_budget_tokens', 'telegram_auto_build_notifications',
   'cron_enabled', 'cron_timezone',
 ];
@@ -484,7 +499,7 @@ const WORKSPACE_OVERRIDABLE: readonly SettingKey[] = [
 /** Settings that are a fact about ONE workspace — a card prefix names one
  *  board — so a global value is meaningless. Never settable at the global
  *  layer, and GET /settings leaves them off the global list. */
-const WORKSPACE_ONLY: readonly SettingKey[] = ['card_prefix'];
+const WORKSPACE_ONLY: readonly SettingKey[] = ['card_prefix', 'instant_sync'];
 export const isGlobalSettable = (k: SettingKey) => !WORKSPACE_ONLY.includes(k);
 export const isWorkspaceOverridable = (k: SettingKey) => WORKSPACE_OVERRIDABLE.includes(k);
 

@@ -43,7 +43,7 @@ import type { Folders } from '../folders.js';
 import type { Cards } from '../cards.js';
 import type { Settings } from '../settings.js';
 import {
-  git, fetchBase, squashToMergeBase, commitStaged, rebaseOntoBase, rebaseAbort,
+  git, fetchBase, squashToMergeBase, commitStaged, rebaseOntoBase, rebaseAbort, rebaseInProgress,
   landingProblems, pushSession, pushSessionForced, pushToBase, hasWorkToLand, GIT_CLIENT_ID,
 } from './git.js';
 import { commitMessageFor } from './commitMessage.js';
@@ -90,7 +90,8 @@ export interface SyncResult {
   sha?: string;
   /** `<short sha> <subject>` of every base commit that came in. */
   arrived?: string[];
-  /** Files the replay changed in the working tree (ok only). */
+  /** ok: files the replay changed in the working tree. blocked with no
+   *  fixer: the files that conflicted (the rebase is left in progress). */
   files?: string[];
   /** Whether the branch reached origin (ok only). */
   pushed?: boolean;
@@ -154,6 +155,11 @@ export interface SyncOptions {
   landOnBase: boolean;
   /** What a person sees while the session is held. */
   label: string;
+  /** Take the session for the run (default). False is instant sync's mode:
+   *  the sync runs whenever, turn or no turn, and hands nothing to the
+   *  session — so it must also run without `resolve`; a conflict is left
+   *  in progress and reported, never handed to a turn. */
+  hold?: boolean;
 }
 
 export async function syncBranch(
@@ -166,17 +172,29 @@ export async function syncBranch(
   const auth = await resolveAuth(deps.settings, workspace);
   const ev = async (step: SyncStep, detail?: string) => { await deps.onEvent?.({ step, detail }); };
   const rounds = opts.landOnBase ? ROUNDS : 1;
+  const hold = opts.hold ?? true;
+
+  // A rebase an instant sync left stopped for the agent: its markers are in
+  // the files. Staging them (`add -A`) would commit them as resolved and
+  // the abort below would throw the agent's work away — so no sync runs
+  // here until the agent finishes it.
+  if (await rebaseInProgress(dir)) {
+    return { outcome: 'blocked', reason: 'a rebase is in progress in this checkout — resolve it first' };
+  }
 
   // 0 — the lock IS the concurrency test. Held by someone else means someone
   // else is writing this checkout; there is nothing further to check.
-  await ev('lock');
-  if (!(await deps.sessions.acquireLock(session, GIT_CLIENT_ID, LOCK_TTL_MS, opts.label))) {
-    return { outcome: 'busy', reason: 'the session is busy — try again when its turn finishes' };
+  let heartbeat: NodeJS.Timeout | undefined;
+  if (hold) {
+    await ev('lock');
+    if (!(await deps.sessions.acquireLock(session, GIT_CLIENT_ID, LOCK_TTL_MS, opts.label))) {
+      return { outcome: 'busy', reason: 'the session is busy — try again when its turn finishes' };
+    }
+    heartbeat = setInterval(() => {
+      void deps.sessions.renewLock(session.id, GIT_CLIENT_ID, LOCK_TTL_MS)
+        .catch((e) => log.warn({ session: session.id, err: errStr(e) }, 'lock renewal failed'));
+    }, RENEW_MS);
   }
-  const heartbeat = setInterval(() => {
-    void deps.sessions.renewLock(session.id, GIT_CLIENT_ID, LOCK_TTL_MS)
-      .catch((e) => log.warn({ session: session.id, err: errStr(e) }, 'lock renewal failed'));
-  }, RENEW_MS);
 
   try {
     // 1 — what is on base that we do not have. Collected before anything is
@@ -243,12 +261,22 @@ export async function syncBranch(
           branch: folder.branch, baseBranch: base,
           files: conflicted.trim().split('\n').filter(Boolean), arrived,
         };
+        // No fixer (instant sync): the rebase is LEFT STOPPED, markers in the
+        // files, for the agent to resolve in place at its next turn — the
+        // note carries the files. Instant sync stays off the checkout while
+        // the rebase is in progress.
+        if (!deps.resolve) {
+          const reason = `conflict in ${ctx.files.join(', ')} — left for the agent to resolve`;
+          log.warn({ session: session.id, round, files: ctx.files }, 'sync: conflict left in progress for the agent');
+          const blocked: SyncResult = { outcome: 'blocked', reason, rounds: round, arrived, files: ctx.files };
+          await deps.recordSummary?.(session, workspace, blocked, opts).catch((e) =>
+            log.warn({ session: session.id, err: errStr(e) }, 'could not record sync summary'));
+          return blocked;
+        }
         await ev('resolve', ctx.files.join(', '));
-        const ok = deps.resolve
-          ? await deps.resolve(session, workspace, dir, ctx).catch((e) => {
-              log.error({ session: session.id, err: errStr(e) }, 'conflict turn threw'); return false;
-            })
-          : false;
+        const ok = await deps.resolve(session, workspace, dir, ctx).catch((e) => {
+          log.error({ session: session.id, err: errStr(e) }, 'conflict turn threw'); return false;
+        });
         // Verified against the repo, never against what the agent said. The
         // rebase-in-progress and ancestor checks are what make a `rebase
         // --abort` read as the failure it is. A block names exactly which
@@ -326,7 +354,9 @@ export async function syncBranch(
     await rebaseAbort(dir);
     return { outcome: 'error', reason: (e as Error).message };
   } finally {
-    clearInterval(heartbeat);
-    await deps.sessions.releaseLock(session.id, GIT_CLIENT_ID);
+    if (hold) {
+      clearInterval(heartbeat);
+      await deps.sessions.releaseLock(session.id, GIT_CLIENT_ID);
+    }
   }
 }

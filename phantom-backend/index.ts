@@ -47,6 +47,7 @@ import { TelegramEngine } from './telegram/engine.js';
 import { credentialForProvider } from './settings.js';
 import { cascade } from '../core/llm/agentConfig.js';
 import { refreshWorkState } from './git/workRefresh.js';
+import { InstantSync } from './git/instantSync.js';
 import { logger, errStr } from './log.js';
 
 const log = logger('boot');
@@ -234,6 +235,30 @@ async function main() {
     return r;
   };
 
+  // Instant sync (git/instantSync.ts) runs the same sync, turn or no turn:
+  // it never takes the session (`hold: false`) and never runs the fixer
+  // (no `resolve`) — a conflict is left stopped and reported. Its notes cannot
+  // go through recordSummary above (that needs the session); they ride
+  // the backdoor queue, in front of the agent's next turn wherever that
+  // turn runs. A note already waiting is not queued again.
+  const noteForNextTurn: SyncDeps['recordSummary'] = async (session, workspace, result, opts) => {
+    let message: string;
+    if (result.outcome === 'ok') {
+      message = toCodingAgent.syncSummary(workspace.baseBranch, opts.landOnBase, result.arrived ?? [], result.files ?? []);
+    } else if (result.outcome === 'blocked' && result.files?.length) {
+      message = toCodingAgent.syncConflict(workspace.baseBranch, result.arrived ?? [], result.files);
+    } else return;
+    if (!backdoor.has(session.id, message)) backdoor.push(session.id, message);
+  };
+  const instantDeps = { sessions, folders, cards, settings, paths, messageConfig, recordSummary: noteForNextTurn };
+  const instantSync = new InstantSync({
+    sessions, folders, workspaces, settings, paths,
+    autoPush: (session, workspace) => autoPush({ ...instantDeps, onEvent: publishSync(session.id, 'push') },
+      session, workspace, { hold: false }),
+    autoPull: (session, workspace) => autoPull({ ...instantDeps, onEvent: publishSync(session.id, 'pull') },
+      session, workspace, { hold: false }),
+  });
+
   // One loop drives both the pool tick and the session sweep. The interval is a
   // SETTING read per tick, so a change takes effect without a restart.
   // Folders with a running container not touched for the threshold and with
@@ -263,12 +288,16 @@ async function main() {
 
   // Work-state refresh: every 10s, recompute `work` for folders with a
   // running container. A change writes the row and publishes on the board
-  // event stream so the kanban board and the toolbar hear it live.
+  // event stream so the kanban board and the toolbar hear it live. Instant
+  // sync brings its watcher set in line with the running containers on the
+  // same beat.
   (async () => {
     while (!stopped) {
       await new Promise((r) => setTimeout(r, 10_000));
       await refreshWorkState({ folders, workspaces, paths, containers, events })
         .catch((e) => log.error({ err: errStr(e) }, 'work-state refresh threw'));
+      await instantSync.reconcile(await containers.activeFolders())
+        .catch((e) => log.error({ err: errStr(e) }, 'instant sync reconcile threw'));
     }
   })();
 
@@ -352,6 +381,7 @@ async function main() {
     looper.stop();
     cronEngine.stop();
     digest.stop();
+    await instantSync.stop();
     await app.close();
     await pgPool.end();
     process.exit(0);

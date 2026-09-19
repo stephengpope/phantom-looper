@@ -26,6 +26,12 @@ export class BackdoorQueue {
     this.bySession.set(sessionId, list);
   }
 
+  /** Is this exact text already waiting for the session? A repeating fact
+   *  (instant sync's notes) is queued once until a turn takes it. */
+  has(sessionId: string, text: string): boolean {
+    return this.bySession.get(sessionId)?.includes(text) ?? false;
+  }
+
   /** Take everything pending for a session (atomic splice — one consumer
    *  gets each message; the session lock guarantees turns come one at a time). */
   drain(sessionId: string): string[] {

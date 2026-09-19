@@ -33,6 +33,19 @@ export const toCodingAgent = {
     parts.push('Just letting you know, use as you see fit.');
     return parts.join('\n\n');
   },
+
+  /** The message for a sync that stopped on a conflict nobody resolved (an
+   *  instant sync runs without the fixer). The rebase is left stopped with
+   *  its markers; the agent is told what came in and where it collides, and
+   *  asked to resolve. */
+  syncConflict: (base: string, arrived: string[], files: string[]): string => {
+    const parts: string[] = [];
+    parts.push(`New changes from ${base} could not be pulled in — they conflict with your work.`);
+    if (arrived.length) parts.push(arrived.map((l) => `- ${l}`).join('\n'));
+    parts.push(`Conflicts: ${files.join(', ')}`);
+    parts.push('Resolve the conflict.');
+    return parts.join('\n\n');
+  },
 };
 
 /** `card` empty removes its line whole (fill's optional-line rule). */
