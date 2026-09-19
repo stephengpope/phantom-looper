@@ -563,7 +563,8 @@ export function App({
     if (session?.busy) store.abortTurn(session.id);
     // Break out of whatever is on screen first — the question before the
     // screen under it: the second press then lands on the prompt, where the
-    // toolbar is showing what it will do.
+    // toolbar is showing what it will do. (A session's own agent question
+    // rides the turn's abort above, so it is already down.)
     if (windowStore.dialog) windowStore.dismissDialog();
     else if (windowStore.overlay) windowStore.dismissOverlay();
     setCtrlC(true); setTimeout(() => setCtrlC(false), 1500);
@@ -721,7 +722,9 @@ export function App({
   // of either and takes its rows from whatever is above it.
   const fullOverlay = windowStore.overlay?.size === 'full' ? windowStore.overlay : null;
   const thirdOverlay = windowStore.overlay?.size === 'third' ? windowStore.overlay : null;
-  const dialog = windowStore.dialog;
+  // The window's own question, else the on-screen session's parked agent
+  // question — never another session's (window.ts dialogOnScreen).
+  const dialog = windowStore.dialogOnScreen;
   const dialogRows = dialog?.rows ?? 0;
   const thirdRows = Math.max(6, Math.floor(screenRows / 3));
   const dialogBox = dialog && (

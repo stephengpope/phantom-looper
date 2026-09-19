@@ -41,9 +41,13 @@ export function switcherChoices(
   return sessions.map((s) => {
     const w = byId.get(s.workspaceId);
     const said = lastSaid(s);
-    // The one status column. `working` beats `new` beats how long ago, because
-    // a row that is doing something is the only reason to look at this list.
-    const state = s.busy
+    // The one status column. `waiting on you` beats `working` beats `new`
+    // beats how long ago: a row whose agent is stopped on a question for you
+    // is the first reason to look at this list, a row doing something the
+    // second.
+    const state = s.ask
+      ? '● waiting on you'
+      : s.busy
       ? 'working…'
       : s.unseen
         ? '● answered'
@@ -58,7 +62,8 @@ export function switcherChoices(
       label: `${w ? workspaceLabel(w) : s.workspaceId} · ${s.branch}`,
       detail: `${s.summary.model}  ${said ? `"${said.slice(0, 40)}${said.length > 40 ? '…' : ''}"  ` : ''}${
         s.id === activeId && !s.busy ? 'you are here' : state}`,
-      busy: s.busy,
+      // No spinner on a row that is stopped waiting for your answer.
+      busy: s.busy && !s.ask,
       busySince: s.startedAt,
       hint: s.id === activeId
         ? 'the session on screen — enter just closes this list'

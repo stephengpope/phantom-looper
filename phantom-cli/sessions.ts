@@ -20,6 +20,7 @@ import type { UsageTotals } from '../core/llm/transcript.js';
 import type { CodingPrompt } from '../core/llm/agents/coding.js';
 import type { CompactionLock } from '../core/llm/compaction.js';
 import { NudgeQueue } from '../core/llm/nudgeQueue.js';
+import type { Dialog } from './window.js';
 import { applyPart, applyTokens, finalize, nextId, takeCompleted, tokenCount, NO_TOKENS, type Part, type StreamPart, type TurnTokens } from './state.js';
 
 export interface LoadedSession {
@@ -101,6 +102,12 @@ export interface LoadedSession {
   nudgeQueue: NudgeQueue;
   /** Finished (or failed) while you were looking somewhere else. */
   unseen: boolean;
+  /** An agent's question about THIS session (the coding agent's "enter code
+   *  mode?"), parked here — not on the window — so it shows only while this
+   *  session is on screen and the answer lands on the session that asked. A
+   *  turn keeps running while you look elsewhere; its question waits here
+   *  and the session list says so. */
+  ask: Dialog | null;
   /** Drives cycle order. 0 until the first message is sent. */
   lastMessageAt: number;
   /** Insertion counter — the tie-break while nothing has been said yet. */
@@ -237,13 +244,35 @@ export class SessionStore {
       busy: false, remoteBusy: false, held: null, startedAt: 0, tokens: NO_TOKENS,
       usage: s.usage ?? { input: 0, output: 0, cache_read: 0, cache_write: 0 }, abort: null,
       nudgeQueue: new NudgeQueue(),
-      unseen: false, lastMessageAt: s.history?.length ? Date.now() : 0, addedAt: ++this.seq, work: null, draft: s.draft ?? '',
+      unseen: false, ask: null, lastMessageAt: s.history?.length ? Date.now() : 0, addedAt: ++this.seq, work: null, draft: s.draft ?? '',
     };
     this.entries.push(entry);
     this.activeId = entry.id;
     this.notify();
     return entry;
   }
+
+  /** Put an agent's question on the session it is about. One at a time per
+   *  session — an agent awaits its answer, so a second cannot arrive while
+   *  the first stands. */
+  setAsk(id: string, d: Dialog): void {
+    const e = this.get(id);
+    if (!e) return;
+    e.ask = d;
+    this.notify();
+  }
+
+  /** Take a session's question down and deliver its answer — enter's true,
+   *  esc's false, `undefined` (or false) when its turn stopped. Cleared
+   *  BEFORE the callback fires, as the window's dismissDialog does. */
+  answerAsk = (id: string, result?: unknown): void => {
+    const e = this.get(id);
+    if (!e?.ask) return;
+    const prev = e.ask;
+    e.ask = null;
+    prev.onDismiss(result);
+    this.notify();
+  };
 
   /** Switching to a session is how you read it, so its mark clears here. */
   activate(id: string): boolean {

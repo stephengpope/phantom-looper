@@ -41,7 +41,11 @@ two places to read "is the board up". Now there is one of each.
 - Every destructive key asks the same way: `/trash`, `/restart`, [t] on
   /resume, [k] on /tasks, [a] on the board, [enter] on /presets and the
   agent's `session_code_mode` all go through `confirm()`. enter is yes, esc
-  is no; ctrl+c or the screen under it leaving answers no.
+  is no; ctrl+c or the screen under it leaving answers no. An agent's
+  question passes `session`: it parks on that session (`LoadedSession.ask`)
+  and shows only while that session is on screen — a background turn never
+  pops its question over the session you are reading, and enter can never
+  approve a session you are not looking at. ctrl+n says `● waiting on you`.
 
 ## What was removed
 

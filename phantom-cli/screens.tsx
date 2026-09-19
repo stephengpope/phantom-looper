@@ -46,10 +46,12 @@ const third = (name: string, render: Overlay['render'], rest: Partial<Overlay> =
 
 /** THE yes/no. enter = true, esc = false; anything that takes it down
  *  (ctrl+c, the screen under it leaving) answers false too — a question
- *  taken off the screen was not answered yes. `who` names an agent asking. */
-export const confirmDialog = (w: WindowStore, title: string, message: string | undefined,
+ *  taken off the screen was not answered yes. `who` names an agent asking.
+ *  `dismiss` is the slot it lives in: the window's for the app's own safety
+ *  checks, a session's for an agent's question (window.ts `confirm`). */
+export const confirmDialog = (dismiss: (result?: unknown) => void, title: string, message: string | undefined,
   who: string | undefined, resolve: (yes: boolean) => void): Dialog => ({
-  render: () => <Confirm title={title} message={message} who={who} onResult={w.dismissDialog} />,
+  render: () => <Confirm title={title} message={message} who={who} onResult={dismiss} />,
   rows: CONFIRM_ROWS + (message ? 1 : 0),
   onDismiss: (yes) => resolve(yes === true),
 });

@@ -310,9 +310,17 @@ export class WindowStore {
     this.notify();
   };
 
+  /** The question on screen right now: the window's own (a safety check you
+   *  just triggered) first, else the on-screen session's parked agent
+   *  question. Another session's question is NOT here — it waits on its
+   *  session (LoadedSession.ask). THE one read for the view and the gates. */
+  get dialogOnScreen(): Dialog | null {
+    return this.dialog ?? this.sessions.active()?.ask ?? null;
+  }
+
   /** True while anything is up — the one gate for input routing: the chat's
    *  handlers and the prompt are off while this is true. */
-  get hasOverlay(): boolean { return this.overlay !== null || this.dialog !== null; }
+  get hasOverlay(): boolean { return this.overlay !== null || this.dialogOnScreen !== null; }
 
   /** The board owns the column (a card opened from it counts). The
    *  Assistant's "show card" asks, to know where esc should go back to. */
@@ -322,17 +330,33 @@ export class WindowStore {
    *  yes, esc is no, and so is anything that takes the question off the
    *  screen. An AGENT's question names the asker (`who`) and rides its
    *  turn's abort: a stopped turn takes the question down, answered no, so
-   *  nothing waits on a dead call. */
-  confirm(title: string, message?: string, ask?: { who: string; signal?: AbortSignal }): Promise<boolean> {
+   *  nothing waits on a dead call. A question ABOUT a session (`session`)
+   *  lives on that session, not the window: it shows only while that
+   *  session is on screen, so a turn running in the background cannot pop
+   *  its question over the session you are reading — and enter cannot
+   *  approve something on a session you are not looking at. */
+  confirm(title: string, message?: string, ask?: { who: string; signal?: AbortSignal; session?: string }): Promise<boolean> {
     return new Promise((resolve) => {
       if (ask?.signal?.aborted) { resolve(false); return; }
-      const dialog = confirmDialog(this, title, message, ask?.who, (yes) => {
+      const session = ask?.session;
+      const dismiss = session ? (r?: unknown) => this.sessions.answerAsk(session, r) : this.dismissDialog;
+      const standing = () => (session ? this.sessions.get(session)?.ask : this.dialog) === dialog;
+      const dialog = confirmDialog(dismiss, title, message, ask?.who, (yes) => {
         ask?.signal?.removeEventListener('abort', onAbort);
         resolve(yes);
       });
-      const onAbort = () => { if (this.dialog === dialog) this.dismissDialog(false); };
+      const onAbort = () => { if (standing()) dismiss(false); };
       ask?.signal?.addEventListener('abort', onAbort);
-      this.showDialog(dialog);
+      if (session) {
+        this.sessions.setAsk(session, dialog);
+        // Asked from a session you are not on: say so where you are, once;
+        // the session list (ctrl+n) keeps saying it until you answer.
+        if (this.sessions.activeId !== session) {
+          this.setToast(`${ask!.who} is waiting on you — ctrl+n or tab to answer`, 'cyan', 6_000);
+        }
+      } else {
+        this.showDialog(dialog);
+      }
     });
   }
 
@@ -520,10 +544,13 @@ export class WindowStore {
         return { ok: true, mode: 'code', note: 'code mode is now active' };
       },
       // The one way the CODING agent LEAVES plan mode: through the user. The
-      // ask is an inline overlay in the chat, named as the agent's, tied to
-      // the turn's abort. The flip is the same record-first write /code makes;
-      // a turn already streaming keeps the kit it started with, so code mode
-      // is real from the next turn — the answer says so.
+      // ask is parked on the SESSION it is about (LoadedSession.ask), named
+      // as the agent's with the branch, tied to the turn's abort — so a
+      // background session's question waits for you to come to it, and the
+      // answer flips the session that asked, never the one on screen at the
+      // time. The flip is the same record-first write /code makes; a turn
+      // already streaming keeps the kit it started with, so code mode is
+      // real from the next turn — the answer says so.
       askCodeMode: async (reason, { abortSignal }) => {
         const e = at();
         if (!e) return { ok: false, error: 'no session is open' };
@@ -531,7 +558,7 @@ export class WindowStore {
         if (!e.planMode) return { ok: false, error: 'already in code mode' };
         // Bound to a session = the coding agent; unbound = the Assistant.
         const yes = await this.confirm('enter code mode?', reason,
-          { who: sessionId ? 'coding agent' : 'the Assistant', signal: abortSignal });
+          { who: `${sessionId ? 'coding agent' : 'the Assistant'} · ${e.branch}`, signal: abortSignal, session: e.id });
         if (!yes) return { ok: false, declined: true, mode: 'plan' };
         await this.api('PATCH', `/sessions/${e.id}`, { plan_mode: false });
         await this.applyPlanMode(e.id, false);
