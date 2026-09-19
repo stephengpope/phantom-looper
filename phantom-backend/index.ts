@@ -300,11 +300,10 @@ async function main() {
   looper.start();
 
   // The cron scheduler — the same shape: a client of this app, built after
-  // listen. One croner job per cron row fires at its time; a refresh every
-  // minute re-reads the rows so a cron the agent just created is scheduled
-  // without a restart.
+  // listen. One croner job per cron row fires at its time; registrations
+  // follow the table's writes and the settings' (events, no polling).
   const cronEngine = new CronEngine({ crons, workspaces, settings, sessions, app, apiKey: env.apiKey,
-    sessionEvents: ctx.sessionEvents, activeTurns: ctx.activeTurns, backdoor: ctx.backdoor });
+    sessionEvents: ctx.sessionEvents, settingsEvents, activeTurns: ctx.activeTurns, backdoor: ctx.backdoor });
   cronEngine.start();
 
   // The Telegram engine — a client of this app like the looper. The webhook

@@ -50,17 +50,16 @@ export async function cronTools(cfg: CronToolsConfig): Promise<Record<string, To
   return pickKit(buildCronTools(cfg), MUTATING, cfg.pick);
 }
 
-/** The workspace's `cron_enabled`, resolved by the server. Unreachable or
- *  unreadable reads as off — no tools rather than tools that cannot work. */
+/** The workspace's `cron_enabled`, resolved by the server. A read that
+ *  fails throws, like every other kit's build — never a silent "no tools". */
 async function cronsEnabled(cfg: CronToolsConfig): Promise<boolean> {
   const f = cfg.fetch ?? fetch;
-  try {
-    const r = await f(`${cfg.baseUrl}/settings?workspace=${encodeURIComponent(cfg.workspaceId)}`, {
-      headers: { authorization: `Bearer ${cfg.apiKey}` },
-    });
-    const j = await r.json() as Envelope<Record<string, { value: unknown }>>;
-    return j.ok && j.data.cron_enabled?.value === true;
-  } catch { return false; }
+  const r = await f(`${cfg.baseUrl}/settings?workspace=${encodeURIComponent(cfg.workspaceId)}`, {
+    headers: { authorization: `Bearer ${cfg.apiKey}` },
+  });
+  const j = await r.json() as Envelope<Record<string, { value: unknown }>>;
+  if (!j.ok) throw new Error(`could not read the workspace's settings: ${j.error.message}`);
+  return j.data.cron_enabled?.value === true;
 }
 
 function buildCronTools(cfg: CronToolsConfig): Record<string, Tool> {

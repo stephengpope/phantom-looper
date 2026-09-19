@@ -1,15 +1,17 @@
 // The cron scheduler — shockwave's, with the database as the source instead
-// of cron.json. Two kinds of croner job:
+// of cron.json. One croner job per cron row, held in memory, fires at its
+// exact time (`protect: true` — a cron never overlaps itself). Croner
+// computes the next fire forward from registration, so a slot that passed
+// while the server was down never fires.
 //
-//   FIRE:    one croner job per cron row, held in memory, fires at its exact
-//            time (`protect: true` — a cron never overlaps itself). Croner
-//            computes the next fire forward from registration, so a slot
-//            that passed while the server was down never fires.
-//   REFRESH: one croner job, every minute, that re-reads every enabled cron
-//            and reconciles the registrations NON-DESTRUCTIVELY — only a
-//            changed schedule or zone re-registers; running jobs are left
-//            alone; rows that are gone are dropped. This is how a cron the
-//            agent just created starts firing within a minute.
+// Registrations follow the rows by EVENTS, not polling (shockwave polls
+// because its file lives on GitHub; ours is written in this process): boot
+// registers everything once; every write to the table (Crons.subscribe) and
+// every settings write (a workspace's cron switch or zone) reconciles that
+// workspace — NON-DESTRUCTIVELY: only a changed schedule or zone
+// re-registers, running jobs are left alone, rows that are gone are dropped.
+// Reconciles are queued one after another, so two can never see the same
+// row as new and register it twice.
 //
 // A fire opens a NEW coding session in the workspace (its own checkout,
 // named after the cron, its seat stamped 'cron'), runs the prompt as one
@@ -33,12 +35,12 @@ import { openSession, type OpenedSession } from '../../core/session.js';
 import { runCodingTurn, settingsValues } from '../looper/turn.js';
 import { injectFetch } from '../looper/injectFetch.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
+import type { SettingsEvents } from '../api/settingsEvents.js';
 import type { BackdoorQueue } from '../api/backdoor.js';
 import { logger, errStr } from '../log.js';
 
 const log = logger('cron');
 const BASE = 'http://cron/api';
-const REFRESH_SCHEDULE = '* * * * *';
 
 export interface CronEngineDeps {
   crons: Crons;
@@ -48,6 +50,8 @@ export interface CronEngineDeps {
   app: FastifyInstance;
   apiKey: string;
   sessionEvents?: SessionEvents;
+  /** Settings writes — a workspace's cron switch or zone moved. */
+  settingsEvents?: SettingsEvents;
   /** Active turns by session id — the interrupt route aborts these. */
   activeTurns?: Map<string, AbortController>;
   backdoor?: BackdoorQueue;
@@ -58,38 +62,52 @@ export interface CronEngineDeps {
 /** A registration. The zone is part of it, not just the schedule: the same
  *  string is a different instant in a different zone, so a zone change
  *  must re-register. */
-interface Registration { cron: Cron; schedule: string; timezone: string }
+interface Registration { cron: Cron; workspaceId: string; schedule: string; timezone: string }
 
 export class CronEngine {
   private registered = new Map<number, Registration>();   // cron row id → croner job
-  private refresh: Cron | null = null;
+  private queue: Promise<void> = Promise.resolve();       // reconciles run one after another
+  private unsubscribe: Array<() => void> = [];
   private f: typeof fetch;
 
   constructor(private deps: CronEngineDeps) {
     this.f = injectFetch(deps.app);
   }
 
-  /** Boot: register everything from the rows, then keep reconciling once a
-   *  minute — the same system (croner), just re-reading the table. */
+  /** Boot: register everything once, then follow the writes. */
   start(): void {
-    void this.reconcile().catch((e) => log.error({ err: errStr(e) }, 'initial cron reconcile failed'));
-    this.refresh = new Cron(REFRESH_SCHEDULE, () => {
-      void this.reconcile().catch((e) => log.error({ err: errStr(e) }, 'cron refresh failed'));
-    });
+    this.reconcile();
+    this.unsubscribe.push(this.deps.crons.subscribe((workspaceId) => this.reconcile(workspaceId)));
+    // A settings write names its scope: one workspace, or global — which
+    // may be the switch or the zone every workspace inherits.
+    if (this.deps.settingsEvents) {
+      this.unsubscribe.push(this.deps.settingsEvents.subscribe((e) => {
+        const ws = e.scope.startsWith('workspace:') ? e.scope.slice('workspace:'.length) : undefined;
+        if (ws || e.scope === 'global') this.reconcile(ws);
+      }));
+    }
     log.info('cron scheduler started');
   }
 
   stop(): void {
-    this.refresh?.stop();
+    for (const u of this.unsubscribe) u();
+    this.unsubscribe = [];
     for (const r of this.registered.values()) r.cron.stop();
     this.registered.clear();
   }
 
-  /** Bring the registrations in line with the rows: register new and
-   *  changed crons, leave unchanged ones alone (a running job is never
-   *  touched), drop what is gone or disabled. */
-  async reconcile(): Promise<void> {
-    const rows = await this.deps.crons.listEnabled();
+  /** Bring one workspace's (or every) registration in line with its rows.
+   *  Queued: reconciles never overlap. Nothing rejects upward. */
+  reconcile(workspaceId?: string): void {
+    this.queue = this.queue
+      .then(() => this.reconcileNow(workspaceId))
+      .catch((e) => log.error({ workspace: workspaceId, err: errStr(e) }, 'cron reconcile failed'));
+  }
+
+  /** Register new and changed crons, leave unchanged ones alone (a running
+   *  job is never touched), drop what is gone, disabled, or switched off. */
+  private async reconcileNow(workspaceId?: string): Promise<void> {
+    const rows = await this.deps.crons.listEnabled(workspaceId);
     const seen = new Set<number>();
     const zones = new Map<string, { enabled: boolean; timezone: string }>();
     for (const row of rows) {
@@ -130,14 +148,16 @@ export class CronEngine {
           }
           continue;
         }
-        this.registered.set(row.id, { cron, schedule: row.schedule, timezone: ws.timezone });
+        this.registered.set(row.id, { cron, workspaceId: row.workspace_id, schedule: row.schedule, timezone: ws.timezone });
+        log.info({ cron: row.name, next: cron.nextRun()?.toISOString() }, 'cron scheduled');
       } catch (e) {
         log.warn({ cron: row.name, schedule: row.schedule, err: errStr(e) }, 'invalid cron schedule — not scheduled');
       }
     }
-    // Drop registrations whose row vanished, was disabled, or whose
-    // workspace was switched off.
+    // Drop registrations (in scope) whose row vanished, was disabled, or
+    // whose workspace was switched off.
     for (const [id, reg] of this.registered) {
+      if (workspaceId && reg.workspaceId !== workspaceId) continue;
       if (!seen.has(id)) { reg.cron.stop(); this.registered.delete(id); }
     }
   }

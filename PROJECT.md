@@ -58,7 +58,7 @@ and reviews each table's behavior while it is in our heads.
 | 12 | `cards` | `Cards` (cards.ts) | **done** |
 | 13 | `settings` | `Settings` (settings.ts) | **done** |
 | 14 | `sessions` | `Sessions` (sessions.ts) | **done** |
-| 15 | `crons` | `Crons` (crons.ts) | **done** — born under the rules (037) |
+| 15 | `crons` | `Crons` (crons.ts) | **done** — born under the rules (037); scheduler proved live: fires at the second, one-time fires and is gone, a missed one-time is dropped at boot, switch and zone changes re-register |
 
 Main-schema migrations: `migrations/*.sql`, run by `phantom-backend/db/migrate.ts`.
 Drizzle mirror: `phantom-backend/db/schema.ts`. Objects are built once in

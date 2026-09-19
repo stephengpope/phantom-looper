@@ -58,7 +58,19 @@ function checkSchedule(schedule: string, timezone: string, now: Date): void {
 }
 
 export class Crons {
+  private listeners: Array<(workspaceId: string) => void> = [];
   constructor(private readonly db: Db) {}
+
+  /** Hear every write, by workspace — the scheduler re-registers that
+   *  workspace's crons on each. Events, not polling: the table is written
+   *  only here, so here is where a change is known. */
+  subscribe(fn: (workspaceId: string) => void): () => void {
+    this.listeners.push(fn);
+    return () => { this.listeners = this.listeners.filter((l) => l !== fn); };
+  }
+  private changed(workspaceId: string): void {
+    for (const l of this.listeners) l(workspaceId);
+  }
 
   // ── reads ──────────────────────────────────────────────────────────────────
 
@@ -74,10 +86,12 @@ export class Crons {
     return rows[0];
   }
 
-  /** Every enabled cron on the server — what the scheduler registers, each
-   *  in its workspace's zone. */
-  async listEnabled(): Promise<CronRow[]> {
-    return this.db.select().from(crons).where(eq(crons.enabled, true)).orderBy(crons.id);
+  /** Every enabled cron — what the scheduler registers, each in its
+   *  workspace's zone. One workspace's, or all. */
+  async listEnabled(workspaceId?: string): Promise<CronRow[]> {
+    return this.db.select().from(crons)
+      .where(and(eq(crons.enabled, true), workspaceId ? eq(crons.workspace_id, workspaceId) : undefined))
+      .orderBy(crons.id);
   }
 
   /** The row behind a registration — re-read at fire time, so an edited
@@ -101,6 +115,7 @@ export class Crons {
         .values({ workspace_id: w.id, name, schedule, once: isOnce(schedule), prompt,
           enabled: fields.enabled ?? true, created_at: now, updated_at: now })
         .returning();
+      this.changed(w.id);
       return row;
     } catch (e) {
       if (isUniqueViolation(e)) throw new CronError('duplicate_name', `a cron named "${name}" already exists — update it, or pick another name`);
@@ -125,6 +140,7 @@ export class Crons {
     if (!prior) throw new CronError('not_found', `no cron named "${name}" in this workspace`);
     try {
       const [row] = await this.db.update(crons).set({ ...set, updated_at: now }).where(eq(crons.id, prior.id)).returning();
+      this.changed(w.id);
       return row;
     } catch (e) {
       if (isUniqueViolation(e)) throw new CronError('duplicate_name', `a cron named "${set.name}" already exists`);
@@ -136,11 +152,13 @@ export class Crons {
     const prior = await this.byName(w, name);
     if (!prior) return false;
     await this.db.delete(crons).where(eq(crons.id, prior.id));
+    this.changed(w.id);
     return true;
   }
 
-  /** The scheduler's removal: a one-time cron whose moment passed while the
-   *  server was down can never fire and is not a cron any more. */
+  /** The scheduler's own removal — a one-time cron whose moment passed
+   *  while the server was down can never fire and is not a cron any more.
+   *  Not announced: the scheduler is the one listening. */
   async removeById(id: number): Promise<void> {
     await this.db.delete(crons).where(eq(crons.id, id));
   }
