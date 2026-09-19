@@ -238,6 +238,10 @@ async function main() {
   // go through recordSummary above (that needs the session); they ride
   // the backdoor queue, in front of the agent's next turn wherever that
   // turn runs. A note already waiting is not queued again.
+  //
+  // It publishes NO steps to the feed: nobody asked for it, so its progress
+  // is noise on every open window. What does reach the feed is a failure
+  // (`sync-failed`) — the one thing a person needs to hear from it.
   const noteForNextTurn: SyncDeps['recordSummary'] = async (session, workspace, result, opts) => {
     let message: string;
     if (result.outcome === 'ok') {
@@ -250,10 +254,10 @@ async function main() {
   const instantDeps = { sessions, folders, cards, settings, paths, messageConfig, recordSummary: noteForNextTurn };
   const instantSync = new InstantSync({
     sessions, folders, workspaces, settings, paths,
-    autoPush: (session, workspace) => autoPush({ ...instantDeps, onEvent: publishSync(session.id, 'push') },
-      session, workspace, { hold: false }),
-    autoPull: (session, workspace) => autoPull({ ...instantDeps, onEvent: publishSync(session.id, 'pull') },
-      session, workspace, { hold: false }),
+    autoPush: (session, workspace) => autoPush(instantDeps, session, workspace, { hold: false }),
+    autoPull: (session, workspace) => autoPull(instantDeps, session, workspace, { hold: false }),
+    failed: (session, op, reason) =>
+      sessionEvents.publish(session.id, GIT_CLIENT_ID, { event: 'sync-failed', op, reason }),
   });
   // What the container events cannot say: the switch or a timing changed
   // (the settings bus announces every write), and containers already running

@@ -45,6 +45,12 @@ export type SessionEvent =
    *  echo rule skips the one window that already draws the stream it asked
    *  for. */
   | { event: 'sync'; op: 'push' | 'pull'; step: string; detail?: string }
+  /** An instant sync (git/instantSync.ts) did not complete: git failed, or a
+   *  conflict was left in the files for the agent. Instant sync publishes no
+   *  steps — it runs on its own, and its progress is nobody's news — so this
+   *  is the one thing a watcher hears from it. `reason` is the sync's own
+   *  words. Said once per reason, not once per beat. */
+  | { event: 'sync-failed'; op: 'push' | 'pull'; reason: string }
   /** Someone asked this session's turn to stop (esc-esc in a cli window,
    *  /stop on telegram). THE stop signal: whoever runs a turn on the session
    *  listens for it and aborts its own turn — a cli window's feed, the

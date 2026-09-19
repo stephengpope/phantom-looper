@@ -1486,6 +1486,12 @@ export class WindowStore {
         this.refreshIfMoved(id, updatedAt || null, keepScreen),
       onPlanModeChanged: (on) => this.applyPlanMode(id, on),
       onModelChanged: () => this.refreshAgent(id),
+      // Named, because the toast is the window's, not the session's: a
+      // failure on a session in the background says which one.
+      onSyncFailed: (op, reason) => {
+        const e = store.get(id);
+        this.setToast(`${e ? `${this.labelOf(e)}: ` : ''}instant ${op} failed — ${reason}`);
+      },
     });
     this.feeds.set(id, feed);
     feed.start();

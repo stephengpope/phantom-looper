@@ -32,6 +32,10 @@ export interface FeedHooks {
    *  been said to yet). The window asks the server for the session's config
    *  again and rebuilds the agent on it. */
   onModelChanged?: () => Promise<void> | void;
+  /** An instant sync on this session did not complete. `reason` is the
+   *  sync's own words. The window shows it where it will be seen (a toast),
+   *  not as a line in the pane. */
+  onSyncFailed?: (op: 'push' | 'pull', reason: string) => void;
 }
 
 const agentName = (agent: string): string | undefined =>
@@ -129,6 +133,9 @@ export class SessionFeed {
         this.store.note(this.sessionId, `${op}: ${AUTO_PUSH_STEPS[step] ?? step}${detail}`);
         return;
       }
+      case 'sync-failed':
+        this.hooks.onSyncFailed?.(rec.op === 'push' ? 'push' : 'pull', String(rec.reason ?? ''));
+        return;
       case 'interrupt':
         // The stop signal (esc-esc in another window, /stop on telegram, the
         // interrupt route). If the turn is OURS, this ends it exactly as esc

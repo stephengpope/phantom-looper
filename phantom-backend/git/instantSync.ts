@@ -12,9 +12,11 @@
 //      (@parcel/watcher, inotify) does nothing but record WHEN the last
 //      change happened.
 //
-// The beat knows no git. It calls the two functions and logs a success; a
-// refusal — the checkout lock held by a manual sync, a rebase left stopped
-// for the agent — comes back quietly and the next beat asks again. One
+// The beat knows no git. It calls the two functions and logs every result.
+// A failure — git failed, a conflict left for the agent — is also REPORTED
+// (`failed`, wired to the session feed), once per reason: the same refusal
+// on the next beat ("a rebase is in progress") is the same news, and
+// `busy` (a manual sync holds the checkout) is no news at all. One
 // timer per checkout is only how the two calls are scheduled; what keeps
 // any two syncs off one checkout is the CHECKOUT LOCK (folders.ts), taken
 // inside the sync itself by every caller.
@@ -67,6 +69,8 @@ export interface InstantSyncDeps {
    *  hold, no fixer, notes to the backdoor queue. */
   autoPush: (session: SessionRow, workspace: WorkspaceRow) => Promise<AutoPushResult>;
   autoPull: (session: SessionRow, workspace: WorkspaceRow) => Promise<AutoPullResult>;
+  /** A sync that did not complete, in the sync's own words. */
+  failed: (session: SessionRow, op: 'push' | 'pull', reason: string) => void;
 }
 
 interface Watched {
@@ -77,6 +81,10 @@ interface Watched {
   pullMs: number;
   /** When a file last changed; null once that change has been pushed. */
   changedAt: number | null;
+  /** The failure last reported, per direction — so a beat that hits the
+   *  same wall says nothing new. Cleared by a sync that ran and did not
+   *  fail; `busy` (it did not run) leaves it alone. */
+  lastFailure: { push: string | null; pull: string | null };
   timer?: NodeJS.Timeout;
   stopped: boolean;
 }
@@ -155,7 +163,7 @@ export class InstantSync {
     // `changedAt` far in the past: the first beat runs a push check, so work
     // left unpushed before this watcher existed (a server restart) goes now.
     w = { folderId, workspace, subscription, debounceMs: c.debounceMs, pullMs: c.pullMs,
-      changedAt: 0, stopped: false };
+      changedAt: 0, lastFailure: { push: null, pull: null }, stopped: false };
     this.watched.set(folderId, w);
     log.info({ folder: folderId, workspace: workspace.id, debounceMs: c.debounceMs, pullMs: c.pullMs }, 'instant sync on');
     void this.beat(w);
@@ -179,11 +187,11 @@ export class InstantSync {
       const session = await this.deps.sessions.get(w.folderId);
       if (!session) return;
       const pulled = await this.deps.autoPull(session, w.workspace);
-      if (pulled.result === 'merged') log.info({ folder: w.folderId }, 'instant pull done');
+      this.settle(w, session, 'pull', pulled);
       const since = w.changedAt;
       if (since !== null && Date.now() - since >= w.debounceMs) {
         const pushed = await this.deps.autoPush(session, w.workspace);
-        if (pushed.result === 'pushed') log.info({ folder: w.folderId }, 'instant push done');
+        this.settle(w, session, 'push', pushed);
         // The change is done with — unless the checkout was held (a manual
         // sync): then it is still pending for the next beat. A change made
         // DURING the push moved `changedAt`, and is left to settle on its own.
@@ -194,5 +202,24 @@ export class InstantSync {
     } finally {
       if (!w.stopped) w.timer = setTimeout(() => void this.beat(w), w.pullMs);
     }
+  }
+
+  /** One sync's result: logged whatever it is; a failure reported once. */
+  private settle(w: Watched, session: SessionRow, op: 'push' | 'pull',
+    r: AutoPushResult | AutoPullResult): void {
+    const at = { folder: w.folderId, op, result: r.result };
+    if (r.result === 'error' || r.result === 'blocked') {
+      const reason = r.reason ?? r.result;
+      // Every failure is logged; only a NEW one is reported to a person.
+      if (w.lastFailure[op] === reason) { log.debug({ ...at, reason }, 'instant sync still failing'); return; }
+      w.lastFailure[op] = reason;
+      log.warn({ ...at, reason }, 'instant sync failed');
+      this.deps.failed(session, op, reason);
+      return;
+    }
+    if (r.result === 'busy') { log.debug(at, 'instant sync: checkout held, next beat'); return; }
+    w.lastFailure[op] = null;
+    if (r.result === 'pushed' || r.result === 'merged') log.info(at, 'instant sync done');
+    else log.debug(at, 'instant sync: nothing to do');
   }
 }
