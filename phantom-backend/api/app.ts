@@ -35,6 +35,7 @@ import type { Crons } from '../crons.js';
 import type { LogTokens } from '../logTokens.js';
 import { SettingsEvents } from './settingsEvents.js';
 import { ForegroundCommands } from './foreground.js';
+import type { System } from '../system.js';
 import { BackdoorQueue } from './backdoor.js';
 import type { AutoPushResult, AutoPushEvent } from '../git/autoPush.js';
 import type { AutoPullResult, AutoPullEvent } from '../git/autoPull.js';
@@ -98,6 +99,8 @@ export interface AppCtx {
   /** Active server-side turns, keyed by session id. The interrupt route aborts
    *  the controller; the turn runner registers on entry and removes on exit.
    *  Absent only in tests that never run a turn. */
+  /** The server's own housekeeping — logs, status, restart, token report (system.ts). */
+  system: System;
   activeTurns?: Map<string, AbortController>;
   /** In-flight foreground (unary bash) commands per session (foreground.ts).
    *  The interrupt route kills them: aborting the stream alone leaves the
@@ -122,7 +125,6 @@ export interface AppCtx {
    *  call site guards with `?.`. */
   looper?: {
     /** A card was written — run its loop while it canTurn. */
-    runLoop(workspaceId: string, cardNumber: number): void;
     /** A session lock was released — its card, if any, may be runnable.
      *  `releasedBy` is the releasing client id: the engine ignores its own
      *  releases (every turn ends in one — reacting would spin). */

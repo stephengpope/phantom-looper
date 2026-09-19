@@ -1,36 +1,19 @@
-// What the Assistant can do to this window: list, read, switch and close
-// sessions; drive the board and the screen; create a workspace behind the
-// approval gate; push and pull. The tool DEFINITIONS live in voice.ts; these
-// are the handlers behind them, and every one reads the window live rather
-// than closing over a value — the Assistant's agent is built once (voice
-// start, a model change) and must not answer with the session that was on
-// screen when it was built.
+// What the Assistant can do to this window. The tool DEFINITIONS live in
+// tui.ts (re-exported by voice.ts); the HANDLERS are core's one set
+// (core/llm/tools/assistantHandlers.ts — the same code the Telegram bot
+// answers with). This file supplies what only the window knows — which
+// session is on screen, how to open one, the approval pane, the local turns
+// — and the two handlers that ARE the window's: the board (its live
+// BoardStore, and moving the screen) and screen mode.
 import type { Tool } from 'ai';
 import { sessionsTool, assistantKanbanTool, workspaceCreateTool, gitAutoPushTool,
-  gitAutoPullTool, assistantModeTool, kebabName, renderRead, renderRaw, dockerLogsTool,
-  type SessionsArgs, type KanbanArgs, type WorkspaceCreateArgs,
-  type GitAutoPushArgs, type GitAutoPullArgs, type DockerLogsArgs } from './voice.js';
-import { isRunning, whoDrives, ago, type SessionInfo, type WorkspaceInfo } from './components/Launcher.js';
+  gitAutoPullTool, assistantModeTool, dockerLogsTool, type KanbanArgs } from './voice.js';
+import { sessionsHandler, workspaceCreateHandler, gitHandlers, dockerLogsHandler,
+  type AssistantHost } from '../core/llm/tools/assistantHandlers.js';
+import type { WorkspaceInfo } from './components/Launcher.js';
 import { kanbanOps, resolveColumn } from './kanban.js';
 import type { WindowStore } from './window.js';
 import type { Api } from './request.js';
-
-/** `session_list`'s page, for the ASSISTANT rather than the screen. 20 is a
- *  spoken answer's worth ("you have four running, and…"); 50 is the ceiling on
- *  one reply. REACH is how far back offset may go: GET /sessions caps `limit`
- *  at 500 and rejects more outright, and the page is taken by asking for
- *  offset+limit rows and dropping the first offset — so offset+limit is the
- *  number that must stay inside the server's cap. */
-export const SESSION_PAGE = 50, SESSION_MAX = 100, SESSION_REACH = 500;
-
-/** One line, capped — a session's last message identifies it; the rest of a
- *  pasted essay is noise in a list of twenty. */
-const oneLine = (s: string | null | undefined, max = 80): string | null => {
-  if (!s) return null;
-  const flat = s.replace(/\s+/g, ' ').trim();
-  if (!flat) return null;
-  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
-};
 
 /** The workspace names the session tools speak with: a 26-character id cannot
  *  be read aloud. Fetched ONCE, lazily — a window that never opened the
@@ -38,8 +21,7 @@ const oneLine = (s: string | null | undefined, max = 80): string | null => {
 export class WorkspaceDirectory {
   private rows: WorkspaceInfo[] = [];
   constructor(private api: Api) {}
-  /** Fill the cache if it is empty. Safe to await beside another request —
-   *  session_list runs it in parallel with its own fetch. */
+  /** Fill the cache if it is empty. */
   async ensure(): Promise<void> {
     if (this.rows.length) return;
     const ws = await this.api('GET', '/workspaces');
@@ -56,131 +38,46 @@ export class WorkspaceDirectory {
   }
 }
 
-/** The `session_*` family, one handler.
- *
- *  LIST is the SERVER's answer, not this window's. The store only holds the
- *  sessions you opened here — listing from it made the Assistant say "just
- *  one" while the workspace held fifty. The window still supplies the two
- *  facts the server cannot know: which session is on screen, and which is
- *  mid-turn locally.
- *
- *  Paging is offset/limit, matching session_read and kanban_card_history
- *  rather than the cursor /resume uses: the caller is a model, and an offset
- *  is something it can reason about, while a two-field cursor is something it
- *  must copy back perfectly. The page is ONE request — ask for the rows up to
- *  the end of the window (plus the lookahead), drop the first offset, and
- *  never re-sort: the ordering has exactly one home, on the server. */
-export function sessionsHandler(win: WindowStore, api: Api, clientId: string,
-  workspaces: WorkspaceDirectory) {
+/** The window as an AssistantHost: every fact read LIVE off the window, never
+ *  closed over — the agent is built once (voice start, a model change) and
+ *  must not answer with the session that was on screen when it was built. */
+export function windowHost(win: WindowStore, deps: {
+  api: Api; clientId: string; workspaces: WorkspaceDirectory;
+}): AssistantHost {
   const store = win.sessions;
-  return async (args: SessionsArgs): Promise<unknown> => {
-    if (args.action === 'list') {
-      const limit = Math.min(Math.max(1, Math.trunc(args.limit ?? SESSION_PAGE)), SESSION_MAX);
-      const offset = Math.max(0, Math.trunc(args.offset ?? 0));
-      // One row past the window is the LOOKAHEAD: it is the difference
-      // between "the page came back full" (which cannot tell a full list from
-      // one with more behind it) and knowing. Fetched, never shown.
-      const want = offset + limit + 1;
-      if (want > SESSION_REACH) {
-        return { error: `the list reaches ${SESSION_REACH} sessions back; offset + limit must stay inside that`,
-          on_screen: store.activeId };
-      }
-      let rows: SessionInfo[];
-      try {
-        // The workspace names ride along on the first list, in parallel.
-        const [got] = await Promise.all([
-          api('GET', `/sessions?limit=${want}`),
-          workspaces.ensure(),
-        ]);
-        // A server that answers something other than a list is a broken
-        // server, not a crashed tool: say so and keep the window usable.
-        const list = (got as { sessions?: unknown })?.sessions;
-        rows = Array.isArray(list) ? list as SessionInfo[] : [];
-      } catch (e) {
-        return { error: `could not list sessions: ${(e as Error).message}`, on_screen: store.activeId };
-      }
-      const page = rows.slice(offset, offset + limit);
-      const busy = (id: string) => store.get(id)?.busy ?? false;
-      return {
-        // The header states the slice the way renderRead's does — the model
-        // reports where it is instead of implying it saw everything.
-        showing: `${page.length} session${page.length === 1 ? '' : 's'}, newest activity first`
-          + (offset ? ` (skipping the ${offset} most recent)` : ''),
-        // The lookahead row came back, so there is genuinely more behind this
-        // page — not "the page was full, who knows".
-        more: rows.length > offset + limit,
-        // Stated even when that session falls outside the page.
-        on_screen: store.activeId,
-        sessions: page.map((s) => ({
-          id: s.id,
-          name: s.name ?? null,
-          // The workspace by NAME: a 26-character id cannot be spoken.
-          workspace: workspaces.name(s.workspaceId),
-          branch: s.branch ?? null,
-          card: s.card ?? null,
-          card_status: s.cardStatus ?? null,
-          // Who drives it — the launcher's own three-way. Supervisor rows are
-          // MARKED, not hidden: the looper mints one per card, and a list that
-          // silently drops half of itself is a list that lies.
-          kind: whoDrives(s),
-          status: s.status === 'active' ? 'active' : 'ended',
-          running: isRunning(s, { busy, clientId }),
-          on_screen: s.id === store.activeId,
-          git_status: s.work ?? null,
-          model: s.model ?? null,
-          tokens: s.tokensOutput ?? null,
-          last_message: oneLine(s.lastUserMessage),
-          when: ago(s.lastUsedAt),
-        })),
-      };
-    }
-    if (args.action === 'switch') {
-      // ONE open path, always — openSession decides whether the session is
-      // already here, needs attaching, or (having been swept) needs
-      // restarting. No partial-id matching: that took the FIRST session whose
-      // id started with the argument, so an ambiguous prefix silently landed
-      // on the wrong conversation. Ids come from session_list in the same
-      // breath; exact is the whole story.
-      const id = String(args.id ?? '').trim();
-      if (!id) return { error: 'session_switch needs an id — session_list has them' };
+  return {
+    call: deps.api,
+    clientId: deps.clientId,
+    // The window's one push/pull path — /auto-push is the same door, and
+    // every step lands as a note in the session's pane.
+    autoPush: (id) => win.runAutoPush(id),
+    autoPull: (id) => win.runAutoPull(id),
+    workspaceId: () => store.active()?.workspaceId ?? null,
+    activeSession: () => store.activeId || null,
+    busy: (id) => store.get(id)?.busy ?? false,
+    history: (id) => store.get(id)?.history ?? null,
+    // ONE open path — openSession decides whether the session is already
+    // here, needs attaching, or (swept) needs restarting. Then the chat view:
+    // the builder sees the session regardless of which screen was up.
+    onSwitch: async (id) => {
       const ok = await win.openSession({ kind: 'open', id });
       if (!ok) {
         return { error: `could not open session ${id} — check the id against session_list; ` +
           'the conversation pane says what went wrong' };
       }
-      // Navigate to the CLI view: the builder sees the newly active session
-      // regardless of where they were (board, card, a menu screen).
       win.dismissOverlay();
       return { ok: true, on_screen: store.activeId };
-    }
-    if (args.action === 'close') {
-      // The app's one close path; its result is already the answer — what
-      // closed, what is on screen now, whether a fresh session had to open.
-      return win.closeSession(args.id ? String(args.id).trim() : undefined);
-    }
-    if (args.action === 'read') {
-      // No id = the session on screen; the store's history is the transcript.
-      // Only what is OPEN here can be read — switch is what opens one, and the
-      // error names that step rather than implying the id was wrong.
-      const id = args.id ? String(args.id) : store.activeId;
-      const e = id ? store.get(id) : undefined;
-      if (!e) {
-        return { error: `session ${id || '(none on screen)'} is not open in this window — ` +
-          'session_switch opens it, then read it' };
-      }
-      // Raw asks for the server's record, not this window's memory: the JSONL
-      // transcript is the exact event log (the window holds no copy of it).
-      if (args.raw) {
-        try {
-          const j = await api('GET', `/sessions/${e.id}/transcript`) as { data?: string };
-          return { text: renderRaw(String(j?.data ?? '')) };
-        } catch (err) {
-          return { error: `could not read the raw transcript: ${(err as Error).message}` };
-        }
-      }
-      return renderRead(e.id, e.history, args);
-    }
-    return { error: `unknown action ${String(args.action)}` };
+    },
+    // The app's one close path; its result is already the answer.
+    onClose: (id) => win.closeSession(id),
+    approve: (ask, signal) => {
+      if (win.approval) return Promise.resolve(false);
+      return win.requestApproval(ask, signal);
+    },
+    onWorkspaceCreated: async (workspaceId) => {
+      const opened = await win.openSession({ kind: 'new', workspaceId });
+      return opened ? { session: store.activeId } : { error: 'the conversation pane says why' };
+    },
   };
 }
 
@@ -224,96 +121,32 @@ export function kanbanHandler(win: WindowStore) {
   };
 }
 
-/** `workspace_create_repo`: kebab the name, get the user's accept (the ask
- *  shows the FINAL name — the point of the gate), then the backend does the
- *  whole flow (POST /workspaces create=true: repo, seed, register; always
- *  private, not the model's call) and the new workspace opens as a session on
- *  screen, the same join+switch every open uses. */
-export function workspaceCreateHandler(win: WindowStore, api: Api) {
-  return async (args: WorkspaceCreateArgs, opts: { abortSignal?: AbortSignal }): Promise<unknown> => {
-    const name = kebabName(args.name ?? '');
-    if (!name) return { error: 'no usable name — ask for the project name again' };
-    if (win.approval) return { error: 'another approval is already waiting on screen' };
-    const ok = await win.requestApproval({ label: 'new private repo', subject: name }, opts.abortSignal);
-    if (!ok) {
-      return { declined: true, note: 'nothing was created — the user declined (or the turn was cut off). ' +
-        'Often the name was misheard: ask what to change before calling again.' };
-    }
-    try {
-      const w = await api('POST', '/workspaces', {
-        url: name, create: true, private: true,
-        ...(args.description ? { description: args.description } : {}),
-      }) as { id: string; owner: string; name: string };
-      const opened = await win.openSession({ kind: 'new', workspaceId: w.id });
-      return { ok: true, repo: `${w.owner}/${w.name}`, private: true, workspace_id: w.id,
-        on_screen: opened ? 'a new session in the new workspace'
-          : 'workspace created, but the session could not be opened — the conversation pane says why' };
-    } catch (e) { return { error: (e as Error).message }; }
-  };
-}
-
-/** `git_auto_push` and `git_auto_pull`: the session on screen unless an id was
- *  given, awaited to the end so the Assistant can say how it went. The work
- *  itself is the window's — `/auto-push` is the same path. */
-export function gitHandlers(win: WindowStore) {
-  return {
-    push: async (args: GitAutoPushArgs) => {
-      const id = args.id ?? win.sessions.activeId;
-      if (!id) return { error: 'no session is open — nothing to push' };
-      return { session: id, ...await win.runAutoPush(id) };
-    },
-    pull: async (args: GitAutoPullArgs) => {
-      const id = args.id ?? win.sessions.activeId;
-      if (!id) return { error: 'no session is open — nothing to pull into' };
-      return { session: id, ...await win.runAutoPull(id) };
-    },
-  };
-}
-
-/** The Assistant's whole kit: the tools the window answers, plus the read-only
- *  workspace tools and the cron kit, run as the assistant's OWN session (`own`)
- *  — the server opens its folder, the on-screen session's, re-pointed on every
- *  switch — in the on-screen session's workspace.
- *  Rebuilt (setAgent — the history is kept) when that session changes; a
- *  failed fetch just means no file tools; no row yet (nothing on screen) means
- *  none either. The ORDER is part of the kit: two tests read the key list. */
+/** The Assistant's whole kit: core's handlers over this window as host, the
+ *  window's own two (board, screen mode), plus the read-only workspace tools
+ *  and the cron kit run as the assistant's OWN session (`own`) — the server
+ *  opens its folder, the on-screen session's, re-pointed on every switch — in
+ *  the on-screen session's workspace. Rebuilt (setAgent — the history is
+ *  kept) when that session changes; no row yet (nothing on screen) means no
+ *  file tools. The ORDER is part of the kit: two tests read the key list. */
 export async function buildAssistantKit(win: WindowStore, deps: {
   api: Api;
   clientId: string;
   workspaces: WorkspaceDirectory;
   newAssistantTools: (sessionId: string, workspaceId: string) => Promise<Record<string, Tool>>;
 }, own: { id: string; folderId: string | null } | null): Promise<Record<string, Tool>> {
-  const git = gitHandlers(win);
+  const host = windowHost(win, deps);
+  const git = gitHandlers(host);
   const sessionId = own?.folderId ? own.id : null;
-  // The on-screen session's workspace — where the assistant's crons go.
   const workspaceId = win.sessions.active()?.workspaceId ?? null;
   return {
-    ...sessionsTool(sessionsHandler(win, deps.api, deps.clientId, deps.workspaces)),
+    ...sessionsTool(sessionsHandler(host)),
     ...assistantKanbanTool(kanbanHandler(win)),
-    ...workspaceCreateTool(workspaceCreateHandler(win, deps.api)),
+    ...workspaceCreateTool(workspaceCreateHandler(host)),
     ...gitAutoPushTool(git.push),
     ...gitAutoPullTool(git.pull),
     ...assistantModeTool(win.screenOps()),
-    ...dockerLogsTool(dockerLogsHandler(deps.api)),
+    ...dockerLogsTool(dockerLogsHandler(host)),
     ...(sessionId && workspaceId
       ? await deps.newAssistantTools(sessionId, workspaceId).catch(() => ({} as Record<string, Tool>)) : {}),
-  };
-}
-
-/** `docker_logs`: the args straight through to POST /system/logs — the route
- *  does the narrowing; the result is just shaped for the model. */
-function dockerLogsHandler(api: Api) {
-  return async (args: DockerLogsArgs): Promise<unknown> => {
-    let d: { service: string; text: string; truncated?: boolean };
-    try {
-      d = await api('POST', '/system/logs', args) as typeof d;
-    } catch (e) {
-      return { error: (e as Error).message };
-    }
-    return {
-      service: d.service,
-      text: d.text || '(no matching log lines)',
-      ...(d.truncated ? { truncated: 'output hit the 64 KB cap — narrow with tail/since/grep and retry' } : {}),
-    };
   };
 }

@@ -5,17 +5,14 @@
 import { eq } from 'drizzle-orm';
 import { isUniqueViolation, type Db } from './db/client.js';
 import { presets, type PresetRow } from './db/schema.js';
-import { isSettingKey, validateSetting } from './settings.js';
+import { META, isSettingKey, validateSetting, type SettingKey } from './settings.js';
 
-/** The setting keys a preset may hold — the model trio, reasoning and max
- *  steps, for each of the three agents. Everything else is refused. */
-export const PRESET_KEYS = [
-  'coding_provider', 'coding_model', 'coding_base_url', 'coding_reasoning', 'coding_max_steps',
-  'assistant_provider', 'assistant_model', 'assistant_base_url',
-  'assistant_reasoning', 'assistant_max_steps',
-  'supervisor_provider', 'supervisor_model', 'supervisor_base_url',
-  'supervisor_reasoning', 'supervisor_max_steps',
-] as const;
+/** The setting keys a preset may hold: every agent's `model` rows — read off
+ *  META's `subgroup`, the ONE declaration of which settings are "the model"
+ *  (the cli's preset editor reads the same fact off GET /settings). Everything
+ *  else is refused. */
+export const PRESET_KEYS: readonly SettingKey[] =
+  (Object.keys(META) as SettingKey[]).filter((k) => META[k].subgroup === 'model');
 const PRESET_KEY_SET = new Set<string>(PRESET_KEYS);
 
 export class PresetError extends Error {

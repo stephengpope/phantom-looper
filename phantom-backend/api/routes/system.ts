@@ -9,63 +9,23 @@
 // docker socket.
 import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs/promises';
-import { statfsSync } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { PassThrough, Readable } from 'node:stream';
-import type Docker from 'dockerode';
 import type { AppCtx } from '../app.js';
 import { err, ok } from '../app.js';
 import { logger, errStr } from '../../log.js';
 import { catalog, modelsFor } from '../../models.js';
 import { PROVIDERS, isProvider } from '../../../core/llm/createAgent.js';
-import { startUpdate, subscribe, isRunning, type UpdateListener } from '../updateTask.js';
-import { formatTokenReport, reportWindows } from '../../tokenReport.js';
+import { SystemError, LOG_MAX_TAIL, LOG_SERVICES } from '../../system.js';
 
 const log = logger('system');
 
-/** A log answer is a page, not a dump: lines asked for, bytes returned. */
-const LOG_MAX_BYTES = 64 * 1024;
-const LOG_MAX_TAIL = 1000;
-
-/** The stack's containers a service name may mean — the label the compose
- *  file sets, never a container name (compose generates those). */
-const LOG_SERVICES = ['api', 'postgres', 'caddy', 'updater', 'autoheal'] as const;
-
-/** The one container for a compose service, or null when absent or stopped
- *  (listContainers is running-only). */
-async function serviceContainer(docker: Docker, service: string): Promise<Docker.Container | null> {
-  const list = await docker.listContainers({ filters: { label: [`com.docker.compose.service=${service}`] } });
-  return list.length ? docker.getContainer(list[0].Id) : null;
-}
-
-/** The container's whole log stream as one string (stdout + stderr, demuxed
- *  — over the socket the two arrive in one multiplexed stream). */
-async function readLogs(docker: Docker, container: Docker.Container,
-  opts: { tail: number; since?: string }): Promise<string> {
-  // follow:false answers with the whole multiplexed payload as ONE buffer;
-  // re-stream it so the modem can split stdout/stderr frames off it.
-  const raw = await container.logs({
-    stdout: true, stderr: true, follow: false,
-    tail: opts.tail, ...(opts.since ? { since: opts.since } : {}),
-  });
-  const out: Buffer[] = [];
-  const sink = new PassThrough();
-  sink.on('data', (d: Buffer) => out.push(d));
-  const source = Readable.from(raw);
-  docker.modem.demuxStream(source, sink, sink);
-  // demuxStream never ends the output streams — end the sink once the source
-  // is fully consumed so the 'finish' promise below can resolve.
-  source.on('end', () => sink.end());
-  await new Promise<void>((resolve, reject) => {
-    sink.on('finish', resolve);
-    // safety: never hang longer than 8 s even if something else goes wrong
-    setTimeout(() => { sink.end(); reject(new Error('log read timed out')); }, 8_000);
-  });
-  return Buffer.concat(out).toString('utf8');
-}
-
 export const RELEASE_TAG = /^v\d+\.\d+\.\d+$/;
+
+/** The System object's refusal, as the API's answer. */
+const systemErr = (reply: { code: (n: number) => { send: (b: unknown) => unknown } }, e: unknown) => {
+  if (!(e instanceof SystemError)) throw e;
+  return reply.code(e.code === 'no_such_service' ? 404 : 503).send(err(e.code, e.message));
+};
 
 export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
   // The model catalog, served by the server so every client and the `model`
@@ -109,58 +69,21 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
     },
   }, async (req, reply) => {
     const { tag, restart_anyway: restartAnyway } = req.body as { tag: string; restart_anyway?: boolean };
-    const docker = ctx.fs?.docker;
-
-    // THE guard: a restart interrupts every loop round in flight (they resume
-    // after boot), so a request that has not been explicitly told to restart
-    // anyway is refused while any card is mid-round.
-    const loops = ctx.looper?.runningCount() ?? 0;
-    if (loops > 0 && !restartAnyway) {
-      return reply.code(409).send(err('loops_running',
-        `${loops === 1 ? '1 card has' : `${loops} cards have`} a round in flight — updating now would interrupt ${loops === 1 ? 'it' : 'them'} (${loops === 1 ? 'it resumes' : 'they resume'} after the restart); send restart_anyway: true to update anyway`, true));
-    }
-    if (!ctx.updateTriggerDir) {
-      return reply.code(503).send(err('updater_unavailable', 'this server has no updater sidecar (UPDATE_TRIGGER_DIR unset) — re-run install.sh once'));
-    }
-    if (!docker) {
-      return reply.code(503).send(err('updater_unavailable', 'this server has no docker access'));
-    }
-
-    const apiImage = process.env.API_IMAGE ?? 'ghcr.io/stephengpope/phantom-backend-api';
-    const sessionImage = 'ghcr.io/stephengpope/phantom-backend-session';
-
-    // Start the task (or attach to an existing one).
-    if (!isRunning()) {
-      startUpdate(docker, tag, ctx.updateTriggerDir, apiImage, sessionImage);
-    }
-
-    // Stream ND-JSON progress to the client.
-    reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
+    // Stream ND-JSON progress to the client; heartbeats keep the connection alive.
+    let run: ReturnType<typeof ctx.system.update>;
     const write = (o: unknown) => { reply.raw.write(`${JSON.stringify(o)}\n`); };
-    const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
-
-    const listener: UpdateListener = (e) => {
-      write(e);
-      // After "restarting" or "error", close the stream.
-      if (e.event === 'restarting' || e.event === 'error') {
-        clearInterval(heartbeat);
-        reply.raw.end();
-      }
-    };
-
-    const unsub = subscribe(listener);
-    if (!unsub) {
-      // Task already finished (race — very unlikely).
-      clearInterval(heartbeat);
-      write({ event: 'error', message: 'no update in progress' });
-      reply.raw.end();
-      return reply;
+    try { run = ctx.system.update(tag, { restartAnyway }, write); }
+    catch (e) {
+      if (!(e instanceof SystemError)) throw e;
+      return reply.code(e.code === 'loops_running' ? 409 : 503).send(err(e.code, e.message, e.retryable));
     }
-
-    // Wait for the client to disconnect or the stream to end.
-    await new Promise<void>((resolve) => reply.raw.on('close', resolve));
+    reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
+    const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
+    const closed = new Promise<void>((resolve) => reply.raw.on('close', resolve));
+    await Promise.race([run.done, closed]);
     clearInterval(heartbeat);
-    unsub();
+    run.stop();
+    reply.raw.end();
     return reply;
   });
 
@@ -184,35 +107,8 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
       },
     },
   }, async (req, reply) => {
-    const docker = ctx.fs?.docker;
-    if (!docker) return reply.code(503).send(err('logs_unavailable', 'this server has no docker access'));
-    const { service = 'api', tail = 100, since, grep } = req.body ?? {};
-    const container = await serviceContainer(docker, service).catch(() => null);
-    if (!container) {
-      return reply.code(404).send(err('no_such_service', `no running container for service "${service}"`));
-    }
-    let text: string;
-    try {
-      text = await readLogs(docker, container, { tail, since });
-    } catch (e) {
-      log.error({ err: errStr(e), service }, 'log read failed');
-      return reply.code(503).send(err('logs_unavailable', `could not read ${service} logs: ${errStr(e)}`));
-    }
-    if (grep) {
-      let keep: (line: string) => boolean;
-      try {
-        const re = new RegExp(grep, 'i');
-        keep = (line) => re.test(line);
-      } catch {
-        const needle = grep.toLowerCase();  // not a regex — a plain substring
-        keep = (line) => line.toLowerCase().includes(needle);
-      }
-      text = text.split('\n').filter(keep).join('\n');
-    }
-    // The newest lines are the answer: cut from the FRONT when over the cap.
-    const truncated = text.length > LOG_MAX_BYTES;
-    if (truncated) text = text.slice(-LOG_MAX_BYTES);
-    return ok({ service, text, ...(truncated ? { truncated: true } : {}) });
+    try { return ok(await ctx.system.logs(req.body ?? {})); }
+    catch (e) { return systemErr(reply, e); }
   });
 
   app.get('/system/status', {
@@ -224,41 +120,7 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
         'statfs on it is the disk docker\'s data lives on. Answers as preformatted `text` — render it ' +
         'as-is (the cli\'s /cpu and telegram\'s /cpu both do).',
     },
-  }, async () => {
-    const gib = (bytes: number) => `${(bytes / 2 ** 30).toFixed(1)}G`;
-    // Two samples of the per-cpu tick counters, 250 ms apart — the same math
-    // top does, no subprocess.
-    const times = () => os.cpus().map((c) => ({ ...c.times }));
-    const a = times();
-    await new Promise((r) => setTimeout(r, 250));
-    const b = times();
-    let idle = 0, all = 0;
-    for (let i = 0; i < a.length; i++) {
-      const totalA = a[i].user + a[i].nice + a[i].sys + a[i].idle + a[i].irq;
-      const totalB = b[i].user + b[i].nice + b[i].sys + b[i].idle + b[i].irq;
-      idle += b[i].idle - a[i].idle;
-      all += totalB - totalA;
-    }
-    const cpuPct = all > 0 ? Math.round((1 - idle / all) * 100) : 0;
-    const load = os.loadavg().map((n) => n.toFixed(2)).join(' ');
-    const totalMem = os.totalmem(), freeMem = os.freemem();
-    const disk = statfsSync(ctx.paths.root);
-    const diskTotal = disk.blocks * disk.bsize, diskAvail = disk.bavail * disk.bsize;
-    const text = [
-      '== cpu ==',
-      `${cpuPct}% busy · ${a.length} cores`,
-      '',
-      '== load ==',
-      `${load}  (1, 5, 15 min)`,
-      '',
-      '== memory ==',
-      `${gib(totalMem - freeMem)} used · ${gib(freeMem)} free · ${gib(totalMem)} total`,
-      '',
-      '== disk (root filesystem) ==',
-      `${gib(diskTotal - diskAvail)} used · ${gib(diskAvail)} free · ${gib(diskTotal)} total`,
-    ].join('\n');
-    return ok({ text });
-  });
+  }, async () => ok(await ctx.system.status()));
 
   app.post<{ Body: { service?: string } }>('/system/restart', {
     schema: {
@@ -276,38 +138,8 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
       },
     },
   }, async (req, reply) => {
-    const docker = ctx.fs?.docker;
-    if (!docker) return reply.code(503).send(err('restart_unavailable', 'this server has no docker access'));
-    const service = req.body?.service ?? 'api';
-    const all = await docker.listContainers().catch((e) => {
-      log.error({ err: errStr(e) }, 'container list failed');
-      return null;
-    });
-    if (!all) return reply.code(503).send(err('restart_unavailable', 'docker did not answer'));
-    const target = all.find((c) => (c.Labels?.['com.docker.compose.service'] ?? '') === service);
-    if (!target) {
-      const services = [...new Set(all.map((c) => c.Labels?.['com.docker.compose.service']).filter(Boolean))].sort();
-      return reply.code(404).send(err('no_such_service',
-        `no running container for service "${service}" — running services: ${services.join(', ') || '(none)'}`));
-    }
-    const container = docker.getContainer(target.Id);
-    if (service === 'api') {
-      // Reply first: the restart kills this very process, so the answer must
-      // be out the door before docker is asked.
-      setTimeout(() => {
-        container.restart().catch((e) => log.warn({ err: errStr(e) }, 'api self-restart failed'));
-      }, 500).unref();
-      log.info('api restart requested');
-      return ok({ restarting: service, note: 'the api is restarting — back in a few seconds' });
-    }
-    try {
-      await container.restart();
-    } catch (e) {
-      log.error({ err: errStr(e), service }, 'restart failed');
-      return reply.code(503).send(err('restart_unavailable', `could not restart ${service}: ${errStr(e)}`));
-    }
-    log.info({ service }, 'service restarted');
-    return ok({ restarting: service });
+    try { return ok(await ctx.system.restart(req.body?.service)); }
+    catch (e) { return systemErr(reply, e); }
   });
 
   // ---- token usage report ---------------------------------------------------
@@ -319,9 +151,5 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
       summary: 'Token usage report — today, last 7 days, last 30 days; agents and helpers by model',
       description: 'Sums the log_tokens entries. Answers as preformatted `text`.',
     },
-  }, async () => {
-    const now = new Date();
-    const rows = await ctx.logTokens.report(reportWindows(now));
-    return ok({ text: formatTokenReport(rows, now) });
-  });
+  }, async () => ok(await ctx.system.tokenUsage()));
 }

@@ -27,6 +27,9 @@ import { MODE_MESSAGE, type TelegramMode } from './botState.js';
 import { PROVIDERS } from '../../core/llm/createAgent.js';
 import { hasCatalog, latestModel, modelsFor } from '../models.js';
 import { credentialForProvider } from '../settings.js';
+import { isHeld } from '../sessions.js';
+import { GLOBAL } from '../store.js';
+import { CLIENT_ID } from './assistant.js';
 
 interface Cmd { command: string; description: string }
 
@@ -133,20 +136,20 @@ export async function handleCommand(
         return;
       }
       // Bare: list them.
-      const j = await (await engine.api('/sessions?typed=true&background=false&limit=10')).json();
-      if (!j.ok || !j.data.sessions.length) { await reply('ℹ️ No sessions yet. /new starts one.'); return; }
-      sessionList.set(dm, j.data.sessions.map((s: any) => s.id));
-      const rows = j.data.sessions.map((s: any, i: number) =>
-        `${i + 1}. ${s.pinned ? '📌 ' : ''}${s.name ?? 'untitled'}${s.id === bot.activeSessionId ? ' (active)' : ''}${s.locked ? ' (busy)' : ''}`);
+      const { sessions } = await engine.sessions.list({ typed: true, background: false, limit: 10 });
+      if (!sessions.length) { await reply('ℹ️ No sessions yet. /new starts one.'); return; }
+      sessionList.set(dm, sessions.map((s) => s.id));
+      const now = Date.now();
+      const rows = sessions.map((s, i) =>
+        `${i + 1}. ${s.pinned ? '📌 ' : ''}${s.name ?? 'untitled'}${s.id === bot.activeSessionId ? ' (active)' : ''}${isHeld(s, now) ? ' (busy)' : ''}`);
       await client.sendMarkdown(dm, titled('📋 Sessions:', [...rows, '',
         'Pick one with /sessions <number>; /code <number> talks to its coding agent'].join('\n')));
       return;
     }
 
     case 'workspaces': {
-      const j = await (await engine.api('/workspaces')).json();
-      const list: any[] = j.ok ? (j.data.workspaces ?? j.data) : [];
-      if (!Array.isArray(list) || !list.length) { await reply('ℹ️ No workspaces yet — add one in phantom-cli.'); return; }
+      const list = await engine.workspaces.list();
+      if (!list.length) { await reply('ℹ️ No workspaces yet — add one in phantom-cli.'); return; }
       // With a number: switch.
       if (arg !== undefined) {
         const ids = workspaceList.get(dm);
@@ -169,11 +172,12 @@ export async function handleCommand(
     case 'new': {
       const ws = bot.activeWorkspaceId;
       if (!ws) { await reply('⚠️ No active workspace — /workspaces to pick one first.'); return; }
-      const j = await (await engine.api('/sessions', { method: 'POST', body: { workspace_id: ws } })).json();
-      if (!j.ok) { await reply(`⚠️ Couldn't start a session: ${j.error?.message}`); return; }
+      let started;
+      try { started = await engine.sessions.start(ws); }
+      catch (e) { await reply(`⚠️ Couldn't start a session: ${(e as Error).message}`); return; }
       // Create + point at it. The mode is untouched: from home the assistant
       // keeps the conversation; in code mode the next message starts the coder.
-      await engine.botState.setActiveSession(j.data.id);
+      await engine.botState.setActiveSession(started.id);
       await reply(bot.mode === 'code'
         ? '🆕 New session. Send your first message to begin.'
         : '🆕 New session is active — /code to start coding in it.');
@@ -187,7 +191,7 @@ export async function handleCommand(
       const s = await sessionRow(engine, bot.activeSessionId);
       if (!s) { await reply('⚠️ That session no longer exists — /sessions for a fresh list.'); return; }
       const next = !s.pinned;
-      await engine.api(`/sessions/${bot.activeSessionId}`, { method: 'PATCH', body: { pinned: next } });
+      await engine.sessions.setPinned(bot.activeSessionId, next);
       await reply(next
         ? `📌 Pinned ${s.name ?? 'untitled'} — it sits at the top of the session list.`
         : `Unpinned ${s.name ?? 'untitled'}.`);
@@ -215,9 +219,9 @@ export async function handleCommand(
       ];
 
       // Server stats condensed to one line.
-      const sysJ = await (await engine.api('/system/status')).json().catch(() => null);
-      if (sysJ?.ok) {
-        const raw = String(sysJ.data.text ?? '');
+      const sys = await engine.system.status().catch(() => null);
+      if (sys) {
+        const raw = sys.text;
         const cpu = raw.match(/(\d+)% busy/)?.[1];
         const mem = raw.match(/([\d.]+G) used .* ([\d.]+G) total\n/);
         const disk = raw.match(/disk.*\n([\d.]+G) used .* ([\d.]+G) free/s);
@@ -237,7 +241,7 @@ export async function handleCommand(
       if (bot.mode !== 'code' || !bot.activeSessionId) { await reply('⚠️ Plan mode belongs to the coding agent — /code first.'); return; }
       const s = await sessionRow(engine, bot.activeSessionId);
       const next = !s?.planMode;
-      await engine.api(`/sessions/${bot.activeSessionId}`, { method: 'PATCH', body: { plan_mode: next } });
+      await engine.sessions.setPlanMode(bot.activeSessionId, next, CLIENT_ID);
       await reply(next ? '📝 Plan mode on — file tools are read-only.' : '🔧 Plan mode off — full tools.');
       return;
     }
@@ -266,8 +270,8 @@ export async function handleCommand(
       if (arg !== undefined) {
         const p = listed(providerList, dm, arg);
         if (!p) { await reply('⚠️ Send /providers first to see the list, then /providers <number>.'); return; }
-        const j = await (await engine.api('/settings', { method: 'PATCH', body: { coding_provider: p, coding_model: null } })).json();
-        if (!j.ok) { await reply(`⚠️ Couldn't switch provider: ${j.error?.message}`); return; }
+        try { await engine.settings.write('global', GLOBAL, { coding_provider: p, coding_model: null }, CLIENT_ID); }
+        catch (e) { await reply(`⚠️ Couldn't switch provider: ${(e as Error).message}`); return; }
         const model = latestModel(p);
         await client.sendMarkdown(dm, titled(
           `✅ Provider: ${p}${model ? ` — model: ${model} (the catalog's newest)` : ''}`,
@@ -281,8 +285,9 @@ export async function handleCommand(
       const keyed: string[] = [];
       for (const p of PROVIDERS) {
         if (p === current) { keyed.push(p); continue; }          // always show the active one
-        const v = await engine.settings.credential(credentialForProvider(p));
-        if (v) keyed.push(p);
+        const name = credentialForProvider(p);
+        // A provider that holds no key here (openai-codex) is always callable.
+        if (!name || await engine.settings.credential(name)) keyed.push(p);
       }
       if (!keyed.length) {
         await reply('⚠️ No provider keys configured yet.');
@@ -314,8 +319,8 @@ export async function handleCommand(
       if (arg !== undefined) {
         const id = listed(modelList, dm, arg);
         if (!id) { await reply('⚠️ Send /models first to see the list, then /models <number>.'); return; }
-        const j = await (await engine.api('/settings', { method: 'PATCH', body: { coding_model: id } })).json();
-        if (!j.ok) { await reply(`⚠️ Couldn't switch model: ${j.error?.message}`); return; }
+        try { await engine.settings.write('global', GLOBAL, { coding_model: id }, CLIENT_ID); }
+        catch (e) { await reply(`⚠️ Couldn't switch model: ${(e as Error).message}`); return; }
         await reply(`✅ Model: ${id}`);
         return;
       }
@@ -331,15 +336,14 @@ export async function handleCommand(
       // Saved model configurations. Applying one is the cli's rule: the
       // preset's keys become a PATCH /settings body — set keys write their
       // value, clear keys null the setting, absent keys stay untouched.
-      const j = await (await engine.api('/presets')).json();
-      const list: Array<{ id: string; name: string; values: Record<string, unknown> }> = j.ok ? j.data : [];
+      const list = await engine.presets.list() as Array<{ id: string; name: string; values: Record<string, unknown> }>;
       if (!list.length) { await reply('ℹ️ No presets saved yet — save one in the cli under /presets.'); return; }
       if (arg !== undefined) {
         const id = listed(presetList, dm, arg);
         if (!id) { await reply('⚠️ Send /presets first to see the list, then /presets <number>.'); return; }
         const p = list.find((x) => x.id === id)!;
-        const applied = await (await engine.api('/settings', { method: 'PATCH', body: p.values })).json();
-        if (!applied.ok) { await reply(`⚠️ Couldn't apply "${p.name}": ${applied.error?.message}`); return; }
+        try { await engine.settings.write('global', GLOBAL, p.values, CLIENT_ID); }
+        catch (e) { await reply(`⚠️ Couldn't apply "${p.name}": ${(e as Error).message}`); return; }
         const { coding_provider: provider, coding_model: model } = await engine.settings.resolveMany(['coding_provider', 'coding_model']);
         await client.sendMarkdown(dm, titled(
           `✅ Applied preset "${p.name}" — ${provider ?? 'no provider'}${model ? ` / ${model}` : ''}.`,
@@ -371,13 +375,13 @@ export async function handleCommand(
       // Never touches the active-session pointer — it's a remote kill.
 
       if (arg === 'all') {
-        const j = await (await engine.api('/sessions?typed=true&background=false&limit=50')).json();
-        const locked = j.ok ? (j.data.sessions ?? []).filter((s: any) => s.locked) : [];
+        const now = Date.now();
+        const locked = (await engine.sessions.list({ typed: true, background: false, limit: 50 })).sessions.filter((s) => isHeld(s, now));
         if (!locked.length) { await reply('ℹ️ Nothing is running.'); return; }
         const names: string[] = [];
         for (const s of locked) {
           engine.stop(s.id);
-          await engine.api(`/sessions/${s.id}/interrupt`, { method: 'POST' });
+          engine.interrupt(s.id);
           names.push(s.name ?? 'untitled');
         }
         await reply(`🛑 Stopped ${names.length}: ${names.map((n) => `'${n}'`).join(', ')}.`);
@@ -392,7 +396,7 @@ export async function handleCommand(
         if (!s) { await reply('⚠️ That session no longer exists — /sessions for a fresh list.'); return; }
         if (!s.locked) { await reply(`ℹ️ ${s.name ?? 'untitled'} isn't running.`); return; }
         engine.stop(id);
-        await engine.api(`/sessions/${id}/interrupt`, { method: 'POST' });
+        engine.interrupt(id);
         await reply(`🛑 Stopping '${s.name ?? 'untitled'}'.`);
         return;
       }
@@ -413,7 +417,7 @@ export async function handleCommand(
         const s = await sessionRow(engine, bot.activeSessionId);
         if (!s?.locked) { await reply('ℹ️ Nothing is running.'); return; }
       }
-      await engine.api(`/sessions/${bot.activeSessionId}/interrupt`, { method: 'POST' });
+      engine.interrupt(bot.activeSessionId);
       await reply('🛑 Stopping.');
       return;
     }
@@ -425,18 +429,18 @@ export async function handleCommand(
 
     case 'cpu': {
       // Legacy alias — folded into /status but still answered if typed.
-      const j = await (await engine.api('/system/status')).json().catch(() => null);
-      if (!j?.ok) { await reply(`⚠️ Couldn't read the server status: ${j?.error?.message ?? 'no answer from the server'}`); return; }
-      const text = String(j.data.text ?? '');
+      let text: string;
+      try { text = (await engine.system.status()).text; }
+      catch (e) { await reply(`⚠️ Couldn't read the server status: ${(e as Error).message}`); return; }
       await client.sendMarkdown(dm, titled('🖥 Server status', text + '\n\nℹ️ /cpu is now part of /status'));
       return;
     }
 
     case 'tokens': {
-      const j = await (await engine.api('/system/token-usage')).json().catch(() => null);
-      if (!j?.ok) { await reply(`⚠️ Couldn't read token usage: ${j?.error?.message ?? 'no answer from the server'}`); return; }
+      let text: string;
+      try { text = (await engine.system.tokenUsage()).text; }
+      catch (e) { await reply(`⚠️ Couldn't read token usage: ${(e as Error).message}`); return; }
       // A code block: the report is a fixed-column table, monospace only.
-      const text = String(j.data.text ?? '');
       await client.sendMarkdown(dm, titled('📊 Token usage', text ? '```\n' + text + '\n```' : '(no usage data)'));
       return;
     }
@@ -452,9 +456,8 @@ export async function handleCommand(
           : 'the api — the whole server is offline for a few seconds (in-flight replies are cut)',
       });
       if (!accepted) return;
-      const j = await (await engine.api('/system/restart',
-        { method: 'POST', body: service ? { service } : {} })).json().catch(() => null);
-      if (!j?.ok) { await reply(`⚠️ Couldn't restart: ${j?.error?.message ?? 'no answer from the server'}`); return; }
+      try { await engine.system.restart(service || undefined); }
+      catch (e) { await reply(`⚠️ Couldn't restart: ${(e as Error).message}`); return; }
       await reply(service
         ? `🔄 Restarting ${service}.`
         : '🔄 Restarting the api — back in a few seconds. Messages sent now queue until it is.');
@@ -531,10 +534,7 @@ function presetSummary(values: Record<string, unknown>): string {
   return bits.length ? ` — ${bits.join(' / ')}` : '';
 }
 
-async function workspaceRow(engine: TelegramEngine, id: string): Promise<{ name?: string } | null> {
-  const j = await (await engine.api(`/workspaces/${id}`)).json();
-  return j.ok ? j.data : null;
-}
+const workspaceRow = (engine: TelegramEngine, id: string) => engine.workspaces.get(id);
 
 /** The first line of a message, clipped — enough to recognise a request. */
 function oneLine(text: string, max = 120): string {
@@ -542,12 +542,10 @@ function oneLine(text: string, max = 120): string {
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
-async function sessionRow(engine: TelegramEngine, id: string): Promise<{
-  name?: string | null; planMode?: boolean; pinned?: boolean; branch?: string | null; card?: number | null;
-  locked?: boolean; lockedLabel?: string | null; lastUserMessage?: string | null;
-} | null> {
-  const j = await (await engine.api(`/sessions/${id}`)).json();
-  return j.ok ? j.data : null;
+/** The session row, with `locked` computed here as the routes compute it. */
+async function sessionRow(engine: TelegramEngine, id: string) {
+  const s = await engine.sessions.get(id);
+  return s ? { ...s, locked: isHeld(s, Date.now()) } : null;
 }
 
 // /help's body — grouped by context. The 'ℹ️ phantom-looper' header is the

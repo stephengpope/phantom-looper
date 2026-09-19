@@ -2,7 +2,7 @@
 //
 // There is NO loop object and NO polling. Loop state = card status plus the
 // two transcripts; turns are EVENT-driven: a card write runs its loop (the
-// kanban routes call `runLoop`), a supervision setting change runs every loop
+// every card write reaches runLoop over the board bus), a supervision setting change runs every loop
 // in the workspace, boot does ONE recovery pass, a released session lock runs
 // that session's card, and a turn that ran chains straight into the next
 // turn. The loop is a DIALOGUE: the supervisor and the coding agent talk
@@ -36,19 +36,22 @@ import type { ModelMessage } from 'ai';
 import type { WorkspaceRow } from '../db/schema.js';
 import { LOOP_CLIENT_ID, folderOf, type Sessions } from '../sessions.js';
 import type { Workspaces } from '../workspaces.js';
-import type { Cards } from '../cards.js';
+import type { Cards, CardFields } from '../cards.js';
 import type { Settings } from '../settings.js';
+import type { LogTokens } from '../logTokens.js';
+import type { SettingsEvents } from '../api/settingsEvents.js';
+import { GLOBAL } from '../store.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
 import { memoryRecorder, serializeTranscript } from '../../core/llm/transcript.js';
-import { agentModelConfig, agentMaxSteps, pinnedModel, sessionPin } from '../../core/llm/agentConfig.js';
+import type { AgentConfig } from '../../core/llm/agentConfig.js';
+import { sessionPin } from '../agentConfig.js';
 import { phantomTools } from '../../core/llm/tools/workspace.js';
 import { webTools } from '../../core/llm/tools/web.js';
 import {
   kanbanReadTool, loopSupervisorTools, loopBlockTool, type LoopColumn, type LoopCardConfig,
 } from '../../core/llm/tools/kanban.js';
-import { runCodingTurn, drain, settingsValues, sumTokens } from './turn.js';
-import { shouldCompact, resolveContextWindow, resolveCompactSetting, CompactionLock, compact, getStrategy } from '../../core/llm/compaction.js';
-import { contextWindowFor } from '../models.js';
+import { runCodingTurn, drain, sumTokens } from './turn.js';
+import { compactionDue, compactionOpts, CompactionLock, compact } from '../../core/llm/compaction.js';
 import { SupervisorAgent } from '../../core/llm/agents/supervisor.js';
 import { canTurn, unsentKickoff, nextStep, needsFreshSession, heldBy, LOOP_COLUMNS, type CardRow } from './logic.js';
 import { injectFetch } from './injectFetch.js';
@@ -66,6 +69,8 @@ export interface LooperDeps {
   workspaces: Workspaces;
   cards: Cards;
   settings: Settings;
+  /** The token log — the budget's coin is read off it directly. */
+  logTokens: LogTokens;
   app: FastifyInstance;
   apiKey: string;
   /** The board's event bus (api/boardEvents.ts): the engine's card writes go
@@ -73,6 +78,9 @@ export interface LooperDeps {
    *  engine knows is the link — a card and its coding session — published
    *  the moment the session is put on the card. */
   events?: BoardEvents;
+  /** The settings feed: a write of either loop switch re-examines the
+   *  affected workspace (or every one, when the global layer changed). */
+  settingsEvents?: SettingsEvents;
   /** The sessions' live feed (api/sessionEvents.ts), handed straight to every
    *  turn this engine runs: that is how a builder watching a card's session
    *  sees the round happen instead of waiting for the record. */
@@ -112,6 +120,20 @@ export class LooperEngine {
   /** Boot: ONE recovery pass — cards that were mid-loop when the process
    *  died. After this, turns run on events only. */
   start(): void {
+    // Every card write, from any door (a route, the Assistant, this engine
+    // itself), lands on the board bus: that is what runs the loop. The engine
+    // re-reads the row and checks canTurn, so an irrelevant edit is a no-op.
+    this.deps.events?.subscribeAll((workspaceId, e) => {
+      if (e.event === 'card') void this.runLoop(workspaceId, Number((e.card as { number: number }).number));
+    });
+    // Supervision flipped (either switch, at any layer, through any door):
+    // re-examine the affected workspace — every one when the global layer
+    // moved. Event-driven, no poll.
+    this.deps.settingsEvents?.subscribe((e) => {
+      if (!e.keys.some((k) => k === 'auto_plan' || k === 'auto_build')) return;
+      const workspaceId = e.scope === GLOBAL ? undefined : e.scope.replace(/^workspace:/, '');
+      void this.runAllLoops(workspaceId).catch((err) => log.warn({ err: errStr(err) }, 'looper settings pass failed'));
+    });
     void this.runAllLoops().catch((e) => log.warn({ err: errStr(e) }, 'looper boot pass failed'));
   }
   stop(): void {
@@ -200,13 +222,13 @@ export class LooperEngine {
         } catch (e) {
           log.warn({ workspace: workspace.name, card: cardNumber, err: errStr(e) },
             'looper turn failed — blocking the card');
-          await this.blockCard(workspace.id, card.number, errStr(e)).catch((be) =>
+          await this.blockCard(workspace, card.number, errStr(e)).catch((be) =>
             log.error({ card: cardNumber, err: errStr(be) }, 'could not block the failed card'));
           continue;
         }
         // A turn just ran — the next step is owed now, not on the next
-        // external event. (A status tool's card PATCH re-enters through the
-        // route too; `pending` catches that as well.)
+        // external event. (A status tool's card write re-enters through the
+        // board bus too; `pending` catches that as well.)
         if (outcome === 'turn') this.pending.add(claim);
       } while (this.pending.has(claim));
     } finally {
@@ -216,8 +238,8 @@ export class LooperEngine {
 
   /** Fail closed: the turn's error becomes the card's blocked_reason — the
    *  board says WHY, and blocked is not a loop column, so the loop ends. */
-  private async blockCard(workspaceId: string, cardNumber: number, reason: string): Promise<void> {
-    await this.patchCard(workspaceId, cardNumber, {
+  private async blockCard(workspace: WorkspaceRow, cardNumber: number, reason: string): Promise<void> {
+    await this.patchCard(workspace, cardNumber, {
       status: 'blocked', blocked_reason: `looper turn failed: ${reason}`, resolution: null,
     });
   }
@@ -232,7 +254,6 @@ export class LooperEngine {
    *  Throws on failure — runLoop turns that into a blocked card. */
   async runTurn(workspace: WorkspaceRow, card: CardRow, budget: Budget): Promise<TurnOutcome> {
     const { apiKey } = this.deps;
-    const cfg = await this.settings();
 
     // The card's coder — its newest coding session (Sessions.coderOf).
     const coder = await this.deps.sessions.coderOf(workspace.id, card.number);
@@ -315,7 +336,7 @@ export class LooperEngine {
         budget.seeded = true;
       }
       if (limit != null && budget.spent >= limit) {
-        await this.patchCard(workspace.id, card.number, {
+        await this.patchCard(workspace, card.number, {
           status: 'blocked',
           blocked_reason: `token budget exhausted: ${budget.spent} of ${limit} tokens used`,
           resolution: null,
@@ -334,12 +355,14 @@ export class LooperEngine {
       const ac = new AbortController();
       this.deps.activeTurns?.set(opened.session.id, ac);
       const coderDeps = { ...this.turnDeps(card.number, ac.signal), extraTools: loopBlockTool(cardCfg) };
+      // The coder's config, on its ROW's model (the pin) — the one door.
+      const cfg = await this.deps.settings.agentConfig('coding', { workspace, pin: sessionPin(opened.session) });
 
       const opener = unsentKickoff(card, opened.messages);
       if (opener) {
         const t = await runCodingTurn(coderDeps, opened, workspace.id, opener.text, opener.planMode, cfg);
         budget.spent += t.tokens;
-        if (!t.interrupted) this.kickCodingCompaction(opened.session.id, t.inputTokens, opened.messages, cfg);
+        if (!t.interrupted) this.kickCompaction(opened.session.id, t.inputTokens, opened.messages, cfg);
         return t.interrupted ? 'interrupted' : 'turn';
       }
 
@@ -365,12 +388,9 @@ export class LooperEngine {
         // traffic included — the step rule reads terminal turns off it). ────
         // The same rule as the coding half: a supervisor conversation that has
         // said anything runs on its pin, not on whatever the settings say now.
-        const model = pinnedModel(agentModelConfig(cfg, 'supervisor'), cfg,
-          sessionPin(supOpened.session as { provider?: string | null; model?: string | null;
-            baseUrl?: string | null }));
-        const supMaxSteps = agentMaxSteps(cfg, 'supervisor');
-        model.fetch = this.deps.modelFetch;
-        model.onRetry = (t) => log.warn({ card: card.number, agent: 'supervisor' }, t);
+        const sup = await this.deps.settings.agentConfig('supervisor', { workspace, pin: sessionPin(supOpened.session) });
+        const model = { ...sup.model, fetch: this.deps.modelFetch,
+          onRetry: (t: string) => log.warn({ card: card.number, agent: 'supervisor' }, t) };
         // The supervisor's tools run as the SUPERVISOR's session: the server
         // opens its folder — the coder's — and the coder's checkout counts
         // the activity. One rule for every session; no client picks a folder.
@@ -385,7 +405,7 @@ export class LooperEngine {
         };
         const incoming: ModelMessage[] = step.append.map((t) => ({ role: 'user', content: t }));
         const messages = [...supOpened.messages, ...incoming];
-        const agent = new SupervisorAgent(model, tools, { sessionId: supOpened.session.id, maxSteps: supMaxSteps });
+        const agent = new SupervisorAgent(model, tools, { sessionId: supOpened.session.id, maxSteps: sup.maxSteps });
         // Cache marks on a copy — the supervisor's growing conversation reads
         // its own prefix back each turn; the transcript stays clean. The
         // step seam collects the WHOLE turn (tool calls included — the step
@@ -424,9 +444,9 @@ export class LooperEngine {
         step.text, card.status === 'plan', cfg);
       budget.spent += t.tokens;
       if (t.interrupted) return 'interrupted';
-      this.kickCodingCompaction(opened.session.id, t.inputTokens, opened.messages, cfg);
+      this.kickCompaction(opened.session.id, t.inputTokens, opened.messages, cfg);
       if (step.kind === 'return' && (card.blocked_reason || card.resolution)) {
-        await this.patchCard(workspace.id, card.number, { blocked_reason: null, resolution: null });
+        await this.patchCard(workspace, card.number, { blocked_reason: null, resolution: null });
       }
       return 'turn';
     } finally {
@@ -442,58 +462,35 @@ export class LooperEngine {
   /** Per-session compaction locks — one compaction at a time per session. */
   private compactionLocks = new Map<string, CompactionLock>();
 
-  /** Fire-and-forget compaction check after a coding turn. Uses the general
-   *  (coding agent) compaction settings; the supervisor model runs the LLM call. */
-  private kickCodingCompaction(
-    sessionId: string, inputTokens: number, history: ModelMessage[],
-    cfg: Record<string, unknown>,
-  ): void {
-    const pct = Number(resolveCompactSetting(cfg, 'coding', 'threshold_pct', 0));
-    if (pct <= 0) return;
-    const cw = resolveContextWindow(cfg, 'coding', contextWindowFor, agentModelConfig,
-      (msg) => log.warn(msg));
-    if (!cw || !shouldCompact(inputTokens, cw, pct)) return;
+  /** Fire-and-forget compaction check after a coding turn, under the coder's
+   *  compaction config (its thresholds; the supervisor's model writes). */
+  private kickCompaction(sessionId: string, inputTokens: number, history: ModelMessage[], cfg: AgentConfig): void {
+    if (!compactionDue(cfg.compaction, inputTokens)) return;
 
     let lock = this.compactionLocks.get(sessionId);
     if (!lock) { lock = new CompactionLock(); this.compactionLocks.set(sessionId, lock); }
     if (lock.active) return;
 
-    const model = agentModelConfig(cfg, 'supervisor');
-    const strategyName = String(resolveCompactSetting(cfg, 'coding', 'strategy', 'fast'));
-    const summarizePct = Number(resolveCompactSetting(cfg, 'coding', 'summarize_pct', 75));
-    const maxTokens = resolveCompactSetting<number | null>(cfg, '', 'max_tokens', null);
-
-    void compact(lock, {
-      history,
-      strategy: getStrategy(strategyName),
-      summarizePct,
-      model, sessionId, maxTokens: maxTokens != null ? Number(maxTokens) : null,
-    }).then((result) => {
+    void compact(lock, compactionOpts(cfg.compaction, history, sessionId)).then((result) => {
       if (result) log.info({ session: sessionId, removed: result.removed }, 'coding session compacted');
     }).catch((err) => {
       log.warn({ session: sessionId, err: (err as Error).message }, 'coding session compaction failed');
     });
   }
 
-  /** One session's spend so far, the budget's coin: input + output tokens
-   *  from the token API (log_tokens, summed per session). */
+  /** One session's spend so far, the budget's coin: input + output tokens,
+   *  summed off the token log — the same rows GET /sessions/:id/token-usage
+   *  serves, read at the object. */
   private async tokensOf(sessionId: string): Promise<number> {
-    const r = await this.f(`${BASE}/sessions/${sessionId}/token-usage`, {
-      headers: { authorization: `Bearer ${this.deps.apiKey}` } });
-    const j = await r.json() as { ok: boolean; data?: { input: number; output: number } };
-    if (!j.ok || !j.data) return 0;
-    return (j.data.input ?? 0) + (j.data.output ?? 0);
+    const t = await this.deps.logTokens.sessionTotals(sessionId);
+    return Number(t.input ?? 0) + Number(t.output ?? 0);
   }
 
-  private async patchCard(workspaceId: string, cardNumber: number, body: unknown): Promise<void> {
-    const r = await this.f(`${BASE}/workspaces/${workspaceId}/cards/${cardNumber}`, {
-      method: 'PATCH',
-      headers: { authorization: `Bearer ${this.deps.apiKey}`, 'content-type': 'application/json',
-        'x-phantom-looper-client': CLIENT_ID },
-      body: JSON.stringify(body),
-    });
-    const j = await r.json() as { ok: boolean; error?: { message: string } };
-    if (!j.ok) throw new Error(`card patch failed: ${j.error?.message}`);
+  /** A card write by the loop, at the object — the board bus carries it to
+   *  every listener (this engine's own runLoop included, which then reads
+   *  the new status and stops). */
+  private patchCard(workspace: WorkspaceRow, cardNumber: number, fields: CardFields): Promise<unknown> {
+    return this.deps.cards.update(workspace, cardNumber, fields, undefined, CLIENT_ID);
   }
 
   private turnDeps(card?: number, signal?: AbortSignal) {
@@ -502,9 +499,5 @@ export class LooperEngine {
       backdoor: this.deps.backdoor,
       onRetry: (t: string) => log.warn({ card, agent: 'coding' }, t),
       signal };
-  }
-
-  private settings(): Promise<Record<string, unknown>> {
-    return settingsValues(this.turnDeps());
   }
 }

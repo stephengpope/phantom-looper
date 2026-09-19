@@ -17,22 +17,16 @@ import type { Cards } from '../cards.js';
 import type { Settings } from '../settings.js';
 import type { Workspaces } from '../workspaces.js';
 import { PhantomHelper } from '../../core/llm/helper.js';
-import { agentModelConfig } from '../../core/llm/agentConfig.js';
 import { lastAssistantFromJsonl } from './transcriptHelper.js';
 import type { NotificationChannel } from './channel.js';
 import { titled } from '../telegram/client.js';
+import { STATUS_ICON } from '../../core/kanban.js';
 import { logger } from '../log.js';
 
 const log = logger('digest');
 
 const TITLE = (n: number) => `📋 ${n} turn${n === 1 ? '' : 's'} completed:`;
 
-// Kanban column → icon. The cli's Launcher.tsx carries color; we only need the
-// character for a plain-text Telegram message.
-const STATUS_ICON: Record<string, string> = {
-  backlog: '○', plan: '◇', in_progress: '▶',
-  blocked: '✕', done: '✓', archived: '▪',
-};
 
 const SYSTEM = `You summarize completed coding session turns.
 
@@ -98,7 +92,7 @@ export class SessionDigest {
 
   private async intervalMs(): Promise<number> {
     try {
-      const min = Number(await this.deps.settings.resolve('session_digest_interval').catch(() => 5));
+      const min = Number(await this.deps.settings.resolve('session_digest_interval'));
       if (!Number.isFinite(min) || min <= 0) return 0;
       return min * 60_000;
     } catch { return 0; }
@@ -155,7 +149,7 @@ export class SessionDigest {
       const onCard = await this.deps.cards.ofSession(s.id);
       if (onCard) {
         card = onCard.number;
-        icon = STATUS_ICON[onCard.status] ?? onCard.status;
+        icon = STATUS_ICON[onCard.status]?.char ?? onCard.status;
       }
 
       // A hold that ran out is a turn that died. Said here in the log too:
@@ -203,11 +197,8 @@ export class SessionDigest {
 
     // ── LLM call ─────────────────────────────────────────────────────────────
 
-    const values = await this.deps.settings.resolveMany(
-      ['coding_provider', 'coding_model', 'coding_base_url', 'assistant_provider', 'assistant_model', 'assistant_base_url']);
-    const config = agentModelConfig(values, 'assistant');
-
-    const text = await new SessionDigestHelper(config, null).run(payload);
+    const { model } = await this.deps.settings.agentConfig('assistant');
+    const text = await new SessionDigestHelper(model, null).run(payload);
     const message = titled(TITLE(rows.length), text.trim());
 
     if (!message) return;

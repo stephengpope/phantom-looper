@@ -17,6 +17,8 @@ export interface WireMeta {
   group?: string;
   /** The sub-heading inside an agent's group (model, compaction, voice). */
   subgroup?: string;
+  /** On a credential row: the LLM provider this key authenticates. */
+  provider?: string;
   choices?: string[];
   choiceLabels?: Record<string, string>;
   /** Open-ended values to offer — the cli's combobox filters them as you type. */

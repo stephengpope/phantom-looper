@@ -14,9 +14,11 @@ export function telegramChannel(settings: Settings): NotificationChannel {
     name: 'telegram',
     async send(message: string) {
       try {
-        const enabled = await settings.resolve('telegram_enabled').catch(() => false);
-        if (enabled !== true) return;
-        const dm = Number(await settings.resolve('telegram_authorized_user').catch(() => ''));
+        // A settings read that fails lands in the catch below as a warning —
+        // never read as "disabled" and dropped in silence.
+        const s = await settings.resolveMany(['telegram_enabled', 'telegram_authorized_user']);
+        if (s.telegram_enabled !== true) return;
+        const dm = Number(s.telegram_authorized_user ?? '');
         if (!dm || !Number.isFinite(dm)) return;
         const token = (await settings.credential('telegram_bot_token')) ?? '';
         if (!token) return;

@@ -71,7 +71,7 @@ export class Workspaces {
       if (isUniqueViolation(e)) throw new WorkspaceError('already_registered', `${row.owner}/${row.name} is already a workspace`);
       throw e;
     }
-    this.events?.publish(workspaceScope(row.id), by);
+    this.events?.publish(workspaceScope(row.id), [], by);
     return (await this.get(row.id))!;
   }
 
@@ -81,7 +81,7 @@ export class Workspaces {
     by?: string): Promise<void> {
     if (!Object.keys(patch).length) return;
     await this.db.update(workspaces).set(patch).where(eq(workspaces.id, id));
-    this.events?.publish(workspaceScope(id), by);
+    this.events?.publish(workspaceScope(id), [], by);
   }
 
   /** Hand out the next card number and move the counter, in the caller's
@@ -102,6 +102,6 @@ export class Workspaces {
     await this.databases?.drop(id);
     await this.settings.dropScope(workspaceScope(id));
     await this.db.delete(workspaces).where(eq(workspaces.id, id));
-    this.events?.publish(workspaceScope(id), by);
+    this.events?.publish(workspaceScope(id), [], by);
   }
 }

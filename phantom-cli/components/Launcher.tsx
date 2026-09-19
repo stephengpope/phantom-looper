@@ -20,44 +20,9 @@ export interface WorkspaceInfo {
   /** The resolved card number prefix ("PHA") — the server's, never derived here. */
   cardPrefix?: string;
 }
-export interface SessionInfo {
-  id: string; workspaceId: string; branch: string; status: string; lastUsedAt: string;
-  /** Someone holds this session right now (server-computed, no clock math). */
-  locked?: boolean;
-  lockedBy?: string | null;
-  lockedLabel?: string | null;
-  /** The last thing the user typed, from the SERVER transcript — so a session
-   *  started on another machine says what it was about. */
-  lastUserMessage?: string | null;
-  /** The model-written title — what the session is building (server-computed). */
-  name?: string | null;
-  /** Who drove the last turn: 'coding'/'supervisor' for the loop's seats,
-   *  'cron' for a scheduled prompt's run, null = a person's (server-derived
-   *  from the writer at every save). */
-  agent?: string | null;
-  card?: number | null;
-  /** The card's board column (plan, in_progress, blocked, done …), from the
-   *  workspace's cards table. Null when no card is linked. */
-  cardStatus?: string | null;
-  /** Where the checkout's work stands (the server's periodic git refresh
-   *  keeps it current): not_pushed = only on the server's disk, not_merged =
-   *  on origin's branch but not in base, merged = in base. null = never
-   *  measured. */
-  work?: 'not_pushed' | 'not_merged' | 'merged' | null;
-  /** The model that drives (or drove) this session — the row's pin. */
-  model?: string | null;
-  /** The provider that model belongs to, pinned on the row alongside it. */
-  provider?: string | null;
-  /** Lifetime token totals, summed by the server from its token log; zero =
-   *  nothing said yet. tokensOutput is the same number the status bar shows;
-   *  the cache figures feed state.ts's one hit-rate rule. */
-  tokensInput?: number | null;
-  tokensOutput?: number | null;
-  tokensCacheRead?: number | null;
-  tokensCacheWrite?: number | null;
-  /** /pin: pinned to the top of the list, ahead of rows in motion. */
-  pinned?: boolean;
-}
+/** A session row as the server lists it — core's one shape. */
+export type { SessionRow as SessionInfo } from '../../core/sessionRows.js';
+import type { SessionRow as SessionInfo } from '../../core/sessionRows.js';
 
 /** The `work` column: the git facts in the operator's terms, each with its
  *  severity mark — the colored • the table draws ahead of the words. Red is
@@ -70,16 +35,10 @@ export const WORK = {
   merged: { text: 'merged', mark: 'green' },
 } as const;
 
-/** Colored icon per card status — one map for /resume's card column and the
- *  board's column headers. The icon replaces the status word entirely. */
-export const STATUS_ICON: Record<string, { char: string; color: string }> = {
-  backlog:     { char: '○', color: 'white' },
-  plan:        { char: '◇', color: 'magenta' },
-  in_progress: { char: '▶', color: 'blue' },
-  blocked:     { char: '✕', color: 'red' },
-  done:        { char: '✓', color: 'green' },
-  archived:    { char: '▪', color: 'gray' },
-};
+/** The icon per card status — core's one map (core/kanban.ts), for /resume's
+ *  card column and the board's column headers. The icon replaces the word. */
+export { STATUS_ICON } from '../../core/kanban.js';
+import { STATUS_ICON } from '../../core/kanban.js';
 
 export type Launch =
   | { kind: 'resume'; sessionId: string }
@@ -101,43 +60,10 @@ export function lastWorkspaceId(workspaces: WorkspaceInfo[], sessions: SessionIn
     .sort((a, b) => Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt))[0]?.workspaceId;
 }
 
-/** WHO DRIVES THE SESSION — the one three-way, shared by the /resume table's
- *  `who` column and the Assistant's session_list `kind`. Off the row's `agent`
- *  alone, never the card: the card link is permanent, but who is driving is
- *  not — a person who types into a card's coding session takes it over, and
- *  the row says so from the next save. `coder` names the seat, not the loop. */
-export type Driver = 'supervisor' | 'coder' | 'cron' | 'assistant' | 'manual';
-export function whoDrives(s: Pick<SessionInfo, 'agent'>): Driver {
-  return s.agent === 'supervisor' ? 'supervisor'
-    : s.agent === 'coding' ? 'coder'
-    : s.agent === 'cron' ? 'cron'
-    : s.agent === 'assistant' ? 'assistant'
-    : 'manual';
-}
-
-/** IS A TURN LIVE IN THIS SESSION — the one definition, shared by the /resume
- *  table and the Assistant's session_list, because a session that reads
- *  "running" on screen and "idle" when the Assistant is asked is one fact with
- *  two answers. Two ways to be running: a turn streaming in THIS window
- *  (`busy`), or someone else holding the lock — locks are per TURN, so a hold
- *  by anyone but us IS a turn running over there. An ended session never runs. */
-export function isRunning(s: SessionInfo,
-  opts: { busy?: (sessionId: string) => boolean; clientId?: string } = {}): boolean {
-  if (s.status !== 'active') return false;
-  return (opts.busy?.(s.id) ?? false) || (!!s.locked && s.lockedBy !== (opts.clientId ?? ''));
-}
-
-/** "2h" — coarse on purpose; the exact minute never matters here. */
-export function ago(iso: string, now = Date.now()): string {
-  const s = Math.max(0, (now - Date.parse(iso)) / 1000);
-  if (s < 90) return 'now';
-  const m = s / 60;
-  if (m < 90) return `${Math.round(m)}m`;
-  const h = m / 60;
-  if (h < 36) return `${Math.round(h)}h`;
-  const d = Math.round(h / 24);
-  return d < 8 ? `${d}d` : `${Math.round(d / 7)}w`;
-}
+/** Who drives, is a turn live, how long ago — core's one definition of
+ *  each (core/sessionRows.ts), shared with the Assistant's session_list. */
+export { whoDrives, isRunning, ago, type Driver } from '../../core/sessionRows.js';
+import { whoDrives, isRunning, ago } from '../../core/sessionRows.js';
 
 /** Session rows — /resume. A session is
  *  what you actually reopen: it carries the branch and the conversation. */

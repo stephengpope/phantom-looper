@@ -1,5 +1,5 @@
 // Boot: env -> db -> migrations -> workspace dirs -> looper -> HTTP.
-import { readEnv } from './env.js';
+import { readEnv, APP_VERSION as VERSION } from './env.js';
 import { makeDb } from './db/client.js';
 import { migrate } from './db/migrate.js';
 import { makePaths } from './pool/paths.js';
@@ -16,6 +16,7 @@ import { Crons } from './crons.js';
 import { CronEngine } from './crons/engine.js';
 import { setTokenRecorder } from '../core/llm/createAgent.js';
 import { LogTokens } from './logTokens.js';
+import { System } from './system.js';
 import { TelegramBotState } from './telegram/botState.js';
 import { TelegramSentMessages } from './telegram/sentMessages.js';
 import { TelegramHandledUpdates } from './telegram/handledUpdates.js';
@@ -32,11 +33,11 @@ import { autoPush, type AutoPushEvent } from './git/autoPush.js';
 import { autoPull, type AutoPullEvent } from './git/autoPull.js';
 import type { ConflictContext } from './git/autoPush.js';
 import { GIT_CLIENT_ID } from './git/git.js';
-import { isProvider } from '../core/llm/createAgent.js';
 import { SessionDigest } from './notifications/digest.js';
 import { telegramChannel } from './notifications/telegramChannel.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../core/session.js';
-import { runCodingTurn, settingsValues } from './looper/turn.js';
+import { runCodingTurn } from './looper/turn.js';
+import { sessionPin } from './agentConfig.js';
 import { injectFetch } from './looper/injectFetch.js';
 import { toCodingAgent } from '../core/llm/prompts/autoPush/wiring.js';
 import { serializeTranscript } from '../core/llm/transcript.js';
@@ -44,14 +45,11 @@ import type { SyncDeps, SyncEvent } from './git/sync.js';
 import type { WorkspaceRow, SessionRow } from './db/schema.js';
 import { LooperEngine } from './looper/engine.js';
 import { TelegramEngine } from './telegram/engine.js';
-import { credentialForProvider } from './settings.js';
-import { cascade } from '../core/llm/agentConfig.js';
 import { refreshWorkState } from './git/workRefresh.js';
 import { InstantSync } from './git/instantSync.js';
 import { logger, errStr } from './log.js';
 
 const log = logger('boot');
-const VERSION = process.env.APP_VERSION ?? 'dev';
 /** Fake base URL for in-process API calls via injectFetch — the host part is
  *  discarded, only the /api path prefix matters. */
 const INTERNAL_API = 'http://internal/api';
@@ -75,7 +73,8 @@ async function main() {
   const workspaces = new Workspaces(db, settings, settingsEvents, databases);
   const folders = new Folders(db, paths, settings, sessionEvents);
   const cards = new Cards(db, workspaces, events);
-  const sessions = new Sessions(db, settings, workspaces, folders, sessionEvents);
+  const docker = makeDocker();
+  const sessions = new Sessions(db, settings, workspaces, folders, sessionEvents, { paths, docker: docker ?? undefined });
   // A settings write reaches every session nothing has been said to yet: its
   // row takes the settings' model (Sessions.followModelSettings — THE rule).
   settingsEvents.subscribe(() => {
@@ -93,7 +92,6 @@ async function main() {
   const telegramSentMessages = new TelegramSentMessages(db);
   const telegramHandledUpdates = new TelegramHandledUpdates(db);
 
-  const docker = makeDocker();
   // Instant sync (built below, once auto-push exists) attaches its watcher
   // inside the container start — before the tool call that started it
   // returns, so the first write is seen — and lets go on removal. `instantSync`
@@ -140,7 +138,8 @@ async function main() {
       const message = toCodingAgent.resolveConflict(
         ctx.branch, ctx.baseBranch, ctx.files, ctx.arrived);
       // planMode false: resolving means writing files.
-      await runCodingTurn(deps, opened, workspace.id, message, false, await settingsValues(deps));
+      await runCodingTurn(deps, opened, workspace.id, message, false,
+        await settings.agentConfig('coding', { workspace, pin: sessionPin(opened.session) }));
       return true;
     } catch (e) {
       log.error({ session: session.id, err: errStr(e) }, 'conflict turn failed');
@@ -160,13 +159,9 @@ async function main() {
   // event); onRetry is what makes the retry loop's waits VISIBLE — without
   // it the call retried in silence, which was the original bug.
   const messageConfig: SyncDeps['messageConfig'] = async (report) => {
-    const cfg = await settings.resolveMany(
-      ['coding_provider', 'coding_model', 'coding_base_url', 'assistant_provider', 'assistant_model', 'assistant_base_url']);
-    const c = cascade(cfg, 'assistant'); // a bad pair throws with the fix in the message
-    if (!isProvider(c.provider)) return null;
-    const apiKey = await settings.credential(credentialForProvider(c.provider));
-    const onRetry = (note: string) => { log.warn(`commit message: ${note}`); report?.(note); };
-    return { ...c, provider: c.provider, apiKey, onRetry };
+    const { model } = await settings.agentConfig('assistant'); // a bad pair throws with the fix in the message
+    model.onRetry = (note: string) => { log.warn(`commit message: ${note}`); report?.(note); };
+    return model;
   };
   // Every sync step also lands on the session's live feed, so a window
   // WATCHING the session sees the sync whoever kicked it off — a card
@@ -206,17 +201,13 @@ async function main() {
 
 
   // When a sync comes back blocked and the session is running a card, the card
-  // is blocked deterministically — the system decides, not the agent. The patch
-  // goes through the API so board events fire and the UI updates.
+  // is blocked deterministically — the system decides, not the agent. The
+  // write is Cards' own; the board bus carries it to the UI and the looper.
   const blockCardOnConflict = async (session: SessionRow, workspace: WorkspaceRow, reason: string) => {
     const card = await cards.ofSession(session.id).catch(() => undefined);
     if (!card) return;
-    const f = injectFetch(app);
-    await f(`${INTERNAL_API}/workspaces/${workspace.id}/cards/${card.number}`, {
-      method: 'PATCH',
-      headers: { authorization: `Bearer ${env.apiKey}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ status: 'blocked', blocked_reason: reason, resolution: null }),
-    }).catch((e) => log.warn({ session: session.id, err: errStr(e) }, 'could not block card after unresolved conflict'));
+    await cards.update(workspace, card.number, { status: 'blocked', blocked_reason: reason, resolution: null }, undefined, GIT_CLIENT_ID)
+      .catch((e) => log.warn({ session: session.id, err: errStr(e) }, 'could not block card after unresolved conflict'));
   };
   const syncDeps = { sessions, folders, cards, settings, paths,
     resolve: resolveConflict, recordSummary, messageConfig };
@@ -315,12 +306,15 @@ async function main() {
   // `ctx` is a named object because the looper is wired into it AFTER the
   // app exists — the engine is a headless client of this app, so it is built
   // second; routes read ctx.looper per request, so the late set is seen.
+  const system = new System(paths, logTokens, docker ?? undefined, process.env.UPDATE_TRIGGER_DIR || undefined,
+    () => ctx.looper?.runningCount() ?? 0);
   const ctx: AppCtx = {
     settings, workspaces, folders, cards, sessions, backgroundTasks, presets, crons, logTokens,
     paths, apiKey: env.apiKey, version: VERSION,
     databases,
     fs: { docker, containers, engine },
     engine,
+    system,
     autoPush: autoPushFn,
     autoPull: autoPullFn,
     events,
@@ -330,14 +324,52 @@ async function main() {
     updateTriggerDir: process.env.UPDATE_TRIGGER_DIR || undefined,
   };
   const app = await buildApp(ctx);
+
+  // Archiving a DONE card auto-pushes its session's work, when
+  // `auto_push_on_archive` says so — a listener on the board bus, so it
+  // fires for every door that archives (a route, the Assistant, a tool),
+  // on the false → true transition only. Archiving from any other column is
+  // just archiving: the discard gesture. Detached: the write answered long
+  // ago; an auto-push can run for minutes. The session lock may be held (a
+  // turn mid-flight): wait it out rather than blocking the card over a
+  // moment's contention. Failure surfaces on the board: the card comes back
+  // un-archived, in blocked, with the reason.
+  events.subscribeAll((workspaceId, e) => {
+    if (e.event !== 'card' || e.archivedBefore !== false) return;
+    const card = e.card as { number: number; archived?: boolean; status?: string };
+    if (card.archived !== true || card.status !== 'done') return;
+    void (async () => {
+      const w = await workspaces.get(workspaceId);
+      const session = w && await sessions.coderOf(w.id, card.number);
+      if (!w || !session || session.status !== 'active') return;
+      if (await settings.resolve('auto_push_on_archive', { workspace: w }) !== true) return;
+      let result: Awaited<ReturnType<typeof autoPushFn>> | undefined;
+      for (let i = 0; i < 30; i++) {
+        try { result = await autoPushFn(session, w); break; }
+        catch (err) {
+          if ((err as { code?: string }).code === 'busy') { await new Promise((r) => setTimeout(r, 10_000)); continue; }
+          result = { result: 'error', reason: errStr(err) }; break;
+        }
+      }
+      result ??= { result: 'error', reason: 'session stayed busy — auto-push never ran' };
+      if (result.result === 'pushed' || result.result === 'nothing') {
+        log.info({ workspace: w.name, card: card.number, result: result.result }, 'auto-push on archive');
+        return;
+      }
+      log.warn({ workspace: w.name, card: card.number, result }, 'auto-push on archive failed — card un-archived into blocked');
+      await cards.unarchiveAsBlocked(w, card.number, `auto-push failed: ${result.reason ?? result.result}`)
+        .catch((err) => log.error({ card: card.number, err: errStr(err) }, 'could not mark the card blocked after a failed auto-push'));
+    })().catch((err) => log.error({ card: card.number, err: errStr(err) }, 'auto-push on archive threw'));
+  });
+
   await app.listen({ port: env.port, host: '0.0.0.0' });
   log.info({ port: env.port, version: VERSION }, 'phantom-backend up');
 
-  // The looper — built after listen: it is a headless
-  // client of this server's own surface, and its rounds assume the routes
-  // are answering. Event-driven: routes poke it through ctx.looper; start()
-  // is ONE recovery sweep, not a poll.
-  const looper = new LooperEngine({ sessions, workspaces, cards, settings, app, apiKey: env.apiKey, events: ctx.events,
+  // The looper — built after listen: its turns' TOOLS are clients of this
+  // server's own surface (the same tools every client runs), so the routes
+  // must be answering. Event-driven: every card write reaches it over the
+  // board bus; start() is ONE recovery sweep, not a poll.
+  const looper = new LooperEngine({ sessions, workspaces, cards, settings, logTokens, app, apiKey: env.apiKey, events: ctx.events, settingsEvents,
     sessionEvents: ctx.sessionEvents, activeTurns: ctx.activeTurns, backdoor: ctx.backdoor });
   ctx.looper = looper;
   looper.start();
@@ -355,8 +387,8 @@ async function main() {
   // re-registers a stale webhook and pushes the command menu.
   const telegram = new TelegramEngine({
     botState: telegramBotState, sentMessages: telegramSentMessages, handledUpdates: telegramHandledUpdates,
-    settings, sessions, cards, workspaces, paths, app, apiKey: env.apiKey,
-    events: ctx.events, backdoor: ctx.backdoor,
+    settings, sessions, cards, workspaces, presets, system, paths, app, apiKey: env.apiKey,
+    events: ctx.events, settingsEvents, foreground: ctx.foreground, loopsRunning: () => looper.runningCount(), backdoor: ctx.backdoor,
     sessionEvents: ctx.sessionEvents, publicAddress: process.env.PHANTOM_BACKEND_ADDRESS,
     autoPush: autoPushFn, autoPull: autoPullFn,
   });

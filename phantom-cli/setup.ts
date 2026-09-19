@@ -32,7 +32,6 @@ import {
 } from './provision.js';
 import { setLocal } from './local.js';
 import { makeSettings } from './settings.js';
-import { PROVIDER_KEY } from './config.js';
 import { PROVIDERS } from '../core/llm/createAgent.js';
 
 /** The questions, as an interface: the wizard asks through it, tests script
@@ -243,6 +242,10 @@ export async function runSetup(deps: SetupDeps = {}): Promise<void> {
       return bail();
     }
   } else {
+    // Which row holds this provider's key is the server's declaration: the
+    // credential entry whose meta.provider names it (GET /settings).
+    const keyRow = Object.entries(await settings.all()).find(([, e]) => e.meta.provider === provider)?.[0];
+    if (!keyRow) { clack.log.error(`the server declares no key row for ${provider}`); return bail(); }
     for (;;) {
       const key = await ask.password(`${provider} — paste the key`);
       if (key === undefined) return bail();
@@ -250,7 +253,7 @@ export async function runSetup(deps: SetupDeps = {}): Promise<void> {
       try {
         await settings.patch({
           coding_provider: provider, coding_model: model.trim(), ...(baseUrl ? { coding_base_url: baseUrl.trim() } : {}),
-          [PROVIDER_KEY[provider as keyof typeof PROVIDER_KEY]]: key.trim(),
+          [keyRow]: key.trim(),
         });
         clack.log.success(`${provider} · ${model.trim()} — key saved on the server`);
         break;

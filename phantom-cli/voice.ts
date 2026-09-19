@@ -31,8 +31,7 @@ import { CONFIG_DIR, type ConfigValue } from './config.js';
 import { applyPart, finalize, nextId, type Part, type StreamPart } from './state.js';
 import { FLUSH_MS, runTurn, type Agent } from './agent.js';
 import { loadTranscriptFile, newestTranscriptFile, Transcript, transcriptStamp, usageEvent } from '../core/llm/transcript.js';
-import { compact, shouldCompact, getStrategy, isSummaryMessage, CompactionLock } from '../core/llm/compaction.js';
-import type { ModelConfig } from '../core/llm/createAgent.js';
+import { compact, compactionDue, compactionOpts, isSummaryMessage, CompactionLock, type CompactionConfig } from '../core/llm/compaction.js';
 
 export const SIDECAR_DIR = fileURLToPath(new URL('./sidecar/', import.meta.url));
 export const VOICE_DIR = join(CONFIG_DIR, 'voice');
@@ -393,24 +392,17 @@ export class VoiceClient {
   }
 
   private transcript: Transcript | null = null;
-  /** Compaction config, supplied with the agent (setCompaction) since both
-   *  come from the same settings read. */
-  private compactionModel: ModelConfig | null = null;
-  private compactionSettings: {
-    pct: number; contextWindow: number; summarizePct: number;
-    strategy: string; maxTokens?: number;
-  } = { pct: 0, contextWindow: 0, summarizePct: 75, strategy: 'fast' };
+  /** The Assistant's compaction config (its AgentConfig's), supplied with the
+   *  agent (setCompaction) since both come from the same server read. Null
+   *  until the agent is set. */
+  private compaction: CompactionConfig | null = null;
   private compactionLock = new CompactionLock();
   private resumed = false;
 
-  /** The Assistant's compaction config — set alongside setAgent (same settings
-   *  read), so /model and the setting are followed. */
-  setCompaction(model: ModelConfig, settings: {
-    pct: number; contextWindow: number; summarizePct: number;
-    strategy: string; maxTokens?: number;
-  }): void {
-    this.compactionModel = model;
-    this.compactionSettings = settings;
+  /** The Assistant's compaction config — set alongside setAgent (same server
+   *  read), so a settings change is followed. */
+  setCompaction(cfg: CompactionConfig): void {
+    this.compaction = cfg;
   }
 
   /** The swap landed: the summary replaced messages. Rewrite the transcript
@@ -429,13 +421,8 @@ export class VoiceClient {
   /** Run compaction on the assistant history. Used by both auto-trigger
    *  (the finally block) and the manual /compact command. */
   async runCompaction(): Promise<boolean> {
-    if (!this.compactionModel) return false;
-    const result = await compact(this.compactionLock, {
-      history: this.history,
-      strategy: getStrategy(this.compactionSettings.strategy),
-      summarizePct: this.compactionSettings.summarizePct,
-      model: this.compactionModel, sessionId: this.sessionId, maxTokens: this.compactionSettings.maxTokens,
-    });
+    if (!this.compaction) return false;
+    const result = await compact(this.compactionLock, compactionOpts(this.compaction, this.history, this.sessionId));
     if (!result) return false;
     this.onCompacted(result.removed);
     return true;
@@ -628,8 +615,7 @@ export class VoiceClient {
       });
       if (turnInput) this.onTurnEnded?.();
       // Long chat? Summarize it in the background — turns never wait on it.
-      if (!this.compactionLock.active && this.compactionModel
-        && shouldCompact(turnInput, this.compactionSettings.contextWindow, this.compactionSettings.pct)) {
+      if (!this.compactionLock.active && this.compaction && compactionDue(this.compaction, turnInput)) {
         void this.runCompaction().catch((err) => {
           this.note({ kind: 'error', id: nextId('verr'), message: `compaction failed: ${(err as Error).message}` });
         });

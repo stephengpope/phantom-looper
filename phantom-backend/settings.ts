@@ -11,7 +11,9 @@ import { settings, type WorkspaceRow } from './db/schema.js';
 import { GLOBAL, workspaceScope } from './store.js';
 import { encrypt, decrypt } from './crypto.js';
 import { latestModel } from './models.js';
-import { PROVIDERS, REASONINGS } from '../core/llm/createAgent.js';
+import { PROVIDERS, REASONINGS, type Provider } from '../core/llm/createAgent.js';
+import { agentConfigFrom, resolveModel, type AgentConfig, type AgentName, type AgentRows, type ModelPin } from './agentConfig.js';
+import { APP_VERSION } from './env.js';
 import { logger } from './log.js';
 import type { SettingsEvents } from './api/settingsEvents.js';
 
@@ -25,7 +27,6 @@ const log = logger('settings');
 // names the workspace image at the same tag (both are published together by
 // the release workflow), a dev build names :latest (scripts/setup.sh builds
 // it locally under that tag). Pulled on first use — see container.ts.
-const APP_VERSION = process.env.APP_VERSION ?? 'dev';
 const SESSION_IMAGE_TAG = /^v\d+\.\d+\.\d+/.test(APP_VERSION) ? APP_VERSION : 'latest';
 
 export const DEFAULTS = {
@@ -52,7 +53,7 @@ export const DEFAULTS = {
   coding_compact_summarize_pct: 75 as number,                // % of user+assistant messages to summarize
   coding_compact_max_tokens: null as number | null,          // output cap for the summary; null = model decides
   // ── the Assistant ─────────────────────────────────────────────────────────
-  // Its model — null = the coding agent's (cascade rule, core agentModelConfig).
+  // Its model — null = the coding agent's (the cascade, agentConfig.ts).
   assistant_provider: null as string | null,
   assistant_model: null as string | null,
   assistant_base_url: null as string | null,
@@ -165,19 +166,25 @@ export const DEFAULTS = {
  *  which provider is its own `*_provider` setting — so it reads the key for
  *  whatever that says, the same row the TUI's own agent reads. One key per
  *  provider, one place to set it. */
-export interface CredentialMeta { label: string; group: 'git' | 'llm' | 'voice' | 'search' | 'chat'; description: string }
+export interface CredentialMeta {
+  label: string; group: 'git' | 'llm' | 'voice' | 'search' | 'chat'; description: string;
+  /** The LLM provider this key authenticates — the ONE declaration of which
+   *  row holds which provider's key. Served on the wire (`meta.provider`), so
+   *  the cli's screens and the server's agent builder read the same fact. */
+  provider?: Provider;
+}
 export const CREDENTIALS = {
   github_token: { label: 'github token', group: 'git',
     description: 'Lets phantom-looper manage GitHub repos: clone, push, and land work on the base branch. A workspace can hold its own token; otherwise this one is used.' },
-  anthropic_api_key: { label: 'anthropic key', group: 'llm', description: 'Used by every agent set to the anthropic provider.' },
-  openai_api_key: { label: 'openai key', group: 'llm', description: 'Used by every agent set to the openai provider.' },
-  google_api_key: { label: 'google key', group: 'llm', description: 'Used by every agent set to the google provider (Gemini).' },
-  deepseek_api_key: { label: 'deepseek key', group: 'llm', description: 'Used by every agent set to the deepseek provider.' },
-  kimi_api_key: { label: 'kimi key', group: 'llm', description: 'Used by every agent set to the kimi provider (Moonshot AI / Kimi).' },
-  xai_api_key: { label: 'xai key', group: 'llm', description: 'Used by every agent set to the xai provider (Grok).' },
-  mistral_api_key: { label: 'mistral key', group: 'llm', description: 'Used by every agent set to the mistral provider.' },
-  groq_api_key: { label: 'groq key', group: 'llm', description: 'Used by every agent set to the groq provider.' },
-  openai_compatible_api_key: { label: 'openai-compatible key', group: 'llm',
+  anthropic_api_key: { label: 'anthropic key', group: 'llm', provider: 'anthropic', description: 'Used by every agent set to the anthropic provider.' },
+  openai_api_key: { label: 'openai key', group: 'llm', provider: 'openai', description: 'Used by every agent set to the openai provider.' },
+  google_api_key: { label: 'google key', group: 'llm', provider: 'google', description: 'Used by every agent set to the google provider (Gemini).' },
+  deepseek_api_key: { label: 'deepseek key', group: 'llm', provider: 'deepseek', description: 'Used by every agent set to the deepseek provider.' },
+  kimi_api_key: { label: 'kimi key', group: 'llm', provider: 'kimi', description: 'Used by every agent set to the kimi provider (Moonshot AI / Kimi).' },
+  xai_api_key: { label: 'xai key', group: 'llm', provider: 'xai', description: 'Used by every agent set to the xai provider (Grok).' },
+  mistral_api_key: { label: 'mistral key', group: 'llm', provider: 'mistral', description: 'Used by every agent set to the mistral provider.' },
+  groq_api_key: { label: 'groq key', group: 'llm', provider: 'groq', description: 'Used by every agent set to the groq provider.' },
+  openai_compatible_api_key: { label: 'openai-compatible key', group: 'llm', provider: 'openai-compatible',
     description: 'For OpenAI-compatible endpoints — Ollama, vLLM, OpenRouter. Not the same key as OpenAI.' },
   deepgram_api_key: { label: 'deepgram key', group: 'voice',
     description: 'Speech to text and text to speech for the Assistant. Without it the Assistant has no voice.' },
@@ -192,11 +199,11 @@ export const CREDENTIAL_NAMES = Object.keys(CREDENTIALS) as CredentialName[];
 export const isCredential = (k: string): k is CredentialName =>
   Object.prototype.hasOwnProperty.call(CREDENTIALS, k);
 
-/** The key holding the API key for one provider. `assistant_provider` and the
- *  TUI's own `provider` both name a provider; this turns either into the one
- *  row that holds its key. */
-export const credentialForProvider = (p: string): CredentialName =>
-  (`${p.replace(/-/g, '_')}_api_key`) as CredentialName;
+/** The row holding one provider's API key, read off CREDENTIALS' `provider`
+ *  field. undefined for a provider that holds no key here (openai-codex reads
+ *  its own login file). */
+export const credentialForProvider = (p: string): CredentialName | undefined =>
+  CREDENTIAL_NAMES.find((n) => (CREDENTIALS[n] as CredentialMeta).provider === p);
 
 /** What each setting does, in one or two plain sentences — and, where it
  *  matters, WHEN a change starts applying. Served by GET /settings and
@@ -616,12 +623,14 @@ export class Settings {
    *  `credentials` false means PLAIN VALUES ONLY — encrypted rows are
    *  skipped, not decrypted. Resolving `spare_clones` has no business touching
    *  a credential, and decrypting every stored one on every ordinary read
-   *  logged a warning per row (found by running it). */
-  private async readStore(scopes: string[], credentials: boolean): Promise<ByScope> {
+   *  logged a warning per row (found by running it). `onlyKey` narrows the
+   *  query to one key: a credential read decrypts that one and no other. */
+  private async readStore(scopes: string[], credentials: boolean, onlyKey?: string): Promise<ByScope> {
     const out: ByScope = new Map();
     for (const s of scopes) out.set(s, new Map());
     const rows = await this.db.select().from(settings).where(and(
-      inArray(settings.scope, scopes), eq(settings.namespace, GENERAL)));
+      inArray(settings.scope, scopes), eq(settings.namespace, GENERAL),
+      ...(onlyKey ? [eq(settings.key, onlyKey)] : [])));
     for (const r of rows) {
       // A row that will not decrypt is KEPT and reported, never treated as
       // unset — unset is what a caller deletes, and one bad row must not lose
@@ -678,7 +687,7 @@ export class Settings {
   /** A credential, most specific layer first — the ONE path that decrypts a
    *  declared credential. undefined = unset at every layer. */
   async credential(name: CredentialName, ctx: ResolveCtx = {}): Promise<string | undefined> {
-    const byScope = await this.readStore(scopesFor(ctx), true);
+    const byScope = await this.readStore(scopesFor(ctx), true, name);
     const l = layersFrom(byScope, ctx, name);
     const v = l.workspace ?? l.global;
     return typeof v === 'string' && v.length ? v : undefined;
@@ -695,6 +704,55 @@ export class Settings {
         workspace: typeof l.workspace === 'string' ? l.workspace : null };
     }
     return out;
+  }
+
+  // ── the agents ──────────────────────────────────────────────────────────────────────
+
+  /** THE door to an agent's runtime configuration — model, key, steps,
+   *  compaction — for every caller in the server and, over
+   *  GET /agents/:agent/config, the cli. The rules live in agentConfig.ts;
+   *  this reads the rows they need (one query) and the one key each model
+   *  needs (decrypting nothing else). `pin` is the session's row model
+   *  (agentConfig.sessionPin); absent = the settings' model. */
+  async agentConfig(agent: AgentName, o: { workspace?: WorkspaceRow; pin?: ModelPin | null } = {}): Promise<AgentConfig> {
+    const ctx: ResolveCtx = o.workspace ? { workspace: o.workspace } : {};
+    const [coding, own, supervisor] = await this.agentRows(['coding', agent, 'supervisor'], ctx);
+    const pin = o.pin ?? null;
+    const keyOf = async (provider: string) => {
+      const name = credentialForProvider(provider);
+      return name ? this.credential(name, ctx) : undefined;
+    };
+    const resolved = resolveModel(agent, coding, own, pin);
+    const supervisorProvider = agent === 'supervisor' ? resolved.provider : resolveModel('supervisor', coding, supervisor, null).provider;
+    return agentConfigFrom({ agent, coding, own, supervisor, pin,
+      keys: { agent: await keyOf(resolved.provider), supervisor: await keyOf(supervisorProvider) } });
+  }
+
+  /** The model trio an agent resolves to from the settings alone (no pin) —
+   *  what a newborn session row is stamped with (Sessions.birthModel). */
+  async agentModel(agent: AgentName, ctx: ResolveCtx = {}): Promise<{ provider: string; model: string; baseUrl: string | null }> {
+    const [coding, own] = await this.agentRows(['coding', agent], ctx);
+    return resolveModel(agent, coding, own, null);
+  }
+
+  /** Each agent's ten rows, typed — the ONE function that spells the three
+   *  agents' setting names. One query for all of them. */
+  private async agentRows(agents: readonly AgentName[], ctx: ResolveCtx): Promise<AgentRows[]> {
+    const keys = agents.flatMap((a) => [
+      `${a}_provider`, `${a}_model`, `${a}_base_url`, `${a}_reasoning`, `${a}_max_steps`,
+      `${a}_context_window`, `${a}_compact_threshold_pct`, `${a}_compact_strategy`,
+      `${a}_compact_summarize_pct`, `${a}_compact_max_tokens`,
+    ] as SettingKey[]);
+    const v = await this.resolveMany(keys, ctx) as Record<string, unknown>;
+    const str = (k: string) => (typeof v[k] === 'string' ? v[k] as string : null);
+    const num = (k: string) => (typeof v[k] === 'number' ? v[k] as number : null);
+    return agents.map((a) => ({
+      provider: str(`${a}_provider`), model: str(`${a}_model`), baseUrl: str(`${a}_base_url`),
+      reasoning: str(`${a}_reasoning`), maxSteps: num(`${a}_max_steps`),
+      contextWindow: num(`${a}_context_window`),
+      compactThresholdPct: num(`${a}_compact_threshold_pct`), compactStrategy: str(`${a}_compact_strategy`),
+      compactSummarizePct: num(`${a}_compact_summarize_pct`), compactMaxTokens: num(`${a}_compact_max_tokens`),
+    }));
   }
 
   /** Is a credential set at exactly this scope (not inherited)? The
@@ -756,7 +814,7 @@ export class Settings {
       if (value === null) await this.dropKey(k, scope);
       else await this.putScoped(scope, k, value);
     }
-    if (entries.length) this.events?.publish(scope, by);
+    if (entries.length) this.events?.publish(scope, entries.map(([k]) => k), by);
     return entries.map(([k]) => k);
   }
 

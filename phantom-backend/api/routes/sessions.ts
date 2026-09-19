@@ -6,16 +6,13 @@ import type { TokenRecord } from '../../logTokens.js';
 import { SessionError, heldByOther, isHeld, expiredHold, assertDuplicable, ownsFolder, folderOf } from '../../sessions.js';
 import { FolderError } from '../../folders.js';
 import { GIT_CLIENT_ID } from '../../git/git.js';
-import { repoDir, sessionDir } from '../../pool/paths.js';
+import { sessionDir } from '../../pool/paths.js';
 
-import { scanSkills, mergeSkills } from '../../../core/skills/skills.js';
-import { systemSkills } from '../../systemSkills.js';
-import { GLOBAL, workspaceScope } from '../../store.js';
 import { ok, err, type AppCtx } from '../app.js';
 import { openSession, SessionLockedError } from '../../../core/session.js';
-import { codingPrompt, type CodingPrompt } from '../../../core/llm/agents/coding.js';
 import { injectFetch } from '../../looper/injectFetch.js';
 import { runCodingTurn } from '../../looper/turn.js';
+import { sessionPin } from '../../agentConfig.js';
 import { writeAttachment } from '../../telegram/attachments.js';
 import type { SessionEvent } from '../sessionEvents.js';
 
@@ -53,25 +50,6 @@ const idParam = { type: 'object', properties: { id: { type: 'string' } }, requir
  *  already holds a prompt keeps it (Sessions.freezeSystemPrompt) — a restart
  *  or a re-open never moves a running session's prompt. Called at creation
  *  and, for sessions born before the column, on their first open. */
-async function freezeSystemPrompt(ctx: AppCtx, s: SessionRow): Promise<CodingPrompt> {
-  const workspace = await ctx.workspaces.get(s.workspaceId);
-  const resolved = await ctx.settings.resolveMany(['container_image', 'agent_git_credentials', 'agent_database'], { workspace });
-  const skills = mergeSkills(
-    await scanSkills(repoDir(ctx.paths, folderOf(s))),
-    ctx.fs ? await systemSkills(ctx.fs.docker, String(resolved.container_image)) : []);
-  const byName = new Map<string, { name: string; description: string }>();
-  for (const sec of await ctx.settings.listSecrets([GLOBAL, workspaceScope(s.workspaceId)])) {
-    if (sec.scope === GLOBAL && byName.has(sec.name)) continue;
-    byName.set(sec.name, { name: sec.name, description: sec.description });
-  }
-  const secrets = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
-  return ctx.sessions.freezeSystemPrompt(s.id,
-    codingPrompt(skills, {
-      credentials: Boolean(resolved.agent_git_credentials),
-      database: Boolean(resolved.agent_database),
-    }, secrets));
-}
-
 /** An attached file's ceiling (attachments route) — ours, unlike telegram's
  *  20MB bot-API ceiling: a screencast should fit, a disk image should not. */
 const MAX_ATTACHMENT_BYTES = 64 * 1024 * 1024;
@@ -121,8 +99,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       } } } }, async (req, reply) => {
     if (!req.body?.workspace_id) return reply.code(400).send(err('missing_workspace', 'body.workspace_id required'));
     try {
-      const s = await ctx.sessions.create(req.body.workspace_id, { id: req.body.id });
-      return reply.code(201).send(ok({ ...s, system_prompt: await freezeSystemPrompt(ctx, s) }));
+      return reply.code(201).send(ok(await ctx.sessions.start(req.body.workspace_id, { id: req.body.id })));
     } catch (e) {
       // The session's own refusals, and the checkout's (a dead token, a repo
       // the token cannot see, GitHub unreachable — Folders.checkout).
@@ -306,16 +283,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         'commands are left running by design). The turn saves what it recorded and ends cleanly — the ' +
         'card is not blocked. 200 whether or not a turn was running (idempotent).',
       params: idParam } },
-    async (req) => {
-      const ac = ctx.activeTurns?.get(req.params.id);
-      if (ac) ac.abort();
-      ctx.foreground?.killAll(req.params.id);
-      // Published under the CALLER's id: the feed never echoes a client its
-      // own events, so the caller's own feed is untouched while every other
-      // listener — the runner among them — hears it.
-      ctx.sessionEvents?.publish(req.params.id, clientOf(req), { event: 'interrupt' });
-      return ok({ interrupted: !!ac });
-    });
+    async (req) => ok(ctx.sessions.interrupt(req.params.id, clientOf(req), ctx)));
 
   // ---- the transcript ------------------------------------------------------
   // The conversation, whole — the same JSONL the client keeps locally. SQL is
@@ -601,10 +569,12 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         else if (p.type === 'tool-call') line({ type: 'tool', name: p.toolName });
       });
       try {
+        const workspace = await ctx.workspaces.get(opened.session.workspaceId);
+        const cfg = await ctx.settings.agentConfig('coding', { workspace: workspace ?? undefined, pin: sessionPin(opened.session) });
         const { text } = await runCodingTurn(
           { f, apiKey: ctx.apiKey, base: 'http://looper/api', modelFetch: ctx.modelFetch,
             sessionEvents: ctx.sessionEvents, client, backdoor: ctx.backdoor },
-          opened, opened.session.workspaceId, req.body.message, req.body.plan === true);
+          opened, opened.session.workspaceId, req.body.message, req.body.plan === true, cfg);
         line({ type: 'result', text });
       } catch (e) {
         line({ type: 'error', message: (e as Error).message });
@@ -753,7 +723,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     // (025) gets its prompt frozen the first time it is opened — the one
     // write this read makes, once.
     let system_prompt = await ctx.sessions.systemPrompt(s.id);
-    if (!system_prompt && ownsFolder(s)) system_prompt = await freezeSystemPrompt(ctx, s);
+    if (!system_prompt && ownsFolder(s)) system_prompt = await ctx.sessions.freezePromptNow(s);
     return ok({ ...s, card: card?.number ?? null,
       system_prompt,
       // Computed like the list's, and for the same reason: the cli polls this

@@ -26,9 +26,8 @@ import { tableChoices, type TableRow } from './table.js';
 import { ValueInput, type EditSpec } from './ValueInput.js';
 import { Screen } from './Screen.js';
 import { TextInput } from './TextInput.js';
-import { makeSettings } from '../settings.js';
+import { makeSettings, type Entry } from '../settings.js';
 import { type ConfigValue } from '../config.js';
-import { PROVIDERS, REASONINGS } from '../../core/llm/createAgent.js';
 import {
   buildModelSpec, providerForModelRow, MODEL_FOR_PROVIDER,
   type CatalogModel,
@@ -36,34 +35,23 @@ import {
 import type { Api } from '../request.js';
 import { newId } from '../../core/ids.js';
 
-/** The 15 model keys a preset may hold (five per agent), in display order,
- *  grouped. Mirrors PRESET_KEYS in phantom-backend/presets.ts; the server
- *  refuses anything else. */
-const PRESET_GROUPS: Array<{ heading: string; keys: Array<{ key: string; label: string; choices?: readonly string[] }> }> = [
-  { heading: 'coding agent', keys: [
-    { key: 'coding_provider', label: 'provider', choices: PROVIDERS },
-    { key: 'coding_model', label: 'model' },
-    { key: 'coding_base_url', label: 'endpoint' },
-    { key: 'coding_reasoning', label: 'reasoning', choices: REASONINGS },
-    { key: 'coding_max_steps', label: 'steps per turn' },
-  ] },
-  { heading: 'assistant', keys: [
-    { key: 'assistant_provider', label: 'provider', choices: PROVIDERS },
-    { key: 'assistant_model', label: 'model' },
-    { key: 'assistant_base_url', label: 'endpoint' },
-    { key: 'assistant_reasoning', label: 'reasoning', choices: REASONINGS },
-    { key: 'assistant_max_steps', label: 'steps per turn' },
-  ] },
-  { heading: 'supervisor', keys: [
-    { key: 'supervisor_provider', label: 'provider', choices: PROVIDERS },
-    { key: 'supervisor_model', label: 'model' },
-    { key: 'supervisor_base_url', label: 'endpoint' },
-    { key: 'supervisor_reasoning', label: 'reasoning', choices: REASONINGS },
-    { key: 'supervisor_max_steps', label: 'steps per turn' },
-  ] },
-];
-
-const ALL_KEYS = PRESET_GROUPS.flatMap((g) => g.keys.map((k) => k.key));
+/** The model keys a preset may hold, grouped per agent — read off GET
+ *  /settings: every entry whose `meta.subgroup` is `model`, under its
+ *  `meta.group`, with the server's label and choices. The server's presets.ts
+ *  derives its allowed list from the same fact; nothing is listed here. */
+interface PresetKey { key: string; label: string; choices?: readonly string[] }
+interface PresetGroup { heading: string; keys: PresetKey[] }
+export function presetGroups(entries: Record<string, Entry>): PresetGroup[] {
+  const groups = new Map<string, PresetKey[]>();
+  for (const [key, e] of Object.entries(entries)) {
+    if (e.meta.subgroup !== 'model' || !e.meta.group) continue;
+    const list = groups.get(e.meta.group) ?? [];
+    list.push({ key, label: e.meta.label ?? key, choices: e.meta.choices });
+    groups.set(e.meta.group, list);
+  }
+  return [...groups.entries()].map(([heading, keys]) => ({ heading, keys }));
+}
+const allKeys = (groups: PresetGroup[]) => groups.flatMap((g) => g.keys.map((k) => k.key));
 
 export interface Preset { id: string; name: string; values: Record<string, unknown> }
 
@@ -90,11 +78,11 @@ const cell = (v: unknown): string => (typeof v === 'string' ? v : '·');
  *  model and reasoning each in their own aligned column under a header —
  *  the same shape /resume, /tasks and /archived draw. Replaces the old
  *  `detail` string that joined the three with ' · ' into one ragged blob. */
-export function presetChoices(presets: Preset[]): Choice<string | null>[] {
+export function presetChoices(presets: Preset[], groups: PresetGroup[]): Choice<string | null>[] {
   const rows = presets.map((p): TableRow<string> => ({
     value: p.id,
     cells: [p.name, cell(p.values.coding_provider), cell(p.values.coding_model), cell(p.values.coding_reasoning)],
-    hint: presetHint(p),
+    hint: presetHint(p, groups),
   }));
   return tableChoices('preset', [
     { title: 'provider', cap: 18 },   // fits 'openai-compatible' (17)
@@ -111,9 +99,9 @@ function displayValue(state: KeyState, value: unknown): string {
 }
 
 /** The full hint for the list's hint block: all 15 keys laid out. */
-function presetHint(p: Preset): string {
+function presetHint(p: Preset, groups: PresetGroup[]): string {
   const lines: string[] = [];
-  for (const g of PRESET_GROUPS) {
+  for (const g of groups) {
     lines.push(`${g.heading}:`);
     for (const k of g.keys) {
       const s = keyState(p.values, k.key);
@@ -149,13 +137,18 @@ export function Presets({ api, confirm, onApplied, onClose }: {
   const [last, setLast] = useState<string | undefined>();
   const [nameText, setNameText] = useState('');
 
-  // Server settings — needed to filter provider choices to keyed providers.
-  const [serverCfg, setServerCfg] = useState<Record<string, ConfigValue> | null>(null);
+  // The server's settings, entries and all: the values a preset overlays, and
+  // the credential rows that say which providers have a key.
+  const [serverEntries, setServerEntries] = useState<Record<string, Entry> | null>(null);
   useEffect(() => {
-    void settings.read()
-      .then((r) => setServerCfg(r))
+    void settings.all()
+      .then((r) => setServerEntries(r))
       .catch((e: unknown) => setNotice(`server unreachable: ${(e as Error).message}`));
   }, [settings]);
+  const serverCfg = useMemo(() => serverEntries
+    ? Object.fromEntries(Object.entries(serverEntries).map(([k, e]) => [k, e.value as ConfigValue])) : null, [serverEntries]);
+  const groups = useMemo(() => presetGroups(serverEntries ?? {}), [serverEntries]);
+  const keys = useMemo(() => allKeys(groups), [groups]);
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -183,7 +176,7 @@ export function Presets({ api, confirm, onApplied, onClose }: {
   const finishSpec = async (key: string, spec: EditSpec, values: Record<string, unknown>): Promise<EditSpec> => {
     const provider = providerForModelRow(key, values);
     const models = provider ? await loadModels(provider) : [];
-    return buildModelSpec(key, spec, values, models);
+    return buildModelSpec(key, spec, values, models, serverEntries ?? {});
   };
 
   // ── Apply ──────────────────────────────────────────────────────────────────
@@ -193,7 +186,7 @@ export function Presets({ api, confirm, onApplied, onClose }: {
       // Build a PATCH body from only the keys the preset has an opinion on.
       // set keys → their value, clear keys → null, leave-unchanged keys → skipped.
       const patch: Record<string, ConfigValue> = {};
-      for (const k of ALL_KEYS) {
+      for (const k of keys) {
         if (!(k in p.values)) continue;            // leave unchanged — don't touch
         patch[k] = p.values[k] as ConfigValue;     // value or null
       }
@@ -207,7 +200,7 @@ export function Presets({ api, confirm, onApplied, onClose }: {
       onClose();
     } catch (e) { setNotice(`could not apply: ${(e as Error).message}`); }
     finally { setBusy(false); }
-  }, [settings, onApplied, onClose]);
+  }, [settings, keys, onApplied, onClose]);
 
   // ── Save one key in a preset ───────────────────────────────────────────────
   // value = a real value → set; null → clear; undefined → leave unchanged
@@ -239,7 +232,7 @@ export function Presets({ api, confirm, onApplied, onClose }: {
     try {
       const id = newId();
       // Clear is the default: a new preset resets every key it doesn't set.
-      const values = Object.fromEntries(ALL_KEYS.map((k) => [k, null]));
+      const values = Object.fromEntries(keys.map((k) => [k, null]));
       await api('PUT', `/presets/${id}`, { name, values });
       const preset: Preset = { id, name, values };
       await load();
@@ -247,7 +240,7 @@ export function Presets({ api, confirm, onApplied, onClose }: {
       setNotice(undefined);
     } catch (e) { setNotice(`could not create: ${(e as Error).message}`); }
     finally { setBusy(false); }
-  }, [api, load]);
+  }, [api, keys, load]);
 
   // ── Rename ─────────────────────────────────────────────────────────────────
   const renamePreset = useCallback(async (preset: Preset, name: string) => {
@@ -271,7 +264,7 @@ export function Presets({ api, confirm, onApplied, onClose }: {
       setNotice('preset deleted');
     } catch (e) { setNotice(`could not delete: ${(e as Error).message}`); }
     finally { setBusy(false); }
-  }, [api, load]);
+  }, [api, keys, load]);
 
   // ── Name input for a new preset ────────────────────────────────────────────
   if (view.at === 'name') {
@@ -319,7 +312,7 @@ export function Presets({ api, confirm, onApplied, onClose }: {
       if (v !== null) merged[k] = v;
     }
     const choices: Choice<string>[] = [];
-    for (const g of PRESET_GROUPS) {
+    for (const g of groups) {
       choices.push({ value: `#${g.heading}`, label: g.heading, heading: true });
       for (const k of g.keys) {
         const state = keyState(p.values, k.key);
@@ -346,12 +339,12 @@ export function Presets({ api, confirm, onApplied, onClose }: {
           choices={choices}
           onSelect={(k) => {
             setLast(k);
-            const info = PRESET_GROUPS.flatMap((g) => g.keys).find((x) => x.key === k);
+            const info = groups.flatMap((g) => g.keys).find((x) => x.key === k);
             if (!info) return;
             const spec: EditSpec = {
               title: info.label,
               choices: info.choices,
-              type: k.endsWith('max_steps') ? 'number' : 'string',
+              type: serverEntries?.[k]?.meta.type ?? 'string',
               current: p.values[k] ?? null,
               note: 'pick a value · empty = clear',
             };
@@ -386,7 +379,7 @@ export function Presets({ api, confirm, onApplied, onClose }: {
       notice={notice} sub="loading…" />;
   }
 
-  const listChoices = presetChoices(presets);
+  const listChoices = presetChoices(presets, groups);
 
   return (
     <Screen title="presets"

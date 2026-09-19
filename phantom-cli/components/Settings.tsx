@@ -24,7 +24,7 @@
 import { Text } from './Text.js';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  DESCRIPTIONS, META, CONFIG_PATH, PROVIDER_KEY, LOCAL_KEYS,
+  DESCRIPTIONS, META, CONFIG_PATH, LOCAL_KEYS,
   mask, type LocalKey, type ConfigValue,
 } from '../config.js';
 import { resolveLocal } from '../local.js';
@@ -139,7 +139,7 @@ export function Settings({ api, onClose, onChange, configPath = CONFIG_PATH, row
     };
     const provider = providerForModelRow(key, values);
     const models = provider ? await loadModels(provider) : [];
-    setView({ at: 'edit', kind: 'server', key, spec: buildModelSpec(key, spec, values, models) });
+    setView({ at: 'edit', kind: 'server', key, spec: buildModelSpec(key, spec, values, models, server ?? {}) });
   };
 
   const openLocal = (key: LocalKey) => {
@@ -316,27 +316,31 @@ export function providerForModelRow(key: string, values: Record<string, unknown>
 
 /** A provider row lists only the providers with a key on /keys — a provider
  *  you cannot call is not a choice (one that takes no key, openai-codex, is
- *  always a choice). With no key stored yet, every provider and a note
- *  saying where the key goes. null for any other row. */
+ *  always a choice). Which row holds which provider's key is the SERVER's
+ *  declaration, read off each credential entry's `meta.provider` — nothing
+ *  here maps providers to keys. With no key stored yet, every provider and a
+ *  note saying where the key goes. null for any other row. */
 export function providerChoices(key: string, choices: readonly string[] | undefined,
-  values: Record<string, unknown>): Pick<EditSpec, 'choices' | 'note'> | null {
+  entries: Record<string, Entry>): Pick<EditSpec, 'choices' | 'note'> | null {
   if (!PROVIDER_ROWS.has(key)) return null;
   const all = choices ?? PROVIDERS;
-  const keyField = (p: string) => PROVIDER_KEY[p as keyof typeof PROVIDER_KEY] as string | undefined;
-  const keyed = all.filter((p) => !keyField(p) || set(values[keyField(p)!]));
+  const keyEntry = (p: string) => Object.values(entries).find((e) => e.meta.provider === p);
+  const keyed = all.filter((p) => { const e = keyEntry(p); return !e || set(e.value); });
   return keyed.length
     ? { choices: keyed, note: 'providers with a key on /keys' }
     : { choices: all, note: 'no provider key on /keys yet — save one there first' };
 }
 
 /** Enriches an EditSpec for a provider or model row with the keyed-provider
- *  filter or the model catalog. Pure: the caller supplies the catalog. Used
- *  by Settings and by Presets. */
+ *  filter or the model catalog. Pure: the caller supplies the catalog.
+ *  `values` decides which provider a model row follows (a preset's values may
+ *  overlay the server's); `entries` is the server's own read, for the keys.
+ *  Used by Settings and by Presets. */
 export function buildModelSpec(
   key: string, spec: EditSpec, values: Record<string, unknown>,
-  models: CatalogModel[],
+  models: CatalogModel[], entries: Record<string, Entry>,
 ): EditSpec {
-  const providerRow = providerChoices(key, spec.choices, values);
+  const providerRow = providerChoices(key, spec.choices, entries);
   if (providerRow) return { ...spec, ...providerRow };
   const provider = providerForModelRow(key, values);
   if (!provider) return spec;

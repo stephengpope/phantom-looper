@@ -36,8 +36,12 @@ import type { Folders } from './folders.js';
 import { newId } from '../core/ids.js';
 import { logger } from './log.js';
 import { lastUserFromJsonl, stripUsageFromJsonl } from '../core/llm/transcript.js';
-import type { CodingPrompt } from '../core/llm/agents/coding.js';
-import { cascade } from '../core/llm/agentConfig.js';
+import { codingPrompt, type CodingPrompt } from '../core/llm/agents/coding.js';
+import { scanSkills, mergeSkills } from '../core/skills/skills.js';
+import { systemSkills } from './systemSkills.js';
+import { repoDir, type Paths } from './pool/paths.js';
+import type Docker from 'dockerode';
+import { GLOBAL, workspaceScope } from './store.js';
 import type { SessionEvents } from './api/sessionEvents.js';
 
 const log = logger('sessions');
@@ -180,7 +184,63 @@ export class Sessions {
     private readonly folders: Folders,
     /** The per-session feed; absent in tests that have no watchers. */
     private readonly events?: SessionEvents,
+    /** What freezing a session's prompt reads: the checkout's skills and the
+     *  image's system skills. Absent in tests: `start` then freezes no skills. */
+    private readonly promptDeps?: { paths: Paths; docker?: Docker },
   ) {}
+
+  // ── start, interrupt ─────────────────────────────────────────────────────
+  // The two session acts every client performs, at the object — the routes
+  // are thin over them, and the server's own engines (Telegram, the looper)
+  // call them here rather than over HTTP.
+
+  /** Create — or restart — a session AND freeze its coding prompt: the
+   *  skills, secrets and git facts of THIS moment, sent verbatim on every
+   *  turn after (Sessions.freezeSystemPrompt). A restart keeps the prompt the
+   *  session was born with. The row and the prompt come back together — what
+   *  POST /sessions answers with. */
+  async start(workspaceId: string, opts: { id?: string } = {}): Promise<SessionFull & { system_prompt: CodingPrompt }> {
+    const s = await this.create(workspaceId, opts);
+    return { ...s, system_prompt: await this.freezePromptNow(s) };
+  }
+
+  /** Freeze THIS moment's coding prompt on a session's row: the checkout's
+   *  skills, the image's, the declared secrets, the workspace's git facts.
+   *  `start` does it at birth; GET /sessions/:id does it once for a coding
+   *  session born before the column existed. */
+  async freezePromptNow(s: SessionRow): Promise<CodingPrompt> {
+    const workspace = await this.workspaces.get(s.workspaceId);
+    const resolved = await this.settings.resolveMany(['container_image', 'agent_git_credentials', 'agent_database'], { workspace });
+    const skills = this.promptDeps
+      ? mergeSkills(
+        await scanSkills(repoDir(this.promptDeps.paths, folderOf(s))),
+        this.promptDeps.docker ? await systemSkills(this.promptDeps.docker, String(resolved.container_image)) : [])
+      : [];
+    const byName = new Map<string, { name: string; description: string }>();
+    for (const sec of await this.settings.listSecrets([GLOBAL, workspaceScope(s.workspaceId)])) {
+      if (sec.scope === GLOBAL && byName.has(sec.name)) continue;
+      byName.set(sec.name, { name: sec.name, description: sec.description });
+    }
+    const secrets = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+    return this.freezeSystemPrompt(s.id, codingPrompt(skills, {
+      credentials: Boolean(resolved.agent_git_credentials),
+      database: Boolean(resolved.agent_database),
+    }, secrets));
+  }
+
+  /** Stop whatever turn is running on a session: the in-process turn is
+   *  aborted, foreground commands in its container are killed (detached ones
+   *  are left by design), and an `interrupt` record goes out on the feed so
+   *  every OTHER client running a turn here — a cli window, the Telegram
+   *  engine — stops its own. Published under `by`: the feed never echoes a
+   *  client its own events. Idempotent. */
+  interrupt(id: string, by: string, runtime: { activeTurns?: Map<string, AbortController>; foreground?: { killAll(id: string): void } }): { interrupted: boolean } {
+    const ac = runtime.activeTurns?.get(id);
+    if (ac) ac.abort();
+    runtime.foreground?.killAll(id);
+    this.events?.publish(id, by, { event: 'interrupt' });
+    return { interrupted: !!ac };
+  }
 
   /** The row moved in a way no richer event names: the list re-reads. Under
    *  no client, so every listener hears it (the feed drops a client's own). */
@@ -219,13 +279,11 @@ export class Sessions {
   private async birthModel(workspaceId: string, agent: 'supervisor' | 'assistant' | null = null):
   Promise<{ provider: string | null; model: string | null; baseUrl: string | null }> {
     const workspace = await this.workspaces.get(workspaceId);
-    const cfg = await this.settings.resolveMany(['coding_provider', 'coding_model', 'coding_base_url',
-      'supervisor_provider', 'supervisor_model', 'supervisor_base_url',
-      'assistant_provider', 'assistant_model', 'assistant_base_url'], workspace ? { workspace } : {});
-    if (agent) {
-      try { return cascade(cfg, agent); } catch { /* nothing usable yet — the row stays empty */ }
-    }
-    return { provider: cfg.coding_provider ?? null, model: cfg.coding_model ?? null, baseUrl: cfg.coding_base_url ?? null };
+    try {
+      const m = await this.settings.agentModel(agent ?? 'coding', workspace ? { workspace } : {});
+      // A whole pin or none: a provider with no model is nothing to run on.
+      return m.provider && m.model ? m : { provider: null, model: null, baseUrl: null };
+    } catch { return { provider: null, model: null, baseUrl: null }; } // a half-set pair — the row stays empty
   }
 
   /** A setting changed: every session with nothing said yet (and no turn in

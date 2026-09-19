@@ -15,7 +15,6 @@ import type { ModelMessage, Tool } from 'ai';
 import type { Agent } from './agent.js';
 import { runTurn } from './agent.js';
 import type { AgentSummary } from './agentFromConfig.js';
-import type { ModelPin } from '../core/llm/agentConfig.js';
 import { Transcript } from './session.js';
 import type { UsageTotals } from '../core/llm/transcript.js';
 import type { CodingPrompt } from '../core/llm/agents/coding.js';
@@ -61,12 +60,6 @@ export interface LoadedSession {
    *  is the record; this mirrors it so the picker's open-here extras carry
    *  the pin too — seeded at open, flipped by setPinned. */
   pinned: boolean;
-  /** The model this session is pinned to (core agentConfig): the row's
-   *  provider/model/endpoint, refreshed whenever a turn starts. Null only
-   *  while nothing has been said — the one case the global settings apply.
-   *  Every rebuild resolves through it, so no path can put a running
-   *  conversation on a different model. */
-  pin: ModelPin | null;
   /** The server transcript's stamp our memory matches (null = never synced).
    *  Compared against the lock response's stamp at each turn start; a
    *  mismatch means another machine advanced the session — pull, reseat,
@@ -152,9 +145,6 @@ export interface NewSession {
   /** The server row's pinned (LoadedSession.pinned). */
   pinned?: boolean;
   syncStamp?: string | null;
-  /** The model this session is pinned to (LoadedSession.pin). Absent only for
-   *  a session with nothing said yet. */
-  pin?: ModelPin | null;
   /** Token totals summed from the seated transcript (LoadedSession.usage). */
   usage?: UsageTotals;
   /** Text already in the prompt that belongs to THIS session (typed while
@@ -243,7 +233,6 @@ export class SessionStore {
       planMode: s.planMode ?? false,
       pinned: s.pinned ?? false,
       syncStamp: s.syncStamp ?? null,
-      pin: s.pin ?? null,
       live: [], turn: [],
       busy: false, remoteBusy: false, held: null, startedAt: 0, tokens: NO_TOKENS,
       usage: s.usage ?? { input: 0, output: 0, cache_read: 0, cache_write: 0 }, abort: null,
@@ -493,26 +482,14 @@ export class SessionStore {
   }
 
   /** Replace one session's disposable agent and the settings summary the
-   *  chrome shows. The caller has just read the server. */
-  setAgent(id: string, agent: Agent, summary: AgentSummary, pin: ModelPin | null): void {
+   *  chrome shows. The caller has just read the server (its config, on the
+   *  row's model). A turn already streaming keeps the agent it started with
+   *  — runTurn holds its own reference — so the switch lands on the next turn. */
+  setAgent(id: string, agent: Agent, summary: AgentSummary): void {
     const e = this.get(id);
     if (!e) return;
     e.agent = agent;
     e.summary = summary;
-    e.pin = pin;
-    this.notify();
-  }
-
-  /** Settings changed: rebuild every session so reasoning, max steps and
-   *  credentials refresh. The caller applies each entry's pin, so a spoken
-   *  session keeps its model for life. A turn already streaming keeps the
-   *  agent it started with — runTurn holds its own reference — so the switch
-   *  lands on the next turn. */
-  rebuildAgents(make: (e: LoadedSession) => { agent: Agent; summary: AgentSummary }): void {
-    for (const e of this.entries) {
-      const { agent, summary } = make(e);
-      e.agent = agent; e.summary = summary;
-    }
     this.notify();
   }
 

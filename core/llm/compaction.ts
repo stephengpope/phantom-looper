@@ -177,6 +177,34 @@ export function summaryMessage(text: string, strategy: string): ModelMessage {
 // Compaction context and execution
 // ---------------------------------------------------------------------------
 
+/** An agent's compaction settings, resolved (phantom-backend/agentConfig.ts
+ *  fills it; this file only reads it). */
+export interface CompactionConfig {
+  /** % of the context window that triggers auto-compaction; 0 = off. */
+  thresholdPct: number;
+  /** The agent's model's context window in tokens; null = unknown, so
+   *  auto-compaction cannot fire (a manual /compact still can). */
+  contextWindow: number | null;
+  /** % of user+assistant messages to summarize. */
+  summarizePct: number;
+  strategy: string;
+  /** Output cap for the summary; null = the model decides. */
+  maxTokens: number | null;
+  /** The model that writes the summary. */
+  model: ModelConfig;
+}
+
+/** Does the last turn's input size call for compaction under this config? */
+export function compactionDue(cfg: CompactionConfig, lastInputTokens: number): boolean {
+  return cfg.contextWindow != null && shouldCompact(lastInputTokens, cfg.contextWindow, cfg.thresholdPct);
+}
+
+/** The run options for one compaction of `history` under `cfg`. */
+export function compactionOpts(cfg: CompactionConfig, history: ModelMessage[], sessionId: string | null): CompactionOpts {
+  return { history, strategy: getStrategy(cfg.strategy), summarizePct: cfg.summarizePct,
+    model: cfg.model, sessionId, maxTokens: cfg.maxTokens };
+}
+
 export interface CompactionOpts {
   /** The live history array — mutated in place on success. */
   history: ModelMessage[];
@@ -299,47 +327,4 @@ export function shouldCompact(lastInputTokens: number, contextWindow: number, pc
   if (!Number.isFinite(lastInputTokens) || lastInputTokens <= 0) return false;
   const threshold = Math.floor(contextWindow * pct / 100);
   return lastInputTokens >= threshold;
-}
-
-// ---------------------------------------------------------------------------
-// Context window resolution
-// ---------------------------------------------------------------------------
-
-/** Resolve the context window for an agent. The chain:
- *  1. The model catalog (contextWindowFor)
- *  2. `<prefix>_context_window` setting (the agent's own)
- *  3. `coding_context_window` setting (the coding agent's — the fallback)
- *  4. null — unknown, auto-compaction cannot fire.
- *  Never returns 0; never silent. */
-export function resolveContextWindow(
-  cfg: Record<string, unknown>,
-  prefix: string,
-  catalogLookup: (provider: string, model: string) => number,
-  modelLookup: (cfg: Record<string, unknown>, prefix: string) => { provider: string; model: string },
-  log?: (msg: string) => void,
-): number | null {
-  try {
-    const mc = modelLookup(cfg, prefix);
-    const cw = catalogLookup(mc.provider, mc.model);
-    if (cw > 0) return cw;
-    log?.(`compaction: model ${mc.provider}/${mc.model} has no context window in the catalog`);
-  } catch (e) {
-    log?.(`compaction: can't resolve ${prefix} model: ${(e as Error).message}`);
-  }
-  // Per-agent override, then general fallback.
-  for (const key of [`${prefix}_context_window`, 'coding_context_window']) {
-    const v = cfg[key];
-    if (v != null && Number(v) > 0) return Number(v);
-  }
-  return null;
-}
-
-/** Resolve a cascaded compaction setting: `<prefix>_compact_<name>` → the
- *  coding agent's `coding_compact_<name>`. */
-export function resolveCompactSetting<T>(cfg: Record<string, unknown>, prefix: string, name: string, fallback: T): T {
-  const v = cfg[`${prefix}_compact_${name}`];
-  if (v != null) return v as T;
-  const g = cfg[`coding_compact_${name}`];
-  if (g != null) return g as T;
-  return fallback;
 }

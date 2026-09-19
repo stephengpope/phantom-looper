@@ -67,40 +67,6 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
     return reply.code(e.code === 'not_found' ? 404 : 400).send(err(e.code, e.message));
   };
 
-  /** Archiving a DONE card auto-pushes its session's work, when
-   *  `auto_push_on_archive` says so. Archiving a card in any other column is
-   *  just archiving — it disappears from the board, nothing fires; that is the
-   *  discard gesture. Detached — the PATCH answers at once; an auto-push can
-   *  run for minutes. The card's session is its newest coding session; a
-   *  card with none has nothing to push.
-   *  Failure surfaces on the board: the card comes back un-archived, in
-   *  blocked, with the reason. */
-  async function autoPushArchivedCard(w: WorkspaceRow, number: number): Promise<void> {
-    if (!ctx.autoPush) return;
-    const session = await ctx.sessions.coderOf(w.id, number);
-    if (!session || session.status !== 'active') return;
-    if (await ctx.settings.resolve('auto_push_on_archive', { workspace: w }) !== true) return;
-    // The session lock may be held (a turn mid-flight, a tool call): wait it
-    // out rather than blocking the card over a moment's contention.
-    let result: Awaited<ReturnType<NonNullable<typeof ctx.autoPush>>> | undefined;
-    for (let i = 0; i < 30; i++) {
-      try { result = await ctx.autoPush(session, w); break; }
-      catch (e) {
-        if ((e as { code?: string }).code === 'busy') { await new Promise((r) => setTimeout(r, 10_000)); continue; }
-        result = { result: 'error', reason: e instanceof Error ? e.message : String(e) }; break;
-      }
-    }
-    result ??= { result: 'error', reason: 'session stayed busy — auto-push never ran' };
-    if (result.result === 'pushed' || result.result === 'nothing') {
-      log.info({ workspace: w.name, card: number, result: result.result }, 'auto-push on archive');
-      return;
-    }
-    log.warn({ workspace: w.name, card: number, result }, 'auto-push on archive failed — card un-archived into blocked');
-    await ctx.cards.unarchiveAsBlocked(w, number, `auto-push failed: ${result.reason ?? result.result}`)
-      .catch((e) =>
-        log.error({ card: number, err: errStr(e) }, 'could not mark the card blocked after a failed auto-push'));
-  }
-
   // The resolved looper defaults ride every board payload so the card editor
   // can always show the REAL value a card inherits — and say which layer it
   // came from. One pair per switch: auto_plan gates the plan column,
@@ -174,12 +140,11 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
     async (req, reply) => {
       const w = await workspaceOf(req.params.id);
       if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
+      // Every card write lands on the board bus (Cards.publish): the looper
+      // and the archive auto-push listen there, whichever door wrote.
       let card;
       try { card = await ctx.cards.create(w, req.body as CardFields & { title: string }, writerOf(req)); }
       catch (e) { return cardErr(reply, e); }
-      // The looper runs on card writes, not on a clock: a card born straight
-      // into a loop column starts here. Eligibility is the engine's to judge.
-      ctx.looper?.runLoop(w.id, card.number);
       return ok({ ...await board(w), card });
     });
 
@@ -195,18 +160,9 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
       const w = await workspaceOf(req.params.id);
       if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
       const { items, ...fields } = req.body as CardFields & { items?: ItemOp[] };
-      let written;
-      try { written = await ctx.cards.update(w, req.params.number, fields, items, writerOf(req)); }
+      let card;
+      try { card = (await ctx.cards.update(w, req.params.number, fields, items, writerOf(req))).card; }
       catch (e) { return cardErr(reply, e); }
-      const { card, wasArchived } = written;
-      if (req.body.archived === true && wasArchived === false && card.status === 'done') {
-        void autoPushArchivedCard(w, card.number).catch((e) =>
-          log.error({ card: card.number, err: errStr(e) }, 'auto-push on archive threw'));
-      }
-      // Every card write runs the looper — a move into a loop column, an
-      // auto_plan/auto_build flip, an unblock. The engine re-reads the row
-      // and checks canTurn itself, so an irrelevant edit is a cheap no-op.
-      ctx.looper?.runLoop(w.id, card.number);
       return ok({ ...await board(w), card });
     });
 

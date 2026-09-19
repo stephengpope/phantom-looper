@@ -8,12 +8,11 @@
 // (core/llm/prompts/helpers/); the model is the Assistant's config, and
 // a half-set assistant pair falls back silently to the coding agent's. Never throws — on any failure the old name (or null) stands (the
 // commitMessage.ts pattern).
-import { isProvider, type ModelConfig } from '../core/llm/createAgent.js';
+import type { ModelConfig } from '../core/llm/createAgent.js';
 import { PhantomHelper } from '../core/llm/helper.js';
-import { cascade } from '../core/llm/agentConfig.js';
 import { titleRequest, type TitleContext } from '../core/llm/prompts/helpers/wiring.js';
 import { parseTranscript } from '../core/llm/transcript.js';
-import { credentialForProvider, type Settings } from './settings.js';
+import type { Settings } from './settings.js';
 import type { Sessions } from './sessions.js';
 import { logger, errStr } from './log.js';
 
@@ -93,27 +92,17 @@ export function cleanTitle(raw: string): string | null {
   return t.length > MAX_TITLE ? `${t.slice(0, MAX_TITLE).trimEnd()}…` : t;
 }
 
-/** The Assistant's trio cascading to the coding agent's (core rule); a bad
- *  pair falls back to the coding config outright — a title is never worth an
- *  error. null = no usable config (unknown provider, no model): skip. */
+/** The Assistant's model. null = it cannot build (a half-set pair): no
+ *  auto-title, said once in the log — a title is never worth an error. A
+ *  missing key or provider is languageModel's problem: it fails fast and the
+ *  tries below log it. */
 async function titleConfig(settings: Settings): Promise<ModelConfig | null> {
-  const cfg = await settings.resolveMany(['coding_provider', 'coding_model', 'coding_base_url',
-    'assistant_provider', 'assistant_model', 'assistant_base_url']);
-  let c: { provider: string; model: string | null; baseUrl: string | null };
   try {
-    c = cascade(cfg, 'assistant');
+    return (await settings.agentConfig('assistant')).model;
   } catch (e) {
-    // No guessing a different model: an unbuildable assistant config means
-    // no auto-title, said once in the log.
     log.warn({ err: (e as Error).message }, 'assistant model config cannot build — sessions are not auto-titled');
     return null;
   }
-  if (!isProvider(c.provider) || !c.model) return null;
-  const apiKey = await settings.credential(credentialForProvider(c.provider));
-  // A missing key is languageModel's problem, not ours: the SDK fails fast
-  // and locally, and the tries below swallow it — commitMessage's "no key"
-  // case exactly.
-  return { provider: c.provider, model: c.model, baseUrl: c.baseUrl ?? undefined, apiKey };
 }
 
 /** The title call: the selected user messages in, a candidate title out. */

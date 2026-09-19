@@ -6,7 +6,7 @@
 import type { ModelMessage } from 'ai';
 import type { OpenedSession } from '../../core/session.js';
 import { memoryRecorder, serializeTranscript } from '../../core/llm/transcript.js';
-import { buildCodingAgent, modelConfigFrom, pinnedCfg, sessionPin } from '../../core/llm/agentConfig.js';
+import { buildCodingAgent, type AgentConfig } from '../../core/llm/agentConfig.js';
 import { phantomTools } from '../../core/llm/tools/workspace.js';
 import { skillTools } from '../../core/llm/tools/skills.js';
 import { webTools } from '../../core/llm/tools/web.js';
@@ -45,16 +45,6 @@ export interface TurnDeps {
   backdoor?: BackdoorQueue;
 }
 
-/** The resolved settings as plain values — the same rows every client reads,
- *  credentials decrypted, over the same route. */
-export async function settingsValues(deps: TurnDeps): Promise<Record<string, unknown>> {
-  const r = await deps.f(`${deps.base}/settings`, {
-    headers: { authorization: `Bearer ${deps.apiKey}` } });
-  const j = await r.json() as { ok: boolean; data: Record<string, { value: unknown }> };
-  if (!j.ok) throw new Error('could not read settings');
-  return Object.fromEntries(Object.entries(j.data).map(([k, v]) => [k, v.value]));
-}
-
 /** Run one coding turn on an opened session and save the record whole. Plan
  *  mode = the readonly preset on the mutating kits (extraTools ride outside
  *  the preset — the loop's block tool works while planning by design).
@@ -62,12 +52,13 @@ export async function settingsValues(deps: TurnDeps): Promise<Record<string, unk
  *  for both consumers, and the record it saves is identical either way
  *  (createAgent's `record` seam collects the same steps from stream and
  *  generate alike). Returns the reply text and the turn's token spend
- *  (input + output). */
+ *  (input + output). `cfg` is the session's coding config from
+ *  Settings.agentConfig('coding', { workspace, pin: sessionPin(session) }) —
+ *  the one door; the row's pinned model is already in it. */
 export async function runCodingTurn(
   deps: TurnDeps, opened: OpenedSession, workspaceId: string,
-  message: string, planMode: boolean, cfg?: Record<string, unknown>,
+  message: string, planMode: boolean, cfg: AgentConfig,
 ): Promise<{ text: string; tokens: number; inputTokens: number; interrupted?: boolean }> {
-  const values = cfg ?? await settingsValues(deps);
   const pick = planMode ? ('readonly' as const) : undefined;
   const common = { baseUrl: deps.base, apiKey: deps.apiKey, sessionId: opened.session.id, fetch: deps.f };
   const tools = {
@@ -80,14 +71,9 @@ export async function runCodingTurn(
     ...kanbanReadTool({ baseUrl: deps.base, apiKey: deps.apiKey, workspaceId, fetch: deps.f }),
     ...deps.extraTools,
   };
-  // THE rule, the same one the app applies: the session runs on its ROW's
-  // model, and only the row's (Sessions.followModelSettings owns when the
-  // row may move). The settings supply everything else — keys, reasoning.
-  const pinned = pinnedCfg(values, sessionPin(
-    opened.session as { provider?: string | null; model?: string | null; baseUrl?: string | null }));
-  const model = modelConfigFrom(pinned);
+  const model = cfg.model;
   if (!opened.prompt) throw new Error(`session ${opened.session.id} has no system prompt — not a coding session`);
-  const { agent } = buildCodingAgent(pinned, tools, opened.session.id,
+  const { agent } = buildCodingAgent(cfg, tools, opened.session.id,
     { prompt: opened.prompt, modelFetch: deps.modelFetch, onRetry: deps.onRetry });
   // Pending backdoor messages ride this turn as their own user messages,
   // AHEAD of the one that started it — they are the older facts. They are

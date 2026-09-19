@@ -13,8 +13,8 @@
 // scoped to the session on screen, rebuilt when the screen switches; the
 // app supplies the handlers. The mutating tools are deliberately not granted.
 //
-// Reasoning defaults to 'none' — the Assistant should be fast — but can be
-// overridden via assistant_reasoning. PhantomAgent turns 'none' into the
+// Reasoning is whatever its config says (Settings.agentConfig: its own
+// setting, else the coding agent's). PhantomAgent turns 'none' into the
 // lowest effort on a model that cannot stop thinking.
 import type { Tool } from 'ai';
 import { PhantomAgent, type ModelConfig } from '../createAgent.js';
@@ -31,9 +31,7 @@ export class AssistantAgent extends PhantomAgent {
     opts: { sessionId: string | null; maxSteps?: number | null; now?: Date },
   ) {
     const now = opts.now ?? new Date();
-    // Reasoning: if the caller (agentModelConfig) resolved one, use it;
-    // otherwise default to 'none' for speed.
-    super({ ...model, reasoning: model.reasoning ?? 'none' }, opts.sessionId, {
+    super(model, opts.sessionId, {
       instructions: withCurrentDate(assistantInstructions(), now), tools,
       maxSteps: opts.maxSteps,
     });

@@ -32,7 +32,8 @@ import type { Crons, CronRow } from '../crons.js';
 import type { Workspaces } from '../workspaces.js';
 import type { Settings } from '../settings.js';
 import { openSession, type OpenedSession } from '../../core/session.js';
-import { runCodingTurn, settingsValues } from '../looper/turn.js';
+import { runCodingTurn } from '../looper/turn.js';
+import { sessionPin } from '../agentConfig.js';
 import { injectFetch } from '../looper/injectFetch.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
 import type { SettingsEvents } from '../api/settingsEvents.js';
@@ -204,7 +205,8 @@ export class CronEngine {
         sessionEvents: this.deps.sessionEvents, client: CRON_CLIENT_ID, backdoor: this.deps.backdoor,
         onRetry: (t: string) => log.warn({ cron: row.name }, t), signal: ac.signal };
       try {
-        const t = await runCodingTurn(deps, opened, w.id, row.prompt, false, await settingsValues(deps));
+        const t = await runCodingTurn(deps, opened, w.id, row.prompt, false,
+          await this.deps.settings.agentConfig('coding', { workspace: w, pin: sessionPin(opened.session) }));
         log.info({ workspace: w.name, cron: row.name, session: sessionId, tokens: t.tokens, interrupted: t.interrupted }, 'cron run finished');
       } finally {
         this.deps.activeTurns?.delete(sessionId);

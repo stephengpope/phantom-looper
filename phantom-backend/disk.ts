@@ -21,6 +21,7 @@
 import fs from 'node:fs/promises';
 import type Docker from 'dockerode';
 import type { SessionRow, WorkspaceRow } from './db/schema.js';
+import { API_IMAGE, APP_VERSION } from './env.js';
 import type { Settings } from './settings.js';
 import type { Workspaces } from './workspaces.js';
 import type { Sessions } from './sessions.js';
@@ -96,8 +97,8 @@ export async function idleBackupSweep(workspaces: Workspaces, sessions: Sessions
  *  else tracks latest. A wrong guess here is harmless: Docker refuses to
  *  remove a tag a running container uses, and the refusal is just a log. */
 const API_IMAGE_CURRENT = (() => {
-  const repo = process.env.API_IMAGE ?? 'ghcr.io/stephengpope/phantom-backend-api';
-  const v = process.env.APP_VERSION ?? 'dev';
+  const repo = API_IMAGE;
+  const v = APP_VERSION;
   return `${repo}:${/^v\d+\.\d+\.\d+/.test(v) ? v : 'latest'}`;
 })();
 

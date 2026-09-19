@@ -21,37 +21,21 @@ import { VoiceClient, sidecarEnv, codingKanbanTool, screenModeTools,
   type KanbanArgs, type ScreenModeHandler } from './voice.js';
 import { Transcript, transcriptPath, adoptServerCopy, syncTranscriptUp, stepSaveUp } from './session.js';
 import { parseTranscript, type UsageTotals } from '../core/llm/transcript.js';
-import { agentModelConfig, pinnedCfg, sessionPin, type ModelPin } from '../core/llm/agentConfig.js';
+import { compact, compactionOpts, CompactionLock } from '../core/llm/compaction.js';
 
-/** The assistant's session row as the routes return it: what its agent is
- *  built from (the pin) and what its file tools run as (id + folder). */
-type AssistantRow = { id: string; folderId: string | null } & ModelPin;
-import { contextWindowFor } from '../phantom-backend/models.js';
-import { compact, getStrategy, CompactionLock, resolveCompactSetting, resolveContextWindow } from '../core/llm/compaction.js';
-
-/** Build the compaction settings from a config read for setCompaction. */
-function compactionSettings(cfg: Record<string, ConfigValue>) {
-  const pct = Number(resolveCompactSetting(cfg as Record<string, unknown>, 'assistant', 'threshold_pct', 0));
-  const cw = resolveContextWindow(
-    cfg as Record<string, unknown>, 'assistant', contextWindowFor, agentModelConfig) ?? 0;
-  const maxTokens = resolveCompactSetting<number | null>(cfg as Record<string, unknown>, 'assistant', 'max_tokens', null);
-  return {
-    pct,
-    contextWindow: cw,
-    summarizePct: Number(resolveCompactSetting(cfg as Record<string, unknown>, 'assistant', 'summarize_pct', 75)),
-    strategy: String(resolveCompactSetting(cfg as Record<string, unknown>, 'assistant', 'strategy', 'fast')),
-    ...(maxTokens != null ? { maxTokens: Number(maxTokens) } : {}),
-  };
-}
+/** The assistant's session row as the routes return it: its id (what its
+ *  agent is billed to, and what GET /agents/assistant/config?session= pins
+ *  on) and what its file tools run as (folder). */
+type AssistantRow = { id: string; folderId: string | null };
 import { openSession as coreOpenSession } from '../core/session.js';
-import { buildAgent, buildAssistantAgent } from './agentFromConfig.js';
+import { buildAgent, buildAssistantAgent, agentConfigFor, type AgentConfig } from './agentFromConfig.js';
 import { codingPrompt, type CodingPrompt } from '../core/llm/agents/coding.js';
 import { runTurn } from './agent.js';
 import { messagesToParts, nextId, type Part } from './state.js';
 import { kanbanOps } from './kanban.js';
 import { PasteStore } from './paste.js';
 import { quiet, watchConnection, type Api } from './request.js';
-import { VOICE_BOOT_KEYS, ASSISTANT_MODEL_KEYS, type ConfigValue } from './config.js';
+import { VOICE_BOOT_KEYS, isLocalKey, type ConfigValue } from './config.js';
 import { makeSettings } from './settings.js';
 import { lastWorkspaceId, type SessionInfo, type WorkspaceInfo } from './components/Launcher.js';
 import type { TasksView } from './components/Tasks.js';
@@ -584,40 +568,28 @@ export class WindowStore {
   /** `prompt` is the row's frozen prompt. A record-only session (the
    *  supervisor's) has none and never runs a turn here; its entry still
    *  carries an agent, built on the default prompt. */
-  private buildFor(tools: Record<string, Tool>, cfg: Record<string, ConfigValue>,
-    prompt: CodingPrompt | null, sessionId: string) {
+  private buildFor(tools: Record<string, Tool>, cfg: AgentConfig, prompt: CodingPrompt | null, sessionId: string) {
     const make = this.opts.makeAgent ?? buildAgent;
     return make(tools, cfg, sessionId, prompt ?? codingPrompt(), (t) => this.sessions.note(sessionId, t));
   }
 
-  private async readSessionPin(id: string): Promise<ModelPin | null> {
-    const row = await this.api('GET', `/sessions/${id}`) as
-      { provider?: string | null; model?: string | null; baseUrl?: string | null };
-    return sessionPin(row);
+  /** A session's coding config from the server, right now — on its ROW's
+   *  model (the server applies the pin) with the current settings for
+   *  everything else. THE read every agent build here goes through. */
+  private codingConfig(sessionId: string): Promise<AgentConfig> {
+    return agentConfigFor(this.api, 'coding', { session: sessionId });
   }
 
-  /** Build the agent a turn is about to use from the server, right now: the
-   *  session ROW supplies the model trio; current settings supply everything
-   *  else. The result replaces the previous disposable agent. */
-  private async refreshAgentForTurn(id: string): Promise<void> {
+  /** Build the agent a turn is about to use from the server, right now. The
+   *  result replaces the previous disposable agent; the pane notes a model
+   *  that moved (a settings change reached a session nothing has been said
+   *  to yet — the feed's onModelChanged lands here too). */
+  private async refreshAgent(id: string): Promise<void> {
     const e = this.sessions.get(id);
     if (!e || e.readonly) return;
-    const pin = await this.readSessionPin(id);
-    const cfg = await this.readSettings();
-    const { agent, summary } = this.buildFor(e.tools, pinnedCfg(cfg, pin), e.prompt, id);
-    this.sessions.setAgent(id, agent, summary, pin);
-  }
-
-  /** The feed said this session's row model moved (a settings change reached
-   *  a session nothing has been said to yet): the agent and the toolbar
-   *  follow the row, and the pane says so. */
-  private async followRowModel(id: string, pin: ModelPin): Promise<void> {
-    const e = this.sessions.get(id);
-    if (!e || e.readonly) return;
-    const cfg = await this.readSettings();
-    const { agent, summary } = this.buildFor(e.tools, pinnedCfg(cfg, pin), e.prompt, id);
+    const { agent, summary } = this.buildFor(e.tools, await this.codingConfig(id), e.prompt, id);
     const moved = summary.provider !== e.summary.provider || summary.model !== e.summary.model;
-    this.sessions.setAgent(id, agent, summary, pin);
+    this.sessions.setAgent(id, agent, summary);
     if (moved) this.sessions.note(id, `model → ${summary.provider}/${summary.model}`);
   }
 
@@ -666,7 +638,7 @@ export class WindowStore {
       const r = await this.api('POST', `/sessions/${id}/lock`, { label: hostname() }) as
         { transcript_updated_at?: string | null };
       await this.refreshIfMoved(id, r?.transcript_updated_at ?? null);
-      await this.refreshAgentForTurn(id);
+      await this.refreshAgent(id);
     };
     // The backdoor message queue (a detached command exited, a file was
     // dropped) rides this window's next send; the drain runs after the lock
@@ -918,8 +890,7 @@ export class WindowStore {
       const opened = await coreOpenSession({ call: this.api, label: hostname(),
         ...(sessionId ? { sessionId } : { workspaceId: (target as { workspaceId: string }).workspaceId }) });
       const row = opened.session as { id: string; branch: string; workspaceId: string;
-        name?: string | null; agent?: string | null; card?: number | null; planMode?: boolean; pinned?: boolean;
-        provider?: string | null; model?: string | null };
+        name?: string | null; agent?: string | null; card?: number | null; planMode?: boolean; pinned?: boolean };
       // The server record IS the conversation — unless this machine holds
       // unsaved steps on top of it (a window that died mid-turn); then the
       // local file is the fuller copy, opens here, and goes up now.
@@ -940,13 +911,11 @@ export class WindowStore {
       // never disagree, so they read the same fact.
       const planMode = row.planMode === true;
       const tools = await this.codingKit(row.id, row.workspaceId);
-      // THE rule (core agentConfig): the session runs on its ROW's model, and
-      // only the row's. The pin is kept on the entry so every later rebuild
-      // (plan mode, a settings change) resolves the same way; the feed moves
-      // it when the server does (followRowModel).
-      const pin = sessionPin(row);
-      const modelCfg = pinnedCfg(await this.readSettings(), pin);
-      const { agent, summary } = this.buildFor(tools, modelCfg, opened.prompt, row.id);
+      // The session runs on its ROW's model, and only the row's — the server
+      // applies that rule (Settings.agentConfig) and every later rebuild
+      // (a turn start, a settings change, the feed's row-model event) asks it
+      // again.
+      const { agent, summary } = this.buildFor(tools, await this.codingConfig(row.id), opened.prompt, row.id);
       const transcript = (this.opts.makeTranscript ?? ((id: string) => new Transcript(transcriptPath(id))))(row.id);
       // The card this session builds, named the way the board names it
       // (`PHA-7`), resolved ONCE here where both facts are in hand.
@@ -967,7 +936,6 @@ export class WindowStore {
         tools, agent, summary, transcript, prompt: opened.prompt,
         history: resumed,
         syncStamp,
-        pin,
         planMode,
         pinned: row.pinned === true,
         // The toolbar's lifetime token totals, from log_tokens.
@@ -1168,7 +1136,7 @@ export class WindowStore {
       .filter((e) => !seen.has(e.id) && !e.readonly && this.matchesPickerQuery(e))
       .map((e) => ({
         id: e.id, workspaceId: e.workspaceId, branch: e.branch, status: 'active', agent: null,
-        model: e.pin?.model ?? null, pinned: e.pinned,
+        model: e.summary.model, pinned: e.pinned,
         tokensInput: e.usage.input || null, tokensOutput: e.usage.output || null,
         tokensCacheRead: e.usage.cache_read || null, tokensCacheWrite: e.usage.cache_write || null,
         // Nothing typed = no activity: it sorts LAST, never ahead of real work.
@@ -1495,7 +1463,7 @@ export class WindowStore {
       onRecordLanded: (updatedAt, keepScreen) =>
         this.refreshIfMoved(id, updatedAt || null, keepScreen),
       onPlanModeChanged: (on) => this.applyPlanMode(id, on),
-      onModelChanged: (pin) => this.followRowModel(id, pin),
+      onModelChanged: () => this.refreshAgent(id),
     });
     this.feeds.set(id, feed);
     feed.start();
@@ -1654,18 +1622,19 @@ export class WindowStore {
    *  a floating promise. */
   startVoice(current?: Record<string, ConfigValue>): void {
     void (async () => {
-      const make = this.opts.makeAssistantAgent ?? buildAssistantAgent;
-      let built;
-      let cfg: Record<string, ConfigValue>;
+      let audio: Record<string, ConfigValue>;
       try {
-        cfg = current ?? await this.readSettings();
-        const own = await this.assistantSession();
-        built = make(await buildAssistantKit(this, this.assistantDeps, own), cfg, own);
+        audio = current ?? await this.readSettings();
+        await this.rebuildAssistant(true);
       } catch (e) { this.note(`assistant not started: ${(e as Error).message}`); return; }
-      this.voice.setAgent(built.agent);
-      this.voice.setCompaction(agentModelConfig(cfg, 'supervisor'), compactionSettings(cfg));
-      void this.voice.start(sidecarEnv(cfg));
+      void this.voice.start(sidecarEnv(audio));
     })();
+  }
+
+  /** The assistant's config from the server, on ITS ROW's model when it has
+   *  one — the same door the coding agent's config comes through. */
+  private assistantConfig(own: AssistantRow | null): Promise<AgentConfig> {
+    return agentConfigFor(this.api, 'assistant', own ? { session: own.id } : {});
   }
 
   /** The assistant's own session row — the supervisor pattern: no checkout,
@@ -1687,18 +1656,23 @@ export class WindowStore {
     return r;
   }
 
-  /** The read tools follow the session on screen: switching rebuilds the kit
-   *  in place, same conversation, the new session's files. */
-  async rebuildAssistant(current?: Record<string, ConfigValue>): Promise<void> {
-    if (!this.voice.running) return;
+  /** The brain, rebuilt from the server: its config (model, steps,
+   *  compaction) and its kit, which follows the session on screen —
+   *  switching rebuilds it in place, same conversation, the new session's
+   *  files. `starting` = the engine is about to start, so "not running" is
+   *  no reason to skip, and a failure is the caller's to report. */
+  async rebuildAssistant(starting = false): Promise<void> {
+    if (!starting && !this.voice.running) return;
     const make = this.opts.makeAssistantAgent ?? buildAssistantAgent;
     try {
-      const cfg = current ?? await this.readSettings();
       const own = await this.assistantSession();
-      const kit = await buildAssistantKit(this, this.assistantDeps, own);
+      const [cfg, kit] = await Promise.all([this.assistantConfig(own), buildAssistantKit(this, this.assistantDeps, own)]);
       this.voice.setAgent(make(kit, cfg, own).agent);
-      this.voice.setCompaction(agentModelConfig(cfg, 'supervisor'), compactionSettings(cfg));
-    } catch (e) { this.note(`assistant not rebuilt for this session: ${(e as Error).message}`); }
+      this.voice.setCompaction(cfg.compaction);
+    } catch (e) {
+      if (starting) throw e;
+      this.note(`assistant not rebuilt for this session: ${(e as Error).message}`);
+    }
   }
 
   /** Launch: the chrome's two values and the voice decision, from one read. */
@@ -1732,19 +1706,21 @@ export class WindowStore {
       this.voiceEnabled = Boolean(cfg.voice_enabled);
       this.sidebarWidth = Number(cfg.sidebar_width) || (this.opts.sidebarPercent ?? 20);
 
-      // Every session's agent re-reads the settings (keys, reasoning, max
-      // steps) over its ROW's model. A model setting never reaches a session
-      // from here: the server moves the rows it may (nothing said yet) and
-      // the session feed brings that in (followRowModel).
-      const make = this.opts.makeAgent ?? buildAgent;
-      this.sessions.rebuildAgents((e: LoadedSession) =>
-        make(e.tools, pinnedCfg(cfg, e.pin), e.id, e.prompt ?? codingPrompt(), (t) => this.sessions.note(e.id, t)));
+      // Every session's agent asks the server for its config again (keys,
+      // reasoning, max steps, compaction) — over its ROW's model, which the
+      // server applies; a model setting reaches a session only through the
+      // row (Sessions.followModelSettings), and the feed brings that in.
+      for (const e of this.sessions.list()) {
+        void this.refreshAgent(e.id).catch((err) => this.sessions.note(e.id, `agent not rebuilt: ${(err as Error).message}`));
+      }
 
       // The Assistant follows its settings: on/off starts and stops it; an
       // audio value (the Deepgram key, the devices) restarts the sidecar,
-      // which reads them again as it spawns; a model value rebuilds the brain
-      // in place — the history stays, the next turn uses the new model; the
-      // spoken voice, the mutes, headphones and the wake word are pushed live.
+      // which reads them again as it spawns; the spoken voice, the mutes,
+      // headphones and the wake word are pushed live; ANY OTHER server
+      // setting rebuilds the brain in place from the server's config — the
+      // history stays, the next turn uses the new model. No list here of
+      // which keys shape the assistant: the server owns that rule.
       const running = this.voice.running;
       if (key === undefined) {
         // A server event names no key: every consumer re-reads. Workspace and
@@ -1761,8 +1737,6 @@ export class WindowStore {
         this.sidebar = null;
       } else if (running && key && VOICE_BOOT_KEYS.includes(key)) {
         this.startVoice(cfg);
-      } else if (running && key && ASSISTANT_MODEL_KEYS.includes(key)) {
-        await this.rebuildAssistant(cfg);
       } else if (running && key === 'voice_spoken_voice') {
         this.voice.update({ voice: String(cfg.voice_spoken_voice) });
       } else if (running && key === 'voice_mic_muted') {
@@ -1774,6 +1748,8 @@ export class WindowStore {
       } else if (running && (key === 'voice_wake_word' || key === 'voice_wake_words' || key === 'voice_wake_timeout')) {
         this.voice.setWake(Boolean(cfg.voice_wake_word), String(cfg.voice_wake_words ?? ''),
           Number(cfg.voice_wake_timeout) || undefined);
+      } else if (running && key && !isLocalKey(key)) {
+        await this.rebuildAssistant();
       }
       this.notify();
     })();
@@ -1903,21 +1879,12 @@ export class WindowStore {
         }
         if (!session) { this.note('no session is open — nothing to compact'); return; }
         if (session.readonly) { this.note("this is the supervisor's record — read-only"); return; }
-        const cfg = await this.readSettings();
-        const model = agentModelConfig(cfg, 'supervisor');
-        const strategyName = String(resolveCompactSetting(cfg as Record<string, unknown>, 'coding', 'strategy', 'fast'));
-        const summarizePct = Number(resolveCompactSetting(cfg as Record<string, unknown>, 'coding', 'summarize_pct', 75));
-        const maxTokens = resolveCompactSetting<number | null>(cfg as Record<string, unknown>, '', 'max_tokens', null);
         if (!session.compactionLock) session.compactionLock = new CompactionLock();
         this.note('compacting — summarizing older messages in the background');
         void (async () => {
           try {
-            const result = await compact(session.compactionLock!, {
-              history: session.history,
-              strategy: getStrategy(strategyName),
-              summarizePct,
-              model, sessionId: session.id, maxTokens: maxTokens != null ? Number(maxTokens) : null,
-            });
+            const { compaction } = await this.codingConfig(session.id);
+            const result = await compact(session.compactionLock!, compactionOpts(compaction, session.history, session.id));
             if (result) {
               this.note('chat compacted — older messages summarized');
               this.uploadTranscript(session);

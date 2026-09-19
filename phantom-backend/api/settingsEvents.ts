@@ -9,14 +9,17 @@ export interface SettingsChanged {
   scope: string;
   /** The writer's client id, so a window can ignore the echo of its own save. */
   client?: string;
+  /** The keys written — what a listener that cares about specific settings
+   *  (the looper's two switches, Telegram's) filters on. Never the values. */
+  keys: string[];
 }
 
 export class SettingsEvents {
   private emitter = new EventEmitter();
   constructor() { this.emitter.setMaxListeners(0); }
 
-  publish(scope: string, client?: string): void {
-    this.emitter.emit('changed', { event: 'settings_changed', scope, ...(client ? { client } : {}) });
+  publish(scope: string, keys: string[], client?: string): void {
+    this.emitter.emit('changed', { event: 'settings_changed', scope, keys, ...(client ? { client } : {}) });
   }
 
   subscribe(fn: (e: SettingsChanged) => void): () => void {

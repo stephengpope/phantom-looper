@@ -16,10 +16,16 @@ import type { FastifyInstance } from 'fastify';
 import type { Paths } from '../pool/paths.js';
 import { sessionDir } from '../pool/paths.js';
 import { injectFetch } from '../looper/injectFetch.js';
-import { runCodingTurn, settingsValues, type TurnDeps } from '../looper/turn.js';
+import { runCodingTurn, type TurnDeps } from '../looper/turn.js';
+import { sessionPin } from '../agentConfig.js';
+import type { SettingKey } from '../settings.js';
+import type { SettingsEvents } from '../api/settingsEvents.js';
+import { APP_VERSION } from '../env.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
 import type { Sessions } from '../sessions.js';
 import type { Cards } from '../cards.js';
+import type { Presets } from '../presets.js';
+import type { System } from '../system.js';
 import type { Settings } from '../settings.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
 import type { BackdoorQueue } from '../api/backdoor.js';
@@ -32,7 +38,7 @@ import { startWaitingBubble } from './bubble.js';
 import { sendMessageTool } from './sendMessageTool.js';
 import { transcribeVoice, speakVoice, splitForSpeech, SPEAK_MAX_CHARS, type Transcription } from './deepgram.js';
 import { writeAttachment, composeMessage, MAX_INBOUND_BYTES, type StoredAttachment } from './attachments.js';
-import { runAssistantTurn, type AssistantDeps } from './assistant.js';
+import { runAssistantTurn, CLIENT_ID, type AssistantDeps } from './assistant.js';
 import { Approvals, type Ask } from './approvals.js';
 import { UpgradeChecker } from './upgrade.js';
 import type { TelegramBotState, TelegramBotStateRow, TelegramMode } from './botState.js';
@@ -49,7 +55,6 @@ import { AssistantConversation } from './assistantConversation.js';
 
 const log = logger('telegram');
 const BASE = 'http://looper/api';
-const CLIENT_ID = 'telegram';
 
 // Progress on a voice message itself. WRITTEN AS ESCAPES — Telegram's reaction
 // set carries no variation selectors, and a picker-pasted glyph brings one,
@@ -80,12 +85,22 @@ export interface TelegramEngineDeps {
   sessions: Sessions;
   cards: Cards;
   workspaces: Workspaces;
+  presets: Presets;
+  system: System;
   paths: Paths;
+  /** The turn runtime an interrupt reaches: in-process turns and foreground commands. */
+  activeTurns?: Map<string, AbortController>;
+  foreground?: { killAll(id: string): void };
+  /** The loops in flight — what an api restart would cut (the upgrade checker warns). */
+  loopsRunning?: () => number;
   app: FastifyInstance;
   apiKey: string;
   sessionEvents?: SessionEvents;
   /** The board bus — the auto build alerts listen on it (alerts.ts). */
   events?: BoardEvents;
+  /** The settings feed — a telegram_* key or the bot token written, through
+   *  any door, reconciles the webhook and the command menu. */
+  settingsEvents?: SettingsEvents;
   /** The backdoor message queue (api/backdoor.ts) — each turn drains its
    *  session's queue. */
   backdoor?: BackdoorQueue;
@@ -132,59 +147,21 @@ export class TelegramEngine {
 
     });
     this.upgradeChecker = new UpgradeChecker({
-      version: process.env.APP_VERSION ?? 'dev',
-      health: async () => {
-        try {
-          const r = await (await this.api('/health')).json();
-          return r.ok ? r : null;
-        } catch { return null; }
-      },
+      version: APP_VERSION,
+      health: async () => ({ version: APP_VERSION, loops_running: deps.loopsRunning?.() ?? 0 }),
       triggerUpdate: async (tag, onEvent) => {
+        // restart_anyway: the approval DM already warns that running turns
+        // are stopped and loop cards blocked — a tap on Approve is the
+        // informed yes the update guard asks for.
         try {
-          // restart_anyway: the approval DM already warns that running turns
-          // are stopped and loop cards blocked — a tap on Approve is the
-          // informed yes the /update guard asks for.
-          const res = await this.apiRaw('/update', { method: 'POST', body: { tag, restart_anyway: true } });
-          if (!res.ok) {
-            const j = await res.json().catch(() => ({ error: { message: `HTTP ${res.status}` } }));
-            return { ok: false, error: j.error?.message ?? `HTTP ${res.status}` };
-          }
-          // Read ND-JSON stream.
-          const reader = res.body?.getReader();
-          if (!reader) return { ok: true };
-          const decoder = new TextDecoder();
-          let buf = '';
-          let lastEvent: string | undefined;
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buf += decoder.decode(value, { stream: true });
-            let nl: number;
-            while ((nl = buf.indexOf('\n')) !== -1) {
-              const line = buf.slice(0, nl).trim();
-              buf = buf.slice(nl + 1);
-              if (!line) continue;
-              try {
-                const e = JSON.parse(line);
-                lastEvent = e.event;
-                onEvent?.(e);
-              } catch {}
-            }
-          }
-          if (lastEvent === 'error') return { ok: false, error: 'update failed' };
-          return { ok: true };
+          let last: string | undefined;
+          await deps.system.update(tag, { restartAnyway: true }, (e) => { last = e.event; onEvent?.(e); }).done;
+          return last === 'error' ? { ok: false, error: 'update failed' } : { ok: true };
         } catch (e) { return { ok: false, error: (e as Error).message }; }
       },
-      setting: async (key) => {
-        const values = await settingsValues(this.turnDeps()).catch(() => ({} as Record<string, unknown>));
-        return values[key];
-      },
+      setting: (key) => deps.settings.resolve(key as SettingKey),
       token: () => this.token(),
-      authorizedUser: async () => {
-        const values = await settingsValues(this.turnDeps()).catch(() => ({} as Record<string, unknown>));
-        const dm = Number(values.telegram_authorized_user ?? '');
-        return Number.isFinite(dm) && dm ? dm : null;
-      },
+      authorizedUser: () => this.authorizedUser(),
       makeClient: (token, dm) => this.trackedClient(token, dm, () => null),
     });
     // Every card write in the system, all workspaces; alerts.ts decides which
@@ -192,6 +169,9 @@ export class TelegramEngine {
     // never retried, and never touches the card.
     deps.events?.subscribeAll((workspaceId, e) => {
       this.alert(workspaceId, e).catch((err) => log.warn({ err: errStr(err) }, 'auto build alert failed'));
+    });
+    deps.settingsEvents?.subscribe((e) => {
+      if (e.keys.some((k) => k === 'telegram_enabled' || k === 'telegram_authorized_user' || k === 'telegram_bot_token')) void this.reconcile();
     });
   }
 
@@ -217,16 +197,15 @@ export class TelegramEngine {
    *  session in code mode like a reply to any coder bubble. */
   private async alert(workspaceId: string, e: BoardEvent): Promise<void> {
     if (e.event !== 'card' || !e.from || e.from === e.card.status) return;   // the cheap test first — no I/O
-    // One read: prefix + the setting resolved at this workspace's layer.
-    const ws = await (await this.api(`/workspaces/${workspaceId}`)).json()
-      .catch((err: Error) => { log.warn({ workspace: workspaceId, err: err.message }, 'workspace read failed — no board alert'); return null; }) as { ok: boolean; data?: { cardPrefix: string;
-        settings: Record<string, { value: unknown }> } } | null;
-    if (!ws?.ok || !ws.data) return;
-    const alertMsg = autoBuildAlert(e, ws.data.cardPrefix);
+    const workspace = await this.deps.workspaces.get(workspaceId);
+    if (!workspace) return;
+    const alertMsg = autoBuildAlert(e, await this.deps.workspaces.prefixOf(workspace));
     if (!alertMsg) return;
-    if (ws.data.settings.telegram_auto_build_notifications?.value !== true) return;
-    if (ws.data.settings.telegram_enabled?.value !== true) return;
-    const dm = Number(ws.data.settings.telegram_authorized_user?.value ?? '');
+    // The switch resolved at this workspace's layer.
+    const s = await this.deps.settings.resolveMany(
+      ['telegram_auto_build_notifications', 'telegram_enabled', 'telegram_authorized_user'], { workspace });
+    if (s.telegram_auto_build_notifications !== true || s.telegram_enabled !== true) return;
+    const dm = Number(s.telegram_authorized_user ?? '');
     if (!dm || !Number.isFinite(dm)) return;
     const token = await this.token();
     if (!token) return;
@@ -250,15 +229,25 @@ export class TelegramEngine {
     return (await this.deps.settings.credential('telegram_bot_token')) ?? '';
   }
 
+  /** The one chat the bot talks to, or null when none is set. */
+  private async authorizedUser(): Promise<number | null> {
+    const dm = Number(await this.deps.settings.resolve('telegram_authorized_user') ?? '');
+    return Number.isFinite(dm) && dm ? dm : null;
+  }
+
+  /** The reply mode, read where a reply is about to be sent. */
+  private async voiceOnly(): Promise<boolean> {
+    return String(await this.deps.settings.resolve('telegram_reply_mode')) === 'voice';
+  }
+
   /** Reconcile the webhook + command menu against desired state. Run at boot
    *  and whenever a telegram_* setting or the token is written (poked from the
    *  settings routes, like the looper). Enabled + token + address present →
    *  register (minting a secret if needed); otherwise tear down. */
   async reconcile(): Promise<void> {
     try {
-      const values = await settingsValues(this.turnDeps());
-      const enabled = values.telegram_enabled === true;
-      const token = await this.token().catch(() => '');
+      const enabled = await this.deps.settings.resolve('telegram_enabled') === true;
+      const token = await this.token();
       const url = this.webhookUrl();
       const bot = await this.deps.botState.read();
 
@@ -291,8 +280,8 @@ export class TelegramEngine {
       // stale one. The menu lives in code, so a bot connected before a
       // command existed still gets it.
       await client.setMyCommands(menuFor('assistant')).catch(() => {});
-      const dm = Number(values.telegram_authorized_user ?? '');
-      if (Number.isFinite(dm) && dm) await client.setMyCommands(menuFor(bot.mode), dm).catch(() => {});
+      const dm = await this.authorizedUser();
+      if (dm) await client.setMyCommands(menuFor(bot.mode), dm).catch(() => {});
     } catch (e) {
       log.warn({ err: errStr(e) }, 'telegram reconcile failed');
     }
@@ -303,13 +292,15 @@ export class TelegramEngine {
   /** Fast-ack the update, then run out-of-band. Returns the HTTP status. */
   async handleUpdate(secretHeader: string, update: any): Promise<number> {
     const bot = await this.deps.botState.read();
-    const values = await settingsValues(this.turnDeps()).catch(() => ({} as Record<string, unknown>));
-    if (values.telegram_enabled !== true) return 200;
+    // A settings read that fails THROWS here: the webhook route answers 500
+    // and Telegram retries, instead of the message being dropped as
+    // "telegram disabled".
+    if (await this.deps.settings.resolve('telegram_enabled') !== true) return 200;
     if (!bot.webhookSecret || !timingSafeEqualStr(secretHeader, bot.webhookSecret)) return 403;
 
-    const authorized = String(values.telegram_authorized_user ?? '');
-    const dm = Number(authorized);
-    if (!authorized || !Number.isFinite(dm)) return 200;
+    const dm = await this.authorizedUser();
+    if (!dm) return 200;
+    const authorized = String(dm);
 
     const reaction = update.message_reaction;
     if (reaction) {
@@ -352,19 +343,19 @@ export class TelegramEngine {
       clearTimeout(entry.timer);
       entry.timer = setTimeout(() => {
         this.albums.delete(groupId);
-        this.handleMessage(dm, entry.msgs, values).catch((e) => log.error({ err: errStr(e) }, 'telegram turn failed'));
+        this.handleMessage(dm, entry.msgs).catch((e) => log.error({ err: errStr(e) }, 'telegram turn failed'));
       }, 800);
       this.albums.set(groupId, entry);
       return 200;
     }
 
-    this.handleMessage(dm, [msg], values).catch((e) => log.error({ err: errStr(e) }, 'telegram turn failed'));
+    this.handleMessage(dm, [msg]).catch((e) => log.error({ err: errStr(e) }, 'telegram turn failed'));
     return 200;
   }
 
-  // ── the turn ─────────────────────────────────────────────────────────────
+  // ── the turn ───────────────────────────────────────────────────────────────────────
 
-  private async handleMessage(dm: number, msgs: any[], values: Record<string, unknown>): Promise<void> {
+  private async handleMessage(dm: number, msgs: any[]): Promise<void> {
     const msg = msgs[0];
     const token = await this.token();
     // Which conversation a sent bubble belongs to. A function so the tracked
@@ -393,7 +384,7 @@ export class TelegramEngine {
       const bot = await this.deps.botState.read();
       sessionId = bot.mode === 'code' ? bot.activeSessionId : null;
 
-      const input = await this.resolveInput(client, dm, msgs, values, bot);
+      const input = await this.resolveInput(client, dm, msgs, bot);
       if (input === null) return;
 
       // A question standing: the exact word answers it and is nothing else;
@@ -413,9 +404,9 @@ export class TelegramEngine {
       }
 
       if (bot.mode === 'code' && bot.activeSessionId) {
-        await this.codeTurn(client, dm, bot.activeSessionId, input, values);
+        await this.codeTurn(client, dm, bot.activeSessionId, input);
       } else {
-        await this.assistantTurn(client, dm, input, values);
+        await this.assistantTurn(client, dm, input);
       }
     } catch (e) {
       await client.sendMarkdown(dm, titled('⚠️ Something went wrong', (e as Error).message)).catch(() => {});
@@ -426,10 +417,8 @@ export class TelegramEngine {
   /** An assistant-mode turn: the in-memory Assistant conversation, streamed to
    *  the bubble. session_switch moves the active-session POINTER only — the
    *  assistant keeps the conversation; /code is how the user hands it over. */
-  private async assistantTurn(client: TelegramClient, dm: number, message: string,
-    values: Record<string, unknown>): Promise<void> {
+  private async assistantTurn(client: TelegramClient, dm: number, message: string): Promise<void> {
     const conv = this.conversation;
-    conv.values = values;
     conv.chat = { client, dm };
     conv.load();
     const typing = startTyping(client, dm);
@@ -439,11 +428,11 @@ export class TelegramEngine {
     const bot = await this.deps.botState.read();
     // The assistant can deliver a file it names from the active session's work
     // dir (its file tools are read-only, but it can point at one the coder made).
-    const voiceOnly = String(values.telegram_reply_mode ?? 'text') === 'voice';
     const sink = makeTelegramSink(client, dm,
       bot.activeSessionId ? this.deliverConfig(bot.activeSessionId) : undefined,
-      { voiceOnly });
-    const deps: AssistantDeps = { f: this.fetch, apiKey: this.deps.apiKey, modelFetch: this.deps.modelFetch };
+      { voiceOnly: await this.voiceOnly() });
+    const deps: AssistantDeps = { f: this.fetch, apiKey: this.deps.apiKey, modelFetch: this.deps.modelFetch,
+      cards: this.deps.cards, workspaces: this.deps.workspaces };
     let replyText = '';
     // The pointer as this turn sees it — live across a switch within the turn.
     let active = bot.activeSessionId ?? null;
@@ -452,6 +441,9 @@ export class TelegramEngine {
       // turn runs on the row's model, its tools open the row's folder, and
       // every call is billed to it.
       const own = await conv.ensureSession(bot.activeWorkspaceId, bot.activeSessionId);
+      const workspace = bot.activeWorkspaceId ? await this.deps.workspaces.get(bot.activeWorkspaceId) : undefined;
+      const config = await this.deps.settings.agentConfig('assistant', { workspace, pin: sessionPin(own) });
+      conv.compaction = config.compaction;
       const onSwitch = async (id: string) => {
         const r = await this.switchSession(client, dm, id);
         if ('error' in r) return r;
@@ -467,15 +459,16 @@ export class TelegramEngine {
       // does, so the user lands talking to the coder like the cli's "on screen".
       const onWorkspaceCreated = async (workspaceId: string) => {
         await this.deps.botState.setActiveWorkspace(workspaceId);
-        const j = await (await this.api('/sessions', { method: 'POST', body: { workspace_id: workspaceId } })).json();
-        if (!j.ok) return { error: j.error?.message as string };
-        await this.deps.botState.setActiveSession(j.data.id);
+        let started;
+        try { started = await this.deps.sessions.start(workspaceId); }
+        catch (e) { return { error: (e as Error).message }; }
+        await this.deps.botState.setActiveSession(started.id);
         await this.enterMode(client, dm, 'code');
         await client.sendMessage(dm, '🆕 New session in the new workspace. Send your first message to begin.');
-        return { session: j.data.id as string };
+        return { session: started.id };
       };
       const result = await runAssistantTurn(deps, conv.history, message, sink, {
-        settings: values,
+        config,
         workspaceId: () => bot.activeWorkspaceId ?? null,
         activeSession: () => active,
         onSwitch,
@@ -490,9 +483,9 @@ export class TelegramEngine {
       // Any messages queued while we ran go out as one follow-up turn.
       const queued = this.inFlight.get(busyKey)?.queue ?? [];
       this.inFlight.delete(busyKey);
-      await this.maybeSpeak(client, dm, values, replyText, typing);
+      await this.maybeSpeak(client, dm, replyText, typing);
       typing.stop();
-      if (queued.length) await this.assistantTurn(client, dm, queued.join('\n\n'), values);
+      if (queued.length) await this.assistantTurn(client, dm, queued.join('\n\n'));
     } catch (e) {
       this.inFlight.delete(busyKey);
       typing.stop();
@@ -507,8 +500,7 @@ export class TelegramEngine {
 
   /** A code-mode turn: a real coding turn on the session, via runCodingTurn,
    *  streamed from the session feed into the bubble. */
-  private async codeTurn(client: TelegramClient, dm: number, sessionId: string,
-    message: string, values: Record<string, unknown>): Promise<void> {
+  private async codeTurn(client: TelegramClient, dm: number, sessionId: string, message: string): Promise<void> {
     let opened: OpenedSession;
     try {
       opened = await openSession({ baseUrl: BASE, apiKey: this.deps.apiKey, clientId: CLIENT_ID,
@@ -527,8 +519,7 @@ export class TelegramEngine {
     this.inFlight.set(sessionId, { queue: [], abort });
     // Files the agent names in its reply are delivered from this session's work
     // dir; the agent writes /workspace/... container paths, which map there.
-    const voiceOnly = String(values.telegram_reply_mode ?? 'text') === 'voice';
-    const sink = makeTelegramSink(client, dm, this.deliverConfig(sessionId), { voiceOnly });
+    const sink = makeTelegramSink(client, dm, this.deliverConfig(sessionId), { voiceOnly: await this.voiceOnly() });
     // The bubble reads the session feed — the ONE place a coding turn's parts
     // are published. Subscribe before the run; the lock makes this the only
     // turn on the session, so there is no gap. The same feed carries the stop
@@ -543,23 +534,25 @@ export class TelegramEngine {
       const s = await this.deps.sessions.get(sessionId);
       const workspaceId = s?.workspaceId ?? '';
       const planMode = s?.planMode === true;
+      const workspace = s ? await this.deps.workspaces.get(s.workspaceId) : undefined;
+      const cfg = await this.deps.settings.agentConfig('coding', { workspace, pin: sessionPin(opened.session) });
       // The agent's deliberate "DM the user" tool — sends through this chat,
       // reading the reply mode at the delivery end.
-      const send = sendMessageTool((text) => this.sendDm(client, dm, values, text));
+      const send = sendMessageTool((text) => this.sendDm(client, dm, text));
       // `signal` is what makes the turn stoppable at all: /stop aborts this
       // controller through the inFlight map, a remote interrupt through the feed
       // subscription above — runCodingTurn ends it cleanly (interrupted, not
       // failed) either way.
       const deps: TurnDeps = { ...this.turnDeps(), extraTools: send, signal: abort.signal };
-      const r = await runCodingTurn(deps, opened, workspaceId, message, planMode, values);
+      const r = await runCodingTurn(deps, opened, workspaceId, message, planMode, cfg);
       unsubscribe?.();
       await sink.done(r.text);
       const queued = this.inFlight.get(sessionId)?.queue ?? [];
       this.inFlight.delete(sessionId);
       await opened.close();
-      await this.maybeSpeak(client, dm, values, r.text, typing);
+      await this.maybeSpeak(client, dm, r.text, typing);
       typing.stop();
-      if (queued.length) await this.codeTurn(client, dm, sessionId, queued.join('\n\n'), values);
+      if (queued.length) await this.codeTurn(client, dm, sessionId, queued.join('\n\n'));
       return;
     } catch (e) {
       unsubscribe?.();
@@ -578,20 +571,19 @@ export class TelegramEngine {
    *  sink withheld the text, so a failed synthesis falls back to sending it.
    *  `typing` is the turn's indicator loop — swapped to `record_voice` while
    *  synthesis runs so the user sees "recording audio…" instead of "typing…". */
-  private async maybeSpeak(client: TelegramClient, dm: number,
-    values: Record<string, unknown>, text?: string,
+  private async maybeSpeak(client: TelegramClient, dm: number, text?: string,
     typing?: { set(a: string): void }): Promise<void> {
-    const mode = String(values.telegram_reply_mode ?? 'text');
+    const mode = String(await this.deps.settings.resolve('telegram_reply_mode'));
     if (mode !== 'voice' && mode !== 'both') return;
     const say = (text ?? '').trim();
     if (!say) return;
-    const apiKey = (await this.deps.settings.credential('deepgram_api_key').catch(() => '')) ?? '';
+    const apiKey = await this.deps.settings.credential('deepgram_api_key');
     if (!apiKey) {
       if (mode === 'voice') await client.sendMarkdown(dm, say).catch(() => {});
       return;
     }
     typing?.set('record_voice');
-    const voice = String(values.voice_spoken_voice ?? '');
+    const voice = String(await this.deps.settings.resolve('voice_spoken_voice'));
     const chunks = splitForSpeech(say);
     if (!chunks.length) return;
 
@@ -641,37 +633,38 @@ export class TelegramEngine {
   private async transcribeInbound(
     client: TelegramClient, dm: number, msg: any,
     file: { file_id: string; file_size?: number },
-    values: Record<string, unknown>,
   ): Promise<string | null> {
     const react = (emoji?: string) => client.setMessageReaction(dm, msg.message_id, emoji).catch(() => {});
     if (file.file_size && file.file_size > MAX_INBOUND_BYTES) {
       await client.sendMessage(dm, "⚠️ That voice note is over Telegram's 20 MB limit for bots.");
       return null;
     }
-    const apiKey = (await this.deps.settings.credential('deepgram_api_key').catch(() => '')) ?? '';
+    const apiKey = await this.deps.settings.credential('deepgram_api_key');
     if (!apiKey) { await client.sendMessage(dm, NOT_HEARD.no_key); return null; }
     const [, audio] = await Promise.all([react(REACT_TRANSCRIBING), client.downloadFile(file.file_id)])
       .catch(async (e) => { await react(); throw e; });
-    const heard = await transcribeVoice(apiKey, audio, String(values.voice_stt_model ?? ''));
+    const { voice_stt_model: sttModel, telegram_transcript_echo: echo } =
+      await this.deps.settings.resolveMany(['voice_stt_model', 'telegram_transcript_echo']);
+    const heard = await transcribeVoice(apiKey, audio, String(sttModel));
     if ('error' in heard) { await react(); await client.sendMessage(dm, NOT_HEARD[heard.error]); return null; }
     if (!heard.text) { await react(); await client.sendMessage(dm, "🎤 I couldn't make out any speech in that."); return null; }
     await react(REACT_HEARD);
-    if (values.telegram_transcript_echo === true) await client.sendMessage(dm, `🎤 "${heard.text}"`);
+    if (echo === true) await client.sendMessage(dm, `🎤 "${heard.text}"`);
     return heard.text;
   }
 
   private async resolveInput(client: TelegramClient, dm: number, msgs: any[],
-    values: Record<string, unknown>, bot: TelegramBotStateRow): Promise<string | null> {
+    bot: TelegramBotStateRow): Promise<string | null> {
     const msg = msgs[0];
     // Telegram puts the caption on only one album item.
     const typed = msgs.map((m) => String(m.text ?? m.caption ?? '').trim()).find(Boolean) ?? '';
 
     // A voice note is the message itself (never `audio` — an mp3 is a file).
-    if (msg.voice && !typed) return this.transcribeInbound(client, dm, msg, msg.voice, values);
+    if (msg.voice && !typed) return this.transcribeInbound(client, dm, msg, msg.voice);
 
     // A round video message (video_note) is treated like a voice note:
     // download, extract audio, transcribe.
-    if (msg.video_note && !typed) return this.transcribeInbound(client, dm, msg, msg.video_note, values);
+    if (msg.video_note && !typed) return this.transcribeInbound(client, dm, msg, msg.video_note);
 
     // Everything else file-bearing: save to the session's scratch, describe it.
     // Attachments only land in code mode (there is a session's scratch to use).
@@ -765,8 +758,8 @@ export class TelegramEngine {
     const s = await this.deps.sessions.get(bot.activeSessionId);
     if (!s) return '🤖 Coding agent';
     const card = (await this.deps.cards.ofSession(bot.activeSessionId))?.number;
-    const ws = await (await this.api(`/workspaces/${s.workspaceId}`)).json().catch(() => null);
-    const prefix: string | undefined = ws?.ok ? ws.data.cardPrefix : undefined;
+    const w = await this.deps.workspaces.get(s.workspaceId);
+    const prefix = w ? await this.deps.workspaces.prefixOf(w) : undefined;
     const parts: string[] = ['🤖 Coding agent'];
     if (prefix) parts.push(prefix);
     if (prefix && card != null) parts.push(`${prefix}-${card}`);
@@ -788,10 +781,10 @@ export class TelegramEngine {
     if (!stored) return;
     const token = await this.token();
     const client = new TelegramClient(token);
-    const apiKey = (await this.deps.settings.credential('deepgram_api_key').catch(() => '')) ?? '';
-    const values = await settingsValues(this.turnDeps()).catch(() => ({} as Record<string, unknown>));
+    const apiKey = (await this.deps.settings.credential('deepgram_api_key')) ?? '';
+    const voice = String(await this.deps.settings.resolve('voice_spoken_voice'));
     client.sendChatAction(dm, 'record_voice').catch(() => {});
-    const audio = await speakVoice(apiKey, String(values.voice_spoken_voice ?? ''),
+    const audio = await speakVoice(apiKey, voice,
       stored.content.replace(/\n\n\(\d+\/\d+\)$/, '').slice(0, SPEAK_MAX_CHARS));
     if (audio) await client.sendVoiceBytes(chatId, audio, { replyToMessageId: messageId }).catch(() => {});
     else await client.sendMessage(chatId, "⚠️ I couldn't turn that into audio — check the Deepgram key.",
@@ -814,36 +807,22 @@ export class TelegramEngine {
 
   get botState() { return this.deps.botState; }
   get settings() { return this.deps.settings; }
+  get sessions() { return this.deps.sessions; }
+  get workspaces() { return this.deps.workspaces; }
+  get presets() { return this.deps.presets; }
+  get system() { return this.deps.system; }
+
+  /** Stop a turn on a session, from this bot: the engine's own turn (inFlight)
+   *  and, through Sessions.interrupt, any other runner's. */
+  interrupt(sessionId: string): void {
+    this.stop(sessionId);
+    this.deps.sessions.interrupt(sessionId, CLIENT_ID, { activeTurns: this.deps.activeTurns, foreground: this.deps.foreground });
+  }
 
   /** The approval gate, for slash commands that need a confirm (today:
    *  /restart). Same gate gated tools use — one question per chat. */
   askApproval(client: TelegramClient, dm: number, ask: Ask): Promise<boolean> {
     return this.approvals.request(client, dm, ask);
-  }
-
-  /** A JSON call to this server's own surface, as the telegram client — the
-   *  one door commands.ts reaches the routes through. */
-  async api(path: string, init?: { method?: string; body?: unknown; session?: string }): Promise<any> {
-    const headers: Record<string, string> = {
-      authorization: `Bearer ${this.deps.apiKey}`, 'x-phantom-looper-client': CLIENT_ID };
-    if (init?.body !== undefined) headers['content-type'] = 'application/json';
-    if (init?.session) headers['x-phantom-looper-session'] = init.session;
-    const r = await this.fetch(`${BASE}${path}`, {
-      method: init?.method ?? 'GET', headers,
-      ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
-    });
-    return { json: () => r.json(), text: () => r.text() };
-  }
-
-  /** Like api() but returns the raw fetch Response — for streaming endpoints. */
-  async apiRaw(path: string, init?: { method?: string; body?: unknown }): Promise<Response> {
-    const headers: Record<string, string> = {
-      authorization: `Bearer ${this.deps.apiKey}`, 'x-phantom-looper-client': CLIENT_ID };
-    if (init?.body !== undefined) headers['content-type'] = 'application/json';
-    return this.fetch(`${BASE}${path}`, {
-      method: init?.method ?? 'GET', headers,
-      ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
-    });
   }
 
   /** `/auto_push` and `/auto_pull` — called directly (not through the HTTP
@@ -897,14 +876,14 @@ export class TelegramEngine {
 
   /** Deliver one deliberate message (send_message tool, or the assistant): the
    *  text as a bubble, spoken too when the reply mode asks. */
-  private async sendDm(client: TelegramClient, dm: number, values: Record<string, unknown>, text: string):
+  private async sendDm(client: TelegramClient, dm: number, text: string):
   Promise<{ ok: boolean; error?: string }> {
     const say = String(text ?? '').trim();
     if (!say) return { ok: false, error: 'empty message' };
-    const mode = String(values.telegram_reply_mode ?? 'text');
     try {
+      const mode = String(await this.deps.settings.resolve('telegram_reply_mode'));
       if (mode !== 'voice') await client.sendMarkdown(dm, say);
-      if (mode === 'voice' || mode === 'both') await this.maybeSpeak(client, dm, values, say);
+      if (mode === 'voice' || mode === 'both') await this.maybeSpeak(client, dm, say);
       return { ok: true };
     } catch (e) {
       return { ok: false, error: (e as Error).message };

@@ -4,6 +4,17 @@ import { randomBytes } from 'node:crypto';
 // tool schemas so the model can only send a real column name.
 export const DEFAULT_COLUMNS = ['backlog', 'plan', 'in_progress', 'blocked', 'done'];
 
+/** The one icon per card status — the cli's /resume column and board headers
+ *  (with the color), the digest's plain-text line (the char alone). */
+export const STATUS_ICON: Record<string, { char: string; color: string }> = {
+  backlog:     { char: '○', color: 'white' },
+  plan:        { char: '◇', color: 'magenta' },
+  in_progress: { char: '▶', color: 'blue' },
+  blocked:     { char: '✕', color: 'red' },
+  done:        { char: '✓', color: 'green' },
+  archived:    { char: '▪', color: 'gray' },
+};
+
 // Checklist items ({key, text, done}) are addressed by key: ticking names the
 // item, never resends the list — a mis-sent list was wiping whole checklists.
 // The key is a short random id, assigned by the SERVER when the item first

@@ -99,27 +99,14 @@ export const META: Record<LocalKey, ConfigMeta> = {
   voice_headphones: { type: 'boolean', label: 'headphones', group: 'voice' },
 };
 
-/** The provider API keys are the SERVER's — one key per provider, one place to
- *  set it (/keys). Declared once in core (the same map every agent builds
- *  from) and re-exported here for the app's screens. */
-import { PROVIDER_KEY } from '../core/llm/agentConfig.js';
-export { PROVIDER_KEY };
-
 /** The audio settings the sidecar only reads when it starts. Changing one of
  *  these while it runs means a restart; the rest — the spoken voice, the
- *  headphones switch, the wake word — are pushed to it live (`set`). */
+ *  headphones switch, the wake word — are pushed to it live (`set`). Any
+ *  other server setting rebuilds the Assistant's brain from the server's
+ *  config (window.ts settingChanged): which keys shape an agent is the
+ *  server's rule, kept nowhere here. */
 export const VOICE_BOOT_KEYS: string[] = [
   'deepgram_api_key', 'voice_mic_device', 'voice_speaker_device', 'voice_stt_model',
-];
-
-/** The settings the Assistant's model is built from. Changing one rebuilds
- *  the brain in place (agentFromConfig.buildAssistantAgent); the sidecar is
- *  not touched — it never sees the model or its key. */
-export const ASSISTANT_MODEL_KEYS: string[] = [
-  'coding_provider', 'coding_model', 'coding_base_url', 'coding_reasoning',
-  'assistant_provider', 'assistant_model', 'assistant_base_url',
-  'assistant_reasoning', 'assistant_max_steps',
-  ...Object.values(PROVIDER_KEY),
 ];
 
 export function validate(key: LocalKey, value: ConfigValue): string | null {

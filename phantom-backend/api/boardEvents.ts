@@ -17,7 +17,10 @@ export type BoardEvent =
   // `client` the writer's x-phantom-looper-client — together they let a
   // listener tell a MOVE by the loop from an edit by a person without
   // remembering anything. The cli's BoardStore reads `card` only.
-  | { event: 'card'; card: Record<string, unknown>; from?: string; client?: string }
+  | { event: 'card'; card: Record<string, unknown>; from?: string; client?: string;
+      /** Whether the card was archived BEFORE this write — with `card.archived`,
+       *  the false → true transition the archive auto-push listens for. */
+      archivedBefore?: boolean }
   | { event: 'deleted'; id: number }                        // hard-deleted
   // One event type per fact, each complete — no field is ever a placeholder
   // for a fact the publisher does not own (the per-session feed's rule,

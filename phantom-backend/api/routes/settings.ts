@@ -17,24 +17,20 @@ import type { FastifyInstance } from 'fastify';
 import type { FastifyRequest } from 'fastify';
 import type { WorkspaceRow } from '../../db/schema.js';
 import {
-  CREDENTIALS, CREDENTIAL_NAMES,
+  CREDENTIALS, CREDENTIAL_NAMES, type CredentialMeta,
   isWorkspaceOverridable, isCredentialWorkspaceScoped, isGlobalSettable,
   SettingsWriteError, type SettingKey,
   DEFAULTS, DESCRIPTIONS, META,
 } from '../../settings.js';
 import { GLOBAL, workspaceScope } from '../../store.js';
+import { sessionPin, type AgentName } from '../../agentConfig.js';
+import { AGENT_NAMES } from '../../../core/llm/agentConfig.js';
 import { ok, err, type AppCtx } from '../app.js';
 
 const writerOf = (req: FastifyRequest): string | undefined =>
   String(req.headers['x-phantom-looper-client'] ?? '') || undefined;
 
 const TAG = { tags: ['settings'] };
-/** The looper's two switches: a write or clear of either re-examines the board. */
-const LOOP_SETTING_KEYS: readonly string[] = ['auto_plan', 'auto_build'];
-// A telegram_* key or the bot token changed: the engine reconciles its
-// webhook + command menu, event-driven like the looper.
-const TELEGRAM_SETTING_KEYS: readonly string[] = [
-  'telegram_enabled', 'telegram_authorized_user', 'telegram_bot_token'];
 const scopeQuery = { type: 'object', properties: {
   workspace: { type: 'string', description: 'Read/write at this workspace\'s layer.' },
 } };
@@ -75,12 +71,12 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
       for (const name of CREDENTIAL_NAMES) {
         const g = creds[name].global;
         const w = sc.kind !== 'global' ? creds[name].workspace : null;
-        const { label, group, description } = CREDENTIALS[name];
+        const { label, group, description, provider } = CREDENTIALS[name] as CredentialMeta;
         out[name] = {
           default: null, global: g, workspace: w,
           value: w ?? g, source: w != null ? 'workspace' : g != null ? 'global' : 'default',
           secret: true, description,
-          meta: { type: 'string', label, group, nullable: true },
+          meta: { type: 'string', label, group, nullable: true, ...(provider ? { provider } : {}) },
           overridable: isCredentialWorkspaceScoped(name),
         };
       }
@@ -105,15 +101,8 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
         if (e instanceof SettingsWriteError) return reply.code(400).send(err(e.code, e.message));
         throw e;
       }
-      // Supervision flipped (either switch): the looper re-examines the
-      // affected workspace — or every one, when the global layer changed.
-      // Event-driven, no poll.
-      if (updated.some((k) => LOOP_SETTING_KEYS.includes(k))) {
-        ctx.looper?.runAllLoops(sc.workspace?.id);
-      }
-      if (updated.some((k) => TELEGRAM_SETTING_KEYS.includes(k))) {
-        void ctx.telegram?.reconcile();
-      }
+      // Every write lands on the settings feed (Settings.write): the looper
+      // and the Telegram engine listen there, whichever door wrote.
       return ok({ updated });
     });
 
@@ -132,11 +121,39 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
         if (e instanceof SettingsWriteError) return reply.code(400).send(err(e.code, e.message));
         throw e;
       }
-      if (LOOP_SETTING_KEYS.includes(req.params.key)) {
-        ctx.looper?.runAllLoops(sc.workspace?.id);
-      }
-      if (TELEGRAM_SETTING_KEYS.includes(req.params.key)) void ctx.telegram?.reconcile();
       return ok({ cleared: req.params.key });
+    });
+
+  // The finished answer to "how does agent X run right now" — model, key,
+  // steps, compaction — for a remote client that runs the agent itself (the
+  // cli). The SAME door the server's own engines use (Settings.agentConfig),
+  // so the cli holds no copy of the cascade or the pin rule and never
+  // downloads every key to build one agent. Returns the key, like GET
+  // /settings does: the caller is going to call the provider with it.
+  app.get<{ Params: { agent: string }; Querystring: { session?: string; workspace?: string } }>(
+    '/agents/:agent/config', { schema: { ...TAG,
+      summary: "An agent's runtime configuration, resolved",
+      description: 'The model (provider, model, endpoint, key, reasoning), steps per turn and compaction settings ' +
+        'for `agent` (coding | assistant | supervisor), resolved from the settings exactly as the server resolves them ' +
+        'for its own turns. Pass ?session= to apply that session\'s pinned model and its workspace\'s overrides; ' +
+        '?workspace= for a workspace\'s overrides alone.',
+      params: { type: 'object', properties: { agent: { type: 'string', enum: [...AGENT_NAMES] } } },
+      querystring: { type: 'object', properties: {
+        session: { type: 'string' }, workspace: { type: 'string' } } } } },
+    async (req, reply) => {
+      const agent = req.params.agent as AgentName;
+      const session = req.query.session ? await ctx.sessions.get(req.query.session) : undefined;
+      if (req.query.session && !session) return reply.code(404).send(err('session_not_found', `no session ${req.query.session}`));
+      const workspaceId = session?.workspaceId ?? req.query.workspace;
+      const workspace = workspaceId ? await ctx.workspaces.get(workspaceId) : undefined;
+      if (workspaceId && !workspace) return reply.code(404).send(err('not_found', `no workspace ${workspaceId}`));
+      try {
+        return ok(await ctx.settings.agentConfig(agent, { workspace, pin: sessionPin(session) }));
+      } catch (e) {
+        // A half-set pair (a provider override with no model): the fix is in
+        // the message, and it is the caller's settings to fix.
+        return reply.code(400).send(err('agent_config_invalid', (e as Error).message));
+      }
     });
 
   // Change notices, never values: every listener re-reads GET /settings. No

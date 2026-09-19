@@ -8,10 +8,8 @@ import path from 'node:path';
 import type { ModelMessage } from 'ai';
 import type { Sessions } from '../sessions.js';
 import type { SessionRow } from '../db/schema.js';
-import { agentModelConfig } from '../../core/llm/agentConfig.js';
 import { loadTranscriptFile, newestTranscriptFile, Transcript, transcriptStamp } from '../../core/llm/transcript.js';
-import { compact, shouldCompact, getStrategy, CompactionLock, resolveContextWindow, resolveCompactSetting } from '../../core/llm/compaction.js';
-import { contextWindowFor } from '../models.js';
+import { compact, compactionDue, compactionOpts, CompactionLock, type CompactionConfig } from '../../core/llm/compaction.js';
 import type { TelegramClient } from './client.js';
 import { logger } from '../log.js';
 
@@ -35,9 +33,10 @@ export class AssistantConversation {
   sessionId: string | null = null;
   private compactionLock = new CompactionLock();
 
-  /** Set by the engine before each turn so compaction can read the model config
-   *  and send the notice to the right chat. */
-  values: Record<string, unknown> = {};
+  /** Set by the engine before each turn: the assistant's compaction config
+   *  (Settings.agentConfig('assistant').compaction) and the chat to notify.
+   *  Null before any turn has run. */
+  compaction: CompactionConfig | null = null;
   chat: AssistantChat | null = null;
 
   constructor(private deps: AssistantConversationDeps) {}
@@ -94,14 +93,7 @@ export class AssistantConversation {
    *  Fire-and-forget — the next turn proceeds on the current history. */
   kickCompaction(inputTokens: number): void {
     if (this.compactionLock.active) return;
-    const pct = Number(resolveCompactSetting(this.values, 'assistant', 'threshold_pct', 0));
-    if (pct <= 0) return;
-
-    const contextWindow = resolveContextWindow(
-      this.values, 'assistant', contextWindowFor, agentModelConfig,
-      (msg) => log.warn(msg));
-    if (!contextWindow) return;
-    if (!shouldCompact(inputTokens, contextWindow, pct)) return;
+    if (!this.compaction || !compactionDue(this.compaction, inputTokens)) return;
 
     void this.runCompaction().catch((err) => {
       log.warn({ err: (err as Error).message }, 'assistant compaction failed — will retry after a later turn');
@@ -116,23 +108,10 @@ export class AssistantConversation {
    *  Returns false when there is nothing to compact (short conversation or
    *  no turn has run yet). */
   async runCompaction(): Promise<boolean> {
-    // No turn has run yet — values is empty, model config would throw.
-    if (!Object.keys(this.values).length) return false;
-    if (!this.history.length) return false;
+    // No turn has run yet — no config, nothing to compact.
+    if (!this.compaction || !this.history.length) return false;
 
-    const strategyName = String(resolveCompactSetting(this.values, 'assistant', 'strategy', 'fast'));
-    const summarizePct = Number(resolveCompactSetting(this.values, 'assistant', 'summarize_pct', 75));
-    const maxTokens = resolveCompactSetting<number | null>(this.values, 'assistant', 'max_tokens', null);
-    const maxTokensOpt = maxTokens != null ? Number(maxTokens) : undefined;
-
-    const model = agentModelConfig(this.values, 'supervisor');
-
-    const result = await compact(this.compactionLock, {
-      history: this.history,
-      strategy: getStrategy(strategyName),
-      summarizePct,
-      model, sessionId: this.sessionId, maxTokens: maxTokensOpt,
-    });
+    const result = await compact(this.compactionLock, compactionOpts(this.compaction, this.history, this.sessionId));
 
     if (!result) return false;
 

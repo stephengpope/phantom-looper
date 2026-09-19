@@ -58,6 +58,9 @@ export interface SessionInfo {
    *  on screen. */
   folderId: string | null;
   agent?: string | null; card?: number | null;
+  /** The row's pinned model — what this session runs on (Sessions.birthModel
+   *  writes it; phantom-backend/agentConfig.ts sessionPin reads it). */
+  provider?: string | null; model?: string | null; baseUrl?: string | null;
   /** The frozen system prompt, in its two cached pieces. Null on a
    *  conversation-only session (a supervisor's, an assistant's). */
   system_prompt: CodingPrompt | null;

@@ -38,7 +38,7 @@ type Requirement = CardRow['requirements'][number];
 export class Cards {
   constructor(private readonly db: Db, private readonly workspaces: Workspaces, private readonly events?: BoardEvents) {}
 
-  private publish(w: WorkspaceRow, card: CardRow, extra: { from?: string; client?: string } = {}): void {
+  private publish(w: WorkspaceRow, card: CardRow, extra: { from?: string; client?: string; archivedBefore?: boolean } = {}): void {
     this.events?.publish(w.id, { event: 'card', card: card as unknown as Record<string, unknown>, ...extra });
   }
 
@@ -186,7 +186,7 @@ export class Cards {
       const [row] = await tx.update(cards).set({ ...set, updated_at: new Date() }).where(mine).returning();
       return { card: row, from: prior.status, wasArchived: prior.archived };
     });
-    this.publish(w, card, { from, client: by });
+    this.publish(w, card, { from, client: by, archivedBefore: wasArchived });
     return { card, from, wasArchived };
   }
 

@@ -1,7 +1,6 @@
 // The Assistant, server-side, for Telegram — assistant MODE, the home the bot
 // answers in by default. It is the SAME agent as the cli's side pane
-// (core AssistantAgent: same prompt, same assistant_* provider/model cascade,
-// reasoning pinned none, maxSteps 10) — reached over the webhook instead of the
+// (core AssistantAgent: same prompt, same Settings.agentConfig('assistant')) — reached over the webhook instead of the
 // Python voice sidecar, with HEADLESS tool handlers hitting this server's own
 // routes instead of the app's BoardStore.
 //
@@ -19,24 +18,32 @@
 
 import type { ModelMessage, Tool } from 'ai';
 import { AssistantAgent } from '../../core/llm/agents/assistant.js';
-import { agentModelConfig, agentMaxSteps, pinnedModel, sessionPin } from '../../core/llm/agentConfig.js';
+import type { AgentConfig } from '../../core/llm/agentConfig.js';
 import type { SessionRow } from '../db/schema.js';
-import { assistantKanbanTool, sessionsTool, workspaceCreateTool, gitAutoPushTool, gitAutoPullTool, renderRead, renderRaw, kebabName,
-  dockerLogsTool,
-  type KanbanArgs, type SessionsArgs, type WorkspaceCreateArgs, type GitAutoPushArgs, type GitAutoPullArgs,
-  type DockerLogsArgs } from '../../core/llm/tools/tui.js';
+import type { Cards, CardFields, ItemOp, CardRow } from '../cards.js';
+import type { Workspaces } from '../workspaces.js';
+import { assistantKanbanTool, sessionsTool, workspaceCreateTool, gitAutoPushTool, gitAutoPullTool, dockerLogsTool,
+  type KanbanArgs } from '../../core/llm/tools/tui.js';
+import { sessionsHandler, workspaceCreateHandler, gitHandlers, dockerLogsHandler,
+  type AssistantHost } from '../../core/llm/tools/assistantHandlers.js';
+import type { ApiCall } from '../../core/session.js';
 import { autoPushSession, autoPullSession } from '../../core/llm/tools/git.js';
 import { phantomTools } from '../../core/llm/tools/workspace.js';
 import { webTools } from '../../core/llm/tools/web.js';
 import { cronTools } from '../../core/llm/tools/crons.js';
-import { parseTranscript, usageEvent, type Transcript } from '../../core/llm/transcript.js';
+import { usageEvent, type Transcript } from '../../core/llm/transcript.js';
 import type { TelegramSink } from './sink.js';
 
 const BASE = 'http://looper/api';
+/** The bot's session-lock id — one declaration, the engine imports it. */
+export const CLIENT_ID = 'telegram';
 
 export interface AssistantDeps {
   f: typeof fetch;
   apiKey: string;
+  /** The board's owner, and the workspace rows it is addressed by. */
+  cards: Cards;
+  workspaces: Workspaces;
   modelFetch?: typeof fetch;
 }
 
@@ -54,108 +61,55 @@ async function api(deps: AssistantDeps, path: string,
   return r.json() as Promise<Envelope>;
 }
 
-/** The headless board handler — the same KanbanArgs the app's handler takes,
- *  answered over the card routes instead of a BoardStore. `screen` has no
- *  telegram meaning and says so. */
+/** The board handler, at the Cards object — the same rows and refusals the
+ *  card routes answer with (they are thin over Cards). `screen` has no
+ *  telegram meaning and says so. Every write lands on the board bus, so the
+ *  looper and the archive auto-push run exactly as for any other door. */
 function boardHandler(deps: AssistantDeps, workspaceId: () => string | null) {
+  const cardOf = (c: CardRow) => ({ card: c.number, title: c.title, status: c.status });
   return async (args: KanbanArgs): Promise<unknown> => {
     const ws = workspaceId();
     if (!ws) return { error: 'no active workspace — /workspaces to pick one' };
-    switch (args.action) {
-      case 'screen':
-        return { note: 'no screen on telegram — read the card instead' };
-      case 'list': {
-        const j = await api(deps, `/workspaces/${ws}/cards`);
-        if (!j.ok) return { error: j.error?.message };
-        return {
-          prefix: j.data.prefix,
-          cards: (j.data.cards as Array<{ number: number; title: string; status: string }>)
-            .map((c) => ({ card: c.number, title: c.title, status: c.status })),
-        };
-      }
-      case 'read': {
-        const j = await api(deps, `/workspaces/${ws}/cards?number=${args.card}`);
-        if (!j.ok) return { error: j.error?.message };
-        const c = j.data.cards[0];
-        return c ?? { error: `no card ${args.card}` };
-      }
-      case 'create': {
-        const body: Record<string, unknown> = { title: args.title };
-        for (const k of ['details', 'status'] as const) if (args[k] !== undefined) body[k] = args[k];
-        if (args.requirements) body.requirements = args.requirements;
-        const j = await api(deps, `/workspaces/${ws}/cards`, { method: 'POST', body });
-        return j.ok ? j.data.card : { error: j.error?.message };
-      }
-      case 'update': case 'move': {
-        const body: Record<string, unknown> = {};
-        for (const k of ['title', 'details', 'status', 'blocked_reason',
-          'archived', 'auto_plan', 'auto_build', 'pinned'] as const) {
-          if (args[k] !== undefined) body[k] = args[k];
+    const w = await deps.workspaces.get(ws);
+    if (!w) return { error: `workspace ${ws} is gone — /workspaces to pick another` };
+    try {
+      switch (args.action) {
+        case 'screen':
+          return { note: 'no screen on telegram — read the card instead' };
+        case 'list':
+          return { prefix: await deps.workspaces.prefixOf(w), cards: (await deps.cards.list(w, {})).map(cardOf) };
+        case 'read':
+          return (await deps.cards.byNumber(w, args.card!)) ?? { error: `no card ${args.card}` };
+        case 'create': {
+          const body: Record<string, unknown> = { title: args.title };
+          for (const k of ['details', 'status'] as const) if (args[k] !== undefined) body[k] = args[k];
+          if (args.requirements) body.requirements = args.requirements;
+          return deps.cards.create(w, body as CardFields & { title: string }, CLIENT_ID);
         }
-        const j = await api(deps, `/workspaces/${ws}/cards/${args.card}`, { method: 'PATCH', body });
-        return j.ok ? j.data.card : { error: j.error?.message };
+        case 'update': case 'move': {
+          const body: Record<string, unknown> = {};
+          for (const k of ['title', 'details', 'status', 'blocked_reason',
+            'archived', 'auto_plan', 'auto_build', 'pinned'] as const) {
+            if (args[k] !== undefined) body[k] = args[k];
+          }
+          return (await deps.cards.update(w, args.card!, body as CardFields, undefined, CLIENT_ID)).card;
+        }
+        case 'items':
+          return (await deps.cards.update(w, args.card!, {}, args.ops as ItemOp[], CLIENT_ID)).card;
+        case 'history':
+          return { card: args.card, revisions: await deps.cards.revisions(w, args.card!, 20) };
+        default:
+          return { error: `unknown board action: ${args.action}` };
       }
-      case 'items': {
-        const j = await api(deps, `/workspaces/${ws}/cards/${args.card}`, { method: 'PATCH', body: { items: args.ops } });
-        return j.ok ? j.data.card : { error: j.error?.message };
-      }
-      case 'history': {
-        const j = await api(deps, `/workspaces/${ws}/cards/${args.card}/revisions`);
-        return j.ok ? j.data : { error: j.error?.message };
-      }
-      default:
-        return { error: `unknown board action: ${args.action}` };
-    }
-  };
-}
-
-/** The sessions handler. LIST is the server's list (typed, no supervisor
- *  seats); READ pulls a transcript and renders it; SWITCH is what the caller
- *  wires to "point the bot at this session" (the pointer only — never a
- *  mode change); GET_ACTIVE is that pointer; close has no telegram job here. */
-function sessionsHandler(
-  deps: AssistantDeps, activeSession: () => string | null,
-  onSwitch: (id: string) => Promise<unknown>,
-) {
-  return async (args: SessionsArgs): Promise<unknown> => {
-    switch (args.action) {
-      case 'list': {
-        const limit = args.limit ?? 30;
-        const offset = args.offset ?? 0;
-        const j = await api(deps, `/sessions?typed=true&background=false&limit=${limit + offset}`);
-        if (!j.ok) return { error: j.error?.message };
-        const rows = (j.data.sessions as Array<Record<string, unknown>>).slice(offset, offset + limit);
-        return {
-          sessions: rows.map((s) => ({
-            id: s.id, title: s.name ?? null, workspace: s.workspaceId, branch: s.branch ?? null,
-            card: s.card ?? null, card_status: s.cardStatus ?? null,
-            git_status: s.work ?? null, model: s.model ?? null, tokens: s.tokensOutput ?? null,
-            last_message: s.lastUserMessage ?? null, running: s.locked ?? false,
-          })),
-          total: j.data.total,
-        };
-      }
-      case 'read': {
-        const id = args.id ?? activeSession();
-        if (!id) return { error: 'no session — pass an id' };
-        const j = await api(deps, `/sessions/${id}/transcript`);
-        if (!j.ok) return { error: j.error?.message };
-        if (args.raw) return { text: renderRaw(String(j.data.data ?? '')) };
-        const parsed = parseTranscript(String(j.data.data ?? ''));
-        return { text: renderRead(id, parsed.messages, { limit: args.limit, offset: args.offset, tools: args.tools }) };
-      }
-      case 'switch':
-        return args.id ? onSwitch(args.id) : { error: 'switch needs an id' };
-      default:
-        return { note: 'not available on telegram' };
-    }
+    } catch (e) { return { error: (e as Error).message }; }
   };
 }
 
 /** What the engine supplies for a turn: where it is, and the two things only
  *  the engine can do — enter a session, and ask the user a yes/no question. */
 export interface AssistantCtx {
-  settings: Record<string, unknown>;
+  /** The assistant's config on ITS ROW's model — Settings.agentConfig('assistant', { pin: sessionPin(own) }). */
+  config: AgentConfig;
   workspaceId: () => string | null;
   activeSession: () => string | null;
   /** session_switch fired — the caller enters code mode. */
@@ -168,67 +122,28 @@ export interface AssistantCtx {
   onWorkspaceCreated: (workspaceId: string) => Promise<{ session?: string; error?: string }>;
 }
 
-/** `workspace_create_repo`, gated: kebab the name, get the user's accept on
- *  the FINAL name (the point of the gate), then the backend does the whole flow
- *  (POST /workspaces create=true: repo, seed, register; always private) and
- *  the engine opens the new workspace. The same steps as the cli's handler. */
-function workspaceCreateHandler(deps: AssistantDeps, ctx: AssistantCtx) {
-  return async (args: WorkspaceCreateArgs, opts: { abortSignal?: AbortSignal }): Promise<unknown> => {
-    const name = kebabName(args.name ?? '');
-    if (!name) return { error: 'no usable name — ask for the project name again' };
-    const ok = await ctx.approve({ label: 'new private repo', subject: name }, opts.abortSignal);
-    if (!ok) {
-      return { declined: true, note: 'nothing was created — the user declined (or the turn was cut off). ' +
-        'Often the name was misheard: ask what to change before calling again.' };
-    }
-    const j = await api(deps, '/workspaces', { method: 'POST', body: {
-      url: name, create: true, private: true,
-      ...(args.description ? { description: args.description } : {}),
-    } });
-    if (!j.ok) return { error: j.error?.message };
-    const w = j.data as { id: string; owner: string; name: string };
-    const opened = await ctx.onWorkspaceCreated(w.id);
-    return { ok: true, repo: `${w.owner}/${w.name}`, private: true, workspace_id: w.id,
-      ...(opened.session ? { entered: 'a new session in the new workspace — the user is now talking to its coding agent' }
-        : { note: `workspace created, but no session could be opened: ${opened.error ?? 'unknown'}` }) };
+/** This bot as an AssistantHost (core/llm/tools/assistantHandlers.ts — the
+ *  same handlers the cli's pane answers with). The API is this server's own
+ *  surface over `deps.f`; the pointer, the switch and the yes/no are the
+ *  engine's. No local turns (`busy`) and no held history: the bot holds no
+ *  session in memory, so a read is always the record. */
+function telegramHost(deps: AssistantDeps, ctx: AssistantCtx): AssistantHost {
+  const call: ApiCall = async (method, path, body) => {
+    const j = await api(deps, path, { method, body });
+    if (!j.ok) throw new Error(j.error?.message ?? `${method} ${path} failed`);
+    return j.data;
   };
-}
-
-/** `git_auto_push` / `git_auto_pull`, headless: the active session unless an
- *  id was given, through core's one client of each git route (this server's
- *  own surface over `deps.f`). Awaited to the end; a refusal is the answer,
- *  never a throw — the Assistant reports it in a sentence. The steps are not
- *  shown here: the Assistant's answer is the one line the person reads (the
- *  slash commands are the door that shows steps). */
-function gitAutoPushHandler(deps: AssistantDeps, activeSession: () => string | null) {
-  return async (args: GitAutoPushArgs): Promise<unknown> => {
-    const id = args.id ?? activeSession();
-    if (!id) return { error: 'no active session — /sessions or /new to pick one, or pass an id' };
-    try { return { session: id, ...await autoPushSession({ baseUrl: BASE, apiKey: deps.apiKey, sessionId: id, fetch: deps.f }) }; }
-    catch (e) { return { session: id, result: 'error', reason: (e as Error).message }; }
-  };
-}
-function gitAutoPullHandler(deps: AssistantDeps, activeSession: () => string | null) {
-  return async (args: GitAutoPullArgs): Promise<unknown> => {
-    const id = args.id ?? activeSession();
-    if (!id) return { error: 'no active session — /sessions or /new to pick one, or pass an id' };
-    try { return { session: id, ...await autoPullSession({ baseUrl: BASE, apiKey: deps.apiKey, sessionId: id, fetch: deps.f }) }; }
-    catch (e) { return { session: id, result: 'error', reason: (e as Error).message }; }
-  };
-}
-
-/** `docker_logs`, headless: the args straight through to POST /system/logs.
- *  The route does the narrowing; here the result is just shaped for the model. */
-function dockerLogsHandler(deps: AssistantDeps) {
-  return async (args: DockerLogsArgs): Promise<unknown> => {
-    const j = await api(deps, '/system/logs', { method: 'POST', body: args });
-    if (!j.ok) return { error: j.error?.message };
-    const d = j.data as { service: string; text: string; truncated?: boolean };
-    return {
-      service: d.service,
-      text: d.text || '(no matching log lines)',
-      ...(d.truncated ? { truncated: 'output hit the 64 KB cap — narrow with tail/since/grep and retry' } : {}),
-    };
+  const gitCfg = (sessionId: string) => ({ baseUrl: BASE, apiKey: deps.apiKey, sessionId, fetch: deps.f });
+  return {
+    call,
+    clientId: CLIENT_ID,
+    autoPush: (id, onStep) => autoPushSession(gitCfg(id), onStep),
+    autoPull: (id, onStep) => autoPullSession(gitCfg(id), onStep),
+    workspaceId: ctx.workspaceId,
+    activeSession: ctx.activeSession,
+    onSwitch: ctx.onSwitch,
+    approve: ctx.approve,
+    onWorkspaceCreated: ctx.onWorkspaceCreated,
   };
 }
 
@@ -240,14 +155,15 @@ function dockerLogsHandler(deps: AssistantDeps) {
  *  board + sessions + the gated workspace_create_repo + git_auto_push +
  *  git_auto_pull + docker_logs always. */
 export async function assistantKit(deps: AssistantDeps, ctx: AssistantCtx, own: SessionRow): Promise<Record<string, Tool>> {
-  const { workspaceId, activeSession, onSwitch } = ctx;
+  const host = telegramHost(deps, ctx);
+  const git = gitHandlers(host);
   const kit: Record<string, Tool> = {
-    ...assistantKanbanTool(boardHandler(deps, workspaceId)),
-    ...sessionsTool(sessionsHandler(deps, activeSession, onSwitch)),
-    ...workspaceCreateTool(workspaceCreateHandler(deps, ctx)),
-    ...gitAutoPushTool(gitAutoPushHandler(deps, activeSession)),
-    ...gitAutoPullTool(gitAutoPullHandler(deps, activeSession)),
-    ...dockerLogsTool(dockerLogsHandler(deps)),
+    ...assistantKanbanTool(boardHandler(deps, ctx.workspaceId)),
+    ...sessionsTool(sessionsHandler(host)),
+    ...workspaceCreateTool(workspaceCreateHandler(host)),
+    ...gitAutoPushTool(git.push),
+    ...gitAutoPullTool(git.pull),
+    ...dockerLogsTool(dockerLogsHandler(host)),
   };
   // Tools that exist in the shared kit but do nothing on Telegram — remove
   // them so the model never wastes a call on a dead end.
@@ -259,7 +175,7 @@ export async function assistantKit(deps: AssistantDeps, ctx: AssistantCtx, own: 
       await phantomTools({ ...common, pick: 'readonly' }),
       webTools(common));
   }
-  const ws = workspaceId();
+  const ws = ctx.workspaceId();
   if (ws) Object.assign(kit, await cronTools({ baseUrl: BASE, apiKey: deps.apiKey, workspaceId: ws, fetch: deps.f }));
   return kit;
 }
@@ -284,10 +200,9 @@ export async function runAssistantTurn(
   ctx: AssistantCtx, abortSignal: AbortSignal | undefined, transcript: Transcript | undefined,
   own: SessionRow,
 ): Promise<AssistantTurnResult> {
-  const model = pinnedModel(agentModelConfig(ctx.settings, 'assistant'), ctx.settings, sessionPin(own));
-  const maxSteps = agentMaxSteps(ctx.settings, 'assistant');
   const tools = await assistantKit(deps, ctx, own);
-  const agent = new AssistantAgent({ ...model, fetch: deps.modelFetch }, tools, { sessionId: own.id, maxSteps });
+  const agent = new AssistantAgent({ ...ctx.config.model, fetch: deps.modelFetch }, tools,
+    { sessionId: own.id, maxSteps: ctx.config.maxSteps });
 
   // Accumulate usage across all steps in this turn.
   const usage = { input: 0, output: 0, cache_read: 0, cache_write: 0 };

@@ -1,166 +1,48 @@
-// Config → agent, once, for every caller: the cli's screens
-// and the server's looper read the same settings rows, and this is the one
-// resolver that turns them into a ModelConfig and a coding agent. The cli's
-// agentFromConfig delegates here; the looper calls it directly.
+// The SHAPE of an agent's runtime configuration — what the LLM layer needs to
+// run one agent, and nothing about where it came from. The server's settings
+// domain (phantom-backend/agentConfig.ts, through Settings.agentConfig) is
+// the one place that fills it: cascade, the session's pinned model, the
+// provider's key, compaction. Nothing in core/llm reads a setting by name.
 import type { Tool } from 'ai';
-import { NO_PROVIDER, type Agent, type ModelConfig, type Provider, type Reasoning } from './createAgent.js';
+import type { Agent, ModelConfig } from './createAgent.js';
+import type { CompactionConfig } from './compaction.js';
 import { CodingAgent, type CodingPrompt } from './agents/coding.js';
 
-/** One API key per provider, named the way each vendor names it — the same
- *  rows the Git Fixer and the Assistant read. */
-export const PROVIDER_KEY = {
-  anthropic: 'anthropic_api_key', openai: 'openai_api_key',
-  google: 'google_api_key', deepseek: 'deepseek_api_key',
-  kimi: 'kimi_api_key', xai: 'xai_api_key', mistral: 'mistral_api_key',
-  groq: 'groq_api_key', 'openai-compatible': 'openai_compatible_api_key',
-} as const;
+export type AgentName = 'coding' | 'assistant' | 'supervisor';
+export const AGENT_NAMES: readonly AgentName[] = ['coding', 'assistant', 'supervisor'];
+export const isAgentName = (s: string): s is AgentName => (AGENT_NAMES as readonly string[]).includes(s);
 
-export type SettingsValues = Record<string, unknown>;
-
-/** null and '' both mean "not set" — the store never stores null, and the
- *  existing model overrides already treated '' as unset. */
-const set = (v: unknown): string | null =>
-  typeof v === 'string' && v !== '' ? v : null;
-
-/** The cascade: a non-coding agent's provider/model/base_url from its three
- *  optional `<prefix>_*` settings, falling back to the coding agent's
- *  (`coding_*`) PER THE
- *  COMPATIBILITY RULE — a field inherits only while the resolved provider IS
- *  the coding provider. Overriding to a different provider makes the model
- *  required (a claude id on a google config is garbage) and stops base_url
- *  inheriting (an endpoint only means something for its own provider).
- *  Enforced HERE, at build time, never at write time: the settings store
- *  writes and clears keys one at a time, so no single write can see the whole
- *  pair — the error surfaces where the agent was needed (a blocked card, a
- *  notice, an auto-push step). */
-export function cascade(cfg: SettingsValues, prefix: string):
-{ provider: string; model: string; baseUrl: string | null } {
-  const coding = set(cfg.coding_provider);
-  const provider = set(cfg[`${prefix}_provider`]) ?? coding;
-  if (!provider) throw new Error(NO_PROVIDER);
-  const inherits = provider === coding;
-  const model = set(cfg[`${prefix}_model`]) ?? (inherits ? set(cfg.coding_model) : null);
-  if (!model) {
-    throw new Error(inherits
-      ? `no model set for ${provider} — pick one on /model (phantom-cli), or PATCH /settings {coding_model}`
-      : `${prefix}_provider is ${provider} but ${prefix}_model is not set — ` +
-        `a model from the coding agent's provider (${coding}) cannot carry over`);
-  }
-  return { provider, model, baseUrl: set(cfg[`${prefix}_base_url`]) ?? (inherits ? set(cfg.coding_base_url) : null) };
+export interface AgentConfig {
+  agent: AgentName;
+  /** The model the agent runs on — provider, model, endpoint, key, reasoning. */
+  model: ModelConfig;
+  /** Steps per turn; null = unlimited. */
+  maxSteps: number | null;
+  /** When and how its history is summarized, and the model that writes the summary. */
+  compaction: CompactionConfig;
 }
 
-/** A non-coding agent's ModelConfig from the same resolved settings values:
- *  the cascade above, plus the key row for whichever provider won, and
- *  reasoning (per-agent or the coding agent's). cfg is a full GET /settings
- *  read, so every provider's key is already in it. */
-export function agentModelConfig(cfg: SettingsValues, prefix: string): ModelConfig {
-  const c = cascade(cfg, prefix);
-  const keyField = PROVIDER_KEY[c.provider as keyof typeof PROVIDER_KEY];
-  // Reasoning cascades: per-agent override → coding agent's.
-  const reasoning = set(cfg[`${prefix}_reasoning`]) ?? (cfg.coding_reasoning != null ? String(cfg.coding_reasoning) : undefined);
-  return {
-    provider: c.provider as Provider, model: c.model, baseUrl: c.baseUrl ?? undefined,
-    apiKey: keyField ? set(cfg[keyField]) ?? undefined : undefined,
-    reasoning: reasoning != null ? (reasoning as Reasoning) : undefined,
-  };
-}
+/** The one-line summary the cli's banner and toolbar draw. */
+export interface AgentSummary { provider: string; model: string; reasoning: string; maxSteps: number | null }
 
-/** An agent's max_steps from its `<prefix>_max_steps` setting, defaulting
- *  to unlimited (null). No cascade: a cap is per agent. */
-export function agentMaxSteps(cfg: SettingsValues, prefix: string): number | null {
-  const n = cfg[`${prefix}_max_steps`] == null ? null : Number(cfg[`${prefix}_max_steps`]);
-  return n != null && Number.isFinite(n) && n > 0 ? n : null;
-}
+export const agentSummary = (c: AgentConfig): AgentSummary => ({
+  provider: c.model.provider || 'unset', model: c.model.model || 'unset',
+  reasoning: c.model.reasoning ?? '', maxSteps: c.maxSteps,
+});
 
-/** provider/model/base_url/reasoning + the provider's key → ModelConfig.
- *  `model` may be overridden (kept for the coding agent itself; the other
- *  agents resolve through agentModelConfig's cascade). */
-export function modelConfigFrom(cfg: SettingsValues, modelOverride?: string | null): ModelConfig {
-  // Unset stays '' here: languageModel builds a handle that fails with the
-  // fix on its first call, so a session still opens on a bare server.
-  const provider = (set(cfg.coding_provider) ?? '') as Provider;
-  const keyField = PROVIDER_KEY[provider as keyof typeof PROVIDER_KEY];
-  return {
-    provider,
-    model: set(modelOverride) ?? set(cfg.coding_model) ?? '',
-    baseUrl: (cfg.coding_base_url as string | null) ?? undefined,
-    apiKey: keyField ? (cfg[keyField] as string | null) ?? undefined : undefined,
-    reasoning: cfg.coding_reasoning != null ? (String(cfg.coding_reasoning) as Reasoning) : undefined,
-  };
-}
-
-/** The coding agent from resolved settings, for one session. null/unset
- *  max_steps = unlimited (the turn ends when the agent is done); a positive
- *  number is a cap. `onRetry` receives each failed model attempt as it
- *  happens (withRetry). Every call the agent makes is billed to `sessionId`.
- *  `prompt` is the session's FROZEN system prompt (its row's). */
+/** The coding agent from its resolved config, for one session. `prompt` is
+ *  the session's FROZEN system prompt (its row's). `onRetry` receives each
+ *  failed model attempt as it happens (withRetry). Every call the agent makes
+ *  is billed to `sessionId`. */
 export function buildCodingAgent(
-  cfg: SettingsValues, tools: Record<string, Tool>, sessionId: string,
+  cfg: AgentConfig, tools: Record<string, Tool>, sessionId: string,
   o: { prompt: CodingPrompt; modelFetch?: typeof fetch; onRetry?: (note: string) => void },
-): { agent: Agent; summary: { provider: string; model: string; reasoning: string; maxSteps: number | null } } {
-  const { prompt, modelFetch, onRetry } = o;
-  const model = modelConfigFrom(cfg);
-  if (modelFetch) model.fetch = modelFetch;
-  if (onRetry) model.onRetry = onRetry;
-  const maxSteps = agentMaxSteps(cfg, 'coding');
+): { agent: Agent; summary: AgentSummary } {
+  const model: ModelConfig = { ...cfg.model };
+  if (o.modelFetch) model.fetch = o.modelFetch;
+  if (o.onRetry) model.onRetry = o.onRetry;
   return {
-    agent: new CodingAgent(model, tools, { sessionId, maxSteps, prompt }),
-    summary: { provider: model.provider || 'unset', model: model.model || 'unset',
-      reasoning: String(cfg.coding_reasoning ?? ''), maxSteps },
+    agent: new CodingAgent(model, tools, { sessionId, maxSteps: cfg.maxSteps, prompt: o.prompt }),
+    summary: agentSummary(cfg),
   };
-}
-
-// --- the session's pin -------------------------------------------------------
-// One rule, one place, for every caller that runs a coding turn: a session runs
-// on its ROW's model. The server writes the row when the session is born and
-// moves it only while nothing has been said (Sessions.followModelSettings); no
-// runner — not the app, not the looper, not Telegram — ever computes a model.
-
-/** What a session is pinned to: its row's columns, and nothing else. */
-export interface ModelPin { provider?: string | null; model?: string | null; baseUrl?: string | null }
-
-/** The pin for one session — THE ROW, whole or not at all. Never mixed field
- *  by field: a provider from one source and an endpoint from another is
- *  exactly the split this prevents. A row with no model (born
- *  before the column, or on a server with no provider set) reads as null and
- *  the caller falls through to the settings. */
-export function sessionPin(
-  row?: { provider?: string | null; model?: string | null; baseUrl?: string | null } | null,
-): ModelPin | null {
-  if (set(row?.provider) && set(row?.model)) {
-    return { provider: row!.provider, model: row!.model, baseUrl: row!.baseUrl ?? null };
-  }
-  return null;
-}
-
-/** The settings a session's turn builds from: the resolved global values with
- *  the session's pin laid over them, as a COPY (the caller's values still feed
- *  the other agents' cascade). No pin returns them untouched.
- *
- *  The endpoint rides the pin, because a provider and a model name do not say
- *  where to send the request: a session pinned to one provider must not inherit
- *  an endpoint someone set for another. A pin carrying no endpoint (a row
- *  from before base_url) inherits the global one only while the provider
- *  matches — the same compatibility rule as `cascade`. */
-/** The same rule for an agent whose model comes from the cascade (the
- *  supervisor's `supervisor_*` trio): its resolved config, with the session's
- *  pin — provider, model, endpoint and that provider's key — laid over it.
- *  Reasoning and max_steps are settings, not part of what ran, so they keep
- *  following the cascade. */
-export function pinnedModel(base: ModelConfig, cfg: SettingsValues, pin?: ModelPin | null): ModelConfig {
-  const provider = set(pin?.provider);
-  const model = set(pin?.model);
-  if (!provider || !model) return base;
-  const keyField = PROVIDER_KEY[provider as keyof typeof PROVIDER_KEY];
-  return { ...base, provider: provider as Provider, model,
-    baseUrl: set(pin?.baseUrl) ?? (provider === base.provider ? base.baseUrl ?? null : null) ?? undefined,
-    apiKey: keyField ? set(cfg[keyField]) ?? undefined : undefined };
-}
-
-export function pinnedCfg<T extends SettingsValues>(cfg: T, pin?: ModelPin | null): T {
-  const provider = set(pin?.provider);
-  const model = set(pin?.model);
-  if (!provider || !model) return cfg;
-  return { ...cfg, coding_provider: provider, coding_model: model,
-    coding_base_url: set(pin?.baseUrl) ?? (provider === set(cfg.coding_provider) ? set(cfg.coding_base_url) : null) };
 }

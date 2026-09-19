@@ -209,7 +209,7 @@ function anthropicProvider(c: ModelConfig) {
       fetch: anthropicOAuthFetch(c.fetch),
     });
   }
-  return createAnthropic({ apiKey: c.apiKey ?? undefined, fetch: c.fetch });
+  return createAnthropic({ apiKey: keyFor(c), fetch: c.fetch });
 }
 
 // --- OpenAI Codex (ChatGPT subscription) ------------------------------------------
@@ -275,25 +275,35 @@ export function languageModel(cfg: ModelConfig): LanguageModel {
   return wrapLanguageModel({ model: providerModel(c), middleware: recordUsage(c) });
 }
 
+/** The key for a keyed provider, or a refusal (openai-codex reads its own
+ *  login file; an openai-compatible endpoint may be open — neither asks). Never `undefined`: every SDK
+ *  client falls back to an environment variable when handed none, and a key
+ *  that came from the environment is a key nobody set in /keys — a second
+ *  source of truth. The settings layer names the fix; this is the backstop. */
+function keyFor(c: ModelConfig): string {
+  if (c.apiKey) return c.apiKey;
+  throw new Error(`no API key for provider ${c.provider} — set its key on /keys (phantom-cli)`);
+}
+
 function providerModel(c: ModelConfig): Exclude<LanguageModel, string> {
   switch (c.provider) {
     case 'anthropic': return anthropicProvider(c)(c.model);
-    case 'openai': return createOpenAI({ apiKey: c.apiKey ?? undefined, baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
+    case 'openai': return createOpenAI({ apiKey: keyFor(c), baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
     case 'openai-codex': return openaiCodexModel(c);
-    case 'google': return createGoogleGenerativeAI({ apiKey: c.apiKey ?? undefined, fetch: c.fetch })(c.model);
-    case 'deepseek': return createDeepSeek({ apiKey: c.apiKey ?? undefined, baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
-    case 'kimi': return createMoonshotAI({ apiKey: c.apiKey ?? undefined, baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
-    case 'xai': return createXai({ apiKey: c.apiKey ?? undefined, baseURL: c.baseUrl ?? undefined, fetch: c.fetch }).chat(c.model);
-    case 'mistral': return createMistral({ apiKey: c.apiKey ?? undefined, baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
-    case 'groq': return createGroq({ apiKey: c.apiKey ?? undefined, baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
+    case 'google': return createGoogleGenerativeAI({ apiKey: keyFor(c), fetch: c.fetch })(c.model);
+    case 'deepseek': return createDeepSeek({ apiKey: keyFor(c), baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
+    case 'kimi': return createMoonshotAI({ apiKey: keyFor(c), baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
+    case 'xai': return createXai({ apiKey: keyFor(c), baseURL: c.baseUrl ?? undefined, fetch: c.fetch }).chat(c.model);
+    case 'mistral': return createMistral({ apiKey: keyFor(c), baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
+    case 'groq': return createGroq({ apiKey: keyFor(c), baseURL: c.baseUrl ?? undefined, fetch: c.fetch })(c.model);
     case 'openai-compatible':
-      if (!c.baseUrl) throw new Error(`provider is openai-compatible but base_url is not set — set the endpoint on /model (phantom-cli), or PATCH /settings {coding_base_url}`);
+      if (!c.baseUrl) throw new Error(`provider is openai-compatible but no endpoint is set — set it on /settings (phantom-cli)`);
       return createOpenAICompatible({ name: 'phantom-looper', baseURL: c.baseUrl, apiKey: c.apiKey ?? 'none', fetch: c.fetch })(c.model);
     default: throw new Error(`provider "${String((c as { provider: string }).provider)}" is not one of ${PROVIDERS.join(', ')} — ${PICK_MODEL}`);
   }
 }
 
-const PICK_MODEL = 'pick one on /model (phantom-cli), or PATCH /settings {coding_provider, coding_model}';
+const PICK_MODEL = 'pick one on /settings (phantom-cli)';
 export const NO_PROVIDER = `no provider set — ${PICK_MODEL}`;
 
 /** A model handle that fails every call with `reason`. */

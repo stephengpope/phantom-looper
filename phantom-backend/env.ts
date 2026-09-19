@@ -10,6 +10,17 @@ export interface Env {
   encryptionKey: Buffer; // 32 bytes, AES-256-GCM
 }
 
+// The two facts about THIS build that several files read: its version and
+// its own image name. Read here once, defaulted once — not in each file.
+
+/** The release this server is (`vX.Y.Z`), or 'dev' for a checkout. Baked in
+ *  by the release workflow. */
+export const APP_VERSION: string = process.env.APP_VERSION ?? 'dev';
+
+/** The api's OWN image name. A container cannot name its own image from
+ *  inside; compose hands it in so the disk cleanup can prune its old tags. */
+export const API_IMAGE: string = process.env.API_IMAGE ?? 'ghcr.io/stephengpope/phantom-backend-api';
+
 export function readEnv(source: NodeJS.ProcessEnv = process.env): Env {
   const need = (k: string): string => {
     const v = source[k];
