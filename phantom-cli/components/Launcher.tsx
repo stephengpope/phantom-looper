@@ -347,8 +347,7 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
     return (
       <Screen title={heading} notice={notice}
         footer={[{ key: 'type', does: 'filter' }, { key: '↑↓', does: 'move' },
-          { key: '←→', does: 'workspace', when: canCycle },
-          { key: 'enter', does: 'open' }, { key: 'esc', does: 'clear' }]}>
+          { key: '←→', does: 'workspace', when: canCycle }]}>
         <Box marginBottom={1}>
           <FixedText color="cyan">{'  / '}</FixedText>
           <TextInput value={query} onChange={(q) => onQuery!(q)} placeholder="name, last message or branch…" />
@@ -366,11 +365,11 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
   return (
     <Screen title={heading}
       notice={notice}
+      // No [enter]/[esc] in either footer: they do what they do everywhere,
+      // and the footer's width is better spent on the letter keys you cannot guess.
       footer={footer ?? (canEdit
-        ? [{ key: 'enter', does: 'start work here' }, { key: 'e', does: 'edit workspace' },
-          { key: 'n', does: 'new workspace', when: canAdd ?? true }, { key: 'esc', does: 'close' }]
+        ? [{ key: 'e', does: 'edit workspace' }, { key: 'n', does: 'new workspace', when: canAdd ?? true }]
         : [
-          { key: 'enter', does: 'open' },
           { key: '←→', does: 'workspace', when: canCycle },
           { key: '/', does: 'filter', when: canFilter },
           { key: 'p', does: 'pin', when: canPin },
@@ -379,7 +378,6 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
           { key: 't', does: 'trash', when: canCopy },
           { key: 'i', does: 'ping', when: canPing },
           { key: 's', does: 'show all', when: canCopy, active: showBackground },
-          { key: 'esc', does: 'exit' },
         ])}>
       <SelectList
         choices={choices}
