@@ -35,14 +35,22 @@ export async function databaseTools(cfg: DatabaseToolsConfig): Promise<Record<st
 
   return {
     database_query: tool({
-      description: 'Run SQL in your own database. Any number of statements; one result per statement: ' +
-        'command, rowCount (the true total), and the first `limit` rows.',
+      description: 'Run SQL in your own database. Several statements allowed; they run as ONE transaction — any error ' +
+        'undoes the whole call. No state survives between calls (SET, TEMP tables, cursors are gone next call). 30 s limit ' +
+        'per statement. `params` fills $1…$n and needs a single statement. Rows: the first `limit` (default 10), `rowCount` ' +
+        'is the true total. Cells over `maxCellChars` (default 1000) end in `…[truncated, N chars]`. Duplicate column names ' +
+        'are refused — alias them. Values: bigint as a number when exact, else a string; numeric/decimal always a string; ' +
+        '`timestamptz` as ISO with Z; `timestamp` (no zone) as sent, no Z; `date` as YYYY-MM-DD; `interval` as text; `bytea` as \\x hex. ' +
+        'An error carries Postgres\'s message and code, the table/column/constraint it names, and for parse errors the line, ' +
+        'column and text.',
       inputSchema: z.object({
         sql: z.string().min(1).describe('the SQL to run'),
         limit: z.number().int().min(1).default(10).describe('rows to return per statement (default 10); rowCount always says how many there were'),
+        maxCellChars: z.number().int().min(1).default(1000).describe('longest cell returned whole (default 1000); longer ones end in …[truncated, N chars]'),
+        params: z.array(z.unknown()).optional().describe('values for $1…$n; single statement only'),
       }),
-      execute: async ({ sql, limit }) => {
-        const r = await f(`${base}/query`, { method: 'POST', headers, body: JSON.stringify({ sql, limit }) });
+      execute: async ({ sql, limit, maxCellChars, params }) => {
+        const r = await f(`${base}/query`, { method: 'POST', headers, body: JSON.stringify({ sql, limit, maxCellChars, params }) });
         const j = await r.json() as Envelope<{ results: unknown[] }>;
         return j.ok ? { results: j.data.results } : j;
       },

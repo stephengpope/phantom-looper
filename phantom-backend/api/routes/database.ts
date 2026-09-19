@@ -24,15 +24,22 @@ export function databaseRoutes(app: FastifyInstance, ctx: AppCtx) {
       return ok({ enabled });
     });
 
-  app.post<{ Params: { id: string }; Body: { sql: string; limit?: number } }>(
+  app.post<{ Params: { id: string }; Body: { sql: string; limit?: number; maxCellChars?: number; params?: unknown[] } }>(
     '/workspaces/:id/database/query', { schema: { ...TAG,
       summary: 'Run SQL in the agent\'s own database',
-      description: 'Any number of statements, run connected as the workspace\'s own role in its own database — the agent is the admin there and nothing else. One result per statement: Postgres\'s command tag, the TRUE row count, and the first `limit` rows (default 10). The database and role are created on first use. 409 `database_off` when the setting is off; 400 `sql_error` with Postgres\'s own message when a statement fails; 503 when this server has no database wiring.',
+      description: 'Run connected as the workspace\'s own role in its own database — the agent is the admin there and nothing else. ' +
+        'Several statements run as ONE transaction: an error undoes the whole call. No session state survives between calls. ' +
+        '30 s statement timeout. `params` fills $1…$n and needs a single statement. One result per statement: Postgres\'s command tag, ' +
+        'the TRUE row count, and the first `limit` rows; cells past `maxCellChars` end in `…[truncated, N chars]`. Duplicate column ' +
+        'names are refused. The database and role are created on first use. 409 `database_off` when the setting is off; 400 `sql_error` ' +
+        'with Postgres\'s own message, code, the object it names, and (for parse errors) line/column; 503 when this server has no database wiring.',
       params: idParam,
       body: { type: 'object', required: ['sql'], additionalProperties: false,
         properties: {
           sql: { type: 'string', minLength: 1 },
           limit: { type: 'integer', minimum: 1, default: 10, description: 'rows returned per statement; rowCount is always the true total' },
+          maxCellChars: { type: 'integer', minimum: 1, default: 1000, description: 'longest cell returned whole; longer ones end in …[truncated, N chars]' },
+          params: { type: 'array', description: 'values for $1…$n; single statement only' },
         } } } },
     async (req, reply) => {
       if (!ctx.databases) return reply.code(503).send(err('database_unavailable', 'this server has no agent database wiring'));
@@ -42,11 +49,14 @@ export function databaseRoutes(app: FastifyInstance, ctx: AppCtx) {
         return reply.code(409).send(err('database_off', 'agent_database is off for this workspace'));
       }
       try {
-        return ok({ results: await ctx.databases.query(workspace.id, req.body.sql, req.body.limit ?? 10) });
+        const results = await ctx.databases.query(workspace.id, req.body.sql, {
+          limit: req.body.limit ?? 10, maxCellChars: req.body.maxCellChars ?? 1000, params: req.body.params,
+        });
+        return ok({ results });
       } catch (e) {
         if (e instanceof SqlError) {
           return reply.code(400).send(err('sql_error', e.message, false,
-            { detail: e.detail, hint: e.hint, position: e.position }));
+            { ...e.info, rolledBack: 'nothing in this call was applied' }));
         }
         throw e;
       }
