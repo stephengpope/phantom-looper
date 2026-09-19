@@ -6,7 +6,8 @@
 import { groupOf, type TokenGroup } from '../core/llm/createAgent.js';
 import type { ReportRow, WindowTotals, Windows } from './logTokens.js';
 
-const KIND_W = 14, MODEL_W = 22, NUM_W = 6;
+// NUM_W: widest value `k` emits is 6 (`999.9B`), +4 gutter so columns never touch.
+const KIND_W = 14, MODEL_W = 22, NUM_W = 10;
 const LABEL_W = 2 + KIND_W + 2 + MODEL_W;  // indent, kind, gutter, model
 
 /** Window starts, from `now`: today's midnight (server timezone), and 7 / 30
@@ -17,11 +18,12 @@ export function reportWindows(now: Date): Windows<Date> {
   return { today, week: daysAgo(7), month: daysAgo(30) };
 }
 
-/** 1234 → 1.2k, 45000 → 45k, 1234567 → 1.2M. */
-const k = (n: number) => n >= 1_000_000 ? `${trim1((n / 1_000_000).toFixed(1))}M`
-  : n >= 1_000 ? `${trim1((n / 1_000).toFixed(1))}k`
+/** 1234 → 1.2k, 45000 → 45.0k, 1234567 → 1.2M, 2e9 → 2.0B. Always one
+ *  decimal so every abbreviated value has the same shape down a column. */
+const k = (n: number) => n >= 1e9 ? `${(n / 1e9).toFixed(1)}B`
+  : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M`
+  : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k`
   : String(n);
-const trim1 = (s: string) => s.replace(/\.0$/, '');
 
 const pct = (t: WindowTotals) => t.input ? `${Math.round(t.cacheRead / t.input * 100)}%` : '–';
 
