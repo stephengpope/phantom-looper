@@ -1,28 +1,35 @@
 // INSTANT SYNC — the on-demand sync, fired for you. A workspace switch
 // (`instant_sync`) that keeps every running session's checkout in step with
-// the base branch on its own:
+// the base branch on its own.
 //
-//   push — a file watcher on the checkout (@parcel/watcher, inotify) arms a
-//          debounce on every change; when the files have been quiet for
-//          `instant_sync_push_debounce_ms`, auto-push runs.
-//   pull — every `instant_sync_pull_interval_ms`, a plain `git fetch` of base
-//          (never the GitHub API, so it costs no rate limit); when base moved,
-//          auto-pull runs.
+// ONE BEAT PER CHECKOUT, every `instant_sync_pull_interval_ms`, doing two
+// things in order:
 //
-// It is NOT a second sync. Both directions are the SAME `autoPush` / `autoPull`
-// the cli, Telegram and the card archive call — same backup, squash, commit
-// message, rebase, verify and push. Two things differ, both set by the wiring
-// in index.ts and both because instant means NOW, turn or no turn:
+//   1. auto-pull — its first step is a plain `git fetch` of base (never the
+//      GitHub API, so no rate limit); nothing new and it stops right there.
+//   2. auto-push — only when a file changed and the files have then been
+//      quiet for `instant_sync_push_debounce_ms`. The watcher on the checkout
+//      (@parcel/watcher, inotify) does nothing but record WHEN the last
+//      change happened.
+//
+// Two operations that never overlap because there is only one timer: step 2
+// waits for step 1, the next beat waits for step 2. No flag, no second lock —
+// the session lock in the database is the only lock in this system.
+//
+// It is NOT a second sync. Both are the SAME `autoPush` / `autoPull` the cli,
+// Telegram and the card archive call — same backup, squash, commit message,
+// rebase, verify and push, and the same "anything to do?" check first, so an
+// idle beat costs no commit and no model call. Two things differ, both set by
+// the wiring in index.ts and both because instant means NOW, turn or no turn:
 //
 //   - it never takes the session (`hold: false`), so a 30-minute turn never
 //     holds a push back;
 //   - it never runs the conflict fixer (no `resolve`) — a fixer is a turn in
 //     the session, and the session may be mid-turn. A conflict is left
-//     stopped, markers in the files, and the agent is told at its next turn.
-//
-// This file only decides WHEN to call them, and it never touches git except
-// to read: `hasWorkToLand` and `fetchBase` are asked first, so a checkout
-// with nothing to do costs no commit and no model call.
+//     stopped, markers in the files, and the agent is told at its next turn
+//     (index.ts queues the note once). While that rebase is in progress the
+//     sync refuses to touch the checkout; once the agent continues it, the
+//     next change pushes.
 //
 // WHICH checkouts: the folders with a running container, in a workspace with
 // the switch on. Files only change through a container (an agent's tool
@@ -30,27 +37,16 @@
 // watch — and every reap frees its watcher. Reconciled every ten seconds
 // from the work-state loop in index.ts: a settings change, a container
 // starting or stopping, all take effect on the next pass with no events to
-// wire.
-//
-// ONE OPERATION AT A TIME PER FOLDER. Our push and our pull are serialized
-// in-process (`running`). A MANUAL sync on the same session (a person's
-// /auto-push, a card archive) holds the session under GIT_CLIENT_ID; we read
-// that hold and step aside for the beat — a read, never a lock.
-//
-// A CONFLICT IS LEFT FOR THE AGENT. The sync leaves the rebase stopped,
-// markers in the files, and the agent is told (index.ts queues the note
-// once). While that rebase is in progress nothing here touches the checkout
-// — the agent's edits fire the watcher, and the push simply finds the
-// rebase and waits. Once the agent continues it, the next change pushes.
+// wire. The watcher arrives up to ten seconds after the container, so the
+// first beat runs a push check regardless — a file written in that window
+// was never seen.
 import watcher, { type AsyncSubscription } from '@parcel/watcher';
 import type { SessionRow, WorkspaceRow } from '../db/schema.js';
-import { isHeld, type Sessions } from '../sessions.js';
+import type { Sessions } from '../sessions.js';
 import type { Folders } from '../folders.js';
 import type { Workspaces } from '../workspaces.js';
 import type { Settings } from '../settings.js';
 import { repoDir, type Paths } from '../pool/paths.js';
-import { resolveAuth } from '../pool/pool.js';
-import { fetchBase, hasWorkToLand, rebaseInProgress, GIT_CLIENT_ID } from './git.js';
 import type { AutoPushResult } from './autoPush.js';
 import type { AutoPullResult } from './autoPull.js';
 import { logger, errStr } from '../log.js';
@@ -79,14 +75,11 @@ interface Watched {
   subscription: AsyncSubscription;
   debounceMs: number;
   pullMs: number;
-  pushTimer?: NodeJS.Timeout;
-  pullTimer?: NodeJS.Timeout;
-  /** A push or a pull is in flight on this folder. */
-  running: boolean;
+  /** When a file last changed; null once that change has been pushed. */
+  changedAt: number | null;
+  timer?: NodeJS.Timeout;
   stopped: boolean;
 }
-
-type Outcome = AutoPushResult['result'] | AutoPullResult['result'];
 
 /** A workspace's three instant-sync settings, resolved. */
 interface Config { on: boolean; debounceMs: number; pullMs: number }
@@ -149,98 +142,53 @@ export class InstantSync {
     let w: Watched;
     const subscription = await watcher.subscribe(dir, (err, events) => {
       if (err) { log.warn({ folder: folderId, err: errStr(err) }, 'watcher error'); return; }
-      if (events.length) this.schedulePush(w);
+      if (events.length) w.changedAt = Date.now();
     }, { ignore: IGNORE });
-    w = { folderId, dir, workspace, subscription, debounceMs, pullMs, running: false, stopped: false };
+    // `changedAt` set as if the debounce has already passed: the first beat
+    // runs a push check, covering anything written before the watcher was up.
+    w = { folderId, dir, workspace, subscription, debounceMs, pullMs,
+      changedAt: Date.now() - debounceMs, stopped: false };
     this.watched.set(folderId, w);
     log.info({ folder: folderId, workspace: workspace.id, debounceMs, pullMs }, 'instant sync on');
-    this.schedulePull(w, w.pullMs);
+    void this.beat(w);
   }
 
   private async unwatch(w: Watched): Promise<void> {
     w.stopped = true;
-    clearTimeout(w.pushTimer);
-    clearTimeout(w.pullTimer);
+    clearTimeout(w.timer);
     this.watched.delete(w.folderId);
     await w.subscription.unsubscribe()
       .catch((e) => log.warn({ folder: w.folderId, err: errStr(e) }, 'unsubscribe failed'));
     log.info({ folder: w.folderId }, 'instant sync off');
   }
 
-  // ── push ───────────────────────────────────────────────────────────────────
-
-  /** Trailing debounce: every change restarts the clock, the push fires
-   *  after `debounceMs` of quiet. */
-  private schedulePush(w: Watched): void {
+  /** The beat: pull, then push if the files have settled. A timeout chain,
+   *  not an interval — a beat that outlasts the interval is followed, never
+   *  overlapped. */
+  private async beat(w: Watched): Promise<void> {
     if (w.stopped) return;
-    clearTimeout(w.pushTimer);
-    w.pushTimer = setTimeout(() => void this.push(w), w.debounceMs);
-  }
-
-  private async push(w: Watched): Promise<void> {
-    if (w.stopped) return;
-    // A pull is on this folder: the change is not lost, the clock restarts.
-    if (w.running) { this.schedulePush(w); return; }
-    await this.run(w, 'push', async (session) => {
-      if (!(await hasWorkToLand(w.dir, w.workspace.baseBranch))) return 'nothing';
-      return this.deps.autoPush(session, w.workspace);
-    });
-  }
-
-  // ── pull ───────────────────────────────────────────────────────────────────
-
-  /** A timeout chain, not an interval: a pull that outlasts the interval is
-   *  followed, never overlapped. */
-  private schedulePull(w: Watched, ms: number): void {
-    if (w.stopped) return;
-    clearTimeout(w.pullTimer);
-    w.pullTimer = setTimeout(() => void this.pull(w), ms);
-  }
-
-  private async pull(w: Watched): Promise<void> {
-    if (w.stopped) return;
-    try {
-      if (w.running) return;
-      await this.run(w, 'pull', async (session) => {
-        const base = w.workspace.baseBranch;
-        const arrived = await fetchBase(w.dir, base, await resolveAuth(this.deps.settings, w.workspace));
-        if (!arrived.length) return 'nothing';
-        return this.deps.autoPull(session, w.workspace);
-      });
-    } finally {
-      this.schedulePull(w, w.pullMs);
-    }
-  }
-
-  // ── one at a time, and the result said out loud ────────────────────────────
-
-  private async run(
-    w: Watched, op: 'push' | 'pull',
-    fn: (session: SessionRow) => Promise<Outcome | AutoPushResult | AutoPullResult>,
-  ): Promise<void> {
-    w.running = true;
     try {
       const session = await this.deps.sessions.get(w.folderId);
       if (!session) return;
-      // A manual sync holds the session — one repo, one sync at a time.
-      if (isHeld(session) && session.lockedBy === GIT_CLIENT_ID) return;
-      // A conflict left stopped for the agent: its checkout, not ours, until
-      // the agent continues the rebase.
-      if (await rebaseInProgress(w.dir)) return;
-      const r = await fn(session);
-      const outcome = typeof r === 'string' ? r : r.result;
-      const reason = typeof r === 'string' ? undefined : r.reason;
-      if (outcome === 'pushed' || outcome === 'merged') {
-        log.info({ folder: w.folderId, op }, `instant ${op} done`);
-      } else if (outcome === 'blocked') {
-        log.warn({ folder: w.folderId, op, reason }, `instant ${op} blocked — conflict left to the agent`);
-      } else if (outcome === 'error') {
-        log.warn({ folder: w.folderId, op, reason }, `instant ${op} error`);
+      const pulled = await this.deps.autoPull(session, w.workspace);
+      this.report(w, 'pull', pulled.result, pulled.reason);
+      if (w.changedAt !== null && Date.now() - w.changedAt >= w.debounceMs) {
+        // Cleared BEFORE the push: a change made while it runs is a new
+        // change, and gets its own push once it settles.
+        w.changedAt = null;
+        const pushed = await this.deps.autoPush(session, w.workspace);
+        this.report(w, 'push', pushed.result, pushed.reason);
       }
     } catch (e) {
-      log.warn({ folder: w.folderId, op, err: errStr(e) }, `instant ${op} threw`);
+      log.warn({ folder: w.folderId, err: errStr(e) }, 'instant sync beat threw');
     } finally {
-      w.running = false;
+      if (!w.stopped) w.timer = setTimeout(() => void this.beat(w), w.pullMs);
     }
+  }
+
+  private report(w: Watched, op: 'push' | 'pull', outcome: string, reason?: string): void {
+    if (outcome === 'pushed' || outcome === 'merged') log.info({ folder: w.folderId, op }, `instant ${op} done`);
+    else if (outcome === 'blocked') log.warn({ folder: w.folderId, op, reason }, `instant ${op} blocked — conflict left to the agent`);
+    else if (outcome === 'error') log.warn({ folder: w.folderId, op, reason }, `instant ${op} error`);
   }
 }

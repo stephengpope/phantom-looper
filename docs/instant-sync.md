@@ -9,12 +9,19 @@ One file decides WHEN: `phantom-backend/git/instantSync.ts`. HOW is the
 same `autoPush` / `autoPull` everything else calls (see auto-pull.md) —
 same backup, squash, commit message, rebase, verify, push.
 
-## The two directions
+## The beat
 
-| direction | trigger | setting | default |
+One beat per checkout, every pull interval, in order:
+
+| step | what | setting | default |
 |---|---|---|---|
-| push | a file changed; the files then stayed quiet for the debounce | `instant_sync_push_debounce_ms` | 30 s |
-| pull | a plain `git fetch` of base found it moved | `instant_sync_pull_interval_ms` | 5 s |
+| 1 | auto-pull — its first step is a plain `git fetch` of base; nothing new and it stops there | `instant_sync_pull_interval_ms` | 5 s |
+| 2 | auto-push — only when a file changed and the files have then been quiet for the debounce | `instant_sync_push_debounce_ms` | 30 s |
+
+The watcher does nothing but record when the last file changed. Step 2
+waits for step 1; the next beat waits for step 2 — one timer, so nothing
+overlaps and no flag or second lock is needed. A push lands on the first
+beat after the debounce: 30–35 s after the last edit.
 
 The switch is workspace-only (`/workspace` → `e`). The debounce and the
 interval are global settings (`/settings`) a workspace may override; empty
@@ -61,11 +68,11 @@ The watcher is `@parcel/watcher` (inotify). It ignores `.git` — every sync
 would otherwise trigger itself. Anything else that changes fires, and
 `hasWorkToLand` (`git status`) decides whether there is anything to push.
 
-## Not hammering
+## Known
 
-- Our push and our pull never overlap on one folder (`running`).
-- A manual sync holding the session (`GIT_CLIENT_ID`) makes the instant
-  one step aside for that beat. A read of the hold, never a lock.
+- A manual `/auto-push` and an instant sync can run on one checkout at the
+  same time. The session lock does not stop it (instant sync does not take
+  it, and every sync takes it under one name that re-enters). Left as is.
 - While a rebase is stopped in the checkout, no sync runs on it — instant
   or manual. Staging marker files would commit them as resolved.
 
@@ -76,4 +83,7 @@ would otherwise trigger itself. Anything else that changes fires, and
   must never do.
 - Do not add retries or back-off. A result is a result; the next change or
   the next interval is the next attempt.
+- Do not add a second lock or a busy flag. One timer per checkout is what
+  keeps push and pull apart; a flag here once dropped pushes for a whole
+  extra debounce.
 - Do not watch every folder on disk.
