@@ -6,7 +6,8 @@
 // setting, off by default): the sessions list already records where you were,
 // so the pick comes off the newest session the user drove — never a pinned
 // workspace id, which goes stale the moment you switch.
-import { Box, useInput } from 'ink';
+import { Box } from 'ink';
+import { useInput } from './useInput.js';
 import { useState } from 'react';
 import { SelectList, type Choice } from './SelectList.js';
 import { Screen, type FooterKey } from './Screen.js';
@@ -76,6 +77,7 @@ export function sessionChoices(
   clientId = '',
   showBackground = false,
   query = '',
+  workspaceId: string | null = null,
 ): Choice<Launch | null>[] {
   const byId = new Map(workspaces.map((w) => [w.id, w]));
   // WHICH sessions are listed is the server's call (`GET /sessions?typed=
@@ -96,7 +98,11 @@ export function sessionChoices(
     || Number(inMotion(b)) - Number(inMotion(a))
     || Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt));
   if (!sessions.length) {
-    if (query.trim()) return [{ value: null, label: `no sessions match “${query.trim()}”`, heading: true }];
+    // The empty state names the filter that emptied it: the text, else the
+    // workspace, else the list is truly empty and says where to start.
+    const where = workspaceId ? ` in ${workspaceTitle(workspaces, workspaceId)}` : '';
+    if (query.trim()) return [{ value: null, label: `no sessions match “${query.trim()}”${where}`, heading: true }];
+    if (workspaceId) return [{ value: null, label: `no sessions${where}`, detail: '←→ another workspace', heading: true }];
     return showBackground
       ? [{ value: null, label: 'no sessions yet', detail: 'start one with /workspace', heading: true }]
       : [{ value: null, label: 'no sessions yet',
@@ -173,7 +179,7 @@ export function sessionChoices(
     const tokensCol = [inMeter, outMeter].filter(Boolean).join(' ') || '·';
     const whenCol = dead ? 'ended' : when;
     return {
-      value: { kind: 'resume', sessionId: s.id } as Launch,
+      value: { kind: 'resume', sessionId: s.id } as Launch, id: s.id,
       cells: [wsCol(s), cardCol, workCol, nameCol, s.model ?? '·', tokensCol, whenCol],
       busy: running,
       dot: open && !running,
@@ -215,6 +221,14 @@ export function sessionChoices(
   return table;
 }
 
+/** What /resume's title calls the workspace filter: the display name, or
+ *  `all`. A workspace the list no longer knows (deleted while the picker
+ *  was up) reads as all rather than as a raw id. */
+export const workspaceTitle = (workspaces: WorkspaceInfo[], id: string | null): string => {
+  const w = id ? workspaces.find((x) => x.id === id) : undefined;
+  return w ? label(w) : 'all';
+};
+
 /** Workspace rows — launching with no arguments, and /workspace. Always ends
  *  with "add a workspace…": an empty install has to be able to get started from
  *  here, not from curl. */
@@ -234,8 +248,14 @@ export function workspaceChoices(workspaces: WorkspaceInfo[], canAdd = true): Ch
 /** One list, two uses. `mode` decides which — sessions for /resume, workspaces
  *  for a fresh start. Deliberately not both at once: launching means "start
  *  work", reopening is a different intent with its own command. */
-export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clientId, onPick, onEdit, onDuplicate, onPin, onPing, onClose, onTrash, onCancel, onNearEnd, showBackground, onToggleBackground, query = '', rowsQuery = query, onQuery, now, title, footer, notice, canAdd }: {
+export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clientId, onPick, onEdit, onDuplicate, onPin, onPing, onClose, onTrash, onCancel, onNearEnd, showBackground, onToggleBackground, query = '', rowsQuery = query, onQuery, workspaceId = null, onCycleWorkspace, now, title, footer, notice, canAdd }: {
   mode: 'sessions' | 'workspaces';
+  /** ←→ on /resume: the workspace the rows are limited to (null = all),
+   *  and the cycle. Like the filter line, the rows are the server's answer
+   *  (WindowStore.pickerWorkspace); this screen names it in the title.
+   *  Absent = no cycle offered. */
+  workspaceId?: string | null;
+  onCycleWorkspace?: (dir: 1 | -1) => void;
   /** [/] on /resume: the filter line's text, and where it goes. The list
    *  is the server's answer to it (WindowStore.pickerQuery); this screen
    *  only owns whether the line is OPEN. Absent = no filter offered. */
@@ -297,6 +317,19 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
   const canPin = mode === 'sessions' && !!onPin;
   const canPing = mode === 'sessions' && !!onPing;
   const canFilter = mode === 'sessions' && !!onQuery;
+  const canCycle = mode === 'sessions' && !!onCycleWorkspace;
+  // ←→ work in BOTH states — the list and the filter line — because the two
+  // filters compose: the text searches inside the workspace. The filter
+  // line is a single-line input and leaves the arrows alone (TextInput).
+  useInput((_ch, key) => {
+    if (key.leftArrow) onCycleWorkspace!(-1);
+    else if (key.rightArrow) onCycleWorkspace!(1);
+  }, { isActive: canCycle });
+  // The title carries the workspace filter, so the list always says what
+  // it is a list OF: `resume · ‹ all ›`, `resume · ‹ phantom ›`.
+  const heading = title ?? (mode === 'sessions'
+    ? (canCycle ? `resume · ‹ ${workspaceTitle(workspaces, workspaceId)} ›` : 'resume')
+    : 'workspace');
   // FILTER MODE is one state: [/] opens the line and the cursor lives in it;
   // type to narrow, ↑↓ to move, enter to open — nothing else. esc clears
   // the text AND closes the line, so the list comes back exactly as it was
@@ -308,20 +341,19 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
   useInput((_ch, key) => { if (key.escape) leaveFilter(); }, { isActive: filtering });
   // The background seats are hidden by default; [s] shows every session.
   const choices = mode === 'sessions'
-    ? sessionChoices(workspaces, sessions ?? [], now, busy, loaded, clientId, showBackground ?? false, rowsQuery)
+    ? sessionChoices(workspaces, sessions ?? [], now, busy, loaded, clientId, showBackground ?? false, rowsQuery, workspaceId)
     : workspaceChoices(workspaces, canAdd ?? true);
   if (filtering) {
     return (
-      <Screen title={title ?? 'resume'} notice={notice}
+      <Screen title={heading} notice={notice}
         footer={[{ key: 'type', does: 'filter' }, { key: '↑↓', does: 'move' },
+          { key: '←→', does: 'workspace', when: canCycle },
           { key: 'enter', does: 'open' }, { key: 'esc', does: 'clear' }]}>
         <Box marginBottom={1}>
           <FixedText color="cyan">{'  / '}</FixedText>
           <TextInput value={query} onChange={(q) => onQuery!(q)} placeholder="name, last message or branch…" />
         </Box>
         <SelectList
-          // Remount per keystroke: the highlight lands on the first match.
-          key={query}
           choices={choices}
           reserve={2}
           onNearEnd={onNearEnd}
@@ -332,13 +364,14 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
     );
   }
   return (
-    <Screen title={title ?? (mode === 'sessions' ? 'resume' : 'workspace')}
+    <Screen title={heading}
       notice={notice}
       footer={footer ?? (canEdit
         ? [{ key: 'enter', does: 'start work here' }, { key: 'e', does: 'edit workspace' },
           { key: 'n', does: 'new workspace', when: canAdd ?? true }, { key: 'esc', does: 'close' }]
         : [
           { key: 'enter', does: 'open' },
+          { key: '←→', does: 'workspace', when: canCycle },
           { key: '/', does: 'filter', when: canFilter },
           { key: 'p', does: 'pin', when: canPin },
           { key: 'x', does: 'close', when: canCopy },

@@ -53,8 +53,14 @@ export class Workspaces {
     return rows[0];
   }
 
+  /** THE workspace order — by the name a person sees (display name, else
+   *  repo name), case-insensitive. /workspace, /resume's workspace cycle and
+   *  the Assistant all read this list, so the order lives here and nowhere
+   *  else; without it the rows came back in table order, which is stable
+   *  only by luck. */
   async list(): Promise<WorkspaceRow[]> {
-    return this.db.select().from(workspaces);
+    return this.db.select().from(workspaces)
+      .orderBy(sql`lower(coalesce(${workspaces.displayName}, ${workspaces.name}))`, workspaces.id);
   }
 
   /** The card number prefix ("PHA"): the `card_prefix` setting at this

@@ -1050,8 +1050,11 @@ export class WindowStore {
   readonly workspaces: WorkspaceDirectory;
 
   /** `query` is the filter text these rows ANSWER (the screen's empty
-   *  state reads it) — the live text is `pickerQuery`, which runs ahead. */
-  picker: { sessions: SessionInfo[]; total: number; end: boolean; query: string } | null = null;
+   *  state reads it) — the live text is `pickerQuery`, which runs ahead.
+   *  `filter` is the whole server query these rows answer (listQuery at
+   *  the read): a refresh compares it to decide whether the list is the
+   *  same one deeper, or a new one from its first page. */
+  picker: { sessions: SessionInfo[]; total: number; end: boolean; query: string; filter: string } | null = null;
   pickerNotice: string | undefined;
   /** [s] on /resume: the background seats — the looper's supervisor records
    *  and cron runs — in the list or not. A fetch parameter, not a filter —
@@ -1063,6 +1066,10 @@ export class WindowStore {
    *  Empty = no filter; cleared when the picker opens and when filter mode
    *  ends. */
   pickerQuery = '';
+  /** ←→ on /resume: one workspace's sessions, or null for all of them.
+   *  A fetch parameter like the two above; the `/` text searches inside it.
+   *  Opens on all. */
+  pickerWorkspace: string | null = null;
   private pickerQueryClock: ReturnType<typeof setTimeout> | null = null;
   private morePickerInFlight = false;
 
@@ -1089,7 +1096,19 @@ export class WindowStore {
    *  page on screen, and `total` is the count for exactly these filters. */
   private listQuery(): string {
     return `typed=true${this.showBackground ? '' : '&background=false'}`
-      + (this.pickerQuery.trim() ? `&q=${encodeURIComponent(this.pickerQuery.trim())}` : '');
+      + (this.pickerQuery.trim() ? `&q=${encodeURIComponent(this.pickerQuery.trim())}` : '')
+      + (this.pickerWorkspace ? `&workspace=${encodeURIComponent(this.pickerWorkspace)}` : '');
+  }
+
+  /** ←→ on /resume: the next workspace round the ring — all, then each
+   *  workspace in the order /workspace lists them (the server's), wrapping.
+   *  The list re-reads at once; a workspace with no sessions shows as such. */
+  cyclePickerWorkspace(dir: 1 | -1): void {
+    const ring: (string | null)[] = [null, ...this.workspaceRows.map((w) => w.id)];
+    const at = ring.indexOf(this.pickerWorkspace);
+    this.pickerWorkspace = ring[(Math.max(at, 0) + dir + ring.length) % ring.length] ?? null;
+    this.notify();
+    void this.refreshPicker().catch(quiet('refresh the session list'));
   }
 
   /** The filter line changed. The list re-reads a beat after the last
@@ -1110,7 +1129,8 @@ export class WindowStore {
    *  substring, case-insensitive) applied to the two facts such a row has. */
   private matchesPickerQuery(e: LoadedSession): boolean {
     const q = this.pickerQuery.trim().toLowerCase();
-    return !q || (e.name ?? '').toLowerCase().includes(q) || e.branch.toLowerCase().includes(q);
+    return (!this.pickerWorkspace || e.workspaceId === this.pickerWorkspace)
+      && (!q || (e.name ?? '').toLowerCase().includes(q) || e.branch.toLowerCase().includes(q));
   }
 
   /** The one addition only this window can make: sessions open HERE that the
@@ -1157,19 +1177,20 @@ export class WindowStore {
     const seq = ++this.pickerSeq;
     // A changed filter is a new list: one page of it, not however deep the
     // old list was scrolled. The same filter re-reads what is loaded.
-    const want = this.pickerQuery !== (this.picker?.query ?? '')
+    const filter = this.listQuery();
+    const want = filter !== this.picker?.filter
       ? PICKER_PAGE : Math.max(this.picker?.sessions.length ?? 0, PICKER_PAGE);
     // The workspace list is read ONCE, at open; after that the settings feed
     // says when a workspace row moved (create, patch, delete) and
     // settingChanged re-reads it into workspaceRows, which the screen draws.
     const [ws, got] = await Promise.all([
       this.picker ? this.workspaceRows : this.api('GET', '/workspaces') as Promise<WorkspaceInfo[]>,
-      this.api('GET', `/sessions?${this.listQuery()}&limit=${want}`),
+      this.api('GET', `/sessions?${filter}&limit=${want}`),
     ]);
     if (seq !== this.pickerSeq) return;
     if (!this.picker) this.seeWorkspaces(ws);
     const { sessions: ss, total } = got as { sessions: SessionInfo[]; total: number };
-    this.picker = { ...this.withOpenHere(ss, total), end: ss.length < want, query: this.pickerQuery };
+    this.picker = { ...this.withOpenHere(ss, total), end: ss.length < want, query: this.pickerQuery, filter };
     this.notify();
   };
   private pickerSeq = 0;
@@ -1208,6 +1229,7 @@ export class WindowStore {
     try {
       this.picker = null;   // an OPEN reads both lists fresh
       this.pickerQuery = '';
+      this.pickerWorkspace = null;
       await this.refreshPicker();
       this.pickerNotice = undefined;
       this.showOverlay(pickerScreen(this, which));

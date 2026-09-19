@@ -8,7 +8,7 @@
 // still costs exactly three rows, so the divider's ┫ junctions and onMeasure
 // hold. The glint runs only on a real terminal: a pipe (tests, headless) gets
 // the label static — ink-testing-library's fake stdout claims isTTY, so the
-// check is on the process's own. Single-line editing on our own TextInput —
+// check is on the process's own. Editing on our own TextArea —
 // ink-text-input inserted every key it did not recognise as literal text,
 // which typed an `o` into the box each time ctrl+o toggled thinking and left
 // no ctrl chord usable for anything. A big paste lands as a chip
@@ -19,7 +19,7 @@
 import { Box, useBoxMetrics } from 'ink';
 import { FixedText, Text } from './Text.js';
 import { useEffect, useRef } from 'react';
-import { TextInput } from './TextInput.js';
+import { TextArea } from './TextInput.js';
 import { Glint } from './Shimmer.js';
 import { APP_VERSION } from '../selfUpdate.js';
 import type { PasteStore } from '../paste.js';
@@ -38,9 +38,8 @@ export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure, pas
    *  that row, the bottom rule two below). The App aligns the divider's
    *  junctions to it. */
   onMeasure?: (top: number) => void;
-  /** Display width for the text area (columns minus the "> " prefix). Enables
-   *  up/down cursor navigation within wrapped text. */
-  columns?: number;
+  /** The text area's width (the column minus the "> " prefix). */
+  columns: number;
   /** Fired when up/down hits the boundary of the wrapped text — the parent
    *  uses it for history recall. */
   onBoundary?: (dir: 'up' | 'down') => void;
@@ -75,7 +74,7 @@ export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure, pas
         {/* FixedText: the marker never shrinks, so the space after `>`
             survives the input wrapping (see Text.tsx). */}
         <FixedText color="cyan" bold>{'> '}</FixedText>
-        <TextInput
+        <TextArea
           value={value}
           onChange={onChange}
           onSubmit={onSubmit}

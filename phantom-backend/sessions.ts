@@ -85,6 +85,8 @@ export interface ListQuery {
   /** One substring, case-insensitive, anywhere in the name, the last user
    *  message or the branch. */
   q?: string;
+  /** Only this workspace's sessions (/resume's ←→ cycle). */
+  workspace?: string;
   limit?: number;
   /** The cursor: the whole sort key of the last row the client saw. */
   before?: Date;
@@ -355,6 +357,7 @@ export class Sessions {
       const needle = `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
       filters.push(or(ilike(sessions.name, needle), ilike(sessions.lastUserMessage, needle), ilike(folders.branch, needle)));
     }
+    if (q.workspace) filters.push(eq(sessions.workspaceId, q.workspace));
     filters.push(or(isNull(sessions.agent), ne(sessions.agent, 'assistant')));
     // The cursor is the whole sort key of the last row the client saw:
     // pinned first (a pinned tail means only unpinned rows follow), then

@@ -119,7 +119,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   // grey them out rather than infer their fate from whether a local
   // transcript happens to exist.
   app.get<{ Querystring: { limit?: number; before?: string; before_id?: string; before_pinned?: boolean;
-    typed?: boolean; background?: boolean; q?: string } }>(
+    typed?: boolean; background?: boolean; q?: string; workspace?: string } }>(
     '/sessions', { schema: { ...TAG,
     summary: 'List sessions',
     description: 'Every session, pinned first then newest activity first, including destroyed ones (status says which). ' +
@@ -138,10 +138,12 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       'container. `status`, `lastUsedAt`, `lastPushAt` and `branch` are the checkout\'s too, shared by ' +
       'every session on the same folder.\n\n' +
       '`q` filters: the text as ONE substring, case-insensitive, anywhere in the name, the last ' +
-      'user message or the branch. It is part of the list\'s WHERE, so paging and `total` follow it.',
+      'user message or the branch. It is part of the list\'s WHERE, so paging and `total` follow it; ' +
+      'so is `workspace` (one workspace id).',
     querystring: { type: 'object', additionalProperties: false, properties: {
       limit: { type: 'integer', minimum: 1, maximum: 500, description: 'Page size; omitted = everything.' },
       q: { type: 'string', maxLength: 200, description: 'Substring to match (case-insensitive) in name, last user message or branch.' },
+      workspace: { type: 'string', description: 'Only this workspace\'s sessions (a workspace id).' },
       typed: { type: 'boolean', description: 'true = only sessions something was typed into (a last message exists).' },
       background: { type: 'boolean', description: 'false = leave out the background seats: the looper\'s supervisor records and cron runs.' },
       before: { type: 'string', description: 'A row\'s last_used_at (ISO) — return only older activity.' },
@@ -153,7 +155,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     // its column from the CARD the row points at.
     const { rows, total } = await (async () => {
       const r = await ctx.sessions.list({
-        typed: req.query.typed, background: req.query.background, q: req.query.q, limit: req.query.limit,
+        typed: req.query.typed, background: req.query.background, q: req.query.q,
+        workspace: req.query.workspace, limit: req.query.limit,
         before: req.query.before ? new Date(req.query.before) : undefined,
         beforeId: req.query.before_id, beforePinned: req.query.before_pinned,
       });

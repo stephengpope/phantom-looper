@@ -1,4 +1,11 @@
-// The single-line editor, ours.
+// The two text boxes, ours: TextInput (one line) and TextArea (wrapping).
+//
+// TWO KINDS, BY NAME. A TextInput is a single line — a filter, a name, a
+// secret: you type, backspace, enter. It never touches the arrow keys, so
+// the screen around it keeps them (/resume's ←→ cycle the workspace while
+// the filter line is open). A TextArea is prose — the message prompt, a
+// card's lines: it wraps at its width and all four arrows move the cursor
+// through the text. One editor underneath; the name is the whole difference.
 //
 // It replaces `ink-text-input`, which filters exactly four keys — up, down,
 // ctrl+c and tab — and inserts EVERYTHING else as literal text. That is not a
@@ -83,7 +90,7 @@ function charAtVisualCol(text: string, rowStart: number, rowEnd: number, targetC
   return rowEnd;
 }
 
-export function TextInput({ value, onChange, onSubmit, focus = true, placeholder = '', mask, pastes, onFileDrop, columns, onBoundary }: {
+interface EditorProps {
   value: string;
   onChange: (value: string) => void;
   onSubmit?: (value: string) => void;
@@ -98,14 +105,27 @@ export function TextInput({ value, onChange, onSubmit, focus = true, placeholder
    *  Returns chip text to insert at the cursor (e.g. `[📎 file.txt]`),
    *  or null when nothing should be inserted. */
   onFileDrop?: (paths: string[]) => Promise<string | null>;
-  /** Display width in columns — enables up/down cursor navigation within
-   *  wrapped text. Without it, up/down are left for the handlers above. */
-  columns?: number;
-  /** Called when up is pressed on the first visual line or down on the last.
-   *  The parent uses it for history recall — TextInput cannot navigate
-   *  further, so the keypress belongs to whatever is above. */
+}
+
+interface AreaProps extends EditorProps {
+  /** The display width the text wraps at — what up/down navigate by. */
+  columns: number;
+  /** Up on the first visual line, down on the last: the cursor cannot go
+   *  further, so the keypress belongs to whatever is above (the prompt's
+   *  history recall, the card editor's next row). */
   onBoundary?: (dir: 'up' | 'down') => void;
-}) {
+}
+
+/** One line. Arrows are the screen's, not the box's. */
+export function TextInput(props: EditorProps) { return <Editor {...props} />; }
+
+/** Wrapping prose. Arrows move the cursor; the edges report to onBoundary. */
+export function TextArea(props: AreaProps) { return <Editor {...props} />; }
+
+function Editor({ value, onChange, onSubmit, focus = true, placeholder = '', mask, pastes, onFileDrop, columns, onBoundary }:
+  EditorProps & Partial<AreaProps>) {
+  // A TextArea gave its width; a TextInput never does.
+  const area = columns !== undefined && columns > 0;
   const [cursorState, setCursorState] = useState(value.length);
   // The cursor is mirrored in a ref and READ from the ref: two keypresses
   // batched into one React update (holding an arrow key, or a fast paste of
@@ -132,15 +152,13 @@ export function TextInput({ value, onChange, onSubmit, focus = true, placeholder
     // here is what makes ctrl+<letter> and the arrow keys usable at all.
     if (key.ctrl || key.meta) return;
     if (key.tab || key.escape || key.pageUp || key.pageDown) return;
-    // Up/down: vertical cursor movement within wrapped text when we know the
-    // display width. On the boundary (first line up, last line down) the
-    // parent gets the event for history recall. Without `columns` the arrows
-    // are left alone — the old behaviour, no regression.
+    // The arrow keys are the TextArea's alone (see the file's header).
+    if (!area && (key.leftArrow || key.rightArrow || key.upArrow || key.downArrow)) return;
+    // Up/down: between wrapped rows; at the edges, the parent's.
     if (key.upArrow || key.downArrow) {
-      if (!columns || columns <= 0) return;
       const value = valueRef.current;
       const cursor = cursorRef.current;
-      const rows = visualRows(value, columns);
+      const rows = visualRows(value, columns!);
       const rowIdx = rows.findIndex((r) => cursor >= r.start && cursor <= r.end
         && (cursor < r.end || r === rows[rows.length - 1]));
       if (key.upArrow) {

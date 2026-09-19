@@ -79,6 +79,11 @@ export const labelWidthFor = (widest: number): number => Math.min(32, widest) + 
 
 export interface Choice<T> {
   value: T;
+  /** What names this row across list changes, so the highlight can stay on
+   *  it while the rows around it move (a refresh, a filter). A string value
+   *  names itself; anything else is anonymous unless given one, and the
+   *  highlight then holds its position by index as before. */
+  id?: string;
   label: string;
   /** Right-hand column — a current value, or where it came from. */
   detail?: string;
@@ -152,7 +157,21 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
   // cursor and ignores enter, leaving the list looking dead. Normalise on read.
   const normalize = (i: number) =>
     (choices[i] && !choices[i].heading ? i : pickable[0] ?? 0);
-  const cursor = normalize(cursorRaw);
+  // A NAMED row is followed, not its index: when the list changes under the
+  // cursor (/resume re-reads, a filter narrows it, ←→ swap the workspace)
+  // the highlight finds the row it was on; a row that is gone means the top.
+  // Computed here, in render, because the swap arrives as new props and the
+  // cursor must be right in the same frame.
+  const keyOf = (c: Choice<T> | undefined) =>
+    c && !c.heading ? c.id ?? (typeof c.value === 'string' ? c.value : undefined) : undefined;
+  const held = useRef<string | undefined>(keyOf(choices[cursorRaw]));
+  let cursor = normalize(cursorRaw);
+  if (held.current !== undefined && keyOf(choices[cursor]) !== held.current) {
+    const at = choices.findIndex((c) => keyOf(c) === held.current);
+    cursor = at >= 0 ? at : pickable[0] ?? 0;
+    if (cursor !== cursorRaw) setCursor(cursor);
+  }
+  held.current = keyOf(choices[cursor]);
 
   // The cursor is mirrored in a ref so a keypress can read where the highlight
   // is RIGHT NOW without a setState updater. Reading it from the render closure
@@ -175,6 +194,9 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
       ? pickable[Math.max(0, Math.min(raw, pickable.length - 1))] ?? from
       : pickable[(raw + pickable.length) % pickable.length] ?? from;
     cursorRef.current = next;
+    // The move names its new row NOW: the render that follows compares the
+    // held name to the row under the cursor, and must not see the old one.
+    held.current = keyOf(choices[next]);
     setCursor(next);
     if (onNearEnd && next >= choices.length - NEAR_END) onNearEnd();
   };

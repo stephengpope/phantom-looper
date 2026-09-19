@@ -36,6 +36,8 @@ export type Cell = string | { text: string; mark?: string; markChar?: string; ma
  *  Marker/hint fields pass straight through to the Choice. */
 export interface TableRow<T> {
   value: T;
+  /** What names this row across refreshes (Choice.id). */
+  id?: string;
   cells: Cell[];
   busy?: boolean; dot?: boolean; lock?: boolean; hint?: string;
 }
@@ -82,7 +84,7 @@ export function tableChoices<T>(
       widths[i] ? { text: c.title, width: widths[i] } : { text: c.title }),
   };
   return [header, ...rows.map((r): Choice<T | null> => ({
-    value: r.value,
+    value: r.value, id: r.id,
     label: cellOf(r.cells[0]).text,
     columns: r.cells.slice(1).map((cell, i): Column => column(cell, widths[i])),
     busy: r.busy, dot: r.dot, lock: r.lock, hint: r.hint,

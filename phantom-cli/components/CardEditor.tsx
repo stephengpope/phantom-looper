@@ -30,7 +30,7 @@ import { useInput } from './useInput.js';
 import { Text } from './Text.js';
 import { useEffect, useRef, useState } from 'react';
 import { isMouseInput, parseMouse } from '../mouse.js';
-import { TextInput } from './TextInput.js';
+import { TextInput, TextArea } from './TextInput.js';
 import { newKey } from '../../core/kanban.js';
 import type { BoardStore, CardStep, Card, CardPatch } from '../board.js';
 
@@ -68,6 +68,9 @@ export function autoLabel(v: boolean | null, fallback: boolean, source?: string)
 
 /** Lists whose lines carry a done box — ctrl+t (or clicking the box) ticks. */
 const tickable = (list: ListName) => list === 'requirements';
+/** A prose row edits in a TextArea (wraps, owns the arrows); the title is
+ *  the one single-line field. */
+const prose = (r: Row) => r.kind === 'item' || (r.kind === 'field' && r.field !== 'title');
 
 type Row =
   | { kind: 'field'; field: 'title' | 'blocked' | 'resolution' }
@@ -187,6 +190,66 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
   draftRef.current = draft;
   const rowRefs = useRef(new Map<string, DOMElement>());
 
+  // ── the scroll ─────────────────────────────────────────────────────────────────
+  // The form is taller than the box once a card has a few wrapped lines.
+  // The header and the key line stay put; the form between them sits in a
+  // clipped viewport and slides up by `scroll` rows (a negative top margin
+  // on one non-shrinking wrapper — Pane's mechanism, proven against Ink
+  // 7.1). FOCUS DRIVES IT: after every render the focused row is measured
+  // against the viewport and the scroll moves just enough to show it, so
+  // tab and the arrows never leave the cursor off screen. The wheel and
+  // PgUp/PgDn nudge it by hand; the next focus move pulls it back.
+  const viewRef = useRef<DOMElement>(null);
+  const formRef = useRef<DOMElement>(null);
+  const [scroll, setScroll] = useState(0);
+  const scrollRef = useRef(0);
+  scrollRef.current = scroll;
+  /** How far the form can go, and the rows out of view either side — set
+   *  by the measure after each render, read by the wheel and the footer. */
+  const reach = useRef({ max: 0, view: 0 });
+  const [hidden, setHidden] = useState({ above: 0, below: 0 });
+  /** The row the view last followed. The follow runs when focus MOVES, not
+   *  on every render — a wheel or PgUp scroll must stand until then, or a
+   *  hand scroll that hides the focused row would snap straight back. */
+  const followed = useRef(-1);
+  const scrollTo = (n: number) => {
+    const next = Math.max(0, Math.min(n, reach.current.max));
+    if (next !== scrollRef.current) { scrollRef.current = next; setScroll(next); }
+  };
+  useEffect(() => {
+    if (!viewRef.current || !formRef.current) return;
+    const view = measureElement(viewRef.current);
+    const form = measureElement(formRef.current);
+    reach.current = { max: Math.max(0, form.height - view.height), view: view.height };
+    const rowsNow = buildRows(draftRef.current, card.status);
+    // Every row's place in the form, scroll-independent: its screen top
+    // minus the form's (which already carries the margin).
+    const place = (r: Row) => {
+      const n = rowRefs.current.get(rowKey(r));
+      if (!n) return null;
+      const m = measureElement(n);
+      return { top: m.y - form.y, bottom: m.y - form.y + m.height };
+    };
+    let next = scrollRef.current;
+    const at = Math.min(atRef.current, rowsNow.length - 1);
+    const f = followed.current !== at ? place(rowsNow[at]) : null;
+    if (f) {
+      followed.current = at;
+      if (f.top < next) next = f.top;
+      else if (f.bottom > next + view.height) next = f.bottom - view.height;
+    }
+    next = Math.max(0, Math.min(next, reach.current.max));
+    let above = 0, below = 0;
+    for (const r of rowsNow) {
+      const p = place(r);
+      if (!p) continue;
+      if (p.bottom <= next) above++;
+      else if (p.top >= next + view.height) below++;
+    }
+    if (above !== hidden.above || below !== hidden.below) setHidden({ above, below });
+    if (next !== scrollRef.current) { scrollRef.current = next; setScroll(next); }
+  });
+
   // The current loop's coding session, off the board payload — by number, so a
   // refresh replacing the card objects cannot orphan it.
   const cardSession = store.state.sessions?.[card.number];
@@ -304,7 +367,12 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
     const r = rowsNow[Math.min(atRef.current, rowsNow.length - 1)];
     if (isMouseInput(ch)) {
       const ev = parseMouse(ch);
+      if (ev?.kind === 'wheel' && ev.x < width) { scrollTo(scrollRef.current + ev.button * 3); return; }
       if (ev?.kind !== 'press' || ev.button !== 0 || ev.x >= width) return;
+      // A row scrolled out of the viewport is not on screen to be clicked,
+      // however its layout box measures.
+      const view = viewRef.current ? measureElement(viewRef.current) : null;
+      if (view && (ev.y < view.y || ev.y >= view.y + view.height)) return;
       for (let i = 0; i < rowsNow.length; i++) {
         const node = rowRefs.current.get(rowKey(rowsNow[i]));
         if (!node) continue;
@@ -327,8 +395,11 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
       return;
     }
     if (key.escape) { flush(); onClose(); return; }
-    if (key.tab || key.downArrow) { move(key.shift ? -1 : 1); return; }
-    if (key.upArrow) { move(-1); return; }
+    if (key.tab) { move(key.shift ? -1 : 1); return; }
+    if (key.pageUp || key.pageDown) { scrollTo(scrollRef.current + (key.pageUp ? -1 : 1) * reach.current.view); return; }
+    // Up/down move between rows — except on a prose row, where the TextArea
+    // owns them and reports the edge (onBoundary), which moves.
+    if ((key.upArrow || key.downArrow) && !prose(r)) { move(key.upArrow ? -1 : 1); return; }
     // ctrl+e — measured with `npm run keys` on the user's terminal, which
     // delivers only ctrl+e r l f d n v; t/k/y are eaten. ctrl+t kept as a
     // silent extra for terminals that do pass it.
@@ -364,11 +435,21 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
   const ref = (r: Row) => (n: DOMElement | null) => { if (n) rowRefs.current.set(rowKey(r), n); };
   const onFocused = (k: string) => isActive && focusedKey === k;
 
-  /** The one live input, on whichever row holds focus. */
-  const input = (k: string, value: string, onChange: (v: string) => void, onSubmit: () => void, placeholder: string) =>
+  /** The one live input, on whichever row holds focus. `columns` given =
+   *  a prose row (a card's lines wrap, the arrows move through them); absent
+   *  = a one-line field (the title). The card's chrome is the border (2), the
+   *  padding (2) and the label gutter. */
+  const input = (k: string, value: string, onChange: (v: string) => void, onSubmit: () => void, placeholder: string,
+    columns?: number) =>
     onFocused(k)
-      ? <TextInput value={value} onChange={onChange} onSubmit={onSubmit} placeholder={placeholder} />
-      : value ? <Text wrap="truncate">{value}</Text> : <Text dimColor>{placeholder}</Text>;
+      ? columns
+        ? <TextArea value={value} onChange={onChange} onSubmit={onSubmit} placeholder={placeholder}
+            columns={Math.max(1, columns)} onBoundary={(dir) => move(dir === 'up' ? -1 : 1)} />
+        : <TextInput value={value} onChange={onChange} onSubmit={onSubmit} placeholder={placeholder} />
+      // Prose reads whole whether or not it is being edited: a line that
+      // wrapped while you typed it and then truncated on the way out was two
+      // different lines. The title is one line either way.
+      : value ? <Text wrap={columns ? 'wrap' : 'truncate'}>{value}</Text> : <Text dimColor>{placeholder}</Text>;
 
   const label = (text: string, k?: string) => (
     <Box width={13} flexShrink={0}>
@@ -382,8 +463,9 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
     <Box ref={ref({ kind: 'field', field })}>
       {label(name, field)}
       {field === 'blocked' && draft.blocked && focusedKey !== field
-        ? <Text color="red" wrap="truncate">{draft.blocked}</Text>
-        : input(field, draft[field], (v) => setDraft((d) => ({ ...d, [field]: v })), next, placeholder)}
+        ? <Text color="red" wrap="wrap">{draft.blocked}</Text>
+        : input(field, draft[field], (v) => setDraft((d) => ({ ...d, [field]: v })), next, placeholder,
+          field === 'title' ? undefined : width - 4 - 13)}
     </Box>
   );
 
@@ -396,6 +478,8 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
           : saveState === 'failed' ? <Text color="red">save failed — edit to retry</Text>
           : <Text dimColor>auto-saves · esc closes</Text>}
       </Box>
+      <Box ref={viewRef} flexDirection="column" flexGrow={1} flexShrink={1} flexBasis={0} overflow="hidden">
+      <Box ref={formRef} flexDirection="column" flexShrink={0} marginTop={-scroll}>
       <Box marginTop={1} flexDirection="column">
         {fieldRow('title', 'Title', 'the card, in a line', () => move(1))}
       </Box>
@@ -432,8 +516,8 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
                     </Text>
                   </Box>
                   {tickable(list) && (v as CardStep).done && focusedKey !== k
-                    ? <Text color="green" wrap="truncate">{itemText(v)}</Text>
-                    : input(k, itemText(v), (t) => setItem(list, i, t), () => insertBelow(list, i), '')}
+                    ? <Text color="green" wrap="wrap">{itemText(v)}</Text>
+                    : input(k, itemText(v), (t) => setItem(list, i, t), () => insertBelow(list, i), '', width - 4 - 12)}
                 </Box>
               );
             })}
@@ -482,9 +566,16 @@ export function CardEditor({ store, card, width, height, prefix, isActive, onClo
         </Text>
         {focusedKey === 'archived' ? <Text dimColor> · [enter] toggles</Text> : null}
       </Box>
-      <Box flexGrow={1} />
-      <Box marginTop={1}>
-        <Text dimColor>[tab/↑↓] move · [enter] next line · [ctrl+e] tick · [esc] back</Text>
+      </Box>
+      </Box>
+      <Box marginTop={1} justifyContent="space-between">
+        <Text dimColor wrap="truncate-end">[tab/↑↓] move · [enter] next line · [ctrl+e] tick · [esc] back</Text>
+        {/* What the viewport hides, SelectList's wording. Pinned: the keys
+            give way, never this. */}
+        <Box flexShrink={0} marginLeft={1}>
+          <Text dimColor>{[hidden.above ? `↑ ${hidden.above} more` : '', hidden.below ? `↓ ${hidden.below} more` : '']
+            .filter(Boolean).join(' · ')}</Text>
+        </Box>
       </Box>
     </Box>
   );
