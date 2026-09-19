@@ -167,12 +167,6 @@ export async function tick(workspaces: Workspaces, settings: Settings, p: Paths)
   }
 }
 
-/** Every ready slot. Pure cache — the disk-pressure sweep drops them all;
- *  the pool restocks on the next ticks. */
-export async function drainReady(p: Paths): Promise<void> {
-  for (const slot of await listDir(p.poolReady)) await rm(path.join(p.poolReady, slot));
-}
-
 /** Anything in setup/ predates this process, so by definition its clone died. */
 export async function bootCleanup(p: Paths): Promise<void> {
   await rm(p.poolSetup);

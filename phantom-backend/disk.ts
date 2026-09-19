@@ -6,10 +6,15 @@
 //   is what makes deletion safe: after it, nothing exists only on this disk,
 //   and reopening a deleted session re-clones the branch with its work in it.
 //
-//   pressureSweep — over disk_cleanup_percent, reclaim in order of least
-//   loss: idle containers (stateless by design), spare clones (pure cache),
-//   old image tags, then sessions oldest-first — each backed up first, and
-//   skipped (never forced) when the backup cannot run.
+//   pressureSweep — over disk_cleanup_percent, reclaim: image tags from
+//   releases OLDER than the running one, then the files of IDLE folders
+//   (past container_idle_ms, the one idle rule), oldest first — each backed
+//   up first, and skipped (never forced) when the backup cannot run.
+//
+//   The sweep is passive: it never touches a running container, a spare
+//   clone (the pool refills them — nothing is freed) or an image newer than
+//   the running release (an update in flight pulled it; deleting it made the
+//   update fail with "image not on this machine").
 //
 // There is deliberately no time-based deletion: a host with free disk keeps
 // every session, and a full one cleans itself. One setting, 0 disables.
@@ -19,7 +24,6 @@ import type { SessionRow, WorkspaceRow } from './db/schema.js';
 import type { Settings } from './settings.js';
 import type { Workspaces } from './workspaces.js';
 import type { Sessions } from './sessions.js';
-import { drainReady } from './pool/pool.js';
 import type { Paths } from './pool/paths.js';
 import type { ContainerManager } from './workspace/container.js';
 import type { GitEngine } from './git/engine.js';
@@ -97,20 +101,40 @@ const API_IMAGE_CURRENT = (() => {
   return `${repo}:${/^v\d+\.\d+\.\d+/.test(v) ? v : 'latest'}`;
 })();
 
-/** Dangling layers, plus every tag of the session and api images' repos
- *  except the ones in use — a release pulls a new tag and nothing ever
- *  removed the old ones. A tag Docker refuses (in use) is logged and left. */
+/** `vX.Y.Z` as a comparable triple; anything else (latest, dev, a digest)
+ *  is not a release and never ordered. */
+const releaseOf = (tag: string): [number, number, number] | null => {
+  const m = /^v(\d+)\.(\d+)\.(\d+)$/.exec(tag);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+};
+const olderRelease = (a: [number, number, number], b: [number, number, number]): boolean =>
+  a[0] !== b[0] ? a[0] < b[0] : a[1] !== b[1] ? a[1] < b[1] : a[2] < b[2];
+
+/** `repo:tag` split at the tag colon (a registry port colon sits before the
+ *  last slash and is not it). */
+const splitRef = (ref: string): { repo: string; tag: string } => {
+  const i = ref.lastIndexOf(':');
+  return i > ref.lastIndexOf('/') ? { repo: ref.slice(0, i), tag: ref.slice(i + 1) } : { repo: ref, tag: '' };
+};
+
+/** Dangling layers, plus the session and api images' tags from releases
+ *  OLDER than the one in use — a release pulls a new tag and nothing ever
+ *  removed the old ones. Never a newer tag (an update in flight pulled it),
+ *  never `latest` or any non-release tag, and nothing when the current tag
+ *  is not a release itself (no order to compare by). A tag Docker refuses
+ *  (in use) is logged and left. */
 async function pruneImages(settings: Settings, docker: Docker): Promise<void> {
   await docker.pruneImages();
-  const currents = [String(await settings.resolve('container_image')), API_IMAGE_CURRENT];
+  const currents = [String(await settings.resolve('container_image')), API_IMAGE_CURRENT]
+    .map(splitRef)
+    .flatMap(({ repo, tag }) => { const r = releaseOf(tag); return r ? [{ repo, release: r }] : []; });
   const stale = new Set<string>();
   for (const img of await docker.listImages()) {
-    for (const tag of img.RepoTags ?? []) {
-      for (const current of currents) {
-        const i = current.lastIndexOf(':');
-        const repo = i > current.lastIndexOf('/') ? current.slice(0, i) : current;
-        if (tag !== current && (tag === repo || tag.startsWith(`${repo}:`))) stale.add(tag);
-      }
+    for (const ref of img.RepoTags ?? []) {
+      const { repo, tag } = splitRef(ref);
+      const release = releaseOf(tag);
+      if (!release) continue;
+      if (currents.some((c) => c.repo === repo && olderRelease(release, c.release))) stale.add(ref);
     }
   }
   for (const tag of stale) {
@@ -120,13 +144,13 @@ async function pruneImages(settings: Settings, docker: Docker): Promise<void> {
   }
 }
 
-/** Over the limit, reclaim until back under it — least loss first, and the
- *  disk re-measured before each session deletion so the sweep stops the
- *  moment enough is freed. A session whose backup does not complete is left
- *  exactly as it was; the run ends loud when only live work remains. */
+/** Over the limit, reclaim until back under it — old images first, then
+ *  idle folders oldest-first, the disk re-measured before each folder so
+ *  the sweep stops the moment enough is freed. A folder whose backup does
+ *  not complete is left exactly as it was; the run ends loud when only live
+ *  or unbacked work remains. */
 export async function pressureSweep(
   settings: Settings, workspaces: Workspaces, sessions: Sessions, p: Paths, docker: Docker, containers: ContainerManager, engine: GitEngine,
-  idleFolders: (idleMs: number) => Promise<string[]>,
 ): Promise<void> {
   const pct = Number(await settings.resolve('disk_cleanup_percent'));
   if (pct <= 0) return;
@@ -134,39 +158,37 @@ export async function pressureSweep(
   if ((await used()) < pct) return;
   log.warn({ used: Math.round(await used()), limit: pct }, 'disk over limit — pressure cleanup started');
 
-  // 1 — idle session containers: stateless, so removal is free and frees the
-  // per-session docker graph volume with them (reap(0) = no idle wait).
-  await containers.reap(0, idleFolders);
-
-  // 2 — spare clones: pure cache; the pool restocks on the next ticks.
-  await drainReady(p);
-
-  // 3 — image weight that serves nothing running.
+  // 1 — image weight from releases older than the running one.
   await pruneImages(settings, docker)
     .catch((e) => log.warn({ err: errStr(e) }, 'image prune failed'));
 
-  // 4 — sessions, oldest-used first: back the branch up, then the container
-  // goes DOWN (nothing left writing to the directory), then the files.
-  // Locked or unbacked sessions are skipped.
+  // 2 — idle folders, oldest-used first. Idle is THE idle rule, the one the
+  // container reaper runs on (container_idle_ms off the folder's
+  // lastUsedAt): a folder inside it is live and is never touched. For each:
+  // back the branch up, then the container goes DOWN (nothing left writing
+  // to the directory), then the files. Locked or unbacked folders are skipped.
+  const idleMs = Number(await settings.resolve('container_idle_ms'));
   let owners: Array<{ s: SessionRow; w: WorkspaceRow }>;
   try { owners = await folderOwners(workspaces, sessions); } catch (e) {
     log.warn({ err: errStr(e) }, 'pressure cleanup stopped — could not read sessions');
     return;
   }
+  const cutoff = Date.now() - idleMs;
+  owners = owners.filter(({ s }) => s.lastUsedAt.getTime() < cutoff);
   owners.sort((a, b) => a.s.lastUsedAt.getTime() - b.s.lastUsedAt.getTime());
   for (const { s, w } of owners) {
     if ((await used()) < pct) break;
     const r = await backupOf(engine, s, w);
     if (r !== 'pushed' && r !== 'nothing') {
-      log.warn({ session: s.id, result: r }, 'pressure cleanup left session in place — backup did not complete');
+      log.warn({ session: s.id, result: r }, 'pressure cleanup left folder in place — backup did not complete');
       continue;
     }
     try {
       await containers.remove(s.id);
       await sessions.destroy(s, { force: false });
-      log.info({ session: s.id }, 'pressure cleanup deleted session (work on its branch)');
+      log.info({ session: s.id }, 'pressure cleanup deleted folder files (work on its branch)');
     } catch (e) {
-      log.warn({ session: s.id, err: errStr(e) }, 'pressure cleanup could not delete session');
+      log.warn({ session: s.id, err: errStr(e) }, 'pressure cleanup could not delete folder files');
     }
   }
 

@@ -54,6 +54,13 @@ interface SpecInput {
 export function buildContainerSpec(i: SpecInput): Record<string, unknown> {
   const HostConfig: Record<string, unknown> = {
     Init: true, // sleep never reaps; orphans become zombies without a real PID 1 (verified T19)
+    // The same policy every compose service has: a host reboot or a dockerd
+    // restart stops every container, and Docker restarts only the ones that
+    // carry this. Without it the container sits Exited and ensure() throws it
+    // away — everything the agent installed and its own docker images with it.
+    // The reaper removes (never stops), so it never fights this. Verified live:
+    // after a daemon restart the container is Up with its writable layer intact.
+    RestartPolicy: { Name: 'unless-stopped' },
     // null (the default) => omit the field entirely, so Docker applies no cap.
     Memory: i.memMb != null && i.memMb > 0 ? i.memMb * 1024 * 1024 : undefined,
     NanoCpus: i.cpus != null && i.cpus > 0 ? Math.round(i.cpus * 1e9) : undefined,
