@@ -116,6 +116,7 @@ export const DEFAULTS = {
   container_pids_limit: null as number | null, // unset => no cap (Docker default)
   container_image: `ghcr.io/stephengpope/phantom-backend-session:${SESSION_IMAGE_TAG}` as string,
   container_docker: true as boolean, // privileged + a graph-storage volume so the agent can run its OWN dockerd inside
+  agent_database: false as boolean,  // the agent's own Postgres database for this workspace, reached only through its database_query tool
   // ── git ───────────────────────────────────────────────────────────────────
   initial_history_depth: '7.days',   // 'full' disables shallow
   auto_push_on_archive: true as boolean,
@@ -208,6 +209,7 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   initial_history_depth: "How much git history a new clone gets — a span like '7.days', or 'full' for all of it. Less means a faster clone and less disk, but the agent cannot see past it. Fixed when the clone is made.",
   container_image: 'Must contain ripgrep. Pulled the first time a session needs it; a change applies when the container next restarts.',
   container_docker: 'Lets the agent run Docker inside its own container. The container gets privileged mode and a native-overlay graph-storage volume, but the daemon is NOT started for you — the agent runs `start-docker` when it wants it, so idle sessions pay nothing. Privileged is a weaker boundary: turn this off for a hardened workspace. Applies when the container next restarts.',
+  agent_database: 'Gives the agent its own PostgreSQL database for this workspace — private to it, kept across sessions, reached only through its database_query tool (never by the project\'s code). The agent is its admin but cannot drop it. Off keeps the data; deleting the workspace deletes it.',
   bash_timeout_ms: 'Kills a command that set no timeout of its own; the agent can ask for a longer one per command.',
   bash_timeout_max_ms: 'The longest timeout the agent may request for one command. Unset means no limit.',
   max_read_bytes: 'Cap on bytes returned per file read. Bigger files are read in chunks — nothing is hidden, it just takes more calls.',
@@ -279,7 +281,7 @@ export interface SettingMeta {
   /** The heading a settings screen files this under — an agent, or an
    *  area. Lives here so every client draws the same sections and a new
    *  setting must pick one. */
-  group: 'coding' | 'assistant' | 'supervisor' | 'board' | 'crons' | 'sessions' | 'containers' | 'git' | 'limits' | 'telegram';
+  group: 'coding' | 'assistant' | 'supervisor' | 'board' | 'crons' | 'sessions' | 'containers' | 'agent' | 'git' | 'limits' | 'telegram';
   /** The sub-heading inside an agent's group. */
   subgroup?: 'model' | 'compaction' | 'voice';
   /** What to call this setting on screen. The key is the identifier — it is
@@ -338,6 +340,8 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
     pattern: /^(full|\d+\.(second|minute|hour|day|week|month|year)s?)$/ },
   container_image: { type: 'string', label: 'container image', group: 'containers' },
   container_docker: { type: 'boolean', label: 'docker in the workspace', group: 'containers' },
+  // `agent`: what the agent is handed beyond its tools.
+  agent_database: { type: 'boolean', label: 'agent database', group: 'agent' },
   bash_timeout_ms: { type: 'number', label: 'command timeout', group: 'limits', unit: 'ms', min: 1 },
   bash_timeout_max_ms: { type: 'number', label: 'command timeout cap', group: 'limits', unit: 'ms', min: 1, nullable: true },
   max_read_bytes: bytes('file read limit', 'limits'),
@@ -345,7 +349,7 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
   max_bash_output_bytes: bytes('command output limit', 'limits'),
   session_lock_ttl_ms: ms('session lock timeout', 'sessions', 1000),
   auto_push_on_archive: { type: 'boolean', label: 'auto-push on archive', group: 'git' },
-  agent_git_credentials: { type: 'boolean', label: 'agent github access', group: 'git' },
+  agent_git_credentials: { type: 'boolean', label: 'agent github access', group: 'agent' },
   card_prefix: { type: 'string', label: 'card number prefix', group: 'board', nullable: true },
   cron_enabled: { type: 'boolean', label: 'crons', group: 'crons' },
   cron_timezone: { type: 'string', label: 'time zone', group: 'crons', check: checkTimezone, suggestions: TIMEZONES },
@@ -471,7 +475,7 @@ export function isSettingKey(k: string): k is SettingKey {
  *  there is no second list of these keys anywhere (the workspace route used
  *  to keep one, and it drifted). */
 const WORKSPACE_OVERRIDABLE: readonly SettingKey[] = [
-  'spare_clones', 'initial_history_depth', 'container_image', 'container_docker',
+  'spare_clones', 'initial_history_depth', 'container_image', 'container_docker', 'agent_database',
   'auto_push_on_archive', 'agent_git_credentials', 'card_prefix',
   'auto_plan', 'auto_build', 'loop_budget_tokens', 'telegram_auto_build_notifications',
   'cron_enabled', 'cron_timezone',

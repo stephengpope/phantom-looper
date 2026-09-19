@@ -39,16 +39,18 @@ Anything meant to keep running — a dev server, a watcher — is started with t
 
 {{sending}}`;
 
-// ── WORKSPACE — per-workspace: skills, secrets, credentials, date ───────────
-// Blanks: {{skills}} {{secrets}} {{credentials}}. The current date is
-// appended at agent-build time (withCurrentDate), not frozen here.
+// ── WORKSPACE — per-workspace: skills, secrets, credentials, database, date ─
+// Blanks: {{skills}} {{secrets}} {{credentials}} {{database}}. The current
+// date is appended at agent-build time (withCurrentDate), not frozen here.
 export const SYSTEM_WORKSPACE = `{{skills}}
 
 {{secrets}}
 
 Git operations are normally covered for you — committing, pushing, and merging into the base branch happen automatically.
 
-{{credentials}}`;
+{{credentials}}
+
+{{database}}`;
 
 // ═══ THE {{skills}} BLANK — the skills index ═════════════════════════════════
 // {{skillsList}} is one line per skill: "- name: description" (clipped to 60 chars).
@@ -74,3 +76,9 @@ The secret_get tool returns a value by name. This list was written when the sess
 // Present only when agent_git_credentials is on for the workspace.
 
 export const CREDENTIALS_FACT = `A GitHub token is in your environment (GITHUB_TOKEN); git and gh are authenticated with it.`;
+
+// ═══ THE {{database}} BLANK — the agent's own database ═══════════════════════════
+// Present only when agent_database is on for the workspace. Facts only —
+// what it is, not what to do with it.
+
+export const DATABASE_FACT = `You have your own PostgreSQL database for this workspace. It is private to you — not the project's, and no code in the workspace can reach it — and it persists across sessions and container restarts. You are its admin. The database_query tool runs SQL in it.`;

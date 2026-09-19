@@ -6,19 +6,21 @@ import { VALUES } from '../values.js';
 import { COMMUNICATION } from '../communication.js';
 import { ENVIRONMENT } from '../environment.js';
 import { SENDING_FILES } from '../sending.js';
-import { SYSTEM_BASE, SYSTEM_WORKSPACE, SKILLS, SECRETS, CREDENTIALS_FACT } from './coding.js';
+import { SYSTEM_BASE, SYSTEM_WORKSPACE, SKILLS, SECRETS, CREDENTIALS_FACT, DATABASE_FACT } from './coding.js';
 import type { SkillMeta } from '../../../skills/skills.js';
 
 /** One stored secret as the prompt (and the create response) carries it —
  *  name and description only, never the value. */
 export interface SecretIndexEntry { name: string; description: string }
 
-/** The workspace's git settings, resolved at session creation (POST /sessions
- *  carries them) and frozen with the rest of the prompt. Facts only, never
- *  instructions — off says NOTHING: the blank vanishes. */
-export interface GitFacts {
+/** The workspace's settings the prompt states, resolved at session creation
+ *  (POST /sessions carries them) and frozen with the rest of the prompt.
+ *  Facts only, never instructions — off says NOTHING: the blank vanishes. */
+export interface WorkspaceFacts {
   /** agent_git_credentials: the GitHub token is in the container env. */
   credentials?: boolean;
+  /** agent_database: the agent has its own database and the database_query tool. */
+  database?: boolean;
 }
 
 const DESC_LIMIT = 60;
@@ -49,7 +51,7 @@ export function secretsIndex(secrets: SecretIndexEntry[]): string {
 export interface CodingPrompt { base: string; workspace: string }
 
 export function codingPrompt(
-  skills: SkillMeta[] = [], git: GitFacts = {}, secrets: SecretIndexEntry[] = [],
+  skills: SkillMeta[] = [], facts: WorkspaceFacts = {}, secrets: SecretIndexEntry[] = [],
 ): CodingPrompt {
   return {
     base: fill(SYSTEM_BASE, {
@@ -62,7 +64,8 @@ export function codingPrompt(
     workspace: fill(SYSTEM_WORKSPACE, {
       skills: skillsIndex(skills),
       secrets: secretsIndex(secrets),
-      credentials: git.credentials ? CREDENTIALS_FACT : '',
+      credentials: facts.credentials ? CREDENTIALS_FACT : '',
+      database: facts.database ? DATABASE_FACT : '',
     }),
   };
 }

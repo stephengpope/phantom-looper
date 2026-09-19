@@ -13,6 +13,7 @@ import { DEFAULT_COLUMNS } from '../core/kanban.js';
 import type { Settings } from './settings.js';
 import { workspaceScope } from './store.js';
 import type { SettingsEvents } from './api/settingsEvents.js';
+import type { Databases } from './databases.js';
 
 export { DEFAULT_COLUMNS };
 
@@ -43,6 +44,8 @@ export class Workspaces {
     private readonly db: Db,
     private readonly settings: Settings,
     private readonly events?: SettingsEvents,
+    /** The agent's own database per workspace — dropped with the row. */
+    private readonly databases?: Databases,
   ) {}
 
   async get(id: string): Promise<WorkspaceRow | undefined> {
@@ -91,11 +94,12 @@ export class Workspaces {
     return number;
   }
 
-  /** The row goes; its settings layer (overrides, its own token) went first
-   *  — a scope whose workspace is gone is a row nothing will ever read. Its
-   *  cards, history, sessions and folders cascade; the route gates that
-   *  behind its own confirm. */
+  /** The row goes; the agent's database and its settings layer (overrides,
+   *  its own token) went first — a scope whose workspace is gone is a row
+   *  nothing will ever read. Its cards, history, sessions and folders
+   *  cascade; the route gates that behind its own confirm. */
   async remove(id: string, by?: string): Promise<void> {
+    await this.databases?.drop(id);
     await this.settings.dropScope(workspaceScope(id));
     await this.db.delete(workspaces).where(eq(workspaces.id, id));
     this.events?.publish(workspaceScope(id), by);

@@ -25,6 +25,7 @@ import { skillTools } from '../core/llm/tools/skills.js';
 import { webTools } from '../core/llm/tools/web.js';
 import { secretTools } from '../core/llm/tools/secrets.js';
 import { cronTools } from '../core/llm/tools/crons.js';
+import { databaseTools } from '../core/llm/tools/database.js';
 import { autoPushSession as corePush, autoPullSession as corePull } from '../core/llm/tools/git.js';
 import { newId } from '../core/ids.js';
 import { App } from './App.js';
@@ -328,6 +329,8 @@ const secretKit = (ws: string) => secretTools({ baseUrl: `${connection().base}/a
 // writes; empty when the workspace's crons are switched off.
 const cronKit = (ws: string, planMode?: () => boolean) =>
   cronTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, workspaceId: ws, planMode });
+// Empty when the workspace's agent_database setting is off.
+const databaseKit = (ws: string) => databaseTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, workspaceId: ws });
 // The session you quit from is not necessarily the one you started in — /new,
 // /resume, /workspace and tab all move it — so track the live one and print
 // THAT id on the way out. One line, for the session you were actually in:
@@ -427,7 +430,8 @@ const app = render(
     autoPull={autoPullSession}
     boot={{ ...(resumeId ? { resumeId } : {}) }}
     newTools={(id, _plan, ws, planMode) => phantomTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, sessionId: id, planMode })
-      .then(async (t) => ({ ...t, ...skillKit(id, planMode), ...webKit(id), ...(ws ? { ...secretKit(ws), ...await cronKit(ws, planMode) } : {}) }))}
+      .then(async (t) => ({ ...t, ...skillKit(id, planMode), ...webKit(id),
+        ...(ws ? { ...secretKit(ws), ...await cronKit(ws, planMode), ...await databaseKit(ws) } : {}) }))}
     newAssistantTools={(id, ws) => phantomTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, sessionId: id, pick: 'readonly' })
       .then(async (t) => ({ ...t, ...webKit(id), ...await cronKit(ws) }))}
     onSession={(s) => { currentId = s.id; openedIds.add(s.id); }}

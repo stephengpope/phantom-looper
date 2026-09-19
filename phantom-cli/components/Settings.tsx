@@ -1,7 +1,7 @@
 // ONE settings screen: every server setting, grouped the way the server
 // files them — the three agents first (coding, assistant, supervisor; each
 // with model and compaction sub-headings, the assistant its voice too), then
-// the areas (board, sessions, containers, git, limits, telegram). This
+// the areas (board, sessions, containers, agent, git, limits, telegram). This
 // machine's own audio rows (mic, speaker, mutes) sit under the assistant as
 // "this machine". /model and /assistant open the same screen at that group.
 //

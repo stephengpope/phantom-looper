@@ -55,7 +55,7 @@ const idParam = { type: 'object', properties: { id: { type: 'string' } }, requir
  *  and, for sessions born before the column, on their first open. */
 async function freezeSystemPrompt(ctx: AppCtx, s: SessionRow): Promise<CodingPrompt> {
   const workspace = await ctx.workspaces.get(s.workspaceId);
-  const resolved = await ctx.settings.resolveMany(['container_image', 'agent_git_credentials'], { workspace });
+  const resolved = await ctx.settings.resolveMany(['container_image', 'agent_git_credentials', 'agent_database'], { workspace });
   const skills = mergeSkills(
     await scanSkills(repoDir(ctx.paths, folderOf(s))),
     ctx.fs ? await systemSkills(ctx.fs.docker, String(resolved.container_image)) : []);
@@ -66,7 +66,10 @@ async function freezeSystemPrompt(ctx: AppCtx, s: SessionRow): Promise<CodingPro
   }
   const secrets = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
   return ctx.sessions.freezeSystemPrompt(s.id,
-    codingPrompt(skills, { credentials: Boolean(resolved.agent_git_credentials) }, secrets));
+    codingPrompt(skills, {
+      credentials: Boolean(resolved.agent_git_credentials),
+      database: Boolean(resolved.agent_database),
+    }, secrets));
 }
 
 /** An attached file's ceiling (attachments route) — ours, unlike telegram's

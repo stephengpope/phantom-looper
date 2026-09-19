@@ -154,9 +154,9 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
 
   // Deliberate order, not the server's. `agent_git_credentials` hands over
   // the token on the row above it, so it sits right under it; then the
-  // auto-push switch. Anything the server adds later that is not named
-  // here still shows, at the end.
-  const ORDER = ['agent_git_credentials', 'auto_push_on_archive',
+  // auto-push switch; then the agent's database. Anything the server adds
+  // later that is not named here still shows, at the end.
+  const ORDER = ['agent_git_credentials', 'auto_push_on_archive', 'agent_database',
     'container_image', 'initial_history_depth', 'spare_clones'];
   const overridable = Object.keys(eff).filter((k) => eff[k].overridable);
   const settingKeys = [

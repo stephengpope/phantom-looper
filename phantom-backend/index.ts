@@ -7,6 +7,7 @@ import { bootCleanup, tick } from './pool/pool.js';
 import { Sessions } from './sessions.js';
 import { Settings } from './settings.js';
 import { Workspaces } from './workspaces.js';
+import { Databases } from './databases.js';
 import { Folders } from './folders.js';
 import { Cards } from './cards.js';
 import { BackgroundTasks } from './backgroundTasks.js';
@@ -69,7 +70,8 @@ async function main() {
   const sessionEvents = new SessionEvents();
   const settingsEvents = new SettingsEvents();
   const settings = new Settings(db, env.encryptionKey, settingsEvents);
-  const workspaces = new Workspaces(db, settings, settingsEvents);
+  const databases = new Databases(pgPool, env.databaseUrl, env.encryptionKey);
+  const workspaces = new Workspaces(db, settings, settingsEvents, databases);
   const folders = new Folders(db, paths, settings, sessionEvents);
   const cards = new Cards(db, workspaces, events);
   const sessions = new Sessions(db, settings, workspaces, folders, sessionEvents);
@@ -276,6 +278,7 @@ async function main() {
   const ctx: AppCtx = {
     settings, workspaces, folders, cards, sessions, backgroundTasks, presets, crons, logTokens,
     paths, apiKey: env.apiKey, version: VERSION,
+    databases,
     fs: { docker, containers, engine },
     engine,
     autoPush: autoPushFn,

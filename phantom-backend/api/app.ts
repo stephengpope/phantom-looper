@@ -14,6 +14,7 @@ declare module 'fastify' {
 import type { Paths } from '../pool/paths.js';
 import { settingsRoutes } from './routes/settings.js';
 import { secretsRoutes } from './routes/secrets.js';
+import { databaseRoutes } from './routes/database.js';
 import { fsRoutes, type FsDeps } from './routes/fs.js';
 import { gitRoutes } from './routes/git.js';
 import { kanbanRoutes } from './routes/kanban.js';
@@ -25,6 +26,7 @@ import { SessionEvents } from './sessionEvents.js';
 import type { Sessions } from '../sessions.js';
 import type { Settings } from '../settings.js';
 import type { Workspaces } from '../workspaces.js';
+import type { Databases } from '../databases.js';
 import type { Folders } from '../folders.js';
 import type { Cards } from '../cards.js';
 import type { BackgroundTasks } from '../backgroundTasks.js';
@@ -61,6 +63,9 @@ export interface AppCtx {
   paths: Paths;
   apiKey: string;
   version: string;
+  /** The agent's own database per workspace (databases.ts). Absent in
+   *  DB-only tests: the query route answers 503. */
+  databases?: Databases;
   /** Docker wiring; absent in DB-only tests, and /fs then 404s. */
   fs?: FsDeps;
   engine?: GitEngine;
@@ -200,6 +205,7 @@ export async function buildApp(ctx: AppCtx) {
     settingsRoutes(api, ctx);
     secretsRoutes(api, ctx);
     workspaceRoutes(api, ctx);
+    databaseRoutes(api, ctx);
     sessionRoutes(api, ctx);
     if (ctx.fs) fsRoutes(api, ctx, ctx.fs);
     if (ctx.fs) tasksRoutes(api, ctx, ctx.fs);
