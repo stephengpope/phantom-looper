@@ -1,7 +1,7 @@
 // ONE settings screen: every server setting, grouped the way the server
 // files them — the three agents first (coding, assistant, supervisor; each
 // with model and compaction sub-headings, the assistant its voice too), then
-// the areas (board, sessions, containers, agent, git, limits, telegram). This
+// the areas (board, crons, sessions, containers, git, limits, telegram). This
 // machine's own audio rows (mic, speaker, mutes) sit under the assistant as
 // "this machine". /model and /assistant open the same screen at that group.
 //
@@ -31,6 +31,7 @@ import { resolveLocal } from '../local.js';
 import { makeSettings, type Entry } from '../settings.js';
 import { SelectList, type Choice } from './SelectList.js';
 import { human, labelFor } from '../settingLabels.js';
+import { groupBlocks, headedChoices, type Block } from '../settingGroups.js';
 import { ValueInput, type EditSpec } from './ValueInput.js';
 import { Screen } from './Screen.js';
 import { PROVIDERS } from '../../core/llm/createAgent.js';
@@ -205,8 +206,10 @@ export function Settings({ api, onClose, onChange, configPath = CONFIG_PATH, row
       notice={notice ?? fileError} sub={notice ? undefined : 'reading settings…'} />;
   }
 
-  const choices = screenRows(rows, server ?? {}, local);
-  const first = startAt ? choices.find((c) => !c.heading && c.group === startAt)?.key : undefined;
+  const blocks = screenRows(rows, server ?? {}, local);
+  const choices = headedChoices(blocks, (r): Choice<string> =>
+    ({ value: r.key, label: r.label, columns: [{ text: r.shown, width: 24 }, { text: r.source }], hint: r.hint }));
+  const first = startAt ? blocks.find((b) => b.group === startAt)?.items[0]?.key : undefined;
   return (
     <Screen title={title}
       footer={[
@@ -218,9 +221,7 @@ export function Settings({ api, onClose, onChange, configPath = CONFIG_PATH, row
         <SelectList
           key={`rows-${rows.local ?? ''}`}
           initial={last ?? first}
-          choices={choices.map((r): Choice<string> => r.heading
-            ? { value: `#${r.key}`, label: r.label, heading: true }
-            : { value: r.key, label: r.label, columns: [{ text: r.shown, width: 24 }, { text: r.source }], hint: r.hint })}
+          choices={choices}
           onSelect={(k) => {
             if (server?.[k] && !isLocal(k)) void openServer(k);
             else if (isLocal(k)) openLocal(k);
@@ -239,55 +240,36 @@ export function Settings({ api, onClose, onChange, configPath = CONFIG_PATH, row
 
 const isLocal = (k: string): k is LocalKey => (LOCAL_KEYS as readonly string[]).includes(k);
 
-interface Row { kind: 'server' | 'local'; key: string; label: string; shown: string; source: string; group: string; hint?: string; heading?: boolean }
+/** One list row and where it files. A server row files where its wire meta
+ *  says; a local row under "this machine" inside the group it belongs to. */
+interface Row { key: string; label: string; shown: string; source: string; hint?: string; group: string; subgroup: string }
 
 /** This machine's voice rows file under the assistant, as its last sub-heading. */
 const LOCAL_HOME: Record<'voice' | 'server', string> = { voice: 'assistant', server: '' };
 
-/** The rows a screen shows, in order: the server's settings grouped under the
- *  wire `group`, sub-headed by `subgroup` (hidden-when rules applied), with
- *  this machine's rows under "this machine" inside the group they belong to.
- *  Headings only when there is more than one block — one block's heading
- *  just repeats the title above it. */
-export function screenRows(rows: Rows, server: Record<string, Entry>, local: ReturnType<typeof resolveLocal>['config']): Row[] {
+/** The rows a screen shows, in the server's order and grouping (hidden-when
+ *  rules applied), with this machine's rows folded in. */
+export function screenRows(rows: Rows, server: Record<string, Entry>, local: ReturnType<typeof resolveLocal>['config']): Block<Row>[] {
   const values = Object.fromEntries(Object.entries(server).map(([k, e]) => [k, e.value]));
-  // group -> subgroup -> rows, in order of first appearance (the server's).
-  const groups = new Map<string, Map<string, Row[]>>();
-  const put = (g: string, sub: string, row: Row) => {
-    if (!groups.has(g)) groups.set(g, new Map());
-    const subs = groups.get(g)!;
-    if (!subs.has(sub)) subs.set(sub, []);
-    subs.get(sub)!.push(row);
-  };
+  const out: Row[] = [];
   if (rows.server) {
     for (const [k, e] of Object.entries(server)) {
       if (e.secret || isLocal(k)) continue;                   // credentials are /keys; a local key never comes from the server
       if (HIDDEN[k]?.(values)) continue;
-      const g = e.meta?.group ?? '';
-      put(g, e.meta?.subgroup ?? '', { kind: 'server', key: k, group: g,
+      out.push({ key: k, group: e.meta?.group ?? '', subgroup: e.meta?.subgroup ?? '',
         label: `${e.overridable ? '↯ ' : ''}${labelFor(k, e.meta)}`,
         shown: human(e.value, e.meta), source: e.source, hint: e.description });
     }
   }
   if (rows.local) {
-    const g = LOCAL_HOME[rows.local];
     for (const k of LOCAL_KEYS.filter((k) => META[k].group === rows.local)) {
       const r = local[k];
-      put(g, 'this machine', { kind: 'local', key: k, group: g, label: META[k].label,
+      out.push({ key: k, group: LOCAL_HOME[rows.local], subgroup: 'this machine', label: META[k].label,
         shown: META[k].secret ? mask(r.value) : human(r.value),
         source: `${r.source}${r.envVar ? ` (${r.envVar})` : ''}`, hint: DESCRIPTIONS[k] });
     }
   }
-  const blocks = [...groups.values()].reduce((n, subs) => n + subs.size, 0);
-  const out: Row[] = [];
-  for (const [g, subs] of groups) {
-    if (blocks > 1 && g) out.push({ kind: 'server', key: `g:${g}`, group: g, label: g, shown: '', source: '', heading: true });
-    for (const [sub, list] of subs) {
-      if (blocks > 1 && sub) out.push({ kind: 'server', key: `s:${g}:${sub}`, group: g, label: `  ${sub}`, shown: '', source: '', heading: true });
-      out.push(...list);
-    }
-  }
-  return out;
+  return groupBlocks(out, (r) => r);
 }
 
 /** One row of GET /models. */

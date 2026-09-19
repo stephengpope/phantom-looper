@@ -1,11 +1,13 @@
 // One workspace: what it is, and the settings it does differently from
 // everyone else. Reached with `e` from the workspace list.
 //
-// Three groups, because they are three different kinds of thing and mixing
-// them is how you end up changing a server-wide value believing it was local:
+// Three kinds of row, because mixing them is how you end up changing a
+// server-wide value believing it was local:
 //
-//   this workspace   its own identity — name, branch, prefix, its GitHub token
-//   settings         the ones the server says can differ here (`overridable`);
+//   the workspace    its own identity — name, branch, prefix, its GitHub token
+//   settings         the ones the server says can differ here (`overridable`),
+//                    under the server's group headings (settingGroups.ts) in
+//                    the server's order, exactly as /settings files them;
 //                    every other setting is global-only and lives on /settings
 //   danger           delete
 //
@@ -30,6 +32,7 @@ import type { Api } from './Settings.js';
 import type { WorkspaceInfo } from './Launcher.js';
 import { fit, human, labelFor, type WireMeta } from '../settingLabels.js';
 import { makeSettings } from '../settings.js';
+import { groupBlocks, headedChoices } from '../settingGroups.js';
 import type { ConfigValue } from '../config.js';
 
 interface Effective {
@@ -152,26 +155,28 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
     return <Screen title={label} busy={busy} notice={notice} footer={[{ key: 'esc', does: 'back' }]} />;
   }
 
-  // Deliberate order, not the server's. `agent_git_credentials` hands over
-  // the token on the row above it, so it sits right under it; then the
-  // auto-push switch, then instant sync with its two timings; then the
-  // agent's database. Anything the server adds later that is not named here
-  // still shows, at the end.
-  const ORDER = ['agent_git_credentials', 'auto_push_on_archive',
-    'instant_sync', 'instant_sync_push_debounce_ms', 'instant_sync_pull_interval_ms', 'agent_database',
-    'container_image', 'initial_history_depth', 'spare_clones'];
+  // The overridable settings in the server's order, under the server's group
+  // headings — the same fold /settings uses, so the two screens agree on
+  // where a setting lives and nothing here names or orders a key.
   const overridable = Object.keys(eff).filter((k) => eff[k].overridable);
-  const settingKeys = [
-    ...ORDER.filter((k) => overridable.includes(k)),
-    ...overridable.filter((k) => !ORDER.includes(k)),
-  ];
+  const settingRows = headedChoices(groupBlocks(overridable, (k) => eff[k].meta), (k) => {
+    const s = eff[k];
+    return {
+      value: k,
+      label: labelFor(k, s.meta),
+      columns: [
+        { text: fit(human(s.value, s.meta), 30), width: 32 },
+        { text: WHENCE(s.source) },
+      ],
+      // The description alone; the columns already say the value and
+      // whether this workspace differs.
+      hint: s.description,
+    };
+  });
 
-  // No group headings. Every one of them ("about X", "settings · X only",
-  // "deleting cannot be undone") said something the rows underneath already
-  // said, in a dim line that looks like content — three restatements of the
-  // workspace name on a screen whose title is the workspace name. A row that
-  // needs a heading to be understood is a row that is badly labelled; fix the
-  // row. The only separator left is blank, before the one irreversible action.
+  // The four identity rows carry no heading: they are the workspace itself,
+  // and the title above already names it. A blank separates them from the
+  // headed settings groups, and another sets off the one irreversible action.
   const choices = [
     { value: 'display_name', label: 'name', detail: fit(row.displayName ?? row.name),
       hint: `What you call it here. It is ${row.owner}/${row.name} on GitHub either way.` },
@@ -187,22 +192,10 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
         ? 'This workspace has its own GitHub token. It is never shown back.'
         : 'This workspace uses the shared GitHub token from /keys. [enter] gives it one of its own.' },
 
-    ...settingKeys.map((k) => {
-      const s = eff[k];
-      return {
-        value: k,
-        label: labelFor(k, s.meta),
-        columns: [
-          { text: fit(human(s.value, s.meta), 30), width: 32 },
-          { text: WHENCE(s.source) },
-        ],
-        // The description alone; the columns already say the value and
-        // whether this workspace differs.
-        hint: s.description,
-      };
-    }),
+    { value: '#gap:settings', label: '', heading: true },
+    ...settingRows,
 
-    { value: '#gap', label: '', heading: true },
+    { value: '#gap:delete', label: '', heading: true },
     { value: 'delete', label: `delete ${label}`, detail: 'cannot be undone',
       hint: 'Deletes the workspace and its data. The GitHub repo is untouched. Refused while a session is running.' },
   ];

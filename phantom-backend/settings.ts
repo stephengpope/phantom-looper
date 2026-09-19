@@ -299,7 +299,7 @@ export interface SettingMeta {
   /** The heading a settings screen files this under — an agent, or an
    *  area. Lives here so every client draws the same sections and a new
    *  setting must pick one. */
-  group: 'coding' | 'assistant' | 'supervisor' | 'board' | 'crons' | 'sessions' | 'containers' | 'agent' | 'git' | 'limits' | 'telegram';
+  group: 'coding' | 'assistant' | 'supervisor' | 'board' | 'crons' | 'sessions' | 'containers' | 'git' | 'limits' | 'telegram';
   /** The sub-heading inside an agent's group. */
   subgroup?: 'model' | 'compaction' | 'voice';
   /** What to call this setting on screen. The key is the identifier — it is
@@ -358,8 +358,8 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
     pattern: /^(full|\d+\.(second|minute|hour|day|week|month|year)s?)$/ },
   container_image: { type: 'string', label: 'container image', group: 'containers' },
   container_docker: { type: 'boolean', label: 'docker in the workspace', group: 'containers' },
-  // `agent`: what the agent is handed beyond its tools.
-  agent_database: { type: 'boolean', label: 'agent database', group: 'agent' },
+  // Under containers: it is a service stood up beside the session container.
+  agent_database: { type: 'boolean', label: 'agent database', group: 'containers' },
   bash_timeout_ms: { type: 'number', label: 'command timeout', group: 'limits', unit: 'ms', min: 1 },
   bash_timeout_max_ms: { type: 'number', label: 'command timeout cap', group: 'limits', unit: 'ms', min: 1, nullable: true },
   max_read_bytes: bytes('file read limit', 'limits'),
@@ -367,7 +367,8 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
   max_bash_output_bytes: bytes('command output limit', 'limits'),
   session_lock_ttl_ms: ms('session lock timeout', 'sessions', 1000),
   auto_push_on_archive: { type: 'boolean', label: 'auto-push on archive', group: 'git' },
-  agent_git_credentials: { type: 'boolean', label: 'agent github access', group: 'agent' },
+  // Under git, beside the token it hands over — not under agent.
+  agent_git_credentials: { type: 'boolean', label: 'agent github access', group: 'git' },
   instant_sync: { type: 'boolean', label: 'instant sync', group: 'git' },
   instant_sync_push_debounce_ms: ms('instant sync push debounce', 'git'),
   instant_sync_pull_interval_ms: ms('instant sync pull interval', 'git'),

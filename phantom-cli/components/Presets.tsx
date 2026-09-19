@@ -27,6 +27,7 @@ import { ValueInput, type EditSpec } from './ValueInput.js';
 import { Screen } from './Screen.js';
 import { TextInput } from './TextInput.js';
 import { makeSettings, type Entry } from '../settings.js';
+import { groupBlocks, headedChoices, type Block } from '../settingGroups.js';
 import { type ConfigValue } from '../config.js';
 import {
   buildModelSpec, providerForModelRow, MODEL_FOR_PROVIDER,
@@ -39,19 +40,15 @@ import { newId } from '../../core/ids.js';
  *  /settings: every entry whose `meta.subgroup` is `model`, under its
  *  `meta.group`, with the server's label and choices. The server's presets.ts
  *  derives its allowed list from the same fact; nothing is listed here. */
-interface PresetKey { key: string; label: string; choices?: readonly string[] }
-interface PresetGroup { heading: string; keys: PresetKey[] }
+interface PresetKey { key: string; label: string; choices?: readonly string[]; group: string }
+type PresetGroup = Block<PresetKey>;
 export function presetGroups(entries: Record<string, Entry>): PresetGroup[] {
-  const groups = new Map<string, PresetKey[]>();
-  for (const [key, e] of Object.entries(entries)) {
-    if (e.meta.subgroup !== 'model' || !e.meta.group) continue;
-    const list = groups.get(e.meta.group) ?? [];
-    list.push({ key, label: e.meta.label ?? key, choices: e.meta.choices });
-    groups.set(e.meta.group, list);
-  }
-  return [...groups.entries()].map(([heading, keys]) => ({ heading, keys }));
+  const keys = Object.entries(entries)
+    .filter(([, e]) => e.meta.subgroup === 'model' && e.meta.group)
+    .map(([key, e]): PresetKey => ({ key, label: e.meta.label ?? key, choices: e.meta.choices, group: e.meta.group! }));
+  return groupBlocks(keys, (k) => k);
 }
-const allKeys = (groups: PresetGroup[]) => groups.flatMap((g) => g.keys.map((k) => k.key));
+const allKeys = (groups: PresetGroup[]) => groups.flatMap((g) => g.items.map((k) => k.key));
 
 export interface Preset { id: string; name: string; values: Record<string, unknown> }
 
@@ -102,8 +99,8 @@ function displayValue(state: KeyState, value: unknown): string {
 function presetHint(p: Preset, groups: PresetGroup[]): string {
   const lines: string[] = [];
   for (const g of groups) {
-    lines.push(`${g.heading}:`);
-    for (const k of g.keys) {
+    lines.push(`${g.group}:`);
+    for (const k of g.items) {
       const s = keyState(p.values, k.key);
       const label = s === 'set' ? String(p.values[k.key])
         : s === 'clear' ? 'clear' : 'leave unchanged';
@@ -311,20 +308,16 @@ export function Presets({ api, confirm, onApplied, onClose }: {
     for (const [k, v] of Object.entries(p.values)) {
       if (v !== null) merged[k] = v;
     }
-    const choices: Choice<string>[] = [];
-    for (const g of groups) {
-      choices.push({ value: `#${g.heading}`, label: g.heading, heading: true });
-      for (const k of g.keys) {
-        const state = keyState(p.values, k.key);
-        const v = p.values[k.key];
-        choices.push({
-          value: k.key,
-          label: k.label,
-          columns: [{ text: displayValue(state, v), width: 32 }],
-          hint: hintForKey(state, v),
-        });
-      }
-    }
+    const choices = headedChoices(groups, (k) => {
+      const state = keyState(p.values, k.key);
+      const v = p.values[k.key];
+      return {
+        value: k.key,
+        label: k.label,
+        columns: [{ text: displayValue(state, v), width: 32 }],
+        hint: hintForKey(state, v),
+      };
+    });
     return (
       <Screen title={`edit: ${p.name}`} notice={notice} busy={busy}
         footer={[
@@ -339,7 +332,7 @@ export function Presets({ api, confirm, onApplied, onClose }: {
           choices={choices}
           onSelect={(k) => {
             setLast(k);
-            const info = groups.flatMap((g) => g.keys).find((x) => x.key === k);
+            const info = groups.flatMap((g) => g.items).find((x) => x.key === k);
             if (!info) return;
             const spec: EditSpec = {
               title: info.label,

@@ -8,25 +8,19 @@
 // all come from GET /settings (the entries flagged `secret`): the server is
 // the one place a credential is described, and this screen shows it verbatim.
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { SelectList, type Choice } from './SelectList.js';
+import { SelectList } from './SelectList.js';
 import { ValueInput } from './ValueInput.js';
 import { Screen } from './Screen.js';
 import { makeSettings, type Api, type Entry } from '../settings.js';
 import { labelFor } from '../settingLabels.js';
+import { groupBlocks, headedChoices } from '../settingGroups.js';
 
-/** The credential rows with a heading where the group changes — the same
- *  pattern Settings uses. Order is the server's. */
-function groupedChoices(creds: Array<[string, Entry]>) {
-  const out: Choice<string>[] = [];
-  let last = '';
-  for (const [name, e] of creds) {
-    const group = e.meta.group ?? '';
-    if (group !== last) { out.push({ value: `#${group}`, label: group, heading: true }); last = group; }
+/** The credential rows under the server's group headings, in its order. */
+const groupedChoices = (creds: Array<[string, Entry]>) =>
+  headedChoices(groupBlocks(creds, ([, e]) => e.meta), ([name, e]) => {
     const stored = typeof e.value === 'string' && e.value.length > 0;
-    out.push({ value: name, label: labelFor(name, e.meta), detail: stored ? 'stored' : 'not set', hint: e.description });
-  }
-  return out;
-}
+    return { value: name, label: labelFor(name, e.meta), detail: stored ? 'stored' : 'not set', hint: e.description };
+  });
 
 export function Keys({ api, onClose, onChanged }: {
   api: Api; onClose: () => void;
