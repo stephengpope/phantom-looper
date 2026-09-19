@@ -133,7 +133,7 @@ export function Settings({ api, onClose, onChange, configPath = CONFIG_PATH, row
     const values = serverValues();
     const spec: EditSpec = {
       title: `${labelFor(key, e.meta)} · everyone`,
-      choices: e.meta.choices, choiceLabels: e.meta.choiceLabels,
+      choices: e.meta.choices, choiceLabels: e.meta.choiceLabels, suggestions: e.meta.suggestions,
       type: e.meta.type, current: e.value, unit: e.meta.unit,
       note: e.meta.unit === 'ms' ? 'e.g. 30m, 2h, 3d · applies to everyone' : 'applies to everyone',
     };

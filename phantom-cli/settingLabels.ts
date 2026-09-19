@@ -19,6 +19,8 @@ export interface WireMeta {
   subgroup?: string;
   choices?: string[];
   choiceLabels?: Record<string, string>;
+  /** Open-ended values to offer — the cli's combobox filters them as you type. */
+  suggestions?: string[];
   nullable?: boolean;
   unit?: string;
 }

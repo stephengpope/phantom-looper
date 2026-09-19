@@ -139,7 +139,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   // grey them out rather than infer their fate from whether a local
   // transcript happens to exist.
   app.get<{ Querystring: { limit?: number; before?: string; before_id?: string; before_pinned?: boolean;
-    typed?: boolean; supervisor?: boolean; q?: string } }>(
+    typed?: boolean; background?: boolean; q?: string } }>(
     '/sessions', { schema: { ...TAG,
     summary: 'List sessions',
     description: 'Every session, pinned first then newest activity first, including destroyed ones (status says which). ' +
@@ -163,7 +163,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       limit: { type: 'integer', minimum: 1, maximum: 500, description: 'Page size; omitted = everything.' },
       q: { type: 'string', maxLength: 200, description: 'Substring to match (case-insensitive) in name, last user message or branch.' },
       typed: { type: 'boolean', description: 'true = only sessions something was typed into (a last message exists).' },
-      supervisor: { type: 'boolean', description: 'false = leave out the looper\'s supervisor seats.' },
+      background: { type: 'boolean', description: 'false = leave out the background seats: the looper\'s supervisor records and cron runs.' },
       before: { type: 'string', description: 'A row\'s last_used_at (ISO) — return only older activity.' },
       before_id: { type: 'string', description: 'That row\'s id, breaking last_used_at ties.' },
       before_pinned: { type: 'boolean', description: 'That row\'s pinned flag — pinned sorts ahead of activity, so the cursor carries it or a pinned page boundary leaks unpinned rows into the pinned block (and vice versa).' } } } } },
@@ -173,7 +173,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     // its column from the CARD the row points at.
     const { rows, total } = await (async () => {
       const r = await ctx.sessions.list({
-        typed: req.query.typed, supervisor: req.query.supervisor, q: req.query.q, limit: req.query.limit,
+        typed: req.query.typed, background: req.query.background, q: req.query.q, limit: req.query.limit,
         before: req.query.before ? new Date(req.query.before) : undefined,
         beforeId: req.query.before_id, beforePinned: req.query.before_pinned,
       });

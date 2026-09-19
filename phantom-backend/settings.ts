@@ -93,6 +93,13 @@ export const DEFAULTS = {
   auto_build: false as boolean,
   loop_budget_tokens: null as number | null,   // null = no limit
   card_prefix: null as string | null,   // unset => derived from the repo name; workspace-only
+  // ── crons ─────────────────────────────────────────────────────────────────
+  // Scheduled prompts (crons.ts, crons/engine.ts): each opens a new coding
+  // session in its workspace and runs one turn. The master switch pauses a
+  // workspace's crons without touching each one; the zone is what every
+  // schedule in the workspace is read in.
+  cron_enabled: true as boolean,
+  cron_timezone: 'UTC' as string,
   // ── sessions ──────────────────────────────────────────────────────────────
   spare_clones: 2,
   maintenance_interval_ms: 60_000,
@@ -210,6 +217,8 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   auto_push_on_archive: 'Archiving a done card auto-pushes its session\'s work to the base branch; a failed push un-archives the card into blocked. Archiving from any other column never pushes.',
   agent_git_credentials: 'Puts the GitHub token inside the container so the agent can run git and gh itself — the agent can then read it. Applies when the container restarts; off does not reclaim it from a running one.',
   card_prefix: 'The letters in front of every card number on this board — "PHA" gives PHA-7. Unset means the first three letters of the repo name.',
+  cron_enabled: 'Scheduled prompts (crons) for this workspace. Off: none fire, and the agents lose their cron tools; the crons themselves are kept. A slot missed while off is not made up.',
+  cron_timezone: 'The time zone every cron schedule is read in — an IANA name like America/New_York or Europe/London. "0 9 * * *" is 9am in this zone.',
   coding_provider: 'The coding agent\'s LLM provider. Its key is set on /keys. Nothing runs until one is chosen.',
   coding_model: 'Model id for the chosen provider. Empty = the newest model the catalog lists for it, so it follows releases.',
   coding_base_url: 'Endpoint for openai / openai-compatible. Required by openai-compatible.',
@@ -270,7 +279,7 @@ export interface SettingMeta {
   /** The heading a settings screen files this under — an agent, or an
    *  area. Lives here so every client draws the same sections and a new
    *  setting must pick one. */
-  group: 'coding' | 'assistant' | 'supervisor' | 'board' | 'sessions' | 'containers' | 'git' | 'limits' | 'telegram';
+  group: 'coding' | 'assistant' | 'supervisor' | 'board' | 'crons' | 'sessions' | 'containers' | 'git' | 'limits' | 'telegram';
   /** The sub-heading inside an agent's group. */
   subgroup?: 'model' | 'compaction' | 'voice';
   /** What to call this setting on screen. The key is the identifier — it is
@@ -292,11 +301,25 @@ export interface SettingMeta {
    *  `--shallow-since=7.dayz` exits 0 and quietly uses a different window), so
    *  nothing downstream will ever catch a typo. */
   pattern?: RegExp;
+  /** A string check no grammar can express — the value must name something
+   *  that exists (a time zone). Returns why it is refused, or null. */
+  check?: (value: string) => string | null;
+  /** The values to offer for an open string — the cli draws a field that
+   *  filters this list as you type (the model catalog's combobox). Not a
+   *  closed set like `choices`: `check` is what refuses a value off it. */
+  suggestions?: readonly string[];
   unit?: 'ms' | 'bytes' | 'mb' | 'count';
   min?: number;
 }
 
 type Group = SettingMeta['group'];
+/** An IANA zone this Node knows — the same table croner and Intl read, so a
+ *  zone accepted here is one every schedule can be evaluated in. A typo
+ *  stored here would make every cron in the workspace fail at its tick. */
+const TIMEZONES: readonly string[] = ['UTC', ...Intl.supportedValuesOf('timeZone').filter((z) => z !== 'UTC')];
+const checkTimezone = (v: string): string | null =>
+  TIMEZONES.includes(v) ? null
+    : `cron_timezone must be an IANA time zone name like America/New_York or Europe/London (got "${v}")`;
 const ms = (label: string, group: Group, min = 0): SettingMeta => ({ type: 'number', label, group, unit: 'ms', min });
 const count = (label: string, group: Group, min = 0): SettingMeta => ({ type: 'number', label, group, unit: 'count', min });
 const bytes = (label: string, group: Group): SettingMeta => ({ type: 'number', label, group, unit: 'bytes', min: 1 });
@@ -324,6 +347,8 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
   auto_push_on_archive: { type: 'boolean', label: 'auto-push on archive', group: 'git' },
   agent_git_credentials: { type: 'boolean', label: 'agent github access', group: 'git' },
   card_prefix: { type: 'string', label: 'card number prefix', group: 'board', nullable: true },
+  cron_enabled: { type: 'boolean', label: 'crons', group: 'crons' },
+  cron_timezone: { type: 'string', label: 'time zone', group: 'crons', check: checkTimezone, suggestions: TIMEZONES },
   coding_provider: { type: 'string', label: 'provider', group: 'coding', subgroup: 'model', nullable: true, choices: PROVIDERS },
   coding_model: { type: 'string', label: 'model', group: 'coding', subgroup: 'model', nullable: true },
   coding_base_url: { type: 'string', label: 'endpoint', group: 'coding', subgroup: 'model', nullable: true },
@@ -407,6 +432,7 @@ export function validateSetting(key: SettingKey, value: unknown): string | null 
   if (m.type === 'boolean') return typeof value === 'boolean' ? null : `${key} must be true or false`;
   if (typeof value !== 'string') return `${key} must be a string`;
   if (m.pattern && !m.pattern.test(value)) return `${key} is not a valid ${m.label}: "${value}"`;
+  if (m.check) return m.check(value);
   return null;
 }
 
@@ -448,6 +474,7 @@ const WORKSPACE_OVERRIDABLE: readonly SettingKey[] = [
   'spare_clones', 'initial_history_depth', 'container_image', 'container_docker',
   'auto_push_on_archive', 'agent_git_credentials', 'card_prefix',
   'auto_plan', 'auto_build', 'loop_budget_tokens', 'telegram_auto_build_notifications',
+  'cron_enabled', 'cron_timezone',
 ];
 
 /** Settings that are a fact about ONE workspace — a card prefix names one

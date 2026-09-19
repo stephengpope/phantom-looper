@@ -58,6 +58,16 @@ export const LAST_MESSAGE_CHARS = 200;
  *  turns. The engine locks with it, the release hook ignores it, and the
  *  transcript save reads who drove the turn off it. */
 export const LOOP_CLIENT_ID = 'supervisor';
+/** The cron engine's client id — the holder whose saves are a cron's run
+ *  (crons/engine.ts). Same role as the looper's: the transcript save reads
+ *  who drove the turn off it. */
+export const CRON_CLIENT_ID = 'cron';
+
+/** The seats no person and no coder sits in — the looper's supervisor record
+ *  and a cron's run. /resume hides them unless asked (`background=false`);
+ *  a person who types into a cron's session takes it over (agentAfterSave)
+ *  and it stops being one. */
+export const BACKGROUND_AGENTS = ['supervisor', 'cron'] as const;
 
 /** What GET /sessions accepts — the object owns what the list IS: the
  *  filters and the count share one WHERE, so `total` is exactly the rows the
@@ -65,8 +75,9 @@ export const LOOP_CLIENT_ID = 'supervisor';
 export interface ListQuery {
   /** Only sessions something was typed into (a last message exists). */
   typed?: boolean;
-  /** false = leave out the looper's supervisor seats. */
-  supervisor?: boolean;
+  /** false = leave out the background seats (BACKGROUND_AGENTS): the
+   *  looper's supervisor records and cron runs. */
+  background?: boolean;
   /** One substring, case-insensitive, anywhere in the name, the last user
    *  message or the branch. */
   q?: string;
@@ -146,14 +157,17 @@ export function expiredHold(s: Pick<SessionRow, 'lockedBy' | 'lockedLabel' | 'lo
 
 /** `sessions.agent` after `client` saved a turn: WHO DROVE THE LAST TURN.
  *  The supervisor's record is the supervisor's for life (read-only in every
- *  client). The coder's seat is 'coding' while the loop's turns land in it and
- *  a PERSON's (null) the moment anyone else's does — typing into a card's
- *  session takes it over; the loop takes it back the next time it drives.
- *  Read off the writer's identity at the record's one door, never off a
- *  client's claim, which is what keeps the column trustworthy. */
-export function agentAfterSave(current: string | null, client: string): 'coding' | 'supervisor' | null {
+ *  client). The coder's seat is 'coding' while the loop's turns land in it,
+ *  a cron's session is 'cron' while the cron engine's do, and either is a
+ *  PERSON's (null) the moment anyone else's does — typing into it takes it
+ *  over; the loop takes its seat back the next time it drives. Read off the
+ *  writer's identity at the record's one door, never off a client's claim,
+ *  which is what keeps the column trustworthy. */
+export function agentAfterSave(current: string | null, client: string): 'coding' | 'supervisor' | 'cron' | null {
   if (current === 'supervisor') return 'supervisor';
-  return client === LOOP_CLIENT_ID ? 'coding' : null;
+  if (client === LOOP_CLIENT_ID) return 'coding';
+  if (client === CRON_CLIENT_ID) return 'cron';
+  return null;
 }
 
 // ── The object ───────────────────────────────────────────────────────────────
@@ -274,7 +288,7 @@ export class Sessions {
   async list(q: ListQuery): Promise<{ sessions: ListedSession[]; total: number }> {
     const filters = [];
     if (q.typed === true) filters.push(isNotNull(sessions.lastUserMessage));
-    if (q.supervisor === false) filters.push(or(isNull(sessions.agent), ne(sessions.agent, 'supervisor')));
+    if (q.background === false) filters.push(or(isNull(sessions.agent), not(inArray(sessions.agent, [...BACKGROUND_AGENTS]))));
     // ONE substring, wherever it appears — no word splitting, no ranking; the
     // list keeps its order and just gets shorter. `%` and `_` are LIKE's own
     // wildcards, so typed ones are escaped.
@@ -555,7 +569,7 @@ export class Sessions {
    *  the id so the writer ignores its own echo. Returns what the naming
    *  decision needs. */
   async saveTranscript(s: SessionRow, data: string, client: string): Promise<{
-    stamp: Date; agent: 'coding' | 'supervisor' | null;
+    stamp: Date; agent: 'coding' | 'supervisor' | 'cron' | null;
     name: string | null; turnCount: number; nameManual: boolean;
   }> {
     // A list preview, not the record: the UI shows a few dozen characters,
@@ -679,10 +693,11 @@ export class Sessions {
     if (s.folderId) await this.folders.touch(s.folderId);
   }
 
-  /** Tag a conversation with who drives it. The loop stamps its coder seat at
-   *  every turn START (so the row is right while the turn runs); the transcript
-   *  save re-derives it from the writer at turn END (agentAfterSave). */
-  async stampAgent(id: string, agent: 'coding' | 'supervisor'): Promise<void> {
+  /** Tag a conversation with who drives it. The loop stamps its coder seat
+   *  (and the cron engine its run) at every turn START (so the row is right
+   *  while the turn runs); the transcript save re-derives it from the writer
+   *  at turn END (agentAfterSave). */
+  async stampAgent(id: string, agent: 'coding' | 'supervisor' | 'cron'): Promise<void> {
     await this.db.update(sessions).set({ agent }).where(eq(sessions.id, id));
     this.changed(id);
   }

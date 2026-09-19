@@ -32,7 +32,8 @@ export interface SessionInfo {
   /** The model-written title — what the session is building (server-computed). */
   name?: string | null;
   /** Who drove the last turn: 'coding'/'supervisor' for the loop's seats,
-   *  null = a person's (server-derived from the writer at every save). */
+   *  'cron' for a scheduled prompt's run, null = a person's (server-derived
+   *  from the writer at every save). */
   agent?: string | null;
   card?: number | null;
   /** The card's board column (plan, in_progress, blocked, done …), from the
@@ -105,10 +106,11 @@ export function lastWorkspaceId(workspaces: WorkspaceInfo[], sessions: SessionIn
  *  alone, never the card: the card link is permanent, but who is driving is
  *  not — a person who types into a card's coding session takes it over, and
  *  the row says so from the next save. `coder` names the seat, not the loop. */
-export type Driver = 'supervisor' | 'coder' | 'assistant' | 'manual';
+export type Driver = 'supervisor' | 'coder' | 'cron' | 'assistant' | 'manual';
 export function whoDrives(s: Pick<SessionInfo, 'agent'>): Driver {
   return s.agent === 'supervisor' ? 'supervisor'
     : s.agent === 'coding' ? 'coder'
+    : s.agent === 'cron' ? 'cron'
     : s.agent === 'assistant' ? 'assistant'
     : 'manual';
 }
@@ -146,14 +148,14 @@ export function sessionChoices(
   busy: (sessionId: string) => boolean = () => false,
   loaded: (sessionId: string) => boolean = () => false,
   clientId = '',
-  showSupervised = false,
+  showBackground = false,
   query = '',
 ): Choice<Launch | null>[] {
   const byId = new Map(workspaces.map((w) => [w.id, w]));
   // WHICH sessions are listed is the server's call (`GET /sessions?typed=
-  // true&supervisor=false` — never-typed rows and the looper's supervisor
-  // seats left out there, so a page is a page on screen and the count is
-  // real). The one thing only this window knows is what is OPEN here: an
+  // true&background=false` — never-typed rows and the background seats, the
+  // looper's supervisor records and cron runs, left out there, so a page is
+  // a page on screen and the count is real). The one thing only this window knows is what is OPEN here: an
   // open session nothing was typed into yet would be missing from the
   // server's list, and /resume is the switcher — hiding an open session
   // would strand it. App merges those in (`sessions` already carries them).
@@ -169,10 +171,10 @@ export function sessionChoices(
     || Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt));
   if (!sessions.length) {
     if (query.trim()) return [{ value: null, label: `no sessions match “${query.trim()}”`, heading: true }];
-    return showSupervised
+    return showBackground
       ? [{ value: null, label: 'no sessions yet', detail: 'start one with /workspace', heading: true }]
       : [{ value: null, label: 'no sessions yet',
-          detail: 'start one with /workspace · [s] shows the looper\'s card sessions', heading: true }];
+          detail: 'start one with /workspace · [s] shows every session, supervisor records and cron runs included', heading: true }];
   }
   // The workspace column is its card prefix ("PHA") — the resolved value the
   // server sends on the list; a server without it falls back to the label. A
@@ -203,8 +205,10 @@ export function sessionChoices(
   const COLS = { card: 8, work: 14, name: 42, model: 20, tokens: 24 };
   const rows = sessions.map((s): TableRow<Launch | null> => {
     // A supervisor session names itself: the looper's verdict record for its
-    // card — read-only.
+    // card — read-only. A cron's run is a normal coding session that a
+    // schedule opened; typing into it takes it over.
     const sup = s.agent === 'supervisor';
+    const cron = s.agent === 'cron';
     const dead = s.status !== 'active';
     // Loaded in THIS window's memory (running wins the marker slot).
     const open = !dead && loaded(s.id);
@@ -255,7 +259,8 @@ export function sessionChoices(
             ? `A turn is running (${s.lockedLabel || 'another machine'}); read freely — sends are refused while it runs.`
             : open
               ? 'Loaded in this window — enter switches to it.'
-              : sup ? `The looper's rounds and verdicts for card ${s.card ?? '?'} — read-only.` : undefined,
+              : sup ? `The looper's rounds and verdicts for card ${s.card ?? '?'} — read-only.`
+              : cron ? 'A scheduled prompt\'s run (cron) — chat into it and it is yours.' : undefined,
       ].filter(Boolean).join('\n') || undefined,
     };
   });
@@ -303,7 +308,7 @@ export function workspaceChoices(workspaces: WorkspaceInfo[], canAdd = true): Ch
 /** One list, two uses. `mode` decides which — sessions for /resume, workspaces
  *  for a fresh start. Deliberately not both at once: launching means "start
  *  work", reopening is a different intent with its own command. */
-export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clientId, onPick, onEdit, onDuplicate, onPin, onPing, onClose, onTrash, onCancel, onNearEnd, showSupervised, onToggleSupervised, query = '', rowsQuery = query, onQuery, now, title, footer, notice, canAdd }: {
+export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clientId, onPick, onEdit, onDuplicate, onPin, onPing, onClose, onTrash, onCancel, onNearEnd, showBackground, onToggleBackground, query = '', rowsQuery = query, onQuery, now, title, footer, notice, canAdd }: {
   mode: 'sessions' | 'workspaces';
   /** [/] on /resume: the filter line's text, and where it goes. The list
    *  is the server's answer to it (WindowStore.pickerQuery); this screen
@@ -320,10 +325,11 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
    *  filters in force, plus what this window merged in) — `sessions` is the
    *  pages loaded so far. Omitted = the loaded rows are the list. */
   total?: number;
-  /** The looper's supervisor seats are hidden unless this is on; [s] asks
-   *  the owner to flip it (the list is re-read with the switch). */
-  showSupervised?: boolean;
-  onToggleSupervised?: () => void;
+  /** The background seats — the looper's supervisor records and cron runs —
+   *  are hidden unless this is on; [s] asks the owner to flip it (the list
+   *  is re-read with the switch). */
+  showBackground?: boolean;
+  onToggleBackground?: () => void;
   /** Is this session running a turn in THIS window right now? The server list
    *  cannot know; the SessionStore can. */
   busy?: (sessionId: string) => boolean;
@@ -374,9 +380,9 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
   const [filtering, setFiltering] = useState(false);
   const leaveFilter = () => { setFiltering(false); onQuery?.(''); };
   useInput((_ch, key) => { if (key.escape) leaveFilter(); }, { isActive: filtering });
-  // The looper's card sessions are hidden by default; [s] toggles them in.
+  // The background seats are hidden by default; [s] shows every session.
   const choices = mode === 'sessions'
-    ? sessionChoices(workspaces, sessions ?? [], now, busy, loaded, clientId, showSupervised ?? false, rowsQuery)
+    ? sessionChoices(workspaces, sessions ?? [], now, busy, loaded, clientId, showBackground ?? false, rowsQuery)
     : workspaceChoices(workspaces, canAdd ?? true);
   if (filtering) {
     return (
@@ -413,7 +419,7 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
           { key: 'd', does: 'duplicate', when: canCopy },
           { key: 't', does: 'trash', when: canCopy },
           { key: 'i', does: 'ping', when: canPing },
-          { key: 's', does: 'supervised', when: canCopy, active: showSupervised },
+          { key: 's', does: 'show all', when: canCopy, active: showBackground },
           { key: 'esc', does: 'exit' },
         ])}>
       <SelectList
@@ -429,7 +435,7 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
           else if (ch === 'n' && (canAdd ?? true)) onPick({ kind: 'add' });
         } : mode === 'sessions' ? (ch, v) => {
           if (ch === '/' && canFilter) { setFiltering(true); return; }
-          if (ch === 's') { onToggleSupervised?.(); return; }
+          if (ch === 's') { onToggleBackground?.(); return; }
           if (v?.kind !== 'resume') return;
           if (ch === 'd') onDuplicate?.(v.sessionId);
           else if (ch === 'p') onPin?.(v.sessionId);

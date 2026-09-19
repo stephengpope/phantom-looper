@@ -24,6 +24,7 @@ import { phantomTools } from '../core/llm/tools/workspace.js';
 import { skillTools } from '../core/llm/tools/skills.js';
 import { webTools } from '../core/llm/tools/web.js';
 import { secretTools } from '../core/llm/tools/secrets.js';
+import { cronTools } from '../core/llm/tools/crons.js';
 import { autoPushSession as corePush, autoPullSession as corePull } from '../core/llm/tools/git.js';
 import { newId } from '../core/ids.js';
 import { App } from './App.js';
@@ -323,6 +324,10 @@ const webKit = (id: string) => webTools({ baseUrl: `${connection().base}/api`, a
 // Workspace-bound, not session-bound: the workspace's secrets shadow global
 // ones by name, and only App knows which workspace a session is in.
 const secretKit = (ws: string) => secretTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, workspaceId: ws });
+// The workspace's scheduled prompts — same binding; plan mode gates the
+// writes; empty when the workspace's crons are switched off.
+const cronKit = (ws: string, planMode?: () => boolean) =>
+  cronTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, workspaceId: ws, planMode });
 // The session you quit from is not necessarily the one you started in — /new,
 // /resume, /workspace and tab all move it — so track the live one and print
 // THAT id on the way out. One line, for the session you were actually in:
@@ -422,9 +427,9 @@ const app = render(
     autoPull={autoPullSession}
     boot={{ ...(resumeId ? { resumeId } : {}) }}
     newTools={(id, _plan, ws, planMode) => phantomTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, sessionId: id, planMode })
-      .then((t) => ({ ...t, ...skillKit(id, planMode), ...webKit(id), ...(ws ? secretKit(ws) : {}) }))}
-    newAssistantTools={(id) => phantomTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, sessionId: id, pick: 'readonly' })
-      .then((t) => ({ ...t, ...webKit(id) }))}
+      .then(async (t) => ({ ...t, ...skillKit(id, planMode), ...webKit(id), ...(ws ? { ...secretKit(ws), ...await cronKit(ws, planMode) } : {}) }))}
+    newAssistantTools={(id, ws) => phantomTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, sessionId: id, pick: 'readonly' })
+      .then(async (t) => ({ ...t, ...webKit(id), ...await cronKit(ws) }))}
     onSession={(s) => { currentId = s.id; openedIds.add(s.id); }}
     onWindow={(w) => { windowStore = w; if (installedVersion) w.setUpdateReady(installedVersion); }}
     clientId={CLIENT_ID}

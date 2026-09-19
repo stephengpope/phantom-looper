@@ -133,7 +133,7 @@ export async function handleCommand(
         return;
       }
       // Bare: list them.
-      const j = await (await engine.api('/sessions?typed=true&supervisor=false&limit=10')).json();
+      const j = await (await engine.api('/sessions?typed=true&background=false&limit=10')).json();
       if (!j.ok || !j.data.sessions.length) { await reply('ℹ️ No sessions yet. /new starts one.'); return; }
       sessionList.set(dm, j.data.sessions.map((s: any) => s.id));
       const rows = j.data.sessions.map((s: any, i: number) =>
@@ -371,7 +371,7 @@ export async function handleCommand(
       // Never touches the active-session pointer — it's a remote kill.
 
       if (arg === 'all') {
-        const j = await (await engine.api('/sessions?typed=true&supervisor=false&limit=50')).json();
+        const j = await (await engine.api('/sessions?typed=true&background=false&limit=50')).json();
         const locked = j.ok ? (j.data.sessions ?? []).filter((s: any) => s.locked) : [];
         if (!locked.length) { await reply('ℹ️ Nothing is running.'); return; }
         const names: string[] = [];

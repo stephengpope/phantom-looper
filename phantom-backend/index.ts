@@ -11,6 +11,8 @@ import { Folders } from './folders.js';
 import { Cards } from './cards.js';
 import { BackgroundTasks } from './backgroundTasks.js';
 import { Presets } from './presets.js';
+import { Crons } from './crons.js';
+import { CronEngine } from './crons/engine.js';
 import { setTokenRecorder } from '../core/llm/createAgent.js';
 import { LogTokens } from './logTokens.js';
 import { TelegramBotState } from './telegram/botState.js';
@@ -78,6 +80,7 @@ async function main() {
   });
   const backgroundTasks = new BackgroundTasks(db);
   const presets = new Presets(db);
+  const crons = new Crons(db);
   const logTokens = new LogTokens(db);
   // Every model call in this process records here (core languageModel).
   setTokenRecorder((r) => {
@@ -271,7 +274,7 @@ async function main() {
   // app exists — the engine is a headless client of this app, so it is built
   // second; routes read ctx.looper per request, so the late set is seen.
   const ctx: AppCtx = {
-    settings, workspaces, folders, cards, sessions, backgroundTasks, presets, logTokens,
+    settings, workspaces, folders, cards, sessions, backgroundTasks, presets, crons, logTokens,
     paths, apiKey: env.apiKey, version: VERSION,
     fs: { docker, containers, engine },
     engine,
@@ -295,6 +298,14 @@ async function main() {
     sessionEvents: ctx.sessionEvents, activeTurns: ctx.activeTurns, backdoor: ctx.backdoor });
   ctx.looper = looper;
   looper.start();
+
+  // The cron scheduler — the same shape: a client of this app, built after
+  // listen. One croner job per cron row fires at its time; a refresh every
+  // minute re-reads the rows so a cron the agent just created is scheduled
+  // without a restart.
+  const cronEngine = new CronEngine({ crons, workspaces, settings, sessions, app, apiKey: env.apiKey,
+    sessionEvents: ctx.sessionEvents, activeTurns: ctx.activeTurns, backdoor: ctx.backdoor });
+  cronEngine.start();
 
   // The Telegram engine — a client of this app like the looper. The webhook
   // URL is always https + PHANTOM_BACKEND_ADDRESS (the same fact the https
@@ -337,6 +348,7 @@ async function main() {
   const shutdown = async () => {
     stopped = true;
     looper.stop();
+    cronEngine.stop();
     digest.stop();
     await app.close();
     await pgPool.end();

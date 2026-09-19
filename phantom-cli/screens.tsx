@@ -188,8 +188,8 @@ export const pickerScreen = (w: WindowStore, which: 'workspace' | 'resume'): Ove
   w.picker ? <Launcher
     mode={which === 'resume' ? 'sessions' : 'workspaces'}
     workspaces={w.workspaceRows} sessions={w.picker.sessions} total={w.picker.total}
-    showSupervised={w.showSupervised}
-    onToggleSupervised={() => w.toggleSupervised()}
+    showBackground={w.showBackground}
+    onToggleBackground={() => w.toggleBackground()}
     query={w.pickerQuery} rowsQuery={w.picker.query}
     onQuery={which === 'resume' ? (q) => w.setPickerQuery(q) : undefined}
     busy={(id) => w.sessions.get(id)?.busy ?? false}

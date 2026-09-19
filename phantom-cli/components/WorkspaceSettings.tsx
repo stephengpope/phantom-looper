@@ -241,6 +241,7 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
             title: `${labelFor(k, s.meta)} · ${label} only`,
             choices: s.meta.choices,
             choiceLabels: s.meta.choiceLabels,
+            suggestions: s.meta.suggestions,
             type: s.meta.type,
             current: s.value,
             note: s.meta.unit === 'ms'

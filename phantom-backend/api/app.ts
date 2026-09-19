@@ -29,6 +29,7 @@ import type { Folders } from '../folders.js';
 import type { Cards } from '../cards.js';
 import type { BackgroundTasks } from '../backgroundTasks.js';
 import type { Presets } from '../presets.js';
+import type { Crons } from '../crons.js';
 import type { LogTokens } from '../logTokens.js';
 import { SettingsEvents } from './settingsEvents.js';
 import { ForegroundCommands } from './foreground.js';
@@ -42,6 +43,7 @@ import { systemRoutes } from './routes/system.js';
 import { tasksRoutes } from './routes/tasks.js';
 import { telegramRoutes } from './routes/telegram.js';
 import { presetRoutes } from './routes/presets.js';
+import { cronRoutes } from './routes/crons.js';
 
 export interface AppCtx {
   // The row owners — one object per table, each the ONLY door to its rows.
@@ -54,6 +56,7 @@ export interface AppCtx {
   sessions: Sessions;
   backgroundTasks: BackgroundTasks;
   presets: Presets;
+  crons: Crons;
   logTokens: LogTokens;
   paths: Paths;
   apiKey: string;
@@ -207,6 +210,7 @@ export async function buildApp(ctx: AppCtx) {
     kanbanRoutes(api, ctx);
     systemRoutes(api, ctx);
     presetRoutes(api, ctx);
+    cronRoutes(api, ctx);
     telegramRoutes(api, ctx);
   }, { prefix: '/api' });
 

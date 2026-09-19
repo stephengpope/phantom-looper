@@ -11,6 +11,7 @@ import { phantomTools } from '../../core/llm/tools/workspace.js';
 import { skillTools } from '../../core/llm/tools/skills.js';
 import { webTools } from '../../core/llm/tools/web.js';
 import { secretTools } from '../../core/llm/tools/secrets.js';
+import { cronTools } from '../../core/llm/tools/crons.js';
 import { kanbanReadTool } from '../../core/llm/tools/kanban.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
 import type { BackdoorQueue } from '../api/backdoor.js';
@@ -73,6 +74,7 @@ export async function runCodingTurn(
     ...skillTools({ ...common, pick }),
     ...webTools(common),
     ...secretTools({ baseUrl: deps.base, apiKey: deps.apiKey, workspaceId, fetch: deps.f }),
+    ...await cronTools({ baseUrl: deps.base, apiKey: deps.apiKey, workspaceId, fetch: deps.f, pick }),
     ...kanbanReadTool({ baseUrl: deps.base, apiKey: deps.apiKey, workspaceId, fetch: deps.f }),
     ...deps.extraTools,
   };

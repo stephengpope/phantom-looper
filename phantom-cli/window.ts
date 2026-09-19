@@ -159,8 +159,9 @@ export interface WindowOptions {
   /** Ink's exit, so /exit and ctrl+c can end the process. */
   exit?: () => void;
   makeAssistantAgent?: typeof buildAssistantAgent;
-  /** The Assistant's read-only workspace tools for one session. */
-  newAssistantTools?: (sessionId: string) => Promise<Record<string, Tool>>;
+  /** The Assistant's read-only workspace tools for one session, and its
+   *  cron kit for that session's workspace. */
+  newAssistantTools?: (sessionId: string, workspaceId: string) => Promise<Record<string, Tool>>;
   /** Width of the voice pane as a percent, when `sidebar_width` is not set. */
   sidebarPercent?: number;
   /** This window's session-lock id, so its own held sessions do not read
@@ -1084,10 +1085,11 @@ export class WindowStore {
    *  state reads it) — the live text is `pickerQuery`, which runs ahead. */
   picker: { sessions: SessionInfo[]; total: number; end: boolean; query: string } | null = null;
   pickerNotice: string | undefined;
-  /** [s] on /resume: the looper's supervisor seats in the list or not. A fetch
-   *  parameter, not a filter — the server decides what the list is. */
-  showSupervised = false;
-  /** [/] on /resume: the filter line's text — like showSupervised, a fetch
+  /** [s] on /resume: the background seats — the looper's supervisor records
+   *  and cron runs — in the list or not. A fetch parameter, not a filter —
+   *  the server decides what the list is. */
+  showBackground = false;
+  /** [/] on /resume: the filter line's text — like showBackground, a fetch
    *  parameter the server applies (one substring, anywhere in the name,
    *  the last message or the branch), never a local sieve over a page.
    *  Empty = no filter; cleared when the picker opens and when filter mode
@@ -1115,10 +1117,10 @@ export class WindowStore {
 
   // ── /resume and /workspace ────────────────────────────────────────────────
 
-  /** The list's FILTERS are the server's (`typed`, `supervisor`): a page is a
+  /** The list's FILTERS are the server's (`typed`, `background`): a page is a
    *  page on screen, and `total` is the count for exactly these filters. */
   private listQuery(): string {
-    return `typed=true${this.showSupervised ? '' : '&supervisor=false'}`
+    return `typed=true${this.showBackground ? '' : '&background=false'}`
       + (this.pickerQuery.trim() ? `&q=${encodeURIComponent(this.pickerQuery.trim())}` : '');
   }
 
@@ -1296,8 +1298,8 @@ export class WindowStore {
   };
 
   /** [s] on /resume: flip the filter and re-read. */
-  toggleSupervised(): void {
-    this.showSupervised = !this.showSupervised;
+  toggleBackground(): void {
+    this.showBackground = !this.showBackground;
     this.notify();
     void this.refreshPicker().catch(quiet('refresh the session list'));
   }

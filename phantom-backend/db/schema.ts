@@ -292,8 +292,31 @@ export const logTokens = phantomLooper.table('log_tokens', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Crons (migration 037): a workspace's scheduled prompts. The scheduler
+// (crons/engine.ts) holds one croner job per enabled row, re-read every
+// minute; at its time a job opens a NEW coding session in the workspace and
+// runs the prompt as one turn — the session is the run's record. A slot
+// that passed while the server was down never fires. RECURRING: `schedule` is a 5-field cron expression, the row lives
+// until removed. ONE-TIME (`once`): `schedule` is an ISO datetime, the row
+// fires and is deleted. Read in the workspace's `cron_timezone`. Crons
+// (crons.ts) is its one owner. Column keys are snake_case like cards': a row
+// IS the API's cron.
+export const crons = phantomLooper.table('crons', {
+  id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+  workspace_id: text('workspace_id').notNull(),
+  name: text('name').notNull(),   // the handle — unique per workspace, case-insensitively
+  schedule: text('schedule').notNull(),
+  once: boolean('once').notNull(),
+  prompt: text('prompt').notNull(),
+  enabled: boolean('enabled').notNull().default(true),
+  last_run_at: timestamp('last_run_at', { withTimezone: true }),   // when it last fired; null = never
+  created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type WorkspaceRow = typeof workspaces.$inferSelect;
 export type CardRow = typeof cards.$inferSelect;
+export type CronRow = typeof crons.$inferSelect;
 export type FolderRow = typeof folders.$inferSelect;
 /** The checkout's facts as a session carries them: joined from its folder
  *  on every read. `status` says whether the files exist ('active' /

@@ -122,8 +122,9 @@ export function App({
   makeAssistantAgent?: typeof buildAssistantAgent;
   /** The Assistant's workspace tools for one session — the real one is
    *  phantomTools(pick:'readonly') (read ls find grep, the server's
-   *  non-mutating set). Rebuilt onto whichever session is on screen. */
-  newAssistantTools?: (sessionId: string) => Promise<Record<string, Tool>>;
+   *  non-mutating set) plus the cron kit for the session's workspace.
+   *  Rebuilt onto whichever session is on screen. */
+  newAssistantTools?: (sessionId: string, workspaceId: string) => Promise<Record<string, Tool>>;
   /** The screen mirror (screen.ts): what text is at which cells, and the
    *  selection highlight. Absent in tests — selection still tracks, copies
    *  nothing. */

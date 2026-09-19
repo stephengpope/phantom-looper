@@ -24,6 +24,10 @@ Put a card in the **plan** column and the loop takes it from there: a coding age
 
 Open sessions, add cards, move them, tick requirements, switch auto plan and auto build on and off, and create a new repo and workspace, all by voice. The assistant works the same board and sessions you do, so you can manage a day's work without touching the keyboard.
 
+### ⏰ Crons — Schedule a prompt; it runs unattended.
+
+Tell the coding agent or the assistant "every weekday at 9, summarize what landed on main" or "remind me tonight at 6:50 to check the deploy", and it schedules it. When the time comes the server opens a fresh session in the workspace, runs the prompt as one turn, and closes it — the session is the record, on `/resume` (behind `[s]`) and in the Telegram digest. Recurring ones take a cron expression, one-time ones a date and time, all read in the workspace's time zone (`/settings` → crons). Crons live in the database with the cards, addressed by name; the agents manage them with the `cron_*` tools.
+
 ### 🛰 Any device — Start on one machine, continue on another.
 
 Every session lives on your server, conversation and all. Open the app anywhere, pick the session up, and carry on where it left off. Close the laptop and the looper keeps building.
@@ -114,6 +118,7 @@ The full product: voice, web, and the looper on autopilot. Row names are the one
 | `auto plan` + `auto build` on | `/settings` | cards in plan and in progress drive themselves |
 | `auto-push on archive` on | `/settings` | archiving a done card merges and pushes it |
 | `loop token budget` | `/settings` | a spend cap per card run |
+| `time zone` under crons | `/settings` | scheduled prompts fire in your zone, not UTC |
 | `boot into last workspace` on | `/settings` | skip the picker, start where you left off |
 
 ### The server, from the app or Telegram

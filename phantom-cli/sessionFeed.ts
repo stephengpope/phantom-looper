@@ -35,7 +35,7 @@ export interface FeedHooks {
 }
 
 const agentName = (agent: string): string | undefined =>
-  agent === 'coding' ? 'coding agent' : agent === 'supervisor' ? 'supervisor' : undefined;
+  agent === 'coding' ? 'coding agent' : agent === 'supervisor' ? 'supervisor' : agent === 'cron' ? 'cron' : undefined;
 
 export class SessionFeed {
   private ac = new AbortController();

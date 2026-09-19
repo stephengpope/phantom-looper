@@ -271,8 +271,9 @@ export function gitHandlers(win: WindowStore) {
 }
 
 /** The Assistant's whole kit: the tools the window answers, plus the read-only
- *  workspace tools, run as the assistant's OWN session (`own`) — the server
- *  opens its folder, the on-screen session's, re-pointed on every switch.
+ *  workspace tools and the cron kit, run as the assistant's OWN session (`own`)
+ *  — the server opens its folder, the on-screen session's, re-pointed on every
+ *  switch — in the on-screen session's workspace.
  *  Rebuilt (setAgent — the history is kept) when that session changes; a
  *  failed fetch just means no file tools; no row yet (nothing on screen) means
  *  none either. The ORDER is part of the kit: two tests read the key list. */
@@ -280,10 +281,12 @@ export async function buildAssistantKit(win: WindowStore, deps: {
   api: Api;
   clientId: string;
   workspaces: WorkspaceDirectory;
-  newAssistantTools: (sessionId: string) => Promise<Record<string, Tool>>;
+  newAssistantTools: (sessionId: string, workspaceId: string) => Promise<Record<string, Tool>>;
 }, own: { id: string; folderId: string | null } | null): Promise<Record<string, Tool>> {
   const git = gitHandlers(win);
   const sessionId = own?.folderId ? own.id : null;
+  // The on-screen session's workspace — where the assistant's crons go.
+  const workspaceId = win.sessions.active()?.workspaceId ?? null;
   return {
     ...sessionsTool(sessionsHandler(win, deps.api, deps.clientId, deps.workspaces)),
     ...assistantKanbanTool(kanbanHandler(win)),
@@ -292,7 +295,8 @@ export async function buildAssistantKit(win: WindowStore, deps: {
     ...gitAutoPullTool(git.pull),
     ...assistantModeTool(win.screenOps()),
     ...dockerLogsTool(dockerLogsHandler(deps.api)),
-    ...(sessionId ? await deps.newAssistantTools(sessionId).catch(() => ({} as Record<string, Tool>)) : {}),
+    ...(sessionId && workspaceId
+      ? await deps.newAssistantTools(sessionId, workspaceId).catch(() => ({} as Record<string, Tool>)) : {}),
   };
 }
 

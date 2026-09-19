@@ -28,6 +28,7 @@ import { assistantKanbanTool, sessionsTool, workspaceCreateTool, gitAutoPushTool
 import { autoPushSession, autoPullSession } from '../../core/llm/tools/git.js';
 import { phantomTools } from '../../core/llm/tools/workspace.js';
 import { webTools } from '../../core/llm/tools/web.js';
+import { cronTools } from '../../core/llm/tools/crons.js';
 import { parseTranscript, usageEvent, type Transcript } from '../../core/llm/transcript.js';
 import type { TelegramSink } from './sink.js';
 
@@ -121,7 +122,7 @@ function sessionsHandler(
       case 'list': {
         const limit = args.limit ?? 30;
         const offset = args.offset ?? 0;
-        const j = await api(deps, `/sessions?typed=true&supervisor=false&limit=${limit + offset}`);
+        const j = await api(deps, `/sessions?typed=true&background=false&limit=${limit + offset}`);
         if (!j.ok) return { error: j.error?.message };
         const rows = (j.data.sessions as Array<Record<string, unknown>>).slice(offset, offset + limit);
         return {
@@ -234,8 +235,10 @@ function dockerLogsHandler(deps: AssistantDeps) {
 /** The Assistant's whole kit for a telegram turn. File tools + web bind to
  *  the assistant's OWN session — the server opens its folder, the on-screen
  *  session's, re-pointed on every switch (Sessions.follow) — when it has one
- *  (read-only); board + sessions + the gated workspace_create_repo +
- *  git_auto_push + git_auto_pull + docker_logs always. */
+ *  (read-only); the cron kit to the active workspace when there is one and
+ *  its crons are switched on;
+ *  board + sessions + the gated workspace_create_repo + git_auto_push +
+ *  git_auto_pull + docker_logs always. */
 export async function assistantKit(deps: AssistantDeps, ctx: AssistantCtx, own: SessionRow): Promise<Record<string, Tool>> {
   const { workspaceId, activeSession, onSwitch } = ctx;
   const kit: Record<string, Tool> = {
@@ -256,6 +259,8 @@ export async function assistantKit(deps: AssistantDeps, ctx: AssistantCtx, own: 
       await phantomTools({ ...common, pick: 'readonly' }),
       webTools(common));
   }
+  const ws = workspaceId();
+  if (ws) Object.assign(kit, await cronTools({ baseUrl: BASE, apiKey: deps.apiKey, workspaceId: ws, fetch: deps.f }));
   return kit;
 }
 
