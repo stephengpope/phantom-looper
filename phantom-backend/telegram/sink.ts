@@ -10,8 +10,8 @@
 
 import type { TelegramClient } from './client.js';
 import { toTelegram, splitFormatted, truncateFormatted } from './entities.js';
-import { startWaitingBubble } from './bubble.js';
-import { collectDeliverables, extractMedia } from './mediaTags.js';
+import { startWaitingBubble, type WaitingBubble } from './bubble.js';
+import { collectDeliverables, extractMedia, type Deliverable } from './mediaTags.js';
 
 /** Where a reply's files may come from, and how a container path maps to the
  *  host file. Present only for code-mode turns (a session has a work dir);
@@ -26,17 +26,24 @@ export interface DeliverConfig {
 const TOOL_EMOJI: Record<string, string> = {
   bash: '⚙️', read: '📖', write: '✍️', edit: '✏️', grep: '🔎', find: '🔎', ls: '📂',
   secret_get: '🔑', secret_list: '🔑', web_search: '🌐', web_fetch: '🌐',
-  telegram_send_file: '📎', kanban_card_read: '📋', skill_load: '📚',
+  send_message: '📨', kanban_card_read: '📋', skill_load: '📚',
 };
 
 /** Fallback when the streamed text cleans down to nothing. */
 const PLACEHOLDER = '…';
 
+/** A bubble that was never posted — claim() yields no slot, so every send
+ *  is a fresh message. */
+const NO_BUBBLE: WaitingBubble = { claim: async () => null, remove: async () => {}, stop: () => {} };
+
 export interface TelegramSink {
   /** Feed one AI SDK stream part (the feed's `part.part`). */
   part(part: Record<string, unknown>): void;
-  /** Close the reply: flush the authoritative final text, chunked. */
-  done(finalText: string): Promise<void>;
+  /** Close the reply: flush the authoritative final text, chunked, then the
+   *  files it named. THE door for agent text — every reply and the
+   *  send_message tool end here; nothing else turns agent text into Telegram
+   *  messages. Returns the text as sent (files cut out) — what to speak. */
+  done(finalText: string): Promise<string>;
   /** Tear down a turn that threw — never reached by done(). */
   dispose(): Promise<void>;
 }
@@ -50,7 +57,7 @@ export interface TelegramSink {
  */
 export function makeTelegramSink(
   client: TelegramClient, chatId: number, deliver?: DeliverConfig,
-  opts: { voiceOnly?: boolean } = {},
+  opts: { voiceOnly?: boolean; bubble?: boolean } = {},
 ): TelegramSink {
   const voiceOnly = opts.voiceOnly === true;
   let text = '';                        // current assistant text segment
@@ -152,8 +159,10 @@ export function makeTelegramSink(
 
   // The placeholder goes up before the agent produces anything, so the wait
   // for the first token happens inside a bubble. Whichever of text or a tool
-  // line renders first takes it over — one API call per turn.
-  const bubble = startWaitingBubble(client, chatId);
+  // line renders first takes it over — one API call per turn. `bubble: false`
+  // (a one-shot send_message, nothing to wait for) skips it: done() posts
+  // the text straight out.
+  const bubble = opts.bubble === false ? NO_BUBBLE : startWaitingBubble(client, chatId);
   const editTimer = setInterval(() => { void flush(false); }, 1300);
 
   async function takeSlot() {
@@ -256,7 +265,7 @@ export function makeTelegramSink(
     // Find the files the agent named, cut them from the text, and hold them to
     // send after the words. Delivery turns only (a session's work dir).
     let final = finalText.trim();
-    let files: { path: string; kind: string }[] = [];
+    let files: Deliverable[] = [];
     if (deliver && final) {
       const got = await collectDeliverables(final, deliver.toHost, deliver.roots);
       final = got.cleaned.trim();
@@ -286,11 +295,12 @@ export function makeTelegramSink(
     // is the worst outcome.
     for (const f of files) {
       try {
-        await client.sendFile(f.kind as Parameters<TelegramClient['sendFile']>[0], chatId, f.path);
+        await client.sendFile(f.kind, chatId, f.path);
       } catch (e) {
         await client.sendMessage(chatId, `⚠️ Couldn't send that file — ${(e as Error).message}`).catch(() => {});
       }
     }
+    return final;
   }
 
   return { part, done, dispose };

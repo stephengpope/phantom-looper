@@ -180,10 +180,12 @@ export async function assistantKit(deps: AssistantDeps, ctx: AssistantCtx, own: 
   return kit;
 }
 
-/** The result of one assistant turn — the reply text and the token usage
- *  across all steps (the compaction trigger reads the input size). */
+/** The result of one assistant turn — the reply text, the text as the sink
+ *  sent it (files cut out — what to speak), and the token usage across all
+ *  steps (the compaction trigger reads the input size). */
 export interface AssistantTurnResult {
   text: string;
+  said: string;
   usage: { input: number; output: number; cache_read: number; cache_write: number };
 }
 
@@ -255,6 +257,6 @@ export async function runAssistantTurn(
     await sink.dispose();
     throw e;
   }
-  await sink.done(text);
-  return { text, usage };
+  const said = await sink.done(text);
+  return { text, said, usage };
 }

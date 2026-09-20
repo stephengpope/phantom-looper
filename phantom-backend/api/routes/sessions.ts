@@ -288,6 +288,33 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       params: idParam } },
     async (req) => ok(ctx.sessions.interrupt(req.params.id, clientOf(req), ctx)));
 
+  // ---- notify ---------------------------------------------------------------
+  // The `send_message` tool's door (core/llm/tools/notify.ts): the session's
+  // agent DMs the user on Telegram, delivered exactly like a reply in a
+  // Telegram chat (telegram/engine.ts notify). Any client running the
+  // session — a cli window, the looper, a cron — reaches Telegram here.
+  app.post<{ Params: { id: string }; Body: { text: string } }>(
+    '/sessions/:id/notify', { schema: { ...TAG,
+      summary: 'DM the user on Telegram from a session',
+      description: 'Sends `text` to the authorized Telegram user as the session\'s agent: markdown formatted, ' +
+        'MEDIA:/workspace/... tags and bare /workspace paths delivered as files, spoken when the reply mode says so. ' +
+        'The bubble is recorded against the session, so a reply to it enters the session. ' +
+        '503 when Telegram is not wired or not enabled — the message says which setting is missing.',
+      params: idParam,
+      body: { type: 'object', required: ['text'], additionalProperties: false,
+        properties: { text: { type: 'string' } } } } },
+    async (req, reply) => {
+      const s = await ctx.sessions.get(req.params.id);
+      if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
+      if (!ctx.telegram) return reply.code(503).send(err('telegram_unavailable', 'telegram is not wired on this server (no public address)'));
+      try {
+        await ctx.telegram.notify(s.id, req.body.text);
+        return ok({ sent: true });
+      } catch (e) {
+        return reply.code(503).send(err('telegram_unavailable', (e as Error).message));
+      }
+    });
+
   // ---- the transcript ------------------------------------------------------
   // The conversation, whole — the same JSONL the client keeps locally. SQL is
   // the record: the client uploads the file when a turn ends and rewrites its

@@ -36,7 +36,6 @@ import { logger, errStr } from '../log.js';
 import { TelegramClient, ALLOWED_UPDATES, titled } from './client.js';
 import { makeTelegramSink, type DeliverConfig } from './sink.js';
 import { startWaitingBubble } from './bubble.js';
-import { sendMessageTool } from './sendMessageTool.js';
 import { transcribeVoice, speakVoice, splitForSpeech, SPEAK_MAX_CHARS, type Transcription } from './deepgram.js';
 import { writeAttachment, composeMessage, MAX_INBOUND_BYTES, type StoredAttachment } from './attachments.js';
 import { runAssistantTurn, CLIENT_ID, type AssistantDeps } from './assistant.js';
@@ -470,7 +469,7 @@ export class TelegramEngine {
         approve: (ask, signal) => this.approvals.request(client, dm, ask, signal),
         onWorkspaceCreated,
       }, abort.signal, conv.getTranscript(), own);
-      replyText = result.text;
+      replyText = result.said;
       await this.deps.sessions.turnEnded(own).catch(
         (e) => log.warn({ err: errStr(e) }, 'assistant session update failed'));
       // Long chat? Summarize it in the background — turns never wait on it.
@@ -531,21 +530,18 @@ export class TelegramEngine {
       const planMode = s?.planMode === true;
       const workspace = s ? await this.deps.workspaces.get(s.workspaceId) : undefined;
       const cfg = await this.deps.settings.agentConfig('coding', { workspace, pin: sessionPin(opened.session) });
-      // The agent's deliberate "DM the user" tool — sends through this chat,
-      // reading the reply mode at the delivery end.
-      const send = sendMessageTool((text) => this.sendDm(client, dm, text));
       // `signal` is what makes the turn stoppable at all: /stop aborts this
       // controller through the inFlight map, a remote interrupt through the feed
       // subscription above — runCodingTurn ends it cleanly (interrupted, not
       // failed) either way.
-      const deps: TurnDeps = { ...this.turnDeps(), extraTools: send, signal: abort.signal };
+      const deps: TurnDeps = { ...this.turnDeps(), signal: abort.signal };
       const r = await runCodingTurn(deps, opened, workspaceId, message, planMode, cfg);
       unsubscribe?.();
-      await sink.done(r.text);
+      const said = await sink.done(r.text);
       const queued = this.inFlight.get(sessionId)?.queue ?? [];
       this.inFlight.delete(sessionId);
       await opened.close();
-      await this.maybeSpeak(client, dm, r.text, typing);
+      await this.maybeSpeak(client, dm, said, typing);
       typing.stop();
       if (queued.length) await this.codeTurn(client, dm, sessionId, queued.join('\n\n'));
       return;
@@ -869,20 +865,23 @@ export class TelegramEngine {
     };
   }
 
-  /** Deliver one deliberate message (send_message tool, or the assistant): the
-   *  text as a bubble, spoken too when the reply mode asks. */
-  private async sendDm(client: TelegramClient, dm: number, text: string):
-  Promise<{ ok: boolean; error?: string }> {
-    const say = String(text ?? '').trim();
-    if (!say) return { ok: false, error: 'empty message' };
-    try {
-      const mode = String(await this.deps.settings.resolve('telegram_reply_mode'));
-      if (mode !== 'voice') await client.sendMarkdown(dm, say);
-      if (mode === 'voice' || mode === 'both') await this.maybeSpeak(client, dm, say);
-      return { ok: true };
-    } catch (e) {
-      return { ok: false, error: (e as Error).message };
-    }
+  /** The `send_message` tool's delivery (POST /sessions/:id/notify): one
+   *  deliberate DM from a coding session, through the same sink a reply
+   *  takes — so it arrives exactly as a reply would — recorded against the
+   *  session so a reply to it enters the session. No waiting bubble: there
+   *  is nothing to wait for. Throws with the reason when the bot is off or
+   *  unconfigured; the route turns that into the tool's answer. */
+  async notify(sessionId: string, text: string): Promise<void> {
+    if (!text.trim()) throw new Error('empty message');
+    if (await this.deps.settings.resolve('telegram_enabled') !== true) throw new Error('telegram is off (/settings)');
+    const dm = await this.authorizedUser();
+    if (!dm) throw new Error('no telegram_authorized_user set (/settings)');
+    const token = await this.token();
+    if (!token) throw new Error('no telegram_bot_token stored (/keys)');
+    const client = this.trackedClient(token, dm, () => sessionId);
+    const sink = makeTelegramSink(client, dm, this.deliverConfig(sessionId), { voiceOnly: await this.voiceOnly(), bubble: false });
+    const said = await sink.done(text);
+    await this.maybeSpeak(client, dm, said);
   }
 }
 

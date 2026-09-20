@@ -142,6 +142,8 @@ export interface AppCtx {
   telegram?: {
     handleUpdate(secretHeader: string, update: unknown): Promise<number>;
     reconcile(): Promise<void>;
+    /** POST /sessions/:id/notify — the send_message tool's delivery. */
+    notify(sessionId: string, text: string): Promise<void>;
   };
 }
 
