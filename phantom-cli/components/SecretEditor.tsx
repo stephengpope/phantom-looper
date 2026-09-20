@@ -5,10 +5,12 @@
 // KILLS the whole thing and only the Save row writes. Value is masked as it
 // is typed and never echoed back.
 //
-// Two modes: new — every row live, Where cycling through EVERY save target
-// (global first, then each workspace by name); edit — name and layer are
-// the row's identity and sit fixed in the header, description and value
-// edit (value re-entered whole: the server never hands a secret back).
+// The SAME rows in both modes — Name, Description, Value, Where, Save —
+// nothing is locked. new: value required. edit: the row's name, description
+// and layer are pre-filled and all editable; the value starts EMPTY and
+// empty means "keep it" (the server never hands a secret back, and a typo
+// in a description must not cost re-pasting the token). A changed name or
+// Where is a move — the screen that owns the list does it.
 import { Box } from 'ink';
 import { useInput } from './useInput.js';
 import { Text } from './Text.js';
@@ -21,34 +23,35 @@ import { secretName, SECRET_NAME_RULE } from '../../core/secretName.js';
 export interface SecretTarget { id: string | null; label: string }
 
 export interface SecretDraft {
-  name: string; description: string; value: string;
+  name: string; description: string;
+  /** edit: '' = keep the stored value. */
+  value: string;
   /** null = global, else the workspace id. */
   workspaceId: string | null;
 }
 
 export function SecretEditor({ mode, initial, targets, isActive = true, onSave, onCancel }: {
   mode: 'new' | 'edit';
-  /** edit: the row being edited (value always starts empty). new: ignored. */
-  initial?: { name: string; description: string; workspaceId: string | null; scopeLabel: string };
-  /** Every place a new secret can go — global first, then the workspaces. */
+  /** edit: the row being edited (value always starts empty).
+   *  new: where the Where row starts (the list's current workspace filter). */
+  initial?: Partial<Omit<SecretDraft, 'value'>>;
+  /** Every place a secret can go — global first, then the workspaces. */
   targets: SecretTarget[];
   isActive?: boolean;
   onSave: (d: SecretDraft) => void;
   onCancel: () => void;
 }) {
   const [draft, setDraft] = useState<SecretDraft>({
-    name: mode === 'edit' ? initial!.name : '',
-    description: mode === 'edit' ? initial!.description : '',
+    name: initial?.name ?? '',
+    description: initial?.description ?? '',
     value: '',
-    workspaceId: mode === 'edit' ? initial!.workspaceId : null,
+    workspaceId: initial?.workspaceId ?? null,
   });
   const [error, setError] = useState<string | undefined>();
 
-  // Row list is fixed per mode; focus lives in a ref (two keys in one React
-  // batch both need the fresh index — the CardEditor/TextInput rule).
-  const rows: string[] = mode === 'new'
-    ? ['name', 'description', 'value', ...(targets.length > 1 ? ['where'] : []), 'save']
-    : ['description', 'value', 'save'];
+  // Focus lives in a ref (two keys in one React batch both need the fresh
+  // index — the CardEditor/TextInput rule).
+  const rows = ['name', 'description', 'value', ...(targets.length > 1 ? ['where'] : []), 'save'];
   const atRef = useRef(0);
   const [, bump] = useState(0);
   const draftRef = useRef(draft);
@@ -68,7 +71,7 @@ export function SecretEditor({ mode, initial, targets, isActive = true, onSave, 
     const d = draftRef.current;
     const name = secretName(d.name);
     if (!name) { setError(`name: ${SECRET_NAME_RULE}`); return; }
-    if (!d.value) { setError('value: required — a secret with no value is nothing to store'); return; }
+    if (mode === 'new' && !d.value) { setError('value: required — a secret with no value is nothing to store'); return; }
     onSave({ ...d, name });
   };
 
@@ -107,31 +110,33 @@ export function SecretEditor({ mode, initial, targets, isActive = true, onSave, 
         : <Text dimColor>{placeholder}</Text>;
 
   const whereLabel = targets.find((t) => t.id === draft.workspaceId)?.label ?? 'global — every workspace';
+  const moved = mode === 'edit'
+    && (draft.name !== initial?.name || draft.workspaceId !== (initial?.workspaceId ?? null));
+  const saveSays = mode === 'new' ? `stores ${whereLabel}`
+    : moved ? `moves it to ${draft.name || '?'} · ${whereLabel}`
+      : draft.value ? 'stores the new value' : 'keeps the value, saves the rest';
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
       <Box justifyContent="space-between">
-        <Text bold color="cyan">
-          {mode === 'new' ? 'new secret' : draft.name}
-          {mode === 'edit' ? <Text dimColor>  {initial!.scopeLabel}</Text> : null}
-        </Text>
+        <Text bold color="cyan">{mode === 'new' ? 'new secret' : initial?.name}</Text>
         <Text dimColor>nothing saves until Save</Text>
       </Box>
-      {mode === 'new' && (
-        <Box marginTop={1}>
-          {label('Name', 'name')}
-          {input('name', 'MY_API_KEY — what the agent asks for')}
-        </Box>
-      )}
+      <Box marginTop={1}>
+        {label('Name', 'name')}
+        {input('name', 'MY_API_KEY — what the agent asks for')}
+      </Box>
       <Box marginTop={1}>
         {label('Description', 'description')}
         {input('description', 'one line the agent reads to know when to use it')}
       </Box>
       <Box marginTop={1}>
         {label('Value', 'value')}
-        {input('value', 'the secret itself — stored encrypted, never shown back', '•')}
+        {input('value', mode === 'new'
+          ? 'the secret itself — stored encrypted, never shown back'
+          : 'leave empty to keep the stored value — never shown back', '•')}
       </Box>
-      {mode === 'new' && targets.length > 1 && (
+      {targets.length > 1 && (
         <Box marginTop={1}>
           {label('Where', 'where')}
           <Text color={draft.workspaceId !== null ? 'cyan' : undefined} dimColor={draft.workspaceId === null}>
@@ -145,7 +150,7 @@ export function SecretEditor({ mode, initial, targets, isActive = true, onSave, 
         {error
           ? <Text color="red" wrap="truncate">{error}</Text>
           : <Text dimColor={focused !== 'save'} color={focused === 'save' ? 'green' : undefined}>
-              {focused === 'save' ? '[enter] saves' : `stores ${mode === 'new' ? whereLabel : 'the new value'}`}
+              {focused === 'save' ? `[enter] saves — ${saveSays}` : saveSays}
             </Text>}
       </Box>
       <Box marginTop={1}>

@@ -895,8 +895,18 @@ export class Settings {
     return undefined;
   }
 
-  /** Create or overwrite one secret at ONE scope. */
-  async putSecret(scope: string, name: string, description: string, value: string): Promise<void> {
+  /** Create or overwrite one secret at ONE scope. No `value` = keep the
+   *  stored one and change only the description — a typo in a description
+   *  must not cost re-pasting the token. Returns false when there was no
+   *  value to keep (nothing stored there yet). */
+  async putSecret(scope: string, name: string, description: string, value?: string): Promise<boolean> {
+    const where = and(eq(settings.scope, scope), eq(settings.namespace, SECRET_NS), eq(settings.key, name));
+    if (value === undefined) {
+      const kept = await this.db.update(settings)
+        .set({ value: { description } as never, updatedAt: new Date() })
+        .where(where).returning({ key: settings.key });
+      return kept.length > 0;
+    }
     const row = { value: { description } as never, valueEnc: encrypt(this.encryptionKey, value) };
     await this.db.insert(settings)
       .values({ scope, namespace: SECRET_NS, key: name, ...row })
@@ -904,6 +914,7 @@ export class Settings {
         target: [settings.scope, settings.namespace, settings.key],
         set: { ...row, updatedAt: new Date() },
       });
+    return true;
   }
 
   /** Delete one secret at ONE scope. Returns whether a row was there. */

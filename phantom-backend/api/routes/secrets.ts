@@ -6,7 +6,8 @@
 // GET cascades.
 //
 //   GET    /secrets            names + descriptions (+?workspace= merges that layer)
-//   PUT    /secrets/:name      create or overwrite {description?, value} at one layer
+//   PUT    /secrets/:name      create or overwrite {description?, value?} at one layer
+//                             (no value = keep the stored one, description only)
 //   GET    /secrets/:name      the decrypted value, workspace → global
 //   DELETE /secrets/:name      remove at one layer
 import type { FastifyInstance } from 'fastify';
@@ -55,7 +56,7 @@ export function secretsRoutes(app: FastifyInstance, ctx: AppCtx) {
     Body: { description?: string; value?: string } }>(
     '/secrets/:name', { schema: { ...TAG,
       summary: 'Create or overwrite one secret at one layer',
-      description: 'Body is {description?, value}. Writing an existing name at the same layer overwrites it — that is the update path; there is no separate one. Names are stored UPPER_CASE (letters, digits, underscores, starting with a letter); whatever case is sent is uppercased.',
+      description: 'Body is {description?, value?}. Writing an existing name at the same layer overwrites it — that is the update path; there is no separate one. Omit `value` to change only the description of a secret already stored at that layer (400 when nothing is there to keep). Names are stored UPPER_CASE (letters, digits, underscores, starting with a letter); whatever case is sent is uppercased.',
       params: nameParam, querystring: scopeQuery,
       body: { type: 'object', properties: {
         description: { type: 'string' }, value: { type: 'string' } } } } },
@@ -65,14 +66,20 @@ export function secretsRoutes(app: FastifyInstance, ctx: AppCtx) {
         return reply.code(400).send(err('invalid_args',
           `secret names are ${SECRET_NAME_RULE} (got "${req.params.name}")`));
       }
+      // An empty string is a mistake ("" is not a token); an ABSENT value is
+      // a description-only edit of a secret already there.
       const value = req.body?.value;
-      if (typeof value !== 'string' || value.length === 0) {
-        return reply.code(400).send(err('invalid_args', 'body.value (the secret itself) is required'));
+      if (value !== undefined && (typeof value !== 'string' || value.length === 0)) {
+        return reply.code(400).send(err('invalid_args', 'body.value (the secret itself) must not be empty'));
       }
       const sc = await scopesOf(req.query);
       if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
-      await ctx.settings.putSecret(sc.write, name,
+      const stored = await ctx.settings.putSecret(sc.write, name,
         String(req.body?.description ?? ''), value);
+      if (!stored) {
+        return reply.code(400).send(err('invalid_args',
+          `body.value (the secret itself) is required — nothing named "${name}" is stored at the ${sc.label} layer to keep`));
+      }
       return ok({ name, scope: sc.label });
     });
 
