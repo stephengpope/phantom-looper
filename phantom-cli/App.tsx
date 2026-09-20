@@ -44,7 +44,7 @@ import { buildAgent, buildAssistantAgent } from './agentFromConfig.js';
 import { phaseLabel, tokenCount, formatTokensIn, formatTokensOut, cachePct } from './state.js';
 import { activeHold } from './sessions.js';
 import { Transcript, transcriptPath } from './session.js';
-import { complete, matches } from './commands.js';
+import { COMMANDS, complete, matches } from './commands.js';
 import { quiet, type Api } from './request.js';
 import { WindowStore } from './window.js';
 import { setTokenRecorder } from '../core/llm/createAgent.js';
@@ -360,6 +360,11 @@ export function App({
   // Set back only where openSession seats an empty session.
   useEffect(() => { if (session?.remoteBusy) windowStore.setSplash(false); }, [session?.remoteBusy]);
   const [suggestAt, setSuggestAt] = useState(0);
+  // What the last tab filled, and from what: tab AGAIN on that exact text
+  // walks the next candidate of the list the first tab saw (zsh's
+  // menu-complete). Any edit makes it stale on its own — the text no longer
+  // matches `produced` — so nothing has to clear it.
+  const [tabRing, setTabRing] = useState<{ from: string; produced: string; at: number } | null>(null);
   // ↑/↓ through what you said before. 0 is "not browsing" — and browsing only
   // ever starts from an empty line, so there is no half-typed line to save and
   // hand back: ↓ off the end of the list lands on the empty line it started on.
@@ -620,12 +625,21 @@ export function App({
     // A slash line is being typed, so tab completes it and the arrows walk the
     // suggestions — that is what they mean while that list is up, and only
     // then. shift+tab is left alone here rather than cycling mid-command.
-    const m = matches(input);
-    const suggesting = m.length > 0;
-    if (suggesting) {
+    // Tab on the text tab just produced is the ring: it never falls through
+    // to the session switch, even when the filled text has no menu of its own.
+    const choices = windowStore.argChoices;
+    const m = matches(input, choices).rows;
+    const ring = key.tab && !key.shift && tabRing?.produced === input ? tabRing : null;
+    if (ring || m.length > 0) {
       if (key.tab && !key.shift) {
-        setInput((cur) => complete(cur, suggestAt < m.length ? suggestAt : undefined));
+        const base = ring ? ring.from : input;
+        const rows = ring ? matches(base, choices).rows : m;
+        if (!rows.length) return;
+        const at = ring ? (ring.at + 1) % rows.length : Math.min(suggestAt, rows.length - 1);
+        const text = complete(base, at, choices);
+        setInput(text);
         setSuggestAt(0);
+        setTabRing(rows.length > 1 ? { from: base, produced: text, at } : null);
       } else if (key.downArrow && !key.shift) setSuggestAt((i) => (i + 1) % m.length);
       else if (key.upArrow && !key.shift) setSuggestAt((i) => (i - 1 + m.length) % m.length);
       return;
@@ -644,8 +658,14 @@ export function App({
     }
   }, { isActive: !windowStore.hasOverlay });
 
-  const suggestions = matches(input);
+  const menu = matches(input, windowStore.argChoices);
+  const suggestions = menu.rows;
   const at = Math.min(suggestAt, Math.max(0, suggestions.length - 1));
+  // Command rows carry the slash; a picked argument's rows are bare names.
+  // The name column is as wide as the WHOLE list's longest name, so it holds
+  // still while typing narrows the rows.
+  const menuSlash = menu.command ? '' : '/';
+  const menuPad = Math.max(10, ...(menu.command ? windowStore.argChoices(menu.command) : COMMANDS).map((r) => r.name.length));
   // The menu shows a window of MENU_ROWS rows and slides it so the highlighted
   // row is always one of them — the list will only grow, and an arrow key must
   // never land on a row that is not on screen.
@@ -839,7 +859,7 @@ export function App({
                     // a wrapped summary would break this menu's fixed height.
                     <Box key={c.name} {...(i === at ? { backgroundColor: HIGHLIGHT_BG } : {})}>
                       <Text color={i === at ? HIGHLIGHT_FG : undefined} bold={i === at} dimColor={i !== at} wrap="truncate-end">
-                        {`${i === at ? '❯ ' : '  '}/${c.name.padEnd(10)} ${c.summary}`}
+                        {`${i === at ? '❯ ' : '  '}${menuSlash}${c.name.padEnd(menuPad)} ${c.summary}`}
                       </Text>
                     </Box>
                   );

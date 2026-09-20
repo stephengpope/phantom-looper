@@ -37,10 +37,10 @@ import { PasteStore } from './paste.js';
 import { quiet, watchConnection, type Api } from './request.js';
 import { VOICE_BOOT_KEYS, isLocalKey, type ConfigValue } from './config.js';
 import { makeSettings } from './settings.js';
-import { lastWorkspaceId, type SessionInfo, type WorkspaceInfo } from './components/Launcher.js';
+import { label, lastWorkspaceId, type SessionInfo, type WorkspaceInfo } from './components/Launcher.js';
 import type { TasksView } from './components/Tasks.js';
 import type { NewWorkspaceRequest } from './components/NewWorkspace.js';
-import { COMMANDS, matches, parse } from './commands.js';
+import { COMMANDS, matches, parse, type Choices } from './commands.js';
 import { WorkspaceDirectory, buildAssistantKit } from './assistantKit.js';
 import { confirmDialog, boardScreen, switcherScreen, settingsScreen, keysScreen, secretsScreen,
   serverScreen, presetsScreen, workspaceSettingsScreen,
@@ -1411,6 +1411,17 @@ export class WindowStore {
     })();
   }
 
+  /** `/new <workspace>`: the rows the slash menu offers, by display name.
+   *  The one you are in leads and says so; the rest in the server's order,
+   *  the same order /workspace lists them. Read on every keystroke and
+   *  render, so it only READS: workspaceRows is filled by boot, the pickers
+   *  and the settings feed, never from here. */
+  argChoices: Choices = () => {
+    const here = this.sessions.active()?.workspaceId;
+    const row = (w: WorkspaceInfo) => ({ name: label(w), summary: `${w.owner}/${w.name}${w.id === here ? ' · here' : ''}` });
+    return [...this.workspaceRows.filter((w) => w.id === here), ...this.workspaceRows.filter((w) => w.id !== here)].map(row);
+  };
+
   /** One workspace list, three consumers: the switcher's rows, the banner's
    *  name cache, and the names the Assistant speaks with. */
   private seeWorkspaces(rows: WorkspaceInfo[]): void {
@@ -1855,13 +1866,19 @@ export class WindowStore {
   runCommand = async (name: string, args = ''): Promise<void> => {
     const session = this.sessions.active();
     switch (name) {
-      case 'new':
-        // No session yet = no workspace to mean "here": the picker chooses.
-        // openSession clears the pane and puts the splash up before the
-        // network calls run.
-        if (session) await this.openSession({ kind: 'new', workspaceId: session.workspaceId });
+      case 'new': {
+        // Named: that workspace, by display name (what the menu showed). Not
+        // named and no session yet = no workspace to mean "here": the picker
+        // chooses. openSession clears the pane and puts the splash up before
+        // the network calls run.
+        if (args) {
+          const w = this.workspaceRows.find((x) => label(x).toLowerCase() === args.toLowerCase());
+          if (!w) { this.note(`unknown workspace "${args}" — /workspace lists them`); return; }
+          await this.openSession({ kind: 'new', workspaceId: w.id });
+        } else if (session) await this.openSession({ kind: 'new', workspaceId: session.workspaceId });
         else await this.openPicker('workspace');
         return;
+      }
       case 'resume': await this.openPicker('resume'); return;
       case 'close': {
         const r = await this.closeSession();
@@ -2098,8 +2115,14 @@ export class WindowStore {
     this.setSplash(false);
     if (msg === 'exit' || msg === 'quit') { this.quit(); return; }
     if (msg.startsWith('/')) {
-      const m = matches(msg);
-      if (m.length) { await this.runCommand(m[Math.min(highlighted, m.length - 1)].name); return; }
+      const menu = matches(msg, this.argChoices);
+      if (menu.rows.length) {
+        const row = menu.rows[Math.min(highlighted, menu.rows.length - 1)];
+        // Rows are either commands, or the highlighted command's choices.
+        if (menu.command) await this.runCommand(menu.command.name, row.name);
+        else await this.runCommand(row.name);
+        return;
+      }
       // No menu: either an argument follows the command (`/ask hello`)
       // or nothing matched. parse() tells the two apart.
       const { command, args, error } = parse(msg);

@@ -5,10 +5,20 @@
 // A command may take the rest of the line as its argument (`/ask hello`). Only
 // the first word is the command; while there is an argument the live menu
 // stays out of the way, so enter sends the line rather than the highlighted row.
-export interface Command { name: string; summary: string; args?: string }
+//
+// Unless the argument is PICKED from a list (`/new <workspace>`): then the menu
+// stays up and shows the list, filtered by what has been typed, and tab and
+// the arrows work on it exactly as they do on the command names. The list is
+// live (the window's workspaces), so the caller hands it in; this file only
+// knows which commands take one.
+export interface Command { name: string; summary: string; args?: string; picks?: boolean }
+/** One row of a picked argument — the same two columns a command row has. */
+export interface Choice { name: string; summary: string }
+/** The live list for a command whose argument is picked. */
+export type Choices = (command: Command) => Choice[];
 
 export const COMMANDS: Command[] = [
-  { name: 'new', summary: 'new session in this workspace' },
+  { name: 'new', summary: 'new session in this workspace, or /new <workspace>', args: 'workspace', picks: true },
   { name: 'resume', summary: 'reopen an earlier session' },
   { name: 'workspace', summary: 'start in a different workspace' },
   { name: 'kanban', summary: "this workspace's task board" },
@@ -65,12 +75,23 @@ function split(input: string): { head: string; args: string; hasArgs: boolean } 
   return { head, args, hasArgs: m?.[2] !== undefined && head.length > 0 };
 }
 
-/** Commands matching what has been typed so far, for the live menu. */
-export function matches(input: string): Command[] {
-  if (!isCommand(input)) return [];
-  const { head, hasArgs } = split(input);
-  if (hasArgs) return [];
-  return COMMANDS.filter((c) => c.name.startsWith(head));
+/** What the live menu shows: command rows, or — once a picking command's name
+ *  is complete and a space typed — that command's choices. `command` is set
+ *  only in the second case; it is the one the rows are arguments to. */
+export interface Menu { command?: Command; rows: Choice[] }
+
+const prefixed = (name: string, typed: string) => name.toLowerCase().startsWith(typed.toLowerCase());
+
+/** Rows matching what has been typed so far, for the live menu. */
+export function matches(input: string, choices?: Choices): Menu {
+  if (!isCommand(input)) return { rows: [] };
+  const { head, args, hasArgs } = split(input);
+  if (!hasArgs) return { rows: COMMANDS.filter((c) => c.name.startsWith(head)) };
+  const command = COMMANDS.find((c) => c.name === head);
+  if (!command?.picks || !choices) return { rows: [] };
+  // The whole line after the name is the argument, spaces and all — a
+  // workspace called "Marketing Site" is one choice, not two words.
+  return { command, rows: choices(command).filter((c) => prefixed(c.name, args)) };
 }
 
 /** Resolve typed input to exactly one command (plus its argument), or say why not. */
@@ -97,17 +118,24 @@ function commonPrefix(names: string[]): string {
   return out;
 }
 
+/** The line that names this row outright: a command with the space that
+ *  invites its argument, or a command and its picked argument. */
+const filled = (menu: Menu, row: Choice) =>
+  menu.command ? `/${menu.command.name} ${row.name}` : `/${row.name} `;
+
 /**
  * Tab. One match completes it outright; several complete as far as they agree,
  * which is the shell behaviour people already have in their fingers — never a
  * silent no-op, and never a guess between two commands.
  * `index` picks a specific candidate when the user has arrowed through the list.
  */
-export function complete(input: string, index?: number): string {
-  const m = matches(input);
+export function complete(input: string, index?: number, choices?: Choices): string {
+  const menu = matches(input, choices);
+  const m = menu.rows;
   if (!m.length) return input;
-  if (index !== undefined && m[index]) return `/${m[index].name} `;
-  if (m.length === 1) return `/${m[0].name} `;
+  if (index !== undefined && m[index]) return filled(menu, m[index]);
+  if (m.length === 1) return filled(menu, m[0]);
   const shared = commonPrefix(m.map((c) => c.name));
-  return shared.length > input.length - 1 ? `/${shared}` : input;
+  const typed = menu.command ? split(input).args : input.slice(1);
+  return shared.length > typed.length ? (menu.command ? `/${menu.command.name} ${shared}` : `/${shared}`) : input;
 }
