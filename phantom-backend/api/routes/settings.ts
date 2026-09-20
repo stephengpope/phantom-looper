@@ -17,7 +17,7 @@ import type { FastifyInstance } from 'fastify';
 import type { FastifyRequest } from 'fastify';
 import type { WorkspaceRow } from '../../db/schema.js';
 import {
-  CREDENTIALS, CREDENTIAL_NAMES, type CredentialMeta,
+  CREDENTIALS, CREDENTIAL_NAMES, type CredentialMeta, credentialMeta,
   isWorkspaceOverridable, isCredentialWorkspaceScoped, isGlobalSettable,
   SettingsWriteError, type SettingKey,
   DEFAULTS, DESCRIPTIONS, META,
@@ -71,12 +71,11 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
       for (const name of CREDENTIAL_NAMES) {
         const g = creds[name].global;
         const w = sc.kind !== 'global' ? creds[name].workspace : null;
-        const { label, group, description, provider } = CREDENTIALS[name] as CredentialMeta;
         out[name] = {
           default: null, global: g, workspace: w,
           value: w ?? g, source: w != null ? 'workspace' : g != null ? 'global' : 'default',
-          secret: true, description,
-          meta: { type: 'string', label, group, nullable: true, ...(provider ? { provider } : {}) },
+          secret: true, description: (CREDENTIALS[name] as CredentialMeta).description,
+          meta: credentialMeta(name),
           overridable: isCredentialWorkspaceScoped(name),
         };
       }

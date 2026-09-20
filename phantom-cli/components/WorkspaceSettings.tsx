@@ -4,12 +4,18 @@
 // Three kinds of row, because mixing them is how you end up changing a
 // server-wide value believing it was local:
 //
-//   the workspace    its own identity — name, branch, prefix, its GitHub token
+//   the workspace    its own facts — name, base branch, branch prefix. No
+//                    default to fall back to, so they cannot be cleared.
 //   settings         the ones the server says can differ here (`overridable`),
-//                    under the server's group headings (settingGroups.ts) in
-//                    the server's order, exactly as /settings files them;
-//                    every other setting is global-only and lives on /settings
+//                    the GitHub token among them, under the server's group
+//                    headings (settingGroups.ts) in the server's order,
+//                    exactly as /settings files them; every other setting is
+//                    global-only and lives on /settings
 //   danger           delete
+//
+// The rule that sorts a row into the first kind or the second: clear it, and
+// what does it fall back to? A global value or a code default => a setting.
+// Nothing => a fact about this workspace.
 //
 // Every settings row says where its value came from — built-in, global, or
 // this workspace — and `d` removes the workspace's value so the row follows
@@ -20,7 +26,8 @@
 // The whole screen renders from ONE call — GET /workspaces/:id — which
 // returns the row plus `settings`: every setting with its layers (default /
 // global / workspace), the computed value + source, description, meta and
-// overridable. Nothing here hardcodes what a setting is, so a new overridable
+// overridable; the token is in there as `secret`, source only, never the
+// value. Nothing here hardcodes what a setting is, so a new overridable
 // setting appears on its own. Every override — the token included — is
 // written through PATCH /settings?workspace=, the one door for a workspace's
 // layer; only the three own fields go to PATCH /workspaces/:id.
@@ -38,18 +45,18 @@ import type { ConfigValue } from '../config.js';
 interface Effective {
   value: unknown; source: 'default' | 'global' | 'workspace';
   default?: unknown; global?: unknown; workspace?: unknown;
-  description: string; overridable: boolean;
+  description: string; overridable: boolean; secret?: boolean;
   meta: WireMeta;
 }
 interface Row {
   id: string; owner: string; name: string; displayName?: string | null;
-  baseBranch: string; branchPrefix: string; hasCredential: boolean;
+  baseBranch: string; branchPrefix: string;
   settings: Record<string, Effective>;
 }
 
 type View =
   | { at: 'list' }
-  | { at: 'edit'; key: string; spec: EditSpec; kind: 'field' | 'setting' | 'credential' }
+  | { at: 'edit'; key: string; spec: EditSpec; kind: 'field' | 'setting' }
   | { at: 'confirm' };
 
 // The right-hand column answers one question: is this workspace different from
@@ -57,6 +64,9 @@ type View =
 // default or a global row is the wrong level of detail here.
 const setHere = (source: string) => source === 'workspace';
 const WHENCE = (source: string) => setHere(source) ? 'changed here' : 'same as everywhere';
+// A secret's value column: it is never shown back, so say whose it is.
+const shownValue = (s: Effective) =>
+  s.secret ? (setHere(s.source) ? 'its own' : s.source === 'global' ? 'the shared one from /keys' : 'none set') : human(s.value, s.meta);
 
 export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
   api: Api;
@@ -133,14 +143,9 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
         spec={view.spec}
         onCancel={() => setView({ at: 'list' })}
         onSubmit={(v) => {
-          if (view.kind === 'credential') {
-            if (v === null) { setView({ at: 'list' }); return; }   // empty = changed my mind
-            // github_token at this workspace's layer — the same key /keys writes globally.
-            void write(() => settings.patch({ github_token: String(v) }, { workspace: workspace.id }),
-              'this workspace now uses its own GitHub token');
-            return;
-          }
           if (view.kind === 'setting') {
+            // An empty secret = changed my mind, not "store an empty token".
+            if (view.spec.secret && v === null) { setView({ at: 'list' }); return; }
             void write(() => settings.patch({ [view.key]: v as ConfigValue }, { workspace: workspace.id }));
             return;
           }
@@ -165,7 +170,7 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
       value: k,
       label: labelFor(k, s.meta),
       columns: [
-        { text: fit(human(s.value, s.meta), 30), width: 32 },
+        { text: fit(shownValue(s), 30), width: 32 },
         { text: WHENCE(s.source) },
       ],
       // The description alone; the columns already say the value and
@@ -174,9 +179,9 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
     };
   });
 
-  // The four identity rows carry no heading: they are the workspace itself,
-  // and the title above already names it. A blank separates them from the
-  // headed settings groups, and another sets off the one irreversible action.
+  // The three own rows carry no heading: they are the workspace itself, and
+  // the title above already names it. A blank separates them from the headed
+  // settings groups, and another sets off the one irreversible action.
   const choices = [
     { value: 'display_name', label: 'name', detail: fit(row.displayName ?? row.name),
       hint: `What you call it here. It is ${row.owner}/${row.name} on GitHub either way.` },
@@ -184,13 +189,6 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
       hint: 'The branch work starts from and goes back to.' },
     { value: 'branch_prefix', label: 'branch prefix', detail: fit(row.branchPrefix),
       hint: 'Starts every session branch name: prefix/session-id.' },
-    // The PAT and the switch that hands it to the agent are two different
-    // decisions and were two unrelated-looking rows. They name each other now.
-    { value: 'credential', label: 'github token',
-      detail: row.hasCredential ? `${label}'s own` : 'the shared one from /keys',
-      hint: row.hasCredential
-        ? 'This workspace has its own GitHub token. It is never shown back.'
-        : 'This workspace uses the shared GitHub token from /keys. [enter] gives it one of its own.' },
 
     { value: '#gap:settings', label: '', heading: true },
     ...settingRows,
@@ -214,13 +212,6 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
         onSelect={(k) => {
           setLast(k);
           if (k === 'delete') { setView({ at: 'confirm' }); return; }
-          if (k === 'credential') {
-            setView({ at: 'edit', kind: 'credential', key: 'credential', spec: {
-              title: 'github token for this workspace', type: 'string', secret: true, current: '',
-              note: 'stored encrypted, never shown back · empty cancels',
-            } });
-            return;
-          }
           if (k === 'display_name' || k === 'base_branch' || k === 'branch_prefix') {
             const current = k === 'display_name' ? row.displayName ?? row.name
               : k === 'base_branch' ? row.baseBranch : row.branchPrefix;
@@ -238,10 +229,12 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
             choiceLabels: s.meta.choiceLabels,
             suggestions: s.meta.suggestions,
             type: s.meta.type,
-            current: s.value,
-            note: s.meta.unit === 'ms'
-              ? `in milliseconds · now ${human(s.value, s.meta)}, ${WHENCE(s.source)}`
-              : `changes this workspace only · now ${human(s.value, s.meta)}, ${WHENCE(s.source)}`,
+            secret: s.secret,
+            current: s.secret ? '' : s.value,
+            note: s.secret ? 'stored encrypted, never shown back · empty cancels'
+              : s.meta.unit === 'ms'
+                ? `in milliseconds · now ${human(s.value, s.meta)}, ${WHENCE(s.source)}`
+                : `changes this workspace only · now ${human(s.value, s.meta)}, ${WHENCE(s.source)}`,
           } });
         }}
         onKey={(ch, k) => {
@@ -249,13 +242,6 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
           // on an inherited row there is nothing to remove, and sending null
           // anyway would look like it did something.
           if (ch !== 'd' || !k) return;
-          if (k === 'credential') {
-            if (!row.hasCredential) { setNotice(`${label} is already using the shared token`); return; }
-            // null clears the workspace layer; the global token applies again.
-            void write(() => settings.patch({ github_token: null }, { workspace: workspace.id }),
-              `${label} is back on the shared token from /keys`);
-            return;
-          }
           if (k === 'display_name') {
             if ((row.displayName ?? null) !== null) void write(() => api('PATCH', `/workspaces/${workspace.id}`, { display_name: '' }));
             return;

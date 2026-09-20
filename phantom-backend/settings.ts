@@ -212,6 +212,14 @@ export const isCredential = (k: string): k is CredentialName =>
 export const credentialForProvider = (p: string): CredentialName | undefined =>
   CREDENTIAL_NAMES.find((n) => (CREDENTIALS[n] as CredentialMeta).provider === p);
 
+/** A credential's meta as served on the wire — the same shape META gives a
+ *  setting, so a client renders and files it with the same code. */
+export const credentialMeta = (name: CredentialName) => {
+  const { label, group, provider } = CREDENTIALS[name] as CredentialMeta;
+  return { type: 'string' as const, label, group, nullable: true as const, ...(provider ? { provider } : {}) };
+};
+export type CredentialWireMeta = ReturnType<typeof credentialMeta>;
+
 /** What each setting does, in one or two plain sentences — and, where it
  *  matters, WHEN a change starts applying. Served by GET /settings and
  *  rendered verbatim by the TUI: this is the ONE place a setting's meaning is
@@ -579,7 +587,8 @@ function layersFrom(byScope: ByScope, ctx: ResolveCtx, key: string): RawLayers {
 }
 
 export type SettingEntry = SettingLayers & {
-  description: string; meta: SettingMeta; overridable: boolean;
+  description: string; meta: SettingMeta | CredentialWireMeta;
+  overridable: boolean; secret?: boolean;
 };
 
 /** scope -> key -> stored value (decrypted where it was encrypted). */
@@ -788,13 +797,24 @@ export class Settings {
   }
 
   /** The layers plus each key's description, meta and overridability — what
-   *  an editor renders from one call. */
-  async block(ctx: ResolveCtx): Promise<Record<SettingKey, SettingEntry>> {
+   *  an editor renders from one call. A credential the workspace may hold
+   *  (its GitHub token) is a row of the same chain and files under the same
+   *  group, so it is listed too — as `secret`, with its SOURCE only: the
+   *  values are null, a token is never shown back. */
+  async block(ctx: ResolveCtx): Promise<Record<string, SettingEntry>> {
     const layers = await this.layers(ctx);
-    const out = {} as Record<SettingKey, SettingEntry>;
+    const out: Record<string, SettingEntry> = {};
     for (const key of Object.keys(DEFAULTS) as SettingKey[]) {
       out[key] = { ...layers[key], description: DESCRIPTIONS[key], meta: META[key],
         overridable: isWorkspaceOverridable(key) };
+    }
+    for (const name of CREDENTIAL_NAMES.filter(isCredentialWorkspaceScoped)) {
+      const here = ctx.workspace ? await this.hasAt(name, workspaceScope(ctx.workspace.id)) : false;
+      const shared = await this.hasAt(name, GLOBAL);
+      out[name] = { default: null, global: null, workspace: null, value: null,
+        source: here ? 'workspace' : shared ? 'global' : 'default',
+        description: (CREDENTIALS[name] as CredentialMeta).description, meta: credentialMeta(name),
+        overridable: true, secret: true };
     }
     return out;
   }
