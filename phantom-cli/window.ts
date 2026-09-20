@@ -1185,7 +1185,7 @@ export class WindowStore {
     });
     const seen = new Set(rows.map((s) => s.id));
     const extras: SessionInfo[] = this.sessions.list()
-      .filter((e) => !seen.has(e.id) && !e.readonly && this.matchesPickerQuery(e))
+      .filter((e) => !seen.has(e.id) && !e.readonly && (e.lastMessageAt > 0 || e.pinned) && this.matchesPickerQuery(e))
       .map((e) => ({
         id: e.id, workspaceId: e.workspaceId, branch: e.branch, status: 'active', agent: null,
         model: e.summary.model, pinned: e.pinned,
