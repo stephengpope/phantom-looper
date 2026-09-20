@@ -125,6 +125,7 @@ export const DEFAULTS = {
   // The repo's root SOUL.md, frozen into the coding agent's prompt at session
   // birth (read from the checkout, like the skills). Off says nothing.
   agent_soul: false as boolean,
+  agent_agents_md: false as boolean,
   // ── git ───────────────────────────────────────────────────────────────────
   initial_history_depth: '7.days',   // 'full' disables shallow
   auto_push_on_archive: true as boolean,
@@ -241,6 +242,7 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   container_docker: 'Lets the agent run Docker inside its own container. The container gets privileged mode and a native-overlay graph-storage volume, but the daemon is NOT started for you — the agent runs `start-docker` when it wants it, so idle sessions pay nothing. Privileged is a weaker boundary: turn this off for a hardened workspace. Applies when the container next restarts.',
   agent_database: 'Gives the agent its own PostgreSQL database for this workspace — private to it, kept across sessions, reached only through its database_query tool (never by the project\'s code). The agent is its admin but cannot drop it. Off keeps the data; deleting the workspace deletes it.',
   agent_soul: 'Puts the repo\'s root SOUL.md into the coding agent\'s system prompt, read from the checkout when a session starts and frozen with it — so an edit reaches new sessions only. A repo without the file adds nothing.',
+  agent_agents_md: 'Puts the repo\'s root AGENTS.md into the coding agent\'s system prompt, read from the checkout when a session starts and frozen with it — so an edit reaches new sessions only. A repo without the file adds nothing. Appears after SOUL.md.',
   bash_timeout_ms: 'Kills a command that set no timeout of its own; the agent can ask for a longer one per command.',
   bash_timeout_max_ms: 'The longest timeout the agent may request for one command. Unset means no limit.',
   max_read_bytes: 'Cap on bytes returned per file read. Bigger files are read in chunks — nothing is hidden, it just takes more calls.',
@@ -375,6 +377,7 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
   // Under containers: it is a service stood up beside the session container.
   agent_database: { type: 'boolean', label: 'agent database', group: 'containers' },
   agent_soul: { type: 'boolean', label: 'SOUL.md in the prompt', group: 'coding' },
+  agent_agents_md: { type: 'boolean', label: 'AGENTS.md in the prompt', group: 'coding' },
   bash_timeout_ms: { type: 'number', label: 'command timeout', group: 'limits', unit: 'ms', min: 1 },
   bash_timeout_max_ms: { type: 'number', label: 'command timeout cap', group: 'limits', unit: 'ms', min: 1, nullable: true },
   max_read_bytes: bytes('file read limit', 'limits'),
@@ -533,7 +536,7 @@ const PROVIDER_BOUND: readonly SettingKey[] = ['coding_model', 'coding_base_url'
  *  to keep one, and it drifted). */
 const WORKSPACE_OVERRIDABLE: readonly SettingKey[] = [
   ...CODING_KEYS,
-  'spare_clones', 'initial_history_depth', 'container_image', 'container_docker', 'agent_database', 'agent_soul',
+  'spare_clones', 'initial_history_depth', 'container_image', 'container_docker', 'agent_database', 'agent_soul', 'agent_agents_md',
   'auto_push_on_archive', 'agent_git_credentials', 'card_prefix',
   'instant_sync', 'instant_sync_push_debounce_ms', 'instant_sync_pull_interval_ms',
   'auto_plan', 'auto_build', 'loop_budget_tokens', 'telegram_auto_build_notifications',

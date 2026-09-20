@@ -26,6 +26,9 @@ export interface WorkspaceFacts {
   /** agent_soul: the checkout's root SOUL.md, verbatim; '' or absent when
    *  the setting is off or the repo has no such file. */
   soul?: string;
+  /** agent_agents_md: the checkout's root AGENTS.md, verbatim; '' or absent
+   *  when the setting is off or the repo has no such file. */
+  agents?: string;
 }
 
 const DESC_LIMIT = 60;
@@ -48,6 +51,7 @@ export function secretsIndex(secrets: SecretIndexEntry[]): string {
 }
 
 export const SOUL_FILENAME = 'SOUL.md';
+export const AGENTS_FILENAME = 'AGENTS.md';
 
 /** The {soul} blank: the checkout's root SOUL.md, verbatim, read once at
  *  session creation and frozen like the skills. No file is the normal case
@@ -55,6 +59,18 @@ export const SOUL_FILENAME = 'SOUL.md';
  *  permissions problem never silently reads as "no soul". */
 export async function readSoul(root: string): Promise<string> {
   const file = path.join(root, SOUL_FILENAME);
+  try {
+    return await fsp.readFile(file, 'utf8');
+  } catch (e) {
+    if ((e as { code?: string }).code === 'ENOENT') return '';
+    throw new Error(`could not read ${file}: ${(e as Error).message}`);
+  }
+}
+
+/** The {agents} blank: the checkout's root AGENTS.md, verbatim. Same
+ *  semantics as readSoul — ENOENT is fine, anything else throws. */
+export async function readAgents(root: string): Promise<string> {
+  const file = path.join(root, AGENTS_FILENAME);
   try {
     return await fsp.readFile(file, 'utf8');
   } catch (e) {
@@ -88,6 +104,7 @@ export function codingPrompt(
       credentials: facts.credentials ? CREDENTIALS_FACT : '',
       database: facts.database ? DATABASE_FACT : '',
       soul: facts.soul ?? '',
+      agents: facts.agents ?? '',
     }),
   };
 }

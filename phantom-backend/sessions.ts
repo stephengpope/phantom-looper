@@ -37,7 +37,7 @@ import { newId } from '../core/ids.js';
 import { logger } from './log.js';
 import { lastUserFromJsonl, stripUsageFromJsonl } from '../core/llm/transcript.js';
 import { codingPrompt, type CodingPrompt } from '../core/llm/agents/coding.js';
-import { readSoul } from '../core/llm/prompts/coding/wiring.js';
+import { readSoul, readAgents } from '../core/llm/prompts/coding/wiring.js';
 import { scanSkills, mergeSkills } from '../core/skills/skills.js';
 import { systemSkills } from './systemSkills.js';
 import { repoDir, type Paths } from './pool/paths.js';
@@ -208,13 +208,13 @@ export class Sessions {
   }
 
   /** Freeze THIS moment's coding prompt on a session's row: the checkout's
-   *  skills and SOUL.md, the image's skills, the declared secrets, the
-   *  workspace's git facts. `start` does it at birth; GET /sessions/:id does
-   *  it once for a coding session born before the column existed. */
+   *  skills, SOUL.md and AGENTS.md, the image's skills, the declared secrets,
+   *  the workspace's git facts. `start` does it at birth; GET /sessions/:id
+   *  does it once for a coding session born before the column existed. */
   async freezePromptNow(s: SessionRow): Promise<CodingPrompt> {
     const workspace = await this.workspaces.get(s.workspaceId);
     const resolved = await this.settings.resolveMany(
-      ['container_image', 'agent_git_credentials', 'agent_database', 'agent_soul'], { workspace });
+      ['container_image', 'agent_git_credentials', 'agent_database', 'agent_soul', 'agent_agents_md'], { workspace });
     const checkout = this.promptDeps ? repoDir(this.promptDeps.paths, folderOf(s)) : null;
     const skills = checkout
       ? mergeSkills(
@@ -222,6 +222,7 @@ export class Sessions {
         this.promptDeps?.docker ? await systemSkills(this.promptDeps.docker, String(resolved.container_image)) : [])
       : [];
     const soul = checkout && resolved.agent_soul ? await readSoul(checkout) : '';
+    const agents = checkout && resolved.agent_agents_md ? await readAgents(checkout) : '';
     const byName = new Map<string, { name: string; description: string }>();
     for (const sec of await this.settings.listSecrets([GLOBAL, workspaceScope(s.workspaceId)])) {
       if (sec.scope === GLOBAL && byName.has(sec.name)) continue;
@@ -232,6 +233,7 @@ export class Sessions {
       credentials: Boolean(resolved.agent_git_credentials),
       database: Boolean(resolved.agent_database),
       soul,
+      agents,
     }, secrets));
   }
 
