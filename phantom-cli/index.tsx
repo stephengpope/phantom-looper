@@ -11,7 +11,7 @@
 // first); ctrl+n lists them.
 //
 // The machine-local settings live in ~/.phantom-cli/settings.json; everything
-// else is on the server, edited in-app with /settings and /model. Env vars
+// else is on the server, edited in-app with /settings. Env vars
 // still override the file, and reach ONLY the local keys (PHANTOM_BACKEND_URL,
 // PHANTOM_BACKEND_KEY, PHANTOM_CLI_AUTO_UPDATE) — the settings screen shows
 // which source each value came from.

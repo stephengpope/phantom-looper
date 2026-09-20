@@ -196,10 +196,10 @@ export async function runSetup(deps: SetupDeps = {}): Promise<void> {
   }
 
   // What the app cannot run without, into the server's store — the same
-  // rows /model and /keys edit later. Backing out here keeps the pairing.
+  // rows /settings and /keys edit later. Backing out here keeps the pairing.
   const settings = makeSettings(api(paired.url, paired.key, paired.ca));
   const bail = async (): Promise<never> => {
-    clack.cancel('paired, but not set up — finish on /model and /keys in phantom-cli');
+    clack.cancel('paired, but not set up — finish on /settings and /keys in phantom-cli');
     if (target) await closeSshMaster(target, sshOpts);
     return exit(0);
   };

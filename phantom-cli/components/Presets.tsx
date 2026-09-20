@@ -5,7 +5,7 @@
 //   list    the saved presets, with [enter] apply, [e] edit, [n] new, [d] delete
 //   name    naming a new preset (TextInput on a Screen)
 //   editor  the 15 model keys for one preset (SelectList + ValueInput, same
-//           pattern as /model and /settings)
+//           pattern as /settings)
 //
 // Each key in a preset has three states:
 //   set             a value — apply writes it
@@ -209,7 +209,7 @@ export function Presets({ api, confirm, onApplied, onClose }: {
       next[key] = value;                 // set (a value) or clear (null)
     }
     // When a provider changes, reset its model to clear (the default state)
-    // — same UX as /model clearing the model when the provider changes.
+    // — same UX as /settings clearing the model when the provider changes.
     const modelKey = MODEL_FOR_PROVIDER[key];
     if (modelKey && value !== preset.values[key]) next[modelKey] = null;
     setBusy(true);

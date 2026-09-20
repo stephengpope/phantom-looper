@@ -3,7 +3,7 @@
 // the page's whole height — the title at the top, the status line and the key
 // footer pinned to the BOTTOM, the content between them. Pages used to frame
 // themselves and they drifted — two private copies of this, two more by hand,
-// one footer mechanism in SelectList and another here, and the /model editor
+// one footer mechanism in SelectList and another here, and the /settings editor
 // with none of it. A page that wants to look different has to argue with this
 // file, not add a marginTop.
 //

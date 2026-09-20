@@ -4,7 +4,7 @@
 //
 // THE ONE LAYOUT RULE: `windowStore.overlay` says what is on top of the chat.
 // A FULL overlay takes the WHOLE column — the board, a card's editor, and
-// every menu (/settings, /model, /workspace, /resume, the session switcher …)
+// every menu (/settings, /workspace, /resume, the session switcher …)
 // are all built in screens.tsx. A THIRD overlay (/tasks, the duplicate's
 // model pick) takes the bottom third where the prompt was, with the
 // conversation still above it. A DIALOG (`windowStore.dialog`, the one
@@ -705,7 +705,7 @@ export function App({
     ? `${windowStore.taskCount} ${windowStore.taskCount === 1 ? 'task' : 'tasks'}`
     : undefined;
   // The model this session is running on — always shown so you know what you
-  // are talking to. Before the first message it follows /model and /presets;
+  // are talking to. Before the first message it follows /settings and /presets;
   // after, it is fixed for life.
   const modelMark = session?.summary.model;
   // The session's lifetime token meters, right of the model — the same

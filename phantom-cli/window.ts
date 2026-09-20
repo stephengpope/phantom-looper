@@ -1005,7 +1005,7 @@ export class WindowStore {
   };
 
   /** [d] on a session row: duplicate it. The copy opens on the source's
-   *  model; /model or a preset moves it until its first message, exactly as
+   *  model; /settings or a preset moves it until its first message, exactly as
    *  for a new session — one door for "this conversation, another model".
    *
    *  The list's own lock marker is the gate: a row the server said is held
@@ -2002,7 +2002,6 @@ export class WindowStore {
       case 'settings': this.showOverlay(settingsScreen(this)); return;
       case 'keys': this.showOverlay(keysScreen(this)); return;
       case 'secrets': this.showOverlay(secretsScreen(this)); return;
-      case 'model': this.showOverlay(settingsScreen(this, 'coding')); return;
       case 'presets': this.showOverlay(presetsScreen(this)); return;
       case 'server': this.showOverlay(serverScreen(this)); return;
       case 'cpu': {

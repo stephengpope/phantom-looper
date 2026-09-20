@@ -263,9 +263,9 @@ export async function handleCommand(
     }
 
     case 'providers': {
-      // The same PROVIDERS list the cli's /model offers; each row names the
+      // The same PROVIDERS list the cli's /settings offers; each row names the
       // catalog's newest model — what an unset `model` resolves to. Switching
-      // clears `coding_model` so it follows that default (the cli's /model rule).
+      // clears `coding_model` so it follows that default (the cli's /settings rule).
       const { coding_provider: current } = await engine.settings.resolveMany(['coding_provider']);
       if (arg !== undefined) {
         const p = listed(providerList, dm, arg);
@@ -276,7 +276,7 @@ export async function handleCommand(
         await client.sendMarkdown(dm, titled(
           `✅ Provider: ${p}${model ? ` — model: ${model} (the catalog's newest)` : ''}`,
           [...(p === 'openai-compatible'
-            ? ['⚠️ openai-compatible also needs an endpoint and a model id — set both in the cli under /model.', ''] : []),
+            ? ['⚠️ openai-compatible also needs an endpoint and a model id — set both in the cli under /settings.', ''] : []),
           'See the top models with /models; switch with /models <number>.',
           ].join('\n')));
         return;
@@ -313,7 +313,7 @@ export async function handleCommand(
       if (!provider) { await reply('⚠️ No provider yet — pick one with /providers.'); return; }
       const models = modelsFor(provider).slice(0, 10);
       if (!models.length) {
-        await reply(`ℹ️ ${provider} has no catalog list — the model is set by id in the cli under /model.`);
+        await reply(`ℹ️ ${provider} has no catalog list — the model is set by id in the cli under /settings.`);
         return;
       }
       if (arg !== undefined) {
@@ -328,7 +328,7 @@ export async function handleCommand(
       const rows = models.map((m, i) => `${i + 1}. ${m.id}${m.id === model ? ' (current)' : ''}`);
       await client.sendMarkdown(dm, titled(`🧠 Models — ${provider} (current: ${model ?? 'none'}):`,
         [...rows, '',
-        'Switch with /models <number>; any other id can be set in the cli under /model'].join('\n')));
+        'Switch with /models <number>; any other id can be set in the cli under /settings'].join('\n')));
       return;
     }
 

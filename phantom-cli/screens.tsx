@@ -94,10 +94,10 @@ export const switcherScreen = (w: WindowStore): Overlay => full('sessions', () =
     onCancel={w.dismissOverlay} />
 ));
 
-/** /settings — every server setting plus this machine's audio rows; /model
- *  and /assistant open it at their group. Device rows offer what the voice
+/** /settings — every server setting plus this machine's audio rows;
+ *  /assistant opens it at the Assistant's group. Device rows offer what the voice
  *  sidecar found; saving a boot-time key restarts it. */
-export const settingsScreen = (w: WindowStore, startAt?: 'coding' | 'assistant'): Overlay => full('settings', () => {
+export const settingsScreen = (w: WindowStore, startAt?: 'assistant'): Overlay => full('settings', () => {
   const vs = w.voice.snapshot();
   return (
     <Settings key={`settings-${w.settingsVersion}`} api={w.api} configPath={w.configPath} title="settings"

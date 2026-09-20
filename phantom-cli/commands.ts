@@ -27,14 +27,13 @@ export const COMMANDS: Command[] = [
   { name: 'code', summary: 'enter code mode — the coding agent has full tools' },
   { name: 'auto-push', summary: "push this session's work to the base branch" },
   { name: 'auto-pull', summary: "bring the base branch into this session's branch" },
-  { name: 'model', summary: 'settings, at the coding agent' },
   { name: 'presets', summary: 'saved provider configurations — switch all agents at once' },
   // First row under the fold (the live menu shows MENU_ROWS = 8): closing a
   // session is a real everyday act, but not more everyday than the eight above
   // it, and [x] on /resume already teaches it.
   { name: 'compact', summary: 'compact this session, or /compact assistant', args: 'assistant' },
   { name: 'pop', summary: 'pull the last queued message into the prompt, or /pop all', args: 'all' },
-  { name: 'duplicate', summary: 'duplicate this session — transcript, branch, model; /model or /presets moves the duplicate until its first message' },
+  { name: 'duplicate', summary: 'duplicate this session — transcript, branch, model; /settings or /presets moves the duplicate until its first message' },
   { name: 'close', summary: 'close this session — it stays on the server' },
   { name: 'trash', summary: 'trash this session for good — row, transcript, files' },
   { name: 'server', summary: 'the server url and api key, this machine only' },

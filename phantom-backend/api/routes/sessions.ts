@@ -639,7 +639,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   // ---- duplicate -----------------------------------------------------------
   // THE way to fork a session — above all, to switch its model: a session
   // that has spoken never changes model, but its copy is a newborn (turn_count
-  // 0) on the source's model, so /model and presets reach it until its first
+  // 0) on the source's model, so /settings and presets reach it until its first
   // new message. The whole operation runs under the source's lock (held as every
   // git operation holds it, labelled 'duplicate'): the lock, then the flush
   // (everything outstanding committed and pushed to the source's branch on
@@ -653,7 +653,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         'branch is cut FROM that branch — the copy starts with all of the source\'s work. The transcript ' +
         'travels whole minus its usage lines, so the copy\'s token totals count its own spend from birth. ' +
         'The frozen system prompt, name, plan mode and model travel; the copy is a newborn (turn_count 0), ' +
-        'so /model and presets move its model until its first new message. A destroyed source skips ' +
+        'so /settings and presets move its model until its first new message. A destroyed source skips ' +
         'the flush — its branch on origin is the record. A failed flush aborts the copy with the error.',
       params: idParam } },
     async (req, reply) => {

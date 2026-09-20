@@ -103,7 +103,7 @@ The two credentials that turn a card into merged code, both on `/keys`:
 | one model key — `anthropic key`, `openai key`, `google key` or `openai-compatible key` | the agents think with it. `anthropic key` also takes a Claude subscription token. The wizard saved it. |
 | `github token` | clones, pushes and lands work on the base branch. A classic token with `repo` scope is the simplest. The wizard saved it. Without one the app can read public repos but never push. |
 
-Plus the coding agent's provider and model on `/model` — there is no default provider; the wizard set both. Leave the model empty and it is the newest one listed for the provider. Everything else has a working default.
+Plus the coding agent's provider and model on `/settings` — there is no default provider; the wizard set both. Leave the model empty and it is the newest one listed for the provider. Everything else has a working default.
 
 #### Ideal setup
 

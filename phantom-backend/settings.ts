@@ -36,7 +36,7 @@ export const DEFAULTS = {
   // ── coding agent ──────────────────────────────────────────────────────────
   // ONE store: the cli and the server's looper read the same rows, which is
   // what makes "the experience is the same" literal. NO default provider:
-  // nothing runs until a person picks one (the wizard, /model). The model's
+  // nothing runs until a person picks one (the wizard, /settings). The model's
   // default is not a constant either — unset, it resolves to the newest
   // model the catalog lists for the provider (models.ts, applied in
   // computeLayersFor), so it follows releases.

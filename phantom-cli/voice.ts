@@ -546,7 +546,7 @@ export class VoiceClient {
     this.note({ kind: 'user', id: nextId('vuser'), text });
     if (this.intercept?.(text)) return;
     if (!this.agent) {
-      this.note({ kind: 'error', id: nextId('verr'), message: 'the Assistant has no model — /model' });
+      this.note({ kind: 'error', id: nextId('verr'), message: 'the Assistant has no model — /assistant' });
       return;
     }
     this.cur?.abort.abort();

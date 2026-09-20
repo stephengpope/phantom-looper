@@ -4,7 +4,7 @@
 //
 // An existing repo is PICKED, not typed: the server lists what the stored
 // GitHub token can see (GET /github/repos — owned, shared, through an org;
-// newest push first) and the list filters as you type, the /model combobox's
+// newest push first) and the list filters as you type, the /settings model combobox's
 // shape. Anything typed that is not in the list is offered as its own row, so
 // a repo the token cannot see is still one field away. No token (or GitHub
 // unreachable) falls back to the plain URL field with the reason on screen.

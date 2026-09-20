@@ -8,7 +8,7 @@
 // Every OTHER setting is the server's, and the server is the one place it is
 // declared — default, type, label, description, choices — served on every
 // entry of GET /settings and rendered verbatim by the screens. This file used
-// to carry a copy of the server keys the /model and /assistant screens show;
+// to carry a copy of the server keys the /settings and /assistant screens show;
 // the copies drifted (a description said one thing here and another there,
 // a provider list here that the server refused). Nothing about a server key
 // lives here now.

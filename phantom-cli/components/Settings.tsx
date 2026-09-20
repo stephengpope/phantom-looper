@@ -3,7 +3,7 @@
 // with model and compaction sub-headings, the assistant its voice too), then
 // the areas (board, crons, sessions, containers, git, limits, telegram). This
 // machine's own audio rows (mic, speaker, mutes) sit under the assistant as
-// "this machine". /model and /assistant open the same screen at that group.
+// "this machine". /assistant opens the same screen at that group.
 //
 // /server is the one other use of this component: this machine's connection
 // rows alone, with no network call — you edit the connection precisely when
@@ -72,7 +72,7 @@ export function Settings({ api, onClose, onChange, configPath = CONFIG_PATH, row
   configPath?: string;
   rows: Rows;
   title: string;
-  /** The group to open on — /model lands on `coding`, /assistant on `assistant`. */
+  /** The group to open on — /assistant lands on `assistant`. */
   startAt?: string;
   /** Values to offer for a local key that has no fixed choices — the device
    *  names the voice sidecar reported, for the mic and speaker rows. Read

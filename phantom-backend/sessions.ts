@@ -277,7 +277,7 @@ export class Sessions {
   // THE RULE: a session's model is its row's provider/model/base_url, and
   // nothing else. Written when the session is born (from the settings, per
   // workspace; a duplicate takes its source's). While nothing has been said —
-  // turn_count 0 — the row follows the settings, so /model and a preset reach
+  // turn_count 0 — the row follows the settings, so /settings and a preset reach
   // a session you have not spoken to yet. The first saved turn moves the
   // count to 1 and the row never changes again. Every runner reads the row.
 
@@ -588,7 +588,7 @@ export class Sessions {
    *  route): the conversation minus its usage lines, the preview, the name
    *  (prefixed `DUP: ` so the copy is told apart from its source in every
    *  list — once, a copy of a copy does not stack), plan mode, the frozen PROMPT and the MODEL — the copy runs on what the
-   *  source ran on, and can be moved with /model or a preset until its first
+   *  source ran on, and can be moved with /settings or a preset until its first
    *  new message (turn_count 0, like any newborn). NO token totals — the
    *  usage lines are stripped, so the copy counts its own spend from birth. */
   async seedCopy(copy: SessionFull, src: SessionRow): Promise<void> {
