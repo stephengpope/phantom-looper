@@ -317,10 +317,14 @@ export class WindowStore {
 
   /** The question on screen right now: the window's own (a safety check you
    *  just triggered) first, else the on-screen session's parked agent
-   *  question. Another session's question is NOT here — it waits on its
-   *  session (LoadedSession.ask). THE one read for the view and the gates. */
+   *  question — but ONLY in the session's chat view, never on a full overlay
+   *  (/resume, board, settings). Another session's question is NOT here — it
+   *  waits on its session (LoadedSession.ask). THE one read for the view and
+   *  the gates. */
   get dialogOnScreen(): Dialog | null {
-    return this.dialog ?? this.sessions.active()?.ask ?? null;
+    if (this.dialog) return this.dialog;
+    if (this.overlay?.size === 'full') return null;
+    return this.sessions.active()?.ask ?? null;
   }
 
   /** True while anything is up — the one gate for input routing: the chat's
@@ -357,7 +361,8 @@ export class WindowStore {
         // Asked from a session you are not on: say so where you are, once;
         // the session list (ctrl+n) keeps saying it until you answer.
         if (this.sessions.activeId !== session) {
-          this.setToast(`${ask!.who} is waiting on you — ctrl+n or tab to answer`, 'cyan', 6_000);
+          const e = this.sessions.get(session);
+          this.setToast(`${e?.name ?? e?.branch ?? 'a session'} needs approval — tab or /resume`, 'cyan');
         }
       } else {
         this.showDialog(dialog);
@@ -563,7 +568,7 @@ export class WindowStore {
         if (!e.planMode) return { ok: false, error: 'already in code mode' };
         // Bound to a session = the coding agent; unbound = the Assistant.
         const yes = await this.confirm('enter code mode?', reason,
-          { who: `${sessionId ? 'coding agent' : 'the Assistant'} · ${e.branch}`, signal: abortSignal, session: e.id });
+          { who: `${sessionId ? 'coding agent' : 'the Assistant'} · ${e.name ?? e.card ?? e.branch}`, signal: abortSignal, session: e.id });
         if (!yes) return { ok: false, declined: true, mode: 'plan' };
         await this.api('PATCH', `/sessions/${e.id}`, { plan_mode: false });
         await this.applyPlanMode(e.id, false);
