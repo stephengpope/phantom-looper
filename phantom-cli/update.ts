@@ -9,14 +9,17 @@
 // Skipping a half is allowed; the next quit names whatever is still behind
 // (quitNotice), in either direction.
 //
-// The server half streams: POST /update returns ND-JSON progress events as the
-// server pulls images, then a "restarting" event before the server goes down.
-// The CLI shows per-image download percentage, then health-polls until the
+// The server half streams: POST /update returns ND-JSON progress events
+// (core/update.ts) as the server pulls the images and the installer copies
+// the release files and restarts the stack — the installer's own lines are
+// relayed as they print, so a failure arrives with its reason the moment it
+// happens. The restart cuts the stream; the CLI then health-polls until the
 // server comes back on the new version.
 //
 // Everything reaches this module through `deps`, so a caller can script a
 // release, a server and a clock without a network or a terminal.
 import { isBehind } from './selfUpdate.js';
+import { pullLine, type PullProgress, type UpdateEvent } from '../core/update.js';
 
 export type Target = 'both' | 'client' | 'server';
 
@@ -97,46 +100,45 @@ async function waitForVersion(d: UpdateDeps, server: ServerLink, version: string
   }
 }
 
-/** Stream progress from POST /update. One line, updated in place:
- *    Downloading server images:  api 42%  session 17%
- *  Resolves with 'restarting' when the server says it's going down, or 'error'
- *  if the stream reports a failure. */
-type UpdateEvent = { event: string; image?: string; percent?: number; message?: string };
-
+/** Stream progress from POST /update. The pull is one line updated in place
+ *  ("Downloading server images:  api 42%  session 17%", then "Unpacking");
+ *  each installer line is printed as it arrives. Resolves 'restarting' once
+ *  the server is going down — said outright, or the stream dropping after the
+ *  images landed, which is the restart cutting it — and 'error' when the
+ *  server reports a failure or the connection is lost before that. */
 async function streamUpdateProgress(d: UpdateDeps, server: ServerLink, tag: string):
   Promise<'restarting' | 'error'> {
-  const progress: Record<string, number> = {};
-  let result: 'restarting' | 'error' = 'error';
-
-  const renderLine = () => {
-    const parts = Object.entries(progress)
-      .map(([img, pct]) => `${img} ${pct}%`).join('  ');
-    return `  Downloading server images:  ${parts}`;
-  };
+  const images: Record<string, PullProgress> = {};
+  let pulled = false;
+  let result: 'restarting' | 'error' | null = null;
 
   try {
     await server.stream('/update', { tag, restart_anyway: true }, (raw) => {
       const e = raw as UpdateEvent;
       if (e.event === 'pulling') {
-        progress[e.image!] = e.percent ?? 0;
-        const line = renderLine();
+        images[e.image] = { download: e.download, unpack: e.unpack };
+        const line = `  ${pullLine(images)}`;
         d.tick ? d.tick(line) : d.out(line);
       } else if (e.event === 'pulled') {
-        d.out('  Server images downloaded.');
+        pulled = true;
+        d.out('  Server images on disk.');
+      } else if (e.event === 'installing') {
+        d.out(`  ${e.message.replace(/^apply: /, '')}`);
       } else if (e.event === 'restarting') {
         result = 'restarting';
-        d.out('  Restarting...');
       } else if (e.event === 'error') {
         result = 'error';
-        d.out(`  Update failed: ${e.message ?? 'unknown error'}`);
+        d.out(`  Update failed: ${e.message}`);
       }
       // heartbeat events are silently ignored
     });
   } catch (e) {
-    d.out(`  Update stream failed: ${errorText(e)}`);
-    return 'error';
+    if (result === null && !pulled) { d.out(`  Update stream failed: ${errorText(e)}`); return 'error'; }
   }
-  return result;
+  if (result === 'error') return 'error';
+  if (result === null && !pulled) { d.out('  The server ended the update without saying why.'); return 'error'; }
+  d.out('  Restarting...');
+  return 'restarting';
 }
 
 /** The command. Returns the process exit code. */

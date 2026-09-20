@@ -11,6 +11,7 @@ import crypto from 'node:crypto';
 import type { TelegramClient } from './client.js';
 import { titled } from './client.js';
 import { checkLatest, isBehind, bare } from '../../core/version.js';
+import { pullLine, type PullProgress, type UpdateEvent } from '../../core/update.js';
 import { logger, errStr } from '../log.js';
 
 const log = logger('upgrade');
@@ -31,7 +32,7 @@ export interface UpgradeCheckerDeps {
   health(): Promise<{ loops_running?: number } | null>;
   /** Trigger the upgrade (POST /update {tag}). Calls onEvent for each ND-JSON
    *  progress event from the server. */
-  triggerUpdate(tag: string, onEvent?: (event: { event: string; image?: string; percent?: number; message?: string }) => void): Promise<{ ok: boolean; error?: string }>;
+  triggerUpdate(tag: string, onEvent?: (event: UpdateEvent) => void): Promise<{ ok: boolean; error?: string }>;
   /** Resolve a setting by key. */
   setting(key: string): Promise<unknown>;
   /** Get the bot token. */
@@ -171,17 +172,20 @@ export class UpgradeChecker {
     const msg = await client.sendMessage(dm, `⬆️ Updating to ${v}...`);
     const msgId = msg?.message_id ?? null;
 
+    // One bubble, edited as the update moves: the pull line (core/update.ts
+    // words it, the same as the cli), then the installer's latest line.
+    const images: Record<string, PullProgress> = {};
+    const show = (line: string) => { if (msgId) client.editMessageText(dm, msgId, `⬆️ Updating to ${v}...\n${line}`).catch(() => {}); };
     const r = await this.deps.triggerUpdate(tag, (event) => {
-      if (!msgId) return;
       if (event.event === 'pulling') {
-        const text = `⬆️ Updating to ${v}...\n` +
-          `Pulling ${event.image} image... ${event.percent ?? 0}%`;
-        client.editMessageText(dm, msgId, text).catch(() => {});
+        images[event.image] = { download: event.download, unpack: event.unpack };
+        show(pullLine(images));
       } else if (event.event === 'pulled') {
-        client.editMessageText(dm, msgId, `⬆️ Updating to ${v}...\nImages pulled. Restarting...`).catch(() => {});
+        show('Images on disk. Installing...');
+      } else if (event.event === 'installing') {
+        show(event.message);
       } else if (event.event === 'restarting') {
-        client.editMessageText(dm, msgId,
-          `⬆️ Updating to ${v}...\nRestarting — any running turns are interrupted and resume after the restart.`).catch(() => {});
+        show('Restarting — any running turns are interrupted and resume after the restart.');
       }
     });
 

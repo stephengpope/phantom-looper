@@ -15,6 +15,7 @@
 // dangling prune here at all; the only removal is by tag, of releases older
 // than the one in use, and only when nothing is pulling.
 import type Docker from 'dockerode';
+import type { PullProgress } from '../core/update.js';
 import { logger, errStr } from './log.js';
 
 const log = logger('images');
@@ -35,15 +36,76 @@ const splitRef = (ref: string): { repo: string; tag: string } => {
   return i > ref.lastIndexOf('/') ? { repo: ref.slice(0, i), tag: ref.slice(i + 1) } : { repo: ref, tag: '' };
 };
 
-interface LayerProgress { current: number; total: number }
+/** One JSON line of Docker's pull stream. */
+interface PullEvent { status?: string; id?: string; progressDetail?: { current?: number; total?: number } }
 
-/** Aggregate download percentage over the layers seen so far. A layer that
- *  goes straight to "Download complete" without progress events is too small
- *  to matter — it does not affect the percentage. */
-function aggregatePercent(layers: Map<string, LayerProgress>): number {
-  let current = 0, total = 0;
-  for (const l of layers.values()) { current += l.current; total += l.total; }
-  return total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
+/** A pull's progress as two percentages that only ever climb: bytes
+ *  downloaded, then layers unpacked. Docker pulls in two phases — every layer
+ *  is downloaded, then each is unpacked — and its stream differs by image
+ *  store (both measured against a live daemon):
+ *
+ *    * legacy (graph driver): "Pulling fs layer" for each layer to fetch,
+ *      "Downloading" with byte totals, "Download complete", then "Extracting"
+ *      with byte totals that START OVER (same id), "Pull complete". Layers
+ *      already here say only "Already exists".
+ *    * containerd store (Docker 28+ default): "Pulling fs layer" for EVERY
+ *      layer, then "Already exists" or a byte-counted download; "Extracting"
+ *      carries elapsed seconds, no total; "Pull complete" for every layer.
+ *
+ *  So bytes are the one honest download measure on both, and unpacking is
+ *  counted in layers (an "Extracting" number is bytes on one store and
+ *  seconds on the other). Download reads 100 only once every layer is
+ *  downloaded — three download at a time, so bytes can hit 100% of what is
+ *  KNOWN while layers still wait — and unpack counts the layers that had to
+ *  be fetched (existing layers never unpack on the legacy store).
+ *
+ *  A layer's size is only learned when its download starts, so the byte
+ *  ratio's denominator grows mid-pull and the true figure can dip; the
+ *  reported one is a high-water mark — "at least this much" — that holds
+ *  until the real figure passes it again. */
+export class PullTracker {
+  private layers = new Set<string>();      // "Pulling fs layer"
+  private existing = new Set<string>();    // "Already exists"
+  private downloaded = new Set<string>();  // "Download complete" | "Already exists"
+  private unpacked = new Set<string>();    // "Pull complete"
+  private bytes = new Map<string, { current: number; total: number }>();
+  private downloadHigh = 0;
+
+  /** Fold one stream line in; true when it changed the picture. */
+  see(e: PullEvent): boolean {
+    const id = e.id;
+    if (!id) return false;
+    switch (e.status) {
+      case 'Pulling fs layer': this.layers.add(id); return true;
+      case 'Already exists': this.existing.add(id); this.downloaded.add(id); return true;
+      case 'Downloading': {
+        const total = e.progressDetail?.total;
+        if (!total) return false;
+        this.bytes.set(id, { current: e.progressDetail?.current ?? 0, total });
+        return true;
+      }
+      case 'Download complete': {
+        this.downloaded.add(id);
+        const b = this.bytes.get(id);
+        if (b) b.current = b.total;
+        return true;
+      }
+      case 'Pull complete': this.downloaded.add(id); this.unpacked.add(id); return true;
+      default: return false;
+    }
+  }
+
+  progress(): PullProgress {
+    const allDownloaded = this.layers.size > 0 && [...this.layers].every((id) => this.downloaded.has(id));
+    let current = 0, total = 0;
+    for (const b of this.bytes.values()) { current += b.current; total += b.total; }
+    const ratio = allDownloaded ? 100 : total > 0 ? Math.min(99, Math.floor((current / total) * 100)) : 0;
+    const download = this.downloadHigh = Math.max(this.downloadHigh, ratio);
+    const toUnpack = [...this.layers].filter((id) => !this.existing.has(id));
+    const done = toUnpack.filter((id) => this.unpacked.has(id)).length;
+    const unpack = toUnpack.length > 0 ? Math.round((done / toUnpack.length) * 100) : allDownloaded ? 100 : 0;
+    return { download, unpack };
+  }
 }
 
 export class Images {
@@ -60,33 +122,31 @@ export class Images {
   /** Is `image` on this machine? Rejects (404) when not. */
   inspect(image: string): Promise<unknown> { return this.docker.getImage(image).inspect(); }
 
-  /** Pull `image`, reporting the aggregate download percentage as layers
-   *  arrive. Resolves when the pull is complete. Attaches to an identical
-   *  pull already running (its progress is reported too). */
-  pull(image: string, onPercent?: (pct: number) => void): Promise<void> {
+  /** Pull `image`, reporting download and unpack percentages as layers
+   *  arrive. Resolves when Docker's stream ends — which is after every layer
+   *  is unpacked and the tag is written: the image is on disk and usable.
+   *  Attaches to an identical pull already running (its progress is reported
+   *  too). */
+  pull(image: string, onProgress?: (p: PullProgress) => void): Promise<void> {
     const inflight = this.pulls.get(image);
     if (inflight) return inflight;
     const p = (this.removal ?? Promise.resolve())
-      .then(() => this.stream(image, onPercent))
+      .then(() => this.stream(image, onProgress))
       .then(() => log.info({ image }, 'image pulled'))
       .finally(() => this.pulls.delete(image));
     this.pulls.set(image, p);
     return p;
   }
 
-  private stream(image: string, onPercent?: (pct: number) => void): Promise<void> {
+  private stream(image: string, onProgress?: (p: PullProgress) => void): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       this.docker.pull(image, (e: Error | null, stream: NodeJS.ReadableStream) => {
         if (e) return reject(e);
-        const layers = new Map<string, LayerProgress>();
+        const tracker = new PullTracker();
         this.docker.modem.followProgress(
           stream,
           (err: Error | null) => (err ? reject(err) : resolve()),
-          (event: { id?: string; progressDetail?: { current?: number; total?: number } }) => {
-            if (!onPercent || !event.id || !event.progressDetail?.total) return;
-            layers.set(event.id, { current: event.progressDetail.current ?? 0, total: event.progressDetail.total });
-            onPercent(aggregatePercent(layers));
-          },
+          (event: PullEvent) => { if (onProgress && tracker.see(event)) onProgress(tracker.progress()); },
         );
       });
     });

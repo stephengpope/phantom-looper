@@ -23,6 +23,7 @@ import { TelegramHandledUpdates } from './telegram/handledUpdates.js';
 import { SettingsEvents } from './api/settingsEvents.js';
 import { idleBackupSweep, pressureSweep } from './disk.js';
 import { buildApp, type AppCtx } from './api/app.js';
+import { shutdown as updateShutdown } from './api/updateTask.js';
 import { BoardEvents } from './api/boardEvents.js';
 import { SessionEvents } from './api/sessionEvents.js';
 import { BackdoorQueue } from './api/backdoor.js';
@@ -429,6 +430,9 @@ async function main() {
 
   const shutdown = async () => {
     stopped = true;
+    // First: an update in flight ends its stream cleanly (this restart IS
+    // the update) before app.close() force-closes every connection.
+    updateShutdown();
     looper.stop();
     cronEngine.stop();
     digest.stop();

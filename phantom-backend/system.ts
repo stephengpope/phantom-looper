@@ -12,7 +12,8 @@ import type { Images } from './images.js';
 import type { LogTokens } from './logTokens.js';
 import { formatTokenReport, reportWindows } from './tokenReport.js';
 import type { Clock } from '../core/clock.js';
-import { startUpdate, subscribe, isRunning, type UpdateEvent } from './api/updateTask.js';
+import { startUpdate, subscribe, isRunning } from './api/updateTask.js';
+import type { UpdateEvent } from '../core/update.js';
 import { API_IMAGE } from './env.js';
 import { logger, errStr } from './log.js';
 
@@ -50,12 +51,13 @@ export class System {
     private readonly loopsRunning: () => number = () => 0,
   ) {}
 
-  /** Update the server to a release: hand the tag to the updater sidecar and
-   *  report progress through `onEvent` until the api restarts (or the update
-   *  fails). Attaches to an update already in progress. THE guard: a restart
-   *  interrupts every loop round in flight (they resume after boot), so a
-   *  call not told to restart anyway is refused while any card is mid-round.
-   *  Resolves when the stream ends; `stop` (the caller went away) detaches. */
+  /** Update the server to a release: pull the images, hand the tag to the
+   *  updater sidecar, relay the installer's output — every step through
+   *  `onEvent` until the api restarts (or the update fails). Attaches to an
+   *  update already in progress. THE guard: a restart interrupts every loop
+   *  round in flight (they resume after boot), so a call not told to restart
+   *  anyway is refused while any card is mid-round. Resolves when the stream
+   *  ends; `stop` (the caller went away) detaches. */
   update(tag: string, o: { restartAnyway?: boolean }, onEvent: (e: UpdateEvent) => void): { done: Promise<void>; stop(): void } {
     const loops = this.loopsRunning();
     if (loops > 0 && !o.restartAnyway) {
@@ -63,8 +65,11 @@ export class System {
         `${loops === 1 ? '1 card has' : `${loops} cards have`} a round in flight — updating now would interrupt ${loops === 1 ? 'it' : 'them'} (${loops === 1 ? 'it resumes' : 'they resume'} after the restart); send restart_anyway: true to update anyway`, true);
     }
     if (!this.updateTriggerDir) throw new SystemError('updater_unavailable', 'this server has no updater sidecar (UPDATE_TRIGGER_DIR unset) — re-run install.sh once');
-    if (!this.images) throw new SystemError('updater_unavailable', 'this server has no docker access');
-    if (!isRunning()) startUpdate(this.images, tag, this.updateTriggerDir, API_IMAGE, 'ghcr.io/stephengpope/phantom-backend-session');
+    if (!this.images || !this.docker) throw new SystemError('updater_unavailable', 'this server has no docker access');
+    if (!isRunning()) {
+      startUpdate({ images: this.images, docker: this.docker, triggerDir: this.updateTriggerDir,
+        apiImage: API_IMAGE, sessionImage: 'ghcr.io/stephengpope/phantom-backend-session' }, tag);
+    }
     let unsub: (() => void) | null = null;
     const done = new Promise<void>((resolve) => {
       unsub = subscribe((e) => {

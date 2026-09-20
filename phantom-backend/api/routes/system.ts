@@ -52,10 +52,13 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
     schema: {
       tags: ['meta'],
       summary: 'Upgrade this server to a release (streamed progress)',
-      description: 'Pulls the new images via dockerode and streams ND-JSON progress events: ' +
-        '`{event:"pulling", image, percent}` per image, `{event:"pulled"}`, `{event:"restarting"}`, ' +
-        'then the stream closes and the sidecar restarts the stack. If an update is already in progress, ' +
-        'the stream attaches to it and replays current state. Heartbeats keep the connection alive. ' +
+      description: 'Pulls the new images and streams ND-JSON progress events: ' +
+        '`{event:"pulling", image, download, unpack}` per image (two percentages: Docker downloads every layer, then unpacks), ' +
+        '`{event:"pulled"}`, then `{event:"installing", message}` per line of the installer\'s own output as it copies ' +
+        'the release files and restarts the stack. The restart cuts the stream — a dropped stream after `pulled` is ' +
+        'the api going down; poll GET /health for the new version. `{event:"error", message}` ends a failed update, ' +
+        'with the reason. If an update is already in progress, the stream attaches to it and replays ' +
+        'progress so far. Heartbeats keep the connection alive. ' +
         'While a card has a loop round in flight the route refuses (409 `loops_running`) unless the ' +
         'caller passes `restart_anyway`. `updater_unavailable` (503) means this server has no updater ' +
         'sidecar (UPDATE_TRIGGER_DIR unset) — re-run install.sh once.',
@@ -69,15 +72,19 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
     },
   }, async (req, reply) => {
     const { tag, restart_anyway: restartAnyway } = req.body as { tag: string; restart_anyway?: boolean };
-    // Stream ND-JSON progress to the client; heartbeats keep the connection alive.
+    // Stream ND-JSON progress to the client; heartbeats keep the connection
+    // alive. The refusals are thrown before the first event; attaching to an
+    // update in progress replays events synchronously, so the head goes out
+    // with the first write, whichever comes first.
     let run: ReturnType<typeof ctx.system.update>;
-    const write = (o: unknown) => { reply.raw.write(`${JSON.stringify(o)}\n`); };
+    const head = () => { if (!reply.raw.headersSent) reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' }); };
+    const write = (o: unknown) => { head(); reply.raw.write(`${JSON.stringify(o)}\n`); };
     try { run = ctx.system.update(tag, { restartAnyway }, write); }
     catch (e) {
       if (!(e instanceof SystemError)) throw e;
       return reply.code(e.code === 'loops_running' ? 409 : 503).send(err(e.code, e.message, e.retryable));
     }
-    reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
+    head();
     const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
     const closed = new Promise<void>((resolve) => reply.raw.on('close', resolve));
     await Promise.race([run.done, closed]);
