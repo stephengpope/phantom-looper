@@ -1,5 +1,7 @@
 // The coding agent's wiring — the code that fills ./coding.ts (the
 // document). No prompt text lives here.
+import fsp from 'node:fs/promises';
+import path from 'node:path';
 import { fill } from '../template.js';
 import { STAKEHOLDERS } from '../stakeholders.js';
 import { VALUES } from '../values.js';
@@ -21,6 +23,9 @@ export interface WorkspaceFacts {
   credentials?: boolean;
   /** agent_database: the agent has its own database and the database_query tool. */
   database?: boolean;
+  /** agent_soul: the checkout's root SOUL.md, verbatim; '' or absent when
+   *  the setting is off or the repo has no such file. */
+  soul?: string;
 }
 
 const DESC_LIMIT = 60;
@@ -40,6 +45,22 @@ export function skillsIndex(skills: SkillMeta[]): string {
 export function secretsIndex(secrets: SecretIndexEntry[]): string {
   if (!secrets.length) return '';
   return fill(SECRETS, { secretsList: secrets.map((s) => `- ${s.name}: ${clip(s.description)}`).join('\n') });
+}
+
+export const SOUL_FILENAME = 'SOUL.md';
+
+/** The {soul} blank: the checkout's root SOUL.md, verbatim, read once at
+ *  session creation and frozen like the skills. No file is the normal case
+ *  (''); any other read failure throws — same rule as scanSkills, so a
+ *  permissions problem never silently reads as "no soul". */
+export async function readSoul(root: string): Promise<string> {
+  const file = path.join(root, SOUL_FILENAME);
+  try {
+    return await fsp.readFile(file, 'utf8');
+  } catch (e) {
+    if ((e as { code?: string }).code === 'ENOENT') return '';
+    throw new Error(`could not read ${file}: ${(e as Error).message}`);
+  }
 }
 
 /** The coding agent's system prompt, in the two pieces the prompt cache
@@ -66,6 +87,7 @@ export function codingPrompt(
       secrets: secretsIndex(secrets),
       credentials: facts.credentials ? CREDENTIALS_FACT : '',
       database: facts.database ? DATABASE_FACT : '',
+      soul: facts.soul ?? '',
     }),
   };
 }

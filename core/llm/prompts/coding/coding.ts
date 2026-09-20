@@ -7,12 +7,13 @@
 //                      communication, environment. Identical across all
 //                      workspaces and sessions; gets an Anthropic cache
 //                      breakpoint so every session shares it.
-//   SYSTEM_WORKSPACE — per-workspace: skills, secrets, credentials. Gets its
-//                      own breakpoint, cached across sessions in the same
-//                      workspace.
+//   SYSTEM_WORKSPACE — per-workspace: skills, secrets, credentials, the
+//                      repo's SOUL.md. Gets its own breakpoint, cached
+//                      across sessions in the same workspace.
 //
 // Blanks: {{stakeholders}} {{values}} {{communication}} {{environment}}
-// {{sending}} (base); {{skills}} {{secrets}} {{credentials}} (workspace).
+// {{sending}} (base); {{skills}} {{secrets}} {{credentials}} {{database}}
+// {{soul}} (workspace).
 // Filled once at session creation and stored AS TWO PIECES on the session
 // row (sessions.system_prompt); every agent build sends them verbatim.
 
@@ -39,8 +40,9 @@ Anything meant to keep running — a dev server, a watcher — is started with t
 
 {{sending}}`;
 
-// ── WORKSPACE — per-workspace: skills, secrets, credentials, database, date ─
-// Blanks: {{skills}} {{secrets}} {{credentials}} {{database}}. The current
+// ── WORKSPACE — per-workspace: skills, secrets, credentials, database, soul ─
+// Blanks: {{skills}} {{secrets}} {{credentials}} {{database}} {{soul}}. The
+// soul is last: the repo's own words are the final frozen text. The current
 // date is appended at agent-build time (withCurrentDate), not frozen here.
 export const SYSTEM_WORKSPACE = `{{skills}}
 
@@ -50,7 +52,9 @@ Git operations are normally covered for you — committing, pushing, and merging
 
 {{credentials}}
 
-{{database}}`;
+{{database}}
+
+{{soul}}`;
 
 // ═══ THE {{skills}} BLANK — the skills index ═════════════════════════════════
 // {{skillsList}} is one line per skill: "- name: description" (clipped to 60 chars).
@@ -82,3 +86,8 @@ export const CREDENTIALS_FACT = `A GitHub token is in your environment (GITHUB_T
 // what it is, not what to do with it.
 
 export const DATABASE_FACT = `You have your own PostgreSQL database for this workspace. It is private to you — not the project's, and no code in the workspace can reach it — and it persists across sessions and container restarts. You are its admin. The database_query tool runs SQL in it.`;
+
+// ═══ THE {{soul}} BLANK — the repo's SOUL.md ═════════════════════════════════
+// The file itself, verbatim — no wrapper text. Present only when agent_soul
+// is on for the workspace AND the checkout has a root SOUL.md (Shockwave's
+// file: who the agent is here, in the repo's own words).
