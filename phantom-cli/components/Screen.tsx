@@ -50,16 +50,18 @@ export const BudgetContext = createContext(24 - CHROME_ROWS());
  *  JSX below and nowhere else. */
 function CHROME_ROWS(): number { return 7; }
 
-/** Like keyLine but returns JSX: active keys render inverse so you can see
- *  the toggle is on. Non-active keys stay plain dim text. */
+/** Like keyLine but returns JSX: active keys render black-on-white so you
+ *  can see the toggle is on. Non-active keys stay dim. Dim is set per key,
+ *  not on the line: a line-wide dim wraps the active key too and greys its
+ *  black text. */
 function footerSegments(keys: FooterKey[]): ReactNode {
   const visible = keys.filter((k) => k.when !== false);
   return visible.map((k, i) => {
     const label = `[${k.key}] ${k.does}`;
     const sep = i < visible.length - 1 ? ' · ' : '';
     return k.active
-      ? <Text key={k.key}><Text inverse dimColor={false}>{label}</Text>{sep}</Text>
-      : <Text key={k.key}>{label}{sep}</Text>;
+      ? <Text key={k.key}><Text color="black" backgroundColor="white">{label}</Text><Text dimColor>{sep}</Text></Text>
+      : <Text key={k.key} dimColor>{label}{sep}</Text>;
   });
 }
 
@@ -100,7 +102,7 @@ export function Screen({ title, footer, sub, busy, notice, error, children }: {
           list reads as one more sentence of that help. Always reserved, so a
           page gaining a footer never shifts its content. */}
       <Text> </Text>
-      <Text dimColor wrap="truncate-end">{'  '}{footer?.length ? footerSegments(footer) : ' '}</Text>
+      <Text wrap="truncate-end">{'  '}{footer?.length ? footerSegments(footer) : ' '}</Text>
     </Box>
   );
 }
