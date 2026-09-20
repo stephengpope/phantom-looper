@@ -86,9 +86,12 @@ export const CREDENTIALS_FACT = `A GitHub token is in your environment (GITHUB_T
 
 // ═══ THE {{database}} BLANK — the agent's own database ═══════════════════════════
 // Present only when agent_database is on for the workspace. Facts only —
-// what it is, not what to do with it.
+// what it is, not what to do with it. Two wordings: private (the default),
+// and shared with the project's code (agent_database_in_code on).
 
 export const DATABASE_FACT = `You have your own PostgreSQL database for this workspace. It is private to you — not the project's, and no code in the workspace can reach it — and it persists across sessions and container restarts. You are its admin. The database_query tool runs SQL in it.`;
+
+export const DATABASE_IN_CODE_FACT = `You have your own PostgreSQL database for this workspace. It persists across sessions and container restarts. You are its admin. The database_query tool runs SQL in it and should be your primary way of accessing it. The project's code can reach the same database should you need to write code that needs access: \`AGENT_DATABASE_URL\` in your environment is the connection string.`;
 
 // ═══ THE {{soul}} BLANK — the repo's SOUL.md ═════════════════════════════════
 // The file itself, verbatim — no wrapper text. Present only when agent_soul

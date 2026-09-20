@@ -51,6 +51,11 @@ services:
       # subpaths of it. dockerd resolves mounts host-side, so an API-internal
       # path would come up empty.
       WORKSPACE_VOLUME: phantom-looper-workspaces
+      # This stack's network (compose names it <project>_default). A workspace
+      # container joins it when `agent_database_in_code` is on, so the
+      # `postgres` host in AGENT_DATABASE_URL resolves; otherwise containers
+      # stay on Docker's default bridge with no path to the stack.
+      WORKSPACE_NETWORK: phantom-backend_default
       # Where POST /update drops the requested release tag for the updater
       # sidecar (shared volume; the sidecar polls it).
       UPDATE_TRIGGER_DIR: /trigger

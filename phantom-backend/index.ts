@@ -101,7 +101,7 @@ async function main() {
   // returns, so the first write is seen — and lets go on removal. `instantSync`
   // is captured lazily, like `app`: containers start long after boot.
   const containers = new ContainerManager(docker, images, paths, {
-    volume: process.env.WORKSPACE_VOLUME, settings,
+    volume: process.env.WORKSPACE_VOLUME, network: process.env.WORKSPACE_NETWORK, settings, databases,
     onStarted: (folderId, workspace) => instantSync.watchFolder(folderId, workspace),
     onRemoved: (folderId) => instantSync.unwatchFolder(folderId),
   });

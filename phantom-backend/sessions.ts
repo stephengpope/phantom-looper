@@ -214,7 +214,7 @@ export class Sessions {
   async freezePromptNow(s: SessionRow): Promise<CodingPrompt> {
     const workspace = await this.workspaces.get(s.workspaceId);
     const resolved = await this.settings.resolveMany(
-      ['container_image', 'agent_git_credentials', 'agent_database', 'agent_soul', 'agent_agents_md'], { workspace });
+      ['container_image', 'agent_git_credentials', 'agent_database', 'agent_database_in_code', 'agent_soul', 'agent_agents_md'], { workspace });
     const checkout = this.promptDeps ? repoDir(this.promptDeps.paths, folderOf(s)) : null;
     const skills = checkout
       ? mergeSkills(
@@ -232,6 +232,7 @@ export class Sessions {
     return this.freezeSystemPrompt(s.id, codingPrompt(skills, {
       credentials: Boolean(resolved.agent_git_credentials),
       database: Boolean(resolved.agent_database),
+      databaseInCode: Boolean(resolved.agent_database_in_code),
       soul,
       agents,
     }, secrets));

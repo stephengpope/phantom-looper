@@ -137,6 +137,16 @@ export class Databases {
     return createHmac('sha256', this.encryptionKey).update(`database:${workspaceId}`).digest('base64url');
   }
 
+  /** The connection string the project's code gets as AGENT_DATABASE_URL
+   *  when `agent_database_in_code` is on — the same role and database the
+   *  tool uses. Ensures first, so the URL works the moment it is handed out.
+   *  The host is the server's own (`postgres` on the stack network); the
+   *  container must be on that network to resolve it. */
+  async urlFor(workspaceId: string): Promise<string> {
+    await this.ensure(workspaceId);
+    return this.connectionString(workspaceId);
+  }
+
   private connectionString(workspaceId: string): string {
     const u = new URL(this.server.toString());
     u.username = this.nameOf(workspaceId);

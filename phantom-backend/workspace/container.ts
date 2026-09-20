@@ -13,6 +13,7 @@
 import type Docker from 'dockerode';
 import type { WorkspaceRow } from '../db/schema.js';
 import type { Settings } from '../settings.js';
+import type { Databases } from '../databases.js';
 import { resolveAuth } from '../pool/pool.js';
 import type { Paths } from '../pool/paths.js';
 import type { Images } from '../images.js';
@@ -47,6 +48,10 @@ interface SpecInput {
   /** Privileged + the graph volume so the agent can run its own dockerd. The
    *  daemon is NOT started here — the image's `start-docker` does that on demand. */
   docker: boolean;
+  /** A Docker network to join instead of the default bridge — the stack's
+   *  own, when the project's code needs the agent database (its host name
+   *  resolves only there). Absent = Docker's default. */
+  network?: string;
 }
 
 /** The dockerode createContainer spec — pure, so the docker wiring is a unit
@@ -79,6 +84,7 @@ export function buildContainerSpec(i: SpecInput): Record<string, unknown> {
     mounts.push({ ...DOCKER_GRAPH_MOUNT });
   }
   if (mounts.length) HostConfig.Mounts = mounts;
+  if (i.network) HostConfig.NetworkMode = i.network;
   return {
     name: i.name,
     Image: i.image,
@@ -98,6 +104,15 @@ export interface ContainerOpts {
    *  Absent (tests) means the container never gets a token, whatever the
    *  setting says. */
   settings?: Settings;
+  /** The agent databases, for `agent_database_in_code`: the container gets
+   *  the workspace's connection string as AGENT_DATABASE_URL. Absent (tests)
+   *  means never. */
+  databases?: Databases;
+  /** The stack's Docker network (compose's `<project>_default`), which a
+   *  container joins when it carries AGENT_DATABASE_URL — the URL's host
+   *  resolves only there. Unset (dev, no compose) = the URL is handed out
+   *  but the container stays on the default bridge. */
+  network?: string;
   /** A container came up for this folder — awaited before `ensure` returns,
    *  so whatever the caller does next (a file write) happens after the
    *  listener is in place. Instant sync attaches its watcher here. */
@@ -158,11 +173,13 @@ export class ContainerManager {
       ['container_image', 'container_memory_mb', 'container_cpus', 'container_pids_limit', 'container_docker'],
       { workspace });
     const image = limits.container_image;
-    const Env = await this.credentialEnv(workspace);
+    const database = await this.databaseEnv(workspace);
+    const Env = [...(await this.credentialEnv(workspace)), ...database];
     const spec = buildContainerSpec({
       name: this.name(key),
       image: String(image),
       env: Env,
+      network: database.length ? this.opts.network : undefined,
       memMb: limits.container_memory_mb,
       cpus: limits.container_cpus,
       pids: limits.container_pids_limit,
@@ -212,6 +229,22 @@ export class ContainerManager {
     }
     log.info({ workspace: workspace.name }, 'workspace container gets the GitHub PAT (agent_git_credentials)');
     return [`GITHUB_TOKEN=${pat}`, `GH_TOKEN=${pat}`];
+  }
+
+  /** The agent database's connection string, when BOTH `agent_database` and
+   *  `agent_database_in_code` are on. The second deliberate hole in "the
+   *  project's code cannot reach it": the role's password enters the
+   *  container's env, and — like the PAT — dies with it. The caller also
+   *  joins the stack network, or the host name in the URL resolves nowhere. */
+  private async databaseEnv(workspace: WorkspaceRow | undefined): Promise<string[]> {
+    if (!workspace || !this.opts.settings || !this.opts.databases) return [];
+    const on = await this.opts.settings.resolveMany(['agent_database', 'agent_database_in_code'], { workspace });
+    if (!on.agent_database || !on.agent_database_in_code) return [];
+    if (!this.opts.network) {
+      log.warn({ workspace: workspace.name }, 'agent_database_in_code is on but WORKSPACE_NETWORK is unset — the URL\'s host may not resolve from the container');
+    }
+    log.info({ workspace: workspace.name }, 'workspace container gets AGENT_DATABASE_URL (agent_database_in_code)');
+    return [`AGENT_DATABASE_URL=${await this.opts.databases.urlFor(workspace.id)}`];
   }
 
   async remove(folderId: string): Promise<void> {

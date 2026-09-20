@@ -8,7 +8,7 @@ import { VALUES } from '../values.js';
 import { COMMUNICATION } from '../communication.js';
 import { ENVIRONMENT } from '../environment.js';
 import { SENDING_FILES } from '../sending.js';
-import { SYSTEM_BASE, SYSTEM_WORKSPACE, SKILLS, SECRETS, CREDENTIALS_FACT, DATABASE_FACT } from './coding.js';
+import { SYSTEM_BASE, SYSTEM_WORKSPACE, SKILLS, SECRETS, CREDENTIALS_FACT, DATABASE_FACT, DATABASE_IN_CODE_FACT } from './coding.js';
 import type { SkillMeta } from '../../../skills/skills.js';
 
 /** One stored secret as the prompt (and the create response) carries it —
@@ -23,6 +23,9 @@ export interface WorkspaceFacts {
   credentials?: boolean;
   /** agent_database: the agent has its own database and the database_query tool. */
   database?: boolean;
+  /** agent_database_in_code: the project's code can reach that database too
+   *  (AGENT_DATABASE_URL in the container). Meaningless without `database`. */
+  databaseInCode?: boolean;
   /** agent_soul: the checkout's root SOUL.md, verbatim; '' or absent when
    *  the setting is off or the repo has no such file. */
   soul?: string;
@@ -102,7 +105,7 @@ export function codingPrompt(
       skills: skillsIndex(skills),
       secrets: secretsIndex(secrets),
       credentials: facts.credentials ? CREDENTIALS_FACT : '',
-      database: facts.database ? DATABASE_FACT : '',
+      database: facts.database ? (facts.databaseInCode ? DATABASE_IN_CODE_FACT : DATABASE_FACT) : '',
       soul: facts.soul ?? '',
       agents: facts.agents ?? '',
     }),
