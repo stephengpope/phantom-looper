@@ -816,7 +816,7 @@ export function App({
             : interruptArmed ? '[esc] again to interrupt' : '[esc] to interrupt'} />}
         {session && session.nudgeQueue.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
-            <Text dimColor>{`  queued — esc sends next · /pop edits last`}</Text>
+            <Text dimColor>{`  queued — [esc] to send message now · /pop to edit last message`}</Text>
             {session.nudgeQueue.all().map((entry) => (
               <UserMessage key={entry.id} text={entry.text ?? '(transcribing…)'} width={width} />
             ))}
