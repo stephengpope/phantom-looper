@@ -109,7 +109,7 @@ export const DEFAULTS = {
   disk_cleanup_percent: 80,
   session_lock_ttl_ms: 3_600_000,
   // The cli's boot: skip the workspace picker, start where you last worked.
-  boot_last_workspace: false as boolean,
+  boot_last_workspace: true as boolean,
   // ── containers ────────────────────────────────────────────────────────────
   container_idle_ms: 4320 * 60_000,
   container_memory_mb: null as number | null, // unset => no cap (Docker default)
@@ -283,7 +283,7 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   supervisor_base_url: 'Endpoint when the supervisor\'s provider is openai-compatible. Empty inherits the coding agent\'s only while the provider matches.',
   supervisor_reasoning: 'How much the supervisor thinks before answering. Empty = the coding agent\'s reasoning level.',
   supervisor_max_steps: 'Tool calls allowed per turn for the supervisor. Empty = unlimited.',
-  boot_last_workspace: 'On, launching the cli skips the workspace picker: it starts a new session in the workspace of the most recent session you drove yourself (looper-run sessions do not count). --resume is unaffected.',
+  boot_last_workspace: 'On (the default), launching the cli skips the workspace picker: it starts a new session in the workspace of the most recent session you drove yourself (looper-run sessions do not count). Off, launching opens the picker. --resume is unaffected.',
   telegram_enabled: 'Answer Telegram DMs. Needs the telegram_bot_token key, telegram_authorized_user, and a public address (PHANTOM_BACKEND_ADDRESS) — the webhook registers itself when all three are set.',
   telegram_authorized_user: 'Your numeric Telegram user id — the ONE sender the bot answers; everyone else is silently ignored. Get it from @userinfobot.',
   telegram_reply_mode: 'How the bot answers: text, voice (a spoken note, on the Assistant\'s Deepgram voice), or both. Read at the start of each turn.',

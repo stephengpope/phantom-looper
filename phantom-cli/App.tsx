@@ -352,8 +352,8 @@ export function App({
   const [ctrlC, setCtrlC] = useState(false);
   // The launch splash: the big PHANTOM LOOPER where the conversation will be.
   // Sessions with nothing said yet — boot's first, every /new — a resume has
-  // history to show. Off at boot when resuming (boot.resumeId), so the
-  // ghost never flashes before the transcript arrives. Cleared by the first
+  // history to show. Off until openSession raises it, so the ghost never
+  // flashes under a picker or before a transcript arrives. Cleared by the first
   // interaction that wants the screen back: a submitted line (message or
   // command — /help's answer lands in the pane the splash covers), a session
   // switch, a note, a menu or the board opening, or a remote turn arriving.

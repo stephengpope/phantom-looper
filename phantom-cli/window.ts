@@ -124,7 +124,7 @@ export interface WindowOptions {
     planMode?: () => boolean) => Promise<Record<string, Tool>>;
   configPath?: string;
   /** What launching wants: resume a named session, or find a workspace and
-   *  start. A resume has history coming, so it never opens on the splash. */
+   *  start. The splash waits on the outcome — see `splash`. */
   boot?: { resumeId?: string };
   makeAgent?: typeof buildAgent;
   makeTranscript?: (sessionId: string) => Transcript;
@@ -191,8 +191,13 @@ export class WindowStore {
    *  when the settings feed says they may have changed. */
   private readonly wsNames = new Map<string, WsFacts>();
 
-  /** The launch splash, where the conversation will be. Cleared by the first
-   *  thing that wants the screen back. */
+  /** The launch splash, where the conversation will be. Off until a session
+   *  with nothing said yet is actually opening (openSession raises it): the
+   *  window opens blank, and boot decides — a picker or a form comes up with
+   *  no ghost under it; a session opening puts the ghost up once. The
+   *  alternative (guessing at construction) flashed the ghost, covered it
+   *  with the picker, then drew it again after the pick. Cleared by the
+   *  first thing that wants the screen back. */
   splash: boolean;
   /** A new session is being built for this window. The pane draws NOTHING
    *  but the splash until it lands — the old conversation would otherwise
@@ -450,7 +455,7 @@ export class WindowStore {
       void this.api('POST', `/sessions/${id}/turn-ended`, {})
         .catch(quiet('update the assistant session'));
     };
-    this.splash = !opts.boot?.resumeId;
+    this.splash = false;
     // Defaults only until readChrome's first server read lands.
     this.voiceEnabled = false;
     this.sidebarWidth = opts.sidebarPercent ?? 20;
@@ -2106,9 +2111,20 @@ export class WindowStore {
     this.booted = true;
     const want = this.opts.boot;
     if (want.resumeId) { await this.openSession({ kind: 'open', id: want.resumeId }); return; }
+    // One parallel ask, then one draw. The pane stays blank until both land:
+    // whether a session opens (ghost) or the picker comes up depends on the
+    // workspace count AND the setting, and drawing before knowing either is
+    // a guess — the old guess (ghost first) flashed under the picker.
     let ws: WorkspaceInfo[];
-    try { ws = await this.api('GET', '/workspaces') as unknown as WorkspaceInfo[]; }
-    catch (e) {
+    let skipPicker: boolean;
+    try {
+      const [rows, settings] = await Promise.all([
+        this.api('GET', '/workspaces') as unknown as Promise<WorkspaceInfo[]>,
+        this.readSettings(),
+      ]);
+      ws = rows;
+      skipPicker = settings.boot_last_workspace === true;
+    } catch (e) {
       // The request function already named the server and the failure; what
       // goes under it is the fix, and there are two: the server answered and
       // refused the key, or nothing answered at that address at all.
@@ -2126,15 +2142,19 @@ export class WindowStore {
     // to be able to start from here, not from curl.
     if (!ws.length) { this.startAddWorkspace(); return; }
     if (ws.length === 1) { await this.openSession({ kind: 'new', workspaceId: ws[0].id }); return; }
-    // boot_last_workspace (a server setting, off by default) skips the picker:
+    // boot_last_workspace (a server setting, on by default) skips the picker:
     // a new session in the workspace of the newest session you drove yourself.
-    try {
-      if ((await this.readSettings()).boot_last_workspace === true) {
+    // The ghost goes up NOW — the decision is made — and the session-list
+    // read runs behind it. Off, the picker comes up on the blank pane and
+    // the ghost follows the pick.
+    if (skipPicker) {
+      this.setSplash(true);
+      try {
         const ss = ((await this.api('GET', '/sessions')) as unknown as { sessions: SessionInfo[] }).sessions;
         const last = lastWorkspaceId(ws, ss);
         if (last) { await this.openSession({ kind: 'new', workspaceId: last }); return; }
-      }
-    } catch (e) { this.note(`could not reopen your last workspace: ${(e as Error).message}`); }
+      } catch (e) { this.note(`could not reopen your last workspace: ${(e as Error).message}`); }
+    }
     await this.openPicker('workspace');
   };
 

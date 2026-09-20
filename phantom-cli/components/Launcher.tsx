@@ -3,7 +3,7 @@
 // conversation. Workspaces are the layer below, for starting something new.
 //
 // The boot-time shortcut past this screen is `boot_last_workspace` (a server
-// setting, off by default): the sessions list already records where you were,
+// setting, on by default): the sessions list already records where you were,
 // so the pick comes off the newest session the user drove — never a pinned
 // workspace id, which goes stale the moment you switch.
 import { Box } from 'ink';
