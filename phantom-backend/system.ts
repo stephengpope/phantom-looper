@@ -8,6 +8,7 @@ import { statfsSync } from 'node:fs';
 import { PassThrough, Readable } from 'node:stream';
 import type Docker from 'dockerode';
 import type { Paths } from './pool/paths.js';
+import type { Images } from './images.js';
 import type { LogTokens } from './logTokens.js';
 import { formatTokenReport, reportWindows } from './tokenReport.js';
 import type { Clock } from '../core/clock.js';
@@ -39,6 +40,9 @@ export class System {
     private readonly logTokens: LogTokens,
     /** Absent when this server has no docker access: logs and restarts refuse. */
     private readonly docker?: Docker,
+    /** The one image puller — the update's pulls go through it so the disk
+     *  sweep can never remove an image under a download. */
+    private readonly images?: Images,
     /** Where POST /update drops a release tag for the updater sidecar; absent =
      *  no sidecar, updates refuse. */
     private readonly updateTriggerDir?: string,
@@ -59,8 +63,8 @@ export class System {
         `${loops === 1 ? '1 card has' : `${loops} cards have`} a round in flight — updating now would interrupt ${loops === 1 ? 'it' : 'them'} (${loops === 1 ? 'it resumes' : 'they resume'} after the restart); send restart_anyway: true to update anyway`, true);
     }
     if (!this.updateTriggerDir) throw new SystemError('updater_unavailable', 'this server has no updater sidecar (UPDATE_TRIGGER_DIR unset) — re-run install.sh once');
-    if (!this.docker) throw new SystemError('updater_unavailable', 'this server has no docker access');
-    if (!isRunning()) startUpdate(this.docker, tag, this.updateTriggerDir, API_IMAGE, 'ghcr.io/stephengpope/phantom-backend-session');
+    if (!this.images) throw new SystemError('updater_unavailable', 'this server has no docker access');
+    if (!isRunning()) startUpdate(this.images, tag, this.updateTriggerDir, API_IMAGE, 'ghcr.io/stephengpope/phantom-backend-session');
     let unsub: (() => void) | null = null;
     const done = new Promise<void>((resolve) => {
       unsub = subscribe((e) => {

@@ -7,9 +7,11 @@
 //   and reopening a deleted session re-clones the branch with its work in it.
 //
 //   pressureSweep — over disk_cleanup_percent, reclaim: image tags from
-//   releases OLDER than the running one, then the files of IDLE folders
-//   (past container_idle_ms, the one idle rule), oldest first — each backed
-//   up first, and skipped (never forced) when the backup cannot run.
+//   releases OLDER than the running one (through Images, which refuses while
+//   a pull is in flight — nothing here may ever touch a download), then the
+//   files of IDLE folders (past container_idle_ms, the one idle rule),
+//   oldest first — each backed up first, and skipped (never forced) when
+//   the backup cannot run.
 //
 //   The sweep is passive: it never touches a running container, a spare
 //   clone (the pool refills them — nothing is freed) or an image newer than
@@ -19,7 +21,6 @@
 // There is deliberately no time-based deletion: a host with free disk keeps
 // every session, and a full one cleans itself. One setting, 0 disables.
 import fs from 'node:fs/promises';
-import type Docker from 'dockerode';
 import type { SessionRow, WorkspaceRow } from './db/schema.js';
 import { API_IMAGE, APP_VERSION } from './env.js';
 import type { Settings } from './settings.js';
@@ -27,6 +28,7 @@ import type { Workspaces } from './workspaces.js';
 import type { Sessions } from './sessions.js';
 import type { Paths } from './pool/paths.js';
 import type { ContainerManager } from './workspace/container.js';
+import type { Images } from './images.js';
 import type { GitEngine } from './git/engine.js';
 import type { PushResult } from './git/git.js';
 import { logger, errStr } from './log.js';
@@ -102,56 +104,13 @@ const API_IMAGE_CURRENT = (() => {
   return `${repo}:${/^v\d+\.\d+\.\d+/.test(v) ? v : 'latest'}`;
 })();
 
-/** `vX.Y.Z` as a comparable triple; anything else (latest, dev, a digest)
- *  is not a release and never ordered. */
-const releaseOf = (tag: string): [number, number, number] | null => {
-  const m = /^v(\d+)\.(\d+)\.(\d+)$/.exec(tag);
-  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
-};
-const olderRelease = (a: [number, number, number], b: [number, number, number]): boolean =>
-  a[0] !== b[0] ? a[0] < b[0] : a[1] !== b[1] ? a[1] < b[1] : a[2] < b[2];
-
-/** `repo:tag` split at the tag colon (a registry port colon sits before the
- *  last slash and is not it). */
-const splitRef = (ref: string): { repo: string; tag: string } => {
-  const i = ref.lastIndexOf(':');
-  return i > ref.lastIndexOf('/') ? { repo: ref.slice(0, i), tag: ref.slice(i + 1) } : { repo: ref, tag: '' };
-};
-
-/** Dangling layers, plus the session and api images' tags from releases
- *  OLDER than the one in use — a release pulls a new tag and nothing ever
- *  removed the old ones. Never a newer tag (an update in flight pulled it),
- *  never `latest` or any non-release tag, and nothing when the current tag
- *  is not a release itself (no order to compare by). A tag Docker refuses
- *  (in use) is logged and left. */
-async function pruneImages(settings: Settings, docker: Docker): Promise<void> {
-  await docker.pruneImages();
-  const currents = [String(await settings.resolve('container_image')), API_IMAGE_CURRENT]
-    .map(splitRef)
-    .flatMap(({ repo, tag }) => { const r = releaseOf(tag); return r ? [{ repo, release: r }] : []; });
-  const stale = new Set<string>();
-  for (const img of await docker.listImages()) {
-    for (const ref of img.RepoTags ?? []) {
-      const { repo, tag } = splitRef(ref);
-      const release = releaseOf(tag);
-      if (!release) continue;
-      if (currents.some((c) => c.repo === repo && olderRelease(release, c.release))) stale.add(ref);
-    }
-  }
-  for (const tag of stale) {
-    await docker.getImage(tag).remove()
-      .then(() => log.info({ image: tag }, 'old image removed'))
-      .catch((e) => log.warn({ image: tag, err: errStr(e) }, 'could not remove old image'));
-  }
-}
-
 /** Over the limit, reclaim until back under it — old images first, then
  *  idle folders oldest-first, the disk re-measured before each folder so
  *  the sweep stops the moment enough is freed. A folder whose backup does
  *  not complete is left exactly as it was; the run ends loud when only live
  *  or unbacked work remains. */
 export async function pressureSweep(
-  settings: Settings, workspaces: Workspaces, sessions: Sessions, p: Paths, docker: Docker, containers: ContainerManager, engine: GitEngine,
+  settings: Settings, workspaces: Workspaces, sessions: Sessions, p: Paths, images: Images, containers: ContainerManager, engine: GitEngine,
 ): Promise<void> {
   const pct = Number(await settings.resolve('disk_cleanup_percent'));
   if (pct <= 0) return;
@@ -159,9 +118,10 @@ export async function pressureSweep(
   if ((await used()) < pct) return;
   log.warn({ used: Math.round(await used()), limit: pct }, 'disk over limit — pressure cleanup started');
 
-  // 1 — image weight from releases older than the running one.
-  await pruneImages(settings, docker)
-    .catch((e) => log.warn({ err: errStr(e) }, 'image prune failed'));
+  // 1 — image weight from releases older than the running one. Images owns
+  // the rule and refuses while a pull is in flight (see images.ts).
+  await images.removeOlderThan([String(await settings.resolve('container_image')), API_IMAGE_CURRENT])
+    .catch((e) => log.warn({ err: errStr(e) }, 'image cleanup failed'));
 
   // 2 — idle folders, oldest-used first. Idle is THE idle rule, the one the
   // container reaper runs on (container_idle_ms off the folder's

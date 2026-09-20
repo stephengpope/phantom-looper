@@ -15,6 +15,7 @@ import type { WorkspaceRow } from '../db/schema.js';
 import type { Settings } from '../settings.js';
 import { resolveAuth } from '../pool/pool.js';
 import type { Paths } from '../pool/paths.js';
+import type { Images } from '../images.js';
 import { sessionDir } from '../pool/paths.js';
 import { logger, errStr } from '../log.js';
 
@@ -110,6 +111,7 @@ export class ContainerManager {
 
   constructor(
     private docker: Docker,
+    private images: Images,
     private paths: Paths,
     private opts: ContainerOpts = {},
   ) {}
@@ -179,7 +181,7 @@ export class ContainerManager {
       // failure surfaces as-is.
       if ((e as { statusCode?: number }).statusCode !== 404) throw e;
       log.info({ folder: key, image }, 'workspace image not present — pulling');
-      await this.pullImage(String(image));
+      await this.images.pull(String(image));
       created = await this.docker.createContainer(spec);
     }
     await created.start();
@@ -210,23 +212,6 @@ export class ContainerManager {
     }
     log.info({ workspace: workspace.name }, 'workspace container gets the GitHub PAT (agent_git_credentials)');
     return [`GITHUB_TOKEN=${pat}`, `GH_TOKEN=${pat}`];
-  }
-
-  /** One pull per image at a time — concurrent first sessions on a fresh box
-   *  share it instead of each streaming the same layers. */
-  private pulls = new Map<string, Promise<void>>();
-  private pullImage(image: string): Promise<void> {
-    const inflight = this.pulls.get(image);
-    if (inflight) return inflight;
-    const p = new Promise<void>((res, rej) => {
-      this.docker.pull(image, (e: Error | null, stream: NodeJS.ReadableStream) => {
-        if (e) return rej(e);
-        this.docker.modem.followProgress(stream, (e2: Error | null) => (e2 ? rej(e2) : res()));
-      });
-    }).then(() => log.info({ image }, 'workspace image pulled'))
-      .finally(() => this.pulls.delete(image));
-    this.pulls.set(image, p);
-    return p;
   }
 
   async remove(folderId: string): Promise<void> {

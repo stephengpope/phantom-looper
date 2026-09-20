@@ -28,6 +28,7 @@ import { SessionEvents } from './api/sessionEvents.js';
 import { BackdoorQueue } from './api/backdoor.js';
 import { makeDocker } from './docker.js';
 import { ContainerManager } from './workspace/container.js';
+import { Images } from './images.js';
 import { GitEngine } from './git/engine.js';
 import { autoPush, type AutoPushEvent } from './git/autoPush.js';
 import { autoPull, type AutoPullEvent } from './git/autoPull.js';
@@ -74,6 +75,9 @@ async function main() {
   const folders = new Folders(db, paths, settings, sessionEvents);
   const cards = new Cards(db, workspaces, events);
   const docker = makeDocker();
+  // THE image puller/remover — every pull and every removal in this process
+  // (update, first-use, disk sweep) goes through it so they never overlap.
+  const images = new Images(docker);
   const sessions = new Sessions(db, settings, workspaces, folders, sessionEvents, { paths, docker: docker ?? undefined });
   // A settings write reaches every session nothing has been said to yet: its
   // row takes the settings' model (Sessions.followModelSettings — THE rule).
@@ -96,7 +100,7 @@ async function main() {
   // inside the container start — before the tool call that started it
   // returns, so the first write is seen — and lets go on removal. `instantSync`
   // is captured lazily, like `app`: containers start long after boot.
-  const containers = new ContainerManager(docker, paths, {
+  const containers = new ContainerManager(docker, images, paths, {
     volume: process.env.WORKSPACE_VOLUME, settings,
     onStarted: (folderId, workspace) => instantSync.watchFolder(folderId, workspace),
     onRemoved: (folderId) => instantSync.unwatchFolder(folderId),
@@ -288,7 +292,7 @@ async function main() {
       await idleBackupSweep(workspaces, sessions, engine).catch((e) => log.error({ err: errStr(e) }, 'idle backup sweep threw'));
       const idleMs = await settings.resolve('container_idle_ms').catch(() => 30 * 60_000);
       await containers.reap(Number(idleMs), idleContainerFolders).catch((e) => log.error({ err: errStr(e) }, 'container reap threw'));
-      await pressureSweep(settings, workspaces, sessions, paths, docker, containers, engine).catch((e) => log.error({ err: errStr(e) }, 'pressure sweep threw'));
+      await pressureSweep(settings, workspaces, sessions, paths, images, containers, engine).catch((e) => log.error({ err: errStr(e) }, 'pressure sweep threw'));
       const ms = await settings.resolve('maintenance_interval_ms').catch(() => 60_000);
       await new Promise((r) => setTimeout(r, Number(ms)));
     }
@@ -310,7 +314,7 @@ async function main() {
   // `ctx` is a named object because the looper is wired into it AFTER the
   // app exists — the engine is a headless client of this app, so it is built
   // second; routes read ctx.looper per request, so the late set is seen.
-  const system = new System(paths, logTokens, docker ?? undefined, process.env.UPDATE_TRIGGER_DIR || undefined,
+  const system = new System(paths, logTokens, docker ?? undefined, images, process.env.UPDATE_TRIGGER_DIR || undefined,
     () => ctx.looper?.runningCount() ?? 0);
   const ctx: AppCtx = {
     settings, workspaces, folders, cards, sessions, backgroundTasks, presets, crons, logTokens,
