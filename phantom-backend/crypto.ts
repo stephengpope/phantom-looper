@@ -1,6 +1,15 @@
 // Credential encryption at rest. AES-256-GCM; the key comes from env and never
 // touches the database. Layout: [iv 12][tag 16][ciphertext] in one bytea.
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from 'node:crypto';
+
+/** Secret comparison that takes the same time whether or not the strings
+ *  match — the API bearer and the Telegram webhook secret both check with
+ *  this. A plain `===` returns on the first differing byte. */
+export function timingSafeEqualStr(a: string, b: string): boolean {
+  const ab = Buffer.from(a); const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
 
 export function encrypt(key: Buffer, plaintext: string): Buffer {
   const iv = randomBytes(12);

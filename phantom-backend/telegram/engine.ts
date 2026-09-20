@@ -11,6 +11,7 @@
 // attachments, the escape-spelled reactions) are ported from ../shockwave.
 
 import crypto from 'node:crypto';
+import { timingSafeEqualStr } from '../crypto.js';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { Paths } from '../pool/paths.js';
@@ -69,12 +70,6 @@ const NOT_HEARD: Record<Extract<Transcription, { error: string }>['error'], stri
   unreachable: "🎤 Couldn't reach Deepgram — send that again in a moment.",
   vendor: "🎤 Deepgram couldn't transcribe that — send it again.",
 };
-
-function timingSafeEqualStr(a: string, b: string): boolean {
-  const ab = Buffer.from(a); const bb = Buffer.from(b);
-  if (ab.length !== bb.length) return false;
-  return crypto.timingSafeEqual(ab, bb);
-}
 
 export interface TelegramEngineDeps {
   /** Telegram's own rows — one owner per table (see each file). */

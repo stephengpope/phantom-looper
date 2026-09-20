@@ -4,6 +4,7 @@
 // Route schemas stay — they are Fastify's validation — but nothing serves
 // them as documentation any more (Swagger UI was cut).
 import Fastify from 'fastify';
+import { timingSafeEqualStr } from '../crypto.js';
 
 // @fastify/swagger used to augment FastifySchema with these. The docs page is
 // cut, but summary/description/tags stay on every route — they are the API's
@@ -177,8 +178,8 @@ export async function buildApp(ctx: AppCtx) {
       // its own secret-token header (timing-safe-checked in the engine) is the
       // auth.
       if (req.url === '/api/telegram/webhook') return;
-      const auth = req.headers.authorization ?? '';
-      if (auth !== `Bearer ${ctx.apiKey}`) {
+      const auth = String(req.headers.authorization ?? '');
+      if (!timingSafeEqualStr(auth, `Bearer ${ctx.apiKey}`)) {
         return reply.code(401).send();
       }
     });

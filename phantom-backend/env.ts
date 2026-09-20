@@ -34,11 +34,15 @@ export function readEnv(source: NodeJS.ProcessEnv = process.env): Env {
   if (encryptionKey.length !== 32) {
     throw new Error('ENCRYPTION_KEY must be 32 bytes base64 (openssl rand -base64 32)');
   }
+  // The bearer is the API's ONLY lock. install.sh writes 48 hex chars; a
+  // placeholder like .env.example's `change-me` must not boot a server.
+  const apiKey = need('API_KEY');
+  if (apiKey.length < 32) throw new Error('API_KEY must be at least 32 characters (openssl rand -hex 24)');
   return {
     databaseUrl: need('DATABASE_URL'),
     workspaceRoot: need('WORKSPACE_ROOT_PATH'),
     port: Number(source.PORT ?? 8080),
-    apiKey: need('API_KEY'),
+    apiKey,
     encryptionKey,
   };
 }
