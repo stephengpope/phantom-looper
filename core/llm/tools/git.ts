@@ -58,7 +58,7 @@ export const AUTO_PUSH_STEPS: Record<string, string> = {
   backup: 'backing the branch up',
   commit: 'committing',
   rebase: 'replaying the work on the base branch',
-  resolve: 'resolving conflicts',
+  resolve: 'Fix Conflicts',
   verify: 'verifying against the repo',
   push_branch: 'pushing the branch',
   push_base: 'pushing to the base branch',
@@ -72,7 +72,7 @@ export const AUTO_PULL_STEPS: Record<string, string> = {
   backup: 'backing the branch up',
   commit: 'committing this session\'s work',
   rebase: 'replaying the work on the base branch',
-  resolve: 'resolving conflicts',
+  resolve: 'Fix Conflicts',
   verify: 'verifying against the repo',
   push_branch: 'pushing the branch',
 };
