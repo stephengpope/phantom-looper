@@ -255,8 +255,8 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   timezone: 'Your time zone — an IANA name like America/New_York or Europe/London. Every date the system shows or reads is in it: a cron\'s "0 9 * * *" is 9am here, the token report\'s "today" starts at midnight here, and the agents are told today\'s date here.',
   card_prefix: 'The letters in front of every card number on this board — "PHA" gives PHA-7. Unset means the first three letters of the repo name.',
   cron_enabled: 'Scheduled prompts (crons) for this workspace. Off: none fire, and the agents lose their cron tools; the crons themselves are kept. A slot missed while off is not made up.',
-  coding_provider: 'The coding agent\'s LLM provider. Its key is set on /keys. Nothing runs until one is chosen.',
-  coding_model: 'Model id for the chosen provider. Empty = the newest model the catalog lists for it, so it follows releases.',
+  coding_provider: 'The coding agent\'s LLM provider. Its key is set on /keys. Nothing runs until one is chosen. Per workspace: override on the workspace — set its provider first, then its model.',
+  coding_model: 'Model id for the chosen provider. Empty = the newest model the catalog lists for it, so it follows releases. A workspace with its own provider picks its own model.',
   coding_base_url: 'Endpoint for openai / openai-compatible. Required by openai-compatible.',
   coding_reasoning: 'How much the model thinks before answering. Providers map this to their own setting.',
   coding_max_steps: 'Tool calls allowed per turn before the agent must stop and answer. Empty = unlimited.',
@@ -505,6 +505,26 @@ export function isSettingKey(k: string): k is SettingKey {
   return Object.prototype.hasOwnProperty.call(DEFAULTS, k);
 }
 
+/** The coding agent's ten rows — the model trio, reasoning, steps, and the
+ *  five compaction settings. A workspace may override every one of them: a
+ *  workspace is where a different model earns its keep.
+ *
+ *  The model trio at the workspace layer follows the PROVIDER-FIRST rule:
+ *  its model and endpoint rows exist only under its own provider row. `write`
+ *  refuses a workspace model/endpoint with no workspace provider (in the row
+ *  or the same patch), and dropping the workspace provider drops its model
+ *  and endpoint with it. Without this a workspace model could sit under a
+ *  provider inherited from global; the global provider changes later, and
+ *  the workspace asks the new provider for a model it does not have —
+ *  every turn fails and nothing said why. */
+const CODING_KEYS: readonly SettingKey[] = [
+  'coding_provider', 'coding_model', 'coding_base_url', 'coding_reasoning', 'coding_max_steps',
+  'coding_context_window', 'coding_compact_threshold_pct', 'coding_compact_strategy',
+  'coding_compact_summarize_pct', 'coding_compact_max_tokens',
+];
+/** The workspace rows that live under the workspace's provider row. */
+const PROVIDER_BOUND: readonly SettingKey[] = ['coding_model', 'coding_base_url'];
+
 /** The settings a single workspace may differ on. The chain is: code
  *  default -> global row -> workspace row. THE one list: `write` refuses a
  *  workspace write of any other key, GET /settings reports `overridable`
@@ -512,6 +532,7 @@ export function isSettingKey(k: string): k is SettingKey {
  *  there is no second list of these keys anywhere (the workspace route used
  *  to keep one, and it drifted). */
 const WORKSPACE_OVERRIDABLE: readonly SettingKey[] = [
+  ...CODING_KEYS,
   'spare_clones', 'initial_history_depth', 'container_image', 'container_docker', 'agent_database', 'agent_soul',
   'auto_push_on_archive', 'agent_git_credentials', 'card_prefix',
   'instant_sync', 'instant_sync_push_debounce_ms', 'instant_sync_pull_interval_ms',
@@ -609,10 +630,22 @@ const sortSecrets = (s: SecretMeta[]) => s.sort((a, b) =>
 
 function computeLayersFor(key: SettingKey, byScope: ByScope, ctx: ResolveCtx): SettingLayers {
   const l = computeLayers(key, layersFrom(byScope, ctx, key));
-  if (key !== 'coding_model' || l.value != null) return l;
-  const provider = computeLayers('coding_provider', layersFrom(byScope, ctx, 'coding_provider')).value;
+  if (!PROVIDER_BOUND.includes(key)) return l;
+  // A model or endpoint belongs to its provider. The workspace's own
+  // provider row, when it differs from the global one, cuts the global
+  // model/endpoint rows out of the chain: a workspace on openai must not
+  // inherit global's claude id (the cascade's compatibility rule,
+  // agentConfig.ts, applied between layers).
+  const providerLayers = layersFrom(byScope, ctx, 'coding_provider');
+  const globalProvider = computeLayers('coding_provider', { global: providerLayers.global }).value;
+  const provider = computeLayers('coding_provider', providerLayers).value;
+  const own = { ...l };
+  if (providerLayers.workspace !== undefined && provider !== globalProvider && l.source === 'global') {
+    own.value = DEFAULTS[key]; own.source = 'default';
+  }
+  if (key !== 'coding_model' || own.value != null) return own;
   const d = latestModel(typeof provider === 'string' ? provider : null);
-  return { ...l, default: d, value: d };
+  return { ...own, default: d, value: d };
 }
 
 // ── The object ───────────────────────────────────────────────────────────────
@@ -808,13 +841,16 @@ export class Settings {
       out[key] = { ...layers[key], description: DESCRIPTIONS[key], meta: META[key],
         overridable: isWorkspaceOverridable(key) };
     }
-    for (const name of CREDENTIAL_NAMES.filter(isCredentialWorkspaceScoped)) {
-      const here = ctx.workspace ? await this.hasAt(name, workspaceScope(ctx.workspace.id)) : false;
+    // Every credential's SOURCE rides along (the provider picker lists only
+    // providers with a key); only the workspace-scoped one is overridable.
+    for (const name of CREDENTIAL_NAMES) {
+      const here = ctx.workspace && isCredentialWorkspaceScoped(name)
+        ? await this.hasAt(name, workspaceScope(ctx.workspace.id)) : false;
       const shared = await this.hasAt(name, GLOBAL);
       out[name] = { default: null, global: null, workspace: null, value: null,
         source: here ? 'workspace' : shared ? 'global' : 'default',
         description: (CREDENTIALS[name] as CredentialMeta).description, meta: credentialMeta(name),
-        overridable: true, secret: true };
+        overridable: isCredentialWorkspaceScoped(name), secret: true };
     }
     return out;
   }
@@ -827,13 +863,13 @@ export class Settings {
    *  stored. Announces the scope when anything was written. Returns the keys
    *  written. `by` is the writer's client id, so its own window ignores the
    *  echo. */
-  async write(layer: SettingsWriteLayer, scope: string, values: Record<string, unknown>, by?: string): Promise<string[]> {
-    const entries = Object.entries(values);
-    const bad = entries.filter(([k]) => !isSettingKey(k) && !isCredential(k)).map(([k]) => k);
+  async write(layer: SettingsWriteLayer, scope: string, patch: Record<string, unknown>, by?: string): Promise<string[]> {
+    const values = { ...patch };
+    const bad = Object.keys(values).filter((k) => !isSettingKey(k) && !isCredential(k));
     if (bad.length) throw new SettingsWriteError('unknown_setting', `unknown settings: ${bad.join(', ')}`);
-    const invalid = validatePatch(entries.filter(([k]) => !isCredential(k)));
+    const invalid = validatePatch(Object.entries(values).filter(([k]) => !isCredential(k)));
     if (invalid.length) throw new SettingsWriteError('invalid_setting', invalid.join('; '));
-    for (const [k, value] of entries) {
+    for (const [k, value] of Object.entries(values)) {
       if (isCredential(k) && value !== null && typeof value !== 'string') {
         throw new SettingsWriteError('invalid_args', `${k} must be a string to be stored encrypted`);
       }
@@ -846,12 +882,32 @@ export class Settings {
       const okHere = isCredential(k) ? isCredentialWorkspaceScoped(k) : isWorkspaceOverridable(k as SettingKey);
       if (!okHere) throw new SettingsWriteError('not_overridable', `${k} cannot be set per workspace`);
     }
+    if (layer === 'workspace') await this.providerFirst(scope, values);
+    const entries = Object.entries(values);
     for (const [k, value] of entries) {
       if (value === null) await this.dropKey(k, scope);
       else await this.putScoped(scope, k, value);
     }
     if (entries.length) this.events?.publish(scope, entries.map(([k]) => k), by);
     return entries.map(([k]) => k);
+  }
+
+  /** The PROVIDER-FIRST rule (CODING_KEYS) on one workspace patch: a model
+   *  or endpoint needs the workspace's own provider — already stored, or in
+   *  this patch — and clearing the provider clears both, added to the patch
+   *  so they go out on the same write. */
+  private async providerFirst(scope: string, values: Record<string, unknown>): Promise<void> {
+    const sets = (k: SettingKey) => values[k] !== undefined && values[k] !== null;
+    const clears = (k: SettingKey) => values[k] === null;
+    const bound = PROVIDER_BOUND.filter(sets);
+    if (bound.length && !sets('coding_provider')) {
+      const stored = await this.readStore([scope], false, 'coding_provider');
+      if (stored.get(scope)?.get('coding_provider') === undefined) {
+        throw new SettingsWriteError('provider_first',
+          `set this workspace's provider before its ${bound.map((k) => META[k].label).join(' or ')}`);
+      }
+    }
+    if (clears('coding_provider')) for (const k of PROVIDER_BOUND) values[k] = null;
   }
 
   /** A whole scope goes — a workspace that no longer exists. Both

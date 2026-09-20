@@ -55,7 +55,7 @@ type View =
  *  Presentation only — the server still stores and returns them. */
 const usesBaseUrl = (p: unknown) => p === 'openai' || p === 'deepseek' || p === 'kimi' || p === 'openai-compatible';
 const set = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
-const HIDDEN: Record<string, (values: Record<string, unknown>) => boolean> = {
+export const HIDDEN: Record<string, (values: Record<string, unknown>) => boolean> = {
   coding_base_url: (v) => !usesBaseUrl(v.coding_provider),
   assistant_base_url: (v) => !usesBaseUrl(set(v.assistant_provider) ?? v.coding_provider),
   supervisor_base_url: (v) => !usesBaseUrl(set(v.supervisor_provider) ?? v.coding_provider),
@@ -307,7 +307,9 @@ export function providerChoices(key: string, choices: readonly string[] | undefi
   if (!PROVIDER_ROWS.has(key)) return null;
   const all = choices ?? PROVIDERS;
   const keyEntry = (p: string) => Object.values(entries).find((e) => e.meta.provider === p);
-  const keyed = all.filter((p) => { const e = keyEntry(p); return !e || set(e.value); });
+  // A key is "set" when it comes from any layer — the workspace read carries
+  // a credential's source only, never its value.
+  const keyed = all.filter((p) => { const e = keyEntry(p); return !e || e.source !== 'default'; });
   return keyed.length
     ? { choices: keyed, note: 'providers with a key on /keys' }
     : { choices: all, note: 'no provider key on /keys yet — save one there first' };

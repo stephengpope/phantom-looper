@@ -31,11 +31,18 @@
 // setting appears on its own. Every override — the token included — is
 // written through PATCH /settings?workspace=, the one door for a workspace's
 // layer; only the three own fields go to PATCH /workspaces/:id.
+//
+// The coding agent's provider and model rows get the pickers /settings has
+// (the same helpers: keyed providers, the provider's catalog, a provider
+// change blanks the model). The server's PROVIDER-FIRST rule (a workspace
+// model lives under the workspace's own provider) is met here without a
+// refusal ever showing: saving a model or endpoint sends the provider it
+// was picked under in the same patch.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { SelectList } from './SelectList.js';
 import { ValueInput, type EditSpec } from './ValueInput.js';
 import { Screen } from './Screen.js';
-import type { Api } from './Settings.js';
+import { HIDDEN, MODEL_FOR_PROVIDER, MODEL_ROWS, buildModelSpec, providerForModelRow, type Api, type CatalogModel } from './Settings.js';
 import type { WorkspaceInfo } from './Launcher.js';
 import { fit, human, labelFor, type WireMeta } from '../settingLabels.js';
 import { makeSettings } from '../settings.js';
@@ -98,6 +105,15 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
 
   useEffect(() => { void load(); }, [load]);
 
+  // The server's model catalog, read when a model row's editor opens; a
+  // server that cannot answer leaves the row free-text (as /settings).
+  const loadModels = useCallback(async (provider: string): Promise<CatalogModel[]> => {
+    try {
+      const r = await api('GET', `/models?provider=${encodeURIComponent(provider)}`) as { models?: CatalogModel[] };
+      return Array.isArray(r?.models) ? r.models : [];
+    } catch (e) { setNotice(`could not load the model list: ${(e as Error).message}`); return []; }
+  }, [api]);
+
   // One write path for everything on the list, so the reload and the error
   // handling cannot drift between them.
   const write = useCallback(async (what: () => Promise<unknown>, after?: string) => {
@@ -146,7 +162,17 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
           if (view.kind === 'setting') {
             // An empty secret = changed my mind, not "store an empty token".
             if (view.spec.secret && v === null) { setView({ at: 'list' }); return; }
-            void write(() => settings.patch({ [view.key]: v as ConfigValue }, { workspace: workspace.id }));
+            const patch: Record<string, ConfigValue> = { [view.key]: v as ConfigValue };
+            // A provider change invalidates its model (as /settings). A model
+            // or endpoint carries the provider it was picked under, so the
+            // workspace owns the pair (the server's provider-first rule).
+            const modelKey = MODEL_FOR_PROVIDER[view.key];
+            if (modelKey && v !== view.spec.current) patch[modelKey] = null;
+            const provider = eff?.coding_provider.value;
+            if ((MODEL_ROWS[view.key] || view.key === 'coding_base_url') && v !== null && typeof provider === 'string') {
+              patch.coding_provider = provider;
+            }
+            void write(() => settings.patch(patch, { workspace: workspace.id }));
             return;
           }
           void write(() => api('PATCH', `/workspaces/${workspace.id}`, { [view.key]: v }));
@@ -163,7 +189,8 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
   // The overridable settings in the server's order, under the server's group
   // headings — the same fold /settings uses, so the two screens agree on
   // where a setting lives and nothing here names or orders a key.
-  const overridable = Object.keys(eff).filter((k) => eff[k].overridable);
+  const values = Object.fromEntries(Object.entries(eff).map(([k, e]) => [k, e.value]));
+  const overridable = Object.keys(eff).filter((k) => eff[k].overridable && !HIDDEN[k]?.(values));
   const settingRows = headedChoices(groupBlocks(overridable, (k) => eff[k].meta), (k) => {
     const s = eff[k];
     return {
@@ -223,7 +250,7 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
           }
           const s = eff[k];
           if (!s) return;
-          setView({ at: 'edit', kind: 'setting', key: k, spec: {
+          const spec: EditSpec = {
             title: `${labelFor(k, s.meta)} · ${label} only`,
             choices: s.meta.choices,
             choiceLabels: s.meta.choiceLabels,
@@ -235,7 +262,12 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
               : s.meta.unit === 'ms'
                 ? `in milliseconds · now ${human(s.value, s.meta)}, ${WHENCE(s.source)}`
                 : `changes this workspace only · now ${human(s.value, s.meta)}, ${WHENCE(s.source)}`,
-          } });
+          };
+          const provider = providerForModelRow(k, values);
+          void (async () => {
+            const models = provider ? await loadModels(provider) : [];
+            setView({ at: 'edit', kind: 'setting', key: k, spec: buildModelSpec(k, spec, values, models, eff) });
+          })();
         }}
         onKey={(ch, k) => {
           // `d` only means something for a row this workspace actually sets —

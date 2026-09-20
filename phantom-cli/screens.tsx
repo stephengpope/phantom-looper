@@ -143,13 +143,15 @@ export const presetsScreen = (w: WindowStore): Overlay => full('presets', () => 
 ));
 
 /** `e` on a /workspace row: that workspace's settings. Closing goes back to
- *  the list it was opened from, refreshed — a rename there has to show up. */
+ *  the list it was opened from, refreshed — a rename there has to show up.
+ *  A write is a settings change like any other (the coding agent's model
+ *  among them): every open session re-reads its config, as after /settings. */
 export const workspaceSettingsScreen = (w: WindowStore, workspace: WorkspaceInfo): Overlay =>
   full('workspaceSettings', () => (
     <WorkspaceSettings key={`workspace-settings-${w.settingsVersion}`}
       api={w.api} workspace={workspace}
       onClose={() => { void w.openPicker('workspace'); }}
-      onChanged={() => { void w.refreshPicker().catch(quiet('refresh the session list')); }} />
+      onChanged={() => { w.settingChanged(); void w.refreshPicker().catch(quiet('refresh the session list')); }} />
   ));
 
 /** The add-a-workspace form. A rejected submit stays on the form with the

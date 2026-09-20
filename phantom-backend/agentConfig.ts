@@ -77,7 +77,7 @@ export function cascade(agent: AgentName, coding: AgentRows, own: AgentRows): Re
   const model = set(own.model) ?? (inherits ? set(coding.model) : null);
   if (!model) {
     throw new Error(inherits
-      ? `no model set for ${provider} — pick one on /settings (phantom-cli)`
+      ? `no model set for ${provider} — pick one on /settings, or on the workspace if it sets its own provider (phantom-cli)`
       : `${agent}_provider is ${provider} but ${agent}_model is not set — ` +
         `a model from the coding agent's provider (${codingProvider}) cannot carry over`);
   }
