@@ -42,6 +42,7 @@ export const COMMANDS: Command[] = [
   { name: 'ask', summary: 'type something to the Assistant', args: 'text' },
   { name: 'rename', summary: 'name this session (blank goes back to auto-titles)', args: 'name' },
   { name: 'pin', summary: 'pin this session to the top of /resume (again unpins)' },
+  { name: 'done', summary: 'done with this session — unpin it and close it' },
   // Late on purpose: the live menu shows the first MENU_ROWS commands and the
   // everyday ones own those rows; /archived is reached by typing (or [a] on
   // the board), not by arrowing.

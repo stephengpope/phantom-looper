@@ -1902,6 +1902,24 @@ export class WindowStore {
         } catch (e) { this.note(`could not pin session ${session.id}: ${(e as Error).message}`); }
         return;
       }
+      case 'done': {
+        // Unpin, then close — the pin is checked off the row first so a
+        // finished session never lingers at the top of /resume. The busy
+        // guard runs before the unpin so a refused close leaves the pin as
+        // it was.
+        if (!session) { this.note('no session is open — nothing to finish'); return; }
+        if (session.busy || session.remoteBusy) {
+          this.note('a turn is running here — esc stops it, then /done');
+          return;
+        }
+        if (session.pinned) {
+          try { await this.setPinned(session.id, false); }
+          catch (e) { this.note(`could not unpin session ${session.id}: ${(e as Error).message}`); return; }
+        }
+        const r = await this.closeSession();
+        if ('error' in r) this.note(r.error);
+        return;
+      }
       case 'kanban': this.openBoard(); return;
       case 'archived':
         if (!session) { this.note('no session is open — archived cards belong to a workspace; /workspace starts a session in one'); return; }
