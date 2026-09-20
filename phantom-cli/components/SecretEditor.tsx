@@ -15,8 +15,7 @@ import { Text } from './Text.js';
 import { useRef, useState } from 'react';
 import { isMouseInput } from '../mouse.js';
 import { TextInput } from './TextInput.js';
-
-const NAME = /^[a-z][a-z0-9_]{0,63}$/;
+import { secretName, SECRET_NAME_RULE } from '../../core/secretName.js';
 
 /** A place a secret can live: global (id null) or one workspace. */
 export interface SecretTarget { id: string | null; label: string }
@@ -67,9 +66,10 @@ export function SecretEditor({ mode, initial, targets, isActive = true, onSave, 
 
   const save = () => {
     const d = draftRef.current;
-    if (!NAME.test(d.name)) { setError('name: lowercase letters, digits, underscores — starting with a letter'); return; }
+    const name = secretName(d.name);
+    if (!name) { setError(`name: ${SECRET_NAME_RULE}`); return; }
     if (!d.value) { setError('value: required — a secret with no value is nothing to store'); return; }
-    onSave(d);
+    onSave({ ...d, name });
   };
 
   useInput((ch, key) => {
@@ -100,7 +100,7 @@ export function SecretEditor({ mode, initial, targets, isActive = true, onSave, 
   const input = (k: 'name' | 'description' | 'value', placeholder: string, mask?: string) =>
     focused === k
       ? <TextInput value={draft[k]} mask={mask}
-          onChange={(v) => { setError(undefined); setDraft((d) => ({ ...d, [k]: v })); }}
+          onChange={(v) => { setError(undefined); setDraft((d) => ({ ...d, [k]: k === 'name' ? v.toUpperCase() : v })); }}
           onSubmit={() => move(1)} placeholder={placeholder} />
       : draft[k]
         ? <Text wrap="truncate">{mask ? mask.repeat(draft[k].length) : draft[k]}</Text>
@@ -120,7 +120,7 @@ export function SecretEditor({ mode, initial, targets, isActive = true, onSave, 
       {mode === 'new' && (
         <Box marginTop={1}>
           {label('Name', 'name')}
-          {input('name', 'lowercase_with_underscores — what the agent asks for')}
+          {input('name', 'MY_API_KEY — what the agent asks for')}
         </Box>
       )}
       <Box marginTop={1}>

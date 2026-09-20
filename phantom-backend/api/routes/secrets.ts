@@ -12,9 +12,9 @@
 import type { FastifyInstance } from 'fastify';
 import { GLOBAL, workspaceScope } from '../../store.js';
 import { ok, err, type AppCtx } from '../app.js';
+import { secretName, SECRET_NAME_RULE } from '../../../core/secretName.js';
 
 const TAG = { tags: ['secrets'] };
-const NAME = /^[a-z][a-z0-9_]{0,63}$/;
 const scopeQuery = { type: 'object', properties: {
   workspace: { type: 'string', description: 'Address this workspace\'s layer (list merges it; write/delete target it; the value GET has it win over global).' },
 } };
@@ -55,15 +55,15 @@ export function secretsRoutes(app: FastifyInstance, ctx: AppCtx) {
     Body: { description?: string; value?: string } }>(
     '/secrets/:name', { schema: { ...TAG,
       summary: 'Create or overwrite one secret at one layer',
-      description: 'Body is {description?, value}. Writing an existing name at the same layer overwrites it — that is the update path; there is no separate one. Names: lowercase letters, digits, underscores, starting with a letter.',
+      description: 'Body is {description?, value}. Writing an existing name at the same layer overwrites it — that is the update path; there is no separate one. Names are stored UPPER_CASE (letters, digits, underscores, starting with a letter); whatever case is sent is uppercased.',
       params: nameParam, querystring: scopeQuery,
       body: { type: 'object', properties: {
         description: { type: 'string' }, value: { type: 'string' } } } } },
     async (req, reply) => {
-      const name = req.params.name;
-      if (!NAME.test(name)) {
+      const name = secretName(req.params.name);
+      if (!name) {
         return reply.code(400).send(err('invalid_args',
-          `secret names are lowercase letters, digits and underscores, starting with a letter (got "${name}")`));
+          `secret names are ${SECRET_NAME_RULE} (got "${req.params.name}")`));
       }
       const value = req.body?.value;
       if (typeof value !== 'string' || value.length === 0) {
@@ -79,18 +79,19 @@ export function secretsRoutes(app: FastifyInstance, ctx: AppCtx) {
   app.get<{ Params: { name: string }; Querystring: { workspace?: string } }>(
     '/secrets/:name', { schema: { ...TAG,
       summary: 'One secret\'s value',
-      description: 'Decrypted. Resolution cascades: the workspace layer (when ?workspace= is passed) wins over global. An unknown name answers with the names that do exist.',
+      description: 'Decrypted. Resolution cascades: the workspace layer (when ?workspace= is passed) wins over global. Name is case-insensitive. An unknown name answers with the names that do exist.',
       params: nameParam, querystring: scopeQuery } },
     async (req, reply) => {
       const sc = await scopesOf(req.query);
       if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
-      const value = await ctx.settings.readSecretValue(req.params.name, sc.chain);
+      const name = secretName(req.params.name);
+      const value = name ? await ctx.settings.readSecretValue(name, sc.chain) : undefined;
       if (value === undefined) {
         const names = (await ctx.settings.listSecrets(sc.chain)).map((s) => s.name);
         return reply.code(404).send(err('not_found',
           `no secret named "${req.params.name}" — stored: ${names.length ? names.join(', ') : '(none)'}`));
       }
-      return ok({ name: req.params.name, value });
+      return ok({ name, value });
     });
 
   app.delete<{ Params: { name: string }; Querystring: { workspace?: string } }>(
@@ -101,7 +102,8 @@ export function secretsRoutes(app: FastifyInstance, ctx: AppCtx) {
     async (req, reply) => {
       const sc = await scopesOf(req.query);
       if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
-      const gone = await ctx.settings.dropSecret(sc.write, req.params.name);
+      const name = secretName(req.params.name);
+      const gone = name ? await ctx.settings.dropSecret(sc.write, name) : false;
       if (!gone) {
         return reply.code(404).send(err('not_found',
           `no secret named "${req.params.name}" at the ${sc.label} layer`));
