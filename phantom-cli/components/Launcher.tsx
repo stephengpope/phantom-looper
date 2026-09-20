@@ -229,13 +229,15 @@ export const workspaceTitle = (workspaces: WorkspaceInfo[], id: string | null): 
   return w ? label(w) : 'all';
 };
 
-/** Workspace rows — launching with no arguments, and /workspace. Always ends
+/** Workspace rows — launching with no arguments, and /workspace: the card
+ *  prefix (`PHA`) and the repo (`owner/name`), the same two columns the
+ *  slash menu shows for `/new` and `/workspace` — nothing twice. Always ends
  *  with "add a workspace…": an empty install has to be able to get started from
  *  here, not from curl. */
 export function workspaceChoices(workspaces: WorkspaceInfo[], canAdd = true): Choice<Launch | null>[] {
   const rows: Choice<Launch | null>[] = workspaces.map((w) => ({
     value: { kind: 'new', workspaceId: w.id } as Launch,
-    label: label(w),
+    label: w.cardPrefix ?? label(w),
     detail: `${w.owner}/${w.name}`,
   }));
   if (canAdd) {

@@ -40,7 +40,7 @@ import { makeSettings } from './settings.js';
 import { label, lastWorkspaceId, type SessionInfo, type WorkspaceInfo } from './components/Launcher.js';
 import type { TasksView } from './components/Tasks.js';
 import type { NewWorkspaceRequest } from './components/NewWorkspace.js';
-import { COMMANDS, matches, parse, type Choices } from './commands.js';
+import { COMMANDS, fillOf, matches, parse, type Choices } from './commands.js';
 import { WorkspaceDirectory, buildAssistantKit } from './assistantKit.js';
 import { confirmDialog, boardScreen, switcherScreen, settingsScreen, keysScreen, secretsScreen,
   serverScreen, presetsScreen, workspaceSettingsScreen,
@@ -1411,16 +1411,36 @@ export class WindowStore {
     })();
   }
 
-  /** `/new <workspace>`: the rows the slash menu offers, by display name.
-   *  The one you are in leads and says so; the rest in the server's order,
-   *  the same order /workspace lists them. Read on every keystroke and
-   *  render, so it only READS: workspaceRows is filled by boot, the pickers
-   *  and the settings feed, never from here. */
+  /** `/new <workspace>` and `/workspace <workspace>`: the rows the slash
+   *  menu offers — the card prefix (`PHA`, the status bar's and /resume's
+   *  name for a workspace) and the repo (`owner/name`), nothing twice. Tab
+   *  fills the repo name, never the prefix: prefixes are three letters and
+   *  two repos can share one. The one you are in leads and says so; the
+   *  rest in the server's order, the same order /workspace lists them. Read
+   *  on every keystroke and render, so it only READS: workspaceRows is
+   *  filled by boot, the pickers and the settings feed, never from here. */
   argChoices: Choices = () => {
     const here = this.sessions.active()?.workspaceId;
-    const row = (w: WorkspaceInfo) => ({ name: label(w), summary: `${w.owner}/${w.name}${w.id === here ? ' · here' : ''}` });
+    const row = (w: WorkspaceInfo) => ({
+      name: w.cardPrefix ?? label(w), fill: w.name,
+      summary: `${w.owner}/${w.name}${w.id === here ? ' · here' : ''}`,
+    });
     return [...this.workspaceRows.filter((w) => w.id === here), ...this.workspaceRows.filter((w) => w.id !== here)].map(row);
   };
+
+  /** The workspace a typed argument names — the repo name tab fills, or
+   *  anything else a row showed: `owner/name`, the card prefix, the display
+   *  name. Case does not matter. One workspace, or the reason there is not:
+   *  a shared prefix names two and the note lists them by repo, which is
+   *  what to type instead. */
+  private findWorkspace(arg: string): WorkspaceInfo | { error: string } {
+    const typed = arg.toLowerCase();
+    const names = (w: WorkspaceInfo) => [w.name, `${w.owner}/${w.name}`, w.cardPrefix, w.displayName];
+    const hits = this.workspaceRows.filter((w) => names(w).some((n) => n?.toLowerCase() === typed));
+    if (hits.length === 1) return hits[0];
+    if (hits.length > 1) return { error: `"${arg}" is ambiguous: ${hits.map((w) => `${w.owner}/${w.name}`).join(', ')}` };
+    return { error: `unknown workspace "${arg}" — /workspace lists them` };
+  }
 
   /** One workspace list, three consumers: the switcher's rows, the banner's
    *  name cache, and the names the Assistant speaks with. */
@@ -1867,13 +1887,13 @@ export class WindowStore {
     const session = this.sessions.active();
     switch (name) {
       case 'new': {
-        // Named: that workspace, by display name (what the menu showed). Not
-        // named and no session yet = no workspace to mean "here": the picker
-        // chooses. openSession clears the pane and puts the splash up before
+        // Named: that workspace (findWorkspace takes anything a row showed).
+        // Not named and no session yet = no workspace to mean "here": the
+        // picker chooses. openSession clears the pane and puts the splash up before
         // the network calls run.
         if (args) {
-          const w = this.workspaceRows.find((x) => label(x).toLowerCase() === args.toLowerCase());
-          if (!w) { this.note(`unknown workspace "${args}" — /workspace lists them`); return; }
+          const w = this.findWorkspace(args);
+          if ('error' in w) { this.note(w.error); return; }
           await this.openSession({ kind: 'new', workspaceId: w.id });
         } else if (session) await this.openSession({ kind: 'new', workspaceId: session.workspaceId });
         else await this.openPicker('workspace');
@@ -1900,7 +1920,17 @@ export class WindowStore {
         if (!session) { this.note('no session is open — nothing to trash'); return; }
         await this.trashActive(session);
         return;
-      case 'workspace': await this.openPicker('workspace'); return;
+      case 'workspace': {
+        // Named: that workspace's settings — the screen `e` opens on its
+        // picker row, one tab away instead of a list and a keypress. Bare:
+        // the picker, to start a session somewhere else.
+        if (args) {
+          const w = this.findWorkspace(args);
+          if ('error' in w) { this.note(w.error); return; }
+          this.editWorkspace(w.id);
+        } else await this.openPicker('workspace');
+        return;
+      }
       case 'rename': {
         if (!session) { this.note('no session is open — nothing to rename'); return; }
         try {
@@ -2082,7 +2112,12 @@ export class WindowStore {
     // message is sent without it, but a slash command or an empty line is
     // refused — silently dropping part of a command changes what it runs.
     const expanded = this.pastes.expand(text);
-    const msg = expanded.text.trim();
+    // The trailing space is MEANING on a slash line: `/new ` is the workspace
+    // list, `/new` is the command list, and the highlighted row is an index
+    // into whichever one is up. Trimming it off here once turned a picked
+    // workspace into a bare /new — a new session right where you were.
+    const line = expanded.text.trimStart();
+    const msg = line.trimEnd();
     if (expanded.missing.length) {
       const gone = expanded.missing.map((n) => `#${n}`).join(', ');
       if (!msg || msg.startsWith('/')) {
@@ -2114,11 +2149,11 @@ export class WindowStore {
     this.setSplash(false);
     if (msg === 'exit' || msg === 'quit') { this.quit(); return; }
     if (msg.startsWith('/')) {
-      const menu = matches(msg, this.argChoices);
+      const menu = matches(line, this.argChoices);
       if (menu.rows.length) {
         const row = menu.rows[Math.min(highlighted, menu.rows.length - 1)];
         // Rows are either commands, or the highlighted command's choices.
-        if (menu.command) await this.runCommand(menu.command.name, row.name);
+        if (menu.command) await this.runCommand(menu.command.name, fillOf(row));
         else await this.runCommand(row.name);
         return;
       }

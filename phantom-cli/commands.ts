@@ -12,15 +12,20 @@
 // live (the window's workspaces), so the caller hands it in; this file only
 // knows which commands take one.
 export interface Command { name: string; summary: string; args?: string; picks?: boolean }
-/** One row of a picked argument — the same two columns a command row has. */
-export interface Choice { name: string; summary: string }
+/** One row of a picked argument — the same two columns a command row has.
+ *  `fill` is what tab writes into the line and enter submits when it differs
+ *  from what the row SHOWS: a workspace row shows its card prefix (`PHA`),
+ *  which two repos can share, and fills its repo name, which they cannot. */
+export interface Choice { name: string; summary: string; fill?: string }
+/** The text a picked row stands for on the line. */
+export const fillOf = (c: Choice) => c.fill ?? c.name;
 /** The live list for a command whose argument is picked. */
 export type Choices = (command: Command) => Choice[];
 
 export const COMMANDS: Command[] = [
   { name: 'new', summary: 'new session in this workspace, or /new <workspace>', args: 'workspace', picks: true },
   { name: 'resume', summary: 'reopen an earlier session' },
-  { name: 'workspace', summary: 'start in a different workspace' },
+  { name: 'workspace', summary: 'pick a workspace, or /workspace <workspace> edits its settings', args: 'workspace', picks: true },
   { name: 'kanban', summary: "this workspace's task board" },
   { name: 'tasks', summary: "what's running in this session's container" },
   { name: 'plan', summary: 'enter plan mode — the coding agent reads, nothing is written' },
@@ -89,8 +94,10 @@ export function matches(input: string, choices?: Choices): Menu {
   const command = COMMANDS.find((c) => c.name === head);
   if (!command?.picks || !choices) return { rows: [] };
   // The whole line after the name is the argument, spaces and all — a
-  // workspace called "Marketing Site" is one choice, not two words.
-  return { command, rows: choices(command).filter((c) => prefixed(c.name, args)) };
+  // workspace called "Marketing Site" is one choice, not two words. A row
+  // answers to what it shows AND what it fills: `pha` finds `PHA` and
+  // `phantom-looper` alike.
+  return { command, rows: choices(command).filter((c) => prefixed(c.name, args) || prefixed(fillOf(c), args)) };
 }
 
 /** Resolve typed input to exactly one command (plus its argument), or say why not. */
@@ -120,7 +127,7 @@ function commonPrefix(names: string[]): string {
 /** The line that names this row outright: a command with the space that
  *  invites its argument, or a command and its picked argument. */
 const filled = (menu: Menu, row: Choice) =>
-  menu.command ? `/${menu.command.name} ${row.name}` : `/${row.name} `;
+  menu.command ? `/${menu.command.name} ${fillOf(row)}` : `/${row.name} `;
 
 /**
  * Tab. One match completes it outright; several complete as far as they agree,
@@ -134,7 +141,7 @@ export function complete(input: string, index?: number, choices?: Choices): stri
   if (!m.length) return input;
   if (index !== undefined && m[index]) return filled(menu, m[index]);
   if (m.length === 1) return filled(menu, m[0]);
-  const shared = commonPrefix(m.map((c) => c.name));
+  const shared = commonPrefix(m.map(fillOf));
   const typed = menu.command ? split(input).args : input.slice(1);
   return shared.length > typed.length ? (menu.command ? `/${menu.command.name} ${shared}` : `/${shared}`) : input;
 }
