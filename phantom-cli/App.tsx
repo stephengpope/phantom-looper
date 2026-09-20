@@ -627,19 +627,23 @@ export function App({
     // then. shift+tab is left alone here rather than cycling mid-command.
     // Tab on the text tab just produced is the ring: it never falls through
     // to the session switch, even when the filled text has no menu of its own.
+    // The ring is for a PICKED argument only (`/new <workspace>`); on command
+    // names tab fills the highlighted row once, as it always has.
     const choices = windowStore.argChoices;
-    const m = matches(input, choices).rows;
+    const menu = matches(input, choices);
+    const m = menu.rows;
     const ring = key.tab && !key.shift && tabRing?.produced === input ? tabRing : null;
     if (ring || m.length > 0) {
       if (key.tab && !key.shift) {
         const base = ring ? ring.from : input;
-        const rows = ring ? matches(base, choices).rows : m;
+        const from = ring ? matches(base, choices) : menu;
+        const rows = from.rows;
         if (!rows.length) return;
         const at = ring ? (ring.at + 1) % rows.length : Math.min(suggestAt, rows.length - 1);
         const text = complete(base, at, choices);
         setInput(text);
         setSuggestAt(0);
-        setTabRing(rows.length > 1 ? { from: base, produced: text, at } : null);
+        setTabRing(from.command && rows.length > 1 ? { from: base, produced: text, at } : null);
       } else if (key.downArrow && !key.shift) setSuggestAt((i) => (i + 1) % m.length);
       else if (key.upArrow && !key.shift) setSuggestAt((i) => (i - 1 + m.length) % m.length);
       return;
