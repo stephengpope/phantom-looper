@@ -12,6 +12,7 @@ import { GLOBAL, workspaceScope } from './store.js';
 import { encrypt, decrypt } from './crypto.js';
 import { latestModel } from './models.js';
 import { PROVIDERS, REASONINGS, type Provider } from '../core/llm/createAgent.js';
+import { Clock, TIMEZONES } from '../core/clock.js';
 import { agentConfigFrom, resolveModel, type AgentConfig, type AgentName, type AgentRows, type ModelPin } from './agentConfig.js';
 import { APP_VERSION } from './env.js';
 import { logger } from './log.js';
@@ -87,6 +88,11 @@ export const DEFAULTS = {
   supervisor_compact_strategy: null as string | null,
   supervisor_compact_summarize_pct: null as number | null,
   supervisor_compact_max_tokens: null as number | null,
+  // ── general ───────────────────────────────────────────────────────────────
+  // The builder's time zone — what every date the system shows or reads is
+  // in (cron schedules, the token report's "today", the agents' current
+  // date). Settings.clock() is the door (core/clock.ts).
+  timezone: 'UTC' as string,
   // ── board ─────────────────────────────────────────────────────────────────
   // The looper: the supervisor loop over kanban cards — TWO switches, one per
   // loop column (a card's own auto_plan/auto_build tri-state overrides them).
@@ -97,10 +103,8 @@ export const DEFAULTS = {
   // ── crons ─────────────────────────────────────────────────────────────────
   // Scheduled prompts (crons.ts, crons/engine.ts): each opens a new coding
   // session in its workspace and runs one turn. The master switch pauses a
-  // workspace's crons without touching each one; the zone is what every
-  // schedule in the workspace is read in.
+  // workspace's crons without touching each one.
   cron_enabled: true as boolean,
-  cron_timezone: 'UTC' as string,
   // ── sessions ──────────────────────────────────────────────────────────────
   spare_clones: 2,
   maintenance_interval_ms: 60_000,
@@ -240,9 +244,9 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   instant_sync: 'Keeps every running session in this workspace in step with the base branch on its own: a file change auto-pushes after the debounce, and base is checked with a plain git fetch on the pull interval and auto-pulled when it moved. Runs whether or not a turn is running and never fixes a conflict itself — the agent is told and resolves it. Best for a notes or second-brain repo. Takes effect at once.',
   instant_sync_push_debounce_ms: 'How long the files must stay quiet after a change before instant sync pushes.',
   instant_sync_pull_interval_ms: 'How often instant sync fetches the base branch to see whether it moved. A plain git fetch — it never touches the GitHub API rate limit. Shorter means other sessions\' work arrives sooner.',
+  timezone: 'Your time zone — an IANA name like America/New_York or Europe/London. Every date the system shows or reads is in it: a cron\'s "0 9 * * *" is 9am here, the token report\'s "today" starts at midnight here, and the agents are told today\'s date here.',
   card_prefix: 'The letters in front of every card number on this board — "PHA" gives PHA-7. Unset means the first three letters of the repo name.',
   cron_enabled: 'Scheduled prompts (crons) for this workspace. Off: none fire, and the agents lose their cron tools; the crons themselves are kept. A slot missed while off is not made up.',
-  cron_timezone: 'The time zone every cron schedule is read in — an IANA name like America/New_York or Europe/London. "0 9 * * *" is 9am in this zone.',
   coding_provider: 'The coding agent\'s LLM provider. Its key is set on /keys. Nothing runs until one is chosen.',
   coding_model: 'Model id for the chosen provider. Empty = the newest model the catalog lists for it, so it follows releases.',
   coding_base_url: 'Endpoint for openai / openai-compatible. Required by openai-compatible.',
@@ -303,7 +307,7 @@ export interface SettingMeta {
   /** The heading a settings screen files this under — an agent, or an
    *  area. Lives here so every client draws the same sections and a new
    *  setting must pick one. */
-  group: 'coding' | 'assistant' | 'supervisor' | 'board' | 'crons' | 'sessions' | 'containers' | 'git' | 'limits' | 'telegram';
+  group: 'coding' | 'assistant' | 'supervisor' | 'general' | 'board' | 'crons' | 'sessions' | 'containers' | 'git' | 'limits' | 'telegram';
   /** The sub-heading inside an agent's group. */
   subgroup?: 'model' | 'compaction' | 'voice';
   /** What to call this setting on screen. The key is the identifier — it is
@@ -337,13 +341,11 @@ export interface SettingMeta {
 }
 
 type Group = SettingMeta['group'];
-/** An IANA zone this Node knows — the same table croner and Intl read, so a
- *  zone accepted here is one every schedule can be evaluated in. A typo
- *  stored here would make every cron in the workspace fail at its tick. */
-const TIMEZONES: readonly string[] = ['UTC', ...Intl.supportedValuesOf('timeZone').filter((z) => z !== 'UTC')];
+/** A zone off the Clock's list is refused: a typo stored here would make
+ *  every cron in the workspace fail at its tick. */
 const checkTimezone = (v: string): string | null =>
   TIMEZONES.includes(v) ? null
-    : `cron_timezone must be an IANA time zone name like America/New_York or Europe/London (got "${v}")`;
+    : `timezone must be an IANA time zone name like America/New_York or Europe/London (got "${v}")`;
 const ms = (label: string, group: Group, min = 0): SettingMeta => ({ type: 'number', label, group, unit: 'ms', min });
 const count = (label: string, group: Group, min = 0): SettingMeta => ({ type: 'number', label, group, unit: 'count', min });
 const bytes = (label: string, group: Group): SettingMeta => ({ type: 'number', label, group, unit: 'bytes', min: 1 });
@@ -378,8 +380,8 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
   instant_sync_push_debounce_ms: ms('instant sync push debounce', 'git'),
   instant_sync_pull_interval_ms: ms('instant sync pull interval', 'git'),
   card_prefix: { type: 'string', label: 'card number prefix', group: 'board', nullable: true },
+  timezone: { type: 'string', label: 'time zone', group: 'general', check: checkTimezone, suggestions: TIMEZONES },
   cron_enabled: { type: 'boolean', label: 'crons', group: 'crons' },
-  cron_timezone: { type: 'string', label: 'time zone', group: 'crons', check: checkTimezone, suggestions: TIMEZONES },
   coding_provider: { type: 'string', label: 'provider', group: 'coding', subgroup: 'model', nullable: true, choices: PROVIDERS },
   coding_model: { type: 'string', label: 'model', group: 'coding', subgroup: 'model', nullable: true },
   coding_base_url: { type: 'string', label: 'endpoint', group: 'coding', subgroup: 'model', nullable: true },
@@ -506,7 +508,7 @@ const WORKSPACE_OVERRIDABLE: readonly SettingKey[] = [
   'auto_push_on_archive', 'agent_git_credentials', 'card_prefix',
   'instant_sync', 'instant_sync_push_debounce_ms', 'instant_sync_pull_interval_ms',
   'auto_plan', 'auto_build', 'loop_budget_tokens', 'telegram_auto_build_notifications',
-  'cron_enabled', 'cron_timezone',
+  'cron_enabled', 'timezone',
 ];
 
 /** Settings that are a fact about ONE workspace — a card prefix names one
@@ -690,6 +692,13 @@ export class Settings {
     return out;
   }
 
+  /** The builder's clock (core/clock.ts) in the `timezone` setting — the
+   *  workspace's own zone when one is given, else the global one. THE door
+   *  for anything that shows or reads a date. */
+  async clock(ctx: ResolveCtx = {}): Promise<Clock> {
+    return new Clock(await this.resolve('timezone', ctx));
+  }
+
   /** A credential, most specific layer first — the ONE path that decrypts a
    *  declared credential. undefined = unset at every layer. */
   async credential(name: CredentialName, ctx: ResolveCtx = {}): Promise<string | undefined> {
@@ -731,7 +740,8 @@ export class Settings {
     const resolved = resolveModel(agent, coding, own, pin);
     const supervisorProvider = agent === 'supervisor' ? resolved.provider : resolveModel('supervisor', coding, supervisor, null).provider;
     return agentConfigFrom({ agent, coding, own, supervisor, pin,
-      keys: { agent: await keyOf(resolved.provider), supervisor: await keyOf(supervisorProvider) } });
+      keys: { agent: await keyOf(resolved.provider), supervisor: await keyOf(supervisorProvider) },
+      timezone: await this.resolve('timezone', ctx) });
   }
 
   /** The model trio an agent resolves to from the settings alone (no pin) —

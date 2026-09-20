@@ -11,6 +11,7 @@ import { type Tool } from 'ai';
 import { PhantomAgent, type ModelConfig } from '../createAgent.js';
 import { withCurrentDate } from '../prompts/template.js';
 import { systemPrompt } from '../prompts/supervisor/wiring.js';
+import type { Clock } from '../../clock.js';
 
 export function supervisorInstructions(): string {
   return systemPrompt();
@@ -22,11 +23,10 @@ export function supervisorInstructions(): string {
 export class SupervisorAgent extends PhantomAgent {
   constructor(
     model: ModelConfig, tools: Record<string, Tool>,
-    opts: { sessionId: string | null; maxSteps?: number | null; now?: Date },
+    opts: { sessionId: string | null; maxSteps?: number | null; clock: Clock },
   ) {
-    const now = opts.now ?? new Date();
     super(model, opts.sessionId, {
-      instructions: withCurrentDate(supervisorInstructions(), now),
+      instructions: withCurrentDate(supervisorInstructions(), opts.clock),
       tools,
       maxSteps: opts.maxSteps,
     });

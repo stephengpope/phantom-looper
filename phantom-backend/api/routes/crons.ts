@@ -1,7 +1,7 @@
 // Crons, workspace-scoped: a workspace's scheduled prompts (crons.ts) are
 // written ONLY through these routes. Addressed by name — the handle a person
 // or an agent uses; the row id is storage's. Every schedule is read in the
-// workspace's `cron_timezone`, and every answer says which zone and what
+// workspace's `timezone`, and every answer says which zone and what
 // time it is there, so a caller never has to guess either.
 //
 //   GET    /workspaces/:id/crons            every cron
@@ -10,6 +10,7 @@
 //   DELETE /workspaces/:id/crons/:name
 import type { FastifyInstance } from 'fastify';
 import type { WorkspaceRow } from '../../db/schema.js';
+import type { Clock } from '../../../core/clock.js';
 import { CronError, CRON_FIELDS, type CronFields } from '../../crons.js';
 import { ok, err, type AppCtx } from '../app.js';
 
@@ -19,7 +20,7 @@ const nameParams = { type: 'object', properties: { id: { type: 'string' }, name:
 
 const cronBodyProps = {
   name: { type: 'string', description: 'The handle — unique in the workspace, case-insensitively.' },
-  schedule: { type: 'string', description: 'A 5-field cron expression ("0 9 * * *") for a recurring cron, or an ISO datetime ("2026-03-14T18:50:00") for a one-time run. Read in the workspace\'s cron_timezone.' },
+  schedule: { type: 'string', description: 'A 5-field cron expression ("0 9 * * *") for a recurring cron, or an ISO datetime ("2026-03-14T18:50:00") for a one-time run. Read in the workspace\'s timezone.' },
   prompt: { type: 'string', description: 'What the run is asked to do. Self-contained: the run is a fresh session.' },
   enabled: { type: 'boolean', description: 'false pauses the cron without removing it.' },
 };
@@ -31,10 +32,10 @@ for (const f of CRON_FIELDS) {
 
 export function cronRoutes(app: FastifyInstance, ctx: AppCtx) {
   const workspaceOf = (id: string) => ctx.workspaces.get(id);
-  const timezoneOf = async (w: WorkspaceRow) => String(await ctx.settings.resolve('cron_timezone', { workspace: w }));
+  const clockOf = (w: WorkspaceRow) => ctx.settings.clock({ workspace: w });
   /** Every answer carries the zone and the time there — what a caller
    *  writing a datetime needs and never otherwise has. */
-  const clock = (timezone: string) => ({ timezone, now: new Date().toISOString() });
+  const stamp = (clock: Clock) => ({ timezone: clock.timezone, now: clock.now().toISOString() });
   const cronErr = (reply: { code: (n: number) => { send: (b: unknown) => unknown } }, e: unknown) => {
     if (!(e instanceof CronError)) throw e;
     return reply.code(e.code === 'not_found' ? 404 : e.code === 'duplicate_name' ? 409 : 400).send(err(e.code, e.message));
@@ -48,8 +49,7 @@ export function cronRoutes(app: FastifyInstance, ctx: AppCtx) {
     async (req, reply) => {
       const w = await workspaceOf(req.params.id);
       if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
-      const timezone = await timezoneOf(w);
-      return ok({ ...clock(timezone), crons: await ctx.crons.list(w) });
+      return ok({ ...stamp(await clockOf(w)), crons: await ctx.crons.list(w) });
     });
 
   app.post<{ Params: { id: string }; Body: CronFields }>(
@@ -61,8 +61,8 @@ export function cronRoutes(app: FastifyInstance, ctx: AppCtx) {
     async (req, reply) => {
       const w = await workspaceOf(req.params.id);
       if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
-      const timezone = await timezoneOf(w);
-      try { return ok({ ...clock(timezone), cron: await ctx.crons.create(w, req.body, timezone) }); }
+      const clock = await clockOf(w);
+      try { return ok({ ...stamp(clock), cron: await ctx.crons.create(w, req.body, clock) }); }
       catch (e) { return cronErr(reply, e); }
     });
 
@@ -74,8 +74,8 @@ export function cronRoutes(app: FastifyInstance, ctx: AppCtx) {
     async (req, reply) => {
       const w = await workspaceOf(req.params.id);
       if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
-      const timezone = await timezoneOf(w);
-      try { return ok({ ...clock(timezone), cron: await ctx.crons.update(w, req.params.name, req.body, timezone) }); }
+      const clock = await clockOf(w);
+      try { return ok({ ...stamp(clock), cron: await ctx.crons.update(w, req.params.name, req.body, clock) }); }
       catch (e) { return cronErr(reply, e); }
     });
 

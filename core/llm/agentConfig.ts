@@ -7,6 +7,7 @@ import type { Tool } from 'ai';
 import type { Agent, ModelConfig } from './createAgent.js';
 import type { CompactionConfig } from './compaction.js';
 import { CodingAgent, type CodingPrompt } from './agents/coding.js';
+import { Clock } from '../clock.js';
 
 export type AgentName = 'coding' | 'assistant' | 'supervisor';
 export const AGENT_NAMES: readonly AgentName[] = ['coding', 'assistant', 'supervisor'];
@@ -20,10 +21,17 @@ export interface AgentConfig {
   maxSteps: number | null;
   /** When and how its history is summarized, and the model that writes the summary. */
   compaction: CompactionConfig;
+  /** The builder's zone (the `timezone` setting) — what "Current date" in
+   *  the agent's prompt is read in. A string, not a Clock: this config
+   *  crosses the wire to the cli. */
+  timezone: string;
 }
 
 /** The one-line summary the cli's banner and toolbar draw. */
 export interface AgentSummary { provider: string; model: string; reasoning: string; maxSteps: number | null }
+
+/** The builder's clock for an agent built from this config. */
+export const agentClock = (c: AgentConfig): Clock => new Clock(c.timezone);
 
 export const agentSummary = (c: AgentConfig): AgentSummary => ({
   provider: c.model.provider || 'unset', model: c.model.model || 'unset',
@@ -42,7 +50,7 @@ export function buildCodingAgent(
   if (o.modelFetch) model.fetch = o.modelFetch;
   if (o.onRetry) model.onRetry = o.onRetry;
   return {
-    agent: new CodingAgent(model, tools, { sessionId, maxSteps: cfg.maxSteps, prompt: o.prompt }),
+    agent: new CodingAgent(model, tools, { sessionId, maxSteps: cfg.maxSteps, prompt: o.prompt, clock: agentClock(cfg) }),
     summary: agentSummary(cfg),
   };
 }

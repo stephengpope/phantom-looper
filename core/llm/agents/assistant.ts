@@ -20,6 +20,7 @@ import type { Tool } from 'ai';
 import { PhantomAgent, type ModelConfig } from '../createAgent.js';
 import { withCurrentDate } from '../prompts/template.js';
 import { systemPrompt } from '../prompts/assistant/wiring.js';
+import type { Clock } from '../../clock.js';
 
 export function assistantInstructions(): string {
   return systemPrompt();
@@ -28,11 +29,10 @@ export function assistantInstructions(): string {
 export class AssistantAgent extends PhantomAgent {
   constructor(
     model: ModelConfig, tools: Record<string, Tool>,
-    opts: { sessionId: string | null; maxSteps?: number | null; now?: Date },
+    opts: { sessionId: string | null; maxSteps?: number | null; clock: Clock },
   ) {
-    const now = opts.now ?? new Date();
     super(model, opts.sessionId, {
-      instructions: withCurrentDate(assistantInstructions(), now), tools,
+      instructions: withCurrentDate(assistantInstructions(), opts.clock), tools,
       maxSteps: opts.maxSteps,
     });
   }

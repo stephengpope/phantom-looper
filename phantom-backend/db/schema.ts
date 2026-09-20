@@ -302,7 +302,7 @@ export const logTokens = phantomLooper.table('log_tokens', {
 // runs the prompt as one turn — the session is the run's record. A slot
 // that passed while the server was down never fires. RECURRING: `schedule` is a 5-field cron expression, the row lives
 // until removed. ONE-TIME (`once`): `schedule` is an ISO datetime, the row
-// fires and is deleted. Read in the workspace's `cron_timezone`. Crons
+// fires and is deleted. Read in the workspace's `timezone`. Crons
 // (crons.ts) is its one owner. Column keys are snake_case like cards': a row
 // IS the API's cron.
 export const crons = phantomLooper.table('crons', {

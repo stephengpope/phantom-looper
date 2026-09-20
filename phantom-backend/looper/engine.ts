@@ -43,7 +43,7 @@ import type { SettingsEvents } from '../api/settingsEvents.js';
 import { GLOBAL } from '../store.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
 import { memoryRecorder, serializeTranscript } from '../../core/llm/transcript.js';
-import type { AgentConfig } from '../../core/llm/agentConfig.js';
+import { agentClock, type AgentConfig } from '../../core/llm/agentConfig.js';
 import { sessionPin } from '../agentConfig.js';
 import { phantomTools } from '../../core/llm/tools/workspace.js';
 import { webTools } from '../../core/llm/tools/web.js';
@@ -405,7 +405,7 @@ export class LooperEngine {
         };
         const incoming: ModelMessage[] = step.append.map((t) => ({ role: 'user', content: t }));
         const messages = [...supOpened.messages, ...incoming];
-        const agent = new SupervisorAgent(model, tools, { sessionId: supOpened.session.id, maxSteps: sup.maxSteps });
+        const agent = new SupervisorAgent(model, tools, { sessionId: supOpened.session.id, maxSteps: sup.maxSteps, clock: agentClock(sup) });
         // Cache marks on a copy — the supervisor's growing conversation reads
         // its own prefix back each turn; the transcript stays clean. The
         // step seam collects the WHOLE turn (tool calls included — the step

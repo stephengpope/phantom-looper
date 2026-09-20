@@ -13,6 +13,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { Cron } from 'croner';
 import { isUniqueViolation, type Db } from './db/client.js';
 import { crons, type CronRow, type WorkspaceRow } from './db/schema.js';
+import type { Clock } from '../core/clock.js';
 
 export type { CronRow };
 
@@ -42,9 +43,9 @@ export function nextFire(schedule: string, timezone: string, after: Date): Date 
 
 /** Refuse a schedule that does not parse or will never fire — written for
  *  the agent to act on, not to log. */
-function checkSchedule(schedule: string, timezone: string, now: Date): void {
+function checkSchedule(schedule: string, clock: Clock, now: Date): void {
   let fire: Date | null;
-  try { fire = nextFire(schedule, timezone, now); }
+  try { fire = nextFire(schedule, clock.timezone, now); }
   catch (e) {
     throw new CronError('invalid_args',
       `"${schedule}" is not a valid schedule (${(e as Error).message}). Use a 5-field cron expression like ` +
@@ -104,12 +105,12 @@ export class Crons {
   // ── writes ─────────────────────────────────────────────────────────────────
 
   /** A new cron. Name, schedule and prompt required; the schedule must fire
-   *  at least once from now, in `timezone`. */
-  async create(w: WorkspaceRow, fields: CronFields, timezone: string, now = new Date()): Promise<CronRow> {
+   *  at least once from now, in the clock's zone. */
+  async create(w: WorkspaceRow, fields: CronFields, clock: Clock, now = clock.now()): Promise<CronRow> {
     const name = cleanName(fields.name);
     const prompt = cleanPrompt(fields.prompt);
     const schedule = cleanSchedule(fields.schedule);
-    checkSchedule(schedule, timezone, now);
+    checkSchedule(schedule, clock, now);
     try {
       const [row] = await this.db.insert(crons)
         .values({ workspace_id: w.id, name, schedule, once: isOnce(schedule), prompt,
@@ -125,13 +126,13 @@ export class Crons {
 
   /** Any subset of fields. A schedule change is checked like a create; a
    *  rename keeps the row. */
-  async update(w: WorkspaceRow, name: string, fields: CronFields, timezone: string, now = new Date()): Promise<CronRow> {
+  async update(w: WorkspaceRow, name: string, fields: CronFields, clock: Clock, now = clock.now()): Promise<CronRow> {
     const set: Partial<typeof crons.$inferInsert> = {};
     if (fields.name !== undefined) set.name = cleanName(fields.name);
     if (fields.prompt !== undefined) set.prompt = cleanPrompt(fields.prompt);
     if (fields.schedule !== undefined) {
       set.schedule = cleanSchedule(fields.schedule);
-      checkSchedule(set.schedule, timezone, now);
+      checkSchedule(set.schedule, clock, now);
       set.once = isOnce(set.schedule);
     }
     if (fields.enabled !== undefined) set.enabled = fields.enabled;

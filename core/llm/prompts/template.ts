@@ -8,6 +8,7 @@
 // Editing a prompt file changes NEW chats only — that is the point, not a
 // limitation. Anything a model must always see current belongs in a tool's
 // description, which reaches every chat, never in here.
+import type { Clock } from '../../clock.js';
 
 const token = () => /\{\{([a-zA-Z]\w*)\}\}/g;
 
@@ -49,9 +50,9 @@ export function firstLineOf(template: string, vars: Record<string, string | numb
   return fill(line, vars);
 }
 
-/** A frozen prompt piece plus today's date — recomputed at every agent
- *  build (launch, resume, model change), so the stored text never moves. */
-export function withCurrentDate(instructions: string, now = new Date()): string {
-  const day = now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: '2-digit' });
-  return `${instructions}\n\nCurrent date: ${day}.`;
+/** A frozen prompt piece plus today's date in the builder's zone —
+ *  recomputed at every agent build (launch, resume, model change), so the
+ *  stored text never moves. */
+export function withCurrentDate(instructions: string, clock: Clock): string {
+  return `${instructions}\n\nCurrent date: ${clock.date()}.`;
 }

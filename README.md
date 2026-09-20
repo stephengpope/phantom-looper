@@ -26,7 +26,7 @@ Open sessions, add cards, move them, tick requirements, switch auto plan and aut
 
 ### ⏰ Crons — Schedule a prompt; it runs unattended.
 
-Tell the coding agent or the assistant "every weekday at 9, summarize what landed on main" or "remind me tonight at 6:50 to check the deploy", and it schedules it. When the time comes the server opens a fresh session in the workspace, runs the prompt as one turn, and closes it — the session is the record, on `/resume` (behind `[s]`) and in the Telegram digest. Recurring ones take a cron expression, one-time ones a date and time, all read in the workspace's time zone (`/settings` → crons). Crons live in the database with the cards, addressed by name; the agents manage them with the `cron_*` tools.
+Tell the coding agent or the assistant "every weekday at 9, summarize what landed on main" or "remind me tonight at 6:50 to check the deploy", and it schedules it. When the time comes the server opens a fresh session in the workspace, runs the prompt as one turn, and closes it — the session is the record, on `/resume` (behind `[s]`) and in the Telegram digest. Recurring ones take a cron expression, one-time ones a date and time, all read in your time zone (`/settings` → general). Crons live in the database with the cards, addressed by name; the agents manage them with the `cron_*` tools.
 
 ### 🛰 Any device — Start on one machine, continue on another.
 
@@ -119,7 +119,7 @@ The full product: voice, web, and the looper on autopilot. Row names are the one
 | `auto-push on archive` on | `/settings` | archiving a done card merges and pushes it |
 | `instant sync` on | `/workspace` → `e` | a notes or second-brain repo keeps itself in step: changes auto-push seconds after they settle, base is fetched and auto-pulled seconds after it moves |
 | `loop token budget` | `/settings` | a spend cap per card run |
-| `time zone` under crons | `/settings` | scheduled prompts fire in your zone, not UTC |
+| `time zone` under general | `/settings` | crons fire, the token report's "today" starts, and the agents' current date is read in your zone, not UTC |
 | `boot into last workspace` on | `/settings` | skip the picker, start where you left off |
 
 ### The server, from the app or Telegram

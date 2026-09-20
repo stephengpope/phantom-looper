@@ -21,15 +21,16 @@ import type { SystemModelMessage, Tool } from 'ai';
 import { PhantomAgent, CACHE_TTL, type ModelConfig } from '../createAgent.js';
 import { withCurrentDate } from '../prompts/template.js';
 import type { CodingPrompt } from '../prompts/coding/wiring.js';
+import type { Clock } from '../../clock.js';
 
 export { codingPrompt, type CodingPrompt } from '../prompts/coding/wiring.js';
 
 /** The two stored pieces as the two cached system blocks. */
-function systemBlocks(prompt: CodingPrompt): SystemModelMessage[] {
+function systemBlocks(prompt: CodingPrompt, clock: Clock): SystemModelMessage[] {
   const cacheControl = { anthropic: { cacheControl: { type: 'ephemeral' as const, ttl: CACHE_TTL } } };
   return [
     { role: 'system', content: prompt.base, providerOptions: cacheControl },
-    { role: 'system', content: withCurrentDate(prompt.workspace), providerOptions: cacheControl },
+    { role: 'system', content: withCurrentDate(prompt.workspace, clock), providerOptions: cacheControl },
   ];
 }
 
@@ -37,10 +38,10 @@ export class CodingAgent extends PhantomAgent {
   constructor(
     model: ModelConfig,
     tools: Record<string, Tool>,
-    opts: { sessionId: string | null; maxSteps?: number | null; prompt: CodingPrompt },
+    opts: { sessionId: string | null; maxSteps?: number | null; prompt: CodingPrompt; clock: Clock },
   ) {
     super(model, opts.sessionId, {
-      instructions: systemBlocks(opts.prompt),
+      instructions: systemBlocks(opts.prompt, opts.clock),
       tools,
       maxSteps: opts.maxSteps,
     });

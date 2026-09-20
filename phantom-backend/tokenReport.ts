@@ -5,17 +5,17 @@
 // cache — since the raw read/write counts say nothing on their own.
 import { groupOf, type TokenGroup } from '../core/llm/createAgent.js';
 import type { ReportRow, WindowTotals, Windows } from './logTokens.js';
+import type { Clock } from '../core/clock.js';
 
 // NUM_W: widest value `k` emits is 6 (`999.9B`), +4 gutter so columns never touch.
 const KIND_W = 14, MODEL_W = 22, NUM_W = 10;
 const LABEL_W = 2 + KIND_W + 2 + MODEL_W;  // indent, kind, gutter, model
 
-/** Window starts, from `now`: today's midnight (server timezone), and 7 / 30
- *  days back to the minute. */
-export function reportWindows(now: Date): Windows<Date> {
-  const today = new Date(now); today.setHours(0, 0, 0, 0);
+/** Window starts, from `now`: today's midnight in the builder's zone, and
+ *  7 / 30 days back to the minute. */
+export function reportWindows(clock: Clock, now: Date): Windows<Date> {
   const daysAgo = (n: number) => new Date(now.getTime() - n * 86_400_000);
-  return { today, week: daysAgo(7), month: daysAgo(30) };
+  return { today: clock.startOfDay(now), week: daysAgo(7), month: daysAgo(30) };
 }
 
 /** 1234 → 1.2k, 45000 → 45.0k, 1234567 → 1.2M, 2e9 → 2.0B. Always one
@@ -65,9 +65,8 @@ function table(title: string, window: keyof Windows<unknown>, rows: ReportRow[])
 
 /** The whole report, plain text. Columns hold only in monospace: the CLI
  *  is, Telegram gets it inside a code block. */
-export function formatTokenReport(rows: ReportRow[], now: Date): string {
-  const today = reportWindows(now).today
-    .toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+export function formatTokenReport(rows: ReportRow[], clock: Clock, now: Date): string {
+  const today = clock.date(now, { weekday: 'short', month: 'short', day: 'numeric' });
   return [
     table(`today · ${today}`, 'today', rows), '',
     table('last 7 days', 'week', rows), '',

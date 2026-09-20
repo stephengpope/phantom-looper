@@ -438,7 +438,7 @@ export async function handleCommand(
 
     case 'tokens': {
       let text: string;
-      try { text = (await engine.system.tokenUsage()).text; }
+      try { text = (await engine.system.tokenUsage(await engine.settings.clock())).text; }
       catch (e) { await reply(`⚠️ Couldn't read token usage: ${(e as Error).message}`); return; }
       // A code block: the report is a fixed-column table, monospace only.
       await client.sendMarkdown(dm, titled('📊 Token usage', text ? '```\n' + text + '\n```' : '(no usage data)'));

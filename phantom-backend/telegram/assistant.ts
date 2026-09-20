@@ -18,7 +18,7 @@
 
 import type { ModelMessage, Tool } from 'ai';
 import { AssistantAgent } from '../../core/llm/agents/assistant.js';
-import type { AgentConfig } from '../../core/llm/agentConfig.js';
+import { agentClock, type AgentConfig } from '../../core/llm/agentConfig.js';
 import type { SessionRow } from '../db/schema.js';
 import type { Cards, CardFields, ItemOp, CardRow } from '../cards.js';
 import type { Workspaces } from '../workspaces.js';
@@ -202,7 +202,7 @@ export async function runAssistantTurn(
 ): Promise<AssistantTurnResult> {
   const tools = await assistantKit(deps, ctx, own);
   const agent = new AssistantAgent({ ...ctx.config.model, fetch: deps.modelFetch }, tools,
-    { sessionId: own.id, maxSteps: ctx.config.maxSteps });
+    { sessionId: own.id, maxSteps: ctx.config.maxSteps, clock: agentClock(ctx.config) });
 
   // Accumulate usage across all steps in this turn.
   const usage = { input: 0, output: 0, cache_read: 0, cache_write: 0 };

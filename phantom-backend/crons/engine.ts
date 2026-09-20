@@ -117,8 +117,8 @@ export class CronEngine {
         const w = await this.deps.workspaces.get(row.workspace_id);
         if (!w) continue;
         try {
-          const s = await this.deps.settings.resolveMany(['cron_enabled', 'cron_timezone'], { workspace: w });
-          ws = { enabled: s.cron_enabled === true, timezone: String(s.cron_timezone) };
+          const s = await this.deps.settings.resolveMany(['cron_enabled', 'timezone'], { workspace: w });
+          ws = { enabled: s.cron_enabled === true, timezone: s.timezone };
         } catch (e) {
           log.error({ workspace: w.name, err: errStr(e) }, 'could not read the workspace\'s cron settings — its crons are not scheduled');
           continue;

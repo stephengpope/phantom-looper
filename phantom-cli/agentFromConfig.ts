@@ -6,7 +6,7 @@
 // every screen that draws a model reads the summary that comes back.
 import type { Tool } from 'ai';
 import type { Agent } from '../core/llm/createAgent.js';
-import { buildCodingAgent, agentSummary, type AgentConfig, type AgentName, type AgentSummary } from '../core/llm/agentConfig.js';
+import { buildCodingAgent, agentSummary, agentClock, type AgentConfig, type AgentName, type AgentSummary } from '../core/llm/agentConfig.js';
 import type { CodingPrompt } from '../core/llm/agents/coding.js';
 import { AssistantAgent } from '../core/llm/agents/assistant.js';
 import type { Api } from './request.js';
@@ -40,7 +40,7 @@ export function buildAgent(tools: Record<string, Tool>, cfg: AgentConfig, sessio
 export function buildAssistantAgent(tools: Record<string, Tool>, cfg: AgentConfig, own: { id: string } | null):
 { agent: Agent; summary: AgentSummary } {
   return {
-    agent: new AssistantAgent(cfg.model, tools, { sessionId: own?.id ?? null, maxSteps: cfg.maxSteps }),
+    agent: new AssistantAgent(cfg.model, tools, { sessionId: own?.id ?? null, maxSteps: cfg.maxSteps, clock: agentClock(cfg) }),
     summary: agentSummary(cfg),
   };
 }

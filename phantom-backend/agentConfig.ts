@@ -112,6 +112,8 @@ export interface AgentConfigInput {
   /** The decrypted key for the provider `model` resolved to, and for the
    *  supervisor's. Settings reads them after cascade+pin decide the provider. */
   keys: { agent: string | undefined; supervisor: string | undefined };
+  /** The `timezone` setting at the same scope. */
+  timezone: string;
 }
 
 /** The model trio + pin for `agent` — what Settings needs BEFORE it can read
@@ -149,5 +151,5 @@ export function agentConfigFrom(i: AgentConfigInput): AgentConfig {
     model: supervisorModel,
   };
 
-  return { agent, model, maxSteps: own.maxSteps != null && own.maxSteps > 0 ? own.maxSteps : null, compaction };
+  return { agent, model, maxSteps: own.maxSteps != null && own.maxSteps > 0 ? own.maxSteps : null, compaction, timezone: i.timezone };
 }

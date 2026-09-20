@@ -10,6 +10,7 @@ import type Docker from 'dockerode';
 import type { Paths } from './pool/paths.js';
 import type { LogTokens } from './logTokens.js';
 import { formatTokenReport, reportWindows } from './tokenReport.js';
+import type { Clock } from '../core/clock.js';
 import { startUpdate, subscribe, isRunning, type UpdateEvent } from './api/updateTask.js';
 import { API_IMAGE } from './env.js';
 import { logger, errStr } from './log.js';
@@ -181,8 +182,9 @@ export class System {
     return { restarting: service };
   }
 
-  /** The token report: today / 7 days / 30 days, per kind × model. */
-  async tokenUsage(now = new Date()): Promise<{ text: string }> {
-    return { text: formatTokenReport(await this.logTokens.report(reportWindows(now)), now) };
+  /** The token report: today / 7 days / 30 days, per kind × model. "Today"
+   *  is the clock's — the builder's midnight, not the container's. */
+  async tokenUsage(clock: Clock, now = clock.now()): Promise<{ text: string }> {
+    return { text: formatTokenReport(await this.logTokens.report(reportWindows(clock, now)), clock, now) };
   }
 }

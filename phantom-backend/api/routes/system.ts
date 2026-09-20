@@ -151,5 +151,5 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
       summary: 'Token usage report — today, last 7 days, last 30 days; agents and helpers by model',
       description: 'Sums the log_tokens entries. Answers as preformatted `text`.',
     },
-  }, async () => ok(await ctx.system.tokenUsage()));
+  }, async () => ok(await ctx.system.tokenUsage(await ctx.settings.clock())));
 }
