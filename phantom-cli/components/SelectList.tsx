@@ -154,23 +154,42 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
   // A stored index only means something for the list it was chosen in. React
   // reuses this component when a caller swaps its choices (same element type in
   // the same position), so the old index can land on a heading — which draws no
-  // cursor and ignores enter, leaving the list looking dead. Normalise on read.
-  const normalize = (i: number) =>
-    (choices[i] && !choices[i].heading ? i : pickable[0] ?? 0);
+  // cursor and ignores enter, leaving the list looking dead — or past the end.
+  // Normalise on read: the nearest pickable row BELOW, else the nearest above
+  // (never the top — a pin's 📌 heading sliding under the cursor must not
+  // teleport it).
+  const normalize = (i: number) => {
+    if (choices[i] && !choices[i].heading) return i;
+    return pickable.find((p) => p > i) ?? pickable.filter((p) => p < i).pop() ?? 0;
+  };
   // A NAMED row is followed, not its index: when the list changes under the
   // cursor (/resume re-reads, a filter narrows it, ←→ swap the workspace)
-  // the highlight finds the row it was on; a row that is gone means the top.
-  // Computed here, in render, because the swap arrives as new props and the
-  // cursor must be right in the same frame.
+  // the highlight finds the row it was on; a row that is gone means the
+  // nearest row. Computed here, in render, because the swap arrives as new
+  // props and the cursor must be right in the same frame.
+  //
+  // EXCEPT after a shortcut on the row (pin, trash, close): the act itself
+  // moves or removes the row, and the bar STAYS PUT — the list moves under
+  // it, so a run of pins/trashes reads down the list instead of chasing each
+  // row to its new place. Armed by the keypress, spent by the first change
+  // of the list's shape after it, disarmed by an arrow (a move says the
+  // highlight is the row again).
   const keyOf = (c: Choice<T> | undefined) =>
     c && !c.heading ? c.id ?? (typeof c.value === 'string' ? c.value : undefined) : undefined;
   const held = useRef<string | undefined>(keyOf(choices[cursorRaw]));
+  const holdPosition = useRef(false);
+  const shape = choices.map(keyOf).join('\n');
+  const lastShape = useRef(shape);
+  const changed = shape !== lastShape.current;
+  lastShape.current = shape;
   let cursor = normalize(cursorRaw);
-  if (held.current !== undefined && keyOf(choices[cursor]) !== held.current) {
+  if (changed && holdPosition.current) {
+    holdPosition.current = false;
+  } else if (held.current !== undefined && keyOf(choices[cursor]) !== held.current) {
     const at = choices.findIndex((c) => keyOf(c) === held.current);
-    cursor = at >= 0 ? at : pickable[0] ?? 0;
-    if (cursor !== cursorRaw) setCursor(cursor);
+    if (at >= 0) cursor = at;
   }
+  if (cursor !== cursorRaw) setCursor(cursor);
   held.current = keyOf(choices[cursor]);
 
   // The cursor is mirrored in a ref so a keypress can read where the highlight
@@ -197,6 +216,7 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
     // The move names its new row NOW: the render that follows compares the
     // held name to the row under the cursor, and must not see the old one.
     held.current = keyOf(choices[next]);
+    holdPosition.current = false;
     setCursor(next);
     if (onNearEnd && next >= choices.length - NEAR_END) onNearEnd();
   };
@@ -218,7 +238,7 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
     // A chord is not a shortcut. Ink reports ctrl+c as the letter `c` with
     // key.ctrl set, so without this ctrl+c would fire the `c` shortcut on the
     // way past — and ctrl+e on the workspace list would open the editor.
-    else if (onKey && ch && !key.ctrl && !key.meta) onKey(ch, current()?.value);
+    else if (onKey && ch && !key.ctrl && !key.meta) { holdPosition.current = true; onKey(ch, current()?.value); }
   });
 
   // The label column sizes itself to its longest label. A fixed width silently
