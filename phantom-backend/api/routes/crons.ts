@@ -5,7 +5,7 @@
 // time it is there, so a caller never has to guess either.
 //
 //   GET    /workspaces/:id/crons            every cron
-//   POST   /workspaces/:id/crons            create {name, schedule, prompt, enabled?}
+//   POST   /workspaces/:id/crons            create {name, schedule, prompt | script, enabled?}
 //   PATCH  /workspaces/:id/crons/:name      any subset of those fields
 //   DELETE /workspaces/:id/crons/:name
 import type { FastifyInstance } from 'fastify';
@@ -21,7 +21,8 @@ const nameParams = { type: 'object', properties: { id: { type: 'string' }, name:
 const cronBodyProps = {
   name: { type: 'string', description: 'The handle — unique in the workspace, case-insensitively.' },
   schedule: { type: 'string', description: 'A 5-field cron expression ("0 9 * * *") for a recurring cron, or an ISO datetime ("2026-03-14T18:50:00") for a one-time run. Read in the workspace\'s timezone.' },
-  prompt: { type: 'string', description: 'What the run is asked to do. Self-contained: the run is a fresh session.' },
+  prompt: { type: 'string', description: 'What an agent run is asked to do. Self-contained: the run is a fresh session. Exactly one of prompt / script.' },
+  script: { type: 'string', description: 'A path in the repo, run with sh in the session\'s container — no model, no tokens. Exactly one of prompt / script.' },
   enabled: { type: 'boolean', description: 'false pauses the cron without removing it.' },
 };
 // The schema must cover THE list (crons.ts) — a field added there without a
@@ -55,9 +56,9 @@ export function cronRoutes(app: FastifyInstance, ctx: AppCtx) {
   app.post<{ Params: { id: string }; Body: CronFields }>(
     '/workspaces/:id/crons', { schema: { ...TAG, summary: 'Create a cron',
       description: 'The schedule must fire at least once from now in the workspace\'s zone; a datetime that has passed is refused. ' +
-        'A name already taken (case-insensitively) is refused with 409.',
+        'Exactly one of prompt / script. A name already taken (case-insensitively) is refused with 409.',
       params: idParam,
-      body: { type: 'object', additionalProperties: false, required: ['name', 'schedule', 'prompt'], properties: cronBodyProps } } },
+      body: { type: 'object', additionalProperties: false, required: ['name', 'schedule'], properties: cronBodyProps } } },
     async (req, reply) => {
       const w = await workspaceOf(req.params.id);
       if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));

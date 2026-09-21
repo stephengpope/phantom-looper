@@ -9,6 +9,11 @@
 // reminder, a check-in later tonight — one moment ever; the row is deleted
 // when it fires. `once` is decided here from the schedule's shape, never
 // asked for.
+//
+// Two bodies, exactly one set. `prompt`: an agent turn — tokens on every
+// fire. `script`: a path in the checkout run with `sh`, no model — for
+// what a shell script already does. Setting one on update clears the other;
+// the pair is checked here and by the table (migration 040).
 import { and, eq, sql } from 'drizzle-orm';
 import { Cron } from 'croner';
 import { isUniqueViolation, type Db } from './db/client.js';
@@ -22,8 +27,8 @@ export class CronError extends Error {
 }
 
 /** THE cron field list — create, update and the API schema all derive from it. */
-export const CRON_FIELDS = ['name', 'schedule', 'prompt', 'enabled'] as const;
-export type CronFields = Partial<{ name: string; schedule: string; prompt: string; enabled: boolean }>;
+export const CRON_FIELDS = ['name', 'schedule', 'prompt', 'script', 'enabled'] as const;
+export type CronFields = Partial<{ name: string; schedule: string; prompt: string; script: string; enabled: boolean }>;
 
 const NAME_MAX = 80;
 
@@ -108,12 +113,12 @@ export class Crons {
    *  at least once from now, in the clock's zone. */
   async create(w: WorkspaceRow, fields: CronFields, clock: Clock, now = clock.now()): Promise<CronRow> {
     const name = cleanName(fields.name);
-    const prompt = cleanPrompt(fields.prompt);
+    const body = cleanBody(fields.prompt, fields.script);
     const schedule = cleanSchedule(fields.schedule);
     checkSchedule(schedule, clock, now);
     try {
       const [row] = await this.db.insert(crons)
-        .values({ workspace_id: w.id, name, schedule, once: isOnce(schedule), prompt,
+        .values({ workspace_id: w.id, name, schedule, once: isOnce(schedule), ...body,
           enabled: fields.enabled ?? true, created_at: now, updated_at: now })
         .returning();
       this.changed(w.id);
@@ -129,7 +134,7 @@ export class Crons {
   async update(w: WorkspaceRow, name: string, fields: CronFields, clock: Clock, now = clock.now()): Promise<CronRow> {
     const set: Partial<typeof crons.$inferInsert> = {};
     if (fields.name !== undefined) set.name = cleanName(fields.name);
-    if (fields.prompt !== undefined) set.prompt = cleanPrompt(fields.prompt);
+    if (fields.prompt !== undefined || fields.script !== undefined) Object.assign(set, cleanBody(fields.prompt, fields.script));
     if (fields.schedule !== undefined) {
       set.schedule = cleanSchedule(fields.schedule);
       checkSchedule(set.schedule, clock, now);
@@ -179,13 +184,18 @@ function cleanName(v: unknown): string {
   if (name.length > NAME_MAX) throw new CronError('invalid_args', `a cron name is at most ${NAME_MAX} characters`);
   return name;
 }
-function cleanPrompt(v: unknown): string {
-  const prompt = String(v ?? '').trim();
-  if (!prompt) {
-    throw new CronError('invalid_args', 'a cron needs a prompt — what the run is asked to do. Make it self-contained: ' +
-      'the run starts a fresh session that cannot see this conversation.');
+/** The body: a prompt or a script, never both, never neither. Both columns
+ *  come back so a write of one clears the other. */
+function cleanBody(p: unknown, s: unknown): { prompt: string | null; script: string | null } {
+  const prompt = String(p ?? '').trim();
+  const script = String(s ?? '').trim();
+  if (prompt && script) throw new CronError('invalid_args', 'a cron runs a prompt OR a script — give one, not both');
+  if (!prompt && !script) {
+    throw new CronError('invalid_args', 'a cron needs a prompt or a script. A prompt is what an agent run is asked to do — ' +
+      'make it self-contained: the run starts a fresh session that cannot see this conversation. A script is a path in ' +
+      'the repo, run with sh and no model.');
   }
-  return prompt;
+  return { prompt: prompt || null, script: script || null };
 }
 function cleanSchedule(v: unknown): string {
   const schedule = String(v ?? '').trim();

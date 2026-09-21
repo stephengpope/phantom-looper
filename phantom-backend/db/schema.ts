@@ -296,10 +296,12 @@ export const logTokens = phantomLooper.table('log_tokens', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-// Crons (migration 037): a workspace's scheduled prompts. The scheduler
+// Crons (migration 037, 040): a workspace's scheduled prompts. The scheduler
 // (crons/engine.ts) holds one croner job per enabled row, re-read every
 // minute; at its time a job opens a NEW coding session in the workspace and
-// runs the prompt as one turn — the session is the run's record. A slot
+// runs the prompt as one turn — or, for a `script` cron, runs `sh <path>`
+// in the session's container with no model — the session is the run's
+// record. Exactly one of `prompt` / `script` is set (migration 040). A slot
 // that passed while the server was down never fires. RECURRING: `schedule` is a 5-field cron expression, the row lives
 // until removed. ONE-TIME (`once`): `schedule` is an ISO datetime, the row
 // fires and is deleted. Read in the workspace's `timezone`. Crons
@@ -311,7 +313,8 @@ export const crons = phantomLooper.table('crons', {
   name: text('name').notNull(),   // the handle — unique per workspace, case-insensitively
   schedule: text('schedule').notNull(),
   once: boolean('once').notNull(),
-  prompt: text('prompt').notNull(),
+  prompt: text('prompt'),   // what an agent run is asked to do
+  script: text('script'),   // a path in the checkout, run with sh — no model
   enabled: boolean('enabled').notNull().default(true),
   last_run_at: timestamp('last_run_at', { withTimezone: true }),   // when it last fired; null = never
   created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

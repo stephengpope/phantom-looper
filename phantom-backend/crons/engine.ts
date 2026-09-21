@@ -16,7 +16,13 @@
 // A fire opens a NEW coding session in the workspace (its own checkout,
 // named after the cron, its seat stamped 'cron'), runs the prompt as one
 // coding turn — the same runner the looper and the /turn route use — and
-// closes it. The session is the run's record. A one-time cron's row is
+// closes it. A SCRIPT cron runs `sh <path>` instead, through the same bash
+// tool route the agent's own bash calls (one executor: pidfile, interrupt,
+// timeout, output tail), with no model in the loop — zero tokens. Either
+// way the session is the run's record: a script run saves a two-message
+// transcript (the command, its exit code and output) so /resume reads it
+// like any other run. A script failure is logged and recorded, not
+// announced. A one-time cron's row is
 // deleted when it fires (the next refresh drops its registration); a
 // recurring one records the time. A one-time cron whose moment has already
 // passed — the server slept through it — can never fire: its row is deleted
@@ -32,7 +38,9 @@ import type { Crons, CronRow } from '../crons.js';
 import type { Workspaces } from '../workspaces.js';
 import type { Settings } from '../settings.js';
 import { openSession, type OpenedSession } from '../../core/session.js';
+import { serializeTranscript } from '../../core/llm/transcript.js';
 import { runCodingTurn } from '../looper/turn.js';
+import { SESSION_HEADER } from '../api/sessionHeader.js';
 import { sessionPin } from '../agentConfig.js';
 import { injectFetch } from '../looper/injectFetch.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
@@ -42,6 +50,10 @@ import { logger, errStr } from '../log.js';
 
 const log = logger('cron');
 const BASE = 'http://cron/api';
+/** A script's own timeout. The bash tool's default (`bash_timeout_ms`, two
+ *  minutes) is sized for an agent waiting on a command; a nightly job is
+ *  not. `bash_timeout_max_ms`, when set, still caps this. */
+const SCRIPT_TIMEOUT_MS = 60 * 60 * 1000;
 
 export interface CronEngineDeps {
   crons: Crons;
@@ -201,13 +213,18 @@ export class CronEngine {
 
       const ac = new AbortController();
       this.deps.activeTurns?.set(sessionId, ac);
-      const deps = { f: this.f, apiKey, base: BASE, modelFetch: this.deps.modelFetch,
-        sessionEvents: this.deps.sessionEvents, client: CRON_CLIENT_ID, backdoor: this.deps.backdoor,
-        onRetry: (t: string) => log.warn({ cron: row.name }, t), signal: ac.signal };
       try {
-        const t = await runCodingTurn(deps, opened, w.id, row.prompt, false,
-          await this.deps.settings.agentConfig('coding', { workspace: w, pin: sessionPin(opened.session) }));
-        log.info({ workspace: w.name, cron: row.name, session: sessionId, tokens: t.tokens, interrupted: t.interrupted }, 'cron run finished');
+        if (row.script) {
+          const exit = await this.runScript(opened, row.script, ac.signal);
+          log.info({ workspace: w.name, cron: row.name, session: sessionId, script: row.script, exit }, 'cron script finished');
+        } else {
+          const deps = { f: this.f, apiKey, base: BASE, modelFetch: this.deps.modelFetch,
+            sessionEvents: this.deps.sessionEvents, client: CRON_CLIENT_ID, backdoor: this.deps.backdoor,
+            onRetry: (t: string) => log.warn({ cron: row.name }, t), signal: ac.signal };
+          const t = await runCodingTurn(deps, opened, w.id, row.prompt ?? '', false,
+            await this.deps.settings.agentConfig('coding', { workspace: w, pin: sessionPin(opened.session) }));
+          log.info({ workspace: w.name, cron: row.name, session: sessionId, tokens: t.tokens, interrupted: t.interrupted }, 'cron run finished');
+        }
       } finally {
         this.deps.activeTurns?.delete(sessionId);
       }
@@ -219,4 +236,37 @@ export class CronEngine {
       await opened?.close().catch((e) => log.warn({ cron: row.name, err: errStr(e) }, 'cron session did not close cleanly'));
     }
   }
+
+  /** `sh <script>` in the session's container, over the bash tool route.
+   *  Whatever comes back — exit code, output, or the route's refusal (no
+   *  such file, timeout) — is the record: saved as the session's
+   *  transcript, never thrown. Returns the exit code, null when the
+   *  command never ran. */
+  private async runScript(opened: OpenedSession, script: string, signal: AbortSignal): Promise<number | null> {
+    const cmd = `sh ${shellQuote(script)}`;
+    const r = await this.f(`${BASE}/tools/bash`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${this.deps.apiKey}`,
+        [SESSION_HEADER]: opened.session.id },
+      body: JSON.stringify({ cmd, timeout: SCRIPT_TIMEOUT_MS }),
+      signal,
+    });
+    const j = await r.json() as { ok: true; data: { exitCode: number; stdout: string; stderr: string } }
+      | { ok: false; error: { code: string; message: string; detail?: unknown } };
+    const exit = j.ok ? j.data.exitCode : null;
+    const report = j.ok
+      ? `exit ${j.data.exitCode}\n\n${j.data.stdout}${j.data.stderr ? `\n--- stderr ---\n${j.data.stderr}` : ''}`
+      : `did not finish: ${j.error.message}${j.error.detail ? `\n\n${JSON.stringify(j.error.detail)}` : ''}`;
+    await opened.saveTranscript(serializeTranscript([
+      { role: 'user', content: cmd },
+      { role: 'assistant', content: report },
+    ]));
+    return exit;
+  }
+}
+
+/** Single-quote a path for sh — the one thing a path may not contain
+ *  unescaped is a single quote. */
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
 }

@@ -24,9 +24,9 @@ Put a card in the **plan** column and the loop takes it from there: a coding age
 
 Open sessions, add cards, move them, tick requirements, switch auto plan and auto build on and off, and create a new repo and workspace, all by voice. The assistant works the same board and sessions you do, so you can manage a day's work without touching the keyboard.
 
-### ⏰ Crons — Schedule a prompt; it runs unattended.
+### ⏰ Crons — Schedule a prompt or a script; it runs unattended.
 
-Tell the coding agent or the assistant "every weekday at 9, summarize what landed on main" or "remind me tonight at 6:50 to check the deploy", and it schedules it. When the time comes the server opens a fresh session in the workspace, runs the prompt as one turn, and closes it — the session is the record, on `/resume` (behind `[s]`) and in the Telegram digest. Recurring ones take a cron expression, one-time ones a date and time, all read in your time zone (`/settings` → general). Crons live in the database with the cards, addressed by name; the agents manage them with the `cron_*` tools.
+Tell the coding agent or the assistant "every weekday at 9, summarize what landed on main" or "remind me tonight at 6:50 to check the deploy", and it schedules it. When the time comes the server opens a fresh session in the workspace, runs the prompt as one turn, and closes it — the session is the record, on `/resume` (behind `[s]`) and in the Telegram digest. For a job a shell script already does — a backup, a report, a health check — schedule the script instead ("every night at 2, run scripts/backup.sh"): it runs with `sh` in the same fresh session, no model and no tokens, and its exit code and output are the record. Recurring ones take a cron expression, one-time ones a date and time, all read in your time zone (`/settings` → general). Crons live in the database with the cards, addressed by name; the agents manage them with the `cron_*` tools.
 
 ### 🛰 Any device — Start on one machine, continue on another.
 
