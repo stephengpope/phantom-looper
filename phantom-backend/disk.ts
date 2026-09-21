@@ -54,6 +54,13 @@ async function diskUsedPercent(root: string): Promise<number> {
   return st.blocks === 0 ? 0 : ((st.blocks - st.bavail) / st.blocks) * 100;
 }
 
+const MIN_FREE_GB = 20;
+
+async function diskFreeGB(root: string): Promise<number> {
+  const st = await fs.statfs(root);
+  return (st.bavail * st.bsize) / (1024 ** 3);
+}
+
 /** The sessions whose files are on disk (only owners hold disk), each with
  *  its workspace row. Fails CLOSED like every sweep: an unreadable list
  *  aborts the run — not knowing what is protected never licenses deletion. */
@@ -113,9 +120,9 @@ export async function pressureSweep(
   settings: Settings, workspaces: Workspaces, sessions: Sessions, p: Paths, images: Images, containers: ContainerManager, engine: GitEngine,
 ): Promise<void> {
   const pct = Number(await settings.resolve('disk_cleanup_percent'));
-  if (pct <= 0) return;
+  if (pct <= 0 && (await diskFreeGB(p.root)) >= MIN_FREE_GB) return;
   const used = () => diskUsedPercent(p.root);
-  if ((await used()) < pct) return;
+  if ((await used()) < pct && (await diskFreeGB(p.root)) >= MIN_FREE_GB) return;
   log.warn({ used: Math.round(await used()), limit: pct }, 'disk over limit — pressure cleanup started');
 
   // 1 — image weight from releases older than the running one. Images owns
