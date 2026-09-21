@@ -157,7 +157,18 @@ export class InstantSync {
   private async attach(folderId: string, workspace: WorkspaceRow, c: Config): Promise<void> {
     let w: Watched;
     const subscription = await watcher.subscribe(repoDir(this.deps.paths, folderId), (err, events) => {
-      if (err) { log.warn({ folder: folderId, err: errStr(err) }, 'watcher error'); return; }
+      if (err) {
+        log.warn({ folder: folderId, err: errStr(err) }, 'watcher error — re-subscribing');
+        // @parcel/watcher's inotify backend dies on EINTR ("Interrupted
+        // system call") — a known, unfixed upstream bug (#141). One error
+        // kills the native backend permanently: no future file change is
+        // ever seen, changedAt is never set, and the beat silently skips
+        // every push forever. The fix: treat the watcher as dead, mark
+        // changedAt so the current beat still pushes, and re-subscribe.
+        w.changedAt = Date.now();
+        void this.resubscribe(w);
+        return;
+      }
       if (events.length) w.changedAt = Date.now();
     }, { ignore: IGNORE });
     // `changedAt` far in the past: the first beat runs a push check, so work
@@ -167,6 +178,28 @@ export class InstantSync {
     this.watched.set(folderId, w);
     log.info({ folder: folderId, workspace: workspace.id, debounceMs: c.debounceMs, pullMs: c.pullMs }, 'instant sync on');
     void this.beat(w);
+  }
+
+  /** Replace a dead watcher subscription with a fresh one. The beat, the
+   *  timers and the map entry stay — only the native subscription changes. */
+  private async resubscribe(w: Watched): Promise<void> {
+    if (w.stopped) return;
+    await w.subscription.unsubscribe()
+      .catch((e) => log.warn({ folder: w.folderId, err: errStr(e) }, 'unsubscribe of dead watcher failed'));
+    try {
+      w.subscription = await watcher.subscribe(repoDir(this.deps.paths, w.folderId), (err, events) => {
+        if (err) {
+          log.warn({ folder: w.folderId, err: errStr(err) }, 'watcher error — re-subscribing');
+          w.changedAt = Date.now();
+          void this.resubscribe(w);
+          return;
+        }
+        if (events.length) w.changedAt = Date.now();
+      }, { ignore: IGNORE });
+      log.info({ folder: w.folderId }, 'watcher re-subscribed');
+    } catch (e) {
+      log.error({ folder: w.folderId, err: errStr(e) }, 'watcher re-subscribe failed — changedAt will keep the beat pushing');
+    }
   }
 
   private async detach(w: Watched): Promise<void> {
@@ -192,10 +225,14 @@ export class InstantSync {
       if (since !== null && Date.now() - since >= w.debounceMs) {
         const pushed = await this.deps.autoPush(session, w.workspace);
         this.settle(w, session, 'push', pushed);
-        // The change is done with — unless the checkout was held (a manual
-        // sync): then it is still pending for the next beat. A change made
-        // DURING the push moved `changedAt`, and is left to settle on its own.
-        if (pushed.result !== 'busy' && w.changedAt === since) w.changedAt = null;
+        // The change is done with when it pushed or there was nothing to push.
+        // `busy` means someone else is handling it — the change is still
+        // pending. `error` or `blocked` means the push FAILED — the change
+        // must stay pending so the next beat retries; clearing it here
+        // stranded work on the branch forever (nothing re-sets changedAt
+        // without a new file-watcher event). A change made DURING the push
+        // moved `changedAt`, and is left to settle on its own.
+        if ((pushed.result === 'pushed' || pushed.result === 'nothing') && w.changedAt === since) w.changedAt = null;
       }
     } catch (e) {
       log.warn({ folder: w.folderId, err: errStr(e) }, 'instant sync beat threw');
