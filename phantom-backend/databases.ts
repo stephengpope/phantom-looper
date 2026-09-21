@@ -138,7 +138,7 @@ export class Databases {
   }
 
   /** The connection string the project's code gets as AGENT_DATABASE_URL
-   *  when `agent_database_in_code` is on — the same role and database the
+   *  when `agent_database_shared` is on — the same role and database the
    *  tool uses. Ensures first, so the URL works the moment it is handed out.
    *  The host is the server's own (`postgres` on the stack network); the
    *  container must be on that network to resolve it. */

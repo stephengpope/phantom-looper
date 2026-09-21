@@ -49,7 +49,7 @@ interface SpecInput {
    *  daemon is NOT started here — the image's `start-docker` does that on demand. */
   docker: boolean;
   /** A Docker network to join instead of the default bridge — the stack's
-   *  own, when the project's code needs the agent database (its host name
+   *  own, when the agent database is shared with the project (its host name
    *  resolves only there). Absent = Docker's default. */
   network?: string;
 }
@@ -104,7 +104,7 @@ export interface ContainerOpts {
    *  Absent (tests) means the container never gets a token, whatever the
    *  setting says. */
   settings?: Settings;
-  /** The agent databases, for `agent_database_in_code`: the container gets
+  /** The agent databases, for `agent_database_shared`: the container gets
    *  the workspace's connection string as AGENT_DATABASE_URL. Absent (tests)
    *  means never. */
   databases?: Databases;
@@ -232,18 +232,18 @@ export class ContainerManager {
   }
 
   /** The agent database's connection string, when BOTH `agent_database` and
-   *  `agent_database_in_code` are on. The second deliberate hole in "the
+   *  `agent_database_shared` are on. The second deliberate hole in "the
    *  project's code cannot reach it": the role's password enters the
    *  container's env, and — like the PAT — dies with it. The caller also
    *  joins the stack network, or the host name in the URL resolves nowhere. */
   private async databaseEnv(workspace: WorkspaceRow | undefined): Promise<string[]> {
     if (!workspace || !this.opts.settings || !this.opts.databases) return [];
-    const on = await this.opts.settings.resolveMany(['agent_database', 'agent_database_in_code'], { workspace });
-    if (!on.agent_database || !on.agent_database_in_code) return [];
+    const on = await this.opts.settings.resolveMany(['agent_database', 'agent_database_shared'], { workspace });
+    if (!on.agent_database || !on.agent_database_shared) return [];
     if (!this.opts.network) {
-      log.warn({ workspace: workspace.name }, 'agent_database_in_code is on but WORKSPACE_NETWORK is unset — the URL\'s host may not resolve from the container');
+      log.warn({ workspace: workspace.name }, 'agent_database_shared is on but WORKSPACE_NETWORK is unset — the URL\'s host may not resolve from the container');
     }
-    log.info({ workspace: workspace.name }, 'workspace container gets AGENT_DATABASE_URL (agent_database_in_code)');
+    log.info({ workspace: workspace.name }, 'workspace container gets AGENT_DATABASE_URL (agent_database_shared)');
     return [`AGENT_DATABASE_URL=${await this.opts.databases.urlFor(workspace.id)}`];
   }
 
