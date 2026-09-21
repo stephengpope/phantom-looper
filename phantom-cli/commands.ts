@@ -43,7 +43,7 @@ export const COMMANDS: Command[] = [
   { name: 'trash', summary: 'trash this session for good — row, transcript, files' },
   { name: 'server', summary: 'the server url and api key, this machine only' },
   { name: 'cpu', summary: 'server status — cpu, load, memory, disk' },
-  { name: 'tokens', summary: 'token usage — today, 7 days, 30 days; agents and helpers by model' },
+  { name: 'tokens', summary: 'token usage by model' },
   { name: 'restart', summary: 'restart the server, or one service (asks first)', args: 'service' },
   { name: 'settings', summary: "the server's settings, for everyone" },
   { name: 'keys', summary: 'the credentials the server holds' },
