@@ -135,8 +135,13 @@ export async function handleCommand(
         if ('error' in r) { await reply('⚠️ That session no longer exists — /sessions for a fresh list.'); return; }
         return;
       }
-      // Bare: list them.
-      const { sessions } = await engine.sessions.list({ typed: true, background: false, limit: 10 });
+      // Bare: list them.  Fetch generously, then trim: all pinned + at
+      // least 5 non-pinned (target 10 total, but pinned never push recent
+      // sessions out of view).
+      const { sessions: allSessions } = await engine.sessions.list({ typed: true, background: false, limit: 30 });
+      const pinned = allSessions.filter((s) => s.pinned);
+      const nonPinned = allSessions.filter((s) => !s.pinned);
+      const sessions = [...pinned, ...nonPinned.slice(0, Math.max(5, 10 - pinned.length))];
       if (!sessions.length) { await reply('ℹ️ No sessions yet. /new starts one.'); return; }
       sessionList.set(dm, sessions.map((s) => s.id));
       const now = Date.now();

@@ -55,7 +55,12 @@ export class AssistantConversation {
     return this.transcript;
   }
 
-  /** Resume the conversation from the newest transcript — once per boot. */
+  /** Resume the conversation from the newest transcript — once per boot.
+   *  A transcript written by a previous build may have the user message
+   *  after the assistant's response (the write-order bug fixed in
+   *  assistant.ts).  If the first message is not a user message the
+   *  conversation is misordered and the model will reject it, so discard
+   *  the stale history and start a fresh file. */
   load(): void {
     if (this.loaded) return;
     this.loaded = true;
@@ -63,6 +68,10 @@ export class AssistantConversation {
     if (!file) return;
     const loaded = loadTranscriptFile(file);
     if (!loaded.messages.length) return;
+    if (loaded.messages[0].role !== 'user') {
+      log.warn('assistant transcript starts with %s, not user — discarding stale history', loaded.messages[0].role);
+      return; // leave this.transcript null so the next turn opens a fresh file
+    }
     this.history.push(...loaded.messages);
     this.transcript = new Transcript(file);
   }

@@ -222,6 +222,13 @@ export async function runAssistantTurn(
     // transcript — the same per-step recording the voice assistant and coding
     // sessions use. No step is lost, no usage is missed.
     const messages = [...history, user];
+    // Write the user message to the transcript BEFORE the turn so step
+    // messages (written by appendStep during the turn) land after it — the
+    // same order the conversation happened in.  A failed turn leaves the
+    // user message on disk; compaction or a fresh file will clean it up,
+    // and one orphan line is better than a misordered conversation that
+    // breaks the model on reload.
+    transcript?.append(user);
     const r = await agent.stream({
       messages, abortSignal,
       record: transcript ? {
@@ -251,7 +258,6 @@ export async function runAssistantTurn(
     const resp = await r.response;
     // Success: commit the user message and the turn's response to history.
     history.push(user, ...(resp.messages as ModelMessage[]));
-    transcript?.append(user);
   } catch (e) {
     // History is untouched — the user message was never added.
     await sink.dispose();
