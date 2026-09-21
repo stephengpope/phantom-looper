@@ -9,8 +9,8 @@
 //      GitHub API, so no rate limit); nothing new and it stops right there.
 //   2. auto-push — only when a file changed and the files have then been
 //      quiet for `instant_sync_push_debounce_ms`. The watcher on the checkout
-//      (@parcel/watcher, inotify) does nothing but record WHEN the last
-//      change happened.
+//      (FolderWatcher — @parcel/watcher in its own child process) does
+//      nothing but record WHEN the last change happened.
 //
 // The beat knows no git. It calls the two functions and logs every result.
 // A failure — git failed, a conflict left for the agent — is also REPORTED
@@ -43,7 +43,6 @@
 // runs on removal. `reconcile` covers what those two cannot: containers
 // already running when this process boots, and the switch or a timing
 // changed (the settings bus says so) — never a poll.
-import watcher, { type AsyncSubscription } from '@parcel/watcher';
 import type { SessionRow, WorkspaceRow } from '../db/schema.js';
 import type { Sessions } from '../sessions.js';
 import type { Folders } from '../folders.js';
@@ -52,12 +51,10 @@ import type { Settings } from '../settings.js';
 import { repoDir, type Paths } from '../pool/paths.js';
 import type { AutoPushResult } from './autoPush.js';
 import type { AutoPullResult } from './autoPull.js';
+import type { FolderWatcher } from './folderWatcher.js';
 import { logger, errStr } from '../log.js';
 
 const log = logger('instant-sync');
-
-/** Git's own writes are not watched — every sync would trigger itself. */
-const IGNORE = ['.git'];
 
 export interface InstantSyncDeps {
   sessions: Sessions;
@@ -65,6 +62,7 @@ export interface InstantSyncDeps {
   workspaces: Workspaces;
   settings: Settings;
   paths: Paths;
+  watcher: FolderWatcher;
   /** Auto-push / auto-pull as index.ts wires them for instant sync: no
    *  hold, no fixer, notes to the backdoor queue. */
   autoPush: (session: SessionRow, workspace: WorkspaceRow) => Promise<AutoPushResult>;
@@ -76,7 +74,6 @@ export interface InstantSyncDeps {
 interface Watched {
   folderId: string;
   workspace: WorkspaceRow;
-  subscription: AsyncSubscription;
   debounceMs: number;
   pullMs: number;
   /** When a file last changed; null once that change has been pushed. */
@@ -146,6 +143,7 @@ export class InstantSync {
 
   async stop(): Promise<void> {
     for (const w of this.watched.values()) await this.detach(w);
+    this.deps.watcher.stop();
   }
 
   private async configOf(workspace: WorkspaceRow): Promise<Config> {
@@ -155,15 +153,11 @@ export class InstantSync {
   }
 
   private async attach(folderId: string, workspace: WorkspaceRow, c: Config): Promise<void> {
-    let w: Watched;
-    const subscription = await watcher.subscribe(repoDir(this.deps.paths, folderId), (err, events) => {
-      if (err) { log.warn({ folder: folderId, err: errStr(err) }, 'watcher error'); return; }
-      if (events.length) w.changedAt = Date.now();
-    }, { ignore: IGNORE });
     // `changedAt` far in the past: the first beat runs a push check, so work
     // left unpushed before this watcher existed (a server restart) goes now.
-    w = { folderId, workspace, subscription, debounceMs: c.debounceMs, pullMs: c.pullMs,
+    const w: Watched = { folderId, workspace, debounceMs: c.debounceMs, pullMs: c.pullMs,
       changedAt: 0, lastFailure: { push: null, pull: null }, stopped: false };
+    this.deps.watcher.watch(folderId, repoDir(this.deps.paths, folderId), () => { w.changedAt = Date.now(); });
     this.watched.set(folderId, w);
     log.info({ folder: folderId, workspace: workspace.id, debounceMs: c.debounceMs, pullMs: c.pullMs }, 'instant sync on');
     void this.beat(w);
@@ -173,8 +167,7 @@ export class InstantSync {
     w.stopped = true;
     clearTimeout(w.timer);
     this.watched.delete(w.folderId);
-    await w.subscription.unsubscribe()
-      .catch((e) => log.warn({ folder: w.folderId, err: errStr(e) }, 'unsubscribe failed'));
+    this.deps.watcher.unwatch(w.folderId);
     log.info({ folder: w.folderId }, 'instant sync off');
   }
 
@@ -192,10 +185,14 @@ export class InstantSync {
       if (since !== null && Date.now() - since >= w.debounceMs) {
         const pushed = await this.deps.autoPush(session, w.workspace);
         this.settle(w, session, 'push', pushed);
-        // The change is done with — unless the checkout was held (a manual
-        // sync): then it is still pending for the next beat. A change made
-        // DURING the push moved `changedAt`, and is left to settle on its own.
-        if (pushed.result !== 'busy' && w.changedAt === since) w.changedAt = null;
+        // The change is done with when it pushed or there was nothing to push.
+        // `busy` means someone else is handling it — the change is still
+        // pending. `error` or `blocked` means the push FAILED — the change
+        // must stay pending so the next beat retries; clearing it here
+        // stranded work on the branch forever (nothing re-sets changedAt
+        // without a new file-watcher event). A change made DURING the push
+        // moved `changedAt`, and is left to settle on its own.
+        if ((pushed.result === 'pushed' || pushed.result === 'nothing') && w.changedAt === since) w.changedAt = null;
       }
     } catch (e) {
       log.warn({ folder: w.folderId, err: errStr(e) }, 'instant sync beat threw');

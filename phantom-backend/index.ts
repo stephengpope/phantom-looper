@@ -49,6 +49,7 @@ import { LooperEngine } from './looper/engine.js';
 import { TelegramEngine } from './telegram/engine.js';
 import { refreshWorkState } from './git/workRefresh.js';
 import { InstantSync } from './git/instantSync.js';
+import { FolderWatcher } from './git/folderWatcher.js';
 import { logger, errStr } from './log.js';
 
 const log = logger('boot');
@@ -258,7 +259,7 @@ async function main() {
   };
   const instantDeps = { sessions, folders, cards, settings, paths, messageConfig, recordSummary: noteForNextTurn };
   const instantSync = new InstantSync({
-    sessions, folders, workspaces, settings, paths,
+    sessions, folders, workspaces, settings, paths, watcher: new FolderWatcher(),
     autoPush: (session, workspace) => autoPush(instantDeps, session, workspace, { hold: false }),
     autoPull: (session, workspace) => autoPull(instantDeps, session, workspace, { hold: false }),
     failed: (session, op, reason) =>
