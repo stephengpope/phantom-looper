@@ -45,6 +45,7 @@ RUN mkdir -p /workspaces /trigger && chown -R node:node /workspaces /trigger /ap
 # installed is what jammed Shockwave's boxes when a file was removed.
 COPY docker-compose.yml /host-files/
 COPY caddy/Caddyfile /host-files/caddy/
+COPY cloudbeaver/cloudbeaver.conf /host-files/cloudbeaver/
 
 COPY updater/ /host-files/updater/
 COPY host/ /host-files/host/

@@ -128,7 +128,13 @@ services:
       # at /db/db/api/ — see the note in cloudbeaver/cloudbeaver.conf.
       CLOUDBEAVER_ROOT_URI: /db/
     volumes:
-      - ./cloudbeaver/cloudbeaver.conf:/opt/cloudbeaver/conf/cloudbeaver.conf:ro
+      - type: bind
+        source: ./cloudbeaver/cloudbeaver.conf
+        target: /opt/cloudbeaver/conf/cloudbeaver.conf
+        read_only: true
+        bind:
+          # A missing release file must fail instead of becoming a directory.
+          create_host_path: false
       - cloudbeaver-data:/opt/cloudbeaver/workspace
 
   # HTTPS terminator + reverse proxy — the ONLY public surface, and only with
