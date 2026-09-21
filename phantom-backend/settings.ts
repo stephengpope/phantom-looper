@@ -148,6 +148,8 @@ export const DEFAULTS = {
   max_read_bytes: 262_144,
   max_search_results: 200,
   max_bash_output_bytes: 1_048_576,
+  // ── database console ────────────────────────────────────────────────────
+  db_ui_enabled: false as boolean,
   // ── telegram ──────────────────────────────────────────────────────────────
   // The bot as a client of this server (phantom-backend/telegram/). The
   // webhook URL is never a setting — it is always https://
@@ -302,6 +304,7 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   supervisor_base_url: 'Endpoint when the supervisor\'s provider is openai-compatible. Empty inherits the coding agent\'s only while the provider matches.',
   supervisor_reasoning: 'How much the supervisor thinks before answering. Empty = the coding agent\'s reasoning level.',
   supervisor_max_steps: 'Tool calls allowed per turn for the supervisor. Empty = unlimited.',
+  db_ui_enabled: 'Serve a browser-based database console at /db on this server\'s address. Sign in as phantom_admin with this server\'s API key. The console connects as the database owner — full access to everything, this server\'s own tables included. Turning it off stops the console\'s container.',
   boot_last_workspace: 'On (the default), launching the cli skips the workspace picker: it starts a new session in the workspace of the most recent session you drove yourself (looper-run sessions do not count). Off, launching opens the picker. --resume is unaffected.',
   telegram_enabled: 'Answer Telegram DMs. Needs the telegram_bot_token key, telegram_authorized_user, and a public address (PHANTOM_BACKEND_ADDRESS) — the webhook registers itself when all three are set.',
   telegram_authorized_user: 'Your numeric Telegram user id — the ONE sender the bot answers; everyone else is silently ignored. Get it from @userinfobot.',
@@ -322,7 +325,7 @@ export interface SettingMeta {
   /** The heading a settings screen files this under — an agent, or an
    *  area. Lives here so every client draws the same sections and a new
    *  setting must pick one. */
-  group: 'coding' | 'assistant' | 'supervisor' | 'general' | 'board' | 'crons' | 'sessions' | 'containers' | 'git' | 'limits' | 'telegram';
+  group: 'coding' | 'assistant' | 'supervisor' | 'general' | 'board' | 'crons' | 'sessions' | 'containers' | 'git' | 'limits' | 'database' | 'telegram';
   /** The sub-heading inside an agent's group. */
   subgroup?: 'model' | 'compaction' | 'voice';
   /** What to call this setting on screen. The key is the identifier — it is
@@ -440,6 +443,7 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
   supervisor_reasoning: { type: 'string', label: 'reasoning', group: 'supervisor', subgroup: 'model', nullable: true, choices: REASONINGS },
   supervisor_max_steps: { type: 'number', label: 'steps per turn', group: 'supervisor', subgroup: 'model', unit: 'count', min: 1, nullable: true },
   boot_last_workspace: { type: 'boolean', label: 'boot into last workspace', group: 'sessions' },
+  db_ui_enabled: { type: 'boolean', label: 'database console', group: 'database' },
   telegram_enabled: { type: 'boolean', label: 'telegram', group: 'telegram' },
   telegram_authorized_user: { type: 'string', label: 'authorized user id', group: 'telegram', nullable: true },
   telegram_reply_mode: { type: 'string', label: 'reply mode', group: 'telegram',

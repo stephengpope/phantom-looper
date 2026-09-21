@@ -50,6 +50,7 @@ import { TelegramEngine } from './telegram/engine.js';
 import { refreshWorkState } from './git/workRefresh.js';
 import { InstantSync } from './git/instantSync.js';
 import { FolderWatcher } from './git/folderWatcher.js';
+import { reconcileDbUi } from './api/routes/dbUi.js';
 import { logger, errStr } from './log.js';
 
 const log = logger('boot');
@@ -374,6 +375,14 @@ async function main() {
 
   await app.listen({ port: env.port, host: '0.0.0.0' });
   log.info({ port: env.port, version: VERSION }, 'phantom-backend up');
+
+  // Database console lifecycle: stop CloudBeaver if the setting is off,
+  // start it when toggled on. The boot reconciliation catches the container
+  // that compose started; the settings listener handles ongoing changes.
+  void reconcileDbUi(docker ?? undefined, settings);
+  settingsEvents.subscribe((e) => {
+    if (e.keys.includes('db_ui_enabled')) void reconcileDbUi(docker ?? undefined, settings);
+  });
 
   // The looper — built after listen: its turns' TOOLS are clients of this
   // server's own surface (the same tools every client runs), so the routes

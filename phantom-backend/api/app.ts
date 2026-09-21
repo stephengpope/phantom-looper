@@ -48,6 +48,7 @@ import { tasksRoutes } from './routes/tasks.js';
 import { telegramRoutes } from './routes/telegram.js';
 import { presetRoutes } from './routes/presets.js';
 import { cronRoutes } from './routes/crons.js';
+import { dbUiRoutes } from './routes/dbUi.js';
 
 export interface AppCtx {
   // The row owners — one object per table, each the ONLY door to its rows.
@@ -162,11 +163,17 @@ export async function buildApp(ctx: AppCtx) {
   const app = Fastify({ logger: false, forceCloseConnections: true });
 
   // ── outer shell: reveal nothing ────────────────────────────────────────
-  // Any request that lands outside /api gets a bare 401 with no body — no
-  // envelope, no framework fingerprint, no confirmation that anything exists.
-  // Scanners and probes learn nothing.
+  // Any request that lands outside /api and /db gets a bare 401 with no
+  // body — no envelope, no framework fingerprint, no confirmation that
+  // anything exists. Scanners and probes learn nothing.
   app.setNotFoundHandler((_req, reply) => { reply.code(401).send(); });
   app.setErrorHandler((_e, _req, reply) => { reply.code(401).send(); });
+
+  // ── /db: the database console ─────────────────────────────────────────
+  // CloudBeaver, proxied. Basic auth (phantom_admin + the API key), not
+  // bearer — a browser cannot send bearer by typing a URL. The route's own
+  // onRequest hook handles auth and the db_ui_enabled gate.
+  dbUiRoutes(app, ctx.settings, ctx.apiKey);
 
   // ── /api: the real surface ─────────────────────────────────────────────
   await app.register(async (api) => {

@@ -25,7 +25,7 @@ export const LOG_MAX_TAIL = 1000;
 
 /** The stack's containers a service name may mean — the label the compose
  *  file sets, never a container name (compose generates those). */
-export const LOG_SERVICES = ['api', 'postgres', 'caddy', 'updater', 'autoheal'] as const;
+export const LOG_SERVICES = ['api', 'postgres', 'caddy', 'updater', 'autoheal', 'cloudbeaver'] as const;
 
 /** A refusal with a name — the routes map the code to a status. */
 export class SystemError extends Error {

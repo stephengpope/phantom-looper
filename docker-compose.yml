@@ -56,6 +56,10 @@ services:
       # `postgres` host in AGENT_DATABASE_URL resolves; otherwise containers
       # stay on Docker's default bridge with no path to the stack.
       WORKSPACE_NETWORK: phantom-backend_default
+      # The database console (CloudBeaver). The API proxies /db to it and
+      # manages its container lifecycle based on the db_ui_enabled setting.
+      DB_UI_URL: http://cloudbeaver:8978
+      DB_UI_DSN: postgres://phantom:${POSTGRES_PASSWORD:?}@postgres:5432/phantom
       # Where POST /update drops the requested release tag for the updater
       # sidecar (shared volume; the sidecar polls it).
       UPDATE_TRIGGER_DIR: /trigger
@@ -107,6 +111,25 @@ services:
       SYSTEM: 0
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  # The database console at /db — CloudBeaver, proxied by the API. No published
+  # ports: the only way in is through the API, which checks db_ui_enabled and
+  # the API key. The API stops this container at boot when the setting is off,
+  # and starts/stops it when the setting changes — so it uses zero resources
+  # when disabled.
+  cloudbeaver:
+    image: dbeaver/cloudbeaver:26.2.0@sha256:c06c1859700bd9202d9d49ebc10ee2512d745997d05e7ca6423267b227af1ca7
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # rootURI alone. Setting CLOUDBEAVER_SERVICE_URI as well serves the API
+      # at /db/db/api/ — see the note in cloudbeaver/cloudbeaver.conf.
+      CLOUDBEAVER_ROOT_URI: /db/
+    volumes:
+      - ./cloudbeaver/cloudbeaver.conf:/opt/cloudbeaver/conf/cloudbeaver.conf:ro
+      - cloudbeaver-data:/opt/cloudbeaver/workspace
 
   # HTTPS terminator + reverse proxy — the ONLY public surface, and only with
   # the `https` profile (install.sh turns it on via COMPOSE_PROFILES in .env;
@@ -179,6 +202,7 @@ volumes:
   pg-data:
   phantom-looper-workspaces:
     name: phantom-looper-workspaces   # fixed name — the API references it by name for subpath mounts
+  cloudbeaver-data:
   caddy-data:
   caddy-config:
   updater-trigger:
