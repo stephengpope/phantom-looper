@@ -140,7 +140,7 @@ export const DEFAULTS = {
   // workspace-only (a notes repo wants it, a code repo usually does not);
   // the two timings are global with a workspace override.
   instant_sync: false as boolean,
-  instant_sync_push_debounce_ms: 30_000,
+  instant_sync_push_debounce_ms: 10_000,
   instant_sync_pull_interval_ms: 5_000,
   // ── limits ────────────────────────────────────────────────────────────────
   bash_timeout_ms: 120_000 as number | null,   // two minutes, as OpenCode; the agent passes a longer one per command

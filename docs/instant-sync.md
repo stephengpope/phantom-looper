@@ -16,13 +16,13 @@ One beat per checkout, every pull interval, in order:
 | step | what | setting | default |
 |---|---|---|---|
 | 1 | auto-pull — its first step is a plain `git fetch` of base; nothing new and it stops there | `instant_sync_pull_interval_ms` | 5 s |
-| 2 | auto-push — only when a file changed and the files have then been quiet for the debounce | `instant_sync_push_debounce_ms` | 30 s |
+| 2 | auto-push — only when a file changed and the files have then been quiet for the debounce | `instant_sync_push_debounce_ms` | 10 s |
 
 The watcher does nothing but record when the last file changed. The beat
 knows no git: it calls the two functions and logs a success; a refusal
 (the checkout held by a manual sync, a rebase left for the agent) comes
 back quietly and the next beat asks again. A push lands on the first beat
-after the debounce: 30–35 s after the last edit. A push refused because the
+after the debounce: 10–15 s after the last edit. A push refused because the
 checkout was held stays pending for the next beat.
 
 The switch is workspace-only (`/workspace` → `e`). The debounce and the
