@@ -21,7 +21,7 @@
 //
 //   A session is SKIPPED, never forced, when it is busy (a turn holds a lock
 //   on its folder, or a background task runs there) or its backup fails
-//   (retried after RETRY_FAILED_MS). So the disk can only stay full when
+//   (tried again on the next run). So the disk can only stay full when
 //   what is left is busy, cannot be backed up, or one session alone fills
 //   it — and the final log names those sessions.
 //
@@ -56,11 +56,6 @@ const BACKUP_IDLE_MS = 5 * 60_000;
 /** The free-space floor: under this, the disk is too full whatever the
  *  percent setting says. */
 export const MIN_FREE_GB = 30;
-
-/** A session whose backup (or delete) failed is left alone this long before
- *  disk cleanup tries it again — a broken checkout fails the same way every
- *  time, and retrying it every minute only fills the log. */
-const RETRY_FAILED_MS = 60 * 60_000;
 
 export interface DiskState { usedPct: number; freeGB: number }
 
@@ -153,9 +148,6 @@ export interface CleanupDeps {
   backup: (s: SessionRow, w: WorkspaceRow, whenSafe: () => Promise<void>) => Promise<PushResult | 'busy'>;
   /** The container, then the files (which refuses anything not on origin). */
   deleteSession: (s: SessionRow) => Promise<void>;
-  /** Session id -> when its backup or delete last failed. Lives across runs. */
-  failed: Map<string, number>;
-  now: () => number;
 }
 
 /** DISK CLEANUP — the loop. See the file header for the rules. */
@@ -181,8 +173,6 @@ export async function diskCleanup(d: CleanupDeps): Promise<void> {
     if (!tooFull(await d.measure(), d.pct)) break;
 
     if (busy.has(s.id)) { left.busy.push(s.id); continue; }
-    const failedAt = d.failed.get(s.id);
-    if (failedAt !== undefined && d.now() - failedAt < RETRY_FAILED_MS) { left.failed.push(s.id); continue; }
 
     let deleted = false;
     const r = await d.backup(s, w, async () => {
@@ -198,14 +188,12 @@ export async function diskCleanup(d: CleanupDeps): Promise<void> {
     });
 
     if (deleted) {
-      d.failed.delete(s.id);
       log.info({ session: s.id, result: r }, 'disk cleanup deleted session (work is on its branch)');
     } else if (r === 'busy') {
       left.busy.push(s.id);
     } else {
-      d.failed.set(s.id, d.now());
       left.failed.push(s.id);
-      log.warn({ session: s.id, result: r }, `disk cleanup skipped session — retrying in ${RETRY_FAILED_MS / 60_000} min`);
+      log.warn({ session: s.id, result: r }, 'disk cleanup skipped session — not backed up');
     }
   }
   await d.removeOldImages();
@@ -218,9 +206,6 @@ export async function diskCleanup(d: CleanupDeps): Promise<void> {
     log.info(rounded(end), 'disk cleanup done — disk healthy');
   }
 }
-
-/** Failures remembered across runs (see RETRY_FAILED_MS). */
-const failed = new Map<string, number>();
 
 /** Disk cleanup against the real system. */
 export async function pressureSweep(
@@ -241,7 +226,5 @@ export async function pressureSweep(
       await containers.remove(s.id);
       await sessions.destroy(s, { force: false });
     },
-    failed,
-    now: Date.now,
   });
 }

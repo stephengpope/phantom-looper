@@ -23,7 +23,6 @@ function world(opts: {
   freeGB: number;
   busy?: string[];
   backupFails?: string[];
-  failed?: Map<string, number>;
 }) {
   let free = opts.freeGB;
   const TOTAL = 1000;
@@ -52,8 +51,6 @@ function world(opts: {
       calls.push(`delete:${s.id}`);
       free += rows.find((r) => r.s.id === s.id)!.gb;
     },
-    failed: opts.failed ?? new Map(),
-    now: () => NOW,
   };
   return { deps, calls, deleted: () => calls.filter((c) => c.startsWith('delete:')).map((c) => c.slice(7)) };
 }
@@ -90,32 +87,21 @@ test('busy sessions are skipped, never backed up or deleted', async () => {
   assert.deepEqual(w.deleted(), ['idle']);
 });
 
-test('failed backup: skipped, remembered, not retried within the hour', async () => {
-  const failed = new Map<string, number>();
-  const w = world({
-    sessions: [{ id: 'broken', ageHours: 100, gb: 500 }, { id: 'ok', ageHours: 50, gb: 1 }],
-    freeGB: 10,
-    backupFails: ['broken'],
-    failed,
-  });
-  await diskCleanup(w.deps);
-  assert.deepEqual(w.deleted(), ['ok']);
-  assert.equal(failed.get('broken'), NOW);
-
-  const again = world({
-    sessions: [{ id: 'broken', ageHours: 100, gb: 500 }],
-    freeGB: 10, backupFails: ['broken'], failed,
-  });
-  await diskCleanup(again.deps);
-  assert.ok(!again.calls.includes('backup:broken'), 'not retried within the hour');
-
-  failed.set('broken', NOW - HOUR - 1);
-  const later = world({
-    sessions: [{ id: 'broken', ageHours: 100, gb: 500 }],
-    freeGB: 10, backupFails: ['broken'], failed,
-  });
-  await diskCleanup(later.deps);
-  assert.ok(later.calls.includes('backup:broken'), 'retried after the hour');
+test('failed backup: skipped, never deleted, tried again next run', async () => {
+  const run = async () => {
+    const w = world({
+      sessions: [{ id: 'broken', ageHours: 100, gb: 500 }, { id: 'ok', ageHours: 50, gb: 1 }],
+      freeGB: 10,
+      backupFails: ['broken'],
+    });
+    await diskCleanup(w.deps);
+    return w;
+  };
+  const first = await run();
+  assert.deepEqual(first.deleted(), ['ok']);
+  const next = await run();
+  assert.ok(next.calls.includes('backup:broken'), 'tried again on the next run');
+  assert.ok(!next.deleted().includes('broken'));
 });
 
 test('old images are removed before each check and once at the end', async () => {
