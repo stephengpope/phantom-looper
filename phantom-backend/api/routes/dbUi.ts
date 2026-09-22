@@ -81,7 +81,7 @@ function connectionFromDsn(dsn: string) {
     saveCredentials: true,
     // Show every database on the server (including agent workspace_* dbs),
     // not just the one named in the connection string.
-    providerProperties: { '@dbeaver-show-non-default-db': 'true' },
+    providerProperties: { '@dbeaver-show-non-default-db@': 'true' },
   };
 }
 
