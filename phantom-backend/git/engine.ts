@@ -59,15 +59,21 @@ export class GitEngine {
    *  rebase, no landing — main is never touched, and a later auto-push
    *  squashes these wip commits into its one real commit (the message is
    *  written from the whole diff, so backup messages never reach base).
-   *  'busy' = the session is being driven; nothing was written. */
-  async backup(s: SessionRow, workspace: WorkspaceRow): Promise<PushResult | 'busy'> {
+   *  'busy' = the session is being driven; nothing was written.
+   *
+   *  `whenSafe` runs only when everything is on origin ('pushed' or
+   *  'nothing'), STILL under the lock — the disk sweep deletes the files
+   *  there, so no turn can start between the backup and the delete. */
+  async backup(s: SessionRow, workspace: WorkspaceRow, whenSafe?: () => Promise<void>): Promise<PushResult | 'busy'> {
     if (!(await this.sessions.acquireLock(s, GIT_CLIENT_ID, LOCK_TTL_MS, 'backup'))) return 'busy';
     const heartbeat = setInterval(() => {
       void this.sessions.renewLock(s.id, GIT_CLIENT_ID, LOCK_TTL_MS)
         .catch((e) => log.warn({ session: s.id, err: errStr(e) }, 'backup lock renewal failed'));
     }, RENEW_MS);
     try {
-      return await this.push(s, workspace);
+      const r = await this.push(s, workspace);
+      if (whenSafe && (r === 'pushed' || r === 'nothing')) await whenSafe();
+      return r;
     } finally {
       clearInterval(heartbeat);
       await this.sessions.releaseLock(s.id, GIT_CLIENT_ID);

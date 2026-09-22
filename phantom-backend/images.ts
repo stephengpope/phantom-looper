@@ -175,8 +175,13 @@ export class Images {
     const live = currents
       .map(splitRef)
       .flatMap(({ repo, tag }) => { const r = releaseOf(tag); return r ? [{ repo, release: r }] : []; });
+    // An image a container still uses (running or stopped) cannot go —
+    // Docker refuses. Skip it instead of asking and logging the refusal on
+    // every sweep; it goes on the sweep after its last container does.
+    const inUse = new Set((await this.docker.listContainers({ all: true })).map((c) => c.ImageID));
     const stale = new Set<string>();
     for (const img of await this.docker.listImages()) {
+      if (inUse.has(img.Id)) continue;
       for (const ref of img.RepoTags ?? []) {
         const { repo, tag } = splitRef(ref);
         const release = releaseOf(tag);

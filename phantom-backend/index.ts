@@ -278,13 +278,20 @@ async function main() {
 
   // One loop drives both the pool tick and the session sweep. The interval is a
   // SETTING read per tick, so a change takes effect without a restart.
-  // Folders with a running container not touched for the threshold and with
-  // no running background task — the set safe to reap. A task's session is
-  // the folder's owner (only a coder has `bash`), so the ids line up.
+  // THE busy rule, for the idle timeout and disk cleanup alike: a folder is
+  // busy while a background task runs there or any session on it (coder,
+  // supervisor, assistant) holds a live lock — a turn is running. A task's
+  // session is the folder's owner (only a coder has `bash`), so the ids line up.
+  const busyFolders = async (ids: string[]): Promise<Set<string>> => {
+    const [tasks, held] = await Promise.all([backgroundTasks.sessionsWithRunning(ids), sessions.foldersHeld(ids)]);
+    return new Set([...tasks, ...held]);
+  };
+  // Folders with a running container not touched for the threshold and not
+  // busy — the set the idle timeout reaps.
   const idleContainerFolders = async (ms: number): Promise<string[]> => {
     const active = await containers.activeFolders();
     const idle = await folders.listIdle(active, ms);
-    const busy = await backgroundTasks.sessionsWithRunning(idle);
+    const busy = await busyFolders(idle);
     return idle.filter((id) => !busy.has(id));
   };
 
@@ -295,7 +302,7 @@ async function main() {
       await idleBackupSweep(workspaces, sessions, engine).catch((e) => log.error({ err: errStr(e) }, 'idle backup sweep threw'));
       const idleMs = await settings.resolve('container_idle_ms').catch(() => 30 * 60_000);
       await containers.reap(Number(idleMs), idleContainerFolders).catch((e) => log.error({ err: errStr(e) }, 'container reap threw'));
-      await pressureSweep(settings, workspaces, sessions, paths, images, containers, engine).catch((e) => log.error({ err: errStr(e) }, 'pressure sweep threw'));
+      await pressureSweep(settings, workspaces, sessions, paths, images, containers, engine, busyFolders).catch((e) => log.error({ err: errStr(e) }, 'pressure sweep threw'));
       const ms = await settings.resolve('maintenance_interval_ms').catch(() => 60_000);
       await new Promise((r) => setTimeout(r, Number(ms)));
     }

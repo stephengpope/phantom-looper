@@ -841,7 +841,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         if (hasFiles) {
           await ctx.sessions.destroy(s, { force: req.query.force === 'true' });
           await ctx.engine?.detach(s.id);
-          await ctx.fs?.containers.remove(s.id);
+          await ctx.fs?.containers.remove(s.id).catch((e: Error) => {
+            log.warn({ session: s.id, err: e.message }, 'files deleted but the container could not be removed');
+          });
         }
         if (!purge) return ok({ destroyed: s.id });
         // The row goes last: its overrides with it, the transcript on it.

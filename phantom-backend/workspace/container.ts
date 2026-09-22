@@ -247,19 +247,28 @@ export class ContainerManager {
     return [`AGENT_DATABASE_URL=${await this.opts.databases.urlFor(workspace.id)}`];
   }
 
+  /** Remove the folder's container. None there (404) is fine — that is the
+   *  goal; any other failure throws, so no caller logs a removal that did
+   *  not happen. */
   async remove(folderId: string): Promise<void> {
-    await this.docker.getContainer(this.name(folderId)).remove({ force: true, v: true }).catch(() => {});
+    await this.docker.getContainer(this.name(folderId)).remove({ force: true, v: true }).catch((e) => {
+      if ((e as { statusCode?: number }).statusCode !== 404) throw e;
+    });
     await this.opts.onRemoved?.(folderId)
       .catch((e) => log.warn({ folder: folderId, err: errStr(e) }, 'onRemoved listener failed'));
   }
 
-  /** Kill idle containers. `idleFolders` answers from the folder's lastUsedAt
-   *  and background_tasks — no in-memory state. */
+  /** Kill idle containers. `idleFolders` answers from the folder's lastUsedAt,
+   *  background_tasks and session locks — no in-memory state. */
   async reap(idleMs: number, idleFolders: (idleMs: number) => Promise<string[]>): Promise<void> {
     const stale = await idleFolders(idleMs);
     for (const folderId of stale) {
-      await this.remove(folderId);
-      log.info({ folder: folderId }, 'idle workspace container removed');
+      try {
+        await this.remove(folderId);
+        log.info({ folder: folderId }, 'idle workspace container removed');
+      } catch (e) {
+        log.warn({ folder: folderId, err: errStr(e) }, 'idle workspace container could not be removed');
+      }
     }
   }
 }

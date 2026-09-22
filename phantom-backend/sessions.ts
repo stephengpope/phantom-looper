@@ -22,7 +22,7 @@
 // publish the same way under the folder's id (Folders). Lock events proper
 // stay with their callers: a hold means different things to a window (its
 // spinner) and to a git sync (nothing to show), so the caller says.
-import { and, desc, eq, ilike, inArray, isNull, isNotNull, lt, ne, not, or, count, sql as sqlRaw } from 'drizzle-orm';
+import { and, desc, eq, gt, ilike, inArray, isNull, isNotNull, lt, ne, not, or, count, sql as sqlRaw } from 'drizzle-orm';
 import type { Db } from './db/client.js';
 import type { PgColumn } from 'drizzle-orm/pg-core';
 // `folders` and `cards` appear here for JOINs only: every session read
@@ -410,6 +410,16 @@ export class Sessions {
         .where(and(...filters)),
     ]);
     return { sessions: rows, total };
+  }
+
+  /** Of `folderIds`, those where a turn is running: any session on the
+   *  folder — the coder, its supervisor, the assistant — holds a live lock. */
+  async foldersHeld(folderIds: string[]): Promise<Set<string>> {
+    if (!folderIds.length) return new Set();
+    const rows = await this.db.select({ folderId: sessions.folderId }).from(sessions)
+      .where(and(inArray(sessions.folderId, folderIds),
+        isNotNull(sessions.lockedBy), gt(sessions.lockExpiresAt, new Date())));
+    return new Set(rows.flatMap((r) => (r.folderId ? [r.folderId] : [])));
   }
 
   /** The sessions that own files on disk — the disk sweeps' set: each is the
