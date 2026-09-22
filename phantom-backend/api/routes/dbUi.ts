@@ -79,6 +79,9 @@ function connectionFromDsn(dsn: string) {
     userName: decodeURIComponent(u.username),
     userPassword: decodeURIComponent(u.password),
     saveCredentials: true,
+    // Show every database on the server (including agent workspace_* dbs),
+    // not just the one named in the connection string.
+    providerProperties: { '@dbeaver-show-non-default-db': 'true' },
   };
 }
 
@@ -117,7 +120,14 @@ async function bootstrap(base: string, dsn: string | undefined): Promise<void> {
     'query($p:ID!){connections:userConnections(projectId:$p){id name}}',
     { p: 'g_GlobalConfiguration' },
   ), jar2, admin).catch(() => ({ connections: [] }));
-  if ((connections ?? []).some((c: { name: string }) => c.name === conn.name)) return;
+  const existing = (connections ?? []).find((c: { name: string }) => c.name === conn.name) as
+    { id: string; name: string } | undefined;
+  if (existing) {
+    await gql(base, q(
+      'mutation($id:ID!,$p:ID!){deleteConnection(id:$id,projectId:$p)}',
+      { id: existing.id, p: 'g_GlobalConfiguration' },
+    ), jar2, admin).catch(() => {});
+  }
 
   await gql(base, q(
     'mutation($p:ID!,$c:ConnectionConfig!){createConnection(projectId:$p,config:$c){id name}}',
