@@ -9,7 +9,7 @@ test('every turn is relayed to the session feed: turn-start, parts in order, tur
   const h = harness();
   TestAgent.script = [{ text: 'hello there', tools: [{ name: 'echo', input: { text: 'x' } }] }, { text: 'done' }];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
-  await a.say('hi');
+  await a.sendUserMessage('hi');
   const relayed = h.fake.sessions.get(a.sessionId)!.relayed;
   assert.equal(relayed[0]!.event, 'turn-start');
   assert.equal(relayed[0]!.agent, 'coding');
@@ -31,7 +31,7 @@ test('a stop published on the feed by someone else interrupts the running turn',
   const h = harness();
   TestAgent.script = [{ text: 'one two three four five six seven', chunkDelayMs: 40 }];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
-  const p = a.say('go');
+  const p = a.sendUserMessage('go');
   await wait(120);
   h.fake.publishInterrupt(a.sessionId);
   const r = await p;
@@ -45,7 +45,7 @@ test('a transport that cannot stream never opens the feed; the relay still runs'
   h.fake.backend.canStream = false;
   TestAgent.script = [{ text: 'fine' }];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
-  await a.say('hi');
+  await a.sendUserMessage('hi');
   assert.equal(h.fake.requests.filter((r) => r.method === 'GET' && r.path.endsWith('/events')).length, 0);
   assert.ok(h.fake.sessions.get(a.sessionId)!.relayed.length > 2);
 });
@@ -64,7 +64,7 @@ test('a relay failure is one notice, never an error, and the turn completes', as
     return origFetch(input, init);
   };
   const b = await TestAgent.resume(h.fake.backend, h.handlers, a.sessionId);
-  const r = await b.say('hi');
+  const r = await b.sendUserMessage('hi');
   assert.equal(r?.outcome, 'done');
   assert.deepEqual(h.errors, []);
   assert.equal(h.notices.filter((n) => n.kind === 'info' && /relay stopped/.test(n.text)).length, 1);
@@ -75,7 +75,7 @@ test('the row is re-read at turn start: plan mode on the row makes mutating tool
   TestAgent.script = [{ tools: [{ name: 'write_note', input: { text: 'n' } }] }, { text: 'ok' }];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
   h.fake.sessions.get(a.sessionId)!.planMode = true;
-  await a.say('go');
+  await a.sendUserMessage('go');
   const toolLine = h.fake.linesOf(a.sessionId).find((l) => l.type === 'message' && (l.message as { role: string }).role === 'tool')!;
   const out = (toolLine.message as { content: Array<{ output: { value: { error: { code: string } } } }> }).content[0]!.output.value;
   assert.equal(out.error.code, 'readonly');
@@ -85,5 +85,5 @@ test('the provider saying the context is too long is its own error code', async 
   const h = harness();
   TestAgent.script = [{ error: new Error('prompt is too long: 210000 tokens > 200000 maximum') }];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
-  await assert.rejects(a.say('hi'), (e: Error & { code: string }) => e.code === 'context_too_long');
+  await assert.rejects(a.sendUserMessage('hi'), (e: Error & { code: string }) => e.code === 'context_too_long');
 });

@@ -1,7 +1,7 @@
 // The SECRETS kit — secret_list, secret_get: the stored secrets, over the
 // /secrets routes. Read-only by design. Bound to the session's workspace:
 // its secrets shadow global ones by name.
-import { tool, type Tool } from 'ai';
+import { tool } from 'ai';
 import { z } from 'zod';
 import { callRaw } from '../backend.js';
 import type { BuiltTools, ToolKit, ToolKitContext } from '../toolkit.js';

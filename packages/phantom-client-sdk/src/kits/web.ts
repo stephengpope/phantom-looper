@@ -1,7 +1,7 @@
 // The WEB kit — web_search, web_fetch. Thin clients on the /web routes;
 // fetched pages land in the session's /workspace/web/, where `read` opens
 // them. Nothing here mutates the repo.
-import { tool, type Tool } from 'ai';
+import { tool } from 'ai';
 import { z } from 'zod';
 import { callRaw } from '../backend.js';
 import type { BuiltTools, ToolKit, ToolKitContext } from '../toolkit.js';

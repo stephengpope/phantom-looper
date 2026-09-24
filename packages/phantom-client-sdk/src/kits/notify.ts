@@ -1,7 +1,7 @@
 // The NOTIFY kit — send_message: the agent DMs the user on Telegram, outside
 // its reply, over POST /sessions/:id/notify. Built only when the global
 // `telegram_enabled` is on: Telegram off means no tool.
-import { tool, type Tool } from 'ai';
+import { tool } from 'ai';
 import { z } from 'zod';
 import { call, callRaw } from '../backend.js';
 import { PhantomError } from '../errors.js';

@@ -12,7 +12,7 @@
 //                         verdict; per-column choices) + kanban_card_items
 //   loopBlockToolKit(card)              — kanban_card_block (the coder's one
 //                         board power in a run; ends the run)
-import { tool, type Tool } from 'ai';
+import { tool } from 'ai';
 import { z } from 'zod';
 import { callRaw, type PhantomBackend } from '../backend.js';
 import type { BuiltTools, ToolKit, ToolKitContext } from '../toolkit.js';

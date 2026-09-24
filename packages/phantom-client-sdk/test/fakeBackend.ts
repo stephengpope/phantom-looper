@@ -162,13 +162,7 @@ export class FakeBackend {
       const messages = s.backdoor.splice(0);
       return this.ok({ messages });
     }
-    if ((m = p.match(/^\/sessions\/([^/]+)\/backdoor\/restore$/)) && method === 'POST') {
-      // A turn that failed before its record held them hands the notes back,
-      // ahead of anything queued since.
-      const s = this.sessions.get(m[1]!)!;
-      s.backdoor.unshift(...(body as { messages: string[] }).messages);
-      return this.ok({ restored: true });
-    }
+
     if ((m = p.match(/^\/sessions\/([^/]+)\/follow$/)) && method === 'POST') {
       const s = this.sessions.get(m[1]!)!;
       const b = body as { session_id: string };

@@ -3,7 +3,7 @@
 // `cron_enabled` is on: crons off means no cron tools. The rules (what a
 // schedule may be, name clashes) live on the server; its refusals come back
 // verbatim, written for the agent.
-import { tool, type Tool } from 'ai';
+import { tool } from 'ai';
 import { z } from 'zod';
 import { call, callRaw } from '../backend.js';
 import { PhantomError } from '../errors.js';

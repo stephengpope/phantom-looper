@@ -30,7 +30,7 @@ test('a plain turn: user + assistant + usage recorded after the model answered; 
   const a = await TestAgent.create(h.fake.backend, h.handlers);
   const parts: string[] = [];
   a.on('part', (p) => parts.push(p.type));
-  const r = await a.say('hi');
+  const r = await a.sendUserMessage('hi');
   assert.equal(r?.outcome, 'done');
   assert.equal(r?.text, 'hello there');
   const lines = h.fake.linesOf(a.sessionId);
@@ -60,7 +60,7 @@ test('tool steps: assistant recorded before the tool result, each result as it l
     { text: 'done' },
   ];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
-  const r = await a.say('go');
+  const r = await a.sendUserMessage('go');
   assert.equal(r?.outcome, 'done');
   const lines = h.fake.linesOf(a.sessionId);
   const kinds = lines.map((l) => l.type === 'message' ? (l.message as { role: string }).role : l.type);
@@ -81,7 +81,7 @@ test('readonly: a mutating tool is refused at execute time, the reader still run
   ];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
   a.setReadonly(() => true);
-  await a.say('go');
+  await a.sendUserMessage('go');
   const results = h.fake.linesOf(a.sessionId)
     .filter((l) => l.type === 'message' && (l.message as { role: string }).role === 'tool')
     .map((l) => (l.message as { content: Array<{ toolName: string; output: { value: unknown } }> }).content[0]!);
@@ -94,13 +94,13 @@ test('model failure: nothing is recorded, nothing is kept — the next message g
   const h = harness();
   TestAgent.script = [{ error: new Error('overloaded') }, { text: 'ok' }];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
-  await assert.rejects(a.say('hi'), (e: Error & { code: string }) => e.code === 'model_error' && /overloaded/.test(e.message));
+  await assert.rejects(a.sendUserMessage('hi'), (e: Error & { code: string }) => e.code === 'model_error' && /overloaded/.test(e.message));
   assert.equal(h.fake.linesOf(a.sessionId).length, 0);
   assert.equal(a.nudges.length, 0);
   assert.equal(h.errors.length, 1);
   assert.equal(h.errors[0]!.code, 'model_error');
   assert.equal(h.fake.sessions.get(a.sessionId)!.lockedBy, null);
-  await a.say('next');
+  await a.sendUserMessage('next');
   const users = h.fake.linesOf(a.sessionId)
     .filter((l) => l.type === 'message' && (l.message as { role: string }).role === 'user')
     .map((l) => (l.message as { content: string }).content);
@@ -112,10 +112,10 @@ test('a turn refused because the session is busy elsewhere keeps nothing', async
   TestAgent.script = [{ text: 'ok' }];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
   h.fake.sessions.get(a.sessionId)!.lockedBy = 'another-window';
-  await assert.rejects(a.say('hi'), (e: Error & { code: string }) => e.code === 'session_locked');
+  await assert.rejects(a.sendUserMessage('hi'), (e: Error & { code: string }) => e.code === 'session_locked');
   assert.equal(a.nudges.length, 0);
   h.fake.sessions.get(a.sessionId)!.lockedBy = null;
-  await a.say('again');
+  await a.sendUserMessage('again');
   const users = h.fake.linesOf(a.sessionId)
     .filter((l) => l.type === 'message' && (l.message as { role: string }).role === 'user')
     .map((l) => (l.message as { content: string }).content);
@@ -128,7 +128,7 @@ test('interrupt mid-tool: finished calls keep results, the cut one gets INTERRUP
     { text: 'working', tools: [{ name: 'echo', input: { text: 'fast' } }, { name: 'slow', input: { ms: 5000 } }] },
   ];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
-  const p = a.say('go');
+  const p = a.sendUserMessage('go');
   await wait(150);
   a.interrupt();
   const r = await p;
@@ -150,7 +150,7 @@ test('interrupt mid-model-call: partial text and the user message are recorded',
   const h = harness();
   TestAgent.script = [{ text: 'one two three four five six', chunkDelayMs: 30 }];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
-  const p = a.say('go');
+  const p = a.sendUserMessage('go');
   await wait(200);
   a.interrupt();
   const r = await p;
@@ -169,9 +169,9 @@ test('nudge mid-turn rides the next model call and is recorded with that step', 
     { text: 'heard you' },
   ];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
-  const p = a.say('start');
+  const p = a.sendUserMessage('start');
   await wait(30);
-  const queued = await a.say('also this');
+  const queued = await a.sendUserMessage('also this');
   assert.equal(queued, null);
   await p;
   const lines = h.fake.linesOf(a.sessionId);
@@ -191,9 +191,9 @@ test('a nudge left over at turn end starts the next turn by itself', async () =>
   const a = await TestAgent.create(h.fake.backend, h.handlers);
   const ends: string[] = [];
   a.on('turn-end', (r) => ends.push(r.text));
-  const p = a.say('one');
+  const p = a.sendUserMessage('one');
   await wait(20);
-  await a.say('two');   // queued during the final model call: no next call to ride
+  await a.sendUserMessage('two');   // queued during the final model call: no next call to ride
   await p;
   await wait(100);
   assert.deepEqual(ends, ['first', 'second']);
@@ -201,20 +201,19 @@ test('a nudge left over at turn end starts the next turn by itself', async () =>
   assert.deepEqual(h.errors, []);
 });
 
-test('injections never start a turn and go in ahead of the next nudge; server backdoor facts too', async () => {
+test('injections: queued for the session, they start no turn and ride the next turn ahead of the user', async () => {
   const h = harness();
   TestAgent.script = [{ text: 'ok' }];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
-  a.inject('a command exited');
+  h.fake.sessions.get(a.sessionId)!.backdoor.push('a command exited', 'new code arrived');
   await wait(20);
   assert.equal(a.busy, false);
   assert.equal(h.fake.linesOf(a.sessionId).length, 0);
-  h.fake.sessions.get(a.sessionId)!.backdoor.push('a file was dropped');
-  await a.say('what happened?');
+  await a.sendUserMessage('what happened?');
   const users = h.fake.linesOf(a.sessionId)
     .filter((l) => l.type === 'message' && (l.message as { role: string }).role === 'user')
     .map((l) => (l.message as { content: string }).content);
-  assert.deepEqual(users, ['a file was dropped', 'a command exited', 'what happened?']);
+  assert.deepEqual(users, ['a command exited', 'new code arrived', 'what happened?']);
 });
 
 test('append: a lost reply is resent with the same delivery id and lands exactly once', async () => {
@@ -222,7 +221,7 @@ test('append: a lost reply is resent with the same delivery id and lands exactly
   TestAgent.script = [{ text: 'fine' }];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
   h.fake.loseAppendReplies = 1;
-  await a.say('hi');
+  await a.sendUserMessage('hi');
   const lines = h.fake.linesOf(a.sessionId);
   assert.deepEqual(lines.map((l) => l.type), ['message', 'message', 'usage']);
   const appends = h.fake.requests.filter((r) => r.path.endsWith('/transcript/append'));
@@ -238,7 +237,7 @@ test('append: a write that fails for good stops the turn with transcript_write_f
   TestAgent.script = [{ text: 'fine' }];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
   h.fake.sessions.get(a.sessionId)!.lockedBy = 'someone-else';
-  await assert.rejects(a.say('hi'), (e: Error & { code: string }) => e.code === 'session_locked');
+  await assert.rejects(a.sendUserMessage('hi'), (e: Error & { code: string }) => e.code === 'session_locked');
   assert.equal(h.fake.linesOf(a.sessionId).length, 0);
   assert.equal(h.errors.length, 1);
 });
@@ -249,7 +248,7 @@ test('append: a count mismatch is a transcript_conflict, never a silent overwrit
   const a = await TestAgent.create(h.fake.backend, h.handlers);
   // Someone wrote a line behind our back (impossible under the lock — the fake lets us).
   h.fake.sessions.get(a.sessionId)!.lines.push(JSON.stringify({ type: 'interrupted', id: 'x', at: 'now' }));
-  await assert.rejects(a.say('hi'), (e: Error & { code: string }) => e.code === 'transcript_conflict' || e.code === 'transcript_write_failed');
+  await assert.rejects(a.sendUserMessage('hi'), (e: Error & { code: string }) => e.code === 'transcript_conflict' || e.code === 'transcript_write_failed');
   assert.equal(h.errors.length, 1);
 });
 
@@ -259,7 +258,7 @@ test('a tool error reaches the model as its result AND the client as tool-error'
   const a = await TestAgent.create(h.fake.backend, h.handlers);
   const toolErrors: string[] = [];
   a.on('tool-error', (e) => toolErrors.push(e.name));
-  const r = await a.say('go');
+  const r = await a.sendUserMessage('go');
   assert.equal(r?.text, 'recovered');
   assert.deepEqual(toolErrors, ['fails']);
   const toolLine = h.fake.linesOf(a.sessionId).find((l) => l.type === 'message' && (l.message as { role: string }).role === 'tool')!;
@@ -288,8 +287,8 @@ test('unfrozen: the prompt is built every turn and never saved', async () => {
   const h = harness();
   TestAgent.script = [{ text: 'a' }, { text: 'b' }];
   const a = await UnfrozenAgent.create(h.fake.backend, h.handlers);
-  await a.say('1');
-  await a.say('2');
+  await a.sendUserMessage('1');
+  await a.sendUserMessage('2');
   assert.equal(a.promptBuilds, 2);
   assert.equal(h.fake.sessions.get(a.sessionId)!.system_prompt, null);
   assert.equal(h.fake.requests.filter((r) => r.path.endsWith('/frozen')).length, 0);
@@ -300,10 +299,10 @@ test('the model is the server\'s answer every turn: a change reaches the next tu
   TestAgent.script = [{ text: 'a' }, { text: 'b' }];
   TestAgent.specs = [];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
-  await a.say('1');
+  await a.sendUserMessage('1');
   (h.fake.agentConfig as { model: { provider: string; model: string; apiKey: string } }).model =
-    { provider: 'openai', model: 'gpt-test', apiKey: 'sk-openai' } as never;
-  await a.say('2');
+    { provider: 'openai', model: 'gpt-test', apiKey: 'sk-openai' };
+  await a.sendUserMessage('2');
   assert.deepEqual(TestAgent.specs.map((s) => [s.provider, s.model, s.apiKey]),
     [['anthropic', 'claude-test', 'sk-ant-api-test'], ['openai', 'gpt-test', 'sk-openai']]);
   assert.deepEqual(h.errors, []);
@@ -315,13 +314,13 @@ test('someone else wrote between turns: the turn reads the transcript again firs
   const a = await TestAgent.create(h.fake.backend, h.handlers);
   const reloads: number[] = [];
   a.on('reloaded', (e) => reloads.push(e.messages.length));
-  await a.say('one');
+  await a.sendUserMessage('one');
   // Another window's turn lands on the shared transcript.
   h.fake.writeAsOther(a.sessionId, [
     { type: 'message', id: 'o1', at: 'now', message: { role: 'user', content: 'from the phone' } },
     { type: 'message', id: 'o2', at: 'now', message: { role: 'assistant', content: [{ type: 'text', text: 'second' }] } },
   ]);
-  const r = await a.say('three');
+  const r = await a.sendUserMessage('three');
   assert.equal(r?.outcome, 'done');
   assert.deepEqual(reloads, [4]);
   const users = a.messages.filter((m) => m.role === 'user').map((m) => m.content);
@@ -336,8 +335,8 @@ test('nothing moved between turns: nothing is downloaded again', async () => {
   const h = harness();
   TestAgent.script = [{ text: 'a' }, { text: 'b' }];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
-  await a.say('1');
-  await a.say('2');
+  await a.sendUserMessage('1');
+  await a.sendUserMessage('2');
   assert.equal(h.fake.requests.filter((r) => r.method === 'GET' && r.path.endsWith('/transcript')).length, 1);
 });
 
@@ -345,9 +344,9 @@ test('a stop starts nothing by itself: what is queued waits for the app', async 
   const h = harness();
   TestAgent.script = [{ tools: [{ name: 'slow', input: { ms: 5000 } }] }, { text: 'never' }];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
-  const p = a.say('go');
+  const p = a.sendUserMessage('go');
   await wait(100);
-  await a.say('queued meanwhile');
+  await a.sendUserMessage('queued meanwhile');
   a.interrupt();
   const r = await p;
   assert.equal(r?.outcome, 'interrupted');
@@ -357,28 +356,41 @@ test('a stop starts nothing by itself: what is queued waits for the app', async 
   assert.equal(a.nudges.length, 1);
 });
 
-test('server notes: a failed turn hands them back to the server; switched off, they are not pulled', async () => {
+test('injections: a failed turn takes them with it — nothing is given back', async () => {
   const h = harness();
   TestAgent.script = [{ error: new Error('overloaded') }, { text: 'ok' }];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
   const s = h.fake.sessions.get(a.sessionId)!;
   s.backdoor.push('a command exited');
-  await assert.rejects(a.say('hi'));
-  await wait(20);
-  assert.deepEqual(s.backdoor, ['a command exited']);
-  a.setServerNotes(false);
-  await a.say('again');
-  assert.deepEqual(s.backdoor, ['a command exited']);
-  assert.equal(h.fake.requests.filter((r) => r.path.endsWith('/backdoor/drain')).length, 1);
+  await assert.rejects(a.sendUserMessage('hi'));
+  assert.deepEqual(s.backdoor, []);
+  await a.sendUserMessage('again');
+  const users = h.fake.linesOf(a.sessionId)
+    .filter((l) => l.type === 'message' && (l.message as { role: string }).role === 'user')
+    .map((l) => (l.message as { content: string }).content);
+  assert.deepEqual(users, ['again']);
 });
 
-test('say() while busy queues; text waiting when the first model call starts rides it', async () => {
+test('PHANTOM_PULL_USER_MESSAGE_QUEUE=off: the queue is not pulled, and stays on the server', async () => {
+  const h = harness();
+  TestAgent.script = [{ text: 'ok' }];
+  const a = await TestAgent.create(h.fake.backend, h.handlers);
+  const s = h.fake.sessions.get(a.sessionId)!;
+  s.backdoor.push('a command exited');
+  process.env.PHANTOM_PULL_USER_MESSAGE_QUEUE = 'off';
+  try { await a.sendUserMessage('hi'); }
+  finally { delete process.env.PHANTOM_PULL_USER_MESSAGE_QUEUE; }
+  assert.deepEqual(s.backdoor, ['a command exited']);
+  assert.equal(h.fake.requests.filter((r) => r.path.endsWith('/backdoor/drain')).length, 0);
+});
+
+test('sendUserMessage while busy queues; text waiting when the first model call starts rides it', async () => {
   const h = harness();
   TestAgent.script = [{ text: 'slow', chunkDelayMs: 30 }, { text: 'next' }];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
-  const p = a.say('a');
+  const p = a.sendUserMessage('a');
   assert.equal(a.busy, true);
-  assert.equal(await a.say('b'), null);   // queued before the first call was built: rides it
+  assert.equal(await a.sendUserMessage('b'), null);   // queued before the first call was built: rides it
   await p;
   await wait(200);
   assert.equal(h.fake.sessions.get(a.sessionId)!.turnsEnded, 1);
@@ -394,7 +406,7 @@ test('a listener that throws is reported, never breaks the turn', async () => {
   TestAgent.script = [{ text: 'fine' }];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
   a.on('turn-end', () => { throw new Error('listener bug'); });
-  const r = await a.say('hi');
+  const r = await a.sendUserMessage('hi');
   assert.equal(r?.outcome, 'done');
   assert.equal(h.errors.length, 1);
   assert.match(h.errors[0]!.message, /listener bug/);
@@ -410,7 +422,7 @@ test('more than 3 prompt blocks on anthropic: a notice, not an error', async () 
     }
   }
   const a = await Wide.create(h.fake.backend as never, h.handlers as never);
-  await a.say('hi');
+  await a.sendUserMessage('hi');
   assert.ok(h.notices.some((n) => n.kind === 'cache'));
   assert.deepEqual(h.errors, []);
 });

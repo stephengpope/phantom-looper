@@ -11,7 +11,7 @@ test('compaction appends one line, replaces the in-memory prefix, and loads back
   // Four turns, then the summary call (the scripted model serves both roles here).
   TestAgent.script = [{ text: 'r1' }, { text: 'r2' }, { text: 'r3' }, { text: 'r4' }, { text: '## Objective\n- the summary' }];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
-  for (const t of ['a', 'b', 'c', 'd']) await a.say(t);
+  for (const t of ['a', 'b', 'c', 'd']) await a.sendUserMessage(t);
   assert.equal(a.messages.length, 8);
   const r = await a.compact();
   assert.ok(r);
@@ -36,8 +36,8 @@ test('auto-compaction fires after a turn whose input crossed the threshold', asy
     ...(h.fake.agentConfig as { compaction: object }).compaction, contextWindow: 1000, thresholdPct: 50 };
   TestAgent.script = [{ text: 'r1' }, { text: 'r2', usage: { input: 900, output: 5 } }, { text: 'summary text' }];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
-  await a.say('a');
-  await a.say('b');
+  await a.sendUserMessage('a');
+  await a.sendUserMessage('b');
   await wait(100);
   assert.equal(h.fake.linesOf(a.sessionId).filter((l) => l.type === 'compaction').length, 1);
   assert.deepEqual(h.errors, []);
@@ -50,8 +50,8 @@ test('the summary model on another provider gets its own key from the server\'s 
   TestAgent.script = [{ text: 'r1' }, { text: 'r2' }, { text: 'the summary' }];
   TestAgent.specs = [];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
-  await a.say('a');
-  await a.say('b');
+  await a.sendUserMessage('a');
+  await a.sendUserMessage('b');
   const r = await a.compact();
   assert.ok(r);
   const summarySpec = TestAgent.specs[TestAgent.specs.length - 1]!;

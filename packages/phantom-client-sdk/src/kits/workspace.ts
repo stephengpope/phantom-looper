@@ -55,7 +55,7 @@ export const workspaceToolKit: ToolKit = {
  *  file tools, not a failing build. */
 export const readonlyWorkspaceToolKit: ToolKit = {
   name: 'workspace',
-  version: workspaceToolKit.version,
+  version: (ctx) => workspaceToolKit.version(ctx),
   async build(ctx: ToolKitContext): Promise<BuiltTools> {
     if (!ctx.folderId) return { tools: {}, mutating: [] };
     const { tools, mutating } = await workspaceToolKit.build(ctx);

@@ -1,7 +1,7 @@
 // The base of every agent. A subclass declares its kind, how its system
 // prompt is built, and its default tool kits. The base owns everything else:
 // creating and resuming a session, freezing the prompt on the row, tools,
-// the turn, nudges and injections, interrupts, the transcript, billing,
+// the turn, the user's messages, interrupts, the transcript, billing,
 // compaction, errors and notices.
 //
 // Which model a turn runs on is never kept here: every turn asks the server
@@ -25,7 +25,7 @@ import { wrapLanguageModel } from 'ai';
 import { MessageQueue } from './queues.js';
 import { ToolKitSet, type ToolKit, type ToolKitContext } from './toolkit.js';
 import { Transcript, conversationFrom, messageLine, compactionLine, type TranscriptLine } from './transcript.js';
-import { runTurn, type TurnResult, type PendingMessages } from './turn.js';
+import { runTurn, type TurnResult } from './turn.js';
 import { interruptedResultMessage } from './messages.js';
 import { compactionDue, compactionStrategy, planCompaction, writeSummary } from './compaction.js';
 import { Relay, watchForInterrupt } from './feed.js';
@@ -98,9 +98,6 @@ export abstract class Agent {
    *  with a live flag (the cli's /plan mid-turn) overrides with setReadonly. */
   #readonly: () => boolean = () => this.#row.planMode === true;
   #nudges = new MessageQueue();
-  #injections = new MessageQueue();
-  /** Pull the server's queued notes into each turn (setServerNotes). */
-  #serverNotes = true;
   #events = new Emitter();
   #turn: Promise<TurnResult & { llm: LlmConfig }> | null = null;
   #abort: AbortController | null = null;
@@ -249,7 +246,6 @@ export abstract class Agent {
   get busy(): boolean { return this.#turn !== null; }
   get systemPromptBlocks(): readonly string[] { return this.#blocks; }
   get nudges(): MessageQueue { return this.#nudges; }
-  get injections(): MessageQueue { return this.#injections; }
   get row(): Readonly<SessionRow> { return this.#row; }
   /** For a subclass's prompt building and kits. */
   protected get backend(): PhantomBackend { return this.#backend; }
@@ -264,26 +260,21 @@ export abstract class Agent {
 
   use(kit: ToolKit): this { this.#kits.add(kit); return this; }
   setReadonly(fn: () => boolean): void { this.#readonly = fn; }
-  /** Pull the server's queued notes (a background command finished, instant
-   *  sync) into each turn. On by default. */
-  setServerNotes(on: boolean): void { this.#serverNotes = on; }
 
   // ── talking ────────────────────────────────────────────────────────────
 
-  /** The builder's words. No turn running → runs one and resolves with its
+  /** The user's message. No turn running → starts one and resolves with its
    *  result. Turn running → queued: rides the next model call; still queued
-   *  when the turn ends → starts the next turn. Resolves null when queued. */
-  say(text: string | Promise<string | null>): Promise<TurnResult | null> {
+   *  when the turn ends → starts the next turn. Resolves null when queued.
+   *  One call for both, decided at the moment of the call — so a message
+   *  sent just as a turn ends is never left waiting with nothing to run it. */
+  sendUserMessage(text: string | Promise<string | null>): Promise<TurnResult | null> {
     if (typeof text === 'string') this.#nudges.add(text);
     else this.#nudges.addPending(text);
     if (this.busy) return Promise.resolve(null);
     if (!this.#nudges.ready) return Promise.resolve(null);   // a pending voice note: onSettled starts the turn
     return this.#guard(() => this.#runTurn());
   }
-
-  /** A system fact. Never starts a turn: rides the next model call of a
-   *  running turn, or goes in ahead of the next nudge. */
-  inject(text: string): void { this.#injections.add(text); }
 
   /** Stop the running turn. Nothing starts after it on its own: whatever is
    *  still queued waits for the app to say what happens next. */
@@ -324,23 +315,19 @@ export abstract class Agent {
     if (this.#compacting) await this.#compacting.then(() => undefined, () => undefined);
     const abort = new AbortController();
     this.#abort = abort;
-    // The builder's words this turn starts with are the turn's from here:
+    // The user's messages this turn starts with are the turn's from here:
     // if it fails, they fail with it — nothing is kept or sent again.
     const opening = this.#takeNudges();
-    // The server's notes this turn took, until the record holds them. A turn
-    // that fails first hands them back: they are facts the next turn is owed.
-    let notes: string[] = [];
-    let notesOwed = false;
     try {
       return await this.#withLock('the turn', async (lock) => {
         await this.#current(lock);
         // The row as it stands now: plan mode, the folder the tools open.
         this.#row = await call<SessionRow>(this.#backend, 'GET', `/sessions/${this.sessionId}`);
-        if (this.#serverNotes) {
-          const drained = await call<{ messages?: string[] }>(this.#backend, 'POST', `/sessions/${this.sessionId}/backdoor/drain`);
-          notes = drained.messages ?? [];
-          notesOwed = notes.length > 0;
-        }
+        // Injections: user messages queued for this session while no turn ran
+        // (a background command finished, instant sync). They ride this
+        // turn's first model call, ahead of the user's own words, and never
+        // start a turn. If the turn fails, nothing happens to them.
+        const injected = await this.#pullUserMessageQueue();
 
         const blocks = this.systemPromptFrozen ? this.#blocks : await this.systemPrompt();
         const { llm, keys } = await this.#resolveLlm();
@@ -348,8 +335,7 @@ export abstract class Agent {
         const tools = await this.#kits.resolve(this.#kitContext());
         this.#noticeCacheLimit(blocks, llm.provider);
 
-        const injected = this.#injections.all().filter((e) => e.settled && !e.failed).map((e) => e.text!);
-        const texts = [...notes, ...injected, ...opening];
+        const texts = [...injected, ...opening];
         this.#emit('turn-start', { texts });
         // The feed, both ways: watchers see this turn as it runs; a stop
         // from anywhere ends it.
@@ -358,8 +344,9 @@ export abstract class Agent {
         const unwatch = watchForInterrupt(this.#rawBackend, this.sessionId, () => this.interrupt(),
           (reason) => this.#handlers.onNotice({ kind: 'info', text: `not listening for a remote stop this turn (${reason})` }));
         relay.turnStart({ agent: this.kind, message: texts.join('\n\n'), provider: llm.provider, model: llm.model });
-        // The first model call carries the notes and the opening words.
-        let first: { notes: string[]; opening: string[] } | null = { notes, opening };
+        // The first model call carries the injections and the opening words;
+        // every later one, whatever the user sent since.
+        let first: string[] | null = texts;
         let r: TurnResult;
         try {
           r = await runTurn({
@@ -369,9 +356,11 @@ export abstract class Agent {
             reasoning: effectiveReasoning({ provider: llm.provider, model: llm.model, endpoint: llm.endpoint, reasoning: llm.reasoning, apiKey: null }),
             signal: abort.signal,
             pending: () => {
-              const p = this.#pending(first, () => { notesOwed = false; });
+              const sent = this.#takeNudges();
+              if (sent.length) this.#emit('nudge', { texts: sent });
+              const out = [...(first ?? []), ...sent];
               first = null;
-              return p;
+              return out;
             },
             record: (lines) => this.#append(lines),
             onPart: (part) => { relay.part(part); this.#emit('part', part); },
@@ -391,38 +380,24 @@ export abstract class Agent {
         this.#emit('turn-end', r);
         return { ...r, llm };
       });
-    } catch (e) {
-      if (notesOwed) {
-        this.#background('handing the server\'s notes back', () =>
-          call(this.#backend, 'POST', `/sessions/${this.sessionId}/backdoor/restore`, { messages: notes }).then(() => undefined));
-      }
-      throw e;
     } finally {
       this.#abort = null;
     }
   }
 
-  /** Every ready nudge from the front, taken. A voice note that failed is
-   *  reported and dropped. */
-  #takeNudges(): string[] {
-    const nud = this.#nudges.drain();
-    for (const f of nud.failed) this.#handlers.onError(asPhantomError(f.error, 'backend_error', 'a queued message failed'));
-    return nud.texts;
+  /** The user messages queued for this session, taken — unless
+   *  PHANTOM_PULL_USER_MESSAGE_QUEUE=off, when the program running the SDK
+   *  handles them itself. */
+  async #pullUserMessageQueue(): Promise<string[]> {
+    if (process.env.PHANTOM_PULL_USER_MESSAGE_QUEUE === 'off') return [];
+    const r = await call<{ messages?: string[] }>(this.#backend, 'POST', `/sessions/${this.sessionId}/backdoor/drain`);
+    return r.messages ?? [];
   }
 
-  /** What rides into the next model call: the server's notes and the
-   *  opening words (first call only), injections, then any nudge typed
-   *  since. If the call they rode fails, injections go back in line — they
-   *  are facts the next turn still needs; the builder's words do not. */
-  #pending(first: { notes: string[]; opening: string[] } | null, onSaved: () => void): PendingMessages {
-    const inj = this.#injections.drain();
-    const nudges = [...(first?.opening ?? []), ...this.#takeNudges()];
-    if (nudges.length) this.#emit('nudge', { texts: nudges });
-    return {
-      texts: [...(first?.notes ?? []), ...inj.texts, ...nudges],
-      commit: onSaved,
-      restore: () => { this.#injections.restore(inj.entries); },
-    };
+  /** Every ready nudge from the front, taken. A voice note that failed was
+   *  already reported when it settled; it is dropped here. */
+  #takeNudges(): string[] {
+    return this.#nudges.drain().texts;
   }
 
   async #append(lines: TranscriptLine[]): Promise<void> {

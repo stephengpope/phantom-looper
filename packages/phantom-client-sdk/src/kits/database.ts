@@ -2,7 +2,7 @@
 // the workspace. There when the workspace's `agent_database` is on, absent
 // when off — the server says which; a server that cannot answer is an
 // error, never a silently missing tool.
-import { tool, type Tool } from 'ai';
+import { tool } from 'ai';
 import { z } from 'zod';
 import { call, callRaw } from '../backend.js';
 import { PhantomError } from '../errors.js';

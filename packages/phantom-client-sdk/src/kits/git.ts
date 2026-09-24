@@ -6,7 +6,7 @@
 //
 // The CODING agent does not carry this kit: moving code between branches is
 // a person's call, or the assistant's on their behalf.
-import { tool, type Tool } from 'ai';
+import { tool } from 'ai';
 import { z } from 'zod';
 import { headersFor, type PhantomBackend } from '../backend.js';
 import { PhantomError } from '../errors.js';

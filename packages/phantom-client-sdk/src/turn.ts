@@ -9,9 +9,8 @@
 //                            AI SDK awaits it and carries reasoning with its
 //                            provider signature).
 //   each tool finished    → its result, as it lands.
-//   model call failed     → nothing from that step. What rode into it is
-//                            handed back (`restore`) — the caller decides what
-//                            that means; the builder's own words are not kept.
+//   model call failed     → nothing from that step. The user messages that
+//                            rode into it are gone with it — nothing is kept.
 //   interrupted           → partial text and every tool call seen, results
 //                            for finished tools, INTERRUPTED_RESULT for the
 //                            rest, then an `interrupted` line.
@@ -40,14 +39,6 @@ export interface TurnResult {
   lastInputTokens: number;
 }
 
-/** What rides into the next model call: drained from the queues. `commit`
- *  once the lines carrying it are saved, `restore` when they never will be. */
-export interface PendingMessages {
-  texts: string[];
-  commit(): void;
-  restore(): void;
-}
-
 export interface TurnInput {
   model: LanguageModel;
   provider: string;
@@ -59,9 +50,9 @@ export interface TurnInput {
   maxSteps: number | null;
   reasoning: Reasoning | undefined;
   signal: AbortSignal;
-  /** Called before EVERY model call: what is waiting in the queues. The
-   *  first call carries the turn's own text. */
-  pending(): PendingMessages;
+  /** Called before EVERY model call: the user messages waiting to go in.
+   *  The first call carries the turn's own text. */
+  pending(): string[];
   /** Append to the record. Rejects → the turn fails. */
   record(lines: TranscriptLine[]): Promise<void>;
   onPart(part: StreamPart): void;
@@ -103,8 +94,8 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
   const step = new StepInFlight();
   // Set from the AI SDK's callbacks, read after the stream — a holder, so
   // the reads are not narrowed to their initial values.
-  const st: { pending: PendingMessages | null; pendingMessages: ModelMessage[]; recordFailure: PhantomError | null } =
-    { pending: null, pendingMessages: [], recordFailure: null };
+  const st: { pendingMessages: ModelMessage[]; recordFailure: PhantomError | null } =
+    { pendingMessages: [], recordFailure: null };
 
   // Every record goes through here: a failure ends the turn and is kept to
   // be thrown once the stream has closed (the AI SDK swallows what a
@@ -125,12 +116,7 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
   // arrived since, and does the same before every later call.
   const drain = () => {
     const more = input.pending();
-    if (!more.texts.length) return;
-    const prev = st.pending;
-    st.pending = prev
-      ? { texts: [...prev.texts, ...more.texts], commit: () => { prev.commit(); more.commit(); }, restore: () => { prev.restore(); more.restore(); } }
-      : more;
-    st.pendingMessages = st.pending.texts.map(userMessage);
+    if (more.length) st.pendingMessages = [...st.pendingMessages, ...more.map(userMessage)];
   };
   drain();
 
@@ -171,11 +157,8 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
       ];
       step.held = [];
       step.assistantRecorded = true;
-      const rode = st.pending;
-      st.pending = null;
       st.pendingMessages = [];
       await record(lines);
-      if (st.recordFailure) rode?.restore(); else rode?.commit();
     },
   });
 
@@ -210,14 +193,12 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
   // nothing is left dangling.
   await result.response.then(() => undefined, () => undefined);
 
-  if (st.recordFailure) st.pending?.restore();
   throwIfFailed(st);
 
   if (abort.signal.aborted) {
     // The cut step. Nothing streamed = nothing to record beyond the user
     // messages that were sent and the mark.
     const lines: TranscriptLine[] = [];
-    const rode = step.assistantRecorded ? null : st.pending;
     if (!step.assistantRecorded) {
       lines.push(...st.pendingMessages.map(messageLine));
       const content: ModelMessage['content'] = [
@@ -229,13 +210,11 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
     for (const c of step.calls) if (!step.answered.has(c.toolCallId)) lines.push(messageLine(interruptedResultMessage(c)));
     lines.push(interruptedLine());
     await record(lines);
-    if (st.recordFailure) rode?.restore(); else rode?.commit();
     throwIfFailed(st);
     return { text: step.text || text, messages: added, usage, outcome: 'interrupted', lastInputTokens };
   }
 
   if (streamFailure !== undefined) {
-    st.pending?.restore();
     if (streamFailure instanceof PhantomError) throw streamFailure;
     const message = streamFailure instanceof Error ? streamFailure.message
       : typeof streamFailure === 'string' ? streamFailure : JSON.stringify(streamFailure);

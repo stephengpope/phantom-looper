@@ -2,7 +2,7 @@
 // routes (the repo's .agents/skills/ and the image's system skills, merged
 // server-side; repo wins a name collision). skill_load repeats cheaply: an
 // unchanged skill served twice in one build's life returns a one-line stub.
-import { tool, type Tool } from 'ai';
+import { tool } from 'ai';
 import { z } from 'zod';
 import { callRaw } from '../backend.js';
 import type { BuiltTools, ToolKit, ToolKitContext } from '../toolkit.js';

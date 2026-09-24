@@ -1,7 +1,6 @@
 # phantom-client-sdk
 
-Build and run agents against a phantom-backend. The plan and every decision
-behind it: `docs/client-sdk.md` at the repo root.
+Build and run agents against a phantom-backend.
 
 ```ts
 import { CodingAgent } from 'phantom-client-sdk';
@@ -18,24 +17,41 @@ const agent = await CodingAgent.create(backend, handlers, { workspaceId });
 agent.on('part', (p) => render(p));          // every stream part, unbatched
 agent.on('turn-end', (r) => console.log(r.text));
 
-const result = await agent.say('add a login page');   // runs a turn
-agent.say('and tests');        // while busy: rides the next model call
-agent.inject('a background command exited: build #12 failed');   // a fact, never a turn
+const result = await agent.sendUserMessage('add a login page');   // nothing running: starts a turn
+agent.sendUserMessage('and tests');   // a turn running: rides its next model call
 agent.interrupt();             // esc — finished tool calls keep their results
 agent.setReadonly(() => planMode);            // asked at execute time
 agent.use(myScreenToolKit);                   // client-defined tools, same interface
-await agent.compact();                        // also automatic, per the frozen llm config
+await agent.compact();
 ```
+
+## User messages
+
+- `sendUserMessage(text)` — nothing running: starts a turn. A turn running:
+  queued, and rides the next model call. Still queued when the turn ends:
+  starts the next turn. A failed turn takes its messages with it — nothing
+  is kept or sent again.
+- Injections — user messages queued for the session while no turn ran (a
+  background command finished, instant sync). Pulled at the start of every
+  turn, ahead of the user's own; they never start a turn.
+  `PHANTOM_PULL_USER_MESSAGE_QUEUE=off` stops the pull, for a program that
+  handles them itself.
 
 ## What the base class guarantees
 
-- The system prompt and the LLM config are built once at `create` and
-  frozen on the session row. `resume` reads them back. Nothing is rebuilt.
-  A subclass sets `systemPromptFrozen = false` / `llmConfigFrozen = false`
-  to opt out — then they are resolved every turn and never saved.
-- The transcript is append-only. Each step is saved the moment its model
-  call succeeds, each tool result as it lands. A save that fails after
-  retries stops the turn. Compaction appends one line; loading rebuilds.
+- The system prompt is built once at `create` and frozen on the session
+  row. `resume` reads it back. A subclass sets `systemPromptFrozen = false`
+  to opt out — then it is built every turn and never saved.
+- The model is never kept: every turn asks the server which model and key
+  the session runs on.
+- The transcript is append-only and shared — other windows and the server
+  write it too, one turn at a time. Every turn first checks it is current
+  and reads it again if someone else added to it. Each step is saved the
+  moment its model call succeeds, each tool result as it lands. A save that
+  fails after retries stops the turn. Compaction appends one line; loading
+  rebuilds.
+- Which tools change things is each kit's word (`build` answers `{ tools,
+  mutating }`); the workspace kit takes it from the server's tool list.
 - Every error reaches `onError` with a code from `ERROR_CODES`, then the
   awaited call rejects with the same error. Background work has one door
   and its failures reach `onError` too. The SDK installs no process-wide
