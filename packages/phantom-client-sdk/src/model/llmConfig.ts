@@ -24,9 +24,12 @@ export interface CompactionConfig {
   strategy: string;
   /** Cap on the summary's length. Null = the model's default. */
   maxTokens: number | null;
-  /** The model that WRITES the summary — never the agent's own. */
-  model: { provider: Provider; model: string; endpoint: string | null; reasoning: Reasoning | null };
 }
+
+/** The model that WRITES a summary — the small-fast slot, never the
+ *  agent's own. NOT frozen: read live at compaction time, so a chat born
+ *  on last month's settings compacts with today's writer and today's key. */
+export interface SummaryWriter { provider: Provider; model: string; endpoint: string | null; reasoning: Reasoning | null; apiKey: string | null }
 
 export interface LlmConfig {
   provider: Provider;
@@ -40,24 +43,26 @@ export interface LlmConfig {
   compaction: CompactionConfig;
 }
 
-/** What GET /agents/:kind/config answers with today, mapped to the frozen
- *  shape. Throws config_invalid on a shape the SDK cannot run. */
+/** The shape GET /agents/:kind/config answers with. */
+export interface RawAgentConfig {
+  model?: { provider?: string; model?: string; baseUrl?: string | null; reasoning?: string | null; apiKey?: string | null };
+  maxSteps?: number | null;
+  compaction?: {
+    thresholdPct?: number; contextWindow?: number | null; summarizePct?: number; strategy?: string;
+    maxTokens?: number | null;
+    model?: { provider?: string; model?: string; baseUrl?: string | null; reasoning?: string | null; apiKey?: string | null };
+  };
+}
+
+/** The frozen part of an agent config. Throws config_invalid on a shape the
+ *  SDK cannot run. */
 export function llmConfigFrom(raw: unknown): LlmConfig {
-  const r = raw as {
-    model?: { provider?: string; model?: string; baseUrl?: string | null; reasoning?: string | null };
-    maxSteps?: number | null;
-    compaction?: {
-      thresholdPct?: number; contextWindow?: number | null; summarizePct?: number; strategy?: string;
-      maxTokens?: number | null;
-      model?: { provider?: string; model?: string; baseUrl?: string | null; reasoning?: string | null };
-    };
-  } | null;
+  const r = raw as RawAgentConfig | null;
   const m = r?.model;
   if (!m || !isProvider(m.provider) || !m.model) {
     throw new PhantomError('config_invalid', 'agent config has no provider/model — pick one on /settings');
   }
   const c = r.compaction ?? {};
-  const cm = c.model ?? m;
   return {
     provider: m.provider, model: m.model, endpoint: m.baseUrl ?? null,
     reasoning: isReasoning(m.reasoning) ? m.reasoning : null,
@@ -68,12 +73,18 @@ export function llmConfigFrom(raw: unknown): LlmConfig {
       summarizePct: c.summarizePct ?? 50,
       strategy: c.strategy ?? 'fast',
       maxTokens: c.maxTokens ?? null,
-      model: {
-        provider: isProvider(cm.provider) ? cm.provider : m.provider,
-        model: cm.model ?? m.model,
-        endpoint: cm.baseUrl ?? null,
-        reasoning: isReasoning(cm.reasoning) ? cm.reasoning : null,
-      },
     },
   };
+}
+
+/** The live summary writer from the same answer: the compaction model when
+ *  the settings name one, else the agent's own — with its key. */
+export function summaryWriterFrom(raw: unknown): SummaryWriter {
+  const r = raw as RawAgentConfig | null;
+  const cm = r?.compaction?.model ?? r?.model;
+  if (!cm || !isProvider(cm.provider) || !cm.model) {
+    throw new PhantomError('config_invalid', 'no model to write the summary with — pick one on /settings');
+  }
+  return { provider: cm.provider, model: cm.model, endpoint: cm.baseUrl ?? null,
+    reasoning: isReasoning(cm.reasoning) ? cm.reasoning : null, apiKey: cm.apiKey ?? null };
 }

@@ -12,7 +12,7 @@ import { call, type PhantomBackend } from './backend.js';
 import { PhantomError, asPhantomError } from './errors.js';
 import { Emitter, type AgentEvents } from './events.js';
 import { systemMessages, CACHED_BLOCKS } from './model/cache.js';
-import { llmConfigFrom, type LlmConfig, type Provider } from './model/llmConfig.js';
+import { llmConfigFrom, summaryWriterFrom, type LlmConfig, type Provider, type RawAgentConfig } from './model/llmConfig.js';
 import { languageModel, billingMiddleware, effectiveReasoning, type ModelHooks, type ModelSpec, type TokenUsage } from './model/languageModel.js';
 import { withRetry, BACKEND_RETRY, MODEL_RETRY, type RetryPolicy } from './model/retry.js';
 import { wrapLanguageModel } from 'ai';
@@ -201,15 +201,18 @@ export abstract class Agent {
   }
 
   async #resolveLlmConfig(): Promise<LlmConfig> {
-    const raw = await call(this.#backend, 'GET', `/agents/${this.kind}/config?session=${encodeURIComponent(this.sessionId)}`);
-    return llmConfigFrom(raw);
+    return llmConfigFrom(await this.#rawConfig());
   }
 
-  /** The key for a provider, read live: keys rotate. The config route
-   *  answers for the session's pinned provider, which is the frozen one. */
+  #rawConfig(): Promise<RawAgentConfig> {
+    return call<RawAgentConfig>(this.#backend, 'GET', `/agents/${this.kind}/config?session=${encodeURIComponent(this.sessionId)}`);
+  }
+
+  /** The key for the session's OWN provider, read live: keys rotate. The
+   *  config route answers for the session's pinned provider, which is the
+   *  frozen one. */
   async #apiKey(provider: Provider): Promise<string | null> {
-    const raw = await call<{ model?: { provider?: string; apiKey?: string | null } }>(this.#backend, 'GET',
-      `/agents/${this.kind}/config?session=${encodeURIComponent(this.sessionId)}`);
+    const raw = await this.#rawConfig();
     if (raw.model?.provider !== provider) {
       throw new PhantomError('no_api_key',
         `this session is frozen on ${provider} but the settings now resolve to ${raw.model?.provider ?? 'nothing'} — set a key for ${provider}, or duplicate the session`);
@@ -438,9 +441,10 @@ export abstract class Agent {
     const prior = this.#ids[0] === null && first && typeof first.content === 'string' ? first.content : null;
     const plan = planCompaction(this.#messages, compactionStrategy(c.strategy), c.summarizePct, prior);
     if (!plan) return null;
-    const apiKey = await this.#apiKey(c.model.provider);
-    const spec: ModelSpec = { provider: c.model.provider, model: c.model.model, endpoint: c.model.endpoint,
-      reasoning: c.model.reasoning, apiKey };
+    // The writer is TODAY's small-fast model with today's key — never
+    // frozen, so a chat born on old settings still compacts.
+    const w = summaryWriterFrom(await this.#rawConfig());
+    const spec: ModelSpec = { provider: w.provider, model: w.model, endpoint: w.endpoint, reasoning: w.reasoning, apiKey: w.apiKey };
     const model = this.#billed(this.buildModel(spec, this.#modelHooks()), spec);
     const summary = await writeSummary(model, plan, c.maxTokens);
     const firstKeptId = this.#ids[plan.removeCount] ?? '';

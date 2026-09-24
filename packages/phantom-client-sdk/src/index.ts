@@ -9,7 +9,7 @@ export { PhantomError, isPhantomError, isContextTooLong, ERROR_CODES, type Error
 export { Relay, watchForInterrupt, RELAY_FLUSH_MS } from './feed.js';
 export type { AgentEvents } from './events.js';
 
-export { type LlmConfig, type CompactionConfig, llmConfigFrom, PROVIDERS, REASONINGS, isProvider, isReasoning,
+export { type LlmConfig, type CompactionConfig, type SummaryWriter, type RawAgentConfig, llmConfigFrom, summaryWriterFrom, PROVIDERS, REASONINGS, isProvider, isReasoning,
   type Provider, type Reasoning } from './model/llmConfig.js';
 export { languageModel, isAnthropicOAuth, withClaudeCodeIdentity, CLAUDE_CODE_SYSTEM, effectiveReasoning,
   type ModelSpec, type ModelHooks, type TokenUsage } from './model/languageModel.js';

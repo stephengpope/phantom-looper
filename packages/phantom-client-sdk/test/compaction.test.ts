@@ -61,3 +61,22 @@ test('compactionDue', () => {
   assert.equal(compactionDue(800, null, 80), false);
   assert.equal(compactionDue(800, 1000, 0), false);
 });
+
+test('the summary writer is read live: a compaction model on ANOTHER provider works, and a settings change is followed', async () => {
+  const h = harness();
+  TestAgent.script = [{ text: 'r1' }, { text: 'r2' }, { text: 'sum-1' }, { text: 'r3' }, { text: 'r4' }, { text: 'sum-2' }];
+  const a = await TestAgent.create(h.fake.backend, h.handlers);
+  await a.say('a'); await a.say('b');
+  assert.ok(await a.compact());
+  // The writer was the config's compaction model (openai), not the session's anthropic.
+  const writerSpec = () => JSON.parse((h.fake.tokenLog.at(-1) as { provider: string; model: string; }) && JSON.stringify(h.fake.tokenLog.at(-1))) as { provider: string; model: string };
+  assert.equal(writerSpec().provider, 'openai');
+  assert.equal(writerSpec().model, 'gpt-small');
+  // The settings move to a new small model: the next compaction uses it, the frozen session model does not move.
+  (h.fake.agentConfig as { compaction: { model: unknown } }).compaction.model = { provider: 'google', model: 'gemini-small', baseUrl: null, reasoning: null, apiKey: 'g-key' };
+  await a.say('c'); await a.say('d');
+  assert.ok(await a.compact());
+  assert.equal(writerSpec().provider, 'google');
+  assert.equal(a.llmConfig?.model, 'claude-test');
+  assert.deepEqual(h.errors, []);
+});

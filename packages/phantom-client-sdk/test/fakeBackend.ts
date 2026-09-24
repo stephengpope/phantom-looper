@@ -30,7 +30,7 @@ export class FakeBackend {
     model: { provider: 'anthropic', model: 'claude-test', baseUrl: null, apiKey: 'sk-ant-api-test', reasoning: null },
     maxSteps: null,
     compaction: { thresholdPct: 80, contextWindow: 1000, summarizePct: 50, strategy: 'fast', maxTokens: null,
-      model: { provider: 'anthropic', model: 'claude-small', baseUrl: null, reasoning: null } },
+      model: { provider: 'openai', model: 'gpt-small', baseUrl: null, reasoning: null, apiKey: 'sk-openai-test' } },
   };
   settings: Record<string, { value: unknown }> = { timezone: { value: 'UTC' } };
   /** Fail the next N appends with this HTTP status (a flaky network). */

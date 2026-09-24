@@ -253,8 +253,7 @@ test('resume after a crash mid-step answers the dangling tool call as interrupte
   const h = harness();
   const s = h.fake.newSession({ system_prompt: ['B', 'W'], llm_config: (h.fake.agentConfig as { model: unknown }) && {
     provider: 'anthropic', model: 'm', endpoint: null, reasoning: null, maxSteps: null,
-    compaction: { thresholdPct: 0, contextWindow: null, summarizePct: 50, strategy: 'fast', maxTokens: null,
-      model: { provider: 'anthropic', model: 'm', endpoint: null, reasoning: null } } } });
+    compaction: { thresholdPct: 0, contextWindow: null, summarizePct: 50, strategy: 'fast', maxTokens: null } } });
   s.lines.push(
     JSON.stringify({ type: 'message', id: 'l1', at: 'now', message: { role: 'user', content: 'do it' } }),
     JSON.stringify({ type: 'message', id: 'l2', at: 'now', message: { role: 'assistant',
