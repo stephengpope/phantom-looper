@@ -5,20 +5,19 @@
 import { tool, type Tool } from 'ai';
 import { z } from 'zod';
 import { callRaw } from '../backend.js';
-import type { ToolKit, ToolKitContext } from '../toolkit.js';
+import type { BuiltTools, ToolKit, ToolKitContext } from '../toolkit.js';
 
 const DEDUP_STUB = 'Skill content unchanged since it was loaded earlier in this conversation — ' +
   'refer to the earlier skill_load result; it is still current and complete.';
 
 export const skillsToolKit: ToolKit = {
   name: 'skills',
-  mutatingToolNames: ['skill_manage'],
   version: (ctx) => `${ctx.sessionId}:${ctx.folderId ?? ''}`,
-  build(ctx: ToolKitContext): Promise<Record<string, Tool>> {
+  build(ctx: ToolKitContext): Promise<BuiltTools> {
     const served = new Map<string, string>();
     const api = <T>(method: string, p: string, body?: unknown) =>
       callRaw<T>(ctx.backend, method, p, body, { sessionId: ctx.sessionId });
-    return Promise.resolve({
+    return Promise.resolve({ mutating: ['skill_manage'], tools: {
       skill_list: tool({
         description: "The live skill set, full descriptions. Use when the clipped index in your " +
           "instructions isn't enough to decide, or a skill might exist the index doesn't show " +
@@ -77,6 +76,6 @@ export const skillsToolKit: ToolKit = {
         }),
         execute: (args) => api('POST', '/skills', args),
       }),
-    });
+    } });
   },
 };

@@ -1,18 +1,24 @@
 // The base of every agent. A subclass declares its kind, how its system
 // prompt is built, and its default tool kits. The base owns everything else:
-// creating and resuming a session, freezing the prompt and the LLM config on
-// the row, tools, the turn, nudges and injections, interrupts, the
-// transcript, billing, compaction, errors and notices.
+// creating and resuming a session, freezing the prompt on the row, tools,
+// the turn, nudges and injections, interrupts, the transcript, billing,
+// compaction, errors and notices.
+//
+// Which model a turn runs on is never kept here: every turn asks the server
+// (GET /agents/:kind/config?session=), and the server applies its own rule.
+// The transcript is shared — other windows, the server and Telegram write
+// it too, one at a time under the session lock — so every turn starts by
+// making sure its copy is the server's.
 //
 // Construction only through a subclass's `create` / `resume` (which call
 // `birth` / `wake` here) — that is what guarantees the prompt is frozen
 // before any turn can run.
-import type { LanguageModel, ModelMessage } from 'ai';
+import type { LanguageModel, ModelMessage, ToolCallPart } from 'ai';
 import { call, type PhantomBackend } from './backend.js';
 import { PhantomError, asPhantomError } from './errors.js';
 import { Emitter, type AgentEvents } from './events.js';
 import { systemMessages, CACHED_BLOCKS } from './model/cache.js';
-import { llmConfigFrom, type LlmConfig, type Provider } from './model/llmConfig.js';
+import { llmConfigFrom, keysFrom, type AgentKeys, type LlmConfig, type Provider } from './model/llmConfig.js';
 import { languageModel, billingMiddleware, effectiveReasoning, type ModelHooks, type ModelSpec, type TokenUsage } from './model/languageModel.js';
 import { withRetry, BACKEND_RETRY, MODEL_RETRY, type RetryPolicy } from './model/retry.js';
 import { wrapLanguageModel } from 'ai';
@@ -47,7 +53,6 @@ export interface SessionRow {
   status: string;
   agent?: string | null;
   system_prompt?: string[] | null;
-  llm_config?: LlmConfig | null;
   [k: string]: unknown;
 }
 
@@ -59,6 +64,11 @@ export type AgentCtor<T extends Agent> = new (backend: PhantomBackend, handlers:
  *  a minute keeps a long tool inside it with room to spare. */
 const LOCK_RENEW_MS = 60_000;
 
+/** What taking the session lock answers. The transcript's last-changed mark
+ *  rides along, so a turn knows whether its copy is current without
+ *  downloading anything. */
+interface LockReply { transcript_updated_at?: string | null }
+
 export abstract class Agent {
   abstract readonly kind: string;
   /** The prompt, as blocks. Run ONCE at creation when frozen. */
@@ -66,8 +76,6 @@ export abstract class Agent {
   protected abstract toolKits(): ToolKit[];
   /** Default: frozen on the row at creation. false = built at every turn, never saved. */
   protected systemPromptFrozen = true;
-  /** Default: frozen on the row at creation. false = resolved at every turn, never saved. */
-  protected llmConfigFrozen = true;
 
   readonly sessionId: string;
   readonly workspaceId: string;
@@ -80,7 +88,6 @@ export abstract class Agent {
   #modelRetry: RetryPolicy;
   #row: SessionRow;
   #blocks: string[] = [];
-  #llm: LlmConfig | null = null;
   #transcript!: Transcript;
   #messages: ModelMessage[] = [];
   #ids: (string | null)[] = [];
@@ -92,6 +99,8 @@ export abstract class Agent {
   #readonly: () => boolean = () => this.#row.planMode === true;
   #nudges = new MessageQueue();
   #injections = new MessageQueue();
+  /** Pull the server's queued notes into each turn (setServerNotes). */
+  #serverNotes = true;
   #events = new Emitter();
   #turn: Promise<TurnResult & { llm: LlmConfig }> | null = null;
   #abort: AbortController | null = null;
@@ -159,62 +168,73 @@ export abstract class Agent {
     return agent;
   }
 
-  /** Kits, then freeze what is frozen (once — a row that already holds it
-   *  keeps it), then load the record. */
+  /** Kits, then freeze the prompt (once — a row that already holds one
+   *  keeps it), then read the record. */
   async #open(): Promise<void> {
     for (const kit of this.toolKits()) this.#kits.add(kit);
-    const want: { systemPrompt?: string[]; llmConfig?: LlmConfig } = {};
     if (this.systemPromptFrozen) {
       const stored = this.#row.system_prompt;
       if (Array.isArray(stored) && stored.length) this.#blocks = stored;
-      else { this.#blocks = await this.systemPrompt(); want.systemPrompt = this.#blocks; }
+      else {
+        const blocks = await this.systemPrompt();
+        await this.#withLock('freezing the prompt', () =>
+          call(this.#backend, 'PUT', `/sessions/${this.sessionId}/frozen`, { systemPrompt: blocks }).then(() => undefined));
+        this.#blocks = blocks;
+      }
     }
-    if (this.llmConfigFrozen) {
-      if (this.#row.llm_config) this.#llm = this.#row.llm_config;
-      else { this.#llm = await this.#resolveLlmConfig(); want.llmConfig = this.#llm; }
+    this.#seat(await Transcript.load(this.#backend, this.sessionId));
+    // Opening is reading: the lock is taken only when a cut step must be
+    // answered in the record.
+    if (danglingCalls(this.#messages).length) {
+      await this.#withLock('answering interrupted calls', (lock) => this.#current(lock));
     }
-    if (want.systemPrompt || want.llmConfig) {
-      await this.#withLock('freezing the session', () =>
-        call(this.#backend, 'PUT', `/sessions/${this.sessionId}/frozen`, want).then(() => undefined));
-    }
-    this.#transcript = await Transcript.load(this.#backend, this.sessionId);
-    const c = conversationFrom(this.#transcript.lines);
-    this.#messages = c.messages;
-    this.#ids = c.ids;
-    for (const l of this.#transcript.lines) {
+  }
+
+  /** Take a copy of the record as the one this agent works from. */
+  #seat(t: Transcript): void {
+    this.#transcript = t;
+    this.#rebuild();
+    this.#usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    for (const l of t.lines) {
       if (l.type !== 'usage') continue;
       this.#usage.input += l.input; this.#usage.output += l.output;
       this.#usage.cacheRead += l.cacheRead; this.#usage.cacheWrite += l.cacheWrite;
+    }
+  }
+
+  /** The conversation the next model call is built from, from the record. */
+  #rebuild(): void {
+    const c = conversationFrom(this.#transcript.lines);
+    this.#messages = c.messages;
+    this.#ids = c.ids;
+  }
+
+  /** Under the lock: make this copy the server's. Someone else (another
+   *  window, the server, Telegram) may have added to the transcript since
+   *  this agent last looked — then it is read again, whole. A step left cut
+   *  (tool calls with no results) is answered after. */
+  async #current(lock: LockReply): Promise<void> {
+    if ((lock.transcript_updated_at ?? null) !== this.#transcript.stamp) {
+      this.#seat(await Transcript.load(this.#backend, this.sessionId));
+      this.#emit('reloaded', { messages: this.#messages });
     }
     await this.#answerDanglingCalls();
   }
 
   /** A crash mid-step left tool calls without results: answer them as
-   *  interrupted so the next call is one the provider accepts. */
+   *  interrupted so the next call is one the provider accepts. Called with
+   *  the lock held. */
   async #answerDanglingCalls(): Promise<void> {
-    const last = this.#messages[this.#messages.length - 1];
-    if (!last || last.role !== 'assistant' || typeof last.content === 'string') return;
-    const calls = last.content.filter((p) => p.type === 'tool-call');
+    const calls = danglingCalls(this.#messages);
     if (!calls.length) return;
-    const lines = calls.map((c) => messageLine(interruptedResultMessage(c)));
-    await this.#withLock('answering interrupted calls', () => this.#append(lines));
+    await this.#append(calls.map((c) => messageLine(interruptedResultMessage(c))));
   }
 
-  async #resolveLlmConfig(): Promise<LlmConfig> {
+  /** The model settings and keys for this agent, as the server resolves them
+   *  now — for this session, on the server's own rule. Nothing is kept. */
+  async #resolveLlm(): Promise<{ llm: LlmConfig; keys: AgentKeys }> {
     const raw = await call(this.#backend, 'GET', `/agents/${this.kind}/config?session=${encodeURIComponent(this.sessionId)}`);
-    return llmConfigFrom(raw);
-  }
-
-  /** The key for a provider, read live: keys rotate. The config route
-   *  answers for the session's pinned provider, which is the frozen one. */
-  async #apiKey(provider: Provider): Promise<string | null> {
-    const raw = await call<{ model?: { provider?: string; apiKey?: string | null } }>(this.#backend, 'GET',
-      `/agents/${this.kind}/config?session=${encodeURIComponent(this.sessionId)}`);
-    if (raw.model?.provider !== provider) {
-      throw new PhantomError('no_api_key',
-        `this session is frozen on ${provider} but the settings now resolve to ${raw.model?.provider ?? 'nothing'} — set a key for ${provider}, or duplicate the session`);
-    }
-    return raw.model.apiKey ?? null;
+    return { llm: llmConfigFrom(raw), keys: keysFrom(raw) };
   }
 
   /** Test seam: a subclass may hand back a mock. Production builds the real one. */
@@ -228,7 +248,6 @@ export abstract class Agent {
   get usage(): Readonly<TokenTotals> { return this.#usage; }
   get busy(): boolean { return this.#turn !== null; }
   get systemPromptBlocks(): readonly string[] { return this.#blocks; }
-  get llmConfig(): LlmConfig | null { return this.#llm; }
   get nudges(): MessageQueue { return this.#nudges; }
   get injections(): MessageQueue { return this.#injections; }
   get row(): Readonly<SessionRow> { return this.#row; }
@@ -245,6 +264,9 @@ export abstract class Agent {
 
   use(kit: ToolKit): this { this.#kits.add(kit); return this; }
   setReadonly(fn: () => boolean): void { this.#readonly = fn; }
+  /** Pull the server's queued notes (a background command finished, instant
+   *  sync) into each turn. On by default. */
+  setServerNotes(on: boolean): void { this.#serverNotes = on; }
 
   // ── talking ────────────────────────────────────────────────────────────
 
@@ -263,7 +285,8 @@ export abstract class Agent {
    *  running turn, or goes in ahead of the next nudge. */
   inject(text: string): void { this.#injections.add(text); }
 
-  /** Stop the running turn. The nudge queue then starts the next one. */
+  /** Stop the running turn. Nothing starts after it on its own: whatever is
+   *  still queued waits for the app to say what happens next. */
   interrupt(): void { this.#abort?.abort(new Error('interrupted')); }
 
   async close(): Promise<void> {
@@ -285,14 +308,14 @@ export abstract class Agent {
   }
 
   /** After the turn, never inside it: compaction, then whatever is still
-   *  queued. Never after a failed turn — the queue is untouched and a
-   *  persistent failure must not loop. */
+   *  queued — only after a turn that finished on its own. Not after a stop
+   *  (the app decides what comes next) and not after a failure. */
   #afterTurn(result: TurnResult & { llm: LlmConfig }): void {
     const c = result.llm.compaction;
     if (compactionDue(result.lastInputTokens, c.contextWindow, c.thresholdPct)) {
       this.#background('compaction', () => this.#compact());
     }
-    if (this.#nudges.ready && !this.#closed) {
+    if (result.outcome === 'done' && this.#nudges.ready && !this.#closed) {
       this.#background('follow-up turn', () => this.#runTurn());
     }
   }
@@ -301,22 +324,32 @@ export abstract class Agent {
     if (this.#compacting) await this.#compacting.then(() => undefined, () => undefined);
     const abort = new AbortController();
     this.#abort = abort;
+    // The builder's words this turn starts with are the turn's from here:
+    // if it fails, they fail with it — nothing is kept or sent again.
+    const opening = this.#takeNudges();
+    // The server's notes this turn took, until the record holds them. A turn
+    // that fails first hands them back: they are facts the next turn is owed.
+    let notes: string[] = [];
+    let notesOwed = false;
     try {
-      return await this.#withLock('the turn', async () => {
+      return await this.#withLock('the turn', async (lock) => {
+        await this.#current(lock);
         // The row as it stands now: plan mode, the folder the tools open.
         this.#row = await call<SessionRow>(this.#backend, 'GET', `/sessions/${this.sessionId}`);
-        // The server's queued facts (a command exited, a file was dropped)
-        // are older than anything typed since: ahead of the queue.
-        const drained = await call<{ messages?: string[] }>(this.#backend, 'POST', `/sessions/${this.sessionId}/backdoor/drain`);
-        this.#injections.prepend(drained.messages ?? []);
+        if (this.#serverNotes) {
+          const drained = await call<{ messages?: string[] }>(this.#backend, 'POST', `/sessions/${this.sessionId}/backdoor/drain`);
+          notes = drained.messages ?? [];
+          notesOwed = notes.length > 0;
+        }
 
         const blocks = this.systemPromptFrozen ? this.#blocks : await this.systemPrompt();
-        const llm = this.llmConfigFrozen ? this.#llm! : await this.#resolveLlmConfig();
-        const model = await this.#modelFor(llm);
+        const { llm, keys } = await this.#resolveLlm();
+        const model = this.#modelFor(llm, keys.model);
         const tools = await this.#kits.resolve(this.#kitContext());
         this.#noticeCacheLimit(blocks, llm.provider);
 
-        const texts = [...this.#injections.all(), ...this.#nudges.all()].filter((e) => e.settled && !e.failed).map((e) => e.text!);
+        const injected = this.#injections.all().filter((e) => e.settled && !e.failed).map((e) => e.text!);
+        const texts = [...notes, ...injected, ...opening];
         this.#emit('turn-start', { texts });
         // The feed, both ways: watchers see this turn as it runs; a stop
         // from anywhere ends it.
@@ -325,6 +358,8 @@ export abstract class Agent {
         const unwatch = watchForInterrupt(this.#rawBackend, this.sessionId, () => this.interrupt(),
           (reason) => this.#handlers.onNotice({ kind: 'info', text: `not listening for a remote stop this turn (${reason})` }));
         relay.turnStart({ agent: this.kind, message: texts.join('\n\n'), provider: llm.provider, model: llm.model });
+        // The first model call carries the notes and the opening words.
+        let first: { notes: string[]; opening: string[] } | null = { notes, opening };
         let r: TurnResult;
         try {
           r = await runTurn({
@@ -333,7 +368,11 @@ export abstract class Agent {
             tools, history: this.#messages, maxSteps: llm.maxSteps,
             reasoning: effectiveReasoning({ provider: llm.provider, model: llm.model, endpoint: llm.endpoint, reasoning: llm.reasoning, apiKey: null }),
             signal: abort.signal,
-            pending: () => this.#pending(),
+            pending: () => {
+              const p = this.#pending(first, () => { notesOwed = false; });
+              first = null;
+              return p;
+            },
             record: (lines) => this.#append(lines),
             onPart: (part) => { relay.part(part); this.#emit('part', part); },
             onToolError: (name, error) => this.#emit('tool-error', { name, error }),
@@ -352,21 +391,37 @@ export abstract class Agent {
         this.#emit('turn-end', r);
         return { ...r, llm };
       });
+    } catch (e) {
+      if (notesOwed) {
+        this.#background('handing the server\'s notes back', () =>
+          call(this.#backend, 'POST', `/sessions/${this.sessionId}/backdoor/restore`, { messages: notes }).then(() => undefined));
+      }
+      throw e;
     } finally {
       this.#abort = null;
     }
   }
 
-  /** What rides into the next model call: injections first, then nudges. */
-  #pending(): PendingMessages {
-    const inj = this.#injections.drain();
+  /** Every ready nudge from the front, taken. A voice note that failed is
+   *  reported and dropped. */
+  #takeNudges(): string[] {
     const nud = this.#nudges.drain();
     for (const f of nud.failed) this.#handlers.onError(asPhantomError(f.error, 'backend_error', 'a queued message failed'));
-    if (nud.texts.length) this.#emit('nudge', { texts: nud.texts });
+    return nud.texts;
+  }
+
+  /** What rides into the next model call: the server's notes and the
+   *  opening words (first call only), injections, then any nudge typed
+   *  since. If the call they rode fails, injections go back in line — they
+   *  are facts the next turn still needs; the builder's words do not. */
+  #pending(first: { notes: string[]; opening: string[] } | null, onSaved: () => void): PendingMessages {
+    const inj = this.#injections.drain();
+    const nudges = [...(first?.opening ?? []), ...this.#takeNudges()];
+    if (nudges.length) this.#emit('nudge', { texts: nudges });
     return {
-      texts: [...inj.texts, ...nud.texts],
-      commit: () => undefined,
-      restore: () => { this.#nudges.restore(nud.entries); this.#injections.restore(inj.entries); },
+      texts: [...(first?.notes ?? []), ...inj.texts, ...nudges],
+      commit: onSaved,
+      restore: () => { this.#injections.restore(inj.entries); },
     };
   }
 
@@ -385,8 +440,7 @@ export abstract class Agent {
       folderId: this.#row.folderId, readonly: () => this.#readonly() };
   }
 
-  async #modelFor(llm: LlmConfig): Promise<LanguageModel> {
-    const apiKey = await this.#apiKey(llm.provider);
+  #modelFor(llm: LlmConfig, apiKey: string | null): LanguageModel {
     const spec: ModelSpec = { provider: llm.provider, model: llm.model, endpoint: llm.endpoint, reasoning: llm.reasoning, apiKey };
     const key = JSON.stringify(spec);
     if (this.#model?.key !== key) this.#model = { key, model: this.#billed(this.buildModel(spec, this.#modelHooks()), spec) };
@@ -432,21 +486,27 @@ export abstract class Agent {
 
   async #compactBody(): Promise<{ removed: number; summary: string } | null> {
     if (this.#turn) await this.#turn.then(() => undefined, () => undefined);
-    const llm = this.#llm ?? await this.#resolveLlmConfig();
+    const { llm, keys } = await this.#resolveLlm();
     const c = llm.compaction;
     const first = this.#messages[0];
     const prior = this.#ids[0] === null && first && typeof first.content === 'string' ? first.content : null;
     const plan = planCompaction(this.#messages, compactionStrategy(c.strategy), c.summarizePct, prior);
     if (!plan) return null;
-    const apiKey = await this.#apiKey(c.model.provider);
+    // The summary model's own key, from the same answer — its provider may
+    // not be the agent's.
     const spec: ModelSpec = { provider: c.model.provider, model: c.model.model, endpoint: c.model.endpoint,
-      reasoning: c.model.reasoning, apiKey };
+      reasoning: c.model.reasoning, apiKey: keys.compaction };
     const model = this.#billed(this.buildModel(spec, this.#modelHooks()), spec);
     const summary = await writeSummary(model, plan, c.maxTokens);
     const firstKeptId = this.#ids[plan.removeCount] ?? '';
-    await this.#withLock('compaction', () => this.#transcript.append([compactionLine(summary, firstKeptId)]));
-    this.#messages = [{ role: 'user', content: summary }, ...this.#messages.slice(plan.removeCount)];
-    this.#ids = [null, ...this.#ids.slice(plan.removeCount)];
+    // The record only grows, so the kept tail's first line is still where it
+    // was even if someone added to the transcript meanwhile: bring the copy
+    // current, append, and rebuild the conversation from the record.
+    await this.#withLock('compaction', async (lock) => {
+      await this.#current(lock);
+      await this.#transcript.append([compactionLine(summary, firstKeptId)]);
+    });
+    this.#rebuild();
     this.#emit('compacted', { removed: plan.removeCount, summary });
     this.#handlers.onNotice({ kind: 'compacted', text: `compacted: ${plan.removeCount} messages summarized` });
     return { removed: plan.removeCount, summary };
@@ -454,13 +514,13 @@ export abstract class Agent {
 
   // ── the lock ───────────────────────────────────────────────────────────
 
-  async #withLock<T>(label: string, fn: () => Promise<T>): Promise<T> {
-    await call(this.#backend, 'POST', `/sessions/${this.sessionId}/lock`, { label });
+  async #withLock<T>(label: string, fn: (lock: LockReply) => Promise<T>): Promise<T> {
+    const lock = await call<LockReply>(this.#backend, 'POST', `/sessions/${this.sessionId}/lock`, { label });
     const renew = setInterval(() => {
       this.#background('lock renewal', () => call(this.#backend, 'POST', `/sessions/${this.sessionId}/ping`).then(() => undefined));
     }, LOCK_RENEW_MS);
     try {
-      return await fn();
+      return await fn(lock ?? {});
     } finally {
       clearInterval(renew);
       // The release runs even when fn threw; a release that fails is
@@ -490,4 +550,12 @@ export abstract class Agent {
   #emit<E extends keyof AgentEvents>(event: E, payload: AgentEvents[E]): void {
     this.#events.emit(event, payload, (e) => this.#handlers.onError(asPhantomError(e, 'backend_error', `a listener for "${event}" threw`)));
   }
+}
+
+/** The tool calls of the last message that never got a result — what a
+ *  step cut by a crash leaves behind. */
+function danglingCalls(messages: readonly ModelMessage[]): ToolCallPart[] {
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== 'assistant' || typeof last.content === 'string') return [];
+  return last.content.filter((p): p is ToolCallPart => p.type === 'tool-call');
 }

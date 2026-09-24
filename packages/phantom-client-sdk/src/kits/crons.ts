@@ -7,7 +7,7 @@ import { tool, type Tool } from 'ai';
 import { z } from 'zod';
 import { call, callRaw } from '../backend.js';
 import { PhantomError } from '../errors.js';
-import type { ToolKit, ToolKitContext } from '../toolkit.js';
+import type { BuiltTools, ToolKit, ToolKitContext } from '../toolkit.js';
 
 const WHAT_A_RUN_IS = 'A RUN HAS NO USER IN IT: it opens a fresh coding session in this workspace (its own checkout, ' +
   'cut from the base branch) and runs the prompt as one turn. It cannot see this conversation and cannot ask a ' +
@@ -25,22 +25,21 @@ const SCHEDULE = 'A 5-field cron expression for something RECURRING ("0 9 * * *"
 
 export const cronsToolKit: ToolKit = {
   name: 'crons',
-  mutatingToolNames: ['cron_create', 'cron_update', 'cron_remove'],
   version: (ctx) => ctx.workspaceId,
-  async build(ctx: ToolKitContext): Promise<Record<string, Tool>> {
+  async build(ctx: ToolKitContext): Promise<BuiltTools> {
     let settings: Record<string, { value: unknown }>;
     try {
       settings = await call(ctx.backend, 'GET', `/settings?workspace=${encodeURIComponent(ctx.workspaceId)}`);
     } catch (e) {
       throw new PhantomError('tool_build_failed', `could not read the workspace's settings: ${(e as Error).message}`, { cause: e });
     }
-    if (settings.cron_enabled?.value !== true) return {};
+    if (settings.cron_enabled?.value !== true) return { tools: {}, mutating: [] };
     const base = `/workspaces/${encodeURIComponent(ctx.workspaceId)}/crons`;
     const api = async (method: string, path: string, body?: unknown): Promise<unknown> => {
       const j = await callRaw(ctx.backend, method, `${base}${path}`, body);
       return j.ok ? j.data : { error: j.error?.message };
     };
-    return {
+    return { mutating: ['cron_create', 'cron_update', 'cron_remove'], tools: {
       cron_list: tool({
         description: 'The workspace\'s crons, each with its schedule, its `prompt` (an agent run) or `script` (a path ' +
           'run with sh, no model), whether it is enabled, `once` (a one-time run) and `last_run_at`. Call this before naming a cron — never guess a name. How a run went is ' +
@@ -83,6 +82,6 @@ export const cronsToolKit: ToolKit = {
         inputSchema: z.object({ name: z.string().describe('the cron to remove, from cron_list') }),
         execute: ({ name }) => api('DELETE', `/${encodeURIComponent(name)}`),
       }),
-    };
+    } };
   },
 };

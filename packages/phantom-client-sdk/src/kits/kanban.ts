@@ -15,7 +15,7 @@
 import { tool, type Tool } from 'ai';
 import { z } from 'zod';
 import { callRaw, type PhantomBackend } from '../backend.js';
-import type { ToolKit, ToolKitContext } from '../toolkit.js';
+import type { BuiltTools, ToolKit, ToolKitContext } from '../toolkit.js';
 
 export const DEFAULT_COLUMNS = ['backlog', 'plan', 'in_progress', 'blocked', 'done'];
 
@@ -82,18 +82,21 @@ const ITEMS_DESCRIPTION = 'add, edit (reword), remove, tick — each op touches 
 /** The coding agent's board surface: read only. */
 export const kanbanReadToolKit: ToolKit = {
   name: 'kanban',
-  mutatingToolNames: [],
   version: (ctx) => ctx.workspaceId,
-  build(ctx: ToolKitContext): Promise<Record<string, Tool>> {
+  build(ctx: ToolKitContext): Promise<BuiltTools> {
     const api = cardApi(ctx.backend, ctx.workspaceId);
-    return Promise.resolve({
+    return Promise.resolve({ mutating: [], tools: {
       kanban_card_read: readTool(api,
         'Read it before planning, and RE-read it when retrying or resuming — the card is the ' +
         'source of truth, not your memory of it. Cards are numbered: PHA-7 is card 7. ' +
         'Use the board only when the user points you at a card; a task needs no card.'),
-    });
+    } });
   },
 };
+
+/** The board tools that change things — refused while readonly. */
+const BOARD_WRITERS = ['kanban_card_create', 'kanban_card_update', 'kanban_card_items', 'kanban_card_move',
+  'kanban_card_auto_plan', 'kanban_card_auto_build', 'kanban_card_pin'];
 
 /** The whole board. `columns` are the workspace's when they differ from the default. */
 export function kanbanToolKit(columns: string[] = DEFAULT_COLUMNS): ToolKit {
@@ -113,12 +116,10 @@ export function kanbanToolKit(columns: string[] = DEFAULT_COLUMNS): ToolKit {
   });
   return {
     name: 'kanban',
-    mutatingToolNames: ['kanban_card_create', 'kanban_card_update', 'kanban_card_items', 'kanban_card_move',
-      'kanban_card_auto_plan', 'kanban_card_auto_build', 'kanban_card_pin'],
     version: (ctx) => ctx.workspaceId,
-    build(ctx: ToolKitContext): Promise<Record<string, Tool>> {
+    build(ctx: ToolKitContext): Promise<BuiltTools> {
       const api = cardApi(ctx.backend, ctx.workspaceId);
-      return Promise.resolve({
+      return Promise.resolve({ mutating: BOARD_WRITERS, tools: {
         kanban_card_list: tool({
           description: 'Every column and card (number, title, status) — a card is what people also call an issue, ' +
             'task, todo, or ticket. Cards are numbered — PHA-7 is card 7. ' +
@@ -172,7 +173,7 @@ export function kanbanToolKit(columns: string[] = DEFAULT_COLUMNS): ToolKit {
           inputSchema: z.object({ card: cardNo, limit: z.number().int().optional().describe('revisions to return (default 20, newest first)') }),
           execute: ({ card, limit }) => api.revisions(card, limit ?? 20),
         }),
-      });
+      } });
     },
   };
 }
@@ -197,12 +198,11 @@ export function loopSupervisorToolKit(cardNumber: number, column: LoopColumn): T
     : '"done" declares you verified EVERY requirement yourself against the repo; ';
   return {
     name: 'loop-supervisor',
-    // Board powers in a run are the point of the run: not trimmed by readonly.
-    mutatingToolNames: [],
     version: () => `${cardNumber}:${column}`,
-    build(ctx: ToolKitContext): Promise<Record<string, Tool>> {
+    build(ctx: ToolKitContext): Promise<BuiltTools> {
       const api = cardApi(ctx.backend, ctx.workspaceId);
-      return Promise.resolve({
+      // Board powers in a run are the point of the run: not trimmed by readonly.
+      return Promise.resolve({ mutating: [], tools: {
         kanban_card_move: tool({
           description: `Move card ${cardNumber}. THIS ENDS THE RUN — the moment you call this, the ` +
             'conversation with the coding agent is over and no further message passes in either ' +
@@ -223,7 +223,7 @@ export function loopSupervisorToolKit(cardNumber: number, column: LoopColumn): T
           inputSchema: z.object({ ops: itemsSchema }),
           execute: ({ ops }) => api.patch(cardNumber, { items: ops }),
         }),
-      });
+      } });
     },
   };
 }
@@ -231,11 +231,11 @@ export function loopSupervisorToolKit(cardNumber: number, column: LoopColumn): T
 export function loopBlockToolKit(cardNumber: number): ToolKit {
   return {
     name: 'loop-block',
-    mutatingToolNames: [],   // survives plan mode by design
     version: () => String(cardNumber),
-    build(ctx: ToolKitContext): Promise<Record<string, Tool>> {
+    build(ctx: ToolKitContext): Promise<BuiltTools> {
       const api = cardApi(ctx.backend, ctx.workspaceId);
-      return Promise.resolve({
+      // Survives plan mode by design: nothing here is marked as changing things.
+      return Promise.resolve({ mutating: [], tools: {
         kanban_card_block: tool({
           description: `Block card ${cardNumber} for a human decision. THIS ENDS THE RUN — the conversation ` +
             'with your supervisor stops and the card lands on the board with your reason. This is your ' +
@@ -245,7 +245,7 @@ export function loopBlockToolKit(cardNumber: number): ToolKit {
           inputSchema: z.object({ reason: z.string().describe('what the human must decide — shown on the board') }),
           execute: ({ reason }) => api.patch(cardNumber, { status: 'blocked', blocked_reason: reason, resolution: null }),
         }),
-      });
+      } });
     },
   };
 }

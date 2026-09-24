@@ -9,6 +9,7 @@ import { Agent, type AgentHandlers, type SessionRow } from '../../agent.js';
 import { call, callRaw, type PhantomBackend } from '../../backend.js';
 import type { ToolKit } from '../../toolkit.js';
 import { fill } from '../../prompts/template.js';
+import { todayFor } from '../../prompts/date.js';
 import { STAKEHOLDERS } from '../../prompts/stakeholders.js';
 import { VALUES } from '../../prompts/values.js';
 import { COMMUNICATION } from '../../prompts/communication.js';
@@ -79,22 +80,16 @@ export async function gatherWorkspaceFacts(b: PhantomBackend, sessionId: string,
     on('agent_soul') ? readRepoFile('SOUL.md') : Promise.resolve(''),
     on('agent_agents_md') ? readRepoFile('AGENTS.md') : Promise.resolve(''),
   ]);
-  const tz = typeof settings.timezone?.value === 'string' ? settings.timezone.value : 'UTC';
   return {
     skills: skills.skills ?? [], secrets: secrets.secrets ?? [],
     credentials: on('agent_git_credentials'), database: on('agent_database'), databaseShared: on('agent_database_shared'),
-    soul, agents, date: dateIn(tz),
+    soul, agents, date: todayFor(settings),
   };
 }
 
 /** The read tool numbers lines for display; the file itself is what the prompt wants. */
 function stripLineNumbers(numbered: string): string {
   return numbered.split('\n').map((l) => l.replace(/^\s*\d+\t/, '')).join('\n');
-}
-
-function dateIn(timezone: string): string {
-  try { return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, dateStyle: 'short' }).format(new Date()); }
-  catch { return new Date().toISOString().slice(0, 10); }
 }
 
 export class CodingAgent extends Agent {

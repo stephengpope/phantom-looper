@@ -4,16 +4,15 @@
 import { tool, type Tool } from 'ai';
 import { z } from 'zod';
 import { callRaw } from '../backend.js';
-import type { ToolKit, ToolKitContext } from '../toolkit.js';
+import type { BuiltTools, ToolKit, ToolKitContext } from '../toolkit.js';
 
 export const webToolKit: ToolKit = {
   name: 'web',
-  mutatingToolNames: [],
   version: (ctx) => ctx.sessionId,
-  build(ctx: ToolKitContext): Promise<Record<string, Tool>> {
+  build(ctx: ToolKitContext): Promise<BuiltTools> {
     const api = (p: string, body: unknown, signal?: AbortSignal) =>
       callRaw(ctx.backend, 'POST', p, body, { sessionId: ctx.sessionId, signal });
-    return Promise.resolve({
+    return Promise.resolve({ mutating: [], tools: {
       web_search: tool({
         description: 'Search the web. Returns titles, URLs, and short snippets — often enough ' +
           'to answer a quick question on their own. To read a full page, pass its URL to web_fetch. ' +
@@ -47,6 +46,6 @@ export const webToolKit: ToolKit = {
         }),
         execute: (args, opts) => api('/web/fetch', args, opts?.abortSignal),
       }),
-    });
+    } });
   },
 };

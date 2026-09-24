@@ -3,9 +3,11 @@
 // with `agent.use(kit)`.
 //
 // `version()` is cheap and the SDK calls it before every turn: a kit's
-// tools are rebuilt only when its version changes. `readonly` is asked at
-// EXECUTE time: a mutating tool called while it says true answers the model
-// with { ok:false, error:{ code:'readonly' } } and runs nothing.
+// tools are rebuilt only when its version changes. `build` answers the
+// tools AND which of them change things — the kit that knows says so (the
+// workspace kit reads it off the server's own tool list). `readonly` is
+// asked at EXECUTE time: a mutating tool called while it says true answers
+// the model with { ok:false, error:{ code:'readonly' } } and runs nothing.
 import type { Tool } from 'ai';
 import type { PhantomBackend } from './backend.js';
 
@@ -20,14 +22,19 @@ export interface ToolKitContext {
   readonly: () => boolean;
 }
 
+/** What a kit builds: its tools, and which of them change things. */
+export interface BuiltTools {
+  tools: Record<string, Tool>;
+  /** Names from `tools` that change things. Refused while readonly. */
+  mutating: readonly string[];
+}
+
 export interface ToolKit {
   /** Unique among the agent's kits. Adding a kit with a name already present replaces it. */
   name: string;
-  /** Which of this kit's tools change things. Refused while readonly. */
-  mutatingToolNames: readonly string[];
   /** Cheap. A different string = rebuild. */
   version(ctx: ToolKitContext): string;
-  build(ctx: ToolKitContext): Promise<Record<string, Tool>>;
+  build(ctx: ToolKitContext): Promise<BuiltTools>;
 }
 
 export const READONLY_REFUSAL = (name: string) => ({
@@ -35,9 +42,10 @@ export const READONLY_REFUSAL = (name: string) => ({
     message: `in plan mode — ${name} is off until the user switches back to code mode` },
 });
 
-/** Wrap a kit's tools so its mutating ones ask `readonly()` at execute time. */
-export function guardReadonly(kit: ToolKit, tools: Record<string, Tool>, ctx: ToolKitContext): Record<string, Tool> {
-  const mutating = new Set(kit.mutatingToolNames);
+/** Wrap built tools so the mutating ones ask `readonly()` at execute time. */
+export function guardReadonly(built: BuiltTools, ctx: ToolKitContext): Record<string, Tool> {
+  const { tools } = built;
+  const mutating = new Set(built.mutating);
   const out: Record<string, Tool> = {};
   for (const [name, t] of Object.entries(tools)) {
     if (!mutating.has(name) || !t.execute) { out[name] = t; continue; }
@@ -66,7 +74,7 @@ export class ToolKitSet {
       const version = kit.version(ctx);
       let entry = this.built.get(kit.name);
       if (!entry || entry.version !== version) {
-        entry = { version, tools: guardReadonly(kit, await kit.build(ctx), ctx) };
+        entry = { version, tools: guardReadonly(await kit.build(ctx), ctx) };
         this.built.set(kit.name, entry);
       }
       Object.assign(all, entry.tools);

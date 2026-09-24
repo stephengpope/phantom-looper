@@ -9,8 +9,9 @@
 //                            AI SDK awaits it and carries reasoning with its
 //                            provider signature).
 //   each tool finished    → its result, as it lands.
-//   model call failed     → nothing from that step; the queued messages that
-//                            rode into it go back to their queues.
+//   model call failed     → nothing from that step. What rode into it is
+//                            handed back (`restore`) — the caller decides what
+//                            that means; the builder's own words are not kept.
 //   interrupted           → partial text and every tool call seen, results
 //                            for finished tools, INTERRUPTED_RESULT for the
 //                            rest, then an `interrupted` line.
@@ -40,7 +41,7 @@ export interface TurnResult {
 }
 
 /** What rides into the next model call: drained from the queues. `commit`
- *  when the call succeeded, `restore` when it failed. */
+ *  once the lines carrying it are saved, `restore` when they never will be. */
 export interface PendingMessages {
   texts: string[];
   commit(): void;
@@ -170,10 +171,11 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
       ];
       step.held = [];
       step.assistantRecorded = true;
-      st.pending?.commit();
+      const rode = st.pending;
       st.pending = null;
       st.pendingMessages = [];
       await record(lines);
+      if (st.recordFailure) rode?.restore(); else rode?.commit();
     },
   });
 
@@ -215,6 +217,7 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
     // The cut step. Nothing streamed = nothing to record beyond the user
     // messages that were sent and the mark.
     const lines: TranscriptLine[] = [];
+    const rode = step.assistantRecorded ? null : st.pending;
     if (!step.assistantRecorded) {
       lines.push(...st.pendingMessages.map(messageLine));
       const content: ModelMessage['content'] = [
@@ -222,11 +225,11 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
       ] as never;
       if ((content as unknown[]).length) lines.push(messageLine({ role: 'assistant', content: content }));
       lines.push(...step.held);
-      st.pending?.commit();
     }
     for (const c of step.calls) if (!step.answered.has(c.toolCallId)) lines.push(messageLine(interruptedResultMessage(c)));
     lines.push(interruptedLine());
     await record(lines);
+    if (st.recordFailure) rode?.restore(); else rode?.commit();
     throwIfFailed(st);
     return { text: step.text || text, messages: added, usage, outcome: 'interrupted', lastInputTokens };
   }

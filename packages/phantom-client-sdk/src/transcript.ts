@@ -19,6 +19,11 @@
 // `deliveryId`. A lost reply → resend → already seen → no duplicate. A lost
 // request → still `after` → written. The client never sends delivery k+1
 // before k is answered, so the count it holds always equals the server's.
+//
+// Others write it too (another window, the server, Telegram — one at a
+// time, under the session lock). `stamp` is the server's last-changed mark
+// for the copy held here; taking the lock answers the server's current one,
+// and a turn that sees them differ reads the record again before it runs.
 import type { ModelMessage } from 'ai';
 import { PhantomError } from './errors.js';
 import { call, type PhantomBackend } from './backend.js';
@@ -89,24 +94,28 @@ export function parseLines(text: string): TranscriptLine[] {
  *  append waits for the first's answer. */
 export class Transcript {
   private lineCount: number;
+  private lastStamp: string | null;
   private chain: Promise<void> = Promise.resolve();
   readonly lines: TranscriptLine[];
 
   constructor(private readonly backend: PhantomBackend, readonly sessionId: string,
-    lines: TranscriptLine[], lineCount: number) {
+    lines: TranscriptLine[], lineCount: number, stamp: string | null) {
     this.lines = lines;
     this.lineCount = lineCount;
+    this.lastStamp = stamp;
   }
 
   /** Read the whole record from the server. */
   static async load(backend: PhantomBackend, sessionId: string): Promise<Transcript> {
-    const r = await call<{ data: string | null; lines?: number }>(backend, 'GET', `/sessions/${sessionId}/transcript`);
+    const r = await call<{ data: string | null; lines?: number; updated_at?: string | null }>(backend, 'GET', `/sessions/${sessionId}/transcript`);
     const lines = parseLines(r.data ?? '');
-    return new Transcript(backend, sessionId, lines, r.lines ?? lines.length);
+    return new Transcript(backend, sessionId, lines, r.lines ?? lines.length, r.updated_at ?? null);
   }
 
   /** How many lines the server has, as last acknowledged. */
   get count(): number { return this.lineCount; }
+  /** The server's last-changed mark for the copy held here. */
+  get stamp(): string | null { return this.lastStamp; }
 
   /** Append lines. Resolves when the server acknowledged them; rejects with
    *  transcript_conflict (someone else wrote) or transcript_write_failed. */
@@ -123,9 +132,9 @@ export class Transcript {
   private async send(lines: TranscriptLine[]): Promise<void> {
     const after = this.lineCount;
     const deliveryId = lineId();
-    let r: { lines: number; applied: boolean };
+    let r: { lines: number; applied: boolean; updated_at?: string | null };
     try {
-      r = await call<{ lines: number; applied: boolean }>(this.backend, 'POST',
+      r = await call<{ lines: number; applied: boolean; updated_at?: string | null }>(this.backend, 'POST',
         `/sessions/${this.sessionId}/transcript/append`, { after, deliveryId, lines });
     } catch (e) {
       if (e instanceof PhantomError && e.code === 'transcript_conflict') throw e;
@@ -137,6 +146,7 @@ export class Transcript {
         `transcript has ${r.lines} lines on the server, expected ${expected} — another writer moved it`);
     }
     this.lineCount = r.lines;
+    this.lastStamp = r.updated_at ?? null;
     this.lines.push(...lines);
   }
 }

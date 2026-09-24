@@ -1,13 +1,15 @@
 // The WORKSPACE kit — the file tools (bash read write edit ls find grep)
 // plus the task tools (task_list task_wait task_kill). The definitions are
 // the server's (GET /tools), fetched once per build; each becomes a tool
-// that POSTs back with the session header. The version folds in the
-// session's folder: a session that follows another (the assistant) reads
-// that one's files, and its tools are rebuilt when it moves.
+// that POSTs back with the session header. Which of them change things is
+// the server's word too — each definition's `mutates` — never a list here.
+// The version folds in the session's folder: a session that follows another
+// (the assistant) reads that one's files, and its tools are rebuilt when it
+// moves.
 import { jsonSchema, tool, type Tool } from 'ai';
 import { callRaw } from '../backend.js';
 import { PhantomError } from '../errors.js';
-import type { ToolKit, ToolKitContext } from '../toolkit.js';
+import type { BuiltTools, ToolKit, ToolKitContext } from '../toolkit.js';
 
 interface ToolListing {
   sessionHeader: string;
@@ -16,9 +18,8 @@ interface ToolListing {
 
 export const workspaceToolKit: ToolKit = {
   name: 'workspace',
-  mutatingToolNames: ['bash', 'write', 'edit', 'task_kill'],
   version: (ctx) => `${ctx.sessionId}:${ctx.folderId ?? ''}`,
-  async build(ctx: ToolKitContext): Promise<Record<string, Tool>> {
+  async build(ctx: ToolKitContext): Promise<BuiltTools> {
     const listing = await callRaw<ToolListing>(ctx.backend, 'GET', '/tools');
     if (!listing.ok || !listing.data) {
       throw new PhantomError('tool_build_failed', `could not read the tool list: ${listing.error?.message ?? 'no data'}`);
@@ -44,6 +45,21 @@ export const workspaceToolKit: ToolKit = {
           callRaw(ctx.backend, 'POST', `/tools/${def.name}`, args ?? {}, { sessionId: ctx.sessionId, signal: opts?.abortSignal }),
       });
     }
-    return out;
+    return { tools: out, mutating: listing.data.tools.filter((t) => t.mutates).map((t) => t.name) };
+  },
+};
+
+/** The workspace kit with only the tools that look — for an agent that
+ *  inspects and never writes (the supervisor, the assistant), whatever the
+ *  readonly flag says. No folder (an assistant with nothing on screen) = no
+ *  file tools, not a failing build. */
+export const readonlyWorkspaceToolKit: ToolKit = {
+  name: 'workspace',
+  version: workspaceToolKit.version,
+  async build(ctx: ToolKitContext): Promise<BuiltTools> {
+    if (!ctx.folderId) return { tools: {}, mutating: [] };
+    const { tools, mutating } = await workspaceToolKit.build(ctx);
+    const writers = new Set(mutating);
+    return { tools: Object.fromEntries(Object.entries(tools).filter(([n]) => !writers.has(n))), mutating: [] };
   },
 };

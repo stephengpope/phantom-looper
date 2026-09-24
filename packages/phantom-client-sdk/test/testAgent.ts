@@ -5,15 +5,15 @@ import { z } from 'zod';
 import { Agent, type AgentHandlers, type Notice, type SessionRow } from '../src/agent.js';
 import { call, type PhantomBackend } from '../src/backend.js';
 import type { PhantomError } from '../src/errors.js';
+import type { ModelSpec } from '../src/model/languageModel.js';
 import type { ToolKit } from '../src/toolkit.js';
 import { FakeBackend } from './fakeBackend.js';
 import { scriptedModel, type ScriptedCall } from './fakeModel.js';
 
 export const echoKit: ToolKit = {
   name: 'echo',
-  mutatingToolNames: ['write_note'],
   version: () => 'v1',
-  build: () => Promise.resolve({
+  build: () => Promise.resolve({ mutating: ['write_note'], tools: {
     echo: tool({ description: 'echo', inputSchema: z.object({ text: z.string() }),
       execute: ({ text }) => Promise.resolve({ echoed: text }) }),
     write_note: tool({ description: 'write', inputSchema: z.object({ text: z.string() }),
@@ -25,13 +25,15 @@ export const echoKit: ToolKit = {
       }) }),
     fails: tool({ description: 'fails', inputSchema: z.object({ why: z.string().optional() }),
       execute: (): Promise<unknown> => Promise.reject(new Error('tool blew up')) }),
-  }),
+  } }),
 };
 
 export class TestAgent extends Agent {
   readonly kind = 'coding';
   static script: ScriptedCall[] = [];
   static modelCalls: unknown[] = [];
+  /** What each model handle was built for — provider, model, key. */
+  static specs: ModelSpec[] = [];
   promptBuilds = 0;
 
   static create(backend: PhantomBackend, handlers: AgentHandlers, workspaceId = 'w1'): Promise<TestAgent> {
@@ -43,17 +45,17 @@ export class TestAgent extends Agent {
   }
   protected systemPrompt(): string[] { this.promptBuilds++; return ['BASE BLOCK', 'WORKSPACE BLOCK']; }
   protected toolKits(): ToolKit[] { return [echoKit]; }
-  protected buildModel(): LanguageModel {
+  protected buildModel(spec: ModelSpec): LanguageModel {
+    TestAgent.specs.push(spec);
     const { model, calls } = scriptedModel(TestAgent.script);
     TestAgent.modelCalls = calls;
     return model;
   }
 }
 
-/** A subclass that rebuilds its prompt and config every turn. */
+/** A subclass that rebuilds its prompt every turn. */
 export class UnfrozenAgent extends TestAgent {
   protected override systemPromptFrozen = false;
-  protected override llmConfigFrozen = false;
   static override create(backend: PhantomBackend, handlers: AgentHandlers, workspaceId = 'w1'): Promise<UnfrozenAgent> {
     return Agent.birth<UnfrozenAgent>(UnfrozenAgent, backend, handlers,
       () => call<SessionRow>(backend, 'POST', '/sessions', { workspace_id: workspaceId }));

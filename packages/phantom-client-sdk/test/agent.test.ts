@@ -7,15 +7,15 @@ import { INTERRUPTED_RESULT } from '../src/messages.js';
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-test('create freezes the prompt and llm config on the row, once', async () => {
+test('create freezes the prompt on the row, once — and nothing about the model', async () => {
   const h = harness();
   const a = await TestAgent.create(h.fake.backend, h.handlers);
   const row = h.fake.sessions.get(a.sessionId)!;
   assert.deepEqual(row.system_prompt, ['BASE BLOCK', 'WORKSPACE BLOCK']);
-  assert.equal((row.llm_config as { model: string }).model, 'claude-test');
   assert.equal(a.promptBuilds, 1);
   const freeze = h.fake.requests.filter((r) => r.path.endsWith('/frozen'));
   assert.equal(freeze.length, 1);
+  assert.deepEqual(Object.keys(freeze[0]!.body as object), ['systemPrompt']);
   // Resume: read back, never rebuilt, never re-frozen.
   const b = await TestAgent.resume(h.fake.backend, h.handlers, a.sessionId);
   assert.equal(b.promptBuilds, 0);
@@ -90,16 +90,36 @@ test('readonly: a mutating tool is refused at execute time, the reader still run
   assert.deepEqual(byName.echo, { echoed: 'e' });
 });
 
-test('model failure: nothing from that step is recorded, the nudge stays queued, onError once, say() rejects', async () => {
+test('model failure: nothing is recorded, nothing is kept — the next message goes alone', async () => {
   const h = harness();
-  TestAgent.script = [{ error: new Error('overloaded') }];
+  TestAgent.script = [{ error: new Error('overloaded') }, { text: 'ok' }];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
   await assert.rejects(a.say('hi'), (e: Error & { code: string }) => e.code === 'model_error' && /overloaded/.test(e.message));
   assert.equal(h.fake.linesOf(a.sessionId).length, 0);
-  assert.equal(a.nudges.length, 1);
+  assert.equal(a.nudges.length, 0);
   assert.equal(h.errors.length, 1);
   assert.equal(h.errors[0]!.code, 'model_error');
   assert.equal(h.fake.sessions.get(a.sessionId)!.lockedBy, null);
+  await a.say('next');
+  const users = h.fake.linesOf(a.sessionId)
+    .filter((l) => l.type === 'message' && (l.message as { role: string }).role === 'user')
+    .map((l) => (l.message as { content: string }).content);
+  assert.deepEqual(users, ['next']);
+});
+
+test('a turn refused because the session is busy elsewhere keeps nothing', async () => {
+  const h = harness();
+  TestAgent.script = [{ text: 'ok' }];
+  const a = await TestAgent.create(h.fake.backend, h.handlers);
+  h.fake.sessions.get(a.sessionId)!.lockedBy = 'another-window';
+  await assert.rejects(a.say('hi'), (e: Error & { code: string }) => e.code === 'session_locked');
+  assert.equal(a.nudges.length, 0);
+  h.fake.sessions.get(a.sessionId)!.lockedBy = null;
+  await a.say('again');
+  const users = h.fake.linesOf(a.sessionId)
+    .filter((l) => l.type === 'message' && (l.message as { role: string }).role === 'user')
+    .map((l) => (l.message as { content: string }).content);
+  assert.deepEqual(users, ['again']);
 });
 
 test('interrupt mid-tool: finished calls keep results, the cut one gets INTERRUPTED_RESULT, then an interrupted line', async () => {
@@ -251,10 +271,7 @@ test('a tool error reaches the model as its result AND the client as tool-error'
 
 test('resume after a crash mid-step answers the dangling tool call as interrupted', async () => {
   const h = harness();
-  const s = h.fake.newSession({ system_prompt: ['B', 'W'], llm_config: (h.fake.agentConfig as { model: unknown }) && {
-    provider: 'anthropic', model: 'm', endpoint: null, reasoning: null, maxSteps: null,
-    compaction: { thresholdPct: 0, contextWindow: null, summarizePct: 50, strategy: 'fast', maxTokens: null,
-      model: { provider: 'anthropic', model: 'm', endpoint: null, reasoning: null } } } });
+  const s = h.fake.newSession({ system_prompt: ['B', 'W'] });
   s.lines.push(
     JSON.stringify({ type: 'message', id: 'l1', at: 'now', message: { role: 'user', content: 'do it' } }),
     JSON.stringify({ type: 'message', id: 'l2', at: 'now', message: { role: 'assistant',
@@ -267,17 +284,92 @@ test('resume after a crash mid-step answers the dangling tool call as interrupte
   assert.equal(s.lockedBy, null);
 });
 
-test('unfrozen: prompt and config are resolved every turn and never saved', async () => {
+test('unfrozen: the prompt is built every turn and never saved', async () => {
   const h = harness();
   TestAgent.script = [{ text: 'a' }, { text: 'b' }];
   const a = await UnfrozenAgent.create(h.fake.backend, h.handlers);
   await a.say('1');
   await a.say('2');
   assert.equal(a.promptBuilds, 2);
-  const row = h.fake.sessions.get(a.sessionId)!;
-  assert.equal(row.system_prompt, null);
-  assert.equal(row.llm_config, null);
+  assert.equal(h.fake.sessions.get(a.sessionId)!.system_prompt, null);
   assert.equal(h.fake.requests.filter((r) => r.path.endsWith('/frozen')).length, 0);
+});
+
+test('the model is the server\'s answer every turn: a change reaches the next turn', async () => {
+  const h = harness();
+  TestAgent.script = [{ text: 'a' }, { text: 'b' }];
+  TestAgent.specs = [];
+  const a = await TestAgent.create(h.fake.backend, h.handlers);
+  await a.say('1');
+  (h.fake.agentConfig as { model: { provider: string; model: string; apiKey: string } }).model =
+    { provider: 'openai', model: 'gpt-test', apiKey: 'sk-openai' } as never;
+  await a.say('2');
+  assert.deepEqual(TestAgent.specs.map((s) => [s.provider, s.model, s.apiKey]),
+    [['anthropic', 'claude-test', 'sk-ant-api-test'], ['openai', 'gpt-test', 'sk-openai']]);
+  assert.deepEqual(h.errors, []);
+});
+
+test('someone else wrote between turns: the turn reads the transcript again first, then runs', async () => {
+  const h = harness();
+  TestAgent.script = [{ text: 'first' }, { text: 'third' }];
+  const a = await TestAgent.create(h.fake.backend, h.handlers);
+  const reloads: number[] = [];
+  a.on('reloaded', (e) => reloads.push(e.messages.length));
+  await a.say('one');
+  // Another window's turn lands on the shared transcript.
+  h.fake.writeAsOther(a.sessionId, [
+    { type: 'message', id: 'o1', at: 'now', message: { role: 'user', content: 'from the phone' } },
+    { type: 'message', id: 'o2', at: 'now', message: { role: 'assistant', content: [{ type: 'text', text: 'second' }] } },
+  ]);
+  const r = await a.say('three');
+  assert.equal(r?.outcome, 'done');
+  assert.deepEqual(reloads, [4]);
+  const users = a.messages.filter((m) => m.role === 'user').map((m) => m.content);
+  assert.deepEqual(users, ['one', 'from the phone', 'three']);
+  // The model saw the other window's turn.
+  const last = TestAgent.modelCalls[TestAgent.modelCalls.length - 1] as { prompt: Array<{ role: string }> };
+  assert.equal(last.prompt.filter((m) => m.role === 'user').length, 3);
+  assert.deepEqual(h.errors, []);
+});
+
+test('nothing moved between turns: nothing is downloaded again', async () => {
+  const h = harness();
+  TestAgent.script = [{ text: 'a' }, { text: 'b' }];
+  const a = await TestAgent.create(h.fake.backend, h.handlers);
+  await a.say('1');
+  await a.say('2');
+  assert.equal(h.fake.requests.filter((r) => r.method === 'GET' && r.path.endsWith('/transcript')).length, 1);
+});
+
+test('a stop starts nothing by itself: what is queued waits for the app', async () => {
+  const h = harness();
+  TestAgent.script = [{ tools: [{ name: 'slow', input: { ms: 5000 } }] }, { text: 'never' }];
+  const a = await TestAgent.create(h.fake.backend, h.handlers);
+  const p = a.say('go');
+  await wait(100);
+  await a.say('queued meanwhile');
+  a.interrupt();
+  const r = await p;
+  assert.equal(r?.outcome, 'interrupted');
+  await wait(100);
+  assert.equal(h.fake.sessions.get(a.sessionId)!.turnsEnded, 1);
+  assert.equal(a.busy, false);
+  assert.equal(a.nudges.length, 1);
+});
+
+test('server notes: a failed turn hands them back to the server; switched off, they are not pulled', async () => {
+  const h = harness();
+  TestAgent.script = [{ error: new Error('overloaded') }, { text: 'ok' }];
+  const a = await TestAgent.create(h.fake.backend, h.handlers);
+  const s = h.fake.sessions.get(a.sessionId)!;
+  s.backdoor.push('a command exited');
+  await assert.rejects(a.say('hi'));
+  await wait(20);
+  assert.deepEqual(s.backdoor, ['a command exited']);
+  a.setServerNotes(false);
+  await a.say('again');
+  assert.deepEqual(s.backdoor, ['a command exited']);
+  assert.equal(h.fake.requests.filter((r) => r.path.endsWith('/backdoor/drain')).length, 1);
 });
 
 test('say() while busy queues; text waiting when the first model call starts rides it', async () => {

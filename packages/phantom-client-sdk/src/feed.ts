@@ -12,7 +12,7 @@
 // when anyone stops the turn (esc in another window, /stop on Telegram, the
 // interrupt route). Heard here, the turn is aborted exactly as a local
 // interrupt would. The feed never echoes a client its own events.
-import { call, CLIENT_HEADER, type PhantomBackend } from './backend.js';
+import { call, headersFor, type PhantomBackend } from './backend.js';
 import type { StreamPart } from './turn.js';
 
 /** How long parts may sit before they are sent. The cli's own repaint rate. */
@@ -74,9 +74,7 @@ export function watchForInterrupt(
   const run = async () => {
     let r: Response;
     try {
-      r = await f(`${backend.url}/sessions/${sessionId}/events`, {
-        headers: { authorization: `Bearer ${backend.apiKey}`, [CLIENT_HEADER]: backend.clientId }, signal: ac.signal,
-      });
+      r = await f(`${backend.url}/sessions/${sessionId}/events`, { headers: headersFor(backend), signal: ac.signal });
     } catch (e) {
       if (!ac.signal.aborted) onFailed((e as Error).message);
       return;

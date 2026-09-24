@@ -1,8 +1,7 @@
-// The SHAPE of what an agent's model runs on. Frozen on the session row at
-// creation (Agent.create) and read back on resume; where the values come
-// from (the server's settings cascade, GET /agents/:kind/config) is not the
-// SDK's business. The API key is NOT here: keys rotate, so it is read live
-// for the frozen provider.
+// The SHAPE of what an agent's model runs on. Read from the server at the
+// start of every turn (GET /agents/:kind/config?session=) and never kept:
+// which model a session runs on is the server's rule, applied there. The
+// keys ride the same answer and are read apart (keysFrom), for the one use.
 import { PhantomError } from '../errors.js';
 
 export const PROVIDERS = ['anthropic', 'openai', 'openai-codex', 'google', 'deepseek', 'kimi', 'xai', 'mistral', 'groq', 'openai-compatible'] as const;
@@ -40,8 +39,8 @@ export interface LlmConfig {
   compaction: CompactionConfig;
 }
 
-/** What GET /agents/:kind/config answers with today, mapped to the frozen
- *  shape. Throws config_invalid on a shape the SDK cannot run. */
+/** What GET /agents/:kind/config answers, mapped to the shape a turn runs
+ *  on. Throws config_invalid on a shape the SDK cannot run. */
 export function llmConfigFrom(raw: unknown): LlmConfig {
   const r = raw as {
     model?: { provider?: string; model?: string; baseUrl?: string | null; reasoning?: string | null };
@@ -76,4 +75,13 @@ export function llmConfigFrom(raw: unknown): LlmConfig {
       },
     },
   };
+}
+
+/** The keys in the same answer: the agent's model's, and the summary
+ *  model's — each for its own provider, as the server resolved them. */
+export interface AgentKeys { model: string | null; compaction: string | null }
+
+export function keysFrom(raw: unknown): AgentKeys {
+  const r = raw as { model?: { apiKey?: string | null }; compaction?: { model?: { apiKey?: string | null } } } | null;
+  return { model: r?.model?.apiKey ?? null, compaction: r?.compaction?.model?.apiKey ?? null };
 }

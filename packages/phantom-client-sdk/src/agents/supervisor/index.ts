@@ -11,11 +11,12 @@ import { Agent, type AgentHandlers, type SessionRow } from '../../agent.js';
 import { call, type PhantomBackend } from '../../backend.js';
 import type { ToolKit } from '../../toolkit.js';
 import { fill } from '../../prompts/template.js';
+import { todayFor } from '../../prompts/date.js';
 import { STAKEHOLDERS } from '../../prompts/stakeholders.js';
 import { VALUES } from '../../prompts/values.js';
 import { COMMUNICATION } from '../../prompts/communication.js';
 import { SYSTEM } from './prompt.js';
-import { workspaceToolKit } from '../../kits/workspace.js';
+import { readonlyWorkspaceToolKit } from '../../kits/workspace.js';
 import { webToolKit } from '../../kits/web.js';
 import { kanbanReadToolKit } from '../../kits/kanban.js';
 
@@ -41,8 +42,7 @@ export class SupervisorAgent extends Agent {
 
   protected async systemPrompt(): Promise<string[]> {
     const settings = await call<Record<string, { value: unknown }>>(this.backend, 'GET', `/settings?workspace=${encodeURIComponent(this.workspaceId)}`);
-    const tz = typeof settings.timezone?.value === 'string' ? settings.timezone.value : 'UTC';
-    return supervisorPromptBlocks(new Intl.DateTimeFormat('en-CA', { timeZone: tz, dateStyle: 'short' }).format(new Date()));
+    return supervisorPromptBlocks(todayFor(settings));
   }
 
   /** Inspection only: the workspace kit is trimmed to its readers here, not
@@ -51,13 +51,3 @@ export class SupervisorAgent extends Agent {
     return [readonlyWorkspaceToolKit, kanbanReadToolKit, webToolKit];
   }
 }
-
-const READERS = new Set(['read', 'ls', 'find', 'grep', 'task_list', 'task_wait']);
-const readonlyWorkspaceToolKit: ToolKit = {
-  ...workspaceToolKit,
-  name: 'workspace',
-  async build(ctx) {
-    const all = await workspaceToolKit.build(ctx);
-    return Object.fromEntries(Object.entries(all).filter(([n]) => READERS.has(n)));
-  },
-};

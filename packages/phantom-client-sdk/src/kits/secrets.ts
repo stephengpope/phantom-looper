@@ -4,15 +4,14 @@
 import { tool, type Tool } from 'ai';
 import { z } from 'zod';
 import { callRaw } from '../backend.js';
-import type { ToolKit, ToolKitContext } from '../toolkit.js';
+import type { BuiltTools, ToolKit, ToolKitContext } from '../toolkit.js';
 
 export const secretsToolKit: ToolKit = {
   name: 'secrets',
-  mutatingToolNames: [],
   version: (ctx) => ctx.workspaceId,
-  build(ctx: ToolKitContext): Promise<Record<string, Tool>> {
+  build(ctx: ToolKitContext): Promise<BuiltTools> {
     const ws = `?workspace=${encodeURIComponent(ctx.workspaceId)}`;
-    return Promise.resolve({
+    return Promise.resolve({ mutating: [], tools: {
       secret_list: tool({
         description: 'The stored secrets — names and descriptions, never values. The index in your ' +
           'instructions was written when this session started; use this when a secret might have ' +
@@ -33,6 +32,6 @@ export const secretsToolKit: ToolKit = {
         }),
         execute: ({ name }) => callRaw(ctx.backend, 'GET', `/secrets/${encodeURIComponent(name)}${ws}`),
       }),
-    });
+    } });
   },
 };

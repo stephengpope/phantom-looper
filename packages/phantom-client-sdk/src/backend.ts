@@ -39,36 +39,50 @@ export interface CallOptions {
 const isErrorCode = (s: unknown): s is ErrorCode =>
   typeof s === 'string' && (ERROR_CODES as readonly string[]).includes(s);
 
-/** One API call, unwrapped. Resolves with `data`; throws a PhantomError. */
-export async function call<T = unknown>(
-  b: PhantomBackend, method: string, path: string, body?: unknown, opts: CallOptions = {},
-): Promise<T> {
-  const f = b.fetch ?? fetch;
-  const headers: Record<string, string> = {
+/** The headers every request to the backend carries: the API key, this
+ *  client's lock identity, the session when the call is on behalf of one,
+ *  and content-type ONLY with a body (Fastify 400s a bodyless request that
+ *  claims application/json). The one place they are written — streaming
+ *  readers (the session feed, the git streams) use it too. */
+export function headersFor(b: PhantomBackend, opts: { sessionId?: string; body?: boolean } = {}): Record<string, string> {
+  return {
     authorization: `Bearer ${b.apiKey}`,
     [CLIENT_HEADER]: b.clientId,
     ...(opts.sessionId ? { [SESSION_HEADER]: opts.sessionId } : {}),
-    // content-type ONLY with a body: Fastify 400s a bodyless request that
-    // claims application/json.
-    ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+    ...(opts.body ? { 'content-type': 'application/json' } : {}),
   };
+}
+
+/** One request, the envelope read. Only transport failures throw. */
+async function request<T>(
+  b: PhantomBackend, method: string, path: string, body: unknown, opts: CallOptions,
+): Promise<{ status: number; envelope: Envelope<T> }> {
+  const f = b.fetch ?? fetch;
   let r: Response;
   try {
     r = await f(`${b.url}${path}`, {
-      method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: opts.signal,
+      method, headers: headersFor(b, { sessionId: opts.sessionId, body: body !== undefined }),
+      body: body === undefined ? undefined : JSON.stringify(body), signal: opts.signal,
     });
   } catch (e) {
     throw new PhantomError('backend_error', `${method} ${path}: ${(e as Error).message}`, { cause: e, retryable: true });
   }
-  let j: Envelope<T>;
   try {
-    j = await r.json() as Envelope<T>;
+    return { status: r.status, envelope: await r.json() as Envelope<T> };
   } catch (e) {
     throw new PhantomError('backend_error', `${method} ${path}: HTTP ${r.status}, not JSON`, { cause: e });
   }
+}
+
+/** One API call, unwrapped. Resolves with `data`; throws a PhantomError —
+ *  with the server's code when it is one of ours. */
+export async function call<T = unknown>(
+  b: PhantomBackend, method: string, path: string, body?: unknown, opts: CallOptions = {},
+): Promise<T> {
+  const { status, envelope: j } = await request<T>(b, method, path, body, opts);
   if (!j.ok) {
     const code = j.error?.code;
-    const message = `${method} ${path}: ${code ?? r.status} ${j.error?.message ?? ''}`.trim();
+    const message = `${method} ${path}: ${code ?? status} ${j.error?.message ?? ''}`.trim();
     throw new PhantomError(isErrorCode(code) ? code : 'backend_error', message,
       { retryable: j.error?.retryable ?? false });
   }
@@ -81,24 +95,5 @@ export async function call<T = unknown>(
 export async function callRaw<T = unknown>(
   b: PhantomBackend, method: string, path: string, body?: unknown, opts: CallOptions = {},
 ): Promise<Envelope<T>> {
-  const f = b.fetch ?? fetch;
-  const headers: Record<string, string> = {
-    authorization: `Bearer ${b.apiKey}`,
-    [CLIENT_HEADER]: b.clientId,
-    ...(opts.sessionId ? { [SESSION_HEADER]: opts.sessionId } : {}),
-    ...(body === undefined ? {} : { 'content-type': 'application/json' }),
-  };
-  let r: Response;
-  try {
-    r = await f(`${b.url}${path}`, {
-      method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: opts.signal,
-    });
-  } catch (e) {
-    throw new PhantomError('backend_error', `${method} ${path}: ${(e as Error).message}`, { cause: e, retryable: true });
-  }
-  try {
-    return await r.json() as Envelope<T>;
-  } catch (e) {
-    throw new PhantomError('backend_error', `${method} ${path}: HTTP ${r.status}, not JSON`, { cause: e });
-  }
+  return (await request<T>(b, method, path, body, opts)).envelope;
 }

@@ -8,9 +8,9 @@
 // a person's call, or the assistant's on their behalf.
 import { tool, type Tool } from 'ai';
 import { z } from 'zod';
-import { CLIENT_HEADER, SESSION_HEADER, type PhantomBackend } from '../backend.js';
+import { headersFor, type PhantomBackend } from '../backend.js';
 import { PhantomError } from '../errors.js';
-import type { ToolKit, ToolKitContext } from '../toolkit.js';
+import type { BuiltTools, ToolKit, ToolKitContext } from '../toolkit.js';
 
 /** `result` is one of the named outcomes today; anything the server adds
  *  later arrives as a string the client shows raw. */
@@ -68,8 +68,7 @@ async function runGitStream<T extends { result: string }>(
   const f = b.fetch ?? fetch;
   const r = await f(`${b.url}/git/${route}`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${b.apiKey}`, 'content-type': 'application/json',
-      [SESSION_HEADER]: sessionId, [CLIENT_HEADER]: b.clientId },
+    headers: headersFor(b, { sessionId, body: true }),
     body: '{}',
   });
   if ((r.headers.get('content-type') ?? '').includes('application/json')) {
@@ -101,12 +100,11 @@ export interface GitToolKitOptions {
 export function gitToolKit(o: GitToolKitOptions): ToolKit {
   return {
     name: 'git',
-    mutatingToolNames: ['git_auto_push', 'git_auto_pull'],
     version: () => 'git',
-    build(ctx: ToolKitContext): Promise<Record<string, Tool>> {
+    build(ctx: ToolKitContext): Promise<BuiltTools> {
       const target = (args: { id?: string }) => args.id ?? o.targetSession();
       const steps = (id: string) => (label: string) => o.onStep?.(id, label);
-      return Promise.resolve({
+      return Promise.resolve({ mutating: ['git_auto_push', 'git_auto_pull'], tools: {
         git_auto_push: tool({
           description: 'Land a session\'s work on the base branch: commit, replay on base, verify, push. ' +
             'The session on screen unless an id is given. Reports how it went.',
@@ -129,7 +127,7 @@ export function gitToolKit(o: GitToolKitOptions): ToolKit {
             catch (e) { return { session: id, result: 'error', reason: (e as Error).message }; }
           },
         }),
-      });
+      } });
     },
   };
 }

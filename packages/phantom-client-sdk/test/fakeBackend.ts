@@ -6,9 +6,11 @@ import type { PhantomBackend } from '../src/backend.js';
 
 export interface FakeSession {
   id: string; workspaceId: string; folderId: string | null; status: string; agent: string | null;
-  system_prompt: string[] | null; llm_config: unknown;
+  system_prompt: string[] | null;
   lockedBy: string | null;
   lines: string[];
+  /** The transcript's last-changed mark: moves on every append. */
+  updatedAt: string | null;
   lastDeliveryId: string | null;
   turnsEnded: number;
   backdoor: string[];
@@ -30,7 +32,7 @@ export class FakeBackend {
     model: { provider: 'anthropic', model: 'claude-test', baseUrl: null, apiKey: 'sk-ant-api-test', reasoning: null },
     maxSteps: null,
     compaction: { thresholdPct: 80, contextWindow: 1000, summarizePct: 50, strategy: 'fast', maxTokens: null,
-      model: { provider: 'anthropic', model: 'claude-small', baseUrl: null, reasoning: null } },
+      model: { provider: 'anthropic', model: 'claude-small', baseUrl: null, apiKey: 'sk-ant-api-small', reasoning: null } },
   };
   settings: Record<string, { value: unknown }> = { timezone: { value: 'UTC' } };
   /** Fail the next N appends with this HTTP status (a flaky network). */
@@ -38,6 +40,7 @@ export class FakeBackend {
   /** Drop the RESPONSE of the next N appends after applying them (a lost reply). */
   loseAppendReplies = 0;
   private nextId = 1;
+  private stampSeq = 0;
 
   readonly backend: PhantomBackend;
 
@@ -49,7 +52,7 @@ export class FakeBackend {
     const id = overrides.id ?? `s${this.nextId++}`;
     const s: FakeSession = {
       id, workspaceId: 'w1', folderId: 'f1', status: 'active', agent: null,
-      system_prompt: null, llm_config: null, lockedBy: null, lines: [], lastDeliveryId: null,
+      system_prompt: null, lockedBy: null, lines: [], updatedAt: null, lastDeliveryId: null,
       turnsEnded: 0, backdoor: [], relayed: [], watchers: new Set(),
       ...Object.fromEntries(Object.entries(overrides).filter(([, v]) => v !== undefined)),
     };
@@ -99,7 +102,7 @@ export class FakeBackend {
       if (!s) return this.err(404, 'session_not_found', 'no session');
       if (method === 'POST') {
         if (s.lockedBy && s.lockedBy !== client) return this.err(409, 'session_locked', `held by ${s.lockedBy}`);
-        s.lockedBy = client; return this.ok({ locked: true });
+        s.lockedBy = client; return this.ok({ locked: true, transcript_updated_at: s.updatedAt });
       }
       if (method === 'DELETE') { if (s.lockedBy === client) s.lockedBy = null; return this.ok({ locked: false }); }
     }
@@ -107,26 +110,26 @@ export class FakeBackend {
     if ((m = p.match(/^\/sessions\/([^/]+)\/frozen$/)) && method === 'PUT') {
       const s = this.sessions.get(m[1]!)!;
       if (s.lockedBy !== client) return this.err(409, 'session_locked', 'the freeze needs the lock');
-      const b = body as { systemPrompt?: string[]; llmConfig?: unknown };
+      const b = body as { systemPrompt?: string[] };
       if (b.systemPrompt) { if (s.system_prompt) return this.err(409, 'prompt_frozen', 'already frozen'); s.system_prompt = b.systemPrompt; }
-      if (b.llmConfig) { if (s.llm_config) return this.err(409, 'prompt_frozen', 'already frozen'); s.llm_config = b.llmConfig; }
       return this.ok(this.row(s));
     }
     if ((m = p.match(/^\/sessions\/([^/]+)\/transcript$/)) && method === 'GET') {
       const s = this.sessions.get(m[1]!)!;
-      return this.ok({ data: s.lines.length ? s.lines.join('\n') + '\n' : null, lines: s.lines.length });
+      return this.ok({ data: s.lines.length ? s.lines.join('\n') + '\n' : null, lines: s.lines.length, updated_at: s.updatedAt });
     }
     if ((m = p.match(/^\/sessions\/([^/]+)\/transcript\/append$/)) && method === 'POST') {
       const s = this.sessions.get(m[1]!)!;
       if (this.failAppends > 0) { this.failAppends--; return this.err(503, 'unavailable', 'try later'); }
       if (s.lockedBy !== client) return this.err(409, 'session_locked', 'append needs the lock');
       const b = body as { after: number; deliveryId: string; lines: unknown[] };
-      if (s.lastDeliveryId === b.deliveryId) return this.ok({ lines: s.lines.length, applied: false });
+      if (s.lastDeliveryId === b.deliveryId) return this.ok({ lines: s.lines.length, applied: false, updated_at: s.updatedAt });
       if (s.lines.length !== b.after) return this.err(409, 'transcript_conflict', `have ${s.lines.length}, you said ${b.after}`);
       for (const l of b.lines) s.lines.push(JSON.stringify(l));
       s.lastDeliveryId = b.deliveryId;
+      s.updatedAt = `t${++this.stampSeq}`;
       if (this.loseAppendReplies > 0) { this.loseAppendReplies--; throw new TypeError('fetch failed'); }
-      return this.ok({ lines: s.lines.length, applied: true });
+      return this.ok({ lines: s.lines.length, applied: true, updated_at: s.updatedAt });
     }
     if ((m = p.match(/^\/sessions\/([^/]+)\/turn-ended$/)) && method === 'POST') {
       const s = this.sessions.get(m[1]!)!;
@@ -159,6 +162,13 @@ export class FakeBackend {
       const messages = s.backdoor.splice(0);
       return this.ok({ messages });
     }
+    if ((m = p.match(/^\/sessions\/([^/]+)\/backdoor\/restore$/)) && method === 'POST') {
+      // A turn that failed before its record held them hands the notes back,
+      // ahead of anything queued since.
+      const s = this.sessions.get(m[1]!)!;
+      s.backdoor.unshift(...(body as { messages: string[] }).messages);
+      return this.ok({ restored: true });
+    }
     if ((m = p.match(/^\/sessions\/([^/]+)\/follow$/)) && method === 'POST') {
       const s = this.sessions.get(m[1]!)!;
       const b = body as { session_id: string };
@@ -190,7 +200,15 @@ export class FakeBackend {
 
   private row(s: FakeSession) {
     return { id: s.id, workspaceId: s.workspaceId, folderId: s.folderId, status: s.status, agent: s.agent,
-      system_prompt: s.system_prompt, llm_config: s.llm_config, planMode: s.planMode ?? false };
+      system_prompt: s.system_prompt, planMode: s.planMode ?? false };
+  }
+
+  /** Someone else wrote to the transcript (another window, the server):
+   *  lines land and the last-changed mark moves, exactly as their append would. */
+  writeAsOther(id: string, lines: Record<string, unknown>[]): void {
+    const s = this.sessions.get(id)!;
+    for (const l of lines) s.lines.push(JSON.stringify(l));
+    s.updatedAt = `t${++this.stampSeq}`;
   }
 
   /** Someone else stopped the turn: the feed carries it to every watcher. */

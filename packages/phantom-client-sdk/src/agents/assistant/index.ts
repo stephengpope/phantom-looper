@@ -10,12 +10,13 @@ import { Agent, type AgentHandlers, type SessionRow } from '../../agent.js';
 import { call, type PhantomBackend } from '../../backend.js';
 import type { ToolKit } from '../../toolkit.js';
 import { fill } from '../../prompts/template.js';
+import { todayFor } from '../../prompts/date.js';
 import { STAKEHOLDERS } from '../../prompts/stakeholders.js';
 import { VALUES } from '../../prompts/values.js';
 import { GIT } from '../../prompts/git.js';
 import { SENDING_FILES } from '../../prompts/sending.js';
 import { SYSTEM } from './prompt.js';
-import { workspaceToolKit } from '../../kits/workspace.js';
+import { readonlyWorkspaceToolKit } from '../../kits/workspace.js';
 import { webToolKit } from '../../kits/web.js';
 import { cronsToolKit } from '../../kits/crons.js';
 import { kanbanToolKit } from '../../kits/kanban.js';
@@ -24,18 +25,6 @@ import { gitToolKit } from '../../kits/git.js';
 export function assistantPromptBlocks(date: string): string[] {
   return [`${fill(SYSTEM, { stakeholders: STAKEHOLDERS, values: VALUES, git: GIT, sending: SENDING_FILES })}\n\nCurrent date: ${date}.`];
 }
-
-const READERS = new Set(['read', 'ls', 'find', 'grep', 'task_list', 'task_wait']);
-const readonlyWorkspaceToolKit: ToolKit = {
-  ...workspaceToolKit,
-  name: 'workspace',
-  async build(ctx) {
-    // No folder yet (nothing on screen) = no file tools, not a failing build.
-    if (!ctx.folderId) return {};
-    const all = await workspaceToolKit.build(ctx);
-    return Object.fromEntries(Object.entries(all).filter(([n]) => READERS.has(n)));
-  },
-};
 
 export class AssistantAgent extends Agent {
   readonly kind = 'assistant';
@@ -60,8 +49,7 @@ export class AssistantAgent extends Agent {
 
   protected async systemPrompt(): Promise<string[]> {
     const settings = await call<Record<string, { value: unknown }>>(this.backend, 'GET', '/settings');
-    const tz = typeof settings.timezone?.value === 'string' ? settings.timezone.value : 'UTC';
-    return assistantPromptBlocks(new Intl.DateTimeFormat('en-CA', { timeZone: tz, dateStyle: 'short' }).format(new Date()));
+    return assistantPromptBlocks(todayFor(settings));
   }
 
   protected toolKits(): ToolKit[] {

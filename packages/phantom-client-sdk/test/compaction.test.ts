@@ -43,6 +43,22 @@ test('auto-compaction fires after a turn whose input crossed the threshold', asy
   assert.deepEqual(h.errors, []);
 });
 
+test('the summary model on another provider gets its own key from the server\'s answer', async () => {
+  const h = harness();
+  (h.fake.agentConfig as { compaction: { model: unknown } }).compaction.model =
+    { provider: 'openai', model: 'gpt-small', baseUrl: null, apiKey: 'sk-openai-small', reasoning: null };
+  TestAgent.script = [{ text: 'r1' }, { text: 'r2' }, { text: 'the summary' }];
+  TestAgent.specs = [];
+  const a = await TestAgent.create(h.fake.backend, h.handlers);
+  await a.say('a');
+  await a.say('b');
+  const r = await a.compact();
+  assert.ok(r);
+  const summarySpec = TestAgent.specs[TestAgent.specs.length - 1]!;
+  assert.deepEqual([summarySpec.provider, summarySpec.model, summarySpec.apiKey], ['openai', 'gpt-small', 'sk-openai-small']);
+  assert.deepEqual(h.errors, []);
+});
+
 test('planCompaction: too little to compact is null; a prior summary is folded in', () => {
   assert.equal(planCompaction([{ role: 'user', content: 'x' }], fastStrategy, 50, null), null);
   const plan = planCompaction([

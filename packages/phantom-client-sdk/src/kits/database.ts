@@ -6,19 +6,18 @@ import { tool, type Tool } from 'ai';
 import { z } from 'zod';
 import { call, callRaw } from '../backend.js';
 import { PhantomError } from '../errors.js';
-import type { ToolKit, ToolKitContext } from '../toolkit.js';
+import type { BuiltTools, ToolKit, ToolKitContext } from '../toolkit.js';
 
 export const databaseToolKit: ToolKit = {
   name: 'database',
-  mutatingToolNames: ['database_query'],
   version: (ctx) => ctx.workspaceId,
-  async build(ctx: ToolKitContext): Promise<Record<string, Tool>> {
+  async build(ctx: ToolKitContext): Promise<BuiltTools> {
     const base = `/workspaces/${encodeURIComponent(ctx.workspaceId)}/database`;
     let status: { enabled: boolean };
     try { status = await call(ctx.backend, 'GET', base); }
     catch (e) { throw new PhantomError('tool_build_failed', `could not read the agent database setting: ${(e as Error).message}`, { cause: e }); }
-    if (!status.enabled) return {};
-    return {
+    if (!status.enabled) return { tools: {}, mutating: [] };
+    return { mutating: ['database_query'], tools: {
       database_query: tool({
         description: 'Run SQL in your own database. Several statements allowed; they run as ONE transaction — any error ' +
           'undoes the whole call. No state survives between calls (SET, TEMP tables, cursors are gone next call). 30 s limit ' +
@@ -39,6 +38,6 @@ export const databaseToolKit: ToolKit = {
           return j.ok ? { results: j.data?.results } : j;
         },
       }),
-    };
+    } };
   },
 };
