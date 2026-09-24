@@ -32,7 +32,7 @@ export { gitToolKit, autoPushSession, autoPullSession, AUTO_PUSH_STEPS, AUTO_PUL
 export { Transcript, conversationFrom, parseLines, messageLine, usageLine, interruptedLine, compactionLine, lineId,
   type TranscriptLine, type MessageLine, type UsageLine, type InterruptedLine, type CompactionLine, type LoadedConversation } from './transcript.js';
 export { runTurn, type TurnResult, type TurnUsage, type TurnInput, type StreamPart } from './turn.js';
-export { MessageQueue, type QueueEntry } from './queues.js';
+export { UserMessageQueue, type QueueEntry } from './userMessageQueue.js';
 export { assistantMessageFrom, toolResultMessage, interruptedResultMessage, INTERRUPTED_RESULT, userMessage } from './messages.js';
 export { fastStrategy, compactionStrategy, registerCompactionStrategy, compactionDue, planCompaction, writeSummary,
   type CompactionStrategy, type CompactionPlan } from './compaction.js';

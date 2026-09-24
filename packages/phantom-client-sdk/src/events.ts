@@ -10,7 +10,7 @@ export interface AgentEvents {
   /** Lines were appended and acknowledged. */
   'step': { messages: ModelMessage[]; usage: TurnUsage };
   /** Queued text rode into a model call. */
-  'nudge': { texts: string[] };
+  'user-message': { texts: string[] };
   'tool-error': { name: string; error: unknown };
   'turn-end': TurnResult;
   'compacted': { removed: number; summary: string };

@@ -22,7 +22,7 @@ import { llmConfigFrom, keysFrom, type AgentKeys, type LlmConfig, type Provider 
 import { languageModel, billingMiddleware, effectiveReasoning, type ModelHooks, type ModelSpec, type TokenUsage } from './model/languageModel.js';
 import { withRetry, BACKEND_RETRY, MODEL_RETRY, type RetryPolicy } from './model/retry.js';
 import { wrapLanguageModel } from 'ai';
-import { MessageQueue } from './queues.js';
+import { UserMessageQueue } from './userMessageQueue.js';
 import { ToolKitSet, type ToolKit, type ToolKitContext } from './toolkit.js';
 import { Transcript, conversationFrom, messageLine, compactionLine, type TranscriptLine } from './transcript.js';
 import { runTurn, type TurnResult } from './turn.js';
@@ -97,7 +97,7 @@ export abstract class Agent {
   /** Default: the row's plan mode, re-read at every turn start. A client
    *  with a live flag (the cli's /plan mid-turn) overrides with setReadonly. */
   #readonly: () => boolean = () => this.#row.planMode === true;
-  #nudges = new MessageQueue();
+  #userMessages = new UserMessageQueue();
   #events = new Emitter();
   #turn: Promise<TurnResult & { llm: LlmConfig }> | null = null;
   #abort: AbortController | null = null;
@@ -115,13 +115,13 @@ export abstract class Agent {
     this.#row = row;
     this.sessionId = row.id;
     this.workspaceId = row.workspaceId;
-    // A pending nudge (a voice note) settled while idle: it starts a turn.
-    this.#nudges.onSettled = (_entry, error) => {
+    // A pending user message (a voice note) settled while idle: it starts a turn.
+    this.#userMessages.onSettled = (_entry, error) => {
       if (error !== undefined) {
         this.#handlers.onError(asPhantomError(error, 'backend_error', 'a queued message failed'));
         return;
       }
-      if (!this.busy && !this.#closed && this.#nudges.ready) this.#background('follow-up turn', () => this.#runTurn());
+      if (!this.busy && !this.#closed && this.#userMessages.ready) this.#background('follow-up turn', () => this.#runTurn());
     };
   }
 
@@ -245,7 +245,7 @@ export abstract class Agent {
   get usage(): Readonly<TokenTotals> { return this.#usage; }
   get busy(): boolean { return this.#turn !== null; }
   get systemPromptBlocks(): readonly string[] { return this.#blocks; }
-  get nudges(): MessageQueue { return this.#nudges; }
+  get userMessages(): UserMessageQueue { return this.#userMessages; }
   get row(): Readonly<SessionRow> { return this.#row; }
   /** For a subclass's prompt building and kits. */
   protected get backend(): PhantomBackend { return this.#backend; }
@@ -269,10 +269,10 @@ export abstract class Agent {
    *  One call for both, decided at the moment of the call — so a message
    *  sent just as a turn ends is never left waiting with nothing to run it. */
   sendUserMessage(text: string | Promise<string | null>): Promise<TurnResult | null> {
-    if (typeof text === 'string') this.#nudges.add(text);
-    else this.#nudges.addPending(text);
+    if (typeof text === 'string') this.#userMessages.add(text);
+    else this.#userMessages.addPending(text);
     if (this.busy) return Promise.resolve(null);
-    if (!this.#nudges.ready) return Promise.resolve(null);   // a pending voice note: onSettled starts the turn
+    if (!this.#userMessages.ready) return Promise.resolve(null);   // a pending voice note: onSettled starts the turn
     return this.#guard(() => this.#runTurn());
   }
 
@@ -306,7 +306,7 @@ export abstract class Agent {
     if (compactionDue(result.lastInputTokens, c.contextWindow, c.thresholdPct)) {
       this.#background('compaction', () => this.#compact());
     }
-    if (result.outcome === 'done' && this.#nudges.ready && !this.#closed) {
+    if (result.outcome === 'done' && this.#userMessages.ready && !this.#closed) {
       this.#background('follow-up turn', () => this.#runTurn());
     }
   }
@@ -317,7 +317,7 @@ export abstract class Agent {
     this.#abort = abort;
     // The user's messages this turn starts with are the turn's from here:
     // if it fails, they fail with it — nothing is kept or sent again.
-    const opening = this.#takeNudges();
+    const opening = this.#takeUserMessages();
     try {
       return await this.#withLock('the turn', async (lock) => {
         await this.#current(lock);
@@ -356,8 +356,8 @@ export abstract class Agent {
             reasoning: effectiveReasoning({ provider: llm.provider, model: llm.model, endpoint: llm.endpoint, reasoning: llm.reasoning, apiKey: null }),
             signal: abort.signal,
             pending: () => {
-              const sent = this.#takeNudges();
-              if (sent.length) this.#emit('nudge', { texts: sent });
+              const sent = this.#takeUserMessages();
+              if (sent.length) this.#emit('user-message', { texts: sent });
               const out = [...(first ?? []), ...sent];
               first = null;
               return out;
@@ -394,10 +394,10 @@ export abstract class Agent {
     return r.messages ?? [];
   }
 
-  /** Every ready nudge from the front, taken. A voice note that failed was
+  /** Every ready user message from the front, taken. A voice note that failed was
    *  already reported when it settled; it is dropped here. */
-  #takeNudges(): string[] {
-    return this.#nudges.drain().texts;
+  #takeUserMessages(): string[] {
+    return this.#userMessages.drain().texts;
   }
 
   async #append(lines: TranscriptLine[]): Promise<void> {

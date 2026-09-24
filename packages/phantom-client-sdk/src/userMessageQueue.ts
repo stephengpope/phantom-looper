@@ -1,16 +1,14 @@
-// The two queues of text waiting to reach the model.
+// The user message queue: the user's own words (typed, spoken, Telegram)
+// waiting to reach the model. Ready text, or PENDING text (a voice note
+// still transcribing) that holds the queue behind it until it settles.
 //
-// Nudges — the builder's own words (typed, spoken, Telegram). Ready text,
-// or PENDING text (a voice note still transcribing) that holds the queue
-// behind it until it settles.
+// Drains every ready entry from the front, stopping at the first pending
+// one. What a drain TRIGGERS is the Agent's rule, not the queue's. A failed
+// pending entry is dropped and reported through `onSettled` — never
+// silently.
 //
-// Injections — system facts (a background command exited, a file was
-// dropped, files were pulled). Always ready.
-//
-// Both drain the same way: every ready entry from the front, stopping at the
-// first pending one. What they TRIGGER differs, and that is the Agent's
-// rule, not the queue's. A failed pending entry is dropped and reported
-// through `onFailed` — never silently.
+// The server has its own UserMessageQueue (phantom-server-sdk) for the
+// messages it holds for a session's AI; same name, same shape.
 export interface QueueEntry<M = unknown> {
   readonly id: number;
   readonly meta?: M;
@@ -22,7 +20,7 @@ export interface QueueEntry<M = unknown> {
 
 let nextId = 1;
 
-export class MessageQueue<M = unknown> {
+export class UserMessageQueue<M = unknown> {
   private entries: QueueEntry<M>[] = [];
   /** A pending entry settled (or failed) — the Agent may drain again. */
   onSettled?: (entry: QueueEntry<M>, error?: unknown) => void;
@@ -33,7 +31,8 @@ export class MessageQueue<M = unknown> {
     for (const e of this.entries) { if (!e.settled) break; if (!e.failed) n++; }
     return n;
   }
-  all(): readonly QueueEntry<M>[] { return this.entries; }
+  /** What is waiting, in order. */
+  pending(): readonly QueueEntry<M>[] { return this.entries; }
 
   add(text: string, meta?: M): QueueEntry<M> {
     const entry: QueueEntry<M> = { id: nextId++, meta, text, settled: true, failed: false };

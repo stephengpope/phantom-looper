@@ -96,7 +96,7 @@ test('model failure: nothing is recorded, nothing is kept — the next message g
   const a = await TestAgent.create(h.fake.backend, h.handlers);
   await assert.rejects(a.sendUserMessage('hi'), (e: Error & { code: string }) => e.code === 'model_error' && /overloaded/.test(e.message));
   assert.equal(h.fake.linesOf(a.sessionId).length, 0);
-  assert.equal(a.nudges.length, 0);
+  assert.equal(a.userMessages.length, 0);
   assert.equal(h.errors.length, 1);
   assert.equal(h.errors[0]!.code, 'model_error');
   assert.equal(h.fake.sessions.get(a.sessionId)!.lockedBy, null);
@@ -113,7 +113,7 @@ test('a turn refused because the session is busy elsewhere keeps nothing', async
   const a = await TestAgent.create(h.fake.backend, h.handlers);
   h.fake.sessions.get(a.sessionId)!.lockedBy = 'another-window';
   await assert.rejects(a.sendUserMessage('hi'), (e: Error & { code: string }) => e.code === 'session_locked');
-  assert.equal(a.nudges.length, 0);
+  assert.equal(a.userMessages.length, 0);
   h.fake.sessions.get(a.sessionId)!.lockedBy = null;
   await a.sendUserMessage('again');
   const users = h.fake.linesOf(a.sessionId)
@@ -162,7 +162,7 @@ test('interrupt mid-model-call: partial text and the user message are recorded',
   assert.ok(text.length > 0 && text.length < 'one two three four five six'.length, text);
 });
 
-test('nudge mid-turn rides the next model call and is recorded with that step', async () => {
+test('a user message mid-turn rides the next model call and is recorded with that step', async () => {
   const h = harness();
   TestAgent.script = [
     { tools: [{ name: 'slow', input: { ms: 100 } }] },
@@ -178,14 +178,14 @@ test('nudge mid-turn rides the next model call and is recorded with that step', 
   const users = lines.filter((l) => l.type === 'message' && (l.message as { role: string }).role === 'user')
     .map((l) => (l.message as { content: string }).content);
   assert.deepEqual(users, ['start', 'also this']);
-  // The second model call saw the nudge as its last message.
+  // The second model call saw the user message as its last message.
   const second = TestAgent.modelCalls[1] as { prompt: Array<{ role: string; content: unknown }> };
   const last = second.prompt[second.prompt.length - 1]!;
   assert.equal(last.role, 'user');
-  assert.equal(a.nudges.length, 0);
+  assert.equal(a.userMessages.length, 0);
 });
 
-test('a nudge left over at turn end starts the next turn by itself', async () => {
+test('a user message left over at turn end starts the next turn by itself', async () => {
   const h = harness();
   TestAgent.script = [{ text: 'first', chunkDelayMs: 20 }, { text: 'second' }];
   const a = await TestAgent.create(h.fake.backend, h.handlers);
@@ -353,7 +353,7 @@ test('a stop starts nothing by itself: what is queued waits for the app', async 
   await wait(100);
   assert.equal(h.fake.sessions.get(a.sessionId)!.turnsEnded, 1);
   assert.equal(a.busy, false);
-  assert.equal(a.nudges.length, 1);
+  assert.equal(a.userMessages.length, 1);
 });
 
 test('injections: a failed turn takes them with it — nothing is given back', async () => {
