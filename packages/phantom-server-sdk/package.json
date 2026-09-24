@@ -1,0 +1,30 @@
+{
+  "name": "phantom-server-sdk",
+  "version": "0.1.0",
+  "description": "What phantom-backend runs: the user message queue — one way for the server to put a message in front of a session's AI.",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src test",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "phantom-client-sdk": "*"
+  },
+  "devDependencies": {
+    "@types/node": "*",
+    "eslint": "10.11.0",
+    "tsx": "4.23.12",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.70.1"
+  }
+}
