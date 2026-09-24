@@ -14,7 +14,10 @@
     "typecheck": "tsc --noEmit && tsc -p phantom-cli",
     "models:snapshot": "tsx scripts/models-snapshot.ts",
     "phantom-cli": "NODE_ENV=production tsx --tsconfig phantom-cli/tsconfig.json phantom-cli/index.tsx",
-    "phantom-backend": "tsx phantom-backend/index.ts"
+    "phantom-backend": "tsx phantom-backend/index.ts",
+    "sdk:build": "npm run build -w phantom-client-sdk",
+    "sdk:test": "npm run test -w phantom-client-sdk",
+    "sdk:lint": "npm run lint -w phantom-client-sdk"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.40",
@@ -64,5 +67,8 @@
     "react": "19.2.8",
     "tsx": "4.23.12",
     "typescript": "5.9.3"
-  }
+  },
+  "workspaces": [
+    "packages/*"
+  ]
 }
