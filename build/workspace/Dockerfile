@@ -5,14 +5,21 @@
 # ripgrep is a HARD requirement of the tool surface (grep/glob run `rg`).
 # Custom container_image values must include it.
 #
-# Debian 13 (trixie): current stable — system python is 3.13, everything recent.
+# Debian 13 (trixie): current stable. Debian FREEZES package versions at
+# release, so anything whose ecosystem expects a current toolchain (Go, Rust,
+# ffmpeg, Node, Python, Playwright) is installed from its own upstream release
+# instead of apt — pinned here, moved only by editing a number. Nothing in this
+# image tracks "latest".
+#
 # The uv pin lives at GLOBAL scope: buildkit cannot expand variables in
 # COPY --from=<image>, so the pin feeds a named stage and the COPY names the
 # stage (found broken live: the v0.1.29 session-image build failed on it).
-ARG UV_VERSION=0.12.12
+ARG UV_VERSION=0.12.19
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv-bin
 FROM debian:trixie-slim
 ARG UID=1000
+# amd64 | arm64 — set by buildx per platform (release.yml builds both natively).
+ARG TARGETARCH
 
 # Base toolchain — everything the agent might need without burning a turn on
 # `apt install`. build-essential/pkg-config/libssl-dev/libffi-dev cover native
@@ -33,11 +40,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       strace ltrace lsof htop gdb valgrind \
       # Search & lint
       fd-find shellcheck man-db \
-      # Media, docs & OCR
-      ffmpeg imagemagick poppler-utils ghostscript qpdf \
+      # Media, docs & OCR (ffmpeg comes from upstream below — Debian's is 7.1)
+      imagemagick poppler-utils ghostscript qpdf \
       tesseract-ocr tesseract-ocr-eng pandoc graphviz \
-      # Languages (Node and Python installed separately below)
-      golang rustc cargo ruby php-cli lua5.4 \
+      # Languages (Node, Python, Go and Rust installed from upstream below)
+      ruby php-cli lua5.4 \
   && rm -rf /var/lib/apt/lists/* \
   && git lfs install --system
 ENV LANG=C.UTF-8
@@ -117,6 +124,43 @@ RUN printf '%s\n' \
   > /usr/local/bin/start-docker \
   && chmod 755 /usr/local/bin/start-docker
 
+# Go from go.dev's official tarball into /usr/local/go — the standard layout
+# (what the golang image does). Debian's golang package is frozen at 1.24,
+# unsupported upstream, and any go.mod asking for newer makes Go silently
+# download a ~200 MB toolchain mid-turn. GOTOOLCHAIN=local ends that: the
+# pinned version is THE version; a module needing newer fails loudly instead.
+# ~/go/bin on PATH so `go install <tool>` is callable by name.
+ARG GO_VERSION=1.27.1
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" \
+      | tar -C /usr/local -xz
+ENV PATH=/usr/local/go/bin:/home/agent/go/bin:$PATH
+ENV GOTOOLCHAIN=local
+
+# Rust via rustup, laid out like the official rust image (RUSTUP_HOME/CARGO_HOME
+# under /usr/local, cargo bin on PATH). Debian's rustc is frozen at 1.85 — a
+# year of releases behind, below the minimum many current crates require.
+# minimal profile + rustfmt/clippy: the tools an agent actually runs, no docs.
+# Agent-owned so `cargo install` and `rustup component add` need no sudo.
+ARG RUST_VERSION=1.98.1
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
+ENV PATH=/usr/local/cargo/bin:$PATH
+RUN curl -fsSL https://sh.rustup.rs \
+      | sh -s -- -y --no-modify-path --profile minimal \
+           --default-toolchain "${RUST_VERSION}" --component rustfmt --component clippy \
+  && chown -R ${UID}:${UID} /usr/local/rustup /usr/local/cargo
+
+# ffmpeg 9 as a static binary from BtbN/FFmpeg-Builds — the standard source for
+# a current ffmpeg on Debian (whose package is 7.1 from 2024: no animated WebP,
+# VVC still experimental, two years of fixes behind). Static = every codec
+# built in, no library conflicts with the apt tree. Pinned to one autobuild
+# release AND one asset name (the "latest" assets float within a branch).
+# whisper (faster-whisper) and imagemagick call `ffmpeg` on PATH — they see it.
+ARG FFMPEG_BUILD=autobuild-2026-09-26-13-03
+ARG FFMPEG_ASSET=ffmpeg-n9.0.2-10-g51c4a23d74
+RUN case "${TARGETARCH}" in amd64) a=linux64 ;; arm64) a=linuxarm64 ;; *) exit 1 ;; esac \
+  && curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/download/${FFMPEG_BUILD}/${FFMPEG_ASSET}-${a}-gpl-9.0.tar.xz" \
+      | tar -C /usr/local/bin -xJ --strip-components=2 --wildcards '*/bin/ffmpeg' '*/bin/ffprobe'
+
 # Python versions via uv: prebuilt standalone CPython, no compiling, and the
 # agent gets `uv venv -p 3.12`, `uv pip`, `uvx` for free. Installed to a fixed
 # system path (agent-owned, so it can add versions later); system python3.13 +
@@ -145,8 +189,11 @@ RUN uv python install 3.11 3.12 3.13 && chown -R ${UID}:${UID} /opt/uv
 # in its exact folder and nowhere else — so the browser is installed by BOTH
 # installers (same revision = shared, a mismatch = both baked; either way every
 # launch finds its browser). Agent-owned so later installs work without sudo.
-ARG PLAYWRIGHT_VERSION=1.62.1
-ARG PLAYWRIGHT_CLI_VERSION=0.1.18
+# Bump as a PAIR: check `npm view @playwright/cli@<v> dependencies` and pick
+# the CLI whose playwright-core is the same minor as PLAYWRIGHT_VERSION — a
+# different minor means a different chromium revision and two browsers baked.
+ARG PLAYWRIGHT_VERSION=1.63.0
+ARG PLAYWRIGHT_CLI_VERSION=0.1.19
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN npm install -g playwright@${PLAYWRIGHT_VERSION} @playwright/cli@${PLAYWRIGHT_CLI_VERSION} \
   && apt-get update \
@@ -208,7 +255,7 @@ ENV PLAYWRIGHT_MCP_BROWSER=chromium
 # Whisper (speech-to-text): whisper-ctranslate2 is a drop-in CLI replacement
 # for OpenAI's whisper that runs on CTranslate2 — same flags, 4x faster on CPU,
 # no PyTorch dependency. Aliased to `whisper` so the original command name works.
-# ffmpeg is added to the base apt install above (whisper needs it for audio decoding).
+# Decodes audio through the `ffmpeg` binary on PATH (the upstream static build above).
 RUN pip install --break-system-packages whisper-ctranslate2 \
   && ln -s "$(which whisper-ctranslate2)" /usr/local/bin/whisper
 
@@ -248,13 +295,15 @@ RUN rg --version && git --version && git lfs version && gh --version \
   && docker --version && docker buildx version && docker compose version \
   && whisper --help > /dev/null \
   # Languages
-  && go version && rustc --version && cargo --version \
+  && go version && test "$(go env GOTOOLCHAIN)" = local \
+  && rustc --version && cargo --version && cargo fmt --version && cargo clippy --version \
   && ruby --version && php --version && lua5.4 -v \
   # Networking & debug
   && ip -V && tcpdump --version && socat -V > /dev/null \
   && strace -V && gdb --version > /dev/null && valgrind --version \
   # Media, docs & OCR
-  && ffmpeg -version > /dev/null && convert --version > /dev/null \
+  && ffmpeg -version | head -1 | grep -q 'ffmpeg version n9' && ffprobe -version > /dev/null \
+  && convert --version > /dev/null \
   && pdftotext -v 2>&1 | grep -q poppler && gs --version \
   && tesseract --version > /dev/null && pandoc --version > /dev/null \
   && dot -V 2>&1 \
