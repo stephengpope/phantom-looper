@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { call, callRaw } from '../backend.js';
 import { PhantomError } from '../errors.js';
 import type { BuiltTools, ToolKit, ToolKitContext } from '../toolkit.js';
+import { keyedProviders, REASONINGS, type Provider } from '../model/llmConfig.js';
 
 const WHAT_A_RUN_IS = 'A RUN HAS NO USER IN IT: it opens a fresh coding session in this workspace (its own checkout, ' +
   'cut from the base branch) and runs the prompt as one turn. It cannot see this conversation and cannot ask a ' +
@@ -23,17 +24,32 @@ const SCHEDULE = 'A 5-field cron expression for something RECURRING ("0 9 * * *"
   'Read in the workspace\'s time zone (every answer says which, and what time it is there now) — a datetime ' +
   'that has already passed is refused.';
 
+/** The model a cron's runs use — only when the user names one. The enum IS
+ *  how the agent knows what is valid: it rides the tool's schema. The
+ *  providers are the ones this workspace can call (keyedProviders — the
+ *  /settings picker's own list), read at build from the same settings
+ *  answer that says whether crons are on. */
+const modelFields = (providers: readonly Provider[]) => ({
+  provider: z.enum(providers as [Provider, ...Provider[]]).nullable().optional().describe('ONLY when the user asks for a specific model. Goes with ' +
+    '`model`: both or neither. Omit = the workspace\'s model; null clears an earlier choice.'),
+  model: z.string().nullable().optional().describe('ONLY when the user asks: the model id on that provider ' +
+    '(e.g. "claude-sonnet-4-5"). Goes with `provider`: both or neither. Null clears.'),
+  reasoning: z.enum(REASONINGS).nullable().optional().describe('ONLY when the user asks: how hard the run thinks. ' +
+    'Omit = the workspace\'s level; null clears.'),
+});
+
 export const cronsToolKit: ToolKit = {
   name: 'crons',
   version: (ctx) => ctx.workspaceId,
   async build(ctx: ToolKitContext): Promise<BuiltTools> {
-    let settings: Record<string, { value: unknown }>;
+    let settings: Record<string, { value: unknown; source?: string; meta?: { provider?: string } }>;
     try {
       settings = await call(ctx.backend, 'GET', `/settings?workspace=${encodeURIComponent(ctx.workspaceId)}`);
     } catch (e) {
       throw new PhantomError('tool_build_failed', `could not read the workspace's settings: ${(e as Error).message}`, { cause: e });
     }
     if (settings.cron_enabled?.value !== true) return { tools: {}, mutating: [] };
+    const MODEL_FIELDS = modelFields(keyedProviders(settings));
     const base = `/workspaces/${encodeURIComponent(ctx.workspaceId)}/crons`;
     const api = async (method: string, path: string, body?: unknown): Promise<unknown> => {
       const j = await callRaw(ctx.backend, method, `${base}${path}`, body);
@@ -42,7 +58,8 @@ export const cronsToolKit: ToolKit = {
     return { mutating: ['cron_create', 'cron_update', 'cron_remove'], tools: {
       cron_list: tool({
         description: 'The workspace\'s crons, each with its schedule, its `prompt` (an agent run) or `script` (a path ' +
-          'run with sh, no model), whether it is enabled, `once` (a one-time run) and `last_run_at`. Call this before naming a cron — never guess a name. How a run went is ' +
+          'run with sh, no model), whether it is enabled, `once` (a one-time run), `last_run_at`, and the model its ' +
+          'runs use (`provider`/`model`/`reasoning`; null = the workspace\'s). Call this before naming a cron — never guess a name. How a run went is ' +
           'in its session (session_list / /resume, named after the cron). The answer also carries the workspace\'s ' +
           '`timezone` and the time there `now`.',
         inputSchema: z.object({}),
@@ -58,12 +75,13 @@ export const cronsToolKit: ToolKit = {
           schedule: z.string().describe(SCHEDULE),
           prompt: z.string().optional().describe('what an agent run is asked to do — self-contained, every fact it needs written in'),
           script: z.string().optional().describe('a path in the repo, run with sh and no model, e.g. "scripts/nightly.sh"'),
+          ...MODEL_FIELDS,
           enabled: z.boolean().optional().describe('false creates it paused; omit for on'),
         }),
         execute: (args) => api('POST', '', args),
       }),
       cron_update: tool({
-        description: 'Change a cron: any of its schedule, prompt or script, name, or enabled (false pauses it without ' +
+        description: 'Change a cron: any of its schedule, prompt or script, name, model, or enabled (false pauses it without ' +
           'removing it). Fields left out are kept; setting a prompt clears the script and the other way round. Call ' +
           'cron_list first for the name.',
         inputSchema: z.object({
@@ -72,6 +90,7 @@ export const cronsToolKit: ToolKit = {
           prompt: z.string().optional().describe('an agent run — replaces a script'),
           script: z.string().optional().describe('a path in the repo, run with sh and no model — replaces a prompt'),
           new_name: z.string().optional().describe('rename it'),
+          ...MODEL_FIELDS,
           enabled: z.boolean().optional(),
         }),
         execute: ({ name, new_name, ...rest }) =>

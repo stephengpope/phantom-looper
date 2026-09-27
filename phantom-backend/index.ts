@@ -89,7 +89,7 @@ async function main() {
   });
   const backgroundTasks = new BackgroundTasks(db);
   const presets = new Presets(db);
-  const crons = new Crons(db);
+  const crons = new Crons(db, settings);
   const logTokens = new LogTokens(db);
   // Every model call in this process records here (core languageModel).
   setTokenRecorder((r) => {

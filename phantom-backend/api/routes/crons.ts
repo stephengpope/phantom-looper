@@ -5,13 +5,14 @@
 // time it is there, so a caller never has to guess either.
 //
 //   GET    /workspaces/:id/crons            every cron
-//   POST   /workspaces/:id/crons            create {name, schedule, prompt | script, enabled?}
+//   POST   /workspaces/:id/crons            create {name, schedule, prompt | script, provider?+model?, reasoning?, enabled?}
 //   PATCH  /workspaces/:id/crons/:name      any subset of those fields
 //   DELETE /workspaces/:id/crons/:name
 import type { FastifyInstance } from 'fastify';
 import type { WorkspaceRow } from '../../db/schema.js';
 import type { Clock } from '../../../core/clock.js';
 import { CronError, CRON_FIELDS, type CronFields } from '../../crons.js';
+import { REASONINGS } from '../../../core/llm/createAgent.js';
 import { ok, err, type AppCtx } from '../app.js';
 
 const TAG = { tags: ['crons'] };
@@ -23,6 +24,9 @@ const cronBodyProps = {
   schedule: { type: 'string', description: 'A 5-field cron expression ("0 9 * * *") for a recurring cron, or an ISO datetime ("2026-03-14T18:50:00") for a one-time run. Read in the workspace\'s timezone.' },
   prompt: { type: 'string', description: 'What an agent run is asked to do. Self-contained: the run is a fresh session. Exactly one of prompt / script.' },
   script: { type: 'string', description: 'A path in the repo, run with sh in the session\'s container — no model, no tokens. Exactly one of prompt / script.' },
+  provider: { type: ['string', 'null'], description: 'Run on this provider instead of the workspace\'s — one with a key on /keys (Crons refuses others, naming the ones that have one). Goes with `model`: both or neither. Null = the workspace\'s.' },
+  model: { type: ['string', 'null'], description: 'The model id on that provider. Goes with `provider`: both or neither. Null = the workspace\'s.' },
+  reasoning: { type: ['string', 'null'], enum: [...REASONINGS, null], description: 'How hard the run thinks. Null = the workspace\'s.' },
   enabled: { type: 'boolean', description: 'false pauses the cron without removing it.' },
 };
 // The schema must cover THE list (crons.ts) — a field added there without a
@@ -45,7 +49,8 @@ export function cronRoutes(app: FastifyInstance, ctx: AppCtx) {
   app.get<{ Params: { id: string } }>(
     '/workspaces/:id/crons', { schema: { ...TAG, summary: 'The workspace\'s crons',
       description: 'Every cron, by name: schedule, `once` (a one-time datetime schedule — the row goes when it fires), enabled, ' +
-        '`last_run_at`. Plus the workspace\'s `timezone` and the server\'s `now`.',
+        '`last_run_at`, and the model its runs pin to (`provider`/`model`/`reasoning`; null = the workspace\'s). ' +
+        'Plus the workspace\'s `timezone` and the server\'s `now`.',
       params: idParam } },
     async (req, reply) => {
       const w = await workspaceOf(req.params.id);

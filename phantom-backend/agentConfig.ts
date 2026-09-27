@@ -21,7 +21,8 @@
 // model, endpoint together (sessions.ts owns when the row may move). The pin
 // carries its endpoint; one from before the column inherits the resolved
 // endpoint only while the provider matches. The key follows the pinned
-// provider.
+// provider. A pin may also carry `reasoning` (a cron's does; a session row
+// has none) — it wins over the cascade's level.
 //
 // Compaction — thresholds and strategy are the agent's own (cascading); the
 // context window is the catalog's figure for the model actually running
@@ -46,8 +47,9 @@ export interface AgentRows {
   compactSummarizePct: number | null; compactMaxTokens: number | null;
 }
 
-/** What a session row pins: the model it was born on. */
-export interface ModelPin { provider?: string | null; model?: string | null; baseUrl?: string | null }
+/** What a session row pins: the model it was born on. A cron's pin adds the
+ *  reasoning level its runs use. */
+export interface ModelPin { provider?: string | null; model?: string | null; baseUrl?: string | null; reasoning?: string | null }
 
 /** null and '' both mean "not set" — the store never stores null, and the
  *  model overrides always treated '' as unset. */
@@ -134,7 +136,7 @@ function modelConfig(r: ResolvedModel, reasoning: string | null, apiKey: string 
 export function agentConfigFrom(i: AgentConfigInput): AgentConfig {
   const { agent, coding, own, supervisor, pin } = i;
   const resolved = resolveModel(agent, coding, own, pin);
-  const model = modelConfig(resolved, inherit(set(own.reasoning), set(coding.reasoning)), i.keys.agent);
+  const model = modelConfig(resolved, set(pin?.reasoning) ?? inherit(set(own.reasoning), set(coding.reasoning)), i.keys.agent);
 
   // The supervisor's model writes every summary. Unpinned: it is whatever
   // the settings say now, not what some conversation was born on.

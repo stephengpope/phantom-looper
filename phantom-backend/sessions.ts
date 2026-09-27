@@ -279,7 +279,8 @@ export class Sessions {
   // ── the model ──────────────────────────────────────────────────────────────
   // THE RULE: a session's model is its row's provider/model/base_url, and
   // nothing else. Written when the session is born (from the settings, per
-  // workspace; a duplicate takes its source's). While nothing has been said —
+  // workspace; a duplicate takes its source's; a cron's run takes its cron's —
+  // stampModel). While nothing has been said —
   // turn_count 0 — the row follows the settings, so /settings and a preset reach
   // a session you have not spoken to yet. The first saved turn moves the
   // count to 1 and the row never changes again. Every runner reads the row.
@@ -779,6 +780,15 @@ export class Sessions {
   async stampAgent(id: string, agent: 'coding' | 'supervisor' | 'cron'): Promise<void> {
     await this.db.update(sessions).set({ agent }).where(eq(sessions.id, id));
     this.changed(id);
+  }
+
+  /** A cron that names its model: its run's newborn row takes it, so the
+   *  record shows what ran and the runner reads the row like every other.
+   *  No endpoint: the run inherits the workspace's while the provider
+   *  matches (agentConfig.ts pinned). */
+  async stampModel(id: string, m: { provider: string; model: string }): Promise<void> {
+    await this.db.update(sessions).set({ provider: m.provider, model: m.model, baseUrl: null }).where(eq(sessions.id, id));
+    this.events?.publish(id, '', { event: 'session', provider: m.provider, model: m.model, base_url: null });
   }
 
   // ── holds ──────────────────────────────────────────────────────────────────

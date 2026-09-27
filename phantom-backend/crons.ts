@@ -14,11 +14,21 @@
 // fire. `script`: a path in the checkout run with `sh`, no model — for
 // what a shell script already does. Setting one on update clears the other;
 // the pair is checked here and by the table (migration 040).
+//
+// The model, optionally. A run is a fresh coding session on the workspace's
+// settings; `provider` + `model` (together, or neither — migration 042) pin
+// one cron's runs to another model, `reasoning` sets how hard it thinks.
+// Null = the workspace's. The provider must be one the workspace can call —
+// the same rule the /settings picker uses (core keyedProviders): a key on
+// /keys, or a provider that takes none. The scheduler (crons/engine.ts)
+// lays them over the run's session (agentConfig.ts pinned).
 import { and, eq, sql } from 'drizzle-orm';
 import { Cron } from 'croner';
 import { isUniqueViolation, type Db } from './db/client.js';
 import { crons, type CronRow, type WorkspaceRow } from './db/schema.js';
 import type { Clock } from '../core/clock.js';
+import { keyedProviders, REASONINGS } from '../core/llm/createAgent.js';
+import type { Settings } from './settings.js';
 
 export type { CronRow };
 
@@ -27,8 +37,11 @@ export class CronError extends Error {
 }
 
 /** THE cron field list — create, update and the API schema all derive from it. */
-export const CRON_FIELDS = ['name', 'schedule', 'prompt', 'script', 'enabled'] as const;
-export type CronFields = Partial<{ name: string; schedule: string; prompt: string; script: string; enabled: boolean }>;
+export const CRON_FIELDS = ['name', 'schedule', 'prompt', 'script', 'provider', 'model', 'reasoning', 'enabled'] as const;
+export type CronFields = Partial<{
+  name: string; schedule: string; prompt: string; script: string;
+  provider: string | null; model: string | null; reasoning: string | null; enabled: boolean;
+}>;
 
 const NAME_MAX = 80;
 
@@ -65,7 +78,7 @@ function checkSchedule(schedule: string, clock: Clock, now: Date): void {
 
 export class Crons {
   private listeners: Array<(workspaceId: string) => void> = [];
-  constructor(private readonly db: Db) {}
+  constructor(private readonly db: Db, private readonly settings: Settings) {}
 
   /** Hear every write, by workspace — the scheduler re-registers that
    *  workspace's crons on each. Events, not polling: the table is written
@@ -116,9 +129,11 @@ export class Crons {
     const body = cleanBody(fields.prompt, fields.script);
     const schedule = cleanSchedule(fields.schedule);
     checkSchedule(schedule, clock, now);
+    const model = await this.cleanModel(w, fields.provider, fields.model);
+    const reasoning = cleanReasoning(fields.reasoning);
     try {
       const [row] = await this.db.insert(crons)
-        .values({ workspace_id: w.id, name, schedule, once: isOnce(schedule), ...body,
+        .values({ workspace_id: w.id, name, schedule, once: isOnce(schedule), ...body, ...model, reasoning,
           enabled: fields.enabled ?? true, created_at: now, updated_at: now })
         .returning();
       this.changed(w.id);
@@ -140,6 +155,8 @@ export class Crons {
       checkSchedule(set.schedule, clock, now);
       set.once = isOnce(set.schedule);
     }
+    if (fields.provider !== undefined || fields.model !== undefined) Object.assign(set, await this.cleanModel(w, fields.provider, fields.model));
+    if (fields.reasoning !== undefined) set.reasoning = cleanReasoning(fields.reasoning);
     if (fields.enabled !== undefined) set.enabled = fields.enabled;
     if (!Object.keys(set).length) throw new CronError('invalid_args', 'no fields to update');
     const prior = await this.byName(w, name);
@@ -160,6 +177,26 @@ export class Crons {
     await this.db.delete(crons).where(eq(crons.id, prior.id));
     this.changed(w.id);
     return true;
+  }
+
+  /** The model pair: both or neither, on a provider this workspace can call.
+   *  Both columns come back so a write of one (or a null) resets the pair —
+   *  a provider with no model is nothing to run on, a model with no
+   *  provider could be anyone's. */
+  private async cleanModel(w: WorkspaceRow, p: unknown, m: unknown): Promise<{ provider: string | null; model: string | null }> {
+    const provider = String(p ?? '').trim();
+    const model = String(m ?? '').trim();
+    if (!provider && !model) return { provider: null, model: null };
+    if (!provider || !model) {
+      throw new CronError('invalid_args', 'provider and model go together — give both to run this cron on another ' +
+        'model, or neither (null) to run on the workspace\'s. A model id means nothing without its provider.');
+    }
+    const keyed = keyedProviders(await this.settings.block({ workspace: w }));
+    if (!keyed.includes(provider as never)) {
+      throw new CronError('invalid_args', `"${provider}" is not a provider this workspace can call — one with a key on /keys: ` +
+        `${keyed.join(', ')}. Save a key there first.`);
+    }
+    return { provider, model };
   }
 
   /** The scheduler's own removal — a one-time cron whose moment passed
@@ -196,6 +233,14 @@ function cleanBody(p: unknown, s: unknown): { prompt: string | null; script: str
       'the repo, run with sh and no model.');
   }
   return { prompt: prompt || null, script: script || null };
+}
+function cleanReasoning(v: unknown): string | null {
+  const reasoning = String(v ?? '').trim();
+  if (!reasoning) return null;
+  if (!(REASONINGS as readonly string[]).includes(reasoning)) {
+    throw new CronError('invalid_args', `"${reasoning}" is not a reasoning level — one of: ${REASONINGS.join(', ')}`);
+  }
+  return reasoning;
 }
 function cleanSchedule(v: unknown): string {
   const schedule = String(v ?? '').trim();

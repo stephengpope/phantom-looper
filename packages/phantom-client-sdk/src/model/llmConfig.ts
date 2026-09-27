@@ -12,6 +12,19 @@ export type Reasoning = typeof REASONINGS[number];
 export const isProvider = (s: unknown): s is Provider => typeof s === 'string' && (PROVIDERS as readonly string[]).includes(s);
 export const isReasoning = (s: unknown): s is Reasoning => typeof s === 'string' && (REASONINGS as readonly string[]).includes(s);
 
+/** THE rule for which providers may be picked: those with a key on /keys,
+ *  plus any that takes no key (openai-codex reads its own login). Read off
+ *  the settings block — each credential entry names its `meta.provider`
+ *  and where its value comes from (`source`; 'default' = no key stored).
+ *  Mirrors core's keyedProviders: the server's cron validation applies the
+ *  same rule, so a provider you cannot call is never a choice anywhere. */
+export function keyedProviders(
+  entries: Record<string, { source?: string; meta?: object }>,
+): Provider[] {
+  const keyEntry = (p: string) => Object.values(entries).find((e) => (e.meta as { provider?: string } | undefined)?.provider === p);
+  return PROVIDERS.filter((p) => { const e = keyEntry(p); return !e || e.source !== 'default'; });
+}
+
 export interface CompactionConfig {
   /** Compact when the last step's input tokens pass this percent of the window. */
   thresholdPct: number;

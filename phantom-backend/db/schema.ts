@@ -315,6 +315,11 @@ export const crons = phantomLooper.table('crons', {
   once: boolean('once').notNull(),
   prompt: text('prompt'),   // what an agent run is asked to do
   script: text('script'),   // a path in the checkout, run with sh — no model
+  // The model a run pins to; null = the workspace's settings at fire time.
+  // provider+model together or not at all (migration 042).
+  provider: text('provider'),
+  model: text('model'),
+  reasoning: text('reasoning'),
   enabled: boolean('enabled').notNull().default(true),
   last_run_at: timestamp('last_run_at', { withTimezone: true }),   // when it last fired; null = never
   created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

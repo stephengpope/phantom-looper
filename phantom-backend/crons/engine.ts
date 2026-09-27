@@ -16,7 +16,10 @@
 // A fire opens a NEW coding session in the workspace (its own checkout,
 // named after the cron, its seat stamped 'cron'), runs the prompt as one
 // coding turn — the same runner the looper and the /turn route use — and
-// closes it. A SCRIPT cron runs `sh <path>` instead, through the same bash
+// closes it. A cron that names its model stamps it on that session's row
+// first (Sessions.stampModel), so the run reads the row like every runner
+// and the record shows what ran; its reasoning rides the pin. A SCRIPT cron
+// runs `sh <path>` instead, through the same bash
 // tool route the agent's own bash calls (one executor: pidfile, interrupt,
 // timeout, output tail), with no model in the loop — zero tokens. Either
 // way the session is the run's record: a script run saves a two-message
@@ -209,6 +212,7 @@ export class CronEngine {
       sessionId = opened.session.id;
       await sessions.nameIfUnnamed(sessionId, row.name);
       await sessions.stampAgent(sessionId, 'cron');
+      if (row.provider && row.model) await sessions.stampModel(sessionId, { provider: row.provider, model: row.model });
       this.deps.sessionEvents?.publish(sessionId, CRON_CLIENT_ID, { event: 'session', agent: 'cron' });
 
       const ac = new AbortController();
@@ -221,8 +225,10 @@ export class CronEngine {
           const deps = { f: this.f, apiKey, base: BASE, modelFetch: this.deps.modelFetch,
             sessionEvents: this.deps.sessionEvents, client: CRON_CLIENT_ID, backdoor: this.deps.backdoor,
             onRetry: (t: string) => log.warn({ cron: row.name }, t), signal: ac.signal };
+          // The row, re-read: it may carry the cron's model now (stampModel).
+          const pin = { ...sessionPin(await sessions.get(sessionId)), reasoning: row.reasoning };
           const t = await runCodingTurn(deps, opened, w.id, row.prompt ?? '', false,
-            await this.deps.settings.agentConfig('coding', { workspace: w, pin: sessionPin(opened.session) }));
+            await this.deps.settings.agentConfig('coding', { workspace: w, pin }));
           log.info({ workspace: w.name, cron: row.name, session: sessionId, tokens: t.tokens, interrupted: t.interrupted }, 'cron run finished');
         }
       } finally {

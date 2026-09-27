@@ -34,7 +34,7 @@ import { human, labelFor } from '../settingLabels.js';
 import { groupBlocks, headedChoices, type Block } from '../settingGroups.js';
 import { ValueInput, type EditSpec } from './ValueInput.js';
 import { Screen } from './Screen.js';
-import { PROVIDERS } from '../../core/llm/createAgent.js';
+import { PROVIDERS, keyedProviders } from '../../core/llm/createAgent.js';
 
 export type { Api } from '../request.js';
 import type { Api } from '../request.js';
@@ -306,10 +306,9 @@ export function providerChoices(key: string, choices: readonly string[] | undefi
   entries: Record<string, Entry>): Pick<EditSpec, 'choices' | 'note'> | null {
   if (!PROVIDER_ROWS.has(key)) return null;
   const all = choices ?? PROVIDERS;
-  const keyEntry = (p: string) => Object.values(entries).find((e) => e.meta.provider === p);
-  // A key is "set" when it comes from any layer — the workspace read carries
-  // a credential's source only, never its value.
-  const keyed = all.filter((p) => { const e = keyEntry(p); return !e || e.source !== 'default'; });
+  // THE rule (core keyedProviders): a key from any layer counts — the
+  // workspace read carries a credential's source only, never its value.
+  const keyed = keyedProviders(entries).filter((p) => all.includes(p));
   return keyed.length
     ? { choices: keyed, note: 'providers with a key on /keys' }
     : { choices: all, note: 'no provider key on /keys yet — save one there first' };
