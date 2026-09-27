@@ -235,7 +235,7 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
   app.delete<{ Params: { id: string }; Querystring: { confirm?: string } }>(
     '/workspaces/:id', { schema: { ...TAG,
       summary: 'Delete a workspace',
-      description: 'Refuses while sessions are active. Deleting a workspace deletes its board — every card and its history — so it additionally requires ?confirm=true.',
+      description: 'Refuses while sessions are active. Requires ?confirm=true.',
       params: idParam, querystring: { type: 'object', properties: { confirm: { type: 'string', enum: ['true'] } } } } },
     async (req, reply) => {
       if (!await ctx.workspaces.get(req.params.id)) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
@@ -245,8 +245,7 @@ export function workspaceRoutes(app: FastifyInstance, ctx: AppCtx) {
       const live = await ctx.folders.countOnDisk(req.params.id);
       if (live) return reply.code(409).send(err('sessions_exist', `workspace ${req.params.id} still has ${live} active session(s) — close them first`));
       if (req.query.confirm !== 'true') {
-        return reply.code(409).send(err('confirm_required',
-          'deleting a workspace deletes its board — every card and its history — pass ?confirm=true'));
+        return reply.code(409).send(err('confirm_required', 'pass ?confirm=true'));
       }
       await ctx.workspaces.remove(req.params.id, writerOf(req));
       return ok({ deleted: req.params.id });

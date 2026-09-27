@@ -135,7 +135,7 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
           choices={[
             { value: false, label: 'keep it', detail: '' },
             { value: true, label: 'delete it', detail: 'cannot be undone',
-              hint: 'Deletes the workspace and its data. The GitHub repo is untouched. Refused while a session is running.' },
+              hint: 'Deletes the workspace and its data. Your GitHub repo is not deleted. Refused while a session is running.' },
           ]}
           onSelect={(yes) => {
             if (!yes) { setView({ at: 'list' }); return; }
@@ -221,8 +221,7 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
     ...settingRows,
 
     { value: '#gap:delete', label: '', heading: true },
-    { value: 'delete', label: `delete ${label}`, detail: 'cannot be undone',
-      hint: 'Deletes the workspace and its data. The GitHub repo is untouched. Refused while a session is running.' },
+    { value: 'delete', label: `delete ${label}`, detail: 'cannot be undone' },
   ];
 
   return (
