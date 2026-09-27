@@ -9,12 +9,13 @@
 // workspace, so it never sits inside one. ←→ narrow the list to one
 // workspace's own rows, /resume's cycle, named in the title; [n] there
 // starts the editor on that workspace. [enter] opens the SecretEditor on
-// the row with every field live: a new value overwrites, an empty one keeps
-// the stored value, a changed name or Where MOVES it (write at the new
-// spot, then remove the old). [d] removes the row at its own layer.
+// the row with every field live and auto-saving: a new value overwrites,
+// an empty one keeps the stored value, a changed name or Where MOVES it
+// (write at the new spot, then remove the old). [d] removes the row at its
+// own layer.
 import { useCallback, useEffect, useState } from 'react';
 import { SelectList, type Choice } from './SelectList.js';
-import { SecretEditor, type SecretDraft, type SecretTarget } from './SecretEditor.js';
+import { SecretEditor, type SecretDraft, type SecretId, type SecretTarget } from './SecretEditor.js';
 import { Screen } from './Screen.js';
 import { useInput } from './useInput.js';
 import type { Api } from '../settings.js';
@@ -82,7 +83,7 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
     void what()
       .then(() => after, (e: Error) => e.message)
       .then(async (said) => { await load(); setNotice(said); })
-      .finally(() => { setBusy(false); setEditing(null); });
+      .finally(() => setBusy(false));
   };
 
   /** PUT at one layer. No value = the server keeps the stored one. */
@@ -90,24 +91,30 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
     api('PUT', `/secrets/${encodeURIComponent(d.name)}${scopeQuery(d.workspaceId)}`,
       { description: d.description, ...(value ? { value } : {}) });
 
-  const save = (d: SecretDraft) => {
+  /** The editor's auto-save: one write, the editor stays open. Rejects so
+   *  the editor can say why; the list re-reads either way. */
+  const save = async (d: SecretDraft, from?: SecretId) => {
     setLast(keyOf(d.workspaceId, d.name));
-    const from = editing?.mode === 'edit' ? editing.row : undefined;
-    const moved = from && (from.name !== d.name || (from.workspace ?? null) !== d.workspaceId);
-    if (!moved) {
-      run(() => put(d, d.value || undefined), `${d.name} saved (${wsName(d.workspaceId)})`);
-      return;
-    }
-    // A move: the value goes with it — typed fresh, or read back from the
-    // old spot (this process already holds every value the agent reads).
-    // Write first, remove second: a failure in between leaves both rows
-    // on the list, never neither.
-    const oldPath = `/secrets/${encodeURIComponent(from.name)}${scopeQuery(from.workspace)}`;
-    run(async () => {
+    const moved = from && (from.name !== d.name || from.workspaceId !== d.workspaceId);
+    try {
+      if (!moved) {
+        await put(d, d.value || undefined);
+        setNotice(`${d.name} saved (${wsName(d.workspaceId)})`);
+        return;
+      }
+      // A move: the value goes with it — typed fresh, or read back from the
+      // old spot (this process already holds every value the agent reads).
+      // Write first, remove second: a failure in between leaves both rows
+      // on the list, never neither.
+      const oldPath = `/secrets/${encodeURIComponent(from.name)}${scopeQuery(from.workspaceId)}`;
       const value = d.value || (await api('GET', oldPath) as { value: string }).value;
       await put(d, value);
       await api('DELETE', oldPath);
-    }, `${from.name} (${layerOf(from)}) moved to ${d.name} (${wsName(d.workspaceId)})`);
+      setNotice(`${from.name} (${wsName(from.workspaceId)}) moved to ${d.name} (${wsName(d.workspaceId)})`);
+    } catch (e) {
+      setNotice((e as Error).message);
+      throw e;
+    } finally { await load(); }
   };
 
   const shown = (rows ?? []).filter((r) => filter === null || r.workspace === filter);
@@ -130,7 +137,7 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
           ? { name: editing.row.name, description: editing.row.description, workspaceId: editing.row.workspace ?? null }
           : { workspaceId: filter }}
         targets={targets}
-        onSave={save} onCancel={() => setEditing(null)}
+        onSave={save} onClose={() => setEditing(null)}
       />
     );
   }
