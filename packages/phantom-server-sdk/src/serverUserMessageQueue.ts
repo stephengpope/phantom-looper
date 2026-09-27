@@ -23,7 +23,7 @@ export interface SessionAccess {
  *  for ever. Oldest drop first — the newest fact is the one that matters. */
 export const MAX_PER_SESSION = 50;
 
-export class UserMessageQueue {
+export class ServerUserMessageQueue {
   #bySession = new Map<string, string[]>();
 
   constructor(private readonly access: SessionAccess) {}

@@ -31,11 +31,10 @@ await agent.compact();
   queued, and rides the next model call. Still queued when the turn ends:
   starts the next turn. A failed turn takes its messages with it — nothing
   is kept or sent again.
-- Injections — user messages queued for the session while no turn ran (a
-  background command finished, instant sync). Pulled at the start of every
-  turn, ahead of the user's own; they never start a turn.
-  `PHANTOM_PULL_USER_MESSAGE_QUEUE=off` stops the pull, for a program that
-  handles them itself.
+- Messages the server holds for a session (a background command finished,
+  instant sync, auto-push) are written into the transcript by the server
+  when the lock is taken. The SDK sees the transcript changed and reads it
+  again — it pulls nothing itself.
 
 ## What the base class guarantees
 

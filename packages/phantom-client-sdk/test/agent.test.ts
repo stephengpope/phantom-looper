@@ -201,21 +201,6 @@ test('a user message left over at turn end starts the next turn by itself', asyn
   assert.deepEqual(h.errors, []);
 });
 
-test('injections: queued for the session, they start no turn and ride the next turn ahead of the user', async () => {
-  const h = harness();
-  TestAgent.script = [{ text: 'ok' }];
-  const a = await TestAgent.create(h.fake.backend, h.handlers);
-  h.fake.sessions.get(a.sessionId)!.backdoor.push('a command exited', 'new code arrived');
-  await wait(20);
-  assert.equal(a.busy, false);
-  assert.equal(h.fake.linesOf(a.sessionId).length, 0);
-  await a.sendUserMessage('what happened?');
-  const users = h.fake.linesOf(a.sessionId)
-    .filter((l) => l.type === 'message' && (l.message as { role: string }).role === 'user')
-    .map((l) => (l.message as { content: string }).content);
-  assert.deepEqual(users, ['a command exited', 'new code arrived', 'what happened?']);
-});
-
 test('append: a lost reply is resent with the same delivery id and lands exactly once', async () => {
   const h = harness();
   TestAgent.script = [{ text: 'fine' }];
@@ -354,34 +339,6 @@ test('a stop starts nothing by itself: what is queued waits for the app', async 
   assert.equal(h.fake.sessions.get(a.sessionId)!.turnsEnded, 1);
   assert.equal(a.busy, false);
   assert.equal(a.userMessages.length, 1);
-});
-
-test('injections: a failed turn takes them with it — nothing is given back', async () => {
-  const h = harness();
-  TestAgent.script = [{ error: new Error('overloaded') }, { text: 'ok' }];
-  const a = await TestAgent.create(h.fake.backend, h.handlers);
-  const s = h.fake.sessions.get(a.sessionId)!;
-  s.backdoor.push('a command exited');
-  await assert.rejects(a.sendUserMessage('hi'));
-  assert.deepEqual(s.backdoor, []);
-  await a.sendUserMessage('again');
-  const users = h.fake.linesOf(a.sessionId)
-    .filter((l) => l.type === 'message' && (l.message as { role: string }).role === 'user')
-    .map((l) => (l.message as { content: string }).content);
-  assert.deepEqual(users, ['again']);
-});
-
-test('PHANTOM_PULL_USER_MESSAGE_QUEUE=off: the queue is not pulled, and stays on the server', async () => {
-  const h = harness();
-  TestAgent.script = [{ text: 'ok' }];
-  const a = await TestAgent.create(h.fake.backend, h.handlers);
-  const s = h.fake.sessions.get(a.sessionId)!;
-  s.backdoor.push('a command exited');
-  process.env.PHANTOM_PULL_USER_MESSAGE_QUEUE = 'off';
-  try { await a.sendUserMessage('hi'); }
-  finally { delete process.env.PHANTOM_PULL_USER_MESSAGE_QUEUE; }
-  assert.deepEqual(s.backdoor, ['a command exited']);
-  assert.equal(h.fake.requests.filter((r) => r.path.endsWith('/backdoor/drain')).length, 0);
 });
 
 test('sendUserMessage while busy queues; text waiting when the first model call starts rides it', async () => {

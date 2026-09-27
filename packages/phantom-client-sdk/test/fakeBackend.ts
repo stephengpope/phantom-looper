@@ -13,7 +13,6 @@ export interface FakeSession {
   updatedAt: string | null;
   lastDeliveryId: string | null;
   turnsEnded: number;
-  backdoor: string[];
   planMode?: boolean;
   /** Events relayed to POST /sessions/:id/events, in order. */
   relayed: Record<string, unknown>[];
@@ -53,7 +52,7 @@ export class FakeBackend {
     const s: FakeSession = {
       id, workspaceId: 'w1', folderId: 'f1', status: 'active', agent: null,
       system_prompt: null, lockedBy: null, lines: [], updatedAt: null, lastDeliveryId: null,
-      turnsEnded: 0, backdoor: [], relayed: [], watchers: new Set(),
+      turnsEnded: 0, relayed: [], watchers: new Set(),
       ...Object.fromEntries(Object.entries(overrides).filter(([, v]) => v !== undefined)),
     };
     this.sessions.set(id, s);
@@ -156,11 +155,6 @@ export class FakeBackend {
       });
       init?.signal?.addEventListener('abort', () => { if (push) s.watchers.delete(push); });
       return new Response(stream, { status: 200, headers: { 'content-type': 'application/x-ndjson' } });
-    }
-    if ((m = p.match(/^\/sessions\/([^/]+)\/backdoor\/drain$/)) && method === 'POST') {
-      const s = this.sessions.get(m[1]!)!;
-      const messages = s.backdoor.splice(0);
-      return this.ok({ messages });
     }
 
     if ((m = p.match(/^\/sessions\/([^/]+)\/follow$/)) && method === 'POST') {

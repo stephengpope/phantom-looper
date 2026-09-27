@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { TranscriptLine } from 'phantom-client-sdk';
-import { UserMessageQueue, MAX_PER_SESSION, type SessionAccess } from '../src/index.js';
+import { ServerUserMessageQueue, MAX_PER_SESSION, type SessionAccess } from '../src/index.js';
 
 class FakeStore implements SessionAccess {
   lines = new Map<string, TranscriptLine[]>();
@@ -23,7 +23,7 @@ class FakeStore implements SessionAccess {
 
 test('add queues; drain writes everything waiting as user messages, in order', async () => {
   const store = new FakeStore();
-  const q = new UserMessageQueue(store);
+  const q = new ServerUserMessageQueue(store);
   q.add('s1', 'sync: 2 files arrived');
   q.add('s1', 'task 3 exited 1');
   assert.deepEqual(store.texts('s1'), []);
@@ -39,13 +39,13 @@ test('add queues; drain writes everything waiting as user messages, in order', a
 
 test('nothing waiting: drain writes nothing', async () => {
   const store = new FakeStore();
-  const q = new UserMessageQueue(store);
+  const q = new ServerUserMessageQueue(store);
   assert.deepEqual(await q.drain('s1'), []);
   assert.equal(store.appends, 0);
 });
 
 test('the same text already waiting is not queued twice', () => {
-  const q = new UserMessageQueue(new FakeStore());
+  const q = new ServerUserMessageQueue(new FakeStore());
   q.add('s1', 'sync: nothing new');
   q.add('s1', 'sync: nothing new');
   assert.deepEqual(q.pending('s1'), ['sync: nothing new']);
@@ -53,7 +53,7 @@ test('the same text already waiting is not queued twice', () => {
 
 test('a write that fails leaves the messages queued, in order, ahead of newer ones', async () => {
   const store = new FakeStore();
-  const q = new UserMessageQueue(store);
+  const q = new ServerUserMessageQueue(store);
   q.add('s1', 'first');
   store.failAppends = 1;
   await assert.rejects(q.drain('s1'), /append failed/);
@@ -64,7 +64,7 @@ test('a write that fails leaves the messages queued, in order, ahead of newer on
 });
 
 test('sessions are independent; the per-session cap drops the oldest', () => {
-  const q = new UserMessageQueue(new FakeStore());
+  const q = new ServerUserMessageQueue(new FakeStore());
   for (let i = 0; i < MAX_PER_SESSION + 5; i++) q.add('a', `a${i}`);
   q.add('b', 'b0');
   assert.equal(q.pending('a').length, MAX_PER_SESSION);

@@ -7,7 +7,7 @@
 // pending entry is dropped and reported through `onSettled` — never
 // silently.
 //
-// The server has its own UserMessageQueue (phantom-server-sdk) for the
+// The server has its own ClientUserMessageQueue (phantom-server-sdk) for the
 // messages it holds for a session's AI; same name, same shape.
 export interface QueueEntry<M = unknown> {
   readonly id: number;
@@ -20,7 +20,7 @@ export interface QueueEntry<M = unknown> {
 
 let nextId = 1;
 
-export class UserMessageQueue<M = unknown> {
+export class ClientUserMessageQueue<M = unknown> {
   private entries: QueueEntry<M>[] = [];
   /** A pending entry settled (or failed) — the Agent may drain again. */
   onSettled?: (entry: QueueEntry<M>, error?: unknown) => void;

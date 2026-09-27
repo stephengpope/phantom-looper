@@ -9,9 +9,9 @@ tasks, instant sync, auto-push / auto-pull and cron all push here. Nothing
 here starts a turn.
 
 ```ts
-import { UserMessageQueue } from 'phantom-server-sdk';
+import { ServerUserMessageQueue } from 'phantom-server-sdk';
 
-const queue = new UserMessageQueue({ appendTranscript });   // the backend's transcript write
+const queue = new ServerUserMessageQueue({ appendTranscript });   // the backend's transcript write
 
 queue.add(sessionId, 'task 7 exited 0');
 

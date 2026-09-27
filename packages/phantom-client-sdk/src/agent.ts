@@ -22,7 +22,7 @@ import { llmConfigFrom, keysFrom, type AgentKeys, type LlmConfig, type Provider 
 import { languageModel, billingMiddleware, effectiveReasoning, type ModelHooks, type ModelSpec, type TokenUsage } from './model/languageModel.js';
 import { withRetry, BACKEND_RETRY, MODEL_RETRY, type RetryPolicy } from './model/retry.js';
 import { wrapLanguageModel } from 'ai';
-import { UserMessageQueue } from './userMessageQueue.js';
+import { ClientUserMessageQueue } from './clientUserMessageQueue.js';
 import { ToolKitSet, type ToolKit, type ToolKitContext } from './toolkit.js';
 import { Transcript, conversationFrom, messageLine, compactionLine, type TranscriptLine } from './transcript.js';
 import { runTurn, type TurnResult } from './turn.js';
@@ -97,7 +97,7 @@ export abstract class Agent {
   /** Default: the row's plan mode, re-read at every turn start. A client
    *  with a live flag (the cli's /plan mid-turn) overrides with setReadonly. */
   #readonly: () => boolean = () => this.#row.planMode === true;
-  #userMessages = new UserMessageQueue();
+  #userMessages = new ClientUserMessageQueue();
   #events = new Emitter();
   #turn: Promise<TurnResult & { llm: LlmConfig }> | null = null;
   #abort: AbortController | null = null;
@@ -245,7 +245,7 @@ export abstract class Agent {
   get usage(): Readonly<TokenTotals> { return this.#usage; }
   get busy(): boolean { return this.#turn !== null; }
   get systemPromptBlocks(): readonly string[] { return this.#blocks; }
-  get userMessages(): UserMessageQueue { return this.#userMessages; }
+  get userMessages(): ClientUserMessageQueue { return this.#userMessages; }
   get row(): Readonly<SessionRow> { return this.#row; }
   /** For a subclass's prompt building and kits. */
   protected get backend(): PhantomBackend { return this.#backend; }
@@ -323,11 +323,9 @@ export abstract class Agent {
         await this.#current(lock);
         // The row as it stands now: plan mode, the folder the tools open.
         this.#row = await call<SessionRow>(this.#backend, 'GET', `/sessions/${this.sessionId}`);
-        // Injections: user messages queued for this session while no turn ran
-        // (a background command finished, instant sync). They ride this
-        // turn's first model call, ahead of the user's own words, and never
-        // start a turn. If the turn fails, nothing happens to them.
-        const injected = await this.#pullUserMessageQueue();
+        // Messages the server held for this session are already in the
+        // transcript: it writes them when the lock is taken, and #current
+        // above read the transcript again because it changed.
 
         const blocks = this.systemPromptFrozen ? this.#blocks : await this.systemPrompt();
         const { llm, keys } = await this.#resolveLlm();
@@ -335,7 +333,7 @@ export abstract class Agent {
         const tools = await this.#kits.resolve(this.#kitContext());
         this.#noticeCacheLimit(blocks, llm.provider);
 
-        const texts = [...injected, ...opening];
+        const texts = opening;
         this.#emit('turn-start', { texts });
         // The feed, both ways: watchers see this turn as it runs; a stop
         // from anywhere ends it.
@@ -344,7 +342,7 @@ export abstract class Agent {
         const unwatch = watchForInterrupt(this.#rawBackend, this.sessionId, () => this.interrupt(),
           (reason) => this.#handlers.onNotice({ kind: 'info', text: `not listening for a remote stop this turn (${reason})` }));
         relay.turnStart({ agent: this.kind, message: texts.join('\n\n'), provider: llm.provider, model: llm.model });
-        // The first model call carries the injections and the opening words;
+        // The first model call carries the opening words;
         // every later one, whatever the user sent since.
         let first: string[] | null = texts;
         let r: TurnResult;
@@ -383,15 +381,6 @@ export abstract class Agent {
     } finally {
       this.#abort = null;
     }
-  }
-
-  /** The user messages queued for this session, taken — unless
-   *  PHANTOM_PULL_USER_MESSAGE_QUEUE=off, when the program running the SDK
-   *  handles them itself. */
-  async #pullUserMessageQueue(): Promise<string[]> {
-    if (process.env.PHANTOM_PULL_USER_MESSAGE_QUEUE === 'off') return [];
-    const r = await call<{ messages?: string[] }>(this.#backend, 'POST', `/sessions/${this.sessionId}/backdoor/drain`);
-    return r.messages ?? [];
   }
 
   /** Every ready user message from the front, taken. A voice note that failed was
