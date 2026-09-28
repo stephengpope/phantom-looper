@@ -2,6 +2,11 @@
 // A client tells them apart by code; the message is for a person; `cause`
 // carries what actually failed (ES2022 error chaining) so the stack is never
 // cut.
+//
+// The first three codes are the server's own (a route answers them in its
+// envelope and the client passes them through); the server's
+// `agent_config_invalid` arrives as `config_invalid` — one code for "no
+// model set", whichever side noticed. The rest are raised here.
 
 export const ERROR_CODES = [
   'session_locked',

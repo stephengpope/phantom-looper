@@ -1,6 +1,9 @@
 // One turn: the model is called, tools run, the model is called again, until
-// it stops calling tools (or maxSteps). ONE runner for every agent and every
-// host. What differs by host is only where the parts go (`onPart`).
+// it stops calling tools (or maxSteps). Then, if the user sent more while it
+// ran, the same turn goes on with that text — one turn, one lock, one result
+// — until nothing is waiting or the turn is stopped. ONE runner for every
+// agent and every host. What differs by host is only where the parts go
+// (`onPart`).
 //
 // What is recorded, and when (the record is the server's transcript):
 //   model call succeeded  → the user messages that rode into it, the
@@ -21,19 +24,17 @@ import { streamText, stepCountIs, type LanguageModel, type ModelMessage, type Sy
 import { PhantomError, asPhantomError, isContextTooLong } from './errors.js';
 import { withRollingCacheMark } from './model/cache.js';
 import type { Reasoning } from './model/llmConfig.js';
-import { assistantMessageFrom, toolResultMessage, interruptedResultMessage, userMessage } from './messages.js';
-import { messageLine, usageLine, interruptedLine, type TranscriptLine } from './transcript.js';
+import { assistantMessageFrom, toolResultMessage, interruptedResultMessage } from './messages.js';
+import { messageLine, usageLine, interruptedLine, userMessage, type TokenTotals, type TranscriptLine } from './transcript.js';
 
 export type StreamPart = { type: string; [k: string]: unknown };
-
-export interface TurnUsage { input: number; output: number; cacheRead: number; cacheWrite: number }
 
 export interface TurnResult {
   /** The final reply text (the last step's). */
   text: string;
   /** Every message this turn added to the conversation, in order. */
   messages: ModelMessage[];
-  usage: TurnUsage;
+  usage: TokenTotals;
   outcome: 'done' | 'interrupted';
 }
 
@@ -48,13 +49,13 @@ export interface TurnInput {
   maxSteps: number | null;
   reasoning: Reasoning | undefined;
   signal: AbortSignal;
-  /** Called before EVERY model call: the user messages waiting to go in.
-   *  The first call carries the turn's own text. */
+  /** What the turn opens with. */
+  opening: string[];
+  /** Called before every model call after the first, and once more when the
+   *  model stops: the user messages that arrived since, taken. */
   pending(): string[];
   /** Append to the record. Rejects → the turn fails. */
   record(lines: TranscriptLine[]): Promise<void>;
-  /** The app's wording for a tool call cut by a stop, if it has one. */
-  interruptedText?: string;
   onPart(part: StreamPart): void;
   /** A tool answered with an error (the model still gets it). */
   onToolError(name: string, error: unknown): void;
@@ -73,6 +74,9 @@ class StepInFlight {
   reset(): void { this.text = ''; this.calls = []; this.answered = new Set(); this.held = []; this.assistantRecorded = false; }
 }
 
+/** What one turn accumulates across its model loops. */
+interface Tally { added: ModelMessage[]; usage: TokenTotals; text: string }
+
 /** The record failure, if one landed during the callbacks. Read through a
  *  function: the field is set from AI SDK callbacks, which TypeScript cannot
  *  see, so an inline read is narrowed to its initial null. */
@@ -81,20 +85,33 @@ function throwIfFailed(st: { recordFailure: PhantomError | null }): void {
 }
 
 export async function runTurn(input: TurnInput): Promise<TurnResult> {
+  const tally: Tally = { added: [], usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, text: '' };
+  let carry = input.opening;
+  for (;;) {
+    const aborted = await runModelLoop(input, carry, tally);
+    if (aborted) return { text: tally.text, messages: tally.added, usage: tally.usage, outcome: 'interrupted' };
+    // The model stopped. Anything the user sent meanwhile that did not ride a
+    // call continues this turn — the reply the user is waiting for is to
+    // everything they said.
+    carry = input.pending();
+    if (!carry.length) return { text: tally.text, messages: tally.added, usage: tally.usage, outcome: 'done' };
+  }
+}
+
+/** One model ↔ tools loop over `history + tally.added`, opening with
+ *  `carry`. Resolves true when it was stopped. */
+async function runModelLoop(input: TurnInput, carry: string[], tally: Tally): Promise<boolean> {
   const abort = new AbortController();
   const onOuterAbort = () => abort.abort(input.signal.reason);
   if (input.signal.aborted) onOuterAbort();
   else input.signal.addEventListener('abort', onOuterAbort, { once: true });
 
-  const added: ModelMessage[] = [];
-  const usage: TurnUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-  let text = '';
   let streamFailure: unknown;
   const step = new StepInFlight();
   // Set from the AI SDK's callbacks, read after the stream — a holder, so
   // the reads are not narrowed to their initial values.
   const st: { pendingMessages: ModelMessage[]; recordFailure: PhantomError | null } =
-    { pendingMessages: [], recordFailure: null };
+    { pendingMessages: carry.map(userMessage), recordFailure: null };
 
   // Every record goes through here: a failure ends the turn and is kept to
   // be thrown once the stream has closed (the AI SDK swallows what a
@@ -103,7 +120,7 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
     if (st.recordFailure) return;
     try {
       await input.record(lines);
-      for (const l of lines) if (l.type === 'message') added.push(l.message);
+      for (const l of lines) if (l.type === 'message') tally.added.push(l.message);
     } catch (e) {
       st.recordFailure = asPhantomError(e, 'transcript_write_failed', 'recording the turn');
       abort.abort(st.recordFailure);
@@ -117,12 +134,11 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
     const more = input.pending();
     if (more.length) st.pendingMessages = [...st.pendingMessages, ...more.map(userMessage)];
   };
-  drain();
 
   const result = streamText({
     model: input.model,
     instructions: input.system,
-    messages: [...input.history, ...st.pendingMessages],
+    messages: [...input.history, ...tally.added, ...st.pendingMessages],
     tools: input.tools,
     stopWhen: input.maxSteps == null ? () => false : stepCountIs(input.maxSteps),
     maxRetries: 0,                       // retries are the fetch wrapper's, never stacked
@@ -146,7 +162,8 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
         cacheRead: e.usage.inputTokenDetails?.cacheReadTokens ?? 0,
         cacheWrite: e.usage.inputTokenDetails?.cacheWriteTokens ?? 0,
       };
-      usage.input += u.input; usage.output += u.output; usage.cacheRead += u.cacheRead; usage.cacheWrite += u.cacheWrite;
+      tally.usage.input += u.input; tally.usage.output += u.output;
+      tally.usage.cacheRead += u.cacheRead; tally.usage.cacheWrite += u.cacheWrite;
       const lines: TranscriptLine[] = [
         ...st.pendingMessages.map(messageLine),
         ...(assistant ? [messageLine(assistant)] : []),
@@ -178,7 +195,7 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
           else step.held.push(line);
           break;
         }
-        case 'finish-step': text = step.text; break;
+        case 'finish-step': tally.text = step.text; break;
         case 'error': if (streamFailure === undefined) streamFailure = part.error; break;
         default: break;
       }
@@ -205,11 +222,12 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
       if ((content as unknown[]).length) lines.push(messageLine({ role: 'assistant', content: content }));
       lines.push(...step.held);
     }
-    for (const c of step.calls) if (!step.answered.has(c.toolCallId)) lines.push(messageLine(interruptedResultMessage(c, input.interruptedText)));
+    for (const c of step.calls) if (!step.answered.has(c.toolCallId)) lines.push(messageLine(interruptedResultMessage(c)));
     lines.push(interruptedLine());
     await record(lines);
     throwIfFailed(st);
-    return { text: step.text || text, messages: added, usage, outcome: 'interrupted' };
+    if (step.text) tally.text = step.text;
+    return true;
   }
 
   if (streamFailure !== undefined) {
@@ -218,6 +236,5 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
       : typeof streamFailure === 'string' ? streamFailure : JSON.stringify(streamFailure);
     throw new PhantomError(isContextTooLong(message) ? 'context_too_long' : 'model_error', message, { cause: streamFailure, retryable: false });
   }
-
-  return { text, messages: added, usage, outcome: 'done' };
+  return false;
 }

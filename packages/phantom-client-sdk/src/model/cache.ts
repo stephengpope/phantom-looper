@@ -12,8 +12,8 @@
 // carry them — a message with providerOptions is refused by the transcript.
 import type { ModelMessage, SystemModelMessage } from 'ai';
 
-/** How long Anthropic keeps a cached prefix alive. A person driving the cli
- *  outlasts the 5-minute default every time they step away; an hour costs
+/** How long Anthropic keeps a cached prefix alive. A person in a
+ *  conversation outlasts the 5-minute default every time they step away; an hour costs
  *  2x the write rate on a delta of a few hundred tokens and saves rewriting
  *  the whole conversation. */
 export const CACHE_TTL = '1h';

@@ -1,5 +1,5 @@
 // The SHAPE of what an agent's model runs on. Read from the server at the
-// start of every turn (GET /agents/:kind/config?session=) and never kept:
+// start of every turn (GET /agents/:type/config?session=) and never kept:
 // which model a session runs on is the server's rule, applied there. The
 // key rides the same answer.
 import { PhantomError } from '../errors.js';
@@ -25,7 +25,7 @@ export interface LlmConfig {
   maxSteps: number | null;
 }
 
-/** What GET /agents/:kind/config answers, mapped to the shape a turn runs
+/** What GET /agents/:type/config answers, mapped to the shape a turn runs
  *  on. Throws config_invalid on a shape the SDK cannot run. */
 export function llmConfigFrom(raw: unknown): LlmConfig {
   const r = raw as {

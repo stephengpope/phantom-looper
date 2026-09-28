@@ -1,25 +1,11 @@
-// The skills surface — Agent Skills folders in the session's repo
-// (`.agents/skills/<name>/`). READS are host-side over the session's checkout
-// (the API owns that directory for git already; a read is safe and fast).
-// WRITES go through the container like every repo mutation (no lock — tools
-// take none; one user drives git). Session travels
-// in the same header as the tool routes.
+// The skills surface — thin routes over skills.ts (the skill_* tools run the
+// same code). Session travels in the same header as the tool routes.
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import fsp from 'node:fs/promises';
-import path from 'node:path';
-import type { SessionRow } from '../../db/schema.js';
-import { repoDir } from '../../pool/paths.js';
-import { Sandbox } from '../../workspace/sandbox.js';
 import { ToolError } from '../../tools/envelope.js';
-import { fuzzyFindAndReplace, formatNoMatchHint } from '../../tools/fuzzy.js';
 import { ok, err, type AppCtx } from '../app.js';
 import { SESSION_HEADER, toolSession } from '../sessionHeader.js';
 import type { FsDeps } from './fs.js';
-import { SKILLS_DIR, mergeSkills, parseDescription, scanSkills } from '../../../core/skills/skills.js';
-import { systemSkills, systemSkillTree } from '../../systemSkills.js';
-import {
-  MAX_FILE_BYTES, lintSkillMd, validateFilePath, validateSkillMd, validateSkillName,
-} from '../../../core/skills/validate.js';
+import { listSkills, loadSkill, manageSkill, type ManageBody } from '../../skills.js';
 
 const TAG = { tags: ['skills'] };
 
@@ -27,52 +13,6 @@ const STATUS: Record<string, number> = {
   session_not_found: 404, session_destroyed: 410, no_folder: 400, skill_not_found: 404,
   invalid_args: 400, busy: 409, container_start_failed: 503,
 };
-
-export interface ManageBody {
-  action: 'create' | 'edit' | 'patch' | 'delete' | 'write_file' | 'remove_file';
-  name: string;
-  content?: string;
-  old_string?: string;
-  new_string?: string;
-  replace_all?: boolean;
-  file_path?: string;
-  file_content?: string;
-}
-
-
-const skillDirHost = (ctx: AppCtx, sessionId: string, name: string) =>
-  path.join(repoDir(ctx.paths, sessionId), SKILLS_DIR, name);
-const skillDirContainer = (name: string) => `/workspace/repo/${SKILLS_DIR}/${name}`;
-
-async function skillExists(ctx: AppCtx, sessionId: string, name: string): Promise<boolean> {
-  return fsp.access(path.join(skillDirHost(ctx, sessionId, name), 'SKILL.md'))
-    .then(() => true, () => false);
-}
-
-/** Every file under the skill folder except SKILL.md, relative paths. */
-async function bundledFiles(dir: string): Promise<string[]> {
-  const out: string[] = [];
-  const walk = async (d: string, rel: string) => {
-    const entries = await fsp.readdir(d, { withFileTypes: true }).catch(() => []);
-    for (const e of entries) {
-      const r = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isDirectory()) await walk(path.join(d, e.name), r);
-      else if (r !== 'SKILL.md') out.push(r);
-    }
-  };
-  await walk(dir, '');
-  return out.sort();
-}
-
-/** Write one file into the skill folder via the container (the container user
- *  owns the repo's files — a host-side write would not, on Linux). */
-async function writeViaContainer(ws: Sandbox, name: string, rel: string, content: string): Promise<void> {
-  const abs = `${skillDirContainer(name)}/${rel}`;
-  const dir = abs.slice(0, abs.lastIndexOf('/'));
-  const mk = await ws.run(['mkdir', '-p', dir]);
-  if (mk.exitCode !== 0) throw new ToolError('invalid_args', `mkdir failed: ${mk.stderr.toString('utf8').slice(0, 200)}`);
-  await ws.writeFile(abs, Buffer.from(content, 'utf8'));
-}
 
 export function skillsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
   const sessionHeader = {
@@ -82,12 +22,6 @@ export function skillsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
   const handle = (reply: FastifyReply, e: unknown) => {
     if (e instanceof ToolError) return reply.code(STATUS[e.code] ?? 400).send(err(e.code, e.message, e.retryable));
     throw e;
-  };
-
-  /** The session's workspace image — the system skill tier lives inside it. */
-  const imageFor = async (session: SessionRow): Promise<string> => {
-    const workspace = await ctx.workspaces.get(session.workspaceId);
-    return String(await ctx.settings.resolve('container_image', { workspace }));
   };
 
   // List — live scan of the session's working tree, merged with the image's
@@ -101,9 +35,7 @@ export function skillsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
   async (req, reply) => {
     try {
       const { session, folderId } = await toolSession(ctx.sessions, req.headers);
-      return ok({ skills: mergeSkills(
-        await scanSkills(repoDir(ctx.paths, folderId)),
-        await systemSkills(deps.docker, await imageFor(session))) });
+      return ok(await listSkills(ctx, deps, session, folderId));
     } catch (e) { return handle(reply, e); }
   });
 
@@ -117,38 +49,7 @@ export function skillsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
     async (req, reply) => {
       try {
         const { session, folderId } = await toolSession(ctx.sessions, req.headers);
-        const name = req.params.name;
-        const nameErr = validateSkillName(name);
-        if (nameErr) throw new ToolError('invalid_args', nameErr);
-        const dir = skillDirHost(ctx, folderId, name);
-        if (!(await skillExists(ctx, folderId, name))) {
-          // Not in the repo — fall through to the image's system tier
-          // (repo shadows system, so this only answers un-shadowed names).
-          const sys = (await systemSkillTree(deps.docker, await imageFor(session))).get(name);
-          if (!sys) {
-            throw new ToolError('skill_not_found',
-              `no skill '${name}' in ${SKILLS_DIR}/ or the image's system skills`);
-          }
-          if (req.query.file) {
-            const fErr = validateFilePath(req.query.file);
-            if (fErr) throw new ToolError('invalid_args', fErr);
-            const content = sys.files.get(req.query.file);
-            if (content === undefined) {
-              throw new ToolError('skill_not_found', `no file '${req.query.file}' in skill '${name}'`);
-            }
-            return ok({ name, file: req.query.file, content });
-          }
-          return ok({ name, instructions: sys.md, files: [...sys.files.keys()].sort() });
-        }
-        if (req.query.file) {
-          const fErr = validateFilePath(req.query.file);
-          if (fErr) throw new ToolError('invalid_args', fErr);
-          const content = await fsp.readFile(path.join(dir, req.query.file), 'utf8')
-            .catch(() => { throw new ToolError('skill_not_found', `no file '${req.query.file}' in skill '${name}'`); });
-          return ok({ name, file: req.query.file, content });
-        }
-        const instructions = await fsp.readFile(path.join(dir, 'SKILL.md'), 'utf8');
-        return ok({ name, instructions, files: await bundledFiles(dir) });
+        return ok(await loadSkill(ctx, deps, session, folderId, req.params.name, req.query.file));
       } catch (e) { return handle(reply, e); }
     });
 
@@ -168,112 +69,7 @@ export function skillsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
   async (req, reply) => {
     try {
       const { session, folderId } = await toolSession(ctx.sessions, req.headers);
-      const nameErr = validateSkillName(req.body.name);
-      if (nameErr) throw new ToolError('invalid_args', nameErr);
-
-      const workspace = await ctx.workspaces.get(session.workspaceId);
-      let container;
-      try {
-        container = await deps.containers.ensure(folderId, workspace);
-      } catch (e) {
-        throw new ToolError('container_start_failed', (e as Error).message, true);
-      }
-      const ws = new Sandbox(deps.docker, container);
-
-      // Writes reach the REPO tier only. When the name exists solely in the
-      // image's system tier, say so — "no skill" would gaslight an agent that
-      // just saw it in skill_list.
-      const systemHas = !(await skillExists(ctx, folderId, req.body.name))
-        && (await systemSkillTree(deps.docker, await imageFor(session))).has(req.body.name);
-      const data = await manage(ctx, ws, folderId, req.body, systemHas);
-      return ok(data);
+      return ok(await manageSkill(ctx, deps, session, folderId, req.body));
     } catch (e) { return handle(reply, e); }
   });
-}
-
-async function manage(ctx: AppCtx, ws: Sandbox, folderId: string, body: ManageBody,
-  systemHas = false): Promise<unknown> {
-  const { action, name } = body;
-  const exists = await skillExists(ctx, folderId, name);
-  const hostDir = skillDirHost(ctx, folderId, name);
-  const notFound = () => new ToolError('skill_not_found', systemHas
-    ? `'${name}' is a read-only system skill (baked into the workspace image). To change what the agent ` +
-      `sees, create a repo skill named '${name}' — it shadows the system one.`
-    : `no skill '${name}'`);
-
-  switch (action) {
-    case 'create':
-    case 'edit': {
-      if (!body.content) throw new ToolError('invalid_args', `'content' (full SKILL.md) is required for '${action}'.`);
-      if (action === 'create' && exists) {
-        throw new ToolError('invalid_args', `Skill '${name}' already exists — use 'edit' or 'patch'.`);
-      }
-      if (action === 'edit' && !exists) throw notFound();
-      const vErr = validateSkillMd(name, body.content);
-      if (vErr) throw new ToolError('invalid_args', vErr);
-      await writeViaContainer(ws, name, 'SKILL.md', body.content);
-      const warnings = action === 'create' ? lintSkillMd(body.content) : [];
-      return { message: `Skill '${name}' ${action === 'create' ? 'created' : 'updated'}.`,
-        description: parseDescription(body.content), ...(warnings.length ? { warnings } : {}) };
-    }
-
-    case 'patch': {
-      if (!exists) throw notFound();
-      if (!body.old_string) throw new ToolError('invalid_args', "'old_string' is required for 'patch'.");
-      if (body.new_string === undefined) {
-        throw new ToolError('invalid_args', "'new_string' is required for 'patch' (empty string deletes the match).");
-      }
-      let rel = 'SKILL.md';
-      if (body.file_path) {
-        const fErr = validateFilePath(body.file_path);
-        if (fErr) throw new ToolError('invalid_args', fErr);
-        rel = body.file_path;
-      }
-      const current = await fsp.readFile(path.join(hostDir, rel), 'utf8')
-        .catch(() => { throw new ToolError('skill_not_found', `no file '${rel}' in skill '${name}'`); });
-      const r = fuzzyFindAndReplace(current, body.old_string, body.new_string, body.replace_all ?? false);
-      if (r.error) {
-        throw new ToolError('invalid_args', r.error + formatNoMatchHint(r.error, r.count, body.old_string, current));
-      }
-      if (rel === 'SKILL.md') {
-        const vErr = validateSkillMd(name, r.content);
-        if (vErr) throw new ToolError('invalid_args', `Patch would break SKILL.md: ${vErr}`);
-      }
-      await writeViaContainer(ws, name, rel, r.content);
-      return { message: `Patched ${rel} in '${name}' (${r.count} replacement${r.count === 1 ? '' : 's'}, ${r.strategy}).` };
-    }
-
-    case 'delete': {
-      if (!exists) throw notFound();
-      const r = await ws.run(['rm', '-rf', skillDirContainer(name)]);
-      if (r.exitCode !== 0) throw new ToolError('invalid_args', `delete failed: ${r.stderr.toString('utf8').slice(0, 200)}`);
-      return { message: `Skill '${name}' deleted.` };
-    }
-
-    case 'write_file': {
-      if (!exists) throw notFound();
-      const fErr = validateFilePath(body.file_path ?? '');
-      if (fErr) throw new ToolError('invalid_args', fErr);
-      if (body.file_content === undefined) throw new ToolError('invalid_args', "'file_content' is required for 'write_file'.");
-      if (Buffer.byteLength(body.file_content, 'utf8') > MAX_FILE_BYTES) {
-        throw new ToolError('invalid_args', `file exceeds ${MAX_FILE_BYTES} bytes.`);
-      }
-      await writeViaContainer(ws, name, body.file_path!, body.file_content);
-      return { message: `Wrote ${body.file_path} to skill '${name}'.` };
-    }
-
-    case 'remove_file': {
-      if (!exists) throw notFound();
-      const fErr = validateFilePath(body.file_path ?? '');
-      if (fErr) throw new ToolError('invalid_args', fErr);
-      const present = await fsp.access(path.join(hostDir, body.file_path!)).then(() => true, () => false);
-      if (!present) throw new ToolError('skill_not_found', `no file '${body.file_path}' in skill '${name}'`);
-      const r = await ws.run(['rm', '-f', `${skillDirContainer(name)}/${body.file_path}`]);
-      if (r.exitCode !== 0) throw new ToolError('invalid_args', `remove failed: ${r.stderr.toString('utf8').slice(0, 200)}`);
-      return { message: `Removed ${body.file_path} from skill '${name}'.` };
-    }
-
-    default:
-      throw new ToolError('invalid_args', `unknown action '${String(action)}'`);
-  }
 }

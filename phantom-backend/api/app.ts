@@ -16,7 +16,8 @@ import type { Paths } from '../pool/paths.js';
 import { settingsRoutes } from './routes/settings.js';
 import { secretsRoutes } from './routes/secrets.js';
 import { databaseRoutes } from './routes/database.js';
-import { fsRoutes, type FsDeps } from './routes/fs.js';
+import type { FsDeps } from './routes/fs.js';
+import { toolRoutes } from './routes/tools.js';
 import { gitRoutes } from './routes/git.js';
 import { kanbanRoutes } from './routes/kanban.js';
 import { skillsRoutes } from './routes/skills.js';
@@ -219,7 +220,7 @@ export async function buildApp(ctx: AppCtx) {
     workspaceRoutes(api, ctx);
     databaseRoutes(api, ctx);
     sessionRoutes(api, ctx);
-    if (ctx.fs) fsRoutes(api, ctx, ctx.fs);
+    toolRoutes(api, ctx);
     if (ctx.fs) tasksRoutes(api, ctx, ctx.fs);
     if (ctx.fs) skillsRoutes(api, ctx, ctx.fs);
     if (ctx.fs && ctx.engine) gitRoutes(api, ctx, ctx.fs, ctx.engine);

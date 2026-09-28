@@ -28,7 +28,7 @@ await queue.drain(sessionId);
 - A write that fails leaves the messages queued.
 - In memory: a message held across a server restart is lost.
 
-Not wired into phantom-backend yet.
+Not wired into phantom-backend: writing into the transcript at lock time is safe only once every client appends to the record. Today the cli, the looper and Telegram save the whole file, and a line appended under the lock would be overwritten by their next save. The client SDK takes the server's notes at turn start instead (POST /sessions/:id/backdoor/drain); this queue is wired when the hosts run on the client SDK.
 
 ## Develop
 

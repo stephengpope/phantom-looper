@@ -6,7 +6,8 @@
 // its turns; an app uses it for a one-shot call (a title, a commit message).
 import { wrapLanguageModel, type LanguageModel, type LanguageModelMiddleware } from 'ai';
 import type { LanguageModelV4Usage } from '@ai-sdk/provider';
-import { call, type PhantomBackend } from '../backend.js';
+import type { PhantomBackend } from '../backend.js';
+import type { TokenUsage } from '../transcript.js';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
@@ -31,12 +32,6 @@ export interface ModelSpec {
   apiKey: string | null;
 }
 
-/** One model call's usage, as billed. */
-export interface TokenUsage {
-  provider: string; model: string; responseId?: string;
-  input: number; output: number; cacheRead: number; cacheWrite: number;
-}
-
 export interface ModelHooks {
   /** Where each failed attempt is reported as it happens (withRetry). */
   notice: (text: string) => void;
@@ -46,7 +41,7 @@ export interface ModelHooks {
   onBillingError: (e: PhantomError) => void;
 }
 
-/** What a call is billed to: the kind of work (an agent's kind, or a
+/** What a call is billed to: the kind of work (an agent's type, or a
  *  helper's name — 'title', 'commit_message') and the session it serves. */
 export interface Billing { kind: string; sessionId: string | null }
 
@@ -207,7 +202,7 @@ function billingMiddleware(s: ModelSpec, usage: (u: TokenUsage) => void): Langua
  *  the backend (POST /log-tokens). The one way to get a model. */
 export function billedModel(backend: PhantomBackend, s: ModelSpec, bill: Billing, hooks: ModelHooks): LanguageModel {
   const model = providerModel(s, withRetry(undefined, hooks.notice, 'model', hooks.retry));
-  const post = (u: TokenUsage) => call(backend, 'POST', '/log-tokens', { kind: bill.kind, sessionId: bill.sessionId, ...u })
+  const post = (u: TokenUsage) => backend.call('POST', '/log-tokens', { kind: bill.kind, sessionId: bill.sessionId, ...u })
     .then(() => undefined, (e: unknown) => hooks.onBillingError(asPhantomError(e, 'backend_error', 'billing')));
   return wrapLanguageModel({ model, middleware: billingMiddleware(s, (u) => { void post(u); }) });
 }

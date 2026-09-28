@@ -4,7 +4,7 @@
 // the SDK would have put in `response.messages` — reasoning with its
 // provider signature included, which Anthropic requires to replay a
 // tool-use step.
-import type { AssistantContent, AssistantModelMessage, ModelMessage, Tool, ToolModelMessage, ToolResultPart } from 'ai';
+import type { AssistantContent, AssistantModelMessage, Tool, ToolModelMessage, ToolResultPart } from 'ai';
 
 type ContentPart = {
   type: string; text?: string; kind?: string; providerMetadata?: Record<string, unknown>;
@@ -67,17 +67,14 @@ export async function toolResultMessage(
 }
 
 /** What a tool call whose result never arrived says in the record. The next
- *  turn must not take "no result" for "did not run". Plain words; an app
- *  may pass its own. */
+ *  turn must not take "no result" for "did not run". */
 export const INTERRUPTED_RESULT =
   'interrupted before this call\'s result was read — it may or may not have run; check the state before repeating it.';
 
-export function interruptedResultMessage(call: { toolCallId: string; toolName: string }, text = INTERRUPTED_RESULT): ToolModelMessage {
+export function interruptedResultMessage(call: { toolCallId: string; toolName: string }): ToolModelMessage {
   return { role: 'tool', content: [{ type: 'tool-result', toolCallId: call.toolCallId, toolName: call.toolName,
-    output: { type: 'error-text', value: text } }] };
+    output: { type: 'error-text', value: INTERRUPTED_RESULT } }] };
 }
-
-export const userMessage = (content: string): ModelMessage => ({ role: 'user', content });
 
 function errorText(e: unknown): string {
   if (e instanceof Error) return e.message;

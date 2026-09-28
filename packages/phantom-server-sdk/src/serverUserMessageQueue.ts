@@ -11,7 +11,7 @@
 // A text already waiting for the session is not queued again (instant sync
 // repeats its note until a turn takes it). In-memory: a message the server
 // held across a restart is lost — the fact it reports lives in its own row.
-import { messageLine, userMessage, type TranscriptLine } from 'phantom-client-sdk';
+import { messageLine, userMessage, type TranscriptLine } from 'phantom-client-sdk/transcript';
 
 /** What the queue needs from the server: a way to append to a session's
  *  transcript. The backend implements it when it wires the queue in. */

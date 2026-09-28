@@ -2,13 +2,14 @@
 // NOT events: they go to the two required handlers (onError, onNotice), so
 // nothing important depends on someone remembering to subscribe.
 import type { ModelMessage } from 'ai';
-import type { StreamPart, TurnResult, TurnUsage } from './turn.js';
+import type { StreamPart, TurnResult } from './turn.js';
+import type { TokenTotals } from './transcript.js';
 
 export interface AgentEvents {
   'turn-start': { texts: string[] };
   'part': StreamPart;
   /** Lines were appended and acknowledged. */
-  'step': { messages: ModelMessage[]; usage: TurnUsage };
+  'step': { messages: ModelMessage[]; usage: Readonly<TokenTotals> };
   /** Queued text rode into a model call. */
   'user-message': { texts: string[] };
   'tool-error': { name: string; error: unknown };

@@ -1,35 +1,21 @@
 // phantom-client-sdk — the agent runtime for a phantom-backend. An app
-// subclasses Agent with its own prompt and kits; nothing about any
-// particular agent lives here.
-
-// The runtime.
-export { Agent, type AgentHandlers, type Notice, type SessionRow, type TokenTotals } from './agent.js';
+// extends Agent with its type and its prompt; the tools are the server's;
+// nothing about any particular agent lives here.
+export { Agent, type AgentHandlers, type Notice } from './agent.js';
+export type { SessionInfo, SessionRow } from './session.js';
 export type { AgentEvents } from './events.js';
-export type { TurnResult, TurnUsage, StreamPart } from './turn.js';
-export type { QueueEntry } from './clientUserMessageQueue.js';
+export type { TurnResult, StreamPart } from './turn.js';
+export type { QueueEntry, UserMessages } from './userMessages.js';
+export type { TokenTotals } from './transcript.js';
 
-// The backend client — for an app's own kits and calls.
-export { type PhantomBackend, call, callRaw, headersFor, type Envelope } from './backend.js';
-export { PhantomError, isPhantomError, isContextTooLong, ERROR_CODES, type ErrorCode } from './errors.js';
-
-// A billed model for a one-shot call (a title, a commit message).
-export { billedModel, type ModelSpec, type Billing, type ModelHooks, type TokenUsage } from './model/languageModel.js';
-export { PROVIDERS, REASONINGS, isProvider, isReasoning, type Provider, type Reasoning, type LlmConfig, llmConfigFrom } from './model/llmConfig.js';
+// The connection — for an app's own kits and calls.
+export { PhantomBackend, type BackendOptions, type CallOptions, type Envelope } from './backend.js';
+export { PhantomError, isPhantomError, ERROR_CODES, type ErrorCode } from './errors.js';
 export type { RetryPolicy } from './model/retry.js';
 
-// Tool kits: the mechanism, and the kits over the API's routes.
-export { type ToolKit, type ToolKitContext, type BuiltTools } from './toolkit.js';
-export { workspaceToolKit, readonlyWorkspaceToolKit } from './kits/workspace.js';
-export { webToolKit } from './kits/web.js';
-export { skillsToolKit } from './kits/skills.js';
-export { secretsToolKit } from './kits/secrets.js';
-export { cronsToolKit } from './kits/crons.js';
-export { databaseToolKit } from './kits/database.js';
-export { notifyToolKit } from './kits/notify.js';
-export { kanbanToolKit, kanbanReadToolKit, type CardRow, type ItemOp } from './kits/kanban.js';
-export { gitToolKit, autoPushSession, autoPullSession, type AutoPushOutcome, type AutoPullOutcome, type GitToolKitOptions } from './kits/git.js';
+// Tools only the app can serve (`agent.use(kit)`).
+export type { ToolKit, ToolKitContext, BuiltTools } from './toolkit.js';
 
-// The record's line format — the server reads and writes it too.
-export { parseLines, conversationFrom, messageLine,
-  type TranscriptLine, type MessageLine, type UsageLine, type InterruptedLine, type CompactionLine } from './transcript.js';
-export { userMessage } from './messages.js';
+// A billed model for an app's one-shot call (a title, a commit message).
+export { billedModel, type ModelSpec, type Billing, type ModelHooks } from './model/languageModel.js';
+export type { Provider, Reasoning } from './model/llmConfig.js';

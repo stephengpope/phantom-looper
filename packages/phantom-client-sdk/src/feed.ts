@@ -1,24 +1,27 @@
 // The session feed, both directions, for one turn.
 //
 // OUT — the relay: every part of a turn this client runs is published to
-// POST /sessions/:id/events so a watcher anywhere (another cli window, the
-// Telegram bubble, the turn route's reply) sees it exactly as they see a
-// turn the server runs. Batched (parts arrive many times a second), chained
-// in order; the FIRST failure ends the relay for the turn with one notice —
-// watchers repaint from the record when it lands. The turn never waits on
-// it and never fails for it.
+// POST /sessions/:id/events so a watcher anywhere (another client of the same
+// session, the server's own readers) sees it exactly as they see a turn the
+// server runs. Batched (parts arrive many times a second), chained in order;
+// the FIRST failure ends the relay for the turn with one notice — watchers
+// repaint from the record when it lands. The turn never waits on it and
+// never fails for it.
 //
-// IN — the stop signal: GET /sessions/:id/events carries {event:"interrupt"}
-// when anyone stops the turn (esc in another window, /stop on Telegram, the
-// interrupt route). Heard here, the turn is aborted exactly as a local
-// interrupt would. The feed never echoes a client its own events.
-import { call, headersFor, type PhantomBackend } from './backend.js';
+// IN — the stop signal and the row: GET /sessions/:id/events carries
+// {event:"interrupt"} when anyone stops the turn (another client, the
+// interrupt route) — heard here, the turn is aborted exactly as a local
+// interrupt would — and {event:"session", planMode?} when the row moves, so
+// a plan-mode flip lands on the running turn's tools. The feed never echoes
+// a client its own events.
+import type { PhantomBackend } from './backend.js';
 import type { StreamPart } from './turn.js';
 
-/** How long parts may sit before they are sent. The cli's own repaint rate. */
+/** How long parts may sit before they are sent. Parts arrive many times a
+ *  second; a few per batch keeps the feed readable without visible lag. */
 export const RELAY_FLUSH_MS = 150;
 
-export class Relay {
+class Relay {
   private buf: Record<string, unknown>[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
   private chain: Promise<void> = Promise.resolve();
@@ -53,7 +56,7 @@ export class Relay {
     this.chain = this.chain.then(async () => {
       if (!this.alive) return;
       try {
-        await call(this.backend, 'POST', `/sessions/${this.sessionId}/events`, { events });
+        await this.backend.call('POST', `/sessions/${this.sessionId}/events`, { events });
       } catch (e) {
         this.alive = false;
         this.onFailed((e as Error).message);
@@ -62,41 +65,40 @@ export class Relay {
   }
 }
 
-/** Listen for the stop signal while a turn runs. Resolves the unsubscribe.
- *  Nothing is opened when the transport cannot stream. A feed that fails to
- *  open or drops is reported once; the turn goes on without it. */
-export function watchForInterrupt(
-  backend: PhantomBackend, sessionId: string, onInterrupt: () => void, onFailed: (reason: string) => void,
-): () => void {
-  if (backend.canStream === false) return () => undefined;
+export interface FeedListener {
+  onInterrupt(): void;
+  onRow(patch: { planMode?: boolean }): void;
+  /** The relay or the listener failed — once each; the turn goes on without it. */
+  onNotice(text: string): void;
+}
+
+/** The feed for one turn: what this turn draws goes out (`part`, `error`,
+ *  `end`), and while it runs the session's stop signal and row moves come
+ *  in. `end` closes both and resolves once the last record went out. */
+export class TurnFeed {
+  readonly #relay: Relay;
+  readonly #stop: () => void;
+
+  constructor(backend: PhantomBackend, sessionId: string, opening: { agent: string; message: string; provider: string; model: string }, l: FeedListener) {
+    this.#relay = new Relay(backend, sessionId,
+      (reason) => l.onNotice(`live relay stopped for this turn (${reason}) — watchers see the record when it lands`));
+    this.#stop = watchSession(backend, sessionId, l,
+      (reason) => l.onNotice(`not listening to the session feed this turn (${reason})`));
+    this.#relay.turnStart(opening);
+  }
+
+  part(part: StreamPart): void { this.#relay.part(part); }
+  error(message: string): void { this.#relay.error(message); }
+  end(): Promise<void> { this.#stop(); return this.#relay.turnEnd(); }
+}
+
+function watchSession(backend: PhantomBackend, sessionId: string, l: FeedListener, onFailed: (reason: string) => void): () => void {
   const ac = new AbortController();
-  const f = backend.fetch ?? fetch;
   const run = async () => {
-    let r: Response;
     try {
-      r = await f(`${backend.url}/sessions/${sessionId}/events`, { headers: headersFor(backend), signal: ac.signal });
-    } catch (e) {
-      if (!ac.signal.aborted) onFailed((e as Error).message);
-      return;
-    }
-    if (!r.ok || !r.body) { onFailed(`session feed answered HTTP ${r.status}`); return; }
-    const reader = r.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let nl: number;
-        while ((nl = buf.indexOf('\n')) >= 0) {
-          const line = buf.slice(0, nl).trim();
-          buf = buf.slice(nl + 1);
-          if (!line) continue;
-          let rec: { event?: string };
-          try { rec = JSON.parse(line) as { event?: string }; } catch { continue; }
-          if (rec.event === 'interrupt') onInterrupt();
-        }
+      for await (const rec of backend.stream('GET', `/sessions/${sessionId}/events`, undefined, { signal: ac.signal })) {
+        if (rec.event === 'interrupt') l.onInterrupt();
+        else if (rec.event === 'session' && typeof rec.planMode === 'boolean') l.onRow({ planMode: rec.planMode });
       }
     } catch (e) {
       if (!ac.signal.aborted) onFailed((e as Error).message);

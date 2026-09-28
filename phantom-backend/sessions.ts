@@ -138,6 +138,12 @@ export function folderOf(s: Pick<SessionRow, 'id' | 'folderId'>): string {
   return s.folderId;
 }
 
+/** How many lines a record holds — the count `transcript_lines` keeps and
+ *  every write path must set, whole-file writes included: the append route
+ *  lands a write only when the writer's count equals it, and `?after=N`
+ *  reads from it. */
+export const lineCount = (jsonl: string): number => jsonl.split('\n').filter((l) => l.trim()).length;
+
 /** Does the session own its files — is the folder its own? A coder does; a
  *  supervisor and the assistant borrow another's. Only an owner has files to
  *  destroy, restart, back up or sweep. */
@@ -622,7 +628,7 @@ export class Sessions {
       systemPrompt: await this.systemPrompt(src.id),
       ...(src.provider && src.model ? { provider: src.provider, model: src.model, baseUrl: src.baseUrl } : {}),
       ...(data != null ? {
-        transcript: stripUsageFromJsonl(data),
+        transcript: stripUsageFromJsonl(data), transcriptLines: lineCount(stripUsageFromJsonl(data)),
         lastUserMessage: src.lastUserMessage, name: copyName(src.name), nameManual: src.nameManual,
         transcriptUpdatedAt: stamp,
       } : {}),
@@ -671,7 +677,7 @@ export class Sessions {
     // Every save is one turn: the counter that paces session naming.
     const agent = agentAfterSave(s.agent, client);
     const [saved] = await this.db.update(sessions)
-      .set({ transcript: data, lastUserMessage, transcriptUpdatedAt: stamp,
+      .set({ transcript: data, transcriptLines: lineCount(data), lastUserMessage, transcriptUpdatedAt: stamp,
         turnCount: sqlRaw`${sessions.turnCount} + 1`, agent })
       .where(eq(sessions.id, s.id))
       .returning({ name: sessions.name, turnCount: sessions.turnCount, nameManual: sessions.nameManual });
@@ -692,7 +698,7 @@ export class Sessions {
   async stepSave(s: SessionRow, data: string): Promise<Date> {
     const stamp = new Date();
     await this.db.update(sessions)
-      .set({ transcript: data, transcriptUpdatedAt: stamp })
+      .set({ transcript: data, transcriptLines: lineCount(data), transcriptUpdatedAt: stamp })
       .where(eq(sessions.id, s.id));
     if (s.folderId) await this.folders.touch(s.folderId);
     return stamp;

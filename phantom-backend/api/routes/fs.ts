@@ -1,6 +1,6 @@
-// The filesystem tool surface. Session travels in a HEADER — it never appears
-// in the schema the model sees; the adapter injects it from client config.
-import type { FastifyInstance } from 'fastify';
+// The file-tool plumbing: the session's container, bash (unary and detached)
+// and the task_* view over the detached commands. The tools themselves are
+// tools/files.ts; the routes that run them are routes/tools.ts.
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -10,11 +10,10 @@ import { newId } from '../../../core/ids.js';
 import { sessionDir } from '../../pool/paths.js';
 import { logger, errStr } from '../../log.js';
 import { Sandbox } from '../../workspace/sandbox.js';
-import { TOOLS, type ToolCtx } from '../../tools/registry.js';
+import type { FileTools } from '../../tools/def.js';
 import { ToolError } from '../../tools/envelope.js';
-import { ok, err, type AppCtx } from '../app.js';
+import type { AppCtx } from '../app.js';
 import { killProcessGroup } from '../foreground.js';
-import { SESSION_HEADER, toolSession } from '../sessionHeader.js';
 import { folderOf } from '../../sessions.js';
 import type { ContainerManager } from '../../workspace/container.js';
 import type Docker from 'dockerode';
@@ -24,12 +23,6 @@ const log = logger('bash');
 
 export interface FsDeps { docker: Docker; containers: ContainerManager; engine?: GitEngine }
 
-const STATUS: Record<string, number> = {
-  not_found: 404, session_not_found: 404, session_destroyed: 410, no_folder: 400,
-  invalid_args: 400, no_match: 422, not_unique: 422, binary_file: 422,
-  is_directory: 400, not_a_directory: 400, too_large: 413,
-  busy: 409, container_start_failed: 503, exec_timeout: 504,
-};
 
 /** Kill one process SESSION by sid: TERM, ~1s grace, KILL. A second exec is
  *  the only kill Docker offers — the Engine API has no exec-kill (moby#9098),
@@ -407,83 +400,31 @@ async function tailLog(logPath: string, lines: number): Promise<string[]> {
   } catch { return []; }
 }
 
-export function fsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
-  // The neutral tool definitions — what every adapter derives from.
-  app.get('/tools', { schema: { tags: ['tools'], summary: 'The neutral tool definitions',
-    description: 'What every adapter derives from: name, summary, description, JSON Schema input, mutates/streaming flags, and the session header name. The same objects validate requests below.' } },
-  async () => ok({
-    version: '1',
-    sessionHeader: SESSION_HEADER,
-    tools: TOOLS.map(({ name, summary, description, input, mutates, streaming }) =>
-      ({ name, summary, description, input, mutates, streaming })),
-  }));
-
-  // One route per tool, registered from the same schema objects the adapters
-  // derive from — validation and documentation cannot drift from the contract.
-  for (const def of TOOLS) {
-    app.post<{ Body: Record<string, unknown> }>(`/tools/${def.name}`, {
-      schema: {
-        tags: ['tools'],
-        summary: def.summary,
-        description: def.description + (def.mutates ? ' Mutating.' : ' Read-only.'),
-        headers: {
-          type: 'object',
-          properties: { [SESSION_HEADER]: { type: 'string', description: 'Session id (ULID). Required — enforced by the handler so the error speaks the envelope.' } },
-        },
-        body: def.input,
-      },
-    }, async (req, reply) => {
-      // The one gate (sessionHeader.ts): the session named, its files on
-      // disk, THE folder its tools open — and the checkout touched.
-      let session: SessionRow, folderId: string;
-      try { ({ session, folderId } = await toolSession(ctx.sessions, req.headers)); }
-      catch (e) {
-        if (e instanceof ToolError) return reply.code(STATUS[e.code] ?? 400).send(err(e.code, e.message, e.retryable));
-        throw e;
-      }
-      const sessionId = session.id;
-      const workspace = await ctx.workspaces.get(session.workspaceId);
-      let container;
-      try {
-        container = await deps.containers.ensure(folderId, workspace);
-      } catch (e) {
-        return reply.code(503).send(err('container_start_failed', (e as Error).message, true));
-      }
-
-      const ws = new Sandbox(deps.docker, container);
-      // The client aborting its fetch (esc) surfaces as the socket closing
-      // with the reply unfinished — the one reliable disconnect signal
-      // (onRequestAbort keys off req.aborted, dead since Node 16: it never
-      // fires once the JSON body has been read). On normal completion
-      // writableFinished is true and nothing aborts.
-      const ac = new AbortController();
-      reply.raw.on('close', () => { if (!reply.raw.writableFinished) ac.abort(); });
-      const readLimits = await ctx.settings.resolveMany(['max_read_bytes', 'max_search_results']);
-      const toolCtx: ToolCtx = {
-        ws,
-        sessionId,
-        limits: {
-          maxReadBytes: Number(readLimits.max_read_bytes),
-          maxSearchResults: Number(readLimits.max_search_results),
-        },
-        runBash: (args) => runBash(ctx, deps, ws, session, args, ac.signal),
-        tasks: {
-          list: () => taskList(ctx, ws, session),
-          wait: (taskId, timeoutMs) => taskWait(ctx, session, taskId, timeoutMs),
-          kill: (taskId) => taskKill(ctx, ws, session, taskId),
-        },
-      };
-      try {
-        // Tools take no lock — the agent fans out parallel calls in one turn
-        // and they all just run; the session/turn lock is the only lock.
-        const data = await def.execute(toolCtx, req.body ?? {});
-        return ok(data);
-      } catch (e) {
-        if (e instanceof ToolError) {
-          return reply.code(STATUS[e.code] ?? 400).send(err(e.code, e.message, e.retryable, e.detail));
-        }
-        throw e;
-      }
-    });
+/** The session's files for a tool call (tools/def.ts FileTools): the
+ *  container started (or already up), the sandbox on it, the bash and task
+ *  plumbing wired around it. `signal` is the client's disconnect — a unary
+ *  bash command is killed on it. Throws ToolError container_start_failed. */
+export async function fileTools(ctx: AppCtx, deps: FsDeps, session: SessionRow, folderId: string, signal: AbortSignal): Promise<FileTools> {
+  const workspace = await ctx.workspaces.get(session.workspaceId);
+  let container;
+  try {
+    container = await deps.containers.ensure(folderId, workspace);
+  } catch (e) {
+    throw new ToolError('container_start_failed', (e as Error).message, true);
   }
+  const ws = new Sandbox(deps.docker, container);
+  const readLimits = await ctx.settings.resolveMany(['max_read_bytes', 'max_search_results']);
+  return {
+    ws,
+    limits: {
+      maxReadBytes: Number(readLimits.max_read_bytes),
+      maxSearchResults: Number(readLimits.max_search_results),
+    },
+    runBash: (args) => runBash(ctx, deps, ws, session, args, signal),
+    tasks: {
+      list: () => taskList(ctx, ws, session),
+      wait: (taskId, timeoutMs) => taskWait(ctx, session, taskId, timeoutMs),
+      kill: (taskId) => taskKill(ctx, ws, session, taskId),
+    },
+  };
 }
