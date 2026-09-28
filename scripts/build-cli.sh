@@ -38,6 +38,8 @@ mkdir -p "$OUT" "$CACHE"
 # records a timing entry per render that nothing under node ever reads.
 # `npm run phantom-cli` sets it too (package.json): the terminal has no devtools
 # to consume the timing entries, and node never empties them (2026-09-03).
+# The SDK the cli bundles from: its package points at dist/, so it is built first.
+npm run sdk:build
 npx esbuild phantom-cli/index.tsx --bundle --platform=node --format=esm --target=node22 \
   --outfile="$OUT/stage/lib/phantom-cli.mjs" \
   --loader:.wasm=copy --loader:.node=copy --jsx=automatic \

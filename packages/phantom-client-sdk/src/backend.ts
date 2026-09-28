@@ -14,6 +14,9 @@ export interface PhantomBackend {
   apiKey: string;
   /** This client's lock identity — sent as x-phantom-looper-client. */
   clientId: string;
+  /** What other clients see as the session's holder (the cli sends its
+   *  hostname). Defaults to clientId. */
+  label?: string;
   fetch?: typeof fetch;
   /** Can this fetch read a response as it streams? Real HTTP can; the
    *  server's in-process shim buffers whole bodies and must say false —

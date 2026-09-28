@@ -178,7 +178,7 @@ async function main() {
   // stream it asked for. `sessionEvents` is captured lazily, like `app`.
   const publishSync = (sessionId: string, op: 'push' | 'pull', by?: string) =>
     (e: SyncEvent) => sessionEvents.publish(sessionId, by || GIT_CLIENT_ID,
-      { event: 'sync', op, step: e.step, detail: e.detail });
+      { event: 'sync', op, step: e.step, label: e.label, detail: e.detail });
   // The manual /git/pull has no stream of its own — the feed is how anyone
   // sees it run, so its steps publish under the git client (no caller to echo).
   const engine = new GitEngine({ sessions, folders, cards, settings, paths,

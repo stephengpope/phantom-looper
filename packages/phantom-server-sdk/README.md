@@ -34,7 +34,6 @@ Not wired into phantom-backend yet.
 
 ```
 npm run sdk:build          # once — this package imports the transcript line format from phantom-client-sdk
-npm run server-sdk:test
 npm run server-sdk:lint
 npm run server-sdk:build
 ```

@@ -15,9 +15,7 @@ export const ERROR_CODES = [
   'tool_build_failed',
   'readonly',
   'busy',
-  'prompt_frozen',
   'config_invalid',
-  'compaction_failed',
   'backend_error',
 ] as const;
 export type ErrorCode = typeof ERROR_CODES[number];
@@ -34,7 +32,7 @@ export class PhantomError extends Error {
 }
 
 /** The provider said the conversation no longer fits its window. One
- *  classification for every provider's wording; the client says "compact". */
+ *  classification for every provider's wording. */
 export function isContextTooLong(message: string): boolean {
   return /prompt is too long|request too large|context[_ ]length[_ ]exceeded|maximum context length|too many tokens|input is too long/i.test(message);
 }

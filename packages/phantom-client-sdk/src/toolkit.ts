@@ -1,6 +1,5 @@
-// A ToolKit is one group of tools. The package ships the default kits; a
-// client adds its own (the cli's screen tools) through the same interface
-// with `agent.use(kit)`.
+// A ToolKit is one group of tools. The package ships kits over the API's
+// routes; an app adds its own through the same interface with `agent.use(kit)`.
 //
 // `version()` is cheap and the SDK calls it before every turn: a kit's
 // tools are rebuilt only when its version changes. `build` answers the
@@ -20,6 +19,8 @@ export interface ToolKitContext {
    *  their version. */
   folderId: string | null;
   readonly: () => boolean;
+  /** The app's own wording for a refused tool, if it has one. */
+  readonlyRefusal?: (tool: string) => string;
 }
 
 /** What a kit builds: its tools, and which of them change things. */
@@ -37,9 +38,10 @@ export interface ToolKit {
   build(ctx: ToolKitContext): Promise<BuiltTools>;
 }
 
-export const READONLY_REFUSAL = (name: string) => ({
+/** What a refused tool answers the model: a coded error, plain words. */
+export const readonlyRefusal = (name: string, text?: (tool: string) => string) => ({
   ok: false, error: { code: 'readonly', retryable: false,
-    message: `in plan mode — ${name} is off until the user switches back to code mode` },
+    message: text ? text(name) : `refused: ${name} is off while this agent is read-only` },
 });
 
 /** Wrap built tools so the mutating ones ask `readonly()` at execute time. */
@@ -51,7 +53,7 @@ export function guardReadonly(built: BuiltTools, ctx: ToolKitContext): Record<st
     if (!mutating.has(name) || !t.execute) { out[name] = t; continue; }
     const inner = t.execute;
     out[name] = { ...t, execute: (args: unknown, opts: unknown) =>
-      ctx.readonly() ? READONLY_REFUSAL(name) : (inner as (a: unknown, o: unknown) => unknown)(args, opts) };
+      ctx.readonly() ? readonlyRefusal(name, ctx.readonlyRefusal) : (inner as (a: unknown, o: unknown) => unknown)(args, opts) };
   }
   return out;
 }
@@ -65,8 +67,6 @@ export class ToolKitSet {
     this.kits.set(kit.name, kit);
     this.built.delete(kit.name);
   }
-  remove(name: string): void { this.kits.delete(name); this.built.delete(name); }
-  names(): string[] { return [...this.kits.keys()]; }
 
   async resolve(ctx: ToolKitContext): Promise<Record<string, Tool>> {
     const all: Record<string, Tool> = {};

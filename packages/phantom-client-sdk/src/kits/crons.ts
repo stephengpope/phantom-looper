@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { call, callRaw } from '../backend.js';
 import { PhantomError } from '../errors.js';
 import type { BuiltTools, ToolKit, ToolKitContext } from '../toolkit.js';
-import { keyedProviders, REASONINGS, type Provider } from '../model/llmConfig.js';
+import { REASONINGS } from '../model/llmConfig.js';
 
 const WHAT_A_RUN_IS = 'A RUN HAS NO USER IN IT: it opens a fresh coding session in this workspace (its own checkout, ' +
   'cut from the base branch) and runs the prompt as one turn. It cannot see this conversation and cannot ask a ' +
@@ -24,32 +24,30 @@ const SCHEDULE = 'A 5-field cron expression for something RECURRING ("0 9 * * *"
   'Read in the workspace\'s time zone (every answer says which, and what time it is there now) — a datetime ' +
   'that has already passed is refused.';
 
-/** The model a cron's runs use — only when the user names one. The enum IS
- *  how the agent knows what is valid: it rides the tool's schema. The
- *  providers are the ones this workspace can call (keyedProviders — the
- *  /settings picker's own list), read at build from the same settings
- *  answer that says whether crons are on. */
-const modelFields = (providers: readonly Provider[]) => ({
-  provider: z.enum(providers as [Provider, ...Provider[]]).nullable().optional().describe('ONLY when the user asks for a specific model. Goes with ' +
-    '`model`: both or neither. Omit = the workspace\'s model; null clears an earlier choice.'),
+/** The model a cron's runs use — only when the user names one. Which
+ *  providers are valid is the server's rule: a provider with no key is
+ *  refused with the valid ones named, and the agent corrects. */
+const MODEL_FIELDS = {
+  provider: z.string().nullable().optional().describe('ONLY when the user asks for a specific model: a provider with a key ' +
+    'on /keys (the server names the valid ones if refused). Goes with `model`: both or neither. Omit = the ' +
+    'workspace\'s model; null clears an earlier choice.'),
   model: z.string().nullable().optional().describe('ONLY when the user asks: the model id on that provider ' +
     '(e.g. "claude-sonnet-4-5"). Goes with `provider`: both or neither. Null clears.'),
   reasoning: z.enum(REASONINGS).nullable().optional().describe('ONLY when the user asks: how hard the run thinks. ' +
     'Omit = the workspace\'s level; null clears.'),
-});
+};
 
 export const cronsToolKit: ToolKit = {
   name: 'crons',
   version: (ctx) => ctx.workspaceId,
   async build(ctx: ToolKitContext): Promise<BuiltTools> {
-    let settings: Record<string, { value: unknown; source?: string; meta?: { provider?: string } }>;
+    let settings: Record<string, { value: unknown }>;
     try {
       settings = await call(ctx.backend, 'GET', `/settings?workspace=${encodeURIComponent(ctx.workspaceId)}`);
     } catch (e) {
       throw new PhantomError('tool_build_failed', `could not read the workspace's settings: ${(e as Error).message}`, { cause: e });
     }
     if (settings.cron_enabled?.value !== true) return { tools: {}, mutating: [] };
-    const MODEL_FIELDS = modelFields(keyedProviders(settings));
     const base = `/workspaces/${encodeURIComponent(ctx.workspaceId)}/crons`;
     const api = async (method: string, path: string, body?: unknown): Promise<unknown> => {
       const j = await callRaw(ctx.backend, method, `${base}${path}`, body);

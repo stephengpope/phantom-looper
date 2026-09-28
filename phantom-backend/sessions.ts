@@ -164,14 +164,14 @@ export function expiredHold(s: Pick<SessionRow, 'lockedBy' | 'lockedLabel' | 'lo
 
 /** `sessions.agent` after `client` saved a turn: WHO DROVE THE LAST TURN.
  *  The supervisor's record is the supervisor's for life (read-only in every
- *  client). The coder's seat is 'coding' while the loop's turns land in it,
+ *  client), and the assistant's is the assistant's. The coder's seat is 'coding' while the loop's turns land in it,
  *  a cron's session is 'cron' while the cron engine's do, and either is a
  *  PERSON's (null) the moment anyone else's does — typing into it takes it
  *  over; the loop takes its seat back the next time it drives. Read off the
  *  writer's identity at the record's one door, never off a client's claim,
  *  which is what keeps the column trustworthy. */
-export function agentAfterSave(current: string | null, client: string): 'coding' | 'supervisor' | 'cron' | null {
-  if (current === 'supervisor') return 'supervisor';
+export function agentAfterSave(current: string | null, client: string): 'coding' | 'supervisor' | 'assistant' | 'cron' | null {
+  if (current === 'supervisor' || current === 'assistant') return current;
   if (client === LOOP_CLIENT_ID) return 'coding';
   if (client === CRON_CLIENT_ID) return 'cron';
   return null;
@@ -320,10 +320,19 @@ export class Sessions {
   }
 
   /** The stored conversation (JSONL), or null when none was ever saved. The
-   *  one read that names the blob on purpose. */
-  async transcript(id: string): Promise<string | null> {
+   *  one read that names the blob on purpose. `after` = only the lines past
+   *  the first N — what a client holding N lines needs to catch up. */
+  async transcript(id: string, after?: number): Promise<string | null> {
     const rows = await this.db.select({ data: sessions.transcript }).from(sessions).where(eq(sessions.id, id));
-    return rows[0]?.data ?? null;
+    const data = rows[0]?.data ?? null;
+    if (data === null || !after) return data;
+    let pos = 0;
+    for (let n = 0; n < after; n++) {
+      const nl = data.indexOf('\n', pos);
+      if (nl < 0) return '';
+      pos = nl + 1;
+    }
+    return data.slice(pos);
   }
 
   /** The frozen system prompt, or null when the row has none (a
@@ -649,7 +658,7 @@ export class Sessions {
    *  the id so the writer ignores its own echo. Returns what the naming
    *  decision needs. */
   async saveTranscript(s: SessionRow, data: string, client: string): Promise<{
-    stamp: Date; agent: 'coding' | 'supervisor' | 'cron' | null;
+    stamp: Date; agent: 'coding' | 'supervisor' | 'assistant' | 'cron' | null;
     name: string | null; turnCount: number; nameManual: boolean;
   }> {
     // A list preview, not the record: the UI shows a few dozen characters,
@@ -689,6 +698,37 @@ export class Sessions {
     return stamp;
   }
 
+  /** Append typed lines to the record (POST /sessions/:id/transcript/append).
+   *  One statement, conditional on the count: the lines land only if the
+   *  record holds exactly `after` lines — else someone else wrote, and the
+   *  writer is told so (transcript_conflict) to read again. A resend of a
+   *  delivery that already landed (its reply was lost) is answered as such,
+   *  never written twice. The record event goes out under the writer so
+   *  its own window ignores the echo. */
+  async appendTranscript(s: SessionRow, client: string, body: { after: number; deliveryId: string; lines: unknown[] }):
+  Promise<{ lines: number; applied: boolean; stamp: Date }> {
+    const text = body.lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+    const stamp = new Date();
+    const rows = await this.db.update(sessions)
+      .set({
+        transcript: sqlRaw`coalesce(${sessions.transcript}, '') || ${text}`,
+        transcriptLines: sqlRaw`${sessions.transcriptLines} + ${body.lines.length}`,
+        transcriptDelivery: body.deliveryId, transcriptUpdatedAt: stamp,
+      })
+      .where(and(eq(sessions.id, s.id), eq(sessions.transcriptLines, body.after)))
+      .returning({ lines: sessions.transcriptLines });
+    if (!rows.length) {
+      const [cur] = await this.db.select({ lines: sessions.transcriptLines, delivery: sessions.transcriptDelivery,
+        updatedAt: sessions.transcriptUpdatedAt }).from(sessions).where(eq(sessions.id, s.id));
+      if (cur?.delivery === body.deliveryId) return { lines: cur.lines, applied: false, stamp: cur.updatedAt ?? stamp };
+      throw new SessionError('transcript_conflict',
+        `transcript has ${cur?.lines ?? 0} lines, the append said ${body.after} — another writer moved it; read it again`);
+    }
+    if (s.folderId) await this.folders.touch(s.folderId);
+    this.events?.publish(s.id, client, { event: 'transcript', updated_at: stamp.toISOString(), by: client });
+    return { lines: rows[0].lines, applied: true, stamp };
+  }
+
   /** A turn began on the session with `message` — the moment the list's
    *  preview can move (the save at turn end used to be the first chance) and,
    *  on a session's FIRST message, the moment to name it. Says whether it is
@@ -707,14 +747,24 @@ export class Sessions {
     return { firstMessage: !!r && r.name === null && r.turnCount === 0 && r.agent === null };
   }
 
-  /** A turn ended on a conversation-only session (the assistant's): bump the
-   *  turn count (leaving 0 is what freezes the row's model) and touch its
-   *  checkout. Tokens are not here — every model call records its own row
-   *  in log_tokens. */
-  async turnEnded(s: SessionRow): Promise<void> {
-    await this.db.update(sessions).set({ turnCount: sqlRaw`${sessions.turnCount} + 1` }).where(eq(sessions.id, s.id));
+  /** A turn ended on a session, whoever ran it: bump the turn count (leaving
+   *  0 is what freezes the row's model), seat the agent after the writer
+   *  (agentAfterSave — a person's turn into the loop's session takes it
+   *  over), touch its checkout. Tokens are not here — every model call
+   *  records its own row in log_tokens. Returns what the naming decision
+   *  needs. */
+  async turnEnded(s: SessionRow, client: string): Promise<{
+    agent: 'coding' | 'supervisor' | 'assistant' | 'cron' | null; name: string | null; turnCount: number; nameManual: boolean;
+  }> {
+    const agent = agentAfterSave(s.agent, client);
+    const [saved] = await this.db.update(sessions)
+      .set({ turnCount: sqlRaw`${sessions.turnCount} + 1`, agent })
+      .where(eq(sessions.id, s.id))
+      .returning({ name: sessions.name, turnCount: sessions.turnCount, nameManual: sessions.nameManual });
     if (s.folderId) await this.folders.touch(s.folderId);
     this.changed(s.id);
+    if (agent !== s.agent) this.events?.publish(s.id, client, { event: 'session', agent });
+    return { agent, name: saved.name, turnCount: saved.turnCount, nameManual: saved.nameManual };
   }
 
   // ── facts a person or a job sets ───────────────────────────────────────────

@@ -1,67 +1,17 @@
 # phantom-client-sdk
 
-Build and run agents against a phantom-backend.
+The agent runtime for a phantom-backend. It knows how to run a session's
+agent correctly against the API — the turn, the shared transcript, the
+session lock, the model, billing, tools — and nothing about any particular
+agent. An app subclasses `Agent` with its own prompt and kits. Our agents
+live in `core/agents/`.
 
 ```ts
-import { CodingAgent } from 'phantom-client-sdk';
+import { Agent, call, workspaceToolKit, webToolKit } from 'phantom-client-sdk';
 
-const backend = { url: 'http://localhost:4000/api', apiKey, clientId: 'my-window' };
-const handlers = {
-  onError: (e) => log.error({ code: e.code, err: e }, e.message),   // every error, once
-  onNotice: (n) => log.warn(n.text),                                 // retries, cache, compaction
-};
-
-const agent = await CodingAgent.create(backend, handlers, { workspaceId });
-// or: await CodingAgent.resume(backend, handlers, sessionId)
-
-agent.on('part', (p) => render(p));          // every stream part, unbatched
-agent.on('turn-end', (r) => console.log(r.text));
-
-const result = await agent.sendUserMessage('add a login page');   // nothing running: starts a turn
-agent.sendUserMessage('and tests');   // a turn running: rides its next model call
-agent.interrupt();             // esc — finished tool calls keep their results
-agent.setReadonly(() => planMode);            // asked at execute time
-agent.use(myScreenToolKit);                   // client-defined tools, same interface
-await agent.compact();
-```
-
-## User messages
-
-- `sendUserMessage(text)` — nothing running: starts a turn. A turn running:
-  queued, and rides the next model call. Still queued when the turn ends:
-  starts the next turn. A failed turn takes its messages with it — nothing
-  is kept or sent again.
-- Messages the server holds for a session (a background command finished,
-  instant sync, auto-push) are written into the transcript by the server
-  when the lock is taken. The SDK sees the transcript changed and reads it
-  again — it pulls nothing itself.
-
-## What the base class guarantees
-
-- The system prompt is built once at `create` and frozen on the session
-  row. `resume` reads it back. A subclass sets `systemPromptFrozen = false`
-  to opt out — then it is built every turn and never saved.
-- The model is never kept: every turn asks the server which model and key
-  the session runs on.
-- The transcript is append-only and shared — other windows and the server
-  write it too, one turn at a time. Every turn first checks it is current
-  and reads it again if someone else added to it. Each step is saved the
-  moment its model call succeeds, each tool result as it lands. A save that
-  fails after retries stops the turn. Compaction appends one line; loading
-  rebuilds.
-- Which tools change things is each kit's word (`build` answers `{ tools,
-  mutating }`); the workspace kit takes it from the server's tool list.
-- Every error reaches `onError` with a code from `ERROR_CODES`, then the
-  awaited call rejects with the same error. Background work has one door
-  and its failures reach `onError` too. The SDK installs no process-wide
-  handlers.
-
-## Write your own agent
-
-```ts
 class ReviewAgent extends Agent {
-  readonly kind = 'review';
-  protected systemPrompt() { return ['You review pull requests.', `Repo facts: ...`]; }
+  readonly kind = 'review';                     // → GET /agents/review/config, billed as 'review'
+  protected systemPrompt() { return ['You review pull requests.']; }
   protected toolKits() { return [workspaceToolKit, webToolKit]; }
   static create(backend, handlers, opts) {
     return Agent.birth<ReviewAgent>(ReviewAgent, backend, handlers,
@@ -69,12 +19,59 @@ class ReviewAgent extends Agent {
   }
   static resume(backend, handlers, id) { return Agent.wake<ReviewAgent>(ReviewAgent, backend, handlers, id); }
 }
+
+const backend = { url: 'http://localhost:4000/api', apiKey, clientId: 'my-window' };
+const handlers = { onError: (e) => log.error(e), onNotice: (n) => log.warn(n.text) };
+const agent = await ReviewAgent.resume(backend, handlers, sessionId);
+
+agent.on('part', (p) => render(p));            // every stream part
+agent.on('turn-end', (r) => console.log(r.text));
+await agent.sendUserMessage('review PR 12');   // nothing running: starts a turn
+agent.sendUserMessage('and check the tests');  // a turn running: rides its next model call
+agent.interrupt();                             // finished tool calls keep their results
+agent.setReadonly(() => planMode);             // asked at execute time
+agent.use(myScreenToolKit);                    // host-defined tools, same interface
 ```
+
+## What the runtime guarantees
+
+- **The turn** (`turn.ts`): model call → tools → model call until the model
+  stops or `maxSteps`. One runner for every agent and every host.
+- **The record**: the transcript is append-only and shared — other windows
+  and the server write it too, one turn at a time under the session lock.
+  Every turn first checks its copy is current and reads it again if someone
+  else added to it (only the new lines are fetched). Each step is saved
+  the moment its model call succeeds,
+  each tool result as it lands. A save that fails after retries stops the
+  turn. A failed model call writes nothing.
+- **The lock**: taken for the turn and released after; the server renews
+  it on the turn's own writes.
+- **The prompt** is the subclass's: `systemPrompt()` is asked before every
+  turn and nothing is stored here. A prompt saved on the session row is
+  answered from the row.
+- **The model** is never kept: every turn asks the server which model and
+  key the session runs on.
+- **User messages**: `sendUserMessage(text)` starts a turn when none is
+  running; otherwise the text rides the next model call; still queued when
+  the turn ends, it starts the next turn. After an interrupt nothing starts
+  by itself — the host decides. Messages the server holds for a session are
+  written into the transcript by the server; the runtime sees the change
+  and reads again.
+- **Tools**: kits answer `{ tools, mutating }`; mutating tools refuse while
+  `readonly` is true. The workspace kit takes its definitions from the
+  server (`GET /tools`).
+- **Billing**: every model call is posted to `/log-tokens` under `kind`.
+  `billedModel()` is the same handle for an app's one-shot call (a title, a
+  commit message) — nothing calls a model unbilled.
+- **Errors**: every one reaches `onError` with a code from `ERROR_CODES`,
+  then the awaited call rejects with the same error. Background work has
+  one door and its failures reach `onError` too. No process-wide handlers.
 
 ## Develop
 
 ```
-npm run sdk:test    # tests against a fake backend and a scripted model
-npm run sdk:lint    # no-floating-promises, no-empty — the rules that keep errors from being dropped
 npm run sdk:build
+npm run sdk:lint    # no-floating-promises, no-empty — the rules that keep errors from being dropped
 ```
+
+The SDK is proven one way: running against a real phantom-backend.

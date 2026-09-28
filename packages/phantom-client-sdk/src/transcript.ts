@@ -9,10 +9,11 @@
 // the model. Cache marks (providerOptions) are per-call and are NEVER
 // written — `append` refuses a message that carries them.
 //
-// Loading: the last `compaction` line, if any, opens the conversation with
-// its summary; then every `message` line after `firstKeptId`. Older lines
-// stay as history and are never sent to the model again. Without a
-// compaction line, every `message` line.
+// Loading: the last `compaction` line, if any (written by the server when
+// it summarizes a long conversation), opens the conversation with its
+// summary; then every `message` line after `firstKeptId`. Older lines stay
+// as history and are never sent to the model again. Without a compaction
+// line, every `message` line.
 //
 // Writing: POST /sessions/:id/transcript/append { after, deliveryId, lines }.
 // The server writes only if it has exactly `after` lines AND has not seen
@@ -23,7 +24,8 @@
 // Others write it too (another window, the server, Telegram — one at a
 // time, under the session lock). `stamp` is the server's last-changed mark
 // for the copy held here; taking the lock answers the server's current one,
-// and a turn that sees them differ reads the record again before it runs.
+// and a turn that sees them differ reads the lines after its own
+// (`catchUp`: GET ...?after=N) before it runs.
 import type { ModelMessage } from 'ai';
 import { PhantomError } from './errors.js';
 import { call, type PhantomBackend } from './backend.js';
@@ -48,31 +50,19 @@ export const messageLine = (message: ModelMessage): MessageLine => {
 };
 export const usageLine = (u: TokenUsage): UsageLine => ({ type: 'usage', id: lineId(), at: now(), ...u });
 export const interruptedLine = (): InterruptedLine => ({ type: 'interrupted', id: lineId(), at: now() });
-export const compactionLine = (summary: string, firstKeptId: string): CompactionLine =>
-  ({ type: 'compaction', id: lineId(), at: now(), summary, firstKeptId });
-
-/** What the model sees, rebuilt from the lines. `ids` runs parallel to
- *  `messages`: the line id of each message, so compaction can name where the
- *  kept tail begins. */
-export interface LoadedConversation {
-  messages: ModelMessage[];
-  ids: (string | null)[];
-}
-
-export function conversationFrom(lines: readonly TranscriptLine[]): LoadedConversation {
+/** What the model sees, rebuilt from the lines. */
+export function conversationFrom(lines: readonly TranscriptLine[]): { messages: ModelMessage[] } {
   let last: CompactionLine | null = null;
   for (const l of lines) if (l.type === 'compaction') last = l;
   const messages: ModelMessage[] = [];
-  const ids: (string | null)[] = [];
   let keeping = last === null;
-  if (last) { messages.push({ role: 'user', content: last.summary }); ids.push(null); }
+  if (last) messages.push({ role: 'user', content: last.summary });
   for (const l of lines) {
     if (last && l.id === last.firstKeptId) keeping = true;
     if (!keeping || l.type !== 'message') continue;
     messages.push(l.message);
-    ids.push(l.id);
   }
-  return { messages, ids };
+  return { messages };
 }
 
 /** Parse the server's text: one JSON per line. A line that does not parse
@@ -116,6 +106,16 @@ export class Transcript {
   get count(): number { return this.lineCount; }
   /** The server's last-changed mark for the copy held here. */
   get stamp(): string | null { return this.lastStamp; }
+
+  /** Someone else wrote: read only the lines after ours and add them. */
+  async catchUp(): Promise<void> {
+    const r = await call<{ data: string | null; lines?: number; updated_at?: string | null }>(this.backend, 'GET',
+      `/sessions/${this.sessionId}/transcript?after=${this.lineCount}`);
+    const more = parseLines(r.data ?? '');
+    this.lines.push(...more);
+    this.lineCount = r.lines ?? this.lineCount + more.length;
+    this.lastStamp = r.updated_at ?? null;
+  }
 
   /** Append lines. Resolves when the server acknowledged them; rejects with
    *  transcript_conflict (someone else wrote) or transcript_write_failed. */

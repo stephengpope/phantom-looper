@@ -35,7 +35,7 @@ function lockEvent(s: SessionRow, over: Partial<{ locked: boolean; by: string | 
     expires_at: locked && expires ? expires.toISOString() : null,
     ...(died ? { died_on: died.label ?? died.by, died_at: died.at.toISOString() } : {}) };
 }
-import { shouldName, nameSession, titleContext, firstMessageContext } from '../../sessionTitle.js';
+import { shouldName, nameSession, titleContext, titleContextFromLines, firstMessageContext } from '../../sessionTitle.js';
 import { logger, errStr } from '../../log.js';
 
 const TAG = { tags: ['sessions'] };
@@ -320,17 +320,63 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   // the record: the client uploads the file when a turn ends and rewrites its
   // local copy from here on resume. Entirely optional — a client that never
   // calls these simply has no server transcript, and nothing else cares.
-  app.get<{ Params: { id: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { after?: number } }>(
     '/sessions/:id/transcript', { schema: { ...TAG,
       summary: 'Read a session\'s transcript',
-      description: 'The stored conversation (JSONL, one message per line), or data: null when none was ever saved. ' +
-        'One session, one transcript. Reads are allowed while another client holds the session — watching a ' +
-        'running session is safe; only writes need the lock.',
-      params: idParam } },
+      description: 'The stored conversation (JSONL, one line per entry), or data: null when none was ever saved. ' +
+        '`lines` is how many lines the record holds. `?after=N` answers only the lines after the first N — what a ' +
+        'client that already holds N lines needs to catch up. One session, one transcript. Reads are allowed ' +
+        'while another client holds the session — watching a running session is safe; only writes need the lock.',
+      params: idParam,
+      querystring: { type: 'object', properties: { after: { type: 'integer', minimum: 0 } } } } },
     async (req, reply) => {
       const s = await ctx.sessions.get(req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
-      return ok({ data: await ctx.sessions.transcript(s.id), updated_at: s.transcriptUpdatedAt ?? null });
+      const data = await ctx.sessions.transcript(s.id, req.query.after);
+      return ok({ data, lines: s.transcriptLines, updated_at: s.transcriptUpdatedAt ?? null });
+    });
+
+  // The append: the record grows one batch of typed lines at a time, from
+  // whoever holds the session. `after` is the writer's count of the record;
+  // the lines land only if the server agrees (else 409 transcript_conflict:
+  // read again). `deliveryId` makes a resend safe: a delivery that already
+  // landed is answered applied:false, never written twice. A holder's
+  // append renews its hold. Nothing else happens here — turn count, seat and
+  // naming are the turn-ended route's; the preview and the first name are the
+  // turn-start hook's.
+  app.post<{ Params: { id: string }; Body: { after: number; deliveryId: string; lines: Record<string, unknown>[] } }>(
+    '/sessions/:id/transcript/append', {
+      bodyLimit: 64 * 1024 * 1024,
+      schema: { ...TAG,
+        summary: 'Append lines to a session\'s transcript',
+        description: 'Appends typed JSON lines to the record. The caller (x-phantom-looper-client) must hold the session. ' +
+          '`after` is how many lines the caller believes the record holds: the append lands only if the server ' +
+          'agrees — 409 transcript_conflict otherwise (someone else wrote; read the transcript again). `deliveryId` ' +
+          'names this append: resending one that already landed answers {applied:false} and writes nothing.',
+        params: idParam,
+        body: { type: 'object', required: ['after', 'deliveryId', 'lines'], additionalProperties: false, properties: {
+          after: { type: 'integer', minimum: 0 }, deliveryId: { type: 'string', minLength: 1 },
+          lines: { type: 'array', minItems: 1, items: { type: 'object', required: ['type'],
+            properties: { type: { type: 'string', enum: ['message', 'usage', 'interrupted', 'compaction'] } } } } } } } },
+    async (req, reply) => {
+      const client = clientOf(req);
+      if (!client) return reply.code(400).send(err('missing_client', 'x-phantom-looper-client header required'));
+      const s = await ctx.sessions.get(req.params.id);
+      if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
+      if (s.lockedBy !== client) {
+        return reply.code(409).send(s.lockedBy ? lockedErr(s)
+          : err('session_not_held', 'hold the session (POST /sessions/:id/lock) before writing to it'));
+      }
+      let r: { lines: number; applied: boolean; stamp: Date };
+      try {
+        r = await ctx.sessions.appendTranscript(s, client, req.body);
+      } catch (e) {
+        if (e instanceof SessionError && e.code === 'transcript_conflict') return reply.code(409).send(err(e.code, e.message));
+        throw e;
+      }
+      const ttl = await ctx.settings.resolve('session_lock_ttl_ms');
+      await ctx.sessions.renewLock(s.id, client, Number(ttl));
+      return ok({ lines: r.lines, applied: r.applied, updated_at: r.stamp.toISOString() });
     });
 
   app.put<{ Params: { id: string }; Body: { data: string } }>(
@@ -889,16 +935,38 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       return ok(await ctx.sessions.get(s.id));
     });
 
+  // The supervisor's session: conversation-only, on the coder's folder, on
+  // the card. The looper creates one per run.
+  app.post<{ Body: { workspace_id: string; folder_id: string; card_id: number } }>(
+    '/sessions/supervisor', { schema: { ...TAG,
+      summary: 'Create a supervisor session',
+      description: 'Creates a conversation-only session for a card run\'s supervisor: no checkout of its own, its ' +
+        'folder is the coder\'s (`folder_id`), so its file tools read the coder\'s work. Returns the row.',
+      body: { type: 'object', required: ['workspace_id', 'folder_id', 'card_id'], additionalProperties: false, properties: {
+        workspace_id: { type: 'string' }, folder_id: { type: 'string' }, card_id: { type: 'integer' } } } } },
+    async (req) => ok(await ctx.sessions.createSupervisor(req.body.workspace_id, req.body.folder_id, req.body.card_id)));
+
+  // The end of a turn, whoever ran it, for every kind of session: the turn
+  // count (leaving 0 freezes the row's model), the agent seat after the
+  // writer, and the auto-title on its cadence — what the whole-file save did
+  // for a coding session, now that the record is appended as the turn runs.
   app.post<{ Params: { id: string } }>(
     '/sessions/:id/turn-ended', { schema: { ...TAG,
-      summary: 'A turn ended on an assistant session',
-      description: 'Bumps the turn count (leaving 0 freezes the row\'s model) and touches last_used_at.',
+      summary: 'A turn ended on a session',
+      description: 'Bumps the turn count (leaving 0 freezes the row\'s model), seats the agent after the caller ' +
+        '(a person\'s turn into a loop or cron session takes it over), touches last_used_at, and names the session ' +
+        'on the titler\'s cadence. 409 while another client holds the session.',
       params: idParam } },
     async (req, reply) => {
+      const client = clientOf(req);
       const s = await ctx.sessions.get(req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
-      if (s.agent !== 'assistant') return reply.code(400).send(err('not_assistant', 'this route is for assistant sessions only'));
-      await ctx.sessions.turnEnded(s);
+      if (heldByOther(s, client)) return reply.code(409).send(lockedErr(s));
+      const ended = await ctx.sessions.turnEnded(s, client);
+      if (!ended.nameManual && shouldName(ended.name, ended.turnCount)) {
+        const data = await ctx.sessions.transcript(s.id);
+        if (data) void nameSession(ctx, s.id, titleContextFromLines(data), ctx.modelFetch);
+      }
       return ok({});
     });
 

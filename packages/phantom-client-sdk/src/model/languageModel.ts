@@ -1,10 +1,12 @@
-// The one place a provider client is built. Every model handle in the SDK
-// comes from `languageModel()`: the provider switch, the Anthropic
-// subscription-token disguise, the retry fetch, and the billing middleware
-// that posts every call's usage to the backend. There is no way to call a
-// model without going through this, so nothing is ever unbilled.
-import type { LanguageModel, LanguageModelMiddleware } from 'ai';
+// The one place a provider client is built. Every model handle comes from
+// `billedModel()`: the provider switch, the Anthropic subscription-token
+// disguise, the retry fetch, and the billing middleware that posts every
+// call's usage to the backend. There is no way to call a model without
+// going through this, so nothing is ever unbilled. The Agent uses it for
+// its turns; an app uses it for a one-shot call (a title, a commit message).
+import { wrapLanguageModel, type LanguageModel, type LanguageModelMiddleware } from 'ai';
 import type { LanguageModelV4Usage } from '@ai-sdk/provider';
+import { call, type PhantomBackend } from '../backend.js';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
@@ -14,9 +16,8 @@ import { createMoonshotAI } from '@ai-sdk/moonshotai';
 import { createXai } from '@ai-sdk/xai';
 import { createMistral } from '@ai-sdk/mistral';
 import { createGroq } from '@ai-sdk/groq';
-import { createOpenAIOAuthTransport } from '@openai-oauth/core';
-import { openaiCredentials } from '@openai-oauth/local';
-import { PhantomError } from '../errors.js';
+import { createOpenAIOAuthTransport, type OpenAIOAuthSession } from '@openai-oauth/core';
+import { PhantomError, asPhantomError } from '../errors.js';
 import { withRetry, type RetryPolicy } from './retry.js';
 import type { Provider, Reasoning } from './llmConfig.js';
 
@@ -25,9 +26,8 @@ export interface ModelSpec {
   model: string;
   endpoint: string | null;
   reasoning: Reasoning | null;
-  /** The live key for `provider`. Null for providers that need none
-   *  (openai-codex reads its own login file; an open openai-compatible
-   *  endpoint). */
+  /** The live key for `provider`, as the server serves it. Null only for an
+   *  open openai-compatible endpoint. */
   apiKey: string | null;
 }
 
@@ -40,13 +40,15 @@ export interface TokenUsage {
 export interface ModelHooks {
   /** Where each failed attempt is reported as it happens (withRetry). */
   notice: (text: string) => void;
-  /** Where each call's usage lands — the Agent posts it to /log-tokens. */
-  usage: (u: TokenUsage) => void;
   /** The provider retry schedule. Absent = MODEL_RETRY. */
   retry?: RetryPolicy;
-  /** Test seam: the fetch the provider client uses. */
-  fetch?: typeof fetch;
+  /** A usage record that could not be posted. */
+  onBillingError: (e: PhantomError) => void;
 }
+
+/** What a call is billed to: the kind of work (an agent's kind, or a
+ *  helper's name — 'title', 'commit_message') and the session it serves. */
+export interface Billing { kind: string; sessionId: string | null }
 
 // ── Anthropic subscription tokens ─────────────────────────────────────────
 
@@ -110,18 +112,23 @@ function anthropicProvider(s: ModelSpec, f: typeof fetch) {
 }
 
 // ── OpenAI Codex (ChatGPT subscription) ───────────────────────────────────
+// The credential arrives like every other key, from the server: `apiKey`
+// is the ChatGPT session as JSON — { accessToken, accountId, refreshToken?,
+// idToken? } (what `codex login` writes). Nothing is read from disk here.
+
+function codexSession(s: ModelSpec): OpenAIOAuthSession {
+  try {
+    const j = JSON.parse(keyFor(s)) as Partial<OpenAIOAuthSession>;
+    if (typeof j.accessToken === 'string' && typeof j.accountId === 'string') return j as OpenAIOAuthSession;
+  } catch (e) {
+    void e; // not JSON: refused below with the same message
+  }
+  throw new PhantomError('no_api_key', 'openai-codex: the key must be the ChatGPT session as JSON ({ accessToken, accountId, ... })');
+}
 
 function openaiCodexModel(s: ModelSpec, f: typeof fetch): Exclude<LanguageModel, string> {
-  const creds = openaiCredentials();
-  const transport = createOpenAIOAuthTransport({
-    auth: () => creds.getSession().catch((e: unknown) => {
-      throw new PhantomError('no_api_key',
-        'openai-codex: no valid ChatGPT credentials — run `npx @openai/codex login` (credentials live in ~/.codex/auth.json)',
-        { cause: e });
-    }),
-    baseURL: creds.baseURL,
-    fetch: f,
-  });
+  const session = codexSession(s);
+  const transport = createOpenAIOAuthTransport({ auth: session, fetch: f });
   return createOpenAI({ apiKey: 'openai-oauth', baseURL: transport.baseURL, fetch: transport.fetch }).responses(s.model);
 }
 
@@ -134,7 +141,7 @@ export function thinkingAlwaysOn(model: string): boolean {
 
 /** The reasoning level actually sent: 'none' on a model that cannot stop
  *  thinking becomes 'minimal'. */
-export function effectiveReasoning(s: ModelSpec): Reasoning | undefined {
+export function effectiveReasoning(s: Pick<ModelSpec, 'provider' | 'model' | 'reasoning'>): Reasoning | undefined {
   if (s.reasoning === null) return undefined;
   if (s.reasoning === 'none' && s.provider === 'anthropic' && thinkingAlwaysOn(s.model)) return 'minimal';
   return s.reasoning;
@@ -168,9 +175,8 @@ function providerModel(s: ModelSpec, f: typeof fetch): Exclude<LanguageModel, st
 }
 
 /** The middleware that bills: usage is read where the AI SDK reads it — the
- *  generate result, or the stream's `finish` part. Applied by the Agent to
- *  every model handle, whatever built it. */
-export function billingMiddleware(s: ModelSpec, usage: ModelHooks['usage']): LanguageModelMiddleware {
+ *  generate result, or the stream's `finish` part. */
+function billingMiddleware(s: ModelSpec, usage: (u: TokenUsage) => void): LanguageModelMiddleware {
   const emit = (u: LanguageModelV4Usage, responseId?: string) => usage({
     provider: s.provider, model: s.model, responseId,
     input: u.inputTokens.total ?? 0, output: u.outputTokens.total ?? 0,
@@ -197,7 +203,11 @@ export function billingMiddleware(s: ModelSpec, usage: ModelHooks['usage']): Lan
   };
 }
 
-/** A provider model handle with retries. Billing is the Agent's (billingMiddleware). */
-export function languageModel(s: ModelSpec, hooks: Pick<ModelHooks, 'notice' | 'fetch' | 'retry'>): LanguageModel {
-  return providerModel(s, withRetry(hooks.fetch, hooks.notice, hooks.retry));
+/** A provider model handle with retries, every call billed to `bill` on
+ *  the backend (POST /log-tokens). The one way to get a model. */
+export function billedModel(backend: PhantomBackend, s: ModelSpec, bill: Billing, hooks: ModelHooks): LanguageModel {
+  const model = providerModel(s, withRetry(undefined, hooks.notice, 'model', hooks.retry));
+  const post = (u: TokenUsage) => call(backend, 'POST', '/log-tokens', { kind: bill.kind, sessionId: bill.sessionId, ...u })
+    .then(() => undefined, (e: unknown) => hooks.onBillingError(asPhantomError(e, 'backend_error', 'billing')));
+  return wrapLanguageModel({ model, middleware: billingMiddleware(s, (u) => { void post(u); }) });
 }

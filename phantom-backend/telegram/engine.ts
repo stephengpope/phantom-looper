@@ -470,7 +470,7 @@ export class TelegramEngine {
         onWorkspaceCreated,
       }, abort.signal, conv.getTranscript(), own);
       replyText = result.said;
-      await this.deps.sessions.turnEnded(own).catch(
+      await this.deps.sessions.turnEnded(own, CLIENT_ID).catch(
         (e) => log.warn({ err: errStr(e) }, 'assistant session update failed'));
       // Long chat? Summarize it in the background — turns never wait on it.
       conv.kickCompaction(result.usage.input);

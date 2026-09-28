@@ -67,16 +67,14 @@ export async function toolResultMessage(
 }
 
 /** What a tool call whose result never arrived says in the record. The next
- *  turn must not take "no result" for "did not run". pi writes "Operation
- *  aborted"; ours says what to do about it. */
+ *  turn must not take "no result" for "did not run". Plain words; an app
+ *  may pass its own. */
 export const INTERRUPTED_RESULT =
-  'interrupted: the turn was stopped before this call\'s result was read. ' +
-  'The command was killed if it was still running, but a short one may already have finished — ' +
-  'check the state before repeating it.';
+  'interrupted before this call\'s result was read — it may or may not have run; check the state before repeating it.';
 
-export function interruptedResultMessage(call: { toolCallId: string; toolName: string }): ToolModelMessage {
+export function interruptedResultMessage(call: { toolCallId: string; toolName: string }, text = INTERRUPTED_RESULT): ToolModelMessage {
   return { role: 'tool', content: [{ type: 'tool-result', toolCallId: call.toolCallId, toolName: call.toolName,
-    output: { type: 'error-text', value: INTERRUPTED_RESULT } }] };
+    output: { type: 'error-text', value: text } }] };
 }
 
 export const userMessage = (content: string): ModelMessage => ({ role: 'user', content });

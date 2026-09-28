@@ -44,7 +44,7 @@ export type SessionEvent =
    *  caller's own client id when the call came from a route, so the feed's
    *  echo rule skips the one window that already draws the stream it asked
    *  for. */
-  | { event: 'sync'; op: 'push' | 'pull'; step: string; detail?: string }
+  | { event: 'sync'; op: 'push' | 'pull'; step: string; label?: string; detail?: string }
   /** An instant sync (git/instantSync.ts) did not complete: git failed, or a
    *  conflict was left in the files for the agent. Instant sync publishes no
    *  steps — it runs on its own, and its progress is nobody's news — so this

@@ -1,7 +1,7 @@
 {
   "name": "phantom-looper",
   "version": "0.1.80",
-  "description": "phantom-looper — a terminal coding agent with a kanban-driven supervisor loop",
+  "description": "phantom-looper \u2014 a terminal coding agent with a kanban-driven supervisor loop",
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -16,10 +16,8 @@
     "phantom-cli": "NODE_ENV=production tsx --tsconfig phantom-cli/tsconfig.json phantom-cli/index.tsx",
     "phantom-backend": "tsx phantom-backend/index.ts",
     "sdk:build": "npm run build -w phantom-client-sdk",
-    "sdk:test": "npm run test -w phantom-client-sdk",
     "sdk:lint": "npm run lint -w phantom-client-sdk",
     "server-sdk:build": "npm run build -w phantom-server-sdk",
-    "server-sdk:test": "npm run test -w phantom-server-sdk",
     "server-sdk:lint": "npm run lint -w phantom-server-sdk"
   },
   "dependencies": {

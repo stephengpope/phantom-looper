@@ -35,8 +35,6 @@ export interface TurnResult {
   messages: ModelMessage[];
   usage: TurnUsage;
   outcome: 'done' | 'interrupted';
-  /** Input tokens of the LAST model call — what compaction compares to the window. */
-  lastInputTokens: number;
 }
 
 export interface TurnInput {
@@ -55,6 +53,8 @@ export interface TurnInput {
   pending(): string[];
   /** Append to the record. Rejects → the turn fails. */
   record(lines: TranscriptLine[]): Promise<void>;
+  /** The app's wording for a tool call cut by a stop, if it has one. */
+  interruptedText?: string;
   onPart(part: StreamPart): void;
   /** A tool answered with an error (the model still gets it). */
   onToolError(name: string, error: unknown): void;
@@ -88,7 +88,6 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
 
   const added: ModelMessage[] = [];
   const usage: TurnUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-  let lastInputTokens = 0;
   let text = '';
   let streamFailure: unknown;
   const step = new StepInFlight();
@@ -148,7 +147,6 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
         cacheWrite: e.usage.inputTokenDetails?.cacheWriteTokens ?? 0,
       };
       usage.input += u.input; usage.output += u.output; usage.cacheRead += u.cacheRead; usage.cacheWrite += u.cacheWrite;
-      lastInputTokens = u.input;
       const lines: TranscriptLine[] = [
         ...st.pendingMessages.map(messageLine),
         ...(assistant ? [messageLine(assistant)] : []),
@@ -207,11 +205,11 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
       if ((content as unknown[]).length) lines.push(messageLine({ role: 'assistant', content: content }));
       lines.push(...step.held);
     }
-    for (const c of step.calls) if (!step.answered.has(c.toolCallId)) lines.push(messageLine(interruptedResultMessage(c)));
+    for (const c of step.calls) if (!step.answered.has(c.toolCallId)) lines.push(messageLine(interruptedResultMessage(c, input.interruptedText)));
     lines.push(interruptedLine());
     await record(lines);
     throwIfFailed(st);
-    return { text: step.text || text, messages: added, usage, outcome: 'interrupted', lastInputTokens };
+    return { text: step.text || text, messages: added, usage, outcome: 'interrupted' };
   }
 
   if (streamFailure !== undefined) {
@@ -221,5 +219,5 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
     throw new PhantomError(isContextTooLong(message) ? 'context_too_long' : 'model_error', message, { cause: streamFailure, retryable: false });
   }
 
-  return { text, messages: added, usage, outcome: 'done', lastInputTokens };
+  return { text, messages: added, usage, outcome: 'done' };
 }

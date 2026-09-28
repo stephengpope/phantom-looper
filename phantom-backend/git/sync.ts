@@ -67,7 +67,24 @@ export type SyncStep =
   | 'lock' | 'backup' | 'commit' | 'rebase' | 'resolve' | 'verify'
   | 'push_branch' | 'push_base' | 'retry';
 
-export interface SyncEvent { step: SyncStep; detail?: string }
+/** Each step in words, as every screen shows it (the cli's status line,
+ *  Telegram, the session feed). Named here, where the step is born, so no
+ *  client keeps its own copy. `commit` reads differently on a pull. */
+export function syncStepLabel(step: SyncStep, landOnBase: boolean): string {
+  switch (step) {
+    case 'lock': return 'taking the session';
+    case 'backup': return 'backing the branch up';
+    case 'commit': return landOnBase ? 'committing' : 'committing this session\'s work';
+    case 'rebase': return 'replaying the work on the base branch';
+    case 'resolve': return 'Fix Conflicts';
+    case 'verify': return 'verifying against the repo';
+    case 'push_branch': return 'pushing the branch';
+    case 'push_base': return 'pushing to the base branch';
+    case 'retry': return 'base moved — replaying again';
+  }
+}
+
+export interface SyncEvent { step: SyncStep; label: string; detail?: string }
 
 /** Everything the coding agent is told about a stopped rebase. `arrived` is the
  *  log of what landed on base — the briefing that separates resolving a
@@ -172,7 +189,7 @@ export async function syncBranch(
   const dir = repoDir(deps.paths, folder.id);
   const base = workspace.baseBranch;
   const auth = await resolveAuth(deps.settings, workspace);
-  const ev = async (step: SyncStep, detail?: string) => { await deps.onEvent?.({ step, detail }); };
+  const ev = async (step: SyncStep, detail?: string) => { await deps.onEvent?.({ step, label: syncStepLabel(step, opts.landOnBase), detail }); };
   const rounds = opts.landOnBase ? ROUNDS : 1;
   const hold = opts.hold ?? true;
 

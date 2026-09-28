@@ -23,23 +23,13 @@ export interface AutoPullOutcome {
   reason?: string; arrived?: string[]; files?: string[]; sha?: string; pushed?: boolean;
 }
 
-export const AUTO_PUSH_STEPS: Record<string, string> = {
-  lock: 'taking the session', backup: 'backing the branch up', commit: 'committing',
-  rebase: 'replaying the work on the base branch', resolve: 'Fix Conflicts',
-  verify: 'verifying against the repo', push_branch: 'pushing the branch',
-  push_base: 'pushing to the base branch', retry: 'base moved — replaying again',
-};
-export const AUTO_PULL_STEPS: Record<string, string> = {
-  lock: 'taking the session', backup: 'backing the branch up', commit: 'committing this session\'s work',
-  rebase: 'replaying the work on the base branch', resolve: 'Fix Conflicts',
-  verify: 'verifying against the repo', push_branch: 'pushing the branch',
-};
-
+/** `onStep` gets each step in the server's words (its `label`, with the
+ *  detail when there is one), as it happens. */
 export function autoPushSession(b: PhantomBackend, sessionId: string, onStep?: (label: string) => void): Promise<AutoPushOutcome> {
-  return runGitStream<AutoPushOutcome>('auto-push', AUTO_PUSH_STEPS, b, sessionId, onStep);
+  return runGitStream<AutoPushOutcome>('auto-push', b, sessionId, onStep);
 }
 export function autoPullSession(b: PhantomBackend, sessionId: string, onStep?: (label: string) => void): Promise<AutoPullOutcome> {
-  return runGitStream<AutoPullOutcome>('auto-pull', AUTO_PULL_STEPS, b, sessionId, onStep);
+  return runGitStream<AutoPullOutcome>('auto-pull', b, sessionId, onStep);
 }
 
 /** One JSON record per line off a streaming body. A torn last line is dropped. */
@@ -62,8 +52,7 @@ async function* ndjson(body: ReadableStream<Uint8Array>): AsyncGenerator<Record<
 }
 
 async function runGitStream<T extends { result: string }>(
-  route: 'auto-push' | 'auto-pull', steps: Record<string, string>,
-  b: PhantomBackend, sessionId: string, onStep?: (label: string) => void,
+  route: 'auto-push' | 'auto-pull', b: PhantomBackend, sessionId: string, onStep?: (label: string) => void,
 ): Promise<T> {
   const f = b.fetch ?? fetch;
   const r = await f(`${b.url}/git/${route}`, {
@@ -80,7 +69,7 @@ async function runGitStream<T extends { result: string }>(
   for await (const rec of ndjson(r.body)) {
     if (rec.event === 'step' && typeof rec.step === 'string') {
       const detail = typeof rec.detail === 'string' && rec.detail ? ` — ${rec.detail}` : '';
-      onStep?.(`${steps[rec.step] ?? rec.step}${detail}`);
+      onStep?.(`${typeof rec.label === 'string' ? rec.label : rec.step}${detail}`);
     } else if (rec.event === 'result') {
       const { event: _e, ...rest } = rec;
       result = { result: 'error', ...rest } as unknown as T;

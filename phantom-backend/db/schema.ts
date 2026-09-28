@@ -179,6 +179,10 @@ export const sessions = phantomLooper.table('sessions', {
   transcript: text('transcript'),
   lastUserMessage: text('last_user_message'),
   transcriptUpdatedAt: timestamp('transcript_updated_at', { withTimezone: true }),
+  // The append protocol's two facts (043): how many lines the record holds,
+  // and the id of the last append that landed — Sessions.appendTranscript.
+  transcriptLines: integer('transcript_lines').notNull().default(0),
+  transcriptDelivery: text('transcript_delivery'),
   // When this session was last included in the idle digest notification.
   // Null = never notified. A session is eligible when transcriptUpdatedAt >
   // digestNotifiedAt AND it has been idle > the configured threshold. (021)

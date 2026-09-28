@@ -35,10 +35,6 @@ export const BACKEND_RETRY: RetryPolicy = {
   retryable: (s) => s === 408 || s === 429 || s >= 500,
 };
 
-/** Kept for callers that only want the model schedule's numbers. */
-export const RETRY_WAITS_S = MODEL_RETRY.waitsS;
-export const RETRY_BUDGET_MS = MODEL_RETRY.budgetMs;
-
 /** retry-after, when the server sent one: used if it asks for MORE than our
  *  scheduled wait, capped at 60s — the budget check still has the last word. */
 function serverDelayMs(r: Response, scheduledMs: number): number {
@@ -58,8 +54,9 @@ const wait = (ms: number, signal?: AbortSignal | null) => new Promise<void>((res
   signal?.addEventListener('abort', onAbort, { once: true });
 });
 
+/** `who` names the other end in the notices: 'model' or 'server'. */
 export function withRetry(inner: typeof fetch | undefined, notice: (text: string) => void,
-  policy: RetryPolicy = MODEL_RETRY): typeof fetch {
+  who: 'model' | 'server', policy: RetryPolicy = MODEL_RETRY): typeof fetch {
   const f = inner ?? fetch;
   const { waitsS, budgetMs, retryable } = policy;
   return async (input, init) => {
@@ -78,10 +75,10 @@ export function withRetry(inner: typeof fetch | undefined, notice: (text: string
       }
       if (r && !retryable(r.status)) return r;
 
-      const what = netErr ? `model unreachable (${(netErr as Error).message})`
-        : r!.status === 429 ? 'model answered 429 (rate limited)'
-        : r!.status === 529 ? 'model answered 529 (overloaded)'
-        : `model answered ${r!.status}`;
+      const what = netErr ? `${who} unreachable (${(netErr as Error).message})`
+        : r!.status === 429 ? `${who} answered 429 (rate limited)`
+        : r!.status === 529 ? `${who} answered 529 (overloaded)`
+        : `${who} answered ${r!.status}`;
       const scheduled = waitsS[attempt];
       const delayMs = scheduled === undefined ? undefined
         : r ? serverDelayMs(r, scheduled * 1000) : scheduled * 1000;

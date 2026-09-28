@@ -13,7 +13,6 @@ export interface AgentEvents {
   'user-message': { texts: string[] };
   'tool-error': { name: string; error: unknown };
   'turn-end': TurnResult;
-  'compacted': { removed: number; summary: string };
   /** Someone else added to the transcript since this agent last looked; it
    *  was read again before the turn ran. `messages` is the conversation now. */
   'reloaded': { messages: readonly ModelMessage[] };
