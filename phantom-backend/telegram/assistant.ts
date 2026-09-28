@@ -67,7 +67,13 @@ async function api(deps: AssistantDeps, path: string,
  *  looper and the archive auto-push run exactly as for any other door. */
 function boardHandler(deps: AssistantDeps, workspaceId: () => string | null) {
   const cardOf = (c: CardRow) => ({ card: c.number, title: c.title, status: c.status });
-  return async (args: KanbanArgs): Promise<unknown> => {
+  // Card rows carry Date fields. Every other door serializes them over HTTP;
+  // here the row would go into the model's history as-is, and the SDK
+  // rejects a non-JSON tool result on the NEXT turn ("messages do not match
+  // the ModelMessage[] schema"). The same round-trip the API does.
+  const json = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
+  return async (args: KanbanArgs): Promise<unknown> => json(await handle(args));
+  async function handle(args: KanbanArgs): Promise<unknown> {
     const ws = workspaceId();
     if (!ws) return { error: 'no active workspace — /workspaces to pick one' };
     const w = await deps.workspaces.get(ws);
@@ -102,7 +108,7 @@ function boardHandler(deps: AssistantDeps, workspaceId: () => string | null) {
           return { error: `unknown board action: ${args.action}` };
       }
     } catch (e) { return { error: (e as Error).message }; }
-  };
+  }
 }
 
 /** What the engine supplies for a turn: where it is, and the two things only

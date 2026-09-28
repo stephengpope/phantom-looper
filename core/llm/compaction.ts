@@ -277,7 +277,11 @@ function prepareCompaction(history: ModelMessage[], strategy: CompactionStrategy
 
   const takeCount = Math.max(1, Math.floor(uaIndices.length * summarizePct / 100));
   const lastUAIndex = uaIndices[takeCount - 1];
-  const removeEnd = lastUAIndex + 1;
+  let removeEnd = lastUAIndex + 1;
+  // A tool message answers the assistant message before it. When the cut
+  // lands on an assistant tool call, take its results too — a history that
+  // opens on a tool_result with no tool_use is rejected by every provider.
+  while (removeEnd < history.length && history[removeEnd].role === 'tool') removeEnd++;
   const removedMessages = history.slice(0, removeEnd);
   const toSummarize = hasPrior ? removedMessages.slice(1) : removedMessages;
   if (toSummarize.length === 0) return null;
