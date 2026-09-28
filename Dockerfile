@@ -31,6 +31,9 @@ RUN git --version && openssl version
 WORKDIR /app
 COPY --from=build /app/node_modules node_modules
 COPY --from=build /app/dist dist
+# The SDK workspaces: node_modules holds them as symlinks into packages/, so
+# without this directory every import of them dangles and the server dies at boot.
+COPY --from=build /app/packages packages
 COPY migrations/ migrations/
 # The workspace volume mounts at /workspaces root-owned on first use unless the
 # image owns the path — same mechanism Shockwave uses for /data/agent. /trigger
