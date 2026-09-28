@@ -104,6 +104,15 @@ RUN mkdir -p -m 755 /etc/apt/keyrings \
        docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
   && rm -rf /var/lib/apt/lists/* \
   && usermod -aG docker agent
+# Pin the inner daemon's storage driver. overlayfs is what dockerd picks on its
+# own on the /var/lib/docker volume, and it stores only what each layer changed.
+# The pin is there for the other case: an agent starting dockerd by hand with
+# `--storage-driver=vfs`, which stores a FULL copy of the filesystem per layer —
+# one 27-step build filled a 77G disk (63G) in 16 minutes and took the host
+# down. With the driver named here dockerd refuses the flag outright ("specified
+# both as a flag and in the configuration file") instead of starting.
+RUN mkdir -p /etc/docker \
+  && echo '{ "storage-driver": "overlayfs" }' > /etc/docker/daemon.json
 # start-docker: bring the inner daemon up on demand, idempotently. dockerd needs
 # root (passwordless sudo, above); the agent reaches the socket via the docker
 # group with no sudo once it is up. A no-op when already running, so it is safe
@@ -307,6 +316,7 @@ RUN rg --version && git --version && git lfs version && gh --version \
   && pdftotext -v 2>&1 | grep -q poppler && gs --version \
   && tesseract --version > /dev/null && pandoc --version > /dev/null \
   && dot -V 2>&1 \
-  && test -x /usr/local/bin/start-docker && id -nG | tr ' ' '\n' | grep -qx docker
+  && test -x /usr/local/bin/start-docker && id -nG | tr ' ' '\n' | grep -qx docker \
+  && grep -q '"storage-driver": "overlayfs"' /etc/docker/daemon.json
 WORKDIR /workspace/repo
 # No CMD — the runtime supplies `sleep infinity`; any image works here.
