@@ -1105,7 +1105,8 @@ export class WindowStore {
   pickerQuery = '';
   /** ←→ on /resume: one workspace's sessions, or null for all of them.
    *  A fetch parameter like the two above; the `/` text searches inside it.
-   *  Opens on all. */
+   *  Kept across opens like showBackground — the list comes back as you
+   *  left it, and the footer key shows the filter is on. */
   pickerWorkspace: string | null = null;
   private pickerQueryClock: ReturnType<typeof setTimeout> | null = null;
   private morePickerInFlight = false;
@@ -1266,7 +1267,6 @@ export class WindowStore {
     try {
       this.picker = null;   // an OPEN reads both lists fresh
       this.pickerQuery = '';
-      this.pickerWorkspace = null;
       await this.refreshPicker();
       this.pickerNotice = undefined;
       this.showOverlay(pickerScreen(this, which));

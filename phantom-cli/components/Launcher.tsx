@@ -349,7 +349,7 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
     return (
       <Screen title={heading} notice={notice}
         footer={[{ key: 'type', does: 'filter' }, { key: '↑↓', does: 'move' },
-          { key: '←→', does: 'workspace', when: canCycle }]}>
+          { key: '←→', does: 'workspace', when: canCycle, active: workspaceId !== null }]}>
         <Box marginBottom={1}>
           <FixedText color="cyan">{'  / '}</FixedText>
           <TextInput value={query} onChange={(q) => onQuery!(q)} placeholder="name, last message or branch…" />
@@ -372,7 +372,9 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
       footer={footer ?? (canEdit
         ? [{ key: 'e', does: 'edit workspace' }, { key: 'n', does: 'new workspace', when: canAdd ?? true }]
         : [
-          { key: '←→', does: 'workspace', when: canCycle },
+          // Lit while a workspace is picked, like [s] — the filter holds
+          // across opens, so the key must say it is on.
+          { key: '←→', does: 'workspace', when: canCycle, active: workspaceId !== null },
           { key: '/', does: 'filter', when: canFilter },
           { key: 'p', does: 'pin', when: canPin },
           { key: 'x', does: 'close', when: canCopy },
