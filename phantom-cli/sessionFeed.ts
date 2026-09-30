@@ -1,5 +1,5 @@
 // Watching what happens to a session elsewhere. The server publishes every
-// part of a turn it runs (a looper round, POST /sessions/:id/turn) on
+// part of a turn it runs (a card-run agent, POST /sessions/:id/turn) on
 // `GET /sessions/:id/events`, plus lock, mode and transcript state; this
 // object holds that feed open and folds what arrives into the SessionStore —
 // through `remoteStart/remoteParts/remoteEnd`, which are the same reducer
@@ -25,8 +25,8 @@ export interface FeedHooks {
    *  thinking and the tool timings a transcript replay cannot carry.
    *  False = we missed something; repaint from the record. */
   onRecordLanded: (updatedAt: string, keepScreen: boolean) => Promise<void> | void;
-  /** Plan mode changed on the server (another window's /plan, or a looper
-   *  round flipping it). The App rebuilds the agent kit around this. */
+  /** Plan mode changed on the server (another window's /plan, or a card
+   *  run flipping it). The App rebuilds the agent kit around this. */
   onPlanModeChanged?: (on: boolean) => Promise<void> | void;
   /** The row's model moved (a settings change reached a session nothing has
    *  been said to yet). The window asks the server for the session's config

@@ -64,7 +64,7 @@ async function api(deps: AssistantDeps, path: string,
 /** The board handler, at the Cards object — the same rows and refusals the
  *  card routes answer with (they are thin over Cards). `screen` has no
  *  telegram meaning and says so. Every write lands on the board bus, so the
- *  looper and the archive auto-push run exactly as for any other door. */
+ *  card runs and the archive auto-push run exactly as for any other door. */
 function boardHandler(deps: AssistantDeps, workspaceId: () => string | null) {
   const cardOf = (c: CardRow) => ({ card: c.number, title: c.title, status: c.status });
   // Card rows carry Date fields. Every other door serializes them over HTTP;

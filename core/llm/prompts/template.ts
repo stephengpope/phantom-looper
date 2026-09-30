@@ -41,7 +41,7 @@ export function fill(template: string, vars: Record<string, string | number>): s
 }
 
 /** The first line of what fill() would SEND — the template's first non-blank
- *  line, filled. The looper's frozen first-message discriminators derive
+ *  line, filled. The card run's frozen first-message discriminators derive
  *  from the templates themselves, so the matched line and the sent line can
  *  never drift apart, and a template that opens on a blank line is no
  *  different from one that doesn't (fill() trims the same way). */

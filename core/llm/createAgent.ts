@@ -131,7 +131,7 @@ export interface ModelConfig {
   fetch?: typeof fetch;
   /** Where each failed model attempt is reported as it happens ("model
    *  answered 429 (rate limited) — retry 2/7 in 4s"). The cli notes it into
-   *  the session's conversation, the looper logs it. Absent = silent retries. */
+   *  the session's conversation, a server-run turn logs it. Absent = silent retries. */
   onRetry?: (note: string) => void;
 }
 
@@ -336,7 +336,7 @@ function unsetModel(reason: string): Exclude<LanguageModel, string> {
 export const RETRY_WAITS_S = [2, 4, 8, 15, 30, 45, 60] as const;
 /** Hard ceiling on TOTAL time spent waiting — a call can never retry past
  *  this, whatever retry-after asks for. Well inside session_lock_ttl_ms
- *  (10 min), so a retrying looper round cannot outlive its session lock. */
+ *  (10 min), so a retrying turn cannot outlive its session lock. */
 export const RETRY_BUDGET_MS = 180_000;
 
 const RETRYABLE_STATUS = (s: number) => s === 408 || s === 409 || s === 429 || s >= 500;
@@ -365,7 +365,7 @@ const wait = (ms: number, signal?: AbortSignal | null) => new Promise<void>((res
  *  provider and every kind of call. Retryable failures (429/408/409/5xx and
  *  network errors) wait out RETRY_WAITS_S and try again, reporting each
  *  attempt as it happens (`report` — the cli notes it into the conversation,
- *  the looper logs it; silence was the old bug). Fatal statuses (400/401/
+ *  a server-run turn logs it; silence was the old bug). Fatal statuses (400/401/
  *  403/404) return at once for the SDK to throw. Aborting cancels a wait
  *  immediately. A non-replayable body (streaming upload) is never retried. */
 export function withRetry(

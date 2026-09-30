@@ -59,16 +59,17 @@ export type SessionFull = SessionRow & { branch: string; cutFromSha: string };
  *  characters on screen, so this many stored — never the record. */
 export const LAST_MESSAGE_CHARS = 200;
 
-/** The looper's client id — the one holder whose saves are the loop's own
- *  turns. The engine locks with it, the release hook ignores it, and the
- *  transcript save reads who drove the turn off it. */
+/** The card run's lock identity — the holder under which its coding and
+ *  supervisor turns save. The looper locks with it when it starts a run, the
+ *  release hook ignores it, and the transcript save reads who drove the turn
+ *  off it. */
 export const LOOP_CLIENT_ID = 'supervisor';
 /** The cron engine's client id — the holder whose saves are a cron's run
- *  (crons/engine.ts). Same role as the looper's: the transcript save reads
+ *  (crons/engine.ts). Same role as the card run's: the transcript save reads
  *  who drove the turn off it. */
 export const CRON_CLIENT_ID = 'cron';
 
-/** The seats no person and no coder sits in — the looper's supervisor record
+/** The seats no person and no coder sits in — the supervisor's session
  *  and a cron's run. /resume hides them unless asked (`background=false`);
  *  a person who types into a cron's session takes it over (agentAfterSave)
  *  and it stops being one. */
@@ -81,7 +82,7 @@ export interface ListQuery {
   /** Only sessions something was typed into (a last message exists). */
   typed?: boolean;
   /** false = leave out the background seats (BACKGROUND_AGENTS): the
-   *  looper's supervisor records and cron runs. */
+   *  supervisor sessions and cron runs. */
   background?: boolean;
   /** One substring, case-insensitive, anywhere in the name, the last user
    *  message or the branch. */
@@ -101,7 +102,7 @@ export type ListedSession = SessionRow & { card: number | null; cardStatus: stri
 // ── Pure rules — no row in hand, nothing to await ────────────────────────────
 
 /** A session that holds only its conversation — no checkout, no container,
- *  nothing on disk. Supervisor (the looper's verdict record) and assistant
+ *  nothing on disk. Supervisor and assistant
  *  (the voice/Telegram conversation) are both this shape. */
 export const conversationOnly = (s: SessionRow): boolean =>
   s.agent === 'supervisor' || s.agent === 'assistant';
@@ -170,7 +171,7 @@ export function expiredHold(s: Pick<SessionRow, 'lockedBy' | 'lockedLabel' | 'lo
 
 /** `sessions.agent` after `client` saved a turn: WHO DROVE THE LAST TURN.
  *  The supervisor's record is the supervisor's for life (read-only in every
- *  client), and the assistant's is the assistant's. The coder's seat is 'coding' while the loop's turns land in it,
+ *  client), and the assistant's is the assistant's. The coder's seat is 'coding' while a card run's turns land in it,
  *  a cron's session is 'cron' while the cron engine's do, and either is a
  *  PERSON's (null) the moment anyone else's does — typing into it takes it
  *  over; the loop takes its seat back the next time it drives. Read off the
@@ -200,7 +201,7 @@ export class Sessions {
 
   // ── start, interrupt ─────────────────────────────────────────────────────
   // The two session acts every client performs, at the object — the routes
-  // are thin over them, and the server's own engines (Telegram, the looper)
+  // are thin over them, and the server's own engines (Telegram, card runs)
   // call them here rather than over HTTP.
 
   /** Create — or restart — a session AND freeze its coding prompt: the
@@ -468,7 +469,7 @@ export class Sessions {
     return this.newestOnCard(workspaceId, cardNumber, 'coding');
   }
 
-  /** The card's supervisor session — the looper's verdict record. */
+  /** The card's supervisor session. */
   supervisorOf(workspaceId: string, cardNumber: number): Promise<SessionRow | undefined> {
     return this.newestOnCard(workspaceId, cardNumber, 'supervisor');
   }
@@ -484,7 +485,7 @@ export class Sessions {
       .orderBy(sessions.cardId, desc(sessions.createdAt));
   }
 
-  /** Put the session on a card. The looper's write when it opens a round's
+  /** Put the session on a card. The card run's write when it opens its
    *  coder; a session born of a person has none until something sets it. */
   async setCard(id: string, cardId: number): Promise<void> {
     await this.db.update(sessions).set({ cardId }).where(eq(sessions.id, id));
@@ -739,7 +740,7 @@ export class Sessions {
    *  preview can move (the save at turn end used to be the first chance) and,
    *  on a session's FIRST message, the moment to name it. Says whether it is
    *  that first message: unnamed, never a turn saved, not a loop seat (a loop
-   *  session's first message is the loop's fixed kickoff text, which would
+   *  session's first message is the card run's fixed kickoff text, which would
    *  name every card's session after the kickoff; those are named off the
    *  save, where the reply is in). Manual names are never in play here — a
    *  renamed session is never unnamed. */
@@ -755,7 +756,7 @@ export class Sessions {
 
   /** A turn ended on a session, whoever ran it: bump the turn count (leaving
    *  0 is what freezes the row's model), seat the agent after the writer
-   *  (agentAfterSave — a person's turn into the loop's session takes it
+   *  (agentAfterSave — a person's turn into a card run's session takes it
    *  over), touch its checkout. Tokens are not here — every model call
    *  records its own row in log_tokens. Returns what the naming decision
    *  needs. */
@@ -795,7 +796,7 @@ export class Sessions {
     return rows.length > 0;
   }
 
-  /** Name a still-unnamed session. The loop's coder seat takes its CARD's
+  /** Name a still-unnamed session. A card run's coding session takes its CARD's
    *  title the moment the pair is written — deterministic, instant, no model
    *  call; the card title stays authoritative while set. A name already there
    *  (a person's /rename included) stands. */

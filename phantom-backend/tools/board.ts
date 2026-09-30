@@ -1,8 +1,8 @@
 // The BOARD tools — the workspace's cards, over Cards (cards.ts), the one
 // owner of card rows. The coding agent and the supervisor read cards; the
-// assistant runs the whole board. A loop run's card-bound powers
+// assistant runs the whole board. A card run's card-bound powers
 // (kanban_card_move / kanban_card_items / kanban_card_block bound to THE
-// card) are the looper's own tools, added by it — not here.
+// card) are the coding agent's and the supervisor's own tools for that run, added by the run — not here.
 import { CardError, type CardFields, type CardRow, type ItemOp } from '../cards.js';
 import { columnsOf } from '../workspaces.js';
 import { int, nullable, obj, oneOf, refusal, str, type ToolCtx, type ToolDef } from './def.js';

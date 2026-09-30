@@ -7,7 +7,7 @@
  * - `kanbanReadTool` — the coding agent's board surface everywhere:
  *   `kanban_card_read` (in the cli the same tool is wired through the
  *   BoardStore instead so an open board repaints).
- * - `loopSupervisorTools` — the supervisor's board powers INSIDE a loop run:
+ * - `loopSupervisorTools` — the supervisor's board powers INSIDE a card run:
  *   `kanban_card_move` (per-column choices, bound to THE card — calling it
  *   ends the run) and `kanban_card_items` (requirement changes by key).
  * - `loopBlockTool` — the coding agent's ONE board mutation inside a loop
@@ -32,7 +32,7 @@ export interface LoopCardConfig extends KanbanToolsConfig {
   /** The card's number — PHA-7 is card 7; the routes and the descriptions name it so. */
   number: number;
   /** Sent as x-phantom-looper-client on every write, so the server knows the
-   *  LOOP moved the card (the looper passes its own id). Without it a
+   *  supervisor moved the card in a card run (the run's lock identity). Without it a
    *  supervisor's move is indistinguishable from a person's. */
   clientId?: string;
 }
@@ -104,7 +104,7 @@ export function kanbanReadTool(cfg: KanbanToolsConfig): Record<string, Tool> {
   };
 }
 
-/** The supervisor's board powers for one loop run: the run-ending move and
+/** The supervisor's board powers for one card run: the run-ending move and
  *  the requirements tool, both bound to THE card. Built fresh each turn so
  *  the move offers exactly the current column's exits. */
 export function loopSupervisorTools(cfg: LoopCardConfig, column: LoopColumn): Record<string, Tool> {
@@ -151,7 +151,7 @@ export function loopSupervisorTools(cfg: LoopCardConfig, column: LoopColumn): Re
   };
 }
 
-/** The coding agent's ONE board mutation inside a loop run — bound to THE
+/** The coding agent's ONE board mutation inside a card run — bound to THE
  *  card, survives plan mode (it is not part of any readonly-trimmed kit). */
 export function loopBlockTool(cfg: LoopCardConfig): Record<string, Tool> {
   return {

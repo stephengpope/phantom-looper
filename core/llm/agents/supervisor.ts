@@ -1,4 +1,4 @@
-// The supervisor — the looper's judge — in one place: its prompt stack and
+// The supervisor — the agent that judges a card run — in one place: its prompt stack and
 // its kit shape.
 //
 // One free-form agent turn per round, in a direct conversation with the
@@ -18,7 +18,7 @@ export function supervisorInstructions(): string {
 }
 
 /** The supervisor's agent. `tools` is the kit the caller assembled — the
- *  readonly inspection preset + card read + web, and the loop's two bound
+ *  readonly inspection preset + card read + web, and the card run's two bound
  *  board tools — capabilities, never loop mechanics. */
 export class SupervisorAgent extends PhantomAgent {
   constructor(

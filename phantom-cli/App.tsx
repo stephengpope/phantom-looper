@@ -284,7 +284,7 @@ export function App({
   const sessionId = session?.id;
 
   // A session someone else is RUNNING — the lock is per turn, so locked =
-  // a turn is live there (a looper round, another window) — is read-only
+  // a turn is live there (a server-run agent, another window) — is read-only
   // here. WHO holds it comes off the feed (`session.held`, the feed's `lock`
   // records: first thing on connect, then every change) and lapses on this
   // window's clock at the hold's expiry, so a holder that died without

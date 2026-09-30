@@ -15,7 +15,7 @@ const TAG = { tags: ['kanban'] };
 const cardNumberParam = { type: 'integer', description: 'card number — PHA-7 is card 7' };
 // Who wrote: the x-phantom-looper-client header every client sends (the
 // session routes' lock reads the same one). Rides each card event so a
-// listener can tell the loop's moves from a person's.
+// listener can tell the supervisor's moves from a person's.
 const writerOf = (req: FastifyRequest): string | undefined => {
   const h = req.headers['x-phantom-looper-client'];
   return typeof h === 'string' && h ? h : undefined;

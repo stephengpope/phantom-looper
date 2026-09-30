@@ -89,7 +89,7 @@ export class Cards {
     return { cards: rows, total };
   }
 
-  /** Every card on the board in these columns — the looper's sweep. */
+  /** Every card on the board in these columns — the looper's sweep for cards to start. */
   async listInColumns(w: WorkspaceRow, statuses: readonly string[]): Promise<CardRow[]> {
     return this.db.select().from(cards)
       .where(and(eq(cards.workspace_id, w.id), inArray(cards.status, [...statuses]), eq(cards.archived, false)));

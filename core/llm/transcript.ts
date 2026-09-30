@@ -79,7 +79,7 @@ export interface TranscriptEvent {
 }
 
 /** A whole conversation as JSONL text — the inverse of parseTranscript.
- *  What a memory-backed caller (the looper, the turn route) PUTs as the
+ *  What a memory-backed caller (a server-run coding or supervisor turn, the turn route) PUTs as the
  *  record. `events` (usage marks and the like) are re-interleaved at their
  *  `at` positions, so a rebuild from parsed messages does not lose them. */
 export function serializeTranscript(messages: ModelMessage[], events: TranscriptEvent[] = []): string {
@@ -207,7 +207,7 @@ export interface StepRecord {
   onStepSaved?: () => void;
 }
 
-/** A StepRecord for memory-backed turn runners (the looper's rounds, the
+/** A StepRecord for memory-backed turn runners (the server's coding and supervisor turns, the
  *  server turn route): collects each step's MESSAGES and its usage line at
  *  its position for the turn-end serializeTranscript rebuild. The messages
  *  collect here because the step seam is the only complete record — the

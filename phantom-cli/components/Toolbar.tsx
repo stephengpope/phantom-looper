@@ -5,7 +5,7 @@
 // composed after it by App. Padded one cell to align with the `> ` prompt
 // gutter above it.
 //
-// `spin` is the session working somewhere else (the loop's turn, another
+// `spin` is the session working somewhere else (a card run's turn, another
 // window): who is working, the spinner, and ONE word for the work —
 // `coding agent ⠹ planning`; `spinWho` is dropped when the holder is not one
 // of our agents, leaving `⠹ macbook-pro`. A spinner is how every other

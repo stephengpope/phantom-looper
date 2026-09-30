@@ -4,7 +4,7 @@
 // — but keyed by SESSION, so a watcher of one conversation is never handed
 // another's tokens.
 //
-// Publishers: runCodingTurn (every part of a coding turn), the looper's
+// Publishers: runCodingTurn (every part of a coding turn), the supervisor's
 // supervisor turn, POST /sessions/:id/events (a cli window relaying the turn
 // IT runs — the same records, over HTTP), PUT /sessions/:id/transcript
 // (the one place that knows the record landed), POST
@@ -63,7 +63,7 @@ export type SessionEvent =
   /** The session's hold changed — taken, renewed, released — or, as the
    *  FIRST record of every feed, what it is right now. This is what a
    *  watcher's spinner reads: `label` is the holder's own word for the
-   *  work (the loop's planning/building/reviewing, a window's hostname),
+   *  work (a card run's planning/building/reviewing, a window's hostname),
    *  `agent` the session's seat, `expires_at` when the hold lapses on its
    *  own if the holder dies — a watcher clears the spinner then without
    *  being told. A hold that DID lapse that way is a turn that died, not

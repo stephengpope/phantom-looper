@@ -375,7 +375,7 @@ export class SessionStore {
   }
 
   // ── a turn someone ELSE is running, streamed here as it happens ───────────
-  // The server publishes every part of a turn it runs (looper round, the turn
+  // The server publishes every part of a turn it runs (a card-run agent, the turn
   // route); SessionFeed folds them in through these three. They are the same
   // machinery a local turn uses — applyPart, the same block splitting — so a
   // watched turn and a driven turn are drawn by one renderer.
@@ -534,7 +534,7 @@ export class SessionStore {
     // The lock lives for THIS TURN, not for having the session open: taken
     // here, released after the turn-end sync lands. The queue exists only
     // behind this window's own turn — a lock held elsewhere (another window,
-    // a looper round) REFUSES the send: nothing waits around to fire into a
+    // a card-run agent) REFUSES the send: nothing waits around to fire into a
     // conversation someone else is shaping. The note keeps the words.
     if (this.onTurnStart) {
       try { await this.onTurnStart(id); }

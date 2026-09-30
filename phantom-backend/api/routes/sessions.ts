@@ -145,7 +145,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       q: { type: 'string', maxLength: 200, description: 'Substring to match (case-insensitive) in name, last user message or branch.' },
       workspace: { type: 'string', description: 'Only this workspace\'s sessions (a workspace id).' },
       typed: { type: 'boolean', description: 'true = only sessions something was typed into (a last message exists).' },
-      background: { type: 'boolean', description: 'false = leave out the background seats: the looper\'s supervisor records and cron runs.' },
+      background: { type: 'boolean', description: 'false = leave out the background seats: supervisor sessions and cron runs.' },
       before: { type: 'string', description: 'A row\'s last_used_at (ISO) — return only older activity.' },
       before_id: { type: 'string', description: 'That row\'s id, breaking last_used_at ties.' },
       before_pinned: { type: 'boolean', description: 'That row\'s pinned flag — pinned sorts ahead of activity, so the cursor carries it or a pinned page boundary leaks unpinned rows into the pinned block (and vice versa).' } } } } },
@@ -228,7 +228,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       const released = await ctx.sessions.releaseLock(req.params.id, client);
       if (released && s) ctx.sessionEvents?.publish(s.id, client, lockEvent(s, { locked: false }));
       if (released) void publishBoardLock(ctx, req.params.id, false);
-      // A freed session is the event a skipped looper round waits on — e.g.
+      // A freed session is the event a skipped card run waits on — e.g.
       // the cli closing a card's coding session it had open.
       if (released) ctx.looper?.runLoopOfSession(req.params.id, client);
       return ok({ released });
@@ -267,14 +267,14 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   // ---- interrupt a running turn ---------------------------------------------
   // THE stop signal, one route for every client (esc-esc in the cli, /stop on
   // telegram). Three doors, one effect — the turn stops and so does what it
-  // was running: a SERVER-side turn (a looper round or the /turn route) is
+  // was running: a SERVER-side turn (a card-run coding or supervisor turn, or the /turn route) is
   // aborted through `activeTurns`; a turn any OTHER client runs (a cli window,
   // the telegram engine) hears the `interrupt` event on the session feed and
   // aborts its own; and the session's in-flight FOREGROUND commands are
   // killed here directly, because a server-side turn's tool calls ride
   // injectFetch — there is no socket to close, so the disconnect kill in the
   // fs route never fires for them. The turn saves what it recorded and ends
-  // cleanly — the looper treats it as an interruption, not a failure: the
+  // cleanly — a card run treats it as an interruption, not a failure: the
   // card is NOT blocked.
   app.post<{ Params: { id: string } }>(
     '/sessions/:id/interrupt', { schema: { ...TAG,
@@ -292,7 +292,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   // The `send_message` tool's door (core/llm/tools/notify.ts): the session's
   // agent DMs the user on Telegram, delivered exactly like a reply in a
   // Telegram chat (telegram/engine.ts notify). Any client running the
-  // session — a cli window, the looper, a cron — reaches Telegram here.
+  // session — a cli window, a card run, a cron — reaches Telegram here.
   app.post<{ Params: { id: string }; Body: { text: string } }>(
     '/sessions/:id/notify', { schema: { ...TAG,
       summary: 'DM the user on Telegram from a session',
@@ -408,7 +408,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       // One statement lands the record, its preview and the turn count (the
       // count leaving 0 is what freezes the row's model) — Sessions.saveTranscript;
       // the record event goes out with it. Who drove it is read off the
-      // writer: a person's turn into the loop's coding session takes the
+      // writer: a person's turn into a card run's coding session takes the
       // session over (agentAfterSave).
       const saved = await ctx.sessions.saveTranscript(s, data, client);
       const { stamp, agent } = saved;

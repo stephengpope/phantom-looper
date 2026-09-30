@@ -1,6 +1,6 @@
 // The supervisor — the judge in a card run. Prompt: core/llm/prompts/supervisor,
 // built every turn with today's date. Its session is conversation-only, on
-// the coder's folder. The run's card-bound powers are the looper's tools,
+// the coder's folder. The run's card-bound powers are the supervisor's own tools for that run,
 // added with `use()`.
 import { Agent, type AgentHandlers, type PhantomBackend } from 'phantom-client-sdk';
 import { systemPrompt as supervisorInstructions } from '../llm/prompts/supervisor/wiring.js';

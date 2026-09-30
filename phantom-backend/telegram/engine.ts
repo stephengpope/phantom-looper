@@ -159,7 +159,7 @@ export class TelegramEngine {
       makeClient: (token, dm) => this.trackedClient(token, dm, () => null),
     });
     // Every card write in the system, all workspaces; alerts.ts decides which
-    // are the loop's moves. Fire-and-forget: an alert that fails is logged,
+    // are the supervisor's moves. Fire-and-forget: an alert that fails is logged,
     // never retried, and never touches the card.
     deps.events?.subscribeAll((workspaceId, e) => {
       this.alert(workspaceId, e).catch((err) => log.warn({ err: errStr(err) }, 'auto build alert failed'));

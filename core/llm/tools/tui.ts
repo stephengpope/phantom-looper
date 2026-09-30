@@ -267,7 +267,7 @@ const itemsTool = (handler: (args: KanbanArgs) => Promise<unknown>) => tool({
   execute: async ({ card, ops }) => handler({ action: 'items', card, ops }),
 });
 
-/** The looper's per-card switches, one tool per loop column. `state` maps
+/** The per-card auto switches — whether the looper starts an agent on the card — one tool per loop column. `state` maps
  *  straight onto the card's tri-state field (`inherit` = null — the workspace
  *  setting decides). A flip is a card write, so the server's looper re-judges
  *  the card at once: on + the matching column = the loop starts. */
@@ -521,7 +521,7 @@ export function gitAutoPullTool(handler: (args: GitAutoPullArgs) => Promise<unkn
  *  pointed at ("do card 7" — also called an issue, task, todo, or ticket).
  *  User-directed: a task needs no card, so it does not go looking for one.
  *  Status moves and requirement ticks are not here — the kit defines what an
- *  agent can do; inside a loop run the looper adds `kanban_card_block`. */
+ *  agent can do; in a card run the coding agent also gets `kanban_card_block`. */
 export function codingKanbanTool(handler: (args: KanbanArgs) => Promise<unknown>,
   _columns: string[] = DEFAULT_COLUMNS): Record<string, Tool> {
   return {

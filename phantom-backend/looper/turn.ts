@@ -1,5 +1,5 @@
-// One coding turn, server-side — the shared runner under BOTH consumers
-//: the looper's rounds and the POST /sessions/:id/turn
+// One coding turn, server-side — the shared runner under BOTH consumers:
+// a card run's coding turns and the POST /sessions/:id/turn
 // route. A server-side turn is a normal session turn whose user message
 // arrived as a string; the kits, the frozen prompt, and the record are the
 // same parts every client uses.
@@ -33,7 +33,7 @@ export interface TurnDeps {
    *  event it publishes, so the feed can keep a publisher from hearing
    *  itself. */
   client: string;
-  /** Tools beyond the standard kits — the looper's `kanban_card_block`,
+  /** Tools beyond the standard kits — the coding agent's `kanban_card_block`,
    *  bound to the run's card. A manual turn (the /turn route) passes none:
    *  the block tool's description talks about a run it is not in. */
   extraTools?: Record<string, import('ai').Tool>;
@@ -48,7 +48,7 @@ export interface TurnDeps {
 
 /** Run one coding turn on an opened session and save the record whole. Plan
  *  mode = the readonly preset on the mutating kits (extraTools ride outside
- *  the preset — the loop's block tool works while planning by design).
+ *  the preset — the coding agent's block tool works while planning by design).
  *  The turn always STREAMS, whether or not anyone is watching: one code path
  *  for both consumers, and the record it saves is identical either way
  *  (createAgent's `record` seam collects the same steps from stream and

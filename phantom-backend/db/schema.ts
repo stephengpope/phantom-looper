@@ -126,7 +126,7 @@ export const folders = phantomLooper.table('folders', {
 export const sessions = phantomLooper.table('sessions', {
   id: text('id').primaryKey(),
   workspaceId: text('workspace_id').notNull(),
-  // Who drove the last turn: 'coding'/'supervisor' for the loop's seats,
+  // Who drove the last turn: 'coding' or 'supervisor' when a card run did,
   // null = a person's. The loop stamps its coder seat at turn start; every
   // transcript save re-derives it from the writer's client id (sessions.ts
   // agentAfterSave) — so a person typing into a card's coding session takes

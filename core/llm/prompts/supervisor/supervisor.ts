@@ -1,4 +1,4 @@
-// The supervisor — the looper's judge. This file is the DOCUMENT: every word
+// The supervisor — the agent that judges a card run. This file is the DOCUMENT: every word
 // of its runs, text only, zero logic. The blanks are filled by ./wiring.ts.
 //
 // The loop is a DIALOGUE: the supervisor and the coding agent talk directly —

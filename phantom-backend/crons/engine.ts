@@ -15,7 +15,7 @@
 //
 // A fire opens a NEW coding session in the workspace (its own checkout,
 // named after the cron, its seat stamped 'cron'), runs the prompt as one
-// coding turn — the same runner the looper and the /turn route use — and
+// coding turn — the same runner the card runs and the /turn route use — and
 // closes it. A cron that names its model stamps it on that session's row
 // first (Sessions.stampModel), so the run reads the row like every runner
 // and the record shows what ran; its reasoning rides the pin. A SCRIPT cron
@@ -31,7 +31,7 @@
 // passed — the server slept through it — can never fire: its row is deleted
 // at reconcile rather than listed as if it were still coming.
 //
-// Like the looper, this is a headless client of the server's own HTTP
+// Like a card run, this is a headless client of the server's own HTTP
 // surface (injectFetch); the database is reached only through the row
 // owners it is handed.
 import type { FastifyInstance } from 'fastify';

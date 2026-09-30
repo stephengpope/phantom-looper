@@ -1,5 +1,5 @@
 // The ONE way anything obtains a working session. The cli
-// and the server's looper both call this; they differ in arguments, never in
+// and the server's card runs both call this; they differ in arguments, never in
 // steps — lock behavior, transcript precedence, and prompt freezing cannot
 // drift between callers because they are this one code path.
 //
@@ -12,7 +12,7 @@
 //                it when the session was created
 //
 // Steps 5–6 (agent build, turns) are the caller's to drive: the cli streams
-// its agent into a screen, the looper drains turns headless — both build from
+// its agent into a screen, a server-run agent works headless — both build from
 // the same core assembly (agentConfig.ts) and save through saveTranscript()
 // here, which is what renews the lock.
 import type { ModelMessage } from 'ai';
@@ -29,7 +29,7 @@ export interface OpenSessionConfig {
   /** Fetch mode: where the server is. Omitted when `call` is given. */
   baseUrl?: string;
   apiKey?: string;
-  /** This client's lock identity (the cli mints one per window; the looper is
+  /** This client's lock identity (the cli mints one per window; a card run is
    *  `supervisor`). Sent as x-phantom-looper-client on every call in fetch
    *  mode; a caller-supplied `call` sends its own. */
   clientId?: string;
@@ -43,7 +43,7 @@ export interface OpenSessionConfig {
   workspaceId?: string;
   /** Open this session: active = attach, destroyed = restart. */
   sessionId?: string;
-  /** Take the session lock for the whole open (the looper's rounds and the
+  /** Take the session lock for the whole open (the server's card-run turns and the
    *  server turn route — they write immediately and close right after).
    *  Default FALSE: opening is READING — the cli locks per turn, not per
    *  open, so looking at a session never blocks anyone. */
@@ -146,7 +146,7 @@ export async function openSession(cfg: OpenSessionConfig): Promise<OpenedSession
     }
   }
 
-  // 2 — lock, only when asked: a writer-for-the-duration (looper round,
+  // 2 — lock, only when asked: a writer-for-the-duration (a card-run turn,
   // server turn) locks here and releases at close(). A reader never locks —
   // opening a session is reading its transcript, nothing more.
   if (cfg.lock) {

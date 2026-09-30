@@ -96,7 +96,7 @@ export interface LooperDeps {
   modelFetch?: typeof fetch;
 }
 
-/** What a turn did — the loop's chaining signal. `turn` means an agent
+/** What a turn did — the card run's chaining signal. `turn` means an agent
  *  turn ran and the next step is owed NOW; `moved`/`idle` mean the card was
  *  acted on or nothing was owed; `skipped` means a seat was held elsewhere —
  *  the lock's release re-runs the loop. */
@@ -345,7 +345,7 @@ export class LooperEngine {
         return 'moved';
       }
 
-      // The loop's card-bound tools: the coder's block, the supervisor's
+      // The run's card-bound tools: the coding agent's block, the supervisor's
       // move + items. Bound at build time — no card input, so neither agent
       // can ever act on a card other than the one it is running.
       const cardCfg: LoopCardConfig = { baseUrl: BASE, apiKey, workspaceId: workspace.id,

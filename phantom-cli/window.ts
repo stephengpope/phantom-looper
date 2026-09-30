@@ -510,7 +510,7 @@ export class WindowStore {
   // ── plan mode, for both in-window agents ──────────────────────────────────
 
   /** getMode reads the SESSIONS TABLE, not this window's mirror: a session
-   *  open in the background could answer from a copy the looper or another
+   *  open in the background could answer from a copy a server-run agent or another
    *  window has since changed. Having read the row it FOLLOWS it, so the
    *  answer and this window's kit converge. enterPlan is the agents' one-way
    *  on-switch; the user's /code or the Assistant's enterCode comes back.
@@ -1093,7 +1093,7 @@ export class WindowStore {
    *  same one deeper, or a new one from its first page. */
   picker: { sessions: SessionInfo[]; total: number; end: boolean; query: string; filter: string } | null = null;
   pickerNotice: string | undefined;
-  /** [s] on /resume: the background seats — the looper's supervisor records
+  /** [s] on /resume: the background seats — supervisor sessions
    *  and cron runs — in the list or not. A fetch parameter, not a filter —
    *  the server decides what the list is. */
   showBackground = false;
@@ -1529,7 +1529,7 @@ export class WindowStore {
 
   // ── the session feeds ────────────────────────────────────────────────────
   // ONE feed per OPEN session, not one following the eye: every session in
-  // this window hears what happens to it elsewhere (a looper round, a
+  // this window hears what happens to it elsewhere (a server-run agent, a
   // Telegram turn, another window's relay, a lock or a plan flip) as it
   // happens, instead of discovering it on switch. Only the session on screen
   // repaints — the store's fold already paints the active id alone — so a
@@ -2172,7 +2172,7 @@ export class WindowStore {
     // No session on screen: the words have no conversation to land in. Say
     // where to get one instead of dropping them silently.
     if (!session) { this.note('no session is open — /workspace starts one, /resume reopens an earlier one'); return; }
-    // A supervisor session is the looper's record — read it, never chat into it.
+    // A supervisor session is the supervisor's — read it, never chat into it.
     if (session.readonly) { this.note("this is the supervisor's record — read-only"); return; }
     // Addressed to the session on screen, and it keeps running there whether
     // or not you stay to watch. Typed while one runs, it waits its turn.

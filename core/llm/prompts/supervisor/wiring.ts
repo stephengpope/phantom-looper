@@ -53,7 +53,7 @@ export const toCodingAgent = {
 
 /** The implanted briefings — one per phase, written into the supervisor's
  *  transcript before that phase's first coder reply is copied in. USER role,
- *  never starts a turn. `planned` is the loop's own knowledge of whether a
+ *  never starts a turn. `planned` is the card run's own knowledge of whether a
  *  plan phase happened: it decides whether the work briefing carries the
  *  card (only the conversation's opening briefing does) and what the
  *  contract line names — the model never infers the phase. */

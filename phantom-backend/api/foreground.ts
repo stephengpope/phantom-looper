@@ -6,7 +6,7 @@
 //
 // Why a registry and not the request's abort: over real HTTP a cli's esc
 // aborts the tool fetch and the socket close fires the kill in the route —
-// but a SERVER-side turn (a looper round, the turn route, telegram) rides
+// but a SERVER-side turn (a card-run turn, the turn route, telegram) rides
 // injectFetch, which has no socket and no mid-flight abort. The interrupt
 // route is the one place every stop path crosses, so the kill hangs off it:
 // abort the stream AND kill what it was running, whoever ran the turn.

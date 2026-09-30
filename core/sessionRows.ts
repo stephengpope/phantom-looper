@@ -14,7 +14,7 @@ export interface SessionRow {
   lastUserMessage?: string | null;
   /** The model-written title — what the session is building. */
   name?: string | null;
-  /** Who drove the last turn: 'coding'/'supervisor' for the loop's seats,
+  /** Who drove the last turn: 'coding' or 'supervisor' when a card run did,
    *  'cron' for a scheduled run, 'assistant', null = a person's. */
   agent?: string | null;
   card?: number | null;
@@ -37,10 +37,10 @@ export interface SessionRow {
  *  never the card: the card link is permanent, but who is driving is not — a
  *  person who types into a card's coding session takes it over, and the row
  *  says so from the next save. `coder` names the seat, not the loop. */
-export type Driver = 'supervisor' | 'coder' | 'cron' | 'assistant' | 'manual';
+export type Driver = 'supervisor' | 'coding' | 'cron' | 'assistant' | 'manual';
 export function whoDrives(s: Pick<SessionRow, 'agent'>): Driver {
   return s.agent === 'supervisor' ? 'supervisor'
-    : s.agent === 'coding' ? 'coder'
+    : s.agent === 'coding' ? 'coding'
     : s.agent === 'cron' ? 'cron'
     : s.agent === 'assistant' ? 'assistant'
     : 'manual';

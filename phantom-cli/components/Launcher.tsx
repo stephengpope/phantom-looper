@@ -49,7 +49,7 @@ export type Launch =
 export const label = (w: WorkspaceInfo) => w.displayName || w.name;
 
 /** The workspace of the newest session the USER drove — boot_last_workspace's
- *  pick. Looper-run sessions (`agent` stamped by the loop path) work at all
+ *  pick. Sessions a card run drives (`agent` stamped by the run) work at all
  *  hours and would teleport the boot, so they do not count; nor does a
  *  session whose workspace is gone. A destroyed session still counts — its
  *  files are swept, but it is still where you were. Undefined = nothing
@@ -82,7 +82,7 @@ export function sessionChoices(
   const byId = new Map(workspaces.map((w) => [w.id, w]));
   // WHICH sessions are listed is the server's call (`GET /sessions?typed=
   // true&background=false` — never-typed rows and the background seats, the
-  // looper's supervisor records and cron runs, left out there, so a page is
+  // supervisor sessions and cron runs, left out there, so a page is
   // a page on screen and the count is real). The one thing only this window knows is what is OPEN here: an
   // open session nothing was typed into yet would be missing from the
   // server's list, and /resume is the switcher — hiding an open session
@@ -136,7 +136,7 @@ export function sessionChoices(
 
   const COLS = { card: 8, work: 14, name: 42, model: 20, tokens: 24 };
   const rows = sessions.map((s): TableRow<Launch | null> => {
-    // A supervisor session names itself: the looper's verdict record for its
+    // A supervisor session names itself: the supervisor's conversation for its
     // card — read-only. A cron's run is a normal coding session that a
     // schedule opened; typing into it takes it over.
     const sup = s.agent === 'supervisor';
@@ -191,7 +191,7 @@ export function sessionChoices(
             ? `A turn is running (${s.lockedLabel || 'another machine'}); read freely — sends are refused while it runs.`
             : open
               ? 'Loaded in this window — enter switches to it.'
-              : sup ? `The looper's rounds and verdicts for card ${s.card ?? '?'} — read-only.`
+              : sup ? `The supervisor's conversation for card ${s.card ?? '?'} — read-only.`
               : cron ? 'A scheduled prompt\'s run (cron) — chat into it and it is yours.' : undefined,
       ].filter(Boolean).join('\n') || undefined,
     };
@@ -273,7 +273,7 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
    *  filters in force, plus what this window merged in) — `sessions` is the
    *  pages loaded so far. Omitted = the loaded rows are the list. */
   total?: number;
-  /** The background seats — the looper's supervisor records and cron runs —
+  /** The background seats — supervisor sessions and cron runs —
    *  are hidden unless this is on; [s] asks the owner to flip it (the list
    *  is re-read with the switch). */
   showBackground?: boolean;

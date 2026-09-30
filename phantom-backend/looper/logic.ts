@@ -16,7 +16,7 @@ export const LOOP_COLUMNS = ['plan', 'in_progress'] as const;
 
 /** The one word a locked-out window shows for what is happening in the
  *  session right now: `planning`, `building`, `reviewing`. It rides as the
- *  lock's LABEL — display only; the lock identity stays the looper's one
+ *  lock's LABEL — display only; the lock identity stays the card run's one
  *  client id, which is what release compares against.
  *
  *  Per seat, because the seats do different work and the label is all a
