@@ -24,13 +24,15 @@ export const CACHED_BLOCKS = 3;
 const cacheControl = { anthropic: { cacheControl: { type: 'ephemeral' as const, ttl: CACHE_TTL } } };
 
 /** The system prompt blocks as system messages: the first CACHED_BLOCKS
- *  marked, the rest bare. */
-export function systemMessages(blocks: readonly string[]): SystemModelMessage[] {
-  return blocks.map((content, i) => (
+ *  marked, the rest bare. `uncached` says how many were left bare on a
+ *  provider that honours the marks — the caller's one notice. */
+export function systemMessages(blocks: readonly string[], provider: string): { messages: SystemModelMessage[]; uncached: number } {
+  const messages = blocks.map((content, i): SystemModelMessage => (
     i < CACHED_BLOCKS
       ? { role: 'system', content, providerOptions: cacheControl }
       : { role: 'system', content }
   ));
+  return { messages, uncached: provider === 'anthropic' ? Math.max(0, blocks.length - CACHED_BLOCKS) : 0 };
 }
 
 const unmark = (m: ModelMessage): ModelMessage => {

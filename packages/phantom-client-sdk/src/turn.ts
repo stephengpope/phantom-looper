@@ -1,9 +1,10 @@
 // One turn: the model is called, tools run, the model is called again, until
 // it stops calling tools (or maxSteps). Then, if the user sent more while it
-// ran, the same turn goes on with that text — one turn, one lock, one result
-// — until nothing is waiting or the turn is stopped. ONE runner for every
-// agent and every host. What differs by host is only where the parts go
-// (`onPart`).
+// ran, the same turn goes on with that text. A stop cuts the model loop it
+// lands in; whether the turn goes on is the caller's (`afterStop`: the words
+// to go on with, or none). One turn, one lock, one result, however many
+// loops. ONE runner for every agent and every host. What differs by host is
+// only where the parts go (`onPart`).
 //
 // What is recorded, and when (the record is the server's transcript):
 //   model call succeeded  → the user messages that rode into it, the
@@ -19,15 +20,22 @@
 //                            rest, then an `interrupted` line.
 // A record that fails after retries STOPS the turn (transcript_write_failed).
 // Nothing runs unrecorded.
-import { streamText, stepCountIs, type LanguageModel, type ModelMessage, type SystemModelMessage,
-  type Tool, type ToolCallPart } from 'ai';
-import { PhantomError, asPhantomError, isContextTooLong } from './errors.js';
+import { streamText, stepCountIs, type AssistantContent, type LanguageModel, type ModelMessage, type SystemModelMessage,
+  type TextStreamPart, type Tool, type ToolCallPart } from 'ai';
+import { PhantomError, asPhantomError } from './errors.js';
+import { isContextTooLong } from './model/languageModel.js';
 import { withRollingCacheMark } from './model/cache.js';
-import type { Reasoning } from './model/llmConfig.js';
+import type { ModelSpec, Reasoning } from './model/llmConfig.js';
 import { assistantMessageFrom, toolResultMessage, interruptedResultMessage } from './messages.js';
 import { messageLine, usageLine, interruptedLine, userMessage, type TokenTotals, type TranscriptLine } from './transcript.js';
 
-export type StreamPart = { type: string; [k: string]: unknown };
+/** One part of the model stream, as the AI SDK emits it. Apps see every
+ *  part (`onPart`); the turn reads the six it records from. */
+export type StreamPart = TextStreamPart<Record<string, Tool>>;
+type ToolCall = { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown };
+type ToolResult = { type: 'tool-result' | 'tool-error'; toolCallId: string; toolName: string; input: unknown; output?: unknown; error?: unknown };
+type KnownPart = { type: 'text-delta'; text: string } | ToolCall | ToolResult
+  | { type: 'finish-step' } | { type: 'error'; error: unknown } | { type: string };
 
 export interface TurnResult {
   /** The final reply text (the last step's). */
@@ -40,15 +48,21 @@ export interface TurnResult {
 
 export interface TurnInput {
   model: LanguageModel;
-  provider: string;
-  modelId: string;
+  /** What `model` is — named on every usage line. */
+  spec: ModelSpec;
   system: SystemModelMessage[];
   tools: Record<string, Tool>;
-  /** The conversation so far. Not mutated; the result carries the additions. */
+  /** The conversation so far, as it stands when the turn starts. The
+   *  caller's copy may grow as `record` lands lines; the turn reads it once. */
   history: readonly ModelMessage[];
   maxSteps: number | null;
   reasoning: Reasoning | undefined;
-  signal: AbortSignal;
+  /** A fresh signal for each model loop: a stop aborts the loop it was
+   *  given to, and only that loop. */
+  loopSignal(): AbortSignal;
+  /** After a stopped loop: the words the turn goes on with, or none to end
+   *  it as interrupted. */
+  afterStop(): string[];
   /** What the turn opens with. */
   opening: string[];
   /** Called before every model call after the first, and once more when the
@@ -86,25 +100,29 @@ function throwIfFailed(st: { recordFailure: PhantomError | null }): void {
 
 export async function runTurn(input: TurnInput): Promise<TurnResult> {
   const tally: Tally = { added: [], usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, text: '' };
+  // The conversation as the turn found it. `record` grows the caller's copy
+  // as lines land, so the loops below build from this snapshot plus what
+  // the turn added — never from a copy that already holds the additions.
+  const history = [...input.history];
   let carry = input.opening;
   for (;;) {
-    const aborted = await runModelLoop(input, carry, tally);
-    if (aborted) return { text: tally.text, messages: tally.added, usage: tally.usage, outcome: 'interrupted' };
-    // The model stopped. Anything the user sent meanwhile that did not ride a
-    // call continues this turn — the reply the user is waiting for is to
-    // everything they said.
-    carry = input.pending();
-    if (!carry.length) return { text: tally.text, messages: tally.added, usage: tally.usage, outcome: 'done' };
+    const stopped = await runModelLoop(input, history, carry, tally);
+    // Stopped: the caller says whether the turn goes on. Done: anything the
+    // user sent meanwhile that did not ride a call continues this turn — the
+    // reply the user is waiting for is to everything they said.
+    carry = stopped ? input.afterStop() : input.pending();
+    if (!carry.length) return { text: tally.text, messages: tally.added, usage: tally.usage, outcome: stopped ? 'interrupted' : 'done' };
   }
 }
 
 /** One model ↔ tools loop over `history + tally.added`, opening with
  *  `carry`. Resolves true when it was stopped. */
-async function runModelLoop(input: TurnInput, carry: string[], tally: Tally): Promise<boolean> {
+async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], carry: string[], tally: Tally): Promise<boolean> {
+  const outer = input.loopSignal();
   const abort = new AbortController();
-  const onOuterAbort = () => abort.abort(input.signal.reason);
-  if (input.signal.aborted) onOuterAbort();
-  else input.signal.addEventListener('abort', onOuterAbort, { once: true });
+  const onOuterAbort = () => abort.abort(outer.reason);
+  if (outer.aborted) onOuterAbort();
+  else outer.addEventListener('abort', onOuterAbort, { once: true });
 
   let streamFailure: unknown;
   const step = new StepInFlight();
@@ -138,7 +156,7 @@ async function runModelLoop(input: TurnInput, carry: string[], tally: Tally): Pr
   const result = streamText({
     model: input.model,
     instructions: input.system,
-    messages: [...input.history, ...tally.added, ...st.pendingMessages],
+    messages: [...history, ...tally.added, ...st.pendingMessages],
     tools: input.tools,
     stopWhen: input.maxSteps == null ? () => false : stepCountIs(input.maxSteps),
     maxRetries: 0,                       // retries are the fetch wrapper's, never stacked
@@ -157,7 +175,7 @@ async function runModelLoop(input: TurnInput, carry: string[], tally: Tally): Pr
       // The model answered: the messages that rode in, the answer, its usage.
       const assistant = assistantMessageFrom(e.content);
       const u = {
-        provider: input.provider, model: input.modelId, responseId: e.responseId,
+        provider: input.spec.provider, model: input.spec.model, responseId: e.responseId,
         input: e.usage.inputTokens ?? 0, output: e.usage.outputTokens ?? 0,
         cacheRead: e.usage.inputTokenDetails?.cacheReadTokens ?? 0,
         cacheWrite: e.usage.inputTokenDetails?.cacheWriteTokens ?? 0,
@@ -178,31 +196,39 @@ async function runModelLoop(input: TurnInput, carry: string[], tally: Tally): Pr
   });
 
   try {
-    for await (const part of result.fullStream as AsyncIterable<StreamPart>) {
+    for await (const raw of result.fullStream) {
+      const part = raw as KnownPart;
       switch (part.type) {
-        case 'text-delta': step.text += typeof part.text === 'string' ? part.text : ''; break;
-        case 'tool-call':
-          step.calls.push({ type: 'tool-call', toolCallId: part.toolCallId as string, toolName: part.toolName as string, input: part.input });
+        case 'text-delta': step.text += (part as { text: string }).text; break;
+        case 'tool-call': {
+          const { toolCallId, toolName, input: args } = part as ToolCall;
+          step.calls.push({ type: 'tool-call', toolCallId, toolName, input: args });
           break;
+        }
         case 'tool-result':
         case 'tool-error': {
-          const isError = part.type === 'tool-error';
-          if (isError) input.onToolError(part.toolName as string, part.error);
-          step.answered.add(part.toolCallId as string);
-          const msg = await toolResultMessage(part as never, input.tools[part.toolName as string], isError);
-          const line = messageLine(msg);
+          const p = part as ToolResult;
+          const isError = p.type === 'tool-error';
+          if (isError) input.onToolError(p.toolName, p.error);
+          step.answered.add(p.toolCallId);
+          const line = messageLine(await toolResultMessage(p, input.tools[p.toolName], isError));
           if (step.assistantRecorded) await record([line]);
           else step.held.push(line);
           break;
         }
         case 'finish-step': tally.text = step.text; break;
-        case 'error': if (streamFailure === undefined) streamFailure = part.error; break;
+        case 'error': if (streamFailure === undefined) streamFailure = (part as { error: unknown }).error; break;
         default: break;
       }
-      input.onPart(part);
+      input.onPart(raw);
     }
+  } catch (e) {
+    // A stop closes the stream by throwing its reason out of the iteration
+    // (verified against the AI SDK: no `abort` part follows). The cut step
+    // is recorded below; anything else is the stream's own failure.
+    if (!abort.signal.aborted) throw e;
   } finally {
-    input.signal.removeEventListener('abort', onOuterAbort);
+    outer.removeEventListener('abort', onOuterAbort);
   }
   // The stream's own promises resolve with the same outcome; settle them so
   // nothing is left dangling.
@@ -216,10 +242,8 @@ async function runModelLoop(input: TurnInput, carry: string[], tally: Tally): Pr
     const lines: TranscriptLine[] = [];
     if (!step.assistantRecorded) {
       lines.push(...st.pendingMessages.map(messageLine));
-      const content: ModelMessage['content'] = [
-        ...(step.text ? [{ type: 'text' as const, text: step.text }] : []), ...step.calls,
-      ] as never;
-      if ((content as unknown[]).length) lines.push(messageLine({ role: 'assistant', content: content }));
+      const content: AssistantContent = [...(step.text ? [{ type: 'text' as const, text: step.text }] : []), ...step.calls];
+      if (content.length) lines.push(messageLine({ role: 'assistant', content }));
       lines.push(...step.held);
     }
     for (const c of step.calls) if (!step.answered.has(c.toolCallId)) lines.push(messageLine(interruptedResultMessage(c)));

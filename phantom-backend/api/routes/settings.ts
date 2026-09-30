@@ -151,7 +151,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
       } catch (e) {
         // A half-set pair (a provider override with no model): the fix is in
         // the message, and it is the caller's settings to fix.
-        return reply.code(400).send(err('agent_config_invalid', (e as Error).message));
+        return reply.code(400).send(err('config_invalid', (e as Error).message));
       }
     });
 

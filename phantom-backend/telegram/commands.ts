@@ -246,7 +246,7 @@ export async function handleCommand(
       if (bot.mode !== 'code' || !bot.activeSessionId) { await reply('⚠️ Plan mode belongs to the coding agent — /code first.'); return; }
       const s = await sessionRow(engine, bot.activeSessionId);
       const next = !s?.planMode;
-      await engine.sessions.setPlanMode(bot.activeSessionId, next, CLIENT_ID);
+      await engine.sessions.setPlanMode(bot.activeSessionId, next);
       await reply(next ? '📝 Plan mode on — file tools are read-only.' : '🔧 Plan mode off — full tools.');
       return;
     }

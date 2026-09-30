@@ -741,10 +741,10 @@ export class WindowStore {
       const u = await this.api('GET', `/sessions/${id}/token-usage`) as
         { input?: number; output?: number; cache_read?: number; cache_write?: number };
       return { input: Number(u.input ?? 0), output: Number(u.output ?? 0),
-        cache_read: Number(u.cache_read ?? 0), cache_write: Number(u.cache_write ?? 0) };
+        cacheRead: Number(u.cache_read ?? 0), cacheWrite: Number(u.cache_write ?? 0) };
     } catch (e) {
       quiet(`read token totals for session ${id}`)(e);
-      return { input: 0, output: 0, cache_read: 0, cache_write: 0 };
+      return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
     }
   }
 
@@ -1185,8 +1185,8 @@ export class WindowStore {
       return { ...s,
         tokensInput: e.usage.input || s.tokensInput,
         tokensOutput: e.usage.output || s.tokensOutput,
-        tokensCacheRead: e.usage.cache_read || s.tokensCacheRead,
-        tokensCacheWrite: e.usage.cache_write || s.tokensCacheWrite,
+        tokensCacheRead: e.usage.cacheRead || s.tokensCacheRead,
+        tokensCacheWrite: e.usage.cacheWrite || s.tokensCacheWrite,
       };
     });
     const seen = new Set(rows.map((s) => s.id));
@@ -1196,7 +1196,7 @@ export class WindowStore {
         id: e.id, workspaceId: e.workspaceId, branch: e.branch, status: 'active', agent: null,
         model: e.summary.model, pinned: e.pinned,
         tokensInput: e.usage.input || null, tokensOutput: e.usage.output || null,
-        tokensCacheRead: e.usage.cache_read || null, tokensCacheWrite: e.usage.cache_write || null,
+        tokensCacheRead: e.usage.cacheRead || null, tokensCacheWrite: e.usage.cacheWrite || null,
         // Nothing typed = no activity: it sorts LAST, never ahead of real work.
         lastUsedAt: new Date(e.lastMessageAt || 0).toISOString(), locked: false, lastUserMessage: null,
       }));

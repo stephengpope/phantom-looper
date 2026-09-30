@@ -8,10 +8,10 @@
 // { ok:false, error:{ code, message, retryable } }. `call` unwraps it and
 // throws a PhantomError with the server's code when it is one of ours.
 //
-// `withRetry(policy, notice)` answers a second client on the same connection
-// whose fetch retries transport failures and 5xx — the Agent makes one for
-// its own calls and keeps the plain one for best-effort work (the live relay),
-// where a minute of retries would only serve stale output.
+// A network failure or a retryable status is retried per `retry` (the
+// policy the Agent sets from its handlers), each attempt a notice. A call
+// that must not wait — best-effort live output — says `retry: false`; a
+// stream is never retried (a live feed is not replayed).
 import { PhantomError, ERROR_CODES, type ErrorCode } from './errors.js';
 import { withRetry as retryingFetch, type RetryPolicy } from './model/retry.js';
 
@@ -25,32 +25,37 @@ export interface BackendOptions {
    *  name). Defaults to clientId. */
   label?: string;
   fetch?: typeof fetch;
+  /** How a failed request is retried. Absent = never. */
+  retry?: { policy: RetryPolicy; notice: (text: string) => void };
 }
 
-export const SESSION_HEADER = 'x-phantom-looper-session';
-export const CLIENT_HEADER = 'x-phantom-looper-client';
+const SESSION_HEADER = 'x-phantom-looper-session';
+const CLIENT_HEADER = 'x-phantom-looper-client';
 
-export interface Envelope<T> {
-  ok: boolean;
-  data?: T;
-  error?: { code?: string; message?: string; retryable?: boolean };
-}
+/** What every route answers. */
+export type Envelope<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: { code: string; message: string; retryable: boolean } };
 
 export interface CallOptions {
   /** Sent as the session header. */
   sessionId?: string;
   signal?: AbortSignal;
+  /** false: this request is never retried (best-effort work). */
+  retry?: boolean;
 }
 
 const isErrorCode = (s: unknown): s is ErrorCode =>
   typeof s === 'string' && (ERROR_CODES as readonly string[]).includes(s);
 
-/** Server codes that name the same customer situation as one of ours. */
-const SERVER_CODES: Record<string, ErrorCode> = { agent_config_invalid: 'config_invalid' };
+/** The server's refusal as the error the app reads: its code when it is one
+ *  of ours, `backend_error` otherwise. */
+const refused = (e: { code: string; message: string; retryable: boolean }, what: string): PhantomError =>
+  new PhantomError(isErrorCode(e.code) ? e.code : 'backend_error', `${what}: ${e.code} ${e.message}`, { retryable: e.retryable });
 
 /** One JSON record per line off a streaming body. A torn last line is
  *  dropped; a line that is not JSON is skipped. */
-export async function* ndjson(body: ReadableStream<Uint8Array>): AsyncGenerator<Record<string, unknown>> {
+async function* ndjson(body: ReadableStream<Uint8Array>): AsyncGenerator<Record<string, unknown>> {
   const reader = body.getReader();
   const dec = new TextDecoder();
   let buf = '';
@@ -74,6 +79,7 @@ export class PhantomBackend {
   readonly label: string;
   readonly #apiKey: string;
   readonly #fetch: typeof fetch;
+  readonly #retrying: typeof fetch;
 
   constructor(o: BackendOptions) {
     this.url = o.url;
@@ -81,13 +87,13 @@ export class PhantomBackend {
     this.label = o.label ?? o.clientId;
     this.#apiKey = o.apiKey;
     this.#fetch = o.fetch ?? fetch;
+    this.#retrying = o.retry ? retryingFetch(this.#fetch, o.retry.notice, 'server', o.retry.policy) : this.#fetch;
   }
 
-  /** The same connection, every request retried on a network failure or a
-   *  retryable status per `policy`; each attempt reported through `notice`. */
+  /** The same connection with a retry rule — the Agent's, from its handlers. */
   withRetry(policy: RetryPolicy, notice: (text: string) => void): PhantomBackend {
     return new PhantomBackend({ url: this.url, apiKey: this.#apiKey, clientId: this.clientId, label: this.label,
-      fetch: retryingFetch(this.#fetch, notice, 'server', policy) });
+      fetch: this.#fetch, retry: { policy, notice } });
   }
 
   /** The headers every request carries: the API key, this client's lock
@@ -105,8 +111,9 @@ export class PhantomBackend {
 
   /** One request. Only transport failures throw. */
   async #request(method: string, path: string, body: unknown, opts: CallOptions): Promise<Response> {
+    const f = opts.retry === false ? this.#fetch : this.#retrying;
     try {
-      return await this.#fetch(`${this.url}${path}`, {
+      return await f(`${this.url}${path}`, {
         method, headers: this.#headers({ sessionId: opts.sessionId, body: body !== undefined }),
         body: body === undefined ? undefined : JSON.stringify(body), signal: opts.signal,
       });
@@ -118,15 +125,9 @@ export class PhantomBackend {
   /** One API call, unwrapped. Resolves with `data`; throws a PhantomError —
    *  with the server's code when it is one of ours. */
   async call<T = unknown>(method: string, path: string, body?: unknown, opts: CallOptions = {}): Promise<T> {
-    const r = await this.#request(method, path, body, opts);
-    const j = await this.#envelope<T>(r, method, path);
-    if (!j.ok) {
-      const code = j.error?.code;
-      const message = `${method} ${path}: ${code ?? r.status} ${j.error?.message ?? ''}`.trim();
-      const ours = isErrorCode(code) ? code : (code && SERVER_CODES[code]) || 'backend_error';
-      throw new PhantomError(ours, message, { retryable: j.error?.retryable ?? false });
-    }
-    return j.data as T;
+    const j = await this.#envelope<T>(await this.#request(method, path, body, opts), method, path);
+    if (!j.ok) throw refused(j.error, `${method} ${path}`);
+    return j.data;
   }
 
   /** The raw envelope, for callers that want the server's refusal AS DATA
@@ -141,12 +142,10 @@ export class PhantomBackend {
    *  closes it or `signal` aborts. A refusal (an envelope instead of a
    *  stream) throws with the server's code. */
   async *stream(method: string, path: string, body?: unknown, opts: CallOptions = {}): AsyncGenerator<Record<string, unknown>> {
-    const r = await this.#request(method, path, body, opts);
+    const r = await this.#request(method, path, body, { ...opts, retry: false });
     if ((r.headers.get('content-type') ?? '').includes('application/json')) {
       const j = await this.#envelope(r, method, path);
-      const code = j.error?.code;
-      throw new PhantomError(isErrorCode(code) ? code : 'backend_error',
-        `${method} ${path}: ${j.error?.message ?? `HTTP ${r.status}`}`, { retryable: j.error?.retryable ?? false });
+      throw j.ok ? new PhantomError('backend_error', `${method} ${path}: answered data, not a stream`) : refused(j.error, `${method} ${path}`);
     }
     if (!r.ok || !r.body) throw new PhantomError('backend_error', `${method} ${path}: HTTP ${r.status} with no stream`);
     yield* ndjson(r.body);

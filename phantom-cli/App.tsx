@@ -716,7 +716,7 @@ export function App({
   // never of output. Hidden at zero — a fresh session has no news yet.
   const tokensShown = session
     ? session.usage.output + ((session.busy || session.remoteBusy) ? tokenCount(session.tokens) : 0) : 0;
-  const pct = session ? cachePct(session.usage.input, session.usage.cache_read, session.usage.cache_write) : null;
+  const pct = session ? cachePct(session.usage.input, session.usage.cacheRead, session.usage.cacheWrite) : null;
   const inMeter = session && session.usage.input > 0
     ? formatTokensIn(session.usage.input) + (pct != null ? ` (${pct}%)` : '') : '';
   const outMeter = tokensShown > 0 ? formatTokensOut(tokensShown) : '';

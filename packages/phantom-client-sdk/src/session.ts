@@ -15,19 +15,17 @@ import { interruptedResultMessage } from './messages.js';
 import { SessionRecord } from './record.js';
 import { conversationFrom, messageLine, type TokenTotals, type TranscriptLine } from './transcript.js';
 
-/** The session row as the server answers it. The fields the runtime reads
- *  are declared; `system_prompt` is whatever the app stores there, read by
- *  its own agent; anything else the server adds rides along. */
+/** The session row, the fields the runtime and an agent read. `system_prompt`
+ *  is whatever the app stored there, read by its own agent. */
 export interface SessionRow {
   id: string;
   workspaceId: string;
   folderId: string | null;
   status: string;
-  agent?: string | null;
-  name?: string | null;
-  planMode?: boolean;
-  system_prompt?: unknown;
-  [k: string]: unknown;
+  agent: string | null;
+  name: string | null;
+  planMode: boolean;
+  system_prompt: unknown;
 }
 
 /** What an app sees of the session. */
@@ -47,27 +45,29 @@ export interface SessionInfo {
 
 /** What taking the lock answers: the record's last-changed mark rides along,
  *  so a turn knows whether its copy is current without downloading anything. */
-interface LockReply { transcript_updated_at?: string | null }
+interface LockReply { transcript_updated_at: string | null }
 
 export class Session implements SessionInfo {
   #row: SessionRow;
   #messages: ModelMessage[];
 
-  private constructor(private readonly backend: PhantomBackend, row: SessionRow, private readonly record: SessionRecord) {
+  private constructor(private readonly backend: PhantomBackend, private readonly handlers: { onError(e: PhantomError): void },
+    row: SessionRow, private readonly record: SessionRecord) {
     this.#row = row;
     this.#messages = conversationFrom(record.lines);
   }
 
-  /** The row as it stands, then the record. Opening only reads. */
-  static async open(backend: PhantomBackend, sessionId: string): Promise<Session> {
+  /** The row as it stands, then the record. Opening only reads. `handlers`
+   *  hears the one failure that must not throw over another: a lock release. */
+  static async open(backend: PhantomBackend, handlers: { onError(e: PhantomError): void }, sessionId: string): Promise<Session> {
     const row = await backend.call<SessionRow>('GET', `/sessions/${sessionId}`);
-    return new Session(backend, row, await SessionRecord.load(backend, sessionId));
+    return new Session(backend, handlers, row, await SessionRecord.load(backend, sessionId));
   }
 
   get id(): string { return this.#row.id; }
   get workspaceId(): string { return this.#row.workspaceId; }
   get folderId(): string | null { return this.#row.folderId; }
-  get planMode(): boolean { return this.#row.planMode === true; }
+  get planMode(): boolean { return this.#row.planMode; }
   get row(): Readonly<SessionRow> { return this.#row; }
   get messages(): readonly ModelMessage[] { return this.#messages; }
   get usage(): Readonly<TokenTotals> { return this.record.usage; }
@@ -77,21 +77,20 @@ export class Session implements SessionInfo {
     this.#row = await this.backend.call<SessionRow>('GET', `/sessions/${this.id}`, undefined, { signal });
   }
 
-  /** The session feed said the row moved. */
-  rowMoved(patch: Partial<SessionRow>): void { this.#row = { ...this.#row, ...patch }; }
+  /** The session feed said plan mode flipped. */
+  setPlanMode(on: boolean): void { this.#row = { ...this.#row, planMode: on }; }
 
   /** Hold the session for `fn`. The server renews the hold on the turn's
    *  own writes. The release runs even when fn threw; a release that fails
    *  is reported, never thrown over the real error. */
-  async withLock<T>(signal: AbortSignal, onReleaseFailed: (e: PhantomError) => void,
-    fn: (lock: { recordMoved: boolean }) => Promise<T>): Promise<T> {
+  async withLock<T>(signal: AbortSignal, fn: (lock: { recordMoved: boolean }) => Promise<T>): Promise<T> {
     const lock = await this.backend.call<LockReply>('POST', `/sessions/${this.id}/lock`,
       { label: this.backend.label }, { signal });
     try {
-      return await fn({ recordMoved: (lock?.transcript_updated_at ?? null) !== this.record.stamp });
+      return await fn({ recordMoved: lock.transcript_updated_at !== this.record.stamp });
     } finally {
       try { await this.backend.call('DELETE', `/sessions/${this.id}/lock`); }
-      catch (e) { onReleaseFailed(asPhantomError(e, 'backend_error', 'releasing the session lock')); }
+      catch (e) { this.handlers.onError(asPhantomError(e, 'backend_error', 'releasing the session lock')); }
     }
   }
 

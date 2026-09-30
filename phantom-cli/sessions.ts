@@ -242,7 +242,7 @@ export class SessionStore {
       syncStamp: s.syncStamp ?? null,
       live: [], turn: [],
       busy: false, remoteBusy: false, held: null, startedAt: 0, tokens: NO_TOKENS,
-      usage: s.usage ?? { input: 0, output: 0, cache_read: 0, cache_write: 0 }, abort: null,
+      usage: s.usage ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, abort: null,
       nudgeQueue: new NudgeQueue(),
       unseen: false, ask: null, lastMessageAt: s.history?.length ? Date.now() : 0, addedAt: ++this.seq, work: null, draft: s.draft ?? '',
     };
@@ -697,8 +697,8 @@ export class SessionStore {
         const cr = p.usage.inputTokenDetails?.cacheReadTokens ?? 0;
         const cw = p.usage.inputTokenDetails?.cacheWriteTokens ?? 0;
         e.usage.input += inp;
-        e.usage.cache_read += cr;
-        e.usage.cache_write += cw;
+        e.usage.cacheRead += cr;
+        e.usage.cacheWrite += cw;
       }
     }
     e.tokens = tokens;

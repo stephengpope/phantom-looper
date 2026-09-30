@@ -35,7 +35,7 @@ function lockEvent(s: SessionRow, over: Partial<{ locked: boolean; by: string | 
     expires_at: locked && expires ? expires.toISOString() : null,
     ...(died ? { died_on: died.label ?? died.by, died_at: died.at.toISOString() } : {}) };
 }
-import { shouldName, nameSession, titleContext, titleContextFromLines, firstMessageContext } from '../../sessionTitle.js';
+import { shouldName, nameSession, titleContext, firstMessageContext } from '../../sessionTitle.js';
 import { logger, errStr } from '../../log.js';
 
 const TAG = { tags: ['sessions'] };
@@ -846,7 +846,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         await ctx.sessions.rename(s.id, name, clientOf(req));
       }
       if (req.body?.plan_mode !== undefined) {
-        await ctx.sessions.setPlanMode(s.id, req.body.plan_mode, clientOf(req));
+        await ctx.sessions.setPlanMode(s.id, req.body.plan_mode);
       }
       if (req.body?.pinned !== undefined) {
         await ctx.sessions.setPinned(s.id, req.body.pinned);
@@ -965,7 +965,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       const ended = await ctx.sessions.turnEnded(s, client);
       if (!ended.nameManual && shouldName(ended.name, ended.turnCount)) {
         const data = await ctx.sessions.transcript(s.id);
-        if (data) void nameSession(ctx, s.id, titleContextFromLines(data), ctx.modelFetch);
+        if (data) void nameSession(ctx, s.id, titleContext(data), ctx.modelFetch);
       }
       return ok({});
     });

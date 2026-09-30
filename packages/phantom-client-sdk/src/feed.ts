@@ -19,7 +19,7 @@ import type { StreamPart } from './turn.js';
 
 /** How long parts may sit before they are sent. Parts arrive many times a
  *  second; a few per batch keeps the feed readable without visible lag. */
-export const RELAY_FLUSH_MS = 150;
+const RELAY_FLUSH_MS = 150;
 
 class Relay {
   private buf: Record<string, unknown>[] = [];
@@ -56,7 +56,7 @@ class Relay {
     this.chain = this.chain.then(async () => {
       if (!this.alive) return;
       try {
-        await this.backend.call('POST', `/sessions/${this.sessionId}/events`, { events });
+        await this.backend.call('POST', `/sessions/${this.sessionId}/events`, { events }, { retry: false });
       } catch (e) {
         this.alive = false;
         this.onFailed((e as Error).message);
@@ -65,9 +65,9 @@ class Relay {
   }
 }
 
-export interface FeedListener {
+interface FeedListener {
   onInterrupt(): void;
-  onRow(patch: { planMode?: boolean }): void;
+  onPlanMode(on: boolean): void;
   /** The relay or the listener failed — once each; the turn goes on without it. */
   onNotice(text: string): void;
 }
@@ -98,7 +98,7 @@ function watchSession(backend: PhantomBackend, sessionId: string, l: FeedListene
     try {
       for await (const rec of backend.stream('GET', `/sessions/${sessionId}/events`, undefined, { signal: ac.signal })) {
         if (rec.event === 'interrupt') l.onInterrupt();
-        else if (rec.event === 'session' && typeof rec.planMode === 'boolean') l.onRow({ planMode: rec.planMode });
+        else if (rec.event === 'session' && typeof rec.planMode === 'boolean') l.onPlanMode(rec.planMode);
       }
     } catch (e) {
       if (!ac.signal.aborted) onFailed((e as Error).message);

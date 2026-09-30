@@ -192,7 +192,7 @@ export async function assistantKit(deps: AssistantDeps, ctx: AssistantCtx, own: 
 export interface AssistantTurnResult {
   text: string;
   said: string;
-  usage: { input: number; output: number; cache_read: number; cache_write: number };
+  usage: { input: number; output: number; cacheRead: number; cacheWrite: number };
 }
 
 /** Run ONE Assistant turn on the conversation, streaming to the telegram
@@ -213,7 +213,7 @@ export async function runAssistantTurn(
     { sessionId: own.id, maxSteps: ctx.config.maxSteps, clock: agentClock(ctx.config) });
 
   // Accumulate usage across all steps in this turn.
-  const usage = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
+  const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
   // The user message is NOT added to history until the turn succeeds — a
   // failed turn (prompt too long, auth error, anything) never touches the
@@ -243,8 +243,8 @@ export async function runAssistantTurn(
           const ev = usageEvent(u);
           usage.input += ev.input as number;
           usage.output += ev.output as number;
-          usage.cache_read += ev.cache_read as number;
-          usage.cache_write += ev.cache_write as number;
+          usage.cacheRead += ev.cacheRead as number;
+          usage.cacheWrite += ev.cacheWrite as number;
         },
       } : undefined,
     });

@@ -20,17 +20,9 @@ import { createGroq } from '@ai-sdk/groq';
 import { createOpenAIOAuthTransport, type OpenAIOAuthSession } from '@openai-oauth/core';
 import { PhantomError, asPhantomError } from '../errors.js';
 import { withRetry, type RetryPolicy } from './retry.js';
-import type { Provider, Reasoning } from './llmConfig.js';
+import type { ModelSpec, Reasoning } from './llmConfig.js';
 
-export interface ModelSpec {
-  provider: Provider;
-  model: string;
-  endpoint: string | null;
-  reasoning: Reasoning | null;
-  /** The live key for `provider`, as the server serves it. Null only for an
-   *  open openai-compatible endpoint. */
-  apiKey: string | null;
-}
+export type { ModelSpec };
 
 export interface ModelHooks {
   /** Where each failed attempt is reported as it happens (withRetry). */
@@ -41,9 +33,9 @@ export interface ModelHooks {
   onBillingError: (e: PhantomError) => void;
 }
 
-/** What a call is billed to: the kind of work (an agent's type, or a
+/** What a call is billed to: the type of work (an agent's type, or a
  *  helper's name — 'title', 'commit_message') and the session it serves. */
-export interface Billing { kind: string; sessionId: string | null }
+export interface Billing { type: string; sessionId: string | null }
 
 // ── Anthropic subscription tokens ─────────────────────────────────────────
 
@@ -51,14 +43,14 @@ export interface Billing { kind: string; sessionId: string | null }
  *  with `Authorization: Bearer`, NOT `x-api-key`, and only land in their normal
  *  rate-limit pool when the request looks like the Claude Code CLI. A Console
  *  API key is sk-ant-api… (x-api-key). */
-export function isAnthropicOAuth(key: string | null | undefined): key is string {
+function isAnthropicOAuth(key: string | null | undefined): key is string {
   return !!key && key.startsWith('sk-ant-') && !key.startsWith('sk-ant-api');
 }
 
-export const CLAUDE_CODE_SYSTEM = "You are Claude Code, Anthropic's official CLI for Claude.";
+const CLAUDE_CODE_SYSTEM = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 /** Splice the Claude Code identity in as the FIRST system block. Idempotent. */
-export function withClaudeCodeIdentity(cur: unknown): Array<{ type: 'text'; text: string }> {
+function withClaudeCodeIdentity(cur: unknown): Array<{ type: 'text'; text: string }> {
   if (Array.isArray(cur) && cur[0]?.text === CLAUDE_CODE_SYSTEM) {
     return cur as Array<{ type: 'text'; text: string }>;
   }
@@ -70,7 +62,7 @@ export function withClaudeCodeIdentity(cur: unknown): Array<{ type: 'text'; text
 
 /** The low-level insertion: strip x-api-key (Bearer + x-api-key together
  *  401s) and rewrite `system` so the identity block is first. */
-export function anthropicOAuthFetch(base: typeof fetch): typeof fetch {
+function anthropicOAuthFetch(base: typeof fetch): typeof fetch {
   return (input, init) => {
     const headers = new Headers(init?.headers);
     headers.delete('x-api-key');
@@ -127,10 +119,16 @@ function openaiCodexModel(s: ModelSpec, f: typeof fetch): Exclude<LanguageModel,
   return createOpenAI({ apiKey: 'openai-oauth', baseURL: transport.baseURL, fetch: transport.fetch }).responses(s.model);
 }
 
+/** The provider said the conversation no longer fits its window. One
+ *  classification for every provider's wording. */
+export function isContextTooLong(message: string): boolean {
+  return /prompt is too long|request too large|context[_ ]length[_ ]exceeded|maximum context length|too many tokens|input is too long/i.test(message);
+}
+
 // ── thinking ──────────────────────────────────────────────────────────────
 
 /** Models on which thinking cannot be turned off (`thinking: disabled` is a 400). */
-export function thinkingAlwaysOn(model: string): boolean {
+function thinkingAlwaysOn(model: string): boolean {
   return /claude-fable-5/.test(model.toLowerCase());
 }
 
@@ -150,7 +148,7 @@ function keyFor(s: ModelSpec): string {
 }
 
 function providerModel(s: ModelSpec, f: typeof fetch): Exclude<LanguageModel, string> {
-  const ep = s.endpoint ?? undefined;
+  const ep = s.baseUrl ?? undefined;
   switch (s.provider) {
     case 'anthropic': return anthropicProvider(s, f)(s.model);
     case 'openai': return createOpenAI({ apiKey: keyFor(s), baseURL: ep, fetch: f })(s.model);
@@ -162,8 +160,8 @@ function providerModel(s: ModelSpec, f: typeof fetch): Exclude<LanguageModel, st
     case 'mistral': return createMistral({ apiKey: keyFor(s), baseURL: ep, fetch: f })(s.model);
     case 'groq': return createGroq({ apiKey: keyFor(s), baseURL: ep, fetch: f })(s.model);
     case 'openai-compatible':
-      if (!s.endpoint) throw new PhantomError('config_invalid', 'provider is openai-compatible but no endpoint is set');
-      return createOpenAICompatible({ name: 'phantom', baseURL: s.endpoint, apiKey: s.apiKey ?? 'none', fetch: f })(s.model);
+      if (!s.baseUrl) throw new PhantomError('config_invalid', 'provider is openai-compatible but no endpoint is set');
+      return createOpenAICompatible({ name: 'phantom', baseURL: s.baseUrl, apiKey: s.apiKey ?? 'none', fetch: f })(s.model);
     default:
       throw new PhantomError('config_invalid', `provider "${String((s as { provider: string }).provider)}" is not supported`);
   }
@@ -202,7 +200,7 @@ function billingMiddleware(s: ModelSpec, usage: (u: TokenUsage) => void): Langua
  *  the backend (POST /log-tokens). The one way to get a model. */
 export function billedModel(backend: PhantomBackend, s: ModelSpec, bill: Billing, hooks: ModelHooks): LanguageModel {
   const model = providerModel(s, withRetry(undefined, hooks.notice, 'model', hooks.retry));
-  const post = (u: TokenUsage) => backend.call('POST', '/log-tokens', { kind: bill.kind, sessionId: bill.sessionId, ...u })
+  const post = (u: TokenUsage) => backend.call('POST', '/log-tokens', { kind: bill.type, sessionId: bill.sessionId, ...u })
     .then(() => undefined, (e: unknown) => hooks.onBillingError(asPhantomError(e, 'backend_error', 'billing')));
   return wrapLanguageModel({ model, middleware: billingMiddleware(s, (u) => { void post(u); }) });
 }

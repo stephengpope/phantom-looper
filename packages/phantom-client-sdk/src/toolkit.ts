@@ -5,13 +5,12 @@
 // (its own screen, its own approvals) through the same interface with
 // `agent.use(kit)`.
 //
-// `version()` is cheap and is asked before every turn: a kit's tools are
-// rebuilt only when its version changes; a kit without one is rebuilt every
-// turn. `build` answers the tools AND which of them change things — the kit
-// that knows says so (the server kit reads it off each definition's
-// `mutates`). `readonly` is asked at EXECUTE time: a mutating tool called
-// while it says true answers the model with { ok:false, error:{ code:
-// 'readonly' } } and runs nothing.
+// Every kit is built before every turn — what an agent has can change
+// between turns (a setting, a folder). `build` answers the tools AND which
+// of them change things — the kit that knows says so (the server kit reads
+// it off each definition's `mutates`). `readonly` is asked at EXECUTE time:
+// a mutating tool called while it says true answers the model with
+// { ok:false, error:{ code:'readonly' } } and runs nothing.
 import { jsonSchema, tool, type Tool } from 'ai';
 import type { PhantomBackend } from './backend.js';
 import { PhantomError } from './errors.js';
@@ -20,9 +19,7 @@ export interface ToolKitContext {
   backend: PhantomBackend;
   sessionId: string;
   workspaceId: string;
-  /** The folder the session's tools open — changes when a session is
-   *  pointed at another's files. Kits whose tools depend on it fold it into
-   *  their version. */
+  /** The folder the session's tools open. */
   folderId: string | null;
   readonly: () => boolean;
 }
@@ -37,18 +34,16 @@ export interface BuiltTools {
 export interface ToolKit {
   /** Unique among the agent's kits. Adding a kit with a name already present replaces it. */
   name: string;
-  /** Cheap. A different string = rebuild. Absent = rebuilt every turn. */
-  version?(ctx: ToolKitContext): string;
   build(ctx: ToolKitContext): Promise<BuiltTools>;
 }
 
 /** What a refused tool answers the model: a coded error, plain words. */
-export const readonlyRefusal = (name: string) => ({
+const readonlyRefusal = (name: string) => ({
   ok: false, error: { code: 'readonly', retryable: false, message: `refused: ${name} is off while this agent is read-only` },
 });
 
 /** Wrap built tools so the mutating ones ask `readonly()` at execute time. */
-export function guardReadonly(built: BuiltTools, ctx: ToolKitContext): Record<string, Tool> {
+function guardReadonly(built: BuiltTools, ctx: ToolKitContext): Record<string, Tool> {
   const { tools } = built;
   const mutating = new Set(built.mutating);
   const out: Record<string, Tool> = {};
@@ -61,27 +56,15 @@ export function guardReadonly(built: BuiltTools, ctx: ToolKitContext): Record<st
   return out;
 }
 
-/** The per-agent cache: rebuilds a kit only when its version moved. */
+/** An agent's kits, built together before a turn. */
 export class ToolKitSet {
   private kits = new Map<string, ToolKit>();
-  private built = new Map<string, { version: string; tools: Record<string, Tool> }>();
 
-  add(kit: ToolKit): void {
-    this.kits.set(kit.name, kit);
-    this.built.delete(kit.name);
-  }
+  add(kit: ToolKit): void { this.kits.set(kit.name, kit); }
 
   async resolve(ctx: ToolKitContext): Promise<Record<string, Tool>> {
     const all: Record<string, Tool> = {};
-    for (const kit of this.kits.values()) {
-      const version = kit.version?.(ctx);
-      let entry = this.built.get(kit.name);
-      if (!entry || version === undefined || entry.version !== version) {
-        entry = { version: version ?? '', tools: guardReadonly(await kit.build(ctx), ctx) };
-        this.built.set(kit.name, entry);
-      }
-      Object.assign(all, entry.tools);
-    }
+    for (const kit of this.kits.values()) Object.assign(all, guardReadonly(await kit.build(ctx), ctx));
     return all;
   }
 }

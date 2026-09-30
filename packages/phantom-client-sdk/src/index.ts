@@ -17,5 +17,5 @@ export type { RetryPolicy } from './model/retry.js';
 export type { ToolKit, ToolKitContext, BuiltTools } from './toolkit.js';
 
 // A billed model for an app's one-shot call (a title, a commit message).
-export { billedModel, type ModelSpec, type Billing, type ModelHooks } from './model/languageModel.js';
-export type { Provider, Reasoning } from './model/llmConfig.js';
+export { billedModel, type Billing, type ModelHooks } from './model/languageModel.js';
+export type { ModelSpec, Provider, Reasoning } from './model/llmConfig.js';

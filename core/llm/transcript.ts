@@ -1,9 +1,10 @@
-// The one transcript format, for every agent. A transcript is a JSONL file:
-// one ModelMessage per line, exactly as it went to the model, with usage
-// lines and other markers between them. The conversation and nothing else —
+// The one transcript format, for every agent — the SDK's
+// (packages/phantom-client-sdk/src/transcript.ts): a JSONL file, every line
+// typed. `{type:"message", id, at, message}` is exactly the ModelMessage that
+// went to the model; `{type:"usage", ...}` follows each model call; other
+// markers (`interrupted`) sit between. The conversation and nothing else —
 // who the session is, which branch, which model, its frozen prompt all live
-// on the session row. (Files from before carry a `{type:'session'}` header
-// line; the parser skips it like any other non-message line.)
+// on the session row.
 //
 // Appended the moment a message exists — the user message on submit, each
 // step's messages when that step ends — never batched to the end of a turn,
@@ -21,6 +22,10 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { ModelMessage } from 'ai';
+import { messageLine, lineId, parseLines, type TranscriptLine } from 'phantom-client-sdk/transcript';
+
+/** A typed line as text. */
+const lineText = (l: object): string => `${JSON.stringify(l)}\n`;
 
 export class Transcript {
   /** Step-level transcript save — set before a turn, called by spliceTurn. */
@@ -33,8 +38,12 @@ export class Transcript {
    *  its directory) is created on first write, so a run nobody spoke to
    *  leaves no file. */
   append(message: ModelMessage): void {
+    this.write(messageLine(message));
+  }
+
+  private write(line: object): void {
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
-    appendFileSync(this.path, `${JSON.stringify(message)}\n`);
+    appendFileSync(this.path, lineText(line));
   }
 
   appendAll(messages: ModelMessage[]): void {
@@ -50,13 +59,16 @@ export class Transcript {
     this.appendEvent(usageEvent(usage));
   }
 
-  /** A non-message marker (a model switch, say). loadTranscript replays only
-   *  lines with a `role`, so these are invisible to the model and safe to add
-   *  without a format version. */
+  /** A non-message marker. Replay takes only `message` lines, so these are
+   *  invisible to the model. */
   appendEvent(event: Record<string, unknown> & { type: string }): void {
-    this.append(event as never);
+    this.write(typedEvent(event));
   }
 }
+
+/** An event as a typed line: id and stamp added once, here. */
+const typedEvent = (event: Record<string, unknown> & { type: string }): Record<string, unknown> =>
+  ({ id: lineId(), at: new Date().toISOString(), ...event });
 
 /** A non-message line and where it sits: `at` = how many messages precede it,
  *  so a rebuild (serializeTranscript) puts it back between the same two
@@ -75,8 +87,8 @@ export function serializeTranscript(messages: ModelMessage[], events: Transcript
   const sorted = [...events].sort((a, b) => a.at - b.at);
   let ei = 0;
   for (let i = 0; i <= messages.length; i++) {
-    while (ei < sorted.length && sorted[ei].at <= i) lines.push(JSON.stringify(sorted[ei++].event));
-    if (i < messages.length) lines.push(JSON.stringify(messages[i]));
+    while (ei < sorted.length && sorted[ei].at <= i) lines.push(JSON.stringify(typedEvent(sorted[ei++].event)));
+    if (i < messages.length) lines.push(JSON.stringify(messageLine(messages[i])));
   }
   return lines.join('\n') + '\n';
 }
@@ -90,25 +102,24 @@ export interface LoadedTranscript {
 }
 
 /** Parse a transcript from its raw JSONL text — the server row and the local
- *  file share this one reading. Unparsable lines are skipped: the last line of
- *  a run that died mid-append is the expected damage, and it must not cost the
- *  session. */
+ *  file share this one reading (the SDK's parseLines). */
 export function parseTranscript(text: string): LoadedTranscript {
   const out: LoadedTranscript = { messages: [], events: [] };
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
-    let entry: unknown;
-    try { entry = JSON.parse(line); } catch { continue; }
-    const e = entry as { type?: string; role?: string };
-    if (e.role) out.messages.push(entry as ModelMessage);
-    // The old header line (`type: 'session'`) is dropped here: what it held
-    // now lives on the session row, and re-serializing must not carry it on.
-    else if (e.type && e.type !== 'session') out.events.push({ at: out.messages.length, event: entry as TranscriptEvent['event'] });
+  for (const l of parseLines(text)) {
+    if (l.type === 'message') out.messages.push(l.message);
+    else out.events.push({ at: out.messages.length, event: eventOf(l) });
   }
   out.messages = dropDanglingToolCall(out.messages);
   // Events that sat after a trimmed dangling tool call describe cut content.
   out.events = out.events.filter((ev) => ev.at <= out.messages.length);
   return out;
+}
+
+/** A non-message line as the event it carries (id and stamp dropped; they
+ *  are re-added on write). */
+function eventOf(l: Exclude<TranscriptLine, { type: 'message' }>): TranscriptEvent['event'] {
+  const { id: _id, at: _at, ...event } = l as unknown as Record<string, unknown> & { type: string; id: string; at: string };
+  return event;
 }
 
 /** Read a transcript back from disk. Missing file returns no messages. */
@@ -137,17 +148,13 @@ export function newestTranscriptFile(dir: string): string | null {
  *  DB column, extracted at save) and the TUI (a local file) share one reading. */
 export function lastUserFromJsonl(text: string): string | undefined {
   let last: string | undefined;
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
-    let e: { role?: string; content?: unknown };
-    try { e = JSON.parse(line); } catch { continue; }
+  for (const l of parseLines(text)) {
+    if (l.type !== 'message') continue;
+    const e = l.message;
     if (e.role !== 'user') continue;
     const t = typeof e.content === 'string'
       ? e.content
-      : Array.isArray(e.content)
-        ? e.content.filter((c: { type?: string }) => c?.type === 'text')
-            .map((c: { text?: string }) => c.text ?? '').join('')
-        : '';
+      : e.content.map((c) => (c.type === 'text' ? c.text : '')).join('');
     if (t.trim()) last = t.trim().replace(/\s+/g, ' ');
   }
   return last;
@@ -163,8 +170,8 @@ export function lastUserFromJsonl(text: string): string | undefined {
 export interface UsageTotals {
   input: number;        // input (prompt) tokens as the provider reported them
   output: number;       // output (completion) tokens
-  cache_read: number;   // input tokens served from the provider's prompt cache
-  cache_write: number;  // input tokens written into the cache
+  cacheRead: number;    // input tokens served from the provider's prompt cache
+  cacheWrite: number;   // input tokens written into the cache
 }
 
 /** The AI SDK's normalized usage → one usage event. Providers leave fields
@@ -177,8 +184,8 @@ export function usageEvent(u?: {
     type: 'usage',
     input: u?.inputTokens ?? 0,
     output: u?.outputTokens ?? 0,
-    cache_read: u?.inputTokenDetails?.cacheReadTokens ?? 0,
-    cache_write: u?.inputTokenDetails?.cacheWriteTokens ?? 0,
+    cacheRead: u?.inputTokenDetails?.cacheReadTokens ?? 0,
+    cacheWrite: u?.inputTokenDetails?.cacheWriteTokens ?? 0,
   };
 }
 

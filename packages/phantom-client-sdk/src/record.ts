@@ -16,7 +16,7 @@ import type { PhantomBackend } from './backend.js';
 import { PhantomError } from './errors.js';
 import { addTotals, lineId, parseLines, usageTotals, type TokenTotals, type TranscriptLine } from './transcript.js';
 
-interface TranscriptReply { data: string | null; lines?: number; updated_at?: string | null }
+interface TranscriptReply { data: string | null; lines: number; updated_at: string | null }
 
 export class SessionRecord {
   #count: number;
@@ -37,7 +37,7 @@ export class SessionRecord {
   static async load(backend: PhantomBackend, sessionId: string): Promise<SessionRecord> {
     const r = await backend.call<TranscriptReply>('GET', `/sessions/${sessionId}/transcript`);
     const lines = parseLines(r.data ?? '');
-    return new SessionRecord(backend, sessionId, lines, r.lines ?? lines.length, r.updated_at ?? null);
+    return new SessionRecord(backend, sessionId, lines, r.lines, r.updated_at);
   }
 
   /** The server's last-changed mark for the copy held here. */
@@ -51,8 +51,8 @@ export class SessionRecord {
       `/sessions/${this.sessionId}/transcript?after=${this.#count}`, undefined, { signal });
     const more = parseLines(r.data ?? '');
     this.#hold(more);
-    this.#count = r.lines ?? this.#count + more.length;
-    this.#stamp = r.updated_at ?? null;
+    this.#count = r.lines;
+    this.#stamp = r.updated_at;
     return more;
   }
 
@@ -74,7 +74,7 @@ export class SessionRecord {
 
   async #send(lines: TranscriptLine[]): Promise<void> {
     const after = this.#count;
-    let r: { lines: number; applied: boolean; updated_at?: string | null };
+    let r: { lines: number; applied: boolean; updated_at: string };
     try {
       r = await this.backend.call('POST', `/sessions/${this.sessionId}/transcript/append`, { after, deliveryId: lineId(), lines });
     } catch (e) {
@@ -86,7 +86,7 @@ export class SessionRecord {
         `transcript has ${r.lines} lines on the server, expected ${after + lines.length} — another writer moved it`);
     }
     this.#count = r.lines;
-    this.#stamp = r.updated_at ?? null;
+    this.#stamp = r.updated_at;
     this.#hold(lines);
   }
 }

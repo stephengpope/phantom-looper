@@ -15,7 +15,7 @@
 // all just run; the session/turn lock is the only lock.
 import type { FastifyInstance } from 'fastify';
 import type { SessionRow, WorkspaceRow } from '../../db/schema.js';
-import { AGENT_NAMES, isAgentName } from '../../../core/llm/agentConfig.js';
+import { AGENT_NAMES, type AgentName } from '../../../core/llm/agentConfig.js';
 import { TOOLS, toolsFor, type FileTools, type ToolCtx } from '../../tools/registry.js';
 import { FILE_TOOLS } from '../../tools/files.js';
 import { ToolError } from '../../tools/envelope.js';
@@ -65,10 +65,9 @@ export function toolRoutes(app: FastifyInstance, ctx: AppCtx) {
       params: { type: 'object', properties: { agent: { type: 'string', enum: [...AGENT_NAMES] } } },
       querystring: { type: 'object', required: ['session'], properties: { session: { type: 'string' } } } } },
     async (req, reply) => {
-      if (!isAgentName(req.params.agent)) return reply.code(404).send(err('not_found', `no agent ${req.params.agent}`));
       try {
         const { session, workspace } = await sessionOf(ctx, req.query.session);
-        return ok({ sessionHeader: SESSION_HEADER, tools: await toolsFor(req.params.agent, { app: ctx, session, workspace }) });
+        return ok({ sessionHeader: SESSION_HEADER, tools: await toolsFor(req.params.agent as AgentName, { app: ctx, session, workspace }) });
       } catch (e) { return send(reply, e); }
     });
 

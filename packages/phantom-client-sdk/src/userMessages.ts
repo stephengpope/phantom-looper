@@ -1,8 +1,8 @@
-// The user message queue: the user's own words waiting to reach the model,
-// in order. Text only. What a drain TRIGGERS is the Agent's rule, not the
-// queue's; the Agent is the only one who adds and drains. An app sees the
-// queue through `UserMessages`: what is waiting, and the two ways to take
-// something back before it is sent.
+// The user message queue: what the user sent WHILE a turn ran, waiting to
+// reach the model, in order. Text only. What a drain TRIGGERS is the Agent's
+// rule, not the queue's; the Agent is the only one who adds and drains. An
+// app sees the queue through `UserMessages`: what is waiting, and the two
+// ways to take something back before it is sent.
 //
 // The server holds its own notes for a session's next turn; the Agent takes
 // those as a turn starts (POST /sessions/:id/backdoor/drain).

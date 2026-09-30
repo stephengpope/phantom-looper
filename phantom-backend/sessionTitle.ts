@@ -11,7 +11,6 @@
 import type { ModelConfig } from '../core/llm/createAgent.js';
 import { PhantomHelper } from '../core/llm/helper.js';
 import { titleRequest, type TitleContext } from '../core/llm/prompts/helpers/wiring.js';
-import { parseTranscript } from '../core/llm/transcript.js';
 import { parseLines, conversationFrom } from 'phantom-client-sdk/transcript';
 import type { Settings } from './settings.js';
 import type { Sessions } from './sessions.js';
@@ -74,13 +73,6 @@ export function userMessagesContext(userMessages: string[]): TitleContext {
 
 /** The user messages in a saved transcript, selected for the title call. */
 export function titleContext(jsonl: string): TitleContext {
-  const { messages } = parseTranscript(jsonl);
-  return userMessagesContext(messages.filter((m) => m.role === 'user')
-    .map((m) => messageText(m.content)));
-}
-
-/** The same, for a record written line by line (the append route's format). */
-export function titleContextFromLines(jsonl: string): TitleContext {
   const messages = conversationFrom(parseLines(jsonl));
   return userMessagesContext(messages.filter((m) => m.role === 'user')
     .map((m) => messageText(m.content)));

@@ -3,10 +3,9 @@
 // carries what actually failed (ES2022 error chaining) so the stack is never
 // cut.
 //
-// The first three codes are the server's own (a route answers them in its
-// envelope and the client passes them through); the server's
-// `agent_config_invalid` arrives as `config_invalid` — one code for "no
-// model set", whichever side noticed. The rest are raised here.
+// `session_locked`, `session_not_found`, `transcript_conflict` and
+// `config_invalid` are the server's own (a route answers them in its
+// envelope and the client passes them through); the rest are raised here.
 
 export const ERROR_CODES = [
   'session_locked',
@@ -34,12 +33,6 @@ export class PhantomError extends Error {
     this.code = code;
     this.retryable = opts.retryable ?? false;
   }
-}
-
-/** The provider said the conversation no longer fits its window. One
- *  classification for every provider's wording. */
-export function isContextTooLong(message: string): boolean {
-  return /prompt is too long|request too large|context[_ ]length[_ ]exceeded|maximum context length|too many tokens|input is too long/i.test(message);
 }
 
 export function isPhantomError(e: unknown): e is PhantomError {

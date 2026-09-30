@@ -804,11 +804,13 @@ export class Sessions {
     this.changed(id);
   }
 
-  /** The cli's /plan switch: while on, clients build the coding agent's
-   *  mutating kits with the readonly preset. */
-  async setPlanMode(id: string, on: boolean, by: string): Promise<void> {
+  /** Plan mode: while on, the agent's mutating tools refuse. Published to
+   *  EVERY reader of the session feed, the writer included — a turn running
+   *  in the window that flipped it must hear it too (the feed drops a
+   *  client's own events otherwise). Readers treat a repeat as a no-op. */
+  async setPlanMode(id: string, on: boolean): Promise<void> {
     await this.db.update(sessions).set({ planMode: on }).where(eq(sessions.id, id));
-    this.events?.publish(id, by, { event: 'session', planMode: on });
+    this.events?.publish(id, '', { event: 'session', planMode: on });
   }
 
   /** The /pin switch: while on, the session sits at the top of every list. */

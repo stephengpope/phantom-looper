@@ -9,7 +9,7 @@ export interface AgentEvents {
   'turn-start': { texts: string[] };
   'part': StreamPart;
   /** Lines were appended and acknowledged. */
-  'step': { messages: ModelMessage[]; usage: Readonly<TokenTotals> };
+  'step': { messages: readonly ModelMessage[]; usage: Readonly<TokenTotals> };
   /** Queued text rode into a model call. */
   'user-message': { texts: string[] };
   'tool-error': { name: string; error: unknown };
