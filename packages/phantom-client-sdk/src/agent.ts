@@ -18,7 +18,7 @@ import { systemMessages, CACHED_BLOCKS } from './model/cache.js';
 import { Models, type ResolvedModel } from './model/models.js';
 import type { SystemModelMessage, Tool } from 'ai';
 import { BACKEND_RETRY, MODEL_RETRY, type RetryPolicy } from './model/retry.js';
-import { Session, type SessionInfo } from './session.js';
+import { Session, type SessionInfo, type TurnStart } from './session.js';
 import { ToolKitSet, serverToolKit, type ToolKit } from './toolkit.js';
 import { runTurn, type TurnResult } from './turn.js';
 import { UserMessageQueue, type UserMessages } from './userMessages.js';
@@ -142,12 +142,12 @@ export abstract class Agent {
   async #turnBody(texts: string[]): Promise<TurnResult> {
     this.#keepQueue = false;
     const signal = this.#nextSignal();
+    const nothing: TurnResult = { text: '', messages: [], usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, outcome: 'interrupted' };
     try {
-      return await this.#session.withLock(signal, async ({ recordMoved }) => {
-        const ready = await this.#prepare(recordMoved, signal);
-        if (!ready) return { text: '', messages: [], usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, outcome: 'interrupted' };
-        // The server's notes ride ahead of the user's words.
-        const opening = [...ready.notes, ...texts];
+      return await this.#session.turn(this.type, signal, async (start) => {
+        const ready = await this.#prepare(start, signal);
+        if (!ready) return nothing;
+        const opening = texts;
         this.#emit('turn-start', { texts: opening });
         const feed = new TurnFeed(this.backend, this.session.id,
           { agent: this.type, message: opening.join('\n\n'), provider: ready.model.spec.provider, model: ready.model.spec.model },
@@ -175,13 +175,14 @@ export abstract class Agent {
           throw e;
         }
         await feed.end();
-        // The turn happened and is recorded: the answer stands whatever the
-        // bookkeeping says. A failure there is reported, not thrown over it.
-        try { await this.#session.turnEnded(); }
-        catch (e) { this.#handlers.onError(asPhantomError(e, 'backend_error', 'marking the turn ended')); }
         this.#emit('turn-end', r);
         return r;
       });
+    } catch (e) {
+      // A stop before the session was even taken: nothing was sent, nothing
+      // recorded, the message dropped — the user said stop.
+      if (signal.aborted) return nothing;
+      throw e;
     } finally {
       this.#abort = null;
     }
@@ -200,21 +201,22 @@ export abstract class Agent {
     return sent;
   }
 
-  /** Everything a turn needs before it sends anything: the record made
-   *  current, the row re-read, the model, the prompt, the tools, the
-   *  server's notes. Null when a stop landed meanwhile — nothing was sent,
-   *  nothing recorded, the queue untouched. */
-  async #prepare(recordMoved: boolean, signal: AbortSignal): Promise<{ model: ResolvedModel; system: SystemModelMessage[]; tools: Record<string, Tool>; notes: string[] } | null> {
+  /** Everything a turn needs before it sends anything, from what turn-start
+   *  answered: the record made current (the server's queued messages are in
+   *  it now), the row re-read, the model, the prompt, the tools. Null when a
+   *  stop landed meanwhile — nothing was sent, nothing recorded, the queue
+   *  untouched. */
+  async #prepare(start: TurnStart & { recordMoved: boolean }, signal: AbortSignal): Promise<{ model: ResolvedModel; system: SystemModelMessage[]; tools: Record<string, Tool> } | null> {
     try {
-      if (await this.#session.makeCurrent(recordMoved, signal)) this.#emit('reloaded', { messages: this.session.messages });
+      if (await this.#session.makeCurrent(start.recordMoved, signal)) this.#emit('reloaded', { messages: this.session.messages });
       await this.#session.refresh(signal);
-      const model = await this.#models.resolve(signal);
+      const model = this.#models.resolve(start.config);
       const { messages: system, uncached } = systemMessages(await this.systemPrompt(), model.spec.provider);
       if (uncached) this.#handlers.onNotice({ type: 'cache', text: `${uncached} system prompt block(s) beyond the first ${CACHED_BLOCKS} are not cached on ${model.spec.provider}` });
+      this.#kits.add(serverToolKit(start.tools));
       const tools = await this.#kits.resolve({ backend: this.backend, sessionId: this.session.id, workspaceId: this.session.workspaceId,
         folderId: this.session.folderId, readonly: () => this.session.planMode });
-      const notes = await this.#session.takeNotes(signal);
-      return { model, system, tools, notes };
+      return { model, system, tools };
     } catch (e) {
       if (signal.aborted) return null;
       throw e;
@@ -226,7 +228,6 @@ export abstract class Agent {
   /** After construction, once `type` exists (a subclass field lands after
    *  the base constructor ran). */
   #wire(): this {
-    this.#kits.add(serverToolKit(this.type));
     this.#models = new Models(this.backend, this.type, this.session.id, {
       retry: { ...MODEL_RETRY, ...this.#handlers.retry?.model },
       notice: (text) => this.#handlers.onNotice({ type: 'retry', text }),

@@ -19,3 +19,6 @@ export type { ToolKit, ToolKitContext, BuiltTools } from './toolkit.js';
 // A billed model for an app's one-shot call (a title, a commit message).
 export { billedModel, type Billing, type ModelHooks } from './model/languageModel.js';
 export type { ModelSpec, Provider, Reasoning } from './model/llmConfig.js';
+
+// One connection for everything — the transport an app hands `PhantomBackend`.
+export { ServerConnection, type ServerConnectionOptions } from './serverConnection.js';

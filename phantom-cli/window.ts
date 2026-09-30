@@ -671,6 +671,13 @@ export class WindowStore {
     // locks — reading is free. The lock response carries the transcript's
     // stamp: unchanged = memory is current; moved = another machine advanced
     // this session, so pull ONCE, reseat, then run.
+    // A refused send puts the words back: into the box when that session is
+    // on screen, into its draft otherwise — either way the next switch to it
+    // shows them.
+    s.onRefused = (id, text) => {
+      if (id === this.sessions.activeId) this.setPrompt(text);
+      else { const e = this.sessions.get(id); if (e) e.draft = text; }
+    };
     s.onTurnStart = async (id) => {
       const r = await this.api('POST', `/sessions/${id}/lock`, { label: hostname() }) as
         { transcript_updated_at?: string | null };

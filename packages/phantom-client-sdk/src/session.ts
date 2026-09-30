@@ -14,6 +14,7 @@ import { asPhantomError, type PhantomError } from './errors.js';
 import { interruptedResultMessage } from './messages.js';
 import { SessionRecord } from './record.js';
 import { conversationFrom, messageLine, type TokenTotals, type TranscriptLine } from './transcript.js';
+import type { LlmConfig } from './model/llmConfig.js';
 
 /** The session row, the fields the runtime and an agent read. `system_prompt`
  *  is whatever the app stored there, read by its own agent. */
@@ -43,9 +44,15 @@ export interface SessionInfo {
   readonly usage: Readonly<TokenTotals>;
 }
 
-/** What taking the lock answers: the record's last-changed mark rides along,
- *  so a turn knows whether its copy is current without downloading anything. */
-interface LockReply { transcript_updated_at: string | null }
+/** What starting a turn answers: the hold, the record's last-changed mark
+ *  (so the turn knows whether its copy is current without downloading
+ *  anything), and what the turn runs on. */
+export interface TurnStart {
+  transcript_updated_at: string | null;
+  config: LlmConfig;
+  tools: PublishedTool[];
+}
+export interface PublishedTool { name: string; summary: string; description?: string; input: Record<string, unknown>; mutates: boolean }
 
 export class Session implements SessionInfo {
   #row: SessionRow;
@@ -80,17 +87,20 @@ export class Session implements SessionInfo {
   /** The session feed said plan mode flipped. */
   setPlanMode(on: boolean): void { this.#row = { ...this.#row, planMode: on }; }
 
-  /** Hold the session for `fn`. The server renews the hold on the turn's
-   *  own writes. The release runs even when fn threw; a release that fails
-   *  is reported, never thrown over the real error. */
-  async withLock<T>(signal: AbortSignal, fn: (lock: { recordMoved: boolean }) => Promise<T>): Promise<T> {
-    const lock = await this.backend.call<LockReply>('POST', `/sessions/${this.id}/lock`,
-      { label: this.backend.label }, { signal });
+  /** One turn on this session: start it (the hold, the server's queued
+   *  messages written, the model and tools answered — one request), run
+   *  `fn`, end it (the server's bookkeeping and the release — one request,
+   *  always, so a turn that threw still lets go). The server renews the hold
+   *  on the turn's own writes. An end that fails is reported, never thrown
+   *  over the turn's own outcome. */
+  async turn<T>(type: string, signal: AbortSignal, fn: (start: TurnStart & { recordMoved: boolean }) => Promise<T>): Promise<T> {
+    const start = await this.backend.call<TurnStart>('POST', `/sessions/${this.id}/turn-start`,
+      { type, label: this.backend.label }, { signal });
     try {
-      return await fn({ recordMoved: lock.transcript_updated_at !== this.record.stamp });
+      return await fn({ ...start, recordMoved: start.transcript_updated_at !== this.record.stamp });
     } finally {
-      try { await this.backend.call('DELETE', `/sessions/${this.id}/lock`); }
-      catch (e) { this.handlers.onError(asPhantomError(e, 'backend_error', 'releasing the session lock')); }
+      try { await this.backend.call('POST', `/sessions/${this.id}/turn-ended`); }
+      catch (e) { this.handlers.onError(asPhantomError(e, 'backend_error', 'ending the turn')); }
     }
   }
 
@@ -106,13 +116,6 @@ export class Session implements SessionInfo {
     return recordMoved;
   }
 
-  /** The one-line notes the server holds for this session's next turn (a
-   *  detached command exited, a sync pulled). Taken, not read. */
-  async takeNotes(signal: AbortSignal): Promise<string[]> {
-    const r = await this.backend.call<{ messages: string[] }>('POST', `/sessions/${this.id}/backdoor/drain`, undefined, { signal });
-    return r.messages;
-  }
-
   /** Append to the record; the conversation grows with it. Answers the
    *  messages added. Rejects → the turn fails. */
   async append(lines: TranscriptLine[]): Promise<ModelMessage[]> {
@@ -120,11 +123,6 @@ export class Session implements SessionInfo {
     const added = conversationFrom(lines);
     this.#messages.push(...added);
     return added;
-  }
-
-  /** A turn ended here: the server's bookkeeping (turn count, seat, name). */
-  turnEnded(): Promise<unknown> {
-    return this.backend.call('POST', `/sessions/${this.id}/turn-ended`);
   }
 }
 

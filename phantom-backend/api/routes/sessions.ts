@@ -13,6 +13,9 @@ import { openSession, SessionLockedError } from '../../../core/session.js';
 import { injectFetch } from '../../looper/injectFetch.js';
 import { runCodingTurn } from '../../looper/turn.js';
 import { sessionPin } from '../../agentConfig.js';
+import { AGENT_NAMES, type AgentName } from '../../../core/llm/agentConfig.js';
+import { toolsFor } from '../../tools/registry.js';
+import { messageLine, userMessage } from 'phantom-client-sdk/transcript';
 import { writeAttachment } from '../../telegram/attachments.js';
 import type { SessionEvent } from '../sessionEvents.js';
 
@@ -946,6 +949,54 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         workspace_id: { type: 'string' }, folder_id: { type: 'string' }, card_id: { type: 'integer' } } } } },
     async (req) => ok(await ctx.sessions.createSupervisor(req.body.workspace_id, req.body.folder_id, req.body.card_id)));
 
+  // The start of a turn, in one request: hold the session, write the
+  // messages the server queued for it into the record, and answer what the
+  // turn runs on — the model (its key travels only here) and the tools an
+  // agent of `type` has right now. The stamp the record was last changed at
+  // rides along so the caller knows whether its copy is current. Everything
+  // a client needs before its first model call, one round trip.
+  app.post<{ Params: { id: string }; Body: { type: AgentName; label?: string } }>(
+    '/sessions/:id/turn-start', { schema: { ...TAG,
+      summary: 'Start a turn: hold the session and answer what it runs on',
+      description: 'Holds the session for x-phantom-looper-client (409 session_locked while someone else does), ' +
+        'writes the user messages the server queued for this session into the record, and answers the model ' +
+        'config (provider, model, key, reasoning, maxSteps) and the tools an agent of `type` has on this ' +
+        'session right now, plus the record\'s transcript_updated_at. POST /sessions/:id/turn-ended releases the hold.',
+      params: idParam,
+      body: { type: 'object', required: ['type'], additionalProperties: false, properties: {
+        type: { type: 'string', enum: [...AGENT_NAMES] },
+        label: { type: 'string', maxLength: 200, description: 'What to show others (a hostname).' } } } } },
+    async (req, reply) => {
+      const client = clientOf(req);
+      if (!client) return reply.code(400).send(err('missing_client', 'x-phantom-looper-client header required'));
+      const s = await ctx.sessions.get(req.params.id);
+      if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
+      if (s.status !== 'active') return reply.code(410).send(err('session_destroyed', `session is ${s.status}`));
+      if (ctx.activeTurns?.has(s.id) && s.lockedBy && s.lockedBy !== client) return reply.code(409).send(lockedErr(s));
+      const workspace = await ctx.workspaces.get(s.workspaceId);
+      if (!workspace) return reply.code(404).send(err('not_found', 'workspace vanished'));
+      const settings = await ctx.settings.resolveMany(['session_lock_ttl_ms'], { workspace });
+      const expires = await ctx.sessions.acquireLock(s, client, Number(settings.session_lock_ttl_ms), req.body.label);
+      if (!expires) return reply.code(409).send(lockedErr(s));
+      ctx.sessionEvents?.publish(s.id, client, lockEvent(s, { locked: true, by: client, label: req.body.label ?? s.lockedLabel ?? null, expires }));
+      if (s.lockedBy !== client) void publishBoardLock(ctx, s.id, true);
+      // The server's queued messages land now, under the hold, ahead of
+      // whatever the caller sends: the caller reads the record after this.
+      const queued = ctx.backdoor?.drain(s.id) ?? [];
+      if (queued.length) {
+        const held = await ctx.sessions.get(s.id);
+        await ctx.sessions.appendTranscript(held!, client, { after: held!.transcriptLines, deliveryId: `turn-start-${Date.now()}`,
+          lines: queued.map((text) => messageLine(userMessage(text))) });
+      }
+      let config;
+      try { config = await ctx.settings.agentConfig(req.body.type, { workspace, pin: sessionPin(s) }); }
+      catch (e) { return reply.code(400).send(err('config_invalid', (e as Error).message)); }
+      const tools = await toolsFor(req.body.type, { app: ctx, session: s, workspace });
+      const stamp = await ctx.sessions.transcriptStamp(s.id);
+      return ok({ expires_at: expires.toISOString(), transcript_updated_at: stamp?.toISOString() ?? null,
+        config: { model: config.model, maxSteps: config.maxSteps }, tools });
+    });
+
   // The end of a turn, whoever ran it, for every kind of session: the turn
   // count (leaving 0 freezes the row's model), the agent seat after the
   // writer, and the auto-title on its cadence — what the whole-file save did
@@ -955,7 +1006,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       summary: 'A turn ended on a session',
       description: 'Bumps the turn count (leaving 0 freezes the row\'s model), seats the agent after the caller ' +
         '(a person\'s turn into a loop or cron session takes it over), touches last_used_at, and names the session ' +
-        'on the titler\'s cadence. 409 while another client holds the session.',
+        'on the titler\'s cadence, and releases the hold turn-start took. 409 while another client holds the session.',
       params: idParam } },
     async (req, reply) => {
       const client = clientOf(req);
@@ -966,6 +1017,15 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (!ended.nameManual && shouldName(ended.name, ended.turnCount)) {
         const data = await ctx.sessions.transcript(s.id);
         if (data) void nameSession(ctx, s.id, titleContext(data), ctx.modelFetch);
+      }
+      // The hold a turn-start took ends here: one request opens a turn, one
+      // closes it. A caller that never held it (a whole-file writer of old)
+      // releases nothing.
+      const released = await ctx.sessions.releaseLock(s.id, client);
+      if (released) {
+        ctx.sessionEvents?.publish(s.id, client, lockEvent(s, { locked: false }));
+        void publishBoardLock(ctx, s.id, false);
+        ctx.looper?.runLoopOfSession(s.id, client);
       }
       return ok({});
     });

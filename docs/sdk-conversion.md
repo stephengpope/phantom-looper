@@ -23,17 +23,31 @@ is the hand-off for finishing that.
 **The SDK.** One base class. A subclass declares `type` and `systemPrompt()`
 and nothing else; `MyAgent.open(backend, handlers, sessionId)` /
 `MyAgent.create(...)`. Inside, one file per job: the connection
-(`backend.ts`), the session — row, record, lock (`session.ts`, `record.ts`),
-the model (`model/`), the turn (`turn.ts`), the feed (`feed.ts`). The record's
-line format is on its own subpath (`phantom-client-sdk/transcript`) for the
-server. Public surface: `Agent`, `PhantomBackend`, `PhantomError`, the
-events, `ToolKit`, `billedModel`, types.
+(`serverConnection.ts`, `backend.ts`), the session — row, record, turn
+(`session.ts`, `record.ts`), the model (`model/`), the turn (`turn.ts`),
+the feed (`feed.ts`). The record's line format is on its own subpath
+(`phantom-client-sdk/transcript`) for the server. Public surface: `Agent`,
+`PhantomBackend`, `ServerConnection`, `PhantomError`, the events, `ToolKit`,
+`billedModel`, types.
+
+**One connection.** `ServerConnection`: one HTTP/2 socket carries every
+call, feed and turn; reconnects on drop. The cli installs it as the fetch
+for the server's origin, so every caller — cli, core tools, git streams —
+rides it unchanged. Proven: 3 feeds + 20 requests on one socket; abort one
+feed, the rest live; server restart, next request reconnects. A plain-http
+dev server (no Caddy, no HTTP/2) keeps the platform fetch.
+
+**One request per turn start.** `POST /sessions/:id/turn-start` holds the
+session, writes the server's queued user messages into the record, answers
+the model config (with key) and the tool list. The SDK's turn is
+turn-start → run → turn-ended; turn-ended releases the hold, always, crash
+included. Before: five sequential requests.
 
 **The turn rule, proven by a harness (32 checks, fake server + fake model):**
 - A user message starts a turn. Text sent while a turn runs is queued; it
   rides the next model call, or continues the turn when the model stops.
 - `interrupt()` cuts the model loop; what was queued continues the **same
-  turn** — same lock, one turn-ended. `interrupt({ keepQueue: true })` ends
+  turn** — same hold, one turn-ended. `interrupt({ keepQueue: true })` ends
   the turn and the queue rides the next `send`.
 - A stop before anything was sent records nothing and drops the message.
 - Session held elsewhere → `send` rejects `session_locked`, nothing recorded.
@@ -42,13 +56,15 @@ events, `ToolKit`, `billedModel`, types.
 - Another writer's lines are read before the turn; the server's queued user
   messages ride ahead of the user's words.
 
+**The cli, today's path.** Enter shows the spinner immediately; a refused
+send puts the text back in the box (or the session's draft off-screen).
+
 **The server.** Every tool defined once (`phantom-backend/tools/*`, 35
-tools), published per agent type at `GET /agents/:type/tools?session=`, run
-through `POST /tools/:name`. Skills and web logic moved out of the routes
-into `skills.ts` / `web.ts` so routes and tools share it. The record's line
-count is kept on every write (migration 044). Every record in the DB is the
-typed format (migration 045, proven on a real Postgres); `core/llm` reads and
-writes that same format so today's hosts keep working.
+tools), published per agent type, run through `POST /tools/:name`. Skills
+and web logic moved out of the routes into `skills.ts` / `web.ts`. The
+record's line count is kept on every write (migration 044). Every record in
+the DB is the typed format (migration 045, proven on a real Postgres);
+`core/llm` reads and writes that same format so today's hosts keep working.
 
 **Language.** "Looper" no longer means an agent anywhere in code, comments
 or screens.
@@ -60,28 +76,13 @@ mid-turn, plan mode flipping live, esc, another window holding the session,
 screen tools, one-shot title calls). If the SDK's shape is wrong anywhere,
 the cli finds it; the headless hosts can't.
 
-### 1. One connection, one request per turn start (build inside the cli switch)
+### 1. Leftovers that land with the cli switch
 
-Measured: today's cli opens 5+ connections per window (one per feed, one per
-burst of requests), and a turn start is five sequential requests before the
-model is asked.
-
-- **One HTTP/2 connection per window.** Node's fetch would not negotiate
-  HTTP/2 in testing; the cli's transport speaks `node:http2` itself and hands
-  it to `PhantomBackend` (which already takes an injected transport). Every
-  call, feed and turn is a stream on it; reconnect on drop.
-- **`POST /sessions/:id/turn-start`** replaces lock, agent config, tools
-  listing and the server-queue drain: one request, one transaction (session,
-  workspace, settings read once — 5 queries), answers `{ config, tools }`
-  with the queued messages already written to the record. `turn-ended`
-  releases the lock, always — in the SDK's `finally`, crash included.
-- Remove `/lock`, `DELETE /lock`, `/agents/:type/config`,
-  `/agents/:type/tools`, `/backdoor/drain` **when the last host stops using
-  them** (the server's card runs and Telegram still lock through them).
-- The model config route today hands the provider's API key to any caller,
-  including the cli's banner read. After turn-start the key only travels
-  inside turn-start; the banner reads provider/model off the session row.
-- Enter shows the spinner immediately; a refusal puts the text back in the box.
+- The old cli still takes the lock and reads the config through the old
+  routes — it needs the key to build its own agent. `/lock`, `DELETE /lock`,
+  `/agents/:type/config`, `/agents/:type/tools`, `/backdoor/drain` go when
+  the last host stops using them. After that the key travels only inside
+  turn-start, and the banner reads provider/model off the session row.
 
 ### 2. The cli onto the SDK
 

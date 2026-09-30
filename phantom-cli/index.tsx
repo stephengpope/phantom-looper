@@ -28,6 +28,7 @@ import { cronTools } from '../core/llm/tools/crons.js';
 import { databaseTools } from '../core/llm/tools/database.js';
 import { notifyTools } from '../core/llm/tools/notify.js';
 import { autoPushSession as corePush, autoPullSession as corePull } from '../core/llm/tools/git.js';
+import { ServerConnection } from 'phantom-client-sdk';
 import { newId } from '../core/ids.js';
 import { App } from './App.js';
 import { createScreen } from './screen.js';
@@ -150,20 +151,34 @@ function connection(): { base: string; key: string } {
   return { base: String(l.server_url), key: String(l.server_key ?? '') };
 }
 
-// An internal-TLS server's root certificate, saved by setup-backend: trusted
-// for every fetch in this process. undici's connect.ca REPLACES the default
-// roots, so they ride along with it. Re-applied whenever the address changes
-// (a /server save), so a switch to another internal-TLS box works live; an
-// address with no saved CA gets the plain defaults back.
-let trustedFor: string | undefined;
+// One connection to the server, for everything this window does: every
+// request, every live feed and every turn ride one HTTP/2 socket
+// (phantom-client-sdk's ServerConnection), which reconnects on its own when it
+// drops. Installed as THE fetch for the server's origin — every caller in
+// the app and in core reaches the server through the global fetch, so one
+// install covers them all; other origins (the model providers) fall through
+// to the platform fetch. An internal-TLS server's root certificate, saved by
+// setup-backend, rides along. Re-installed whenever the address changes
+// (a /server save), so a switch to another box works live. A plain-http
+// server (a local dev box, no Caddy in front) speaks HTTP/1.1 only, and
+// keeps the platform fetch.
+const platformFetch = globalThis.fetch;
+let server: ServerConnection | undefined;
+let connectedTo: string | undefined;
 async function trustSavedCa(base: string): Promise<void> {
-  if (trustedFor === base) return;
+  if (connectedTo === base) return;
   const savedCa = savedCaFor(base);
-  if (!savedCa && trustedFor === undefined) { trustedFor = base; return; }
-  const [{ Agent, setGlobalDispatcher }, { rootCertificates }] =
-    await Promise.all([import('undici'), import('node:tls')]);
-  setGlobalDispatcher(new Agent({ connect: savedCa ? { ca: [...rootCertificates, savedCa] } : {} }));
-  trustedFor = base;
+  const { rootCertificates } = await import('node:tls');
+  const origin = new URL(base).origin;
+  if (!origin.startsWith('https:')) { globalThis.fetch = platformFetch; connectedTo = base; return; }
+  server?.close();
+  server = new ServerConnection({ origin, ...(savedCa ? { ca: [...rootCertificates, savedCa] } : {}) });
+  const one = server;
+  globalThis.fetch = ((input, init) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    return url.startsWith(origin) ? one.fetch(input, init) : platformFetch(input, init);
+  }) as typeof fetch;
+  connectedTo = base;
 }
 await trustSavedCa(connection().base);
 

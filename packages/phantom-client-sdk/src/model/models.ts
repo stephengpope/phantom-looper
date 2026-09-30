@@ -1,7 +1,7 @@
-// Which model a turn runs on, and the handle for it. Never kept between
-// turns: every turn asks the server (GET /agents/:type/config?session=) and
-// the server applies its own rule. The handle is rebuilt only when the
-// answer moved; every call through it is billed to the session.
+// The handle for the model a turn runs on. The config comes from the
+// server with every turn start and is never kept; the handle is rebuilt
+// only when the config moved. Every call through it is billed to the
+// session.
 import type { LanguageModel } from 'ai';
 import type { PhantomBackend } from '../backend.js';
 import { PhantomError } from '../errors.js';
@@ -22,10 +22,8 @@ export class Models {
   constructor(private readonly backend: PhantomBackend, private readonly type: string, private readonly sessionId: string,
     private readonly hooks: ModelHooks) {}
 
-  /** The model for the next turn, as the server resolves it now. */
-  async resolve(signal: AbortSignal): Promise<ResolvedModel> {
-    const c = await this.backend.call<LlmConfig>('GET',
-      `/agents/${encodeURIComponent(this.type)}/config?session=${encodeURIComponent(this.sessionId)}`, undefined, { signal });
+  /** The handle for this turn's config. */
+  resolve(c: LlmConfig): ResolvedModel {
     if (!c.model?.provider || !c.model.model) throw new PhantomError('config_invalid', 'no model is set for this agent — pick one on /settings');
     const key = JSON.stringify(c.model);
     if (this.#cached?.key !== key) {

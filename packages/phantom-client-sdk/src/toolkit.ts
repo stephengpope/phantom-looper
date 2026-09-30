@@ -1,9 +1,8 @@
 // A ToolKit is one group of tools. The runtime carries ONE kit of its own:
-// the server's tools for this agent (`serverToolKit`, GET
-// /agents/:type/tools?session=) — the server decides what an agent of that
-// type gets, and what each tool does. An app adds tools only it can serve
-// (its own screen, its own approvals) through the same interface with
-// `agent.use(kit)`.
+// the server's tools for this agent, listed with every turn start — the
+// server decides what an agent of that type gets, and what each tool does.
+// An app adds tools only it can serve (its own screen, its own approvals)
+// through the same interface with `agent.use(kit)`.
 //
 // Every kit is built before every turn — what an agent has can change
 // between turns (a setting, a folder). `build` answers the tools AND which
@@ -13,7 +12,7 @@
 // { ok:false, error:{ code:'readonly' } } and runs nothing.
 import { jsonSchema, tool, type Tool } from 'ai';
 import type { PhantomBackend } from './backend.js';
-import { PhantomError } from './errors.js';
+import type { PublishedTool } from './session.js';
 
 export interface ToolKitContext {
   backend: PhantomBackend;
@@ -71,28 +70,18 @@ export class ToolKitSet {
 
 // ── the server's tools ────────────────────────────────────────────────────
 
-interface ToolListing {
-  tools: { name: string; summary: string; description?: string; input: Record<string, unknown>; mutates: boolean }[];
-}
-
-/** The server's tools for an agent of `type` on this session, read before
- *  every turn: the server's word on which tools that agent has right now
- *  (a switched-off feature is a missing tool, a session with no files has no
- *  file tools) and what each one does. Each becomes a tool that POSTs back
- *  with the session header; the envelope IS the result — the model reads
+/** The server's tools for this turn, from the listing turn-start answered:
+ *  the server's word on which tools the agent has right now (a switched-off
+ *  feature is a missing tool, a session with no files has no file tools)
+ *  and what each one does. Each becomes a tool that POSTs back with the
+ *  session header; the envelope IS the result — the model reads
  *  {ok:false, error:{code, message, retryable}} and self-corrects. */
-export function serverToolKit(type: string): ToolKit {
+export function serverToolKit(listing: readonly PublishedTool[]): ToolKit {
   return {
     name: 'server',
-    async build(ctx: ToolKitContext): Promise<BuiltTools> {
-      let listing: ToolListing;
-      try {
-        listing = await ctx.backend.call<ToolListing>('GET', `/agents/${encodeURIComponent(type)}/tools?session=${encodeURIComponent(ctx.sessionId)}`);
-      } catch (e) {
-        throw new PhantomError('tool_build_failed', `could not read the tool list: ${(e as Error).message}`, { cause: e });
-      }
+    build(ctx: ToolKitContext): Promise<BuiltTools> {
       const out: Record<string, Tool> = {};
-      for (const def of listing.tools) {
+      for (const def of listing) {
         out[def.name] = tool({
           description: def.description ?? def.summary,
           inputSchema: jsonSchema(def.input as never),
@@ -110,7 +99,7 @@ export function serverToolKit(type: string): ToolKit {
             ctx.backend.callRaw('POST', `/tools/${def.name}`, args ?? {}, { sessionId: ctx.sessionId, signal: opts?.abortSignal }),
         });
       }
-      return { tools: out, mutating: listing.tools.filter((t) => t.mutates).map((t) => t.name) };
+      return Promise.resolve({ tools: out, mutating: listing.filter((t) => t.mutates).map((t) => t.name) });
     },
   };
 }

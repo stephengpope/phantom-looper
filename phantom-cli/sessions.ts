@@ -176,6 +176,9 @@ export class SessionStore {
    *  it. It does NOT queue: the queue is only for this window's own running
    *  turn, never for a lock held elsewhere. */
   onTurnStart?: (id: string) => Promise<void>;
+  /** The send was refused before anything ran (session held elsewhere, the
+   *  server unreachable): the words go back where they were typed. */
+  onRefused?: (id: string, text: string) => void;
   /** Drain the session's backdoor message queue (App wires
    *  `POST /sessions/:id/backdoor/drain`): server-side one-liners — a
    *  detached command exited, a file was dropped onto the window — that ride
@@ -531,18 +534,26 @@ export class SessionStore {
     const texts = (Array.isArray(text) ? text : [text]).filter((t) => t.trim());
     if (!texts.length) return;
 
-    // The lock lives for THIS TURN, not for having the session open: taken
-    // here, released after the turn-end sync lands. The queue exists only
-    // behind this window's own turn — a lock held elsewhere (another window,
-    // a card-run agent) REFUSES the send: nothing waits around to fire into a
-    // conversation someone else is shaping. The note keeps the words.
+    // The moment enter lands the session is working: the spinner runs
+    // through the server round trips below, not after them. The lock lives
+    // for THIS TURN, not for having the session open: taken here, released
+    // after the turn-end sync lands. The queue exists only behind this
+    // window's own turn — a lock held elsewhere (another window, a card-run
+    // agent) REFUSES the send: the session goes idle again, the words go
+    // back into the box, and the note says why.
+    e.busy = true;
+    e.startedAt = Date.now();
+    e.tokens = NO_TOKENS;
+    this.notify();
     if (this.onTurnStart) {
       try { await this.onTurnStart(id); }
       catch (err) {
+        e.busy = false;
         const why = (err as { code?: string }).code === 'session_locked'
             || (err as Error).message.includes('session_locked')
           ? 'session in use elsewhere' : (err as Error).message;
-        this.note(id, `not sent — ${why}: ${texts.map((t) => `"${t}"`).join(' · ')}`);
+        this.note(id, `not sent — ${why}`);
+        this.onRefused?.(id, texts.join('\n\n'));
         return;
       }
     }
@@ -561,9 +572,6 @@ export class SessionStore {
       e.history.push(message);
       e.transcript.append(message);
     }
-    e.busy = true;
-    e.startedAt = Date.now();
-    e.tokens = NO_TOKENS;
     const ac = new AbortController();
     e.abort = ac;
     // Step-level transcript save — push the local file to the server per step.
