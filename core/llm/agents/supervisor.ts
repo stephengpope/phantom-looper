@@ -9,8 +9,8 @@
 // card's status change — never on the agent's word.
 import { type Tool } from 'ai';
 import { PhantomAgent, type ModelConfig } from '../createAgent.js';
-import { withCurrentDate } from '../prompts/template.js';
-import { systemPrompt } from '../prompts/supervisor/wiring.js';
+import { withCurrentDate } from '../../prompts/template.js';
+import { systemPrompt } from '../../prompts/supervisor/wiring.js';
 import type { Clock } from '../../clock.js';
 
 export function supervisorInstructions(): string {

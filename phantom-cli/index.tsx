@@ -158,19 +158,20 @@ function connection(): { base: string; key: string } {
 // the app and in core reaches the server through the global fetch, so one
 // install covers them all; other origins (the model providers) fall through
 // to the platform fetch. An internal-TLS server's root certificate, saved by
-// setup-backend, rides along. Re-installed whenever the address changes
-// (a /server save), so a switch to another box works live. A plain-http
-// server (a local dev box, no Caddy in front) speaks HTTP/1.1 only, and
-// keeps the platform fetch.
+// setup-backend (or scripts/setup.sh for a dev box), rides along.
+// Re-installed whenever the address changes (a /server save), so a switch to
+// another box works live. The server is always https behind Caddy — dev
+// included — so this is the one transport; any other URL is a setup error.
 const platformFetch = globalThis.fetch;
 let server: ServerConnection | undefined;
 let connectedTo: string | undefined;
 async function trustSavedCa(base: string): Promise<void> {
   if (connectedTo === base) return;
+  if (!base) throw new Error('no phantom-backend paired — setup-backend, or /server to enter one');
+  const origin = new URL(base).origin;
+  if (!origin.startsWith('https:')) throw new Error(`phantom-backend URL must be https:// (got ${base}) — /server to fix it, or scripts/setup.sh for a dev box`);
   const savedCa = savedCaFor(base);
   const { rootCertificates } = await import('node:tls');
-  const origin = new URL(base).origin;
-  if (!origin.startsWith('https:')) { globalThis.fetch = platformFetch; connectedTo = base; return; }
   server?.close();
   server = new ServerConnection({ origin, ...(savedCa ? { ca: [...rootCertificates, savedCa] } : {}) });
   const one = server;
@@ -180,8 +181,6 @@ async function trustSavedCa(base: string): Promise<void> {
   }) as typeof fetch;
   connectedTo = base;
 }
-await trustSavedCa(connection().base);
-
 // This window's session-lock identity: minted per process, sent on every call.
 // The server compares it when a session is held; the label is what other
 // windows see on the "in use" row.

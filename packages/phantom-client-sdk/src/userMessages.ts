@@ -4,8 +4,8 @@
 // app sees the queue through `UserMessages`: what is waiting, and the two
 // ways to take something back before it is sent.
 //
-// The server holds its own notes for a session's next turn; the Agent takes
-// those as a turn starts (POST /sessions/:id/backdoor/drain).
+// The server holds its own user message queue for a session's next turn;
+// turn-start writes it into the record ahead of what this queue holds.
 export interface QueueEntry {
   readonly id: number;
   readonly text: string;

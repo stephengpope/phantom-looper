@@ -1,6 +1,7 @@
 // Drizzle mirror of migrations/*.sql. The SQL files are the source of truth
 // (applied by server/db/migrate.ts); this file exists for typed queries.
 import { getTableColumns } from 'drizzle-orm';
+import type { StoredSystemPrompt } from 'phantom-client-sdk/systemPrompt';
 import { pgSchema, text, jsonb, timestamp, integer, bigint, boolean, real, customType, primaryKey, unique } from 'drizzle-orm/pg-core';
 
 const bytea = customType<{ data: Buffer }>({ dataType: () => 'bytea' });
@@ -197,14 +198,15 @@ export const sessions = phantomLooper.table('sessions', {
   provider: text('provider'),
   model: text('model'),
   baseUrl: text('base_url'),
-  // THE system prompt this session runs on, in the two pieces the prompt
-  // cache wants (core/llm/prompts/coding/wiring.ts CodingPrompt). Frozen at
-  // birth from that moment's facts — skills, secrets, credentials — and never
+  // THE system prompt this session runs on, in its three sections — stable,
+  // context, volatile (phantom-client-sdk/systemPrompt; one system block and
+  // one cache mark each). Assembled ONCE at birth from the agent's layout
+  // and that moment's facts — skills, secrets, SOUL.md, the date — and never
   // rewritten, so a prompt edit reaches new sessions only and a running
-  // session's cache never moves. A duplicate takes its source's. Null on a
-  // conversation-only session (supervisor, assistant): those build fresh.
-  // (025; Sessions.systemPrompt / freezeSystemPrompt)
-  systemPrompt: jsonb('system_prompt').$type<{ base: string; workspace: string }>(),
+  // session's cache never moves. A duplicate takes its source's. Every
+  // session has one, whatever agent runs it. (025, 046;
+  // Sessions.systemPrompt / freezeSystemPrompt)
+  systemPrompt: jsonb('system_prompt').$type<StoredSystemPrompt>(),
 });
 
 // Every sessions read selects THESE (plus the folder's facts, joined —

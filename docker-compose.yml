@@ -138,8 +138,8 @@ services:
       - cloudbeaver-data:/opt/cloudbeaver/workspace
 
   # HTTPS terminator + reverse proxy — the ONLY public surface, and only with
-  # the `https` profile (install.sh turns it on via COMPOSE_PROFILES in .env;
-  # local dev is plain http://127.0.0.1:8080 with no proxy at all).
+  # the `https` profile (install.sh and scripts/setup.sh both turn it on via
+  # COMPOSE_PROFILES in .env: dev runs this same stack, on Caddy's own CA).
   #
   # Caddy owns certificates end to end — nothing in the API writes TLS config.
   # PHANTOM_BACKEND_ADDRESS is a domain OR a bare public IP: Let's Encrypt issues real
@@ -158,9 +158,11 @@ services:
       PHANTOM_BACKEND_ADDRESS: ${PHANTOM_BACKEND_ADDRESS:-}
       PHANTOM_BACKEND_CERT_EMAIL: ${PHANTOM_BACKEND_CERT_EMAIL:-}
       PHANTOM_BACKEND_TLS: ${PHANTOM_BACKEND_TLS:-public}
+    # The host ports are overridable for a dev box where 80/443 are taken;
+    # an install leaves them alone (Let's Encrypt needs the real ones).
     ports:
-      - "80:80"
-      - "443:443"
+      - "${PHANTOM_BACKEND_HTTP_PORT:-80}:80"
+      - "${PHANTOM_BACKEND_HTTPS_PORT:-443}:443"
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       # Certificates and the internal CA live here. Losing this volume means

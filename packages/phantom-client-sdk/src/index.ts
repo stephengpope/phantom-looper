@@ -13,7 +13,7 @@ export { PhantomBackend, type BackendOptions, type CallOptions, type Envelope } 
 export { PhantomError, isPhantomError, ERROR_CODES, type ErrorCode } from './errors.js';
 export type { RetryPolicy } from './model/retry.js';
 
-// Tools only the app can serve (`agent.use(kit)`).
+// Tools only the app can serve (`agent.addToolKit(kit)`).
 export type { ToolKit, ToolKitContext, BuiltTools } from './toolkit.js';
 
 // A billed model for an app's one-shot call (a title, a commit message).
@@ -22,3 +22,7 @@ export type { ModelSpec, Provider, Reasoning } from './model/llmConfig.js';
 
 // One connection for everything — the transport an app hands `PhantomBackend`.
 export { ServerConnection, type ServerConnectionOptions } from './serverConnection.js';
+
+// The system prompt: the layout an agent declares, the shape the row stores.
+export { agentText, systemPromptBlocks, SYSTEM_PROMPT_SECTIONS,
+  type SystemPromptLayout, type SystemPromptEntry, type SystemPromptSection, type StoredSystemPrompt } from './systemPrompt.js';

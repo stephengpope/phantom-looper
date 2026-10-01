@@ -42,6 +42,7 @@ import type { LogTokens } from '../logTokens.js';
 import type { SettingsEvents } from '../api/settingsEvents.js';
 import { GLOBAL } from '../store.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
+import { SupervisorAgent as SupervisorAgentOnSdk } from '../../core/agents/supervisor.js';
 import { memoryRecorder, serializeTranscript } from '../../core/llm/transcript.js';
 import { agentClock, type AgentConfig } from '../../core/llm/agentConfig.js';
 import { sessionPin } from '../agentConfig.js';
@@ -276,7 +277,7 @@ export class LooperEngine {
         const sup = await this.deps.sessions.supervisorOf(workspace.id, card.number);
         supervisorSessionId = sup && sup.createdAt.getTime() >= coder.createdAt.getTime()
           ? sup.id
-          : (await this.deps.sessions.createSupervisor(workspace.id, folderOf(coder), card.id)).id;
+          : (await this.deps.sessions.createSupervisor(workspace.id, folderOf(coder), card.id, SupervisorAgentOnSdk.systemPromptLayout)).id;
       } else {
         // A new run: the coder (with its folder), put on the card the moment
         // it exists.
@@ -300,7 +301,7 @@ export class LooperEngine {
         // A new coder gets a new supervisor: a conversation on the coder's
         // folder, on the same card.
         supervisorSessionId = (await this.deps.sessions.createSupervisor(workspace.id,
-          folderOf(opened.session), card.id)).id;
+          folderOf(opened.session), card.id, SupervisorAgentOnSdk.systemPromptLayout)).id;
       }
     } catch (e) {
       if (e instanceof SessionLockedError) {

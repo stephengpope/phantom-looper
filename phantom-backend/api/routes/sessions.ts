@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import type { SessionRow } from '../../db/schema.js';
@@ -13,6 +13,8 @@ import { openSession, SessionLockedError } from '../../../core/session.js';
 import { injectFetch } from '../../looper/injectFetch.js';
 import { runCodingTurn } from '../../looper/turn.js';
 import { sessionPin } from '../../agentConfig.js';
+import type { SystemPromptLayout } from 'phantom-client-sdk/systemPrompt';
+import { SystemPromptError } from '../../systemPrompt/SystemPrompt.js';
 import { AGENT_NAMES, type AgentName } from '../../../core/llm/agentConfig.js';
 import { toolsFor } from '../../tools/registry.js';
 import { messageLine, userMessage } from 'phantom-client-sdk/transcript';
@@ -81,8 +83,39 @@ async function publishBoardLock(ctx: AppCtx, sessionId: string, locked: boolean)
   } catch { /* best-effort — the board refreshes on reconnect anyway */ }
 }
 
+/** Let go of a session this client holds, and tell everyone who listens:
+ *  the session feed, the board, and the card run that may be waiting for a
+ *  free session. THE one release: turn-ended, DELETE /lock and a turn-start
+ *  whose caller hung up all come through here. Idempotent — releasing a
+ *  session this client does not hold changes nothing. */
+async function releaseHold(ctx: AppCtx, s: SessionRow, client: string): Promise<boolean> {
+  const released = await ctx.sessions.releaseLock(s.id, client);
+  if (released) {
+    ctx.sessionEvents?.publish(s.id, client, lockEvent(s, { locked: false }));
+    void publishBoardLock(ctx, s.id, false);
+    ctx.looper?.runLoopOfSession(s.id, client);
+  }
+  return released;
+}
+
+/** The agent's system prompt layout, as every create route takes it: three
+ *  sections, each a list of server block names and the agent's own text
+ *  (phantom-client-sdk/systemPrompt). */
+const layoutSection = { type: 'array', items: { anyOf: [
+  { type: 'string', description: 'a server block: soul_md, agents_md, skills_list, secrets_list, time_date, github_token, agent_database' },
+  { type: 'object', required: ['text'], additionalProperties: false, properties: { text: { type: 'string' } } },
+] } } as const;
+const SYSTEM_PROMPT_LAYOUT = { type: 'object', required: ['stable', 'context', 'volatile'], additionalProperties: false,
+  description: 'The agent\'s system prompt layout. Assembled once, written with the row, never changed.',
+  properties: { stable: layoutSection, context: layoutSection, volatile: layoutSection } } as const;
+
+/** A create route's one refusal of its own: a block name the server does
+ *  not have. */
+const unknownBlock = (reply: FastifyReply, e: unknown) =>
+  e instanceof SystemPromptError ? reply.code(400).send(err(e.code, e.message)) : undefined;
+
 export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
-  app.post<{ Body: { workspace_id: string; id?: string } }>('/sessions', { schema: { ...TAG,
+  app.post<{ Body: { workspace_id: string; id?: string; system_prompt_layout: SystemPromptLayout } }>('/sessions', { schema: { ...TAG,
     summary: 'Create — or restart — a session',
     description: 'Claims a pre-cloned pool directory (or clones) and checks out the session\'s branch: ' +
       'its own {prefix}/{id}, cut from the base branch. That one branch ' +
@@ -91,19 +124,22 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       'Pass `id` to RESTART a session that was destroyed. Destroying a session deletes its files and ' +
       'nothing else — the row keeps its id and its branch — so a restart re-clones, finds that branch on ' +
       'origin, and carries on exactly where it stopped. Restarting a session that is still active is refused.\n\n' +
-      'The response carries `system_prompt` — the coding agent\'s prompt in its two cached pieces ' +
-      '(`base`, `workspace`), frozen on the row at creation from that moment\'s skills, secrets and ' +
-      'git facts, and sent verbatim on every turn. A restart keeps the prompt the session was born with.',
-    body: { type: 'object', required: ['workspace_id'], additionalProperties: false,
-      examples: [{ workspace_id: 'paste the id from POST /workspaces' }],
+      '`system_prompt_layout` is the agent\'s prompt layout; the server fills its blocks from that moment\'s ' +
+      'skills, secrets, SOUL.md and date, writes the three sections with the row, and answers them as ' +
+      '`system_prompt` — sent as stored on every turn. A restart keeps the prompt the session was born with.',
+    body: { type: 'object', required: ['workspace_id', 'system_prompt_layout'], additionalProperties: false,
+      examples: [{ workspace_id: 'paste the id from POST /workspaces',
+        system_prompt_layout: { stable: [{ text: 'You are…' }], context: ['agents_md'], volatile: ['time_date'] } }],
       properties: {
         workspace_id: { type: 'string' },
         id: { type: 'string', description: 'Restart this session id instead of starting a new one.' },
+        system_prompt_layout: SYSTEM_PROMPT_LAYOUT,
       } } } }, async (req, reply) => {
     if (!req.body?.workspace_id) return reply.code(400).send(err('missing_workspace', 'body.workspace_id required'));
     try {
-      return reply.code(201).send(ok(await ctx.sessions.start(req.body.workspace_id, { id: req.body.id })));
+      return reply.code(201).send(ok(await ctx.sessions.start(req.body.workspace_id, req.body.system_prompt_layout, { id: req.body.id })));
     } catch (e) {
+      if (unknownBlock(reply, e)) return;
       // The session's own refusals, and the checkout's (a dead token, a repo
       // the token cannot see, GitHub unreachable — Folders.checkout).
       if (e instanceof SessionError || e instanceof FolderError) {
@@ -228,13 +264,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       const client = clientOf(req);
       if (!client) return reply.code(400).send(err('missing_client', 'x-phantom-looper-client header required'));
       const s = await ctx.sessions.get(req.params.id);
-      const released = await ctx.sessions.releaseLock(req.params.id, client);
-      if (released && s) ctx.sessionEvents?.publish(s.id, client, lockEvent(s, { locked: false }));
-      if (released) void publishBoardLock(ctx, req.params.id, false);
-      // A freed session is the event a skipped card run waits on — e.g.
-      // the cli closing a card's coding session it had open.
-      if (released) ctx.looper?.runLoopOfSession(req.params.id, client);
-      return ok({ released });
+      if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
+      return ok({ released: await releaseHold(ctx, s, client) });
     });
 
   // ---- ping a container -----------------------------------------------------
@@ -791,20 +822,15 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
 
   app.get<{ Params: { id: string } }>('/sessions/:id', { schema: { ...TAG,
     summary: 'Session metadata',
-    description: 'Status, branch, timestamps, `system_prompt` (the frozen prompt a coding session ' +
-      'runs on; null for a supervisor\'s or assistant\'s). A session runs on its workspace\'s settings — ' +
+    description: 'Status, branch, timestamps, `system_prompt` (the frozen prompt the session runs on, ' +
+      'in its three sections; null only on a row born before 025). A session runs on its workspace\'s settings — ' +
       'GET /settings?workspace=. The workspace container is runtime state and has no field here.',
     params: idParam } }, async (req, reply) => {
     const s = await ctx.sessions.get(req.params.id);
     if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
     const card = await ctx.cards.ofSession(s.id);
-    // A coding session (one that owns its folder) born before the column
-    // (025) gets its prompt frozen the first time it is opened — the one
-    // write this read makes, once.
-    let system_prompt = await ctx.sessions.systemPrompt(s.id);
-    if (!system_prompt && ownsFolder(s)) system_prompt = await ctx.sessions.freezePromptNow(s);
     return ok({ ...s, card: card?.number ?? null,
-      system_prompt,
+      system_prompt: await ctx.sessions.systemPrompt(s.id),
       // Computed like the list's, and for the same reason: the cli polls this
       // route while a session runs elsewhere (lock state + stamp, one GET)
       // and must not compare clocks with the server.
@@ -915,14 +941,19 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     session_id: { type: ['string', 'null'], description: 'the session on screen — the assistant reads its files' },
   } } as const;
 
-  app.post<{ Body: { workspace_id: string; session_id?: string | null } }>(
+  app.post<{ Body: { workspace_id: string; session_id?: string | null; system_prompt_layout: SystemPromptLayout } }>(
     '/sessions/assistant', { schema: { ...TAG,
       summary: 'Create an assistant session',
       description: 'Creates a conversation-only session for the assistant: no checkout of its own, its ' +
         'folder is the on-screen session\'s (its file tools run as this session and open that folder). ' +
-        'It runs on the row\'s model like every session, and its model calls are billed to it. Returns the row.',
-      body: target } },
-    async (req) => ok(await ctx.sessions.createAssistant(req.body.workspace_id, req.body.session_id)));
+        'It runs on the row\'s model like every session, and its model calls are billed to it. ' +
+        '`system_prompt_layout` as on POST /sessions. Returns the row.',
+      body: { ...target, required: [...target.required, 'system_prompt_layout'],
+        properties: { ...target.properties, system_prompt_layout: SYSTEM_PROMPT_LAYOUT } } } },
+    async (req, reply) => {
+      try { return ok(await ctx.sessions.createAssistant(req.body.workspace_id, req.body.session_id, req.body.system_prompt_layout)); }
+      catch (e) { if (unknownBlock(reply, e)) return; throw e; }
+    });
 
   app.post<{ Params: { id: string }; Body: { workspace_id: string; session_id?: string | null } }>(
     '/sessions/:id/follow', { schema: { ...TAG,
@@ -940,14 +971,19 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
 
   // The supervisor's session: conversation-only, on the coder's folder, on
   // the card. The looper creates one per run.
-  app.post<{ Body: { workspace_id: string; folder_id: string; card_id: number } }>(
+  app.post<{ Body: { workspace_id: string; folder_id: string; card_id: number; system_prompt_layout: SystemPromptLayout } }>(
     '/sessions/supervisor', { schema: { ...TAG,
       summary: 'Create a supervisor session',
       description: 'Creates a conversation-only session for a card run\'s supervisor: no checkout of its own, its ' +
-        'folder is the coder\'s (`folder_id`), so its file tools read the coder\'s work. Returns the row.',
-      body: { type: 'object', required: ['workspace_id', 'folder_id', 'card_id'], additionalProperties: false, properties: {
-        workspace_id: { type: 'string' }, folder_id: { type: 'string' }, card_id: { type: 'integer' } } } } },
-    async (req) => ok(await ctx.sessions.createSupervisor(req.body.workspace_id, req.body.folder_id, req.body.card_id)));
+        'folder is the coder\'s (`folder_id`), so its file tools read the coder\'s work. ' +
+        '`system_prompt_layout` as on POST /sessions. Returns the row.',
+      body: { type: 'object', required: ['workspace_id', 'folder_id', 'card_id', 'system_prompt_layout'], additionalProperties: false, properties: {
+        workspace_id: { type: 'string' }, folder_id: { type: 'string' }, card_id: { type: 'integer' },
+        system_prompt_layout: SYSTEM_PROMPT_LAYOUT } } } },
+    async (req, reply) => {
+      try { return ok(await ctx.sessions.createSupervisor(req.body.workspace_id, req.body.folder_id, req.body.card_id, req.body.system_prompt_layout)); }
+      catch (e) { if (unknownBlock(reply, e)) return; throw e; }
+    });
 
   // The start of a turn, in one request: hold the session, write the
   // messages the server queued for it into the record, and answer what the
@@ -975,26 +1011,44 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (ctx.activeTurns?.has(s.id) && s.lockedBy && s.lockedBy !== client) return reply.code(409).send(lockedErr(s));
       const workspace = await ctx.workspaces.get(s.workspaceId);
       if (!workspace) return reply.code(404).send(err('not_found', 'workspace vanished'));
+      // The caller hanging up (a stop pressed while this request was in
+      // flight) surfaces as the socket closing with the reply unfinished —
+      // the one reliable disconnect signal (tools.ts reads it the same way).
+      // The server owns the hold: a hold taken for a caller that is gone is
+      // released here, whether the hang-up lands before or after the reply
+      // was being written.
+      let held = false;
+      let callerGone = false;
+      reply.raw.on('close', () => {
+        if (reply.raw.writableFinished) return;
+        callerGone = true;
+        if (held) void releaseHold(ctx, s, client);
+      });
       const settings = await ctx.settings.resolveMany(['session_lock_ttl_ms'], { workspace });
       const expires = await ctx.sessions.acquireLock(s, client, Number(settings.session_lock_ttl_ms), req.body.label);
       if (!expires) return reply.code(409).send(lockedErr(s));
+      held = true;
+      if (callerGone) { await releaseHold(ctx, s, client); return; }
       ctx.sessionEvents?.publish(s.id, client, lockEvent(s, { locked: true, by: client, label: req.body.label ?? s.lockedLabel ?? null, expires }));
       if (s.lockedBy !== client) void publishBoardLock(ctx, s.id, true);
       // The server's queued messages land now, under the hold, ahead of
       // whatever the caller sends: the caller reads the record after this.
       const queued = ctx.backdoor?.drain(s.id) ?? [];
+      // The row as the turn starts: after the hold, after the queued writes.
+      let atStart = s;
       if (queued.length) {
-        const held = await ctx.sessions.get(s.id);
-        await ctx.sessions.appendTranscript(held!, client, { after: held!.transcriptLines, deliveryId: `turn-start-${Date.now()}`,
+        atStart = (await ctx.sessions.get(s.id))!;
+        await ctx.sessions.appendTranscript(atStart, client, { after: atStart.transcriptLines, deliveryId: `turn-start-${Date.now()}`,
           lines: queued.map((text) => messageLine(userMessage(text))) });
+        atStart = (await ctx.sessions.get(s.id))!;
       }
+      ctx.sessions.rememberLinesAtTurnStart(s.id, atStart.transcriptLines);
       let config;
       try { config = await ctx.settings.agentConfig(req.body.type, { workspace, pin: sessionPin(s) }); }
       catch (e) { return reply.code(400).send(err('config_invalid', (e as Error).message)); }
       const tools = await toolsFor(req.body.type, { app: ctx, session: s, workspace });
-      const stamp = await ctx.sessions.transcriptStamp(s.id);
-      return ok({ expires_at: expires.toISOString(), transcript_updated_at: stamp?.toISOString() ?? null,
-        config: { model: config.model, maxSteps: config.maxSteps }, tools });
+      return ok({ expires_at: expires.toISOString(), transcript_updated_at: atStart.transcriptUpdatedAt?.toISOString() ?? null,
+        planMode: s.planMode, config: { model: config.model, maxSteps: config.maxSteps }, tools });
     });
 
   // The end of a turn, whoever ran it, for every kind of session: the turn
@@ -1021,12 +1075,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       // The hold a turn-start took ends here: one request opens a turn, one
       // closes it. A caller that never held it (a whole-file writer of old)
       // releases nothing.
-      const released = await ctx.sessions.releaseLock(s.id, client);
-      if (released) {
-        ctx.sessionEvents?.publish(s.id, client, lockEvent(s, { locked: false }));
-        void publishBoardLock(ctx, s.id, false);
-        ctx.looper?.runLoopOfSession(s.id, client);
-      }
+      await releaseHold(ctx, s, client);
       return ok({});
     });
 

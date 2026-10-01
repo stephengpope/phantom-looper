@@ -155,7 +155,7 @@ Environment variables, if you need them:
 ## Develop
 
 ```bash
-./scripts/setup.sh     # first boot: .env + secrets, local workspace image, compose up, cli connected
+./scripts/setup.sh     # first boot: .env + secrets, local workspace image, compose up (https, Caddy's own CA), cli connected
 npm run phantom-cli    # the app from source; `-- --resume <id>` to reopen a session
 ```
 

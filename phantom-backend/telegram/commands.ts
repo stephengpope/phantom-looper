@@ -19,6 +19,7 @@
 // act on the coding session the bot points at. Each runs as ONE bubble
 // edited in place — a line per step as it happens, the result on the last line.
 
+import { CodingAgent } from '../../core/agents/coding.js';
 import type { TelegramClient } from './client.js';
 import { titled } from './client.js';
 import { toTelegram } from './entities.js';
@@ -178,7 +179,7 @@ export async function handleCommand(
       const ws = bot.activeWorkspaceId;
       if (!ws) { await reply('⚠️ No active workspace — /workspaces to pick one first.'); return; }
       let started;
-      try { started = await engine.sessions.start(ws); }
+      try { started = await engine.sessions.start(ws, CodingAgent.systemPromptLayout); }
       catch (e) { await reply(`⚠️ Couldn't start a session: ${(e as Error).message}`); return; }
       // Create + point at it. The mode is untouched: from home the assistant
       // keeps the conversation; in code mode the next message starts the coder.

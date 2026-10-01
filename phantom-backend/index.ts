@@ -41,7 +41,7 @@ import { openSession, SessionLockedError, type OpenedSession } from '../core/ses
 import { runCodingTurn } from './looper/turn.js';
 import { sessionPin } from './agentConfig.js';
 import { injectFetch } from './looper/injectFetch.js';
-import { toCodingAgent } from '../core/llm/prompts/autoPush/wiring.js';
+import { toCodingAgent } from '../core/prompts/autoPush/wiring.js';
 import { serializeTranscript } from '../core/llm/transcript.js';
 import type { SyncDeps, SyncEvent } from './git/sync.js';
 import type { WorkspaceRow, SessionRow } from './db/schema.js';

@@ -18,8 +18,8 @@
 // lowest effort on a model that cannot stop thinking.
 import type { Tool } from 'ai';
 import { PhantomAgent, type ModelConfig } from '../createAgent.js';
-import { withCurrentDate } from '../prompts/template.js';
-import { systemPrompt } from '../prompts/assistant/wiring.js';
+import { withCurrentDate } from '../../prompts/template.js';
+import { systemPrompt } from '../../prompts/assistant/wiring.js';
 import type { Clock } from '../../clock.js';
 
 export function assistantInstructions(): string {

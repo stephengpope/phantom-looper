@@ -9,7 +9,7 @@
 import type { ModelMessage } from 'ai';
 import {
   firstLine, toCodingAgent, toSupervisor, type CardShape,
-} from '../../core/llm/prompts/supervisor/wiring.js';
+} from '../../core/prompts/supervisor/wiring.js';
 import { ENDING_TOOLS } from '../../core/llm/tools/kanban.js';
 
 export const LOOP_COLUMNS = ['plan', 'in_progress'] as const;

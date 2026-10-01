@@ -8,7 +8,7 @@
 // Editing a prompt file changes NEW chats only — that is the point, not a
 // limitation. Anything a model must always see current belongs in a tool's
 // description, which reaches every chat, never in here.
-import type { Clock } from '../../clock.js';
+import type { Clock } from '../clock.js';
 
 const token = () => /\{\{([a-zA-Z]\w*)\}\}/g;
 

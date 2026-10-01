@@ -10,6 +10,7 @@
 // is Deepgram-only. Mechanisms (the streaming bubble, entities, telegram_sent_messages,
 // attachments, the escape-spelled reactions) are ported from ../shockwave.
 
+import { CodingAgent } from '../../core/agents/coding.js';
 import crypto from 'node:crypto';
 import { timingSafeEqualStr } from '../crypto.js';
 import path from 'node:path';
@@ -454,7 +455,7 @@ export class TelegramEngine {
       const onWorkspaceCreated = async (workspaceId: string) => {
         await this.deps.botState.setActiveWorkspace(workspaceId);
         let started;
-        try { started = await this.deps.sessions.start(workspaceId); }
+        try { started = await this.deps.sessions.start(workspaceId, CodingAgent.systemPromptLayout); }
         catch (e) { return { error: (e as Error).message }; }
         await this.deps.botState.setActiveSession(started.id);
         await this.enterMode(client, dm, 'code');

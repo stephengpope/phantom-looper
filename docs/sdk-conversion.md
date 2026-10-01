@@ -20,9 +20,9 @@ is the hand-off for finishing that.
 
 ## Done
 
-**The SDK.** One base class. A subclass declares `type` and `systemPrompt()`
-and nothing else; `MyAgent.open(backend, handlers, sessionId)` /
-`MyAgent.create(...)`. Inside, one file per job: the connection
+**The SDK.** One base class. A subclass declares `type` and its
+`systemPromptLayout` and nothing else; `MyAgent.open(backend, handlers,
+sessionId)` / `MyAgent.newSession(...)`. Inside, one file per job: the connection
 (`serverConnection.ts`, `backend.ts`), the session — row, record, turn
 (`session.ts`, `record.ts`), the model (`model/`), the turn (`turn.ts`),
 the feed (`feed.ts`). The record's line format is on its own subpath
@@ -34,8 +34,11 @@ the feed (`feed.ts`). The record's line format is on its own subpath
 call, feed and turn; reconnects on drop. The cli installs it as the fetch
 for the server's origin, so every caller — cli, core tools, git streams —
 rides it unchanged. Proven: 3 feeds + 20 requests on one socket; abort one
-feed, the rest live; server restart, next request reconnects. A plain-http
-dev server (no Caddy, no HTTP/2) keeps the platform fetch.
+feed, the rest live; server restart, next request reconnects. It is the
+only transport: the server is always https behind Caddy, dev included
+(`scripts/setup.sh` runs the `https` profile on Caddy's own CA and saves
+the root where the cli trusts it). A non-https URL is refused with a
+message; there is no plain-http path.
 
 **One request per turn start.** `POST /sessions/:id/turn-start` holds the
 session, writes the server's queued user messages into the record, answers
@@ -55,6 +58,19 @@ included. Before: five sequential requests.
 - Crash recovery answers exactly the tool calls without a result.
 - Another writer's lines are read before the turn; the server's queued user
   messages ride ahead of the user's words.
+
+**The system prompt.** Assembled ONCE when the session is created, written
+with the row, never changed; every turn sends it as stored. The agent
+declares its layout — three sections (stable, context, volatile), each the
+agent's own text and the names of blocks only the server fills (`soul_md`,
+`agents_md`, `skills_list`, `secrets_list`, `time_date`, `github_token`,
+`agent_database`). `POST /sessions` takes the layout;
+`phantom-backend/systemPrompt/SystemPrompt.ts` fills it. One system block
+and one cache mark per section. Migration 046 renamed the old two pieces.
+
+**The turn's hold.** turn-start answers plan mode (no row re-read per
+turn); a caller that hangs up mid turn-start has its hold released by the
+server; a turn that wrote nothing does not count (no model freeze).
 
 **The cli, today's path.** Enter shows the spinner immediately; a refused
 send puts the text back in the box (or the session's draft off-screen).
@@ -83,16 +99,20 @@ the cli finds it; the headless hosts can't.
   `/agents/:type/config`, `/agents/:type/tools`, `/backdoor/drain` go when
   the last host stops using them. After that the key travels only inside
   turn-start, and the banner reads provider/model off the session row.
+- The cli installs `ServerConnection` by overriding `globalThis.fetch` for
+  the server's origin — an interim shortcut because the old path has eight
+  callers of the global fetch. At the switch `PhantomBackend` gets the
+  connection injected and the override goes.
 
 ### 2. The cli onto the SDK
 
-- Coding sessions: `CodingAgent.open/start` from `core/agents`. Esc =
+- Coding sessions: `CodingAgent.open/newSession` from `core/agents`. Esc =
   `agent.interrupt()`.
 - Delete: the local transcript file (`~/.phantom-cli/sessions/`),
   `adoptServerCopy`, `syncTranscriptUp`, `stepSaveUp`, the nudge queue, the
   cli's compaction calls. Every step is on the server as it lands; a local
   copy is a second truth.
-- The cli's own tools become `use()` kits: sessions list/read/switch,
+- The cli's own tools become `addToolKit()` kits: sessions list/read/switch,
   docker logs, workspace create, screen mode, the code-mode ask (blocks a
   tool call on a dialog; the SDK passes the abort signal through, so it
   works unchanged), the board with repaint, git push/pull with progress.
@@ -111,7 +131,7 @@ the cli finds it; the headless hosts can't.
   like any client; the shortcut is deleted. Do this here, not before.
 - `looper/turn.ts` (the server's coding-turn runner) goes; the card run
   opens `CodingAgent` / `SupervisorAgent` and adds its card-bound tools with
-  `use()`. Rename the run's `kanban_card_move` — the server publishes a tool
+  `addToolKit()`. Rename the run's `kanban_card_move` — the server publishes a tool
   of that name with a different contract (any card, any column).
 - The server's user message queue is written into the record inside
   turn-start; `api/backdoor.ts` goes.
@@ -128,6 +148,49 @@ read them. The whole-file transcript routes (`PUT /transcript`,
 
 Server-side, on the record (a `compaction` line the reader honours). Not
 discussed yet; the four `*_compact_*` settings are dead until then.
+
+## Later: the system prompt override
+
+Decided, not built. A client may rebuild a session's prompt, deliberately,
+never automatically: `send(text, { rebuildSystemPrompt: true })` → the
+turn-start body carries `system_prompt_layout`; the server, under the hold,
+assembles from today's facts, overwrites the row, answers the new sections
+in the turn-start reply (`system_prompt`, present only when rebuilt); the
+SDK takes them for that turn and after. A record line marks the rebuild.
+No separate route, no separate method.
+
+## Names — decided, do not reinvent
+
+Reviewed name by name with the builder. Keep these; rename only with a reason.
+
+**Objects**: `Agent`, `CodingAgent` / `AssistantAgent` / `SupervisorAgent`,
+`PhantomBackend`, `ToolKit`, `SystemPrompt`, `StoredSystemPrompt`
+(`{ stable, context, volatile }`), `SERVER_PROMPT_BLOCKS` (the blocks only
+the server can fill, each with its reader).
+
+**Methods**
+- `Agent.open(backend, handlers, sessionId)` — an existing session.
+- `Agent.create(backend, handlers, …)` — a new session.
+- `CodingAgent.newSession(…)` / `AssistantAgent.newSession(…)` — was `start`.
+- `Agent.addToolKit(kit)` — was `use`.
+- `Agent.send(text)`, `Agent.interrupt()`.
+- `systemPromptLayout()` — the subclass declares its three sections.
+- `agentText(…)` — marks a layout entry as the agent's own text.
+- `SystemPrompt.assemble(layout, session)` — fills the layout.
+- `SystemPrompt.sections()` — the three strings. Was `write`; it writes nothing.
+- `Session.turn(…)`.
+- Deleted: per-turn `systemPrompt()`.
+
+**Wire / storage**: `POST /sessions` body `system_prompt_layout`;
+`sessions.system_prompt` holds `{ stable, context, volatile }`; turn-start
+answers `planMode`.
+
+**Server blocks** (named for what the text is): `soul_md`, `agents_md`,
+`skills_list`, `secrets_list`, `time_date`, `github_token`, `agent_database`.
+Never "fact", "note", "hint".
+
+**Files**: `phantom-backend/systemPrompt/SystemPrompt.ts`; prompt texts move
+`core/prompts/` → `core/prompts/`; `core/agents/clock.ts` deleted.
 
 ## Notes worth keeping
 

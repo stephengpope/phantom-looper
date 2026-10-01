@@ -1,11 +1,13 @@
-// The base of every agent. A subclass says its type and how its system
-// prompt is built — nothing else. The base wires the session (session.ts),
+// The base of every agent. A subclass says its type and its system prompt
+// LAYOUT (systemPrompt.ts) — nothing else. The layout goes with the create
+// request; the server assembles the prompt once and writes it with the row;
+// every turn sends it as stored. The base wires the session (session.ts),
 // the model (model/models.ts), the tools (toolkit.ts) and the turn
 // (turn.ts), and owns the user's queue, interrupts and events.
 //
 //   class CodingAgent extends Agent {
 //     readonly type = 'coding';
-//     protected systemPrompt() { return [this.session.row.system_prompt as string]; }
+//     static readonly systemPromptLayout: SystemPromptLayout = { stable: [...], context: [...], volatile: [...] };
 //   }
 //   const agent = await CodingAgent.open(backend, handlers, sessionId);
 //
@@ -22,6 +24,7 @@ import { Session, type SessionInfo, type TurnStart } from './session.js';
 import { ToolKitSet, serverToolKit, type ToolKit } from './toolkit.js';
 import { runTurn, type TurnResult } from './turn.js';
 import { UserMessageQueue, type UserMessages } from './userMessages.js';
+import { systemPromptBlocks } from './systemPrompt.js';
 
 export interface Notice {
   type: 'retry' | 'cache' | 'info';
@@ -46,8 +49,6 @@ type AgentClass<T extends Agent> = new (deps: AgentDeps) => T;
 export abstract class Agent {
   /** Which agent this is — the server answers its model and tools by type. */
   abstract readonly type: string;
-  /** The prompt, as blocks, asked before every turn. */
-  protected abstract systemPrompt(): Promise<string[]> | string[];
 
   /** The connection, retrying: a network failure or a 5xx is retried per
    *  the handlers' policy, each attempt a notice; 409s (locked, conflict)
@@ -99,7 +100,7 @@ export abstract class Agent {
   }
 
   /** Tools only this app can serve, alongside the server's. */
-  use(kit: ToolKit): this { this.#kits.add(kit); return this; }
+  addToolKit(kit: ToolKit): this { this.#kits.add(kit); return this; }
 
   // ── the user's words ───────────────────────────────────────────────────
   // A user message starts a turn. Text sent WHILE a turn runs is queued: it
@@ -203,15 +204,17 @@ export abstract class Agent {
 
   /** Everything a turn needs before it sends anything, from what turn-start
    *  answered: the record made current (the server's queued messages are in
-   *  it now), the row re-read, the model, the prompt, the tools. Null when a
-   *  stop landed meanwhile — nothing was sent, nothing recorded, the queue
+   *  it now), plan mode, the model, the prompt as stored, the tools. Null when a stop
+   *  landed meanwhile — nothing was sent, nothing recorded, the queue
    *  untouched. */
   async #prepare(start: TurnStart & { recordMoved: boolean }, signal: AbortSignal): Promise<{ model: ResolvedModel; system: SystemModelMessage[]; tools: Record<string, Tool> } | null> {
     try {
       if (await this.#session.makeCurrent(start.recordMoved, signal)) this.#emit('reloaded', { messages: this.session.messages });
-      await this.#session.refresh(signal);
+      this.#session.setPlanMode(start.planMode);
       const model = this.#models.resolve(start.config);
-      const { messages: system, uncached } = systemMessages(await this.systemPrompt(), model.spec.provider);
+      const stored = this.session.row.system_prompt;
+      if (!stored) throw new PhantomError('config_invalid', `session ${this.session.id} has no system prompt`);
+      const { messages: system, uncached } = systemMessages(systemPromptBlocks(stored), model.spec.provider);
       if (uncached) this.#handlers.onNotice({ type: 'cache', text: `${uncached} system prompt block(s) beyond the first ${CACHED_BLOCKS} are not cached on ${model.spec.provider}` });
       this.#kits.add(serverToolKit(start.tools));
       const tools = await this.#kits.resolve({ backend: this.backend, sessionId: this.session.id, workspaceId: this.session.workspaceId,

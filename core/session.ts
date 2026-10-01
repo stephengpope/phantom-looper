@@ -18,6 +18,7 @@
 import type { ModelMessage } from 'ai';
 import { parseTranscript, type TranscriptEvent } from './llm/transcript.js';
 import type { CodingPrompt } from './llm/agents/coding.js';
+import { CodingAgent } from './agents/coding.js';
 
 export class SessionLockedError extends Error {
   constructor(message: string) { super(message); this.name = 'SessionLockedError'; }
@@ -133,7 +134,7 @@ export async function openSession(cfg: OpenSessionConfig): Promise<OpenedSession
   let created = false;
   if (!cfg.sessionId) {
     if (!cfg.workspaceId) throw new Error('openSession: workspaceId required to create');
-    session = await guarded('POST', '/sessions', { workspace_id: cfg.workspaceId }) as SessionInfo;
+    session = await guarded('POST', '/sessions', { workspace_id: cfg.workspaceId, system_prompt_layout: CodingAgent.systemPromptLayout }) as SessionInfo;
     created = true;
   } else {
     const existing = await guarded('GET', `/sessions/${cfg.sessionId}`) as SessionInfo;
@@ -141,7 +142,7 @@ export async function openSession(cfg: OpenSessionConfig): Promise<OpenedSession
       session = existing;
     } else {
       session = await guarded('POST', '/sessions',
-        { workspace_id: existing.workspaceId, id: cfg.sessionId }) as SessionInfo;
+        { workspace_id: existing.workspaceId, id: cfg.sessionId, system_prompt_layout: CodingAgent.systemPromptLayout }) as SessionInfo;
       created = true;
     }
   }

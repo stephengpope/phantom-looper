@@ -4,6 +4,7 @@
 // class. The engine holds one instance and calls methods on it; commands.ts
 // reaches `runCompaction()` through it.
 
+import { AssistantAgent } from '../../core/agents/assistant.js';
 import path from 'node:path';
 import type { ModelMessage } from 'ai';
 import type { Sessions } from '../sessions.js';
@@ -91,7 +92,7 @@ export class AssistantConversation {
       if (row) return row;
       this.sessionId = null; // purged underneath us — make a new one
     }
-    const row = await this.deps.sessions.createAssistant(workspaceId, activeSessionId);
+    const row = await this.deps.sessions.createAssistant(workspaceId, activeSessionId, AssistantAgent.systemPromptLayout);
     this.sessionId = row.id;
     return row;
   }

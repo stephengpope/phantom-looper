@@ -14,7 +14,7 @@
 // the same intent the coding agent had; this call is the only place the sync
 // spends a model when nothing conflicts.
 import type { ModelConfig } from '../../core/llm/createAgent.js';
-import { commitMessagePrompt } from '../../core/llm/prompts/autoPush/wiring.js';
+import { commitMessagePrompt } from '../../core/prompts/autoPush/wiring.js';
 import { PhantomHelper } from '../../core/llm/helper.js';
 import { git } from './git.js';
 import { logger } from '../log.js';

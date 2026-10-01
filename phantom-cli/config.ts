@@ -47,7 +47,9 @@ export const CONFIG_PATH = join(CONFIG_DIR, 'settings.json');
  *  whether you muted yourself here. A device name is wrong on your other
  *  machine; a model choice is not. */
 export const DEFAULTS = {
-  server_url: 'http://localhost:8080' as string,
+  // No default: the server is always https behind Caddy, paired by
+  // setup-backend or scripts/setup.sh — there is no address to guess.
+  server_url: '' as string,
   server_key: null as string | null,
   auto_update: true as boolean,
   voice_mic_device: null as string | null,
@@ -65,7 +67,7 @@ export const isLocalKey = (k: string): k is LocalKey => Object.prototype.hasOwnP
 export type ConfigValue = string | number | boolean | null;
 
 export const DESCRIPTIONS: Record<LocalKey, string> = {
-  server_url: 'Base URL of the phantom-looper API.',
+  server_url: 'Base URL of the phantom-looper API — always https://, behind the server\'s Caddy.',
   server_key: 'Bearer token for the phantom-looper API (its API_KEY).',
   auto_update: 'Check for a new phantom-cli release about once a day and install it in the background. It runs on next launch — the version label above the prompt says when one is ready.',
   voice_mic_device: 'Microphone, by device name. Empty = the system default.',

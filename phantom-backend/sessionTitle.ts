@@ -5,12 +5,12 @@
 // save afterwards on shouldName's cadence: +1 turn per save, name at turn 1
 // while still unnamed, then every 10th turn — a duplicate arrives named with its
 // clock at 0 and renames on its own schedule. The prompt is its own document
-// (core/llm/prompts/helpers/); the model is the Assistant's config, and
+// (core/prompts/helpers/); the model is the Assistant's config, and
 // a half-set assistant pair falls back silently to the coding agent's. Never throws — on any failure the old name (or null) stands (the
 // commitMessage.ts pattern).
 import type { ModelConfig } from '../core/llm/createAgent.js';
 import { PhantomHelper } from '../core/llm/helper.js';
-import { titleRequest, type TitleContext } from '../core/llm/prompts/helpers/wiring.js';
+import { titleRequest, type TitleContext } from '../core/prompts/helpers/wiring.js';
 import { parseLines, conversationFrom } from 'phantom-client-sdk/transcript';
 import type { Settings } from './settings.js';
 import type { Sessions } from './sessions.js';

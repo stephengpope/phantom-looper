@@ -36,10 +36,8 @@ import type { Folders } from './folders.js';
 import { newId } from '../core/ids.js';
 import { logger } from './log.js';
 import { lastUserFromJsonl, stripUsageFromJsonl } from '../core/llm/transcript.js';
-import { codingPrompt, type CodingPrompt } from '../core/llm/agents/coding.js';
-import { readSoul, readAgents } from '../core/llm/prompts/coding/wiring.js';
-import { scanSkills, mergeSkills } from '../core/skills/skills.js';
-import { systemSkills } from './systemSkills.js';
+import type { SystemPromptLayout, StoredSystemPrompt } from 'phantom-client-sdk/systemPrompt';
+import { SystemPrompt } from './systemPrompt/SystemPrompt.js';
 import { repoDir, type Paths } from './pool/paths.js';
 import type Docker from 'dockerode';
 import { GLOBAL, workspaceScope } from './store.js';
@@ -204,45 +202,29 @@ export class Sessions {
   // are thin over them, and the server's own engines (Telegram, card runs)
   // call them here rather than over HTTP.
 
-  /** Create — or restart — a session AND freeze its coding prompt: the
-   *  skills, secrets and git facts of THIS moment, sent verbatim on every
-   *  turn after (Sessions.freezeSystemPrompt). A restart keeps the prompt the
-   *  session was born with. The row and the prompt come back together — what
-   *  POST /sessions answers with. */
-  async start(workspaceId: string, opts: { id?: string } = {}): Promise<SessionFull & { system_prompt: CodingPrompt }> {
+  /** Create — or restart — a session AND write its system prompt: the
+   *  agent's layout filled with THIS moment's facts (skills, secrets,
+   *  SOUL.md, the date), sent as stored on every turn after. A restart keeps
+   *  the prompt the session was born with. The row and the prompt come back
+   *  together — what POST /sessions answers with. */
+  async start(workspaceId: string, layout: SystemPromptLayout, opts: { id?: string } = {}): Promise<SessionFull & { system_prompt: StoredSystemPrompt }> {
+    SystemPrompt.check(layout);
     const s = await this.create(workspaceId, opts);
-    return { ...s, system_prompt: await this.freezePromptNow(s) };
+    return { ...s, system_prompt: await this.writeSystemPrompt(s, layout) };
   }
 
-  /** Freeze THIS moment's coding prompt on a session's row: the checkout's
-   *  skills, SOUL.md and AGENTS.md, the image's skills, the declared secrets,
-   *  the workspace's git facts. `start` does it at birth; GET /sessions/:id
-   *  does it once for a coding session born before the column existed. */
-  async freezePromptNow(s: SessionRow): Promise<CodingPrompt> {
-    const workspace = await this.workspaces.get(s.workspaceId);
-    const resolved = await this.settings.resolveMany(
-      ['container_image', 'agent_git_credentials', 'agent_database', 'agent_database_shared', 'agent_soul', 'agent_agents_md'], { workspace });
-    const checkout = this.promptDeps ? repoDir(this.promptDeps.paths, folderOf(s)) : null;
-    const skills = checkout
-      ? mergeSkills(
-        await scanSkills(checkout),
-        this.promptDeps?.docker ? await systemSkills(this.promptDeps.docker, String(resolved.container_image)) : [])
-      : [];
-    const soul = checkout && resolved.agent_soul ? await readSoul(checkout) : '';
-    const agents = checkout && resolved.agent_agents_md ? await readAgents(checkout) : '';
-    const byName = new Map<string, { name: string; description: string }>();
-    for (const sec of await this.settings.listSecrets([GLOBAL, workspaceScope(s.workspaceId)])) {
-      if (sec.scope === GLOBAL && byName.has(sec.name)) continue;
-      byName.set(sec.name, { name: sec.name, description: sec.description });
-    }
-    const secrets = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
-    return this.freezeSystemPrompt(s.id, codingPrompt(skills, {
-      credentials: Boolean(resolved.agent_git_credentials),
-      database: Boolean(resolved.agent_database),
-      databaseShared: Boolean(resolved.agent_database_shared),
-      soul,
-      agents,
-    }, secrets));
+  /** Assemble the agent's layout from the session's facts and freeze it on
+   *  the row. The checkout the blocks read is the session's own folder, or
+   *  the one it borrows (a supervisor's coder, the assistant's on-screen
+   *  session); none when there is nothing to read. */
+  private async writeSystemPrompt(s: SessionRow, layout: SystemPromptLayout): Promise<StoredSystemPrompt> {
+    const workspace = (await this.workspaces.get(s.workspaceId))!;
+    const prompt = await SystemPrompt.assemble(layout, {
+      workspaceId: s.workspaceId, workspace, settings: this.settings,
+      checkout: this.promptDeps && s.folderId ? repoDir(this.promptDeps.paths, s.folderId) : null,
+      docker: this.promptDeps?.docker,
+    });
+    return this.freezeSystemPrompt(s.id, prompt.sections());
   }
 
   /** Stop whatever turn is running on a session: the in-process turn is
@@ -342,10 +324,10 @@ export class Sessions {
     return data.slice(pos);
   }
 
-  /** The frozen system prompt, or null when the row has none (a
-   *  conversation-only session, or one born before 025 and not yet opened).
-   *  The other read that names a blob on purpose. */
-  async systemPrompt(id: string): Promise<CodingPrompt | null> {
+  /** The frozen system prompt, or null when the row has none (born before
+   *  025 and never opened since). The other read that names a blob on
+   *  purpose. */
+  async systemPrompt(id: string): Promise<StoredSystemPrompt | null> {
     const rows = await this.db.select({ prompt: sessions.systemPrompt }).from(sessions).where(eq(sessions.id, id));
     return rows[0]?.prompt ?? null;
   }
@@ -353,7 +335,7 @@ export class Sessions {
   /** Write the prompt once: only a row with none takes it, so a restart or a
    *  re-open can never move a running session's prompt. Returns what the row
    *  holds afterwards. */
-  async freezeSystemPrompt(id: string, prompt: CodingPrompt): Promise<CodingPrompt> {
+  async freezeSystemPrompt(id: string, prompt: StoredSystemPrompt): Promise<StoredSystemPrompt> {
     const rows = await this.db.update(sessions).set({ systemPrompt: prompt })
       .where(and(eq(sessions.id, id), isNull(sessions.systemPrompt)))
       .returning({ prompt: sessions.systemPrompt });
@@ -581,8 +563,11 @@ export class Sessions {
   /** The supervisor's conversation-only session, on its coder's card: no
    *  folder of its own — its folder_id points at the coder's, which is where
    *  the files are. */
-  createSupervisor(workspaceId: string, folderId: string, cardId: number): Promise<SessionRow> {
-    return this.createConversation(workspaceId, { agent: 'supervisor', folderId, cardId });
+  async createSupervisor(workspaceId: string, folderId: string, cardId: number, layout: SystemPromptLayout): Promise<SessionRow> {
+    SystemPrompt.check(layout);
+    const s = await this.createConversation(workspaceId, { agent: 'supervisor', folderId, cardId });
+    await this.writeSystemPrompt(s, layout);
+    return s;
   }
 
   /** Where the assistant's row points: the workspace, and the folder of the
@@ -597,9 +582,12 @@ export class Sessions {
 
   /** The assistant's conversation-only session, pointed at what the user is
    *  looking at. */
-  async createAssistant(workspaceId: string, activeSessionId?: string | null): Promise<SessionRow> {
+  async createAssistant(workspaceId: string, activeSessionId: string | null | undefined, layout: SystemPromptLayout): Promise<SessionRow> {
+    SystemPrompt.check(layout);
     const t = await this.assistantTarget(workspaceId, activeSessionId);
-    return this.createConversation(t.workspaceId, { agent: 'assistant', folderId: t.folderId });
+    const s = await this.createConversation(t.workspaceId, { agent: 'assistant', folderId: t.folderId });
+    await this.writeSystemPrompt(s, layout);
+    return s;
   }
 
   /** The assistant's row follows the session on screen: its tools read that
@@ -754,18 +742,34 @@ export class Sessions {
     return { firstMessage: !!r && r.name === null && r.turnCount === 0 && r.agent === null };
   }
 
-  /** A turn ended on a session, whoever ran it: bump the turn count (leaving
-   *  0 is what freezes the row's model), seat the agent after the writer
-   *  (agentAfterSave — a person's turn into a card run's session takes it
-   *  over), touch its checkout. Tokens are not here — every model call
-   *  records its own row in log_tokens. Returns what the naming decision
-   *  needs. */
+  /** The record's line count when a turn started, per session — so the
+   *  turn's end can tell whether the turn wrote anything. In memory: a turn
+   *  lives inside one server process, and an entry missing at the end (a
+   *  restart mid-turn, a writer that never called turn-start) counts the turn
+   *  as before. */
+  readonly #linesAtTurnStart = new Map<string, number>();
+
+  /** turn-start took the hold and wrote the queued messages: remember where
+   *  the record stands now. */
+  rememberLinesAtTurnStart(id: string, lines: number): void { this.#linesAtTurnStart.set(id, lines); }
+
+  /** A turn ended on a session, whoever ran it: bump the turn count — only
+   *  when the turn wrote to the record, because leaving 0 is what freezes
+   *  the row's model and a turn that said nothing (stopped before the first
+   *  word, failed to start) must not freeze it — seat the agent after the
+   *  writer (agentAfterSave — a person's turn into a card run's session
+   *  takes it over), touch its checkout. Tokens are not here — every model
+   *  call records its own row in log_tokens. Returns what the naming
+   *  decision needs. */
   async turnEnded(s: SessionRow, client: string): Promise<{
     agent: 'coding' | 'supervisor' | 'assistant' | 'cron' | null; name: string | null; turnCount: number; nameManual: boolean;
   }> {
     const agent = agentAfterSave(s.agent, client);
+    const linesAtStart = this.#linesAtTurnStart.get(s.id);
+    this.#linesAtTurnStart.delete(s.id);
+    const wrote = linesAtStart === undefined || s.transcriptLines !== linesAtStart;
     const [saved] = await this.db.update(sessions)
-      .set({ turnCount: sqlRaw`${sessions.turnCount} + 1`, agent })
+      .set({ ...(wrote ? { turnCount: sqlRaw`${sessions.turnCount} + 1` } : {}), agent })
       .where(eq(sessions.id, s.id))
       .returning({ name: sessions.name, turnCount: sessions.turnCount, nameManual: sessions.nameManual });
     if (s.folderId) await this.folders.touch(s.folderId);

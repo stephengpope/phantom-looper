@@ -2,7 +2,7 @@
 // the server's tools for this agent, listed with every turn start — the
 // server decides what an agent of that type gets, and what each tool does.
 // An app adds tools only it can serve (its own screen, its own approvals)
-// through the same interface with `agent.use(kit)`.
+// through the same interface with `agent.addToolKit(kit)`.
 //
 // Every kit is built before every turn — what an agent has can change
 // between turns (a setting, a folder). `build` answers the tools AND which

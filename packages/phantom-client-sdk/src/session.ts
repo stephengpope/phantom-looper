@@ -15,9 +15,11 @@ import { interruptedResultMessage } from './messages.js';
 import { SessionRecord } from './record.js';
 import { conversationFrom, messageLine, type TokenTotals, type TranscriptLine } from './transcript.js';
 import type { LlmConfig } from './model/llmConfig.js';
+import type { StoredSystemPrompt } from './systemPrompt.js';
 
-/** The session row, the fields the runtime and an agent read. `system_prompt`
- *  is whatever the app stored there, read by its own agent. */
+/** The session row, the fields the runtime and an agent read.
+ *  `system_prompt` is the prompt as assembled at create — the three
+ *  sections every turn sends; null only on a row born before it existed. */
 export interface SessionRow {
   id: string;
   workspaceId: string;
@@ -26,7 +28,7 @@ export interface SessionRow {
   agent: string | null;
   name: string | null;
   planMode: boolean;
-  system_prompt: unknown;
+  system_prompt: StoredSystemPrompt | null;
 }
 
 /** What an app sees of the session. */
@@ -46,9 +48,10 @@ export interface SessionInfo {
 
 /** What starting a turn answers: the hold, the record's last-changed mark
  *  (so the turn knows whether its copy is current without downloading
- *  anything), and what the turn runs on. */
+ *  anything), plan mode as the row has it now, and what the turn runs on. */
 export interface TurnStart {
   transcript_updated_at: string | null;
+  planMode: boolean;
   config: LlmConfig;
   tools: PublishedTool[];
 }
@@ -79,12 +82,8 @@ export class Session implements SessionInfo {
   get messages(): readonly ModelMessage[] { return this.#messages; }
   get usage(): Readonly<TokenTotals> { return this.record.usage; }
 
-  /** The row as the server has it now (plan mode, the folder the tools open). */
-  async refresh(signal?: AbortSignal): Promise<void> {
-    this.#row = await this.backend.call<SessionRow>('GET', `/sessions/${this.id}`, undefined, { signal });
-  }
-
-  /** The session feed said plan mode flipped. */
+  /** Plan mode as the server says it: turn-start's answer, or the session
+   *  feed mid-turn. */
   setPlanMode(on: boolean): void { this.#row = { ...this.#row, planMode: on }; }
 
   /** One turn on this session: start it (the hold, the server's queued
