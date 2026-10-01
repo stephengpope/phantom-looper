@@ -19,11 +19,13 @@
 //   release images older than the running one that no container uses any
 //   more are deleted too (a container pins its image).
 //
-//   A session is SKIPPED, never forced, when it is busy (a turn holds a lock
-//   on its folder, or a background task runs there) or its backup fails
+//   A session is SKIPPED, never forced, when its work has not landed on
+//   base (an unmerged session is someone's live work — its files stay,
+//   whatever the disk says), when it is busy (a turn holds a lock on its
+//   folder, or a background task runs there), or when its backup fails
 //   (tried again on the next run). So the disk can only stay full when
-//   what is left is busy, cannot be backed up, or one session alone fills
-//   it — and the final log names those sessions.
+//   what is left is unmerged, busy, cannot be backed up, or one session
+//   alone fills it — and the final log names those sessions.
 //
 //   Never touched: a spare clone (the pool refills it — nothing is freed)
 //   and an image newer than the running release (an update in flight pulled
@@ -38,7 +40,8 @@ import type { Paths } from './pool/paths.js';
 import type { ContainerManager } from './workspace/container.js';
 import type { Images } from './images.js';
 import type { GitEngine } from './git/engine.js';
-import type { PushResult } from './git/git.js';
+import { workState, type PushResult } from './git/git.js';
+import { repoDir } from './pool/paths.js';
 import { logger, errStr } from './log.js';
 
 const log = logger('disk');
@@ -141,6 +144,9 @@ export interface CleanupDeps {
   /** Of these folder ids, the busy ones: a turn holds a lock there, or a
    *  background task runs there. */
   busy: (folderIds: string[]) => Promise<Set<string>>;
+  /** Has this session's work landed on base? Unknown counts as no — the
+   *  sweep never deletes on a guess. */
+  landed: (s: SessionRow, w: WorkspaceRow) => Promise<boolean>;
   /** Delete release images older than the running one that no container uses. */
   removeOldImages: () => Promise<void>;
   /** engine.backup: push, then run `whenSafe` under the same lock only if
@@ -167,12 +173,13 @@ export async function diskCleanup(d: CleanupDeps): Promise<void> {
   }
   owners.sort((a, b) => a.s.lastUsedAt.getTime() - b.s.lastUsedAt.getTime());
 
-  const left = { busy: [] as string[], failed: [] as string[] };
+  const left = { unmerged: [] as string[], busy: [] as string[], failed: [] as string[] };
   for (const { s, w } of owners) {
     await d.removeOldImages();
     if (!tooFull(await d.measure(), d.pct)) break;
 
     if (busy.has(s.id)) { left.busy.push(s.id); continue; }
+    if (!(await d.landed(s, w))) { left.unmerged.push(s.id); continue; }
 
     let deleted = false;
     const r = await d.backup(s, w, async () => {
@@ -200,8 +207,8 @@ export async function diskCleanup(d: CleanupDeps): Promise<void> {
 
   const end = await d.measure();
   if (tooFull(end, d.pct)) {
-    log.warn({ ...rounded(end), busy: left.busy, failed: left.failed },
-      'disk still too full — what is left is busy or could not be backed up');
+    log.warn({ ...rounded(end), unmerged: left.unmerged, busy: left.busy, failed: left.failed },
+      'disk still too full — what is left is unmerged, busy or could not be backed up');
   } else {
     log.info(rounded(end), 'disk cleanup done — disk healthy');
   }
@@ -218,6 +225,9 @@ export async function pressureSweep(
     measure: () => measureDisk(p.root),
     owners: () => folderOwners(workspaces, sessions),
     busy,
+    // Measured live from the checkout: the stored `work` column is cleared
+    // once the container is gone, which is exactly the idle session here.
+    landed: async (s, w) => !!s.branch && (await workState(repoDir(p, s.id), s.branch, w.baseBranch)) === 'merged',
     // Images owns the rule and refuses while a pull is in flight (images.ts).
     removeOldImages: () => images.removeOlderThan(currents)
       .catch((e) => log.warn({ err: errStr(e) }, 'image cleanup failed')),

@@ -163,7 +163,7 @@ export function sessionChoices(
     const nameCol = s.name ?? '·';
     // A session open here that nothing was typed into carries no activity
     // time (App's merge fills epoch 0 so it sorts last) — the dot, not "2957w".
-    const when = dead ? 'ended' : Date.parse(s.lastUsedAt) > 0 ? ago(s.lastUsedAt, now) : '·';
+    const when = Date.parse(s.lastUsedAt) > 0 ? ago(s.lastUsedAt, now) : '·';
     // A blank work fact is the dot, UNMARKED — a color would claim a state
     // the server did not give: the list may not have been fetched with
     // git=true yet (the instant first paint), or there is nothing to measure.
@@ -177,7 +177,9 @@ export function sessionChoices(
       ? formatTokensIn(s.tokensInput) + (pct != null ? ` (${pct}%)` : '') : '';
     const outMeter = s.tokensOutput ? formatTokensOut(s.tokensOutput) : '';
     const tokensCol = [inMeter, outMeter].filter(Boolean).join(' ') || '·';
-    const whenCol = dead ? 'ended' : when;
+    // ☠ = no folder (the disk sweep took it). The time stays — when it was
+    // last touched is still the fact that matters.
+    const whenCol: Cell = dead ? { text: when, mark: 'gray', markChar: '☠', markAfter: true } : when;
     return {
       value: { kind: 'resume', sessionId: s.id } as Launch, id: s.id,
       cells: [wsCol(s), cardCol, workCol, nameCol, s.model ?? '·', tokensCol, whenCol],
@@ -185,14 +187,12 @@ export function sessionChoices(
       dot: open && !running,
       hint: [
         s.name ?? undefined,
-        dead
-          ? `Ended — reopening restarts it.`
-          : held
-            ? `A turn is running (${s.lockedLabel || 'another machine'}); read freely — sends are refused while it runs.`
-            : open
-              ? 'Loaded in this window — enter switches to it.'
-              : sup ? `The supervisor's conversation for card ${s.card ?? '?'} — read-only.`
-              : cron ? 'A scheduled prompt\'s run (cron) — chat into it and it is yours.' : undefined,
+        held
+          ? `A turn is running (${s.lockedLabel || 'another machine'}); read freely — sends are refused while it runs.`
+          : open
+            ? 'Loaded in this window — enter switches to it.'
+            : sup ? `The supervisor's conversation for card ${s.card ?? '?'} — read-only.`
+            : cron ? 'A scheduled prompt\'s run (cron) — chat into it and it is yours.' : undefined,
       ].filter(Boolean).join('\n') || undefined,
     };
   });

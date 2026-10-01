@@ -269,9 +269,11 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     });
 
   // ---- ping a container -----------------------------------------------------
-  // Start the session's container so the periodic git-status check can read
-  // it again. The caller sees `work` update within ~10s via the board event
-  // stream. 503 when Docker is not wired (DB-only test environments).
+  // Bring the session back up, whichever layer went: files gone (the disk
+  // sweep took them) → clone its branch back; then start the container so
+  // the periodic git-status check can read it again. The caller sees `work`
+  // update within ~10s via the board event stream. 503 when Docker is not
+  // wired (DB-only test environments).
   //
   // The ping is activity: it touches the folder's lastUsedAt like a tool call
   // does. Without that a session idle past container_idle_ms is started and
@@ -280,8 +282,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   app.post<{ Params: { id: string } }>(
     '/sessions/:id/ping', { schema: { ...TAG,
       summary: 'Ping the session container',
-      description: 'Starts the session\u2019s container if it is not already running and marks the ' +
-        'checkout as used, so the idle reaper leaves it up for another container_idle_ms. ' +
+      description: 'Brings the session back up: clones its branch back if the files are gone, starts ' +
+        'the container if it is not already running, and marks the checkout as used so the idle ' +
+        'reaper leaves it up for another container_idle_ms. ' +
         'The periodic git-status refresh picks it up within ~10 seconds and ' +
         'publishes the result on the board event stream. 503 when Docker is not wired.',
       params: idParam,
@@ -290,9 +293,12 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (!ctx.fs) return reply.code(503).send(err('unavailable', 'containers are not wired on this server', false));
       const s = await ctx.sessions.get(req.params.id);
       if (!s) return reply.code(404).send(err('not_found', 'session not found'));
-      if (s.status !== 'active') return reply.code(400).send(err('session_ended', `session is ${s.status}`));
       const workspace = await ctx.workspaces.get(s.workspaceId);
       if (!workspace) return reply.code(404).send(err('not_found', 'workspace not found'));
+      if (s.status !== 'active') {
+        if (!ownsFolder(s)) return reply.code(400).send(err('no_files', 'this session has no files of its own'));
+        await ctx.sessions.create(s.workspaceId, { id: s.id });
+      }
       await ctx.sessions.touch(s);
       await ctx.fs.containers.ensure(folderOf(s), workspace);
       return ok({ pinged: true });

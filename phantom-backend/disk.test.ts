@@ -23,6 +23,8 @@ function world(opts: {
   freeGB: number;
   busy?: string[];
   backupFails?: string[];
+  /** Sessions whose work is NOT on base. Default: everything is merged. */
+  unmerged?: string[];
 }) {
   let free = opts.freeGB;
   const TOTAL = 1000;
@@ -38,6 +40,7 @@ function world(opts: {
     measure: async (): Promise<DiskState> => ({ usedPct: ((TOTAL - free) / TOTAL) * 100, freeGB: free }),
     owners: async () => rows.map(({ s, w }) => ({ s, w })),
     busy: async (ids) => new Set(ids.filter((id) => opts.busy?.includes(id))),
+    landed: async (s) => !opts.unmerged?.includes(s.id),
     removeOldImages: async () => { calls.push('images'); },
     backup: async (s, _w, whenSafe) => {
       calls.push(`backup:${s.id}`);
@@ -85,6 +88,20 @@ test('busy sessions are skipped, never backed up or deleted', async () => {
   await diskCleanup(w.deps);
   assert.ok(!w.calls.includes('backup:busy'));
   assert.deepEqual(w.deleted(), ['idle']);
+});
+
+test('unmerged sessions are never deleted, whatever the disk says', async () => {
+  const w = world({
+    sessions: [
+      { id: 'oldest-unmerged', ageHours: 200, gb: 100 },
+      { id: 'merged', ageHours: 10, gb: 300 },
+    ],
+    freeGB: 10,
+    unmerged: ['oldest-unmerged'],
+  });
+  await diskCleanup(w.deps);
+  assert.deepEqual(w.deleted(), ['merged']);
+  assert.ok(!w.calls.includes('backup:oldest-unmerged'), 'not even backed up by the sweep');
 });
 
 test('failed backup: skipped, never deleted, tried again next run', async () => {
