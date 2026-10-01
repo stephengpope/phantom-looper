@@ -61,9 +61,9 @@ export class WorkspaceWatcher {
       if (this.stopped) return;
       log.warn({ pid: child.pid, code, signal, watches: this.watches.size }, 'watcher child exited — restarting');
       this.spawn();
-      for (const w of this.watches.values()) w.onChange();
+      for (const watch of this.watches.values()) watch.onChange();
     });
     // Replay: every watch this process holds, to the new child.
-    for (const [id, w] of this.watches) child.send({ op: 'watch', id, dir: w.dir });
+    for (const [id, watch] of this.watches) child.send({ op: 'watch', id, dir: watch.dir });
   }
 }

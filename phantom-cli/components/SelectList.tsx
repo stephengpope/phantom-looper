@@ -248,8 +248,8 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
   // rather than wrapped so a row is always exactly one line.
   // Structured headings (table headers) count too: the label column must at
   // least fit its own title, or an empty table truncates its header away.
-  const widest = choices.reduce((w, c) =>
-    c.heading && !c.columns ? w : Math.max(w, c.label.length), 0);
+  const widest = choices.reduce((widest, c) =>
+    c.heading && !c.columns ? widest : Math.max(widest, c.label.length), 0);
   const labelWidth = labelWidthFor(widest);
 
   // Keep the cursor inside the window without ever showing more than `visible`.

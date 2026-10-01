@@ -104,8 +104,8 @@ export class InstantSync {
 
   /** The workspace's container is gone. */
   async unwatchWorkspace(workspaceId: string): Promise<void> {
-    const w = this.watched.get(workspaceId);
-    if (w) await this.detach(w);
+    const watcher = this.watched.get(workspaceId);
+    if (watcher) await this.detach(watcher);
   }
 
   /** Bring the watcher set in line with `activeWorkspaceIds` (the running
@@ -114,7 +114,7 @@ export class InstantSync {
    *  settings change — the two facts no container event carries. */
   async reconcile(activeWorkspaceIds: string[]): Promise<void> {
     const rows = await this.deps.workspaces.listForWorkRefresh(activeWorkspaceIds);
-    const projects = new Map((await this.deps.projects.list()).map((w) => [w.id, w]));
+    const projects = new Map((await this.deps.projects.list()).map((project) => [project.id, project]));
     const configs = new Map<string, Config>();
     for (const id of new Set(rows.map((r) => r.projectId))) {
       const project = projects.get(id);
@@ -136,13 +136,13 @@ export class InstantSync {
           .catch((e) => log.warn({ workspace: row.id, err: errStr(e) }, 'could not start watching'));
       }
     }
-    for (const [id, w] of this.watched) {
-      if (!wanted.has(id)) await this.detach(w);
+    for (const [id, project] of this.watched) {
+      if (!wanted.has(id)) await this.detach(project);
     }
   }
 
   async stop(): Promise<void> {
-    for (const w of this.watched.values()) await this.detach(w);
+    for (const project of this.watched.values()) await this.detach(project);
     this.deps.watcher.stop();
   }
 
@@ -155,36 +155,36 @@ export class InstantSync {
   private async attach(workspaceId: string, project: ProjectRow, c: Config): Promise<void> {
     // `changedAt` far in the past: the first beat runs a push check, so work
     // left unpushed before this watcher existed (a server restart) goes now.
-    const w: Watched = { workspaceId, project, debounceMs: c.debounceMs, pullMs: c.pullMs,
+    const watched: Watched = { workspaceId, project, debounceMs: c.debounceMs, pullMs: c.pullMs,
       changedAt: 0, lastFailure: { push: null, pull: null }, stopped: false };
-    this.deps.watcher.watch(workspaceId, repoDir(this.deps.paths, workspaceId), () => { w.changedAt = Date.now(); });
-    this.watched.set(workspaceId, w);
+    this.deps.watcher.watch(workspaceId, repoDir(this.deps.paths, workspaceId), () => { watched.changedAt = Date.now(); });
+    this.watched.set(workspaceId, watched);
     log.info({ workspace: workspaceId, project: project.id, debounceMs: c.debounceMs, pullMs: c.pullMs }, 'instant sync on');
-    void this.beat(w);
+    void this.beat(watched);
   }
 
-  private async detach(w: Watched): Promise<void> {
-    w.stopped = true;
-    clearTimeout(w.timer);
-    this.watched.delete(w.workspaceId);
-    this.deps.watcher.unwatch(w.workspaceId);
-    log.info({ workspace: w.workspaceId }, 'instant sync off');
+  private async detach(watched: Watched): Promise<void> {
+    watched.stopped = true;
+    clearTimeout(watched.timer);
+    this.watched.delete(watched.workspaceId);
+    this.deps.watcher.unwatch(watched.workspaceId);
+    log.info({ workspace: watched.workspaceId }, 'instant sync off');
   }
 
   /** The beat: pull, then push if the files have settled. A timeout chain,
    *  not an interval — a beat that outlasts the interval is followed, never
    *  overlapped. */
-  private async beat(w: Watched): Promise<void> {
-    if (w.stopped) return;
+  private async beat(watched: Watched): Promise<void> {
+    if (watched.stopped) return;
     try {
-      const session = await this.deps.sessions.get(w.workspaceId);
+      const session = await this.deps.sessions.get(watched.workspaceId);
       if (!session) return;
-      const pulled = await this.deps.autoPull(session, w.project);
-      this.settle(w, session, 'pull', pulled);
-      const since = w.changedAt;
-      if (since !== null && Date.now() - since >= w.debounceMs) {
-        const pushed = await this.deps.autoPush(session, w.project);
-        this.settle(w, session, 'push', pushed);
+      const pulled = await this.deps.autoPull(session, watched.project);
+      this.settle(watched, session, 'pull', pulled);
+      const since = watched.changedAt;
+      if (since !== null && Date.now() - since >= watched.debounceMs) {
+        const pushed = await this.deps.autoPush(session, watched.project);
+        this.settle(watched, session, 'push', pushed);
         // The change is done with when it pushed or there was nothing to push.
         // `busy` means someone else is handling it — the change is still
         // pending. `error` or `blocked` means the push FAILED — the change
@@ -192,30 +192,30 @@ export class InstantSync {
         // stranded work on the branch forever (nothing re-sets changedAt
         // without a new file-watcher event). A change made DURING the push
         // moved `changedAt`, and is left to settle on its own.
-        if ((pushed.result === 'pushed' || pushed.result === 'nothing') && w.changedAt === since) w.changedAt = null;
+        if ((pushed.result === 'pushed' || pushed.result === 'nothing') && watched.changedAt === since) watched.changedAt = null;
       }
     } catch (e) {
-      log.warn({ workspace: w.workspaceId, err: errStr(e) }, 'instant sync beat threw');
+      log.warn({ workspace: watched.workspaceId, err: errStr(e) }, 'instant sync beat threw');
     } finally {
-      if (!w.stopped) w.timer = setTimeout(() => void this.beat(w), w.pullMs);
+      if (!watched.stopped) watched.timer = setTimeout(() => void this.beat(watched), watched.pullMs);
     }
   }
 
   /** One sync's result: logged whatever it is; a failure reported once. */
-  private settle(w: Watched, session: SessionRow, op: 'push' | 'pull',
+  private settle(watched: Watched, session: SessionRow, op: 'push' | 'pull',
     r: AutoPushResult | AutoPullResult): void {
-    const at = { workspace: w.workspaceId, op, result: r.result };
+    const at = { workspace: watched.workspaceId, op, result: r.result };
     if (r.result === 'error' || r.result === 'blocked') {
       const reason = r.reason ?? r.result;
       // Every failure is logged; only a NEW one is reported to a person.
-      if (w.lastFailure[op] === reason) { log.debug({ ...at, reason }, 'instant sync still failing'); return; }
-      w.lastFailure[op] = reason;
+      if (watched.lastFailure[op] === reason) { log.debug({ ...at, reason }, 'instant sync still failing'); return; }
+      watched.lastFailure[op] = reason;
       log.warn({ ...at, reason }, 'instant sync failed');
       this.deps.failed(session, op, reason);
       return;
     }
     if (r.result === 'busy') { log.debug(at, 'instant sync: checkout held, next beat'); return; }
-    w.lastFailure[op] = null;
+    watched.lastFailure[op] = null;
     if (r.result === 'pushed' || r.result === 'merged') log.info(at, 'instant sync done');
     else log.debug(at, 'instant sync: nothing to do');
   }

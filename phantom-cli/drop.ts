@@ -15,7 +15,7 @@ import fs from 'node:fs';
 /** Split what a terminal pastes for a drag into words the way a shell would:
  *  single and double quotes group, backslash escapes the next character.
  *  Null when the quoting is unbalanced — that is text, not a drop. */
-function words(text: string): string[] | null {
+function splitWords(text: string): string[] | null {
   const out: string[] = [];
   let cur = '', quote: string | null = null, started = false;
   for (let i = 0; i < text.length; i++) {
@@ -51,11 +51,11 @@ function asLocalPath(word: string): { path: string; looked: boolean } | null {
 /** Pasted text as a file drop: the dragged files' paths, or null when this
  *  is an ordinary paste and should be handled as text. */
 export function parseDrop(text: string): string[] | null {
-  const ws = words(text.trim());
-  if (!ws?.length) return null;
+  const words = splitWords(text.trim());
+  if (!words?.length) return null;
   const paths: string[] = [];
-  for (const w of ws) {
-    const p = asLocalPath(w);
+  for (const word of words) {
+    const p = asLocalPath(word);
     if (!p?.looked) return null;
     try { if (!fs.statSync(p.path).isFile()) return null; } catch { return null; }
     paths.push(p.path);

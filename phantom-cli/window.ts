@@ -172,7 +172,7 @@ export class WindowStore {
   private readonly boards = new Map<string, BoardStore>();
   /** Display name and card prefix per project: a display cache, cleared
    *  when the settings feed says they may have changed. */
-  private readonly wsNames = new Map<string, WsFacts>();
+  private readonly projectNames = new Map<string, WsFacts>();
 
   /** The launch splash, where the conversation will be. Off until a session
    *  with nothing said yet is actually opening (openSession raises it): the
@@ -752,9 +752,9 @@ export class WindowStore {
   /** The project LIST carries the same two facts per row: whoever reads it
    *  refreshes the display cache, so a later open needs no lookup. */
   seedWsFacts(list: { id: string; name?: string; displayName?: string | null; cardPrefix?: string }[]): void {
-    for (const w of list) {
-      const label = w.displayName || w.name;
-      if (label) this.wsNames.set(w.id, { label, ...(w.cardPrefix ? { cardPrefix: w.cardPrefix } : {}) });
+    for (const project of list) {
+      const label = project.displayName || project.name;
+      if (label) this.projectNames.set(project.id, { label, ...(project.cardPrefix ? { cardPrefix: project.cardPrefix } : {}) });
     }
   }
 
@@ -762,15 +762,15 @@ export class WindowStore {
    *  with the id AND says why, so an id never passes for a project called
    *  that. */
   async projectFacts(id: string): Promise<WsFacts> {
-    const hit = this.wsNames.get(id);
+    const hit = this.projectNames.get(id);
     if (hit) return hit;
     try {
-      const w = await this.api('GET', `/projects/${id}`) as
+      const project = await this.api('GET', `/projects/${id}`) as
         { name?: string; displayName?: string | null; cardPrefix?: string };
-      const found = w.displayName || w.name;
+      const found = project.displayName || project.name;
       if (!found) throw new Error('the server sent no name for it');
-      const facts: WsFacts = { label: found, ...(w.cardPrefix ? { cardPrefix: w.cardPrefix } : {}) };
-      this.wsNames.set(id, facts);
+      const facts: WsFacts = { label: found, ...(project.cardPrefix ? { cardPrefix: project.cardPrefix } : {}) };
+      this.projectNames.set(id, facts);
       return facts;
     } catch (e) {
       return { label: id, error: `could not read project ${id}'s name: ${(e as Error).message}` };
@@ -779,7 +779,7 @@ export class WindowStore {
 
   /** The name to say for a project id — the id itself when unknown, which
    *  is still an answer rather than a blank. */
-  wsLabel(id: string): string { return this.wsNames.get(id)?.label ?? id; }
+  wsLabel(id: string): string { return this.projectNames.get(id)?.label ?? id; }
 
   /** What the toolbar calls the work in front of you: the card the session is
    *  building, named the way the board names it (`PHA-7`), and failing that
@@ -788,7 +788,7 @@ export class WindowStore {
   get cardMark(): string | undefined {
     const e = this.sessions.active();
     if (!e) return undefined;
-    return e.card ?? this.wsNames.get(e.projectId)?.cardPrefix;
+    return e.card ?? this.projectNames.get(e.projectId)?.cardPrefix;
   }
 
   // ── opening and closing ───────────────────────────────────────────────────
@@ -1019,7 +1019,7 @@ export class WindowStore {
    *  project in the order /project lists them (the server's), wrapping.
    *  The list re-reads at once; a project with no sessions shows as such. */
   cyclePickerProject(dir: 1 | -1): void {
-    const ring: (string | null)[] = [null, ...this.projectRows.map((w) => w.id)];
+    const ring: (string | null)[] = [null, ...this.projectRows.map((project) => project.id)];
     const at = ring.indexOf(this.pickerProject);
     this.pickerProject = ring[(Math.max(at, 0) + dir + ring.length) % ring.length] ?? null;
     this.notify();
@@ -1303,11 +1303,11 @@ export class WindowStore {
    *  filled by boot, the pickers and the settings feed, never from here. */
   argChoices: Choices = () => {
     const here = this.sessions.active()?.projectId;
-    const row = (w: ProjectInfo) => ({
-      name: w.cardPrefix ?? label(w), fill: w.name,
-      summary: `${w.owner}/${w.name}${w.id === here ? ' · here' : ''}`,
+    const row = (project: ProjectInfo) => ({
+      name: project.cardPrefix ?? label(project), fill: project.name,
+      summary: `${project.owner}/${project.name}${project.id === here ? ' · here' : ''}`,
     });
-    return [...this.projectRows.filter((w) => w.id === here), ...this.projectRows.filter((w) => w.id !== here)].map(row);
+    return [...this.projectRows.filter((project) => project.id === here), ...this.projectRows.filter((project) => project.id !== here)].map(row);
   };
 
   /** The project a typed argument names — the repo name tab fills, or
@@ -1317,10 +1317,10 @@ export class WindowStore {
    *  what to type instead. */
   private findProject(arg: string): ProjectInfo | { error: string } {
     const typed = arg.toLowerCase();
-    const names = (w: ProjectInfo) => [w.name, `${w.owner}/${w.name}`, w.cardPrefix, w.displayName];
-    const hits = this.projectRows.filter((w) => names(w).some((n) => n?.toLowerCase() === typed));
+    const names = (project: ProjectInfo) => [project.name, `${project.owner}/${project.name}`, project.cardPrefix, project.displayName];
+    const hits = this.projectRows.filter((project) => names(project).some((n) => n?.toLowerCase() === typed));
     if (hits.length === 1) return hits[0];
-    if (hits.length > 1) return { error: `"${arg}" is ambiguous: ${hits.map((w) => `${w.owner}/${w.name}`).join(', ')}` };
+    if (hits.length > 1) return { error: `"${arg}" is ambiguous: ${hits.map((project) => `${project.owner}/${project.name}`).join(', ')}` };
     return { error: `unknown project "${arg}" — /project lists them` };
   }
 
@@ -1336,8 +1336,8 @@ export class WindowStore {
   /** `e` on a /project row: that project's settings, on their own screen
    *  (its close reopens the list). */
   editProject(id: string): void {
-    const w = this.projectRows.find((x) => x.id === id);
-    if (w) this.showOverlay(projectSettingsScreen(this, w));
+    const project = this.projectRows.find((x) => x.id === id);
+    if (project) this.showOverlay(projectSettingsScreen(this, project));
   }
 
   /** The add form, with any previous complaint cleared. */
@@ -1355,10 +1355,10 @@ export class WindowStore {
     this.addError = undefined;
     this.notify();
     try {
-      const w = await this.api('POST', '/projects', req) as { id: string; owner: string; name: string };
+      const project = await this.api('POST', '/projects', req) as { id: string; owner: string; name: string };
       this.dismissOverlay();
-      await this.openSession({ kind: 'new', projectId: w.id });
-      this.note(`project ${w.owner}/${w.name} added`);
+      await this.openSession({ kind: 'new', projectId: project.id });
+      this.note(`project ${project.owner}/${project.name} added`);
     } catch (e) {
       // The form is still up and reads this on its next draw — it is NOT
       // re-shown, which would remount it and lose what was typed.
@@ -1685,7 +1685,7 @@ export class WindowStore {
       if (key === undefined) {
         // A server event names no key: every consumer re-reads. Project and
         // board rows carry resolved settings too (card prefix, loop defaults).
-        this.wsNames.clear();
+        this.projectNames.clear();
         void this.api('GET', '/projects')
           .then((projects) => this.seeProjects(projects as unknown as ProjectInfo[]))
           .catch(quiet('reload project settings'));
@@ -1761,9 +1761,9 @@ export class WindowStore {
         // picker chooses. openSession clears the pane and puts the splash up before
         // the network calls run.
         if (args) {
-          const w = this.findProject(args);
-          if ('error' in w) { this.note(w.error); return; }
-          await this.openSession({ kind: 'new', projectId: w.id });
+          const project = this.findProject(args);
+          if ('error' in project) { this.note(project.error); return; }
+          await this.openSession({ kind: 'new', projectId: project.id });
         } else if (session) await this.openSession({ kind: 'new', projectId: session.projectId });
         else await this.openPicker('project');
         return;
@@ -1794,9 +1794,9 @@ export class WindowStore {
         // picker row, one tab away instead of a list and a keypress. Bare:
         // the picker, to start a session somewhere else.
         if (args) {
-          const w = this.findProject(args);
-          if ('error' in w) { this.note(w.error); return; }
-          this.editProject(w.id);
+          const project = this.findProject(args);
+          if ('error' in project) { this.note(project.error); return; }
+          this.editProject(project.id);
         } else await this.openPicker('project');
         return;
       }

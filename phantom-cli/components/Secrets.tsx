@@ -63,14 +63,14 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
   /** What a layer is called: the project's display name (a project the
    *  list no longer knows reads as its id), or `global`. */
   const wsName = (id?: string | null) => {
-    const w = id ? projects.find((x) => x.id === id) : undefined;
-    return w ? (w.displayName || w.name) : id || GLOBAL_TAG;
+    const project = id ? projects.find((x) => x.id === id) : undefined;
+    return project ? (project.displayName || project.name) : id || GLOBAL_TAG;
   };
   const layerOf = (r: Row) => (r.scope === 'project' ? wsName(r.project) : GLOBAL_TAG);
 
   // /resume's ring: all, then each project in the server's order, wrapping.
   const cycle = (dir: 1 | -1) => {
-    const ring: (string | null)[] = [null, ...projects.map((w) => w.id)];
+    const ring: (string | null)[] = [null, ...projects.map((project) => project.id)];
     const at = ring.indexOf(filter);
     setFilter(ring[(Math.max(at, 0) + dir + ring.length) % ring.length] ?? null);
   };
@@ -121,7 +121,7 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
   if (editing) {
     const targets: SecretTarget[] = [
       { id: null, label: 'global — every project' },
-      ...projects.map((w) => ({ id: w.id, label: `${w.displayName || w.name} only` })),
+      ...projects.map((project) => ({ id: project.id, label: `${project.displayName || project.name} only` })),
     ];
     return (
       <SecretEditor
@@ -147,7 +147,7 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
   if (filter === null) {
     const groups: Array<[string, Row[]]> = [
       [GLOBAL_TAG, shown.filter((r) => r.scope === 'global')],
-      ...projects.map((w): [string, Row[]] => [wsName(w.id), shown.filter((r) => r.project === w.id)]),
+      ...projects.map((project): [string, Row[]] => [wsName(project.id), shown.filter((r) => r.project === project.id)]),
     ];
     for (const [heading, members] of groups) {
       if (!members.length) continue;

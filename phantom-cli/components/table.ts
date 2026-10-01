@@ -69,7 +69,7 @@ export function tableChoices<T>(
   const widths = cols.map((c, i) => {
     if (c.width) return c.width;
     if (i === cols.length - 1) return undefined;
-    const widest = rows.reduce((w, r) => Math.max(w, cellWidth(r.cells[i + 1])), c.title.length);
+    const widest = rows.reduce((widest, r) => Math.max(widest, cellWidth(r.cells[i + 1])), c.title.length);
     return Math.min(c.cap ?? 32, widest) + GUTTER;
   });
   // The header IS a row: same label box, same column boxes, rendered dim by

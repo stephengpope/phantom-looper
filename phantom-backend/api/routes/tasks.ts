@@ -115,8 +115,8 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
     const { container } = await probe(workspaceOf(session));
     if (!container) return reply.code(404).send(err('no_such_task', 'nothing is running — the container is not up'));
 
-    const ws = new Sandbox(deps.docker, container);
-    const groups = await probeGroups(ws);
+    const sandbox = new Sandbox(deps.docker, container);
+    const groups = await probeGroups(sandbox);
     if (!groups.some((g) => g.sid === req.params.sid)) {
       return reply.code(404).send(err('no_such_task', `no running task with sid ${req.params.sid}`));
     }
@@ -125,7 +125,7 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
     // status='running', so 'killed' set here is final even if the stream's
     // exit lands a moment later.
     const marked = await ctx.backgroundTasks.markKilledBySid(session.id, req.params.sid);
-    await killSid(ws, req.params.sid);
+    await killSid(sandbox, req.params.sid);
     return ok({ sid: req.params.sid, background_task_id: marked });
   });
 

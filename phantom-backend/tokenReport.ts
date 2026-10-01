@@ -27,7 +27,7 @@ const k = (n: number) => n >= 1e9 ? `${(n / 1e9).toFixed(1)}B`
 
 const pct = (t: WindowTotals) => t.input ? `${Math.round(t.cacheRead / t.input * 100)}%` : '–';
 
-const clip = (s: string, w: number) => s.length > w ? s.slice(0, w - 1) + '…' : s;
+const clip = (s: string, width: number) => s.length > width ? s.slice(0, width - 1) + '…' : s;
 /** Display name for a model: the dated snapshot suffix (`-20250514`) is
  *  noise in a column this narrow. */
 const modelName = (r: ReportRow) => (r.model ?? r.provider ?? '?').replace(/-\d{8}$/, '');

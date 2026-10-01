@@ -357,13 +357,13 @@ async function main() {
     const card = e.card as { number: number; archived?: boolean; status?: string };
     if (card.archived !== true || card.status !== 'done') return;
     void (async () => {
-      const w = await projects.get(projectId);
-      const session = w && await sessions.coderOf(w.id, card.number);
-      if (!w || !session || session.status !== 'active') return;
-      if (await settings.resolve('auto_push_on_archive', { project: w }) !== true) return;
+      const project = await projects.get(projectId);
+      const session = project && await sessions.coderOf(project.id, card.number);
+      if (!project || !session || session.status !== 'active') return;
+      if (await settings.resolve('auto_push_on_archive', { project }) !== true) return;
       let result: Awaited<ReturnType<typeof autoPushFn>> | undefined;
       for (let i = 0; i < 30; i++) {
-        try { result = await autoPushFn(session, w); break; }
+        try { result = await autoPushFn(session, project); break; }
         catch (err) {
           if ((err as { code?: string }).code === 'busy') { await new Promise((r) => setTimeout(r, 10_000)); continue; }
           result = { result: 'error', reason: errStr(err) }; break;
@@ -371,11 +371,11 @@ async function main() {
       }
       result ??= { result: 'error', reason: 'session stayed busy — auto-push never ran' };
       if (result.result === 'pushed' || result.result === 'nothing') {
-        log.info({ project: w.name, card: card.number, result: result.result }, 'auto-push on archive');
+        log.info({ project: project.name, card: card.number, result: result.result }, 'auto-push on archive');
         return;
       }
-      log.warn({ project: w.name, card: card.number, result }, 'auto-push on archive failed — card un-archived into blocked');
-      await cards.unarchiveAsBlocked(w, card.number, `auto-push failed: ${result.reason ?? result.result}`)
+      log.warn({ project: project.name, card: card.number, result }, 'auto-push on archive failed — card un-archived into blocked');
+      await cards.unarchiveAsBlocked(project, card.number, `auto-push failed: ${result.reason ?? result.result}`)
         .catch((err) => log.error({ card: card.number, err: errStr(err) }, 'could not mark the card blocked after a failed auto-push'));
     })().catch((err) => log.error({ card: card.number, err: errStr(err) }, 'auto-push on archive threw'));
   });

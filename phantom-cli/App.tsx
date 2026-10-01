@@ -130,7 +130,7 @@ export function App({
   onSession?: (s: { id: string; branch: string; projectId: string }) => void;
   /** Hands the caller the window store once it exists — index.tsx's version
    *  watch uses it to light up the update-ready label. */
-  onWindow?: (w: WindowStore) => void;
+  onWindow?: (store: WindowStore) => void;
 }) {
   const { exit } = useApp();
   const { columns, rows } = useWindowSize();

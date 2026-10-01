@@ -34,8 +34,8 @@ export class ProjectDirectory {
   /** The name to say for a project id — the id itself when unknown, which
    *  is still an answer rather than a blank. */
   name(id: string): string {
-    const w = this.rows.find((n) => n.id === id);
-    return w?.displayName || w?.name || id;
+    const project = this.rows.find((n) => n.id === id);
+    return project?.displayName || project?.name || id;
   }
 }
 

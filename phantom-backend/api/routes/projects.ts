@@ -65,7 +65,7 @@ export function projectRoutes(app: FastifyInstance, ctx: AppCtx) {
       return reply.code(listed.code === 'upstream_unreachable' ? 502 : 400)
         .send(err(listed.code, listed.message, listed.code === 'upstream_unreachable'));
     }
-    const have = new Set((await ctx.projects.list()).map((w) => `${w.owner}/${w.name}`.toLowerCase()));
+    const have = new Set((await ctx.projects.list()).map((project) => `${project.owner}/${project.name}`.toLowerCase()));
     return ok(listed.repos.map((r) => ({ ...r, added: have.has(`${r.owner}/${r.name}`.toLowerCase()) })));
   });
 
@@ -181,15 +181,15 @@ export function projectRoutes(app: FastifyInstance, ctx: AppCtx) {
       'from this one call. `overridable: false` means global-only: PATCH will not accept it. ' +
       'The first question to ask when the pool misbehaves.',
     params: idParam } }, async (req, reply) => {
-    const w = await ctx.projects.get(req.params.id);
-    if (!w) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
+    const project = await ctx.projects.get(req.params.id);
+    if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
     return ok({
-      ...publicProject(w, await ctx.settings.hasAt('github_token', projectScope(w.id))),
+      ...publicProject(project, await ctx.settings.hasAt('github_token', projectScope(project.id))),
       // Same fact, same name as GET /projects: a client that reads one
       // project (the cli, opening a session) must not have to list them all
       // to learn how this project names its cards.
-      cardPrefix: await ctx.projects.prefixOf(w),
-      settings: await ctx.settings.block({ project: w }) });
+      cardPrefix: await ctx.projects.prefixOf(project),
+      settings: await ctx.settings.block({ project }) });
   });
 
   // The project's OWN three fields — no global to fall back to, so they

@@ -57,12 +57,12 @@ async function bundledFiles(dir: string): Promise<string[]> {
 
 /** Write one file into the skill folder via the container (the container user
  *  owns the repo's files — a host-side write would not, on Linux). */
-async function writeViaContainer(ws: Sandbox, name: string, rel: string, content: string): Promise<void> {
+async function writeViaContainer(sandbox: Sandbox, name: string, rel: string, content: string): Promise<void> {
   const abs = `${skillDirContainer(name)}/${rel}`;
   const dir = abs.slice(0, abs.lastIndexOf('/'));
-  const mk = await ws.run(['mkdir', '-p', dir]);
+  const mk = await sandbox.run(['mkdir', '-p', dir]);
   if (mk.exitCode !== 0) throw new ToolError('invalid_args', `mkdir failed: ${mk.stderr.toString('utf8').slice(0, 200)}`);
-  await ws.writeFile(abs, Buffer.from(content, 'utf8'));
+  await sandbox.writeFile(abs, Buffer.from(content, 'utf8'));
 }
 
 /** The session's workspace image — the system skill tier lives inside it. */
@@ -122,16 +122,16 @@ export async function manageSkill(ctx: AppCtx, deps: FsDeps, session: SessionRow
   } catch (e) {
     throw new ToolError('container_start_failed', (e as Error).message, true);
   }
-  const ws = new Sandbox(deps.docker, container);
+  const sandbox = new Sandbox(deps.docker, container);
   // Writes reach the REPO tier only. When the name exists solely in the
   // image's system tier, say so — "no skill" would gaslight an agent that
   // just saw it in skill_list.
   const systemHas = !(await skillExists(ctx, workspaceId, body.name))
     && (await systemSkillTree(deps.docker, await imageFor(ctx, session))).has(body.name);
-  return manage(ctx, ws, workspaceId, body, systemHas);
+  return manage(ctx, sandbox, workspaceId, body, systemHas);
 }
 
-async function manage(ctx: AppCtx, ws: Sandbox, workspaceId: string, body: ManageBody,
+async function manage(ctx: AppCtx, sandbox: Sandbox, workspaceId: string, body: ManageBody,
   systemHas = false): Promise<unknown> {
   const { action, name } = body;
   const exists = await skillExists(ctx, workspaceId, name);
@@ -151,7 +151,7 @@ async function manage(ctx: AppCtx, ws: Sandbox, workspaceId: string, body: Manag
       if (action === 'edit' && !exists) throw notFound();
       const vErr = validateSkillMd(name, body.content);
       if (vErr) throw new ToolError('invalid_args', vErr);
-      await writeViaContainer(ws, name, 'SKILL.md', body.content);
+      await writeViaContainer(sandbox, name, 'SKILL.md', body.content);
       const warnings = action === 'create' ? lintSkillMd(body.content) : [];
       return { message: `Skill '${name}' ${action === 'create' ? 'created' : 'updated'}.`,
         description: parseDescription(body.content), ...(warnings.length ? { warnings } : {}) };
@@ -179,13 +179,13 @@ async function manage(ctx: AppCtx, ws: Sandbox, workspaceId: string, body: Manag
         const vErr = validateSkillMd(name, r.content);
         if (vErr) throw new ToolError('invalid_args', `Patch would break SKILL.md: ${vErr}`);
       }
-      await writeViaContainer(ws, name, rel, r.content);
+      await writeViaContainer(sandbox, name, rel, r.content);
       return { message: `Patched ${rel} in '${name}' (${r.count} replacement${r.count === 1 ? '' : 's'}, ${r.strategy}).` };
     }
 
     case 'delete': {
       if (!exists) throw notFound();
-      const r = await ws.run(['rm', '-rf', skillDirContainer(name)]);
+      const r = await sandbox.run(['rm', '-rf', skillDirContainer(name)]);
       if (r.exitCode !== 0) throw new ToolError('invalid_args', `delete failed: ${r.stderr.toString('utf8').slice(0, 200)}`);
       return { message: `Skill '${name}' deleted.` };
     }
@@ -198,7 +198,7 @@ async function manage(ctx: AppCtx, ws: Sandbox, workspaceId: string, body: Manag
       if (Buffer.byteLength(body.file_content, 'utf8') > MAX_FILE_BYTES) {
         throw new ToolError('invalid_args', `file exceeds ${MAX_FILE_BYTES} bytes.`);
       }
-      await writeViaContainer(ws, name, body.file_path!, body.file_content);
+      await writeViaContainer(sandbox, name, body.file_path!, body.file_content);
       return { message: `Wrote ${body.file_path} to skill '${name}'.` };
     }
 
@@ -208,7 +208,7 @@ async function manage(ctx: AppCtx, ws: Sandbox, workspaceId: string, body: Manag
       if (fErr) throw new ToolError('invalid_args', fErr);
       const present = await fsp.access(path.join(hostDir, body.file_path!)).then(() => true, () => false);
       if (!present) throw new ToolError('skill_not_found', `no file '${body.file_path}' in skill '${name}'`);
-      const r = await ws.run(['rm', '-f', `${skillDirContainer(name)}/${body.file_path}`]);
+      const r = await sandbox.run(['rm', '-f', `${skillDirContainer(name)}/${body.file_path}`]);
       if (r.exitCode !== 0) throw new ToolError('invalid_args', `remove failed: ${r.stderr.toString('utf8').slice(0, 200)}`);
       return { message: `Removed ${body.file_path} from skill '${name}'.` };
     }

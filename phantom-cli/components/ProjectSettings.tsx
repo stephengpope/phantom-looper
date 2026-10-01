@@ -95,9 +95,9 @@ export function ProjectSettings({ api, project, onClose, onChanged }: {
   const load = useCallback(async () => {
     setBusy(true);
     try {
-      const w = await api('GET', `/projects/${project.id}`) as Row;
-      setRow(w);
-      setEff(w.settings);
+      const row = await api('GET', `/projects/${project.id}`) as Row;
+      setRow(row);
+      setEff(row.settings);
       setNotice(undefined);
     } catch (err) { setNotice(`could not load: ${(err as Error).message}`); }
     finally { setBusy(false); }

@@ -34,11 +34,11 @@ export interface FsDeps { docker: Docker; containers: ContainerManager; engine?:
  *  own session — never inside what it kills. The tasks route kills by sid
  *  from the background_tasks row; killProcessGroup (api/foreground.ts) reads it from
  *  a pidfile. */
-export function killSid(ws: Sandbox, sid: string): Promise<unknown> {
+export function killSid(sandbox: Sandbox, sid: string): Promise<unknown> {
   const script =
     'pkill -TERM -s "$0" 2>/dev/null; sleep 1; ' +
     'pgrep -s "$0" >/dev/null 2>&1 && pkill -KILL -s "$0" 2>/dev/null; exit 0';
-  return ws.run(['/bin/sh', '-c', script, sid], { timeoutMs: 15_000 })
+  return sandbox.run(['/bin/sh', '-c', script, sid], { timeoutMs: 15_000 })
     .catch((e) => log.warn({ err: errStr(e) }, 'kill of command group failed'));
 }
 
@@ -120,8 +120,8 @@ export function liveGroups(rows: PsRow[]): LiveGroup[] {
 }
 
 /** The live groups of a container, one ps. */
-export async function probeGroups(ws: Sandbox): Promise<LiveGroup[]> {
-  const r = await ws.run(PS_ARGV, { timeoutMs: 15_000 });
+export async function probeGroups(sandbox: Sandbox): Promise<LiveGroup[]> {
+  const r = await sandbox.run(PS_ARGV, { timeoutMs: 15_000 });
   return liveGroups(parsePs(r.stdout.toString('utf8')));
 }
 
@@ -161,7 +161,7 @@ export async function reconcileRunning(
  *  kill reaches turns that have no socket to close (server-side turns ride
  *  injectFetch) — one kill, two doors. */
 async function runBash(
-  ctx: AppCtx, deps: FsDeps, ws: Sandbox, session: SessionRow,
+  ctx: AppCtx, deps: FsDeps, sandbox: Sandbox, session: SessionRow,
   args: { cmd: string; cwd?: string; detached?: boolean; timeout?: number },
   signal?: AbortSignal,
 ): Promise<unknown> {
@@ -191,9 +191,9 @@ async function runBash(
     const pidfile = `/tmp/.phantom-bash-${newId()}.pid`;
     const wrapped = ['/bin/sh', '-c',
       'echo $$ >"$0"; /bin/sh -c "$1"; s=$?; rm -f "$0"; exit $s', pidfile, args.cmd];
-    const onAbort = () => { void killProcessGroup(ws, pidfile); };
+    const onAbort = () => { void killProcessGroup(sandbox, pidfile); };
     signal?.addEventListener('abort', onAbort, { once: true });
-    ctx.foreground?.add(session.id, pidfile, ws);
+    ctx.foreground?.add(session.id, pidfile, sandbox);
     // Keep the TAIL (errors live at the end) and spill the full output to a
     // file the agent can read — nothing is lost. One shape for a finished
     // command and for one the timeout killed.
@@ -222,14 +222,14 @@ async function runBash(
     };
     try {
       // Collect generously; shape() keeps the tail.
-      const r = await ws.run(wrapped, { cwd: args.cwd, timeoutMs, maxBytes: 16 * 1024 * 1024 });
+      const r = await sandbox.run(wrapped, { cwd: args.cwd, timeoutMs, maxBytes: 16 * 1024 * 1024 });
       return { exitCode: r.exitCode, ...(await shape(r.stdout, r.stderr)) };
     } catch (e) {
       const te = e as { code?: string; stdout?: Buffer; stderr?: Buffer };
       if (te.code === 'exec_timeout') {
         // The sandbox timeout only tore down the stream; the process is
         // still running. Same kill as an esc — orphans were the old bug.
-        void killProcessGroup(ws, pidfile);
+        void killProcessGroup(sandbox, pidfile);
         // The kill is an error the agent can act on: what the command printed
         // before it died rides in detail, shaped like a normal result.
         throw new ToolError('exec_timeout',
@@ -259,7 +259,7 @@ async function runBash(
     let exitCode: number | null = null;
     let status: BackgroundTaskEnd = 'exited';
     try {
-      for await (const rec of ws.runStream(wrapped, { cwd: args.cwd })) {
+      for await (const rec of sandbox.runStream(wrapped, { cwd: args.cwd })) {
         out.write(JSON.stringify(rec) + '\n');
         if (rec.event === 'exit') exitCode = rec.code ?? -1;
         if (rec.event === 'error') status = 'killed';
@@ -291,7 +291,7 @@ async function runBash(
     const script =
       's=""; for i in 1 2 3 4 5 6 7 8 9 10; do s=$(cat "$0" 2>/dev/null) && [ -n "$s" ] && break; sleep 0.3; done; ' +
       'rm -f "$0"; printf %s "$s"';
-    const r = await ws.run(['/bin/sh', '-c', script, sidfile], { timeoutMs: 10_000 });
+    const r = await sandbox.run(['/bin/sh', '-c', script, sidfile], { timeoutMs: 10_000 });
     const sid = r.stdout.toString('utf8').trim();
     if (/^\d+$/.test(sid)) await ctx.backgroundTasks.setSid(taskId, sid);
   })().catch((e) => log.warn({ taskId, err: errStr(e) }, 'detached sid capture failed'));
@@ -322,14 +322,14 @@ const shapeBackgroundTask = (r: BackgroundTaskRow) => ({
   log_file: `/workspace/logs/${r.id}.ndjson`,
 });
 
-async function taskList(ctx: AppCtx, ws: Sandbox, session: SessionRow): Promise<unknown> {
+async function taskList(ctx: AppCtx, sandbox: Sandbox, session: SessionRow): Promise<unknown> {
   const rows = await ctx.backgroundTasks.listForSession(session.id, 20);
   const running = rows.filter((r) => r.status === 'running');
   if (running.length) {
     // Reconcile on read so `running` is the truth. A failed ps SKIPS it —
     // rows still answer unreconciled rather than live commands being closed
     // on a bad reading.
-    try { await reconcileRunning(ctx, running, await probeGroups(ws)); }
+    try { await reconcileRunning(ctx, running, await probeGroups(sandbox)); }
     catch (e) { log.warn({ err: errStr(e) }, 'task_list reconcile skipped — ps failed'); }
   }
   return {
@@ -362,7 +362,7 @@ async function taskWait(ctx: AppCtx, session: SessionRow, taskId: string, timeou
   return { ...shapeBackgroundTask(row), tail: await tailLog(row.logPath, 10) };
 }
 
-async function taskKill(ctx: AppCtx, ws: Sandbox, session: SessionRow, taskId: string): Promise<unknown> {
+async function taskKill(ctx: AppCtx, sandbox: Sandbox, session: SessionRow, taskId: string): Promise<unknown> {
   const row = await ownBackgroundTask(ctx, session, taskId);
   if (row.status !== 'running') return { ...shapeBackgroundTask(row), note: 'not running — nothing to kill' };
   if (!row.sid) {
@@ -372,7 +372,7 @@ async function taskKill(ctx: AppCtx, ws: Sandbox, session: SessionRow, taskId: s
   // status='running', so 'killed' set here is final even if the stream's
   // exit lands a moment later. The same order as the /tasks route's kill.
   await ctx.backgroundTasks.markKilled(row.id);
-  await killSid(ws, row.sid);
+  await killSid(sandbox, row.sid);
   return { background_task_id: row.id, status: 'killed' };
 }
 
@@ -412,19 +412,19 @@ export async function fileTools(ctx: AppCtx, deps: FsDeps, session: SessionRow, 
   } catch (e) {
     throw new ToolError('container_start_failed', (e as Error).message, true);
   }
-  const ws = new Sandbox(deps.docker, container);
+  const sandbox = new Sandbox(deps.docker, container);
   const readLimits = await ctx.settings.resolveMany(['max_read_bytes', 'max_search_results']);
   return {
-    ws,
+    sandbox,
     limits: {
       maxReadBytes: Number(readLimits.max_read_bytes),
       maxSearchResults: Number(readLimits.max_search_results),
     },
-    runBash: (args) => runBash(ctx, deps, ws, session, args, signal),
+    runBash: (args) => runBash(ctx, deps, sandbox, session, args, signal),
     tasks: {
-      list: () => taskList(ctx, ws, session),
+      list: () => taskList(ctx, sandbox, session),
       wait: (taskId, timeoutMs) => taskWait(ctx, session, taskId, timeoutMs),
-      kill: (taskId) => taskKill(ctx, ws, session, taskId),
+      kill: (taskId) => taskKill(ctx, sandbox, session, taskId),
     },
   };
 }

@@ -46,7 +46,7 @@ export type Launch =
   | { kind: 'new'; projectId: string }
   | { kind: 'add' };
 
-export const label = (w: ProjectInfo) => w.displayName || w.name;
+export const label = (project: ProjectInfo) => project.displayName || project.name;
 
 /** The project of the newest session the USER drove — boot_last_project's
  *  pick. Sessions a card run drives (`agent` stamped by the run) work at all
@@ -55,7 +55,7 @@ export const label = (w: ProjectInfo) => w.displayName || w.name;
  *  files are swept, but it is still where you were. Undefined = nothing
  *  eligible, show the picker. */
 export function lastProjectId(projects: ProjectInfo[], sessions: SessionInfo[]): string | undefined {
-  const known = new Set(projects.map((w) => w.id));
+  const known = new Set(projects.map((project) => project.id));
   return sessions
     .filter((s) => !s.agent && known.has(s.projectId))
     .sort((a, b) => Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt))[0]?.projectId;
@@ -79,7 +79,7 @@ export function sessionChoices(
   query = '',
   projectId: string | null = null,
 ): Choice<Launch | null>[] {
-  const byId = new Map(projects.map((w) => [w.id, w]));
+  const byId = new Map(projects.map((project) => [project.id, project]));
   // WHICH sessions are listed is the server's call (`GET /sessions?typed=
   // true&background=false` — never-typed rows and the background seats, the
   // supervisor sessions and cron runs, left out there, so a page is
@@ -115,8 +115,8 @@ export function sessionChoices(
   // lazy loading now reaches) blew the label column to its cap and pushed the
   // whole table past the terminal's edge.
   const wsCol = (s: SessionInfo): string => {
-    const w = byId.get(s.projectId);
-    return w ? (w.cardPrefix ?? label(w)) : '·';
+    const project = byId.get(s.projectId);
+    return project ? (project.cardPrefix ?? label(project)) : '·';
   };
   // Columns ride the shared table system (table.ts — /resume's geometry made
   // reusable): fixed widths on the value columns, because this list refreshes
@@ -225,8 +225,8 @@ export function sessionChoices(
  *  `all`. A project the list no longer knows (deleted while the picker
  *  was up) reads as all rather than as a raw id. */
 export const projectTitle = (projects: ProjectInfo[], id: string | null): string => {
-  const w = id ? projects.find((x) => x.id === id) : undefined;
-  return w ? label(w) : 'all';
+  const project = id ? projects.find((x) => x.id === id) : undefined;
+  return project ? label(project) : 'all';
 };
 
 /** Project rows — launching with no arguments, and /project: the card
@@ -235,10 +235,10 @@ export const projectTitle = (projects: ProjectInfo[], id: string | null): string
  *  with "add a project…": an empty install has to be able to get started from
  *  here, not from curl. */
 export function projectChoices(projects: ProjectInfo[], canAdd = true): Choice<Launch | null>[] {
-  const rows: Choice<Launch | null>[] = projects.map((w) => ({
-    value: { kind: 'new', projectId: w.id } as Launch,
-    label: w.cardPrefix ?? label(w),
-    detail: `${w.owner}/${w.name}`,
+  const rows: Choice<Launch | null>[] = projects.map((project) => ({
+    value: { kind: 'new', projectId: project.id } as Launch,
+    label: project.cardPrefix ?? label(project),
+    detail: `${project.owner}/${project.name}`,
   }));
   if (canAdd) {
     rows.push({ value: { kind: 'add' } as Launch, label: 'add a project…',

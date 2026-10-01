@@ -71,11 +71,11 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
   // can always show the REAL value a card inherits — and say which layer it
   // came from. One pair per switch: auto_plan gates the plan column,
   // auto_build gates in_progress.
-  const board = async (w: ProjectRow) => {
-    const plan = await ctx.settings.resolveWithSource('auto_plan', { project: w });
-    const build = await ctx.settings.resolveWithSource('auto_build', { project: w });
-    return { prefix: await ctx.projects.prefixOf(w), columns: columnsOf(w),
-      project: w.displayName ?? w.name,
+  const board = async (project: ProjectRow) => {
+    const plan = await ctx.settings.resolveWithSource('auto_plan', { project });
+    const build = await ctx.settings.resolveWithSource('auto_build', { project });
+    return { prefix: await ctx.projects.prefixOf(project), columns: columnsOf(project),
+      project: project.displayName ?? project.name,
       auto_plan_default: Boolean(plan.value), auto_plan_source: plan.source,
       auto_build_default: Boolean(build.value), auto_build_source: build.source };
   };
@@ -85,9 +85,9 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
   // `locked` is computed here (same rule as GET /sessions) so the board can
   // show a spinner on cards whose session is actively running; `work` is
   // the stored column the 10s refresh job maintains.
-  const cardSessions = async (w: ProjectRow) => {
+  const cardSessions = async (project: ProjectRow) => {
     const now = Date.now();
-    return (await ctx.sessions.codersByCard(w.id)).map((s) => ({
+    return (await ctx.sessions.codersByCard(project.id)).map((s) => ({
       card: s.card, id: s.id, name: s.name,
       locked: isHeld(s, now),
       work: s.work }));
@@ -109,25 +109,25 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
         before: { type: 'string', description: "archived=only: a row's updated_at (ISO) — return only older changes" },
         before_id: { type: 'integer', description: "that row's id, breaking updated_at ties" } } } } },
     async (req, reply) => {
-      const w = await projectOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
+      const project = await projectOf(req.params.id);
+      if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
       if (req.query.number !== undefined) {
-        const card = await ctx.cards.byNumber(w, req.query.number);
-        return ok({ ...await board(w), cards: card ? [card] : [] });
+        const card = await ctx.cards.byNumber(project, req.query.number);
+        return ok({ ...await board(project), cards: card ? [card] : [] });
       }
       if (req.query.archived === 'only') {
-        const { cards, total } = await ctx.cards.listArchived(w,
+        const { cards, total } = await ctx.cards.listArchived(project,
           { limit: req.query.limit, before: req.query.before, beforeId: req.query.before_id });
-        return ok({ ...await board(w), cards, total });
+        return ok({ ...await board(project), cards, total });
       }
-      const rows = await ctx.cards.list(w, { includeArchived: req.query.archived === 'true' });
-      const cs = await cardSessions(w);
+      const rows = await ctx.cards.list(project, { includeArchived: req.query.archived === 'true' });
+      const cs = await cardSessions(project);
       // card_work: the git work state per card; card_locked: whether the
       // card's coding session is held right now.
       const cardWork: Record<number, string | null> = {};
       const cardLocked: Record<number, boolean> = {};
       for (const c of cs) { if (c.work) cardWork[c.card] = c.work; if (c.locked) cardLocked[c.card] = true; }
-      return ok({ ...await board(w), cards: rows, card_sessions: cs.map(({ work: _w, ...c }) => c),
+      return ok({ ...await board(project), cards: rows, card_sessions: cs.map(({ work: _w, ...c }) => c),
         card_work: cardWork, card_locked: cardLocked });
     });
 
@@ -138,14 +138,14 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       body: { type: 'object', additionalProperties: false, required: ['title'], properties: cardBodyProps } } },
     async (req, reply) => {
-      const w = await projectOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
+      const project = await projectOf(req.params.id);
+      if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
       // Every card write lands on the board bus (Cards.publish): the looper
       // and the archive auto-push listen there, whichever door wrote.
       let card;
-      try { card = await ctx.cards.create(w, req.body as CardFields & { title: string }, writerOf(req)); }
+      try { card = await ctx.cards.create(project, req.body as CardFields & { title: string }, writerOf(req)); }
       catch (e) { return cardErr(reply, e); }
-      return ok({ ...await board(w), card });
+      return ok({ ...await board(project), card });
     });
 
   app.patch<{ Params: { id: string; number: number }; Body: Record<string, unknown> }>(
@@ -157,13 +157,13 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
       params: { type: 'object', properties: { id: { type: 'string' }, number: cardNumberParam }, required: ['id', 'number'] },
       body: { type: 'object', additionalProperties: false, properties: { ...cardBodyProps, items: itemsSchema } } } },
     async (req, reply) => {
-      const w = await projectOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
+      const project = await projectOf(req.params.id);
+      if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
       const { items, ...fields } = req.body as CardFields & { items?: ItemOp[] };
       let card;
-      try { card = (await ctx.cards.update(w, req.params.number, fields, items, writerOf(req))).card; }
+      try { card = (await ctx.cards.update(project, req.params.number, fields, items, writerOf(req))).card; }
       catch (e) { return cardErr(reply, e); }
-      return ok({ ...await board(w), card });
+      return ok({ ...await board(project), card });
     });
 
   app.get<{ Params: { id: string; number: number }; Querystring: { limit: number } }>(
@@ -174,9 +174,9 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
       params: { type: 'object', properties: { id: { type: 'string' }, number: cardNumberParam }, required: ['id', 'number'] },
       querystring: { type: 'object', properties: { limit: { type: 'integer', default: 20 } } } } },
     async (req, reply) => {
-      const w = await projectOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
-      return ok({ card: req.params.number, revisions: await ctx.cards.revisions(w, req.params.number, req.query.limit) });
+      const project = await projectOf(req.params.id);
+      if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
+      return ok({ card: req.params.number, revisions: await ctx.cards.revisions(project, req.params.number, req.query.limit) });
     });
 
   app.delete<{ Params: { id: string; number: number } }>(
@@ -184,9 +184,9 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
       description: 'Hard delete — the card, its number and its history. Prefer PATCH archived=true, which keeps all three.',
       params: { type: 'object', properties: { id: { type: 'string' }, number: cardNumberParam }, required: ['id', 'number'] } } },
     async (req, reply) => {
-      const w = await projectOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
-      if (!await ctx.cards.remove(w, req.params.number))
+      const project = await projectOf(req.params.id);
+      if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
+      if (!await ctx.cards.remove(project, req.params.number))
         return reply.code(404).send(err('not_found', `no card ${req.params.number} in project ${req.params.id}`));
       return ok({ deleted: true });
     });
@@ -204,12 +204,12 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
         'coding session, {event: heartbeat} every 15 s. No replay — load the board on connect.',
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } } },
     async (req, reply) => {
-      const w = await projectOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
+      const project = await projectOf(req.params.id);
+      if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
       reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
       const write = (o: unknown) => { reply.raw.write(`${JSON.stringify(o)}\n`); };
       const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
-      const unsubscribe = ctx.events!.subscribe(w.id, write);
+      const unsubscribe = ctx.events!.subscribe(project.id, write);
       write({ event: 'heartbeat' });
       await new Promise<void>((resolve) => reply.raw.on('close', resolve));
       clearInterval(heartbeat);

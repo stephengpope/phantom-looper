@@ -76,21 +76,21 @@ function boardHandler(deps: AssistantDeps, projectId: () => string | null) {
   async function handle(args: KanbanArgs): Promise<unknown> {
     const id = projectId();
     if (!id) return { error: 'no active project — /projects to pick one' };
-    const w = await deps.projects.get(id);
-    if (!w) return { error: `project ${id} is gone — /projects to pick another` };
+    const project = await deps.projects.get(id);
+    if (!project) return { error: `project ${id} is gone — /projects to pick another` };
     try {
       switch (args.action) {
         case 'screen':
           return { note: 'no screen on telegram — read the card instead' };
         case 'list':
-          return { prefix: await deps.projects.prefixOf(w), cards: (await deps.cards.list(w, {})).map(cardOf) };
+          return { prefix: await deps.projects.prefixOf(project), cards: (await deps.cards.list(project, {})).map(cardOf) };
         case 'read':
-          return (await deps.cards.byNumber(w, args.card!)) ?? { error: `no card ${args.card}` };
+          return (await deps.cards.byNumber(project, args.card!)) ?? { error: `no card ${args.card}` };
         case 'create': {
           const body: Record<string, unknown> = { title: args.title };
           for (const k of ['details', 'status'] as const) if (args[k] !== undefined) body[k] = args[k];
           if (args.requirements) body.requirements = args.requirements;
-          return deps.cards.create(w, body as CardFields & { title: string }, CLIENT_ID);
+          return deps.cards.create(project, body as CardFields & { title: string }, CLIENT_ID);
         }
         case 'update': case 'move': {
           const body: Record<string, unknown> = {};
@@ -98,12 +98,12 @@ function boardHandler(deps: AssistantDeps, projectId: () => string | null) {
             'archived', 'auto_plan', 'auto_build', 'pinned'] as const) {
             if (args[k] !== undefined) body[k] = args[k];
           }
-          return (await deps.cards.update(w, args.card!, body as CardFields, undefined, CLIENT_ID)).card;
+          return (await deps.cards.update(project, args.card!, body as CardFields, undefined, CLIENT_ID)).card;
         }
         case 'items':
-          return (await deps.cards.update(w, args.card!, {}, args.ops as ItemOp[], CLIENT_ID)).card;
+          return (await deps.cards.update(project, args.card!, {}, args.ops as ItemOp[], CLIENT_ID)).card;
         case 'history':
-          return { card: args.card, revisions: await deps.cards.revisions(w, args.card!, 20) };
+          return { card: args.card, revisions: await deps.cards.revisions(project, args.card!, 20) };
         default:
           return { error: `unknown board action: ${args.action}` };
       }

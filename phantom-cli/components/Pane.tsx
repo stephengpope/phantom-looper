@@ -88,7 +88,7 @@ export function Pane<T>({ items, render, offset, width, onMeasure, fill, topGap 
 
   // The window, and the geometry that follows from it. Recomputed only when
   // something it depends on moves — a measurement, the scroll, a new item.
-  const w = useMemo(() => {
+  const window = useMemo(() => {
     const map = heights.current;
     // The guess for an item never drawn: what the drawn ones average. Ignore
     // keys left behind by other lists this pane has shown (it is reused across
@@ -128,7 +128,7 @@ export function Pane<T>({ items, render, offset, width, onMeasure, fill, topGap 
     // `version` is the dependency that says a measurement moved.
   }, [items, key, offset, paneRows, topGap, total, version]);
 
-  useEffect(() => { onMeasure?.(measured ? w.maxOffset : 0); }, [measured, w.maxOffset, onMeasure]);
+  useEffect(() => { onMeasure?.(measured ? window.maxOffset : 0); }, [measured, window.maxOffset, onMeasure]);
 
   // A pane with no height draws nothing (react-virtualized's AutoSizer rule).
   // Yoga gives the children of a zero-height box no layout, so every item
@@ -140,18 +140,18 @@ export function Pane<T>({ items, render, offset, width, onMeasure, fill, topGap 
   // measurements and drawing nothing keeps them intact for the next frame.
   const blind = !measured || paneRows === 0;
   const drawn: ReactNode[] = [];
-  for (let i = w.start; i <= w.end && i < total && !blind; i++) {
+  for (let i = window.start; i <= window.end && i < total && !blind; i++) {
     const k = key(i);
     drawn.push(<Measured key={k} id={k} report={report}>{render(items[i], i)}</Measured>);
   }
   return (
     <Box ref={frame} flexDirection="column" flexGrow={1} flexShrink={1} flexBasis={0}
-      width={width} overflow="hidden" justifyContent={w.fits ? 'flex-start' : 'flex-end'}>
-      <Box flexDirection="column" flexShrink={0} paddingTop={w.gap}
-        marginBottom={w.fits ? 0 : -Math.max(0, w.at - w.below)}>
+      width={width} overflow="hidden" justifyContent={window.fits ? 'flex-start' : 'flex-end'}>
+      <Box flexDirection="column" flexShrink={0} paddingTop={window.gap}
+        marginBottom={window.fits ? 0 : -Math.max(0, window.at - window.below)}>
         {drawn}
       </Box>
-      {w.fits && fill && !blind ? <Box flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden">{fill}</Box> : null}
+      {window.fits && fill && !blind ? <Box flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden">{fill}</Box> : null}
     </Box>
   );
 }

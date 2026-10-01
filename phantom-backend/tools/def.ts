@@ -25,7 +25,7 @@ export interface ToolCtx {
 /** The session's container and the bash/task plumbing the route layer wires
  *  around it (api/routes/fs.ts) — the registry stays free of db and docker. */
 export interface FileTools {
-  ws: Sandbox;
+  sandbox: Sandbox;
   limits: { maxReadBytes: number; maxSearchResults: number };
   runBash: (args: { cmd: string; cwd?: string; detached?: boolean; timeout?: number }) => Promise<unknown>;
   tasks: {

@@ -750,8 +750,8 @@ export class TelegramEngine {
     const s = await this.deps.sessions.get(bot.activeSessionId);
     if (!s) return '🤖 Coding agent';
     const card = (await this.deps.cards.ofSession(bot.activeSessionId))?.number;
-    const w = await this.deps.projects.get(s.projectId);
-    const prefix = w ? await this.deps.projects.prefixOf(w) : undefined;
+    const project = await this.deps.projects.get(s.projectId);
+    const prefix = project ? await this.deps.projects.prefixOf(project) : undefined;
     const parts: string[] = ['🤖 Coding agent'];
     if (prefix) parts.push(prefix);
     if (prefix && card != null) parts.push(`${prefix}-${card}`);
@@ -831,7 +831,7 @@ export class TelegramEngine {
     label: string,
     sessionId: string,
     steps: Record<string, string>,
-    fn: ((s: SessionRow, w: ProjectRow, onEvent?: (e: { step: string; detail?: string }) => void | Promise<void>, by?: string) => Promise<T>) | undefined,
+    fn: ((s: SessionRow, project: ProjectRow, onEvent?: (e: { step: string; detail?: string }) => void | Promise<void>, by?: string) => Promise<T>) | undefined,
     onStep?: (label: string) => void,
   ): Promise<T> {
     if (!fn) return { result: 'error', reason: `auto-${label} is not available on this server` } as T;

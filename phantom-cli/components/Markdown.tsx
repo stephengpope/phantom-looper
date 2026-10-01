@@ -22,9 +22,9 @@ import { createLowlight, common } from 'lowlight';
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 const visibleLength = (s: string) => s.replace(ANSI_RE, '').length;
 
-/** Pad `s` with trailing spaces until its visible width reaches `w`. */
-const padRight = (s: string, w: number) => {
-  const gap = Math.max(0, w - visibleLength(s));
+/** Pad `s` with trailing spaces until its visible width reaches `width`. */
+const padRight = (s: string, width: number) => {
+  const gap = Math.max(0, width - visibleLength(s));
   return gap > 0 ? s + ' '.repeat(gap) : s;
 };
 
@@ -284,7 +284,7 @@ function renderTable(headers: string[], rows: string[][], width: number): string
   const PAD = 2;           // 1 space each side of cell content
   const overhead = numCols + 1 + numCols * PAD;   // borders + padding
   const budget = Math.max(numCols * 3, width - overhead);
-  const total = colW.reduce((s, w) => s + w, 0);
+  const total = colW.reduce((s, columnWidth) => s + columnWidth, 0);
   if (total > budget) {
     const scale = budget / total;
     for (let c = 0; c < numCols; c++) colW[c] = Math.max(3, Math.floor(colW[c] * scale));
@@ -293,7 +293,7 @@ function renderTable(headers: string[], rows: string[][], width: number): string
   // ── drawing helpers ──
   const dim = chalk.dim;
   const hline = (l: string, m: string, r: string) =>
-    dim(l + colW.map(w => '─'.repeat(w + PAD)).join(m) + r);
+    dim(l + colW.map(columnWidth => '─'.repeat(columnWidth + PAD)).join(m) + r);
 
   const fmtRow = (cells: string[], isHeader: boolean) => {
     const parts = cells.map((cell, c) => {

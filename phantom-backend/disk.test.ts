@@ -31,14 +31,14 @@ function world(opts: {
   const calls: string[] = [];
   const rows = opts.sessions.map((x) => ({
     s: { id: x.id, lastUsedAt: new Date(NOW - x.ageHours * HOUR) } as SessionRow,
-    w: {} as ProjectRow,
+    project: {} as ProjectRow,
     gb: x.gb,
   }));
   let lockHeld = false;
   const deps: CleanupDeps = {
     pct: 80,
     measure: async (): Promise<DiskState> => ({ usedPct: ((TOTAL - free) / TOTAL) * 100, freeGB: free }),
-    owners: async () => rows.map(({ s, w }) => ({ s, w })),
+    owners: async () => rows.map(({ s, project }) => ({ s, project })),
     busy: async (ids) => new Set(ids.filter((id) => opts.busy?.includes(id))),
     landed: async (s) => !opts.unmerged?.includes(s.id),
     removeOldImages: async () => { calls.push('images'); },
@@ -59,14 +59,14 @@ function world(opts: {
 }
 
 test('healthy disk: nothing happens', async () => {
-  const w = world({ sessions: [{ id: 'a', ageHours: 100, gb: 10 }], freeGB: 500 });
-  await diskCleanup(w.deps);
-  assert.deepEqual(w.calls, []);
+  const fake = world({ sessions: [{ id: 'a', ageHours: 100, gb: 10 }], freeGB: 500 });
+  await diskCleanup(fake.deps);
+  assert.deepEqual(fake.calls, []);
 });
 
 test('oldest first, including sessions inside the 3-day timeout, stops once healthy', async () => {
   // 1000 GB disk, 10 GB free: too full. Healthy = under 80% (> 200 GB free).
-  const w = world({
+  const fake = world({
     sessions: [
       { id: 'new', ageHours: 1, gb: 300 },
       { id: 'oldest', ageHours: 200, gb: 100 },
@@ -74,24 +74,24 @@ test('oldest first, including sessions inside the 3-day timeout, stops once heal
     ],
     freeGB: 10,
   });
-  await diskCleanup(w.deps);
+  await diskCleanup(fake.deps);
   // 10 -> 110 free (oldest) -> 210 free (mid) = 79% used: healthy, 'new' kept.
-  assert.deepEqual(w.deleted(), ['oldest', 'mid']);
+  assert.deepEqual(fake.deleted(), ['oldest', 'mid']);
 });
 
 test('busy sessions are skipped, never backed up or deleted', async () => {
-  const w = world({
+  const fake = world({
     sessions: [{ id: 'busy', ageHours: 100, gb: 500 }, { id: 'idle', ageHours: 50, gb: 500 }],
     freeGB: 10,
     busy: ['busy'],
   });
-  await diskCleanup(w.deps);
-  assert.ok(!w.calls.includes('backup:busy'));
-  assert.deepEqual(w.deleted(), ['idle']);
+  await diskCleanup(fake.deps);
+  assert.ok(!fake.calls.includes('backup:busy'));
+  assert.deepEqual(fake.deleted(), ['idle']);
 });
 
 test('unmerged sessions are never deleted, whatever the disk says', async () => {
-  const w = world({
+  const fake = world({
     sessions: [
       { id: 'oldest-unmerged', ageHours: 200, gb: 100 },
       { id: 'merged', ageHours: 10, gb: 300 },
@@ -99,20 +99,20 @@ test('unmerged sessions are never deleted, whatever the disk says', async () => 
     freeGB: 10,
     unmerged: ['oldest-unmerged'],
   });
-  await diskCleanup(w.deps);
-  assert.deepEqual(w.deleted(), ['merged']);
-  assert.ok(!w.calls.includes('backup:oldest-unmerged'), 'not even backed up by the sweep');
+  await diskCleanup(fake.deps);
+  assert.deepEqual(fake.deleted(), ['merged']);
+  assert.ok(!fake.calls.includes('backup:oldest-unmerged'), 'not even backed up by the sweep');
 });
 
 test('failed backup: skipped, never deleted, tried again next run', async () => {
   const run = async () => {
-    const w = world({
+    const fake = world({
       sessions: [{ id: 'broken', ageHours: 100, gb: 500 }, { id: 'ok', ageHours: 50, gb: 1 }],
       freeGB: 10,
       backupFails: ['broken'],
     });
-    await diskCleanup(w.deps);
-    return w;
+    await diskCleanup(fake.deps);
+    return fake;
   };
   const first = await run();
   assert.deepEqual(first.deleted(), ['ok']);
@@ -122,14 +122,14 @@ test('failed backup: skipped, never deleted, tried again next run', async () => 
 });
 
 test('old images are removed before each check and once at the end', async () => {
-  const w = world({ sessions: [{ id: 'a', ageHours: 5, gb: 500 }], freeGB: 10 });
-  await diskCleanup(w.deps);
-  assert.deepEqual(w.calls, ['images', 'backup:a', 'delete:a', 'images']);
+  const fake = world({ sessions: [{ id: 'a', ageHours: 5, gb: 500 }], freeGB: 10 });
+  await diskCleanup(fake.deps);
+  assert.deepEqual(fake.calls, ['images', 'backup:a', 'delete:a', 'images']);
 });
 
 test('percent 0: a 90%-full disk above the floor deletes nothing (no delete-everything bug)', async () => {
-  const w = world({ sessions: [{ id: 'a', ageHours: 500, gb: 1 }], freeGB: 100 });
-  w.deps.pct = 0;
-  await diskCleanup(w.deps);
-  assert.deepEqual(w.deleted(), []);
+  const fake = world({ sessions: [{ id: 'a', ageHours: 500, gb: 1 }], freeGB: 100 });
+  fake.deps.pct = 0;
+  await diskCleanup(fake.deps);
+  assert.deepEqual(fake.deleted(), []);
 });

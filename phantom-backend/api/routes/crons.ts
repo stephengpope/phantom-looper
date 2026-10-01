@@ -37,7 +37,7 @@ for (const f of CRON_FIELDS) {
 
 export function cronRoutes(app: FastifyInstance, ctx: AppCtx) {
   const projectOf = (id: string) => ctx.projects.get(id);
-  const clockOf = (w: ProjectRow) => ctx.settings.clock({ project: w });
+  const clockOf = (project: ProjectRow) => ctx.settings.clock({ project });
   /** Every answer carries the zone and the time there — what a caller
    *  writing a datetime needs and never otherwise has. */
   const stamp = (clock: Clock) => ({ timezone: clock.timezone, now: clock.now().toISOString() });
@@ -53,9 +53,9 @@ export function cronRoutes(app: FastifyInstance, ctx: AppCtx) {
         'Plus the project\'s `timezone` and the server\'s `now`.',
       params: idParam } },
     async (req, reply) => {
-      const w = await projectOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
-      return ok({ ...stamp(await clockOf(w)), crons: await ctx.crons.list(w) });
+      const project = await projectOf(req.params.id);
+      if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
+      return ok({ ...stamp(await clockOf(project)), crons: await ctx.crons.list(project) });
     });
 
   app.post<{ Params: { id: string }; Body: CronFields }>(
@@ -65,10 +65,10 @@ export function cronRoutes(app: FastifyInstance, ctx: AppCtx) {
       params: idParam,
       body: { type: 'object', additionalProperties: false, required: ['name', 'schedule'], properties: cronBodyProps } } },
     async (req, reply) => {
-      const w = await projectOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
-      const clock = await clockOf(w);
-      try { return ok({ ...stamp(clock), cron: await ctx.crons.create(w, req.body, clock) }); }
+      const project = await projectOf(req.params.id);
+      if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
+      const clock = await clockOf(project);
+      try { return ok({ ...stamp(clock), cron: await ctx.crons.create(project, req.body, clock) }); }
       catch (e) { return cronErr(reply, e); }
     });
 
@@ -78,10 +78,10 @@ export function cronRoutes(app: FastifyInstance, ctx: AppCtx) {
       params: nameParams,
       body: { type: 'object', additionalProperties: false, properties: cronBodyProps } } },
     async (req, reply) => {
-      const w = await projectOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
-      const clock = await clockOf(w);
-      try { return ok({ ...stamp(clock), cron: await ctx.crons.update(w, req.params.name, req.body, clock) }); }
+      const project = await projectOf(req.params.id);
+      if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
+      const clock = await clockOf(project);
+      try { return ok({ ...stamp(clock), cron: await ctx.crons.update(project, req.params.name, req.body, clock) }); }
       catch (e) { return cronErr(reply, e); }
     });
 
@@ -89,9 +89,9 @@ export function cronRoutes(app: FastifyInstance, ctx: AppCtx) {
     '/projects/:id/crons/:name', { schema: { ...TAG, summary: 'Remove a cron',
       description: 'The row goes; the sessions its runs opened stay.', params: nameParams } },
     async (req, reply) => {
-      const w = await projectOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
-      if (!await ctx.crons.remove(w, req.params.name)) {
+      const project = await projectOf(req.params.id);
+      if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
+      if (!await ctx.crons.remove(project, req.params.name)) {
         return reply.code(404).send(err('not_found', `no cron named "${req.params.name}" in this project`));
       }
       return ok({ deleted: req.params.name });

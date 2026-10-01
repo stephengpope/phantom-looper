@@ -111,7 +111,7 @@ export function GlintRows({
   rows: string[]; colors: string[]; active?: boolean; shimmerColor?: string; bold?: boolean;
   restMs?: [number, number]; cellMs?: [number, number]; firstRestMs?: [number, number];
 }) {
-  const width = rows.reduce((w, r) => Math.max(w, r.length), 0);
+  const width = rows.reduce((widest, r) => Math.max(widest, r.length), 0);
   const offset = useGlintSweep(width + TAIL * 2, active, restMs, cellMs, firstRestMs);
   return (
     <>

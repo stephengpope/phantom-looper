@@ -37,9 +37,9 @@ export function switcherChoices(
   projects: ProjectInfo[] = [],
   now = Date.now(),
 ): Choice<string>[] {
-  const byId = new Map(projects.map((w) => [w.id, w]));
+  const byId = new Map(projects.map((project) => [project.id, project]));
   return sessions.map((s) => {
-    const w = byId.get(s.projectId);
+    const project = byId.get(s.projectId);
     const said = lastSaid(s);
     // The one status column. `waiting on you` beats `working` beats `new`
     // beats how long ago: a row whose agent is stopped on a question for you
@@ -59,7 +59,7 @@ export function switcherChoices(
     // what makes the row its subject rather than its category.
     return {
       value: s.id,
-      label: `${w ? projectLabel(w) : s.projectId} · ${s.branch}`,
+      label: `${project ? projectLabel(project) : s.projectId} · ${s.branch}`,
       detail: `${s.summary.model}  ${said ? `"${said.slice(0, 40)}${said.length > 40 ? '…' : ''}"  ` : ''}${
         s.id === activeId && !s.busy ? 'you are here' : state}`,
       // No spinner on a row that is stopped waiting for your answer.

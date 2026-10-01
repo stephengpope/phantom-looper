@@ -24,8 +24,8 @@ export function defaultPrefix(name: string): string {
 }
 
 /** The board's columns: the project's own list, or the default. */
-export const columnsOf = (w: ProjectRow): string[] =>
-  (Array.isArray(w.kanbanColumns) && w.kanbanColumns.length ? w.kanbanColumns : DEFAULT_COLUMNS);
+export const columnsOf = (project: ProjectRow): string[] =>
+  (Array.isArray(project.kanbanColumns) && project.kanbanColumns.length ? project.kanbanColumns : DEFAULT_COLUMNS);
 
 /** What a new project is registered with — the route resolved the URL and
  *  (for create=true) made the repository first. */
@@ -65,8 +65,8 @@ export class Projects {
 
   /** The card number prefix ("PHA"): the `card_prefix` setting at this
    *  project's layer, else the repo name's first three letters. */
-  async prefixOf(w: ProjectRow): Promise<string> {
-    return (await this.settings.resolve('card_prefix', { project: w })) ?? defaultPrefix(w.name);
+  async prefixOf(project: ProjectRow): Promise<string> {
+    return (await this.settings.resolve('card_prefix', { project })) ?? defaultPrefix(project.name);
   }
 
   /** Refuses a repo that is already a project (`owner, name` is unique). */

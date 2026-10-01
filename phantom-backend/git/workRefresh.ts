@@ -39,7 +39,7 @@ export async function refreshWorkState({ workspaces, projects, paths, containers
   if (!rows.length) return;
 
   // Resolve base branches per project (one lookup for the batch).
-  const baseOf = new Map((await projects.list()).map((w) => [w.id, w.baseBranch]));
+  const baseOf = new Map((await projects.list()).map((project) => [project.id, project.baseBranch]));
 
   // Check each workspace in parallel.
   await Promise.all(rows.map(async (f) => {

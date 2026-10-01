@@ -94,14 +94,14 @@ export class Crons {
   // ── reads ──────────────────────────────────────────────────────────────────
 
   /** A project's crons, by name. */
-  async list(w: ProjectRow): Promise<CronRow[]> {
-    return this.db.select().from(crons).where(eq(crons.project_id, w.id)).orderBy(crons.name);
+  async list(project: ProjectRow): Promise<CronRow[]> {
+    return this.db.select().from(crons).where(eq(crons.project_id, project.id)).orderBy(crons.name);
   }
 
   /** The cron with this name (case-insensitive). */
-  async byName(w: ProjectRow, name: string): Promise<CronRow | undefined> {
+  async byName(project: ProjectRow, name: string): Promise<CronRow | undefined> {
     const rows = await this.db.select().from(crons)
-      .where(and(eq(crons.project_id, w.id), sql`lower(${crons.name}) = lower(${name})`));
+      .where(and(eq(crons.project_id, project.id), sql`lower(${crons.name}) = lower(${name})`));
     return rows[0];
   }
 
@@ -124,19 +124,19 @@ export class Crons {
 
   /** A new cron. Name, schedule and prompt required; the schedule must fire
    *  at least once from now, in the clock's zone. */
-  async create(w: ProjectRow, fields: CronFields, clock: Clock, now = clock.now()): Promise<CronRow> {
+  async create(project: ProjectRow, fields: CronFields, clock: Clock, now = clock.now()): Promise<CronRow> {
     const name = cleanName(fields.name);
     const body = cleanBody(fields.prompt, fields.script);
     const schedule = cleanSchedule(fields.schedule);
     checkSchedule(schedule, clock, now);
-    const model = await this.cleanModel(w, fields.provider, fields.model);
+    const model = await this.cleanModel(project, fields.provider, fields.model);
     const reasoning = cleanReasoning(fields.reasoning);
     try {
       const [row] = await this.db.insert(crons)
-        .values({ project_id: w.id, name, schedule, once: isOnce(schedule), ...body, ...model, reasoning,
+        .values({ project_id: project.id, name, schedule, once: isOnce(schedule), ...body, ...model, reasoning,
           enabled: fields.enabled ?? true, created_at: now, updated_at: now })
         .returning();
-      this.changed(w.id);
+      this.changed(project.id);
       return row;
     } catch (e) {
       if (isUniqueViolation(e)) throw new CronError('duplicate_name', `a cron named "${name}" already exists — update it, or pick another name`);
@@ -146,7 +146,7 @@ export class Crons {
 
   /** Any subset of fields. A schedule change is checked like a create; a
    *  rename keeps the row. */
-  async update(w: ProjectRow, name: string, fields: CronFields, clock: Clock, now = clock.now()): Promise<CronRow> {
+  async update(project: ProjectRow, name: string, fields: CronFields, clock: Clock, now = clock.now()): Promise<CronRow> {
     const set: Partial<typeof crons.$inferInsert> = {};
     if (fields.name !== undefined) set.name = cleanName(fields.name);
     if (fields.prompt !== undefined || fields.script !== undefined) Object.assign(set, cleanBody(fields.prompt, fields.script));
@@ -155,15 +155,15 @@ export class Crons {
       checkSchedule(set.schedule, clock, now);
       set.once = isOnce(set.schedule);
     }
-    if (fields.provider !== undefined || fields.model !== undefined) Object.assign(set, await this.cleanModel(w, fields.provider, fields.model));
+    if (fields.provider !== undefined || fields.model !== undefined) Object.assign(set, await this.cleanModel(project, fields.provider, fields.model));
     if (fields.reasoning !== undefined) set.reasoning = cleanReasoning(fields.reasoning);
     if (fields.enabled !== undefined) set.enabled = fields.enabled;
     if (!Object.keys(set).length) throw new CronError('invalid_args', 'no fields to update');
-    const prior = await this.byName(w, name);
+    const prior = await this.byName(project, name);
     if (!prior) throw new CronError('not_found', `no cron named "${name}" in this project`);
     try {
       const [row] = await this.db.update(crons).set({ ...set, updated_at: now }).where(eq(crons.id, prior.id)).returning();
-      this.changed(w.id);
+      this.changed(project.id);
       return row;
     } catch (e) {
       if (isUniqueViolation(e)) throw new CronError('duplicate_name', `a cron named "${set.name}" already exists`);
@@ -171,11 +171,11 @@ export class Crons {
     }
   }
 
-  async remove(w: ProjectRow, name: string): Promise<boolean> {
-    const prior = await this.byName(w, name);
+  async remove(project: ProjectRow, name: string): Promise<boolean> {
+    const prior = await this.byName(project, name);
     if (!prior) return false;
     await this.db.delete(crons).where(eq(crons.id, prior.id));
-    this.changed(w.id);
+    this.changed(project.id);
     return true;
   }
 
@@ -183,7 +183,7 @@ export class Crons {
    *  Both columns come back so a write of one (or a null) resets the pair —
    *  a provider with no model is nothing to run on, a model with no
    *  provider could be anyone's. */
-  private async cleanModel(w: ProjectRow, p: unknown, m: unknown): Promise<{ provider: string | null; model: string | null }> {
+  private async cleanModel(project: ProjectRow, p: unknown, m: unknown): Promise<{ provider: string | null; model: string | null }> {
     const provider = String(p ?? '').trim();
     const model = String(m ?? '').trim();
     if (!provider && !model) return { provider: null, model: null };
@@ -191,7 +191,7 @@ export class Crons {
       throw new CronError('invalid_args', 'provider and model go together — give both to run this cron on another ' +
         'model, or neither (null) to run on the project\'s. A model id means nothing without its provider.');
     }
-    const keyed = keyedProviders(await this.settings.block({ project: w }));
+    const keyed = keyedProviders(await this.settings.block({ project }));
     if (!keyed.includes(provider as never)) {
       throw new CronError('invalid_args', `"${provider}" is not a provider this project can call — one with a key on /keys: ` +
         `${keyed.join(', ')}. Save a key there first.`);

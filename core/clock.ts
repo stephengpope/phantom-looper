@@ -26,8 +26,8 @@ function wallClock(at: Date, timeZone: string) {
 
 /** The zone's offset from UTC at `at`, in ms (positive east of Greenwich). */
 function offsetMs(at: Date, timeZone: string): number {
-  const w = wallClock(at, timeZone);
-  const asUtc = Date.UTC(w.year, w.month - 1, w.day, w.hour, w.minute, w.second);
+  const wall = wallClock(at, timeZone);
+  const asUtc = Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute, wall.second);
   return asUtc - Math.floor(at.getTime() / 1000) * 1000;
 }
 
@@ -41,8 +41,8 @@ export class Clock {
    *  midnight and local midnight lands on the right side (the same
    *  approach as date-fns-tz's fromZonedTime). */
   startOfDay(at: Date = this.now()): Date {
-    const w = wallClock(at, this.timezone);
-    const local = Date.UTC(w.year, w.month - 1, w.day);
+    const wall = wallClock(at, this.timezone);
+    const local = Date.UTC(wall.year, wall.month - 1, wall.day);
     const guess = local - offsetMs(new Date(local), this.timezone);
     return new Date(local - offsetMs(new Date(guess), this.timezone));
   }

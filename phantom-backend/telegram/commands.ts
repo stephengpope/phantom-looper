@@ -164,13 +164,13 @@ export async function handleCommand(
           await reply('⚠️ Send /projects first to see the list, then /projects <number>.');
           return;
         }
-        const w = list.find((x) => x.id === ids[n - 1]);
+        const project = list.find((x) => x.id === ids[n - 1]);
         await engine.botState.setActiveProject(ids[n - 1]);
-        await reply(`📁 Active project: ${w?.name ?? ids[n - 1]}`);
+        await reply(`📁 Active project: ${project?.name ?? ids[n - 1]}`);
         return;
       }
-      projectList.set(dm, list.map((w) => w.id));
-      const rows = list.map((w, i) => `${i + 1}. ${w.name}${w.id === bot.activeProjectId ? ' (active)' : ''}`);
+      projectList.set(dm, list.map((project) => project.id));
+      const rows = list.map((project, i) => `${i + 1}. ${project.name}${project.id === bot.activeProjectId ? ' (active)' : ''}`);
       await client.sendMarkdown(dm, titled('📋 Projects:', [...rows, '', 'Switch with /projects <number>'].join('\n')));
       return;
     }
@@ -206,7 +206,7 @@ export async function handleCommand(
 
     case 'status': {
       // Project, session + state, agent, mode (code only), server.
-      const w = bot.activeProjectId ? await projectRow(engine, bot.activeProjectId) : null;
+      const project = bot.activeProjectId ? await projectRow(engine, bot.activeProjectId) : null;
       const s = bot.activeSessionId ? await sessionRow(engine, bot.activeSessionId) : null;
 
       let sessionLine: string;
@@ -218,7 +218,7 @@ export async function handleCommand(
       }
 
       const lines = [
-        `Project: ${w?.name ?? bot.activeProjectId ?? 'none — /projects'}`,
+        `Project: ${project?.name ?? bot.activeProjectId ?? 'none — /projects'}`,
         `Session: ${sessionLine}`,
         `Agent: ${bot.mode}`,
         ...(bot.mode === 'code' && s ? [`Mode: ${s.planMode ? 'plan' : 'code'}`] : []),

@@ -69,11 +69,11 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
       }
       // Credentials are keys of the same store — same table, same chain.
       for (const name of CREDENTIAL_NAMES) {
-        const g = creds[name].global;
-        const w = sc.kind !== 'global' ? creds[name].project : null;
+        const globalValue = creds[name].global;
+        const projectValue = sc.kind !== 'global' ? creds[name].project : null;
         out[name] = {
-          default: null, global: g, project: w,
-          value: w ?? g, source: w != null ? 'project' : g != null ? 'global' : 'default',
+          default: null, global: globalValue, project: projectValue,
+          value: projectValue ?? globalValue, source: projectValue != null ? 'project' : globalValue != null ? 'global' : 'default',
           secret: true, description: (CREDENTIALS[name] as CredentialMeta).description,
           meta: credentialMeta(name),
           overridable: isCredentialProjectScoped(name),

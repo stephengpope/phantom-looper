@@ -86,18 +86,18 @@ const rounded = (d: DiskState) => ({ usedPct: Math.round(d.usedPct), freeGB: Mat
 /** The sessions whose files are on disk (only owners hold disk), each with
  *  its project row. Fails CLOSED like every sweep: an unreadable list
  *  aborts the run — not knowing what is protected never licenses deletion. */
-async function workspaceOwners(projects: Projects, sessions: Sessions): Promise<Array<{ s: SessionRow; w: ProjectRow }>> {
+async function workspaceOwners(projects: Projects, sessions: Sessions): Promise<Array<{ s: SessionRow; project: ProjectRow }>> {
   const rows = await sessions.listOwnersOnDisk();
-  const byId = new Map((await projects.list()).map((w) => [w.id, w]));
+  const byId = new Map((await projects.list()).map((project) => [project.id, project]));
   return rows
     .flatMap((s) => {
-      const w = byId.get(s.projectId);
-      return w ? [{ s, w }] : [];
+      const project = byId.get(s.projectId);
+      return project ? [{ s, project }] : [];
     });
 }
 
-const backupOf = async (engine: GitEngine, s: SessionRow, w: ProjectRow): Promise<PushResult | 'busy'> =>
-  engine.backup(s, w).catch((e) => {
+const backupOf = async (engine: GitEngine, s: SessionRow, project: ProjectRow): Promise<PushResult | 'busy'> =>
+  engine.backup(s, project).catch((e) => {
     log.warn({ session: s.id, err: errStr(e) }, 'backup failed');
     return 'error';
   });
@@ -107,17 +107,17 @@ const backupOf = async (engine: GitEngine, s: SessionRow, w: ProjectRow): Promis
  *  `lastPushAt < lastUsedAt` means a session with nothing new since its last
  *  push is never touched — the common case costs no lock, no git, no push. */
 export async function idleBackupSweep(projects: Projects, sessions: Sessions, engine: GitEngine): Promise<void> {
-  let owners: Array<{ s: SessionRow; w: ProjectRow }>;
+  let owners: Array<{ s: SessionRow; project: ProjectRow }>;
   try { owners = await workspaceOwners(projects, sessions); } catch (e) {
     log.warn({ err: errStr(e) }, 'skipping idle backup — could not read state');
     return;
   }
   const now = Date.now();
-  for (const { s, w } of owners) {
+  for (const { s, project } of owners) {
     if (s.turnCount < BACKUP_MIN_TURNS) continue;
     if (now - s.lastUsedAt.getTime() < BACKUP_IDLE_MS) continue;
     if (s.lastPushAt && s.lastPushAt.getTime() >= s.lastUsedAt.getTime()) continue;
-    const r = await backupOf(engine, s, w);
+    const r = await backupOf(engine, s, project);
     if (r === 'pushed') log.info({ session: s.id }, 'idle session backed up');
   }
 }
@@ -140,18 +140,18 @@ export interface CleanupDeps {
   pct: number;
   measure: () => Promise<DiskState>;
   /** The sessions with files on disk, with their projects. */
-  owners: () => Promise<Array<{ s: SessionRow; w: ProjectRow }>>;
+  owners: () => Promise<Array<{ s: SessionRow; project: ProjectRow }>>;
   /** Of these workspace ids, the busy ones: a turn holds a lock there, or a
    *  background task runs there. */
   busy: (workspaceIds: string[]) => Promise<Set<string>>;
   /** Has this session's work landed on base? Unknown counts as no — the
    *  sweep never deletes on a guess. */
-  landed: (s: SessionRow, w: ProjectRow) => Promise<boolean>;
+  landed: (s: SessionRow, project: ProjectRow) => Promise<boolean>;
   /** Delete release images older than the running one that no container uses. */
   removeOldImages: () => Promise<void>;
   /** engine.backup: push, then run `whenSafe` under the same lock only if
    *  everything is on origin. */
-  backup: (s: SessionRow, w: ProjectRow, whenSafe: () => Promise<void>) => Promise<PushResult | 'busy'>;
+  backup: (s: SessionRow, project: ProjectRow, whenSafe: () => Promise<void>) => Promise<PushResult | 'busy'>;
   /** The container, then the files (which refuses anything not on origin). */
   deleteSession: (s: SessionRow) => Promise<void>;
 }
@@ -162,7 +162,7 @@ export async function diskCleanup(d: CleanupDeps): Promise<void> {
   if (!tooFull(start, d.pct)) return;
   log.warn({ ...rounded(start), limitPct: d.pct, minFreeGB: MIN_FREE_GB }, 'disk too full — cleanup started');
 
-  let owners: Array<{ s: SessionRow; w: ProjectRow }>;
+  let owners: Array<{ s: SessionRow; project: ProjectRow }>;
   let busy: Set<string>;
   try {
     owners = await d.owners();
@@ -174,15 +174,15 @@ export async function diskCleanup(d: CleanupDeps): Promise<void> {
   owners.sort((a, b) => a.s.lastUsedAt.getTime() - b.s.lastUsedAt.getTime());
 
   const left = { unmerged: [] as string[], busy: [] as string[], failed: [] as string[] };
-  for (const { s, w } of owners) {
+  for (const { s, project } of owners) {
     await d.removeOldImages();
     if (!tooFull(await d.measure(), d.pct)) break;
 
     if (busy.has(s.id)) { left.busy.push(s.id); continue; }
-    if (!(await d.landed(s, w))) { left.unmerged.push(s.id); continue; }
+    if (!(await d.landed(s, project))) { left.unmerged.push(s.id); continue; }
 
     let deleted = false;
-    const r = await d.backup(s, w, async () => {
+    const r = await d.backup(s, project, async () => {
       try {
         await d.deleteSession(s);
         deleted = true;
@@ -227,11 +227,11 @@ export async function pressureSweep(
     busy,
     // Measured live from the checkout: the stored `work` column is cleared
     // once the container is gone, which is exactly the idle session here.
-    landed: async (s, w) => !!s.branch && (await workState(repoDir(p, s.id), s.branch, w.baseBranch)) === 'merged',
+    landed: async (s, project) => !!s.branch && (await workState(repoDir(p, s.id), s.branch, project.baseBranch)) === 'merged',
     // Images owns the rule and refuses while a pull is in flight (images.ts).
     removeOldImages: () => images.removeOlderThan(currents)
       .catch((e) => log.warn({ err: errStr(e) }, 'image cleanup failed')),
-    backup: (s, w, whenSafe) => engine.backup(s, w, whenSafe),
+    backup: (s, project, whenSafe) => engine.backup(s, project, whenSafe),
     deleteSession: async (s) => {
       await containers.remove(s.id);
       await sessions.destroy(s, { force: false });

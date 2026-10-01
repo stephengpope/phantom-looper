@@ -22,14 +22,14 @@ const log = logger('bash');
  *  an exec'd command is a session leader (runc setsids it), so the sid names
  *  the whole tree and `pkill -s` reaches children. TERM, ~1s grace, KILL.
  *  The pidfile can lag the exec's spawn by a beat, so the read retries. */
-export function killProcessGroup(ws: Sandbox, pidfile: string): Promise<unknown> {
+export function killProcessGroup(sandbox: Sandbox, pidfile: string): Promise<unknown> {
   const script =
     'sid=""; for i in 1 2 3 4 5; do sid=$(cat "$0" 2>/dev/null) && [ -n "$sid" ] && break; sleep 0.2; done; ' +
     '[ -n "$sid" ] || exit 0; ' +
     'pkill -TERM -s "$sid" 2>/dev/null; sleep 1; ' +
     'pgrep -s "$sid" >/dev/null 2>&1 && pkill -KILL -s "$sid" 2>/dev/null; ' +
     'rm -f "$0"; exit 0';
-  return ws.run(['/bin/sh', '-c', script, pidfile], { timeoutMs: 15_000 })
+  return sandbox.run(['/bin/sh', '-c', script, pidfile], { timeoutMs: 15_000 })
     .catch((e) => log.warn({ err: errStr(e) }, 'kill of command group failed'));
 }
 
@@ -39,10 +39,10 @@ export function killProcessGroup(ws: Sandbox, pidfile: string): Promise<unknown>
 export class ForegroundCommands {
   private bySession = new Map<string, Map<string, Sandbox>>();
 
-  add(sessionId: string, pidfile: string, ws: Sandbox): void {
+  add(sessionId: string, pidfile: string, sandbox: Sandbox): void {
     let m = this.bySession.get(sessionId);
     if (!m) this.bySession.set(sessionId, (m = new Map()));
-    m.set(pidfile, ws);
+    m.set(pidfile, sandbox);
   }
 
   remove(sessionId: string, pidfile: string): void {
@@ -57,8 +57,8 @@ export class ForegroundCommands {
    *  resolves the tool call on its own. Idempotent — pkill of a dead session
    *  is a no-op, so doubling with the socket-close kill is harmless. */
   killAll(sessionId: string): void {
-    for (const [pidfile, ws] of this.bySession.get(sessionId) ?? []) {
-      void killProcessGroup(ws, pidfile);
+    for (const [pidfile, sandbox] of this.bySession.get(sessionId) ?? []) {
+      void killProcessGroup(sandbox, pidfile);
     }
   }
 }

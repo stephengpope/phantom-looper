@@ -103,7 +103,7 @@ export function sessionsHandler(host: AssistantHost) {
         // A server that answers something other than a list is a broken
         // server, not a crashed tool: say so and keep the host usable.
         rows = Array.isArray(got?.sessions) ? got.sessions as SessionRow[] : [];
-        for (const w of Array.isArray(projects) ? projects : []) names.set(w.id, w.displayName || w.name);
+        for (const project of Array.isArray(projects) ? projects : []) names.set(project.id, project.displayName || project.name);
       } catch (e) {
         return { error: `could not list sessions: ${(e as Error).message}`, on_screen };
       }
@@ -183,12 +183,12 @@ export function projectCreateHandler(host: AssistantHost) {
         'Often the name was misheard: ask what to change before calling again.' };
     }
     try {
-      const w = await host.call('POST', '/projects', {
+      const project = await host.call('POST', '/projects', {
         url: name, create: true, private: true,
         ...(args.description ? { description: args.description } : {}),
       }) as { id: string; owner: string; name: string };
-      const opened = await host.onProjectCreated(w.id);
-      return { ok: true, repo: `${w.owner}/${w.name}`, private: true, project_id: w.id,
+      const opened = await host.onProjectCreated(project.id);
+      return { ok: true, repo: `${project.owner}/${project.name}`, private: true, project_id: project.id,
         ...(opened.session ? { entered: 'a new session in the new project' }
           : { note: `project created, but no session could be opened: ${opened.error ?? 'unknown'}` }) };
     } catch (e) { return { error: (e as Error).message }; }

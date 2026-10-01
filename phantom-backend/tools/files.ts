@@ -24,7 +24,7 @@ const IMAGE_TYPES: Record<string, string> = {
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 
 async function readText(f: FileTools, p: string): Promise<string> {
-  const r = await f.ws.readFile(p);
+  const r = await f.sandbox.readFile(p);
   if (r.exitCode !== 0) {
     if (/no such file/i.test(r.stderr)) throw new ToolError('not_found', `${p}: no such file`);
     if (/is a directory/i.test(r.stderr)) throw new ToolError('is_directory', `${p} is a directory — use ls`);
@@ -160,7 +160,7 @@ export const FILE_TOOLS: ToolDef[] = [
       const p = s(a.path);
       const ext = p.slice(p.lastIndexOf('.') + 1).toLowerCase();
       if (IMAGE_TYPES[ext]) {
-        const r = await f.ws.readFile(p);
+        const r = await f.sandbox.readFile(p);
         if (r.exitCode !== 0) throw new ToolError('not_found', `${p}: no such file`);
         if (r.content.length > MAX_IMAGE_BYTES) {
           throw new ToolError('too_large', `${p} is ${r.content.length} bytes — image limit is ${MAX_IMAGE_BYTES}`);
@@ -181,7 +181,7 @@ export const FILE_TOOLS: ToolDef[] = [
     mutates: true, agents: ['coding'], offered: hasFiles,
     async execute(ctx, a) {
       const p = s(a.path);
-      await (await ctx.files()).ws.writeFile(p, Buffer.from(s(a.content), 'utf8'));
+      await (await ctx.files()).sandbox.writeFile(p, Buffer.from(s(a.content), 'utf8'));
       return { path: Sandbox.resolvePath(p), bytes: Buffer.byteLength(s(a.content)) };
     },
   },
@@ -237,7 +237,7 @@ export const FILE_TOOLS: ToolDef[] = [
         content = res.content;
         applied.push({ strategy: res.strategy, replacements: res.count });
       }
-      await f.ws.writeFile(p, Buffer.from(content, 'utf8'));
+      await f.sandbox.writeFile(p, Buffer.from(content, 'utf8'));
       const after = await readText(f, p);
       if (after !== content) {
         throw new ToolError('internal', 'post-write verification failed — re-read and retry', true);
@@ -258,7 +258,7 @@ export const FILE_TOOLS: ToolDef[] = [
     mutates: false, agents: FILE_AGENTS, offered: hasFiles,
     async execute(ctx, a) {
       const p = Sandbox.resolvePath(s(a.path ?? '.'));
-      const r = await (await ctx.files()).ws.run(['ls', '-1Ap', p]);
+      const r = await (await ctx.files()).sandbox.run(['ls', '-1Ap', p]);
       if (r.exitCode !== 0) {
         const e = r.stderr.toString('utf8');
         if (/no such file/i.test(e)) throw new ToolError('not_found', `${p}: no such directory`);
@@ -292,7 +292,7 @@ export const FILE_TOOLS: ToolDef[] = [
       const f = await ctx.files();
       const dir = Sandbox.resolvePath(s(a.path ?? '.'));
       const argv = ['rg', '--files', ...(a.include_ignored ? ['--no-ignore'] : []), '-g', s(a.pattern), dir];
-      const r = await f.ws.run(argv);
+      const r = await f.sandbox.run(argv);
       if (r.exitCode === 127) throw new ToolError('internal', 'ripgrep missing from workspace image — it is a required tool');
       const all = r.stdout.toString('utf8').split('\n').filter(Boolean);
       const files = all.slice(0, Math.max(1, Number(a.limit ?? f.limits.maxSearchResults)));
@@ -327,7 +327,7 @@ export const FILE_TOOLS: ToolDef[] = [
       const argv = ['rg', '--json', ...(a.ignore_case ? ['-i'] : []),
         ...(a.literal ? ['-F'] : []), ...(ctxLines ? ['-C', String(ctxLines)] : []),
         ...(a.glob ? ['-g', s(a.glob)] : []), '-e', s(a.pattern), dir];
-      const r = await f.ws.run(argv, { maxBytes: 8 * 1024 * 1024 });
+      const r = await f.sandbox.run(argv, { maxBytes: 8 * 1024 * 1024 });
       if (r.exitCode === 127) throw new ToolError('internal', 'ripgrep missing from workspace image — it is a required tool');
       if (r.exitCode === 2) throw new ToolError('invalid_args', r.stderr.toString('utf8').slice(0, 300));
       const cap = Math.max(1, Number(a.limit ?? f.limits.maxSearchResults));

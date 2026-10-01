@@ -129,13 +129,13 @@ export class CronEngine {
     for (const row of rows) {
       let zone = zones.get(row.project_id);
       if (!zone) {
-        const w = await this.deps.projects.get(row.project_id);
-        if (!w) continue;
+        const project = await this.deps.projects.get(row.project_id);
+        if (!project) continue;
         try {
-          const s = await this.deps.settings.resolveMany(['cron_enabled', 'timezone'], { project: w });
+          const s = await this.deps.settings.resolveMany(['cron_enabled', 'timezone'], { project });
           zone = { enabled: s.cron_enabled === true, timezone: s.timezone };
         } catch (e) {
-          log.error({ project: w.name, err: errStr(e) }, 'could not read the project\'s cron settings — its crons are not scheduled');
+          log.error({ project: project.name, err: errStr(e) }, 'could not read the project\'s cron settings — its crons are not scheduled');
           continue;
         }
         zones.set(row.project_id, zone);
@@ -199,15 +199,15 @@ export class CronEngine {
     let opened: OpenedSession | undefined;
     let sessionId: string | null = null;
     try {
-      const w = await this.deps.projects.get(row.project_id);
-      if (!w) throw new Error(`project ${row.project_id} is gone`);
-      log.info({ project: w.name, cron: row.name }, 'cron run started');
+      const project = await this.deps.projects.get(row.project_id);
+      if (!project) throw new Error(`project ${row.project_id} is gone`);
+      log.info({ project: project.name, cron: row.name }, 'cron run started');
       // A fresh session, with its checkout, named after the cron. The seat
       // is stamped before the turn so a window watching reads `cron` at
       // once; the transcript save re-derives it from the writer (CRON_CLIENT_ID).
       opened = await openSession({
         baseUrl: BASE, apiKey, clientId: CRON_CLIENT_ID, label: `cron: ${row.name}`,
-        fetch: this.f, lock: true, projectId: w.id,
+        fetch: this.f, lock: true, projectId: project.id,
       });
       sessionId = opened.session.id;
       await sessions.nameIfUnnamed(sessionId, row.name);
@@ -220,16 +220,16 @@ export class CronEngine {
       try {
         if (row.script) {
           const exit = await this.runScript(opened, row.script, ac.signal);
-          log.info({ project: w.name, cron: row.name, session: sessionId, script: row.script, exit }, 'cron script finished');
+          log.info({ project: project.name, cron: row.name, session: sessionId, script: row.script, exit }, 'cron script finished');
         } else {
           const deps = { f: this.f, apiKey, base: BASE, modelFetch: this.deps.modelFetch,
             sessionEvents: this.deps.sessionEvents, client: CRON_CLIENT_ID, backdoor: this.deps.backdoor,
             onRetry: (t: string) => log.warn({ cron: row.name }, t), signal: ac.signal };
           // The row, re-read: it may carry the cron's model now (stampModel).
           const pin = { ...sessionPin(await sessions.get(sessionId)), reasoning: row.reasoning };
-          const t = await runCodingTurn(deps, opened, w.id, row.prompt ?? '', false,
-            await this.deps.settings.agentConfig('coding', { project: w, pin }));
-          log.info({ project: w.name, cron: row.name, session: sessionId, tokens: t.tokens, interrupted: t.interrupted }, 'cron run finished');
+          const t = await runCodingTurn(deps, opened, project.id, row.prompt ?? '', false,
+            await this.deps.settings.agentConfig('coding', { project, pin }));
+          log.info({ project: project.name, cron: row.name, session: sessionId, tokens: t.tokens, interrupted: t.interrupted }, 'cron run finished');
         }
       } finally {
         this.deps.activeTurns?.delete(sessionId);

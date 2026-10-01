@@ -38,15 +38,15 @@ type Requirement = CardRow['requirements'][number];
 export class Cards {
   constructor(private readonly db: Db, private readonly projects: Projects, private readonly events?: BoardEvents) {}
 
-  private publish(w: ProjectRow, card: CardRow, extra: { from?: string; client?: string; archivedBefore?: boolean } = {}): void {
-    this.events?.publish(w.id, { event: 'card', card: card as unknown as Record<string, unknown>, ...extra });
+  private publish(project: ProjectRow, card: CardRow, extra: { from?: string; client?: string; archivedBefore?: boolean } = {}): void {
+    this.events?.publish(project.id, { event: 'card', card: card as unknown as Record<string, unknown>, ...extra });
   }
 
   // ── reads ──────────────────────────────────────────────────────────────────
 
   /** The card with this number, archived or not. */
-  async byNumber(w: ProjectRow, number: number): Promise<CardRow | undefined> {
-    const rows = await this.db.select().from(cards).where(and(eq(cards.project_id, w.id), eq(cards.number, number)));
+  async byNumber(project: ProjectRow, number: number): Promise<CardRow | undefined> {
+    const rows = await this.db.select().from(cards).where(and(eq(cards.project_id, project.id), eq(cards.number, number)));
     return rows[0];
   }
 
@@ -60,16 +60,16 @@ export class Cards {
   }
 
   /** The card with this number, only while it is on the board. */
-  async activeByNumber(w: ProjectRow, number: number): Promise<CardRow | undefined> {
+  async activeByNumber(project: ProjectRow, number: number): Promise<CardRow | undefined> {
     const rows = await this.db.select().from(cards)
-      .where(and(eq(cards.project_id, w.id), eq(cards.number, number), eq(cards.archived, false)));
+      .where(and(eq(cards.project_id, project.id), eq(cards.number, number), eq(cards.archived, false)));
     return rows[0];
   }
 
   /** The board: cards in column order — status, pinned first, then pos. */
-  async list(w: ProjectRow, opts: { includeArchived?: boolean } = {}): Promise<CardRow[]> {
+  async list(project: ProjectRow, opts: { includeArchived?: boolean } = {}): Promise<CardRow[]> {
     return this.db.select().from(cards)
-      .where(and(eq(cards.project_id, w.id), opts.includeArchived ? undefined : eq(cards.archived, false)))
+      .where(and(eq(cards.project_id, project.id), opts.includeArchived ? undefined : eq(cards.archived, false)))
       .orderBy(cards.status, desc(cards.pinned), cards.pos, cards.id);
   }
 
@@ -77,9 +77,9 @@ export class Cards {
    *  No archived_at column exists; updated_at is the order — archiving
    *  touches it, and an archived card is rarely edited after. `total` counts
    *  the whole archive so a page knows how long the list is. */
-  async listArchived(w: ProjectRow, page: { limit?: number; before?: string; beforeId?: number } = {}):
+  async listArchived(project: ProjectRow, page: { limit?: number; before?: string; beforeId?: number } = {}):
     Promise<{ cards: CardRow[]; total: number }> {
-    const archived = and(eq(cards.project_id, w.id), eq(cards.archived, true));
+    const archived = and(eq(cards.project_id, project.id), eq(cards.archived, true));
     const older = page.before !== undefined && page.beforeId !== undefined
       ? sql`(${cards.updated_at}, ${cards.id}) < (${page.before}::timestamptz, ${page.beforeId}::bigint)` : undefined;
     let q = this.db.select().from(cards).where(and(archived, older)).orderBy(desc(cards.updated_at), desc(cards.id)).$dynamic();
@@ -90,29 +90,29 @@ export class Cards {
   }
 
   /** Every card on the board in these columns — the looper's sweep for cards to start. */
-  async listInColumns(w: ProjectRow, statuses: readonly string[]): Promise<CardRow[]> {
+  async listInColumns(project: ProjectRow, statuses: readonly string[]): Promise<CardRow[]> {
     return this.db.select().from(cards)
-      .where(and(eq(cards.project_id, w.id), inArray(cards.status, [...statuses]), eq(cards.archived, false)));
+      .where(and(eq(cards.project_id, project.id), inArray(cards.status, [...statuses]), eq(cards.archived, false)));
   }
 
   /** What changed on a card and when, newest first — written by a trigger,
    *  so edits made over SQL are recorded too. Empty for a card that does not
    *  exist: history goes with its card. */
-  async revisions(w: ProjectRow, number: number, limit: number): Promise<Array<{ changed_from: unknown; changed_at: Date }>> {
+  async revisions(project: ProjectRow, number: number, limit: number): Promise<Array<{ changed_from: unknown; changed_at: Date }>> {
     return this.db.select({ changed_from: cardRevisions.changed_from, changed_at: cardRevisions.changed_at })
       .from(cardRevisions)
       .innerJoin(cards, eq(cards.id, cardRevisions.card_id))
-      .where(and(eq(cards.project_id, w.id), eq(cards.number, number)))
+      .where(and(eq(cards.project_id, project.id), eq(cards.number, number)))
       .orderBy(desc(cardRevisions.id)).limit(limit);
   }
 
   /** When the card last changed column — the revision trigger's record of
    *  the newest status write. null = never moved. The looper's transition
    *  clock: entering plan is a NEW run, always. */
-  async lastMovedAt(w: ProjectRow, number: number): Promise<Date | null> {
+  async lastMovedAt(project: ProjectRow, number: number): Promise<Date | null> {
     const rows = await this.db.select({ at: cardRevisions.changed_at }).from(cardRevisions)
       .innerJoin(cards, eq(cards.id, cardRevisions.card_id))
-      .where(and(eq(cards.project_id, w.id), eq(cards.number, number), sql`${cardRevisions.changed_from} ? 'status'`))
+      .where(and(eq(cards.project_id, project.id), eq(cards.number, number), sql`${cardRevisions.changed_from} ? 'status'`))
       .orderBy(desc(cardRevisions.id)).limit(1);
     return rows[0]?.at ?? null;
   }
@@ -123,8 +123,8 @@ export class Cards {
    *  column. The number is the project's next — taken under the project
    *  row's lock, never reused. `by` is the writer's client id, on
    *  the event. */
-  async create(w: ProjectRow, fields: CardFields & { title: string }, by?: string): Promise<CardRow> {
-    const cols = columnsOf(w);
+  async create(project: ProjectRow, fields: CardFields & { title: string }, by?: string): Promise<CardRow> {
+    const cols = columnsOf(project);
     const status = String(fields.status ?? cols[0]);
     if (!cols.includes(status)) throw new CardError('invalid_args', `status must be one of: ${cols.join(', ')}`);
     const title = String(fields.title);
@@ -133,14 +133,14 @@ export class Cards {
       if (f !== 'status' && f !== 'pos' && f !== 'title' && f in fields) values[f] = fields[f] as never;
     if ('requirements' in fields) values.requirements = keyedItems(fields.requirements as ChecklistItem[]);
     const card = await this.db.transaction(async (tx) => {
-      const number = await this.projects.claimCardNumber(w.id, tx);
+      const number = await this.projects.claimCardNumber(project.id, tx);
       const pos = 'pos' in fields
         ? Number(fields.pos)
-        : sql`(select coalesce(max(${cards.pos}), 0) + 1 from ${cards} where ${cards.project_id} = ${w.id} and ${cards.status} = ${status})`;
-      const [row] = await tx.insert(cards).values({ ...values, project_id: w.id, number, status, title, pos: pos as never }).returning();
+        : sql`(select coalesce(max(${cards.pos}), 0) + 1 from ${cards} where ${cards.project_id} = ${project.id} and ${cards.status} = ${status})`;
+      const [row] = await tx.insert(cards).values({ ...values, project_id: project.id, number, status, title, pos: pos as never }).returning();
       return row;
     });
-    this.publish(w, card, { client: by });
+    this.publish(project, card, { client: by });
     return card;
   }
 
@@ -150,9 +150,9 @@ export class Cards {
    *  BEFORE the write (the event carries it so a listener can tell a move
    *  from an edit) and whether it was archived before (auto-push fires only
    *  on the false → true transition). */
-  async update(w: ProjectRow, number: number, fields: CardFields, items?: ItemOp[], by?: string):
+  async update(project: ProjectRow, number: number, fields: CardFields, items?: ItemOp[], by?: string):
     Promise<{ card: CardRow; from: string; wasArchived: boolean }> {
-    const cols = columnsOf(w);
+    const cols = columnsOf(project);
     if ('status' in fields && !cols.includes(String(fields.status)))
       throw new CardError('invalid_args', `status must be one of: ${cols.join(', ')}`);
     for (const o of items ?? []) {
@@ -170,7 +170,7 @@ export class Cards {
     }
     if (!Object.keys(set).length && !items) throw new CardError('invalid_args', 'no fields to update');
 
-    const mine = and(eq(cards.project_id, w.id), eq(cards.number, number));
+    const mine = and(eq(cards.project_id, project.id), eq(cards.number, number));
 
     // The row as it stood, read under the row lock so the transition this
     // write reports is the one it made: auto-push fires only on archived
@@ -181,31 +181,31 @@ export class Cards {
     const { card, from, wasArchived } = await this.db.transaction(async (tx) => {
       const [prior] = await tx.select({ archived: cards.archived, status: cards.status, requirements: cards.requirements })
         .from(cards).where(mine).for('update');
-      if (!prior) throw new CardError('not_found', `no card ${number} in project ${w.id}`);
+      if (!prior) throw new CardError('not_found', `no card ${number} in project ${project.id}`);
       if (items) set.requirements = applyItemOps(prior.requirements, items);
       const [row] = await tx.update(cards).set({ ...set, updated_at: new Date() }).where(mine).returning();
       return { card: row, from: prior.status, wasArchived: prior.archived };
     });
-    this.publish(w, card, { from, client: by, archivedBefore: wasArchived });
+    this.publish(project, card, { from, client: by, archivedBefore: wasArchived });
     return { card, from, wasArchived };
   }
 
   /** An archived card comes back onto the board, blocked, with the reason —
    *  what a failed auto-push on archive does. */
-  async unarchiveAsBlocked(w: ProjectRow, number: number, reason: string): Promise<CardRow | undefined> {
+  async unarchiveAsBlocked(project: ProjectRow, number: number, reason: string): Promise<CardRow | undefined> {
     const [card] = await this.db.update(cards)
       .set({ archived: false, status: 'blocked', blocked_reason: reason, updated_at: new Date() })
-      .where(and(eq(cards.project_id, w.id), eq(cards.number, number))).returning();
-    if (card) this.publish(w, card);
+      .where(and(eq(cards.project_id, project.id), eq(cards.number, number))).returning();
+    if (card) this.publish(project, card);
     return card;
   }
 
   /** Hard delete — the card, its number and its history. Archive is the
    *  normal path; it keeps all three. */
-  async remove(w: ProjectRow, number: number): Promise<boolean> {
-    const [gone] = await this.db.delete(cards).where(and(eq(cards.project_id, w.id), eq(cards.number, number))).returning({ id: cards.id });
+  async remove(project: ProjectRow, number: number): Promise<boolean> {
+    const [gone] = await this.db.delete(cards).where(and(eq(cards.project_id, project.id), eq(cards.number, number))).returning({ id: cards.id });
     if (!gone) return false;
-    this.events?.publish(w.id, { event: 'deleted', id: gone.id });
+    this.events?.publish(project.id, { event: 'deleted', id: gone.id });
     return true;
   }
 }

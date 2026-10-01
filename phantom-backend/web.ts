@@ -117,11 +117,11 @@ export async function webSearch(ctx: AppCtx, b: SearchBody): Promise<Array<Recor
   const web = (r.data?.web ?? []) as Array<Record<string, unknown>>;
   // Snippets are usually ~150 chars but Firecrawl sometimes inlines a page
   // of markdown there — clipped, ten results stay a snippet list.
-  return web.map((w) => ({
-    title: String(w.title ?? ''), url: String(w.url ?? ''),
-    snippet: String(w.description ?? '').slice(0, 300),
+  return web.map((hit) => ({
+    title: String(hit.title ?? ''), url: String(hit.url ?? ''),
+    snippet: String(hit.description ?? '').slice(0, 300),
     // Present when the search was category-filtered — which bucket this hit.
-    ...(w.category !== undefined ? { category: String(w.category) } : {}),
+    ...(hit.category !== undefined ? { category: String(hit.category) } : {}),
   }));
 }
 

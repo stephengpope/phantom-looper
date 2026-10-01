@@ -349,7 +349,7 @@ const app = render(
     boot={{ ...(resumeId ? { resumeId } : {}) }}
     backend={() => server.backend()}
     onSession={(s) => { currentId = s.id; }}
-    onWindow={(w) => { windowStore = w; if (installedVersion) w.setUpdateReady(installedVersion); }}
+    onWindow={(store) => { windowStore = store; if (installedVersion) store.setUpdateReady(installedVersion); }}
     clientId={CLIENT_ID}
     screen={screen}
   />,

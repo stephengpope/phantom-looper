@@ -194,11 +194,11 @@ export async function collectDeliverables(
   ];
   const files: Deliverable[] = [];
   const seen = new Set<string>();
-  for (const w of wanted) {
-    const host = await validateDeliveryPath(toHost(unquote(w.path)), allowedRoots);
+  for (const want of wanted) {
+    const host = await validateDeliveryPath(toHost(unquote(want.path)), allowedRoots);
     if (!host || seen.has(host)) continue;
     seen.add(host);
-    files.push({ path: host, kind: deliveryKind(host, { isVoice: w.isVoice, forceDocument: tagged.forceDocument }) });
+    files.push({ path: host, kind: deliveryKind(host, { isVoice: want.isVoice, forceDocument: tagged.forceDocument }) });
   }
   return { cleaned: bare.cleaned, files };
 }

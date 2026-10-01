@@ -2,8 +2,8 @@
 // FULL one owns the main column (every menu, the board), a THIRD takes the
 // bottom third with the conversation still above (the glance lists). Each
 // is built here as a plain `Overlay` — what to draw, what to do when it goes
-// — and the window shows it with `w.showOverlay`. Closing is one thing
-// everywhere: `w.dismissOverlay(result)`. The one thing that goes ON TOP of
+// — and the window shows it with `store.showOverlay`. Closing is one thing
+// everywhere: `store.dismissOverlay(result)`. The one thing that goes ON TOP of
 // an overlay is the confirm dialog, built here too.
 //
 // Adding a screen: a builder here, and the store method or slash command
@@ -64,47 +64,47 @@ export const confirmDialog = (dismiss: (result?: unknown) => void, title: string
  *  esc goes BACK to — the columns when it was opened from the board, the chat
  *  from anywhere else (the archive, the Assistant) — because that is the only
  *  thing that ever differed between the two. */
-export const boardScreen = (w: WindowStore, projectId: string,
+export const boardScreen = (store: WindowStore, projectId: string,
   card?: { number: number; back: 'chat' | 'board' }): Overlay =>
   // The name says what is on screen for the Assistant's "is the board up":
   // a card opened FROM the board is still the board.
   full(card?.back === 'chat' ? 'card' : 'board', ({ width, height }) => (
-    <Board store={w.boardFor(projectId)} width={width} height={height} isActive
+    <Board store={store.boardFor(projectId)} width={width} height={height} isActive
       card={card?.number}
-      confirm={(t, m) => w.confirm(t, m)}
-      onOpenCard={(number) => w.openCard(number, 'board')}
-      onCloseCard={() => { if (card?.back === 'board') w.openBoard(); else w.dismissOverlay(); }}
-      onClose={w.dismissOverlay}
+      confirm={(t, m) => store.confirm(t, m)}
+      onOpenCard={(number) => store.openCard(number, 'board')}
+      onCloseCard={() => { if (card?.back === 'board') store.openBoard(); else store.dismissOverlay(); }}
+      onClose={store.dismissOverlay}
       // The card editor's Session row: back to chat, then the one open
       // path — already loaded switches, otherwise it opens (read-only
       // while the looper holds it, like /resume).
-      onOpenSession={(id) => { w.dismissOverlay(); void w.openSession({ kind: 'open', id }); }}
+      onOpenSession={(id) => { store.dismissOverlay(); void store.openSession({ kind: 'open', id }); }}
       // [v]: the archive. Off the board first, so a failed fetch's note
       // lands where you can read it.
-      onArchived={() => { w.dismissOverlay(); void w.openArchived(projectId); }} />
+      onArchived={() => { store.dismissOverlay(); void store.openArchived(projectId); }} />
   ));
 
 // ── the menus ─────────────────────────────────────────────────────────────
 
 /** ctrl+n: the sessions open in this window. */
-export const switcherScreen = (w: WindowStore): Overlay => full('sessions', () => (
+export const switcherScreen = (store: WindowStore): Overlay => full('sessions', () => (
   <SessionSwitcher
-    sessions={w.sessions.list()} activeId={w.sessions.activeId} projects={w.projectRows}
-    onPick={(id) => { w.dismissOverlay(); w.switchTo(id); }}
-    onCancel={w.dismissOverlay} />
+    sessions={store.sessions.list()} activeId={store.sessions.activeId} projects={store.projectRows}
+    onPick={(id) => { store.dismissOverlay(); store.switchTo(id); }}
+    onCancel={store.dismissOverlay} />
 ));
 
 /** /settings — every server setting plus this machine's audio rows;
  *  /assistant opens it at the Assistant's group. Device rows offer what the voice
  *  sidecar found; saving a boot-time key restarts it. */
-export const settingsScreen = (w: WindowStore, startAt?: 'assistant'): Overlay => full('settings', () => {
-  const vs = w.voice.snapshot();
+export const settingsScreen = (store: WindowStore, startAt?: 'assistant'): Overlay => full('settings', () => {
+  const vs = store.voice.snapshot();
   return (
-    <Settings key={`settings-${w.settingsVersion}`} api={w.api} configPath={w.configPath} title="settings"
+    <Settings key={`settings-${store.settingsVersion}`} api={store.api} configPath={store.configPath} title="settings"
       rows={{ server: true, local: 'voice' }} startAt={startAt}
       suggestions={{ voice_mic_device: vs.devices.mics, voice_speaker_device: vs.devices.speakers }}
-      onOpenRow={(k) => { if (k === 'voice_mic_device' || k === 'voice_speaker_device') void w.voice.refreshDevices(); }}
-      onChange={w.settingChanged} onClose={w.dismissOverlay} />
+      onOpenRow={(k) => { if (k === 'voice_mic_device' || k === 'voice_speaker_device') void store.voice.refreshDevices(); }}
+      onChange={store.settingChanged} onClose={store.dismissOverlay} />
   );
 });
 
@@ -112,109 +112,109 @@ export const settingsScreen = (w: WindowStore, startAt?: 'assistant'): Overlay =
  *  saved key has to reach the app like any other setting change: the
  *  Assistant takes its Deepgram key at spawn, and the agents take theirs at
  *  build. */
-export const keysScreen = (w: WindowStore): Overlay => full('keys', () => (
-  <Keys key={`keys-${w.settingsVersion}`} api={w.api} onClose={w.dismissOverlay}
-    onChanged={w.settingChanged} />
+export const keysScreen = (store: WindowStore): Overlay => full('keys', () => (
+  <Keys key={`keys-${store.settingsVersion}`} api={store.api} onClose={store.dismissOverlay}
+    onChanged={store.settingChanged} />
 ));
 
 /** /secrets — the agent's secrets, not phantom's own credentials (/keys).
  *  The screen reads every layer itself — no session context needed. */
-export const secretsScreen = (w: WindowStore): Overlay => full('secrets', () => (
-  <Secrets api={w.api} onClose={w.dismissOverlay} />
+export const secretsScreen = (store: WindowStore): Overlay => full('secrets', () => (
+  <Secrets api={store.api} onClose={store.dismissOverlay} />
 ));
 
 /** /server — this machine's connection rows, on the offline api (see above). */
-export const serverScreen = (w: WindowStore): Overlay => full('server', () => (
-  <Settings key={`server-settings-${w.settingsVersion}`}
-    api={offline} configPath={w.configPath} title="server" rows={{ local: 'server' }}
-    onChange={w.settingChanged} onClose={w.dismissOverlay} />
+export const serverScreen = (store: WindowStore): Overlay => full('server', () => (
+  <Settings key={`server-settings-${store.settingsVersion}`}
+    api={offline} configPath={store.configPath} title="server" rows={{ local: 'server' }}
+    onChange={store.settingChanged} onClose={store.dismissOverlay} />
 ));
 
 /** /presets. Applying closes the screen — the confirmation and the rebuilt
  *  agents both land in the CLI the user is back at. */
-export const presetsScreen = (w: WindowStore): Overlay => full('presets', () => (
-  <Presets key={`presets-${w.settingsVersion}`} api={w.api}
-    confirm={(t, m) => w.confirm(t, m)}
+export const presetsScreen = (store: WindowStore): Overlay => full('presets', () => (
+  <Presets key={`presets-${store.settingsVersion}`} api={store.api}
+    confirm={(t, m) => store.confirm(t, m)}
     onApplied={(name) => {
-      w.note(`preset applied: ${name}`);
-      w.settingChanged('provider');
+      store.note(`preset applied: ${name}`);
+      store.settingChanged('provider');
     }}
-    onClose={w.dismissOverlay} />
+    onClose={store.dismissOverlay} />
 ));
 
 /** `e` on a /project row: that project's settings. Closing goes back to
  *  the list it was opened from, refreshed — a rename there has to show up.
  *  A write is a settings change like any other (the coding agent's model
  *  among them): every open session re-reads its config, as after /settings. */
-export const projectSettingsScreen = (w: WindowStore, project: ProjectInfo): Overlay =>
+export const projectSettingsScreen = (store: WindowStore, project: ProjectInfo): Overlay =>
   full('projectSettings', () => (
-    <ProjectSettings key={`project-settings-${w.settingsVersion}`}
-      api={w.api} project={project}
-      onClose={() => { void w.openPicker('project'); }}
-      onChanged={() => { w.settingChanged(); void w.refreshPicker().catch(quiet('refresh the session list')); }} />
+    <ProjectSettings key={`project-settings-${store.settingsVersion}`}
+      api={store.api} project={project}
+      onClose={() => { void store.openPicker('project'); }}
+      onChanged={() => { store.settingChanged(); void store.refreshPicker().catch(quiet('refresh the session list')); }} />
   ));
 
 /** The add-a-project form. A rejected submit stays on the form with the
- *  server's words (`w.addError`, read fresh each render — the form must NOT
+ *  server's words (`store.addError`, read fresh each render — the form must NOT
  *  be re-shown, that would remount it and lose what was typed). */
-export const addProjectScreen = (w: WindowStore): Overlay => full('addProject', () => (
-  <NewProject api={w.api} error={w.addError}
-    onCancel={w.dismissOverlay}
-    onSubmit={(req: NewProjectRequest) => { void w.addProject(req); }} />
+export const addProjectScreen = (store: WindowStore): Overlay => full('addProject', () => (
+  <NewProject api={store.api} error={store.addError}
+    onCancel={store.dismissOverlay}
+    onSubmit={(req: NewProjectRequest) => { void store.addProject(req); }} />
 ));
 
 /** /archived — the project's archived cards, paged like /resume. */
-export const archivedScreen = (w: WindowStore, projectId: string): Overlay => full('archived', () => (
-  <Archived cards={w.archived} notice={w.archivedNotice}
-    onNearEnd={() => { void w.moreArchived(projectId); }}
-    total={w.archivedTotal}
+export const archivedScreen = (store: WindowStore, projectId: string): Overlay => full('archived', () => (
+  <Archived cards={store.archived} notice={store.archivedNotice}
+    onNearEnd={() => { void store.moreArchived(projectId); }}
+    total={store.archivedTotal}
     // The solo editor renders from the board store, which never holds
     // archived cards on its own — seat this one first.
-    onOpen={(t) => w.openArchivedCard(projectId, t)}
-    onRestore={(t) => { void w.restoreCard(projectId, t); }}
-    onCancel={w.dismissOverlay} />
+    onOpen={(t) => store.openArchivedCard(projectId, t)}
+    onRestore={(t) => { void store.restoreCard(projectId, t); }}
+    onCancel={store.dismissOverlay} />
 ));
 
 /** /tasks — what is running in the session's container. Re-read on the
  *  poll while up: rows come and go on their own. */
-export const tasksScreen = (w: WindowStore): Overlay => third('tasks', () => (
-  w.tasks ? <Tasks view={w.tasks} notice={w.tasksNotice}
-    onKill={(sid, cmd) => { void w.killTask(sid, cmd); }}
-    onCancel={w.dismissOverlay} /> : null
-), { poll: () => { void w.refreshTasks().catch(quiet('refresh tasks')); } });
+export const tasksScreen = (store: WindowStore): Overlay => third('tasks', () => (
+  store.tasks ? <Tasks view={store.tasks} notice={store.tasksNotice}
+    onKill={(sid, cmd) => { void store.killTask(sid, cmd); }}
+    onCancel={store.dismissOverlay} /> : null
+), { poll: () => { void store.refreshTasks().catch(quiet('refresh tasks')); } });
 
 /** /resume (sessions) and /project (projects) — one launcher, two
  *  modes. /resume follows the session list feed while up: a row moving
  *  anywhere re-reads the list, so its rows spin and its locks lapse as they
  *  happen. The refresh swaps rows in place, so the cursor and the notice
  *  line stay put. */
-export const pickerScreen = (w: WindowStore, which: 'project' | 'resume'): Overlay => full(which, () => (
-  w.picker ? <Launcher
+export const pickerScreen = (store: WindowStore, which: 'project' | 'resume'): Overlay => full(which, () => (
+  store.picker ? <Launcher
     mode={which === 'resume' ? 'sessions' : 'projects'}
-    projects={w.projectRows} sessions={w.picker.sessions} total={w.picker.total}
-    showBackground={w.showBackground}
-    onToggleBackground={() => w.toggleBackground()}
-    query={w.pickerQuery} rowsQuery={w.picker.query}
-    onQuery={which === 'resume' ? (q) => w.setPickerQuery(q) : undefined}
-    projectId={w.pickerProject}
-    onCycleProject={which === 'resume' ? (dir) => w.cyclePickerProject(dir) : undefined}
-    busy={(id) => w.sessions.get(id)?.busy ?? false}
-    loaded={(id) => w.sessions.has(id)}
-    clientId={w.clientId}
-    notice={w.pickerNotice}
-    onNearEnd={which === 'resume' ? () => { void w.morePicker(); } : undefined}
-    onEdit={(id) => w.editProject(id)}
-    onDuplicate={(id) => { void w.duplicateFromPicker(id); }}
-    onPin={(id) => { void w.pinFromPicker(id); }}
-    onPing={(id) => { void w.pingSession(id); }}
-    onClose={w.closeFromPicker}
-    onTrash={(id) => { void w.trashSession(id); }}
-    onCancel={w.dismissOverlay}
+    projects={store.projectRows} sessions={store.picker.sessions} total={store.picker.total}
+    showBackground={store.showBackground}
+    onToggleBackground={() => store.toggleBackground()}
+    query={store.pickerQuery} rowsQuery={store.picker.query}
+    onQuery={which === 'resume' ? (q) => store.setPickerQuery(q) : undefined}
+    projectId={store.pickerProject}
+    onCycleProject={which === 'resume' ? (dir) => store.cyclePickerProject(dir) : undefined}
+    busy={(id) => store.sessions.get(id)?.busy ?? false}
+    loaded={(id) => store.sessions.has(id)}
+    clientId={store.clientId}
+    notice={store.pickerNotice}
+    onNearEnd={which === 'resume' ? () => { void store.morePicker(); } : undefined}
+    onEdit={(id) => store.editProject(id)}
+    onDuplicate={(id) => { void store.duplicateFromPicker(id); }}
+    onPin={(id) => { void store.pinFromPicker(id); }}
+    onPing={(id) => { void store.pingSession(id); }}
+    onClose={store.closeFromPicker}
+    onTrash={(id) => { void store.trashSession(id); }}
+    onCancel={store.dismissOverlay}
     onPick={(l) => {
-      if (l.kind === 'add') { w.startAddProject(); return; }
-      w.dismissOverlay();
-      void w.openSession(l.kind === 'new'
+      if (l.kind === 'add') { store.startAddProject(); return; }
+      store.dismissOverlay();
+      void store.openSession(l.kind === 'new'
         ? { kind: 'new', projectId: l.projectId }
         : { kind: 'open', id: l.sessionId });
     }} /> : null
-), which === 'resume' ? { watch: w.watchPicker } : {});
+), which === 'resume' ? { watch: store.watchPicker } : {});
