@@ -25,15 +25,15 @@ import type { Api } from './request.js';
  *  the layer it came from), whether it is stored encrypted, and what to
  *  show for it. */
 export interface Entry {
-  default?: unknown; global?: unknown; workspace?: unknown;
-  value: unknown; source: 'default' | 'global' | 'workspace'; secret?: boolean;
+  default?: unknown; global?: unknown; project?: unknown;
+  value: unknown; source: 'default' | 'global' | 'project'; secret?: boolean;
   description: string; meta: WireMeta; overridable?: boolean;
 }
 
-/** `?workspace=` reads and writes that workspace's layer. */
-export interface Scope { workspace?: string }
+/** `?project=` reads and writes that project's layer. */
+export interface Scope { project?: string }
 
-const q = (s: Scope = {}) => (s.workspace ? `?workspace=${encodeURIComponent(s.workspace)}` : '');
+const q = (s: Scope = {}) => (s.project ? `?project=${encodeURIComponent(s.project)}` : '');
 
 /** The settings client: one door for server settings and this machine's local
  *  ones. A read always asks its store; a write always routes by where the key

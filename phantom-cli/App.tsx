@@ -4,7 +4,7 @@
 //
 // THE ONE LAYOUT RULE: `windowStore.overlay` says what is on top of the chat.
 // A FULL overlay takes the WHOLE column — the board, a card's editor, and
-// every menu (/settings, /workspace, /resume, the session switcher …)
+// every menu (/settings, /project, /resume, the session switcher …)
 // are all built in screens.tsx. A THIRD overlay (/tasks, the duplicate's
 // model pick) takes the bottom third where the prompt was, with the
 // conversation still above it. A DIALOG (`windowStore.dialog`, the one
@@ -82,7 +82,7 @@ export function App({
   /** The window's connection, for the agents (server.ts). */
   backend: () => PhantomBackend;
   /** GET a server ND-JSON stream as records — each BoardStore follows its
-   *  workspace's `/events` through it. index.tsx wires the real one; absent
+   *  project's `/events` through it. index.tsx wires the real one; absent
    *  (tests), boards load once and hear nothing. */
   stream?: Stream;
   /** POST /git/auto-push for one session, consuming its ND-JSON stream: `onStep`
@@ -119,15 +119,15 @@ export function App({
    *  launch passes `boot` instead and the window opens EMPTY: the app must
    *  come up whatever is wrong (a dead token, an unreachable server), because
    *  the screens that fix those problems are all in here. */
-  /** What launching wants: resume a named session, or find a workspace and
-   *  start — the same flow /new and /workspace run, so a failure lands as
+  /** What launching wants: resume a named session, or find a project and
+   *  start — the same flow /new and /project run, so a failure lands as
    *  words in the pane instead of a stack trace before the app exists. */
   boot?: { resumeId?: string };
   configPath?: string;
-  /** Fired whenever the live session changes — /new, /resume, /workspace and
+  /** Fired whenever the live session changes — /new, /resume, /project and
    *  tab all switch it, so the id the caller started with is not the one you
    *  are in when you quit. */
-  onSession?: (s: { id: string; branch: string; workspaceId: string }) => void;
+  onSession?: (s: { id: string; branch: string; projectId: string }) => void;
   /** Hands the caller the window store once it exists — index.tsx's version
    *  watch uses it to light up the update-ready label. */
   onWindow?: (w: WindowStore) => void;
@@ -300,7 +300,7 @@ export function App({
   const [input, setInput] = useState('');
   // The prompt's text as a ref — read by switchTo and openSession to save the
   // draft without adding `input` to their dependency arrays (which would
-  // recreate the callbacks on every keystroke). Same rule as heldRef/workspaceRef.
+  // recreate the callbacks on every keystroke). Same rule as heldRef/projectRef.
   const inputRef = useRef(input);
   inputRef.current = input;
   // What the window asks for when it parks the unsent text on a session it is
@@ -597,7 +597,7 @@ export function App({
     // then. shift+tab is left alone here rather than cycling mid-command.
     // Tab on the text tab just produced is the ring: it never falls through
     // to the session switch, even when the filled text has no menu of its own.
-    // The ring is for a PICKED argument only (`/new <workspace>`); on command
+    // The ring is for a PICKED argument only (`/new <project>`); on command
     // names tab fills the highlighted row once, as it always has.
     const choices = windowStore.argChoices;
     const menu = matches(input, choices);
@@ -656,7 +656,7 @@ export function App({
   const modeMark = session ? (session.planMode ? 'plan' : 'code') : undefined;
   // Which card this session is building — the board's own name for it
   // (`PHA-7`), so the line you read while typing answers "what am I working
-  // on" without opening anything. With no card attached the workspace prefix
+  // on" without opening anything. With no card attached the project prefix
   // alone (`PHA`) still shows: you always know which project.
   const cardMark = windowStore.cardMark;
   // The git work dot — where the session's code stands, the colored • ahead
@@ -864,7 +864,7 @@ export function App({
               windowStore.opening ? []
               : ctrlC ? withMode('press ctrl+c again to quit')
               : !session
-                ? [['no session open — [/workspace] starts one · [/resume] reopens an earlier one']]
+                ? [['no session open — [/project] starts one · [/resume] reopens an earlier one']]
                 : withMode()} />
           </>
         </Boundary>

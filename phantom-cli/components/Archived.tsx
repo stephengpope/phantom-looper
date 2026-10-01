@@ -1,4 +1,4 @@
-// /archived — the workspace's archived cards, /resume's shape: a Screen page,
+// /archived — the project's archived cards, /resume's shape: a Screen page,
 // one aligned table, newest change first (the server's order — fetched and
 // paged by App, never part of the board download), the hint block reading
 // the highlighted card's story. Where an accidental [a] on the board is

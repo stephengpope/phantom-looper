@@ -6,15 +6,15 @@
 // the first word is the command; while there is an argument the live menu
 // stays out of the way, so enter sends the line rather than the highlighted row.
 //
-// Unless the argument is PICKED from a list (`/new <workspace>`): then the menu
+// Unless the argument is PICKED from a list (`/new <project>`): then the menu
 // stays up and shows the list, filtered by what has been typed, and tab and
 // the arrows work on it exactly as they do on the command names. The list is
-// live (the window's workspaces), so the caller hands it in; this file only
+// live (the window's projects), so the caller hands it in; this file only
 // knows which commands take one.
 export interface Command { name: string; summary: string; args?: string; picks?: boolean }
 /** One row of a picked argument — the same two columns a command row has.
  *  `fill` is what tab writes into the line and enter submits when it differs
- *  from what the row SHOWS: a workspace row shows its card prefix (`PHA`),
+ *  from what the row SHOWS: a project row shows its card prefix (`PHA`),
  *  which two repos can share, and fills its repo name, which they cannot. */
 export interface Choice { name: string; summary: string; fill?: string }
 /** The text a picked row stands for on the line. */
@@ -23,10 +23,10 @@ export const fillOf = (c: Choice) => c.fill ?? c.name;
 export type Choices = (command: Command) => Choice[];
 
 export const COMMANDS: Command[] = [
-  { name: 'new', summary: 'new session in this workspace, or /new <workspace>', args: 'workspace', picks: true },
+  { name: 'new', summary: 'new session in this project, or /new <project>', args: 'project', picks: true },
   { name: 'resume', summary: 'reopen an earlier session' },
-  { name: 'workspace', summary: 'pick a workspace, or /workspace <workspace> edits its settings', args: 'workspace', picks: true },
-  { name: 'kanban', summary: "this workspace's task board" },
+  { name: 'project', summary: 'pick a project, or /project <project> edits its settings', args: 'project', picks: true },
+  { name: 'kanban', summary: "this project's task board" },
   { name: 'tasks', summary: "what's running in this session's container" },
   { name: 'plan', summary: 'enter plan mode — the coding agent reads, nothing is written' },
   { name: 'code', summary: 'enter code mode — the coding agent has full tools' },
@@ -94,7 +94,7 @@ export function matches(input: string, choices?: Choices): Menu {
   const command = COMMANDS.find((c) => c.name === head);
   if (!command?.picks || !choices) return { rows: [] };
   // The whole line after the name is the argument, spaces and all — a
-  // workspace called "Marketing Site" is one choice, not two words. A row
+  // project called "Marketing Site" is one choice, not two words. A row
   // answers to what it shows AND what it fills: `pha` finds `PHA` and
   // `phantom-looper` alike.
   return { command, rows: choices(command).filter((c) => prefixed(c.name, args) || prefixed(fillOf(c), args)) };

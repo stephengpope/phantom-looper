@@ -5,7 +5,7 @@
 //   phantom-cli setup-backend                # install a server over ssh, pair, exit
 //
 // Inside: /new for another session here, /resume to reopen an earlier one,
-// /workspace to start in a different one. They all JOIN this window rather
+// /project to start in a different one. They all JOIN this window rather
 // than replacing what is in it — every session you open stays open and keeps
 // running. tab and shift+tab walk between them (most recently spoken to
 // first); ctrl+n lists them.
@@ -246,14 +246,14 @@ function flag(name: string, short?: string): string | undefined {
 const resumeId = flag('--resume', '-r');
 
 // The app opens FIRST, empty, and opens its own first session — the same flow
-// /new and /workspace run. Nothing here may keep the window from coming up:
+// /new and /project run. Nothing here may keep the window from coming up:
 // the screens that fix a dead token or a wrong address are all inside it, so
 // a launch-time failure has to land in the pane, not on a stack trace. What
-// launching wants (resume this id, or find a workspace and start) rides the
+// launching wants (resume this id, or find a project and start) rides the
 // `boot` prop; App's boot effect does the rest.
 
 // The session you quit from is not necessarily the one you started in — /new,
-// /resume, /workspace and tab all move it — so track the live one and print
+// /resume, /project and tab all move it — so track the live one and print
 // THAT id on the way out. One line, for the session you were actually in:
 // listing every session you happened to open is a wall to read past. null
 // until the first session opens — a window can now run without one.

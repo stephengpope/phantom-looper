@@ -1,10 +1,10 @@
-// The BOARD tools — the workspace's cards, over Cards (cards.ts), the one
+// The BOARD tools — the project's cards, over Cards (cards.ts), the one
 // owner of card rows. The coding agent and the supervisor read cards; the
 // assistant runs the whole board. A card run's card-bound powers
 // (kanban_card_move / kanban_card_items / kanban_card_block bound to THE
 // card) are the coding agent's and the supervisor's own tools for that run, added by the run — not here.
 import { CardError, type CardFields, type CardRow, type ItemOp } from '../cards.js';
-import { columnsOf } from '../workspaces.js';
+import { columnsOf } from '../projects.js';
 import { int, nullable, obj, oneOf, refusal, str, type ToolCtx, type ToolDef } from './def.js';
 
 const cardNo = int('card number — PHA-7 is card 7');
@@ -23,7 +23,7 @@ async function cardCall<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 const patch = (ctx: ToolCtx, number: number, fields: CardFields, items?: ItemOp[]) =>
-  cardCall(async () => renderCard((await ctx.app.cards.update(ctx.workspace, number, fields, items, ctx.client)).card));
+  cardCall(async () => renderCard((await ctx.app.cards.update(ctx.project, number, fields, items, ctx.client)).card));
 
 const itemsSchema = {
   type: 'array', minItems: 1,
@@ -41,19 +41,19 @@ const ITEMS_DESCRIPTION = 'add, edit (reword), remove, tick — each op touches 
   'returned in the result). Ops apply in order, all-or-nothing. THE way to change the list — there is no ' +
   'whole-list send. Tick done true means you VERIFIED it, not that you wrote code for it.';
 
-/** The card's column, as the board has it: the workspace's own columns are
+/** The card's column, as the board has it: the project's own columns are
  *  in the description, since a listing is built per session and the schema
  *  itself stays static. */
-const statusField = (d: string) => str(`${d} — one of the workspace's columns (kanban_card_list names them)`);
+const statusField = (d: string) => str(`${d} — one of the project's columns (kanban_card_list names them)`);
 
 const autoSwitch = (field: 'auto_plan' | 'auto_build', column: string, job: string): ToolDef => ({
   name: `kanban_card_${field}`,
   summary: `The card's Auto ${field === 'auto_plan' ? 'plan' : 'build'} switch.`,
   description: `The card's Auto ${field === 'auto_plan' ? 'plan' : 'build'} switch — whether the supervisor ${job} while the card sits in ${column}. ` +
-    'on/off overrides the workspace setting for this card; inherit clears the override so the workspace setting decides. ' +
+    'on/off overrides the project setting for this card; inherit clears the override so the project setting decides. ' +
     `Turning it on while the card is in ${column} starts the looper on it at once; kanban_card_move puts it there. ` +
     'The result states the switch as it now stands — report that.',
-  input: obj({ card: cardNo, state: oneOf(['on', 'off', 'inherit'], 'inherit = follow the workspace setting') }, ['card', 'state']),
+  input: obj({ card: cardNo, state: oneOf(['on', 'off', 'inherit'], 'inherit = follow the project setting') }, ['card', 'state']),
   mutates: true, agents: ['assistant'],
   execute: (ctx, a) => patch(ctx, Number(a.card), { [field]: a.state === 'inherit' ? null : a.state === 'on' }),
 });
@@ -69,7 +69,7 @@ export const BOARD_TOOLS: ToolDef[] = [
     input: obj({ card: cardNo }, ['card']),
     mutates: false, agents: ['coding', 'supervisor', 'assistant'],
     async execute(ctx, a) {
-      const t = await ctx.app.cards.byNumber(ctx.workspace, Number(a.card));
+      const t = await ctx.app.cards.byNumber(ctx.project, Number(a.card));
       if (!t) throw refusal('not_found', `no card ${String(a.card)} — pass the card number`);
       return renderCard(t);
     },
@@ -83,8 +83,8 @@ export const BOARD_TOOLS: ToolDef[] = [
     input: obj({}),
     mutates: false, agents: ['assistant'],
     async execute(ctx) {
-      const cards = await ctx.app.cards.list(ctx.workspace);
-      return { prefix: await ctx.app.workspaces.prefixOf(ctx.workspace), columns: columnsOf(ctx.workspace),
+      const cards = await ctx.app.cards.list(ctx.project);
+      return { prefix: await ctx.app.projects.prefixOf(ctx.project), columns: columnsOf(ctx.project),
         cards: cards.map((c) => ({ card: c.number, title: c.title, status: c.status })) };
     },
   },
@@ -102,7 +102,7 @@ export const BOARD_TOOLS: ToolDef[] = [
     }, ['title']),
     mutates: true, agents: ['assistant'],
     execute: (ctx, a) => cardCall(async () =>
-      renderCard(await ctx.app.cards.create(ctx.workspace, a as CardFields & { title: string }, ctx.client))),
+      renderCard(await ctx.app.cards.create(ctx.project, a as CardFields & { title: string }, ctx.client))),
   },
   {
     name: 'kanban_card_update',
@@ -154,7 +154,7 @@ export const BOARD_TOOLS: ToolDef[] = [
     input: obj({ card: cardNo, limit: int('revisions to return (default 20, newest first)', 20) }, ['card']),
     mutates: false, agents: ['assistant'],
     async execute(ctx, a) {
-      return { card: Number(a.card), revisions: await ctx.app.cards.revisions(ctx.workspace, Number(a.card), Number(a.limit ?? 20)) };
+      return { card: Number(a.card), revisions: await ctx.app.cards.revisions(ctx.project, Number(a.card), Number(a.limit ?? 20)) };
     },
   },
 ];

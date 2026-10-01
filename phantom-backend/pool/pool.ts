@@ -1,5 +1,5 @@
 // The warm-checkout pool, ported from Shockwave's checkoutPool.ts with the
-// target list widened from "whatever Telegram points at" to every workspace in the
+// target list widened from "whatever Telegram points at" to every project in the
 // database, and eviction added (evict and re-stock, never re-deepen).
 //
 // A folder's LOCATION is its state:
@@ -11,8 +11,8 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { WorkspaceRow } from '../db/schema.js';
-import type { Workspaces } from '../workspaces.js';
+import type { ProjectRow } from '../db/schema.js';
+import type { Projects } from '../projects.js';
 
 import type { Settings } from '../settings.js';
 import { remoteUrl } from '../git/remote.js';
@@ -24,7 +24,7 @@ import { logger, errStr } from '../log.js';
 const log = logger('pool');
 
 /** A clone still in setup/ after this long is a dead one. Generous — a first
- *  clone of a large workspace is legitimately slow. Not a setting: it cannot change
+ *  clone of a large project is legitimately slow. Not a setting: it cannot change
  *  an outcome, only how long a corpse lingers. */
 const SETUP_STALE_MS = 30 * 60_000;
 
@@ -33,16 +33,16 @@ async function listDir(dir: string): Promise<string[]> {
 }
 const rm = (p: string) => fs.rm(p, { recursive: true, force: true }).catch(() => {});
 
-/** Credential resolution: workspace PAT -> global PAT -> unauthenticated. The
+/** Credential resolution: project PAT -> global PAT -> unauthenticated. The
  *  specific overrides the general, same chain philosophy as settings. */
-// The chain — this workspace's token, else the global one, else unauthenticated
+// The chain — this project's token, else the global one, else unauthenticated
 // — is no longer written out here. It is `github_token` resolved through the
 // same layers every other setting uses.
-export async function resolveAuth(settings: Settings, r: WorkspaceRow): Promise<GitAuth> {
-  return { url: remoteUrl(r.owner, r.name), pat: await settings.credential('github_token', { workspace: r }) };
+export async function resolveAuth(settings: Settings, r: ProjectRow): Promise<GitAuth> {
+  return { url: remoteUrl(r.owner, r.name), pat: await settings.credential('github_token', { project: r }) };
 }
 
-/** Claim a ready slot for a workspace into `dest`. The claim is a RENAME and nothing
+/** Claim a ready slot for a project into `dest`. The claim is a RENAME and nothing
  *  else — no locks, no bookkeeping. Two claimants cannot get the same folder:
  *  one wins, the other gets ENOENT and takes the next or falls through to a
  *  clone at the call site. */
@@ -71,16 +71,16 @@ let ticking = false;
 /** Reconcile the pool to what it should be. Everything that is not claiming
  *  happens here; claiming has no side effects, so a session can never be
  *  slowed by maintenance work. */
-export async function tick(workspaces: Workspaces, settings: Settings, p: Paths): Promise<void> {
+export async function tick(projects: Projects, settings: Settings, p: Paths): Promise<void> {
   if (ticking) return;
   ticking = true;
   try {
-    // Stocking fails OPEN: an unreadable workspace list must not empty the pool —
-    // but with no list we cannot distinguish "workspace removed" from "db down",
+    // Stocking fails OPEN: an unreadable project list must not empty the pool —
+    // but with no list we cannot distinguish "project removed" from "db down",
     // so we also must not delete anything. Just stop.
-    let workspaceRows: WorkspaceRow[];
-    try { workspaceRows = await workspaces.list(); } catch (e) {
-      log.warn({ err: errStr(e) }, 'skipping pool tick — could not read workspaces');
+    let projectRows: ProjectRow[];
+    try { projectRows = await projects.list(); } catch (e) {
+      log.warn({ err: errStr(e) }, 'skipping pool tick — could not read projects');
       return;
     }
 
@@ -91,24 +91,24 @@ export async function tick(workspaces: Workspaces, settings: Settings, p: Paths)
       if (!st || now - st.mtimeMs > SETUP_STALE_MS) await rm(path.join(p.poolSetup, slot));
     }
 
-    const wanted = new Map(workspaceRows.map((r) => [slotPrefix(r.owner, r.name, r.baseBranch), r]));
+    const wanted = new Map(projectRows.map((r) => [slotPrefix(r.owner, r.name, r.baseBranch), r]));
     const ready = await listDir(p.poolReady);
 
-    // Slots for workspaces we no longer serve.
+    // Slots for projects we no longer serve.
     for (const slot of ready) {
       const prefix = slot.slice(0, slot.lastIndexOf('__') + 2);
       if (!wanted.has(prefix)) await rm(path.join(p.poolReady, slot));
     }
 
-    // Per-workspace maintenance, concurrently across workspaces — one at a time globally
-    // would take workspaces × target ticks to fill from cold.
-    await Promise.all([...wanted.entries()].map(async ([prefix, workspace]) => {
+    // Per-project maintenance, concurrently across projects — one at a time globally
+    // would take projects × target ticks to fill from cold.
+    await Promise.all([...wanted.entries()].map(async ([prefix, project]) => {
       const cfg = await settings.resolveMany(
         ['spare_clones', 'spare_clone_refresh_ms', 'spare_clone_max_age_ms', 'initial_history_depth'],
-        { workspace });
+        { project });
       const { spare_clones: target, spare_clone_refresh_ms: refreshMs,
         spare_clone_max_age_ms: maxAgeMs, initial_history_depth: depth } = cfg;
-      const auth = await resolveAuth(settings, workspace);
+      const auth = await resolveAuth(settings, project);
 
       let mine = ready.filter((s) => s.startsWith(prefix));
 
@@ -133,7 +133,7 @@ export async function tick(workspaces: Workspaces, settings: Settings, p: Paths)
         if (!st) { mine = mine.filter((s) => s !== slot); continue; }
         if (now - st.mtimeMs < refreshMs) continue;
         try {
-          await refreshPristine(path.join(full, 'repo'), auth, workspace.baseBranch);
+          await refreshPristine(path.join(full, 'repo'), auth, project.baseBranch);
           await fs.utimes(full, new Date(), new Date());
         } catch (e) {
           log.warn({ slot, err: errStr(e) }, 'ready checkout would not refresh — discarding');
@@ -142,20 +142,20 @@ export async function tick(workspaces: Workspaces, settings: Settings, p: Paths)
         }
       }
 
-      // Restock one per workspace per tick.
+      // Restock one per project per tick.
       if (mine.length < target) {
         const slot = `${prefix}${newId()}`;
         const staging = path.join(p.poolSetup, slot);
         try {
           await fs.mkdir(path.join(staging), { recursive: true });
-          await cloneFresh(path.join(staging, 'repo'), auth, workspace.baseBranch, depth);
+          await cloneFresh(path.join(staging, 'repo'), auth, project.baseBranch, depth);
           await fs.mkdir(path.join(staging, 'scratch'), { recursive: true });
           await fs.mkdir(p.poolReady, { recursive: true });
           // Only NOW is it usable, and the rename is what says so.
           await fs.rename(staging, path.join(p.poolReady, slot));
-          log.info({ workspace: `${workspace.owner}/${workspace.name}`, have: mine.length + 1, want: target }, 'stocked a warm checkout');
+          log.info({ project: `${project.owner}/${project.name}`, have: mine.length + 1, want: target }, 'stocked a warm checkout');
         } catch (e) {
-          log.warn({ workspace: `${workspace.owner}/${workspace.name}`, err: errStr(e) }, 'could not stock a warm checkout');
+          log.warn({ project: `${project.owner}/${project.name}`, err: errStr(e) }, 'could not stock a warm checkout');
           await rm(staging);
         }
       }

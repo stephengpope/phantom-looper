@@ -1,7 +1,7 @@
 // The shape every tool definition has, and the schema helpers the
 // definition files share. The list itself is registry.ts.
 import type { AppCtx } from '../api/app.js';
-import type { SessionRow, WorkspaceRow } from '../db/schema.js';
+import type { SessionRow, ProjectRow } from '../db/schema.js';
 import type { Sandbox } from '../workspace/sandbox.js';
 import type { AgentName } from '../../core/llm/agentConfig.js';
 import { ToolError } from './envelope.js';
@@ -9,13 +9,13 @@ import { ToolError } from './envelope.js';
 export type { AgentName };
 
 /** What a tool call runs with: the row owners, the calling session and its
- *  workspace, who called (the lock identity), the client's abort, and the
+ *  project, who called (the lock identity), the client's abort, and the
  *  session's files — started on first use, so a tool that never touches a
  *  file never starts a container. */
 export interface ToolCtx {
   app: AppCtx;
   session: SessionRow;
-  workspace: WorkspaceRow;
+  project: ProjectRow;
   /** The caller's x-phantom-looper-client — rides card writes as the writer. */
   client: string;
   signal: AbortSignal;
@@ -36,7 +36,7 @@ export interface FileTools {
 }
 
 /** What deciding whether a tool is offered may look at. */
-export interface OfferCtx { app: AppCtx; session: SessionRow; workspace: WorkspaceRow }
+export interface OfferCtx { app: AppCtx; session: SessionRow; project: ProjectRow }
 
 export interface ToolDef {
   name: string;

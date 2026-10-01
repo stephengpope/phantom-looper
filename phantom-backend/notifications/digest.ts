@@ -15,7 +15,7 @@
 import { expiredHold, type Sessions } from '../sessions.js';
 import type { Cards } from '../cards.js';
 import type { Settings } from '../settings.js';
-import type { Workspaces } from '../workspaces.js';
+import type { Projects } from '../projects.js';
 import { PhantomHelper } from '../../core/llm/helper.js';
 import { lastAssistantFromJsonl } from './transcriptHelper.js';
 import type { NotificationChannel } from './channel.js';
@@ -30,16 +30,16 @@ const TITLE = (n: number) => `📋 ${n} turn${n === 1 ? '' : 's'} completed:`;
 
 const SYSTEM = `You summarize completed coding session turns.
 
-You receive a JSON array of workspace groups, each with sessions sorted by last run time. Return the result as compact markdown — one bold workspace heading per group, then one line per session.
+You receive a JSON array of project groups, each with sessions sorted by last run time. Return the result as compact markdown — one bold project heading per group, then one line per session.
 
 For sessions with a card, use: #<card> <icon> — <description>
 For sessions without a card, use: • <description>
 A session with "died_on" did NOT finish: its last turn died on that machine (the process crashed or was killed). Write its line as ⚠️ died on <died_on> — <what it was doing>, never as completed work.
 
-Keep each description under 80 characters. No title, no extra text, just the workspace headings and lines.
+Keep each description under 80 characters. No title, no extra text, just the project headings and lines.
 
 Example input:
-[{"workspace":"PHA","sessions":[{"card":7,"icon":"▶","name":"fix login redirect","last":"Resolved the OAuth callback loop by correcting the redirect URI"},{"card":12,"icon":"◇","name":"card schema","last":"Added a priority column and ran the migration"}]},{"workspace":"FOO","sessions":[{"name":"seed data","last":"Populated the test fixtures with realistic entries"}]}]
+[{"project":"PHA","sessions":[{"card":7,"icon":"▶","name":"fix login redirect","last":"Resolved the OAuth callback loop by correcting the redirect URI"},{"card":12,"icon":"◇","name":"card schema","last":"Added a priority column and ran the migration"}]},{"project":"FOO","sessions":[{"name":"seed data","last":"Populated the test fixtures with realistic entries"}]}]
 
 Example output:
 **PHA**
@@ -53,7 +53,7 @@ export interface DigestDeps {
   sessions: Sessions;
   cards: Cards;
   settings: Settings;
-  workspaces: Workspaces;
+  projects: Projects;
   channels: NotificationChannel[];
 }
 
@@ -120,14 +120,14 @@ export class SessionDigest {
 
     if (!rows.length) return;
 
-    // ── resolve workspace prefixes ───────────────────────────────────────────
+    // ── resolve project prefixes ───────────────────────────────────────────
 
-    const wsIds = [...new Set(rows.map((r) => r.workspaceId))];
-    const prefixByWsId = new Map<string, string>();
-    for (const wsId of wsIds) {
-      const ws = await this.deps.workspaces.get(wsId);
-      if (ws) prefixByWsId.set(wsId, await this.deps.workspaces.prefixOf(ws));
-      else prefixByWsId.set(wsId, wsId.slice(0, 3).toUpperCase());
+    const wsIds = [...new Set(rows.map((r) => r.projectId))];
+    const prefixByProjectId = new Map<string, string>();
+    for (const projectId of wsIds) {
+      const project = await this.deps.projects.get(projectId);
+      if (project) prefixByProjectId.set(projectId, await this.deps.projects.prefixOf(project));
+      else prefixByProjectId.set(projectId, projectId.slice(0, 3).toUpperCase());
     }
 
     // ── build per-session items ──────────────────────────────────────────────
@@ -163,14 +163,14 @@ export class SessionDigest {
       items.push({
         name: s.name ?? 'untitled',
         lastMessage: lastMsg ?? s.lastUserMessage ?? '(no messages)',
-        wsPrefix: prefixByWsId.get(s.workspaceId)!,
+        wsPrefix: prefixByProjectId.get(s.projectId)!,
         card, icon,
         ...(died ? { diedOn: died.label ?? died.by } : {}),
         ranAt: s.transcriptUpdatedAt?.getTime() ?? 0,
       });
     }
 
-    // ── group by workspace, sort by last run time ────────────────────────────
+    // ── group by project, sort by last run time ────────────────────────────
 
     const grouped = new Map<string, Item[]>();
     for (const item of items) {
@@ -183,7 +183,7 @@ export class SessionDigest {
     // ── build the JSON payload for the LLM ───────────────────────────────────
 
     const payload = [...grouped.entries()].map(([prefix, group]) => ({
-      workspace: prefix,
+      project: prefix,
       sessions: group.map((item) => {
         const entry: Record<string, unknown> = {};
         if (item.card != null) entry.card = item.card;

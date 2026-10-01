@@ -24,7 +24,7 @@ two places to read "is the board up". Now there is one of each.
 
 - `render(main)` is a FUNCTION, not an element. It runs on every App render
   and reads the store's current data — so a poll landing on `/tasks`, a page
-  appended to `/resume`, a rejected add-workspace form's error all show up
+  appended to `/resume`, a rejected add-project form's error all show up
   without re-opening the screen (and without remounting it, which would lose
   the cursor or what was typed).
 - `poll` is the overlay's own re-read clock. `showOverlay` starts it,
@@ -51,7 +51,7 @@ two places to read "is the board up". Now there is one of each.
 
 `Menu`, `ScreenName`, `screen`, `setScreen`, `closeScreen`, `menuUp`,
 `closeCard`, `menuClock`, `editing`, `cancelDuplicate`,
-`closeWorkspaceSettings`, `promptTrashArmed`, `promptRestartArmed` and the
+`closeProjectSettings`, `promptTrashArmed`, `promptRestartArmed` and the
 two typed-`c` blocks in `submit()`, the `MenuScreen` switch, App's three-way
 column branch, and the four in-screen "[c] to confirm" arms (`trashArmed`,
 `killArmed`, `archiveArmed`, `applyArmed`).

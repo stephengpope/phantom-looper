@@ -34,7 +34,7 @@ docker build -q -t phantom-rig:latest build/testrig
 
 echo "→ building the api + workspace images the installer will find preloaded"
 docker build -q -t "$API_IMAGE:latest" .
-docker build -q -t "$SESSION_IMAGE:latest" build/workspace
+docker build -q -t "$SESSION_IMAGE:latest" build/project
 
 # A keypair for the rig alone, never a password: root login is key-only.
 mkdir -p "$RIG_DIR"

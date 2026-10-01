@@ -1,9 +1,9 @@
 // `telegram_bot_state` (migrations 012, 031): the ONE row, id pinned 1 — who
-// answers a plain message (mode), the active session and workspace, and the
+// answers a plain message (mode), the active session and project, and the
 // webhook registration. State, not settings: a pointer has no
 // default/override semantics. The webhook secret is encrypted at rest like
 // every stored credential. The pointers are foreign keys: a deleted session
-// or workspace clears them, so no reader guards against a phantom.
+// or project clears them, so no reader guards against a phantom.
 
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
@@ -15,7 +15,7 @@ export type TelegramMode = 'assistant' | 'code';
 export interface TelegramBotStateRow {
   mode: TelegramMode;
   activeSessionId: string | null;
-  activeWorkspaceId: string | null;
+  activeProjectId: string | null;
   webhookSecret: string | null;
   webhookUrl: string | null;
   botUsername: string | null;
@@ -26,7 +26,7 @@ export const MODE_MESSAGE: Record<TelegramMode, string> = {
   assistant: "🏠 You're now talking to the assistant.",
 };
 
-const EMPTY: TelegramBotStateRow = { mode: 'assistant', activeSessionId: null, activeWorkspaceId: null,
+const EMPTY: TelegramBotStateRow = { mode: 'assistant', activeSessionId: null, activeProjectId: null,
   webhookSecret: null, webhookUrl: null, botUsername: null };
 
 export class TelegramBotState {
@@ -46,7 +46,7 @@ export class TelegramBotState {
     }
     return {
       mode: r.mode === 'code' ? 'code' : 'assistant',
-      activeSessionId: r.activeSessionId, activeWorkspaceId: r.activeWorkspaceId,
+      activeSessionId: r.activeSessionId, activeProjectId: r.activeProjectId,
       webhookSecret, webhookUrl: r.webhookUrl, botUsername: r.botUsername,
     };
   }
@@ -71,9 +71,9 @@ export class TelegramBotState {
     await this.patch({ activeSessionId: sessionId });
   }
 
-  /** The workspace /new opens sessions in. Must exist (foreign key). */
-  async setActiveWorkspace(workspaceId: string | null): Promise<void> {
-    await this.patch({ activeWorkspaceId: workspaceId });
+  /** The project /new opens sessions in. Must exist (foreign key). */
+  async setActiveProject(projectId: string | null): Promise<void> {
+    await this.patch({ activeProjectId: projectId });
   }
 
   /** The webhook is registered: its secret (encrypted at rest), URL and bot. */

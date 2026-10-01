@@ -9,12 +9,12 @@
 // rows alone, with no network call — you edit the connection precisely when
 // the server is unreachable.
 //
-// Two more scopes exist and are deliberately NOT here: one workspace's own
-// values (WorkspaceSettings.tsx, `e` on a row in /workspace) and the server's
-// credentials (Keys.tsx, /keys). This screen marks the settings a workspace
+// Two more scopes exist and are deliberately NOT here: one project's own
+// values (ProjectSettings.tsx, `e` on a row in /project) and the server's
+// credentials (Keys.tsx, /keys). This screen marks the settings a project
 // can differ on with ↯ so the server-wide list points at them, but it never
 // edits them — changing something for everyone and changing it for one
-// workspace must not be two rows apart in the same list.
+// project must not be two rows apart in the same list.
 //
 // A server row is rendered from what GET /settings sends — label, description,
 // type, choices, unit, which layer the value came from. Nothing about a server
@@ -216,7 +216,7 @@ export function Settings({ api, onClose, onChange, configPath = CONFIG_PATH, row
         { key: 'enter', does: 'change' }, { key: 'd', does: 'reset' }, { key: 'esc', does: 'close' },
       ]}
       notice={notice ?? fileError}
-      sub={rows.server ? 'applies to everyone · "this machine" rows stay here · ↯ rows can also be set per workspace: /workspace, then e' : undefined}>
+      sub={rows.server ? 'applies to everyone · "this machine" rows stay here · ↯ rows can also be set per project: /project, then e' : undefined}>
       {busy && !choices.length ? <Text dimColor>{'  loading…'}</Text> : (
         <SelectList
           key={`rows-${rows.local ?? ''}`}
@@ -307,7 +307,7 @@ export function providerChoices(key: string, choices: readonly string[] | undefi
   if (!PROVIDER_ROWS.has(key)) return null;
   const all = choices ?? PROVIDERS;
   // THE rule (core keyedProviders): a key from any layer counts — the
-  // workspace read carries a credential's source only, never its value.
+  // project read carries a credential's source only, never its value.
   const keyed = keyedProviders(entries).filter((p) => all.includes(p));
   return keyed.length
     ? { choices: keyed, note: 'providers with a key on /keys' }

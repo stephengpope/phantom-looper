@@ -1,8 +1,8 @@
 // Git + exec surface. Exec is the one streamable tool; everything else stays
 // unary. Detached logs are ND-JSON on the volume at work/<id>/logs/ — NEVER
-// under workspace/, where the next push's add -A would commit them.
+// under project/, where the next push's add -A would commit them.
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import type { SessionRow, WorkspaceRow } from '../../db/schema.js';
+import type { SessionRow, ProjectRow } from '../../db/schema.js';
 import { ToolError } from '../../tools/envelope.js';
 import { ok, err, type AppCtx } from '../app.js';
 import { SESSION_HEADER, toolSession } from '../sessionHeader.js';
@@ -26,13 +26,13 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
     return typeof h === 'string' ? h : '';
   };
 
-  /** The one gate (sessionHeader.ts), plus the workspace git needs. */
+  /** The one gate (sessionHeader.ts), plus the project git needs. */
   async function resolveSession(req: { headers: Record<string, unknown> }):
-    Promise<{ session: SessionRow; workspace: WorkspaceRow }> {
+    Promise<{ session: SessionRow; project: ProjectRow }> {
     const { session } = await toolSession(ctx.sessions, req.headers);
-    const workspace = await ctx.workspaces.get(session.workspaceId);
-    if (!workspace) throw new ToolError('not_found', 'workspace vanished');
-    return { session, workspace };
+    const project = await ctx.projects.get(session.projectId);
+    if (!project) throw new ToolError('not_found', 'project vanished');
+    return { session, project };
   }
 
   const send = (reply: { code: (n: number) => { send: (b: unknown) => unknown } }, e: unknown) => {
@@ -48,8 +48,8 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
     description: 'Commit and push the session branch immediately; the quiet cycle also does this automatically. A push never pulls — only pull does.',
     body: { type: 'object', additionalProperties: false } } }, async (req, reply) => {
     try {
-      const { session, workspace } = await resolveSession(req);
-      const result = await engine.push(session, workspace);
+      const { session, project } = await resolveSession(req);
+      const result = await engine.push(session, project);
       return ok({ result });
     } catch (e) { return send(reply, e); }
   });
@@ -59,8 +59,8 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
     description: 'Bring origin/<base> under this session\'s work and push the branch: the same flow as auto-push, stopping before the landing. A conflict goes to the session\'s own coding agent. Nothing reaches base.',
     body: { type: 'object', additionalProperties: false } } }, async (req, reply) => {
     try {
-      const { session, workspace } = await resolveSession(req);
-      const result = await engine.pull(session, workspace);
+      const { session, project } = await resolveSession(req);
+      const result = await engine.pull(session, project);
       return ok({ result });
     } catch (e) { return send(reply, e); }
   });
@@ -70,8 +70,8 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
     description: 'Read-only: commits and files on base not yet merged into this session, how many commits base has gained since this checkout was cut, and what previous pulls brought in.' } },
   async (req, reply) => {
     try {
-      const { session, workspace } = await resolveSession(req);
-      return ok(await engine.status(session, workspace));
+      const { session, project } = await resolveSession(req);
+      return ok(await engine.status(session, project));
     } catch (e) { return send(reply, e); }
   });
 
@@ -113,12 +113,12 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
       'ND-JSON stream: step records, then one result record (pushed | nothing | blocked | error | busy).',
     body: { type: 'object', additionalProperties: false } } },
   async (req, reply) => {
-    let session: SessionRow; let workspace: WorkspaceRow;
-    try { ({ session, workspace } = await resolveSession(req)); }
+    let session: SessionRow; let project: ProjectRow;
+    try { ({ session, project } = await resolveSession(req)); }
     catch (e) { return send(reply, e); }
     const autoPush = ctx.autoPush;
     if (!autoPush) return reply.code(503).send(err('unavailable', 'auto-push is not wired on this server', true));
-    return streamRun(reply, 'auto-push', session.id, (onStep) => autoPush(session, workspace, onStep, clientOf(req)));
+    return streamRun(reply, 'auto-push', session.id, (onStep) => autoPush(session, project, onStep, clientOf(req)));
   });
 
   // AUTO-PULL: base INTO the session branch in one call, streamed the same way.
@@ -131,11 +131,11 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
       'ND-JSON stream: step records, then one result record (merged | clean | blocked | error | busy).',
     body: { type: 'object', additionalProperties: false } } },
   async (req, reply) => {
-    let session: SessionRow; let workspace: WorkspaceRow;
-    try { ({ session, workspace } = await resolveSession(req)); }
+    let session: SessionRow; let project: ProjectRow;
+    try { ({ session, project } = await resolveSession(req)); }
     catch (e) { return send(reply, e); }
     const autoPull = ctx.autoPull;
     if (!autoPull) return reply.code(503).send(err('unavailable', 'auto-pull is not wired on this server', true));
-    return streamRun(reply, 'auto-pull', session.id, (onStep) => autoPull(session, workspace, onStep, clientOf(req)));
+    return streamRun(reply, 'auto-pull', session.id, (onStep) => autoPull(session, project, onStep, clientOf(req)));
   });
 }

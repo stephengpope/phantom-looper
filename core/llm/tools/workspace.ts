@@ -1,5 +1,5 @@
 /**
- * The WORKSPACE kit — the file tools (`bash read write edit ls find grep`)
+ * The PROJECT kit — the file tools (`bash read write edit ls find grep`)
  * plus the task tools (`task_list task_wait task_kill`) over bash's detached
  * commands. Needs: a phantom-backend and a session. Any agent whose host has
  * those can carry this kit (the coding agent does; the Assistant could).
@@ -13,7 +13,7 @@
  * server marks as not mutating (read ls find grep task_list task_wait).
  * Default: all of them.
  *
- *   import { phantomTools } from '../core/llm/tools/workspace.js';
+ *   import { phantomTools } from '../core/llm/tools/project.js';
  *   const tools = await phantomTools({ baseUrl, apiKey, sessionId });
  *
  * Requires the `ai` package (v5+) as a peer.

@@ -79,7 +79,7 @@ function connectionFromDsn(dsn: string) {
     userName: decodeURIComponent(u.username),
     userPassword: decodeURIComponent(u.password),
     saveCredentials: true,
-    // Show every database on the server (including agent workspace_* dbs),
+    // Show every database on the server (including agent project_* dbs),
     // not just the one named in the connection string.
     providerProperties: { '@dbeaver-show-non-default-db@': 'true' },
   };

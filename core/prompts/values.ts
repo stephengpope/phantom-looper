@@ -70,7 +70,7 @@ If the choice is easy — good interface, best practice, no harm to customer res
 
 Continue the work until it's done unless you need help resolving a conflict between a task requirement and our value system (or of there is missing information required to build a requested feature or bug fix).
 
-Always do the obvious grunt work to setup and run a local development workspace, and keeping services up-to-date, e.g. rebuilding a local docker image proactively after a code change and restarting it, etc.
+Always do the obvious grunt work to setup and run a local development project, and keeping services up-to-date, e.g. rebuilding a local docker image proactively after a code change and restarting it, etc.
 
 ## 6. Respect the customer experience
 

@@ -16,7 +16,7 @@ import { z } from 'zod';
 import { DEFAULT_COLUMNS } from '../../kanban.js';
 
 /** `status` is an ENUM of the real column names — the model cannot send
- *  "in progress" for in_progress. Pass the workspace's columns when they
+ *  "in progress" for in_progress. Pass the project's columns when they
  *  differ from the default; an empty list falls back to a plain string. */
 const statusEnum = (columns: string[]) =>
   columns.length ? z.enum(columns as [string, ...string[]]) : z.string();
@@ -35,7 +35,7 @@ export interface SessionsArgs {
  *
  *  Where each answer comes from is deliberate. LIST is the SERVER's — the
  *  window only knows the sessions you happened to open in it, so a list built
- *  from memory says "one session" while the workspace holds fifty. SWITCH goes
+ *  from memory says "one session" while the project holds fifty. SWITCH goes
  *  through the app's one open-a-session path, the same one /resume uses, so
  *  any session can be put on screen. READ stays on the window's memory: it
  *  renders the conversation the window is holding, and switch is what puts a
@@ -48,7 +48,7 @@ export function sessionsTool(handler: (args: SessionsArgs) => Promise<unknown>):
   return {
     session_list: tool({
       description: 'Every coding session on the server — not just the ones open in this window: id, title, ' +
-        'workspace, branch, card, model, token count, which is on screen, which are RUNNING a turn right now ' +
+        'project, branch, card, model, token count, which is on screen, which are RUNNING a turn right now ' +
         '(here or on another machine), and git_status (not_pushed / not_merged / merged — the session branch ' +
         'vs the base branch). Filter and count sessions by git_status, branch or card from this one call — ' +
         'do not switch into each session to find out. ' +
@@ -268,17 +268,17 @@ const itemsTool = (handler: (args: KanbanArgs) => Promise<unknown>) => tool({
 });
 
 /** The per-card auto switches — whether the looper starts an agent on the card — one tool per loop column. `state` maps
- *  straight onto the card's tri-state field (`inherit` = null — the workspace
+ *  straight onto the card's tri-state field (`inherit` = null — the project
  *  setting decides). A flip is a card write, so the server's looper re-judges
  *  the card at once: on + the matching column = the loop starts. */
 const autoSwitchTool = (handler: (args: KanbanArgs) => Promise<unknown>,
   field: 'auto_plan' | 'auto_build', column: string, job: string) => tool({
   description: `The card's Auto ${field === 'auto_plan' ? 'plan' : 'build'} switch — whether the supervisor ${job} while the card sits in ${column}. ` +
-    'on/off overrides the workspace setting for this card; inherit clears the override so the workspace setting decides. ' +
+    'on/off overrides the project setting for this card; inherit clears the override so the project setting decides. ' +
     `Turning it on while the card is in ${column} starts the looper on it at once; kanban_card_move puts it there. ` +
     'The result states the switch as it now stands — report that.',
   inputSchema: z.object({ card: cardNo,
-    state: z.enum(['on', 'off', 'inherit']).describe('inherit = follow the workspace setting') }),
+    state: z.enum(['on', 'off', 'inherit']).describe('inherit = follow the project setting') }),
   execute: async ({ card, state }) =>
     handler({ action: 'update', card, [field]: state === 'inherit' ? null : state === 'on' }),
 });
@@ -294,7 +294,7 @@ const historyTool = (handler: (args: KanbanArgs) => Promise<unknown>) => tool({
   execute: async (args) => handler({ action: 'history', ...args }),
 });
 
-/** `kanban_*` for the ASSISTANT: the task board of the workspace on screen —
+/** `kanban_*` for the ASSISTANT: the task board of the project on screen —
  *  cards plus the screen (`kanban_screen`, a UI helper and nothing more).
  *  Same pattern as `session_*`: schemas and descriptions whole here, the TUI
  *  supplies the one handler — it edits the same board store the screen renders
@@ -434,28 +434,28 @@ export function assistantModeTool(handler: ScreenModeHandler): Record<string, To
 export const kebabName = (s: string): string =>
   s.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
-export interface WorkspaceCreateArgs { name: string; description?: string }
+export interface ProjectCreateArgs { name: string; description?: string }
 
-/** `workspace_create_repo`, the Assistant's start-a-new-project verb: a new
- *  PRIVATE GitHub repository + a workspace + a session on screen, one call
- *  (the backend's POST /workspaces create=true does the repo + the seed +
+/** `project_create_repo`, the Assistant's start-a-new-project verb: a new
+ *  PRIVATE GitHub repository + a project + a session on screen, one call
+ *  (the backend's POST /projects create=true does the repo + the seed +
  *  the registration; the handler opens the session). GATED — the one tool
  *  that needs approval: the handler shows the user an accept/decline prompt
  *  with the FINAL name before anything exists on GitHub, because voice
  *  mishears names and a repo name is about to be permanent. Always private —
  *  visibility is not even a parameter the model could set. */
-export function workspaceCreateTool(
-  handler: (args: WorkspaceCreateArgs, opts: { abortSignal?: AbortSignal }) => Promise<unknown>,
+export function projectCreateTool(
+  handler: (args: ProjectCreateArgs, opts: { abortSignal?: AbortSignal }) => Promise<unknown>,
 ): Record<string, Tool> {
   return {
-    workspace_create_repo: tool({
+    project_create_repo: tool({
       description: 'Start a NEW project: create a brand-new PRIVATE GitHub repository, register it as a ' +
-        'workspace, and open a session in it, on screen. The repo name is the kebab-cased project name ' +
+        'project, and open a session in it, on screen. The repo name is the kebab-cased project name ' +
         '("phantom viewer" → phantom-viewer). Calling this shows the USER an accept/decline prompt with the ' +
         'final name — nothing is created until they accept (a click, a button, or saying "accept") — so tell ' +
         'them the prompt is up, then report the result. Declined usually means the name was misheard: ask what ' +
         'to change, then call again. Use the name the user gave — never invent one. Only for repos that do not ' +
-        'exist yet; an existing repo is added in phantom-cli on the /workspace screen.',
+        'exist yet; an existing repo is added in phantom-cli on the /project screen.',
       inputSchema: z.object({
         name: z.string().describe('the project name as the user said it — kebab-cased into the repo name'),
         description: z.string().optional().describe('one-line GitHub repo description, only when the user gave one'),

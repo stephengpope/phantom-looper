@@ -51,7 +51,7 @@ services:
       # subpaths of it. dockerd resolves mounts host-side, so an API-internal
       # path would come up empty.
       WORKSPACE_VOLUME: phantom-looper-workspaces
-      # This stack's network (compose names it <project>_default). A workspace
+      # This stack's network (compose names it <project>_default). A project
       # container joins it when `agent_database_shared` is on, so the
       # `postgres` host in AGENT_DATABASE_URL resolves; otherwise containers
       # stay on Docker's default bridge with no path to the stack.

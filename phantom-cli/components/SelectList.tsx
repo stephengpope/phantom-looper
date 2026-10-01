@@ -163,7 +163,7 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
     return pickable.find((p) => p > i) ?? pickable.filter((p) => p < i).pop() ?? 0;
   };
   // A NAMED row is followed, not its index: when the list changes under the
-  // cursor (/resume re-reads, a filter narrows it, ←→ swap the workspace)
+  // cursor (/resume re-reads, a filter narrows it, ←→ swap the project)
   // the highlight finds the row it was on; a row that is gone means the
   // nearest row. Computed here, in render, because the swap arrives as new
   // props and the cursor must be right in the same frame.
@@ -237,7 +237,7 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
     //
     // A chord is not a shortcut. Ink reports ctrl+c as the letter `c` with
     // key.ctrl set, so without this ctrl+c would fire the `c` shortcut on the
-    // way past — and ctrl+e on the workspace list would open the editor.
+    // way past — and ctrl+e on the project list would open the editor.
     else if (onKey && ch && !key.ctrl && !key.meta) { holdPosition.current = true; onKey(ch, current()?.value); }
   });
 
@@ -264,7 +264,7 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
 
   // Any marker in the list means EVERY row carries the two-cell marker slot
   // (blank when unmarked), so details line up in one column. A list that
-  // never marks (settings, workspaces) keeps its flush layout.
+  // never marks (settings, projects) keeps its flush layout.
   const hasMarkers = choices.some((c) => c.busy || c.dot || c.lock);
 
   // The hint, wrapped HERE to a fixed measure rather than left to Ink — Ink

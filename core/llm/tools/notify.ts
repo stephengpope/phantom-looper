@@ -3,7 +3,7 @@
  * deliberately, outside its reply. Over POST /sessions/:id/notify, so every
  * client running a coding agent has it — a cli window, the server's card runs, a cron
  * run, a Telegram chat — and the server delivers it exactly like a reply in a
- * Telegram chat: markdown, MEDIA: tags and bare /workspace paths as files,
+ * Telegram chat: markdown, MEDIA: tags and bare /project paths as files,
  * spoken when the reply mode asks, and a reply to the bubble enters the session.
  *
  * Built only when `telegram_enabled` is on: Telegram off means no tool, not a

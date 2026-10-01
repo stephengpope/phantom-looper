@@ -80,19 +80,19 @@ export class AssistantConversation {
   // ── session row ──────────────────────────────────────────────────────────
 
   /** The assistant's session row, pointed at what the user is looking at —
-   *  created the first time, re-pointed (workspace + folder) every turn
+   *  created the first time, re-pointed (project + folder) every turn
    *  after, since the active session moves between turns. Called BEFORE the
    *  turn's agent is built: the turn runs on the row's model, its tools open
    *  the row's folder, and every call is billed to it. */
-  async ensureSession(workspaceId: string | null, activeSessionId?: string | null): Promise<SessionRow> {
-    if (!workspaceId) throw new Error('no active workspace — /workspaces to pick one');
+  async ensureSession(projectId: string | null, activeSessionId?: string | null): Promise<SessionRow> {
+    if (!projectId) throw new Error('no active project — /projects to pick one');
     if (this.sessionId) {
-      await this.deps.sessions.follow(this.sessionId, workspaceId, activeSessionId);
+      await this.deps.sessions.follow(this.sessionId, projectId, activeSessionId);
       const row = await this.deps.sessions.get(this.sessionId);
       if (row) return row;
       this.sessionId = null; // purged underneath us — make a new one
     }
-    const row = await this.deps.sessions.createAssistant(workspaceId, activeSessionId, AssistantAgent.systemPromptLayout);
+    const row = await this.deps.sessions.createAssistant(projectId, activeSessionId, AssistantAgent.systemPromptLayout);
     this.sessionId = row.id;
     return row;
   }

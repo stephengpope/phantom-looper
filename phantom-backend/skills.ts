@@ -67,8 +67,8 @@ async function writeViaContainer(ws: Sandbox, name: string, rel: string, content
 
 /** The session's workspace image — the system skill tier lives inside it. */
 async function imageFor(ctx: AppCtx, session: SessionRow): Promise<string> {
-  const workspace = await ctx.workspaces.get(session.workspaceId);
-  return String(await ctx.settings.resolve('container_image', { workspace }));
+  const project = await ctx.projects.get(session.projectId);
+  return String(await ctx.settings.resolve('container_image', { project }));
 }
 
 /** Every skill the session sees: a live scan of its working tree merged with
@@ -115,10 +115,10 @@ export async function loadSkill(ctx: AppCtx, deps: FsDeps, session: SessionRow, 
 export async function manageSkill(ctx: AppCtx, deps: FsDeps, session: SessionRow, folderId: string, body: ManageBody): Promise<unknown> {
   const nameErr = validateSkillName(body.name);
   if (nameErr) throw new ToolError('invalid_args', nameErr);
-  const workspace = await ctx.workspaces.get(session.workspaceId);
+  const project = await ctx.projects.get(session.projectId);
   let container;
   try {
-    container = await deps.containers.ensure(folderId, workspace);
+    container = await deps.containers.ensure(folderId, project);
   } catch (e) {
     throw new ToolError('container_start_failed', (e as Error).message, true);
   }

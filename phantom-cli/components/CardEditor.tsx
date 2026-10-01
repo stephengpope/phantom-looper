@@ -53,7 +53,7 @@ interface Draft {
   requirements: CardStep[];
 }
 
-/** Each per-card switch cycles inherit → on → off (null = the workspace's
+/** Each per-card switch cycles inherit → on → off (null = the project's
  *  setting of the same name decides). */
 export const cycleAuto = (v: boolean | null): boolean | null =>
   v === null ? true : v === true ? false : null;
@@ -63,7 +63,7 @@ export const cycleAuto = (v: boolean | null): boolean | null =>
  *  hides behind "inherit". */
 export function autoLabel(v: boolean | null, fallback: boolean, source?: string): string {
   if (v !== null) return `${v ? 'on' : 'off'} · this card`;
-  return `${fallback ? 'on' : 'off'} · ${source === 'workspace' ? 'workspace' : source === 'global' ? 'global' : 'default'}`;
+  return `${fallback ? 'on' : 'off'} · ${source === 'project' ? 'project' : source === 'global' ? 'global' : 'default'}`;
 }
 
 /** Lists whose lines carry a done box — ctrl+t (or clicking the box) ticks. */

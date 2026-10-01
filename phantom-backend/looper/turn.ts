@@ -54,10 +54,10 @@ export interface TurnDeps {
  *  (createAgent's `record` seam collects the same steps from stream and
  *  generate alike). Returns the reply text and the turn's token spend
  *  (input + output). `cfg` is the session's coding config from
- *  Settings.agentConfig('coding', { workspace, pin: sessionPin(session) }) —
+ *  Settings.agentConfig('coding', { project, pin: sessionPin(session) }) —
  *  the one door; the row's pinned model is already in it. */
 export async function runCodingTurn(
-  deps: TurnDeps, opened: OpenedSession, workspaceId: string,
+  deps: TurnDeps, opened: OpenedSession, projectId: string,
   message: string, planMode: boolean, cfg: AgentConfig,
 ): Promise<{ text: string; tokens: number; inputTokens: number; interrupted?: boolean }> {
   const pick = planMode ? ('readonly' as const) : undefined;
@@ -66,10 +66,10 @@ export async function runCodingTurn(
     ...await phantomTools({ ...common, pick }),
     ...skillTools({ ...common, pick }),
     ...webTools(common),
-    ...secretTools({ baseUrl: deps.base, apiKey: deps.apiKey, workspaceId, fetch: deps.f }),
-    ...await cronTools({ baseUrl: deps.base, apiKey: deps.apiKey, workspaceId, fetch: deps.f, pick }),
-    ...await databaseTools({ baseUrl: deps.base, apiKey: deps.apiKey, workspaceId, fetch: deps.f }),
-    ...kanbanReadTool({ baseUrl: deps.base, apiKey: deps.apiKey, workspaceId, fetch: deps.f }),
+    ...secretTools({ baseUrl: deps.base, apiKey: deps.apiKey, projectId, fetch: deps.f }),
+    ...await cronTools({ baseUrl: deps.base, apiKey: deps.apiKey, projectId, fetch: deps.f, pick }),
+    ...await databaseTools({ baseUrl: deps.base, apiKey: deps.apiKey, projectId, fetch: deps.f }),
+    ...kanbanReadTool({ baseUrl: deps.base, apiKey: deps.apiKey, projectId, fetch: deps.f }),
     ...await notifyTools(common),
     ...deps.extraTools,
   };

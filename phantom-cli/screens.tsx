@@ -19,8 +19,8 @@ import type { Dialog, Overlay, WindowStore } from './window.js';
 import type { Api } from './request.js';
 import { Settings } from './components/Settings.js';
 import { Launcher } from './components/Launcher.js';
-import { NewWorkspace, type NewWorkspaceRequest } from './components/NewWorkspace.js';
-import { WorkspaceSettings } from './components/WorkspaceSettings.js';
+import { NewProject, type NewProjectRequest } from './components/NewProject.js';
+import { ProjectSettings } from './components/ProjectSettings.js';
 import { SessionSwitcher } from './components/SessionSwitcher.js';
 import { Keys } from './components/Keys.js';
 import { Tasks } from './components/Tasks.js';
@@ -30,7 +30,7 @@ import { Presets } from './components/Presets.js';
 import { Board } from './components/Board.js';
 import { Confirm, CONFIRM_ROWS } from './components/Confirm.js';
 import { quiet } from './request.js';
-import type { WorkspaceInfo } from './components/Launcher.js';
+import type { ProjectInfo } from './components/Launcher.js';
 
 /** /server is the ONE screen that must work with the server down — it is
  *  where you fix the address — so it gets this api and its two keys are the
@@ -64,12 +64,12 @@ export const confirmDialog = (dismiss: (result?: unknown) => void, title: string
  *  esc goes BACK to — the columns when it was opened from the board, the chat
  *  from anywhere else (the archive, the Assistant) — because that is the only
  *  thing that ever differed between the two. */
-export const boardScreen = (w: WindowStore, workspaceId: string,
+export const boardScreen = (w: WindowStore, projectId: string,
   card?: { number: number; back: 'chat' | 'board' }): Overlay =>
   // The name says what is on screen for the Assistant's "is the board up":
   // a card opened FROM the board is still the board.
   full(card?.back === 'chat' ? 'card' : 'board', ({ width, height }) => (
-    <Board store={w.boardFor(workspaceId)} width={width} height={height} isActive
+    <Board store={w.boardFor(projectId)} width={width} height={height} isActive
       card={card?.number}
       confirm={(t, m) => w.confirm(t, m)}
       onOpenCard={(number) => w.openCard(number, 'board')}
@@ -81,7 +81,7 @@ export const boardScreen = (w: WindowStore, workspaceId: string,
       onOpenSession={(id) => { w.dismissOverlay(); void w.openSession({ kind: 'open', id }); }}
       // [v]: the archive. Off the board first, so a failed fetch's note
       // lands where you can read it.
-      onArchived={() => { w.dismissOverlay(); void w.openArchived(workspaceId); }} />
+      onArchived={() => { w.dismissOverlay(); void w.openArchived(projectId); }} />
   ));
 
 // ── the menus ─────────────────────────────────────────────────────────────
@@ -89,7 +89,7 @@ export const boardScreen = (w: WindowStore, workspaceId: string,
 /** ctrl+n: the sessions open in this window. */
 export const switcherScreen = (w: WindowStore): Overlay => full('sessions', () => (
   <SessionSwitcher
-    sessions={w.sessions.list()} activeId={w.sessions.activeId} workspaces={w.workspaceRows}
+    sessions={w.sessions.list()} activeId={w.sessions.activeId} projects={w.projectRows}
     onPick={(id) => { w.dismissOverlay(); w.switchTo(id); }}
     onCancel={w.dismissOverlay} />
 ));
@@ -142,36 +142,36 @@ export const presetsScreen = (w: WindowStore): Overlay => full('presets', () => 
     onClose={w.dismissOverlay} />
 ));
 
-/** `e` on a /workspace row: that workspace's settings. Closing goes back to
+/** `e` on a /project row: that project's settings. Closing goes back to
  *  the list it was opened from, refreshed — a rename there has to show up.
  *  A write is a settings change like any other (the coding agent's model
  *  among them): every open session re-reads its config, as after /settings. */
-export const workspaceSettingsScreen = (w: WindowStore, workspace: WorkspaceInfo): Overlay =>
-  full('workspaceSettings', () => (
-    <WorkspaceSettings key={`workspace-settings-${w.settingsVersion}`}
-      api={w.api} workspace={workspace}
-      onClose={() => { void w.openPicker('workspace'); }}
+export const projectSettingsScreen = (w: WindowStore, project: ProjectInfo): Overlay =>
+  full('projectSettings', () => (
+    <ProjectSettings key={`project-settings-${w.settingsVersion}`}
+      api={w.api} project={project}
+      onClose={() => { void w.openPicker('project'); }}
       onChanged={() => { w.settingChanged(); void w.refreshPicker().catch(quiet('refresh the session list')); }} />
   ));
 
-/** The add-a-workspace form. A rejected submit stays on the form with the
+/** The add-a-project form. A rejected submit stays on the form with the
  *  server's words (`w.addError`, read fresh each render — the form must NOT
  *  be re-shown, that would remount it and lose what was typed). */
-export const addWorkspaceScreen = (w: WindowStore): Overlay => full('addWorkspace', () => (
-  <NewWorkspace api={w.api} error={w.addError}
+export const addProjectScreen = (w: WindowStore): Overlay => full('addProject', () => (
+  <NewProject api={w.api} error={w.addError}
     onCancel={w.dismissOverlay}
-    onSubmit={(req: NewWorkspaceRequest) => { void w.addWorkspace(req); }} />
+    onSubmit={(req: NewProjectRequest) => { void w.addProject(req); }} />
 ));
 
-/** /archived — the workspace's archived cards, paged like /resume. */
-export const archivedScreen = (w: WindowStore, workspaceId: string): Overlay => full('archived', () => (
+/** /archived — the project's archived cards, paged like /resume. */
+export const archivedScreen = (w: WindowStore, projectId: string): Overlay => full('archived', () => (
   <Archived cards={w.archived} notice={w.archivedNotice}
-    onNearEnd={() => { void w.moreArchived(workspaceId); }}
+    onNearEnd={() => { void w.moreArchived(projectId); }}
     total={w.archivedTotal}
     // The solo editor renders from the board store, which never holds
     // archived cards on its own — seat this one first.
-    onOpen={(t) => w.openArchivedCard(workspaceId, t)}
-    onRestore={(t) => { void w.restoreCard(workspaceId, t); }}
+    onOpen={(t) => w.openArchivedCard(projectId, t)}
+    onRestore={(t) => { void w.restoreCard(projectId, t); }}
     onCancel={w.dismissOverlay} />
 ));
 
@@ -183,27 +183,27 @@ export const tasksScreen = (w: WindowStore): Overlay => third('tasks', () => (
     onCancel={w.dismissOverlay} /> : null
 ), { poll: () => { void w.refreshTasks().catch(quiet('refresh tasks')); } });
 
-/** /resume (sessions) and /workspace (workspaces) — one launcher, two
+/** /resume (sessions) and /project (projects) — one launcher, two
  *  modes. /resume follows the session list feed while up: a row moving
  *  anywhere re-reads the list, so its rows spin and its locks lapse as they
  *  happen. The refresh swaps rows in place, so the cursor and the notice
  *  line stay put. */
-export const pickerScreen = (w: WindowStore, which: 'workspace' | 'resume'): Overlay => full(which, () => (
+export const pickerScreen = (w: WindowStore, which: 'project' | 'resume'): Overlay => full(which, () => (
   w.picker ? <Launcher
-    mode={which === 'resume' ? 'sessions' : 'workspaces'}
-    workspaces={w.workspaceRows} sessions={w.picker.sessions} total={w.picker.total}
+    mode={which === 'resume' ? 'sessions' : 'projects'}
+    projects={w.projectRows} sessions={w.picker.sessions} total={w.picker.total}
     showBackground={w.showBackground}
     onToggleBackground={() => w.toggleBackground()}
     query={w.pickerQuery} rowsQuery={w.picker.query}
     onQuery={which === 'resume' ? (q) => w.setPickerQuery(q) : undefined}
-    workspaceId={w.pickerWorkspace}
-    onCycleWorkspace={which === 'resume' ? (dir) => w.cyclePickerWorkspace(dir) : undefined}
+    projectId={w.pickerProject}
+    onCycleProject={which === 'resume' ? (dir) => w.cyclePickerProject(dir) : undefined}
     busy={(id) => w.sessions.get(id)?.busy ?? false}
     loaded={(id) => w.sessions.has(id)}
     clientId={w.clientId}
     notice={w.pickerNotice}
     onNearEnd={which === 'resume' ? () => { void w.morePicker(); } : undefined}
-    onEdit={(id) => w.editWorkspace(id)}
+    onEdit={(id) => w.editProject(id)}
     onDuplicate={(id) => { void w.duplicateFromPicker(id); }}
     onPin={(id) => { void w.pinFromPicker(id); }}
     onPing={(id) => { void w.pingSession(id); }}
@@ -211,10 +211,10 @@ export const pickerScreen = (w: WindowStore, which: 'workspace' | 'resume'): Ove
     onTrash={(id) => { void w.trashSession(id); }}
     onCancel={w.dismissOverlay}
     onPick={(l) => {
-      if (l.kind === 'add') { w.startAddWorkspace(); return; }
+      if (l.kind === 'add') { w.startAddProject(); return; }
       w.dismissOverlay();
       void w.openSession(l.kind === 'new'
-        ? { kind: 'new', workspaceId: l.workspaceId }
+        ? { kind: 'new', projectId: l.projectId }
         : { kind: 'open', id: l.sessionId });
     }} /> : null
 ), which === 'resume' ? { watch: w.watchPicker } : {});

@@ -24,18 +24,18 @@ export const SECRETS_LIST = `The user has stored secrets for your use — tokens
 The secret_get tool returns a value by name. This list was written when the session started; the secret_list tool returns the most current list should you need to find a newly added secret.`;
 
 // ═══ github_token ════════════════════════════════════════════════════════════
-// Present only when agent_git_credentials is on for the workspace.
+// Present only when agent_git_credentials is on for the project.
 
 export const GITHUB_TOKEN = `A GitHub token is in your environment (GITHUB_TOKEN); git and gh are authenticated with it.`;
 
 // ═══ agent_database ══════════════════════════════════════════════════════════
-// Present only when agent_database is on for the workspace. Facts only —
+// Present only when agent_database is on for the project. Facts only —
 // what it is, not what to do with it. Two wordings: private (the default),
 // and shared with the project's code (agent_database_shared on).
 
-export const AGENT_DATABASE = `You have your own PostgreSQL database for this workspace. It is private to you — not the project's, and no code in the workspace can reach it — and it persists across sessions and container restarts. You are its admin. The database_query tool runs SQL in it.`;
+export const AGENT_DATABASE = `You have your own PostgreSQL database for this project. It is private to you — not the project's, and no code in the project can reach it — and it persists across sessions and container restarts. You are its admin. The database_query tool runs SQL in it.`;
 
-export const AGENT_DATABASE_SHARED = `You have your own PostgreSQL database for this workspace. It persists across sessions and container restarts. You are its admin. The database_query tool runs SQL in it and should be your primary way of accessing it. The project's code can reach the same database should you need to write code that needs access: \`AGENT_DATABASE_URL\` in your environment is the connection string.`;
+export const AGENT_DATABASE_SHARED = `You have your own PostgreSQL database for this project. It persists across sessions and container restarts. You are its admin. The database_query tool runs SQL in it and should be your primary way of accessing it. The project's code can reach the same database should you need to write code that needs access: \`AGENT_DATABASE_URL\` in your environment is the connection string.`;
 
 // ═══ time_date ═══════════════════════════════════════════════════════════════
 // {{date}} is today, in the builder's time zone (the `timezone` setting),
@@ -46,4 +46,4 @@ export const TIME_DATE = `Current date: {{date}}.`;
 // ═══ soul_md · agents_md ═════════════════════════════════════════════════════
 // The repo's root SOUL.md / AGENTS.md, verbatim — no wrapper text. Present
 // only when the matching setting (agent_soul / agent_agents_md) is on for
-// the workspace AND the checkout has the file.
+// the project AND the checkout has the file.

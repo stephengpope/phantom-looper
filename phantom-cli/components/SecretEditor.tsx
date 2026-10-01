@@ -19,23 +19,23 @@ import { isMouseInput } from '../mouse.js';
 import { TextInput } from './TextInput.js';
 import { secretName, SECRET_NAME_RULE } from '../../core/secretName.js';
 
-/** A place a secret can live: global (id null) or one workspace. */
+/** A place a secret can live: global (id null) or one project. */
 export interface SecretTarget { id: string | null; label: string }
 
 export interface SecretDraft {
   name: string; description: string;
   /** edit: '' = keep the stored value. */
   value: string;
-  /** null = global, else the workspace id. */
-  workspaceId: string | null;
+  /** null = global, else the project id. */
+  projectId: string | null;
 }
 
 export function SecretEditor({ mode, initial, targets, isActive = true, onSave, onCancel }: {
   mode: 'new' | 'edit';
   /** edit: the row being edited (value always starts empty).
-   *  new: where the Where row starts (the list's current workspace filter). */
+   *  new: where the Where row starts (the list's current project filter). */
   initial?: Partial<Omit<SecretDraft, 'value'>>;
-  /** Every place a secret can go — global first, then the workspaces. */
+  /** Every place a secret can go — global first, then the projects. */
   targets: SecretTarget[];
   isActive?: boolean;
   onSave: (d: SecretDraft) => void;
@@ -45,7 +45,7 @@ export function SecretEditor({ mode, initial, targets, isActive = true, onSave, 
     name: initial?.name ?? '',
     description: initial?.description ?? '',
     value: '',
-    workspaceId: initial?.workspaceId ?? null,
+    projectId: initial?.projectId ?? null,
   });
   const [error, setError] = useState<string | undefined>();
 
@@ -62,9 +62,9 @@ export function SecretEditor({ mode, initial, targets, isActive = true, onSave, 
 
   /** Cycle Where through the targets, either direction. */
   const cycleWhere = (dir: 1 | -1) => setDraft((d) => {
-    const i = targets.findIndex((t) => t.id === d.workspaceId);
+    const i = targets.findIndex((t) => t.id === d.projectId);
     const next = targets[(Math.max(i, 0) + dir + targets.length) % targets.length];
-    return { ...d, workspaceId: next.id };
+    return { ...d, projectId: next.id };
   });
 
   const save = () => {
@@ -109,9 +109,9 @@ export function SecretEditor({ mode, initial, targets, isActive = true, onSave, 
         ? <Text wrap="truncate">{mask ? mask.repeat(draft[k].length) : draft[k]}</Text>
         : <Text dimColor>{placeholder}</Text>;
 
-  const whereLabel = targets.find((t) => t.id === draft.workspaceId)?.label ?? 'global — every workspace';
+  const whereLabel = targets.find((t) => t.id === draft.projectId)?.label ?? 'global — every project';
   const moved = mode === 'edit'
-    && (draft.name !== initial?.name || draft.workspaceId !== (initial?.workspaceId ?? null));
+    && (draft.name !== initial?.name || draft.projectId !== (initial?.projectId ?? null));
   const saveSays = mode === 'new' ? `stores ${whereLabel}`
     : moved ? `moves it to ${draft.name || '?'} · ${whereLabel}`
       : draft.value ? 'stores the new value' : 'keeps the value, saves the rest';
@@ -139,7 +139,7 @@ export function SecretEditor({ mode, initial, targets, isActive = true, onSave, 
       {targets.length > 1 && (
         <Box marginTop={1}>
           {label('Where', 'where')}
-          <Text color={draft.workspaceId !== null ? 'cyan' : undefined} dimColor={draft.workspaceId === null}>
+          <Text color={draft.projectId !== null ? 'cyan' : undefined} dimColor={draft.projectId === null}>
             {whereLabel}
           </Text>
           {focused === 'where' ? <Text dimColor> · [enter/←→] next of {targets.length}</Text> : null}

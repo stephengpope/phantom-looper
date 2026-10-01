@@ -7,31 +7,31 @@
 // BoardStore, and moving the screen) and screen mode.
 import type { Tool } from 'ai';
 import type { ToolKit } from 'phantom-client-sdk';
-import { sessionsTool, assistantKanbanTool, workspaceCreateTool, gitAutoPushTool,
+import { sessionsTool, assistantKanbanTool, projectCreateTool, gitAutoPushTool,
   gitAutoPullTool, assistantModeTool, dockerLogsTool, type KanbanArgs } from './voice.js';
-import { sessionsHandler, workspaceCreateHandler, gitHandlers, dockerLogsHandler,
+import { sessionsHandler, projectCreateHandler, gitHandlers, dockerLogsHandler,
   type AssistantHost } from '../core/llm/tools/assistantHandlers.js';
-import type { WorkspaceInfo } from './components/Launcher.js';
+import type { ProjectInfo } from './components/Launcher.js';
 import { kanbanOps, resolveColumn } from './kanban.js';
 import type { WindowStore } from './window.js';
 import type { Api } from './request.js';
 
-/** The workspace names the session tools speak with: a 26-character id cannot
+/** The project names the session tools speak with: a 26-character id cannot
  *  be read aloud. Fetched ONCE, lazily — a window that never opened the
  *  switcher has none — and held here so every caller reads the same cache. */
-export class WorkspaceDirectory {
-  private rows: WorkspaceInfo[] = [];
+export class ProjectDirectory {
+  private rows: ProjectInfo[] = [];
   constructor(private api: Api) {}
   /** Fill the cache if it is empty. */
   async ensure(): Promise<void> {
     if (this.rows.length) return;
-    const ws = await this.api('GET', '/workspaces');
-    if (Array.isArray(ws) && ws.length) this.rows = ws as WorkspaceInfo[];
+    const projects = await this.api('GET', '/projects');
+    if (Array.isArray(projects) && projects.length) this.rows = projects as ProjectInfo[];
   }
   /** A list another screen already fetched (the switcher's). Only a NON-empty
    *  list is taken: an empty render must not wipe what we have. */
-  offer(rows: WorkspaceInfo[]): void { if (rows.length) this.rows = rows; }
-  /** The name to say for a workspace id — the id itself when unknown, which
+  offer(rows: ProjectInfo[]): void { if (rows.length) this.rows = rows; }
+  /** The name to say for a project id — the id itself when unknown, which
    *  is still an answer rather than a blank. */
   name(id: string): string {
     const w = this.rows.find((n) => n.id === id);
@@ -43,7 +43,7 @@ export class WorkspaceDirectory {
  *  closed over — the agent is built once (voice start, a model change) and
  *  must not answer with the session that was on screen when it was built. */
 export function windowHost(win: WindowStore, deps: {
-  api: Api; clientId: string; workspaces: WorkspaceDirectory;
+  api: Api; clientId: string; projects: ProjectDirectory;
 }): AssistantHost {
   const store = win.sessions;
   return {
@@ -53,7 +53,7 @@ export function windowHost(win: WindowStore, deps: {
     // every step lands as a note in the session's pane.
     autoPush: (id) => win.runAutoPush(id),
     autoPull: (id) => win.runAutoPull(id),
-    workspaceId: () => store.active()?.workspaceId ?? null,
+    projectId: () => store.active()?.projectId ?? null,
     activeSession: () => store.activeId || null,
     busy: (id) => store.get(id)?.busy ?? false,
     history: (id) => { const h = store.get(id)?.history; return h ? [...h] : null; },
@@ -75,8 +75,8 @@ export function windowHost(win: WindowStore, deps: {
       if (win.approval) return Promise.resolve(false);
       return win.requestApproval(ask, signal);
     },
-    onWorkspaceCreated: async (workspaceId) => {
-      const opened = await win.openSession({ kind: 'new', workspaceId });
+    onProjectCreated: async (projectId) => {
+      const opened = await win.openSession({ kind: 'new', projectId });
       return opened ? { session: store.activeId } : { error: 'the conversation pane says why' };
     },
   };
@@ -88,11 +88,11 @@ export function windowHost(win: WindowStore, deps: {
  *  guessing. Everything else is the shared card work in kanban.ts. */
 export function kanbanHandler(win: WindowStore) {
   return async (args: KanbanArgs): Promise<unknown> => {
-    const workspaceId = win.sessions.active()?.workspaceId ?? '';
-    if (!workspaceId) return { error: 'no session is on screen yet, so there is no workspace or board' };
+    const projectId = win.sessions.active()?.projectId ?? '';
+    if (!projectId) return { error: 'no session is on screen yet, so there is no project or board' };
     if (args.action === 'screen') {
       if (args.show === 'off') { win.dismissOverlay(); return { ok: true, screen: 'chat' }; }
-      const b = win.boardFor(workspaceId);
+      const b = win.boardFor(projectId);
       if (!b.state.loaded) await b.load();
       if (args.show === 'column') {
         // One column across the whole width — the board's [e]. Spoken names
@@ -118,13 +118,13 @@ export function kanbanHandler(win: WindowStore) {
       b.requestBoard(); // every column: an open editor drops, an expanded column collapses
       return { ok: true, screen: 'board' };
     }
-    return kanbanOps(win.boardFor(workspaceId), args);
+    return kanbanOps(win.boardFor(projectId), args);
   };
 }
 
 /** The Assistant's tools only this window can serve: core's handlers over
  *  this window as host, the window's own two (board, screen mode). The
- *  server's tools for the assistant (the read-only workspace tools, web,
+ *  server's tools for the assistant (the read-only project tools, web,
  *  crons…) come with every turn start and ride beside these. Every fact is
  *  read live off the window at execute time, so one kit serves every
  *  session that comes on screen. `mutating` names the ones plan mode
@@ -132,7 +132,7 @@ export function kanbanHandler(win: WindowStore) {
 export function assistantToolKit(win: WindowStore, deps: {
   api: Api;
   clientId: string;
-  workspaces: WorkspaceDirectory;
+  projects: ProjectDirectory;
 }): ToolKit {
   const host = windowHost(win, deps);
   const git = gitHandlers(host);
@@ -142,7 +142,7 @@ export function assistantToolKit(win: WindowStore, deps: {
       tools: {
         ...sessionsTool(sessionsHandler(host)),
         ...assistantKanbanTool(kanbanHandler(win)),
-        ...workspaceCreateTool(workspaceCreateHandler(host)),
+        ...projectCreateTool(projectCreateHandler(host)),
         ...gitAutoPushTool(git.push),
         ...gitAutoPullTool(git.pull),
         ...assistantModeTool(win.screenOps()),

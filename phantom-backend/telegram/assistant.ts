@@ -21,10 +21,10 @@ import { AssistantAgent } from '../../core/llm/agents/assistant.js';
 import { agentClock, type AgentConfig } from '../../core/llm/agentConfig.js';
 import type { SessionRow } from '../db/schema.js';
 import type { Cards, CardFields, ItemOp, CardRow } from '../cards.js';
-import type { Workspaces } from '../workspaces.js';
-import { assistantKanbanTool, sessionsTool, workspaceCreateTool, gitAutoPushTool, gitAutoPullTool, dockerLogsTool,
+import type { Projects } from '../projects.js';
+import { assistantKanbanTool, sessionsTool, projectCreateTool, gitAutoPushTool, gitAutoPullTool, dockerLogsTool,
   type KanbanArgs } from '../../core/llm/tools/tui.js';
-import { sessionsHandler, workspaceCreateHandler, gitHandlers, dockerLogsHandler,
+import { sessionsHandler, projectCreateHandler, gitHandlers, dockerLogsHandler,
   type AssistantHost } from '../../core/llm/tools/assistantHandlers.js';
 import type { ApiCall } from '../../core/session.js';
 import { autoPushSession, autoPullSession } from '../../core/llm/tools/git.js';
@@ -41,9 +41,9 @@ export const CLIENT_ID = 'telegram';
 export interface AssistantDeps {
   f: typeof fetch;
   apiKey: string;
-  /** The board's owner, and the workspace rows it is addressed by. */
+  /** The board's owner, and the project rows it is addressed by. */
   cards: Cards;
-  workspaces: Workspaces;
+  projects: Projects;
   modelFetch?: typeof fetch;
 }
 
@@ -65,7 +65,7 @@ async function api(deps: AssistantDeps, path: string,
  *  card routes answer with (they are thin over Cards). `screen` has no
  *  telegram meaning and says so. Every write lands on the board bus, so the
  *  card runs and the archive auto-push run exactly as for any other door. */
-function boardHandler(deps: AssistantDeps, workspaceId: () => string | null) {
+function boardHandler(deps: AssistantDeps, projectId: () => string | null) {
   const cardOf = (c: CardRow) => ({ card: c.number, title: c.title, status: c.status });
   // Card rows carry Date fields. Every other door serializes them over HTTP;
   // here the row would go into the model's history as-is, and the SDK
@@ -74,16 +74,16 @@ function boardHandler(deps: AssistantDeps, workspaceId: () => string | null) {
   const json = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
   return async (args: KanbanArgs): Promise<unknown> => json(await handle(args));
   async function handle(args: KanbanArgs): Promise<unknown> {
-    const ws = workspaceId();
-    if (!ws) return { error: 'no active workspace — /workspaces to pick one' };
-    const w = await deps.workspaces.get(ws);
-    if (!w) return { error: `workspace ${ws} is gone — /workspaces to pick another` };
+    const id = projectId();
+    if (!id) return { error: 'no active project — /projects to pick one' };
+    const w = await deps.projects.get(id);
+    if (!w) return { error: `project ${id} is gone — /projects to pick another` };
     try {
       switch (args.action) {
         case 'screen':
           return { note: 'no screen on telegram — read the card instead' };
         case 'list':
-          return { prefix: await deps.workspaces.prefixOf(w), cards: (await deps.cards.list(w, {})).map(cardOf) };
+          return { prefix: await deps.projects.prefixOf(w), cards: (await deps.cards.list(w, {})).map(cardOf) };
         case 'read':
           return (await deps.cards.byNumber(w, args.card!)) ?? { error: `no card ${args.card}` };
         case 'create': {
@@ -116,16 +116,16 @@ function boardHandler(deps: AssistantDeps, workspaceId: () => string | null) {
 export interface AssistantCtx {
   /** The assistant's config on ITS ROW's model — Settings.agentConfig('assistant', { pin: sessionPin(own) }). */
   config: AgentConfig;
-  workspaceId: () => string | null;
+  projectId: () => string | null;
   activeSession: () => string | null;
   /** session_switch fired — the caller enters code mode. */
   onSwitch: (id: string) => Promise<unknown>;
   /** The approval gate: show the ask, resolve with the user's answer; the
    *  tool's abort declines. */
   approve: (ask: { label: string; subject: string }, signal?: AbortSignal) => Promise<boolean>;
-  /** A workspace was just created — make it the active one and open a session
+  /** A project was just created — make it the active one and open a session
    *  in it (the telegram meaning of the cli's "on screen"). */
-  onWorkspaceCreated: (workspaceId: string) => Promise<{ session?: string; error?: string }>;
+  onProjectCreated: (projectId: string) => Promise<{ session?: string; error?: string }>;
 }
 
 /** This bot as an AssistantHost (core/llm/tools/assistantHandlers.ts — the
@@ -145,28 +145,28 @@ function telegramHost(deps: AssistantDeps, ctx: AssistantCtx): AssistantHost {
     clientId: CLIENT_ID,
     autoPush: (id, onStep) => autoPushSession(gitCfg(id), onStep),
     autoPull: (id, onStep) => autoPullSession(gitCfg(id), onStep),
-    workspaceId: ctx.workspaceId,
+    projectId: ctx.projectId,
     activeSession: ctx.activeSession,
     onSwitch: ctx.onSwitch,
     approve: ctx.approve,
-    onWorkspaceCreated: ctx.onWorkspaceCreated,
+    onProjectCreated: ctx.onProjectCreated,
   };
 }
 
 /** The Assistant's whole kit for a telegram turn. File tools + web bind to
  *  the assistant's OWN session — the server opens its folder, the on-screen
  *  session's, re-pointed on every switch (Sessions.follow) — when it has one
- *  (read-only); the cron kit to the active workspace when there is one and
+ *  (read-only); the cron kit to the active project when there is one and
  *  its crons are switched on;
- *  board + sessions + the gated workspace_create_repo + git_auto_push +
+ *  board + sessions + the gated project_create_repo + git_auto_push +
  *  git_auto_pull + docker_logs always. */
 export async function assistantKit(deps: AssistantDeps, ctx: AssistantCtx, own: SessionRow): Promise<Record<string, Tool>> {
   const host = telegramHost(deps, ctx);
   const git = gitHandlers(host);
   const kit: Record<string, Tool> = {
-    ...assistantKanbanTool(boardHandler(deps, ctx.workspaceId)),
+    ...assistantKanbanTool(boardHandler(deps, ctx.projectId)),
     ...sessionsTool(sessionsHandler(host)),
-    ...workspaceCreateTool(workspaceCreateHandler(host)),
+    ...projectCreateTool(projectCreateHandler(host)),
     ...gitAutoPushTool(git.push),
     ...gitAutoPullTool(git.pull),
     ...dockerLogsTool(dockerLogsHandler(host)),
@@ -181,8 +181,8 @@ export async function assistantKit(deps: AssistantDeps, ctx: AssistantCtx, own: 
       await phantomTools({ ...common, pick: 'readonly' }),
       webTools(common));
   }
-  const ws = ctx.workspaceId();
-  if (ws) Object.assign(kit, await cronTools({ baseUrl: BASE, apiKey: deps.apiKey, workspaceId: ws, fetch: deps.f }));
+  const id = ctx.projectId();
+  if (id) Object.assign(kit, await cronTools({ baseUrl: BASE, apiKey: deps.apiKey, projectId: id, fetch: deps.f }));
   return kit;
 }
 

@@ -7,8 +7,8 @@
 // build, date only.
 //
 // Kit: the caller's — `session_*`, the full board kit, `screen_*`,
-// `workspace_create_repo` (gated in the app), the web kit
-// (core/llm/tools/tui.ts + web.ts), and the READ-ONLY workspace tools
+// `project_create_repo` (gated in the app), the web kit
+// (core/llm/tools/tui.ts + web.ts), and the READ-ONLY project tools
 // (read ls find grep task_list task_wait — phantomTools pick:'readonly')
 // scoped to the session on screen, rebuilt when the screen switches; the
 // app supplies the handlers. The mutating tools are deliberately not granted.

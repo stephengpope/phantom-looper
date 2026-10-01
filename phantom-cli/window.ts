@@ -30,23 +30,23 @@ import { PasteStore } from './paste.js';
 import { quiet, watchConnection, type Api } from './request.js';
 import { VOICE_BOOT_KEYS, isLocalKey, type ConfigValue } from './config.js';
 import { makeSettings } from './settings.js';
-import { label, lastWorkspaceId, type SessionInfo, type WorkspaceInfo } from './components/Launcher.js';
+import { label, lastProjectId, type SessionInfo, type ProjectInfo } from './components/Launcher.js';
 import type { TasksView } from './components/Tasks.js';
-import type { NewWorkspaceRequest } from './components/NewWorkspace.js';
+import type { NewProjectRequest } from './components/NewProject.js';
 import { COMMANDS, fillOf, matches, parse, type Choices } from './commands.js';
-import { WorkspaceDirectory, assistantToolKit } from './assistantKit.js';
+import { ProjectDirectory, assistantToolKit } from './assistantKit.js';
 import { confirmDialog, boardScreen, switcherScreen, settingsScreen, keysScreen, secretsScreen,
-  serverScreen, presetsScreen, workspaceSettingsScreen,
-  addWorkspaceScreen, archivedScreen, tasksScreen, pickerScreen } from './screens.js';
+  serverScreen, presetsScreen, projectSettingsScreen,
+  addProjectScreen, archivedScreen, tasksScreen, pickerScreen } from './screens.js';
 
-/** What the window remembers about a workspace: the banner's display name and
+/** What the window remembers about a project: the banner's display name and
  *  the prefix its cards are named with (`PHA` → `PHA-7`). `error` says why a
  *  lookup fell back to the id, so a bare id never passes for a name. */
 export interface WsFacts { label: string; cardPrefix?: string; error?: string }
 
 /** What opening resolves to. core's openSession turns each into the same
  *  create / restart / attach path. */
-export type OpenTarget = { kind: 'new'; workspaceId: string } | { kind: 'open'; id: string }
+export type OpenTarget = { kind: 'new'; projectId: string } | { kind: 'open'; id: string }
   | { kind: 'duplicate'; id: string };
 
 /** An ask standing in the Assistant's pane, and the promise its tool is
@@ -110,10 +110,10 @@ export interface WindowOptions {
    *  turns through it, under this window's identity. */
   backend: () => PhantomBackend;
   /** GET a server ND-JSON stream as records — each BoardStore follows its
-   *  workspace's `/events` through it. Absent (tests): boards load once. */
+   *  project's `/events` through it. Absent (tests): boards load once. */
   stream?: Stream;
   configPath?: string;
-  /** What launching wants: resume a named session, or find a workspace and
+  /** What launching wants: resume a named session, or find a project and
    *  start. The splash waits on the outcome — see `splash`. */
   boot?: { resumeId?: string };
   makeVoice?: () => VoiceClient;
@@ -126,7 +126,7 @@ export interface WindowOptions {
   autoPull?: (sessionId: string, onStep?: (label: string) => void) =>
     Promise<{ result: string; reason?: string; arrived?: string[]; files?: string[]; sha?: string; pushed?: boolean }>;
   /** Fired whenever the session on screen changes. */
-  onSession?: (s: { id: string; branch: string; workspaceId: string }) => void;
+  onSession?: (s: { id: string; branch: string; projectId: string }) => void;
   /** Ink's exit, so /exit and ctrl+c can end the process. */
   exit?: () => void;
   /** Width of the voice pane as a percent, when `sidebar_width` is not set. */
@@ -152,10 +152,10 @@ const SWITCH_KEY: Record<'mic' | 'speaker' | 'headphones' | 'wake', string> = {
 };
 
 /** The banner at the top of a session: where you are, then the model line. */
-function bannerParts(s: { workspace: string; branch: string },
+function bannerParts(s: { project: string; branch: string },
   summary: { provider: string; model: string; reasoning: string }): Part[] {
   return [
-    `${s.workspace} · ${s.branch}`,
+    `${s.project} · ${s.branch}`,
     `${summary.provider}/${summary.model} · reasoning ${summary.reasoning}`,
   ].map((text) => ({ kind: 'note', id: nextId('note'), text }) as Part);
 }
@@ -166,11 +166,11 @@ export class WindowStore {
   /** The Assistant, over the Python sidecar. Constructed, never started: the
    *  window comes up with voice off unless a setting says otherwise. */
   readonly voice: VoiceClient;
-  /** One board per workspace, shared by the /kanban view, the Assistant's
+  /** One board per project, shared by the /kanban view, the Assistant's
    *  board tool and every coding session's — so a tool edit repaints an open
    *  board with no extra wiring. */
   private readonly boards = new Map<string, BoardStore>();
-  /** Display name and card prefix per workspace: a display cache, cleared
+  /** Display name and card prefix per project: a display cache, cleared
    *  when the settings feed says they may have changed. */
   private readonly wsNames = new Map<string, WsFacts>();
 
@@ -356,8 +356,8 @@ export class WindowStore {
   /** /kanban, and the Assistant's "show the board". */
   openBoard(): void {
     const e = this.sessions.active();
-    if (!e) { this.note('no session is open — the board belongs to a workspace; /workspace starts a session in one'); return; }
-    this.showOverlay(boardScreen(this, e.workspaceId));
+    if (!e) { this.note('no session is open — the board belongs to a project; /project starts a session in one'); return; }
+    this.showOverlay(boardScreen(this, e.projectId));
   }
 
   /** A card's editor, and where esc leaves it: opened from the board it goes
@@ -365,7 +365,7 @@ export class WindowStore {
   openCard(number: number, back: 'chat' | 'board' = 'chat'): void {
     const e = this.sessions.active();
     if (!e) return;
-    this.showOverlay(boardScreen(this, e.workspaceId, { number, back }));
+    this.showOverlay(boardScreen(this, e.projectId, { number, back }));
   }
 
   /** The open list's re-read clock (`Overlay.poll`), unref'd so it never
@@ -433,7 +433,7 @@ export class WindowStore {
       ? new SettingsFeed(opts.stream, () => this.settingsWrittenElsewhere(), opts.clientId)
       : null;
     this.settingsFeed?.start();
-    this.workspaces = new WorkspaceDirectory(this.api);
+    this.projects = new ProjectDirectory(this.api);
     this.voice = (opts.makeVoice ?? (() => new VoiceClient()))();
     this.splash = false;
     // Defaults only until readChrome's first server read lands.
@@ -467,20 +467,20 @@ export class WindowStore {
 
   // ── boards ────────────────────────────────────────────────────────────────
 
-  boardFor(workspaceId: string): BoardStore {
-    let b = this.boards.get(workspaceId);
+  boardFor(projectId: string): BoardStore {
+    let b = this.boards.get(projectId);
     if (!b) {
-      b = new BoardStore(this.api, workspaceId, this.opts.stream);
+      b = new BoardStore(this.api, projectId, this.opts.stream);
       b.follow();
-      this.boards.set(workspaceId, b);
+      this.boards.set(projectId, b);
     }
     return b;
   }
 
-  /** The coding agent's board handler, bound to the session's OWN workspace —
+  /** The coding agent's board handler, bound to the session's OWN project —
    *  not the one on screen: a turn keeps running while you switch away. */
-  private codingKanbanHandler = (workspaceId: string) =>
-    (args: KanbanArgs) => kanbanOps(this.boardFor(workspaceId), args);
+  private codingKanbanHandler = (projectId: string) =>
+    (args: KanbanArgs) => kanbanOps(this.boardFor(projectId), args);
 
   // ── plan mode, for both in-window agents ──────────────────────────────────
 
@@ -566,12 +566,12 @@ export class WindowStore {
    *  from here, the screen's modes and the code-mode ask. The server's tools
    *  come with every turn start; these ride beside them. `mutating` names
    *  the ones plan mode refuses. */
-  private cliToolKit(sessionId: string, workspaceId: string): ToolKit {
+  private cliToolKit(sessionId: string, projectId: string): ToolKit {
     return {
       name: 'cli',
       build: async () => {
         const tools: Record<string, Tool> = {
-          ...codingKanbanTool(this.codingKanbanHandler(workspaceId)),
+          ...codingKanbanTool(this.codingKanbanHandler(projectId)),
           ...screenModeTools(this.screenOps(sessionId)),
         };
         return { tools, mutating: Object.keys(tools).filter((n) => /create|update|move|block|enter_code|set_mode/.test(n)) };
@@ -580,11 +580,11 @@ export class WindowStore {
   }
 
   /** The banner's model line before any turn: the row's provider/model, the
-   *  workspace's reasoning setting. After the first turn, turn-start's word. */
-  private async modelLineFor(row: { provider?: string | null; model?: string | null }, workspaceId: string): Promise<ModelLine> {
+   *  project's reasoning setting. After the first turn, turn-start's word. */
+  private async modelLineFor(row: { provider?: string | null; model?: string | null }, projectId: string): Promise<ModelLine> {
     let reasoning = '';
     try {
-      const st = await this.api('GET', `/settings?workspace=${encodeURIComponent(workspaceId)}`) as Record<string, { value?: unknown }>;
+      const st = await this.api('GET', `/settings?project=${encodeURIComponent(projectId)}`) as Record<string, { value?: unknown }>;
       reasoning = String(st.coding_reasoning?.value ?? '');
     } catch (e) { quiet('read the reasoning setting')(e); }
     return { provider: row.provider || 'unset', model: row.model || 'unset', reasoning };
@@ -721,7 +721,7 @@ export class WindowStore {
     if (!this.sessions.activate(id)) return;
     this.splash = false;
     const e = this.sessions.get(id);
-    if (e) this.opts.onSession?.({ id: e.id, branch: e.branch, workspaceId: e.workspaceId });
+    if (e) this.opts.onSession?.({ id: e.id, branch: e.branch, projectId: e.projectId });
     this.watchTasks();
     this.notify();
     // Cheap staleness check in the background: pull only when the server's
@@ -747,9 +747,9 @@ export class WindowStore {
     this.switchTo(target.id);
   }
 
-  // ── workspaces ────────────────────────────────────────────────────────────
+  // ── projects ────────────────────────────────────────────────────────────
 
-  /** The workspace LIST carries the same two facts per row: whoever reads it
+  /** The project LIST carries the same two facts per row: whoever reads it
    *  refreshes the display cache, so a later open needs no lookup. */
   seedWsFacts(list: { id: string; name?: string; displayName?: string | null; cardPrefix?: string }[]): void {
     for (const w of list) {
@@ -758,14 +758,14 @@ export class WindowStore {
     }
   }
 
-  /** The display name and card prefix for a workspace. A failure answers
-   *  with the id AND says why, so an id never passes for a workspace called
+  /** The display name and card prefix for a project. A failure answers
+   *  with the id AND says why, so an id never passes for a project called
    *  that. */
-  async wsFacts(id: string): Promise<WsFacts> {
+  async projectFacts(id: string): Promise<WsFacts> {
     const hit = this.wsNames.get(id);
     if (hit) return hit;
     try {
-      const w = await this.api('GET', `/workspaces/${id}`) as
+      const w = await this.api('GET', `/projects/${id}`) as
         { name?: string; displayName?: string | null; cardPrefix?: string };
       const found = w.displayName || w.name;
       if (!found) throw new Error('the server sent no name for it');
@@ -773,22 +773,22 @@ export class WindowStore {
       this.wsNames.set(id, facts);
       return facts;
     } catch (e) {
-      return { label: id, error: `could not read workspace ${id}'s name: ${(e as Error).message}` };
+      return { label: id, error: `could not read project ${id}'s name: ${(e as Error).message}` };
     }
   }
 
-  /** The name to say for a workspace id — the id itself when unknown, which
+  /** The name to say for a project id — the id itself when unknown, which
    *  is still an answer rather than a blank. */
   wsLabel(id: string): string { return this.wsNames.get(id)?.label ?? id; }
 
   /** What the toolbar calls the work in front of you: the card the session is
    *  building, named the way the board names it (`PHA-7`), and failing that
-   *  the workspace's prefix alone (`PHA`) so the line always says which
+   *  the project's prefix alone (`PHA`) so the line always says which
    *  project you are in. Nothing at all when neither is known. */
   get cardMark(): string | undefined {
     const e = this.sessions.active();
     if (!e) return undefined;
-    return e.card ?? this.wsNames.get(e.workspaceId)?.cardPrefix;
+    return e.card ?? this.wsNames.get(e.projectId)?.cardPrefix;
   }
 
   // ── opening and closing ───────────────────────────────────────────────────
@@ -815,7 +815,7 @@ export class WindowStore {
         this.notify();
       }
       // The session IS its agent: resumed (an id — /resume, a duplicate's
-      // copy) or made new (/new, /workspace). Resuming only reads; nothing
+      // copy) or made new (/new, /project). Resuming only reads; nothing
       // is held until the first turn.
       // The agent's handlers forward to the store entry by the agent's own
       // session id — known only once it exists. A failure before that is the
@@ -828,22 +828,22 @@ export class WindowStore {
       };
       const backend = this.opts.backend();
       const agent: CodingAgent = target.kind === 'new'
-        ? await CodingAgent.newSession(backend, handlers, target.workspaceId)
+        ? await CodingAgent.newSession(backend, handlers, target.projectId)
         : await CodingAgent.resumeSession(backend, handlers, target.kind === 'duplicate'
           ? ((await this.api('POST', `/sessions/${target.id}/duplicate`) as { id: string }).id)
           : target.id);
       made = agent;
-      agent.addToolKit(this.cliToolKit(agent.session.id, agent.session.workspaceId));
-      const row = await this.api('GET', `/sessions/${agent.session.id}`) as { id: string; branch: string; workspaceId: string;
+      agent.addToolKit(this.cliToolKit(agent.session.id, agent.session.projectId));
+      const row = await this.api('GET', `/sessions/${agent.session.id}`) as { id: string; branch: string; projectId: string;
         name?: string | null; agent?: string | null; card?: number | null; planMode?: boolean; pinned?: boolean;
         provider?: string | null; model?: string | null; transcript_updated_at?: string | null };
-      const summary = await this.modelLineFor(row, row.workspaceId);
+      const summary = await this.modelLineFor(row, row.projectId);
       const planMode = row.planMode === true;
       // The card this session builds, named the way the board names it
       // (`PHA-7`), resolved ONCE here where both facts are in hand.
-      const ws = await this.wsFacts(row.workspaceId);
+      const project = await this.projectFacts(row.projectId);
       const card = row.card != null
-        ? `${ws.cardPrefix ? `${ws.cardPrefix}-` : 'card '}${row.card}` : undefined;
+        ? `${project.cardPrefix ? `${project.cardPrefix}-` : 'card '}${row.card}` : undefined;
       // Whose is the text in the box? /new cleared it before these calls ran,
       // so anything there now was typed FOR the session being built — it goes
       // with the new entry. Any other open was picked from an overlay over a
@@ -854,7 +854,7 @@ export class WindowStore {
       const resumed = [...agent.session.messages];
       this.sessions.add({
         ...(target.kind === 'new' ? { draft: onScreen } : {}),
-        id: row.id, branch: row.branch, workspaceId: row.workspaceId,
+        id: row.id, branch: row.branch, projectId: row.projectId,
         name: row.name ?? null,
         agent, summary,
         syncStamp: row.transcript_updated_at ?? null,
@@ -862,8 +862,8 @@ export class WindowStore {
         pinned: row.pinned === true,
         ...(card ? { card } : {}),
         done: [
-          ...bannerParts({ workspace: ws.label, branch: row.branch }, summary),
-          ...(ws.error ? [{ kind: 'note', id: nextId('note'), text: ws.error } as Part] : []),
+          ...bannerParts({ project: project.label, branch: row.branch }, summary),
+          ...(project.error ? [{ kind: 'note', id: nextId('note'), text: project.error } as Part] : []),
           ...messagesToParts(resumed),
         ],
       });
@@ -873,11 +873,11 @@ export class WindowStore {
       this.watchTasks();
       this.watchSession(row.id);
       this.notify();
-      this.opts.onSession?.({ id: row.id, branch: row.branch, workspaceId: row.workspaceId });
+      this.opts.onSession?.({ id: row.id, branch: row.branch, projectId: row.projectId });
       return true;
     } catch (e) {
       const what = target.kind === 'new'
-        ? `could not start a session in ${this.wsLabel(target.workspaceId)}`
+        ? `could not start a session in ${this.wsLabel(target.projectId)}`
         : target.kind === 'duplicate' ? `could not duplicate session ${target.id}`
           : `could not open session ${target.id}`;
       this.opening = false;
@@ -918,7 +918,7 @@ export class WindowStore {
    *  /resume, /close, the Assistant's session_close) comes through here.
    *  Refused while a turn runs there. Closing the one on screen hands the
    *  screen to whatever you spoke to most recently; closing the LAST one opens
-   *  a fresh session in the same workspace, because close means "done with
+   *  a fresh session in the same project, because close means "done with
    *  this", never "leave me looking at nothing". A timed flash on the
    *  toolbar confirms it; `quiet` is for doors that say their own (trash). */
 
@@ -927,7 +927,7 @@ export class WindowStore {
     if (!target) return { error: 'no session is open — nothing to close' };
     const e = this.sessions.get(target);
     if (!e) return { error: `session ${target} is not open in this window — nothing to close` };
-    const { workspaceId } = e;
+    const { projectId } = e;
     const wasOnScreen = this.sessions.activeId === target;
     if (!this.sessions.close(target)) return { error: `a turn is running in ${target} — stop it first` };
     this.unwatchSession(target);
@@ -935,7 +935,7 @@ export class WindowStore {
     if (wasOnScreen) {
       const next = this.sessions.list()[0];
       if (next) this.switchTo(next.id);
-      else opened_new = await this.openSession({ kind: 'new', workspaceId });
+      else opened_new = await this.openSession({ kind: 'new', projectId });
       // Both of those restart the count's clock; a failed open leaves no
       // session on screen, and this is what clears the toolbar's count.
       if (!this.sessions.activeId) this.watchTasks();
@@ -955,13 +955,13 @@ export class WindowStore {
   // window has — which sessions are open here, which is mid-turn, this
   // window's lock id.
 
-  /** A rejected "add a workspace" stays on the form with the server's words. */
+  /** A rejected "add a project" stays on the form with the server's words. */
   addError: string | undefined;
-  /** The workspace rows the switcher names its sessions with, fetched the
+  /** The project rows the switcher names its sessions with, fetched the
    *  first time a screen needs them and never at launch. */
-  workspaceRows: WorkspaceInfo[] = [];
+  projectRows: ProjectInfo[] = [];
   /** The names the Assistant speaks with — the same cache, shared. */
-  readonly workspaces: WorkspaceDirectory;
+  readonly projects: ProjectDirectory;
 
   /** `query` is the filter text these rows ANSWER (the screen's empty
    *  state reads it) — the live text is `pickerQuery`, which runs ahead.
@@ -980,11 +980,11 @@ export class WindowStore {
    *  Empty = no filter; cleared when the picker opens and when filter mode
    *  ends. */
   pickerQuery = '';
-  /** ←→ on /resume: one workspace's sessions, or null for all of them.
+  /** ←→ on /resume: one project's sessions, or null for all of them.
    *  A fetch parameter like the two above; the `/` text searches inside it.
    *  Kept across opens like showBackground — the list comes back as you
    *  left it, and the footer key shows the filter is on. */
-  pickerWorkspace: string | null = null;
+  pickerProject: string | null = null;
   private pickerQueryClock: ReturnType<typeof setTimeout> | null = null;
   private morePickerInFlight = false;
 
@@ -1005,23 +1005,23 @@ export class WindowStore {
    *  it never holds the process open. */
   private taskClock: ReturnType<typeof setInterval> | null = null;
 
-  // ── /resume and /workspace ────────────────────────────────────────────────
+  // ── /resume and /project ────────────────────────────────────────────────
 
   /** The list's FILTERS are the server's (`typed`, `background`): a page is a
    *  page on screen, and `total` is the count for exactly these filters. */
   private listQuery(): string {
     return `typed=true${this.showBackground ? '' : '&background=false'}`
       + (this.pickerQuery.trim() ? `&q=${encodeURIComponent(this.pickerQuery.trim())}` : '')
-      + (this.pickerWorkspace ? `&workspace=${encodeURIComponent(this.pickerWorkspace)}` : '');
+      + (this.pickerProject ? `&project=${encodeURIComponent(this.pickerProject)}` : '');
   }
 
-  /** ←→ on /resume: the next workspace round the ring — all, then each
-   *  workspace in the order /workspace lists them (the server's), wrapping.
-   *  The list re-reads at once; a workspace with no sessions shows as such. */
-  cyclePickerWorkspace(dir: 1 | -1): void {
-    const ring: (string | null)[] = [null, ...this.workspaceRows.map((w) => w.id)];
-    const at = ring.indexOf(this.pickerWorkspace);
-    this.pickerWorkspace = ring[(Math.max(at, 0) + dir + ring.length) % ring.length] ?? null;
+  /** ←→ on /resume: the next project round the ring — all, then each
+   *  project in the order /project lists them (the server's), wrapping.
+   *  The list re-reads at once; a project with no sessions shows as such. */
+  cyclePickerProject(dir: 1 | -1): void {
+    const ring: (string | null)[] = [null, ...this.projectRows.map((w) => w.id)];
+    const at = ring.indexOf(this.pickerProject);
+    this.pickerProject = ring[(Math.max(at, 0) + dir + ring.length) % ring.length] ?? null;
     this.notify();
     void this.refreshPicker().catch(quiet('refresh the session list'));
   }
@@ -1044,7 +1044,7 @@ export class WindowStore {
    *  substring, case-insensitive) applied to the two facts such a row has. */
   private matchesPickerQuery(e: LoadedSession): boolean {
     const q = this.pickerQuery.trim().toLowerCase();
-    return (!this.pickerWorkspace || e.workspaceId === this.pickerWorkspace)
+    return (!this.pickerProject || e.projectId === this.pickerProject)
       && (!q || (e.name ?? '').toLowerCase().includes(q) || e.branch.toLowerCase().includes(q));
   }
 
@@ -1070,7 +1070,7 @@ export class WindowStore {
     const extras: SessionInfo[] = this.sessions.list()
       .filter((e) => !seen.has(e.id) && (e.lastMessageAt > 0 || e.pinned) && this.matchesPickerQuery(e))
       .map((e) => ({
-        id: e.id, workspaceId: e.workspaceId, branch: e.branch, status: 'active', agent: null,
+        id: e.id, projectId: e.projectId, branch: e.branch, status: 'active', agent: null,
         model: e.summary.model, pinned: e.pinned,
         tokensInput: e.usage.input || null, tokensOutput: e.usage.output || null,
         tokensCacheRead: e.usage.cacheRead || null, tokensCacheWrite: e.usage.cacheWrite || null,
@@ -1095,15 +1095,15 @@ export class WindowStore {
     const filter = this.listQuery();
     const want = filter !== this.picker?.filter
       ? PICKER_PAGE : Math.max(this.picker?.sessions.length ?? 0, PICKER_PAGE);
-    // The workspace list is read ONCE, at open; after that the settings feed
-    // says when a workspace row moved (create, patch, delete) and
-    // settingChanged re-reads it into workspaceRows, which the screen draws.
-    const [ws, got] = await Promise.all([
-      this.picker ? this.workspaceRows : this.api('GET', '/workspaces') as Promise<WorkspaceInfo[]>,
+    // The project list is read ONCE, at open; after that the settings feed
+    // says when a project row moved (create, patch, delete) and
+    // settingChanged re-reads it into projectRows, which the screen draws.
+    const [projects, got] = await Promise.all([
+      this.picker ? this.projectRows : this.api('GET', '/projects') as Promise<ProjectInfo[]>,
       this.api('GET', `/sessions?${filter}&limit=${want}`),
     ]);
     if (seq !== this.pickerSeq) return;
-    if (!this.picker) this.seeWorkspaces(ws);
+    if (!this.picker) this.seeProjects(projects);
     const { sessions: ss, total } = got as { sessions: SessionInfo[]; total: number };
     this.picker = { ...this.withOpenHere(ss, total), end: ss.length < want, query: this.pickerQuery, filter };
     this.notify();
@@ -1140,7 +1140,7 @@ export class WindowStore {
 
   /** Fetch first, THEN show — a server that cannot answer leaves you where you
    *  were with a note, never on an empty screen. */
-  openPicker = async (which: 'workspace' | 'resume'): Promise<void> => {
+  openPicker = async (which: 'project' | 'resume'): Promise<void> => {
     try {
       this.picker = null;   // an OPEN reads both lists fresh
       this.pickerQuery = '';
@@ -1148,7 +1148,7 @@ export class WindowStore {
       this.pickerNotice = undefined;
       this.showOverlay(pickerScreen(this, which));
     } catch (e) {
-      this.note(`could not list ${which === 'resume' ? 'sessions' : 'workspaces'}: ${(e as Error).message}`);
+      this.note(`could not list ${which === 'resume' ? 'sessions' : 'projects'}: ${(e as Error).message}`);
     }
   };
 
@@ -1283,86 +1283,86 @@ export class WindowStore {
     this.trash(e.id, this.labelOf(e), { refuse: this.note, done: () => this.setToast('Session trashed') });
 
   /** ctrl+n: the sessions open in this window. It shows FIRST and fills the
-   *  workspace names in behind — the rows read fine as ids until they land. */
+   *  project names in behind — the rows read fine as ids until they land. */
   openSwitcher(): void {
     this.showOverlay(switcherScreen(this));
-    if (this.workspaceRows.length) return;
+    if (this.projectRows.length) return;
     void (async () => {
-      try { this.seeWorkspaces(await this.api('GET', '/workspaces') as unknown as WorkspaceInfo[]); this.notify(); }
-      catch (e) { this.note(`could not list workspaces: ${(e as Error).message}`); }
+      try { this.seeProjects(await this.api('GET', '/projects') as unknown as ProjectInfo[]); this.notify(); }
+      catch (e) { this.note(`could not list projects: ${(e as Error).message}`); }
     })();
   }
 
-  /** `/new <workspace>` and `/workspace <workspace>`: the rows the slash
+  /** `/new <project>` and `/project <project>`: the rows the slash
    *  menu offers — the card prefix (`PHA`, the status bar's and /resume's
-   *  name for a workspace) and the repo (`owner/name`), nothing twice. Tab
+   *  name for a project) and the repo (`owner/name`), nothing twice. Tab
    *  fills the repo name, never the prefix: prefixes are three letters and
    *  two repos can share one. The one you are in leads and says so; the
-   *  rest in the server's order, the same order /workspace lists them. Read
-   *  on every keystroke and render, so it only READS: workspaceRows is
+   *  rest in the server's order, the same order /project lists them. Read
+   *  on every keystroke and render, so it only READS: projectRows is
    *  filled by boot, the pickers and the settings feed, never from here. */
   argChoices: Choices = () => {
-    const here = this.sessions.active()?.workspaceId;
-    const row = (w: WorkspaceInfo) => ({
+    const here = this.sessions.active()?.projectId;
+    const row = (w: ProjectInfo) => ({
       name: w.cardPrefix ?? label(w), fill: w.name,
       summary: `${w.owner}/${w.name}${w.id === here ? ' · here' : ''}`,
     });
-    return [...this.workspaceRows.filter((w) => w.id === here), ...this.workspaceRows.filter((w) => w.id !== here)].map(row);
+    return [...this.projectRows.filter((w) => w.id === here), ...this.projectRows.filter((w) => w.id !== here)].map(row);
   };
 
-  /** The workspace a typed argument names — the repo name tab fills, or
+  /** The project a typed argument names — the repo name tab fills, or
    *  anything else a row showed: `owner/name`, the card prefix, the display
-   *  name. Case does not matter. One workspace, or the reason there is not:
+   *  name. Case does not matter. One project, or the reason there is not:
    *  a shared prefix names two and the note lists them by repo, which is
    *  what to type instead. */
-  private findWorkspace(arg: string): WorkspaceInfo | { error: string } {
+  private findProject(arg: string): ProjectInfo | { error: string } {
     const typed = arg.toLowerCase();
-    const names = (w: WorkspaceInfo) => [w.name, `${w.owner}/${w.name}`, w.cardPrefix, w.displayName];
-    const hits = this.workspaceRows.filter((w) => names(w).some((n) => n?.toLowerCase() === typed));
+    const names = (w: ProjectInfo) => [w.name, `${w.owner}/${w.name}`, w.cardPrefix, w.displayName];
+    const hits = this.projectRows.filter((w) => names(w).some((n) => n?.toLowerCase() === typed));
     if (hits.length === 1) return hits[0];
     if (hits.length > 1) return { error: `"${arg}" is ambiguous: ${hits.map((w) => `${w.owner}/${w.name}`).join(', ')}` };
-    return { error: `unknown workspace "${arg}" — /workspace lists them` };
+    return { error: `unknown project "${arg}" — /project lists them` };
   }
 
-  /** One workspace list, three consumers: the switcher's rows, the banner's
+  /** One project list, three consumers: the switcher's rows, the banner's
    *  name cache, and the names the Assistant speaks with. */
-  private seeWorkspaces(rows: WorkspaceInfo[]): void {
-    this.workspaceRows = rows;
+  private seeProjects(rows: ProjectInfo[]): void {
+    this.projectRows = rows;
     this.seedWsFacts(rows);
-    this.workspaces.offer(rows);
+    this.projects.offer(rows);
     this.notify();
   }
 
-  /** `e` on a /workspace row: that workspace's settings, on their own screen
+  /** `e` on a /project row: that project's settings, on their own screen
    *  (its close reopens the list). */
-  editWorkspace(id: string): void {
-    const w = this.workspaceRows.find((x) => x.id === id);
-    if (w) this.showOverlay(workspaceSettingsScreen(this, w));
+  editProject(id: string): void {
+    const w = this.projectRows.find((x) => x.id === id);
+    if (w) this.showOverlay(projectSettingsScreen(this, w));
   }
 
   /** The add form, with any previous complaint cleared. */
-  startAddWorkspace(): void { this.addError = undefined; this.showOverlay(addWorkspaceScreen(this)); }
+  startAddProject(): void { this.addError = undefined; this.showOverlay(addProjectScreen(this)); }
 
-  /** The add form's submit. Adding a workspace is only useful if you then work
+  /** The add form's submit. Adding a project is only useful if you then work
    *  in it, so it opens a session there; the confirmation goes AFTER that
    *  switch, into the session you land in, because noting it first writes it
    *  to the session you are leaving where the switch wipes it off unread. A
    *  rejected POST stays on the form with the server's own words, which
    *  distinguish already_exists from a token that cannot create. */
-  addWorkspace = async (req: NewWorkspaceRequest): Promise<void> => {
+  addProject = async (req: NewProjectRequest): Promise<void> => {
     // Cleared before the call so a second failure with the SAME message is
     // still a change of the error the form sees.
     this.addError = undefined;
     this.notify();
     try {
-      const w = await this.api('POST', '/workspaces', req) as { id: string; owner: string; name: string };
+      const w = await this.api('POST', '/projects', req) as { id: string; owner: string; name: string };
       this.dismissOverlay();
-      await this.openSession({ kind: 'new', workspaceId: w.id });
-      this.note(`workspace ${w.owner}/${w.name} added`);
+      await this.openSession({ kind: 'new', projectId: w.id });
+      this.note(`project ${w.owner}/${w.name} added`);
     } catch (e) {
       // The form is still up and reads this on its next draw — it is NOT
       // re-shown, which would remount it and lose what was typed.
-      this.addError = (e as Error).message.replace(/^POST \/workspaces: /, '');
+      this.addError = (e as Error).message.replace(/^POST \/projects: /, '');
       this.notify();
     }
   };
@@ -1434,7 +1434,7 @@ export class WindowStore {
         const e = store.get(id);
         if (!e) return;
         const row = await this.api('GET', `/sessions/${id}`) as { provider?: string | null; model?: string | null };
-        store.setModelLine(id, await this.modelLineFor(row, e.workspaceId));
+        store.setModelLine(id, await this.modelLineFor(row, e.projectId));
       },
       // Named, because the toast is the window's, not the session's: a
       // failure on a session in the background says which one.
@@ -1472,29 +1472,29 @@ export class WindowStore {
 
   // ── /archived ─────────────────────────────────────────────────────────────
 
-  /** The workspace's archived cards, fetched for the screen alone: the board
+  /** The project's archived cards, fetched for the screen alone: the board
    *  GET never carries the archive, because the board does not render it and
    *  the archive grows forever while the board stays small. Pages like
    *  /resume. Shared with the board's [v]. */
-  openArchived = async (workspaceId: string): Promise<void> => {
+  openArchived = async (projectId: string): Promise<void> => {
     try {
       const d = await this.api('GET',
-        `/workspaces/${workspaceId}/cards?archived=only&limit=${PICKER_PAGE}`) as { cards: Card[]; total?: number };
+        `/projects/${projectId}/cards?archived=only&limit=${PICKER_PAGE}`) as { cards: Card[]; total?: number };
       this.archivedEnd = d.cards.length < PICKER_PAGE;
       this.archived = d.cards;
       this.archivedTotal = d.total;
       this.archivedNotice = undefined;
-      this.showOverlay(archivedScreen(this, workspaceId));
+      this.showOverlay(archivedScreen(this, projectId));
     } catch (e) { this.note(`could not list archived cards: ${(e as Error).message}`); }
   };
 
   /** The next page, appended in place — morePicker's shape. */
-  moreArchived = async (workspaceId: string): Promise<void> => {
+  moreArchived = async (projectId: string): Promise<void> => {
     const tail = this.archived[this.archived.length - 1];
     if (this.archivedEnd || !tail || this.moreArchivedInFlight) return;
     this.moreArchivedInFlight = true;
     try {
-      const d = await this.api('GET', `/workspaces/${workspaceId}/cards?archived=only&limit=${PICKER_PAGE}`
+      const d = await this.api('GET', `/projects/${projectId}/cards?archived=only&limit=${PICKER_PAGE}`
         + `&before=${encodeURIComponent(tail.updated_at)}&before_id=${tail.id}`) as { cards: Card[]; total?: number };
       this.archivedEnd = d.cards.length < PICKER_PAGE;
       this.archivedTotal = d.total;
@@ -1508,20 +1508,20 @@ export class WindowStore {
   /** [r] on /archived: a direct PATCH, and the notice names the destination.
    *  The card returns to the column it was archived from, which can wake the
    *  looper. */
-  restoreCard = async (workspaceId: string, card: Card): Promise<void> => {
+  restoreCard = async (projectId: string, card: Card): Promise<void> => {
     try {
-      await this.api('PATCH', `/workspaces/${workspaceId}/cards/${card.id}`, { archived: false });
+      await this.api('PATCH', `/projects/${projectId}/cards/${card.id}`, { archived: false });
       this.archived = this.archived.filter((x) => x.id !== card.id);
       this.archivedNotice = `restored ${card.number}-${card.title} → ${card.status.replace(/_/g, ' ')}`;
-      void this.boardFor(workspaceId).load();   // the card is back on the board
+      void this.boardFor(projectId).load();   // the card is back on the board
     } catch (e) { this.archivedNotice = `restore failed: ${(e as Error).message}`; }
     this.notify();
   };
 
   /** [enter] on /archived: the solo editor renders from the board store, which
    *  never holds archived cards on its own — seat this one first. */
-  openArchivedCard = (workspaceId: string, card: Card): void => {
-    this.boardFor(workspaceId).adoptCard(card);
+  openArchivedCard = (projectId: string, card: Card): void => {
+    this.boardFor(projectId).adoptCard(card);
     // esc from here is the chat: the archive screen it came from is a menu,
     // and going "back" to a board the user never opened would be a surprise.
     this.openCard(card.number, 'chat');
@@ -1587,7 +1587,7 @@ export class WindowStore {
   get showSidebar(): boolean { return this.sidebar ?? this.voiceEnabled; }
 
   private get assistantDeps() {
-    return { api: this.api, clientId: this.opts.clientId ?? '', workspaces: this.workspaces };
+    return { api: this.api, clientId: this.opts.clientId ?? '', projects: this.projects };
   }
 
   /** Voice follows the setting: on at launch when enabled, stopped with the
@@ -1624,11 +1624,11 @@ export class WindowStore {
       const active = this.sessions.active();
       if (!active) return;
       if (this.assistant) {
-        await this.assistant.follow(active.workspaceId, active.id);
+        await this.assistant.follow(active.projectId, active.id);
         return;
       }
       const agent = await AssistantAgent.newSession(this.opts.backend(), this.voice.handlers(),
-        { workspaceId: active.workspaceId, activeSessionId: active.id });
+        { projectId: active.projectId, activeSessionId: active.id });
       agent.addToolKit(assistantToolKit(this, this.assistantDeps));
       this.assistant = agent;
       this.voice.setAgent(agent);
@@ -1683,12 +1683,12 @@ export class WindowStore {
       // which keys shape the assistant: the server owns that rule.
       const running = this.voice.running;
       if (key === undefined) {
-        // A server event names no key: every consumer re-reads. Workspace and
+        // A server event names no key: every consumer re-reads. Project and
         // board rows carry resolved settings too (card prefix, loop defaults).
         this.wsNames.clear();
-        void this.api('GET', '/workspaces')
-          .then((ws) => this.seeWorkspaces(ws as unknown as WorkspaceInfo[]))
-          .catch(quiet('reload workspace settings'));
+        void this.api('GET', '/projects')
+          .then((projects) => this.seeProjects(projects as unknown as ProjectInfo[]))
+          .catch(quiet('reload project settings'));
         for (const b of this.boards.values()) void b.load().catch(quiet('reload board settings'));
         if (cfg.voice_enabled) this.startVoice(cfg);
         else { this.voice.stop(); this.sidebar = null; }
@@ -1756,16 +1756,16 @@ export class WindowStore {
     const session = this.sessions.active();
     switch (name) {
       case 'new': {
-        // Named: that workspace (findWorkspace takes anything a row showed).
-        // Not named and no session yet = no workspace to mean "here": the
+        // Named: that project (findProject takes anything a row showed).
+        // Not named and no session yet = no project to mean "here": the
         // picker chooses. openSession clears the pane and puts the splash up before
         // the network calls run.
         if (args) {
-          const w = this.findWorkspace(args);
+          const w = this.findProject(args);
           if ('error' in w) { this.note(w.error); return; }
-          await this.openSession({ kind: 'new', workspaceId: w.id });
-        } else if (session) await this.openSession({ kind: 'new', workspaceId: session.workspaceId });
-        else await this.openPicker('workspace');
+          await this.openSession({ kind: 'new', projectId: w.id });
+        } else if (session) await this.openSession({ kind: 'new', projectId: session.projectId });
+        else await this.openPicker('project');
         return;
       }
       case 'resume': await this.openPicker('resume'); return;
@@ -1789,15 +1789,15 @@ export class WindowStore {
         if (!session) { this.note('no session is open — nothing to trash'); return; }
         await this.trashActive(session);
         return;
-      case 'workspace': {
-        // Named: that workspace's settings — the screen `e` opens on its
+      case 'project': {
+        // Named: that project's settings — the screen `e` opens on its
         // picker row, one tab away instead of a list and a keypress. Bare:
         // the picker, to start a session somewhere else.
         if (args) {
-          const w = this.findWorkspace(args);
+          const w = this.findProject(args);
           if ('error' in w) { this.note(w.error); return; }
-          this.editWorkspace(w.id);
-        } else await this.openPicker('workspace');
+          this.editProject(w.id);
+        } else await this.openPicker('project');
         return;
       }
       case 'rename': {
@@ -1838,8 +1838,8 @@ export class WindowStore {
       }
       case 'kanban': this.openBoard(); return;
       case 'archived':
-        if (!session) { this.note('no session is open — archived cards belong to a workspace; /workspace starts a session in one'); return; }
-        await this.openArchived(session.workspaceId);
+        if (!session) { this.note('no session is open — archived cards belong to a project; /project starts a session in one'); return; }
+        await this.openArchived(session.projectId);
         return;
       case 'tasks': await this.openTasks(); return;
       case 'plan': {
@@ -1961,10 +1961,10 @@ export class WindowStore {
     // message is sent without it, but a slash command or an empty line is
     // refused — silently dropping part of a command changes what it runs.
     const expanded = this.pastes.expand(text);
-    // The trailing space is MEANING on a slash line: `/new ` is the workspace
+    // The trailing space is MEANING on a slash line: `/new ` is the project
     // list, `/new` is the command list, and the highlighted row is an index
     // into whichever one is up. Trimming it off here once turned a picked
-    // workspace into a bare /new — a new session right where you were.
+    // project into a bare /new — a new session right where you were.
     const line = expanded.text.trimStart();
     const msg = line.trimEnd();
     if (expanded.missing.length) {
@@ -2015,7 +2015,7 @@ export class WindowStore {
     }
     // No session on screen: the words have no conversation to land in. Say
     // where to get one instead of dropping them silently.
-    if (!session) { this.note('no session is open — /workspace starts one, /resume reopens an earlier one'); return; }
+    if (!session) { this.note('no session is open — /project starts one, /resume reopens an earlier one'); return; }
     // Addressed to the session on screen, and it keeps running there whether
     // or not you stay to watch. Typed while one runs, it waits its turn.
     this.sessions.say(session.id, msg);
@@ -2023,7 +2023,7 @@ export class WindowStore {
 
   // ── launch ────────────────────────────────────────────────────────────────
 
-  /** The launch, as the same flow /new and /workspace run, so the window is
+  /** The launch, as the same flow /new and /project run, so the window is
    *  ALREADY OPEN when anything goes wrong: a failure lands as words in the
    *  pane and the screens that fix it are a slash command away, never a stack
    *  trace before the app exists. */
@@ -2035,17 +2035,17 @@ export class WindowStore {
     if (want.resumeId) { await this.openSession({ kind: 'open', id: want.resumeId }); return; }
     // One parallel ask, then one draw. The pane stays blank until both land:
     // whether a session opens (ghost) or the picker comes up depends on the
-    // workspace count AND the setting, and drawing before knowing either is
+    // project count AND the setting, and drawing before knowing either is
     // a guess — the old guess (ghost first) flashed under the picker.
-    let ws: WorkspaceInfo[];
+    let projects: ProjectInfo[];
     let skipPicker: boolean;
     try {
       const [rows, settings] = await Promise.all([
-        this.api('GET', '/workspaces') as unknown as Promise<WorkspaceInfo[]>,
+        this.api('GET', '/projects') as unknown as Promise<ProjectInfo[]>,
         this.readSettings(),
       ]);
-      ws = rows;
-      skipPicker = settings.boot_last_workspace === true;
+      projects = rows;
+      skipPicker = settings.boot_last_project === true;
     } catch (e) {
       // The request function already named the server and the failure; what
       // goes under it is the fix, and there are two: the server answered and
@@ -2054,18 +2054,18 @@ export class WindowStore {
       if ((e as { code?: string }).code === 'unauthorized') {
         this.note('fix the key under /server — a server box prints its key with `phantom-backend key`; a dev checkout gets it from ./scripts/setup.sh');
       } else {
-        this.note('have a server? its address and key go under /server, then /workspace starts a session');
+        this.note('have a server? its address and key go under /server, then /project starts a session');
         this.note('need one? quit and run `phantom-cli setup-backend`');
       }
       return;
     }
-    this.seeWorkspaces(ws);
+    this.seeProjects(projects);
     // Nothing registered yet: go straight to adding one. An empty install has
     // to be able to start from here, not from curl.
-    if (!ws.length) { this.startAddWorkspace(); return; }
-    if (ws.length === 1) { await this.openSession({ kind: 'new', workspaceId: ws[0].id }); return; }
-    // boot_last_workspace (a server setting, on by default) skips the picker:
-    // a new session in the workspace of the newest session you drove yourself.
+    if (!projects.length) { this.startAddProject(); return; }
+    if (projects.length === 1) { await this.openSession({ kind: 'new', projectId: projects[0].id }); return; }
+    // boot_last_project (a server setting, on by default) skips the picker:
+    // a new session in the project of the newest session you drove yourself.
     // The ghost goes up NOW — the decision is made — and the session-list
     // read runs behind it. Off, the picker comes up on the blank pane and
     // the ghost follows the pick.
@@ -2073,11 +2073,11 @@ export class WindowStore {
       this.setSplash(true);
       try {
         const ss = ((await this.api('GET', '/sessions')) as unknown as { sessions: SessionInfo[] }).sessions;
-        const last = lastWorkspaceId(ws, ss);
-        if (last) { await this.openSession({ kind: 'new', workspaceId: last }); return; }
-      } catch (e) { this.note(`could not reopen your last workspace: ${(e as Error).message}`); }
+        const last = lastProjectId(projects, ss);
+        if (last) { await this.openSession({ kind: 'new', projectId: last }); return; }
+      } catch (e) { this.note(`could not reopen your last project: ${(e as Error).message}`); }
     }
-    await this.openPicker('workspace');
+    await this.openPicker('project');
   };
 
   // ── the end ───────────────────────────────────────────────────────────────

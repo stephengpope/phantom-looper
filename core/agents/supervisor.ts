@@ -15,9 +15,9 @@ export class SupervisorAgent extends Agent {
   };
 
   static newSession(backend: PhantomBackend, handlers: AgentHandlers,
-    opts: { workspaceId: string; folderId: string; cardId: number }): Promise<SupervisorAgent> {
+    opts: { projectId: string; folderId: string; cardId: number }): Promise<SupervisorAgent> {
     return SupervisorAgent.create(backend, handlers, (b) => b.call('POST', '/sessions/supervisor',
-      { workspace_id: opts.workspaceId, folder_id: opts.folderId, card_id: opts.cardId,
+      { project_id: opts.projectId, folder_id: opts.folderId, card_id: opts.cardId,
         system_prompt_layout: SupervisorAgent.systemPromptLayout }));
   }
 }

@@ -23,7 +23,7 @@
 import fs from 'node:fs/promises';
 import { and, eq, inArray, isNotNull, isNull, lt, not, or, count } from 'drizzle-orm';
 import type { Db } from './db/client.js';
-import { folders, sessions, cards, type FolderRow, type WorkspaceRow } from './db/schema.js';
+import { folders, sessions, cards, type FolderRow, type ProjectRow } from './db/schema.js';
 import type { SessionEvents } from './api/sessionEvents.js';
 import type { Settings } from './settings.js';
 import { git, cloneFresh, checkoutBranch, classifyGitFailure, localState, type WorkState } from './git/git.js';
@@ -43,7 +43,7 @@ export class FolderError extends Error {
 /** A folder as the work-state refresh walks it: what the git read needs,
  *  plus the card number its board event is named by. */
 export interface WorkRefreshFolder {
-  id: string; workspaceId: string; branch: string; work: string | null; card: number | null;
+  id: string; projectId: string; branch: string; work: string | null; card: number | null;
 }
 
 export class Folders {
@@ -76,21 +76,21 @@ export class Folders {
    *  something is wrong, and a copy that quietly starts at base loses the
    *  work. A remote failure is classified into a FolderError so the API
    *  answers with its meaning; anything unrecognised keeps its own error. */
-  private async obtain(workspace: WorkspaceRow, id: string, branch: string, fromBranch?: string):
+  private async obtain(project: ProjectRow, id: string, branch: string, fromBranch?: string):
   Promise<{ head: string; found: 'existing' | 'new'; claimed: boolean }> {
     const dest = sessionDir(this.paths, id);
     const dir = repoDir(this.paths, id);
-    const auth = await resolveAuth(this.settings, workspace);
+    const auth = await resolveAuth(this.settings, project);
     try {
-      const claimed = await claimSlot(this.paths, workspace.owner, workspace.name, workspace.baseBranch, dest);
+      const claimed = await claimSlot(this.paths, project.owner, project.name, project.baseBranch, dest);
       if (claimed) {
         // Pool slots are pristine by construction, so the unguarded catch-up is
         // safe — and mandatory: a slot stocked days ago is days behind.
-        await git(dir, ['fetch', 'origin', workspace.baseBranch], auth);
-        await git(dir, ['reset', '--hard', `origin/${workspace.baseBranch}`]);
+        await git(dir, ['fetch', 'origin', project.baseBranch], auth);
+        await git(dir, ['reset', '--hard', `origin/${project.baseBranch}`]);
       } else {
-        const depth = await this.settings.resolve('initial_history_depth', { workspace });
-        await cloneFresh(dir, auth, workspace.baseBranch, depth);
+        const depth = await this.settings.resolve('initial_history_depth', { project });
+        await cloneFresh(dir, auth, project.baseBranch, depth);
         await fs.mkdir(`${dest}/scratch`, { recursive: true });
       }
       await fs.mkdir(`${dest}/logs`, { recursive: true }); // detached exec logs — outside repo/, or add -A commits them
@@ -100,7 +100,7 @@ export class Folders {
       // tracking ref and every origin/<branch> ancestry check would read as
       // no_upstream forever. One added refspec scopes tracking to exactly this
       // branch; on base there is nothing to add.
-      if (branch !== workspace.baseBranch) {
+      if (branch !== project.baseBranch) {
         await git(dir, ['config', '--add', 'remote.origin.fetch',
           `+refs/heads/${branch}:refs/remotes/origin/${branch}`]);
       }
@@ -129,7 +129,7 @@ export class Folders {
     } catch (e) {
       if (e instanceof FolderError) throw e;
       const why = classifyGitFailure(e, { hadToken: !!auth.pat });
-      if (why) throw new FolderError(why.code, `cannot check out ${workspace.owner}/${workspace.name}: ${why.message}`, why.retryable);
+      if (why) throw new FolderError(why.code, `cannot check out ${project.owner}/${project.name}: ${why.message}`, why.retryable);
       throw e;
     }
   }
@@ -139,12 +139,12 @@ export class Folders {
    *  it was cut from (`cut_from_sha`, what /git/status measures against).
    *  `fromBranch` cuts it from origin's copy of that branch instead of base
    *  (the duplicate route). */
-  async checkout(workspace: WorkspaceRow, id: string, opts: { fromBranch?: string } = {}): Promise<FolderRow> {
-    const branch = `${workspace.branchPrefix}/${id}`;
-    const { head, found, claimed } = await this.obtain(workspace, id, branch, opts.fromBranch);
+  async checkout(project: ProjectRow, id: string, opts: { fromBranch?: string } = {}): Promise<FolderRow> {
+    const branch = `${project.branchPrefix}/${id}`;
+    const { head, found, claimed } = await this.obtain(project, id, branch, opts.fromBranch);
     const [row] = await this.db.insert(folders)
-      .values({ id, workspaceId: workspace.id, branch, cutFromSha: head, createdAt: new Date() }).returning();
-    log.info({ folder: id, workspace: `${workspace.owner}/${workspace.name}`, branch, found, claimed, cutFromSha: head },
+      .values({ id, projectId: project.id, branch, cutFromSha: head, createdAt: new Date() }).returning();
+    log.info({ folder: id, project: `${project.owner}/${project.name}`, branch, found, claimed, cutFromSha: head },
       'checkout made');
     return row;
   }
@@ -153,8 +153,8 @@ export class Folders {
    *  obtaining, then the branch the ROW remembers checked out from origin —
    *  the work is on it, and the checkout carries on where it stopped. The
    *  cut point stays what it was. */
-  async restore(folder: FolderRow, workspace: WorkspaceRow): Promise<void> {
-    const { found } = await this.obtain(workspace, folder.id, folder.branch);
+  async restore(folder: FolderRow, project: ProjectRow): Promise<void> {
+    const { found } = await this.obtain(project, folder.id, folder.branch);
     await this.db.update(folders).set({ onDisk: true, lastUsedAt: new Date() }).where(eq(folders.id, folder.id));
     log.info({ folder: folder.id, branch: folder.branch, found }, 'checkout restored');
     this.changed(folder.id);
@@ -177,11 +177,11 @@ export class Folders {
     this.changed(folder.id);
   }
 
-  /** Folders in a workspace whose files exist — what stands in the way of
+  /** Folders in a project whose files exist — what stands in the way of
    *  deleting it (files and containers; a conversation holds neither). */
-  async countOnDisk(workspaceId: string): Promise<number> {
+  async countOnDisk(projectId: string): Promise<number> {
     const [{ n }] = await this.db.select({ n: count() }).from(folders)
-      .where(and(eq(folders.workspaceId, workspaceId), eq(folders.onDisk, true)));
+      .where(and(eq(folders.projectId, projectId), eq(folders.onDisk, true)));
     return n;
   }
 
@@ -255,7 +255,7 @@ export class Folders {
   async listForWorkRefresh(ids: string[]): Promise<WorkRefreshFolder[]> {
     if (!ids.length) return [];
     return this.db.select({
-      id: folders.id, workspaceId: folders.workspaceId, branch: folders.branch, work: folders.work,
+      id: folders.id, projectId: folders.projectId, branch: folders.branch, work: folders.work,
       card: cards.number,
     }).from(folders)
       .leftJoin(sessions, eq(sessions.id, folders.id))
@@ -270,7 +270,7 @@ export class Folders {
       ? and(isNotNull(folders.work), not(inArray(folders.id, activeIds)))
       : isNotNull(folders.work);
     return this.db.select({
-      id: folders.id, workspaceId: folders.workspaceId, branch: folders.branch, work: folders.work,
+      id: folders.id, projectId: folders.projectId, branch: folders.branch, work: folders.work,
       card: cards.number,
     }).from(folders)
       .leftJoin(sessions, eq(sessions.id, folders.id))

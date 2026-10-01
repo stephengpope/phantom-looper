@@ -1,4 +1,4 @@
-// Adding a workspace without leaving the app. Two shapes, because they are
+// Adding a project without leaving the app. Two shapes, because they are
 // genuinely different acts: point at a repository that exists, or create one on
 // GitHub and seed its base branch.
 //
@@ -26,7 +26,7 @@ import { Screen } from './Screen.js';
 import { ago } from './Launcher.js';
 import type { Api } from './Settings.js';
 
-export interface NewWorkspaceRequest {
+export interface NewProjectRequest {
   url: string; create?: boolean; private?: boolean; display_name?: string;
 }
 
@@ -34,7 +34,7 @@ export interface NewWorkspaceRequest {
 export interface GitHubRepo {
   owner: string; name: string; private: boolean; defaultBranch: string;
   pushedAt: string | null;
-  /** A workspace already points at it. */
+  /** A project already points at it. */
   added: boolean;
 }
 
@@ -48,9 +48,9 @@ type Step =
 // A row of the picker: a listed repo, or whatever was typed.
 type Pick = { repo: GitHubRepo } | { typed: string };
 
-export function NewWorkspace({ api, onSubmit, onCancel, error, now }: {
+export function NewProject({ api, onSubmit, onCancel, error, now }: {
   api: Api;
-  onSubmit: (req: NewWorkspaceRequest) => void;
+  onSubmit: (req: NewProjectRequest) => void;
   onCancel: () => void;
   /** Whatever the server said last time, shown so it can be corrected. */
   error?: string;
@@ -105,7 +105,7 @@ export function NewWorkspace({ api, onSubmit, onCancel, error, now }: {
 
   if (step.at === 'kind') {
     return (
-      <Screen title="add a workspace" error={error}
+      <Screen title="add a project" error={error}
         footer={[{ key: 'enter', does: 'choose' }, { key: 'esc', does: 'back' }]}>
         <SelectList
           choices={[
@@ -122,7 +122,7 @@ export function NewWorkspace({ api, onSubmit, onCancel, error, now }: {
   }
 
   if (step.at === 'pick') {
-    if (repos === null) return <Screen title="add a workspace" busy error={error} />;
+    if (repos === null) return <Screen title="add a project" busy error={error} />;
 
     const q = query.trim().toLowerCase();
     const shown = q ? repos.filter((r) => `${r.owner}/${r.name}`.toLowerCase().includes(q)) : repos;
@@ -131,9 +131,9 @@ export function NewWorkspace({ api, onSubmit, onCancel, error, now }: {
       label: `${r.owner}/${r.name}`,
       columns: [
         { text: r.private ? 'private' : 'public', width: 9 },
-        { text: r.added ? 'already a workspace' : r.pushedAt ? `pushed ${ago(r.pushedAt, now)}` : '' },
+        { text: r.added ? 'already a project' : r.pushedAt ? `pushed ${ago(r.pushedAt, now)}` : '' },
       ],
-      hint: r.added ? 'This repo is a workspace here already.' : `Clones ${r.owner}/${r.name}; work starts from ${r.defaultBranch}.`,
+      hint: r.added ? 'This repo is a project here already.' : `Clones ${r.owner}/${r.name}; work starts from ${r.defaultBranch}.`,
     }));
     // Whatever was typed, unless it names a listed repo exactly — the way in
     // for a repo the token cannot see.
@@ -143,7 +143,7 @@ export function NewWorkspace({ api, onSubmit, onCancel, error, now }: {
         hint: 'A URL or owner/name the token may not list — the server checks it.' });
     }
     return (
-      <Screen title="add a workspace" error={error} notice={notice}
+      <Screen title="add a project" error={error} notice={notice}
         sub={repos.length ? 'the repos your GitHub token can see, newest push first' : 'your GitHub token sees no repos — type one'}
         footer={[
           { key: 'type', does: 'filter' }, { key: '↑↓', does: 'move' },
@@ -159,7 +159,7 @@ export function NewWorkspace({ api, onSubmit, onCancel, error, now }: {
           reserve={2}
           onSelect={(p) => {
             if ('typed' in p) { submitExisting(p.typed, 'pick'); return; }
-            if (p.repo.added) { setNotice(`${p.repo.owner}/${p.repo.name} is already a workspace here`); return; }
+            if (p.repo.added) { setNotice(`${p.repo.owner}/${p.repo.name} is already a project here`); return; }
             submitExisting(`${p.repo.owner}/${p.repo.name}`, 'pick');
           }}
           onCancel={() => { setNotice(undefined); setStep({ at: 'kind' }); }}
@@ -170,7 +170,7 @@ export function NewWorkspace({ api, onSubmit, onCancel, error, now }: {
 
   if (step.at === 'url') {
     return (
-      <Screen title="add a workspace" error={error} notice={notice}
+      <Screen title="add a project" error={error} notice={notice}
         sub={step.create
           ? 'a name creates it under your account · org/name for an org'
           : 'the repo to add — its URL or owner/name'}
@@ -197,7 +197,7 @@ export function NewWorkspace({ api, onSubmit, onCancel, error, now }: {
 
   if (step.at === 'visibility') {
     return (
-      <Screen title="add a workspace" error={error}
+      <Screen title="add a project" error={error}
         footer={[{ key: 'enter', does: 'create' }, { key: 'esc', does: 'back' }]}>
         <Text dimColor>{`  ${step.url}`}</Text>
         <SelectList
@@ -217,7 +217,7 @@ export function NewWorkspace({ api, onSubmit, onCancel, error, now }: {
   }
 
   return (
-    <Screen title="add a workspace" error={error} busy>
+    <Screen title="add a project" error={error} busy>
       <Text dimColor>{`  ${step.what}`}</Text>
     </Screen>
   );

@@ -2,13 +2,13 @@
 // routes (the cli, the Assistant's kit, the supervisor's move and tick, the
 // coder's block, the looper engine itself — all HTTP clients of this one
 // process), so those handlers are the one place a change is known the moment
-// it happens. They publish here; `GET /workspaces/:id/events` streams it out
+// it happens. They publish here; `GET /projects/:id/events` streams it out
 // as ND-JSON, and the cli's BoardStore adopts each record — the same path its
 // own optimistic edits take, so a change from anywhere shows at once. One api
 // process, so an in-process emitter is the whole bus; no polling anywhere.
 import { EventEmitter } from 'node:events';
 
-/** The all-workspaces channel; a symbol so no workspace id can collide with it. */
+/** The all-projects channel; a symbol so no project id can collide with it. */
 const ALL = Symbol('all');
 
 export type BoardEvent =
@@ -32,18 +32,18 @@ export type BoardEvent =
 export class BoardEvents {
   private emitter = new EventEmitter();
   constructor() { this.emitter.setMaxListeners(0); }
-  publish(workspaceId: string, e: BoardEvent): void {
-    this.emitter.emit(workspaceId, e);
-    this.emitter.emit(ALL, workspaceId, e);
+  publish(projectId: string, e: BoardEvent): void {
+    this.emitter.emit(projectId, e);
+    this.emitter.emit(ALL, projectId, e);
   }
-  subscribe(workspaceId: string, fn: (e: BoardEvent) => void): () => void {
-    this.emitter.on(workspaceId, fn);
-    return () => { this.emitter.off(workspaceId, fn); };
+  subscribe(projectId: string, fn: (e: BoardEvent) => void): () => void {
+    this.emitter.on(projectId, fn);
+    return () => { this.emitter.off(projectId, fn); };
   }
-  /** Every workspace's events, tagged with the workspace — the Telegram
-   *  alerts listen here. Events are keyed by workspace id, so `publish` also
+  /** Every project's events, tagged with the project — the Telegram
+   *  alerts listen here. Events are keyed by project id, so `publish` also
    *  emits on ALL. */
-  subscribeAll(fn: (workspaceId: string, e: BoardEvent) => void): () => void {
+  subscribeAll(fn: (projectId: string, e: BoardEvent) => void): () => void {
     this.emitter.on(ALL, fn);
     return () => { this.emitter.off(ALL, fn); };
   }

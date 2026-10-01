@@ -11,7 +11,7 @@
 // containers are never wiped at boot — they stay up and the normal idle reaper
 // handles them.
 import type Docker from 'dockerode';
-import type { WorkspaceRow } from '../db/schema.js';
+import type { ProjectRow } from '../db/schema.js';
 import type { Settings } from '../settings.js';
 import type { Databases } from '../databases.js';
 import { resolveAuth } from '../pool/pool.js';
@@ -32,7 +32,7 @@ const NAME_PREFIX = 'phantom-looper-ws-';
  *  real filesystem. An anonymous volume (no Source) is disk-backed, so the inner
  *  dockerd gets the overlay2 graph driver — nesting it on the container's own
  *  overlay upperdir would fall back to vfs (copy-per-layer, unusably slow). It
- *  never touches /workspace, so nothing the agent's docker builds is ever
+ *  never touches /project, so nothing the agent's docker builds is ever
  *  committed by auto-push, and it dies with the container (remove passes v). */
 const DOCKER_GRAPH_MOUNT = { Type: 'volume', Target: '/var/lib/docker' } as const;
 
@@ -74,10 +74,10 @@ export function buildContainerSpec(i: SpecInput): Record<string, unknown> {
   };
   const mounts: Array<Record<string, unknown>> = [];
   if ('volume' in i.mount) {
-    mounts.push({ Type: 'volume', Source: i.mount.volume, Target: '/workspace',
+    mounts.push({ Type: 'volume', Source: i.mount.volume, Target: '/project',
       VolumeOptions: { Subpath: i.mount.subpath } });
   } else {
-    HostConfig.Binds = [`${i.mount.bind}:/workspace`];
+    HostConfig.Binds = [`${i.mount.bind}:/project`];
   }
   if (i.docker) {
     HostConfig.Privileged = true;
@@ -96,7 +96,7 @@ export function buildContainerSpec(i: SpecInput): Record<string, unknown> {
 }
 
 export interface ContainerOpts {
-  /** Named volume holding the workspace tree. When set, each container mounts
+  /** Named volume holding the project tree. When set, each container mounts
    *  ONLY its session via volume subpath — mount-level isolation, verified
    *  live. Unset (dev/tests) falls back to a bind mount of the session dir. */
   volume?: string;
@@ -105,7 +105,7 @@ export interface ContainerOpts {
    *  setting says. */
   settings?: Settings;
   /** The agent databases, for `agent_database_shared`: the container gets
-   *  the workspace's connection string as AGENT_DATABASE_URL. Absent (tests)
+   *  the project's connection string as AGENT_DATABASE_URL. Absent (tests)
    *  means never. */
   databases?: Databases;
   /** The stack's Docker network (compose's `<project>_default`), which a
@@ -116,7 +116,7 @@ export interface ContainerOpts {
   /** A container came up for this folder — awaited before `ensure` returns,
    *  so whatever the caller does next (a file write) happens after the
    *  listener is in place. Instant sync attaches its watcher here. */
-  onStarted?: (folderId: string, workspace: WorkspaceRow | undefined) => Promise<void>;
+  onStarted?: (folderId: string, project: ProjectRow | undefined) => Promise<void>;
   /** The folder's container was removed (idle reap, an explicit remove). */
   onRemoved?: (folderId: string) => Promise<void>;
 }
@@ -150,15 +150,15 @@ export class ContainerManager {
    *  folder — the coder, its supervisor, the assistant — shares the one.
    *  Serialized per folder so two simultaneous tool calls cannot
    *  double-create. */
-  async ensure(folderId: string, workspace: WorkspaceRow | undefined): Promise<Docker.Container> {
+  async ensure(folderId: string, project: ProjectRow | undefined): Promise<Docker.Container> {
     const existing = this.inflight.get(folderId);
     if (existing) return existing;
-    const p = this.ensureInner(folderId, workspace).finally(() => this.inflight.delete(folderId));
+    const p = this.ensureInner(folderId, project).finally(() => this.inflight.delete(folderId));
     this.inflight.set(folderId, p);
     return p;
   }
 
-  private async ensureInner(key: string, workspace: WorkspaceRow | undefined): Promise<Docker.Container> {
+  private async ensureInner(key: string, project: ProjectRow | undefined): Promise<Docker.Container> {
     const c = this.docker.getContainer(this.name(key));
     try {
       const info = await c.inspect();
@@ -171,10 +171,10 @@ export class ContainerManager {
     if (!this.opts.settings) throw new Error('ContainerManager needs settings to create a container');
     const limits = await this.opts.settings.resolveMany(
       ['container_image', 'container_memory_mb', 'container_cpus', 'container_pids_limit', 'container_docker'],
-      { workspace });
+      { project });
     const image = limits.container_image;
-    const database = await this.databaseEnv(workspace);
-    const Env = [...(await this.credentialEnv(workspace)), ...database];
+    const database = await this.databaseEnv(project);
+    const Env = [...(await this.credentialEnv(project)), ...database];
     const spec = buildContainerSpec({
       name: this.name(key),
       image: String(image),
@@ -203,7 +203,7 @@ export class ContainerManager {
     }
     await created.start();
     log.info({ folder: key, image }, 'workspace container started');
-    await this.opts.onStarted?.(key, workspace)
+    await this.opts.onStarted?.(key, project)
       .catch((e) => log.warn({ folder: key, err: errStr(e) }, 'onStarted listener failed — container is up regardless'));
     return created;
   }
@@ -215,19 +215,19 @@ export class ContainerManager {
    *  that reads GITHUB_TOKEN, so supplying the variable is all it takes for the
    *  agent's git and gh to be authenticated — nothing is written to the volume,
    *  and the value dies with the container. The chain is the usual one:
-   *  github_token at this workspace's layer, then at the global one.
+   *  github_token at this project's layer, then at the global one.
    *
    *  Env is fixed at create, so a rotated token takes effect when the container
    *  is next recreated (container_idle_ms, or an explicit remove). */
-  private async credentialEnv(workspace: WorkspaceRow | undefined): Promise<string[]> {
-    if (!workspace || !this.opts.settings) return [];
-    if (!(await this.opts.settings.resolve('agent_git_credentials', { workspace }))) return [];
-    const { pat } = await resolveAuth(this.opts.settings, workspace);
+  private async credentialEnv(project: ProjectRow | undefined): Promise<string[]> {
+    if (!project || !this.opts.settings) return [];
+    if (!(await this.opts.settings.resolve('agent_git_credentials', { project }))) return [];
+    const { pat } = await resolveAuth(this.opts.settings, project);
     if (!pat) {
-      log.warn({ workspace: workspace.name }, 'agent_git_credentials is on but no PAT resolved — container gets none');
+      log.warn({ project: project.name }, 'agent_git_credentials is on but no PAT resolved — container gets none');
       return [];
     }
-    log.info({ workspace: workspace.name }, 'workspace container gets the GitHub PAT (agent_git_credentials)');
+    log.info({ project: project.name }, 'workspace container gets the GitHub PAT (agent_git_credentials)');
     return [`GITHUB_TOKEN=${pat}`, `GH_TOKEN=${pat}`];
   }
 
@@ -236,15 +236,15 @@ export class ContainerManager {
    *  project's code cannot reach it": the role's password enters the
    *  container's env, and — like the PAT — dies with it. The caller also
    *  joins the stack network, or the host name in the URL resolves nowhere. */
-  private async databaseEnv(workspace: WorkspaceRow | undefined): Promise<string[]> {
-    if (!workspace || !this.opts.settings || !this.opts.databases) return [];
-    const on = await this.opts.settings.resolveMany(['agent_database', 'agent_database_shared'], { workspace });
+  private async databaseEnv(project: ProjectRow | undefined): Promise<string[]> {
+    if (!project || !this.opts.settings || !this.opts.databases) return [];
+    const on = await this.opts.settings.resolveMany(['agent_database', 'agent_database_shared'], { project });
     if (!on.agent_database || !on.agent_database_shared) return [];
     if (!this.opts.network) {
-      log.warn({ workspace: workspace.name }, 'agent_database_shared is on but WORKSPACE_NETWORK is unset — the URL\'s host may not resolve from the container');
+      log.warn({ project: project.name }, 'agent_database_shared is on but WORKSPACE_NETWORK is unset — the URL\'s host may not resolve from the container');
     }
-    log.info({ workspace: workspace.name }, 'workspace container gets AGENT_DATABASE_URL (agent_database_shared)');
-    return [`AGENT_DATABASE_URL=${await this.opts.databases.urlFor(workspace.id)}`];
+    log.info({ project: project.name }, 'workspace container gets AGENT_DATABASE_URL (agent_database_shared)');
+    return [`AGENT_DATABASE_URL=${await this.opts.databases.urlFor(project.id)}`];
   }
 
   /** Remove the folder's container. None there (404) is fine — that is the

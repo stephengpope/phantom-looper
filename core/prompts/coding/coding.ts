@@ -5,8 +5,8 @@
 //
 // Two texts, one per section of the agent's layout (core/agents/coding.ts):
 //   CODING_AGENT     — stable: the agent itself. Identical across every
-//                      workspace and session.
-//   CODING_WORKSPACE — context: the checkout and the machine. Identical
+//                      project and session.
+//   CODING_PROJECT — context: the checkout and the machine. Identical
 //                      across sessions on one repo.
 // The blocks only the server can fill — the repo's SOUL.md and AGENTS.md,
 // the skills and secrets lists, the GitHub token and database lines, the

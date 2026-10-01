@@ -61,7 +61,7 @@ export function Board({ store, width, height, isActive, onClose, card, confirm, 
   const [zoom, setZoom] = useState(false);
   const colRefs = useRef(new Map<string, DOMElement>());
 
-  const { columns, prefix, loaded, workspace, error } = store.state;
+  const { columns, prefix, loaded, project, error } = store.state;
   const focusColName = columns[Math.min(focus.col, Math.max(0, columns.length - 1))];
   const focusCards = focusColName ? store.cardsIn(focusColName) : [];
   const focusCard: Card | undefined = focusCards[Math.min(focus.row, focusCards.length - 1)];
@@ -197,7 +197,7 @@ export function Board({ store, width, height, isActive, onClose, card, confirm, 
   return (
     <Box flexDirection="column" width={width} height={height}>
       <Box paddingX={1} justifyContent="space-between">
-        <Text bold color="cyan">{prefix}<Text dimColor> · {workspace ?? store.workspaceId}</Text></Text>
+        <Text bold color="cyan">{prefix}<Text dimColor> · {project ?? store.projectId}</Text></Text>
         <Text dimColor>{cards} card{cards === 1 ? '' : 's'}</Text>
       </Box>
       <Box flexGrow={1}>

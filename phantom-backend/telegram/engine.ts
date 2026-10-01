@@ -49,8 +49,8 @@ import { menuFor, handleCommand } from './commands.js';
 import { AUTO_PUSH_STEPS, AUTO_PULL_STEPS, type AutoPushOutcome, type AutoPullOutcome } from '../../core/llm/tools/git.js';
 import type { AutoPushEvent } from '../git/autoPush.js';
 import type { AutoPullEvent } from '../git/autoPull.js';
-import type { SessionRow, WorkspaceRow } from '../db/schema.js';
-import type { Workspaces } from '../workspaces.js';
+import type { SessionRow, ProjectRow } from '../db/schema.js';
+import type { Projects } from '../projects.js';
 import { AssistantConversation } from './assistantConversation.js';
 
 
@@ -79,7 +79,7 @@ export interface TelegramEngineDeps {
   settings: Settings;
   sessions: Sessions;
   cards: Cards;
-  workspaces: Workspaces;
+  projects: Projects;
   presets: Presets;
   system: System;
   paths: Paths;
@@ -104,9 +104,9 @@ export interface TelegramEngineDeps {
   publicAddress?: string;
   /** Direct auto-push / auto-pull — bypasses injectFetch so onEvent fires
    *  as each step completes instead of all at once after the stream ends. */
-  autoPush?: (session: SessionRow, workspace: WorkspaceRow,
+  autoPush?: (session: SessionRow, project: ProjectRow,
     onEvent?: (e: AutoPushEvent) => void | Promise<void>, by?: string) => Promise<AutoPushOutcome>;
-  autoPull?: (session: SessionRow, workspace: WorkspaceRow,
+  autoPull?: (session: SessionRow, project: ProjectRow,
     onEvent?: (e: AutoPullEvent) => void | Promise<void>, by?: string) => Promise<AutoPullOutcome>;
 }
 
@@ -159,11 +159,11 @@ export class TelegramEngine {
       authorizedUser: () => this.authorizedUser(),
       makeClient: (token, dm) => this.trackedClient(token, dm, () => null),
     });
-    // Every card write in the system, all workspaces; alerts.ts decides which
+    // Every card write in the system, all projects; alerts.ts decides which
     // are the supervisor's moves. Fire-and-forget: an alert that fails is logged,
     // never retried, and never touches the card.
-    deps.events?.subscribeAll((workspaceId, e) => {
-      this.alert(workspaceId, e).catch((err) => log.warn({ err: errStr(err) }, 'auto build alert failed'));
+    deps.events?.subscribeAll((projectId, e) => {
+      this.alert(projectId, e).catch((err) => log.warn({ err: errStr(err) }, 'auto build alert failed'));
     });
     deps.settingsEvents?.subscribe((e) => {
       if (e.keys.some((k) => k === 'telegram_enabled' || k === 'telegram_authorized_user' || k === 'telegram_bot_token')) void this.reconcile();
@@ -186,28 +186,28 @@ export class TelegramEngine {
   // ── auto build alerts ────────────────────────────────────────────────────
 
   /** One DM per loop move into in_progress / blocked / done, when
-   *  `telegram_auto_build_notifications` resolves on for that workspace and
+   *  `telegram_auto_build_notifications` resolves on for that project and
    *  the bot is enabled for an authorized user. The bubble is recorded with
    *  the card's coding session as its origin, so a reply to it enters that
    *  session in code mode like a reply to any coder bubble. */
-  private async alert(workspaceId: string, e: BoardEvent): Promise<void> {
+  private async alert(projectId: string, e: BoardEvent): Promise<void> {
     if (e.event !== 'card' || !e.from || e.from === e.card.status) return;   // the cheap test first — no I/O
-    const workspace = await this.deps.workspaces.get(workspaceId);
-    if (!workspace) return;
-    const alertMsg = autoBuildAlert(e, await this.deps.workspaces.prefixOf(workspace));
+    const project = await this.deps.projects.get(projectId);
+    if (!project) return;
+    const alertMsg = autoBuildAlert(e, await this.deps.projects.prefixOf(project));
     if (!alertMsg) return;
-    // The switch resolved at this workspace's layer.
+    // The switch resolved at this project's layer.
     const s = await this.deps.settings.resolveMany(
-      ['telegram_auto_build_notifications', 'telegram_enabled', 'telegram_authorized_user'], { workspace });
+      ['telegram_auto_build_notifications', 'telegram_enabled', 'telegram_authorized_user'], { project });
     if (s.telegram_auto_build_notifications !== true || s.telegram_enabled !== true) return;
     const dm = Number(s.telegram_authorized_user ?? '');
     if (!dm || !Number.isFinite(dm)) return;
     const token = await this.token();
     if (!token) return;
-    const coder = await this.deps.sessions.coderOf(workspaceId, alertMsg.number);
+    const coder = await this.deps.sessions.coderOf(projectId, alertMsg.number);
     const client = this.trackedClient(token, dm, () => coder?.id ?? null);
     await client.sendMessage(dm, alertMsg.text);
-    log.info({ workspace: workspaceId, card: alertMsg.number, status: alertMsg.status }, 'auto build alert sent');
+    log.info({ project: projectId, card: alertMsg.number, status: alertMsg.status }, 'auto build alert sent');
   }
 
   // ── setup ─────────────────────────────────────────────────────────────
@@ -427,7 +427,7 @@ export class TelegramEngine {
       bot.activeSessionId ? this.deliverConfig(bot.activeSessionId) : undefined,
       { voiceOnly: await this.voiceOnly() });
     const deps: AssistantDeps = { f: this.fetch, apiKey: this.deps.apiKey, modelFetch: this.deps.modelFetch,
-      cards: this.deps.cards, workspaces: this.deps.workspaces };
+      cards: this.deps.cards, projects: this.deps.projects };
     let replyText = '';
     // The pointer as this turn sees it — live across a switch within the turn.
     let active = bot.activeSessionId ?? null;
@@ -435,9 +435,9 @@ export class TelegramEngine {
       // The assistant's session row exists BEFORE its agent is built: the
       // turn runs on the row's model, its tools open the row's folder, and
       // every call is billed to it.
-      const own = await conv.ensureSession(bot.activeWorkspaceId, bot.activeSessionId);
-      const workspace = bot.activeWorkspaceId ? await this.deps.workspaces.get(bot.activeWorkspaceId) : undefined;
-      const config = await this.deps.settings.agentConfig('assistant', { workspace, pin: sessionPin(own) });
+      const own = await conv.ensureSession(bot.activeProjectId, bot.activeSessionId);
+      const project = bot.activeProjectId ? await this.deps.projects.get(bot.activeProjectId) : undefined;
+      const config = await this.deps.settings.agentConfig('assistant', { project, pin: sessionPin(own) });
       conv.compaction = config.compaction;
       const onSwitch = async (id: string) => {
         const r = await this.switchSession(client, dm, id);
@@ -445,30 +445,30 @@ export class TelegramEngine {
         active = r.id;
         // The assistant's folder follows the switch mid-turn: its read tools
         // open the row's folder, so the very next call sees the new files.
-        await this.deps.sessions.follow(own.id, bot.activeWorkspaceId!, r.id);
+        await this.deps.sessions.follow(own.id, bot.activeProjectId!, r.id);
         return { active: r.id, title: r.title,
           note: "You are still the assistant — this session's files are now what your read tools see. " +
             'The user sends /code to talk to its coding agent; you never enter it.' };
       };
-      // A new workspace: make it active and open a session in it — what /new
+      // A new project: make it active and open a session in it — what /new
       // does, so the user lands talking to the coder like the cli's "on screen".
-      const onWorkspaceCreated = async (workspaceId: string) => {
-        await this.deps.botState.setActiveWorkspace(workspaceId);
+      const onProjectCreated = async (projectId: string) => {
+        await this.deps.botState.setActiveProject(projectId);
         let started;
-        try { started = await this.deps.sessions.start(workspaceId, CodingAgent.systemPromptLayout); }
+        try { started = await this.deps.sessions.start(projectId, CodingAgent.systemPromptLayout); }
         catch (e) { return { error: (e as Error).message }; }
         await this.deps.botState.setActiveSession(started.id);
         await this.enterMode(client, dm, 'code');
-        await client.sendMessage(dm, '🆕 New session in the new workspace. Send your first message to begin.');
+        await client.sendMessage(dm, '🆕 New session in the new project. Send your first message to begin.');
         return { session: started.id };
       };
       const result = await runAssistantTurn(deps, conv.history, message, sink, {
         config,
-        workspaceId: () => bot.activeWorkspaceId ?? null,
+        projectId: () => bot.activeProjectId ?? null,
         activeSession: () => active,
         onSwitch,
         approve: (ask, signal) => this.approvals.request(client, dm, ask, signal),
-        onWorkspaceCreated,
+        onProjectCreated,
       }, abort.signal, conv.getTranscript(), own);
       replyText = result.said;
       await this.deps.sessions.turnEnded(own, CLIENT_ID).catch(
@@ -527,16 +527,16 @@ export class TelegramEngine {
 
     try {
       const s = await this.deps.sessions.get(sessionId);
-      const workspaceId = s?.workspaceId ?? '';
+      const projectId = s?.projectId ?? '';
       const planMode = s?.planMode === true;
-      const workspace = s ? await this.deps.workspaces.get(s.workspaceId) : undefined;
-      const cfg = await this.deps.settings.agentConfig('coding', { workspace, pin: sessionPin(opened.session) });
+      const project = s ? await this.deps.projects.get(s.projectId) : undefined;
+      const cfg = await this.deps.settings.agentConfig('coding', { project, pin: sessionPin(opened.session) });
       // `signal` is what makes the turn stoppable at all: /stop aborts this
       // controller through the inFlight map, a remote interrupt through the feed
       // subscription above — runCodingTurn ends it cleanly (interrupted, not
       // failed) either way.
       const deps: TurnDeps = { ...this.turnDeps(), signal: abort.signal };
-      const r = await runCodingTurn(deps, opened, workspaceId, message, planMode, cfg);
+      const r = await runCodingTurn(deps, opened, projectId, message, planMode, cfg);
       unsubscribe?.();
       const said = await sink.done(r.text);
       const queued = this.inFlight.get(sessionId)?.queue ?? [];
@@ -740,7 +740,7 @@ export class TelegramEngine {
     return changed;
   }
 
-  /** The short line sent when entering code mode — workspace prefix, card ID,
+  /** The short line sent when entering code mode — project prefix, card ID,
    *  session name, and (when switching) the last thing the agent said. One
    *  function, used by enterMode and the /code echo. Pass `dm` to include the
    *  last agent message (the switch announcement); omit it for a bare label. */
@@ -750,8 +750,8 @@ export class TelegramEngine {
     const s = await this.deps.sessions.get(bot.activeSessionId);
     if (!s) return '🤖 Coding agent';
     const card = (await this.deps.cards.ofSession(bot.activeSessionId))?.number;
-    const w = await this.deps.workspaces.get(s.workspaceId);
-    const prefix = w ? await this.deps.workspaces.prefixOf(w) : undefined;
+    const w = await this.deps.projects.get(s.projectId);
+    const prefix = w ? await this.deps.projects.prefixOf(w) : undefined;
     const parts: string[] = ['🤖 Coding agent'];
     if (prefix) parts.push(prefix);
     if (prefix && card != null) parts.push(`${prefix}-${card}`);
@@ -800,7 +800,7 @@ export class TelegramEngine {
   get botState() { return this.deps.botState; }
   get settings() { return this.deps.settings; }
   get sessions() { return this.deps.sessions; }
-  get workspaces() { return this.deps.workspaces; }
+  get projects() { return this.deps.projects; }
   get presets() { return this.deps.presets; }
   get system() { return this.deps.system; }
 
@@ -831,16 +831,16 @@ export class TelegramEngine {
     label: string,
     sessionId: string,
     steps: Record<string, string>,
-    fn: ((s: SessionRow, w: WorkspaceRow, onEvent?: (e: { step: string; detail?: string }) => void | Promise<void>, by?: string) => Promise<T>) | undefined,
+    fn: ((s: SessionRow, w: ProjectRow, onEvent?: (e: { step: string; detail?: string }) => void | Promise<void>, by?: string) => Promise<T>) | undefined,
     onStep?: (label: string) => void,
   ): Promise<T> {
     if (!fn) return { result: 'error', reason: `auto-${label} is not available on this server` } as T;
     try {
       const session = await this.deps.sessions.get(sessionId);
       if (!session) return { result: 'error', reason: 'session not found' } as T;
-      const workspace = await this.deps.workspaces.get(session.workspaceId);
-      if (!workspace) return { result: 'error', reason: 'workspace not found' } as T;
-      return await fn(session, workspace, (e) => {
+      const project = await this.deps.projects.get(session.projectId);
+      if (!project) return { result: 'error', reason: 'project not found' } as T;
+      return await fn(session, project, (e) => {
         const text = steps[e.step] ?? e.step;
         const detail = e.detail ? ` — ${e.detail}` : '';
         onStep?.(`${text}${detail}`);

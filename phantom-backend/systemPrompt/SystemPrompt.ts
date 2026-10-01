@@ -21,15 +21,15 @@ import { scanSkills, mergeSkills, type SkillMeta } from '../../core/skills/skill
 import { Clock } from '../../core/clock.js';
 import { systemSkills } from '../systemSkills.js';
 import type { Settings } from '../settings.js';
-import type { WorkspaceRow } from '../db/schema.js';
-import { GLOBAL, workspaceScope } from '../store.js';
+import type { ProjectRow } from '../db/schema.js';
+import { GLOBAL, projectScope } from '../store.js';
 
 /** What the blocks read: the session's checkout (null for a session with
- *  no files of its own), its workspace, the settings, and docker for the
+ *  no files of its own), its project, the settings, and docker for the
  *  image's skills (absent in tests). */
 export interface SystemPromptSource {
-  workspaceId: string;
-  workspace: WorkspaceRow;
+  projectId: string;
+  project: ProjectRow;
   checkout: string | null;
   settings: Settings;
   docker?: Docker;
@@ -84,7 +84,7 @@ export const SERVER_PROMPT_BLOCKS = {
 
   secrets_list: async (src: BlockSource): Promise<string> => {
     const byName = new Map<string, { name: string; description: string }>();
-    for (const sec of await src.settings.listSecrets([GLOBAL, workspaceScope(src.workspaceId)])) {
+    for (const sec of await src.settings.listSecrets([GLOBAL, projectScope(src.projectId)])) {
       if (sec.scope === GLOBAL && byName.has(sec.name)) continue;
       byName.set(sec.name, { name: sec.name, description: sec.description });
     }
@@ -126,7 +126,7 @@ export class SystemPrompt {
   /** Fill the agent's layout from the session. */
   static async assemble(layout: SystemPromptLayout, source: SystemPromptSource): Promise<SystemPrompt> {
     SystemPrompt.check(layout);
-    const resolved = await source.settings.resolveMany(SETTINGS_READ, { workspace: source.workspace }) as Resolved;
+    const resolved = await source.settings.resolveMany(SETTINGS_READ, { project: source.project }) as Resolved;
     const src: BlockSource = { ...source, resolved };
     const text = async (entry: SystemPromptEntry): Promise<string> =>
       typeof entry === 'string' ? SERVER_PROMPT_BLOCKS[entry as ServerPromptBlockName](src) : entry.text;

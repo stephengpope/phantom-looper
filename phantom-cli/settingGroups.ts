@@ -4,7 +4,7 @@
 // The server declares where every setting and credential files (META and
 // CREDENTIALS in phantom-backend/settings.ts) and in what order (declaration
 // order). This module folds that into blocks and headings; it decides nothing
-// itself. Every settings screen — /settings, /keys, /presets, a workspace's
+// itself. Every settings screen — /settings, /keys, /presets, a project's
 // own — goes through here, so a group renamed or a key moved on the server
 // moves on all of them at once, and no screen keeps its own order of keys.
 // Three of them used to, and one had drifted into a hand-written list.

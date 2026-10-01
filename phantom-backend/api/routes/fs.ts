@@ -153,7 +153,7 @@ export async function reconcileRunning(
 
 /** Full bash semantics, injected into the registry's bash tool. Unary runs
  *  to completion and answers; detached records a command row and streams ND-JSON to
- *  work/<id>/logs/ — outside workspace/, where add -A would commit it.
+ *  work/<id>/logs/ — outside project/, where add -A would commit it.
  *  `signal` is the client's disconnect (esc aborted the tool fetch): a unary
  *  command runs under setsid as its own process-group leader, pgid in a
  *  pidfile, and abort or timeout kills the GROUP — children included. The
@@ -405,10 +405,10 @@ async function tailLog(logPath: string, lines: number): Promise<string[]> {
  *  plumbing wired around it. `signal` is the client's disconnect — a unary
  *  bash command is killed on it. Throws ToolError container_start_failed. */
 export async function fileTools(ctx: AppCtx, deps: FsDeps, session: SessionRow, folderId: string, signal: AbortSignal): Promise<FileTools> {
-  const workspace = await ctx.workspaces.get(session.workspaceId);
+  const project = await ctx.projects.get(session.projectId);
   let container;
   try {
-    container = await deps.containers.ensure(folderId, workspace);
+    container = await deps.containers.ensure(folderId, project);
   } catch (e) {
     throw new ToolError('container_start_failed', (e as Error).message, true);
   }

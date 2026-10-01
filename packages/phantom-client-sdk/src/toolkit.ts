@@ -17,7 +17,7 @@ import type { PublishedTool } from './session.js';
 export interface ToolKitContext {
   backend: PhantomBackend;
   sessionId: string;
-  workspaceId: string;
+  projectId: string;
   /** The folder the session's tools open. */
   folderId: string | null;
   readonly: () => boolean;

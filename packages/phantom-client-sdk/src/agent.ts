@@ -244,7 +244,7 @@ export abstract class Agent {
       const { messages: system, uncached } = systemMessages(systemPromptBlocks(stored), model.spec.provider);
       if (uncached) this.#handlers.onNotice({ type: 'cache', text: `${uncached} system prompt block(s) beyond the first ${CACHED_BLOCKS} are not cached on ${model.spec.provider}` });
       this.#kits.add(serverToolKit(start.tools));
-      const tools = await this.#kits.resolve({ backend: this.backend, sessionId: this.session.id, workspaceId: this.session.workspaceId,
+      const tools = await this.#kits.resolve({ backend: this.backend, sessionId: this.session.id, projectId: this.session.projectId,
         folderId: this.session.folderId, readonly: () => this.session.planMode });
       return { model, system, tools };
     } catch (e) {

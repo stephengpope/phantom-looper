@@ -6,7 +6,7 @@
 // The server runs in a container whose OS clock is UTC, so anything that
 // reads the OS zone (`setHours(0)`, `toLocaleDateString()` with no zone) is
 // wrong for a builder anywhere else. The zone is the `timezone` setting —
-// global with a workspace override — and Settings.clock() builds the Clock.
+// global with a project override — and Settings.clock() builds the Clock.
 //
 // Built on Intl alone (the same zone table croner reads); no date library.
 

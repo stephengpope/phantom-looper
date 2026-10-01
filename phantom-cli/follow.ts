@@ -1,6 +1,6 @@
 // Following a server ND-JSON feed, forever: connect, read records, and when
 // the link dies come back. ONE copy of that policy, shared by everything that
-// watches a stream — the board's `/workspaces/:id/events` and a session's
+// watches a stream — the board's `/projects/:id/events` and a session's
 // `/sessions/:id/events`. Written twice it would drift the first time a
 // timeout is tuned.
 //

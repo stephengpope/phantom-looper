@@ -31,10 +31,10 @@
 //   and an image newer than the running release (an update in flight pulled
 //   it; deleting it made the update fail with "image not on this machine").
 import fs from 'node:fs/promises';
-import type { SessionRow, WorkspaceRow } from './db/schema.js';
+import type { SessionRow, ProjectRow } from './db/schema.js';
 import { API_IMAGE, APP_VERSION } from './env.js';
 import type { Settings } from './settings.js';
-import type { Workspaces } from './workspaces.js';
+import type { Projects } from './projects.js';
 import type { Sessions } from './sessions.js';
 import type { Paths } from './pool/paths.js';
 import type { ContainerManager } from './workspace/container.js';
@@ -68,7 +68,7 @@ export function tooFull(d: DiskState, pct: number): boolean {
   return (pct > 0 && d.usedPct >= pct) || d.freeGB < MIN_FREE_GB;
 }
 
-/** The workspace filesystem, read once. The named volume and docker's own
+/** The project filesystem, read once. The named volume and docker's own
  *  data share the host's one disk in any standard install, so this speaks
  *  for both. `bavail` (what an unprivileged user may still use) is the
  *  honest measure of "full". */
@@ -84,19 +84,19 @@ async function measureDisk(root: string): Promise<DiskState> {
 const rounded = (d: DiskState) => ({ usedPct: Math.round(d.usedPct), freeGB: Math.round(d.freeGB) });
 
 /** The sessions whose files are on disk (only owners hold disk), each with
- *  its workspace row. Fails CLOSED like every sweep: an unreadable list
+ *  its project row. Fails CLOSED like every sweep: an unreadable list
  *  aborts the run — not knowing what is protected never licenses deletion. */
-async function folderOwners(workspaces: Workspaces, sessions: Sessions): Promise<Array<{ s: SessionRow; w: WorkspaceRow }>> {
+async function folderOwners(projects: Projects, sessions: Sessions): Promise<Array<{ s: SessionRow; w: ProjectRow }>> {
   const rows = await sessions.listOwnersOnDisk();
-  const byId = new Map((await workspaces.list()).map((w) => [w.id, w]));
+  const byId = new Map((await projects.list()).map((w) => [w.id, w]));
   return rows
     .flatMap((s) => {
-      const w = byId.get(s.workspaceId);
+      const w = byId.get(s.projectId);
       return w ? [{ s, w }] : [];
     });
 }
 
-const backupOf = async (engine: GitEngine, s: SessionRow, w: WorkspaceRow): Promise<PushResult | 'busy'> =>
+const backupOf = async (engine: GitEngine, s: SessionRow, w: ProjectRow): Promise<PushResult | 'busy'> =>
   engine.backup(s, w).catch((e) => {
     log.warn({ session: s.id, err: errStr(e) }, 'backup failed');
     return 'error';
@@ -106,9 +106,9 @@ const backupOf = async (engine: GitEngine, s: SessionRow, w: WorkspaceRow): Prom
  *  strand work that exists only on this disk. The gate
  *  `lastPushAt < lastUsedAt` means a session with nothing new since its last
  *  push is never touched — the common case costs no lock, no git, no push. */
-export async function idleBackupSweep(workspaces: Workspaces, sessions: Sessions, engine: GitEngine): Promise<void> {
-  let owners: Array<{ s: SessionRow; w: WorkspaceRow }>;
-  try { owners = await folderOwners(workspaces, sessions); } catch (e) {
+export async function idleBackupSweep(projects: Projects, sessions: Sessions, engine: GitEngine): Promise<void> {
+  let owners: Array<{ s: SessionRow; w: ProjectRow }>;
+  try { owners = await folderOwners(projects, sessions); } catch (e) {
     log.warn({ err: errStr(e) }, 'skipping idle backup — could not read state');
     return;
   }
@@ -139,19 +139,19 @@ export interface CleanupDeps {
   /** disk_cleanup_percent, read per run. */
   pct: number;
   measure: () => Promise<DiskState>;
-  /** The sessions with files on disk, with their workspaces. */
-  owners: () => Promise<Array<{ s: SessionRow; w: WorkspaceRow }>>;
+  /** The sessions with files on disk, with their projects. */
+  owners: () => Promise<Array<{ s: SessionRow; w: ProjectRow }>>;
   /** Of these folder ids, the busy ones: a turn holds a lock there, or a
    *  background task runs there. */
   busy: (folderIds: string[]) => Promise<Set<string>>;
   /** Has this session's work landed on base? Unknown counts as no — the
    *  sweep never deletes on a guess. */
-  landed: (s: SessionRow, w: WorkspaceRow) => Promise<boolean>;
+  landed: (s: SessionRow, w: ProjectRow) => Promise<boolean>;
   /** Delete release images older than the running one that no container uses. */
   removeOldImages: () => Promise<void>;
   /** engine.backup: push, then run `whenSafe` under the same lock only if
    *  everything is on origin. */
-  backup: (s: SessionRow, w: WorkspaceRow, whenSafe: () => Promise<void>) => Promise<PushResult | 'busy'>;
+  backup: (s: SessionRow, w: ProjectRow, whenSafe: () => Promise<void>) => Promise<PushResult | 'busy'>;
   /** The container, then the files (which refuses anything not on origin). */
   deleteSession: (s: SessionRow) => Promise<void>;
 }
@@ -162,7 +162,7 @@ export async function diskCleanup(d: CleanupDeps): Promise<void> {
   if (!tooFull(start, d.pct)) return;
   log.warn({ ...rounded(start), limitPct: d.pct, minFreeGB: MIN_FREE_GB }, 'disk too full — cleanup started');
 
-  let owners: Array<{ s: SessionRow; w: WorkspaceRow }>;
+  let owners: Array<{ s: SessionRow; w: ProjectRow }>;
   let busy: Set<string>;
   try {
     owners = await d.owners();
@@ -216,14 +216,14 @@ export async function diskCleanup(d: CleanupDeps): Promise<void> {
 
 /** Disk cleanup against the real system. */
 export async function pressureSweep(
-  settings: Settings, workspaces: Workspaces, sessions: Sessions, p: Paths, images: Images,
+  settings: Settings, projects: Projects, sessions: Sessions, p: Paths, images: Images,
   containers: ContainerManager, engine: GitEngine, busy: (folderIds: string[]) => Promise<Set<string>>,
 ): Promise<void> {
   const currents = [String(await settings.resolve('container_image')), API_IMAGE_CURRENT];
   await diskCleanup({
     pct: Number(await settings.resolve('disk_cleanup_percent')),
     measure: () => measureDisk(p.root),
-    owners: () => folderOwners(workspaces, sessions),
+    owners: () => folderOwners(projects, sessions),
     busy,
     // Measured live from the checkout: the stored `work` column is cleared
     // once the container is gone, which is exactly the idle session here.

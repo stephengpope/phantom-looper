@@ -10,7 +10,7 @@
 // anything is committed so a no-op pull mints no commit and spends no model
 // call; and there are no rounds, because nothing races a pull — base moving
 // afterward is simply the next pull.
-import type { WorkspaceRow, SessionRow } from '../db/schema.js';
+import type { ProjectRow, SessionRow } from '../db/schema.js';
 import type { Paths } from '../pool/paths.js';
 import { syncBranch, type SyncEvent, type SyncDeps } from './sync.js';
 import type { Sessions } from '../sessions.js';
@@ -50,11 +50,11 @@ export interface AutoPullDeps {
 }
 
 export async function autoPull(
-  deps: AutoPullDeps, session: SessionRow, workspace: WorkspaceRow,
+  deps: AutoPullDeps, session: SessionRow, project: ProjectRow,
   /** `hold: false` — run without taking the session (instant sync; see sync.ts). */
   opts: { hold?: boolean } = {},
 ): Promise<AutoPullResult> {
-  const r = await syncBranch(deps, session, workspace,
+  const r = await syncBranch(deps, session, project,
     { landOnBase: false, label: 'auto-pull', ...opts });
   const { reason, arrived, files, sha, pushed } = r;
   if (r.outcome === 'ok') return { result: 'merged', arrived, files, sha, pushed, ...(reason ? { reason } : {}) };

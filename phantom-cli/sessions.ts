@@ -33,7 +33,7 @@ export const FLUSH_MS = 150;
 export interface LoadedSession {
   id: string;
   branch: string;
-  workspaceId: string;
+  projectId: string;
   /** The server row's name — the auto-title or a /rename. Seeded at open and
    *  refreshed by /rename and by each landing's staleness GET. Null until the
    *  first title. */
@@ -118,7 +118,7 @@ export const activeHold = (e: LoadedSession | undefined | null): LoadedSession['
   e?.held && (e.held.expiresAt > Date.now() || e.remoteBusy) ? e.held : null;
 
 export interface NewSession {
-  id: string; branch: string; workspaceId: string;
+  id: string; branch: string; projectId: string;
   name?: string | null;
   card?: string;
   agent: CodingAgent;
@@ -179,7 +179,7 @@ export class SessionStore {
     const existing = this.get(s.id);
     if (existing) { this.activate(existing.id); return existing; }
     const entry: LoadedSession = {
-      id: s.id, branch: s.branch, workspaceId: s.workspaceId, name: s.name ?? null, card: s.card,
+      id: s.id, branch: s.branch, projectId: s.projectId, name: s.name ?? null, card: s.card,
       agent: s.agent, summary: s.summary,
       get busy() { return this.agent.busy; },
       get history() { return this.agent.session.messages; },

@@ -15,8 +15,8 @@ export class CodingAgent extends Agent {
     volatile: ['skills_list', 'time_date', 'secrets_list'],
   };
 
-  static newSession(backend: PhantomBackend, handlers: AgentHandlers, workspaceId: string): Promise<CodingAgent> {
+  static newSession(backend: PhantomBackend, handlers: AgentHandlers, projectId: string): Promise<CodingAgent> {
     return CodingAgent.create(backend, handlers, (b) => b.call('POST', '/sessions',
-      { workspace_id: workspaceId, system_prompt_layout: CodingAgent.systemPromptLayout }));
+      { project_id: projectId, system_prompt_layout: CodingAgent.systemPromptLayout }));
   }
 }

@@ -7,8 +7,8 @@
 // effect without a restart or the config API lies.
 import { and, eq, inArray } from 'drizzle-orm';
 import type { Db } from './db/client.js';
-import { settings, type WorkspaceRow } from './db/schema.js';
-import { GLOBAL, workspaceScope } from './store.js';
+import { settings, type ProjectRow } from './db/schema.js';
+import { GLOBAL, projectScope } from './store.js';
 import { encrypt, decrypt } from './crypto.js';
 import { latestModel } from './models.js';
 import { PROVIDERS, REASONINGS, type Provider } from '../core/llm/createAgent.js';
@@ -99,11 +99,11 @@ export const DEFAULTS = {
   auto_plan: false as boolean,
   auto_build: false as boolean,
   loop_budget_tokens: null as number | null,   // null = no limit
-  card_prefix: null as string | null,   // unset => derived from the repo name; workspace-only
+  card_prefix: null as string | null,   // unset => derived from the repo name; project-only
   // ── crons ─────────────────────────────────────────────────────────────────
   // Scheduled prompts (crons.ts, crons/engine.ts): each opens a new coding
-  // session in its workspace and runs one turn. The master switch pauses a
-  // workspace's crons without touching each one.
+  // session in its project and runs one turn. The master switch pauses a
+  // project's crons without touching each one.
   cron_enabled: true as boolean,
   // ── sessions ──────────────────────────────────────────────────────────────
   spare_clones: 2,
@@ -112,8 +112,8 @@ export const DEFAULTS = {
   spare_clone_max_age_ms: 7 * 24 * 3_600_000, // evict and re-stock rather than re-deepen
   disk_cleanup_percent: 80,
   session_lock_ttl_ms: 3_600_000,
-  // The cli's boot: skip the workspace picker, start where you last worked.
-  boot_last_workspace: true as boolean,
+  // The cli's boot: skip the project picker, start where you last worked.
+  boot_last_project: true as boolean,
   // ── containers ────────────────────────────────────────────────────────────
   container_idle_ms: 4320 * 60_000,
   container_memory_mb: null as number | null, // unset => no cap (Docker default)
@@ -121,7 +121,7 @@ export const DEFAULTS = {
   container_pids_limit: null as number | null, // unset => no cap (Docker default)
   container_image: `ghcr.io/stephengpope/phantom-backend-session:${SESSION_IMAGE_TAG}` as string,
   container_docker: true as boolean, // privileged + a graph-storage volume so the agent can run its OWN dockerd inside
-  agent_database: false as boolean,  // the agent's own Postgres database for this workspace, reached only through its database_query tool
+  agent_database: false as boolean,  // the agent's own Postgres database for this project, reached only through its database_query tool
   // Shares the agent's database with the project's code: the session
   // container gets AGENT_DATABASE_URL and joins the stack's network so the
   // URL resolves. Means nothing with agent_database off.
@@ -134,11 +134,11 @@ export const DEFAULTS = {
   initial_history_depth: '7.days',   // 'full' disables shallow
   auto_push_on_archive: true as boolean,
   agent_git_credentials: false as boolean,
-  // Instant sync (git/instantSync.ts): a workspace switch that turns the
+  // Instant sync (git/instantSync.ts): a project switch that turns the
   // on-demand auto-push / auto-pull into a continuous one — a file watcher
   // pushes after a quiet spell, a timer pulls base in. The switch is
-  // workspace-only (a notes repo wants it, a code repo usually does not);
-  // the two timings are global with a workspace override.
+  // project-only (a notes repo wants it, a code repo usually does not);
+  // the two timings are global with a project override.
   instant_sync: false as boolean,
   instant_sync_push_debounce_ms: 10_000,
   instant_sync_pull_interval_ms: 5_000,
@@ -159,7 +159,7 @@ export const DEFAULTS = {
   telegram_reply_mode: 'text' as string,
   telegram_transcript_echo: false as boolean,
   // A DM when the LOOP moves a card into in_progress / blocked / done — the
-  // automated work, seen from the phone. Workspace-overridable.
+  // automated work, seen from the phone. Project-overridable.
   telegram_auto_build_notifications: true as boolean,
   // How often to send a digest of sessions that finished. Minutes; 0 = off.
   // Sessions idle longer than this are included. Sent to all notification
@@ -189,7 +189,7 @@ export interface CredentialMeta {
 }
 export const CREDENTIALS = {
   github_token: { label: 'github token', group: 'git',
-    description: 'Lets phantom-looper manage GitHub repos: clone, push, and land work on the base branch. A workspace can hold its own token; otherwise this one is used.' },
+    description: 'Lets phantom-looper manage GitHub repos: clone, push, and land work on the base branch. A project can hold its own token; otherwise this one is used.' },
   anthropic_api_key: { label: 'anthropic key', group: 'llm', provider: 'anthropic', description: 'Used by every agent set to the anthropic provider.' },
   openai_api_key: { label: 'openai key', group: 'llm', provider: 'openai', description: 'Used by every agent set to the openai provider.' },
   google_api_key: { label: 'google key', group: 'llm', provider: 'google', description: 'Used by every agent set to the google provider (Gemini).' },
@@ -245,9 +245,9 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   container_pids_limit: 'Unset (the default) means no cap. Set it only as fork-bomb protection on a shared host; too low and a normal parallel build hits it.',
   initial_history_depth: "How much git history a new clone gets — a span like '7.days', or 'full' for all of it. Less means a faster clone and less disk, but the agent cannot see past it. Fixed when the clone is made.",
   container_image: 'Must contain ripgrep. Pulled the first time a session needs it; a change applies when the container next restarts.',
-  container_docker: 'Lets the agent run Docker inside its own container. The container gets privileged mode and a native-overlay graph-storage volume, but the daemon is NOT started for you — the agent runs `start-docker` when it wants it, so idle sessions pay nothing. Privileged is a weaker boundary: turn this off for a hardened workspace. Applies when the container next restarts.',
-  agent_database: 'Gives the agent its own PostgreSQL database for this workspace — private to it, kept across sessions, reached only through its database_query tool (never by the project\'s code). The agent is its admin but cannot drop it. Off keeps the data; deleting the workspace deletes it.',
-  agent_database_shared: 'Lets the project\'s code use the agent database too: the session container gets AGENT_DATABASE_URL (its connection string) and can reach the database server. Every session in the workspace shares the one database. Applies when the container is next created; does nothing while agent database is off.',
+  container_docker: 'Lets the agent run Docker inside its own container. The container gets privileged mode and a native-overlay graph-storage volume, but the daemon is NOT started for you — the agent runs `start-docker` when it wants it, so idle sessions pay nothing. Privileged is a weaker boundary: turn this off for a hardened project. Applies when the container next restarts.',
+  agent_database: 'Gives the agent its own PostgreSQL database for this project — private to it, kept across sessions, reached only through its database_query tool (never by the project\'s code). The agent is its admin but cannot drop it. Off keeps the data; deleting the project deletes it.',
+  agent_database_shared: 'Lets the project\'s code use the agent database too: the session container gets AGENT_DATABASE_URL (its connection string) and can reach the database server. Every session in the project shares the one database. Applies when the container is next created; does nothing while agent database is off.',
   agent_soul: 'Puts the repo\'s root SOUL.md into the coding agent\'s system prompt, read from the checkout when a session starts and frozen with it — so an edit reaches new sessions only. A repo without the file adds nothing.',
   agent_agents_md: 'Puts the repo\'s root AGENTS.md into the coding agent\'s system prompt, read from the checkout when a session starts and frozen with it — so an edit reaches new sessions only. A repo without the file adds nothing. Appears after SOUL.md.',
   bash_timeout_ms: 'Kills a command that set no timeout of its own; the agent can ask for a longer one per command.',
@@ -258,14 +258,14 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   session_lock_ttl_ms: 'How long a session stays held after its holder goes quiet. A turn the server itself is running is never handed away on this clock — it is checked directly — so this only covers a client that died holding a session (a closed laptop, a killed window).',
   auto_push_on_archive: 'Archiving a done card auto-pushes its session\'s work to the base branch; a failed push un-archives the card into blocked. Archiving from any other column never pushes.',
   agent_git_credentials: 'Puts the GitHub token inside the container so the agent can run git and gh itself — the agent can then read it. Applies when the container restarts; off does not reclaim it from a running one.',
-  instant_sync: 'Keeps every running session in this workspace in step with the base branch on its own: a file change auto-pushes after the debounce, and base is checked with a plain git fetch on the pull interval and auto-pulled when it moved. Runs whether or not a turn is running and never fixes a conflict itself — the agent is told and resolves it. Best for a notes or second-brain repo. Takes effect at once.',
+  instant_sync: 'Keeps every running session in this project in step with the base branch on its own: a file change auto-pushes after the debounce, and base is checked with a plain git fetch on the pull interval and auto-pulled when it moved. Runs whether or not a turn is running and never fixes a conflict itself — the agent is told and resolves it. Best for a notes or second-brain repo. Takes effect at once.',
   instant_sync_push_debounce_ms: 'How long the files must stay quiet after a change before instant sync pushes.',
   instant_sync_pull_interval_ms: 'How often instant sync fetches the base branch to see whether it moved. A plain git fetch — it never touches the GitHub API rate limit. Shorter means other sessions\' work arrives sooner.',
   timezone: 'Your time zone — an IANA name like America/New_York or Europe/London. Every date the system shows or reads is in it: a cron\'s "0 9 * * *" is 9am here, the token report\'s "today" starts at midnight here, and the agents are told today\'s date here.',
   card_prefix: 'The letters in front of every card number on this board — "PHA" gives PHA-7. Unset means the first three letters of the repo name.',
-  cron_enabled: 'Scheduled prompts (crons) for this workspace. Off: none fire, and the agents lose their cron tools; the crons themselves are kept. A slot missed while off is not made up.',
-  coding_provider: 'The coding agent\'s LLM provider. Its key is set on /keys. Nothing runs until one is chosen. Per workspace: override on the workspace — set its provider first, then its model.',
-  coding_model: 'Model id for the chosen provider. Empty = the newest model the catalog lists for it, so it follows releases. A workspace with its own provider picks its own model.',
+  cron_enabled: 'Scheduled prompts (crons) for this project. Off: none fire, and the agents lose their cron tools; the crons themselves are kept. A slot missed while off is not made up.',
+  coding_provider: 'The coding agent\'s LLM provider. Its key is set on /keys. Nothing runs until one is chosen. Per project: override on the project — set its provider first, then its model.',
+  coding_model: 'Model id for the chosen provider. Empty = the newest model the catalog lists for it, so it follows releases. A project with its own provider picks its own model.',
   coding_base_url: 'Endpoint for openai / openai-compatible. Required by openai-compatible.',
   coding_reasoning: 'How much the model thinks before answering. Providers map this to their own setting.',
   coding_max_steps: 'Tool calls allowed per turn before the agent must stop and answer. Empty = unlimited.',
@@ -305,12 +305,12 @@ export const DESCRIPTIONS: Record<keyof typeof DEFAULTS, string> = {
   supervisor_reasoning: 'How much the supervisor thinks before answering. Empty = the coding agent\'s reasoning level.',
   supervisor_max_steps: 'Tool calls allowed per turn for the supervisor. Empty = unlimited.',
   db_ui_enabled: 'Serve a browser-based database console at /db on this server\'s address. Sign in as phantom_admin with this server\'s API key. The console connects as the database owner — full access to everything, this server\'s own tables included. Turning it off stops the console\'s container.',
-  boot_last_workspace: 'On (the default), launching the cli skips the workspace picker: it starts a new session in the workspace of the most recent session you drove yourself (looper-run sessions do not count). Off, launching opens the picker. --resume is unaffected.',
+  boot_last_project: 'On (the default), launching the cli skips the project picker: it starts a new session in the project of the most recent session you drove yourself (looper-run sessions do not count). Off, launching opens the picker. --resume is unaffected.',
   telegram_enabled: 'Answer Telegram DMs. Needs the telegram_bot_token key, telegram_authorized_user, and a public address (PHANTOM_BACKEND_ADDRESS) — the webhook registers itself when all three are set.',
   telegram_authorized_user: 'Your numeric Telegram user id — the ONE sender the bot answers; everyone else is silently ignored. Get it from @userinfobot.',
   telegram_reply_mode: 'How the bot answers: text, voice (a spoken note, on the Assistant\'s Deepgram voice), or both. Read at the start of each turn.',
   telegram_transcript_echo: 'On, a voice note\'s transcript is posted back as 🎤 "…" before the turn runs, so a misheard word is distinguishable from a misunderstood instruction.',
-  telegram_auto_build_notifications: 'A message when the loop moves a card to in progress, blocked, or done. Moves made by people are never announced. Reply to one to enter the card\'s coding session. Per workspace: override on the workspace.',
+  telegram_auto_build_notifications: 'A message when the loop moves a card to in progress, blocked, or done. Moves made by people are never announced. Reply to one to enter the card\'s coding session. Per project: override on the project.',
   session_digest_interval: 'How often (minutes) to send a digest of sessions that finished their turn. 0 disables it. Sessions idle longer than this interval are included.',
   update_check_interval_ms: 'How often the server checks GitHub for a new release and sends a Telegram notification. 0 disables the check. The check runs only when Telegram is enabled and an authorized user is set.',
 };
@@ -360,7 +360,7 @@ export interface SettingMeta {
 
 type Group = SettingMeta['group'];
 /** A zone off the Clock's list is refused: a typo stored here would make
- *  every cron in the workspace fail at its tick. */
+ *  every cron in the project fail at its tick. */
 const checkTimezone = (v: string): string | null =>
   TIMEZONES.includes(v) ? null
     : `timezone must be an IANA time zone name like America/New_York or Europe/London (got "${v}")`;
@@ -381,7 +381,7 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
   initial_history_depth: { type: 'string', label: 'git history', group: 'git',
     pattern: /^(full|\d+\.(second|minute|hour|day|week|month|year)s?)$/ },
   container_image: { type: 'string', label: 'container image', group: 'containers' },
-  container_docker: { type: 'boolean', label: 'docker in the workspace', group: 'containers' },
+  container_docker: { type: 'boolean', label: 'docker in the project', group: 'containers' },
   // Under containers: it is a service stood up beside the session container.
   agent_database: { type: 'boolean', label: 'agent database', group: 'containers' },
   agent_database_shared: { type: 'boolean', label: 'agent database shared', group: 'containers' },
@@ -442,7 +442,7 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
   supervisor_base_url: { type: 'string', label: 'endpoint', group: 'supervisor', subgroup: 'model', nullable: true },
   supervisor_reasoning: { type: 'string', label: 'reasoning', group: 'supervisor', subgroup: 'model', nullable: true, choices: REASONINGS },
   supervisor_max_steps: { type: 'number', label: 'steps per turn', group: 'supervisor', subgroup: 'model', unit: 'count', min: 1, nullable: true },
-  boot_last_workspace: { type: 'boolean', label: 'boot into last workspace', group: 'sessions' },
+  boot_last_project: { type: 'boolean', label: 'boot into last project', group: 'sessions' },
   db_ui_enabled: { type: 'boolean', label: 'database console', group: 'database' },
   telegram_enabled: { type: 'boolean', label: 'telegram', group: 'telegram' },
   telegram_authorized_user: { type: 'string', label: 'authorized user id', group: 'telegram', nullable: true },
@@ -455,7 +455,7 @@ export const META: Record<keyof typeof DEFAULTS, SettingMeta> = {
 };
 
 // ONE rule at every layer: null in a PATCH clears the key; null is never
-// STORED anywhere (settings rows, workspace columns, session columns alike).
+// STORED anywhere (settings rows, project columns, session columns alike).
 // A nullable setting may therefore only be null via its default — a nullable
 // setting with a non-null default would make "off" unsayable, so that
 // combination refuses to boot. Future "off" states are real values (0,
@@ -495,8 +495,8 @@ export function validateSetting(key: SettingKey, value: unknown): string | null 
  *  fine.
  *
  *  both write paths call this. They used not to: PATCH /settings validated and
- *  PATCH /workspaces/:id did not, so `spare_clones: -5` was refused globally
- *  and stored per workspace. A second write path is a second place to forget. */
+ *  PATCH /projects/:id did not, so `spare_clones: -5` was refused globally
+ *  and stored per project. A second write path is a second place to forget. */
 export function validatePatch(entries: Array<[string, unknown]>): string[] {
   return entries
     .filter(([, v]) => v !== null)
@@ -509,7 +509,7 @@ export class SettingsWriteError extends Error {
   constructor(readonly code: string, message: string) { super(message); }
 }
 
-export type SettingsWriteLayer = 'global' | 'workspace';
+export type SettingsWriteLayer = 'global' | 'project';
 
 export type SettingKey = keyof typeof DEFAULTS;
 export type SettingValue = (typeof DEFAULTS)[SettingKey];
@@ -519,32 +519,32 @@ export function isSettingKey(k: string): k is SettingKey {
 }
 
 /** The coding agent's ten rows — the model trio, reasoning, steps, and the
- *  five compaction settings. A workspace may override every one of them: a
- *  workspace is where a different model earns its keep.
+ *  five compaction settings. A project may override every one of them: a
+ *  project is where a different model earns its keep.
  *
- *  The model trio at the workspace layer follows the PROVIDER-FIRST rule:
+ *  The model trio at the project layer follows the PROVIDER-FIRST rule:
  *  its model and endpoint rows exist only under its own provider row. `write`
- *  refuses a workspace model/endpoint with no workspace provider (in the row
- *  or the same patch), and dropping the workspace provider drops its model
- *  and endpoint with it. Without this a workspace model could sit under a
+ *  refuses a project model/endpoint with no project provider (in the row
+ *  or the same patch), and dropping the project provider drops its model
+ *  and endpoint with it. Without this a project model could sit under a
  *  provider inherited from global; the global provider changes later, and
- *  the workspace asks the new provider for a model it does not have —
+ *  the project asks the new provider for a model it does not have —
  *  every turn fails and nothing said why. */
 const CODING_KEYS: readonly SettingKey[] = [
   'coding_provider', 'coding_model', 'coding_base_url', 'coding_reasoning', 'coding_max_steps',
   'coding_context_window', 'coding_compact_threshold_pct', 'coding_compact_strategy',
   'coding_compact_summarize_pct', 'coding_compact_max_tokens',
 ];
-/** The workspace rows that live under the workspace's provider row. */
+/** The project rows that live under the project's provider row. */
 const PROVIDER_BOUND: readonly SettingKey[] = ['coding_model', 'coding_base_url'];
 
-/** The settings a single workspace may differ on. The chain is: code
- *  default -> global row -> workspace row. THE one list: `write` refuses a
- *  workspace write of any other key, GET /settings reports `overridable`
- *  from it, and the cli's workspace screen draws its rows from that flag —
- *  there is no second list of these keys anywhere (the workspace route used
+/** The settings a single project may differ on. The chain is: code
+ *  default -> global row -> project row. THE one list: `write` refuses a
+ *  project write of any other key, GET /settings reports `overridable`
+ *  from it, and the cli's project screen draws its rows from that flag —
+ *  there is no second list of these keys anywhere (the project route used
  *  to keep one, and it drifted). */
-const WORKSPACE_OVERRIDABLE: readonly SettingKey[] = [
+const PROJECT_OVERRIDABLE: readonly SettingKey[] = [
   ...CODING_KEYS,
   'spare_clones', 'initial_history_depth', 'container_image', 'container_docker', 'agent_database', 'agent_database_shared', 'agent_soul', 'agent_agents_md',
   'auto_push_on_archive', 'agent_git_credentials', 'card_prefix',
@@ -553,37 +553,37 @@ const WORKSPACE_OVERRIDABLE: readonly SettingKey[] = [
   'cron_enabled', 'timezone',
 ];
 
-/** Settings that are a fact about ONE workspace — a card prefix names one
+/** Settings that are a fact about ONE project — a card prefix names one
  *  board — so a global value is meaningless. Never settable at the global
  *  layer, and GET /settings leaves them off the global list. */
-const WORKSPACE_ONLY: readonly SettingKey[] = ['card_prefix', 'instant_sync'];
-export const isGlobalSettable = (k: SettingKey) => !WORKSPACE_ONLY.includes(k);
-export const isWorkspaceOverridable = (k: SettingKey) => WORKSPACE_OVERRIDABLE.includes(k);
+const PROJECT_ONLY: readonly SettingKey[] = ['card_prefix', 'instant_sync'];
+export const isGlobalSettable = (k: SettingKey) => !PROJECT_ONLY.includes(k);
+export const isProjectOverridable = (k: SettingKey) => PROJECT_OVERRIDABLE.includes(k);
 
-/** Credentials are scoped too: a workspace may hold its own GitHub token, which
- *  is what makes the credential chain (workspace -> global -> none) the SAME
+/** Credentials are scoped too: a project may hold its own GitHub token, which
+ *  is what makes the credential chain (project -> global -> none) the SAME
  *  chain as every other setting rather than a hand-written copy of it. */
-export const isCredentialWorkspaceScoped = (k: string) => k === 'github_token';
+export const isCredentialProjectScoped = (k: string) => k === 'github_token';
 
 /** Where a value came from — the layer's own name. */
-export type Source = 'default' | 'global' | 'workspace';
+export type Source = 'default' | 'global' | 'project';
 
-export interface ResolveCtx { workspace?: WorkspaceRow }
+export interface ResolveCtx { project?: ProjectRow }
 
 /** One setting with its LAYERS exposed, not just the winner — what a client
  *  needs to render an editor (VS Code's inspect(), git's --show-origin):
- *  `default` (code), `global` (the settings row, null when unset), `workspace`
+ *  `default` (code), `global` (the settings row, null when unset), `project`
  *  (its override, null when unset or no such context), then the computed
  *  `value` + `source`. */
 export interface SettingLayers {
   default: unknown;
   global: unknown;
-  workspace: unknown;
+  project: unknown;
   value: unknown;
   source: Source;
 }
 
-/** THE precedence rule, written once: default → global row → workspace row.
+/** THE precedence rule, written once: default → global row → project row.
  *  Null is never stored at any layer (null in a PATCH clears), so row
  *  presence simply means "set". Everything that resolves a setting reads
  *  its answer off this. */
@@ -593,22 +593,22 @@ function computeLayers(key: SettingKey, layers: RawLayers): SettingLayers {
   // Row PRESENCE decides at every level — null is never a stored value,
   // so "there is a row" and "there is an override" are the same statement.
   if (layers.global !== undefined) { value = layers.global; source = 'global'; }
-  if (layers.workspace !== undefined) { value = layers.workspace; source = 'workspace'; }
+  if (layers.project !== undefined) { value = layers.project; source = 'project'; }
   return {
     default: DEFAULTS[key],
     global: layers.global ?? null,
-    workspace: layers.workspace ?? null,
+    project: layers.project ?? null,
     value, source,
   };
 }
 
-interface RawLayers { global?: unknown; workspace?: unknown }
+interface RawLayers { global?: unknown; project?: unknown }
 
 /** The scopes to read for a context, in order. Every read goes through here
  *  so none can look at a different set. */
 function scopesFor(ctx: ResolveCtx): string[] {
   const out = [GLOBAL];
-  if (ctx.workspace) out.push(workspaceScope(ctx.workspace.id));
+  if (ctx.project) out.push(projectScope(ctx.project.id));
   return out;
 }
 
@@ -616,7 +616,7 @@ function layersFrom(byScope: ByScope, ctx: ResolveCtx, key: string): RawLayers {
   const at = (scope: string) => byScope.get(scope)?.get(key);
   return {
     global: at(GLOBAL),
-    workspace: ctx.workspace ? at(workspaceScope(ctx.workspace.id)) : undefined,
+    project: ctx.project ? at(projectScope(ctx.project.id)) : undefined,
   };
 }
 
@@ -644,16 +644,16 @@ const sortSecrets = (s: SecretMeta[]) => s.sort((a, b) =>
 function computeLayersFor(key: SettingKey, byScope: ByScope, ctx: ResolveCtx): SettingLayers {
   const l = computeLayers(key, layersFrom(byScope, ctx, key));
   if (!PROVIDER_BOUND.includes(key)) return l;
-  // A model or endpoint belongs to its provider. The workspace's own
+  // A model or endpoint belongs to its provider. The project's own
   // provider row, when it differs from the global one, cuts the global
-  // model/endpoint rows out of the chain: a workspace on openai must not
+  // model/endpoint rows out of the chain: a project on openai must not
   // inherit global's claude id (the cascade's compatibility rule,
   // agentConfig.ts, applied between layers).
   const providerLayers = layersFrom(byScope, ctx, 'coding_provider');
   const globalProvider = computeLayers('coding_provider', { global: providerLayers.global }).value;
   const provider = computeLayers('coding_provider', providerLayers).value;
   const own = { ...l };
-  if (providerLayers.workspace !== undefined && provider !== globalProvider && l.source === 'global') {
+  if (providerLayers.project !== undefined && provider !== globalProvider && l.source === 'global') {
     own.value = DEFAULTS[key]; own.source = 'default';
   }
   if (key !== 'coding_model' || own.value != null) return own;
@@ -748,7 +748,7 @@ export class Settings {
   }
 
   /** The builder's clock (core/clock.ts) in the `timezone` setting — the
-   *  workspace's own zone when one is given, else the global one. THE door
+   *  project's own zone when one is given, else the global one. THE door
    *  for anything that shows or reads a date. */
   async clock(ctx: ResolveCtx = {}): Promise<Clock> {
     return new Clock(await this.resolve('timezone', ctx));
@@ -759,19 +759,19 @@ export class Settings {
   async credential(name: CredentialName, ctx: ResolveCtx = {}): Promise<string | undefined> {
     const byScope = await this.readStore(scopesFor(ctx), true, name);
     const l = layersFrom(byScope, ctx, name);
-    const v = l.workspace ?? l.global;
+    const v = l.project ?? l.global;
     return typeof v === 'string' && v.length ? v : undefined;
   }
 
-  /** Every credential's stored value at the global and workspace layers,
+  /** Every credential's stored value at the global and project layers,
    *  decrypted — what the settings editor shows (flagged secret there). */
-  async credentialLayers(ctx: ResolveCtx): Promise<Record<CredentialName, { global: string | null; workspace: string | null }>> {
+  async credentialLayers(ctx: ResolveCtx): Promise<Record<CredentialName, { global: string | null; project: string | null }>> {
     const byScope = await this.readStore(scopesFor(ctx), true);
-    const out = {} as Record<CredentialName, { global: string | null; workspace: string | null }>;
+    const out = {} as Record<CredentialName, { global: string | null; project: string | null }>;
     for (const name of CREDENTIAL_NAMES) {
       const l = layersFrom(byScope, ctx, name);
       out[name] = { global: typeof l.global === 'string' ? l.global : null,
-        workspace: typeof l.workspace === 'string' ? l.workspace : null };
+        project: typeof l.project === 'string' ? l.project : null };
     }
     return out;
   }
@@ -784,8 +784,8 @@ export class Settings {
    *  this reads the rows they need (one query) and the one key each model
    *  needs (decrypting nothing else). `pin` is the session's row model
    *  (agentConfig.sessionPin); absent = the settings' model. */
-  async agentConfig(agent: AgentName, o: { workspace?: WorkspaceRow; pin?: ModelPin | null } = {}): Promise<AgentConfig> {
-    const ctx: ResolveCtx = o.workspace ? { workspace: o.workspace } : {};
+  async agentConfig(agent: AgentName, o: { project?: ProjectRow; pin?: ModelPin | null } = {}): Promise<AgentConfig> {
+    const ctx: ResolveCtx = o.project ? { project: o.project } : {};
     const [coding, own, supervisor] = await this.agentRows(['coding', agent, 'supervisor'], ctx);
     const pin = o.pin ?? null;
     const keyOf = async (provider: string) => {
@@ -827,7 +827,7 @@ export class Settings {
   }
 
   /** Is a credential set at exactly this scope (not inherited)? The
-   *  workspace list's `hasCredential` flag. */
+   *  project list's `hasCredential` flag. */
   async hasAt(name: CredentialName, scope: string): Promise<boolean> {
     const rows = await this.db.select({ key: settings.key }).from(settings).where(and(
       eq(settings.scope, scope), eq(settings.namespace, GENERAL), eq(settings.key, name)));
@@ -843,7 +843,7 @@ export class Settings {
   }
 
   /** The layers plus each key's description, meta and overridability — what
-   *  an editor renders from one call. A credential the workspace may hold
+   *  an editor renders from one call. A credential the project may hold
    *  (its GitHub token) is a row of the same chain and files under the same
    *  group, so it is listed too — as `secret`, with its SOURCE only: the
    *  values are null, a token is never shown back. */
@@ -852,18 +852,18 @@ export class Settings {
     const out: Record<string, SettingEntry> = {};
     for (const key of Object.keys(DEFAULTS) as SettingKey[]) {
       out[key] = { ...layers[key], description: DESCRIPTIONS[key], meta: META[key],
-        overridable: isWorkspaceOverridable(key) };
+        overridable: isProjectOverridable(key) };
     }
     // Every credential's SOURCE rides along (the provider picker lists only
-    // providers with a key); only the workspace-scoped one is overridable.
+    // providers with a key); only the project-scoped one is overridable.
     for (const name of CREDENTIAL_NAMES) {
-      const here = ctx.workspace && isCredentialWorkspaceScoped(name)
-        ? await this.hasAt(name, workspaceScope(ctx.workspace.id)) : false;
+      const here = ctx.project && isCredentialProjectScoped(name)
+        ? await this.hasAt(name, projectScope(ctx.project.id)) : false;
       const shared = await this.hasAt(name, GLOBAL);
-      out[name] = { default: null, global: null, workspace: null, value: null,
-        source: here ? 'workspace' : shared ? 'global' : 'default',
+      out[name] = { default: null, global: null, project: null, value: null,
+        source: here ? 'project' : shared ? 'global' : 'default',
         description: (CREDENTIALS[name] as CredentialMeta).description, meta: credentialMeta(name),
-        overridable: isCredentialWorkspaceScoped(name), secret: true };
+        overridable: isCredentialProjectScoped(name), secret: true };
     }
     return out;
   }
@@ -871,7 +871,7 @@ export class Settings {
   // ── writes ─────────────────────────────────────────────────────────────────
 
   /** THE settings writer. Every route that changes a setting — global or
-   *  workspace — goes through this one validation + store path, so a second
+   *  project — goes through this one validation + store path, so a second
    *  door cannot accept a value the first refused. null clears; it is never
    *  stored. Announces the scope when anything was written. Returns the keys
    *  written. `by` is the writer's client id, so its own window ignores the
@@ -888,14 +888,14 @@ export class Settings {
       }
       if (layer === 'global') {
         if (isSettingKey(k) && !isGlobalSettable(k)) {
-          throw new SettingsWriteError('not_overridable', `${k} is a fact about one workspace — set it there`);
+          throw new SettingsWriteError('not_overridable', `${k} is a fact about one project — set it there`);
         }
         continue;
       }
-      const okHere = isCredential(k) ? isCredentialWorkspaceScoped(k) : isWorkspaceOverridable(k as SettingKey);
-      if (!okHere) throw new SettingsWriteError('not_overridable', `${k} cannot be set per workspace`);
+      const okHere = isCredential(k) ? isCredentialProjectScoped(k) : isProjectOverridable(k as SettingKey);
+      if (!okHere) throw new SettingsWriteError('not_overridable', `${k} cannot be set per project`);
     }
-    if (layer === 'workspace') await this.providerFirst(scope, values);
+    if (layer === 'project') await this.providerFirst(scope, values);
     const entries = Object.entries(values);
     for (const [k, value] of entries) {
       if (value === null) await this.dropKey(k, scope);
@@ -905,8 +905,8 @@ export class Settings {
     return entries.map(([k]) => k);
   }
 
-  /** The PROVIDER-FIRST rule (CODING_KEYS) on one workspace patch: a model
-   *  or endpoint needs the workspace's own provider — already stored, or in
+  /** The PROVIDER-FIRST rule (CODING_KEYS) on one project patch: a model
+   *  or endpoint needs the project's own provider — already stored, or in
    *  this patch — and clearing the provider clears both, added to the patch
    *  so they go out on the same write. */
   private async providerFirst(scope: string, values: Record<string, unknown>): Promise<void> {
@@ -917,13 +917,13 @@ export class Settings {
       const stored = await this.readStore([scope], false, 'coding_provider');
       if (stored.get(scope)?.get('coding_provider') === undefined) {
         throw new SettingsWriteError('provider_first',
-          `set this workspace's provider before its ${bound.map((k) => META[k].label).join(' or ')}`);
+          `set this project's provider before its ${bound.map((k) => META[k].label).join(' or ')}`);
       }
     }
     if (clears('coding_provider')) for (const k of PROVIDER_BOUND) values[k] = null;
   }
 
-  /** A whole scope goes — a workspace that no longer exists. Both
+  /** A whole scope goes — a project that no longer exists. Both
    *  namespaces: its overrides and its secrets. */
   async dropScope(scope: string): Promise<void> {
     await this.db.delete(settings).where(eq(settings.scope, scope));
@@ -941,15 +941,15 @@ export class Settings {
     return sortSecrets(rows.map(secretMeta));
   }
 
-  /** EVERY secret, every layer — the cli's list, which offers every workspace
-   *  as a save target and so must show every workspace's rows. */
+  /** EVERY secret, every layer — the cli's list, which offers every project
+   *  as a save target and so must show every project's rows. */
   async listAllSecrets(): Promise<SecretMeta[]> {
     const rows = await this.db.select().from(settings).where(eq(settings.namespace, SECRET_NS));
     return sortSecrets(rows.map(secretMeta));
   }
 
   /** One secret's value, most-specific-first over the scopes given (pass
-   *  [GLOBAL, workspaceScope(id)] — workspace wins). undefined = no such
+   *  [GLOBAL, projectScope(id)] — project wins). undefined = no such
    *  secret, or it would not decrypt. */
   async readSecretValue(name: string, scopes: string[] = [GLOBAL]): Promise<string | undefined> {
     const rows = await this.db.select().from(settings).where(and(

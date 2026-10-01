@@ -411,16 +411,16 @@ export function withRetry(
 /**
  * Prompt caching — three breakpoints, three cache lifetimes:
  *
- *  1. Static system block — identical across every workspace and session.
+ *  1. Static system block — identical across every project and session.
  *     Set on the first SystemModelMessage in the instructions array, by the
  *     agent builder (e.g. codingAgent's splitInstructions). Cached globally.
- *  2. Workspace system block — per-workspace (skills, secrets, credentials,
+ *  2. Project system block — per-project (skills, secrets, credentials,
  *     current date). Set on the second SystemModelMessage.
- *     Cached across sessions in the same workspace.
+ *     Cached across sessions in the same project.
  *  3. Last conversation message — the rolling mark placed here by
  *     withCacheBreakpoints, before every step. The backward walk from it
  *     finds the best prior prefix (the previous step's write, or on a new
- *     session the workspace block's write).
+ *     session the project block's write).
  *
  * Anthropic: explicit breakpoints, 4 max — we use 3. The backward walk
  * (20-block lookback per breakpoint) finds prior writes automatically.
@@ -476,7 +476,7 @@ export function withCacheBreakpoints(messages: ModelMessage[]): ModelMessage[] {
 
 export interface AgentSpec {
   /** The system prompt — a single string, or an array of SystemModelMessages
-   *  for per-block cache control (static block + workspace block). */
+   *  for per-block cache control (static block + project block). */
   instructions: string | SystemModelMessage[];
   tools: Record<string, Tool>;
   /** Tool-call rounds per turn. `null`/undefined = unlimited: the turn ends

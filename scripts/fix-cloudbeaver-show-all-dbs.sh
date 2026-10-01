@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-shot fix: make CloudBeaver show all databases (including agent workspace_* dbs).
+# One-shot fix: make CloudBeaver show all databases (including agent project_* dbs).
 # Run from the phantom-looper install directory, then delete this script.
 set -euo pipefail
 

@@ -1,20 +1,20 @@
-// The agent's own database, one per workspace: `workspace_<id>` on the same
+// The agent's own database, one per project: `project_<id>` on the same
 // Postgres server this API runs on, reached ONLY through the coding agent's
-// database_query tool (the /workspaces/:id/database routes). It is the
+// database_query tool (the /projects/:id/database routes). It is the
 // agent's private, permanent store — nothing of ours lives in it, the
 // project's code cannot reach it, and it outlives containers and sessions.
 //
-// The fence is a LOGIN role, `workspace_<id>`, and every query CONNECTS as
+// The fence is a LOGIN role, `project_<id>`, and every query CONNECTS as
 // it: `set role` inside a superuser connection is no fence at all (the
 // statement text is the agent's, and `reset role` is one statement). The
 // role owns nothing above its database — no createdb, no createrole — and
 // the database's owner is our own user, so the agent cannot drop it. Its
-// password is derived from ENCRYPTION_KEY and the workspace id: stored
+// password is derived from ENCRYPTION_KEY and the project id: stored
 // nowhere, re-set on every ensure (so a rotated key heals itself), and it
 // never leaves this process.
 //
-// The setting `agent_database` says whether a workspace HAS this; the route
-// reads it. Off keeps the data; only the workspace going drops it.
+// The setting `agent_database` says whether a project HAS this; the route
+// reads it. Off keeps the data; only the project going drops it.
 import { createHmac } from 'node:crypto';
 import pg from 'pg';
 import { parse as parseArray } from 'postgres-array';
@@ -117,24 +117,24 @@ const quoteIdent = (s: string) => `"${s.replaceAll('"', '""')}"`;
 const quoteLiteral = (s: string) => `'${s.replaceAll("'", "''")}'`;
 
 export class Databases {
-  /** Workspaces whose database and role this process has already ensured. */
+  /** Projects whose database and role this process has already ensured. */
   private ready = new Set<string>();
   private ensuring = new Map<string, Promise<void>>();
   private readonly server: URL;
 
   /** `pool` is the API's own (superuser) connection — the one that creates
-   *  databases and roles. `databaseUrl` names the server; a workspace's
+   *  databases and roles. `databaseUrl` names the server; a project's
    *  connection is the same host and port with its own role and database. */
   constructor(private readonly pool: pg.Pool, databaseUrl: string, private readonly encryptionKey: Buffer) {
     this.server = new URL(databaseUrl);
   }
 
-  /** Database name and role name are the same word: `workspace_<id>`. A
-   *  workspace id is a lowercase ULID, so the name is a plain identifier. */
-  nameOf(workspaceId: string): string { return `workspace_${workspaceId}`; }
+  /** Database name and role name are the same word: `project_<id>`. A
+   *  project id is a lowercase ULID, so the name is a plain identifier. */
+  nameOf(projectId: string): string { return `project_${projectId}`; }
 
-  private passwordOf(workspaceId: string): string {
-    return createHmac('sha256', this.encryptionKey).update(`database:${workspaceId}`).digest('base64url');
+  private passwordOf(projectId: string): string {
+    return createHmac('sha256', this.encryptionKey).update(`database:${projectId}`).digest('base64url');
   }
 
   /** The connection string the project's code gets as AGENT_DATABASE_URL
@@ -142,37 +142,37 @@ export class Databases {
    *  tool uses. Ensures first, so the URL works the moment it is handed out.
    *  The host is the server's own (`postgres` on the stack network); the
    *  container must be on that network to resolve it. */
-  async urlFor(workspaceId: string): Promise<string> {
-    await this.ensure(workspaceId);
-    return this.connectionString(workspaceId);
+  async urlFor(projectId: string): Promise<string> {
+    await this.ensure(projectId);
+    return this.connectionString(projectId);
   }
 
-  private connectionString(workspaceId: string): string {
+  private connectionString(projectId: string): string {
     const u = new URL(this.server.toString());
-    u.username = this.nameOf(workspaceId);
-    u.password = this.passwordOf(workspaceId);
-    u.pathname = `/${this.nameOf(workspaceId)}`;
+    u.username = this.nameOf(projectId);
+    u.password = this.passwordOf(projectId);
+    u.pathname = `/${this.nameOf(projectId)}`;
     return u.toString();
   }
 
   /** The role and database exist and the role's password is current. Once
-   *  per workspace per process; serialized so two first queries cannot race
+   *  per project per process; serialized so two first queries cannot race
    *  each other into `create role` twice. */
-  async ensure(workspaceId: string): Promise<void> {
-    if (this.ready.has(workspaceId)) return;
-    const inflight = this.ensuring.get(workspaceId);
+  async ensure(projectId: string): Promise<void> {
+    if (this.ready.has(projectId)) return;
+    const inflight = this.ensuring.get(projectId);
     if (inflight) return inflight;
-    const p = this.ensureInner(workspaceId)
-      .then(() => { this.ready.add(workspaceId); })
-      .finally(() => this.ensuring.delete(workspaceId));
-    this.ensuring.set(workspaceId, p);
+    const p = this.ensureInner(projectId)
+      .then(() => { this.ready.add(projectId); })
+      .finally(() => this.ensuring.delete(projectId));
+    this.ensuring.set(projectId, p);
     return p;
   }
 
-  private async ensureInner(workspaceId: string): Promise<void> {
-    const name = this.nameOf(workspaceId);
+  private async ensureInner(projectId: string): Promise<void> {
+    const name = this.nameOf(projectId);
     const role = quoteIdent(name);
-    const password = quoteLiteral(this.passwordOf(workspaceId));
+    const password = quoteLiteral(this.passwordOf(projectId));
 
     const { rows: roles } = await this.pool.query('select from pg_roles where rolname = $1', [name]);
     if (!roles.length) {
@@ -200,20 +200,20 @@ export class Databases {
       } finally {
         await client.end();
       }
-      log.info({ workspace: workspaceId, database: name }, 'agent database created');
+      log.info({ project: projectId, database: name }, 'agent database created');
     }
   }
 
-  /** Run the agent's SQL connected AS the workspace role, in that
-   *  workspace's database. One result per statement, carrying the first
+  /** Run the agent's SQL connected AS the project role, in that
+   *  project's database. One result per statement, carrying the first
    *  `limit` rows and the true row count. Rows are read as they stream and
    *  dropped past `limit`, so the server never holds a result bigger than
    *  what was asked for. Rows come back as arrays with the field list, so a
    *  duplicate column name is refused instead of silently overwriting. */
-  async query(workspaceId: string, sql: string, o: QueryOptions): Promise<StatementResult[]> {
-    await this.ensure(workspaceId);
+  async query(projectId: string, sql: string, o: QueryOptions): Promise<StatementResult[]> {
+    await this.ensure(projectId);
     const client = new pg.Client({
-      connectionString: this.connectionString(workspaceId), connectionTimeoutMillis: 5000, types: AGENT_TYPES,
+      connectionString: this.connectionString(projectId), connectionTimeoutMillis: 5000, types: AGENT_TYPES,
     });
     await client.connect();
     try {
@@ -260,13 +260,13 @@ export class Databases {
     }
   }
 
-  /** The workspace is gone: its database and role go with it. `force` ends
+  /** The project is gone: its database and role go with it. `force` ends
    *  any open connection first. */
-  async drop(workspaceId: string): Promise<void> {
-    const name = this.nameOf(workspaceId);
-    this.ready.delete(workspaceId);
+  async drop(projectId: string): Promise<void> {
+    const name = this.nameOf(projectId);
+    this.ready.delete(projectId);
     await this.pool.query(`drop database if exists ${quoteIdent(name)} with (force)`);
     await this.pool.query(`drop role if exists ${quoteIdent(name)}`);
-    log.info({ workspace: workspaceId, database: name }, 'agent database dropped');
+    log.info({ project: projectId, database: name }, 'agent database dropped');
   }
 }

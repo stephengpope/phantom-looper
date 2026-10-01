@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events';
 
 export interface SettingsChanged {
   event: 'settings_changed';
-  /** The store scope written: global, workspace:<id>, or session:<id>. */
+  /** The store scope written: global, project:<id>, or session:<id>. */
   scope: string;
   /** The writer's client id, so a window can ignore the echo of its own save. */
   client?: string;

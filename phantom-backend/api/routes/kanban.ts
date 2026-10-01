@@ -1,9 +1,9 @@
-// Kanban, workspace-scoped: cards (cards.ts) are written ONLY through these
-// routes — the API owns the writes. The column list and the card prefix are workspace fields
-// (PATCH /workspaces/:id); defaults live here in code, the DB stores overrides.
+// Kanban, project-scoped: cards (cards.ts) are written ONLY through these
+// routes — the API owns the writes. The column list and the card prefix are project fields
+// (PATCH /projects/:id); defaults live here in code, the DB stores overrides.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import type { WorkspaceRow } from '../../db/schema.js';
-import { columnsOf } from '../../workspaces.js';
+import type { ProjectRow } from '../../db/schema.js';
+import { columnsOf } from '../../projects.js';
 import { isHeld } from '../../sessions.js';
 import { CardError, CARD_FIELDS, CARD_JSON_FIELDS, type CardFields, type ItemOp } from '../../cards.js';
 import { logger, errStr } from '../../log.js';
@@ -31,12 +31,12 @@ const itemSchema = { type: 'object', additionalProperties: false, required: ['te
 const cardBodyProps = {
   title: { type: 'string' },
   details: { type: 'string' },
-  status: { type: 'string', description: 'One of the workspace\'s columns.' },
+  status: { type: 'string', description: 'One of the project\'s columns.' },
   pos: { type: 'number', description: 'Sort position within the column (fractional inserts).' },
   blocked_reason: { type: ['string', 'null'], description: 'Set to mark the card blocked; null clears it.' },
   resolution: { type: ['string', 'null'], description: 'The human\'s reply to a block — written before moving the card back; the loop clears it once the card moves on.' },
-  auto_plan: { type: ['boolean', 'null'], description: 'The looper\'s per-card switch for the plan column: true/false overrides the workspace\'s auto_plan setting; null inherits it.' },
-  auto_build: { type: ['boolean', 'null'], description: 'The looper\'s per-card switch for the in_progress column: true/false overrides the workspace\'s auto_build setting; null inherits it.' },
+  auto_plan: { type: ['boolean', 'null'], description: 'The looper\'s per-card switch for the plan column: true/false overrides the project\'s auto_plan setting; null inherits it.' },
+  auto_build: { type: ['boolean', 'null'], description: 'The looper\'s per-card switch for the in_progress column: true/false overrides the project\'s auto_build setting; null inherits it.' },
   pinned: { type: 'boolean', description: 'Pins the card to the top of its column: pinned cards sit as a group above the rest, pos still sorting inside the group.' },
   archived: { type: 'boolean' },
   requirements: { type: 'array', items: itemSchema,
@@ -60,7 +60,7 @@ for (const f of [...CARD_FIELDS, ...CARD_JSON_FIELDS]) {
 
 export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
   const log = logger('kanban');
-  const workspaceOf = (id: string) => ctx.workspaces.get(id);
+  const projectOf = (id: string) => ctx.projects.get(id);
   /** A card's own refusal, as the API's answer. */
   const cardErr = (reply: { code: (n: number) => { send: (b: unknown) => unknown } }, e: unknown) => {
     if (!(e instanceof CardError)) throw e;
@@ -71,11 +71,11 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
   // can always show the REAL value a card inherits — and say which layer it
   // came from. One pair per switch: auto_plan gates the plan column,
   // auto_build gates in_progress.
-  const board = async (w: WorkspaceRow) => {
-    const plan = await ctx.settings.resolveWithSource('auto_plan', { workspace: w });
-    const build = await ctx.settings.resolveWithSource('auto_build', { workspace: w });
-    return { prefix: await ctx.workspaces.prefixOf(w), columns: columnsOf(w),
-      workspace: w.displayName ?? w.name,
+  const board = async (w: ProjectRow) => {
+    const plan = await ctx.settings.resolveWithSource('auto_plan', { project: w });
+    const build = await ctx.settings.resolveWithSource('auto_build', { project: w });
+    return { prefix: await ctx.projects.prefixOf(w), columns: columnsOf(w),
+      project: w.displayName ?? w.name,
       auto_plan_default: Boolean(plan.value), auto_plan_source: plan.source,
       auto_build_default: Boolean(build.value), auto_build_source: build.source };
   };
@@ -85,7 +85,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
   // `locked` is computed here (same rule as GET /sessions) so the board can
   // show a spinner on cards whose session is actively running; `work` is
   // the stored column the 10s refresh job maintains.
-  const cardSessions = async (w: WorkspaceRow) => {
+  const cardSessions = async (w: ProjectRow) => {
     const now = Date.now();
     return (await ctx.sessions.codersByCard(w.id)).map((s) => ({
       card: s.card, id: s.id, name: s.name,
@@ -95,7 +95,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
 
   app.get<{ Params: { id: string };
     Querystring: { archived?: 'true' | 'false' | 'only'; number?: number; limit?: number; before?: string; before_id?: number } }>(
-    '/workspaces/:id/cards', { schema: { ...TAG, summary: 'The board: columns, card prefix, cards',
+    '/projects/:id/cards', { schema: { ...TAG, summary: 'The board: columns, card prefix, cards',
       description: 'Everything a board render needs in one call. Cards are ordered by column position; ' +
         'archived cards are excluded (archived=true includes them; archived=only lists JUST the archive, ' +
         'newest change first, keyset-paged like GET /sessions — limit/before/before_id, `total` = the whole archive, a short page = the ' +
@@ -109,8 +109,8 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
         before: { type: 'string', description: "archived=only: a row's updated_at (ISO) — return only older changes" },
         before_id: { type: 'integer', description: "that row's id, breaking updated_at ties" } } } } },
     async (req, reply) => {
-      const w = await workspaceOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
+      const w = await projectOf(req.params.id);
+      if (!w) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
       if (req.query.number !== undefined) {
         const card = await ctx.cards.byNumber(w, req.query.number);
         return ok({ ...await board(w), cards: card ? [card] : [] });
@@ -132,14 +132,14 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
     });
 
   app.post<{ Params: { id: string }; Body: Record<string, unknown> }>(
-    '/workspaces/:id/cards', { schema: { ...TAG, summary: 'Create a card',
+    '/projects/:id/cards', { schema: { ...TAG, summary: 'Create a card',
       description: 'New card. status defaults to the first column; pos defaults to the end of that column. ' +
-        'The card number is the workspace\'s next and is never reused.',
+        'The card number is the project\'s next and is never reused.',
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       body: { type: 'object', additionalProperties: false, required: ['title'], properties: cardBodyProps } } },
     async (req, reply) => {
-      const w = await workspaceOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
+      const w = await projectOf(req.params.id);
+      if (!w) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
       // Every card write lands on the board bus (Cards.publish): the looper
       // and the archive auto-push listen there, whichever door wrote.
       let card;
@@ -149,7 +149,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
     });
 
   app.patch<{ Params: { id: string; number: number }; Body: Record<string, unknown> }>(
-    '/workspaces/:id/cards/:number', { schema: { ...TAG, summary: 'Update a card',
+    '/projects/:id/cards/:number', { schema: { ...TAG, summary: 'Update a card',
       description: 'Any subset of fields; status+pos is a move. blocked_reason null unblocks; archived true hides ' +
         'the card from the board (archive instead of delete). items changes checklist items BY KEY ' +
         '(add/edit/remove/tick), touching nothing else — the way agents edit checklists; replacing a whole ' +
@@ -157,8 +157,8 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
       params: { type: 'object', properties: { id: { type: 'string' }, number: cardNumberParam }, required: ['id', 'number'] },
       body: { type: 'object', additionalProperties: false, properties: { ...cardBodyProps, items: itemsSchema } } } },
     async (req, reply) => {
-      const w = await workspaceOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
+      const w = await projectOf(req.params.id);
+      if (!w) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
       const { items, ...fields } = req.body as CardFields & { items?: ItemOp[] };
       let card;
       try { card = (await ctx.cards.update(w, req.params.number, fields, items, writerOf(req))).card; }
@@ -167,45 +167,45 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
     });
 
   app.get<{ Params: { id: string; number: number }; Querystring: { limit: number } }>(
-    '/workspaces/:id/cards/:number/revisions', { schema: { ...TAG, summary: "A card's revision history",
+    '/projects/:id/cards/:number/revisions', { schema: { ...TAG, summary: "A card's revision history",
       description: 'What changed on a card and when, newest first — written by a trigger, so edits made ' +
         'over SQL are recorded too. Each entry is {changed_from, changed_at}: the keys that changed and the value each had before. History ' +
         'goes with its card: a deleted card has none.',
       params: { type: 'object', properties: { id: { type: 'string' }, number: cardNumberParam }, required: ['id', 'number'] },
       querystring: { type: 'object', properties: { limit: { type: 'integer', default: 20 } } } } },
     async (req, reply) => {
-      const w = await workspaceOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
+      const w = await projectOf(req.params.id);
+      if (!w) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
       return ok({ card: req.params.number, revisions: await ctx.cards.revisions(w, req.params.number, req.query.limit) });
     });
 
   app.delete<{ Params: { id: string; number: number } }>(
-    '/workspaces/:id/cards/:number', { schema: { ...TAG, summary: 'Delete a card permanently',
+    '/projects/:id/cards/:number', { schema: { ...TAG, summary: 'Delete a card permanently',
       description: 'Hard delete — the card, its number and its history. Prefer PATCH archived=true, which keeps all three.',
       params: { type: 'object', properties: { id: { type: 'string' }, number: cardNumberParam }, required: ['id', 'number'] } } },
     async (req, reply) => {
-      const w = await workspaceOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
+      const w = await projectOf(req.params.id);
+      if (!w) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
       if (!await ctx.cards.remove(w, req.params.number))
-        return reply.code(404).send(err('not_found', `no card ${req.params.number} in workspace ${req.params.id}`));
+        return reply.code(404).send(err('not_found', `no card ${req.params.number} in project ${req.params.id}`));
       return ok({ deleted: true });
     });
 
   // The board's live feed: one long-lived ND-JSON stream per open board (the
-  // cli's BoardStore holds one per workspace for as long as the app runs).
+  // cli's BoardStore holds one per project for as long as the app runs).
   // Records are the BoardEvents published above, plus a heartbeat so an idle
   // link stays open through proxies and the client can tell a dead one. No
   // replay: the client loads the board on connect and again on reconnect.
   app.get<{ Params: { id: string } }>(
-    '/workspaces/:id/events', { schema: { ...TAG, summary: 'Board events stream',
+    '/projects/:id/events', { schema: { ...TAG, summary: 'Board events stream',
       description: 'ND-JSON, open until the client hangs up: {event: card, card, from?, client?} on every create/update ' +
         '(the full row; from = the status before an update, client = the writer\'s x-phantom-looper-client), ' +
         '{event: deleted, id} on a hard delete, {event: session, card, id, name} when a loop pairs a card with its ' +
         'coding session, {event: heartbeat} every 15 s. No replay — load the board on connect.',
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } } },
     async (req, reply) => {
-      const w = await workspaceOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
+      const w = await projectOf(req.params.id);
+      if (!w) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
       reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
       const write = (o: unknown) => { reply.raw.write(`${JSON.stringify(o)}\n`); };
       const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);

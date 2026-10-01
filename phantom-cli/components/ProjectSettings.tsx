@@ -1,10 +1,10 @@
-// One workspace: what it is, and the settings it does differently from
-// everyone else. Reached with `e` from the workspace list.
+// One project: what it is, and the settings it does differently from
+// everyone else. Reached with `e` from the project list.
 //
 // Three kinds of row, because mixing them is how you end up changing a
 // server-wide value believing it was local:
 //
-//   the workspace    its own facts — name, base branch, branch prefix. No
+//   the project    its own facts — name, base branch, branch prefix. No
 //                    default to fall back to, so they cannot be cleared.
 //   settings         the ones the server says can differ here (`overridable`),
 //                    the GitHub token among them, under the server's group
@@ -15,27 +15,27 @@
 //
 // The rule that sorts a row into the first kind or the second: clear it, and
 // what does it fall back to? A global value or a code default => a setting.
-// Nothing => a fact about this workspace.
+// Nothing => a fact about this project.
 //
 // Every settings row says where its value came from — built-in, global, or
-// this workspace — and `d` removes the workspace's value so the row follows
+// this project — and `d` removes the project's value so the row follows
 // the global one again. That is NOT the same as setting it to whatever the
 // global value happens to be today: an unset row keeps following when the
 // global changes, a set one does not.
 //
-// The whole screen renders from ONE call — GET /workspaces/:id — which
+// The whole screen renders from ONE call — GET /projects/:id — which
 // returns the row plus `settings`: every setting with its layers (default /
-// global / workspace), the computed value + source, description, meta and
+// global / project), the computed value + source, description, meta and
 // overridable; the token is in there as `secret`, source only, never the
 // value. Nothing here hardcodes what a setting is, so a new overridable
 // setting appears on its own. Every override — the token included — is
-// written through PATCH /settings?workspace=, the one door for a workspace's
-// layer; only the three own fields go to PATCH /workspaces/:id.
+// written through PATCH /settings?project=, the one door for a project's
+// layer; only the three own fields go to PATCH /projects/:id.
 //
 // The coding agent's provider and model rows get the pickers /settings has
 // (the same helpers: keyed providers, the provider's catalog, a provider
-// change blanks the model). The server's PROVIDER-FIRST rule (a workspace
-// model lives under the workspace's own provider) is met here without a
+// change blanks the model). The server's PROVIDER-FIRST rule (a project
+// model lives under the project's own provider) is met here without a
 // refusal ever showing: saving a model or endpoint sends the provider it
 // was picked under in the same patch.
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -43,15 +43,15 @@ import { SelectList } from './SelectList.js';
 import { ValueInput, type EditSpec } from './ValueInput.js';
 import { Screen } from './Screen.js';
 import { HIDDEN, MODEL_FOR_PROVIDER, MODEL_ROWS, buildModelSpec, providerForModelRow, type Api, type CatalogModel } from './Settings.js';
-import type { WorkspaceInfo } from './Launcher.js';
+import type { ProjectInfo } from './Launcher.js';
 import { fit, human, labelFor, type WireMeta } from '../settingLabels.js';
 import { makeSettings } from '../settings.js';
 import { groupBlocks, headedChoices } from '../settingGroups.js';
 import type { ConfigValue } from '../config.js';
 
 interface Effective {
-  value: unknown; source: 'default' | 'global' | 'workspace';
-  default?: unknown; global?: unknown; workspace?: unknown;
+  value: unknown; source: 'default' | 'global' | 'project';
+  default?: unknown; global?: unknown; project?: unknown;
   description: string; overridable: boolean; secret?: boolean;
   meta: WireMeta;
 }
@@ -66,20 +66,20 @@ type View =
   | { at: 'edit'; key: string; spec: EditSpec; kind: 'field' | 'setting' }
   | { at: 'confirm' };
 
-// The right-hand column answers one question: is this workspace different from
+// The right-hand column answers one question: is this project different from
 // the others? Two answers, not three — whether the shared value is the code
 // default or a global row is the wrong level of detail here.
-const setHere = (source: string) => source === 'workspace';
+const setHere = (source: string) => source === 'project';
 const WHENCE = (source: string) => setHere(source) ? 'changed here' : 'same as everywhere';
 // A secret's value column: it is never shown back, so say whose it is.
 const shownValue = (s: Effective) =>
   s.secret ? (setHere(s.source) ? 'its own' : s.source === 'global' ? 'the shared one from /keys' : 'none set') : human(s.value, s.meta);
 
-export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
+export function ProjectSettings({ api, project, onClose, onChanged }: {
   api: Api;
-  workspace: WorkspaceInfo;
+  project: ProjectInfo;
   onClose: () => void;
-  /** Fired after any write, so the caller can refresh its workspace list. */
+  /** Fired after any write, so the caller can refresh its project list. */
   onChanged?: () => void;
 }) {
   const settings = useMemo(() => makeSettings(api), [api]);
@@ -95,13 +95,13 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
   const load = useCallback(async () => {
     setBusy(true);
     try {
-      const w = await api('GET', `/workspaces/${workspace.id}`) as Row;
+      const w = await api('GET', `/projects/${project.id}`) as Row;
       setRow(w);
       setEff(w.settings);
       setNotice(undefined);
     } catch (err) { setNotice(`could not load: ${(err as Error).message}`); }
     finally { setBusy(false); }
-  }, [api, workspace.id]);
+  }, [api, project.id]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -129,20 +129,20 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
 
   if (view.at === 'confirm') {
     return (
-      <Screen title={`delete ${workspace.displayName || workspace.name}?`} busy={busy} notice={notice}
+      <Screen title={`delete ${project.displayName || project.name}?`} busy={busy} notice={notice}
         footer={[{ key: 'enter', does: 'choose' }, { key: 'esc', does: 'back' }]}>
         <SelectList
           choices={[
             { value: false, label: 'keep it', detail: '' },
             { value: true, label: 'delete it', detail: 'cannot be undone',
-              hint: 'Deletes the workspace and its data. Your GitHub repo is not deleted. Refused while a session is running.' },
+              hint: 'Deletes the project and its data. Your GitHub repo is not deleted. Refused while a session is running.' },
           ]}
           onSelect={(yes) => {
             if (!yes) { setView({ at: 'list' }); return; }
             // Not `write`: there is nothing left to reload afterwards, and the
             // 404 that reload would hit reads as a failure when it succeeded.
             setBusy(true);
-            void api('DELETE', `/workspaces/${workspace.id}?confirm=true`)
+            void api('DELETE', `/projects/${project.id}?confirm=true`)
               .then(() => { onChanged?.(); onClose(); })
               .catch((err: Error) => { setNotice(err.message); setView({ at: 'list' }); })
               .finally(() => setBusy(false));
@@ -165,23 +165,23 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
             const patch: Record<string, ConfigValue> = { [view.key]: v as ConfigValue };
             // A provider change invalidates its model (as /settings). A model
             // or endpoint carries the provider it was picked under, so the
-            // workspace owns the pair (the server's provider-first rule).
+            // project owns the pair (the server's provider-first rule).
             const modelKey = MODEL_FOR_PROVIDER[view.key];
             if (modelKey && v !== view.spec.current) patch[modelKey] = null;
             const provider = eff?.coding_provider.value;
             if ((MODEL_ROWS[view.key] || view.key === 'coding_base_url') && v !== null && typeof provider === 'string') {
               patch.coding_provider = provider;
             }
-            void write(() => settings.patch(patch, { workspace: workspace.id }));
+            void write(() => settings.patch(patch, { project: project.id }));
             return;
           }
-          void write(() => api('PATCH', `/workspaces/${workspace.id}`, { [view.key]: v }));
+          void write(() => api('PATCH', `/projects/${project.id}`, { [view.key]: v }));
         }}
       />
     );
   }
 
-  const label = workspace.displayName || workspace.name;
+  const label = project.displayName || project.name;
   if (!eff || !row) {
     return <Screen title={label} busy={busy} notice={notice} footer={[{ key: 'esc', does: 'back' }]} />;
   }
@@ -201,12 +201,12 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
         { text: WHENCE(s.source) },
       ],
       // The description alone; the columns already say the value and
-      // whether this workspace differs.
+      // whether this project differs.
       hint: s.description,
     };
   });
 
-  // The three own rows carry no heading: they are the workspace itself, and
+  // The three own rows carry no heading: they are the project itself, and
   // the title above already names it. A blank separates them from the headed
   // settings groups, and another sets off the one irreversible action.
   const choices = [
@@ -231,7 +231,7 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
         { key: 'esc', does: 'back' },
       ]}>
       <SelectList
-        key="workspace"
+        key="project"
         initial={last}
         choices={choices}
         onCancel={onClose}
@@ -260,7 +260,7 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
             note: s.secret ? 'stored encrypted, never shown back · empty cancels'
               : s.meta.unit === 'ms'
                 ? `in milliseconds · now ${human(s.value, s.meta)}, ${WHENCE(s.source)}`
-                : `changes this workspace only · now ${human(s.value, s.meta)}, ${WHENCE(s.source)}`,
+                : `changes this project only · now ${human(s.value, s.meta)}, ${WHENCE(s.source)}`,
           };
           const provider = providerForModelRow(k, values);
           void (async () => {
@@ -269,18 +269,18 @@ export function WorkspaceSettings({ api, workspace, onClose, onChanged }: {
           })();
         }}
         onKey={(ch, k) => {
-          // `d` only means something for a row this workspace actually sets —
+          // `d` only means something for a row this project actually sets —
           // on an inherited row there is nothing to remove, and sending null
           // anyway would look like it did something.
           if (ch !== 'd' || !k) return;
           if (k === 'display_name') {
-            if ((row.displayName ?? null) !== null) void write(() => api('PATCH', `/workspaces/${workspace.id}`, { display_name: '' }));
+            if ((row.displayName ?? null) !== null) void write(() => api('PATCH', `/projects/${project.id}`, { display_name: '' }));
             return;
           }
           const s = eff[k];
           if (!s?.overridable) return;
           if (!setHere(s.source)) { setNotice(`"${labelFor(k, s.meta)}" is not set here — it already uses the shared value`); return; }
-          void write(() => settings.patch({ [k]: null }, { workspace: workspace.id }));
+          void write(() => settings.patch({ [k]: null }, { project: project.id }));
         }}
       />
     </Screen>

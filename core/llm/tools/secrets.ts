@@ -4,9 +4,9 @@
  * design: adding and deleting are the cli's, so there is nothing for a
  * readonly preset to drop and the kit works unchanged in plan mode.
  *
- * Bound to the session's WORKSPACE at build time (the kanban read's pattern):
- * the workspace's own secrets win a name collision with global ones, and the
- * server resolves that chain from the ?workspace= these tools always send.
+ * Bound to the session's PROJECT at build time (the kanban read's pattern):
+ * the project's own secrets win a name collision with global ones, and the
+ * server resolves that chain from the ?project= these tools always send.
  */
 import { tool, type Tool } from 'ai';
 import { z } from 'zod';
@@ -14,8 +14,8 @@ import { z } from 'zod';
 export interface SecretToolsConfig {
   baseUrl: string;
   apiKey: string;
-  /** The session's workspace — its secrets shadow global ones by name. */
-  workspaceId: string;
+  /** The session's project — its secrets shadow global ones by name. */
+  projectId: string;
   fetch?: typeof fetch;
 }
 
@@ -24,7 +24,7 @@ type Envelope<T> = { ok: true; data: T } | { ok: false; error: { code: string; m
 export function secretTools(cfg: SecretToolsConfig): Record<string, Tool> {
   const f = cfg.fetch ?? fetch;
   const api = async <T>(p: string): Promise<Envelope<T>> => {
-    const r = await f(`${cfg.baseUrl}${p}?workspace=${encodeURIComponent(cfg.workspaceId)}`, {
+    const r = await f(`${cfg.baseUrl}${p}?project=${encodeURIComponent(cfg.projectId)}`, {
       headers: { authorization: `Bearer ${cfg.apiKey}` },
     });
     return r.json() as Promise<Envelope<T>>;

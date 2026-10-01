@@ -43,7 +43,7 @@ source .env
 
 # The default container_image setting names this tag; building it locally makes
 # the default work with no registry involved.
-docker build -q -t ghcr.io/stephengpope/phantom-backend-session:latest build/workspace
+docker build -q -t ghcr.io/stephengpope/phantom-backend-session:latest build/project
 
 docker compose up -d --build
 
@@ -91,6 +91,6 @@ cat <<DONE
   api key:    $API_KEY   (also written to .phantom-cli/settings.json)
   root cert:  $CA        (caddy's own CA — the cli trusts it for localhost)
 
-  next: npm run phantom-cli — already connected; add a workspace, paste model
+  next: npm run phantom-cli — already connected; add a project, paste model
   keys on /keys, and drop a supervised card into plan to watch the looper.
 DONE

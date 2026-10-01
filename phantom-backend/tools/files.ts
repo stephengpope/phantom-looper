@@ -76,7 +76,7 @@ const hasFiles = ({ session }: { session: { folderId: string | null } }) => Prom
 export const FILE_TOOLS: ToolDef[] = [
   {
     name: 'bash',
-    summary: 'Run a shell command in the workspace.',
+    summary: 'Run a shell command in the project.',
     description: 'Runs a shell command in the session container. For routine file work prefer ' +
       'read/edit/write/grep — structured results, fewer mistakes.\n\n' +
       'Run commands plain: the result returns the log — the tail inline, plus the path to all of ' +

@@ -23,7 +23,7 @@ export const STATUS_ICON: Record<string, { char: string; color: string }> = {
 // silently hit the WRONG item (duplicate texts, an item reworded since its
 // key was made). An id can only be COPIED from a read or a write result —
 // always right — or missed loudly (the error names the real keys).
-// workspaceSchema v8 backfilled the items that existed before keys with
+// projectSchema v8 backfilled the items that existed before keys with
 // slugs of their text; those keys are ordinary ids now, kept as they are.
 
 export interface ChecklistItem { key?: string; text: string; done?: boolean }

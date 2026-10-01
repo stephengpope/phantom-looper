@@ -1,12 +1,12 @@
 // The git engine — the MANUAL operations (/git/push, /git/pull, /git/status).
 // No background git of its own: no tick, no commit timers, no periodic base
 // merge. Work reaches base through auto-push (autoPush.ts) — on demand, or
-// fired by instant sync (instantSync.ts) when a workspace opts in; push and
+// fired by instant sync (instantSync.ts) when a project opts in; push and
 // pull remain as explicit calls. `backup` is the ONE locked caller:
 // the disk sweeps fire it unattended, so it holds the session lock while a
 // person-driven push/pull relies on git's own index.lock to error a true
 // simultaneous op.
-import type { WorkspaceRow, SessionRow } from '../db/schema.js';
+import type { ProjectRow, SessionRow } from '../db/schema.js';
 import { git, commitAll, pushSession, GIT_CLIENT_ID, type PushResult, type PullResult, type GitAuth } from './git.js';
 import type { Sessions } from '../sessions.js';
 import type { FolderRow } from '../db/schema.js';
@@ -44,7 +44,7 @@ export class GitEngine {
     this.arrivals.delete(sessionId);
   }
 
-  private auth(workspace: WorkspaceRow): Promise<GitAuth> { return resolveAuth(this.deps.settings, workspace); }
+  private auth(project: ProjectRow): Promise<GitAuth> { return resolveAuth(this.deps.settings, project); }
 
   /** Git operates on FOLDERS — the branch and the directory live there. A
    *  session with no folder has nothing git-shaped to do. */
@@ -64,14 +64,14 @@ export class GitEngine {
    *  `whenSafe` runs only when everything is on origin ('pushed' or
    *  'nothing'), STILL under the lock — the disk sweep deletes the files
    *  there, so no turn can start between the backup and the delete. */
-  async backup(s: SessionRow, workspace: WorkspaceRow, whenSafe?: () => Promise<void>): Promise<PushResult | 'busy'> {
+  async backup(s: SessionRow, project: ProjectRow, whenSafe?: () => Promise<void>): Promise<PushResult | 'busy'> {
     if (!(await this.sessions.acquireLock(s, GIT_CLIENT_ID, LOCK_TTL_MS, 'backup'))) return 'busy';
     const heartbeat = setInterval(() => {
       void this.sessions.renewLock(s.id, GIT_CLIENT_ID, LOCK_TTL_MS)
         .catch((e) => log.warn({ session: s.id, err: errStr(e) }, 'backup lock renewal failed'));
     }, RENEW_MS);
     try {
-      const r = await this.push(s, workspace);
+      const r = await this.push(s, project);
       if (whenSafe && (r === 'pushed' || r === 'nothing')) await whenSafe();
       return r;
     } finally {
@@ -83,7 +83,7 @@ export class GitEngine {
   /** commit -> push the branch this session is on. That is the whole of it:
    *  one branch, checked out at creation, pushed back to here. Porcelain inside
    *  commitAll is the authoritative dirty check. */
-  async push(s: SessionRow, workspace: WorkspaceRow): Promise<PushResult | 'busy'> {
+  async push(s: SessionRow, project: ProjectRow): Promise<PushResult | 'busy'> {
     const folder = await this.folderOf(s);
     const dir = repoDir(this.paths, folder.id);
     // The checkout lock: commit + push is a sequence too, and a sync may be
@@ -94,7 +94,7 @@ export class GitEngine {
       const committed = await commitAll(dir, `phantom push ${new Date().toISOString()}\n\nPhantom-Session: ${s.id}`);
       const { stdout: ahead } = await git(dir, ['rev-list', '--count', `origin/${folder.branch}..HEAD`]).catch(() => ({ stdout: '1' }));
       if (!committed && Number(ahead.trim()) === 0) return 'nothing';
-      const r = await pushSession(dir, folder.branch, await this.auth(workspace));
+      const r = await pushSession(dir, folder.branch, await this.auth(project));
       if (r !== 'pushed') return r;
       await this.deps.folders.markPushed(folder.id);
       log.info({ session: s.id, branch: folder.branch }, 'pushed');
@@ -113,10 +113,10 @@ export class GitEngine {
    *  "get base's new commits under my work", not three. Nothing reaches base.
    *
    *  It takes the session (sync does), which is why `busy` is a result here. */
-  async pull(s: SessionRow, workspace: WorkspaceRow): Promise<PullResult | 'busy'> {
+  async pull(s: SessionRow, project: ProjectRow): Promise<PullResult | 'busy'> {
     const r = await syncBranch(
       { ...this.deps, onEvent: (e) => this.onSyncEvent?.(s.id, e) },
-      s, workspace, { landOnBase: false, label: 'pull' });
+      s, project, { landOnBase: false, label: 'pull' });
     if (r.outcome === 'ok') {
       const list = this.arrivals.get(s.id) ?? [];
       list.push({ at: Date.now(), commits: r.arrived ?? [] });
@@ -134,7 +134,7 @@ export class GitEngine {
   }
 
   /** What moved on base — read-only, changes nothing in the tree. */
-  async status(s: SessionRow, workspace: WorkspaceRow): Promise<{
+  async status(s: SessionRow, project: ProjectRow): Promise<{
     pending: { commits: string[]; files: string[] };
     /** Commits base has gained since this checkout was cut. */
     sinceCut: number;
@@ -142,12 +142,12 @@ export class GitEngine {
   }> {
     const folder = await this.folderOf(s);
     const dir = repoDir(this.paths, folder.id);
-    await git(dir, ['fetch', 'origin', workspace.baseBranch], await this.auth(workspace)).catch((e: Error) => {
-      log.warn({ dir, base: workspace.baseBranch, err: e.message }, 'fetch of base failed — arrivals are measured against the last copy');
+    await git(dir, ['fetch', 'origin', project.baseBranch], await this.auth(project)).catch((e: Error) => {
+      log.warn({ dir, base: project.baseBranch, err: e.message }, 'fetch of base failed — arrivals are measured against the last copy');
     });
-    const { stdout: commits } = await git(dir, ['log', '--format=%h %s', `HEAD..origin/${workspace.baseBranch}`]).catch(() => ({ stdout: '' }));
-    const { stdout: files } = await git(dir, ['diff', '--name-only', `HEAD...origin/${workspace.baseBranch}`]).catch(() => ({ stdout: '' }));
-    const { stdout: since } = await git(dir, ['rev-list', '--count', `${folder.cutFromSha}..origin/${workspace.baseBranch}`]).catch(() => ({ stdout: '0' }));
+    const { stdout: commits } = await git(dir, ['log', '--format=%h %s', `HEAD..origin/${project.baseBranch}`]).catch(() => ({ stdout: '' }));
+    const { stdout: files } = await git(dir, ['diff', '--name-only', `HEAD...origin/${project.baseBranch}`]).catch(() => ({ stdout: '' }));
+    const { stdout: since } = await git(dir, ['rev-list', '--count', `${folder.cutFromSha}..origin/${project.baseBranch}`]).catch(() => ({ stdout: '0' }));
     return {
       pending: {
         commits: commits.trim().split('\n').filter(Boolean),

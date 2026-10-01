@@ -9,12 +9,12 @@
 //                                        model sees
 //   GET  /tools                          the file tools' definitions, for the
 //                                        clients that predate the agent
-//                                        listing (core/llm/tools/workspace.ts)
+//                                        listing (core/llm/tools/project.ts)
 //
 // Tools take no lock — an agent fans out parallel calls in one turn and they
 // all just run; the session/turn lock is the only lock.
 import type { FastifyInstance } from 'fastify';
-import type { SessionRow, WorkspaceRow } from '../../db/schema.js';
+import type { SessionRow, ProjectRow } from '../../db/schema.js';
 import { AGENT_NAMES, type AgentName } from '../../../core/llm/agentConfig.js';
 import { TOOLS, toolsFor, type FileTools, type ToolCtx } from '../../tools/registry.js';
 import { FILE_TOOLS } from '../../tools/files.js';
@@ -36,18 +36,18 @@ const clientOf = (req: { headers: Record<string, unknown> }): string => {
 };
 
 /** The session a tool call or listing names: known and still active, with
- *  its workspace. A tool call is use — the checkout is touched. Files are
+ *  its project. A tool call is use — the checkout is touched. Files are
  *  NOT required here: a tool that needs them asks `files()`, which refuses a
  *  session without a folder. */
-async function sessionOf(ctx: AppCtx, id: string): Promise<{ session: SessionRow; workspace: WorkspaceRow }> {
+async function sessionOf(ctx: AppCtx, id: string): Promise<{ session: SessionRow; project: ProjectRow }> {
   if (!id) throw new ToolError('session_not_found', `missing ${SESSION_HEADER} header`);
   const session = await ctx.sessions.get(id);
   if (!session) throw new ToolError('session_not_found', `no session ${id}`);
   if (session.status !== 'active') throw new ToolError('session_destroyed', `session is ${session.status}`);
-  const workspace = await ctx.workspaces.get(session.workspaceId);
-  if (!workspace) throw new ToolError('not_found', 'workspace vanished');
+  const project = await ctx.projects.get(session.projectId);
+  if (!project) throw new ToolError('not_found', 'project vanished');
   void ctx.sessions.touch(session);
-  return { session, workspace };
+  return { session, project };
 }
 
 export function toolRoutes(app: FastifyInstance, ctx: AppCtx) {
@@ -82,7 +82,7 @@ export function toolRoutes(app: FastifyInstance, ctx: AppCtx) {
       },
     }, async (req, reply) => {
       try {
-        const { session, workspace } = await sessionOf(ctx, String(req.headers[SESSION_HEADER] ?? ''));
+        const { session, project } = await sessionOf(ctx, String(req.headers[SESSION_HEADER] ?? ''));
         // The client aborting its fetch surfaces as the socket closing with
         // the reply unfinished — the one reliable disconnect signal
         // (onRequestAbort keys off req.aborted, dead since Node 16: it never
@@ -92,7 +92,7 @@ export function toolRoutes(app: FastifyInstance, ctx: AppCtx) {
         reply.raw.on('close', () => { if (!reply.raw.writableFinished) ac.abort(); });
         let files: Promise<FileTools> | undefined;
         const toolCtx: ToolCtx = {
-          app: ctx, session, workspace, client: clientOf(req), signal: ac.signal,
+          app: ctx, session, project, client: clientOf(req), signal: ac.signal,
           files: () => {
             if (!files) {
               const fs = ctx.fs;

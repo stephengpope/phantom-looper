@@ -1,4 +1,4 @@
-// Boot: env -> db -> migrations -> workspace dirs -> looper -> HTTP.
+// Boot: env -> db -> migrations -> project dirs -> looper -> HTTP.
 import { readEnv, APP_VERSION as VERSION } from './env.js';
 import { makeDb } from './db/client.js';
 import { migrate } from './db/migrate.js';
@@ -6,7 +6,7 @@ import { makePaths } from './pool/paths.js';
 import { bootCleanup, tick } from './pool/pool.js';
 import { Sessions } from './sessions.js';
 import { Settings } from './settings.js';
-import { Workspaces } from './workspaces.js';
+import { Projects } from './projects.js';
 import { Databases } from './databases.js';
 import { Folders } from './folders.js';
 import { Cards } from './cards.js';
@@ -44,7 +44,7 @@ import { injectFetch } from './looper/injectFetch.js';
 import { toCodingAgent } from '../core/prompts/autoPush/wiring.js';
 import { serializeTranscript } from '../core/llm/transcript.js';
 import type { SyncDeps, SyncEvent } from './git/sync.js';
-import type { WorkspaceRow, SessionRow } from './db/schema.js';
+import type { ProjectRow, SessionRow } from './db/schema.js';
 import { LooperEngine } from './looper/engine.js';
 import { TelegramEngine } from './telegram/engine.js';
 import { refreshWorkState } from './git/workRefresh.js';
@@ -74,14 +74,14 @@ async function main() {
   const settingsEvents = new SettingsEvents();
   const settings = new Settings(db, env.encryptionKey, settingsEvents);
   const databases = new Databases(pgPool, env.databaseUrl, env.encryptionKey);
-  const workspaces = new Workspaces(db, settings, settingsEvents, databases);
+  const projects = new Projects(db, settings, settingsEvents, databases);
   const folders = new Folders(db, paths, settings, sessionEvents);
-  const cards = new Cards(db, workspaces, events);
+  const cards = new Cards(db, projects, events);
   const docker = makeDocker();
   // THE image puller/remover — every pull and every removal in this process
   // (update, first-use, disk sweep) goes through it so they never overlap.
   const images = new Images(docker);
-  const sessions = new Sessions(db, settings, workspaces, folders, sessionEvents, { paths, docker: docker ?? undefined });
+  const sessions = new Sessions(db, settings, projects, folders, sessionEvents, { paths, docker: docker ?? undefined });
   // A settings write reaches every session nothing has been said to yet: its
   // row takes the settings' model (Sessions.followModelSettings — THE rule).
   settingsEvents.subscribe(() => {
@@ -105,7 +105,7 @@ async function main() {
   // is captured lazily, like `app`: containers start long after boot.
   const containers = new ContainerManager(docker, images, paths, {
     volume: process.env.WORKSPACE_VOLUME, network: process.env.WORKSPACE_NETWORK, settings, databases,
-    onStarted: (folderId, workspace) => instantSync.watchFolder(folderId, workspace),
+    onStarted: (folderId, project) => instantSync.watchFolder(folderId, project),
     onRemoved: (folderId) => instantSync.unwatchFolder(folderId),
   });
   // THE CONFLICT RESOLVER — the session's own coding agent, not a separate
@@ -122,7 +122,7 @@ async function main() {
   // `app` is captured lazily: the hook is built before buildApp and only ever
   // runs long after boot.
   const resolveConflict = async (
-    session: SessionRow, workspace: WorkspaceRow, _dir: string, ctx: ConflictContext,
+    session: SessionRow, project: ProjectRow, _dir: string, ctx: ConflictContext,
   ): Promise<boolean> => {
     const f = injectFetch(app);
     // The SAME client id auto-push locks under — a holder may re-take its own
@@ -145,8 +145,8 @@ async function main() {
       const message = toCodingAgent.resolveConflict(
         ctx.branch, ctx.baseBranch, ctx.files, ctx.arrived);
       // planMode false: resolving means writing files.
-      await runCodingTurn(deps, opened, workspace.id, message, false,
-        await settings.agentConfig('coding', { workspace, pin: sessionPin(opened.session) }));
+      await runCodingTurn(deps, opened, project.id, message, false,
+        await settings.agentConfig('coding', { project, pin: sessionPin(opened.session) }));
       return true;
     } catch (e) {
       log.error({ session: session.id, err: errStr(e) }, 'conflict turn failed');
@@ -188,10 +188,10 @@ async function main() {
   // the coding agent knows what happened on its next turn. Same lock, same
   // openSession pattern as the conflict resolver — the sync still holds the
   // session under GIT_CLIENT_ID when this runs.
-  const recordSummary: SyncDeps['recordSummary'] = async (session, workspace, result, opts) => {
+  const recordSummary: SyncDeps['recordSummary'] = async (session, project, result, opts) => {
     if (result.outcome !== 'ok') return;
     const message = toCodingAgent.syncSummary(
-      workspace.baseBranch, opts.landOnBase, result.arrived ?? [], result.files ?? []);
+      project.baseBranch, opts.landOnBase, result.arrived ?? [], result.files ?? []);
     const f = injectFetch(app);
     let opened: OpenedSession;
     try {
@@ -210,31 +210,31 @@ async function main() {
   // When a sync comes back blocked and the session is running a card, the card
   // is blocked deterministically — the system decides, not the agent. The
   // write is Cards' own; the board bus carries it to the UI and the looper.
-  const blockCardOnConflict = async (session: SessionRow, workspace: WorkspaceRow, reason: string) => {
+  const blockCardOnConflict = async (session: SessionRow, project: ProjectRow, reason: string) => {
     const card = await cards.ofSession(session.id).catch(() => undefined);
     if (!card) return;
-    await cards.update(workspace, card.number, { status: 'blocked', blocked_reason: reason, resolution: null }, undefined, GIT_CLIENT_ID)
+    await cards.update(project, card.number, { status: 'blocked', blocked_reason: reason, resolution: null }, undefined, GIT_CLIENT_ID)
       .catch((e) => log.warn({ session: session.id, err: errStr(e) }, 'could not block card after unresolved conflict'));
   };
   const syncDeps = { sessions, folders, cards, settings, paths,
     resolve: resolveConflict, recordSummary, messageConfig };
-  const autoPushFn = async (session: SessionRow, workspace: WorkspaceRow,
+  const autoPushFn = async (session: SessionRow, project: ProjectRow,
     onEvent?: (e: AutoPushEvent) => void | Promise<void>, by?: string) => {
     const publish = publishSync(session.id, 'push', by);
     const r = await autoPush({ ...syncDeps,
-      onEvent: async (e) => { publish(e); await onEvent?.(e); } }, session, workspace);
-    if (r.result === 'blocked') await blockCardOnConflict(session, workspace,
+      onEvent: async (e) => { publish(e); await onEvent?.(e); } }, session, project);
+    if (r.result === 'blocked') await blockCardOnConflict(session, project,
       r.reason ?? 'a rebase conflict could not be resolved');
     return r;
   };
   // Auto-pull rides the same resolver and the same message model — one
   // configuration for every git operation that commits or resolves.
-  const autoPullFn = async (session: SessionRow, workspace: WorkspaceRow,
+  const autoPullFn = async (session: SessionRow, project: ProjectRow,
     onEvent?: (e: AutoPullEvent) => void | Promise<void>, by?: string) => {
     const publish = publishSync(session.id, 'pull', by);
     const r = await autoPull({ ...syncDeps,
-      onEvent: async (e) => { publish(e); await onEvent?.(e); } }, session, workspace);
-    if (r.result === 'blocked') await blockCardOnConflict(session, workspace,
+      onEvent: async (e) => { publish(e); await onEvent?.(e); } }, session, project);
+    if (r.result === 'blocked') await blockCardOnConflict(session, project,
       r.reason ?? 'a rebase conflict could not be resolved');
     return r;
   };
@@ -249,20 +249,20 @@ async function main() {
   // It publishes NO steps to the feed: nobody asked for it, so its progress
   // is noise on every open window. What does reach the feed is a failure
   // (`sync-failed`) — the one thing a person needs to hear from it.
-  const noteForNextTurn: SyncDeps['recordSummary'] = async (session, workspace, result, opts) => {
+  const noteForNextTurn: SyncDeps['recordSummary'] = async (session, project, result, opts) => {
     let message: string;
     if (result.outcome === 'ok') {
-      message = toCodingAgent.syncSummary(workspace.baseBranch, opts.landOnBase, result.arrived ?? [], result.files ?? []);
+      message = toCodingAgent.syncSummary(project.baseBranch, opts.landOnBase, result.arrived ?? [], result.files ?? []);
     } else if (result.outcome === 'blocked' && result.files?.length) {
-      message = toCodingAgent.syncConflict(workspace.baseBranch, result.arrived ?? [], result.files);
+      message = toCodingAgent.syncConflict(project.baseBranch, result.arrived ?? [], result.files);
     } else return;
     if (!backdoor.has(session.id, message)) backdoor.push(session.id, message);
   };
   const instantDeps = { sessions, folders, cards, settings, paths, messageConfig, recordSummary: noteForNextTurn };
   const instantSync = new InstantSync({
-    sessions, folders, workspaces, settings, paths, watcher: new FolderWatcher(),
-    autoPush: (session, workspace) => autoPush(instantDeps, session, workspace, { hold: false }),
-    autoPull: (session, workspace) => autoPull(instantDeps, session, workspace, { hold: false }),
+    sessions, folders, projects, settings, paths, watcher: new FolderWatcher(),
+    autoPush: (session, project) => autoPush(instantDeps, session, project, { hold: false }),
+    autoPull: (session, project) => autoPull(instantDeps, session, project, { hold: false }),
     failed: (session, op, reason) =>
       sessionEvents.publish(session.id, GIT_CLIENT_ID, { event: 'sync-failed', op, reason }),
   });
@@ -298,11 +298,11 @@ async function main() {
   let stopped = false;
   (async () => {
     while (!stopped) {
-      await tick(workspaces, settings, paths).catch((e) => log.error({ err: errStr(e) }, 'pool tick threw'));
-      await idleBackupSweep(workspaces, sessions, engine).catch((e) => log.error({ err: errStr(e) }, 'idle backup sweep threw'));
+      await tick(projects, settings, paths).catch((e) => log.error({ err: errStr(e) }, 'pool tick threw'));
+      await idleBackupSweep(projects, sessions, engine).catch((e) => log.error({ err: errStr(e) }, 'idle backup sweep threw'));
       const idleMs = await settings.resolve('container_idle_ms').catch(() => 30 * 60_000);
       await containers.reap(Number(idleMs), idleContainerFolders).catch((e) => log.error({ err: errStr(e) }, 'container reap threw'));
-      await pressureSweep(settings, workspaces, sessions, paths, images, containers, engine, busyFolders).catch((e) => log.error({ err: errStr(e) }, 'pressure sweep threw'));
+      await pressureSweep(settings, projects, sessions, paths, images, containers, engine, busyFolders).catch((e) => log.error({ err: errStr(e) }, 'pressure sweep threw'));
       const ms = await settings.resolve('maintenance_interval_ms').catch(() => 60_000);
       await new Promise((r) => setTimeout(r, Number(ms)));
     }
@@ -316,7 +316,7 @@ async function main() {
   (async () => {
     while (!stopped) {
       await new Promise((r) => setTimeout(r, 10_000));
-      await refreshWorkState({ folders, workspaces, paths, containers, events })
+      await refreshWorkState({ folders, projects, paths, containers, events })
         .catch((e) => log.error({ err: errStr(e) }, 'work-state refresh threw'));
     }
   })();
@@ -327,7 +327,7 @@ async function main() {
   const system = new System(paths, logTokens, docker ?? undefined, images, process.env.UPDATE_TRIGGER_DIR || undefined,
     () => ctx.looper?.runningCount() ?? 0);
   const ctx: AppCtx = {
-    settings, workspaces, folders, cards, sessions, backgroundTasks, presets, crons, logTokens,
+    settings, projects, folders, cards, sessions, backgroundTasks, presets, crons, logTokens,
     paths, apiKey: env.apiKey, version: VERSION,
     databases,
     fs: { docker, containers, engine },
@@ -352,15 +352,15 @@ async function main() {
   // turn mid-flight): wait it out rather than blocking the card over a
   // moment's contention. Failure surfaces on the board: the card comes back
   // un-archived, in blocked, with the reason.
-  events.subscribeAll((workspaceId, e) => {
+  events.subscribeAll((projectId, e) => {
     if (e.event !== 'card' || e.archivedBefore !== false) return;
     const card = e.card as { number: number; archived?: boolean; status?: string };
     if (card.archived !== true || card.status !== 'done') return;
     void (async () => {
-      const w = await workspaces.get(workspaceId);
+      const w = await projects.get(projectId);
       const session = w && await sessions.coderOf(w.id, card.number);
       if (!w || !session || session.status !== 'active') return;
-      if (await settings.resolve('auto_push_on_archive', { workspace: w }) !== true) return;
+      if (await settings.resolve('auto_push_on_archive', { project: w }) !== true) return;
       let result: Awaited<ReturnType<typeof autoPushFn>> | undefined;
       for (let i = 0; i < 30; i++) {
         try { result = await autoPushFn(session, w); break; }
@@ -371,10 +371,10 @@ async function main() {
       }
       result ??= { result: 'error', reason: 'session stayed busy — auto-push never ran' };
       if (result.result === 'pushed' || result.result === 'nothing') {
-        log.info({ workspace: w.name, card: card.number, result: result.result }, 'auto-push on archive');
+        log.info({ project: w.name, card: card.number, result: result.result }, 'auto-push on archive');
         return;
       }
-      log.warn({ workspace: w.name, card: card.number, result }, 'auto-push on archive failed — card un-archived into blocked');
+      log.warn({ project: w.name, card: card.number, result }, 'auto-push on archive failed — card un-archived into blocked');
       await cards.unarchiveAsBlocked(w, card.number, `auto-push failed: ${result.reason ?? result.result}`)
         .catch((err) => log.error({ card: card.number, err: errStr(err) }, 'could not mark the card blocked after a failed auto-push'));
     })().catch((err) => log.error({ card: card.number, err: errStr(err) }, 'auto-push on archive threw'));
@@ -395,7 +395,7 @@ async function main() {
   // server's own surface (the same tools every client runs), so the routes
   // must be answering. Event-driven: every card write reaches it over the
   // board bus; start() is ONE recovery sweep, not a poll.
-  const looper = new LooperEngine({ sessions, workspaces, cards, settings, logTokens, app, apiKey: env.apiKey, events: ctx.events, settingsEvents,
+  const looper = new LooperEngine({ sessions, projects, cards, settings, logTokens, app, apiKey: env.apiKey, events: ctx.events, settingsEvents,
     sessionEvents: ctx.sessionEvents, activeTurns: ctx.activeTurns, backdoor: ctx.backdoor });
   ctx.looper = looper;
   looper.start();
@@ -403,7 +403,7 @@ async function main() {
   // The cron scheduler — the same shape: a client of this app, built after
   // listen. One croner job per cron row fires at its time; registrations
   // follow the table's writes and the settings' (events, no polling).
-  const cronEngine = new CronEngine({ crons, workspaces, settings, sessions, app, apiKey: env.apiKey,
+  const cronEngine = new CronEngine({ crons, projects, settings, sessions, app, apiKey: env.apiKey,
     sessionEvents: ctx.sessionEvents, settingsEvents, activeTurns: ctx.activeTurns, backdoor: ctx.backdoor });
   cronEngine.start();
 
@@ -413,7 +413,7 @@ async function main() {
   // re-registers a stale webhook and pushes the command menu.
   const telegram = new TelegramEngine({
     botState: telegramBotState, sentMessages: telegramSentMessages, handledUpdates: telegramHandledUpdates,
-    settings, sessions, cards, workspaces, presets, system, paths, app, apiKey: env.apiKey,
+    settings, sessions, cards, projects, presets, system, paths, app, apiKey: env.apiKey,
     events: ctx.events, settingsEvents, foreground: ctx.foreground, loopsRunning: () => looper.runningCount(), backdoor: ctx.backdoor,
     sessionEvents: ctx.sessionEvents, publicAddress: process.env.PHANTOM_BACKEND_ADDRESS,
     autoPush: autoPushFn, autoPull: autoPullFn,
@@ -424,7 +424,7 @@ async function main() {
   // Session idle digest — a periodic notification listing sessions that
   // finished. Standalone timer, no dependency on the engine's turn machinery.
   const digest = new SessionDigest({
-    sessions, cards, settings, workspaces,
+    sessions, cards, settings, projects,
     channels: [telegramChannel(settings)],
   });
   void digest.start();

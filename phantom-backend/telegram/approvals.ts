@@ -1,5 +1,5 @@
 // The Telegram approval gate — the server-side twin of the cli's (App.tsx
-// "the approval gate"). A gated tool (today: workspace_create_repo) calls
+// "the approval gate"). A gated tool (today: project_create_repo) calls
 // `request` and waits; the user sees ONE bubble — what kind, the exact subject
 // about to exist, an [Accept] [Decline] inline keyboard — and answers by
 // tapping, or by saying the exact word ("accept" / "decline" as a text or a

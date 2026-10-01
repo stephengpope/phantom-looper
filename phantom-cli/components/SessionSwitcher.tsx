@@ -11,8 +11,8 @@ import { SelectList, type Choice } from './SelectList.js';
 import { Screen } from './Screen.js';
 import { ago } from './Launcher.js';
 import type { LoadedSession } from '../sessions.js';
-import type { WorkspaceInfo } from './Launcher.js';
-import { label as workspaceLabel } from './Launcher.js';
+import type { ProjectInfo } from './Launcher.js';
+import { label as projectLabel } from './Launcher.js';
 
 /** The last thing you typed at this session — read from the history already in
  *  memory, so nothing is stored twice and nothing is read off disk. */
@@ -34,12 +34,12 @@ export function lastSaid(s: Pick<LoadedSession, 'history'>): string | undefined 
 export function switcherChoices(
   sessions: LoadedSession[],
   activeId: string,
-  workspaces: WorkspaceInfo[] = [],
+  projects: ProjectInfo[] = [],
   now = Date.now(),
 ): Choice<string>[] {
-  const byId = new Map(workspaces.map((w) => [w.id, w]));
+  const byId = new Map(projects.map((w) => [w.id, w]));
   return sessions.map((s) => {
-    const w = byId.get(s.workspaceId);
+    const w = byId.get(s.projectId);
     const said = lastSaid(s);
     // The one status column. `waiting on you` beats `working` beats `new`
     // beats how long ago: a row whose agent is stopped on a question for you
@@ -54,12 +54,12 @@ export function switcherChoices(
         : s.lastMessageAt
           ? ago(new Date(s.lastMessageAt).toISOString(), now)
           : 'nothing said yet';
-    // The workspace alone does not name a row: two sessions in one workspace
+    // The project alone does not name a row: two sessions in one project
     // are two identical lines. The branch is the session's own name, so it is
     // what makes the row its subject rather than its category.
     return {
       value: s.id,
-      label: `${w ? workspaceLabel(w) : s.workspaceId} · ${s.branch}`,
+      label: `${w ? projectLabel(w) : s.projectId} · ${s.branch}`,
       detail: `${s.summary.model}  ${said ? `"${said.slice(0, 40)}${said.length > 40 ? '…' : ''}"  ` : ''}${
         s.id === activeId && !s.busy ? 'you are here' : state}`,
       // No spinner on a row that is stopped waiting for your answer.
@@ -72,10 +72,10 @@ export function switcherChoices(
   });
 }
 
-export function SessionSwitcher({ sessions, activeId, workspaces, onPick, onCancel }: {
+export function SessionSwitcher({ sessions, activeId, projects, onPick, onCancel }: {
   sessions: LoadedSession[];
   activeId: string;
-  workspaces?: WorkspaceInfo[];
+  projects?: ProjectInfo[];
   onPick: (id: string) => void;
   onCancel: () => void;
 }) {
@@ -86,7 +86,7 @@ export function SessionSwitcher({ sessions, activeId, workspaces, onPick, onCanc
         { key: 'esc', does: 'close' },
       ]}>
       <SelectList
-        choices={switcherChoices(sessions, activeId, workspaces)}
+        choices={switcherChoices(sessions, activeId, projects)}
         onSelect={onPick}
         onCancel={onCancel}
       />

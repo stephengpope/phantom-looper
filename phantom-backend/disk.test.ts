@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { tooFull, diskCleanup, MIN_FREE_GB, type CleanupDeps, type DiskState } from './disk.js';
-import type { SessionRow, WorkspaceRow } from './db/schema.js';
+import type { SessionRow, ProjectRow } from './db/schema.js';
 
 const HOUR = 60 * 60_000;
 const NOW = 1_000 * HOUR;
@@ -31,7 +31,7 @@ function world(opts: {
   const calls: string[] = [];
   const rows = opts.sessions.map((x) => ({
     s: { id: x.id, lastUsedAt: new Date(NOW - x.ageHours * HOUR) } as SessionRow,
-    w: {} as WorkspaceRow,
+    w: {} as ProjectRow,
     gb: x.gb,
   }));
   let lockHeld = false;

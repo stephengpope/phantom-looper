@@ -2,12 +2,12 @@
 // definitions in tui.ts, for every host the Assistant runs in: the cli's side
 // pane and the Telegram bot. Each was answering the same tools with its own
 // code, and the two had drifted (the list's paging, `more`, who drives,
-// active/ended, workspace names — present in one, missing in the other).
+// active/ended, project names — present in one, missing in the other).
 //
 // Everything here is answered over the server's API through `host.call` —
 // the same rows and routes whoever asks. What differs between hosts is small
 // and named on AssistantHost: where the pointer is, how to switch to a
-// session, how to ask the user a yes/no, what to do when a workspace is
+// session, how to ask the user a yes/no, what to do when a project is
 // born, and (the cli only) which sessions have a turn streaming locally.
 //
 // NOT here: the board's card work. The cli answers it from its live
@@ -16,7 +16,7 @@
 import type { ModelMessage } from 'ai';
 import type { ApiCall } from '../../session.js';
 import { kebabName, renderRead, renderRaw,
-  type SessionsArgs, type WorkspaceCreateArgs, type GitAutoPushArgs, type GitAutoPullArgs, type DockerLogsArgs } from './tui.js';
+  type SessionsArgs, type ProjectCreateArgs, type GitAutoPushArgs, type GitAutoPullArgs, type DockerLogsArgs } from './tui.js';
 import type { AutoPushOutcome, AutoPullOutcome } from './git.js';
 import { parseTranscript } from '../transcript.js';
 import { whoDrives, isRunning, ago, type SessionRow } from '../../sessionRows.js';
@@ -49,8 +49,8 @@ export interface AssistantHost {
    *  each step in words as it happens. */
   autoPush(sessionId: string, onStep?: (label: string) => void): Promise<AutoPushOutcome>;
   autoPull(sessionId: string, onStep?: (label: string) => void): Promise<AutoPullOutcome>;
-  /** The workspace the Assistant is standing in, or null. */
-  workspaceId(): string | null;
+  /** The project the Assistant is standing in, or null. */
+  projectId(): string | null;
   /** The session the Assistant is pointed at, or null. */
   activeSession(): string | null;
   /** A turn streaming in THIS host right now (the cli's local turns). */
@@ -66,8 +66,8 @@ export interface AssistantHost {
   onClose?(id?: string): Promise<unknown>;
   /** The approval gate: show the ask, resolve with the answer; abort declines. */
   approve(ask: { label: string; subject: string }, signal?: AbortSignal): Promise<boolean>;
-  /** A workspace was just created — make it the place the user is. */
-  onWorkspaceCreated(workspaceId: string): Promise<{ session?: string; error?: string }>;
+  /** A project was just created — make it the place the user is. */
+  onProjectCreated(projectId: string): Promise<{ session?: string; error?: string }>;
   /** Steps of a push/pull as they happen (the cli notes them into the pane). */
   onGitStep?(sessionId: string, label: string): void;
 }
@@ -76,7 +76,7 @@ export interface AssistantHost {
  *
  *  LIST is the SERVER's answer, never a host's memory: the cli's store only
  *  holds the sessions opened there, and listing from it made the Assistant
- *  say "just one" while the workspace held fifty. Paging is offset/limit
+ *  say "just one" while the project held fifty. Paging is offset/limit
  *  (something a model can reason about); the page is ONE request — the rows
  *  up to the end of the window plus one LOOKAHEAD row, so `more` is known,
  *  not guessed from a full page — and never re-sorted: the order has one
@@ -92,18 +92,18 @@ export function sessionsHandler(host: AssistantHost) {
         return { error: `the list reaches ${SESSION_REACH} sessions back; offset + limit must stay inside that`, on_screen };
       }
       let rows: SessionRow[];
-      // The workspace by NAME: a 26-character id cannot be spoken. The list
+      // The project by NAME: a 26-character id cannot be spoken. The list
       // rides along in parallel — one round trip's worth of time.
       const names = new Map<string, string>();
       try {
-        const [got, ws] = await Promise.all([
+        const [got, projects] = await Promise.all([
           host.call('GET', `/sessions?typed=true&limit=${want}`) as Promise<{ sessions?: unknown }>,
-          host.call('GET', '/workspaces') as Promise<Array<{ id: string; name: string; displayName?: string | null }>>,
+          host.call('GET', '/projects') as Promise<Array<{ id: string; name: string; displayName?: string | null }>>,
         ]);
         // A server that answers something other than a list is a broken
         // server, not a crashed tool: say so and keep the host usable.
         rows = Array.isArray(got?.sessions) ? got.sessions as SessionRow[] : [];
-        for (const w of Array.isArray(ws) ? ws : []) names.set(w.id, w.displayName || w.name);
+        for (const w of Array.isArray(projects) ? projects : []) names.set(w.id, w.displayName || w.name);
       } catch (e) {
         return { error: `could not list sessions: ${(e as Error).message}`, on_screen };
       }
@@ -116,7 +116,7 @@ export function sessionsHandler(host: AssistantHost) {
         sessions: page.map((s) => ({
           id: s.id,
           name: s.name ?? null,
-          workspace: names.get(s.workspaceId) ?? s.workspaceId,
+          project: names.get(s.projectId) ?? s.projectId,
           branch: s.branch ?? null,
           card: s.card ?? null,
           card_status: s.cardStatus ?? null,
@@ -168,13 +168,13 @@ export function sessionsHandler(host: AssistantHost) {
   };
 }
 
-/** `workspace_create_repo`: kebab the name, get the user's accept on the
+/** `project_create_repo`: kebab the name, get the user's accept on the
  *  FINAL name (the point of the gate), then the backend does the whole flow
- *  (POST /workspaces create=true: repo, seed, register; always private, not
- *  the model's call) and the host makes the new workspace the place the user
+ *  (POST /projects create=true: repo, seed, register; always private, not
+ *  the model's call) and the host makes the new project the place the user
  *  is. */
-export function workspaceCreateHandler(host: AssistantHost) {
-  return async (args: WorkspaceCreateArgs, opts: { abortSignal?: AbortSignal }): Promise<unknown> => {
+export function projectCreateHandler(host: AssistantHost) {
+  return async (args: ProjectCreateArgs, opts: { abortSignal?: AbortSignal }): Promise<unknown> => {
     const name = kebabName(args.name ?? '');
     if (!name) return { error: 'no usable name — ask for the project name again' };
     const ok = await host.approve({ label: 'new private repo', subject: name }, opts.abortSignal);
@@ -183,14 +183,14 @@ export function workspaceCreateHandler(host: AssistantHost) {
         'Often the name was misheard: ask what to change before calling again.' };
     }
     try {
-      const w = await host.call('POST', '/workspaces', {
+      const w = await host.call('POST', '/projects', {
         url: name, create: true, private: true,
         ...(args.description ? { description: args.description } : {}),
       }) as { id: string; owner: string; name: string };
-      const opened = await host.onWorkspaceCreated(w.id);
-      return { ok: true, repo: `${w.owner}/${w.name}`, private: true, workspace_id: w.id,
-        ...(opened.session ? { entered: 'a new session in the new workspace' }
-          : { note: `workspace created, but no session could be opened: ${opened.error ?? 'unknown'}` }) };
+      const opened = await host.onProjectCreated(w.id);
+      return { ok: true, repo: `${w.owner}/${w.name}`, private: true, project_id: w.id,
+        ...(opened.session ? { entered: 'a new session in the new project' }
+          : { note: `project created, but no session could be opened: ${opened.error ?? 'unknown'}` }) };
     } catch (e) { return { error: (e as Error).message }; }
   };
 }

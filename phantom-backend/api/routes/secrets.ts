@@ -1,58 +1,58 @@
 // Secrets — user-named tokens the coding agent reads (the cli adds and
 // deletes). The settings table's `secret` namespace: free names, one row per
 // secret, token encrypted, description plain. Two layers — global and
-// workspace — workspace winning a name collision, the same chain the GitHub
+// project — project winning a name collision, the same chain the GitHub
 // token walks. Writes and deletes address ONE explicit layer; only the value
 // GET cascades.
 //
-//   GET    /secrets            names + descriptions (+?workspace= merges that layer)
+//   GET    /secrets            names + descriptions (+?project= merges that layer)
 //   PUT    /secrets/:name      create or overwrite {description?, value?} at one layer
 //                             (no value = keep the stored one, description only)
-//   GET    /secrets/:name      the decrypted value, workspace → global
+//   GET    /secrets/:name      the decrypted value, project → global
 //   DELETE /secrets/:name      remove at one layer
 import type { FastifyInstance } from 'fastify';
-import { GLOBAL, workspaceScope } from '../../store.js';
+import { GLOBAL, projectScope } from '../../store.js';
 import { ok, err, type AppCtx } from '../app.js';
 import { secretName, SECRET_NAME_RULE } from '../../../core/secretName.js';
 
 const TAG = { tags: ['secrets'] };
 const scopeQuery = { type: 'object', properties: {
-  workspace: { type: 'string', description: 'Address this workspace\'s layer (list merges it; write/delete target it; the value GET has it win over global).' },
+  project: { type: 'string', description: 'Address this project\'s layer (list merges it; write/delete target it; the value GET has it win over global).' },
 } };
 const nameParam = { type: 'object', required: ['name'],
   properties: { name: { type: 'string' } } };
 
 export function secretsRoutes(app: FastifyInstance, ctx: AppCtx) {
   /** The scopes a request reads, most specific LAST — and the one it writes.
-   *  A workspace id is verified to exist, or a typo becomes a row nothing
+   *  A project id is verified to exist, or a typo becomes a row nothing
    *  will ever read. */
-  async function scopesOf(q: { workspace?: string }):
-  Promise<{ error: string } | { chain: string[]; write: string; label: 'global' | 'workspace' }> {
-    if (!q.workspace) return { chain: [GLOBAL], write: GLOBAL, label: 'global' };
-    if (!await ctx.workspaces.get(q.workspace)) return { error: `no workspace ${q.workspace}` };
-    return { chain: [GLOBAL, workspaceScope(q.workspace)], write: workspaceScope(q.workspace), label: 'workspace' };
+  async function scopesOf(q: { project?: string }):
+  Promise<{ error: string } | { chain: string[]; write: string; label: 'global' | 'project' }> {
+    if (!q.project) return { chain: [GLOBAL], write: GLOBAL, label: 'global' };
+    if (!await ctx.projects.get(q.project)) return { error: `no project ${q.project}` };
+    return { chain: [GLOBAL, projectScope(q.project)], write: projectScope(q.project), label: 'project' };
   }
 
-  app.get<{ Querystring: { workspace?: string } }>(
+  app.get<{ Querystring: { project?: string } }>(
     '/secrets', { schema: { ...TAG,
       summary: 'Every secret — names and descriptions, never values',
-      description: 'With ?workspace=: global + that workspace\'s layer, merged — the agent\'s view. Bare: EVERY layer on the server (the cli\'s list, which saves to any workspace), each workspace row carrying its `workspace` id. Either way `scope` says the layer, and the same name at two layers lists twice — the more specific one wins when a value is read.',
+      description: 'With ?project=: global + that project\'s layer, merged — the agent\'s view. Bare: EVERY layer on the server (the cli\'s list, which saves to any project), each project row carrying its `project` id. Either way `scope` says the layer, and the same name at two layers lists twice — the more specific one wins when a value is read.',
       querystring: scopeQuery } },
     async (req, reply) => {
       const sc = await scopesOf(req.query);
       if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
-      const raw = req.query.workspace
+      const raw = req.query.project
         ? await ctx.settings.listSecrets(sc.chain)
         : await ctx.settings.listAllSecrets();
       const secrets = raw.map((s) => ({
         name: s.name, description: s.description,
-        scope: s.scope === GLOBAL ? 'global' : 'workspace',
-        ...(s.scope === GLOBAL ? {} : { workspace: s.scope.replace(/^workspace:/, '') }),
+        scope: s.scope === GLOBAL ? 'global' : 'project',
+        ...(s.scope === GLOBAL ? {} : { project: s.scope.replace(/^project:/, '') }),
       }));
       return ok({ secrets });
     });
 
-  app.put<{ Params: { name: string }; Querystring: { workspace?: string };
+  app.put<{ Params: { name: string }; Querystring: { project?: string };
     Body: { description?: string; value?: string } }>(
     '/secrets/:name', { schema: { ...TAG,
       summary: 'Create or overwrite one secret at one layer',
@@ -83,10 +83,10 @@ export function secretsRoutes(app: FastifyInstance, ctx: AppCtx) {
       return ok({ name, scope: sc.label });
     });
 
-  app.get<{ Params: { name: string }; Querystring: { workspace?: string } }>(
+  app.get<{ Params: { name: string }; Querystring: { project?: string } }>(
     '/secrets/:name', { schema: { ...TAG,
       summary: 'One secret\'s value',
-      description: 'Decrypted. Resolution cascades: the workspace layer (when ?workspace= is passed) wins over global. Name is case-insensitive. An unknown name answers with the names that do exist.',
+      description: 'Decrypted. Resolution cascades: the project layer (when ?project= is passed) wins over global. Name is case-insensitive. An unknown name answers with the names that do exist.',
       params: nameParam, querystring: scopeQuery } },
     async (req, reply) => {
       const sc = await scopesOf(req.query);
@@ -101,10 +101,10 @@ export function secretsRoutes(app: FastifyInstance, ctx: AppCtx) {
       return ok({ name, value });
     });
 
-  app.delete<{ Params: { name: string }; Querystring: { workspace?: string } }>(
+  app.delete<{ Params: { name: string }; Querystring: { project?: string } }>(
     '/secrets/:name', { schema: { ...TAG,
       summary: 'Delete one secret at one layer',
-      description: 'Removes the row at the addressed layer only — a global secret shadowed by a workspace one survives the workspace delete, and the other way round.',
+      description: 'Removes the row at the addressed layer only — a global secret shadowed by a project one survives the project delete, and the other way round.',
       params: nameParam, querystring: scopeQuery } },
     async (req, reply) => {
       const sc = await scopesOf(req.query);

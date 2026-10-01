@@ -27,7 +27,7 @@ import { BoardEvents } from './boardEvents.js';
 import { SessionEvents } from './sessionEvents.js';
 import type { Sessions } from '../sessions.js';
 import type { Settings } from '../settings.js';
-import type { Workspaces } from '../workspaces.js';
+import type { Projects } from '../projects.js';
 import type { Databases } from '../databases.js';
 import type { Folders } from '../folders.js';
 import type { Cards } from '../cards.js';
@@ -41,8 +41,8 @@ import type { System } from '../system.js';
 import { BackdoorQueue } from './backdoor.js';
 import type { AutoPushResult, AutoPushEvent } from '../git/autoPush.js';
 import type { AutoPullResult, AutoPullEvent } from '../git/autoPull.js';
-import type { WorkspaceRow, SessionRow } from '../db/schema.js';
-import { workspaceRoutes } from './routes/workspaces.js';
+import type { ProjectRow, SessionRow } from '../db/schema.js';
+import { projectRoutes } from './routes/projects.js';
 import { sessionRoutes } from './routes/sessions.js';
 import { systemRoutes } from './routes/system.js';
 import { tasksRoutes } from './routes/tasks.js';
@@ -56,7 +56,7 @@ export interface AppCtx {
   // A route parses, checks, calls one method, shapes the reply; the rules
   // (and every change notice) live in the object.
   settings: Settings;
-  workspaces: Workspaces;
+  projects: Projects;
   folders: Folders;
   cards: Cards;
   sessions: Sessions;
@@ -67,7 +67,7 @@ export interface AppCtx {
   paths: Paths;
   apiKey: string;
   version: string;
-  /** The agent's own database per workspace (databases.ts). Absent in
+  /** The agent's own database per project (databases.ts). Absent in
    *  DB-only tests: the query route answers 503. */
   databases?: Databases;
   /** Docker wiring; absent in DB-only tests, and /fs then 404s. */
@@ -79,11 +79,11 @@ export interface AppCtx {
   /** `by` is the caller's client id: every step also lands on the session's
    *  live feed, published under it, so the feed's echo rule skips the one
    *  window that already draws this stream. */
-  autoPush?: (session: SessionRow, workspace: WorkspaceRow,
+  autoPush?: (session: SessionRow, project: ProjectRow,
     onEvent?: (e: AutoPushEvent) => void | Promise<void>, by?: string) => Promise<AutoPushResult>;
   /** Auto-pull (git/autoPull.ts) — base INTO the branch, same fixer. Absent
    *  in DB-only tests: the auto-pull route answers 503. */
-  autoPull?: (session: SessionRow, workspace: WorkspaceRow,
+  autoPull?: (session: SessionRow, project: ProjectRow,
     onEvent?: (e: AutoPullEvent) => void | Promise<void>, by?: string) => Promise<AutoPullResult>;
   /** The board's event bus (boardEvents.ts) — the card routes publish, the
    *  events route streams, the looper engine publishes its pairings. index.ts
@@ -132,8 +132,8 @@ export interface AppCtx {
      *  `releasedBy` is the releasing client id: the engine ignores its own
      *  releases (every turn ends in one — reacting would spin). */
     runLoopOfSession(sessionId: string, releasedBy: string): void;
-    /** auto_plan/auto_build changed — run every loop in a workspace (or all). */
-    runAllLoops(workspaceId?: string): void;
+    /** auto_plan/auto_build changed — run every loop in a project (or all). */
+    runAllLoops(projectId?: string): void;
     /** Cards with a round in flight — GET /health's `loops_running`. */
     runningCount(): number;
   };
@@ -158,7 +158,7 @@ export function ok<T>(data: T) {
 
 export async function buildApp(ctx: AppCtx) {
   // forceCloseConnections: a shutdown must not wait on the live feeds
-  // (`/sessions/:id/events`, `/workspaces/:id/events` — held open for as long
+  // (`/sessions/:id/events`, `/projects/:id/events` — held open for as long
   // as a window watches). Fastify's default waits for active connections,
   // which is for ever here; the clients reconnect on their own (follow.ts).
   const app = Fastify({ logger: false, forceCloseConnections: true });
@@ -217,7 +217,7 @@ export async function buildApp(ctx: AppCtx) {
     ctx.backdoor ??= new BackdoorQueue();
     settingsRoutes(api, ctx);
     secretsRoutes(api, ctx);
-    workspaceRoutes(api, ctx);
+    projectRoutes(api, ctx);
     databaseRoutes(api, ctx);
     sessionRoutes(api, ctx);
     toolRoutes(api, ctx);

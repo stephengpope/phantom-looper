@@ -2,7 +2,7 @@
 //
 // TWO KINDS, BY NAME. A TextInput is a single line — a filter, a name, a
 // secret: you type, backspace, enter. It never touches the arrow keys, so
-// the screen around it keeps them (/resume's ←→ cycle the workspace while
+// the screen around it keeps them (/resume's ←→ cycle the project while
 // the filter line is open). A TextArea is prose — the message prompt, a
 // card's lines: it wraps at its width and all four arrows move the cursor
 // through the text. One editor underneath; the name is the whole difference.

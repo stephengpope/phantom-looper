@@ -21,7 +21,7 @@
 // So a dev run and the installed app never share a byte — dev talks to the
 // server setup.sh brought up (it seats the url + key there), installed talks to
 // yours. Beyond that there is no per-directory config: a phantom-looper
-// workspace is remote, so the directory you launched from says nothing about
+// project is remote, so the directory you launched from says nothing about
 // which one you want. PHANTOM_CLI_DIR is the test seam: the suite points it at
 // a fresh temp dir so App's own file writes (the seating rule, the sidecar
 // log) never land in a real home.

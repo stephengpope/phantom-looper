@@ -1,4 +1,4 @@
-// INSTANT SYNC — the on-demand sync, fired for you. A workspace switch
+// INSTANT SYNC — the on-demand sync, fired for you. A project switch
 // (`instant_sync`) that keeps every live checkout in step with the base
 // branch on its own.
 //
@@ -43,10 +43,10 @@
 // runs on removal. `reconcile` covers what those two cannot: containers
 // already running when this process boots, and the switch or a timing
 // changed (the settings bus says so) — never a poll.
-import type { SessionRow, WorkspaceRow } from '../db/schema.js';
+import type { SessionRow, ProjectRow } from '../db/schema.js';
 import type { Sessions } from '../sessions.js';
 import type { Folders } from '../folders.js';
-import type { Workspaces } from '../workspaces.js';
+import type { Projects } from '../projects.js';
 import type { Settings } from '../settings.js';
 import { repoDir, type Paths } from '../pool/paths.js';
 import type { AutoPushResult } from './autoPush.js';
@@ -59,21 +59,21 @@ const log = logger('instant-sync');
 export interface InstantSyncDeps {
   sessions: Sessions;
   folders: Folders;
-  workspaces: Workspaces;
+  projects: Projects;
   settings: Settings;
   paths: Paths;
   watcher: FolderWatcher;
   /** Auto-push / auto-pull as index.ts wires them for instant sync: no
    *  hold, no fixer, notes to the backdoor queue. */
-  autoPush: (session: SessionRow, workspace: WorkspaceRow) => Promise<AutoPushResult>;
-  autoPull: (session: SessionRow, workspace: WorkspaceRow) => Promise<AutoPullResult>;
+  autoPush: (session: SessionRow, project: ProjectRow) => Promise<AutoPushResult>;
+  autoPull: (session: SessionRow, project: ProjectRow) => Promise<AutoPullResult>;
   /** A sync that did not complete, in the sync's own words. */
   failed: (session: SessionRow, op: 'push' | 'pull', reason: string) => void;
 }
 
 interface Watched {
   folderId: string;
-  workspace: WorkspaceRow;
+  project: ProjectRow;
   debounceMs: number;
   pullMs: number;
   /** When a file last changed; null once that change has been pushed. */
@@ -86,7 +86,7 @@ interface Watched {
   stopped: boolean;
 }
 
-/** A workspace's three instant-sync settings, resolved. */
+/** A project's three instant-sync settings, resolved. */
 interface Config { on: boolean; debounceMs: number; pullMs: number }
 
 export class InstantSync {
@@ -94,12 +94,12 @@ export class InstantSync {
 
   constructor(private deps: InstantSyncDeps) {}
 
-  /** A container came up for this folder. Attach if its workspace has the
+  /** A container came up for this folder. Attach if its project has the
    *  switch on; a no-op if already attached. */
-  async watchFolder(folderId: string, workspace: WorkspaceRow | undefined): Promise<void> {
-    if (!workspace || this.watched.has(folderId)) return;
-    const c = await this.configOf(workspace);
-    if (c.on) await this.attach(folderId, workspace, c);
+  async watchFolder(folderId: string, project: ProjectRow | undefined): Promise<void> {
+    if (!project || this.watched.has(folderId)) return;
+    const c = await this.configOf(project);
+    if (c.on) await this.attach(folderId, project, c);
   }
 
   /** The folder's container is gone. */
@@ -109,30 +109,30 @@ export class InstantSync {
   }
 
   /** Bring the watcher set in line with `activeFolderIds` (the running
-   *  containers) and each workspace's switch and timings: attach the new,
+   *  containers) and each project's switch and timings: attach the new,
    *  detach the gone or switched off, retime the rest. For boot and for a
    *  settings change — the two facts no container event carries. */
   async reconcile(activeFolderIds: string[]): Promise<void> {
     const rows = await this.deps.folders.listForWorkRefresh(activeFolderIds);
-    const workspaces = new Map((await this.deps.workspaces.list()).map((w) => [w.id, w]));
+    const projects = new Map((await this.deps.projects.list()).map((w) => [w.id, w]));
     const configs = new Map<string, Config>();
-    for (const id of new Set(rows.map((r) => r.workspaceId))) {
-      const workspace = workspaces.get(id);
-      if (workspace) configs.set(id, await this.configOf(workspace));
+    for (const id of new Set(rows.map((r) => r.projectId))) {
+      const project = projects.get(id);
+      if (project) configs.set(id, await this.configOf(project));
     }
     const wanted = new Set<string>();
     for (const row of rows) {
-      const workspace = workspaces.get(row.workspaceId);
-      const c = configs.get(row.workspaceId);
-      if (!workspace || !c?.on) continue;
+      const project = projects.get(row.projectId);
+      const c = configs.get(row.projectId);
+      if (!project || !c?.on) continue;
       wanted.add(row.id);
       const current = this.watched.get(row.id);
       if (current) {
-        current.workspace = workspace;
+        current.project = project;
         current.debounceMs = c.debounceMs;
         current.pullMs = c.pullMs;
       } else {
-        await this.attach(row.id, workspace, c)
+        await this.attach(row.id, project, c)
           .catch((e) => log.warn({ folder: row.id, err: errStr(e) }, 'could not start watching'));
       }
     }
@@ -146,20 +146,20 @@ export class InstantSync {
     this.deps.watcher.stop();
   }
 
-  private async configOf(workspace: WorkspaceRow): Promise<Config> {
+  private async configOf(project: ProjectRow): Promise<Config> {
     const c = await this.deps.settings.resolveMany(
-      ['instant_sync', 'instant_sync_push_debounce_ms', 'instant_sync_pull_interval_ms'], { workspace });
+      ['instant_sync', 'instant_sync_push_debounce_ms', 'instant_sync_pull_interval_ms'], { project });
     return { on: c.instant_sync, debounceMs: c.instant_sync_push_debounce_ms, pullMs: c.instant_sync_pull_interval_ms };
   }
 
-  private async attach(folderId: string, workspace: WorkspaceRow, c: Config): Promise<void> {
+  private async attach(folderId: string, project: ProjectRow, c: Config): Promise<void> {
     // `changedAt` far in the past: the first beat runs a push check, so work
     // left unpushed before this watcher existed (a server restart) goes now.
-    const w: Watched = { folderId, workspace, debounceMs: c.debounceMs, pullMs: c.pullMs,
+    const w: Watched = { folderId, project, debounceMs: c.debounceMs, pullMs: c.pullMs,
       changedAt: 0, lastFailure: { push: null, pull: null }, stopped: false };
     this.deps.watcher.watch(folderId, repoDir(this.deps.paths, folderId), () => { w.changedAt = Date.now(); });
     this.watched.set(folderId, w);
-    log.info({ folder: folderId, workspace: workspace.id, debounceMs: c.debounceMs, pullMs: c.pullMs }, 'instant sync on');
+    log.info({ folder: folderId, project: project.id, debounceMs: c.debounceMs, pullMs: c.pullMs }, 'instant sync on');
     void this.beat(w);
   }
 
@@ -179,11 +179,11 @@ export class InstantSync {
     try {
       const session = await this.deps.sessions.get(w.folderId);
       if (!session) return;
-      const pulled = await this.deps.autoPull(session, w.workspace);
+      const pulled = await this.deps.autoPull(session, w.project);
       this.settle(w, session, 'pull', pulled);
       const since = w.changedAt;
       if (since !== null && Date.now() - since >= w.debounceMs) {
-        const pushed = await this.deps.autoPush(session, w.workspace);
+        const pushed = await this.deps.autoPush(session, w.project);
         this.settle(w, session, 'push', pushed);
         // The change is done with when it pushed or there was nothing to push.
         // `busy` means someone else is handling it — the change is still

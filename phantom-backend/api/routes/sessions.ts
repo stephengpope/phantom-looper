@@ -50,8 +50,8 @@ const idParam = { type: 'object', properties: { id: { type: 'string' } }, requir
  *  skills (the repo's .agents/skills/ on the session's branch — scanned AFTER
  *  the checkout, since a claim sits on base until checkoutBranch — merged
  *  with the image's baked /opt/skills, repo shadowing system), the secrets
- *  index (names + descriptions, global + workspace, workspace shadowing
- *  global), and the workspace's resolved agent_git_credentials. A row that
+ *  index (names + descriptions, global + project, project shadowing
+ *  global), and the project's resolved agent_git_credentials. A row that
  *  already holds a prompt keeps it (Sessions.freezeSystemPrompt) — a restart
  *  or a re-open never moves a running session's prompt. Called at creation
  *  and, for sessions born before the column, on their first open. */
@@ -78,7 +78,7 @@ const lockedErr = (s: SessionRow) =>
 async function publishBoardLock(ctx: AppCtx, sessionId: string, locked: boolean): Promise<void> {
   try {
     const card = await ctx.cards.ofSession(sessionId);
-    if (card) ctx.events?.publish(card.workspace_id,
+    if (card) ctx.events?.publish(card.project_id,
       { event: 'session_lock', card: card.number, id: sessionId, locked });
   } catch { /* best-effort — the board refreshes on reconnect anyway */ }
 }
@@ -115,7 +115,7 @@ const unknownBlock = (reply: FastifyReply, e: unknown) =>
   e instanceof SystemPromptError ? reply.code(400).send(err(e.code, e.message)) : undefined;
 
 export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
-  app.post<{ Body: { workspace_id: string; id?: string; system_prompt_layout: SystemPromptLayout } }>('/sessions', { schema: { ...TAG,
+  app.post<{ Body: { project_id: string; id?: string; system_prompt_layout: SystemPromptLayout } }>('/sessions', { schema: { ...TAG,
     summary: 'Create — or restart — a session',
     description: 'Claims a pre-cloned pool directory (or clones) and checks out the session\'s branch: ' +
       'its own {prefix}/{id}, cut from the base branch. That one branch ' +
@@ -127,24 +127,24 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       '`system_prompt_layout` is the agent\'s prompt layout; the server fills its blocks from that moment\'s ' +
       'skills, secrets, SOUL.md and date, writes the three sections with the row, and answers them as ' +
       '`system_prompt` — sent as stored on every turn. A restart keeps the prompt the session was born with.',
-    body: { type: 'object', required: ['workspace_id', 'system_prompt_layout'], additionalProperties: false,
-      examples: [{ workspace_id: 'paste the id from POST /workspaces',
+    body: { type: 'object', required: ['project_id', 'system_prompt_layout'], additionalProperties: false,
+      examples: [{ project_id: 'paste the id from POST /projects',
         system_prompt_layout: { stable: [{ text: 'You are…' }], context: ['agents_md'], volatile: ['time_date'] } }],
       properties: {
-        workspace_id: { type: 'string' },
+        project_id: { type: 'string' },
         id: { type: 'string', description: 'Restart this session id instead of starting a new one.' },
         system_prompt_layout: SYSTEM_PROMPT_LAYOUT,
       } } } }, async (req, reply) => {
-    if (!req.body?.workspace_id) return reply.code(400).send(err('missing_workspace', 'body.workspace_id required'));
+    if (!req.body?.project_id) return reply.code(400).send(err('missing_project', 'body.project_id required'));
     try {
-      return reply.code(201).send(ok(await ctx.sessions.start(req.body.workspace_id, req.body.system_prompt_layout, { id: req.body.id })));
+      return reply.code(201).send(ok(await ctx.sessions.start(req.body.project_id, req.body.system_prompt_layout, { id: req.body.id })));
     } catch (e) {
       if (unknownBlock(reply, e)) return;
       // The session's own refusals, and the checkout's (a dead token, a repo
       // the token cannot see, GitHub unreachable — Folders.checkout).
       if (e instanceof SessionError || e instanceof FolderError) {
         const status = e.code === 'already_active' ? 409
-          : e.code === 'workspace_mismatch' || e.code === 'invalid_args'
+          : e.code === 'project_mismatch' || e.code === 'invalid_args'
             || e.code === 'credential_invalid' || e.code === 'credential_insufficient' ? 400
           : e.code === 'upstream_unreachable' ? 502 : 404;
         return reply.code(status).send(err(e.code, e.message, e.retryable));
@@ -158,14 +158,14 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   // grey them out rather than infer their fate from whether a local
   // transcript happens to exist.
   app.get<{ Querystring: { limit?: number; before?: string; before_id?: string; before_pinned?: boolean;
-    typed?: boolean; background?: boolean; q?: string; workspace?: string } }>(
+    typed?: boolean; background?: boolean; q?: string; project?: string } }>(
     '/sessions', { schema: { ...TAG,
     summary: 'List sessions',
     description: 'Every session, pinned first then newest activity first, including destroyed ones (status says which). ' +
       'Each row carries `locked` (someone holds it right now, label in locked_label/locked_by), ' +
       '`lastUserMessage` (the last thing the user typed, from the server-side transcript) and ' +
       '`name` (a model-written title of what the session is building, best-effort). ' +
-      'Join against GET /workspaces for names.\n\n' +
+      'Join against GET /projects for names.\n\n' +
       'No parameters = the whole list. `limit` returns one page; the next page passes the last ' +
       'row\'s last_used_at as `before` and its id as `before_id` (the tie-break — several rows can ' +
       'share a timestamp). A page shorter than `limit` is the end. The cursor is the values the ' +
@@ -178,11 +178,11 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       'every session on the same folder.\n\n' +
       '`q` filters: the text as ONE substring, case-insensitive, anywhere in the name, the last ' +
       'user message or the branch. It is part of the list\'s WHERE, so paging and `total` follow it; ' +
-      'so is `workspace` (one workspace id).',
+      'so is `project` (one project id).',
     querystring: { type: 'object', additionalProperties: false, properties: {
       limit: { type: 'integer', minimum: 1, maximum: 500, description: 'Page size; omitted = everything.' },
       q: { type: 'string', maxLength: 200, description: 'Substring to match (case-insensitive) in name, last user message or branch.' },
-      workspace: { type: 'string', description: 'Only this workspace\'s sessions (a workspace id).' },
+      project: { type: 'string', description: 'Only this project\'s sessions (a project id).' },
       typed: { type: 'boolean', description: 'true = only sessions something was typed into (a last message exists).' },
       background: { type: 'boolean', description: 'false = leave out the background seats: supervisor sessions and cron runs.' },
       before: { type: 'string', description: 'A row\'s last_used_at (ISO) — return only older activity.' },
@@ -195,7 +195,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     const { rows, total } = await (async () => {
       const r = await ctx.sessions.list({
         typed: req.query.typed, background: req.query.background, q: req.query.q,
-        workspace: req.query.workspace, limit: req.query.limit,
+        project: req.query.project, limit: req.query.limit,
         before: req.query.before ? new Date(req.query.before) : undefined,
         beforeId: req.query.before_id, beforePinned: req.query.before_pinned,
       });
@@ -293,14 +293,14 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (!ctx.fs) return reply.code(503).send(err('unavailable', 'containers are not wired on this server', false));
       const s = await ctx.sessions.get(req.params.id);
       if (!s) return reply.code(404).send(err('not_found', 'session not found'));
-      const workspace = await ctx.workspaces.get(s.workspaceId);
-      if (!workspace) return reply.code(404).send(err('not_found', 'workspace not found'));
+      const project = await ctx.projects.get(s.projectId);
+      if (!project) return reply.code(404).send(err('not_found', 'project not found'));
       if (s.status !== 'active') {
         if (!ownsFolder(s)) return reply.code(400).send(err('no_files', 'this session has no files of its own'));
-        await ctx.sessions.create(s.workspaceId, { id: s.id });
+        await ctx.sessions.create(s.projectId, { id: s.id });
       }
       await ctx.sessions.touch(s);
-      await ctx.fs.containers.ensure(folderOf(s), workspace);
+      await ctx.fs.containers.ensure(folderOf(s), project);
       return ok({ pinged: true });
     });
 
@@ -337,7 +337,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     '/sessions/:id/notify', { schema: { ...TAG,
       summary: 'DM the user on Telegram from a session',
       description: 'Sends `text` to the authorized Telegram user as the session\'s agent: markdown formatted, ' +
-        'MEDIA:/workspace/... tags and bare /workspace paths delivered as files, spoken when the reply mode says so. ' +
+        'MEDIA:/workspace/... tags and bare /project paths delivered as files, spoken when the reply mode says so. ' +
         'The bubble is recorded against the session, so a reply to it enters the session. ' +
         '503 when Telegram is not wired or not enabled — the message says which setting is missing.',
       params: idParam,
@@ -685,12 +685,12 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         else if (p.type === 'tool-call') line({ type: 'tool', name: p.toolName });
       });
       try {
-        const workspace = await ctx.workspaces.get(opened.session.workspaceId);
-        const cfg = await ctx.settings.agentConfig('coding', { workspace: workspace ?? undefined, pin: sessionPin(opened.session) });
+        const project = await ctx.projects.get(opened.session.projectId);
+        const cfg = await ctx.settings.agentConfig('coding', { project: project ?? undefined, pin: sessionPin(opened.session) });
         const { text } = await runCodingTurn(
           { f, apiKey: ctx.apiKey, base: 'http://looper/api', modelFetch: ctx.modelFetch,
             sessionEvents: ctx.sessionEvents, client, backdoor: ctx.backdoor },
-          opened, opened.session.workspaceId, req.body.message, req.body.plan === true, cfg);
+          opened, opened.session.projectId, req.body.message, req.body.plan === true, cfg);
         line({ type: 'result', text });
       } catch (e) {
         line({ type: 'error', message: (e as Error).message });
@@ -778,8 +778,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         // A destroyed session has no checkout — its branch on origin is the
         // record, and the cut below fails clearly if even that is gone.
         if (src.status === 'active' && ctx.engine && src.branch) {
-          const workspace = await ctx.workspaces.get(src.workspaceId);
-          const r = await ctx.engine.push(src, workspace!);
+          const project = await ctx.projects.get(src.projectId);
+          const r = await ctx.engine.push(src, project!);
           if (r !== 'pushed' && r !== 'nothing') {
             return reply.code(502).send(err('flush_failed',
               `could not push the session's work to origin first (push ${r}) — the copy was not made`, true));
@@ -788,7 +788,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
           // nobody else takes the source mid-copy.
           await ctx.sessions.renewLock(src.id, GIT_CLIENT_ID, Number(ttl));
         }
-        const copy = await ctx.sessions.create(src.workspaceId, src.branch ? { fromBranch: src.branch } : {});
+        const copy = await ctx.sessions.create(src.projectId, src.branch ? { fromBranch: src.branch } : {});
         // Copy the source's scratch pad into the copy's folder — same filenames,
         // the copy's container mounts them at the same /workspace/scratch/ path,
         // so every reference in the transcript works without rewriting.
@@ -813,8 +813,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   app.get<{ Params: { id: string } }>('/sessions/:id', { schema: { ...TAG,
     summary: 'Session metadata',
     description: 'Status, branch, timestamps, `system_prompt` (the frozen prompt the session runs on, ' +
-      'in its three sections; null only on a row born before 025). A session runs on its workspace\'s settings — ' +
-      'GET /settings?workspace=. The workspace container is runtime state and has no field here.',
+      'in its three sections; null only on a row born before 025). A session runs on its project\'s settings — ' +
+      'GET /settings?project=. The workspace container is runtime state and has no field here.',
     params: idParam } }, async (req, reply) => {
     const s = await ctx.sessions.get(req.params.id);
     if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
@@ -879,9 +879,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       const hasFiles = ownsFolder(s) && s.status === 'active';
       if (!purge && !hasFiles) return ok({ already: ownsFolder(s) ? s.status : 'no files' });
       if (hasFiles && ctx.engine) {
-        const workspace = await ctx.workspaces.get(s.workspaceId);
-        if (workspace) {
-          await ctx.engine.push(s, workspace).catch((e: Error) => {
+        const project = await ctx.projects.get(s.projectId);
+        if (project) {
+          await ctx.engine.push(s, project).catch((e: Error) => {
             log.warn({ session: s.id, err: e.message }, 'push before delete failed — deleting anyway');
           });
         }
@@ -910,12 +910,12 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   // Telegram assistant calls createAssistant directly (it lives in the
   // server process).
 
-  const target = { type: 'object', required: ['workspace_id'], properties: {
-    workspace_id: { type: 'string' },
+  const target = { type: 'object', required: ['project_id'], properties: {
+    project_id: { type: 'string' },
     session_id: { type: ['string', 'null'], description: 'the session on screen — the assistant reads its files' },
   } } as const;
 
-  app.post<{ Body: { workspace_id: string; session_id?: string | null; system_prompt_layout: SystemPromptLayout } }>(
+  app.post<{ Body: { project_id: string; session_id?: string | null; system_prompt_layout: SystemPromptLayout } }>(
     '/sessions/assistant', { schema: { ...TAG,
       summary: 'Create an assistant session',
       description: 'Creates a conversation-only session for the assistant: no checkout of its own, its ' +
@@ -925,37 +925,37 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       body: { ...target, required: [...target.required, 'system_prompt_layout'],
         properties: { ...target.properties, system_prompt_layout: SYSTEM_PROMPT_LAYOUT } } } },
     async (req, reply) => {
-      try { return ok(await ctx.sessions.createAssistant(req.body.workspace_id, req.body.session_id, req.body.system_prompt_layout)); }
+      try { return ok(await ctx.sessions.createAssistant(req.body.project_id, req.body.session_id, req.body.system_prompt_layout)); }
       catch (e) { if (unknownBlock(reply, e)) return; throw e; }
     });
 
-  app.post<{ Params: { id: string }; Body: { workspace_id: string; session_id?: string | null } }>(
+  app.post<{ Params: { id: string }; Body: { project_id: string; session_id?: string | null } }>(
     '/sessions/:id/follow', { schema: { ...TAG,
       summary: 'Point an assistant session at the session on screen',
-      description: 'Re-points the assistant row\'s workspace and folder at what the user is looking at, ' +
+      description: 'Re-points the assistant row\'s project and folder at what the user is looking at, ' +
         'so its tools read that session\'s files. Assistant sessions only. Returns the row.',
       params: idParam, body: target } },
     async (req, reply) => {
       const s = await ctx.sessions.get(req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (s.agent !== 'assistant') return reply.code(400).send(err('not_assistant', 'this route is for assistant sessions only'));
-      await ctx.sessions.follow(s.id, req.body.workspace_id, req.body.session_id);
+      await ctx.sessions.follow(s.id, req.body.project_id, req.body.session_id);
       return ok(await ctx.sessions.get(s.id));
     });
 
   // The supervisor's session: conversation-only, on the coder's folder, on
   // the card. The looper creates one per run.
-  app.post<{ Body: { workspace_id: string; folder_id: string; card_id: number; system_prompt_layout: SystemPromptLayout } }>(
+  app.post<{ Body: { project_id: string; folder_id: string; card_id: number; system_prompt_layout: SystemPromptLayout } }>(
     '/sessions/supervisor', { schema: { ...TAG,
       summary: 'Create a supervisor session',
       description: 'Creates a conversation-only session for a card run\'s supervisor: no checkout of its own, its ' +
         'folder is the coder\'s (`folder_id`), so its file tools read the coder\'s work. ' +
         '`system_prompt_layout` as on POST /sessions. Returns the row.',
-      body: { type: 'object', required: ['workspace_id', 'folder_id', 'card_id', 'system_prompt_layout'], additionalProperties: false, properties: {
-        workspace_id: { type: 'string' }, folder_id: { type: 'string' }, card_id: { type: 'integer' },
+      body: { type: 'object', required: ['project_id', 'folder_id', 'card_id', 'system_prompt_layout'], additionalProperties: false, properties: {
+        project_id: { type: 'string' }, folder_id: { type: 'string' }, card_id: { type: 'integer' },
         system_prompt_layout: SYSTEM_PROMPT_LAYOUT } } } },
     async (req, reply) => {
-      try { return ok(await ctx.sessions.createSupervisor(req.body.workspace_id, req.body.folder_id, req.body.card_id, req.body.system_prompt_layout)); }
+      try { return ok(await ctx.sessions.createSupervisor(req.body.project_id, req.body.folder_id, req.body.card_id, req.body.system_prompt_layout)); }
       catch (e) { if (unknownBlock(reply, e)) return; throw e; }
     });
 
@@ -983,8 +983,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (s.status !== 'active') return reply.code(410).send(err('session_destroyed', `session is ${s.status}`));
       if (ctx.activeTurns?.has(s.id) && s.lockedBy && s.lockedBy !== client) return reply.code(409).send(lockedErr(s));
-      const workspace = await ctx.workspaces.get(s.workspaceId);
-      if (!workspace) return reply.code(404).send(err('not_found', 'workspace vanished'));
+      const project = await ctx.projects.get(s.projectId);
+      if (!project) return reply.code(404).send(err('not_found', 'project vanished'));
       // The caller hanging up (a stop pressed while this request was in
       // flight) surfaces as the socket closing with the reply unfinished —
       // the one reliable disconnect signal (tools.ts reads it the same way).
@@ -998,7 +998,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         callerGone = true;
         if (held) void releaseHold(ctx, s, client);
       });
-      const settings = await ctx.settings.resolveMany(['session_lock_ttl_ms'], { workspace });
+      const settings = await ctx.settings.resolveMany(['session_lock_ttl_ms'], { project });
       const expires = await ctx.sessions.acquireLock(s, client, Number(settings.session_lock_ttl_ms), req.body.label);
       if (!expires) return reply.code(409).send(lockedErr(s));
       held = true;
@@ -1018,9 +1018,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       }
       ctx.sessions.rememberLinesAtTurnStart(s.id, atStart.transcriptLines);
       let config;
-      try { config = await ctx.settings.agentConfig(req.body.type, { workspace, pin: sessionPin(s) }); }
+      try { config = await ctx.settings.agentConfig(req.body.type, { project, pin: sessionPin(s) }); }
       catch (e) { return reply.code(400).send(err('config_invalid', (e as Error).message)); }
-      const tools = await toolsFor(req.body.type, { app: ctx, session: s, workspace });
+      const tools = await toolsFor(req.body.type, { app: ctx, session: s, project });
       return ok({ expires_at: expires.toISOString(), transcript_updated_at: atStart.transcriptUpdatedAt?.toISOString() ?? null,
         planMode: s.planMode, config: { model: config.model, maxSteps: config.maxSteps }, tools });
     });

@@ -22,11 +22,11 @@ Put a card in the **plan** column and the loop takes it from there: a coding age
 
 ### 🎙 Voice assistant — Run the whole app by talking to it.
 
-Open sessions, add cards, move them, tick requirements, switch auto plan and auto build on and off, and create a new repo and workspace, all by voice. The assistant works the same board and sessions you do, so you can manage a day's work without touching the keyboard.
+Open sessions, add cards, move them, tick requirements, switch auto plan and auto build on and off, and create a new repo and project, all by voice. The assistant works the same board and sessions you do, so you can manage a day's work without touching the keyboard.
 
 ### ⏰ Crons — Schedule a prompt or a script; it runs unattended.
 
-Tell the coding agent or the assistant "every weekday at 9, summarize what landed on main" or "remind me tonight at 6:50 to check the deploy", and it schedules it. When the time comes the server opens a fresh session in the workspace, runs the prompt as one turn, and closes it — the session is the record, on `/resume` (behind `[s]`) and in the Telegram digest. For a job a shell script already does — a backup, a report, a health check — schedule the script instead ("every night at 2, run scripts/backup.sh"): it runs with `sh` in the same fresh session, no model and no tokens, and its exit code and output are the record. Recurring ones take a cron expression, one-time ones a date and time, all read in your time zone (`/settings` → general). A run uses the workspace's coding model unless you name one for that cron ("run the nightly audit on opus, high reasoning") — the agent stores the provider, model and reasoning level on the cron, and only that cron's runs use them. Crons live in the database with the cards, addressed by name; the agents manage them with the `cron_*` tools.
+Tell the coding agent or the assistant "every weekday at 9, summarize what landed on main" or "remind me tonight at 6:50 to check the deploy", and it schedules it. When the time comes the server opens a fresh session in the project, runs the prompt as one turn, and closes it — the session is the record, on `/resume` (behind `[s]`) and in the Telegram digest. For a job a shell script already does — a backup, a report, a health check — schedule the script instead ("every night at 2, run scripts/backup.sh"): it runs with `sh` in the same fresh session, no model and no tokens, and its exit code and output are the record. Recurring ones take a cron expression, one-time ones a date and time, all read in your time zone (`/settings` → general). A run uses the project's coding model unless you name one for that cron ("run the nightly audit on opus, high reasoning") — the agent stores the provider, model and reasoning level on the cron, and only that cron's runs use them. Crons live in the database with the cards, addressed by name; the agents manage them with the `cron_*` tools.
 
 ### 🛰 Any device — Start on one machine, continue on another.
 
@@ -90,7 +90,7 @@ On `/server`, paste the URL and API key. Both come from the box: `phantom-backen
 
 ### 3. First run
 
-Either way you are now in the app. It asks for a GitHub repo — that is your first workspace, and every session runs on a clone of it. Credentials live on `/keys`, everything else on `/settings`.
+Either way you are now in the app. It asks for a GitHub repo — that is your first project, and every session runs on a clone of it. Credentials live on `/keys`, everything else on `/settings`.
 
 ### 4. Configure
 
@@ -117,10 +117,10 @@ The full product: voice, web, and the looper on autopilot. Row names are the one
 | `firecrawl key` | `/keys` | the agents can search and read the web |
 | `auto plan` + `auto build` on | `/settings` | cards in plan and in progress drive themselves |
 | `auto-push on archive` on | `/settings` | archiving a done card merges and pushes it |
-| `instant sync` on | `/workspace` → `e` | a notes or second-brain repo keeps itself in step: changes auto-push seconds after they settle, base is fetched and auto-pulled seconds after it moves |
+| `instant sync` on | `/project` → `e` | a notes or second-brain repo keeps itself in step: changes auto-push seconds after they settle, base is fetched and auto-pulled seconds after it moves |
 | `loop token budget` | `/settings` | a spend cap per card run |
 | `time zone` under general | `/settings` | crons fire, the token report's "today" starts, and the agents' current date is read in your zone, not UTC |
-| `boot into last workspace` on | `/settings` | skip the picker, start where you left off |
+| `boot into last project` on | `/settings` | skip the picker, start where you left off |
 
 ### The server, from the app or Telegram
 

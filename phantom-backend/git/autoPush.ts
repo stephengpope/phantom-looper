@@ -2,7 +2,7 @@
 // `syncBranch` with `landOnBase: true`; sync.ts holds the flow and the whole
 // argument for it. This file is the result vocabulary the routes and the app
 // already speak, and nothing else.
-import type { WorkspaceRow, SessionRow } from '../db/schema.js';
+import type { ProjectRow, SessionRow } from '../db/schema.js';
 import type { Paths } from '../pool/paths.js';
 import type { ModelConfig } from '../../core/llm/createAgent.js';
 import { syncBranch, type SyncEvent, type SyncDeps, type ConflictContext } from './sync.js';
@@ -36,11 +36,11 @@ export interface AutoPushDeps {
 }
 
 export async function autoPush(
-  deps: AutoPushDeps, session: SessionRow, workspace: WorkspaceRow,
+  deps: AutoPushDeps, session: SessionRow, project: ProjectRow,
   /** `hold: false` — run without taking the session (instant sync; see sync.ts). */
   opts: { hold?: boolean } = {},
 ): Promise<AutoPushResult> {
-  const r = await syncBranch(deps, session, workspace,
+  const r = await syncBranch(deps, session, project,
     { landOnBase: true, label: 'auto-push', ...opts });
   const { reason, rounds, sha } = r;
   if (r.outcome === 'ok') return { result: 'pushed', rounds, sha };

@@ -39,7 +39,7 @@ export interface CardRow extends CardShape {
 
 /** A card runs when the switch for ITS loop column says so: `plan` is gated
  *  by auto_plan, `in_progress` by auto_build — the card's own tri-state, or,
- *  unset, the workspace's setting of the same name. The break is this same
+ *  unset, the project's setting of the same name. The break is this same
  *  predicate no longer matching (the card left the columns, or its column's
  *  switch is off). */
 export function canTurn(card: CardRow, defaults: { plan: boolean; build: boolean }): boolean {

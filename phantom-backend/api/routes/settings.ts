@@ -6,23 +6,23 @@
 //   GET    /settings/events    change notices (no values — listeners re-read)
 //
 // Every key is declared in code (settings.ts) — defaults, types, descriptions,
-// whether a workspace may override it. Unknown keys are refused: a store
+// whether a project may override it. Unknown keys are refused: a store
 // where every key is declared is what keeps a typo from becoming an override
-// nothing reads. `?workspace=<id>` reads or writes that workspace's layer —
-// THE door for workspace overrides (the cli's workspace screen, the token).
+// nothing reads. `?project=<id>` reads or writes that project's layer —
+// THE door for project overrides (the cli's project screen, the token).
 //
 // Credentials are returned decrypted; which keys are credentials is declared
 // in code (CREDENTIALS), never decided by a write.
 import type { FastifyInstance } from 'fastify';
 import type { FastifyRequest } from 'fastify';
-import type { WorkspaceRow } from '../../db/schema.js';
+import type { ProjectRow } from '../../db/schema.js';
 import {
   CREDENTIALS, CREDENTIAL_NAMES, type CredentialMeta, credentialMeta,
-  isWorkspaceOverridable, isCredentialWorkspaceScoped, isGlobalSettable,
+  isProjectOverridable, isCredentialProjectScoped, isGlobalSettable,
   SettingsWriteError, type SettingKey,
   DEFAULTS, DESCRIPTIONS, META,
 } from '../../settings.js';
-import { GLOBAL, workspaceScope } from '../../store.js';
+import { GLOBAL, projectScope } from '../../store.js';
 import { sessionPin, type AgentName } from '../../agentConfig.js';
 import { AGENT_NAMES } from '../../../core/llm/agentConfig.js';
 import { ok, err, type AppCtx } from '../app.js';
@@ -32,62 +32,62 @@ const writerOf = (req: FastifyRequest): string | undefined =>
 
 const TAG = { tags: ['settings'] };
 const scopeQuery = { type: 'object', properties: {
-  workspace: { type: 'string', description: 'Read/write at this workspace\'s layer.' },
+  project: { type: 'string', description: 'Read/write at this project\'s layer.' },
 } };
 
 export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
-  /** The scope one request addresses. Verifying the workspace exists is what
+  /** The scope one request addresses. Verifying the project exists is what
    *  stops a typo becoming an override nothing will ever read — the row would
    *  be perfectly valid and perfectly dead. */
-  type Scope = { error: string } | { write: string; kind: 'global' | 'workspace'; workspace?: WorkspaceRow };
-  async function scopeOf(q: { workspace?: string }): Promise<Scope> {
-    if (q.workspace) {
-      const workspace = await ctx.workspaces.get(q.workspace);
-      if (!workspace) return { error: `no workspace ${q.workspace}` };
-      return { write: workspaceScope(q.workspace), kind: 'workspace' as const, workspace };
+  type Scope = { error: string } | { write: string; kind: 'global' | 'project'; project?: ProjectRow };
+  async function scopeOf(q: { project?: string }): Promise<Scope> {
+    if (q.project) {
+      const project = await ctx.projects.get(q.project);
+      if (!project) return { error: `no project ${q.project}` };
+      return { write: projectScope(q.project), kind: 'project' as const, project };
     }
     return { write: GLOBAL, kind: 'global' as const };
   }
 
-  app.get<{ Querystring: { workspace?: string } }>(
+  app.get<{ Querystring: { project?: string } }>(
     '/settings', { schema: { ...TAG,
       summary: 'Every setting, resolved',
-      description: 'Every setting with its LAYERS — `default` (code), `global`, `workspace` — plus the computed `value` and `source` (the layer it came from), and `description`/`meta`/`overridable` so a client renders an editor from this one call. Pass ?workspace= to fill in that layer. Credentials come back decrypted, flagged `secret`.',
+      description: 'Every setting with its LAYERS — `default` (code), `global`, `project` — plus the computed `value` and `source` (the layer it came from), and `description`/`meta`/`overridable` so a client renders an editor from this one call. Pass ?project= to fill in that layer. Credentials come back decrypted, flagged `secret`.',
       querystring: scopeQuery } },
     async (req, reply) => {
       const sc = await scopeOf(req.query);
       if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
-      const resolveCtx = { workspace: sc.workspace };
+      const resolveCtx = { project: sc.project };
       const layers = await ctx.settings.layers(resolveCtx);
       const creds = await ctx.settings.credentialLayers(resolveCtx);
       const out: Record<string, unknown> = {};
       for (const key of Object.keys(DEFAULTS) as SettingKey[]) {
-        // A workspace-only key has no global meaning — the global list omits it.
+        // A project-only key has no global meaning — the global list omits it.
         if (sc.kind === 'global' && !isGlobalSettable(key)) continue;
         out[key] = { ...layers[key], secret: false, description: DESCRIPTIONS[key], meta: META[key],
-          overridable: isWorkspaceOverridable(key) };
+          overridable: isProjectOverridable(key) };
       }
       // Credentials are keys of the same store — same table, same chain.
       for (const name of CREDENTIAL_NAMES) {
         const g = creds[name].global;
-        const w = sc.kind !== 'global' ? creds[name].workspace : null;
+        const w = sc.kind !== 'global' ? creds[name].project : null;
         out[name] = {
-          default: null, global: g, workspace: w,
-          value: w ?? g, source: w != null ? 'workspace' : g != null ? 'global' : 'default',
+          default: null, global: g, project: w,
+          value: w ?? g, source: w != null ? 'project' : g != null ? 'global' : 'default',
           secret: true, description: (CREDENTIALS[name] as CredentialMeta).description,
           meta: credentialMeta(name),
-          overridable: isCredentialWorkspaceScoped(name),
+          overridable: isCredentialProjectScoped(name),
         };
       }
       return ok(out);
     });
 
-  app.patch<{ Querystring: { workspace?: string }; Body: Record<string, unknown> }>(
+  app.patch<{ Querystring: { project?: string }; Body: Record<string, unknown> }>(
     '/settings', { schema: { ...TAG,
       summary: 'Write settings',
       description: 'Body is {key: value}. null CLEARS a key — the same rule at every layer, and null is never a stored value. An empty string is a real empty string. ' +
         'Which keys are credentials is declared in code, so they are stored encrypted without any flag. Unknown keys are refused. ' +
-        'Pass ?workspace= to write that workspace\'s layer; a key the workspace may not override is refused.',
+        'Pass ?project= to write that project\'s layer; a key the project may not override is refused.',
       querystring: scopeQuery,
       body: { type: 'object', additionalProperties: true } } },
     async (req, reply) => {
@@ -105,7 +105,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
       return ok({ updated });
     });
 
-  app.delete<{ Params: { key: string }; Querystring: { workspace?: string } }>(
+  app.delete<{ Params: { key: string }; Querystring: { project?: string } }>(
     '/settings/:key', { schema: { ...TAG,
       summary: 'Clear one key',
       description: 'Identical to PATCH with null. The setting reverts to the code default and follows it if the default changes later — a different state from being set to the same value.',

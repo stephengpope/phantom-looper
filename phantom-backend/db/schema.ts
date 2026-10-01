@@ -30,7 +30,7 @@ export const phantomLooper = pgSchema('phantom_looper');
 // here) make a general row hold exactly one of the two columns and a secret
 // row both (migrations 010, 034).
 export const settings = phantomLooper.table('settings', {
-  scope: text('scope').notNull().default('global'),  // global | workspace:<id>
+  scope: text('scope').notNull().default('global'),  // global | project:<id>
   namespace: text('namespace').notNull().default('general'),  // general | secret
   key: text('key').notNull(),
   value: json('value'),
@@ -40,7 +40,7 @@ export const settings = phantomLooper.table('settings', {
 
 // A registered GitHub repository. Its clone URL is derived from owner + name
 // (git/remote.ts remoteUrl), not stored (032).
-export const workspaces = phantomLooper.table('workspaces', {
+export const projects = phantomLooper.table('projects', {
   id: text('id').primaryKey(),
   owner: text('owner').notNull(),
   name: text('name').notNull(),
@@ -48,22 +48,22 @@ export const workspaces = phantomLooper.table('workspaces', {
   baseBranch: text('base_branch').notNull(),
   branchPrefix: text('branch_prefix').notNull().default('agent'),
   kanbanColumns: jsonb('kanban_columns').$type<string[]>(),
-  // The next card number this workspace hands out. Numbers are never reused:
-  // a deleted card's stays taken. (024; Workspaces.claimCardNumber moves it.)
+  // The next card number this project hands out. Numbers are never reused:
+  // a deleted card's stays taken. (024; Projects.claimCardNumber moves it.)
   nextCardNumber: integer('next_card_number').notNull().default(1),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-// The board (024: one table, every workspace). Status is a plain string
-// matched against the workspace's column list (workspaces.kanban_columns,
+// The board (024: one table, every project). Status is a plain string
+// matched against the project's column list (projects.kanban_columns,
 // default in code) — columns are data, not DDL. `auto_plan`/`auto_build` are
-// the per-card looper switches: null inherits the workspace setting of the
+// the per-card looper switches: null inherits the project setting of the
 // same name. `requirements` is the ONE checklist — {key, text, done}, done
 // meaning VERIFIED. Column keys are snake_case on purpose: a card row IS the
 // API's card, sent as stored to the cli and the agents' kanban tools.
 export const cards = phantomLooper.table('cards', {
   id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
-  workspace_id: text('workspace_id').notNull(),
+  project_id: text('project_id').notNull(),
   number: integer('number').notNull(),  // PHA-7 is card 7 — the permanent handle, never reused
   status: text('status').notNull().default('backlog'),
   pos: real('pos').notNull(),
@@ -78,7 +78,7 @@ export const cards = phantomLooper.table('cards', {
   archived: boolean('archived').notNull().default(false),
   created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-}, (t) => [unique().on(t.workspace_id, t.number)]);
+}, (t) => [unique().on(t.project_id, t.number)]);
 
 // A card's history, written by a trigger on every update (024, 028, 033) so
 // edits made over SQL are recorded too. `changed_from`: the keys that
@@ -94,11 +94,11 @@ export const cardRevisions = phantomLooper.table('card_revisions', {
 // A checkout: the files on disk, the branch, the container. The directory on
 // disk is named by this id (which equals the owning session's id). The row is
 // permanent — it is what remembers the branch; the FILES can be deleted and
-// re-cloned from it. Goes with its workspace (cascade, 026). Every fact about
+// re-cloned from it. Goes with its project (cascade, 026). Every fact about
 // the checkout lives here (036); a session reads them through its folder_id.
 export const folders = phantomLooper.table('folders', {
   id: text('id').primaryKey(),
-  workspaceId: text('workspace_id').notNull(),
+  projectId: text('project_id').notNull(),
   branch: text('branch').notNull(),
   // HEAD right after the checkout: base's tip for a new session, the source
   // branch's tip for a duplicate. /git/status counts base's commits since it.
@@ -126,7 +126,7 @@ export const folders = phantomLooper.table('folders', {
 // pushed, git state — are its FOLDER's (036); reads join them in.
 export const sessions = phantomLooper.table('sessions', {
   id: text('id').primaryKey(),
-  workspaceId: text('workspace_id').notNull(),
+  projectId: text('project_id').notNull(),
   // Who drove the last turn: 'coding' or 'supervisor' when a card run did,
   // null = a person's. The loop stamps its coder seat at turn start; every
   // transcript save re-derives it from the writer's client id (sessions.ts
@@ -222,14 +222,14 @@ export const sessionColumns = withoutBlob;
 // TelegramHandledUpdates.
 
 // The ONE row (id pinned 1): who answers a plain message, which session and
-// workspace are active, and the webhook registration.
+// project are active, and the webhook registration.
 export const telegramBotState = phantomLooper.table('telegram_bot_state', {
   id: integer('id').primaryKey().default(1),
   // 'assistant' (home) | 'code' (messages run coding turns on activeSessionId).
   mode: text('mode').notNull().default('assistant'),
-  // Keyed to sessions / workspaces, cleared when the row goes (031).
+  // Keyed to sessions / projects, cleared when the row goes (031).
   activeSessionId: text('active_session_id'),
-  activeWorkspaceId: text('active_workspace_id'),
+  activeProjectId: text('active_project_id'),
   webhookSecretEnc: bytea('webhook_secret_enc'),
   webhookUrl: text('webhook_url'),
   botUsername: text('bot_username'),
@@ -302,26 +302,26 @@ export const logTokens = phantomLooper.table('log_tokens', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-// Crons (migration 037, 040): a workspace's scheduled prompts. The scheduler
+// Crons (migration 037, 040): a project's scheduled prompts. The scheduler
 // (crons/engine.ts) holds one croner job per enabled row, re-read every
-// minute; at its time a job opens a NEW coding session in the workspace and
+// minute; at its time a job opens a NEW coding session in the project and
 // runs the prompt as one turn — or, for a `script` cron, runs `sh <path>`
 // in the session's container with no model — the session is the run's
 // record. Exactly one of `prompt` / `script` is set (migration 040). A slot
 // that passed while the server was down never fires. RECURRING: `schedule` is a 5-field cron expression, the row lives
 // until removed. ONE-TIME (`once`): `schedule` is an ISO datetime, the row
-// fires and is deleted. Read in the workspace's `timezone`. Crons
+// fires and is deleted. Read in the project's `timezone`. Crons
 // (crons.ts) is its one owner. Column keys are snake_case like cards': a row
 // IS the API's cron.
 export const crons = phantomLooper.table('crons', {
   id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
-  workspace_id: text('workspace_id').notNull(),
-  name: text('name').notNull(),   // the handle — unique per workspace, case-insensitively
+  project_id: text('project_id').notNull(),
+  name: text('name').notNull(),   // the handle — unique per project, case-insensitively
   schedule: text('schedule').notNull(),
   once: boolean('once').notNull(),
   prompt: text('prompt'),   // what an agent run is asked to do
   script: text('script'),   // a path in the checkout, run with sh — no model
-  // The model a run pins to; null = the workspace's settings at fire time.
+  // The model a run pins to; null = the project's settings at fire time.
   // provider+model together or not at all (migration 042).
   provider: text('provider'),
   model: text('model'),
@@ -332,7 +332,7 @@ export const crons = phantomLooper.table('crons', {
   updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-export type WorkspaceRow = typeof workspaces.$inferSelect;
+export type ProjectRow = typeof projects.$inferSelect;
 export type CardRow = typeof cards.$inferSelect;
 export type CronRow = typeof crons.$inferSelect;
 export type FolderRow = typeof folders.$inferSelect;

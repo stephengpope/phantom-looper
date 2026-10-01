@@ -4,7 +4,7 @@ name: Release
 #
 # One tag → two images, both multi-arch (amd64 + arm64), pushed to ghcr.io:
 #   ghcr.io/stephengpope/phantom-backend-api       the API server (Dockerfile)
-#   ghcr.io/stephengpope/phantom-backend-session   every session's container (build/workspace)
+#   ghcr.io/stephengpope/phantom-backend-session   every session's container (build/project)
 # Each platform builds NATIVELY (images, 4 jobs) and pushes by digest; the
 # manifests job (2 jobs) stitches each pair into one multi-arch tag.
 #
@@ -13,7 +13,7 @@ name: Release
 # alone: fresh installs pull :latest, so an rc must never move it.
 #
 # The API image gets the tag baked in as APP_VERSION (served by GET /health);
-# the API's default workspace_image setting is the workspace image at that SAME
+# the API's default container_image setting is the workspace image at that SAME
 # tag, so the two images are one release by construction. install.sh and
 # updater/apply.sh copy the host files out of the API image, so everything a
 # box needs for a release is these two images and nothing else.
@@ -50,7 +50,7 @@ jobs:
             context: .
             dockerfile: Dockerfile
           - name: phantom-backend-session
-            context: build/workspace
+            context: build/project
             dockerfile: build/workspace/Dockerfile
         platform:
           - { os: linux/amd64, arch: amd64, runner: ubuntu-latest }

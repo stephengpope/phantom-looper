@@ -1,9 +1,9 @@
-// The agent's own database, per workspace (databases.ts). Two routes, both
-// behind the workspace's `agent_database` setting — the ONE place that says
+// The agent's own database, per project (databases.ts). Two routes, both
+// behind the project's `agent_database` setting — the ONE place that says
 // whether the agent has a database:
 //
-//   GET  /workspaces/:id/database         { enabled }   — the tool kit asks before it offers database_query
-//   POST /workspaces/:id/database/query   { sql, limit } — run it, connected as the workspace's role
+//   GET  /projects/:id/database         { enabled }   — the tool kit asks before it offers database_query
+//   POST /projects/:id/database/query   { sql, limit } — run it, connected as the project's role
 import type { FastifyInstance } from 'fastify';
 import { SqlError } from '../../databases.js';
 import { ok, err, type AppCtx } from '../app.js';
@@ -13,21 +13,21 @@ const idParam = { type: 'object', properties: { id: { type: 'string' } }, requir
 
 export function databaseRoutes(app: FastifyInstance, ctx: AppCtx) {
   app.get<{ Params: { id: string } }>(
-    '/workspaces/:id/database', { schema: { ...TAG,
-      summary: 'Whether the agent has its own database in this workspace',
-      description: 'The `agent_database` setting resolved at this workspace\'s layer. The coding agent\'s tool kit reads it: on, the database_query tool is offered; off, it is not.',
+    '/projects/:id/database', { schema: { ...TAG,
+      summary: 'Whether the agent has its own database in this project',
+      description: 'The `agent_database` setting resolved at this project\'s layer. The coding agent\'s tool kit reads it: on, the database_query tool is offered; off, it is not.',
       params: idParam } },
     async (req, reply) => {
-      const workspace = await ctx.workspaces.get(req.params.id);
-      if (!workspace) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
-      const enabled = Boolean(await ctx.settings.resolve('agent_database', { workspace }));
+      const project = await ctx.projects.get(req.params.id);
+      if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
+      const enabled = Boolean(await ctx.settings.resolve('agent_database', { project }));
       return ok({ enabled });
     });
 
   app.post<{ Params: { id: string }; Body: { sql: string; limit?: number; maxCellChars?: number; params?: unknown[] } }>(
-    '/workspaces/:id/database/query', { schema: { ...TAG,
+    '/projects/:id/database/query', { schema: { ...TAG,
       summary: 'Run SQL in the agent\'s own database',
-      description: 'Run connected as the workspace\'s own role in its own database — the agent is the admin there and nothing else. ' +
+      description: 'Run connected as the project\'s own role in its own database — the agent is the admin there and nothing else. ' +
         'Several statements run as ONE transaction: an error undoes the whole call. No session state survives between calls. ' +
         '30 s statement timeout. `params` fills $1…$n and needs a single statement. One result per statement: Postgres\'s command tag, ' +
         'the TRUE row count, and the first `limit` rows; cells past `maxCellChars` end in `…[truncated, N chars]`. Duplicate column ' +
@@ -43,13 +43,13 @@ export function databaseRoutes(app: FastifyInstance, ctx: AppCtx) {
         } } } },
     async (req, reply) => {
       if (!ctx.databases) return reply.code(503).send(err('database_unavailable', 'this server has no agent database wiring'));
-      const workspace = await ctx.workspaces.get(req.params.id);
-      if (!workspace) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
-      if (!(await ctx.settings.resolve('agent_database', { workspace }))) {
-        return reply.code(409).send(err('database_off', 'agent_database is off for this workspace'));
+      const project = await ctx.projects.get(req.params.id);
+      if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
+      if (!(await ctx.settings.resolve('agent_database', { project }))) {
+        return reply.code(409).send(err('database_off', 'agent_database is off for this project'));
       }
       try {
-        const results = await ctx.databases.query(workspace.id, req.body.sql, {
+        const results = await ctx.databases.query(project.id, req.body.sql, {
           limit: req.body.limit ?? 10, maxCellChars: req.body.maxCellChars ?? 1000, params: req.body.params,
         });
         return ok({ results });

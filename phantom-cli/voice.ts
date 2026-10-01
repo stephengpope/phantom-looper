@@ -525,7 +525,7 @@ export class VoiceClient {
     this.note({ kind: 'user', id: nextId('vuser'), text });
     if (this.intercept?.(text)) return;
     if (!this.agent) {
-      this.note({ kind: 'error', id: nextId('verr'), message: 'the Assistant has no session yet — open a workspace' });
+      this.note({ kind: 'error', id: nextId('verr'), message: 'the Assistant has no session yet — open a project' });
       return;
     }
     if (this.agent.busy) this.agent.interrupt();
@@ -670,6 +670,6 @@ export const inertVoice = (): VoiceClient =>
 // (core/llm/tools/tui.ts); the App
 // supplies the handler body (it reads the session store directly). Re-exported
 // here because this file is the Assistant's client-side home.
-export { sessionsTool, assistantKanbanTool, codingKanbanTool, workspaceCreateTool, gitAutoPushTool, gitAutoPullTool, screenModeTools, assistantModeTool, kebabName, renderRead, renderRaw, dockerLogsTool, type SessionsArgs, type KanbanArgs, type WorkspaceCreateArgs, type GitAutoPushArgs, type GitAutoPullArgs, type ScreenModeHandler, type DockerLogsArgs } from '../core/llm/tools/tui.js';
+export { sessionsTool, assistantKanbanTool, codingKanbanTool, projectCreateTool, gitAutoPushTool, gitAutoPullTool, screenModeTools, assistantModeTool, kebabName, renderRead, renderRaw, dockerLogsTool, type SessionsArgs, type KanbanArgs, type ProjectCreateArgs, type GitAutoPushArgs, type GitAutoPullArgs, type ScreenModeHandler, type DockerLogsArgs } from '../core/llm/tools/tui.js';
 
 export function sidecarDirExists(): boolean { return existsSync(dirname(join(SIDECAR_DIR, 'bot.py'))); }

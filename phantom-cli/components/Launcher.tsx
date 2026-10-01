@@ -1,11 +1,11 @@
 // What you see when the TUI starts with nothing to attach to. Sessions first,
 // because a session is what you actually resume — it carries the branch and the
-// conversation. Workspaces are the layer below, for starting something new.
+// conversation. Projects are the layer below, for starting something new.
 //
-// The boot-time shortcut past this screen is `boot_last_workspace` (a server
+// The boot-time shortcut past this screen is `boot_last_project` (a server
 // setting, on by default): the sessions list already records where you were,
 // so the pick comes off the newest session the user drove — never a pinned
-// workspace id, which goes stale the moment you switch.
+// project id, which goes stale the moment you switch.
 import { Box } from 'ink';
 import { useInput } from './useInput.js';
 import { useState } from 'react';
@@ -16,7 +16,7 @@ import { FixedText } from './Text.js';
 import { tableChoices, type TableRow, type Cell } from './table.js';
 import { formatTokensIn, formatTokensOut, cachePct } from '../state.js';
 
-export interface WorkspaceInfo {
+export interface ProjectInfo {
   id: string; owner: string; name: string; displayName?: string | null;
   /** The resolved card number prefix ("PHA") — the server's, never derived here. */
   cardPrefix?: string;
@@ -43,22 +43,22 @@ import { STATUS_ICON } from '../../core/kanban.js';
 
 export type Launch =
   | { kind: 'resume'; sessionId: string }
-  | { kind: 'new'; workspaceId: string }
+  | { kind: 'new'; projectId: string }
   | { kind: 'add' };
 
-export const label = (w: WorkspaceInfo) => w.displayName || w.name;
+export const label = (w: ProjectInfo) => w.displayName || w.name;
 
-/** The workspace of the newest session the USER drove — boot_last_workspace's
+/** The project of the newest session the USER drove — boot_last_project's
  *  pick. Sessions a card run drives (`agent` stamped by the run) work at all
  *  hours and would teleport the boot, so they do not count; nor does a
- *  session whose workspace is gone. A destroyed session still counts — its
+ *  session whose project is gone. A destroyed session still counts — its
  *  files are swept, but it is still where you were. Undefined = nothing
  *  eligible, show the picker. */
-export function lastWorkspaceId(workspaces: WorkspaceInfo[], sessions: SessionInfo[]): string | undefined {
-  const known = new Set(workspaces.map((w) => w.id));
+export function lastProjectId(projects: ProjectInfo[], sessions: SessionInfo[]): string | undefined {
+  const known = new Set(projects.map((w) => w.id));
   return sessions
-    .filter((s) => !s.agent && known.has(s.workspaceId))
-    .sort((a, b) => Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt))[0]?.workspaceId;
+    .filter((s) => !s.agent && known.has(s.projectId))
+    .sort((a, b) => Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt))[0]?.projectId;
 }
 
 /** Who drives, is a turn live, how long ago — core's one definition of
@@ -69,7 +69,7 @@ import { whoDrives, isRunning, ago } from '../../core/sessionRows.js';
 /** Session rows — /resume. A session is
  *  what you actually reopen: it carries the branch and the conversation. */
 export function sessionChoices(
-  workspaces: WorkspaceInfo[],
+  projects: ProjectInfo[],
   sessions: SessionInfo[],
   now = Date.now(),
   busy: (sessionId: string) => boolean = () => false,
@@ -77,9 +77,9 @@ export function sessionChoices(
   clientId = '',
   showBackground = false,
   query = '',
-  workspaceId: string | null = null,
+  projectId: string | null = null,
 ): Choice<Launch | null>[] {
-  const byId = new Map(workspaces.map((w) => [w.id, w]));
+  const byId = new Map(projects.map((w) => [w.id, w]));
   // WHICH sessions are listed is the server's call (`GET /sessions?typed=
   // true&background=false` — never-typed rows and the background seats, the
   // supervisor sessions and cron runs, left out there, so a page is
@@ -99,23 +99,23 @@ export function sessionChoices(
     || Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt));
   if (!sessions.length) {
     // The empty state names the filter that emptied it: the text, else the
-    // workspace, else the list is truly empty and says where to start.
-    const where = workspaceId ? ` in ${workspaceTitle(workspaces, workspaceId)}` : '';
+    // project, else the list is truly empty and says where to start.
+    const where = projectId ? ` in ${projectTitle(projects, projectId)}` : '';
     if (query.trim()) return [{ value: null, label: `no sessions match “${query.trim()}”${where}`, heading: true }];
-    if (workspaceId) return [{ value: null, label: `no sessions${where}`, detail: '←→ another workspace', heading: true }];
+    if (projectId) return [{ value: null, label: `no sessions${where}`, detail: '←→ another project', heading: true }];
     return showBackground
-      ? [{ value: null, label: 'no sessions yet', detail: 'start one with /workspace', heading: true }]
+      ? [{ value: null, label: 'no sessions yet', detail: 'start one with /project', heading: true }]
       : [{ value: null, label: 'no sessions yet',
-          detail: 'start one with /workspace · [s] shows every session, supervisor records and cron runs included', heading: true }];
+          detail: 'start one with /project · [s] shows every session, supervisor records and cron runs included', heading: true }];
   }
-  // The workspace column is its card prefix ("PHA") — the resolved value the
+  // The project column is its card prefix ("PHA") — the resolved value the
   // server sends on the list; a server without it falls back to the label. A
-  // workspace that no longer exists has nothing to show: the dot, NEVER the
-  // raw 26-char id — one such row (old sessions of a deleted workspace, which
+  // project that no longer exists has nothing to show: the dot, NEVER the
+  // raw 26-char id — one such row (old sessions of a deleted project, which
   // lazy loading now reaches) blew the label column to its cap and pushed the
   // whole table past the terminal's edge.
   const wsCol = (s: SessionInfo): string => {
-    const w = byId.get(s.workspaceId);
+    const w = byId.get(s.projectId);
     return w ? (w.cardPrefix ?? label(w)) : '·';
   };
   // Columns ride the shared table system (table.ts — /resume's geometry made
@@ -148,7 +148,7 @@ export function sessionChoices(
     // per turn) — same spinner as a local turn. One fact, one place.
     const held = !dead && !!s.locked && s.lockedBy !== clientId;
     const running = isRunning(s, { busy, clientId });   // a local turn, or held elsewhere
-    // The card this session works on — the BARE number, because the ws
+    // The card this session works on — the BARE number, because the project
     // column beside it already shows the prefix (the board's own shape:
     // prefix in the header, number on the row). Either seat of a loop
     // carries it; a session with no card is the blank-fact dot.
@@ -221,43 +221,43 @@ export function sessionChoices(
   return table;
 }
 
-/** What /resume's title calls the workspace filter: the display name, or
- *  `all`. A workspace the list no longer knows (deleted while the picker
+/** What /resume's title calls the project filter: the display name, or
+ *  `all`. A project the list no longer knows (deleted while the picker
  *  was up) reads as all rather than as a raw id. */
-export const workspaceTitle = (workspaces: WorkspaceInfo[], id: string | null): string => {
-  const w = id ? workspaces.find((x) => x.id === id) : undefined;
+export const projectTitle = (projects: ProjectInfo[], id: string | null): string => {
+  const w = id ? projects.find((x) => x.id === id) : undefined;
   return w ? label(w) : 'all';
 };
 
-/** Workspace rows — launching with no arguments, and /workspace: the card
+/** Project rows — launching with no arguments, and /project: the card
  *  prefix (`PHA`) and the repo (`owner/name`), the same two columns the
- *  slash menu shows for `/new` and `/workspace` — nothing twice. Always ends
- *  with "add a workspace…": an empty install has to be able to get started from
+ *  slash menu shows for `/new` and `/project` — nothing twice. Always ends
+ *  with "add a project…": an empty install has to be able to get started from
  *  here, not from curl. */
-export function workspaceChoices(workspaces: WorkspaceInfo[], canAdd = true): Choice<Launch | null>[] {
-  const rows: Choice<Launch | null>[] = workspaces.map((w) => ({
-    value: { kind: 'new', workspaceId: w.id } as Launch,
+export function projectChoices(projects: ProjectInfo[], canAdd = true): Choice<Launch | null>[] {
+  const rows: Choice<Launch | null>[] = projects.map((w) => ({
+    value: { kind: 'new', projectId: w.id } as Launch,
     label: w.cardPrefix ?? label(w),
     detail: `${w.owner}/${w.name}`,
   }));
   if (canAdd) {
-    rows.push({ value: { kind: 'add' } as Launch, label: 'add a workspace…',
-      detail: workspaces.length ? '' : 'nothing here yet — start with this' });
+    rows.push({ value: { kind: 'add' } as Launch, label: 'add a project…',
+      detail: projects.length ? '' : 'nothing here yet — start with this' });
   }
   return rows;
 }
 
-/** One list, two uses. `mode` decides which — sessions for /resume, workspaces
+/** One list, two uses. `mode` decides which — sessions for /resume, projects
  *  for a fresh start. Deliberately not both at once: launching means "start
  *  work", reopening is a different intent with its own command. */
-export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clientId, onPick, onEdit, onDuplicate, onPin, onPing, onClose, onTrash, onCancel, onNearEnd, showBackground, onToggleBackground, query = '', rowsQuery = query, onQuery, workspaceId = null, onCycleWorkspace, now, title, footer, notice, canAdd }: {
-  mode: 'sessions' | 'workspaces';
-  /** ←→ on /resume: the workspace the rows are limited to (null = all),
+export function Launcher({ mode, projects, sessions, total, busy, loaded, clientId, onPick, onEdit, onDuplicate, onPin, onPing, onClose, onTrash, onCancel, onNearEnd, showBackground, onToggleBackground, query = '', rowsQuery = query, onQuery, projectId = null, onCycleProject, now, title, footer, notice, canAdd }: {
+  mode: 'sessions' | 'projects';
+  /** ←→ on /resume: the project the rows are limited to (null = all),
    *  and the cycle. Like the filter line, the rows are the server's answer
-   *  (WindowStore.pickerWorkspace); this screen names it in the title.
+   *  (WindowStore.pickerProject); this screen names it in the title.
    *  Absent = no cycle offered. */
-  workspaceId?: string | null;
-  onCycleWorkspace?: (dir: 1 | -1) => void;
+  projectId?: string | null;
+  onCycleProject?: (dir: 1 | -1) => void;
   /** [/] on /resume: the filter line's text, and where it goes. The list
    *  is the server's answer to it (WindowStore.pickerQuery); this screen
    *  only owns whether the line is OPEN. Absent = no filter offered. */
@@ -267,7 +267,7 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
    *  esc on a zero-match filter draws "no sessions yet" for a frame. */
   rowsQuery?: string;
   onQuery?: (q: string) => void;
-  workspaces: WorkspaceInfo[];
+  projects: ProjectInfo[];
   sessions?: SessionInfo[];
   /** How many sessions the whole list holds (the server's count for the
    *  filters in force, plus what this window merged in) — `sessions` is the
@@ -287,8 +287,8 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
   /** This window's own lock id, so its own held sessions do not read "in use". */
   clientId?: string;
   onPick: (l: Launch) => void;
-  /** `e` on a workspace row. Absent => the key does nothing and is not offered. */
-  onEdit?: (workspaceId: string) => void;
+  /** `e` on a project row. Absent => the key does nothing and is not offered. */
+  onEdit?: (projectId: string) => void;
   /** `d` on a session row: duplicate it into a new session — the way past a lock. */
   onDuplicate?: (sessionId: string) => void;
   /** `p` on a session row: pin it to the top of the list (or take it down). */
@@ -312,26 +312,26 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
   notice?: string;
   canAdd?: boolean;
 }) {
-  // Editing is offered only where there is something to edit: workspace rows,
-  // and not the "add a workspace…" row that sits with them.
-  const canEdit = mode === 'workspaces' && !!onEdit;
+  // Editing is offered only where there is something to edit: project rows,
+  // and not the "add a project…" row that sits with them.
+  const canEdit = mode === 'projects' && !!onEdit;
   const canCopy = mode === 'sessions' && !!onDuplicate;
   const canPin = mode === 'sessions' && !!onPin;
   const canPing = mode === 'sessions' && !!onPing;
   const canFilter = mode === 'sessions' && !!onQuery;
-  const canCycle = mode === 'sessions' && !!onCycleWorkspace;
+  const canCycle = mode === 'sessions' && !!onCycleProject;
   // ←→ work in BOTH states — the list and the filter line — because the two
-  // filters compose: the text searches inside the workspace. The filter
+  // filters compose: the text searches inside the project. The filter
   // line is a single-line input and leaves the arrows alone (TextInput).
   useInput((_ch, key) => {
-    if (key.leftArrow) onCycleWorkspace!(-1);
-    else if (key.rightArrow) onCycleWorkspace!(1);
+    if (key.leftArrow) onCycleProject!(-1);
+    else if (key.rightArrow) onCycleProject!(1);
   }, { isActive: canCycle });
-  // The title carries the workspace filter, so the list always says what
+  // The title carries the project filter, so the list always says what
   // it is a list OF: `resume · ‹ all ›`, `resume · ‹ phantom ›`.
   const heading = title ?? (mode === 'sessions'
-    ? (canCycle ? `resume · ‹ ${workspaceTitle(workspaces, workspaceId)} ›` : 'resume')
-    : 'workspace');
+    ? (canCycle ? `resume · ‹ ${projectTitle(projects, projectId)} ›` : 'resume')
+    : 'project');
   // FILTER MODE is one state: [/] opens the line and the cursor lives in it;
   // type to narrow, ↑↓ to move, enter to open — nothing else. esc clears
   // the text AND closes the line, so the list comes back exactly as it was
@@ -343,13 +343,13 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
   useInput((_ch, key) => { if (key.escape) leaveFilter(); }, { isActive: filtering });
   // The background seats are hidden by default; [s] shows every session.
   const choices = mode === 'sessions'
-    ? sessionChoices(workspaces, sessions ?? [], now, busy, loaded, clientId, showBackground ?? false, rowsQuery, workspaceId)
-    : workspaceChoices(workspaces, canAdd ?? true);
+    ? sessionChoices(projects, sessions ?? [], now, busy, loaded, clientId, showBackground ?? false, rowsQuery, projectId)
+    : projectChoices(projects, canAdd ?? true);
   if (filtering) {
     return (
       <Screen title={heading} notice={notice}
         footer={[{ key: 'type', does: 'filter' }, { key: '↑↓', does: 'move' },
-          { key: '←→', does: 'workspace', when: canCycle, active: workspaceId !== null }]}>
+          { key: '←→', does: 'project', when: canCycle, active: projectId !== null }]}>
         <Box marginBottom={1}>
           <FixedText color="cyan">{'  / '}</FixedText>
           <TextInput value={query} onChange={(q) => onQuery!(q)} placeholder="name, last message or branch…" />
@@ -370,11 +370,11 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
       // No [enter]/[esc] in either footer: they do what they do everywhere,
       // and the footer's width is better spent on the letter keys you cannot guess.
       footer={footer ?? (canEdit
-        ? [{ key: 'e', does: 'edit workspace' }, { key: 'n', does: 'new workspace', when: canAdd ?? true }]
+        ? [{ key: 'e', does: 'edit project' }, { key: 'n', does: 'new project', when: canAdd ?? true }]
         : [
-          // Lit while a workspace is picked, like [s] — the filter holds
+          // Lit while a project is picked, like [s] — the filter holds
           // across opens, so the key must say it is on.
-          { key: '←→', does: 'workspace', when: canCycle, active: workspaceId !== null },
+          { key: '←→', does: 'project', when: canCycle, active: projectId !== null },
           { key: '/', does: 'filter', when: canFilter },
           { key: 'p', does: 'pin', when: canPin },
           { key: 'x', does: 'close', when: canCopy },
@@ -391,8 +391,8 @@ export function Launcher({ mode, workspaces, sessions, total, busy, loaded, clie
         total={mode === 'sessions' ? total : undefined}
         onSelect={(v) => { if (v) onPick(v); }}
         onKey={canEdit ? (ch, v) => {
-          if (ch === 'e' && v?.kind === 'new') onEdit!(v.workspaceId);
-          // The same act as the "add a workspace…" row, one key from any row.
+          if (ch === 'e' && v?.kind === 'new') onEdit!(v.projectId);
+          // The same act as the "add a project…" row, one key from any row.
           else if (ch === 'n' && (canAdd ?? true)) onPick({ kind: 'add' });
         } : mode === 'sessions' ? (ch, v) => {
           if (ch === '/' && canFilter) { setFiltering(true); return; }

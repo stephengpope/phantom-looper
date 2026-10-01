@@ -6,7 +6,7 @@ import { followStream, type Stream } from './follow.js';
 // same instance, so the screen (which renders from it and subscribes) updates
 // no matter who made the edit. Writes are optimistic: apply locally, notify,
 // send to the server, reload on error. The server owns the truth
-// (/workspaces/:id/cards), and every write to it from anywhere — the looper,
+// (/projects/:id/cards), and every write to it from anywhere — the looper,
 // the supervisor, another window — comes back down its event stream
 // (`follow`) and is adopted here the same way, so the board is always
 // current and nothing polls.
@@ -34,7 +34,7 @@ export type CardPatch = Partial<Pick<Card, 'title' | 'details' | 'status' | 'pos
 /** A card's current loop's coding session — who is (or was) building it. */
 export interface CardSession { id: string; name: string | null }
 export interface BoardState {
-  prefix: string; columns: string[]; cards: Card[]; loaded: boolean; workspace?: string; error?: string;
+  prefix: string; columns: string[]; cards: Card[]; loaded: boolean; project?: string; error?: string;
   /** By card number: the CURRENT loop's coding session, from the board GET.
    *  Absent number = the card never entered the loop. */
   sessions?: Record<number, CardSession>;
@@ -46,8 +46,8 @@ export interface BoardState {
    *  not locked or no session. A turn that has run a long time is the thing a
    *  person needs to notice, so the value is a clock, not a flag. */
   cardLocked?: Record<number, number>;
-  /** The workspace's resolved auto_plan / auto_build — what an `inherit` card
-   *  actually gets — and which layer said so ('default' | 'global' | 'workspace'). */
+  /** The project's resolved auto_plan / auto_build — what an `inherit` card
+   *  actually gets — and which layer said so ('default' | 'global' | 'project'). */
   autoPlanDefault?: boolean; autoPlanSource?: string;
   autoBuildDefault?: boolean; autoBuildSource?: string;
 }
@@ -63,9 +63,9 @@ export class BoardStore {
   private listeners = new Set<() => void>();
   private following: AbortController | null = null;
 
-  constructor(private api: Api, readonly workspaceId: string, private stream?: Stream) {}
+  constructor(private api: Api, readonly projectId: string, private stream?: Stream) {}
 
-  /** Follow the workspace's event stream for the life of the store: each
+  /** Follow the project's event stream for the life of the store: each
    *  record is adopted like the store's own edits (a card written anywhere
    *  replaces its copy; a delete drops it; a loop pairing fills the Session
    *  row). The link is re-opened whenever it drops, with a full load after
@@ -75,7 +75,7 @@ export class BoardStore {
     if (!this.stream || this.following) return;
     const ac = new AbortController();
     this.following = ac;
-    void followStream(this.stream, `/workspaces/${this.workspaceId}/events`, ac.signal, {
+    void followStream(this.stream, `/projects/${this.projectId}/events`, ac.signal, {
       onRecord: (rec) => this.applyEvent(rec),
       onReconnect: () => this.load(),   // records were missed — refill the board
     });
@@ -139,7 +139,7 @@ export class BoardStore {
    *  state (cardsIn filters archived, so the board is untouched);
    *  undefined = no such card. */
   async fetchCard(number: number): Promise<Card | undefined> {
-    const d = await this.api('GET', `/workspaces/${this.workspaceId}/cards?number=${number}`) as Record<string, unknown>;
+    const d = await this.api('GET', `/projects/${this.projectId}/cards?number=${number}`) as Record<string, unknown>;
     const card = (d.cards as Card[] | undefined)?.[0];
     if (!card) return undefined;
     this.adoptCard(card);
@@ -171,7 +171,7 @@ export class BoardStore {
 
   async load(): Promise<void> {
     try {
-      const d = await this.api('GET', `/workspaces/${this.workspaceId}/cards`) as Record<string, unknown>;
+      const d = await this.api('GET', `/projects/${this.projectId}/cards`) as Record<string, unknown>;
       const sessions: Record<number, CardSession> = {};
       for (const s of (d.card_sessions as { card: number; id: string; name: string | null }[] | undefined) ?? [])
         sessions[s.card] = { id: s.id, name: s.name };
@@ -192,7 +192,7 @@ export class BoardStore {
         if (v) cardLocked[Number(k)] = this.state.cardLocked?.[Number(k)] ?? Date.now();
       this.state = { prefix: String(d.prefix), columns: d.columns as string[],
         cards: [...fresh, ...kept], loaded: true, sessions, cardWork, cardLocked,
-        workspace: d.workspace ? String(d.workspace) : undefined,
+        project: d.project ? String(d.project) : undefined,
         autoPlanDefault: Boolean(d.auto_plan_default),
         autoPlanSource: d.auto_plan_source ? String(d.auto_plan_source) : undefined,
         autoBuildDefault: Boolean(d.auto_build_default),
@@ -209,7 +209,7 @@ export class BoardStore {
     // The server publishes the new row on the event stream BEFORE it answers
     // this POST, so the card is usually already here by the time the answer
     // lands — seat it (replace by id), never append, or the board shows two.
-    const d = await this.api('POST', `/workspaces/${this.workspaceId}/cards`, fields) as Record<string, unknown>;
+    const d = await this.api('POST', `/projects/${this.projectId}/cards`, fields) as Record<string, unknown>;
     const card = d.card as Card;
     this.adoptCard(card);
     return card;
@@ -225,7 +225,7 @@ export class BoardStore {
     this.state = { ...this.state, cards: this.state.cards.map((t) => t.id === id ? { ...t, ...patch } : t) };
     this.notify();
     try {
-      const d = await this.api('PATCH', `/workspaces/${this.workspaceId}/cards/${number}`, patch) as Record<string, unknown>;
+      const d = await this.api('PATCH', `/projects/${this.projectId}/cards/${number}`, patch) as Record<string, unknown>;
       this.adopt(d.card as Card | undefined);
       return null;
     }
@@ -273,7 +273,7 @@ export class BoardStore {
     this.state = { ...this.state, cards: this.state.cards.map((t) => t.id === id ? apply(t) : t) };
     this.notify();
     try {
-      const d = await this.api('PATCH', `/workspaces/${this.workspaceId}/cards/${number}`, { items: ops }) as Record<string, unknown>;
+      const d = await this.api('PATCH', `/projects/${this.projectId}/cards/${number}`, { items: ops }) as Record<string, unknown>;
       this.adopt(d.card as Card | undefined);
       return null;
     }
@@ -288,7 +288,7 @@ export class BoardStore {
    *  state. By number straight to the server: an archived card is not on
    *  the board and its history still answers. */
   async revisions(number: number, limit?: number): Promise<unknown[]> {
-    const d = await this.api('GET', `/workspaces/${this.workspaceId}/cards/${number}/revisions` +
+    const d = await this.api('GET', `/projects/${this.projectId}/cards/${number}/revisions` +
       (limit !== undefined ? `?limit=${limit}` : '')) as Record<string, unknown>;
     return d.revisions as unknown[];
   }

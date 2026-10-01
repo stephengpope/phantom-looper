@@ -1,5 +1,5 @@
 // System skills — the MACHINE tier: `/opt/skills/<name>/SKILL.md` baked into
-// the workspace (fs) image, documenting the toolchain that image carries
+// the project (fs) image, documenting the toolchain that image carries
 // (playwright-cli first). Two tiers exist: the repo's `.agents/skills/`
 // (scanned host-side over the checkout) and this one; repo shadows system on
 // a name collision, same rule as settings resolution — most specific wins.

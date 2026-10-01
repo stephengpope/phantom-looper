@@ -31,7 +31,7 @@ import type { PgColumn } from 'drizzle-orm/pg-core';
 // to write.
 import { sessions, sessionColumns, folders, cards, logTokens, type SessionRow } from './db/schema.js';
 import type { Settings } from './settings.js';
-import type { Workspaces } from './workspaces.js';
+import type { Projects } from './projects.js';
 import type { Folders } from './folders.js';
 import { newId } from '../core/ids.js';
 import { logger } from './log.js';
@@ -40,7 +40,7 @@ import type { SystemPromptLayout, StoredSystemPrompt } from 'phantom-client-sdk/
 import { SystemPrompt } from './systemPrompt/SystemPrompt.js';
 import { repoDir, type Paths } from './pool/paths.js';
 import type Docker from 'dockerode';
-import { GLOBAL, workspaceScope } from './store.js';
+import { GLOBAL, projectScope } from './store.js';
 import type { SessionEvents } from './api/sessionEvents.js';
 
 const log = logger('sessions');
@@ -85,8 +85,8 @@ export interface ListQuery {
   /** One substring, case-insensitive, anywhere in the name, the last user
    *  message or the branch. */
   q?: string;
-  /** Only this workspace's sessions (/resume's ←→ cycle). */
-  workspace?: string;
+  /** Only this project's sessions (/resume's ←→ cycle). */
+  project?: string;
   limit?: number;
   /** The cursor: the whole sort key of the last row the client saw. */
   before?: Date;
@@ -188,7 +188,7 @@ export class Sessions {
   constructor(
     private readonly db: Db,
     private readonly settings: Settings,
-    private readonly workspaces: Workspaces,
+    private readonly projects: Projects,
     private readonly folders: Folders,
     /** The per-session feed; absent in tests that have no watchers. */
     private readonly events?: SessionEvents,
@@ -207,9 +207,9 @@ export class Sessions {
    *  SOUL.md, the date), sent as stored on every turn after. A restart keeps
    *  the prompt the session was born with. The row and the prompt come back
    *  together — what POST /sessions answers with. */
-  async start(workspaceId: string, layout: SystemPromptLayout, opts: { id?: string } = {}): Promise<SessionFull & { system_prompt: StoredSystemPrompt }> {
+  async start(projectId: string, layout: SystemPromptLayout, opts: { id?: string } = {}): Promise<SessionFull & { system_prompt: StoredSystemPrompt }> {
     SystemPrompt.check(layout);
-    const s = await this.create(workspaceId, opts);
+    const s = await this.create(projectId, opts);
     return { ...s, system_prompt: await this.writeSystemPrompt(s, layout) };
   }
 
@@ -218,9 +218,9 @@ export class Sessions {
    *  the one it borrows (a supervisor's coder, the assistant's on-screen
    *  session); none when there is nothing to read. */
   private async writeSystemPrompt(s: SessionRow, layout: SystemPromptLayout): Promise<StoredSystemPrompt> {
-    const workspace = (await this.workspaces.get(s.workspaceId))!;
+    const project = (await this.projects.get(s.projectId))!;
     const prompt = await SystemPrompt.assemble(layout, {
-      workspaceId: s.workspaceId, workspace, settings: this.settings,
+      projectId: s.projectId, project, settings: this.settings,
       checkout: this.promptDeps && s.folderId ? repoDir(this.promptDeps.paths, s.folderId) : null,
       docker: this.promptDeps?.docker,
     });
@@ -268,19 +268,19 @@ export class Sessions {
   // ── the model ──────────────────────────────────────────────────────────────
   // THE RULE: a session's model is its row's provider/model/base_url, and
   // nothing else. Written when the session is born (from the settings, per
-  // workspace; a duplicate takes its source's; a cron's run takes its cron's —
+  // project; a duplicate takes its source's; a cron's run takes its cron's —
   // stampModel). While nothing has been said —
   // turn_count 0 — the row follows the settings, so /settings and a preset reach
   // a session you have not spoken to yet. The first saved turn moves the
   // count to 1 and the row never changes again. Every runner reads the row.
 
-  /** What a session born in this workspace runs on right now. `agent` picks
+  /** What a session born in this project runs on right now. `agent` picks
    *  the cascade (the supervisor's / assistant's trio, else the coding one). */
-  private async birthModel(workspaceId: string, agent: 'supervisor' | 'assistant' | null = null):
+  private async birthModel(projectId: string, agent: 'supervisor' | 'assistant' | null = null):
   Promise<{ provider: string | null; model: string | null; baseUrl: string | null }> {
-    const workspace = await this.workspaces.get(workspaceId);
+    const project = await this.projects.get(projectId);
     try {
-      const m = await this.settings.agentModel(agent ?? 'coding', workspace ? { workspace } : {});
+      const m = await this.settings.agentModel(agent ?? 'coding', project ? { project } : {});
       // A whole pin or none: a provider with no model is nothing to run on.
       return m.provider && m.model ? m : { provider: null, model: null, baseUrl: null };
     } catch { return { provider: null, model: null, baseUrl: null }; } // a half-set pair — the row stays empty
@@ -294,7 +294,7 @@ export class Sessions {
     const now = Date.now();
     for (const s of rows) {
       if (isHeld(s, now)) continue;
-      const m = await this.birthModel(s.workspaceId, s.agent as 'supervisor' | 'assistant' | null);
+      const m = await this.birthModel(s.projectId, s.agent as 'supervisor' | 'assistant' | null);
       if (m.provider === s.provider && m.model === s.model && m.baseUrl === s.baseUrl) continue;
       await this.db.update(sessions).set(m).where(eq(sessions.id, s.id));
       this.events?.publish(s.id, '', { event: 'session', provider: m.provider, model: m.model, base_url: m.baseUrl });
@@ -364,7 +364,7 @@ export class Sessions {
       const needle = `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
       filters.push(or(ilike(sessions.name, needle), ilike(sessions.lastUserMessage, needle), ilike(folders.branch, needle)));
     }
-    if (q.workspace) filters.push(eq(sessions.workspaceId, q.workspace));
+    if (q.project) filters.push(eq(sessions.projectId, q.project));
     filters.push(or(isNull(sessions.agent), ne(sessions.agent, 'assistant')));
     // The cursor is the whole sort key of the last row the client saw:
     // pinned first (a pinned tail means only unpinned rows follow), then
@@ -436,34 +436,34 @@ export class Sessions {
 
   /** The newest session of `agent` kind on the card, any status — a
    *  destroyed coder is still the card's coder (the looper restarts it). */
-  private async newestOnCard(workspaceId: string, cardNumber: number, kind: 'coding' | 'supervisor'):
+  private async newestOnCard(projectId: string, cardNumber: number, kind: 'coding' | 'supervisor'):
   Promise<SessionRow | undefined> {
     const rows = await this.from()
       .innerJoin(cards, eq(cards.id, sessions.cardId))
-      .where(and(eq(cards.workspace_id, workspaceId), eq(cards.number, cardNumber),
+      .where(and(eq(cards.project_id, projectId), eq(cards.number, cardNumber),
         kind === 'coding' ? isCodingSession : eq(sessions.agent, 'supervisor')))
       .orderBy(desc(sessions.createdAt)).limit(1);
     return rows[0];
   }
 
   /** The card's coding session — the one building it. */
-  coderOf(workspaceId: string, cardNumber: number): Promise<SessionRow | undefined> {
-    return this.newestOnCard(workspaceId, cardNumber, 'coding');
+  coderOf(projectId: string, cardNumber: number): Promise<SessionRow | undefined> {
+    return this.newestOnCard(projectId, cardNumber, 'coding');
   }
 
   /** The card's supervisor session. */
-  supervisorOf(workspaceId: string, cardNumber: number): Promise<SessionRow | undefined> {
-    return this.newestOnCard(workspaceId, cardNumber, 'supervisor');
+  supervisorOf(projectId: string, cardNumber: number): Promise<SessionRow | undefined> {
+    return this.newestOnCard(projectId, cardNumber, 'supervisor');
   }
 
-  /** Every card's coding session in a workspace — the newest per card, the
+  /** Every card's coding session in a project — the newest per card, the
    *  same rule `coderOf` uses. One query for the whole board. */
-  async codersByCard(workspaceId: string): Promise<Array<SessionRow & { card: number }>> {
+  async codersByCard(projectId: string): Promise<Array<SessionRow & { card: number }>> {
     return this.db.selectDistinctOn([sessions.cardId], { ...Sessions.view, card: cards.number })
       .from(sessions)
       .leftJoin(folders, eq(folders.id, sessions.folderId))
       .innerJoin(cards, eq(cards.id, sessions.cardId))
-      .where(and(eq(cards.workspace_id, workspaceId), isCodingSession))
+      .where(and(eq(cards.project_id, projectId), isCodingSession))
       .orderBy(sessions.cardId, desc(sessions.createdAt));
   }
 
@@ -499,13 +499,13 @@ export class Sessions {
    *  id comes back exactly where it stopped (Folders.restore). `fromBranch`
    *  cuts a NEW session's branch from a source branch on origin instead of
    *  base (the duplicate route). */
-  async create(workspaceId: string, opts: { id?: string; fromBranch?: string } = {}): Promise<SessionFull> {
-    const workspace = await this.workspaces.get(workspaceId);
-    if (!workspace) throw new SessionError('not_found', `no workspace ${workspaceId}`);
+  async create(projectId: string, opts: { id?: string; fromBranch?: string } = {}): Promise<SessionFull> {
+    const project = await this.projects.get(projectId);
+    if (!project) throw new SessionError('not_found', `no project ${projectId}`);
 
     const prior = opts.id ? await this.get(opts.id) : undefined;
-    if (prior && prior.workspaceId !== workspaceId) {
-      throw new SessionError('workspace_mismatch', `session ${prior.id} belongs to another workspace`);
+    if (prior && prior.projectId !== projectId) {
+      throw new SessionError('project_mismatch', `session ${prior.id} belongs to another project`);
     }
     // A session that does not own its folder has no files of its own — there
     // is nothing to restart.
@@ -526,7 +526,7 @@ export class Sessions {
 
     if (prior) {
       const folder = (await this.folders.get(prior.id))!;
-      await this.folders.restore(folder, workspace);
+      await this.folders.restore(folder, project);
       log.info({ session: prior.id, branch: folder.branch }, 'session restarted');
       const row = (await this.get(prior.id))!;
       return { ...row, branch: folder.branch, cutFromSha: folder.cutFromSha };
@@ -535,8 +535,8 @@ export class Sessions {
     // The folder (the checkout) and the session (the conversation) are born
     // together, sharing the id.
     const id = opts.id ?? newId();
-    const folder = await this.folders.checkout(workspace, id, { fromBranch: opts.fromBranch });
-    await this.db.insert(sessions).values({ id, workspaceId, folderId: id, ...await this.birthModel(workspaceId) });
+    const folder = await this.folders.checkout(project, id, { fromBranch: opts.fromBranch });
+    await this.db.insert(sessions).values({ id, projectId, folderId: id, ...await this.birthModel(projectId) });
     const row = (await this.get(id))!;
     log.info({ session: id, branch: folder.branch }, 'session created');
     this.changed(id);
@@ -547,14 +547,14 @@ export class Sessions {
    *  another session's folder (the files it can read), or is null when there is
    *  nothing to read. The shared base for supervisor and assistant sessions. */
   private async createConversation(
-    workspaceId: string, opts: { agent: 'supervisor' | 'assistant'; folderId?: string | null; cardId?: number },
+    projectId: string, opts: { agent: 'supervisor' | 'assistant'; folderId?: string | null; cardId?: number },
   ): Promise<SessionRow> {
     const id = newId();
     await this.db.insert(sessions).values({
-      id, workspaceId, agent: opts.agent,
+      id, projectId, agent: opts.agent,
       ...(opts.folderId ? { folderId: opts.folderId } : {}),
       ...(opts.cardId ? { cardId: opts.cardId } : {}),
-      ...await this.birthModel(workspaceId, opts.agent),
+      ...await this.birthModel(projectId, opts.agent),
     });
     this.changed(id);
     return (await this.get(id))!;
@@ -563,41 +563,41 @@ export class Sessions {
   /** The supervisor's conversation-only session, on its coder's card: no
    *  folder of its own — its folder_id points at the coder's, which is where
    *  the files are. */
-  async createSupervisor(workspaceId: string, folderId: string, cardId: number, layout: SystemPromptLayout): Promise<SessionRow> {
+  async createSupervisor(projectId: string, folderId: string, cardId: number, layout: SystemPromptLayout): Promise<SessionRow> {
     SystemPrompt.check(layout);
-    const s = await this.createConversation(workspaceId, { agent: 'supervisor', folderId, cardId });
+    const s = await this.createConversation(projectId, { agent: 'supervisor', folderId, cardId });
     await this.writeSystemPrompt(s, layout);
     return s;
   }
 
-  /** Where the assistant's row points: the workspace, and the folder of the
+  /** Where the assistant's row points: the project, and the folder of the
    *  session on screen (that session's own folderId — a coder owns its
    *  folder, a supervisor borrows the coder's). No session on screen = the
-   *  workspace alone, no folder. The same resolution for creating the row
+   *  project alone, no folder. The same resolution for creating the row
    *  and re-pointing it. */
-  private async assistantTarget(workspaceId: string, activeSessionId?: string | null) {
+  private async assistantTarget(projectId: string, activeSessionId?: string | null) {
     const active = activeSessionId ? await this.get(activeSessionId) : undefined;
-    return { workspaceId, folderId: active?.folderId ?? null };
+    return { projectId, folderId: active?.folderId ?? null };
   }
 
   /** The assistant's conversation-only session, pointed at what the user is
    *  looking at. */
-  async createAssistant(workspaceId: string, activeSessionId: string | null | undefined, layout: SystemPromptLayout): Promise<SessionRow> {
+  async createAssistant(projectId: string, activeSessionId: string | null | undefined, layout: SystemPromptLayout): Promise<SessionRow> {
     SystemPrompt.check(layout);
-    const t = await this.assistantTarget(workspaceId, activeSessionId);
-    const s = await this.createConversation(t.workspaceId, { agent: 'assistant', folderId: t.folderId });
+    const t = await this.assistantTarget(projectId, activeSessionId);
+    const s = await this.createConversation(t.projectId, { agent: 'assistant', folderId: t.folderId });
     await this.writeSystemPrompt(s, layout);
     return s;
   }
 
   /** The assistant's row follows the session on screen: its tools read that
-   *  session's files, so its workspace and folder are re-pointed at it on
+   *  session's files, so its project and folder are re-pointed at it on
    *  every switch. Assistant rows only; a no-op when nothing moved. */
-  async follow(id: string, workspaceId: string, activeSessionId?: string | null): Promise<void> {
+  async follow(id: string, projectId: string, activeSessionId?: string | null): Promise<void> {
     const s = await this.get(id);
     if (!s || s.agent !== 'assistant') return;
-    const t = await this.assistantTarget(workspaceId, activeSessionId);
-    if (s.workspaceId === t.workspaceId && s.folderId === t.folderId) return;
+    const t = await this.assistantTarget(projectId, activeSessionId);
+    if (s.projectId === t.projectId && s.folderId === t.folderId) return;
     await this.db.update(sessions).set(t).where(eq(sessions.id, id));
     this.changed(id);
   }
@@ -847,7 +847,7 @@ export class Sessions {
 
   /** A cron that names its model: its run's newborn row takes it, so the
    *  record shows what ran and the runner reads the row like every other.
-   *  No endpoint: the run inherits the workspace's while the provider
+   *  No endpoint: the run inherits the project's while the provider
    *  matches (agentConfig.ts pinned). */
   async stampModel(id: string, m: { provider: string; model: string }): Promise<void> {
     await this.db.update(sessions).set({ provider: m.provider, model: m.model, baseUrl: null }).where(eq(sessions.id, id));

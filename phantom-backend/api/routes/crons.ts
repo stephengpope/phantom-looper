@@ -1,15 +1,15 @@
-// Crons, workspace-scoped: a workspace's scheduled prompts (crons.ts) are
+// Crons, project-scoped: a project's scheduled prompts (crons.ts) are
 // written ONLY through these routes. Addressed by name — the handle a person
 // or an agent uses; the row id is storage's. Every schedule is read in the
-// workspace's `timezone`, and every answer says which zone and what
+// project's `timezone`, and every answer says which zone and what
 // time it is there, so a caller never has to guess either.
 //
-//   GET    /workspaces/:id/crons            every cron
-//   POST   /workspaces/:id/crons            create {name, schedule, prompt | script, provider?+model?, reasoning?, enabled?}
-//   PATCH  /workspaces/:id/crons/:name      any subset of those fields
-//   DELETE /workspaces/:id/crons/:name
+//   GET    /projects/:id/crons            every cron
+//   POST   /projects/:id/crons            create {name, schedule, prompt | script, provider?+model?, reasoning?, enabled?}
+//   PATCH  /projects/:id/crons/:name      any subset of those fields
+//   DELETE /projects/:id/crons/:name
 import type { FastifyInstance } from 'fastify';
-import type { WorkspaceRow } from '../../db/schema.js';
+import type { ProjectRow } from '../../db/schema.js';
 import type { Clock } from '../../../core/clock.js';
 import { CronError, CRON_FIELDS, type CronFields } from '../../crons.js';
 import { REASONINGS } from '../../../core/llm/createAgent.js';
@@ -20,13 +20,13 @@ const idParam = { type: 'object', properties: { id: { type: 'string' } }, requir
 const nameParams = { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' } }, required: ['id', 'name'] };
 
 const cronBodyProps = {
-  name: { type: 'string', description: 'The handle — unique in the workspace, case-insensitively.' },
-  schedule: { type: 'string', description: 'A 5-field cron expression ("0 9 * * *") for a recurring cron, or an ISO datetime ("2026-03-14T18:50:00") for a one-time run. Read in the workspace\'s timezone.' },
+  name: { type: 'string', description: 'The handle — unique in the project, case-insensitively.' },
+  schedule: { type: 'string', description: 'A 5-field cron expression ("0 9 * * *") for a recurring cron, or an ISO datetime ("2026-03-14T18:50:00") for a one-time run. Read in the project\'s timezone.' },
   prompt: { type: 'string', description: 'What an agent run is asked to do. Self-contained: the run is a fresh session. Exactly one of prompt / script.' },
   script: { type: 'string', description: 'A path in the repo, run with sh in the session\'s container — no model, no tokens. Exactly one of prompt / script.' },
-  provider: { type: ['string', 'null'], description: 'Run on this provider instead of the workspace\'s — one with a key on /keys (Crons refuses others, naming the ones that have one). Goes with `model`: both or neither. Null = the workspace\'s.' },
-  model: { type: ['string', 'null'], description: 'The model id on that provider. Goes with `provider`: both or neither. Null = the workspace\'s.' },
-  reasoning: { type: ['string', 'null'], enum: [...REASONINGS, null], description: 'How hard the run thinks. Null = the workspace\'s.' },
+  provider: { type: ['string', 'null'], description: 'Run on this provider instead of the project\'s — one with a key on /keys (Crons refuses others, naming the ones that have one). Goes with `model`: both or neither. Null = the project\'s.' },
+  model: { type: ['string', 'null'], description: 'The model id on that provider. Goes with `provider`: both or neither. Null = the project\'s.' },
+  reasoning: { type: ['string', 'null'], enum: [...REASONINGS, null], description: 'How hard the run thinks. Null = the project\'s.' },
   enabled: { type: 'boolean', description: 'false pauses the cron without removing it.' },
 };
 // The schema must cover THE list (crons.ts) — a field added there without a
@@ -36,8 +36,8 @@ for (const f of CRON_FIELDS) {
 }
 
 export function cronRoutes(app: FastifyInstance, ctx: AppCtx) {
-  const workspaceOf = (id: string) => ctx.workspaces.get(id);
-  const clockOf = (w: WorkspaceRow) => ctx.settings.clock({ workspace: w });
+  const projectOf = (id: string) => ctx.projects.get(id);
+  const clockOf = (w: ProjectRow) => ctx.settings.clock({ project: w });
   /** Every answer carries the zone and the time there — what a caller
    *  writing a datetime needs and never otherwise has. */
   const stamp = (clock: Clock) => ({ timezone: clock.timezone, now: clock.now().toISOString() });
@@ -47,52 +47,52 @@ export function cronRoutes(app: FastifyInstance, ctx: AppCtx) {
   };
 
   app.get<{ Params: { id: string } }>(
-    '/workspaces/:id/crons', { schema: { ...TAG, summary: 'The workspace\'s crons',
+    '/projects/:id/crons', { schema: { ...TAG, summary: 'The project\'s crons',
       description: 'Every cron, by name: schedule, `once` (a one-time datetime schedule — the row goes when it fires), enabled, ' +
-        '`last_run_at`, and the model its runs pin to (`provider`/`model`/`reasoning`; null = the workspace\'s). ' +
-        'Plus the workspace\'s `timezone` and the server\'s `now`.',
+        '`last_run_at`, and the model its runs pin to (`provider`/`model`/`reasoning`; null = the project\'s). ' +
+        'Plus the project\'s `timezone` and the server\'s `now`.',
       params: idParam } },
     async (req, reply) => {
-      const w = await workspaceOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
+      const w = await projectOf(req.params.id);
+      if (!w) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
       return ok({ ...stamp(await clockOf(w)), crons: await ctx.crons.list(w) });
     });
 
   app.post<{ Params: { id: string }; Body: CronFields }>(
-    '/workspaces/:id/crons', { schema: { ...TAG, summary: 'Create a cron',
-      description: 'The schedule must fire at least once from now in the workspace\'s zone; a datetime that has passed is refused. ' +
+    '/projects/:id/crons', { schema: { ...TAG, summary: 'Create a cron',
+      description: 'The schedule must fire at least once from now in the project\'s zone; a datetime that has passed is refused. ' +
         'Exactly one of prompt / script. A name already taken (case-insensitively) is refused with 409.',
       params: idParam,
       body: { type: 'object', additionalProperties: false, required: ['name', 'schedule'], properties: cronBodyProps } } },
     async (req, reply) => {
-      const w = await workspaceOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
+      const w = await projectOf(req.params.id);
+      if (!w) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
       const clock = await clockOf(w);
       try { return ok({ ...stamp(clock), cron: await ctx.crons.create(w, req.body, clock) }); }
       catch (e) { return cronErr(reply, e); }
     });
 
   app.patch<{ Params: { id: string; name: string }; Body: CronFields }>(
-    '/workspaces/:id/crons/:name', { schema: { ...TAG, summary: 'Update a cron',
+    '/projects/:id/crons/:name', { schema: { ...TAG, summary: 'Update a cron',
       description: 'Any subset of the fields. A new schedule is checked like a create; `name` renames it (the row stays).',
       params: nameParams,
       body: { type: 'object', additionalProperties: false, properties: cronBodyProps } } },
     async (req, reply) => {
-      const w = await workspaceOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
+      const w = await projectOf(req.params.id);
+      if (!w) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
       const clock = await clockOf(w);
       try { return ok({ ...stamp(clock), cron: await ctx.crons.update(w, req.params.name, req.body, clock) }); }
       catch (e) { return cronErr(reply, e); }
     });
 
   app.delete<{ Params: { id: string; name: string } }>(
-    '/workspaces/:id/crons/:name', { schema: { ...TAG, summary: 'Remove a cron',
+    '/projects/:id/crons/:name', { schema: { ...TAG, summary: 'Remove a cron',
       description: 'The row goes; the sessions its runs opened stay.', params: nameParams } },
     async (req, reply) => {
-      const w = await workspaceOf(req.params.id);
-      if (!w) return reply.code(404).send(err('not_found', `no workspace ${req.params.id}`));
+      const w = await projectOf(req.params.id);
+      if (!w) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
       if (!await ctx.crons.remove(w, req.params.name)) {
-        return reply.code(404).send(err('not_found', `no cron named "${req.params.name}" in this workspace`));
+        return reply.code(404).send(err('not_found', `no cron named "${req.params.name}" in this project`));
       }
       return ok({ deleted: req.params.name });
     });

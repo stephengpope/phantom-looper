@@ -1,5 +1,5 @@
 // The CRON tools — cron_list, cron_create, cron_update, cron_remove, over
-// Crons (crons.ts). Offered only when the workspace's `cron_enabled` is on:
+// Crons (crons.ts). Offered only when the project's `cron_enabled` is on:
 // crons off means no cron tools. The rules (what a schedule may be, name
 // clashes) live in Crons; its refusals come back verbatim, written for the
 // agent.
@@ -7,7 +7,7 @@ import { CronError, type CronFields } from '../crons.js';
 import { REASONINGS } from '../../core/llm/createAgent.js';
 import { nullable, obj, refusal, str, type OfferCtx, type ToolCtx, type ToolDef } from './def.js';
 
-const WHAT_A_RUN_IS = 'A RUN HAS NO USER IN IT: it opens a fresh coding session in this workspace (its own checkout, ' +
+const WHAT_A_RUN_IS = 'A RUN HAS NO USER IN IT: it opens a fresh coding session in this project (its own checkout, ' +
   'cut from the base branch) and runs the prompt as one turn. It cannot see this conversation and cannot ask a ' +
   'question — the prompt must stand on its own. The session is the record of the run, named after the cron.';
 const PROMPT_OR_SCRIPT = 'Exactly one of `prompt` / `script`. A prompt is an agent run — tokens on every fire. A script ' +
@@ -17,7 +17,7 @@ const PROMPT_OR_SCRIPT = 'Exactly one of `prompt` / `script`. A prompt is an age
 const SCHEDULE = 'A 5-field cron expression for something RECURRING ("0 9 * * *" = every day at 9am), or an ISO ' +
   'datetime for a ONE-TIME run ("2026-03-14T18:50:00"). Anything the user frames as a single future moment ' +
   '("tonight at 6:50", "tomorrow morning", "in 10 days") is one-time: it fires that minute and is then removed. ' +
-  'Read in the workspace\'s time zone (every answer says which, and what time it is there now) — a datetime ' +
+  'Read in the project\'s time zone (every answer says which, and what time it is there now) — a datetime ' +
   'that has already passed is refused.';
 
 /** The model a cron's runs use — only when the user names one. Which
@@ -26,19 +26,19 @@ const SCHEDULE = 'A 5-field cron expression for something RECURRING ("0 9 * * *"
 const MODEL_FIELDS = {
   provider: nullable('string', 'ONLY when the user asks for a specific model: a provider with a key ' +
     'on /keys (the server names the valid ones if refused). Goes with `model`: both or neither. Omit = the ' +
-    'workspace\'s model; null clears an earlier choice.'),
+    'project\'s model; null clears an earlier choice.'),
   model: nullable('string', 'ONLY when the user asks: the model id on that provider ' +
     '(e.g. "claude-sonnet-4-5"). Goes with `provider`: both or neither. Null clears.'),
   reasoning: { type: ['string', 'null'], enum: [...REASONINGS, null],
-    description: 'ONLY when the user asks: how hard the run thinks. Omit = the workspace\'s level; null clears.' },
+    description: 'ONLY when the user asks: how hard the run thinks. Omit = the project\'s level; null clears.' },
 };
 
-const enabled = async ({ app, workspace }: OfferCtx) => Boolean(await app.settings.resolve('cron_enabled', { workspace }));
+const enabled = async ({ app, project }: OfferCtx) => Boolean(await app.settings.resolve('cron_enabled', { project }));
 
 /** Every answer carries the zone and the time there — what a caller
  *  writing a datetime needs and never otherwise has. */
 async function stamped<T>(ctx: ToolCtx, fn: (clock: Awaited<ReturnType<ToolCtx['app']['settings']['clock']>>) => Promise<T>) {
-  const clock = await ctx.app.settings.clock({ workspace: ctx.workspace });
+  const clock = await ctx.app.settings.clock({ project: ctx.project });
   try {
     return { timezone: clock.timezone, now: clock.now().toISOString(), ...(await fn(clock)) };
   } catch (e) {
@@ -52,24 +52,24 @@ const AGENTS = ['coding', 'assistant'] as const;
 export const CRON_TOOLS: ToolDef[] = [
   {
     name: 'cron_list',
-    summary: "The workspace's crons.",
-    description: 'The workspace\'s crons, each with its schedule, its `prompt` (an agent run) or `script` (a path ' +
+    summary: "The project's crons.",
+    description: 'The project\'s crons, each with its schedule, its `prompt` (an agent run) or `script` (a path ' +
       'run with sh, no model), whether it is enabled, `once` (a one-time run), `last_run_at`, and the model its ' +
-      'runs use (`provider`/`model`/`reasoning`; null = the workspace\'s). Call this before naming a cron — never guess a name. How a run went is ' +
-      'in its session, named after the cron. The answer also carries the workspace\'s `timezone` and the time there `now`.',
+      'runs use (`provider`/`model`/`reasoning`; null = the project\'s). Call this before naming a cron — never guess a name. How a run went is ' +
+      'in its session, named after the cron. The answer also carries the project\'s `timezone` and the time there `now`.',
     input: obj({}),
     mutates: false, agents: AGENTS, offered: enabled,
-    execute: (ctx) => stamped(ctx, async () => ({ crons: await ctx.app.crons.list(ctx.workspace) })),
+    execute: (ctx) => stamped(ctx, async () => ({ crons: await ctx.app.crons.list(ctx.project) })),
   },
   {
     name: 'cron_create',
     summary: 'Schedule a prompt or a script.',
-    description: 'Schedule a prompt or a script to run unattended in this workspace. ' + WHAT_A_RUN_IS + ' ' +
+    description: 'Schedule a prompt or a script to run unattended in this project. ' + WHAT_A_RUN_IS + ' ' +
       PROMPT_OR_SCRIPT + ' If the point of a prompt run is to tell the user something, the prompt must say so. A ' +
       'new cron is picked up within a minute, so schedule at least two minutes out — anything sooner, just do now. ' +
       'Returns the cron as stored.',
     input: obj({
-      name: str('a short handle, unique in the workspace — how the cron is addressed from now on'),
+      name: str('a short handle, unique in the project — how the cron is addressed from now on'),
       schedule: str(SCHEDULE),
       prompt: str('what an agent run is asked to do — self-contained, every fact it needs written in'),
       script: str('a path in the repo, run with sh and no model, e.g. "scripts/nightly.sh"'),
@@ -77,7 +77,7 @@ export const CRON_TOOLS: ToolDef[] = [
       enabled: { type: 'boolean', description: 'false creates it paused; omit for on' },
     }, ['name', 'schedule']),
     mutates: true, agents: AGENTS, offered: enabled,
-    execute: (ctx, a) => stamped(ctx, async (clock) => ({ cron: await ctx.app.crons.create(ctx.workspace, a as CronFields, clock) })),
+    execute: (ctx, a) => stamped(ctx, async (clock) => ({ cron: await ctx.app.crons.create(ctx.project, a as CronFields, clock) })),
   },
   {
     name: 'cron_update',
@@ -96,7 +96,7 @@ export const CRON_TOOLS: ToolDef[] = [
     }, ['name']),
     mutates: true, agents: AGENTS, offered: enabled,
     execute: (ctx, { name, new_name, ...rest }) => stamped(ctx, async (clock) => ({
-      cron: await ctx.app.crons.update(ctx.workspace, String(name),
+      cron: await ctx.app.crons.update(ctx.project, String(name),
         { ...(rest as CronFields), ...(new_name !== undefined ? { name: String(new_name) } : {}) }, clock) })),
   },
   {
@@ -107,7 +107,7 @@ export const CRON_TOOLS: ToolDef[] = [
     mutates: true, agents: AGENTS, offered: enabled,
     async execute(ctx, a) {
       const name = String(a.name);
-      if (!(await ctx.app.crons.remove(ctx.workspace, name))) throw refusal('not_found', `no cron named "${name}" in this workspace`);
+      if (!(await ctx.app.crons.remove(ctx.project, name))) throw refusal('not_found', `no cron named "${name}" in this project`);
       return { deleted: name };
     },
   },

@@ -1,4 +1,4 @@
-// The cron row's one owner: a workspace's scheduled prompts (migration 037).
+// The cron row's one owner: a project's scheduled prompts (migration 037).
 // This is the only file that queries the table, and the only place a
 // schedule is checked — croner here is the same croner the scheduler
 // (crons/engine.ts) fires with, so "is this valid" and "when does it fire"
@@ -15,17 +15,17 @@
 // what a shell script already does. Setting one on update clears the other;
 // the pair is checked here and by the table (migration 040).
 //
-// The model, optionally. A run is a fresh coding session on the workspace's
+// The model, optionally. A run is a fresh coding session on the project's
 // settings; `provider` + `model` (together, or neither — migration 042) pin
 // one cron's runs to another model, `reasoning` sets how hard it thinks.
-// Null = the workspace's. The provider must be one the workspace can call —
+// Null = the project's. The provider must be one the project can call —
 // the same rule the /settings picker uses (core keyedProviders): a key on
 // /keys, or a provider that takes none. The scheduler (crons/engine.ts)
 // lays them over the run's session (agentConfig.ts pinned).
 import { and, eq, sql } from 'drizzle-orm';
 import { Cron } from 'croner';
 import { isUniqueViolation, type Db } from './db/client.js';
-import { crons, type CronRow, type WorkspaceRow } from './db/schema.js';
+import { crons, type CronRow, type ProjectRow } from './db/schema.js';
 import type { Clock } from '../core/clock.js';
 import { keyedProviders, REASONINGS } from '../core/llm/createAgent.js';
 import type { Settings } from './settings.js';
@@ -77,39 +77,39 @@ function checkSchedule(schedule: string, clock: Clock, now: Date): void {
 }
 
 export class Crons {
-  private listeners: Array<(workspaceId: string) => void> = [];
+  private listeners: Array<(projectId: string) => void> = [];
   constructor(private readonly db: Db, private readonly settings: Settings) {}
 
-  /** Hear every write, by workspace — the scheduler re-registers that
-   *  workspace's crons on each. Events, not polling: the table is written
+  /** Hear every write, by project — the scheduler re-registers that
+   *  project's crons on each. Events, not polling: the table is written
    *  only here, so here is where a change is known. */
-  subscribe(fn: (workspaceId: string) => void): () => void {
+  subscribe(fn: (projectId: string) => void): () => void {
     this.listeners.push(fn);
     return () => { this.listeners = this.listeners.filter((l) => l !== fn); };
   }
-  private changed(workspaceId: string): void {
-    for (const l of this.listeners) l(workspaceId);
+  private changed(projectId: string): void {
+    for (const l of this.listeners) l(projectId);
   }
 
   // ── reads ──────────────────────────────────────────────────────────────────
 
-  /** A workspace's crons, by name. */
-  async list(w: WorkspaceRow): Promise<CronRow[]> {
-    return this.db.select().from(crons).where(eq(crons.workspace_id, w.id)).orderBy(crons.name);
+  /** A project's crons, by name. */
+  async list(w: ProjectRow): Promise<CronRow[]> {
+    return this.db.select().from(crons).where(eq(crons.project_id, w.id)).orderBy(crons.name);
   }
 
   /** The cron with this name (case-insensitive). */
-  async byName(w: WorkspaceRow, name: string): Promise<CronRow | undefined> {
+  async byName(w: ProjectRow, name: string): Promise<CronRow | undefined> {
     const rows = await this.db.select().from(crons)
-      .where(and(eq(crons.workspace_id, w.id), sql`lower(${crons.name}) = lower(${name})`));
+      .where(and(eq(crons.project_id, w.id), sql`lower(${crons.name}) = lower(${name})`));
     return rows[0];
   }
 
   /** Every enabled cron — what the scheduler registers, each in its
-   *  workspace's zone. One workspace's, or all. */
-  async listEnabled(workspaceId?: string): Promise<CronRow[]> {
+   *  project's zone. One project's, or all. */
+  async listEnabled(projectId?: string): Promise<CronRow[]> {
     return this.db.select().from(crons)
-      .where(and(eq(crons.enabled, true), workspaceId ? eq(crons.workspace_id, workspaceId) : undefined))
+      .where(and(eq(crons.enabled, true), projectId ? eq(crons.project_id, projectId) : undefined))
       .orderBy(crons.id);
   }
 
@@ -124,7 +124,7 @@ export class Crons {
 
   /** A new cron. Name, schedule and prompt required; the schedule must fire
    *  at least once from now, in the clock's zone. */
-  async create(w: WorkspaceRow, fields: CronFields, clock: Clock, now = clock.now()): Promise<CronRow> {
+  async create(w: ProjectRow, fields: CronFields, clock: Clock, now = clock.now()): Promise<CronRow> {
     const name = cleanName(fields.name);
     const body = cleanBody(fields.prompt, fields.script);
     const schedule = cleanSchedule(fields.schedule);
@@ -133,7 +133,7 @@ export class Crons {
     const reasoning = cleanReasoning(fields.reasoning);
     try {
       const [row] = await this.db.insert(crons)
-        .values({ workspace_id: w.id, name, schedule, once: isOnce(schedule), ...body, ...model, reasoning,
+        .values({ project_id: w.id, name, schedule, once: isOnce(schedule), ...body, ...model, reasoning,
           enabled: fields.enabled ?? true, created_at: now, updated_at: now })
         .returning();
       this.changed(w.id);
@@ -146,7 +146,7 @@ export class Crons {
 
   /** Any subset of fields. A schedule change is checked like a create; a
    *  rename keeps the row. */
-  async update(w: WorkspaceRow, name: string, fields: CronFields, clock: Clock, now = clock.now()): Promise<CronRow> {
+  async update(w: ProjectRow, name: string, fields: CronFields, clock: Clock, now = clock.now()): Promise<CronRow> {
     const set: Partial<typeof crons.$inferInsert> = {};
     if (fields.name !== undefined) set.name = cleanName(fields.name);
     if (fields.prompt !== undefined || fields.script !== undefined) Object.assign(set, cleanBody(fields.prompt, fields.script));
@@ -160,7 +160,7 @@ export class Crons {
     if (fields.enabled !== undefined) set.enabled = fields.enabled;
     if (!Object.keys(set).length) throw new CronError('invalid_args', 'no fields to update');
     const prior = await this.byName(w, name);
-    if (!prior) throw new CronError('not_found', `no cron named "${name}" in this workspace`);
+    if (!prior) throw new CronError('not_found', `no cron named "${name}" in this project`);
     try {
       const [row] = await this.db.update(crons).set({ ...set, updated_at: now }).where(eq(crons.id, prior.id)).returning();
       this.changed(w.id);
@@ -171,7 +171,7 @@ export class Crons {
     }
   }
 
-  async remove(w: WorkspaceRow, name: string): Promise<boolean> {
+  async remove(w: ProjectRow, name: string): Promise<boolean> {
     const prior = await this.byName(w, name);
     if (!prior) return false;
     await this.db.delete(crons).where(eq(crons.id, prior.id));
@@ -179,21 +179,21 @@ export class Crons {
     return true;
   }
 
-  /** The model pair: both or neither, on a provider this workspace can call.
+  /** The model pair: both or neither, on a provider this project can call.
    *  Both columns come back so a write of one (or a null) resets the pair —
    *  a provider with no model is nothing to run on, a model with no
    *  provider could be anyone's. */
-  private async cleanModel(w: WorkspaceRow, p: unknown, m: unknown): Promise<{ provider: string | null; model: string | null }> {
+  private async cleanModel(w: ProjectRow, p: unknown, m: unknown): Promise<{ provider: string | null; model: string | null }> {
     const provider = String(p ?? '').trim();
     const model = String(m ?? '').trim();
     if (!provider && !model) return { provider: null, model: null };
     if (!provider || !model) {
       throw new CronError('invalid_args', 'provider and model go together — give both to run this cron on another ' +
-        'model, or neither (null) to run on the workspace\'s. A model id means nothing without its provider.');
+        'model, or neither (null) to run on the project\'s. A model id means nothing without its provider.');
     }
-    const keyed = keyedProviders(await this.settings.block({ workspace: w }));
+    const keyed = keyedProviders(await this.settings.block({ project: w }));
     if (!keyed.includes(provider as never)) {
-      throw new CronError('invalid_args', `"${provider}" is not a provider this workspace can call — one with a key on /keys: ` +
+      throw new CronError('invalid_args', `"${provider}" is not a provider this project can call — one with a key on /keys: ` +
         `${keyed.join(', ')}. Save a key there first.`);
     }
     return { provider, model };

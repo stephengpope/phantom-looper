@@ -35,7 +35,7 @@
 // THE LOCK is the only concurrency test. The sync takes the session lock and
 // fails when it cannot; it never inspects whether anything is running. Same
 // single lock the rest of the system uses — no new mutex.
-import type { WorkspaceRow, SessionRow } from '../db/schema.js';
+import type { ProjectRow, SessionRow } from '../db/schema.js';
 import { resolveAuth } from '../pool/pool.js';
 import { repoDir, type Paths } from '../pool/paths.js';
 import type { Sessions } from '../sessions.js';
@@ -146,11 +146,11 @@ export interface SyncDeps {
    *
    *  The sync already holds the session when this runs, under GIT_CLIENT_ID, so
    *  the hook's own openSession re-takes our hold rather than finding us. */
-  resolve?: (session: SessionRow, workspace: WorkspaceRow, dir: string, ctx: ConflictContext) => Promise<boolean>;
+  resolve?: (session: SessionRow, project: ProjectRow, dir: string, ctx: ConflictContext) => Promise<boolean>;
   /** Append a summary of the sync to the session's transcript — a user message
    *  the agent picks up on its next turn. Same lock (GIT_CLIENT_ID), same
    *  openSession pattern as `resolve`. Absent -> no summary is recorded. */
-  recordSummary?: (session: SessionRow, workspace: WorkspaceRow, result: SyncResult, opts: SyncOptions) => Promise<void>;
+  recordSummary?: (session: SessionRow, project: ProjectRow, result: SyncResult, opts: SyncOptions) => Promise<void>;
   /** Model for the commit message (the assistant's). A throw or a null fails
    *  the sync with the reason — there is no file-name fallback: base history
    *  only ever gets a real message. `report` is the retry loop's voice
@@ -182,13 +182,13 @@ export interface SyncOptions {
 }
 
 export async function syncBranch(
-  deps: SyncDeps, session: SessionRow, workspace: WorkspaceRow, opts: SyncOptions,
+  deps: SyncDeps, session: SessionRow, project: ProjectRow, opts: SyncOptions,
 ): Promise<SyncResult> {
   const folder = session.folderId ? await deps.folders.get(session.folderId) : undefined;
   if (!folder) return { outcome: 'error', reason: 'session has no folder — nothing to sync' };
   const dir = repoDir(deps.paths, folder.id);
-  const base = workspace.baseBranch;
-  const auth = await resolveAuth(deps.settings, workspace);
+  const base = project.baseBranch;
+  const auth = await resolveAuth(deps.settings, project);
   const ev = async (step: SyncStep, detail?: string) => { await deps.onEvent?.({ step, label: syncStepLabel(step, opts.landOnBase), detail }); };
   const rounds = opts.landOnBase ? ROUNDS : 1;
   const hold = opts.hold ?? true;
@@ -301,12 +301,12 @@ export async function syncBranch(
           const reason = `conflict in ${ctx.files.join(', ')} — left for the agent to resolve`;
           log.warn({ session: session.id, round, files: ctx.files }, 'sync: conflict left in progress for the agent');
           const blocked: SyncResult = { outcome: 'blocked', reason, rounds: round, arrived, files: ctx.files };
-          await deps.recordSummary?.(session, workspace, blocked, opts).catch((e) =>
+          await deps.recordSummary?.(session, project, blocked, opts).catch((e) =>
             log.warn({ session: session.id, err: errStr(e) }, 'could not record sync summary'));
           return blocked;
         }
         await ev('resolve', ctx.files.join(', '));
-        const ok = await deps.resolve(session, workspace, dir, ctx).catch((e) => {
+        const ok = await deps.resolve(session, project, dir, ctx).catch((e) => {
           log.error({ session: session.id, err: errStr(e) }, 'conflict turn threw'); return false;
         });
         // Verified against the repo, never against what the agent said. The
@@ -356,7 +356,7 @@ export async function syncBranch(
       };
       if (!opts.landOnBase) {
         log.info({ session: session.id, base, arrived: arrived.length, pushed }, 'pulled base');
-        await deps.recordSummary?.(session, workspace, done, opts).catch((e) =>
+        await deps.recordSummary?.(session, project, done, opts).catch((e) =>
           log.warn({ session: session.id, err: errStr(e) }, 'could not record sync summary'));
         return done;
       }
@@ -370,7 +370,7 @@ export async function syncBranch(
       const landed = await pushToBase(dir, base, auth);
       if (landed === 'pushed') {
         log.info({ session: session.id, base, rounds: round }, 'pushed');
-        await deps.recordSummary?.(session, workspace, done, opts).catch((e) =>
+        await deps.recordSummary?.(session, project, done, opts).catch((e) =>
           log.warn({ session: session.id, err: errStr(e) }, 'could not record sync summary'));
         return done;
       }

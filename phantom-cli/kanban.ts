@@ -99,7 +99,7 @@ export async function kanbanOps(board: BoardStore, args: KanbanArgs): Promise<un
   // A switch flip answers with the switch as it now stands — the effective
   // value, inherit spelled out — so the tool never has to guess what null means.
   const switchState = (v: boolean | null | undefined, fallback: boolean | undefined) =>
-    v == null ? `inherit (workspace ${fallback ? 'on' : 'off'})` : v ? 'on' : 'off';
+    v == null ? `inherit (project ${fallback ? 'on' : 'off'})` : v ? 'on' : 'off';
   const switches = args.auto_plan !== undefined || args.auto_build !== undefined
     ? { auto_plan: switchState(fresh?.auto_plan, board.state.autoPlanDefault),
       auto_build: switchState(fresh?.auto_build, board.state.autoBuildDefault) } : {};

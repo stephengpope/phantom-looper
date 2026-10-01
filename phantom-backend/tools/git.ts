@@ -15,16 +15,16 @@ const wired = ({ app }: OfferCtx) => Promise.resolve(!!app.autoPush && !!app.aut
 
 const idField = str('a session id; omit for the session this assistant is following');
 
-/** The session the tool acts on and its workspace, or the refusal. */
+/** The session the tool acts on and its project, or the refusal. */
 async function target(ctx: ToolCtx, a: Record<string, unknown>) {
   const id = typeof a.id === 'string' && a.id ? a.id : ctx.session.folderId;
   if (!id) throw refusal('no_session', 'no session to act on — name one with `id`');
   const session = await ctx.app.sessions.get(id);
   if (!session) throw refusal('session_not_found', `no session ${id}`);
   if (session.status !== 'active') throw refusal('session_destroyed', `session ${id} is ${session.status}`);
-  const workspace = await ctx.app.workspaces.get(session.workspaceId);
-  if (!workspace) throw refusal('not_found', 'workspace vanished');
-  return { session, workspace };
+  const project = await ctx.app.projects.get(session.projectId);
+  if (!project) throw refusal('not_found', 'project vanished');
+  return { session, project };
 }
 
 /** The result, or the operation's own failure as a result the model reads. */
@@ -47,7 +47,7 @@ export const GIT_TOOLS: ToolDef[] = [
     mutates: true, agents: ['assistant'], offered: wired,
     async execute(ctx, a) {
       const t = await target(ctx, a);
-      return { session: t.session.id, ...await run(() => ctx.app.autoPush!(t.session, t.workspace, undefined, ctx.client)) };
+      return { session: t.session.id, ...await run(() => ctx.app.autoPush!(t.session, t.project, undefined, ctx.client)) };
     },
   },
   {
@@ -60,7 +60,7 @@ export const GIT_TOOLS: ToolDef[] = [
     mutates: true, agents: ['assistant'], offered: wired,
     async execute(ctx, a) {
       const t = await target(ctx, a);
-      return { session: t.session.id, ...await run(() => ctx.app.autoPull!(t.session, t.workspace, undefined, ctx.client)) };
+      return { session: t.session.id, ...await run(() => ctx.app.autoPull!(t.session, t.project, undefined, ctx.client)) };
     },
   },
 ];

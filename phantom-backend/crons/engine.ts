@@ -7,13 +7,13 @@
 // Registrations follow the rows by EVENTS, not polling (shockwave polls
 // because its file lives on GitHub; ours is written in this process): boot
 // registers everything once; every write to the table (Crons.subscribe) and
-// every settings write (a workspace's cron switch or zone) reconciles that
-// workspace — NON-DESTRUCTIVELY: only a changed schedule or zone
+// every settings write (a project's cron switch or zone) reconciles that
+// project — NON-DESTRUCTIVELY: only a changed schedule or zone
 // re-registers, running jobs are left alone, rows that are gone are dropped.
 // Reconciles are queued one after another, so two can never see the same
 // row as new and register it twice.
 //
-// A fire opens a NEW coding session in the workspace (its own checkout,
+// A fire opens a NEW coding session in the project (its own checkout,
 // named after the cron, its seat stamped 'cron'), runs the prompt as one
 // coding turn — the same runner the card runs and the /turn route use — and
 // closes it. A cron that names its model stamps it on that session's row
@@ -38,7 +38,7 @@ import type { FastifyInstance } from 'fastify';
 import { Cron } from 'croner';
 import { CRON_CLIENT_ID, type Sessions } from '../sessions.js';
 import type { Crons, CronRow } from '../crons.js';
-import type { Workspaces } from '../workspaces.js';
+import type { Projects } from '../projects.js';
 import type { Settings } from '../settings.js';
 import { openSession, type OpenedSession } from '../../core/session.js';
 import { serializeTranscript } from '../../core/llm/transcript.js';
@@ -60,13 +60,13 @@ const SCRIPT_TIMEOUT_MS = 60 * 60 * 1000;
 
 export interface CronEngineDeps {
   crons: Crons;
-  workspaces: Workspaces;
+  projects: Projects;
   settings: Settings;
   sessions: Sessions;
   app: FastifyInstance;
   apiKey: string;
   sessionEvents?: SessionEvents;
-  /** Settings writes — a workspace's cron switch or zone moved. */
+  /** Settings writes — a project's cron switch or zone moved. */
   settingsEvents?: SettingsEvents;
   /** Active turns by session id — the interrupt route aborts these. */
   activeTurns?: Map<string, AbortController>;
@@ -78,7 +78,7 @@ export interface CronEngineDeps {
 /** A registration. The zone is part of it, not just the schedule: the same
  *  string is a different instant in a different zone, so a zone change
  *  must re-register. */
-interface Registration { cron: Cron; workspaceId: string; schedule: string; timezone: string }
+interface Registration { cron: Cron; projectId: string; schedule: string; timezone: string }
 
 export class CronEngine {
   private registered = new Map<number, Registration>();   // cron row id → croner job
@@ -93,13 +93,13 @@ export class CronEngine {
   /** Boot: register everything once, then follow the writes. */
   start(): void {
     this.reconcile();
-    this.unsubscribe.push(this.deps.crons.subscribe((workspaceId) => this.reconcile(workspaceId)));
-    // A settings write names its scope: one workspace, or global — which
-    // may be the switch or the zone every workspace inherits.
+    this.unsubscribe.push(this.deps.crons.subscribe((projectId) => this.reconcile(projectId)));
+    // A settings write names its scope: one project, or global — which
+    // may be the switch or the zone every project inherits.
     if (this.deps.settingsEvents) {
       this.unsubscribe.push(this.deps.settingsEvents.subscribe((e) => {
-        const ws = e.scope.startsWith('workspace:') ? e.scope.slice('workspace:'.length) : undefined;
-        if (ws || e.scope === 'global') this.reconcile(ws);
+        const projectId = e.scope.startsWith('project:') ? e.scope.slice('project:'.length) : undefined;
+        if (projectId || e.scope === 'global') this.reconcile(projectId);
       }));
     }
     log.info('cron scheduler started');
@@ -112,45 +112,45 @@ export class CronEngine {
     this.registered.clear();
   }
 
-  /** Bring one workspace's (or every) registration in line with its rows.
+  /** Bring one project's (or every) registration in line with its rows.
    *  Queued: reconciles never overlap. Nothing rejects upward. */
-  reconcile(workspaceId?: string): void {
+  reconcile(projectId?: string): void {
     this.queue = this.queue
-      .then(() => this.reconcileNow(workspaceId))
-      .catch((e) => log.error({ workspace: workspaceId, err: errStr(e) }, 'cron reconcile failed'));
+      .then(() => this.reconcileNow(projectId))
+      .catch((e) => log.error({ project: projectId, err: errStr(e) }, 'cron reconcile failed'));
   }
 
   /** Register new and changed crons, leave unchanged ones alone (a running
    *  job is never touched), drop what is gone, disabled, or switched off. */
-  private async reconcileNow(workspaceId?: string): Promise<void> {
-    const rows = await this.deps.crons.listEnabled(workspaceId);
+  private async reconcileNow(projectId?: string): Promise<void> {
+    const rows = await this.deps.crons.listEnabled(projectId);
     const seen = new Set<number>();
     const zones = new Map<string, { enabled: boolean; timezone: string }>();
     for (const row of rows) {
-      let ws = zones.get(row.workspace_id);
-      if (!ws) {
-        const w = await this.deps.workspaces.get(row.workspace_id);
+      let zone = zones.get(row.project_id);
+      if (!zone) {
+        const w = await this.deps.projects.get(row.project_id);
         if (!w) continue;
         try {
-          const s = await this.deps.settings.resolveMany(['cron_enabled', 'timezone'], { workspace: w });
-          ws = { enabled: s.cron_enabled === true, timezone: s.timezone };
+          const s = await this.deps.settings.resolveMany(['cron_enabled', 'timezone'], { project: w });
+          zone = { enabled: s.cron_enabled === true, timezone: s.timezone };
         } catch (e) {
-          log.error({ workspace: w.name, err: errStr(e) }, 'could not read the workspace\'s cron settings — its crons are not scheduled');
+          log.error({ project: w.name, err: errStr(e) }, 'could not read the project\'s cron settings — its crons are not scheduled');
           continue;
         }
-        zones.set(row.workspace_id, ws);
+        zones.set(row.project_id, zone);
       }
-      if (!ws.enabled) continue;   // the workspace's master switch: its registrations drop below
+      if (!zone.enabled) continue;   // the project's master switch: its registrations drop below
       seen.add(row.id);
       const existing = this.registered.get(row.id);
-      if (existing && existing.schedule === row.schedule && existing.timezone === ws.timezone) continue;
+      if (existing && existing.schedule === row.schedule && existing.timezone === zone.timezone) continue;
       if (existing) existing.cron.stop();   // schedule or zone changed → replace
       try {
         // AWAITED on purpose: croner's `protect` holds only while it awaits
         // this callback, so a fire-and-forget body would let a long run
         // overlap itself. `fire` catches everything, so awaiting it cannot
         // reject into croner.
-        const cron = new Cron(row.schedule, { timezone: ws.timezone, protect: true }, async () => {
+        const cron = new Cron(row.schedule, { timezone: zone.timezone, protect: true }, async () => {
           await this.fire(row.id);
         });
         if (!cron.nextRun()) {
@@ -164,16 +164,16 @@ export class CronEngine {
           }
           continue;
         }
-        this.registered.set(row.id, { cron, workspaceId: row.workspace_id, schedule: row.schedule, timezone: ws.timezone });
+        this.registered.set(row.id, { cron, projectId: row.project_id, schedule: row.schedule, timezone: zone.timezone });
         log.info({ cron: row.name, next: cron.nextRun()?.toISOString() }, 'cron scheduled');
       } catch (e) {
         log.warn({ cron: row.name, schedule: row.schedule, err: errStr(e) }, 'invalid cron schedule — not scheduled');
       }
     }
     // Drop registrations (in scope) whose row vanished, was disabled, or
-    // whose workspace was switched off.
+    // whose project was switched off.
     for (const [id, reg] of this.registered) {
-      if (workspaceId && reg.workspaceId !== workspaceId) continue;
+      if (projectId && reg.projectId !== projectId) continue;
       if (!seen.has(id)) { reg.cron.stop(); this.registered.delete(id); }
     }
   }
@@ -199,15 +199,15 @@ export class CronEngine {
     let opened: OpenedSession | undefined;
     let sessionId: string | null = null;
     try {
-      const w = await this.deps.workspaces.get(row.workspace_id);
-      if (!w) throw new Error(`workspace ${row.workspace_id} is gone`);
-      log.info({ workspace: w.name, cron: row.name }, 'cron run started');
+      const w = await this.deps.projects.get(row.project_id);
+      if (!w) throw new Error(`project ${row.project_id} is gone`);
+      log.info({ project: w.name, cron: row.name }, 'cron run started');
       // A fresh session, with its checkout, named after the cron. The seat
       // is stamped before the turn so a window watching reads `cron` at
       // once; the transcript save re-derives it from the writer (CRON_CLIENT_ID).
       opened = await openSession({
         baseUrl: BASE, apiKey, clientId: CRON_CLIENT_ID, label: `cron: ${row.name}`,
-        fetch: this.f, lock: true, workspaceId: w.id,
+        fetch: this.f, lock: true, projectId: w.id,
       });
       sessionId = opened.session.id;
       await sessions.nameIfUnnamed(sessionId, row.name);
@@ -220,7 +220,7 @@ export class CronEngine {
       try {
         if (row.script) {
           const exit = await this.runScript(opened, row.script, ac.signal);
-          log.info({ workspace: w.name, cron: row.name, session: sessionId, script: row.script, exit }, 'cron script finished');
+          log.info({ project: w.name, cron: row.name, session: sessionId, script: row.script, exit }, 'cron script finished');
         } else {
           const deps = { f: this.f, apiKey, base: BASE, modelFetch: this.deps.modelFetch,
             sessionEvents: this.deps.sessionEvents, client: CRON_CLIENT_ID, backdoor: this.deps.backdoor,
@@ -228,8 +228,8 @@ export class CronEngine {
           // The row, re-read: it may carry the cron's model now (stampModel).
           const pin = { ...sessionPin(await sessions.get(sessionId)), reasoning: row.reasoning };
           const t = await runCodingTurn(deps, opened, w.id, row.prompt ?? '', false,
-            await this.deps.settings.agentConfig('coding', { workspace: w, pin }));
-          log.info({ workspace: w.name, cron: row.name, session: sessionId, tokens: t.tokens, interrupted: t.interrupted }, 'cron run finished');
+            await this.deps.settings.agentConfig('coding', { project: w, pin }));
+          log.info({ project: w.name, cron: row.name, session: sessionId, tokens: t.tokens, interrupted: t.interrupted }, 'cron run finished');
         }
       } finally {
         this.deps.activeTurns?.delete(sessionId);

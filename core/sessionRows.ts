@@ -5,7 +5,7 @@
 // screen and "idle" when the Assistant is asked is one fact with two answers.
 
 export interface SessionRow {
-  id: string; workspaceId: string; branch: string; status: string; lastUsedAt: string;
+  id: string; projectId: string; branch: string; status: string; lastUsedAt: string;
   /** Someone holds this session right now (server-computed, no clock math). */
   locked?: boolean;
   lockedBy?: string | null;
@@ -18,7 +18,7 @@ export interface SessionRow {
    *  'cron' for a scheduled run, 'assistant', null = a person's. */
   agent?: string | null;
   card?: number | null;
-  /** The card's board column, from the workspace's cards table. */
+  /** The card's board column, from the project's cards table. */
   cardStatus?: string | null;
   /** Where the checkout's work stands: not_pushed / not_merged / merged;
    *  null = never measured. */

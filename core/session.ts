@@ -41,7 +41,7 @@ export interface OpenSessionConfig {
   /** What to show others while held (a hostname, `supervisor`). */
   label?: string;
   /** Required when creating (no sessionId). */
-  workspaceId?: string;
+  projectId?: string;
   /** Open this session: active = attach, destroyed = restart. */
   sessionId?: string;
   /** Take the session lock for the whole open (the server's card-run turns and the
@@ -53,7 +53,7 @@ export interface OpenSessionConfig {
 }
 
 export interface SessionInfo {
-  id: string; workspaceId: string; branch: string | null; status: string;
+  id: string; projectId: string; branch: string | null; status: string;
   /** The folder this session's tools open — its own for a coder, the
    *  coder's for a supervisor. Null only on an assistant with no session
    *  on screen. */
@@ -133,8 +133,8 @@ export async function openSession(cfg: OpenSessionConfig): Promise<OpenedSession
   let session: SessionInfo;
   let created = false;
   if (!cfg.sessionId) {
-    if (!cfg.workspaceId) throw new Error('openSession: workspaceId required to create');
-    session = await guarded('POST', '/sessions', { workspace_id: cfg.workspaceId, system_prompt_layout: CodingAgent.systemPromptLayout }) as SessionInfo;
+    if (!cfg.projectId) throw new Error('openSession: projectId required to create');
+    session = await guarded('POST', '/sessions', { project_id: cfg.projectId, system_prompt_layout: CodingAgent.systemPromptLayout }) as SessionInfo;
     created = true;
   } else {
     const existing = await guarded('GET', `/sessions/${cfg.sessionId}`) as SessionInfo;
@@ -142,7 +142,7 @@ export async function openSession(cfg: OpenSessionConfig): Promise<OpenedSession
       session = existing;
     } else {
       session = await guarded('POST', '/sessions',
-        { workspace_id: existing.workspaceId, id: cfg.sessionId, system_prompt_layout: CodingAgent.systemPromptLayout }) as SessionInfo;
+        { project_id: existing.projectId, id: cfg.sessionId, system_prompt_layout: CodingAgent.systemPromptLayout }) as SessionInfo;
       created = true;
     }
   }

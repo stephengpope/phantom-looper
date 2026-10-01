@@ -4,14 +4,14 @@
 // a plain message (`/code`, `/assistant` — the only two doors between modes).
 //
 // The menus are per mode (chat scope, swapped by enterMode). Each mode shows
-// only what belongs in that context — assistant mode shows workspace/session
+// only what belongs in that context — assistant mode shows project/session
 // navigation and server basics; code mode shows the coding session's own
 // actions plus model management. Every handler still answers correctly from
 // either mode (graceful errors), so a typed command never goes unanswered.
 //
 // Merged pairs: `/sessions` lists, `/sessions 2` points at number 2;
-// `/workspaces` lists, `/workspaces 2` switches. No singular /session or
-// /workspace.
+// `/projects` lists, `/projects 2` switches. No singular /session or
+// /project.
 //
 // `/auto_push` and `/auto_pull` are the project's `/auto-push` / `/auto-pull`
 // under Telegram's command law (lowercase letters, digits, underscores — a
@@ -34,18 +34,18 @@ import { CLIENT_ID } from './assistant.js';
 
 interface Cmd { command: string; description: string }
 
-/** The menus — one per mode. Assistant mode shows workspace/session navigation
+/** The menus — one per mode. Assistant mode shows project/session navigation
  *  and server basics; code mode shows the coding session's actions plus model
  *  management. No shared COMMON array — each menu is explicit about what
  *  belongs in that context. */
 export const MENU: Record<TelegramMode, Cmd[]> = {
   assistant: [
     { command: 'code', description: 'Talk to the coding agent' },
-    { command: 'workspaces', description: 'List or switch workspaces' },
+    { command: 'projects', description: 'List or switch projects' },
     { command: 'sessions', description: 'List or switch sessions' },
     { command: 'compact', description: 'Summarize older messages to free space' },
     { command: 'stop', description: 'Stop the assistant' },
-    { command: 'status', description: 'Server, workspace and session overview' },
+    { command: 'status', description: 'Server, project and session overview' },
     { command: 'presets', description: 'List or apply model presets' },
     { command: 'tokens', description: 'Token usage by model' },
     { command: 'update', description: 'Check for updates' },
@@ -74,11 +74,11 @@ export const MENU: Record<TelegramMode, Cmd[]> = {
  *  answers, so a menu entry never goes unanswered. */
 export function menuFor(mode: TelegramMode): Cmd[] { return MENU[mode]; }
 
-// Per-chat numbered lists — /sessions n and /workspaces n read positions off
+// Per-chat numbered lists — /sessions n and /projects n read positions off
 // the list the same command last printed. In-memory; a stale index misses and
 // re-prompts, never acts on the wrong row.
 const sessionList = new Map<number, string[]>();
-const workspaceList = new Map<number, string[]>();
+const projectList = new Map<number, string[]>();
 const providerList = new Map<number, string[]>();
 const modelList = new Map<number, string[]>();
 const presetList = new Map<number, string[]>();
@@ -153,33 +153,33 @@ export async function handleCommand(
       return;
     }
 
-    case 'workspaces': {
-      const list = await engine.workspaces.list();
-      if (!list.length) { await reply('ℹ️ No workspaces yet — add one in phantom-cli.'); return; }
+    case 'projects': {
+      const list = await engine.projects.list();
+      if (!list.length) { await reply('ℹ️ No projects yet — add one in phantom-cli.'); return; }
       // With a number: switch.
       if (arg !== undefined) {
-        const ids = workspaceList.get(dm);
+        const ids = projectList.get(dm);
         const n = Number.parseInt(arg, 10);
         if (!ids || !Number.isInteger(n) || n < 1 || n > ids.length) {
-          await reply('⚠️ Send /workspaces first to see the list, then /workspaces <number>.');
+          await reply('⚠️ Send /projects first to see the list, then /projects <number>.');
           return;
         }
         const w = list.find((x) => x.id === ids[n - 1]);
-        await engine.botState.setActiveWorkspace(ids[n - 1]);
-        await reply(`📁 Active workspace: ${w?.name ?? ids[n - 1]}`);
+        await engine.botState.setActiveProject(ids[n - 1]);
+        await reply(`📁 Active project: ${w?.name ?? ids[n - 1]}`);
         return;
       }
-      workspaceList.set(dm, list.map((w) => w.id));
-      const rows = list.map((w, i) => `${i + 1}. ${w.name}${w.id === bot.activeWorkspaceId ? ' (active)' : ''}`);
-      await client.sendMarkdown(dm, titled('📋 Workspaces:', [...rows, '', 'Switch with /workspaces <number>'].join('\n')));
+      projectList.set(dm, list.map((w) => w.id));
+      const rows = list.map((w, i) => `${i + 1}. ${w.name}${w.id === bot.activeProjectId ? ' (active)' : ''}`);
+      await client.sendMarkdown(dm, titled('📋 Projects:', [...rows, '', 'Switch with /projects <number>'].join('\n')));
       return;
     }
 
     case 'new': {
-      const ws = bot.activeWorkspaceId;
-      if (!ws) { await reply('⚠️ No active workspace — /workspaces to pick one first.'); return; }
+      const projectId = bot.activeProjectId;
+      if (!projectId) { await reply('⚠️ No active project — /projects to pick one first.'); return; }
       let started;
-      try { started = await engine.sessions.start(ws, CodingAgent.systemPromptLayout); }
+      try { started = await engine.sessions.start(projectId, CodingAgent.systemPromptLayout); }
       catch (e) { await reply(`⚠️ Couldn't start a session: ${(e as Error).message}`); return; }
       // Create + point at it. The mode is untouched: from home the assistant
       // keeps the conversation; in code mode the next message starts the coder.
@@ -205,8 +205,8 @@ export async function handleCommand(
     }
 
     case 'status': {
-      // Workspace, session + state, agent, mode (code only), server.
-      const w = bot.activeWorkspaceId ? await workspaceRow(engine, bot.activeWorkspaceId) : null;
+      // Project, session + state, agent, mode (code only), server.
+      const w = bot.activeProjectId ? await projectRow(engine, bot.activeProjectId) : null;
       const s = bot.activeSessionId ? await sessionRow(engine, bot.activeSessionId) : null;
 
       let sessionLine: string;
@@ -218,7 +218,7 @@ export async function handleCommand(
       }
 
       const lines = [
-        `Workspace: ${w?.name ?? bot.activeWorkspaceId ?? 'none — /workspaces'}`,
+        `Project: ${w?.name ?? bot.activeProjectId ?? 'none — /projects'}`,
         `Session: ${sessionLine}`,
         `Agent: ${bot.mode}`,
         ...(bot.mode === 'code' && s ? [`Mode: ${s.planMode ? 'plan' : 'code'}`] : []),
@@ -540,7 +540,7 @@ function presetSummary(values: Record<string, unknown>): string {
   return bits.length ? ` — ${bits.join(' / ')}` : '';
 }
 
-const workspaceRow = (engine: TelegramEngine, id: string) => engine.workspaces.get(id);
+const projectRow = (engine: TelegramEngine, id: string) => engine.projects.get(id);
 
 /** The first line of a message, clipped — enough to recognise a request. */
 function oneLine(text: string, max = 120): string {
@@ -566,7 +566,7 @@ const HELP = [
   '/assistant — Talk to the assistant',
   '',
   'Navigation',
-  '/workspaces — List workspaces; /workspaces 2 switches',
+  '/projects — List projects; /projects 2 switches',
   '/sessions — List sessions; /sessions 2 switches',
   '',
   'Coding session',

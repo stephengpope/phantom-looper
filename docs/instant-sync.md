@@ -1,6 +1,6 @@
 # instant sync
 
-Auto-push and auto-pull, fired for you. A workspace switch (`instant_sync`,
+Auto-push and auto-pull, fired for you. A project switch (`instant_sync`,
 off by default) that keeps every running session's checkout in step with the
 base branch without anyone running `/auto-push` or `/auto-pull`. Built for a
 notes or second-brain repo shared across devices.
@@ -25,9 +25,9 @@ back quietly and the next beat asks again. A push lands on the first beat
 after the debounce: 10–15 s after the last edit. A push refused because the
 checkout was held stays pending for the next beat.
 
-The switch is workspace-only (`/workspace` → `e`). The debounce and the
-interval are global settings (`/settings`) a workspace may override; empty
-on the workspace means it follows the global value.
+The switch is project-only (`/project` → `e`). The debounce and the
+interval are global settings (`/settings`) a project may override; empty
+on the project means it follows the global value.
 
 The fetch is git, never the GitHub API — it costs no rate limit.
 
@@ -76,7 +76,7 @@ them, said as locks.
 
 ## What is watched
 
-Folders with a **running container**, in a workspace with the switch on.
+Folders with a **running container**, in a project with the switch on.
 Files only change through a container or through the sync itself. The
 container tells instant sync as it happens: the watcher attaches inside the
 container start, before the tool call that started it returns, and lets go

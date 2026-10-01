@@ -24,7 +24,7 @@ Nothing survived. One operation, one answer.
 ## The difference, in full
 
 ```
-syncBranch(deps, session, workspace, { landOnBase, label })
+syncBranch(deps, session, project, { landOnBase, label })
 ```
 
 `landOnBase` is the whole difference. One bit, three consequences:

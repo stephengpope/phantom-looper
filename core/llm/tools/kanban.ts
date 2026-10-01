@@ -1,7 +1,7 @@
 /**
  * The KANBAN kit for headless callers — thin clients on the card routes, the
  * same pattern as the skills and web kits. Needs: a phantom-backend and a
- * workspace.
+ * project.
  *
  * Three builds share this file:
  * - `kanbanReadTool` — the coding agent's board surface everywhere:
@@ -22,7 +22,7 @@ import { z } from 'zod';
 export interface KanbanToolsConfig {
   baseUrl: string;
   apiKey: string;
-  workspaceId: string;
+  projectId: string;
   fetch?: typeof fetch;
 }
 
@@ -72,7 +72,7 @@ const headers = (cfg: KanbanToolsConfig, body?: boolean) => ({
 /** PATCH one card and hand the envelope's data (or error) back to the agent. */
 async function patchCard(cfg: LoopCardConfig, body: unknown): Promise<unknown> {
   const f = cfg.fetch ?? fetch;
-  const r = await f(`${cfg.baseUrl}/workspaces/${cfg.workspaceId}/cards/${cfg.number}`, {
+  const r = await f(`${cfg.baseUrl}/projects/${cfg.projectId}/cards/${cfg.number}`, {
     method: 'PATCH',
     headers: { ...headers(cfg, true), ...(cfg.clientId ? { 'x-phantom-looper-client': cfg.clientId } : {}) },
     body: JSON.stringify(body),
@@ -91,7 +91,7 @@ export function kanbanReadTool(cfg: KanbanToolsConfig): Record<string, Tool> {
       inputSchema: z.object({ card: z.number().int().describe('card number — PHA-7 is card 7') }),
       execute: async ({ card }) => {
         // The number lookup, not the board list: one card back, archived or not.
-        const r = await f(`${cfg.baseUrl}/workspaces/${cfg.workspaceId}/cards?number=${card}`, {
+        const r = await f(`${cfg.baseUrl}/projects/${cfg.projectId}/cards?number=${card}`, {
           headers: headers(cfg),
         });
         const j = await r.json() as { ok: boolean; data?: { cards: CardRow[] }; error?: unknown };

@@ -1,12 +1,12 @@
 // The DATABASE tool — database_query: the agent's own Postgres database for
-// the workspace (databases.ts). Offered when the workspace's `agent_database`
+// the project (databases.ts). Offered when the project's `agent_database`
 // is on and the server has database wiring; absent otherwise — a missing
 // tool, never a failing one.
 import { SqlError } from '../databases.js';
 import { obj, refusal, type OfferCtx, type ToolDef } from './def.js';
 
-const enabled = async ({ app, workspace }: OfferCtx) =>
-  !!app.databases && Boolean(await app.settings.resolve('agent_database', { workspace }));
+const enabled = async ({ app, project }: OfferCtx) =>
+  !!app.databases && Boolean(await app.settings.resolve('agent_database', { project }));
 
 export const DATABASE_TOOLS: ToolDef[] = [
   {
@@ -29,11 +29,11 @@ export const DATABASE_TOOLS: ToolDef[] = [
     mutates: true, agents: ['coding'], offered: enabled,
     async execute(ctx, a) {
       if (!ctx.app.databases) throw refusal('database_unavailable', 'this server has no agent database wiring');
-      if (!(await ctx.app.settings.resolve('agent_database', { workspace: ctx.workspace }))) {
-        throw refusal('database_off', 'agent_database is off for this workspace');
+      if (!(await ctx.app.settings.resolve('agent_database', { project: ctx.project }))) {
+        throw refusal('database_off', 'agent_database is off for this project');
       }
       try {
-        const results = await ctx.app.databases.query(ctx.workspace.id, String(a.sql), {
+        const results = await ctx.app.databases.query(ctx.project.id, String(a.sql), {
           limit: Number(a.limit ?? 10), maxCellChars: Number(a.maxCellChars ?? 1000), params: a.params as unknown[] | undefined,
         });
         return { results };

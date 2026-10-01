@@ -123,7 +123,7 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
       tags: ['meta'],
       summary: 'Server status — cpu, load, memory, disk',
       description: 'Read straight from the kernel (no docker, no mounts): in a container /proc shows the ' +
-        'HOST\'s cpu, load and memory, and the workspaces volume sits on the host\'s root filesystem, so ' +
+        'HOST\'s cpu, load and memory, and the projects volume sits on the host\'s root filesystem, so ' +
         'statfs on it is the disk docker\'s data lives on. Answers as preformatted `text` — render it ' +
         'as-is (the cli\'s /cpu and telegram\'s /cpu both do).',
     },
