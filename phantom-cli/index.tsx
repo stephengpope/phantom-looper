@@ -20,30 +20,23 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { format } from 'node:util';
 import { render } from 'ink';
-import { phantomTools } from '../core/llm/tools/workspace.js';
-import { skillTools } from '../core/llm/tools/skills.js';
-import { webTools } from '../core/llm/tools/web.js';
-import { secretTools } from '../core/llm/tools/secrets.js';
-import { cronTools } from '../core/llm/tools/crons.js';
-import { databaseTools } from '../core/llm/tools/database.js';
-import { notifyTools } from '../core/llm/tools/notify.js';
-import { autoPushSession as corePush, autoPullSession as corePull } from '../core/llm/tools/git.js';
-import { ServerConnection } from 'phantom-client-sdk';
 import { newId } from '../core/ids.js';
 import { App } from './App.js';
+import type { WindowStore } from './window.js';
 import { createScreen } from './screen.js';
 import { createCprFilter } from './cursorAudit.js';
 import { MOUSE_OFF, MOUSE_ON } from './mouse.js';
 import { CONFIG_DIR } from './config.js';
 import { CLI_LOG_PATH, logLine } from './cliLog.js';
 import { resolveLocal, localValues } from './local.js';
-import { ndjson } from '../core/ndjson.js';
 import { apiFor, streamFor, savedCaFor } from './provision.js';
+import { Server } from './server.js';
+import { AUTO_PUSH_STEPS, AUTO_PULL_STEPS, type AutoPushOutcome, type AutoPullOutcome } from '../core/llm/tools/git.js';
+import { hostname } from 'node:os';
 import { APP_VERSION, checkLatest, selfUpdate } from './selfUpdate.js';
 import { CHECK_INTERVAL_MS, autoUpdateCycle, dueForCheck, prelaunchReconcile, stampChecked } from './autoUpdate.js';
 import { quitNotice, runUpdate, versionLines } from './update.js';
 import type { ServerLink, Target, UpdateDeps } from './update.js';
-import { requestError } from './request.js';
 
 // The connection comes from the file, synchronously: it is how we REACH the
 // settings store, so it cannot come from it — and you edit it precisely when
@@ -142,49 +135,16 @@ if (firstArg === 'setup-backend') {
   process.exit(0);
 }
 
-// The connection is read from the file at EVERY request, never captured at
-// launch: /server rewrites the file while the app runs, and the next call
-// must reach the new address with the new key — no relaunch. Nothing paired
-// still opens the app; the boot note says where the two ways in are.
-function connection(): { base: string; key: string } {
-  const l = localValues();
-  return { base: String(l.server_url), key: String(l.server_key ?? '') };
-}
-
-// One connection to the server, for everything this window does: every
-// request, every live feed and every turn ride one HTTP/2 socket
-// (phantom-client-sdk's ServerConnection), which reconnects on its own when it
-// drops. Installed as THE fetch for the server's origin — every caller in
-// the app and in core reaches the server through the global fetch, so one
-// install covers them all; other origins (the model providers) fall through
-// to the platform fetch. An internal-TLS server's root certificate, saved by
-// setup-backend (or scripts/setup.sh for a dev box), rides along.
-// Re-installed whenever the address changes (a /server save), so a switch to
-// another box works live. The server is always https behind Caddy — dev
-// included — so this is the one transport; any other URL is a setup error.
-const platformFetch = globalThis.fetch;
-let server: ServerConnection | undefined;
-let connectedTo: string | undefined;
-async function trustSavedCa(base: string): Promise<void> {
-  if (connectedTo === base) return;
-  if (!base) throw new Error('no phantom-backend paired — setup-backend, or /server to enter one');
-  const origin = new URL(base).origin;
-  if (!origin.startsWith('https:')) throw new Error(`phantom-backend URL must be https:// (got ${base}) — /server to fix it, or scripts/setup.sh for a dev box`);
-  const savedCa = savedCaFor(base);
-  const { rootCertificates } = await import('node:tls');
-  server?.close();
-  server = new ServerConnection({ origin, ...(savedCa ? { ca: [...rootCertificates, savedCa] } : {}) });
-  const one = server;
-  globalThis.fetch = ((input, init) => {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-    return url.startsWith(origin) ? one.fetch(input, init) : platformFetch(input, init);
-  }) as typeof fetch;
-  connectedTo = base;
-}
 // This window's session-lock identity: minted per process, sent on every call.
 // The server compares it when a session is held; the label is what other
 // windows see on the "in use" row.
 const CLIENT_ID = newId();
+
+// The window's one connection (server.ts): one HTTP/2 socket, this window's
+// identity on every request, the address re-read from the file per call.
+const server = new Server(CLIENT_ID, hostname());
+export const api = server.api;
+export const stream = (path: string, signal: AbortSignal) => server.stream(path, signal);
 
 // Version watch, in the background — the screen belongs to the app while it
 // runs. Gated by a stamp file to about once a day, at launch and on an unref'd
@@ -199,7 +159,7 @@ let installedVersion: string | null = null;
 let serverVersion: string | null = null;
 // The window store, handed up by App (the onWindow prop) once it exists — a
 // finished install lights up the version label through it.
-let windowStore: { setUpdateReady(v: string): void } | null = null;
+let windowStore: WindowStore | null = null;
 function versionWatch(): void {
   // One install per run: once a version is ready, the label already says so
   // and re-installing the same tag daily would be pure waste.
@@ -250,64 +210,12 @@ await prelaunchReconcile({
 versionWatch();
 setInterval(versionWatch, CHECK_INTERVAL_MS).unref();
 
-/** POST /git/auto-push for one session — core's client over the ND-JSON
- *  stream (heartbeats keep the connection alive, step records become notes,
- *  exactly one result record ends it); the cli adds only its connection, its
- *  lock identity and the saved CA. */
-export async function autoPushSession(sessionId: string, onStep?: (label: string) => void) {
-  const { base, key } = connection();
-  await trustSavedCa(base);
-  return corePush({ baseUrl: `${base}/api`, apiKey: key, sessionId, clientId: CLIENT_ID }, onStep);
-}
-
-/** POST /git/auto-pull for one session — core's client over the same stream
- *  shape as auto-push; the cli adds only its connection, its lock identity and
- *  the saved CA (a self-signed backend must work for pull as it does for push). */
-export async function autoPullSession(sessionId: string, onStep?: (label: string) => void) {
-  const { base, key } = connection();
-  await trustSavedCa(base);
-  return corePull({ baseUrl: `${base}/api`, apiKey: key, sessionId, clientId: CLIENT_ID }, onStep);
-}
-
-/** GET a server stream (ND-JSON) as records — the board's live feed. Open
- *  until the signal aborts or the server hangs up; a refusal (the plain JSON
- *  envelope) throws with the server's message. */
-export async function stream(path: string, signal: AbortSignal): Promise<AsyncIterable<Record<string, unknown>>> {
-  const { base, key } = connection();
-  await trustSavedCa(base);
-  let r: Response;
-  try {
-    r = await fetch(`${base}/api${path}`, {
-      headers: { authorization: `Bearer ${key}`, 'x-phantom-looper-client': CLIENT_ID }, signal });
-  } catch (e) { throw requestError('GET', path, base, e); }
-  if ((r.headers.get('content-type') ?? '').includes('application/json')) {
-    const j = await r.json() as { error?: { code?: string; message?: string } };
-    throw requestError('GET', path, base, undefined, { status: r.status, ...j.error });
-  }
-  if (!r.body) throw requestError('GET', path, base, undefined, { status: r.status });
-  return ndjson(r.body);
-}
-
-export async function api(method: string, path: string, body?: unknown) {
-  // content-type only WITH a body — Fastify 400s a bodyless application/json
-  // request, which silently broke the lock release (DELETE) and left every
-  // opened session "in use" for the whole TTL.
-  const { base, key } = connection();
-  await trustSavedCa(base);
-  let r: Response;
-  let j: { ok: boolean; data?: unknown; error?: { code?: string; message?: string } };
-  try {
-    r = await fetch(`${base}/api${path}`, {
-      method,
-      headers: { authorization: `Bearer ${key}`, 'x-phantom-looper-client': CLIENT_ID,
-        ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    j = await r.json() as typeof j;
-  } catch (e) { throw requestError(method, path, base, e); }
-  if (!j.ok) throw requestError(method, path, base, undefined, { status: r.status, ...j.error });
-  return j.data as Record<string, unknown>;
-}
+/** POST /git/auto-push / auto-pull for one session, on the window's
+ *  connection: step records become notes, one result record ends it. */
+export const autoPushSession = (sessionId: string, onStep?: (label: string) => void) =>
+  server.git<AutoPushOutcome>('auto-push', sessionId, AUTO_PUSH_STEPS, onStep);
+export const autoPullSession = (sessionId: string, onStep?: (label: string) => void) =>
+  server.git<AutoPullOutcome>('auto-pull', sessionId, AUTO_PULL_STEPS, onStep);
 
 // The server's version, for the quit-time staleness notice. Fire-and-forget:
 // offline just means no notice.
@@ -331,32 +239,12 @@ const resumeId = flag('--resume', '-r');
 // launching wants (resume this id, or find a workspace and start) rides the
 // `boot` prop; App's boot effect does the rest.
 
-// The coding kit factories: the seven file tools + the skill tools + web.
-// Plan mode is a runtime gate (the planMode callback), never a structural
-// one: the tools are always present so a mid-turn mode flip works both ways.
-const skillKit = (id: string, planMode?: () => boolean) =>
-  skillTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, sessionId: id, planMode });
-const webKit = (id: string) => webTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, sessionId: id });
-// Workspace-bound, not session-bound: the workspace's secrets shadow global
-// ones by name, and only App knows which workspace a session is in.
-const secretKit = (ws: string) => secretTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, workspaceId: ws });
-// The workspace's scheduled prompts — same binding; plan mode gates the
-// writes; empty when the workspace's crons are switched off.
-const cronKit = (ws: string, planMode?: () => boolean) =>
-  cronTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, workspaceId: ws, planMode });
-// Empty when the workspace's agent_database setting is off.
-const databaseKit = (ws: string) => databaseTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, workspaceId: ws });
-// send_message — empty when telegram is off.
-const notifyKit = (id: string) => notifyTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, sessionId: id });
 // The session you quit from is not necessarily the one you started in — /new,
 // /resume, /workspace and tab all move it — so track the live one and print
 // THAT id on the way out. One line, for the session you were actually in:
 // listing every session you happened to open is a wall to read past. null
 // until the first session opens — a window can now run without one.
 let currentId: string | null = null;
-// Every session this window opened, so each hold can be released on the way
-// out. A crash skips this and relies on the lock's own expiry instead.
-const openedIds = new Set<string>();
 
 // Fullscreen, so the app owns the mouse: Ink draws through the screen mirror
 // (selection needs to know what is on screen), and the terminal is asked to
@@ -446,12 +334,8 @@ const app = render(
     autoPush={autoPushSession}
     autoPull={autoPullSession}
     boot={{ ...(resumeId ? { resumeId } : {}) }}
-    newTools={(id, _plan, ws, planMode) => phantomTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, sessionId: id, planMode })
-      .then(async (t) => ({ ...t, ...skillKit(id, planMode), ...webKit(id), ...await notifyKit(id),
-        ...(ws ? { ...secretKit(ws), ...await cronKit(ws, planMode), ...await databaseKit(ws) } : {}) }))}
-    newAssistantTools={(id, ws) => phantomTools({ baseUrl: `${connection().base}/api`, apiKey: connection().key, sessionId: id, pick: 'readonly' })
-      .then(async (t) => ({ ...t, ...webKit(id), ...await cronKit(ws) }))}
-    onSession={(s) => { currentId = s.id; openedIds.add(s.id); }}
+    backend={() => server.backend()}
+    onSession={(s) => { currentId = s.id; }}
     onWindow={(w) => { windowStore = w; if (installedVersion) w.setUpdateReady(installedVersion); }}
     clientId={CLIENT_ID}
     screen={screen}
@@ -476,9 +360,9 @@ const lateReply = screen.stopAudit();
 mouseOff();
 restoreConsole();
 
-// Release every hold this window took — best effort, quickly: quitting must
-// not hang on a dead server, and the lock expires on its own anyway.
-await Promise.allSettled([...openedIds].map((id) => api('DELETE', `/sessions/${id}/lock`)));
+// Every agent closed: each turn interrupted and waited out, so every
+// turn-ended reaches the server and no hold outlives this window.
+await (windowStore as WindowStore | null)?.closeAgents().catch(() => undefined);
 
 // Quitting is not the end of the session: its branch and its transcript are
 // both still there. One line of prose and the command on its own line, so it

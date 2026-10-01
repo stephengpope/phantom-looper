@@ -11,14 +11,11 @@
 //      have finished talking; we answer with `speak_*` text as the model writes
 //      it; it says `interrupted` when you cut in and `spoken` with what was
 //      actually said out loud, so the history can hold that and not the rest.
-//   3. the brain — the Assistant itself, an AI SDK agent built by
-//      core/llm/createAgent exactly like the coding agent (agentFromConfig.
-//      buildAssistantAgent): its own prompt, its own history, the `session_*` tools.
-//      Run here, in this process, with runTurn; the pane shows the same `Part`s
-//      the conversation renders. The history is the newest file in VOICE_DIR —
-//      resumed on start and shown in the pane, appended as it goes; past the
-//      message limit it compacts (core/llm/compaction.ts), the summary opening
-//      a fresh file and the old ones staying as the archive.
+//   3. the brain — the Assistant itself, an `AssistantAgent` (the client
+//      SDK) the window makes once a session is on screen and re-points on
+//      every switch. Its conversation is its session's record on the server;
+//      what it says streams here as `Part`s for the pane and as speech for
+//      the sidecar.
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -29,9 +26,9 @@ import { createInterface } from 'node:readline';
 import type { ModelMessage } from 'ai';
 import { CONFIG_DIR, type ConfigValue } from './config.js';
 import { applyPart, finalize, nextId, type Part, type StreamPart } from './state.js';
-import { FLUSH_MS, runTurn, type Agent } from './agent.js';
-import { loadTranscriptFile, newestTranscriptFile, Transcript, transcriptStamp, usageEvent } from '../core/llm/transcript.js';
-import { compact, compactionDue, compactionOpts, isSummaryMessage, CompactionLock, type CompactionConfig } from '../core/llm/compaction.js';
+import type { PhantomError } from 'phantom-client-sdk';
+import type { AssistantAgent } from '../core/agents/assistant.js';
+import { FLUSH_MS } from './sessions.js';
 
 export const SIDECAR_DIR = fileURLToPath(new URL('./sidecar/', import.meta.url));
 export const VOICE_DIR = join(CONFIG_DIR, 'voice');
@@ -267,11 +264,8 @@ export interface VoiceSnapshot {
  *  where it started in the history and how many of its steps have landed. */
 interface Turn {
   id: string;
-  abort: AbortController;
   /** Steps the stream has started (= the `step` in speak_start). */
   step: number;
-  /** history.length when the turn began — its user message is at this index. */
-  historyStart: number;
 }
 
 /** Index of the n-th (1-based) assistant message at or after `from`; -1 if
@@ -311,14 +305,7 @@ export function partsFromHistory(messages: ModelMessage[]): Part[] {
   const out: Part[] = [];
   for (const m of messages) {
     if (m.role === 'user' && typeof m.content === 'string') {
-      if (isSummaryMessage(m)) {
-        out.push({ kind: 'note', id: nextId('vnote'), text: '--- conversation summary ---' });
-        if (typeof m.content === 'string' && m.content.trim()) {
-          out.push({ kind: 'text', id: nextId('vtext'), text: m.content.trim(), done: true });
-        }
-      } else {
-        out.push({ kind: 'user', id: nextId('vuser'), text: m.content });
-      }
+      out.push({ kind: 'user', id: nextId('vuser'), text: m.content });
     } else if (m.role === 'assistant') {
       const text = typeof m.content === 'string' ? m.content
         : m.content.filter((c) => c.type === 'text').map((c) => (c as { type: 'text'; text: string }).text).join('');
@@ -344,9 +331,12 @@ export class VoiceClient {
   private partial: { id: string; heard: string; interim: string } | null = null;
   private gen = 0;
   // The brain.
-  private agent: Agent | null = null;
-  /** The voice conversation, every message exactly as it goes to the model. */
-  readonly history: ModelMessage[] = [];
+  private agent: AssistantAgent | null = null;
+  private unwire: () => void = () => undefined;
+  /** The voice conversation, as the agent holds it (the record's). */
+  get history(): readonly ModelMessage[] { return this.agent?.session.messages ?? []; }
+  /** The Assistant's own session, once the agent is set. */
+  get sessionId(): string | null { return this.agent?.session.id ?? null; }
   /** The reply in flight, as parts (text, tools) — the live half of the pane. */
   private reply: Part[] = [];
   /** Coalesces the pane's repaints while a reply streams (paintLive). The
@@ -367,19 +357,7 @@ export class VoiceClient {
    *  (the prompt on screen says the two words). Return true = consumed: the
    *  text still shows in the pane as yours, but the brain does not run. */
   intercept: ((text: string) => boolean) | null = null;
-  /** The assistant's session row, opened by the window BEFORE the agent is
-   *  built (the model bills its calls to it). Null until a workspace is on
-   *  screen. The window sets it with the agent. */
-  sessionId: string | null = null;
-  /** A turn ended — the window bumps the session row (turn count, last used,
-   *  model pin). Wired by the WindowStore. */
-  onTurnEnded: (() => void) | null = null;
-
-  constructor(
-    private spawner: Spawner = spawnSidecar,
-    private transcriptDir: string | null = VOICE_DIR,
-    private run: typeof runTurn = runTurn,
-  ) {}
+  constructor(private spawner: Spawner = spawnSidecar) {}
 
   subscribe(fn: () => void): () => void { this.subs.add(fn); return () => { this.subs.delete(fn); }; }
   snapshot(): VoiceSnapshot { return this.snap; }
@@ -391,81 +369,72 @@ export class VoiceClient {
     for (const fn of this.subs) fn();
   }
 
-  private transcript: Transcript | null = null;
-  /** The Assistant's compaction config (its AgentConfig's), supplied with the
-   *  agent (setCompaction) since both come from the same server read. Null
-   *  until the agent is set. */
-  private compaction: CompactionConfig | null = null;
-  private compactionLock = new CompactionLock();
-  private resumed = false;
-
-  /** The Assistant's compaction config — set alongside setAgent (same server
-   *  read), so a settings change is followed. */
-  setCompaction(cfg: CompactionConfig): void {
-    this.compaction = cfg;
-  }
-
-  /** The swap landed: the summary replaced messages. Rewrite the transcript
-   *  in place with the compacted history and tell the pane. */
-  private onCompacted(removed: number): void {
-    for (const t of this.turns.values()) t.historyStart = Math.max(1, t.historyStart - (removed - 1));
-    // Rewrite the transcript in place.
-    if (this.transcriptDir && this.transcript) {
-      this.transcript = null;
-      const t = this.log();
-      if (t) t.appendAll([...this.history]);
-    }
-    this.note({ kind: 'note', id: nextId('vnote'), text: 'chat compacted — older messages summarized' });
-  }
-
-  /** Run compaction on the assistant history. Used by both auto-trigger
-   *  (the finally block) and the manual /compact command. */
-  async runCompaction(): Promise<boolean> {
-    if (!this.compaction) return false;
-    const result = await compact(this.compactionLock, compactionOpts(this.compaction, this.history, this.sessionId));
-    if (!result) return false;
-    this.onCompacted(result.removed);
-    return true;
-  }
-
-  /** Resume the conversation from the newest transcript — once per process,
-   *  on the first engine start. The messages seed the brain and render in
-   *  the pane like a resumed coding session; the file keeps appending. */
-  private resume(): void {
-    if (this.resumed || !this.transcriptDir) return;
-    this.resumed = true;
-    const file = newestTranscriptFile(this.transcriptDir);
-    if (!file) return;
-    const loaded = loadTranscriptFile(file);
-    if (!loaded.messages.length) return;
-    this.history.push(...loaded.messages);
-    this.transcript = new Transcript(file);
-    this.set({ done: [...this.snap.done, ...partsFromHistory(loaded.messages)] });
-  }
-
-  /** The brain. Set before start, and again whenever the model config changes
-   *  (the history stays; only the next turn sees the new model). */
-  setAgent(agent: Agent): void {
+  /** The brain: the Assistant's agent, set by the window once its session
+   *  exists. What it says is drawn here and spoken through the sidecar. The
+   *  agent's conversation is the record on the server; a window opens on an
+   *  empty one. */
+  setAgent(agent: AssistantAgent): void {
+    this.unwire();
     this.agent = agent;
+    const a = agent;
+    let t0 = 0;
+    let first = true;
+    const offs = [
+      a.on('turn-start', () => {
+        const t: Turn = { id: `vt${++this.turnSeq}`, step: 0 };
+        this.cur = t;
+        this.turns.set(t.id, t);
+        for (const k of [...this.turns.keys()].slice(0, -8)) this.turns.delete(k);   // keep the recent few
+        this.reply = [];
+        t0 = Date.now(); first = true;
+        this.set({ status: this.snap.status === 'speaking' ? 'speaking' : 'thinking', live: this.live() });
+      }),
+      a.on('part', (part) => {
+        const t = this.cur;
+        if (!t) return;
+        // Time to the first token (text, thinking or a tool call) — not to
+        // the stream's own `start` markers, which arrive at once.
+        if (first && (part.type === 'text-delta' || part.type === 'reasoning-delta' || part.type === 'tool-call' || part.type === 'tool-input-start')) {
+          first = false; this.set({ ttfb: { ...this.snap.ttfb, llm: Date.now() - t0 } });
+        }
+        // A failure is drawn ONCE, from onError; the stream's error part is
+        // the same words.
+        if (part.type === 'error') return;
+        this.onPart(t, part as StreamPart);
+      }),
+      a.on('turn-end', () => this.turnSettled()),
+    ];
+    this.unwire = () => { for (const off of offs) off(); };
+    if (this.history.length) this.set({ done: [...this.snap.done, ...partsFromHistory([...this.history])] });
   }
 
-  /** The conversation's record, on the shared format (core/llm/transcript.ts):
-   *  one ModelMessage per line, one file per voice conversation
-   *  (engine start), created on the first message. Same format as the coding
-   *  sessions and the git fixer; never replayed — a restart is a fresh
-   *  conversation, the file is the record. */
-  private log(): Transcript | null {
-    if (!this.transcriptDir) return null;
-    if (!this.transcript) {
-      this.transcript = new Transcript(join(this.transcriptDir, `${transcriptStamp()}.jsonl`));
-    }
-    return this.transcript;
+  /** The agent's handlers, for the window to hand `AssistantAgent`. */
+  handlers(): { onError(e: PhantomError): void; onNotice(n: { type: string; text: string }): void } {
+    return {
+      onError: (e) => {
+        this.reply = [...this.reply, { kind: 'error', id: nextId('verr'), message: e.message }];
+        this.paintLive();
+        setTimeout(() => { if (this.cur && !this.agent?.busy) this.turnSettled(); }, 0);
+      },
+      onNotice: (n) => { if (n.type !== 'retry') this.note({ kind: 'note', id: nextId('vnote'), text: n.text }); },
+    };
+  }
+
+  /** The turn is over, however it ended: the reply closes into the pane. */
+  private turnSettled(): void {
+    this.cur = null;
+    if (this.liveTimer) { clearTimeout(this.liveTimer); this.liveTimer = null; this.liveDirty = false; }
+    const done = finalize(this.reply);
+    this.reply = [];
+    this.set({
+      done: [...this.snap.done, ...done], live: this.live(),
+      status: this.snap.status === 'speaking' ? this.snap.status : this.snap.status === 'error' ? 'error' : 'listening',
+    });
   }
 
   /** Start (or restart) the sidecar with this environment. */
   async start(env: Record<string, string>): Promise<void> {
     this.stop();
-    this.resume();   // the conversation outlives the engine — pick it back up
     const gen = ++this.gen;
     this.set({ status: 'starting', detail: 'starting…' });
     try {
@@ -504,7 +473,7 @@ export class VoiceClient {
       this.proc.kill();
       this.proc = null;
     }
-    this.cur?.abort.abort();
+    this.agent?.interrupt();
     this.partial = null;
     this.set({ status: 'off', detail: undefined, live: [] });
   }
@@ -530,7 +499,7 @@ export class VoiceClient {
     });
   }
   /** Stop generating and stop talking, now. */
-  cancel(): void { this.cur?.abort.abort(); this.send({ type: 'cancel' }); }
+  cancel(): void { this.agent?.interrupt(); this.send({ type: 'cancel' }); }
   update(opts: { voice?: string; wake?: boolean; wake_words?: string; wake_timeout?: number }): void { this.send({ type: 'set', ...opts }); }
 
   private note(p: Part): void { this.set({ done: [...this.snap.done, p] }); }
@@ -538,99 +507,30 @@ export class VoiceClient {
 
   // --- the brain ---------------------------------------------------------------
 
-  /** One turn: what you said → the Assistant → text to the sidecar as it streams.
-   *  A turn that arrives while another runs replaces it — you spoke over it. */
-  async turn(text: string): Promise<void> {
+  /** One turn: what you said → the Assistant → text to the sidecar as it
+   *  streams. Spoken over a running turn, the new words cut it and go on
+   *  with it (the agent's rule: queued text continues the same turn). */
+  turn(text: string): void {
     text = text.trim();
     if (!text) return;
     this.note({ kind: 'user', id: nextId('vuser'), text });
     if (this.intercept?.(text)) return;
     if (!this.agent) {
-      this.note({ kind: 'error', id: nextId('verr'), message: 'the Assistant has no model — /assistant' });
+      this.note({ kind: 'error', id: nextId('verr'), message: 'the Assistant has no session yet — open a workspace' });
       return;
     }
-    this.cur?.abort.abort();
-    const t: Turn = { id: `vt${++this.turnSeq}`, abort: new AbortController(), step: 0, historyStart: this.history.length };
-    this.cur = t;
-    this.turns.set(t.id, t);
-    for (const k of [...this.turns.keys()].slice(0, -8)) this.turns.delete(k);   // keep the recent few
-    this.history.push({ role: 'user', content: text });
-    this.log()?.append({ role: 'user', content: text });
-    this.reply = [];
-    this.set({ status: this.snap.status === 'speaking' ? 'speaking' : 'thinking', live: this.live() });
-    const t0 = Date.now();
-    let first = true;
-    // ONE failure, ONE line — same rule as SessionStore.send: the SDK reports
-    // a failed call as an `error` event in the stream AND as the rejection the
-    // catch sees; when the stream already spoke, the catch stays quiet.
-    let streamErrored = false;
-    // Accumulate usage across all steps in this turn.
-    let turnInput = 0;
-    try {
-      // A COPY: compaction may swap the stored history mid-turn (its splice
-      // keeps appends intact), and the turn in flight must finish on the
-      // conversation it started with — also the warm cached prefix.
-      await this.run(
-        this.agent, [...this.history],
-        (parts) => {
-          // Time to the first token (text, thinking or a tool call) — not to
-          // the stream's own `start` markers, which arrive at once.
-          if (first && parts.some((p) => p.type === 'text-delta' || p.type === 'reasoning-delta' || p.type === 'tool-call' || p.type === 'tool-input-start')) {
-            first = false; this.set({ ttfb: { ...this.snap.ttfb, llm: Date.now() - t0 } });
-          }
-          if (parts.some((p) => p.type === 'error')) streamErrored = true;
-          this.onParts(t, parts);
-        },
-        t.abort.signal,
-        (msgs) => {
-          if (t.abort.signal.aborted) return;
-          this.history.push(...msgs);
-        },
-        0,   // speech wants every delta now, not batched for the screen
-        // The transcript records the step (messages + usage line) through
-        // createAgent's `record` seam — same abort rule as the history.
-        // The input size is kept for the compaction trigger below.
-        { appendStep: (msgs, usage) => {
-          if (!t.abort.signal.aborted) {
-            this.log()?.appendStep(msgs, usage);
-            turnInput += usageEvent(usage).input as number;
-          }
-        } },
-      );
-    } catch (e) {
-      if (!t.abort.signal.aborted && !streamErrored) {
-        const msg = (e as Error).message;
-        const isPromptTooLong = /prompt is too long|request too large/i.test(msg);
-        this.reply = [...this.reply, { kind: 'error', id: nextId('verr'),
-          message: isPromptTooLong ? 'Chat history exceeds the model\'s limit — run /compact assistant to free space' : msg }];
-      }
-    } finally {
-      if (this.cur === t) this.cur = null;
-      if (this.liveTimer) { clearTimeout(this.liveTimer); this.liveTimer = null; this.liveDirty = false; }
-      const done = finalize(this.reply);
-      this.reply = [];
-      this.set({
-        done: [...this.snap.done, ...done], live: this.live(),
-        status: this.cur || this.snap.status === 'speaking' ? this.snap.status : this.snap.status === 'error' ? 'error' : 'listening',
-      });
-      if (turnInput) this.onTurnEnded?.();
-      // Long chat? Summarize it in the background — turns never wait on it.
-      if (!this.compactionLock.active && this.compaction && compactionDue(this.compaction, turnInput)) {
-        void this.runCompaction().catch((err) => {
-          this.note({ kind: 'error', id: nextId('verr'), message: `compaction failed: ${(err as Error).message}` });
-        });
-      }
-    }
+    if (this.agent.busy) this.agent.interrupt();
+    // Never awaited: every failure reaches the pane through onError, once.
+    void this.agent.send(text).catch(() => undefined);
   }
 
-  /** Stream parts → the sidecar (speech) and the pane (parts). */
-  private onParts(t: Turn, parts: StreamPart[]): void {
-    for (const part of parts) {
-      if (part.type === 'start-step') { t.step++; this.send({ type: 'speak_start', turn: t.id, step: t.step }); }
-      else if (part.type === 'text-delta') this.send({ type: 'speak_delta', turn: t.id, text: part.text });
-      else if (part.type === 'finish-step') this.send({ type: 'speak_end', turn: t.id });
-      this.reply = applyPart(this.reply, part);
-    }
+  /** A stream part → the sidecar (speech) and the pane. Every delta the
+   *  moment it arrives: speech wants it now, not batched for the screen. */
+  private onPart(t: Turn, part: StreamPart): void {
+    if (part.type === 'start-step') { t.step++; this.send({ type: 'speak_start', turn: t.id, step: t.step }); }
+    else if (part.type === 'text-delta') this.send({ type: 'speak_delta', turn: t.id, text: part.text });
+    else if (part.type === 'finish-step') this.send({ type: 'speak_end', turn: t.id });
+    this.reply = applyPart(this.reply, part);
     this.paintLive();
   }
 
@@ -646,18 +546,15 @@ export class VoiceClient {
     }, FLUSH_MS);
   }
 
-  /** The sidecar's account of one step once it has been said: in full, nothing
-   *  to do; cut short, the history must hold the spoken part and no more. */
+  /** The sidecar's account of one step once it has been said: in full,
+   *  nothing to do; cut short, the person heard the spoken part and no
+   *  more — the agent records that, so the model remembers what was heard,
+   *  not what it was going to say. */
   private onSpoken(m: Extract<VoiceIn, { type: 'spoken' }>): void {
     if (!m.interrupted) return;
     const t = this.turns.get(m.turn);
     if (!t) return;
-    const i = nthAssistantIndex(this.history, t.historyStart, m.step);
-    if (i >= 0) this.history[i] = truncateAssistant(this.history[i], m.text);
-    else if (m.text.trim()) this.history.push({ role: 'assistant', content: m.text });
-    // The record: the full step is already on disk; this event says what the
-    // user actually heard. Events are invisible to replay (no `role`).
-    this.log()?.appendEvent({ type: 'interrupted', step: m.step, spoken: m.text });
+    this.agent?.partialMessage(m.text);
     // The pane: trim what is on screen to what was heard.
     const trim = (ps: Part[]) => {
       const last = [...ps].reverse().find((p) => p.kind === 'text');
@@ -720,7 +617,7 @@ export class VoiceClient {
         void this.turn(msg.text);
         return;
       case 'interrupted':
-        this.cur?.abort.abort();
+        this.agent?.interrupt();
         return;
       case 'spoken':
         this.onSpoken(msg);
@@ -756,7 +653,7 @@ export class VoiceClient {
  *  about voice. Without it a test that reads the real settings file (voice on)
  *  would start the real sidecar, which is exactly what happened once. */
 export const inertVoice = (): VoiceClient =>
-  new VoiceClient(async () => ({ send() {}, kill() {} }), null);
+  new VoiceClient(async () => ({ send() {}, kill() {} }));
 
 // --- the one tool, for now ----------------------------------------------------
 

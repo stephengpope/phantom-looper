@@ -39,15 +39,12 @@ import { Box, useApp, useBoxMetrics, useInput, useWindowSize } from 'ink';
 import { Text } from './components/Text.js';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { Tool } from 'ai';
-import { runTurn } from './agent.js';
-import { buildAgent, buildAssistantAgent } from './agentFromConfig.js';
+import type { PhantomBackend } from 'phantom-client-sdk';
 import { phaseLabel, tokenCount, formatTokensIn, formatTokensOut, cachePct } from './state.js';
 import { activeHold } from './sessions.js';
-import { Transcript, transcriptPath } from './session.js';
 import { COMMANDS, complete, matches } from './commands.js';
 import { quiet, type Api } from './request.js';
 import { WindowStore } from './window.js';
-import { setTokenRecorder } from '../core/llm/createAgent.js';
 
 
 /** Rows the slash menu shows at once; the window slides to follow the cursor. */
@@ -71,22 +68,19 @@ import { copyToClipboard, isMouseInput, parseMouse, selectionRanges, type Select
 import type { Screen } from './screen.js';
 
 export function App({
-  api, stream, boot, newTools, configPath, onSession, onWindow,
+  api, stream, backend, boot, configPath, onSession, onWindow,
   autoPush,
   autoPull,
   clientId = '',
   pollMs = 3_000,
   taskPollMs = 60_000,
-  makeAgent = buildAgent,
-  makeTranscript = (id: string) => new Transcript(transcriptPath(id)),
-  run = runTurn,
   sidebarPercent = 20,
   makeVoice,
-  makeAssistantAgent = buildAssistantAgent,
-  newAssistantTools = async () => ({}),
   screen,
 }: {
   api: Api;
+  /** The window's connection, for the agents (server.ts). */
+  backend: () => PhantomBackend;
   /** GET a server ND-JSON stream as records — each BoardStore follows its
    *  workspace's `/events` through it. index.tsx wires the real one; absent
    *  (tests), boards load once and hear nothing. */
@@ -117,14 +111,6 @@ export function App({
   sidebarPercent?: number;
   /** Test seam: the voice client. The real one spawns the Python sidecar. */
   makeVoice?: () => VoiceClient;
-  /** Test seam: the Assistant (the brain). The real one reads the config
-   *  chain and builds a live model, like makeAgent. */
-  makeAssistantAgent?: typeof buildAssistantAgent;
-  /** The Assistant's workspace tools for one session — the real one is
-   *  phantomTools(pick:'readonly') (read ls find grep, the server's
-   *  non-mutating set) plus the cron kit for the session's workspace.
-   *  Rebuilt onto whichever session is on screen. */
-  newAssistantTools?: (sessionId: string, workspaceId: string) => Promise<Record<string, Tool>>;
   /** The screen mirror (screen.ts): what text is at which cells, and the
    *  selection highlight. Absent in tests — selection still tracks, copies
    *  nothing. */
@@ -137,19 +123,7 @@ export function App({
    *  start — the same flow /new and /workspace run, so a failure lands as
    *  words in the pane instead of a stack trace before the app exists. */
   boot?: { resumeId?: string };
-  /** Tools are per-session, so every session that joins needs a fresh set.
-   *  `plan` builds the plan-mode kit instead: the readonly preset on the
-   *  mutating kits — /plan swaps between the two. `planMode` reads the
-   *  session's mode live: the mutating tools refuse while it is on. */
-  newTools: (sessionId: string, plan?: boolean, workspaceId?: string,
-    planMode?: () => boolean) => Promise<Record<string, Tool>>;
   configPath?: string;
-  /** Test seam: the real one reads the config chain and builds a live model. */
-  makeAgent?: typeof buildAgent;
-  /** Test seam. A factory, not an instance — there is one per open session. */
-  makeTranscript?: (sessionId: string) => Transcript;
-  /** Test seam: the turn runner the store drives. */
-  run?: typeof runTurn;
   /** Fired whenever the live session changes — /new, /resume, /workspace and
    *  tab all switch it, so the id the caller started with is not the one you
    *  are in when you quit. */
@@ -191,14 +165,10 @@ export function App({
   // in the initialiser, like the session store it replaces, so the banner is
   // on screen for the first frame. This component is a view over it.
   const [windowStore] = useState(() => {
-    // Every model call this process makes records here (core languageModel);
-    // the server's LogTokens is the one writer, so the record goes to it.
-    setTokenRecorder((r) => { void api('POST', '/log-tokens', r).catch(quiet('record token usage')); });
     return new WindowStore({
-      api, stream, newTools, configPath, boot,
-      makeAgent, makeTranscript, run, makeVoice, onSession, exit,
-      autoPush, autoPull, clientId, pollMs, taskPollMs,
-      makeAssistantAgent, newAssistantTools, sidebarPercent,
+      api, stream, backend, configPath, boot,
+      makeVoice, onSession, exit,
+      autoPush, autoPull, clientId, pollMs, taskPollMs, sidebarPercent,
     });
   });
   const store = windowStore.sessions;
@@ -683,9 +653,7 @@ export function App({
   // 'code'. The » prefix (or 📌 when pinned) is rendered by the Toolbar
   // itself on the far left. A supervisor record has no modes — you cannot
   // chat there at all.
-  const modeMark = session && !session.readonly
-    ? (session.planMode ? 'plan' : 'code')
-    : undefined;
+  const modeMark = session ? (session.planMode ? 'plan' : 'code') : undefined;
   // Which card this session is building — the board's own name for it
   // (`PHA-7`), so the line you read while typing answers "what am I working
   // on" without opening anything. With no card attached the workspace prefix
@@ -812,13 +780,13 @@ export function App({
         {(session?.busy || session?.remoteBusy) && <StatusLine phase={phaseLabel(session.live)}
           startedAt={session.startedAt} tokens={tokenCount(session.tokens)}
           escHint={session.busy
-            ? (session.nudgeQueue.length ? '[esc] skip to next' : '[esc] to interrupt')
+            ? (session.agent.userMessages.length ? '[esc] to send queued now' : '[esc] to interrupt')
             : interruptArmed ? '[esc] again to interrupt' : '[esc] to interrupt'} />}
-        {session && session.nudgeQueue.length > 0 && (
+        {session && session.agent.userMessages.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
             <Text dimColor>{`  queued — [esc] to send message now · /pop to edit last message`}</Text>
-            {session.nudgeQueue.all().map((entry) => (
-              <UserMessage key={entry.id} text={entry.text ?? '(transcribing…)'} width={width} />
+            {session.agent.userMessages.pending().map((entry) => (
+              <UserMessage key={entry.id} text={entry.text} width={width} />
             ))}
           </Box>
         )}

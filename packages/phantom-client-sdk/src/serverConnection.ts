@@ -50,6 +50,10 @@ export class ServerConnection {
     const headers: OutgoingHttpHeaders = { ':method': init?.method ?? 'GET', ':path': url.pathname + url.search };
     new Headers(init?.headers).forEach((v, k) => { headers[k] = v; });
     const body = init?.body;
+    // A request with no body says so: without the length the proxy in front
+    // of the server forwards an empty chunked body, which the server reads
+    // as a body with no content type (415) — proven on turn-ended.
+    if (body === undefined || body === null) headers['content-length'] = 0;
     const req = this.#connect().request(headers);
     const signal = init?.signal;
     const onAbort = () => req.close(http2.constants.NGHTTP2_CANCEL);

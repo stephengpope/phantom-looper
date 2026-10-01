@@ -12,7 +12,7 @@
 // policy the Agent sets from its handlers), each attempt a notice. A call
 // that must not wait — best-effort live output — says `retry: false`; a
 // stream is never retried (a live feed is not replayed).
-import { PhantomError, ERROR_CODES, type ErrorCode } from './errors.js';
+import { PhantomError } from './errors.js';
 import { withRetry as retryingFetch, type RetryPolicy } from './model/retry.js';
 
 export interface BackendOptions {
@@ -45,13 +45,11 @@ export interface CallOptions {
   retry?: boolean;
 }
 
-const isErrorCode = (s: unknown): s is ErrorCode =>
-  typeof s === 'string' && (ERROR_CODES as readonly string[]).includes(s);
-
-/** The server's refusal as the error the app reads: its code when it is one
- *  of ours, `backend_error` otherwise. */
-const refused = (e: { code: string; message: string; retryable: boolean }, what: string): PhantomError =>
-  new PhantomError(isErrorCode(e.code) ? e.code : 'backend_error', `${what}: ${e.code} ${e.message}`, { retryable: e.retryable });
+/** The server's refusal as the error the app reads: the server's code,
+ *  message and status, exactly as sent — the message is the sentence a
+ *  person reads; the request it answers is in `cause`. */
+const refused = (e: { code: string; message: string; retryable: boolean }, status: number, what: string): PhantomError =>
+  new PhantomError(e.code, e.message, { retryable: e.retryable, status, cause: new Error(`${what} answered ${status} ${e.code}`) });
 
 /** One JSON record per line off a streaming body. A torn last line is
  *  dropped; a line that is not JSON is skipped. */
@@ -118,15 +116,16 @@ export class PhantomBackend {
         body: body === undefined ? undefined : JSON.stringify(body), signal: opts.signal,
       });
     } catch (e) {
-      throw new PhantomError('backend_error', `${method} ${path}: ${(e as Error).message}`, { cause: e, retryable: true });
+      throw new PhantomError('unreachable', `${method} ${path}: ${(e as Error).message}`, { cause: e, retryable: true });
     }
   }
 
   /** One API call, unwrapped. Resolves with `data`; throws a PhantomError —
    *  with the server's code when it is one of ours. */
   async call<T = unknown>(method: string, path: string, body?: unknown, opts: CallOptions = {}): Promise<T> {
-    const j = await this.#envelope<T>(await this.#request(method, path, body, opts), method, path);
-    if (!j.ok) throw refused(j.error, `${method} ${path}`);
+    const r = await this.#request(method, path, body, opts);
+    const j = await this.#envelope<T>(r, method, path);
+    if (!j.ok) throw refused(j.error, r.status, `${method} ${path}`);
     return j.data;
   }
 
@@ -145,9 +144,10 @@ export class PhantomBackend {
     const r = await this.#request(method, path, body, { ...opts, retry: false });
     if ((r.headers.get('content-type') ?? '').includes('application/json')) {
       const j = await this.#envelope(r, method, path);
-      throw j.ok ? new PhantomError('backend_error', `${method} ${path}: answered data, not a stream`) : refused(j.error, `${method} ${path}`);
+      throw j.ok ? new PhantomError('not_a_stream', `${method} ${path}: answered data, not a stream`, { status: r.status })
+        : refused(j.error, r.status, `${method} ${path}`);
     }
-    if (!r.ok || !r.body) throw new PhantomError('backend_error', `${method} ${path}: HTTP ${r.status} with no stream`);
+    if (!r.ok || !r.body) throw new PhantomError('bad_response', `${method} ${path}: HTTP ${r.status} with no stream`, { status: r.status });
     yield* ndjson(r.body);
   }
 
@@ -155,7 +155,7 @@ export class PhantomBackend {
     try {
       return await r.json() as Envelope<T>;
     } catch (e) {
-      throw new PhantomError('backend_error', `${method} ${path}: HTTP ${r.status}, not JSON`, { cause: e });
+      throw new PhantomError('bad_response', `${method} ${path}: HTTP ${r.status}, not JSON`, { cause: e, status: r.status });
     }
   }
 }

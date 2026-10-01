@@ -4,9 +4,11 @@
 import type { ModelMessage } from 'ai';
 import type { StreamPart, TurnResult } from './turn.js';
 import type { TokenTotals } from './transcript.js';
+import type { Provider, Reasoning } from './model/llmConfig.js';
 
 export interface AgentEvents {
-  'turn-start': { texts: string[] };
+  /** The turn is running: what it opened with, and the model it runs on. */
+  'turn-start': { texts: string[]; model: { provider: Provider; model: string; reasoning: Reasoning | null } };
   'part': StreamPart;
   /** Lines were appended and acknowledged. */
   'step': { messages: readonly ModelMessage[]; usage: Readonly<TokenTotals> };

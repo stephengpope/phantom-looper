@@ -10,7 +10,7 @@ export type { TokenTotals } from './transcript.js';
 
 // The connection — for an app's own kits and calls.
 export { PhantomBackend, type BackendOptions, type CallOptions, type Envelope } from './backend.js';
-export { PhantomError, isPhantomError, ERROR_CODES, type ErrorCode } from './errors.js';
+export { PhantomError, isPhantomError, SDK_ERROR_CODES, type ErrorCode, type SdkErrorCode } from './errors.js';
 export type { RetryPolicy } from './model/retry.js';
 
 // Tools only the app can serve (`agent.addToolKit(kit)`).

@@ -123,38 +123,6 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
       return ok({ cleared: req.params.key });
     });
 
-  // The finished answer to "how does agent X run right now" — model, key,
-  // steps, compaction — for a remote client that runs the agent itself (the
-  // cli). The SAME door the server's own engines use (Settings.agentConfig),
-  // so the cli holds no copy of the cascade or the pin rule and never
-  // downloads every key to build one agent. Returns the key, like GET
-  // /settings does: the caller is going to call the provider with it.
-  app.get<{ Params: { agent: string }; Querystring: { session?: string; workspace?: string } }>(
-    '/agents/:agent/config', { schema: { ...TAG,
-      summary: "An agent's runtime configuration, resolved",
-      description: 'The model (provider, model, endpoint, key, reasoning), steps per turn and compaction settings ' +
-        'for `agent` (coding | assistant | supervisor), resolved from the settings exactly as the server resolves them ' +
-        'for its own turns. Pass ?session= to apply that session\'s pinned model and its workspace\'s overrides; ' +
-        '?workspace= for a workspace\'s overrides alone.',
-      params: { type: 'object', properties: { agent: { type: 'string', enum: [...AGENT_NAMES] } } },
-      querystring: { type: 'object', properties: {
-        session: { type: 'string' }, workspace: { type: 'string' } } } } },
-    async (req, reply) => {
-      const agent = req.params.agent as AgentName;
-      const session = req.query.session ? await ctx.sessions.get(req.query.session) : undefined;
-      if (req.query.session && !session) return reply.code(404).send(err('session_not_found', `no session ${req.query.session}`));
-      const workspaceId = session?.workspaceId ?? req.query.workspace;
-      const workspace = workspaceId ? await ctx.workspaces.get(workspaceId) : undefined;
-      if (workspaceId && !workspace) return reply.code(404).send(err('not_found', `no workspace ${workspaceId}`));
-      try {
-        return ok(await ctx.settings.agentConfig(agent, { workspace, pin: sessionPin(session) }));
-      } catch (e) {
-        // A half-set pair (a provider override with no model): the fix is in
-        // the message, and it is the caller's settings to fix.
-        return reply.code(400).send(err('config_invalid', (e as Error).message));
-      }
-    });
-
   // Change notices, never values: every listener re-reads GET /settings. No
   // replay — a reconnect is itself the signal to re-read, which closes any gap.
   app.get('/settings/events', { schema: { ...TAG,

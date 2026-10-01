@@ -6,6 +6,7 @@
 // — and the two handlers that ARE the window's: the board (its live
 // BoardStore, and moving the screen) and screen mode.
 import type { Tool } from 'ai';
+import type { ToolKit } from 'phantom-client-sdk';
 import { sessionsTool, assistantKanbanTool, workspaceCreateTool, gitAutoPushTool,
   gitAutoPullTool, assistantModeTool, dockerLogsTool, type KanbanArgs } from './voice.js';
 import { sessionsHandler, workspaceCreateHandler, gitHandlers, dockerLogsHandler,
@@ -55,7 +56,7 @@ export function windowHost(win: WindowStore, deps: {
     workspaceId: () => store.active()?.workspaceId ?? null,
     activeSession: () => store.activeId || null,
     busy: (id) => store.get(id)?.busy ?? false,
-    history: (id) => store.get(id)?.history ?? null,
+    history: (id) => { const h = store.get(id)?.history; return h ? [...h] : null; },
     // ONE open path — openSession decides whether the session is already
     // here, needs attaching, or (swept) needs restarting. Then the chat view:
     // the builder sees the session regardless of which screen was up.
@@ -121,32 +122,33 @@ export function kanbanHandler(win: WindowStore) {
   };
 }
 
-/** The Assistant's whole kit: core's handlers over this window as host, the
- *  window's own two (board, screen mode), plus the read-only workspace tools
- *  and the cron kit run as the assistant's OWN session (`own`) — the server
- *  opens its folder, the on-screen session's, re-pointed on every switch — in
- *  the on-screen session's workspace. Rebuilt (setAgent — the history is
- *  kept) when that session changes; no row yet (nothing on screen) means no
- *  file tools. The ORDER is part of the kit: two tests read the key list. */
-export async function buildAssistantKit(win: WindowStore, deps: {
+/** The Assistant's tools only this window can serve: core's handlers over
+ *  this window as host, the window's own two (board, screen mode). The
+ *  server's tools for the assistant (the read-only workspace tools, web,
+ *  crons…) come with every turn start and ride beside these. Every fact is
+ *  read live off the window at execute time, so one kit serves every
+ *  session that comes on screen. `mutating` names the ones plan mode
+ *  refuses — the Assistant's session is never in plan mode, so none. */
+export function assistantToolKit(win: WindowStore, deps: {
   api: Api;
   clientId: string;
   workspaces: WorkspaceDirectory;
-  newAssistantTools: (sessionId: string, workspaceId: string) => Promise<Record<string, Tool>>;
-}, own: { id: string; folderId: string | null } | null): Promise<Record<string, Tool>> {
+}): ToolKit {
   const host = windowHost(win, deps);
   const git = gitHandlers(host);
-  const sessionId = own?.folderId ? own.id : null;
-  const workspaceId = win.sessions.active()?.workspaceId ?? null;
   return {
-    ...sessionsTool(sessionsHandler(host)),
-    ...assistantKanbanTool(kanbanHandler(win)),
-    ...workspaceCreateTool(workspaceCreateHandler(host)),
-    ...gitAutoPushTool(git.push),
-    ...gitAutoPullTool(git.pull),
-    ...assistantModeTool(win.screenOps()),
-    ...dockerLogsTool(dockerLogsHandler(host)),
-    ...(sessionId && workspaceId
-      ? await deps.newAssistantTools(sessionId, workspaceId).catch(() => ({} as Record<string, Tool>)) : {}),
+    name: 'cli-assistant',
+    build: async () => ({
+      tools: {
+        ...sessionsTool(sessionsHandler(host)),
+        ...assistantKanbanTool(kanbanHandler(win)),
+        ...workspaceCreateTool(workspaceCreateHandler(host)),
+        ...gitAutoPushTool(git.push),
+        ...gitAutoPullTool(git.pull),
+        ...assistantModeTool(win.screenOps()),
+        ...dockerLogsTool(dockerLogsHandler(host)),
+      } as Record<string, Tool>,
+      mutating: [],
+    }),
   };
 }

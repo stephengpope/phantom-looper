@@ -1,7 +1,7 @@
 // The tool routes — one surface for every tool an agent can call, off the
 // registry (tools/registry.ts):
 //
-//   GET  /agents/:agent/tools?session=   what an agent of that kind has on that
+//   POST /sessions/:id/turn-start         what an agent of that kind has on that
 //                                        session right now — a client builds
 //                                        its tools from this and nothing else
 //   POST /tools/:name                    run one; the session travels in a
@@ -56,25 +56,10 @@ export function toolRoutes(app: FastifyInstance, ctx: AppCtx) {
     throw e;
   };
 
-  app.get<{ Params: { agent: string }; Querystring: { session: string } }>(
-    '/agents/:agent/tools', { schema: { tags: ['tools'], summary: "An agent's tools on a session, right now",
-      description: 'The tools an agent of this kind has on the session, as the server decides it at this moment: ' +
-        'a switched-off feature is a missing tool, a session with no files has no file tools. Each carries name, ' +
-        'summary, description, JSON Schema input and `mutates`. A client builds its tools from this list and runs ' +
-        'them with POST /tools/:name under the session header.',
-      params: { type: 'object', properties: { agent: { type: 'string', enum: [...AGENT_NAMES] } } },
-      querystring: { type: 'object', required: ['session'], properties: { session: { type: 'string' } } } } },
-    async (req, reply) => {
-      try {
-        const { session, workspace } = await sessionOf(ctx, req.query.session);
-        return ok({ sessionHeader: SESSION_HEADER, tools: await toolsFor(req.params.agent as AgentName, { app: ctx, session, workspace }) });
-      } catch (e) { return send(reply, e); }
-    });
-
   // The file tools alone — the listing the earlier clients build from.
   app.get('/tools', { schema: { tags: ['tools'], summary: 'The file tool definitions',
     description: 'The file and task tools: name, summary, description, JSON Schema input, mutates, and the session ' +
-      'header name. GET /agents/:agent/tools?session= is the whole picture for one agent.' } },
+      'header name. POST /sessions/:id/turn-start answers the whole picture for one agent.' } },
   async () => ok({
     version: '1',
     sessionHeader: SESSION_HEADER,

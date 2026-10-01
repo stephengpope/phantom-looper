@@ -11,7 +11,7 @@
 // every session hears its own "someone else touched me" news live. Only the
 // session on screen repaints — the store's fold paints the active id alone —
 // so a background feed costs its connection and its parts, never a redraw.
-import { FLUSH_MS } from './agent.js';
+import { FLUSH_MS } from './sessions.js';
 import { AUTO_PUSH_STEPS } from '../core/llm/tools/git.js';
 import { followStream, type Stream } from './follow.js';
 import type { SessionStore, LoadedSession } from './sessions.js';

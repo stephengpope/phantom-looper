@@ -12,25 +12,18 @@ import { hostname } from 'node:os';
 import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { Tool } from 'ai';
-import { SessionStore, activeHold, type LoadedSession } from './sessions.js';
+import { SessionStore, activeHold, type LoadedSession, type ModelLine } from './sessions.js';
+import type { AgentHandlers, PhantomBackend, ToolKit } from 'phantom-client-sdk';
+import { parseLines, conversationFrom, usageTotals } from 'phantom-client-sdk/transcript';
+import { CodingAgent } from '../core/agents/coding.js';
+import { AssistantAgent } from '../core/agents/assistant.js';
 import { SessionFeed } from './sessionFeed.js';
 import { SettingsFeed } from './settingsFeed.js';
 import { SessionsFeed } from './sessionsFeed.js';
 import { BoardStore, type Card, type Stream } from './board.js';
 import { VoiceClient, sidecarEnv, codingKanbanTool, screenModeTools,
   type KanbanArgs, type ScreenModeHandler } from './voice.js';
-import { Transcript, transcriptPath, adoptServerCopy, syncTranscriptUp, stepSaveUp } from './session.js';
-import { parseTranscript, type UsageTotals } from '../core/llm/transcript.js';
-import { compact, compactionOpts, CompactionLock } from '../core/llm/compaction.js';
 
-/** The assistant's session row as the routes return it: its id (what its
- *  agent is billed to, and what GET /agents/assistant/config?session= pins
- *  on) and what its file tools run as (folder). */
-type AssistantRow = { id: string; folderId: string | null };
-import { openSession as coreOpenSession } from '../core/session.js';
-import { buildAgent, buildAssistantAgent, agentConfigFor, type AgentConfig } from './agentFromConfig.js';
-import { codingPrompt, type CodingPrompt } from '../core/llm/agents/coding.js';
-import { runTurn } from './agent.js';
 import { messagesToParts, nextId, type Part } from './state.js';
 import { kanbanOps } from './kanban.js';
 import { PasteStore } from './paste.js';
@@ -41,7 +34,7 @@ import { label, lastWorkspaceId, type SessionInfo, type WorkspaceInfo } from './
 import type { TasksView } from './components/Tasks.js';
 import type { NewWorkspaceRequest } from './components/NewWorkspace.js';
 import { COMMANDS, fillOf, matches, parse, type Choices } from './commands.js';
-import { WorkspaceDirectory, buildAssistantKit } from './assistantKit.js';
+import { WorkspaceDirectory, assistantToolKit } from './assistantKit.js';
 import { confirmDialog, boardScreen, switcherScreen, settingsScreen, keysScreen, secretsScreen,
   serverScreen, presetsScreen, workspaceSettingsScreen,
   addWorkspaceScreen, archivedScreen, tasksScreen, pickerScreen } from './screens.js';
@@ -113,22 +106,16 @@ const PICKER_FILTER_DEBOUNCE_MS = 150;
 
 export interface WindowOptions {
   api: Api;
+  /** The window's connection, for the agents: every open session runs its
+   *  turns through it, under this window's identity. */
+  backend: () => PhantomBackend;
   /** GET a server ND-JSON stream as records — each BoardStore follows its
    *  workspace's `/events` through it. Absent (tests): boards load once. */
   stream?: Stream;
-  /** Tools are per session, so every session that joins needs a fresh set.
-   *  `plan` builds the plan-mode kit: the readonly preset on the mutating kits.
-   *  `planMode` reads the session's mode live: the mutating tools refuse
-   *  while it is on, so a /plan mid-turn stops the turn's writes. */
-  newTools: (sessionId: string, plan?: boolean, workspaceId?: string,
-    planMode?: () => boolean) => Promise<Record<string, Tool>>;
   configPath?: string;
   /** What launching wants: resume a named session, or find a workspace and
    *  start. The splash waits on the outcome — see `splash`. */
   boot?: { resumeId?: string };
-  makeAgent?: typeof buildAgent;
-  makeTranscript?: (sessionId: string) => Transcript;
-  run?: typeof runTurn;
   makeVoice?: () => VoiceClient;
   /** POST /git/auto-push for one session, consuming its ND-JSON stream:
    *  `onStep` gets a human label per step, the promise resolves with the final
@@ -142,10 +129,6 @@ export interface WindowOptions {
   onSession?: (s: { id: string; branch: string; workspaceId: string }) => void;
   /** Ink's exit, so /exit and ctrl+c can end the process. */
   exit?: () => void;
-  makeAssistantAgent?: typeof buildAssistantAgent;
-  /** The Assistant's read-only workspace tools for one session, and its
-   *  cron kit for that session's workspace. */
-  newAssistantTools?: (sessionId: string, workspaceId: string) => Promise<Record<string, Tool>>;
   /** Width of the voice pane as a percent, when `sidebar_width` is not set. */
   sidebarPercent?: number;
   /** This window's session-lock id, so its own held sessions do not read
@@ -451,15 +434,7 @@ export class WindowStore {
       : null;
     this.settingsFeed?.start();
     this.workspaces = new WorkspaceDirectory(this.api);
-    this.voice = (opts.makeVoice ?? (() => new VoiceClient(undefined, undefined, opts.run ?? runTurn)))();
-    // A turn ended on the assistant's session: the row's turn count and
-    // last used move, as they do for a coding session's save.
-    this.voice.onTurnEnded = () => {
-      const id = this.voice.sessionId;
-      if (!id) return;
-      void this.api('POST', `/sessions/${id}/turn-ended`, {})
-        .catch(quiet('update the assistant session'));
-    };
+    this.voice = (opts.makeVoice ?? (() => new VoiceClient()))();
     this.splash = false;
     // Defaults only until readChrome's first server read lands.
     this.voiceEnabled = false;
@@ -537,7 +512,6 @@ export class WindowStore {
       enterPlan: async () => {
         const e = at();
         if (!e) return { ok: false, error: 'no session is open' };
-        if (e.readonly) return { ok: false, error: 'a supervisor record has no modes' };
         if (e.planMode) return { ok: false, error: 'already in plan mode' };
         await this.api('PATCH', `/sessions/${e.id}`, { plan_mode: true });
         await this.applyPlanMode(e.id, true);
@@ -547,7 +521,6 @@ export class WindowStore {
       enterCode: async () => {
         const e = at();
         if (!e) return { ok: false, error: 'no session is open' };
-        if (e.readonly) return { ok: false, error: 'a supervisor record has no modes' };
         if (!e.planMode) return { ok: false, error: 'already in code mode' };
         await this.api('PATCH', `/sessions/${e.id}`, { plan_mode: false });
         await this.applyPlanMode(e.id, false);
@@ -564,7 +537,6 @@ export class WindowStore {
       askCodeMode: async (reason, { abortSignal }) => {
         const e = at();
         if (!e) return { ok: false, error: 'no session is open' };
-        if (e.readonly) return { ok: false, error: 'a supervisor record has no modes' };
         if (!e.planMode) return { ok: false, error: 'already in code mode' };
         // Bound to a session = the coding agent; unbound = the Assistant.
         const yes = await this.confirm('enter code mode?', reason,
@@ -586,117 +558,52 @@ export class WindowStore {
    *  nothing changed; a supervisor record never flips. */
   applyPlanMode = async (id: string, on: boolean): Promise<void> => {
     const e = this.sessions.get(id);
-    if (!e || e.readonly || e.planMode === on) return;
+    if (!e || e.planMode === on) return;
     this.sessions.setPlanMode(id, on);
   };
 
-  /** The coding agent's whole kit for one session: always the full set.
-   *  Plan mode is a runtime gate (the planMode callback), not a structural
-   *  one, so the kit never changes between modes. */
-  private async codingKit(sessionId: string, workspaceId: string): Promise<Record<string, Tool>> {
+  /** The tools only this window can serve for a coding session: the board
+   *  from here, the screen's modes and the code-mode ask. The server's tools
+   *  come with every turn start; these ride beside them. `mutating` names
+   *  the ones plan mode refuses. */
+  private cliToolKit(sessionId: string, workspaceId: string): ToolKit {
     return {
-      ...await this.opts.newTools(sessionId, false, workspaceId,
-        () => this.sessions.get(sessionId)?.planMode === true),
-      ...codingKanbanTool(this.codingKanbanHandler(workspaceId)),
-      ...screenModeTools(this.screenOps(sessionId)),
+      name: 'cli',
+      build: async () => {
+        const tools: Record<string, Tool> = {
+          ...codingKanbanTool(this.codingKanbanHandler(workspaceId)),
+          ...screenModeTools(this.screenOps(sessionId)),
+        };
+        return { tools, mutating: Object.keys(tools).filter((n) => /create|update|move|block|enter_code|set_mode/.test(n)) };
+      },
     };
   }
 
-  /** `prompt` is the row's frozen prompt. A record-only session (the
-   *  supervisor's) has none and never runs a turn here; its entry still
-   *  carries an agent, built on the default prompt. */
-  private buildFor(tools: Record<string, Tool>, cfg: AgentConfig, prompt: CodingPrompt | null, sessionId: string) {
-    const make = this.opts.makeAgent ?? buildAgent;
-    return make(tools, cfg, sessionId, prompt ?? codingPrompt(), (t) => this.sessions.note(sessionId, t));
-  }
-
-  /** A session's coding config from the server, right now — on its ROW's
-   *  model (the server applies the pin) with the current settings for
-   *  everything else. THE read every agent build here goes through. */
-  private codingConfig(sessionId: string): Promise<AgentConfig> {
-    return agentConfigFor(this.api, 'coding', { session: sessionId });
-  }
-
-  /** Build the agent a turn is about to use from the server, right now. The
-   *  result replaces the previous disposable agent; the pane notes a model
-   *  that moved (a settings change reached a session nothing has been said
-   *  to yet — the feed's onModelChanged lands here too). */
-  private async refreshAgent(id: string): Promise<void> {
-    const e = this.sessions.get(id);
-    if (!e || e.readonly) return;
-    const { agent, summary } = this.buildFor(e.tools, await this.codingConfig(id), e.prompt, id);
-    const moved = summary.provider !== e.summary.provider || summary.model !== e.summary.model;
-    this.sessions.setAgent(id, agent, summary);
-    if (moved) this.sessions.note(id, `model → ${summary.provider}/${summary.model}`);
+  /** The banner's model line before any turn: the row's provider/model, the
+   *  workspace's reasoning setting. After the first turn, turn-start's word. */
+  private async modelLineFor(row: { provider?: string | null; model?: string | null }, workspaceId: string): Promise<ModelLine> {
+    let reasoning = '';
+    try {
+      const st = await this.api('GET', `/settings?workspace=${encodeURIComponent(workspaceId)}`) as Record<string, { value?: unknown }>;
+      reasoning = String(st.coding_reasoning?.value ?? '');
+    } catch (e) { quiet('read the reasoning setting')(e); }
+    return { provider: row.provider || 'unset', model: row.model || 'unset', reasoning };
   }
 
   // ── the session store, and the turn's two ends ────────────────────────────
 
-  // The transcript upload's two bookkeeping sets. Chained per session: two
-  // turns ending close together must land in order, or a stale upload could
-  // overwrite the newer one. A failure is noted ONCE per streak, so a server
-  // that cannot store transcripts is one line, not one per turn — and the
-  // streak set is also what recover() retries.
-  private syncChains = new Map<string, Promise<void>>();
-  private syncFailing = new Set<string>();
-
-  /** Ship the whole local file to the server — SQL is the record. `after`
-   *  runs once the record landed or failed (the turn-end lock release hangs
-   *  off it: holding the lock helps nobody either way). */
-  private uploadTranscript = (e: LoadedSession, after?: () => void): void => {
-    const next = (this.syncChains.get(e.id) ?? Promise.resolve())
-      .then(() => syncTranscriptUp(this.api, e.id, e.transcript.path))
-      .then(
-        (stamp) => { this.sessions.setStamp(e.id, stamp); if (this.syncFailing.delete(e.id)) this.sessions.note(e.id, 'transcript sync recovered'); },
-        (err) => {
-          if (this.syncFailing.has(e.id)) return;
-          this.syncFailing.add(e.id);
-          this.sessions.note(e.id, `transcript sync failed (kept locally): ${(err as Error).message}`);
-        },
-      )
-      .finally(() => { after?.(); });
-    this.syncChains.set(e.id, next);
-  };
-
   private newSessionStore(): SessionStore {
-    const s: SessionStore = new SessionStore(this.opts.run ?? runTurn, (e) => {
-      // The turn is on disk already (appended per step); the whole file goes
-      // up now, and the turn's lock is released behind it.
-      this.uploadTranscript(e, () => { void this.api('DELETE', `/sessions/${e.id}/lock`).catch(quiet(`release session ${e.id}`)); });
+    const s: SessionStore = new SessionStore(() => {
       // The toolbar's task count follows every turn — a turn is when tasks
       // start and stop. Background: a failure goes to cli.log, not the pane.
       void this.onTurnEnded?.().catch(quiet('refresh tasks'));
     });
-    // Lock per TURN: taken as a send starts, released above. Opening never
-    // locks — reading is free. The lock response carries the transcript's
-    // stamp: unchanged = memory is current; moved = another machine advanced
-    // this session, so pull ONCE, reseat, then run.
     // A refused send puts the words back: into the box when that session is
     // on screen, into its draft otherwise — either way the next switch to it
     // shows them.
     s.onRefused = (id, text) => {
       if (id === this.sessions.activeId) this.setPrompt(text);
       else { const e = this.sessions.get(id); if (e) e.draft = text; }
-    };
-    s.onTurnStart = async (id) => {
-      const r = await this.api('POST', `/sessions/${id}/lock`, { label: hostname() }) as
-        { transcript_updated_at?: string | null };
-      await this.refreshIfMoved(id, r?.transcript_updated_at ?? null);
-      await this.refreshAgent(id);
-    };
-    // The backdoor message queue (a detached command exited, a file was
-    // dropped) rides this window's next send; the drain runs after the lock
-    // above, so one consumer takes them.
-    s.drainBackdoor = async (id) => {
-      const r = await this.api('POST', `/sessions/${id}/backdoor/drain`) as { messages?: string[] };
-      return r?.messages ?? [];
-    };
-    // This window's own turn, relayed as it runs, so any watcher sees it
-    // stream exactly like a turn the server runs.
-    s.relay = async (id, events) => { await this.api('POST', `/sessions/${id}/events`, { events }); };
-    // Step-level transcript save — lighter than the turn-end PUT.
-    s.stepSave = (id) => {
-      stepSaveUp(this.api, id);
     };
     return s;
   }
@@ -712,7 +619,7 @@ export class WindowStore {
    *  means. Quiet on failure: the caller runs again on its own. */
   recheckSession = async (id: string): Promise<void> => {
     const cur = this.sessions.get(id);
-    if (!cur || cur.busy || cur.readonly) return;
+    if (!cur || cur.busy) return;
     try {
       const r = await this.api('GET', `/sessions/${id}`) as {
         planMode?: boolean; transcript_updated_at?: string | null;
@@ -731,56 +638,33 @@ export class WindowStore {
    *  refreshed. One note says it happened, so a screen that fixes itself is
    *  not a mystery. */
   private recover = async (): Promise<void> => {
-    for (const e of this.sessions.list()) {
-      await this.recheckSession(e.id);
-      if (this.syncFailing.has(e.id)) this.uploadTranscript(e);
-    }
+    for (const e of this.sessions.list()) await this.recheckSession(e.id);
     // The open list, if one polls, re-reads now rather than on its next tick.
     this.overlay?.poll?.();
     this.note('back in touch with the server — everything re-synced');
   };
 
-  /** A session's lifetime token totals — the log_tokens sums, the
-   *  toolbar's numbers. Zeros when the server cannot answer: the toolbar
-   *  shows what it has, and the next reseat corrects it. */
-  private async sessionUsage(id: string): Promise<UsageTotals> {
-    try {
-      const u = await this.api('GET', `/sessions/${id}/token-usage`) as
-        { input?: number; output?: number; cache_read?: number; cache_write?: number };
-      return { input: Number(u.input ?? 0), output: Number(u.output ?? 0),
-        cacheRead: Number(u.cache_read ?? 0), cacheWrite: Number(u.cache_write ?? 0) };
-    } catch (e) {
-      quiet(`read token totals for session ${id}`)(e);
-      return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-    }
-  }
-
-  /** Compare the server's transcript stamp with what memory matches; when it
-   *  moved, pull and reseat. The ONE reseat path: turn start, switch, and the
-   *  feed. `server` is the stamp the caller already holds; null means don't
-   *  look. Never caught here — a failure inside the feed's handler must reject
-   *  into followStream so the link reconnects onto a fresh snapshot. */
+  /** Compare the server's transcript stamp with what the SCREEN matches;
+   *  when it moved, read the record and repaint. The ONE repaint path:
+   *  switch, and the feed's record-landed. The agent keeps its own copy
+   *  current on its own, at its next turn start. `server` is the stamp the
+   *  caller already holds; null means don't look. Never caught here — a
+   *  failure inside the feed's handler must reject into followStream so the
+   *  link reconnects onto a fresh snapshot. */
   refreshIfMoved = async (id: string, server: string | null, keepScreen = false): Promise<void> => {
     const cur = this.sessions.get(id);
     if (!cur || cur.busy || !server || server === cur.syncStamp) return;
     const t = await this.api('GET', `/sessions/${id}/transcript`) as
       { data: string | null; updated_at?: string | null };
-    // Same seating rule as open: a local file that is the server's text plus
-    // unsaved steps is kept and shipped; the screen shows the fuller copy.
-    const seated = adoptServerCopy(id, t.data);
-    const parsed = parseTranscript(seated.text);
-    if (seated.localKept) {
-      void syncTranscriptUp(this.api, id).then((stamp) => this.sessions.setStamp(id, stamp),
-        quiet(`upload unsaved steps for session ${id}`));
-    }
-    const usage = await this.sessionUsage(id);
+    const lines = parseLines(t.data ?? '');
     // keepScreen: the feed showed us this whole turn as it happened, so the
-    // record brings the history and the stamp and the screen keeps what it
-    // drew — richer than a transcript replay, and no repaint to jump through.
-    this.sessions.reseat(id, parsed.messages, keepScreen ? null : [
+    // record brings the stamp and the totals and the screen keeps what it
+    // drew — richer than a replay, and no repaint to jump through.
+    this.sessions.reseat(id, keepScreen ? null : [
+      ...cur.done.slice(0, 2),
       { kind: 'note', id: nextId('note'), text: 'refreshed — this session moved forward elsewhere' } as Part,
-      ...messagesToParts(parsed.messages),
-    ], t.updated_at ?? server, usage);
+      ...messagesToParts(conversationFrom(lines)),
+    ], t.updated_at ?? server, usageTotals(lines));
   };
 
   // ── what is on screen ─────────────────────────────────────────────────────
@@ -827,6 +711,8 @@ export class WindowStore {
     return chips.length ? chips.join(' ') : null;
   };
 
+  /** Show that session's conversation in the pane, tail first. The unsent
+   *  text goes with the session being left and comes back with it. */
   /** Show that session's conversation in the pane, tail first. The unsent
    *  text goes with the session being left and comes back with it. */
   switchTo = (id: string): void => {
@@ -928,39 +814,31 @@ export class WindowStore {
         this.splash = true;
         this.notify();
       }
-      const sessionId = target.kind === 'duplicate'
-        ? ((await this.api('POST', `/sessions/${target.id}/duplicate`) as { id: string }).id)
-        : target.kind === 'open' ? target.id : undefined;
-      const opened = await coreOpenSession({ call: this.api, label: hostname(),
-        ...(sessionId ? { sessionId } : { workspaceId: (target as { workspaceId: string }).workspaceId }) });
-      const row = opened.session as { id: string; branch: string; workspaceId: string;
-        name?: string | null; agent?: string | null; card?: number | null; planMode?: boolean; pinned?: boolean };
-      // The server record IS the conversation — unless this machine holds
-      // unsaved steps on top of it (a window that died mid-turn); then the
-      // local file is the fuller copy, opens here, and goes up now.
-      const seated = adoptServerCopy(row.id, opened.raw);
-      let resumed = opened.messages;
-      let syncStamp = opened.updatedAt;
-      let seatNote: string | null = null; // under the banner: what happened to the file
-      if (seated.localKept) {
-        resumed = parseTranscript(seated.text).messages;
-        try {
-          syncStamp = await syncTranscriptUp(this.api, row.id);
-          seatNote = 'unsaved steps found on this machine — uploaded';
-        } catch (e) {
-          seatNote = `unsaved steps found on this machine — kept locally, upload failed: ${(e as Error).message}`;
-        }
-      }
-      // The row's plan_mode seeds the mode AND picks the kit — the two must
-      // never disagree, so they read the same fact.
+      // The session IS its agent: resumed (an id — /resume, a duplicate's
+      // copy) or made new (/new, /workspace). Resuming only reads; nothing
+      // is held until the first turn.
+      // The agent's handlers forward to the store entry by the agent's own
+      // session id — known only once it exists. A failure before that is the
+      // create/resume rejection, caught below.
+      let made: CodingAgent | null = null;
+      const forEntry = () => (made && this.sessions.has(made.session.id) ? this.sessions.handlersFor(made.session.id) : null);
+      const handlers: AgentHandlers = {
+        onError: (e) => forEntry()?.onError(e),
+        onNotice: (n) => forEntry()?.onNotice(n),
+      };
+      const backend = this.opts.backend();
+      const agent: CodingAgent = target.kind === 'new'
+        ? await CodingAgent.newSession(backend, handlers, target.workspaceId)
+        : await CodingAgent.resumeSession(backend, handlers, target.kind === 'duplicate'
+          ? ((await this.api('POST', `/sessions/${target.id}/duplicate`) as { id: string }).id)
+          : target.id);
+      made = agent;
+      agent.addToolKit(this.cliToolKit(agent.session.id, agent.session.workspaceId));
+      const row = await this.api('GET', `/sessions/${agent.session.id}`) as { id: string; branch: string; workspaceId: string;
+        name?: string | null; agent?: string | null; card?: number | null; planMode?: boolean; pinned?: boolean;
+        provider?: string | null; model?: string | null; transcript_updated_at?: string | null };
+      const summary = await this.modelLineFor(row, row.workspaceId);
       const planMode = row.planMode === true;
-      const tools = await this.codingKit(row.id, row.workspaceId);
-      // The session runs on its ROW's model, and only the row's — the server
-      // applies that rule (Settings.agentConfig) and every later rebuild
-      // (a turn start, a settings change, the feed's row-model event) asks it
-      // again.
-      const { agent, summary } = this.buildFor(tools, await this.codingConfig(row.id), opened.prompt, row.id);
-      const transcript = (this.opts.makeTranscript ?? ((id: string) => new Transcript(transcriptPath(id))))(row.id);
       // The card this session builds, named the way the board names it
       // (`PHA-7`), resolved ONCE here where both facts are in hand.
       const ws = await this.wsFacts(row.workspaceId);
@@ -973,27 +851,19 @@ export class WindowStore {
       const onScreen = this.draftOnScreen();
       const prev = this.sessions.active();
       if (prev && target.kind !== 'new') prev.draft = onScreen;
+      const resumed = [...agent.session.messages];
       this.sessions.add({
         ...(target.kind === 'new' ? { draft: onScreen } : {}),
         id: row.id, branch: row.branch, workspaceId: row.workspaceId,
         name: row.name ?? null,
-        tools, agent, summary, transcript, prompt: opened.prompt,
-        history: resumed,
-        syncStamp,
+        agent, summary,
+        syncStamp: row.transcript_updated_at ?? null,
         planMode,
         pinned: row.pinned === true,
-        // The toolbar's lifetime token totals, from log_tokens.
-        usage: await this.sessionUsage(row.id),
         ...(card ? { card } : {}),
-        ...(row.agent === 'supervisor' ? { readonly: true } : {}),
         done: [
           ...bannerParts({ workspace: ws.label, branch: row.branch }, summary),
           ...(ws.error ? [{ kind: 'note', id: nextId('note'), text: ws.error } as Part] : []),
-          ...(row.agent === 'supervisor'
-            ? [{ kind: 'note', id: nextId('note'),
-                text: `the supervisor's record${row.card != null ? ` · card ${row.card}` : ''} — read-only` } as Part]
-            : []),
-          ...(seatNote ? [{ kind: 'note', id: nextId('note'), text: seatNote } as Part] : []),
           ...messagesToParts(resumed),
         ],
       });
@@ -1198,7 +1068,7 @@ export class WindowStore {
     });
     const seen = new Set(rows.map((s) => s.id));
     const extras: SessionInfo[] = this.sessions.list()
-      .filter((e) => !seen.has(e.id) && !e.readonly && (e.lastMessageAt > 0 || e.pinned) && this.matchesPickerQuery(e))
+      .filter((e) => !seen.has(e.id) && (e.lastMessageAt > 0 || e.pinned) && this.matchesPickerQuery(e))
       .map((e) => ({
         id: e.id, workspaceId: e.workspaceId, branch: e.branch, status: 'active', agent: null,
         model: e.summary.model, pinned: e.pinned,
@@ -1560,7 +1430,12 @@ export class WindowStore {
       onRecordLanded: (updatedAt, keepScreen) =>
         this.refreshIfMoved(id, updatedAt || null, keepScreen),
       onPlanModeChanged: (on) => this.applyPlanMode(id, on),
-      onModelChanged: () => this.refreshAgent(id),
+      onModelChanged: async () => {
+        const e = store.get(id);
+        if (!e) return;
+        const row = await this.api('GET', `/sessions/${id}`) as { provider?: string | null; model?: string | null };
+        store.setModelLine(id, await this.modelLineFor(row, e.workspaceId));
+      },
       // Named, because the toast is the window's, not the session's: a
       // failure on a session in the background says which one.
       onSyncFailed: (op, reason) => {
@@ -1712,9 +1587,7 @@ export class WindowStore {
   get showSidebar(): boolean { return this.sidebar ?? this.voiceEnabled; }
 
   private get assistantDeps() {
-    return { api: this.api, clientId: this.opts.clientId ?? '',
-      workspaces: this.workspaces,
-      newAssistantTools: this.opts.newAssistantTools ?? (async () => ({})) };
+    return { api: this.api, clientId: this.opts.clientId ?? '', workspaces: this.workspaces };
   }
 
   /** Voice follows the setting: on at launch when enabled, stopped with the
@@ -1734,47 +1607,34 @@ export class WindowStore {
     })();
   }
 
-  /** The assistant's config from the server, on ITS ROW's model when it has
-   *  one — the same door the coding agent's config comes through. */
-  private assistantConfig(own: AssistantRow | null): Promise<AgentConfig> {
-    return agentConfigFor(this.api, 'assistant', own ? { session: own.id } : {});
-  }
+  /** The Assistant's agent. Made ONCE per window, the first time a session
+   *  is on screen (null before — the engine can start before any session
+   *  opens): a conversation-only session on the on-screen session's folder,
+   *  with this window's kit. Re-pointed (`follow`) on every switch after,
+   *  which App fires. */
+  private assistant: AssistantAgent | null = null;
 
-  /** The assistant's own session row — the supervisor pattern: no checkout,
-   *  its folder the session on screen's, so its tools read that session's
-   *  files, it runs on the row's model, and its calls are billed to it.
-   *  Opened ONCE per window, the first time a session is on screen (null
-   *  before — the assistant can start before any session opens); re-pointed
-   *  on every rebuild after, which App fires on every switch. Runs BEFORE
-   *  the agent is built — the model needs the row. */
-  private async assistantSession(): Promise<AssistantRow | null> {
-    const active = this.sessions.active();
-    if (!active) return this.voice.sessionId ? await this.api('GET', `/sessions/${this.voice.sessionId}`) as AssistantRow : null;
-    const target = { workspace_id: active.workspaceId, session_id: active.id };
-    if (this.voice.sessionId) {
-      return await this.api('POST', `/sessions/${this.voice.sessionId}/follow`, target) as AssistantRow;
-    }
-    const r = await this.api('POST', '/sessions/assistant', target) as AssistantRow;
-    this.voice.sessionId = r.id;
-    return r;
-  }
-
-  /** The brain, rebuilt from the server: its config (model, steps,
-   *  compaction) and its kit, which follows the session on screen —
-   *  switching rebuilds it in place, same conversation, the new session's
-   *  files. `starting` = the engine is about to start, so "not running" is
-   *  no reason to skip, and a failure is the caller's to report. */
+  /** The Assistant follows the session on screen: made if it does not
+   *  exist yet, re-pointed if it does. `starting` = the engine is about to
+   *  start, so "not running" is no reason to skip, and a failure is the
+   *  caller's to report. */
   async rebuildAssistant(starting = false): Promise<void> {
     if (!starting && !this.voice.running) return;
-    const make = this.opts.makeAssistantAgent ?? buildAssistantAgent;
     try {
-      const own = await this.assistantSession();
-      const [cfg, kit] = await Promise.all([this.assistantConfig(own), buildAssistantKit(this, this.assistantDeps, own)]);
-      this.voice.setAgent(make(kit, cfg, own).agent);
-      this.voice.setCompaction(cfg.compaction);
+      const active = this.sessions.active();
+      if (!active) return;
+      if (this.assistant) {
+        await this.assistant.follow(active.workspaceId, active.id);
+        return;
+      }
+      const agent = await AssistantAgent.newSession(this.opts.backend(), this.voice.handlers(),
+        { workspaceId: active.workspaceId, activeSessionId: active.id });
+      agent.addToolKit(assistantToolKit(this, this.assistantDeps));
+      this.assistant = agent;
+      this.voice.setAgent(agent);
     } catch (e) {
       if (starting) throw e;
-      this.note(`assistant not rebuilt for this session: ${(e as Error).message}`);
+      this.note(`assistant not pointed at this session: ${(e as Error).message}`);
     }
   }
 
@@ -1809,13 +1669,10 @@ export class WindowStore {
       this.voiceEnabled = Boolean(cfg.voice_enabled);
       this.sidebarWidth = Number(cfg.sidebar_width) || (this.opts.sidebarPercent ?? 20);
 
-      // Every session's agent asks the server for its config again (keys,
-      // reasoning, max steps, compaction) — over its ROW's model, which the
-      // server applies; a model setting reaches a session only through the
-      // row (Sessions.followModelSettings), and the feed brings that in.
-      for (const e of this.sessions.list()) {
-        void this.refreshAgent(e.id).catch((err) => this.sessions.note(e.id, `agent not rebuilt: ${(err as Error).message}`));
-      }
+      // A session's agent reads its model and tools from the server at
+      // every turn start; nothing here is rebuilt. A model setting reaches
+      // a session only through its row (Sessions.followModelSettings), and
+      // the session feed brings that into the banner.
 
       // The Assistant follows its settings: on/off starts and stops it; an
       // audio value (the Deepgram key, the devices) restarts the sidecar,
@@ -1987,7 +1844,6 @@ export class WindowStore {
       case 'tasks': await this.openTasks(); return;
       case 'plan': {
         if (!session) { this.note('no session is open — nothing to switch'); return; }
-        if (session.readonly) { this.note("this is the supervisor's record — read-only"); return; }
         if (session.planMode) { this.note('already in plan mode'); return; }
         try {
           await this.api('PATCH', `/sessions/${session.id}`, { plan_mode: true });
@@ -1997,7 +1853,6 @@ export class WindowStore {
       }
       case 'code': {
         if (!session) { this.note('no session is open — nothing to switch'); return; }
-        if (session.readonly) { this.note("this is the supervisor's record — read-only"); return; }
         if (!session.planMode) { this.note('already in code mode'); return; }
         try {
           await this.api('PATCH', `/sessions/${session.id}`, { plan_mode: false });
@@ -2005,33 +1860,15 @@ export class WindowStore {
         } catch (e) { this.note(`could not enter code mode: ${(e as Error).message}`); }
         return;
       }
-      case 'compact': {
+      case 'compact':
+        // Compaction is the server's, on the record — not built
+        // (sdk-conversion.md item 6).
         if (args.trim().toLowerCase() === 'assistant') {
-          if (!this.voice.history.length) { this.note('assistant has no conversation — nothing to compact'); return; }
-          this.note('compacting assistant — summarizing older messages in the background');
-          void this.voice.runCompaction()
-            .then((ok) => { if (!ok) this.note('nothing to compact'); })
-            .catch((err) => { this.note(`compaction failed: ${(err as Error).message}`); });
+            this.note('compaction is not available for the Assistant yet');
           return;
         }
-        if (!session) { this.note('no session is open — nothing to compact'); return; }
-        if (session.readonly) { this.note("this is the supervisor's record — read-only"); return; }
-        if (!session.compactionLock) session.compactionLock = new CompactionLock();
-        this.note('compacting — summarizing older messages in the background');
-        void (async () => {
-          try {
-            const { compaction } = await this.codingConfig(session.id);
-            const result = await compact(session.compactionLock!, compactionOpts(compaction, session.history, session.id));
-            if (result) {
-              this.note('chat compacted — older messages summarized');
-              this.uploadTranscript(session);
-            } else {
-              this.note('nothing to compact');
-            }
-          } catch (err) { this.note(`compaction failed: ${(err as Error).message}`); }
-        })();
+        this.note('compaction is not available for coding sessions yet');
         return;
-      }
       case 'auto-push':
         if (!session) { this.note('no session is open — nothing to push'); return; }
         // Detached: a push can run for minutes and the prompt never locks.
@@ -2089,9 +1926,9 @@ export class WindowStore {
         return;
       case 'pop': {
         if (!session) { this.note('no session is open'); return; }
-        if (!session.nudgeQueue.length) { this.note('the queue is empty — nothing to pop'); return; }
+        if (!session.agent.userMessages.length) { this.note('the queue is empty — nothing to pop'); return; }
         if (args === 'all') {
-          const all = session.nudgeQueue.all().map(e => e.text ?? '').filter(Boolean).join('\n\n');
+          const all = session.agent.userMessages.pending().map((e) => e.text).filter(Boolean).join('\n\n');
           this.sessions.clearQueue(session.id);
           this.setPrompt(all);
           return;
@@ -2179,8 +2016,6 @@ export class WindowStore {
     // No session on screen: the words have no conversation to land in. Say
     // where to get one instead of dropping them silently.
     if (!session) { this.note('no session is open — /workspace starts one, /resume reopens an earlier one'); return; }
-    // A supervisor session is the supervisor's — read it, never chat into it.
-    if (session.readonly) { this.note("this is the supervisor's record — read-only"); return; }
     // Addressed to the session on screen, and it keeps running there whether
     // or not you stay to watch. Typed while one runs, it waits its turn.
     this.sessions.say(session.id, msg);
@@ -2254,6 +2089,11 @@ export class WindowStore {
     this.voice.stop();
     this.opts.exit?.();
   }
+
+  /** Every agent closed — each turn interrupted and waited out, so every
+   *  turn-ended reaches the server. What index.tsx awaits after the screen
+   *  is down. */
+  closeAgents(): Promise<void> { return this.sessions.closeAll(); }
 
   /** The window is going away: the clocks, the boards' event streams and the
    *  sidecar all close with it. */

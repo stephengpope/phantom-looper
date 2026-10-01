@@ -1,15 +1,17 @@
-// Every error the SDK produces is a PhantomError with a code from ErrorCode.
-// A client tells them apart by code; the message is for a person; `cause`
-// carries what actually failed (ES2022 error chaining) so the stack is never
-// cut.
+// Every error the SDK produces is a PhantomError: a code that names exactly
+// what went wrong, a message for a person, `cause` with what actually failed
+// (ES2022 error chaining) so the stack is never cut, and — when the server
+// answered — the HTTP status.
 //
-// `session_locked`, `session_not_found`, `transcript_conflict` and
-// `config_invalid` are the server's own (a route answers them in its
-// envelope and the client passes them through); the rest are raised here.
+// The code is the server's own when the server refused (`session_locked`,
+// `unauthorized`, `not_found`, `unpushed_work`… as the route sent it, never
+// renamed), or one of SDK_ERROR_CODES when the failure happened here.
 
-export const ERROR_CODES = [
-  'session_locked',
-  'session_not_found',
+/** The failures that happen on this side, not on the server. */
+export const SDK_ERROR_CODES = [
+  'unreachable',            // the request never got an answer (network)
+  'bad_response',           // the server answered, but not with an envelope
+  'not_a_stream',           // a stream route answered plain data
   'transcript_conflict',
   'transcript_write_failed',
   'transcript_invalid',
@@ -20,18 +22,24 @@ export const ERROR_CODES = [
   'readonly',
   'busy',
   'config_invalid',
-  'backend_error',
+  'listener_threw',         // an app's event listener threw
+  'internal',               // the SDK's own code threw where it should not
 ] as const;
-export type ErrorCode = typeof ERROR_CODES[number];
+export type SdkErrorCode = typeof SDK_ERROR_CODES[number];
+/** An SDK code, or any code the server sent. */
+export type ErrorCode = SdkErrorCode | (string & {});
 
 export class PhantomError extends Error {
   readonly code: ErrorCode;
   readonly retryable: boolean;
-  constructor(code: ErrorCode, message: string, opts: { cause?: unknown; retryable?: boolean } = {}) {
+  /** The HTTP status, when the server answered. */
+  readonly status: number | undefined;
+  constructor(code: ErrorCode, message: string, opts: { cause?: unknown; retryable?: boolean; status?: number } = {}) {
     super(message, opts.cause === undefined ? undefined : { cause: opts.cause });
     this.name = 'PhantomError';
     this.code = code;
     this.retryable = opts.retryable ?? false;
+    this.status = opts.status;
   }
 }
 

@@ -1,166 +1,137 @@
 // Every session you have opened in this window, and the one turn each of them
 // may be running.
 //
+// Each open session IS a `CodingAgent` (the client SDK): the agent holds the
+// conversation, runs the turn, writes the record, and tells this store what
+// happened through its events. The store keeps what the SCREEN needs — the
+// rendered parts, the live block, the spinner's clock and token count, the
+// banner's model line — and nothing the agent already holds.
+//
 // This lives OUTSIDE React on purpose. A turn keeps streaming while you are
 // looking at a different session, so its parts cannot land in component state
-// belonging to whatever is on screen — `onParts` closes over the entry it was
-// started for, never over "the active one". Same shape as Shockwave's
-// chatStore (renderer/ChatSidebar.tsx): the store owns the conversations and
-// the subscription, the component is a view over the active entry.
+// belonging to whatever is on screen — every listener closes over the entry
+// it was wired for, never over "the active one".
 //
 // Order is by LAST MESSAGE SENT, not by visiting. Tabbing through sessions
 // must not reorder the thing you are tabbing through, or the ring moves under
 // your fingers; only saying something to a session makes it recent.
-import type { ModelMessage, Tool } from 'ai';
-import type { Agent } from './agent.js';
-import { runTurn } from './agent.js';
-import type { AgentSummary } from './agentFromConfig.js';
-import { Transcript } from './session.js';
-import type { UsageTotals } from '../core/llm/transcript.js';
-import type { CodingPrompt } from '../core/llm/agents/coding.js';
-import type { CompactionLock } from '../core/llm/compaction.js';
-import { NudgeQueue } from '../core/llm/nudgeQueue.js';
+import type { ModelMessage } from 'ai';
+import type { PhantomError, StreamPart as AgentStreamPart, TokenTotals } from 'phantom-client-sdk';
+import type { CodingAgent } from '../core/agents/coding.js';
 import type { Dialog } from './window.js';
-import { applyPart, applyTokens, finalize, nextId, takeCompleted, tokenCount, NO_TOKENS, type Part, type StreamPart, type TurnTokens } from './state.js';
+import { applyPart, applyTokens, finalize, nextId, takeCompleted, tokenCount, NO_TOKENS, messagesToParts,
+  type Part, type StreamPart, type TurnTokens } from './state.js';
+
+/** The banner's model line: the row's provider/model and the reasoning
+ *  setting at open; what turn-start answers after. */
+export interface ModelLine { provider: string; model: string; reasoning: string }
+
+/** How long stream parts may sit before the pane sees them. A setState per
+ *  token is the classic Ink flicker; a few parts per paint keeps it smooth. */
+export const FLUSH_MS = 150;
 
 export interface LoadedSession {
-  /** The row's frozen system prompt; null on a record-only session. */
-  prompt: CodingPrompt | null;
   id: string;
   branch: string;
   workspaceId: string;
   /** The server row's name — the auto-title or a /rename. Seeded at open and
-   *  refreshed by /rename and by each landing's staleness GET; it can still
-   *  lag the server (naming rides the save, fire-and-forget), so anything
-   *  that must be exact re-reads the row. Null until the first title. */
+   *  refreshed by /rename and by each landing's staleness GET. Null until the
+   *  first title. */
   name: string | null;
   /** The kanban card this session is building, already named the way the
-   *  board names it (`PHA-7`). Absent when the session belongs to no card —
-   *  anything you started yourself. */
+   *  board names it (`PHA-7`). Absent when the session belongs to no card. */
   card?: string;
-  /** The compaction lock for /compact on coding sessions. */
-  compactionLock?: CompactionLock;
-  /** Per session: the adapter derives them from the session's own /tools. */
-  tools: Record<string, Tool>;
-  agent: Agent;
-  summary: AgentSummary;
-  transcript: Transcript;
-  /** What goes to the model. Mutated in place; the store notifies. */
-  history: ModelMessage[];
+  /** The agent: the conversation, the turn, the record. */
+  agent: CodingAgent;
+  /** This window owns a turn on the session right now (the agent's word). */
+  readonly busy: boolean;
+  /** The conversation as the agent holds it (the agent's, never copied). */
+  readonly history: readonly ModelMessage[];
+  /** A turn this window started is still to be settled on screen: set when
+   *  enter sends, cleared when the turn's residue is drawn. Guards the one
+   *  settle per turn, whichever way it ended. */
+  turnOpen: boolean;
+  /** The banner's model line. */
+  summary: ModelLine;
   /** Finished parts — what <Static> prints. */
   done: Part[];
-  /** A supervised session's OTHER conversation (the supervisor's rounds),
-   *  already rendered. Empty on ordinary sessions. */
-  /** A supervisor session's record is read-only — viewing, never chatting. */
-  readonly: boolean;
-  /** /plan: the coding agent's mutating kits are built with the readonly
-   *  preset while this is on. The server row (sessions.plan_mode) is the
-   *  record; this mirrors it, seeded at open, flipped by setPlanMode. */
+  /** /plan: the server row (sessions.plan_mode) is the record; the agent
+   *  reads it at every turn start and off the feed mid-turn. This mirrors it
+   *  for the toolbar only — seeded at open, flipped by setPlanMode. */
   planMode: boolean;
-  /** /pin: pinned to the top of /resume. The server row (sessions.pinned)
-   *  is the record; this mirrors it so the picker's open-here extras carry
-   *  the pin too — seeded at open, flipped by setPinned. */
+  /** /pin: pinned to the top of /resume. The server row is the record; this
+   *  mirrors it — seeded at open, flipped by setPinned. */
   pinned: boolean;
-  /** The server transcript's stamp our memory matches (null = never synced).
-   *  Compared against the lock response's stamp at each turn start; a
-   *  mismatch means another machine advanced the session — pull, reseat,
-   *  THEN run. Memory does all the work while the stamps agree. */
+  /** The server transcript's stamp the SCREEN matches (null = never seated).
+   *  The feed compares it when another writer's record lands, so the pane
+   *  repaints once; the agent keeps its own copy current on its own. */
   syncStamp: string | null;
   /** The block being written right now. */
   live: Part[];
-  /** Accumulating turn, pre-split. Per entry or a background turn's output
-   *  lands in the visible session. */
+  /** Accumulating turn, pre-split. */
   turn: Part[];
-  busy: boolean;
   /** A turn the SERVER is running on this session, streamed here over the
    *  session feed. Separate from `busy` on purpose: busy means this window
    *  owns the turn (esc stops it, the prompt is held); this means someone
    *  else is working and we are watching. Drives the working line only. */
   remoteBusy: boolean;
   /** Who holds this session right now, when it is not us — off the feed's
-   *  `lock` records (the first thing a feed sends, then every change). The
-   *  toolbar spins on it; `expiresAt` lets the window clear it on its own
-   *  clock if the holder died without releasing. */
+   *  `lock` records. The toolbar spins on it; `expiresAt` lets the window
+   *  clear it on its own clock if the holder died without releasing. */
   held: { who?: string; label: string; expiresAt: number } | null;
   startedAt: number;
   /** Output tokens so far this turn (status line). Reset when a turn starts. */
   tokens: TurnTokens;
   /** Token totals over the session's LIFE (the toolbar's `↓ 12.4k`, the
-   *  launcher's up/down meters and the cache % all read this one object):
-   *  the sum of the record's usage lines at the last seat (open or reseat —
-   *  the local file IS the record's working copy), plus each finished turn's
-   *  OUTPUT count folded in at turn end (only output streams live; input and
-   *  cache figures stand at the last seat until the next). A running turn's
-   *  `tokens` ride on top live. An esc-cut step's estimate stands until the
-   *  next seat recomputes. */
-  usage: UsageTotals;
-  abort: AbortController | null;
-  /** Typed while a turn is running. The turn drains it into the very next
-   *  model call (the nudge seam — a typed word steers the agent mid-turn);
-   *  whatever is still here when the turn ends starts its own turn. Per
-   *  session: what you queued for one is not said to another. */
-  nudgeQueue: NudgeQueue;
+   *  launcher's meters, the cache %): the record's usage lines, as the agent
+   *  sums them — refreshed on every step. */
+  usage: TokenTotals;
+  /** The caption under the spinner while the model is being retried. */
+  caption: string | null;
+  /** The words a send is carrying until turn-start lands — put back in the
+   *  box if the session turns out to be held elsewhere. */
+  sending: string | null;
   /** Finished (or failed) while you were looking somewhere else. */
   unseen: boolean;
   /** An agent's question about THIS session (the coding agent's "enter code
    *  mode?"), parked here — not on the window — so it shows only while this
-   *  session is on screen and the answer lands on the session that asked. A
-   *  turn keeps running while you look elsewhere; its question waits here
-   *  and the session list says so. */
+   *  session is on screen and the answer lands on the session that asked. */
   ask: Dialog | null;
   /** Drives cycle order. 0 until the first message is sent. */
   lastMessageAt: number;
   /** Insertion counter — the tie-break while nothing has been said yet. */
   addedAt: number;
-  /** Where this session's code stands: not_pushed, not_merged, merged. Null
-   *  before the first poll lands or when the server could not read it. */
+  /** Where this session's code stands. Null before the first poll lands. */
   work: 'not_pushed' | 'not_merged' | 'merged' | null;
   /** The unsent text in the prompt when the user switched away from this
    *  session. Restored into the input box when returning. */
   draft: string;
+  /** Stop listening to the agent — on close. */
+  unwire: () => void;
 }
 
 /** Is someone else working in this session right now? The hold's expiry is a
  *  clock, and a turn that outruns it keeps streaming — so observed activity
  *  (parts arriving, no turn-end yet) counts too. THE one answer: the toolbar
- *  spinner, the esc-stop and the send guard all read this, or they drift —
- *  the last time they answered separately, a lapsed clock let a second turn
- *  start on a live conversation. */
+ *  spinner, the esc-stop and the send guard all read this. */
 export const activeHold = (e: LoadedSession | undefined | null): LoadedSession['held'] =>
   e?.held && (e.held.expiresAt > Date.now() || e.remoteBusy) ? e.held : null;
 
 export interface NewSession {
   id: string; branch: string; workspaceId: string;
-  /** The server row's name at open (see LoadedSession.name). */
   name?: string | null;
-  /** The card this session builds, named `PHA-7` (see LoadedSession.card). */
   card?: string;
-  tools: Record<string, Tool>;
-  agent: Agent; summary: AgentSummary;
-  transcript: Transcript;
-  /** The row's FROZEN system prompt — kept so a model change rebuilds the
-   *  agent on the same prompt. Null on a record-only session. */
-  prompt: CodingPrompt | null;
-  /** Replayed from a transcript when resuming; empty otherwise. */
-  history?: ModelMessage[];
+  agent: CodingAgent;
+  summary: ModelLine;
   /** The banner and the replayed conversation, already rendered to parts. */
   done?: Part[];
-  /** The supervisor conversation, rendered — supervised sessions only. */
-  readonly?: boolean;
-  /** The server row's plan_mode — the tools passed above must already match. */
   planMode?: boolean;
-  /** The server row's pinned (LoadedSession.pinned). */
   pinned?: boolean;
   syncStamp?: string | null;
-  /** Token totals summed from the seated transcript (LoadedSession.usage). */
-  usage?: UsageTotals;
   /** Text already in the prompt that belongs to THIS session (typed while
    *  /new was building it). Lands in the box the moment it opens. */
   draft?: string;
 }
-
-/** Injectable so tests drive turns without a model. */
-export type RunTurn = typeof runTurn;
 
 export class SessionStore {
   private entries: LoadedSession[] = [];
@@ -168,38 +139,13 @@ export class SessionStore {
   private seq = 0;
   activeId = '';
 
-  /** `onTurnEnd` fires after every turn settles (answered, failed or
-   *  interrupted) — the App's transcript upload hangs off it. Best effort by
-   *  contract: it must never block the queue or throw into `send`. */
-  /** Turn-start hook: acquire the session lock (App wires the API call).
-   *  Throwing refuses the turn — the text is dropped with a note that quotes
-   *  it. It does NOT queue: the queue is only for this window's own running
-   *  turn, never for a lock held elsewhere. */
-  onTurnStart?: (id: string) => Promise<void>;
   /** The send was refused before anything ran (session held elsewhere, the
    *  server unreachable): the words go back where they were typed. */
   onRefused?: (id: string, text: string) => void;
-  /** Drain the session's backdoor message queue (App wires
-   *  `POST /sessions/:id/backdoor/drain`): server-side one-liners — a
-   *  detached command exited, a file was dropped onto the window — that ride
-   *  the next turn ahead of the typed text. A failure loses nothing: the
-   *  server drops only what it answered, so they wait for the next send. */
-  drainBackdoor?: (id: string) => Promise<string[]>;
-  /** Step-level transcript save — calls POST /sessions/:id/step to push the
-   *  local file to the server per step. Best-effort. Wired by the window. */
-  stepSave?: (sessionId: string) => void;
-  /** The relay: this window's own turn, published to the server as it runs
-   *  (App wires `POST /sessions/:id/events`), so a watcher anywhere sees it
-   *  exactly as they see a turn the server runs — one feed, whoever drives.
-   *  The records are the same ones the server publishes for its turns:
-   *  turn-start, each flush of parts, turn-end (and error). Sent in order,
-   *  one request behind the other; the FIRST failure ends the relay for
-   *  that turn — a watcher then never gets turn-end, and repaints from the
-   *  record when it lands, which is the honest outcome. The turn itself
-   *  never waits on it and never fails for it. */
-  relay?: (id: string, events: Record<string, unknown>[]) => Promise<void>;
-  constructor(private run: RunTurn = runTurn,
-    private onTurnEnd?: (e: LoadedSession) => void) {}
+  /** Fires after every turn settles (answered, failed or interrupted). The
+   *  window's task-count refresh hangs off it. Best effort: never throws
+   *  into a turn. */
+  constructor(private onTurnEnd?: (e: LoadedSession) => void) {}
 
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
@@ -216,9 +162,8 @@ export class SessionStore {
 
   active(): LoadedSession | undefined { return this.get(this.activeId); }
 
-  /** Every loaded session sorted for the tab ring and session list.
-   *  Pinned sessions float to the top sorted by recency among themselves,
-   *  then unpinned sessions sorted by recency. */
+  /** Every loaded session sorted for the tab ring and session list. Pinned
+   *  sessions float to the top by recency among themselves, then the rest. */
   list(): LoadedSession[] {
     return [...this.entries].sort((a, b) => {
       const ap = a.pinned && a.lastMessageAt > 0;
@@ -235,24 +180,139 @@ export class SessionStore {
     if (existing) { this.activate(existing.id); return existing; }
     const entry: LoadedSession = {
       id: s.id, branch: s.branch, workspaceId: s.workspaceId, name: s.name ?? null, card: s.card,
-      tools: s.tools, agent: s.agent, summary: s.summary, transcript: s.transcript,
-      prompt: s.prompt,
-      history: [...(s.history ?? [])],
+      agent: s.agent, summary: s.summary,
+      get busy() { return this.agent.busy; },
+      get history() { return this.agent.session.messages; },
+      turnOpen: false,
       done: [...(s.done ?? [])],
-      readonly: s.readonly ?? false,
       planMode: s.planMode ?? false,
       pinned: s.pinned ?? false,
       syncStamp: s.syncStamp ?? null,
       live: [], turn: [],
-      busy: false, remoteBusy: false, held: null, startedAt: 0, tokens: NO_TOKENS,
-      usage: s.usage ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, abort: null,
-      nudgeQueue: new NudgeQueue(),
-      unseen: false, ask: null, lastMessageAt: s.history?.length ? Date.now() : 0, addedAt: ++this.seq, work: null, draft: s.draft ?? '',
+      remoteBusy: false, held: null, startedAt: 0, tokens: NO_TOKENS,
+      usage: { ...s.agent.session.usage }, caption: null, sending: null,
+      unseen: false, ask: null, lastMessageAt: s.agent.session.messages.length ? Date.now() : 0, addedAt: ++this.seq,
+      work: null, draft: s.draft ?? '',
+      unwire: () => undefined,
     };
+    entry.unwire = this.wire(entry);
     this.entries.push(entry);
     this.activeId = entry.id;
     this.notify();
     return entry;
+  }
+
+  /** What the agent says, folded into the entry it was wired for. */
+  private wire(e: LoadedSession): () => void {
+    const a = e.agent;
+    // Deltas arrive many times a second: buffered, flushed every FLUSH_MS;
+    // any non-delta part flushes at once so ordering holds.
+    let buf: StreamPart[] = [];
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const flush = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      if (buf.length) { const b = buf; buf = []; this.fold(e, b); }
+    };
+    const offs = [
+      a.on('turn-start', ({ texts, model }) => {
+        e.sending = null;
+        e.startedAt = Date.now();
+        e.tokens = NO_TOKENS;
+        e.caption = null;
+        e.lastMessageAt = Date.now();
+        this.userParts(e, texts);
+        const line: ModelLine = { provider: model.provider, model: model.model, reasoning: model.reasoning ?? '' };
+        if (line.provider !== e.summary.provider || line.model !== e.summary.model) {
+          e.summary = line;
+          e.done = [...e.done, { kind: 'note', id: nextId('note'), text: `model → ${line.provider}/${line.model}` }];
+        }
+        this.notify();
+      }),
+      a.on('part', (part) => {
+        // A failure is reported ONCE, through onError below; the stream's
+        // own error part would be the same words twice.
+        if (part.type === 'error') return;
+        buf.push(part as StreamPart);
+        const isDelta = part.type === 'text-delta' || part.type === 'reasoning-delta' || part.type === 'tool-input-delta';
+        if (isDelta) { if (!timer) timer = setTimeout(flush, FLUSH_MS); }
+        else flush();
+      }),
+      a.on('user-message', ({ texts }) => { flush(); this.userParts(e, texts); this.notify(); }),
+      a.on('step', ({ usage }) => { e.usage = { ...usage }; }),
+      a.on('reloaded', ({ messages }) => {
+        // Another writer moved the record; the agent re-read it. The pane
+        // shows the conversation as it stands now.
+        flush();
+        this.repaint(e, messages);
+      }),
+      a.on('turn-end', () => {
+        flush();
+        this.turnSettled(e);
+      }),
+    ];
+    return () => { flush(); for (const off of offs) off(); };
+  }
+
+  /** The agent's required handlers, for the window to hand `CodingAgent`
+   *  when it opens a session. Errors reach the pane exactly once, here. */
+  handlersFor(id: string): { onError(e: PhantomError): void; onNotice(n: { type: string; text: string }): void } {
+    return {
+      onError: (err) => {
+        const e = this.get(id);
+        if (!e) return;
+        if (err.code === 'session_locked') {
+          // Refused before anything ran: the session goes idle again, the
+          // words go back into the box, and the note says why.
+          const text = e.sending;
+          e.sending = null;
+          e.turnOpen = false;
+          e.startedAt = 0;
+          this.note(id, 'not sent — session in use elsewhere');
+          if (text) this.onRefused?.(id, text);
+          setTimeout(() => this.notify(), 0);   // the agent lets go a tick after it told us
+          return;
+        }
+        e.turn = [...e.turn, { kind: 'error', id: nextId('err'), message: err.message }];
+        if (e.id === this.activeId) this.notify();
+        // A turn that failed sends no turn-end: settle it once the agent has
+        // let go (it tells us before its own promise settles).
+        setTimeout(() => { if (e.turnOpen && !e.agent.busy) this.turnSettled(e); }, 0);
+      },
+      onNotice: (n) => {
+        const e = this.get(id);
+        if (!e) return;
+        if (n.type === 'retry') { e.caption = n.text; if (e.id === this.activeId) this.notify(); return; }
+        this.note(id, n.text);
+      },
+    };
+  }
+
+  /** The user's words, drawn where they were sent. */
+  private userParts(e: LoadedSession, texts: string[]): void {
+    for (const t of texts) if (t.trim()) e.done = [...e.done, { kind: 'user', id: nextId('user'), text: t }];
+  }
+
+  /** The turn is over, however it ended: the live tail closes, the elapsed
+   *  total stays as a line, the totals take the record's sums. */
+  private turnSettled(e: LoadedSession): void {
+    if (!e.turnOpen) return;
+    e.turnOpen = false;
+    const rest = finalize(e.turn);
+    e.turn = [];
+    if (e.startedAt) {
+      const endedAt = Date.now();
+      rest.push({ kind: 'worked', id: nextId('worked'), ms: endedAt - e.startedAt, at: endedAt });
+    }
+    e.done = [...e.done, ...rest];
+    e.live = [];
+    e.caption = null;
+    e.sending = null;
+    e.usage = { ...e.agent.session.usage };
+    // An error counts as something to come back to, same as an answer.
+    if (e.id !== this.activeId) e.unseen = true;
+    this.notify();
+    try { this.onTurnEnd?.(e); }
+    catch (err) { this.note(e.id, `after the turn: ${(err as Error).message}`); }
   }
 
   /** Put an agent's question on the session it is about. One at a time per
@@ -289,20 +349,20 @@ export class SessionStore {
 
   /** Drop a session from THIS window: it leaves the tab ring, the open-session
    *  list and its dot in /resume. The server keeps everything — the row, the
-   *  transcript, the files — so /resume opens it again unchanged; this is
-   *  closing a tab, not deleting anything (that is [t]rash).
+   *  record, the files — so /resume opens it again unchanged; this is closing
+   *  a tab, not deleting anything (that is [t]rash).
    *
-   *  Refused while a turn is running here: the stream's `onParts` closes over
-   *  this entry, so dropping it mid-turn would fold output into a session
-   *  nothing can show. Stop the turn first (esc), then drop. */
+   *  Refused while a turn is running here: stop the turn first (esc), then
+   *  drop. */
   close(id: string): boolean {
     const e = this.get(id);
-    if (!e || e.busy) return false;
+    if (!e || e.agent.busy) return false;
+    e.unwire();
+    void e.agent.close();
     this.entries = this.entries.filter((x) => x.id !== id);
     // Dropping the one on screen leaves NOTHING on screen, deliberately: what
     // comes next is the App's call through switchTo (the one path that puts a
-    // session in the pane — scroll, history, the staleness check). The store
-    // does not get a second, quieter way to change what you are looking at.
+    // session in the pane).
     if (this.activeId === id) this.activeId = '';
     this.notify();
     return true;
@@ -318,10 +378,7 @@ export class SessionStore {
   }
 
   /** The next session round the ring, or undefined when there is nowhere to
-   *  go. Sessions that have never been spoken to (`lastMessageAt === 0`) are
-   *  skipped — unless pinned, which is an explicit "keep visible" signal.
-   *  Unpinned empty sessions sit in the open list but stay out of the tab
-   *  ring until someone says something to them. */
+   *  go. Sessions never spoken to are skipped — unless pinned. */
   next(dir: 1 | -1 = 1): LoadedSession | undefined {
     const order = this.list();
     if (order.length < 2) return undefined;
@@ -335,7 +392,6 @@ export class SessionStore {
     return undefined;
   }
 
-  /** A one-line note in a session's transcript view (never in its history). */
   setStamp(id: string, stamp: string | null): void {
     const e = this.get(id);
     if (e) e.syncStamp = stamp;
@@ -346,53 +402,42 @@ export class SessionStore {
     if (e && e.work !== work) { e.work = work; this.notify(); }
   }
 
-  /** Take the server's copy of a session that moved elsewhere. History and
-   *  stamp ALWAYS move: the record is the server's, it is what the next turn
-   *  is built from, and the stamp is what stops the watch pulling it again.
-   *
-   *  `parts` is the SCREEN, and it is optional: pass the rendered transcript
-   *  to repaint, or null to keep what is already drawn. Null is for a turn
-   *  this window watched from start to finish over the session feed — what we
-   *  drew came off the same stream the server recorded, and it is RICHER
-   *  (thinking, live tool timings) than a transcript replay, so repainting it
-   *  would only make the screen jump and lose detail. Anything less than a
-   *  clean watch — joined mid-turn, a reconnect, a clipped tool result,
-   *  another window's work — passes parts and repaints. */
-  reseat(id: string, history: ModelMessage[], parts: Part[] | null, stamp: string | null,
-    usage?: UsageTotals): void {
+  /** Another writer's record landed: the SCREEN takes the conversation as it
+   *  stands. `parts` null keeps what is drawn (a turn this window watched
+   *  whole over the feed is richer than a replay). The agent reads the
+   *  record itself at its next turn start. */
+  reseat(id: string, parts: Part[] | null, stamp: string | null, usage?: TokenTotals): void {
     const e = this.get(id);
     if (!e) return;
-    e.history = [...history];
     if (parts) {
-      // The one place the live region is discarded: a repaint replaces the
-      // whole conversation, so a half-streamed tail must not survive it.
       e.done = [...parts];
       e.live = [];
       e.turn = [];
     }
     e.syncStamp = stamp;
-    // The record just landed whole, so its exact sums replace whatever the
-    // live folds had accumulated — no estimate survives a reseat.
     if (usage) e.usage = usage;
     this.notify();
   }
 
-  // ── a turn someone ELSE is running, streamed here as it happens ───────────
-  // The server publishes every part of a turn it runs (a card-run agent, the turn
-  // route); SessionFeed folds them in through these three. They are the same
-  // machinery a local turn uses — applyPart, the same block splitting — so a
-  // watched turn and a driven turn are drawn by one renderer.
-  //
-  // `busy` deliberately stays FALSE: this window is not running the turn, esc
-  // cannot stop it, and nothing here may claim otherwise. What marks the
-  // session as working is the toolbar's holder spinner, which the watch owns.
+  /** The conversation as the agent now holds it, drawn whole — after the
+   *  agent re-read a record someone else moved. The banner (the first two
+   *  notes) stays. */
+  private repaint(e: LoadedSession, messages: readonly ModelMessage[]): void {
+    const banner = e.done.slice(0, 2);
+    e.done = [...banner, { kind: 'note', id: nextId('note'), text: 'refreshed — this session moved forward elsewhere' },
+      ...messagesToParts([...messages])];
+    e.live = [];
+    e.turn = [];
+    this.notify();
+  }
 
-  /** A remote turn began: its user message joins the conversation (so the
-   *  reply is not answering a question nobody can see) and any stale live
-   *  block goes. */
+  // ── a turn someone ELSE is running, streamed here as it happens ───────────
+  // The server publishes every part of a turn it runs; SessionFeed folds them
+  // in through these three. Same renderer as a local turn.
+
   remoteStart(id: string, text: string): void {
     const e = this.get(id);
-    if (!e || e.busy) return;
+    if (!e || e.agent.busy) return;
     e.turn = [];
     e.live = [];
     e.remoteBusy = true;
@@ -402,33 +447,18 @@ export class SessionStore {
     this.notify();
   }
 
-  /** A flush of parts off the feed. Ignored while this window runs its own
-   *  turn — that output is the one thing the live region belongs to. */
   remoteParts(id: string, parts: StreamPart[]): void {
     const e = this.get(id);
-    if (!e || e.busy) return;
-    // Parts arriving IS a turn running — a window that joined after the
-    // turn-start went by (no replay) learns it from the first part.
+    if (!e || e.agent.busy) return;
     if (!e.remoteBusy) { e.remoteBusy = true; e.startedAt = Date.now(); e.tokens = NO_TOKENS; }
     this.fold(e, parts);
-    // fold repaints only the active session; a remote turn is only followed
-    // while it IS the active one, so nothing extra is needed here.
   }
 
-  /** The remote turn stopped. The tail still in the live region is closed and
-   *  committed exactly the way a local turn's is — otherwise the last block
-   *  would sit below the pane for ever. The record arrives separately (the
-   *  feed's `transcript` event → reseat). */
   remoteEnd(id: string): void {
     const e = this.get(id);
-    if (!e || e.busy) return;
-    // Nothing was in flight (the feed just closed on a quiet session): leave
-    // the session exactly as it is — in particular do not mark it unseen.
+    if (!e || e.agent.busy) return;
     if (!e.remoteBusy && !e.turn.length) return;
     e.remoteBusy = false;
-    // The watched turn's output tokens join the session totals; the record
-    // landing behind it (the feed's `transcript` event → reseat) replaces the
-    // base with the exact sums, so an estimate never stands for long.
     e.usage.output += tokenCount(e.tokens);
     const rest = finalize(e.turn);
     e.turn = [];
@@ -453,48 +483,54 @@ export class SessionStore {
     this.notify();
   }
 
-  /** Interrupt the running turn. The queue's front message starts
-   *  immediately (esc = "skip to next"). With an empty queue, esc just
-   *  stops. */
-  abortTurn(id: string): void { this.get(id)?.abort?.abort(); }
+  /** Stop the running turn. What was typed meanwhile goes on with the same
+   *  turn (the agent's rule); with nothing queued, esc just stops. */
+  abortTurn(id: string): void { this.get(id)?.agent.interrupt(); }
 
-  /** Say it now if the session is free, otherwise queue it behind the
-   *  running turn. The queue is ONE array per session, mutated in place,
-   *  never replaced: the running turn holds its reference and drains it
-   *  into the next model call (the nudge seam in createAgent), so a new
-   *  array would be a queue the turn cannot see. */
+  /** Say it: a turn starts if the session is free, otherwise it is queued
+   *  behind the running turn and rides its next model call. The spinner
+   *  starts the moment enter lands. */
   say(id: string, text: string): void {
     const e = this.get(id);
-    if (!e) return;
-    if (!e.busy) { void this.send(id, text); return; }
-    e.nudgeQueue.add(text);
+    if (!e || !text.trim()) return;
+    if (!e.agent.busy) {
+      e.sending = text;
+      e.turnOpen = true;
+      e.startedAt = Date.now();
+      e.tokens = NO_TOKENS;
+    }
+    // Never awaited: every failure reaches the pane through onError, once.
+    void e.agent.send(text).catch(() => undefined);
     this.notify();
   }
 
-  /** Drop everything queued — the backing method for `/pop all`. */
+  /** Drop everything queued — `/pop all`. */
   clearQueue(id: string): void {
     const e = this.get(id);
-    if (!e || !e.nudgeQueue.length) return;
-    e.nudgeQueue.clear();
+    if (!e || !e.agent.userMessages.length) return;
+    e.agent.userMessages.clear();
     this.notify();
   }
 
-  /** Take the last queued message back — the backing method for `/pop`. */
+  /** Take the last queued message back — `/pop`. */
   unqueue(id: string): string | undefined {
     const e = this.get(id);
-    if (!e || !e.nudgeQueue.length) return undefined;
-    const popped = e.nudgeQueue.pop();
+    if (!e || !e.agent.userMessages.length) return undefined;
+    const last = e.agent.userMessages.pending().at(-1)!;
+    const taken = e.agent.userMessages.take(last.id);
     this.notify();
-    return popped?.text ?? undefined;
+    return taken?.text;
   }
 
-  /** Every turn, everywhere — what quitting does. Without it a turn running in
-   *  a session you were not looking at holds an open request, and node will not
-   *  exit until it settles: the window closes and the shell hangs. */
-  abortAll(): void { for (const e of this.entries) e.abort?.abort(); }
+  /** Every turn, everywhere — what quitting does first. */
+  abortAll(): void { for (const e of this.entries) e.agent.interrupt(); }
 
-  /** /pin flipped: the mirror follows the server row (the PATCH landed
-   *  before this is called), so an open-here extra in /resume pins too. */
+  /** Every agent closed: each turn interrupted and waited out, so every
+   *  turn-ended reaches the server before the process goes. */
+  closeAll(): Promise<void> {
+    return Promise.all(this.entries.map((e) => { e.unwire(); return e.agent.close(); })).then(() => undefined);
+  }
+
   setPinned(id: string, on: boolean): void {
     const e = this.get(id);
     if (!e || e.pinned === on) return;
@@ -502,10 +538,8 @@ export class SessionStore {
     this.notify();
   }
 
-  /** /plan flipped: the toolkit is always the full set — the planMode callback
-   *  each tool closes over reads this flag, so flipping it is all that is
-   *  needed. No kit rebuild, no agent rebuild. A turn already streaming sees
-   *  the flip immediately through the callback. */
+  /** /plan flipped (here or elsewhere): the toolbar's mirror. The agent
+   *  reads the row at turn start and hears a mid-turn flip off the feed. */
   setPlanMode(id: string, on: boolean): void {
     const e = this.get(id);
     if (!e || e.planMode === on) return;
@@ -513,182 +547,13 @@ export class SessionStore {
     this.notify();
   }
 
-  /** Replace one session's disposable agent and the settings summary the
-   *  chrome shows. The caller has just read the server (its config, on the
-   *  row's model). A turn already streaming keeps the agent it started with
-   *  — runTurn holds its own reference — so the switch lands on the next turn. */
-  setAgent(id: string, agent: Agent, summary: AgentSummary): void {
+  /** The banner's model line moved on the server (a settings change reached
+   *  a session nothing has been said to yet). */
+  setModelLine(id: string, line: ModelLine): void {
     const e = this.get(id);
-    if (!e) return;
-    e.agent = agent;
-    e.summary = summary;
-    this.notify();
-  }
-
-  /** Run a turn on `id`, whether or not it is the session on screen. Each
-   *  queued message gets its own turn — the queue drains one at a time,
-   *  whether the turn ended normally or was interrupted. */
-  async send(id: string, text: string | string[]): Promise<void> {
-    const e = this.get(id);
-    if (!e || e.busy) return;
-    const texts = (Array.isArray(text) ? text : [text]).filter((t) => t.trim());
-    if (!texts.length) return;
-
-    // The moment enter lands the session is working: the spinner runs
-    // through the server round trips below, not after them. The lock lives
-    // for THIS TURN, not for having the session open: taken here, released
-    // after the turn-end sync lands. The queue exists only behind this
-    // window's own turn — a lock held elsewhere (another window, a card-run
-    // agent) REFUSES the send: the session goes idle again, the words go
-    // back into the box, and the note says why.
-    e.busy = true;
-    e.startedAt = Date.now();
-    e.tokens = NO_TOKENS;
-    this.notify();
-    if (this.onTurnStart) {
-      try { await this.onTurnStart(id); }
-      catch (err) {
-        e.busy = false;
-        const why = (err as { code?: string }).code === 'session_locked'
-            || (err as Error).message.includes('session_locked')
-          ? 'session in use elsewhere' : (err as Error).message;
-        this.note(id, `not sent — ${why}`);
-        this.onRefused?.(id, texts.join('\n\n'));
-        return;
-      }
-    }
-
-    // Backdoor messages first: they are older facts than what was just
-    // typed, so they ride AHEAD of it — recorded into history and the
-    // transcript exactly like a typed message, which keeps them whether or
-    // not the turn lands. A drain failure keeps them server-side for the
-    // next send.
-    let backdoor: string[] = [];
-    try { backdoor = (await this.drainBackdoor?.(id)) ?? []; } catch { backdoor = []; }
-    e.lastMessageAt = Date.now();
-    for (const t of [...backdoor, ...texts]) {
-      e.done = [...e.done, { kind: 'user', id: nextId('user'), text: t }];
-      const message: ModelMessage = { role: 'user', content: t };
-      e.history.push(message);
-      e.transcript.append(message);
-    }
-    const ac = new AbortController();
-    e.abort = ac;
-    // Step-level transcript save — push the local file to the server per step.
-    if (this.stepSave) {
-      const save = this.stepSave;
-      const sid = e.id;
-      e.transcript.onStepSaved = () => { save(sid); };
-    }
-    this.notify();
-
-    // The relay chain: every batch waits for the one before it, so records
-    // land in the order they were drawn. One failure and the rest of the
-    // turn goes unrelayed (see `relay`).
-    let chain = Promise.resolve();
-    let relaying = !!this.relay;
-    const relay = (events: Record<string, unknown>[]) => {
-      if (!relaying) return;
-      // Checked again when its turn in the chain comes: a batch queued before
-      // an earlier one failed must not go out after it.
-      chain = chain.then(() => { if (relaying) return this.relay!(id, events); })
-        .catch(() => { relaying = false; });
-    };
-    relay([{ event: 'turn-start', agent: 'coding', message: texts.join('\n\n'),
-      provider: e.summary.provider, model: e.summary.model }]);
-
-    // ONE failure, ONE line. The SDK reports a failed call through two doors:
-    // an `error` event in the stream (rendered in place by applyPart) AND the
-    // turn's promise rejecting with the same error. Both reporters are needed
-    // — the catch is the only coverage for failures the stream never sees (a
-    // crash in our own code, a failure before the stream starts) — but when
-    // the stream already spoke, the catch stays quiet.
-    let streamErrored = false;
-    try {
-      await this.run(
-        e.agent,
-        e.history,
-        (parts) => {
-          if (parts.some((p) => p.type === 'error')) streamErrored = true;
-          this.fold(e, parts);
-          relay(parts.map((part) => ({ event: 'part', part })));
-        },
-        ac.signal,
-        (stepMessages) => { e.history.push(...stepMessages); },
-        undefined,
-        // The transcript records the step — messages and usage line — through
-        // createAgent's `record` seam, the same way every agent does.
-        e.transcript,
-        // The nudge seam: the turn drains this queue into the very next
-        // model call mid-turn (what stays queued at turn end starts its own
-        // turn below, as ever). Whatever was poured lands in the transcript
-        // through the record seam; here it joins history and the screen.
-        // Wire onDrain for this turn's context.
-        (() => {
-          e.nudgeQueue.setCallbacks({
-            onDrain: (entries) => {
-              for (const entry of entries) {
-                e.done = [...e.done, { kind: 'user', id: nextId('user'), text: entry.text! }];
-                e.history.push({ role: 'user', content: entry.text! });
-              }
-              this.notify();
-            },
-          });
-          return e.nudgeQueue;
-        })(),
-      );
-    } catch (err) {
-      if (!ac.signal.aborted && !streamErrored) {
-        e.turn = [...e.turn, { kind: 'error', id: nextId('err'), message: (err as Error).message }];
-        // A failure the stream never reported: watchers must hear it too (a
-        // stream-reported one already rode the feed as a part).
-        relay([{ event: 'error', message: (err as Error).message }]);
-      }
-    } finally {
-      // turn-end goes out before the transcript upload (onTurnEnd below), so
-      // a watcher sees the turn close and THEN the record land — the order
-      // that lets it keep the screen it drew.
-      relay([{ event: 'turn-end' }]);
-      await chain;
-      const rest = finalize(e.turn);
-      e.turn = [];
-      // The turn's residue: the status line's elapsed total, kept in the
-      // transcript once the spinner goes. Interrupts and errors count too —
-      // the time was spent either way.
-      const endedAt = Date.now();
-      rest.push({ kind: 'worked', id: nextId('worked'), ms: endedAt - e.startedAt, at: endedAt });
-      e.done = [...e.done, ...rest];
-      e.live = [];
-      e.busy = false;
-      e.abort = null;
-      // The turn's output joins the session's lifetime totals (the toolbar's
-      // number). Settled is exact — every step ended with a finish-step's
-      // real usage; only an esc-cut step leaves an estimate, and the next
-      // seat recomputes from the record.
-      e.usage.output += tokenCount(e.tokens);
-      // An error counts as something to come back to, same as an answer — a
-      // session that fell over must not sit in the list looking idle.
-      if (e.id !== this.activeId) e.unseen = true;
-      this.notify();
-      // The turn is on disk already (appended per step); the hook ships the
-      // whole file to the server in the background.
-      try { this.onTurnEnd?.(e); }
-      catch (err) { this.note(e.id, `transcript sync failed (kept locally): ${(err as Error).message}`); }
-      // The turn is over, so its mirror callbacks go with it: `send` below
-      // records the message itself — left wired, onDrain would put it in
-      // history a second time.
-      e.nudgeQueue.setCallbacks({});
-      // Esc is "skip to next": ONE queued message starts the next turn, the
-      // rest stay queued. A turn that ended on its own takes everything
-      // typed while it ran as one follow-up turn.
-      if (ac.signal.aborted) {
-        const one = await e.nudgeQueue.next();
-        if (one) void this.send(e.id, one.text);
-      } else {
-        const leftovers = e.nudgeQueue.drain();
-        if (leftovers.length) void this.send(e.id, leftovers.join('\n\n'));
-      }
-    }
+    if (!e || (e.summary.provider === line.provider && e.summary.model === line.model && e.summary.reasoning === line.reasoning)) return;
+    e.summary = line;
+    this.note(id, `model → ${line.provider}/${line.model}`);
   }
 
   /** Fold a flush of stream parts into the entry that produced them. */
@@ -698,24 +563,14 @@ export class SessionStore {
     for (const p of parts) {
       t = applyPart(t, p);
       tokens = applyTokens(tokens, p);
-      // Accumulate input/cache tokens from each step so the toolbar's input
-      // meter updates live — output is already tracked via TurnTokens.
-      if (p.type === 'finish-step' && p.usage) {
-        const inp = p.usage.inputTokens ?? 0;
-        const cr = p.usage.inputTokenDetails?.cacheReadTokens ?? 0;
-        const cw = p.usage.inputTokenDetails?.cacheWriteTokens ?? 0;
-        e.usage.input += inp;
-        e.usage.cacheRead += cr;
-        e.usage.cacheWrite += cw;
-      }
     }
     e.tokens = tokens;
     const split = takeCompleted(t);
     e.turn = split.live;
     if (split.done.length) e.done = [...e.done, ...split.done];
     e.live = split.live;
-    // Only the session on screen needs a repaint; a background turn changes
-    // nothing anyone is looking at until it finishes (which always notifies).
     if (e.id === this.activeId) this.notify();
   }
 }
+
+export type { AgentStreamPart };

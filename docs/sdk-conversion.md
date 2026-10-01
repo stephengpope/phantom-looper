@@ -1,10 +1,10 @@
 # The client SDK — where it stands, and what is left
 
 The client SDK (`packages/phantom-client-sdk`) is the one agent runtime for a
-phantom-backend. It is built and on main. No host runs on it yet: the cli,
-the server's card runs (coding agent + supervisor), cron runs and Telegram
-still run on `core/llm`, which duplicates everything the SDK does. This doc
-is the hand-off for finishing that.
+phantom-backend. The cli runs on it. The server's card runs (coding agent +
+supervisor), cron runs and Telegram still run on `core/llm`, which
+duplicates everything the SDK does. This doc is the hand-off for finishing
+that.
 
 ## Words
 
@@ -21,8 +21,8 @@ is the hand-off for finishing that.
 ## Done
 
 **The SDK.** One base class. A subclass declares `type` and its
-`systemPromptLayout` and nothing else; `MyAgent.open(backend, handlers,
-sessionId)` / `MyAgent.newSession(...)`. Inside, one file per job: the connection
+`systemPromptLayout` and nothing else; `MyAgent.resumeSession(backend,
+handlers, sessionId)` / `MyAgent.newSession(...)`. Inside, one file per job: the connection
 (`serverConnection.ts`, `backend.ts`), the session — row, record, turn
 (`session.ts`, `record.ts`), the model (`model/`), the turn (`turn.ts`),
 the feed (`feed.ts`). The record's line format is on its own subpath
@@ -72,8 +72,21 @@ and one cache mark per section. Migration 046 renamed the old two pieces.
 turn); a caller that hangs up mid turn-start has its hold released by the
 server; a turn that wrote nothing does not count (no model freeze).
 
-**The cli, today's path.** Enter shows the spinner immediately; a refused
-send puts the text back in the box (or the session's draft off-screen).
+**The cli on the SDK (D).** One `PhantomBackend` per window on
+`ServerConnection` (`phantom-cli/server.ts`), the window's identity on every
+request; errors carry the server's code and status. A coding session is a
+`CodingAgent`; the Assistant is an `AssistantAgent` (`follow` on every
+switch); the cli's own tools are kits (`cliToolKit`, `assistantToolKit`).
+The pane draws from the agent's events; Enter → `send`, Esc →
+`interrupt`, typed mid-turn → queued; a refused send puts the text back.
+Quit interrupts every agent and awaits every `close`. Gone: the cli's turn
+loop, the local transcript file and its syncs, the nudge queue, local
+compaction, the per-turn config/tools fetches, the global fetch override,
+and the routes with no caller left (`/backdoor/drain`,
+`/agents/:agent/config`, `/agents/:agent/tools`, `/sessions/:id/token-usage`).
+`/lock` stays for `core/session.ts` until the server agents move (3).
+Proven against the dev stack with a fake OpenAI-compatible model (the
+proof scripts live in scratch, not committed).
 
 **The server.** Every tool defined once (`phantom-backend/tools/*`, 35
 tools), published per agent type, run through `POST /tools/:name`. Skills
@@ -92,36 +105,21 @@ mid-turn, plan mode flipping live, esc, another window holding the session,
 screen tools, one-shot title calls). If the SDK's shape is wrong anywhere,
 the cli finds it; the headless hosts can't.
 
-### 1. Leftovers that land with the cli switch
+### 1. Leftovers — done with the cli switch
 
-- The old cli still takes the lock and reads the config through the old
-  routes — it needs the key to build its own agent. `/lock`, `DELETE /lock`,
-  `/agents/:type/config`, `/agents/:type/tools`, `/backdoor/drain` go when
-  the last host stops using them. After that the key travels only inside
-  turn-start, and the banner reads provider/model off the session row.
-- The cli installs `ServerConnection` by overriding `globalThis.fetch` for
-  the server's origin — an interim shortcut because the old path has eight
-  callers of the global fetch. At the switch `PhantomBackend` gets the
-  connection injected and the override goes.
+The key travels only inside turn-start; the banner reads provider/model off
+the session row and reasoning off the settings. `/lock` and `DELETE /lock`
+remain for `core/session.ts` (the server agents' old path) until 3.
 
-### 2. The cli onto the SDK
+### 2. The cli onto the SDK — done
 
-- Coding sessions: `CodingAgent.open/newSession` from `core/agents`. Esc =
-  `agent.interrupt()`.
-- Delete: the local transcript file (`~/.phantom-cli/sessions/`),
-  `adoptServerCopy`, `syncTranscriptUp`, `stepSaveUp`, the nudge queue, the
-  cli's compaction calls. Every step is on the server as it lands; a local
-  copy is a second truth.
-- The cli's own tools become `addToolKit()` kits: sessions list/read/switch,
-  docker logs, workspace create, screen mode, the code-mode ask (blocks a
-  tool call on a dialog; the SDK passes the abort signal through, so it
-  works unchanged), the board with repaint, git push/pull with progress.
-- The assistant (`voice.ts`) becomes `AssistantAgent.open()` + its kit;
-  `follow` on session switch.
-- Plan mode: the cli PATCHes the row; the SDK reads it at turn start and
-  off the feed mid-turn. The cli's mirror is display-only.
-- Token totals: `session.usage` from the record replaces the cli's live
-  estimate + `GET /token-usage`.
+See "The cli on the SDK (D)" above. Not carried over, by decision or by
+the record moving to the server: the Assistant's cross-launch memory (it
+lived in a local file; a window opens on an empty assistant session — a
+`resumeSession` on the newest assistant row would bring it back, one list
+filter away), `/compact` (item 6). The spoken cut is back as
+`partialMessage` — one rule for every host: the record keeps what reached
+the person.
 
 ### 3. The server's agents onto the SDK (card runs, cron, `/turn`)
 
@@ -169,12 +167,16 @@ Reviewed name by name with the builder. Keep these; rename only with a reason.
 the server can fill, each with its reader).
 
 **Methods**
-- `Agent.open(backend, handlers, sessionId)` — an existing session.
+- `Agent.resumeSession(backend, handlers, sessionId)` — an existing session. Was `open`.
 - `Agent.create(backend, handlers, …)` — a new session.
 - `CodingAgent.newSession(…)` / `AssistantAgent.newSession(…)` — was `start`.
 - `Agent.addToolKit(kit)` — was `use`.
 - `Agent.send(text)`, `Agent.interrupt()`.
-- `systemPromptLayout()` — the subclass declares its three sections.
+- `Agent.partialMessage(text)` — the person received the last reply only
+  up to `text` (a reply cut off while being spoken, after the model had
+  written it). The record line is `partial_message`; the reader cuts the
+  assistant message before it. A stream cut by `interrupt` needs no call.
+- `systemPromptLayout` — the subclass declares its three sections (a static value: it is sent before any agent object exists).
 - `agentText(…)` — marks a layout entry as the agent's own text.
 - `SystemPrompt.assemble(layout, session)` — fills the layout.
 - `SystemPrompt.sections()` — the three strings. Was `write`; it writes nothing.
@@ -185,12 +187,18 @@ the server can fill, each with its reader).
 `sessions.system_prompt` holds `{ stable, context, volatile }`; turn-start
 answers `planMode`.
 
+**Errors**: `PhantomError.code` is the server's code exactly as sent
+(`unauthorized`, `session_locked`, `not_found`…) with `status`; the SDK's own
+failures are `SDK_ERROR_CODES` (`unreachable`, `bad_response`,
+`not_a_stream`, `model_error`, `context_too_long`, `internal`…). There is no
+catch-all; `backend_error` is gone.
+
 **Server blocks** (named for what the text is): `soul_md`, `agents_md`,
 `skills_list`, `secrets_list`, `time_date`, `github_token`, `agent_database`.
 Never "fact", "note", "hint".
 
 **Files**: `phantom-backend/systemPrompt/SystemPrompt.ts`; prompt texts move
-`core/prompts/` → `core/prompts/`; `core/agents/clock.ts` deleted.
+`core/llm/prompts/` → `core/prompts/`; `core/agents/clock.ts` deleted.
 
 ## Notes worth keeping
 

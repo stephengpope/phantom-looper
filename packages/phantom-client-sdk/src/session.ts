@@ -13,7 +13,7 @@ import type { PhantomBackend } from './backend.js';
 import { asPhantomError, type PhantomError } from './errors.js';
 import { interruptedResultMessage } from './messages.js';
 import { SessionRecord } from './record.js';
-import { conversationFrom, messageLine, type TokenTotals, type TranscriptLine } from './transcript.js';
+import { conversationFrom, cutLastAssistantMessage, messageLine, type TokenTotals, type TranscriptLine } from './transcript.js';
 import type { LlmConfig } from './model/llmConfig.js';
 import type { StoredSystemPrompt } from './systemPrompt.js';
 
@@ -67,9 +67,9 @@ export class Session implements SessionInfo {
     this.#messages = conversationFrom(record.lines);
   }
 
-  /** The row as it stands, then the record. Opening only reads. `handlers`
+  /** The row as it stands, then the record. Loading only reads. `handlers`
    *  hears the one failure that must not throw over another: a lock release. */
-  static async open(backend: PhantomBackend, handlers: { onError(e: PhantomError): void }, sessionId: string): Promise<Session> {
+  static async load(backend: PhantomBackend, handlers: { onError(e: PhantomError): void }, sessionId: string): Promise<Session> {
     const row = await backend.call<SessionRow>('GET', `/sessions/${sessionId}`);
     return new Session(backend, handlers, row, await SessionRecord.load(backend, sessionId));
   }
@@ -99,7 +99,7 @@ export class Session implements SessionInfo {
       return await fn({ ...start, recordMoved: start.transcript_updated_at !== this.record.stamp });
     } finally {
       try { await this.backend.call('POST', `/sessions/${this.id}/turn-ended`); }
-      catch (e) { this.handlers.onError(asPhantomError(e, 'backend_error', 'ending the turn')); }
+      catch (e) { this.handlers.onError(asPhantomError(e, 'internal', 'ending the turn')); }
     }
   }
 
@@ -119,10 +119,17 @@ export class Session implements SessionInfo {
    *  messages added. Rejects → the turn fails. */
   async append(lines: TranscriptLine[]): Promise<ModelMessage[]> {
     await this.record.append(lines);
-    const added = conversationFrom(lines);
-    this.#messages.push(...added);
+    const added: ModelMessage[] = [];
+    for (const l of lines) {
+      if (l.type === 'message') { this.#messages.push(l.message); added.push(l.message); }
+      else if (l.type === 'partial_message') cutLastAssistantMessage(this.#messages, l.text);
+    }
     return added;
   }
+
+  /** The person received the last reply only up to `text`: the conversation
+   *  held here is cut now; the record line follows under the next hold. */
+  cutLastReply(text: string): void { cutLastAssistantMessage(this.#messages, text); }
 }
 
 /** The tool calls of the last assistant message that never got a result —

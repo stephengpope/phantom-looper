@@ -9,9 +9,9 @@
 //     readonly type = 'coding';
 //     static readonly systemPromptLayout: SystemPromptLayout = { stable: [...], context: [...], volatile: [...] };
 //   }
-//   const agent = await CodingAgent.open(backend, handlers, sessionId);
+//   const agent = await CodingAgent.resumeSession(backend, handlers, sessionId);
 //
-// Opening only reads: nothing is locked or written until a turn starts.
+// Resuming only reads: nothing is locked or written until a turn starts.
 import type { PhantomBackend } from './backend.js';
 import { PhantomError, asPhantomError } from './errors.js';
 import { Emitter, type AgentEvents } from './events.js';
@@ -25,6 +25,7 @@ import { ToolKitSet, serverToolKit, type ToolKit } from './toolkit.js';
 import { runTurn, type TurnResult } from './turn.js';
 import { UserMessageQueue, type UserMessages } from './userMessages.js';
 import { systemPromptBlocks } from './systemPrompt.js';
+import { partialMessageLine } from './transcript.js';
 
 export interface Notice {
   type: 'retry' | 'cache' | 'info';
@@ -41,8 +42,8 @@ export interface AgentHandlers {
   retry?: { backend?: Partial<RetryPolicy>; model?: Partial<RetryPolicy> };
 }
 
-/** What the base builds a subclass from — `open` / `create` are the only
- *  callers. Subclasses declare no constructor. */
+/** What the base builds a subclass from — `resumeSession` / `create` are
+ *  the only callers. Subclasses declare no constructor. */
 interface AgentDeps { backend: PhantomBackend; handlers: AgentHandlers; session: Session }
 type AgentClass<T extends Agent> = new (deps: AgentDeps) => T;
 
@@ -66,8 +67,11 @@ export abstract class Agent {
   #abort: AbortController | null = null;
   #keepQueue = false;
   #closed = false;
+  /** What the person received of the last reply, not yet in the record:
+   *  written under the session's hold at the next chance (partialMessage). */
+  #partials: string[] = [];
 
-  /** @internal — through `open` / `create` only. */
+  /** @internal — through `resumeSession` / `create` only. */
   constructor({ backend, handlers, session }: AgentDeps) {
     this.backend = backend;
     this.#handlers = handlers;
@@ -75,15 +79,15 @@ export abstract class Agent {
     this.session = session;
   }
 
-  // ── opening ────────────────────────────────────────────────────────────
+  // ── resuming / creating ────────────────────────────────────────────────
 
   /** An existing session: the row as it stands, then the record. */
-  static async open<T extends Agent>(this: AgentClass<T>, backend: PhantomBackend, handlers: AgentHandlers, sessionId: string): Promise<T> {
-    return Agent.#build(this, backend, handlers, () => Promise.resolve(sessionId), `opening session ${sessionId}`);
+  static async resumeSession<T extends Agent>(this: AgentClass<T>, backend: PhantomBackend, handlers: AgentHandlers, sessionId: string): Promise<T> {
+    return Agent.#build(this, backend, handlers, () => Promise.resolve(sessionId), `resuming session ${sessionId}`);
   }
 
   /** A new session: the app makes the row its own way (the route is the
-   *  app's) and answers its id; then as `open`. */
+   *  app's) and answers its id; then as `resumeSession`. */
   static async create<T extends Agent>(this: AgentClass<T>, backend: PhantomBackend, handlers: AgentHandlers,
     createRow: (backend: PhantomBackend) => Promise<{ id: string }>): Promise<T> {
     return Agent.#build(this, backend, handlers, async (b) => (await createRow(b)).id, 'creating the session');
@@ -130,6 +134,25 @@ export abstract class Agent {
     this.#abort.abort(new Error('interrupted'));
   }
 
+  /** The person received the last reply only up to `text` — a reply cut off
+   *  while it was being spoken, after the model had already written it (the
+   *  host's speaker knows the cut; the stream does not). The conversation
+   *  is cut at once; the record gets a partial_message line under the
+   *  session's hold at the next chance: before anything else this turn
+   *  writes, or at the next turn's start. A text host never needs this —
+   *  a stream cut by `interrupt` is recorded at the cut already. */
+  partialMessage(text: string): void {
+    this.#session.cutLastReply(text);
+    this.#partials.push(text);
+  }
+
+  /** Write what partialMessage holds, in order, before anything else lands. */
+  async #flushPartials(): Promise<void> {
+    if (!this.#partials.length) return;
+    const lines = this.#partials.splice(0).map(partialMessageLine);
+    await this.#session.append(lines);
+  }
+
   async close(): Promise<void> {
     this.#closed = true;
     this.interrupt({ keepQueue: true });
@@ -149,7 +172,8 @@ export abstract class Agent {
         const ready = await this.#prepare(start, signal);
         if (!ready) return nothing;
         const opening = texts;
-        this.#emit('turn-start', { texts: opening });
+        this.#emit('turn-start', { texts: opening,
+          model: { provider: ready.model.spec.provider, model: ready.model.spec.model, reasoning: ready.model.spec.reasoning } });
         const feed = new TurnFeed(this.backend, this.session.id,
           { agent: this.type, message: opening.join('\n\n'), provider: ready.model.spec.provider, model: ready.model.spec.model },
           { onInterrupt: () => this.interrupt(), onPlanMode: (on) => this.#session.setPlanMode(on),
@@ -164,6 +188,7 @@ export abstract class Agent {
             pending: () => this.#sent(),
             afterStop: () => (this.#keepQueue || this.#closed ? [] : this.#sent()),
             record: async (lines) => {
+              await this.#flushPartials();
               const added = await this.#session.append(lines);
               if (added.length) this.#emit('step', { messages: added, usage: this.session.usage });
             },
@@ -176,6 +201,7 @@ export abstract class Agent {
           throw e;
         }
         await feed.end();
+        await this.#flushPartials();
         this.#emit('turn-end', r);
         return r;
       });
@@ -210,6 +236,7 @@ export abstract class Agent {
   async #prepare(start: TurnStart & { recordMoved: boolean }, signal: AbortSignal): Promise<{ model: ResolvedModel; system: SystemModelMessage[]; tools: Record<string, Tool> } | null> {
     try {
       if (await this.#session.makeCurrent(start.recordMoved, signal)) this.#emit('reloaded', { messages: this.session.messages });
+      await this.#flushPartials();
       this.#session.setPlanMode(start.planMode);
       const model = this.#models.resolve(start.config);
       const stored = this.session.row.system_prompt;
@@ -243,14 +270,14 @@ export abstract class Agent {
   async #guard<T>(fn: () => Promise<T>): Promise<T> {
     try { return await fn(); }
     catch (e) {
-      const pe = asPhantomError(e, 'backend_error', 'agent');
+      const pe = asPhantomError(e, 'internal', 'agent');
       this.#handlers.onError(pe);
       throw pe;
     }
   }
 
   #emit<E extends keyof AgentEvents>(event: E, payload: AgentEvents[E]): void {
-    this.#events.emit(event, payload, (e) => this.#handlers.onError(asPhantomError(e, 'backend_error', `a listener for "${event}" threw`)));
+    this.#events.emit(event, payload, (e) => this.#handlers.onError(asPhantomError(e, 'listener_threw', `a listener for "${event}" threw`)));
   }
 
   /** The one way an agent comes to be: the session id (made or given), the
@@ -260,9 +287,9 @@ export abstract class Agent {
     sessionId: (b: PhantomBackend) => Promise<string>, what: string): Promise<T> {
     try {
       const b = backend.withRetry({ ...BACKEND_RETRY, ...handlers.retry?.backend }, (text) => handlers.onNotice({ type: 'retry', text }));
-      return new ctor({ backend: b, handlers, session: await Session.open(b, handlers, await sessionId(b)) }).#wire();
+      return new ctor({ backend: b, handlers, session: await Session.load(b, handlers, await sessionId(b)) }).#wire();
     } catch (e) {
-      const pe = asPhantomError(e, 'backend_error', what);
+      const pe = asPhantomError(e, 'internal', what);
       handlers.onError(pe);
       throw pe;
     }

@@ -4,32 +4,29 @@
 // "could not <do what> in <where>:" — nothing else in the app inspects a raw
 // error, and "server down" reads the same way everywhere. Lives apart from
 // index.tsx (the entrypoint has side effects) so it can be tested.
+import type { PhantomError } from 'phantom-client-sdk';
 
 /** Three shapes:
  *    - the network failed: "phantom-backend at <url> is not reachable"
  *    - the key was refused: "… rejected the key — /server to fix it"
- *    - the server refused: the server's own sentence (its code rides as
- *      `.code` for the few callers that branch on one). */
-export function requestError(method: string, path: string, base: string, cause: unknown,
-  refusal?: { status: number; code?: string; message?: string }): Error & { code?: string; status?: number } {
+ *    - the server refused: the server's own sentence.
+ *  The server's code and status ride as `.code` / `.status` for the few
+ *  callers that branch on one. */
+export function requestError(method: string, path: string, base: string, e: PhantomError): Error & { code?: string; status?: number } {
   let text: string;
-  let code: string | undefined;
-  if (refusal) {
-    code = refusal.code;
-    if (refusal.status === 401 || refusal.code === 'unauthorized') {
-      text = `phantom-backend at ${base} rejected the key — /server to fix it`;
-    } else {
-      text = refusal.message || `phantom-backend at ${base} answered ${method} ${path} with HTTP ${refusal.status} and no message`;
-    }
-  } else {
-    const c = cause as { cause?: { code?: string; message?: string }; message?: string; name?: string };
-    const why = c?.cause?.code ?? c?.cause?.message ?? (c?.name === 'SyntaxError' ? 'not a phantom-backend reply' : c?.message);
+  if (e.code === 'unreachable') {
+    const why = (e.cause as { cause?: { code?: string; message?: string } } | undefined)?.cause?.code ?? e.message;
     text = `phantom-backend at ${base} is not reachable${why ? ` (${why})` : ''}`;
-    code = 'unreachable';
+  } else if (e.status === 401 || e.code === 'unauthorized') {
+    text = `phantom-backend at ${base} rejected the key — /server to fix it`;
+  } else if (e.code === 'bad_response') {
+    text = `phantom-backend at ${base} answered ${method} ${path} with HTTP ${e.status ?? '?'} and no envelope`;
+  } else {
+    text = e.message || `phantom-backend at ${base} answered ${method} ${path} with HTTP ${e.status ?? '?'} and no message`;
   }
-  const failed = new Error(text) as Error & { code?: string; status?: number };
-  if (code) failed.code = code;
-  if (refusal) failed.status = refusal.status;
+  const failed = new Error(text, { cause: e }) as Error & { code?: string; status?: number };
+  failed.code = e.code;
+  if (e.status !== undefined) failed.status = e.status;
   return failed;
 }
 

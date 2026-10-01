@@ -2,9 +2,13 @@
 // entry, every line typed. Pure: no I/O, no client. The server imports this
 // file (phantom-client-sdk/transcript) to read and write the same shape.
 //
-//   { type:"message",     id, at, message:{ role, content } }
-//   { type:"usage",       id, at, provider, model, input, output, cacheRead, cacheWrite }
-//   { type:"interrupted", id, at }
+//   { type:"message",         id, at, message:{ role, content } }
+//   { type:"usage",           id, at, provider, model, input, output, cacheRead, cacheWrite }
+//   { type:"interrupted",     id, at }
+//   { type:"partial_message", id, at, text }   the assistant message before this
+//                                              line reached the person only up to
+//                                              `text` (a reply cut off while being
+//                                              spoken); the reader keeps that much
 //
 // A `message` line is exactly the AI SDK message that went to (or came from)
 // the model. Cache marks (providerOptions) are per-call and are NEVER
@@ -20,7 +24,8 @@ export interface TokenUsage extends TokenTotals { provider: string; model: strin
 export interface MessageLine { type: 'message'; id: string; at: string; message: ModelMessage }
 export interface UsageLine extends TokenTotals { type: 'usage'; id: string; at: string; provider?: string; model?: string; responseId?: string }
 export interface InterruptedLine { type: 'interrupted'; id: string; at: string }
-export type TranscriptLine = MessageLine | UsageLine | InterruptedLine;
+export interface PartialMessageLine { type: 'partial_message'; id: string; at: string; text: string }
+export type TranscriptLine = MessageLine | UsageLine | InterruptedLine | PartialMessageLine;
 
 let seq = 0;
 /** Line ids: time-ordered and unique within a process. */
@@ -35,11 +40,36 @@ export const messageLine = (message: ModelMessage): MessageLine => {
 };
 export const usageLine = (u: TokenUsage): UsageLine => ({ type: 'usage', id: lineId(), at: now(), ...u });
 export const interruptedLine = (): InterruptedLine => ({ type: 'interrupted', id: lineId(), at: now() });
+export const partialMessageLine = (text: string): PartialMessageLine => ({ type: 'partial_message', id: lineId(), at: now(), text });
 export const userMessage = (content: string): ModelMessage => ({ role: 'user', content });
 
-/** What the model sees: every message line, in order. */
-export const conversationFrom = (lines: readonly TranscriptLine[]): ModelMessage[] =>
-  lines.flatMap((l) => (l.type === 'message' ? [l.message] : []));
+/** The last assistant message with its text replaced by what the person
+ *  actually received (tool calls and anything else kept): the model must
+ *  remember what was heard, not what it was going to say. No assistant
+ *  message = nothing to cut. In place. */
+export function cutLastAssistantMessage(messages: ModelMessage[], text: string): void {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.role !== 'assistant') continue;
+    if (typeof m.content === 'string') { messages[i] = { ...m, content: text }; return; }
+    const rest = m.content.filter((c) => c.type !== 'text');
+    const at = m.content.findIndex((c) => c.type === 'text');
+    const part = { type: 'text' as const, text };
+    messages[i] = { ...m, content: at < 0 ? [part, ...rest] : [...rest.slice(0, at), part, ...rest.slice(at)] };
+    return;
+  }
+}
+
+/** What the model sees: every message line, in order, each partial_message
+ *  line applied to the assistant message before it. */
+export function conversationFrom(lines: readonly TranscriptLine[]): ModelMessage[] {
+  const out: ModelMessage[] = [];
+  for (const l of lines) {
+    if (l.type === 'message') out.push(l.message);
+    else if (l.type === 'partial_message') cutLastAssistantMessage(out, l.text);
+  }
+  return out;
+}
 
 /** The tokens the lines account for. */
 export function usageTotals(lines: readonly TranscriptLine[]): TokenTotals {
@@ -54,7 +84,7 @@ export function usageTotals(lines: readonly TranscriptLine[]): TokenTotals {
 export const addTotals = (a: TokenTotals, b: TokenTotals): TokenTotals =>
   ({ input: a.input + b.input, output: a.output + b.output, cacheRead: a.cacheRead + b.cacheRead, cacheWrite: a.cacheWrite + b.cacheWrite });
 
-const LINE_TYPES = new Set(['message', 'usage', 'interrupted']);
+const LINE_TYPES = new Set(['message', 'usage', 'interrupted', 'partial_message']);
 
 /** Parse the server's text: one JSON per line. A line that does not parse
  *  is a torn write and is skipped; a line that is not one of ours is

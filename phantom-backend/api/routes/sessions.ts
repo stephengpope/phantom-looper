@@ -391,7 +391,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         body: { type: 'object', required: ['after', 'deliveryId', 'lines'], additionalProperties: false, properties: {
           after: { type: 'integer', minimum: 0 }, deliveryId: { type: 'string', minLength: 1 },
           lines: { type: 'array', minItems: 1, items: { type: 'object', required: ['type'],
-            properties: { type: { type: 'string', enum: ['message', 'usage', 'interrupted', 'compaction'] } } } } } } } },
+            properties: { type: { type: 'string', enum: ['message', 'usage', 'interrupted', 'partial_message', 'compaction'] } } } } } } } },
     async (req, reply) => {
       const client = clientOf(req);
       if (!client) return reply.code(400).send(err('missing_client', 'x-phantom-looper-client header required'));
@@ -695,22 +695,6 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       }
     });
 
-  // ---- the backdoor message queue ------------------------------------------
-  // A window's side of the backdoor message queue (backdoor.ts): as its send
-  // starts, it drains what is waiting and folds it into the turn ahead of the
-  // typed text — the server-side turn runner drains in-process and never
-  // crosses here. Drain is take-not-peek: the window records what it got with
-  // the turn, and the fact each message reports lives in its own row
-  // regardless.
-  app.post<{ Params: { id: string } }>(
-    '/sessions/:id/backdoor/drain', { schema: { ...TAG,
-      summary: "Take the session's pending backdoor messages",
-      description: 'Drains and returns the one-line backdoor messages waiting for the session\'s next ' +
-        'turn (a detached command exiting, a file dropped onto the cli window). The caller folds them ' +
-        'into the turn it is starting and records them with it.',
-      params: idParam } },
-    async (req) => ok({ messages: ctx.backdoor?.drain(req.params.id) ?? [] }));
-
   // ---- attachments -----------------------------------------------------------
   // A file given to the session out-of-band — the first caller is a drag
   // onto the cli window: the terminal pastes the path, the cli reads the
@@ -840,22 +824,6 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       // cli reads this name.)
       transcript_updated_at: s.transcriptUpdatedAt?.toISOString() ?? null });
   });
-
-  // ---- token usage ---------------------------------------------------------
-  // Token totals from log_tokens — one entry per LLM call.
-  app.get<{ Params: { id: string } }>(
-    '/sessions/:id/token-usage', { schema: { ...TAG,
-      summary: 'A session\'s token totals from log_tokens',
-      description: 'Summed from the session\'s log_tokens entries — agent steps and helper calls alike. ' +
-        'All zeros when nothing was ever recorded.',
-      params: idParam } },
-    async (req, reply) => {
-      const s = await ctx.sessions.get(req.params.id);
-      if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
-      const t = await ctx.logTokens.sessionTotals(req.params.id);
-      return ok({ input: t.input, output: t.output,
-        cache_read: t.cacheRead, cache_write: t.cacheWrite });
-    });
 
   app.patch<{ Params: { id: string }; Body: { name?: string | null; plan_mode?: boolean; pinned?: boolean } }>(
     '/sessions/:id', { schema: { ...TAG, summary: 'Per-session overrides',
