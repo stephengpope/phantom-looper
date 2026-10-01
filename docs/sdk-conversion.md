@@ -98,30 +98,47 @@ the DB is the typed format (migration 045, proven on a real Postgres);
 **Language.** "Looper" no longer means an agent anywhere in code, comments
 or screens.
 
-## Not done — the conversion, in order
+## The conversion, by number
 
-The cli goes first: it is the host with everything (a person typing
+The cli went first: it is the host with everything (a person typing
 mid-turn, plan mode flipping live, esc, another window holding the session,
-screen tools, one-shot title calls). If the SDK's shape is wrong anywhere,
-the cli finds it; the headless hosts can't.
+screen tools). It found the SDK's gaps; the headless hosts could not have.
 
-### 1. Leftovers — done with the cli switch
+### 1. Leftovers with the cli switch — done
 
-The key travels only inside turn-start; the banner reads provider/model off
-the session row and reasoning off the settings. `/lock` and `DELETE /lock`
-remain for `core/session.ts` (the server agents' old path) until 3.
+- The key travels only inside turn-start.
+- The banner reads provider/model off the session row, reasoning off the
+  settings; the turn-start event carries the model after.
+- Routes with no caller left are gone: `/backdoor/drain`,
+  `/agents/:agent/config`, `/agents/:agent/tools`, `/sessions/:id/token-usage`.
+- Left behind: `/lock` and `DELETE /lock` — `core/session.ts` (the server
+  agents' old path) still calls them. Go with 3.
 
 ### 2. The cli onto the SDK — done
 
-See "The cli on the SDK (D)" above. Not carried over, by decision or by
-the record moving to the server: the Assistant's cross-launch memory (it
-lived in a local file; a window opens on an empty assistant session — a
-`resumeSession` on the newest assistant row would bring it back, one list
-filter away), `/compact` (item 6). The spoken cut is back as
-`partialMessage` — one rule for every host: the record keeps what reached
-the person.
+- One `PhantomBackend` per window on `ServerConnection`
+  (`phantom-cli/server.ts`); errors carry the server's code and status.
+- A coding session is a `CodingAgent`; the Assistant is an
+  `AssistantAgent` (`follow` on every switch); the cli's tools are kits.
+- Enter → `send`, Esc → `interrupt`, typed mid-turn → queued, `/pop` →
+  `userMessages.take`; a refused send puts the words back; quit awaits
+  every `close`.
+- Deleted: the cli's turn loop, the local transcript file and syncs, the
+  nudge queue, local compaction, the per-turn config/tools fetches, the
+  global fetch override, the supervisor read-only rule.
+- `partialMessage`: the record keeps what reached the person — voice's
+  spoken cut, one rule for every host.
+- Left behind:
+  - The Assistant's memory across launches lived in the local file; a
+    window now opens on an empty assistant session. Bringing it back is
+    `resumeSession` on the newest assistant row (one list filter).
+  - `/compact` says "not available" (6).
+  - No live run in a real terminal with a real model yet — no model key
+    on the build box. The store, the Assistant's brain, the transport and
+    every turn rule are proven with a fake OpenAI-compatible model; the Ink
+    screen itself is not.
 
-### 3. The server's agents onto the SDK (card runs, cron, `/turn`)
+### 3. The server's agents onto the SDK (card runs, cron, `/turn`) — next
 
 - The server's turns call its own routes through an in-process shortcut
   (`looper/injectFetch.ts`) that cannot stream, so the SDK's stop-listener
@@ -129,12 +146,13 @@ the person.
   like any client; the shortcut is deleted. Do this here, not before.
 - `looper/turn.ts` (the server's coding-turn runner) goes; the card run
   opens `CodingAgent` / `SupervisorAgent` and adds its card-bound tools with
-  `addToolKit()`. Rename the run's `kanban_card_move` — the server publishes a tool
-  of that name with a different contract (any card, any column).
+  `addToolKit()`. Rename the run's `kanban_card_move` — the server publishes
+  a tool of that name with a different contract (any card, any column).
 - The server's user message queue is written into the record inside
   turn-start; `api/backdoor.ts` goes.
+- `core/session.ts` and the `/lock` routes go with the last caller.
 
-### 4. Telegram onto the SDK.
+### 4. Telegram onto the SDK
 
 ### 5. Delete `core/llm`
 
@@ -147,15 +165,34 @@ read them. The whole-file transcript routes (`PUT /transcript`,
 Server-side, on the record (a `compaction` line the reader honours). Not
 discussed yet; the four `*_compact_*` settings are dead until then.
 
-## Later: the system prompt override
+## Decided, not built
 
-Decided, not built. A client may rebuild a session's prompt, deliberately,
-never automatically: `send(text, { rebuildSystemPrompt: true })` → the
-turn-start body carries `system_prompt_layout`; the server, under the hold,
-assembles from today's facts, overwrites the row, answers the new sections
-in the turn-start reply (`system_prompt`, present only when rebuilt); the
-SDK takes them for that turn and after. A record line marks the rebuild.
-No separate route, no separate method.
+- **The system prompt override.** A client may rebuild a session's
+  prompt, deliberately, never automatically: `send(text, {
+  rebuildSystemPrompt: true })` → the turn-start body carries
+  `system_prompt_layout`; the server, under the hold, assembles from
+  today's facts, overwrites the row, answers the new sections in the
+  turn-start reply (`system_prompt`, present only when rebuilt); the SDK
+  takes them for that turn and after. A record line marks the rebuild. No
+  separate route, no separate method.
+
+## How the work went — what to keep doing
+
+- Every change was proven on the real stack before its commit: the dev
+  box runs the same https/Caddy stack as an install (`scripts/setup.sh`),
+  and a fake OpenAI-compatible model over local HTTP stands in for a key.
+  The proof scripts live in scratch, not in the repo (no tests, by
+  decision); rebuild them the same way when a rule changes.
+- Decisions were named before code: the prompt's three sections and
+  their order came from reading Hermes, the cache marks from Anthropic's
+  own doc, the cancelled-request release from a pattern already in
+  `tools.ts`. When a fact was wrong (the server freezing the prompt, the
+  per-turn timezone read) it was said so and fixed, not patched around.
+- What was not carried over is listed under its number, with the way
+  back. Nothing silent.
+- Names were reviewed one by one and written down (below). Keep it that
+  way: a name says what the thing is, never "fact", "note", "hint",
+  "backend_error".
 
 ## Names — decided, do not reinvent
 
