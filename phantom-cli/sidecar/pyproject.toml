@@ -10,7 +10,8 @@ dependencies = [
 ]
 
 [tool.uv]
-# The venv lives in sidecar/.venv so the TUI can find it regardless of cwd.
+# The venv lives in ~/.phantom-cli/voice/venv (voice.ts sets
+# UV_PROJECT_ENVIRONMENT) — installed once, shared across app versions.
 package = false
 
 [dependency-groups]

@@ -33,7 +33,7 @@ import { apiFor, streamFor, savedCaFor } from './provision.js';
 import { Server } from './server.js';
 import { AUTO_PUSH_STEPS, AUTO_PULL_STEPS, type AutoPushOutcome, type AutoPullOutcome } from '../core/llm/tools/git.js';
 import { hostname } from 'node:os';
-import { APP_VERSION, checkLatest, selfUpdate } from './selfUpdate.js';
+import { APP_ROOT, APP_VERSION, checkLatest, installVersion, selfUpdate, thisBuildDir } from './selfUpdate.js';
 import { CHECK_INTERVAL_MS, autoUpdateCycle, dueForCheck, prelaunchReconcile, stampChecked } from './autoUpdate.js';
 import { quitNotice, runUpdate, versionLines } from './update.js';
 import type { ServerLink, Target, UpdateDeps } from './update.js';
@@ -68,6 +68,19 @@ if (firstArg === '--version' || firstArg === '-v') {
     ? await server.call('GET', '/health').then((h) => String((h as { version?: string }).version ?? '') || null, () => null)
     : null;
   for (const line of versionLines(APP_VERSION, server ? { url: server.url, version } : null)) console.log(line);
+  process.exit(0);
+}
+// `install`: make THIS build the current one. install-cli.sh unpacks a
+// verified release into ~/.phantom-cli/app/.staging-<pid>/ and runs this from
+// there; installVersion moves it into place, swaps the launcher and prunes
+// old versions. From an already-installed folder it repairs the launcher.
+if (firstArg === 'install') {
+  if (APP_VERSION === 'dev') die('a checkout runs from source — `install` is for a release build');
+  try {
+    const r = installVersion(thisBuildDir());
+    console.log(`phantom-cli ${r.version} installed`);
+    for (const v of r.removed) console.log(`  removed ${v}`);
+  } catch (e) { die(`install failed: ${e instanceof Error ? e.message : String(e)}`); }
   process.exit(0);
 }
 if (firstArg === 'update') {
@@ -197,7 +210,7 @@ await prelaunchReconcile({
     // still ahead of it (ahead of the latest PUBLISHED release — a manual
     // tag) opens mismatched with the quit notice instead of re-execing forever.
     if (process.env.PHANTOM_CLI_REEXEC) return;
-    const r = spawnSync(join(CONFIG_DIR, 'app', version, 'bin', 'phantom-cli'), process.argv.slice(2), {
+    const r = spawnSync(join(APP_ROOT, version, 'bin', 'phantom-cli'), process.argv.slice(2), {
       stdio: 'inherit', env: { ...process.env, PHANTOM_CLI_REEXEC: '1' },
     });
     process.exit(r.status ?? 0);

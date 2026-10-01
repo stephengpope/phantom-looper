@@ -50,9 +50,10 @@ npx esbuild phantom-cli/index.tsx --bundle --platform=node --format=esm --target
   --log-level=warning
 
 # The sidecar rides as FILES beside the bundle (uv needs pyproject/uv.lock on
-# disk; voice.ts resolves ./sidecar/ beside the module). The venv never ships.
+# disk; voice.ts resolves ./sidecar/ beside the module). The engine itself
+# lives in ~/.phantom-cli/voice/ and never ships.
 mkdir -p "$OUT/stage/lib/sidecar"
-tar -C phantom-cli/sidecar --exclude .venv --exclude __pycache__ -cf - . | tar -C "$OUT/stage/lib/sidecar" -xf -
+tar -C phantom-cli/sidecar --exclude __pycache__ -cf - . | tar -C "$OUT/stage/lib/sidecar" -xf -
 
 # The server installer, shipped beside the cli for the rig and for reading
 # offline — the wizard has the BOX download the release copy (provision.ts).

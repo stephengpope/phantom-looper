@@ -32,6 +32,15 @@ import { FLUSH_MS } from './sessions.js';
 
 export const SIDECAR_DIR = fileURLToPath(new URL('./sidecar/', import.meta.url));
 export const VOICE_DIR = join(CONFIG_DIR, 'voice');
+// The engine (the sidecar's Python venv — pipecat, torch, hundreds of MB)
+// lives ONCE under VOICE_DIR, not inside the version folder beside the
+// recipe (pyproject/uv.lock). It used to: every update re-downloaded it and
+// every old version folder kept its own copy. UV_PROJECT_ENVIRONMENT is uv's
+// own knob for a venv outside the project; `uv sync --frozen` still checks
+// it against THIS version's uv.lock on every start, so a changed lock is
+// applied in place.
+export const VOICE_VENV = join(VOICE_DIR, 'venv');
+const uvEnv = { ...process.env, UV_PROJECT_ENVIRONMENT: VOICE_VENV };
 const UV_VERSION = '0.11.2';
 
 // --- the wire -----------------------------------------------------------------
@@ -141,7 +150,7 @@ export async function installUv(onProgress: (t: string) => void): Promise<string
  *  code back. */
 function uvSync(uv: string): Promise<number | null> {
   return new Promise((resolve) => {
-    const child = spawn(uv, ['sync', '--frozen'], { cwd: SIDECAR_DIR, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(uv, ['sync', '--frozen'], { cwd: SIDECAR_DIR, env: uvEnv, stdio: ['ignore', 'pipe', 'pipe'] });
     createInterface({ input: child.stdout! }).on('line', (l) => log(l));
     createInterface({ input: child.stderr! }).on('line', (l) => log(l));
     child.on('error', (e) => { log(`--- uv sync error ${e.message}`); resolve(null); });
@@ -157,12 +166,12 @@ export const spawnSidecar: Spawner = async (env, onLine, onExit, onProgress) => 
   // says so); after that it is a ~100ms check that the venv still matches
   // uv.lock, so an updated lock is picked up without anyone knowing to re-sync.
   // Progress strings are short on purpose: the pane is ~20 columns.
-  if (!existsSync(join(SIDECAR_DIR, '.venv'))) onProgress('installing engine (first run)…');
+  if (!existsSync(VOICE_VENV)) onProgress('installing engine (first run)…');
   const code = await uvSync(uv);
   if (code !== 0) throw new Error(`install failed — see ${join(VOICE_DIR, 'sidecar.log')}`);
   log(`--- sidecar start ${new Date().toISOString()}`);
   const child: ChildProcess = spawn(uv, ['run', '--no-sync', 'bot.py'], {
-    cwd: SIDECAR_DIR, env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'], detached: true,
+    cwd: SIDECAR_DIR, env: { ...uvEnv, ...env }, stdio: ['pipe', 'pipe', 'pipe'], detached: true,
   });
   createInterface({ input: child.stdout! }).on('line', onLine);
   createInterface({ input: child.stderr! }).on('line', (l) => log(l));
@@ -188,9 +197,9 @@ export const spawnSidecar: Spawner = async (env, onLine, onExit, onProgress) => 
 export async function listDevices(): Promise<{ mics: string[]; speakers: string[] }> {
   const none = { mics: [], speakers: [] };
   const uv = findUv();
-  if (!uv || !existsSync(join(SIDECAR_DIR, '.venv'))) return none;
+  if (!uv || !existsSync(VOICE_VENV)) return none;
   return new Promise((resolve) => {
-    const child = spawn(uv, ['run', '--no-sync', 'devices.py'], { cwd: SIDECAR_DIR, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(uv, ['run', '--no-sync', 'devices.py'], { cwd: SIDECAR_DIR, env: uvEnv, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     child.stdout.on('data', (b: Buffer) => { out += b.toString(); });
     child.stderr.on('data', (b: Buffer) => log(b.toString()));

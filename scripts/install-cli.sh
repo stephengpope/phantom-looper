@@ -17,9 +17,12 @@
 #      sidecar's files, the server installer, and a pinned Node runtime.
 #      PHANTOM_CLI_VERSION=vX.Y.Z pins a release; default is latest.
 #   3. Verifies it against the release's checksums.txt.
-#   4. Unpacks to ~/.phantom-cli/app/<version> and points ONE symlink at it:
-#      ~/.local/bin/phantom-cli. Re-running (or `phantom-cli` self-updating
-#      later) just moves that symlink — the old version stays until replaced.
+#   4. Unpacks into ~/.phantom-cli/app/.staging-<pid>/ and runs
+#      `phantom-cli install` FROM there. The app owns the rest — moving the
+#      folder to app/<version>, pointing ~/.local/bin/phantom-cli at it,
+#      deleting old versions (selfUpdate.ts, installVersion). Same split as
+#      Claude Code's installer: this script never learns how versions are laid
+#      out, so there is ONE place that knows.
 #   5. Tells you if ~/.local/bin is not on PATH.
 #
 # Nothing here needs root and nothing touches the system outside
@@ -68,16 +71,14 @@ else GOT=$(sha256sum "$TMP/$ASSET" | cut -d' ' -f1); fi
 [ "$WANT" = "$GOT" ] || fail "checksum mismatch for $ASSET — refusing to install it"
 ok "Checksum verified"
 
-tar -C "$TMP" -xzf "$TMP/$ASSET"
-GOT_VERSION=$(cat "$TMP/phantom-cli/VERSION")
-APP_DIR="$HOME/.phantom-cli/app/$GOT_VERSION"
-
-mkdir -p "$HOME/.phantom-cli/app" "$HOME/.local/bin"
+# Staging sits INSIDE app/ — the same filesystem as its final home — so the
+# app's move into place is one atomic rename (never across a /tmp mount).
+STAGE="$HOME/.phantom-cli/app/.staging-$$"
+mkdir -p "$STAGE"
 chmod 700 "$HOME/.phantom-cli" 2>/dev/null || true
-rm -rf "$APP_DIR"
-mv "$TMP/phantom-cli" "$APP_DIR"
-ln -sf "$APP_DIR/bin/phantom-cli" "$HOME/.local/bin/phantom-cli"
-ok "phantom-cli $GOT_VERSION installed"
+trap 'rm -rf "$TMP" "$STAGE"' EXIT
+tar -C "$STAGE" -xzf "$TMP/$ASSET"
+"$STAGE/phantom-cli/bin/phantom-cli" install
 
 case ":$PATH:" in
   *":$HOME/.local/bin:"*) ;;

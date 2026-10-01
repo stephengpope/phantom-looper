@@ -38,7 +38,7 @@ export interface UpdateDeps {
   latest(): Promise<string | null>;
   /** The paired server, or null when nothing is paired. */
   server: ServerLink | null;
-  /** selfUpdate(tag) — download, verify, unpack, re-link. */
+  /** selfUpdate(tag) — download, verify, unpack, install (link + prune). */
   installClient(tag: string): Promise<unknown>;
   /** Ask the person a yes/no question. */
   confirm(question: string): Promise<boolean>;

@@ -52,7 +52,7 @@ export interface AutoUpdateDeps {
   autoUpdate: boolean;
   /** The latest published release tag, null when unreachable. */
   latest(): Promise<string | null>;
-  /** selfUpdate(tag) — download, verify, unpack, re-link. */
+  /** selfUpdate(tag) — download, verify, unpack, install (link + prune). */
   install(tag: string): Promise<unknown>;
 }
 
