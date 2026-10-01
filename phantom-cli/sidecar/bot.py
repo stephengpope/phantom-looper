@@ -2,7 +2,7 @@
 TUI spawns. The brain (the model, its tools, its history) is the TUI's — an AI
 SDK agent built like the coding agent; this process never sees a model key.
 
-    mic → Deepgram STT → UserGate → user aggregator → Brain → AssistantTap
+    mic → Deepgram STT (speech only — see SpeechOnlyAudio) → UserGate → user aggregator → Brain → AssistantTap
         → SpeakerGate → Deepgram TTS → speaker → assistant aggregator
 
 `Brain` sits where pipecat's LLM would. Upstream hands it "the user's turn is
@@ -45,6 +45,7 @@ from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
     Frame,
+    InputAudioRawFrame,
     InterimTranscriptionFrame,
     InterruptionFrame,
     LLMContextFrame,
@@ -329,6 +330,52 @@ class State:
     def on_user_started(self) -> None:
         """A new utterance: it is echo if it begins while we speak or in the tail."""
         self.echo_utterance = (not self.headphones) and self.speaking_or_tail()
+
+
+PREROLL_S = 1.0     # audio kept back before the VAD confirms speech, replayed when it does
+
+
+class SpeechOnlyAudio:
+    """Mixin for the STT service: audio reaches Deepgram only while someone is
+    speaking. Deepgram bills every second of audio it receives — silence and
+    our own voice coming back through the speakers included — and the
+    pipeline was streaming the mic non-stop. On an idle desk that was ~60
+    billed minutes an hour; after this, the seconds you actually talk. (A
+    muted mic does not get this far: `set_mic` stops the capture stream.)
+
+    How: pipecat's STTService already tracks `_user_speaking` from the
+    aggregator's VAD (upstream VADUserStarted/StoppedSpeaking), and its
+    Deepgram service sends `Finalize` on the stop, so the last transcript
+    still arrives once the audio stops; its text KeepAlive (free) holds the
+    socket in between. Only the pre-roll is new: the VAD confirms speech
+    ~start_secs late, so the last PREROLL_S of audio is kept and replayed
+    first, or the opening syllable is clipped — the buffer is
+    SegmentedSTTService's. `State.user_suppressed()` (echo over speakers) is
+    the one rule for "nothing the mic hears counts": when nothing counts,
+    nothing is sent."""
+
+    _user_speaking: bool   # STTService's
+
+    def __init__(self, *, state: State, **kwargs) -> None:  # noqa: ANN003
+        super().__init__(**kwargs)
+        self._state = state
+        self._preroll = bytearray()
+
+    async def process_audio_frame(self, frame, direction):  # noqa: ANN001, ANN201 — pipecat's signature
+        if self._state.user_suppressed():
+            self._preroll.clear()
+            return
+        if not self._user_speaking:
+            self._preroll += frame.audio
+            keep = int(frame.sample_rate * 2 * PREROLL_S)   # 16-bit mono
+            if len(self._preroll) > keep:
+                del self._preroll[: len(self._preroll) - keep]
+            return
+        if self._preroll:
+            head = InputAudioRawFrame(audio=bytes(self._preroll), sample_rate=frame.sample_rate, num_channels=frame.num_channels)
+            self._preroll.clear()
+            await super().process_audio_frame(head, direction)  # type: ignore[misc]
+        await super().process_audio_frame(frame, direction)  # type: ignore[misc]
 
 
 class LiveWakeStrategy(WakePhraseUserTurnStartStrategy):
@@ -635,7 +682,11 @@ async def main() -> None:
         audio_in_enabled=True, audio_out_enabled=True,
         input_device_index=in_idx, output_device_index=out_idx,
     ))
-    stt = DeepgramSTTService(
+    class GatedDeepgramSTT(SpeechOnlyAudio, DeepgramSTTService):
+        pass
+
+    stt = GatedDeepgramSTT(
+        state=state,
         api_key=cfg.deepgram_key,
         # profanity_filter=False must be explicit: pipecat's default is True
         # (Deepgram's own API default is False) and it was starring out words.
@@ -747,6 +798,22 @@ async def main() -> None:
         cancel_on_idle_timeout=False,
     )
 
+    def set_mic(muted: bool) -> None:
+        """Muted means the microphone is OFF: the OS capture stream is stopped,
+        so nothing is recorded, nothing reaches the VAD or Deepgram, and the
+        system's mic-in-use light goes out. Not a filter further down the
+        pipe. pipecat 1.4.0 has no switch for this, so it is PyAudio's own
+        stop_stream/start_stream on the input transport's stream (`_in_stream`
+        is private to pipecat — the version is pinned for exactly this)."""
+        state.mic_muted = muted
+        stream = getattr(transport.input(), "_in_stream", None)
+        if stream is None:
+            return   # before the pipeline started; `ready` applies the saved state
+        if muted and stream.is_active():
+            stream.stop_stream()
+        elif not muted and stream.is_stopped():
+            stream.start_stream()
+
     async def inbox_loop() -> None:
         while True:
             msg = await inbox.get()
@@ -779,7 +846,7 @@ async def main() -> None:
                     finally:
                         pa2.terminate()
                 elif t == "mic":
-                    state.mic_muted = bool(msg.get("muted"))
+                    set_mic(bool(msg.get("muted")))
                     ch.send({"type": "status", "mic_muted": state.mic_muted})
                 elif t == "speaker":
                     state.speaker_muted = bool(msg.get("muted"))
@@ -828,6 +895,7 @@ async def main() -> None:
     # /say the instant it sees ready.
     @task.event_handler("on_pipeline_started")
     async def _on_started(_task, _frame) -> None:  # noqa: ANN001
+        set_mic(state.mic_muted)   # the stream opens on StartFrame; a saved mute stops it right here
         ch.send({"type": "ready", "devices": devices, "mic": cfg.mic or "", "speaker": cfg.speaker or "",
                  "voice": cfg.voice, "turn": turn_label,
                  "mic_muted": state.mic_muted, "speaker_muted": state.speaker_muted,
