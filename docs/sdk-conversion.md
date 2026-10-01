@@ -51,9 +51,9 @@ included. Before: five sequential requests.
   rides the next model call, or continues the turn when the model stops.
 - `interrupt()` cuts the model loop; what was queued continues the **same
   turn** — same hold, one turn-ended. `interrupt({ keepQueue: true })` ends
-  the turn and the queue rides the next `send`.
+  the turn and the queue rides the next `sendMessage`.
 - A stop before anything was sent records nothing and drops the message.
-- Session held elsewhere → `send` rejects `session_locked`, nothing recorded.
+- Session held elsewhere → `sendMessage` rejects `session_locked`, nothing recorded.
 - A turn whose answer landed is returned even if turn-ended fails.
 - Crash recovery answers exactly the tool calls without a result.
 - Another writer's lines are read before the turn; the server's queued user
@@ -77,7 +77,7 @@ server; a turn that wrote nothing does not count (no model freeze).
 request; errors carry the server's code and status. A coding session is a
 `CodingAgent`; the Assistant is an `AssistantAgent` (`follow` on every
 switch); the cli's own tools are kits (`cliToolKit`, `assistantToolKit`).
-The pane draws from the agent's events; Enter → `send`, Esc →
+The pane draws from the agent's events; Enter → `sendMessage`, Esc →
 `interrupt`, typed mid-turn → queued; a refused send puts the text back.
 Quit interrupts every agent and awaits every `close`. Gone: the cli's turn
 loop, the local transcript file and its syncs, the nudge queue, local
@@ -120,7 +120,7 @@ screen tools). It found the SDK's gaps; the headless hosts could not have.
   (`phantom-cli/server.ts`); errors carry the server's code and status.
 - A coding session is a `CodingAgent`; the Assistant is an
   `AssistantAgent` (`follow` on every switch); the cli's tools are kits.
-- Enter → `send`, Esc → `interrupt`, typed mid-turn → queued, `/pop` →
+- Enter → `sendMessage`, Esc → `interrupt`, typed mid-turn → queued, `/pop` →
   `userMessages.take`; a refused send puts the words back; quit awaits
   every `close`.
 - Deleted: the cli's turn loop, the local transcript file and syncs, the
@@ -168,7 +168,7 @@ discussed yet; the four `*_compact_*` settings are dead until then.
 ## Decided, not built
 
 - **The system prompt override.** A client may rebuild a session's
-  prompt, deliberately, never automatically: `send(text, {
+  prompt, deliberately, never automatically: `sendMessage(text, {
   rebuildSystemPrompt: true })` → the turn-start body carries
   `system_prompt_layout`; the server, under the hold, assembles from
   today's facts, overwrites the row, answers the new sections in the
@@ -208,7 +208,7 @@ the server can fill, each with its reader).
 - `Agent.create(backend, handlers, …)` — a new session.
 - `CodingAgent.newSession(…)` / `AssistantAgent.newSession(…)` — was `start`.
 - `Agent.addToolKit(kit)` — was `use`.
-- `Agent.send(text)`, `Agent.interrupt()`.
+- `Agent.sendMessage(text)` — was `send`. `Agent.interrupt()`.
 - `Agent.partialMessage(text)` — the person received the last reply only
   up to `text` (a reply cut off while being spoken, after the model had
   written it). The record line is `partial_message`; the reader cuts the

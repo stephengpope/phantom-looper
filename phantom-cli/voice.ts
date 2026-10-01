@@ -521,7 +521,7 @@ export class VoiceClient {
     }
     if (this.agent.busy) this.agent.interrupt();
     // Never awaited: every failure reaches the pane through onError, once.
-    void this.agent.send(text).catch(() => undefined);
+    void this.agent.sendMessage(text).catch(() => undefined);
   }
 
   /** A stream part → the sidecar (speech) and the pane. Every delta the

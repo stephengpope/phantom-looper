@@ -500,7 +500,7 @@ export class SessionStore {
       e.tokens = NO_TOKENS;
     }
     // Never awaited: every failure reaches the pane through onError, once.
-    void e.agent.send(text).catch(() => undefined);
+    void e.agent.sendMessage(text).catch(() => undefined);
     this.notify();
   }
 

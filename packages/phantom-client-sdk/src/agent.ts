@@ -116,7 +116,7 @@ export abstract class Agent {
 
   /** The user's message. No turn running → a turn starts with it and this
    *  resolves with the result. A turn running → queued; resolves null. */
-  send(text: string): Promise<TurnResult | null> {
+  sendMessage(text: string): Promise<TurnResult | null> {
     if (this.busy) { this.#queue.add(text); return Promise.resolve(null); }
     if (this.#closed) return Promise.reject(new PhantomError('busy', 'the agent is closed'));
     const p = this.#guard(() => this.#turnBody([...this.#queue.drain(), text]));
