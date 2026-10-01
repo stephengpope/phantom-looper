@@ -2,7 +2,7 @@
 // target list widened from "whatever Telegram points at" to every project in the
 // database, and eviction added (evict and re-stock, never re-deepen).
 //
-// A folder's LOCATION is its state:
+// A workspace's LOCATION is its state:
 //   pool/setup/<owner>__<name>__<branch>__<ulid>   being cloned — never read
 //   pool/ready/<same>                              complete, claimable
 //   work/<sessionId>/repo                          claimed; a session owns it
@@ -43,7 +43,7 @@ export async function resolveAuth(settings: Settings, r: ProjectRow): Promise<Gi
 }
 
 /** Claim a ready slot for a project into `dest`. The claim is a RENAME and nothing
- *  else — no locks, no bookkeeping. Two claimants cannot get the same folder:
+ *  else — no locks, no bookkeeping. Two claimants cannot get the same workspace:
  *  one wins, the other gets ENOENT and takes the next or falls through to a
  *  clone at the call site. */
 export async function claimSlot(

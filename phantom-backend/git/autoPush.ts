@@ -7,7 +7,7 @@ import type { Paths } from '../pool/paths.js';
 import type { ModelConfig } from '../../core/llm/createAgent.js';
 import { syncBranch, type SyncEvent, type SyncDeps, type ConflictContext } from './sync.js';
 import type { Sessions } from '../sessions.js';
-import type { Folders } from '../folders.js';
+import type { Workspaces } from '../workspaces.js';
 import type { Cards } from '../cards.js';
 import type { Settings } from '../settings.js';
 
@@ -25,7 +25,7 @@ export interface AutoPushResult {
 
 export interface AutoPushDeps {
   sessions: Sessions;
-  folders: Folders;
+  workspaces: Workspaces;
   cards: Cards;
   settings: Settings;
   paths: Paths;

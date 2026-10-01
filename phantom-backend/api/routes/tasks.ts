@@ -10,7 +10,7 @@ import type { FastifyInstance } from 'fastify';
 import fsp from 'node:fs/promises';
 import { Sandbox } from '../../workspace/sandbox.js';
 import { ok, err, type AppCtx } from '../app.js';
-import { folderOf } from '../../sessions.js';
+import { workspaceOf } from '../../sessions.js';
 import {
   killSid, probeGroups, reconcileRunning, commandTextFromArgv, elapsedSeconds,
   type LiveGroup, type FsDeps,
@@ -26,11 +26,11 @@ const idParam = { type: 'object', properties: { id: { type: 'string' } }, requir
 export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
   /** The session's container, probed WITHOUT creating one — listing must
    *  never boot a container just to answer "nothing". */
-  const probe = async (folderId: string) => {
-    const c = deps.docker.getContainer(deps.containers.name(folderId));
+  const probe = async (workspaceId: string) => {
+    const c = deps.docker.getContainer(deps.containers.name(workspaceId));
     const info = await c.inspect().catch((e: { statusCode?: number; message?: string }) => {
       // 404 IS "absent"; anything else is docker failing to answer.
-      if (e.statusCode !== 404) log.warn({ folder: folderId, err: e.message }, 'container inspect failed — listed as absent');
+      if (e.statusCode !== 404) log.warn({ workspace: workspaceId, err: e.message }, 'container inspect failed — listed as absent');
       return null;
     });
     if (!info) return { state: 'absent' as const, container: null };
@@ -47,9 +47,9 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
   async (req, reply) => {
     const session = await ctx.sessions.get(req.params.id);
     if (!session) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
-    if (!session.folderId) return reply.code(400).send(err('no_folder', 'this session has no files — nothing runs for it'));
+    if (!session.workspaceId) return reply.code(400).send(err('no_workspace', 'this session has no files — nothing runs for it'));
 
-    const { state, container } = await probe(folderOf(session));
+    const { state, container } = await probe(workspaceOf(session));
     let groups: LiveGroup[] = [];
     if (container) {
       try {
@@ -111,8 +111,8 @@ export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
   async (req, reply) => {
     const session = await ctx.sessions.get(req.params.id);
     if (!session) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
-    if (!session.folderId) return reply.code(400).send(err('no_folder', 'this session has no files — nothing runs for it'));
-    const { container } = await probe(folderOf(session));
+    if (!session.workspaceId) return reply.code(400).send(err('no_workspace', 'this session has no files — nothing runs for it'));
+    const { container } = await probe(workspaceOf(session));
     if (!container) return reply.code(404).send(err('no_such_task', 'nothing is running — the container is not up'));
 
     const ws = new Sandbox(deps.docker, container);

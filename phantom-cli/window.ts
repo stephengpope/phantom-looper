@@ -1609,7 +1609,7 @@ export class WindowStore {
 
   /** The Assistant's agent. Made ONCE per window, the first time a session
    *  is on screen (null before — the engine can start before any session
-   *  opens): a conversation-only session on the on-screen session's folder,
+   *  opens): a conversation-only session on the on-screen session's workspace,
    *  with this window's kit. Re-pointed (`follow`) on every switch after,
    *  which App fires. */
   private assistant: AssistantAgent | null = null;

@@ -7,7 +7,7 @@ import { ToolError } from '../../tools/envelope.js';
 import { webFetch, webSearch, type SearchBody } from '../../web.js';
 
 const STATUS: Record<string, number> = {
-  session_not_found: 404, session_destroyed: 410, no_folder: 400, credential_required: 400, search_failed: 502,
+  session_not_found: 404, session_destroyed: 410, no_workspace: 400, credential_required: 400, search_failed: 502,
 };
 
 const TAG = { tags: ['web'] };
@@ -58,9 +58,9 @@ export function webRoutes(app: FastifyInstance, ctx: AppCtx) {
   }, async (req, reply) => {
     try {
       // The one gate (sessionHeader.ts): the session named, its files on
-      // disk, THE folder its tools open — and the checkout touched.
-      const { folderId } = await toolSession(ctx.sessions, req.headers);
-      return ok(await webFetch(ctx, folderId, req.body.urls));
+      // disk, THE workspace its tools open — and the checkout touched.
+      const { workspaceId } = await toolSession(ctx.sessions, req.headers);
+      return ok(await webFetch(ctx, workspaceId, req.body.urls));
     } catch (e) { return handle(reply, e); }
   });
 }

@@ -1,4 +1,4 @@
-// The folder row's one owner. A folder is a checkout: the files on disk, the
+// The workspace row's one owner. A workspace is a checkout: the files on disk, the
 // branch, the container. The directory on disk is named by this id (which
 // equals the owning session's id). The row is permanent: it is what
 // remembers the branch; the FILES can be deleted (`removeFiles`) and
@@ -13,17 +13,17 @@
 //
 // Every fact about the checkout lives here (036): whether the files exist,
 // when it was last touched, when its branch last reached origin, its git
-// state. Sessions read them through their folder_id (Sessions.view), so a
+// state. Sessions read them through their workspace_id (Sessions.view), so a
 // supervisor's or the assistant's activity counts for the coder's checkout
 // the same as the coder's own.
 //
-// Events: the folder's id IS its owning session's id, so a write here
+// Events: the workspace's id IS its owning session's id, so a write here
 // publishes on that session's feed — a bare `session` record ("this row
 // moved") for the list, `work` with its value for the watcher's dot.
 import fs from 'node:fs/promises';
 import { and, eq, inArray, isNotNull, isNull, lt, not, or, count } from 'drizzle-orm';
 import type { Db } from './db/client.js';
-import { folders, sessions, cards, type FolderRow, type ProjectRow } from './db/schema.js';
+import { workspaces, sessions, cards, type WorkspaceRow, type ProjectRow } from './db/schema.js';
 import type { SessionEvents } from './api/sessionEvents.js';
 import type { Settings } from './settings.js';
 import { git, cloneFresh, checkoutBranch, classifyGitFailure, localState, type WorkState } from './git/git.js';
@@ -31,22 +31,22 @@ import { claimSlot, resolveAuth } from './pool/pool.js';
 import { sessionDir, repoDir, type Paths } from './pool/paths.js';
 import { logger } from './log.js';
 
-const log = logger('folders');
+const log = logger('workspaces');
 
 /** A checkout's own refusal: the remote said no in a way a person can act on
  *  (a dead token, a repo it cannot see, GitHub unreachable, a source branch
  *  that never reached origin), or the files hold work nobody pushed. */
-export class FolderError extends Error {
+export class WorkspaceError extends Error {
   constructor(public code: string, message: string, public retryable = false) { super(message); }
 }
 
-/** A folder as the work-state refresh walks it: what the git read needs,
+/** A workspace as the work-state refresh walks it: what the git read needs,
  *  plus the card number its board event is named by. */
-export interface WorkRefreshFolder {
+export interface WorkRefreshWorkspace {
   id: string; projectId: string; branch: string; work: string | null; card: number | null;
 }
 
-export class Folders {
+export class Workspaces {
   constructor(
     private readonly db: Db,
     private readonly paths: Paths,
@@ -57,8 +57,8 @@ export class Folders {
 
   private changed(id: string): void { this.events?.publish(id, '', { event: 'session' }); }
 
-  async get(id: string): Promise<FolderRow | undefined> {
-    const rows = await this.db.select().from(folders).where(eq(folders.id, id));
+  async get(id: string): Promise<WorkspaceRow | undefined> {
+    const rows = await this.db.select().from(workspaces).where(eq(workspaces.id, id));
     return rows[0];
   }
 
@@ -74,7 +74,7 @@ export class Folders {
    *  A missing `fromBranch` is a hard error, never a silent fall back to
    *  base: the caller flushed the source to origin first, so absent means
    *  something is wrong, and a copy that quietly starts at base loses the
-   *  work. A remote failure is classified into a FolderError so the API
+   *  work. A remote failure is classified into a WorkspaceError so the API
    *  answers with its meaning; anything unrecognised keeps its own error. */
   private async obtain(project: ProjectRow, id: string, branch: string, fromBranch?: string):
   Promise<{ head: string; found: 'existing' | 'new'; claimed: boolean }> {
@@ -114,7 +114,7 @@ export class Folders {
         } catch (e) {
           const msg = String((e as { stderr?: string }).stderr ?? e);
           if (/couldn't find remote ref|not found in upstream|no such ref/i.test(msg)) {
-            throw new FolderError('source_branch_gone',
+            throw new WorkspaceError('source_branch_gone',
               `the source branch ${fromBranch} is not on origin — its work never made it there, so there is nothing to copy`);
           }
           throw e;
@@ -127,9 +127,9 @@ export class Folders {
       const { stdout } = await git(dir, ['rev-parse', 'HEAD']);
       return { head: stdout.trim(), found, claimed };
     } catch (e) {
-      if (e instanceof FolderError) throw e;
+      if (e instanceof WorkspaceError) throw e;
       const why = classifyGitFailure(e, { hadToken: !!auth.pat });
-      if (why) throw new FolderError(why.code, `cannot check out ${project.owner}/${project.name}: ${why.message}`, why.retryable);
+      if (why) throw new WorkspaceError(why.code, `cannot check out ${project.owner}/${project.name}: ${why.message}`, why.retryable);
       throw e;
     }
   }
@@ -139,49 +139,49 @@ export class Folders {
    *  it was cut from (`cut_from_sha`, what /git/status measures against).
    *  `fromBranch` cuts it from origin's copy of that branch instead of base
    *  (the duplicate route). */
-  async checkout(project: ProjectRow, id: string, opts: { fromBranch?: string } = {}): Promise<FolderRow> {
+  async checkout(project: ProjectRow, id: string, opts: { fromBranch?: string } = {}): Promise<WorkspaceRow> {
     const branch = `${project.branchPrefix}/${id}`;
     const { head, found, claimed } = await this.obtain(project, id, branch, opts.fromBranch);
-    const [row] = await this.db.insert(folders)
+    const [row] = await this.db.insert(workspaces)
       .values({ id, projectId: project.id, branch, cutFromSha: head, createdAt: new Date() }).returning();
-    log.info({ folder: id, project: `${project.owner}/${project.name}`, branch, found, claimed, cutFromSha: head },
+    log.info({ workspace: id, project: `${project.owner}/${project.name}`, branch, found, claimed, cutFromSha: head },
       'checkout made');
     return row;
   }
 
-  /** The files back for a folder whose files were removed: the same
+  /** The files back for a workspace whose files were removed: the same
    *  obtaining, then the branch the ROW remembers checked out from origin —
    *  the work is on it, and the checkout carries on where it stopped. The
    *  cut point stays what it was. */
-  async restore(folder: FolderRow, project: ProjectRow): Promise<void> {
-    const { found } = await this.obtain(project, folder.id, folder.branch);
-    await this.db.update(folders).set({ onDisk: true, lastUsedAt: new Date() }).where(eq(folders.id, folder.id));
-    log.info({ folder: folder.id, branch: folder.branch, found }, 'checkout restored');
-    this.changed(folder.id);
+  async restore(workspace: WorkspaceRow, project: ProjectRow): Promise<void> {
+    const { found } = await this.obtain(project, workspace.id, workspace.branch);
+    await this.db.update(workspaces).set({ onDisk: true, lastUsedAt: new Date() }).where(eq(workspaces.id, workspace.id));
+    log.info({ workspace: workspace.id, branch: workspace.branch, found }, 'checkout restored');
+    this.changed(workspace.id);
   }
 
   /** Delete the files and nothing else — the row keeps the branch, so
    *  `restore` brings them back where they stopped. Refuses while the
    *  checkout holds work that is not on origin unless `force` — the caller's
    *  decision to lose it; the automatic sweeps never force. */
-  async removeFiles(folder: FolderRow, opts: { force: boolean }): Promise<void> {
-    const dir = repoDir(this.paths, folder.id);
-    const state = await localState(dir, folder.branch).catch(() => 'unknown' as const);
+  async removeFiles(workspace: WorkspaceRow, opts: { force: boolean }): Promise<void> {
+    const dir = repoDir(this.paths, workspace.id);
+    const state = await localState(dir, workspace.branch).catch(() => 'unknown' as const);
     if (state !== 'clean' && !opts.force) {
-      log.warn({ folder: folder.id, state }, 'removing the files would discard work — refusing (pass force)');
-      throw new FolderError('unpushed_work', `session holds ${state} work; delete with force=true to discard`);
+      log.warn({ workspace: workspace.id, state }, 'removing the files would discard work — refusing (pass force)');
+      throw new WorkspaceError('unpushed_work', `session holds ${state} work; delete with force=true to discard`);
     }
-    await fs.rm(sessionDir(this.paths, folder.id), { recursive: true, force: true });
-    await this.db.update(folders).set({ onDisk: false }).where(eq(folders.id, folder.id));
-    log.info({ folder: folder.id, state }, 'files removed');
-    this.changed(folder.id);
+    await fs.rm(sessionDir(this.paths, workspace.id), { recursive: true, force: true });
+    await this.db.update(workspaces).set({ onDisk: false }).where(eq(workspaces.id, workspace.id));
+    log.info({ workspace: workspace.id, state }, 'files removed');
+    this.changed(workspace.id);
   }
 
-  /** Folders in a project whose files exist — what stands in the way of
+  /** Workspaces in a project whose files exist — what stands in the way of
    *  deleting it (files and containers; a conversation holds neither). */
   async countOnDisk(projectId: string): Promise<number> {
-    const [{ n }] = await this.db.select({ n: count() }).from(folders)
-      .where(and(eq(folders.projectId, projectId), eq(folders.onDisk, true)));
+    const [{ n }] = await this.db.select({ n: count() }).from(workspaces)
+      .where(and(eq(workspaces.projectId, projectId), eq(workspaces.onDisk, true)));
     return n;
   }
 
@@ -190,7 +190,7 @@ export class Folders {
   /** A person or an agent used the checkout: a tool call, a saved turn.
    *  Background jobs never touch, or nothing ever goes cold. */
   async touch(id: string): Promise<void> {
-    await this.db.update(folders).set({ lastUsedAt: new Date() }).where(eq(folders.id, id));
+    await this.db.update(workspaces).set({ lastUsedAt: new Date() }).where(eq(workspaces.id, id));
     this.changed(id);
   }
 
@@ -199,8 +199,8 @@ export class Folders {
   async listIdle(candidates: string[], idleMs: number): Promise<string[]> {
     if (!candidates.length) return [];
     const cutoff = new Date(Date.now() - idleMs);
-    const rows = await this.db.select({ id: folders.id }).from(folders)
-      .where(and(inArray(folders.id, candidates), lt(folders.lastUsedAt, cutoff)));
+    const rows = await this.db.select({ id: workspaces.id }).from(workspaces)
+      .where(and(inArray(workspaces.id, candidates), lt(workspaces.lastUsedAt, cutoff)));
     return rows.map((r) => r.id);
   }
 
@@ -213,67 +213,67 @@ export class Folders {
   /** Take the checkout for `holder`: free, or lapsed. Returns whether it
    *  was taken. */
   async acquireSyncLock(id: string, holder: string, ttlMs: number): Promise<boolean> {
-    const rows = await this.db.update(folders)
+    const rows = await this.db.update(workspaces)
       .set({ syncLockedBy: holder, syncLockExpiresAt: new Date(Date.now() + ttlMs) })
-      .where(and(eq(folders.id, id),
-        or(isNull(folders.syncLockedBy), isNull(folders.syncLockExpiresAt),
-          lt(folders.syncLockExpiresAt, new Date()))))
-      .returning({ id: folders.id });
+      .where(and(eq(workspaces.id, id),
+        or(isNull(workspaces.syncLockedBy), isNull(workspaces.syncLockExpiresAt),
+          lt(workspaces.syncLockExpiresAt, new Date()))))
+      .returning({ id: workspaces.id });
     return rows.length > 0;
   }
 
   /** Slide `holder`'s expiry forward. */
   async renewSyncLock(id: string, holder: string, ttlMs: number): Promise<void> {
-    await this.db.update(folders).set({ syncLockExpiresAt: new Date(Date.now() + ttlMs) })
-      .where(and(eq(folders.id, id), eq(folders.syncLockedBy, holder)));
+    await this.db.update(workspaces).set({ syncLockExpiresAt: new Date(Date.now() + ttlMs) })
+      .where(and(eq(workspaces.id, id), eq(workspaces.syncLockedBy, holder)));
   }
 
   /** Release `holder`'s hold. Releasing what you do not hold changes nothing. */
   async releaseSyncLock(id: string, holder: string): Promise<void> {
-    await this.db.update(folders).set({ syncLockedBy: null, syncLockExpiresAt: null })
-      .where(and(eq(folders.id, id), eq(folders.syncLockedBy, holder)));
+    await this.db.update(workspaces).set({ syncLockedBy: null, syncLockExpiresAt: null })
+      .where(and(eq(workspaces.id, id), eq(workspaces.syncLockedBy, holder)));
   }
 
   // ── git ────────────────────────────────────────────────────────────────────
 
   /** The branch reached origin. */
   async markPushed(id: string): Promise<void> {
-    await this.db.update(folders).set({ lastPushAt: new Date() }).where(eq(folders.id, id));
+    await this.db.update(workspaces).set({ lastPushAt: new Date() }).where(eq(workspaces.id, id));
     this.changed(id);
   }
 
   /** Where the checkout's work stands, as the git refresh measured it. A
    *  watcher's work-state dot follows the event. */
   async setWork(id: string, work: WorkState | null): Promise<void> {
-    await this.db.update(folders).set({ work }).where(eq(folders.id, id));
+    await this.db.update(workspaces).set({ work }).where(eq(workspaces.id, id));
     this.events?.publish(id, '', { event: 'session', work });
   }
 
-  /** The folders the work-state refresh walks: the ones named (running
+  /** The workspaces the work-state refresh walks: the ones named (running
    *  containers), with the facts the walk needs. The card is the owning
    *  session's — the join reaches it for the board event's name. */
-  async listForWorkRefresh(ids: string[]): Promise<WorkRefreshFolder[]> {
+  async listForWorkRefresh(ids: string[]): Promise<WorkRefreshWorkspace[]> {
     if (!ids.length) return [];
     return this.db.select({
-      id: folders.id, projectId: folders.projectId, branch: folders.branch, work: folders.work,
+      id: workspaces.id, projectId: workspaces.projectId, branch: workspaces.branch, work: workspaces.work,
       card: cards.number,
-    }).from(folders)
-      .leftJoin(sessions, eq(sessions.id, folders.id))
+    }).from(workspaces)
+      .leftJoin(sessions, eq(sessions.id, workspaces.id))
       .leftJoin(cards, eq(cards.id, sessions.cardId))
-      .where(inArray(folders.id, ids));
+      .where(inArray(workspaces.id, ids));
   }
 
-  /** Folders whose `work` is stale: measured once, but no container runs
+  /** Workspaces whose `work` is stale: measured once, but no container runs
    *  now. The refresh clears these to null. */
-  async listStaleWork(activeIds: string[]): Promise<WorkRefreshFolder[]> {
+  async listStaleWork(activeIds: string[]): Promise<WorkRefreshWorkspace[]> {
     const where = activeIds.length
-      ? and(isNotNull(folders.work), not(inArray(folders.id, activeIds)))
-      : isNotNull(folders.work);
+      ? and(isNotNull(workspaces.work), not(inArray(workspaces.id, activeIds)))
+      : isNotNull(workspaces.work);
     return this.db.select({
-      id: folders.id, projectId: folders.projectId, branch: folders.branch, work: folders.work,
+      id: workspaces.id, projectId: workspaces.projectId, branch: workspaces.branch, work: workspaces.work,
       card: cards.number,
-    }).from(folders)
-      .leftJoin(sessions, eq(sessions.id, folders.id))
+    }).from(workspaces)
+      .leftJoin(sessions, eq(sessions.id, workspaces.id))
       .leftJoin(cards, eq(cards.id, sessions.cardId))
       .where(where);
   }

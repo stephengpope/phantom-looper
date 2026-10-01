@@ -3,8 +3,8 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import type { SessionRow } from '../../db/schema.js';
 import type { TokenRecord } from '../../logTokens.js';
-import { SessionError, heldByOther, isHeld, expiredHold, assertDuplicable, ownsFolder, folderOf } from '../../sessions.js';
-import { FolderError } from '../../folders.js';
+import { SessionError, heldByOther, isHeld, expiredHold, assertDuplicable, ownsWorkspace, workspaceOf } from '../../sessions.js';
+import { WorkspaceError } from '../../workspaces.js';
 import { GIT_CLIENT_ID } from '../../git/git.js';
 import { sessionDir } from '../../pool/paths.js';
 
@@ -141,8 +141,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     } catch (e) {
       if (unknownBlock(reply, e)) return;
       // The session's own refusals, and the checkout's (a dead token, a repo
-      // the token cannot see, GitHub unreachable — Folders.checkout).
-      if (e instanceof SessionError || e instanceof FolderError) {
+      // the token cannot see, GitHub unreachable — Workspaces.checkout).
+      if (e instanceof SessionError || e instanceof WorkspaceError) {
         const status = e.code === 'already_active' ? 409
           : e.code === 'project_mismatch' || e.code === 'invalid_args'
             || e.code === 'credential_invalid' || e.code === 'credential_insufficient' ? 400
@@ -175,7 +175,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       'server\'s disk), not_merged (on origin\'s branch, not in base), merged (in base), or null ' +
       '(never measured). The server\'s periodic git refresh keeps it current for sessions with a running ' +
       'container. `status`, `lastUsedAt`, `lastPushAt` and `branch` are the checkout\'s too, shared by ' +
-      'every session on the same folder.\n\n' +
+      'every session on the same workspace.\n\n' +
       '`q` filters: the text as ONE substring, case-insensitive, anywhere in the name, the last ' +
       'user message or the branch. It is part of the list\'s WHERE, so paging and `total` follow it; ' +
       'so is `project` (one project id).',
@@ -190,7 +190,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       before_pinned: { type: 'boolean', description: 'That row\'s pinned flag — pinned sorts ahead of activity, so the cursor carries it or a pinned page boundary leaks unpinned rows into the pinned block (and vice versa).' } } } } },
   async (req) => {
     // The list IS the object's (Sessions.list): filters, cursor and count in
-    // one place. branch comes from the session's FOLDER, the card number and
+    // one place. branch comes from the session's WORKSPACE, the card number and
     // its column from the CARD the row points at.
     const { rows, total } = await (async () => {
       const r = await ctx.sessions.list({
@@ -275,7 +275,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   // update within ~10s via the board event stream. 503 when Docker is not
   // wired (DB-only test environments).
   //
-  // The ping is activity: it touches the folder's lastUsedAt like a tool call
+  // The ping is activity: it touches the workspace's lastUsedAt like a tool call
   // does. Without that a session idle past container_idle_ms is started and
   // then reaped again on the next maintenance tick — the reaper reads ONLY
   // that stamp, so it never learned the container was wanted.
@@ -296,11 +296,11 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       const project = await ctx.projects.get(s.projectId);
       if (!project) return reply.code(404).send(err('not_found', 'project not found'));
       if (s.status !== 'active') {
-        if (!ownsFolder(s)) return reply.code(400).send(err('no_files', 'this session has no files of its own'));
+        if (!ownsWorkspace(s)) return reply.code(400).send(err('no_files', 'this session has no files of its own'));
         await ctx.sessions.create(s.projectId, { id: s.id });
       }
       await ctx.sessions.touch(s);
-      await ctx.fs.containers.ensure(folderOf(s), project);
+      await ctx.fs.containers.ensure(workspaceOf(s), project);
       return ok({ pinged: true });
     });
 
@@ -727,7 +727,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (data.length > MAX_ATTACHMENT_BYTES) {
         return reply.code(413).send(err('too_large', `file is over ${MAX_ATTACHMENT_BYTES / 1024 / 1024}MB`, true));
       }
-      const scratch = path.join(sessionDir(ctx.paths, folderOf(session)), 'scratch');
+      const scratch = path.join(sessionDir(ctx.paths, workspaceOf(session)), 'scratch');
       const a = await writeAttachment(scratch, data, { filename: req.body.name });
       if (!a) return reply.code(422).send(err('invalid_args', 'the file claims to be an image but is not one', true));
       return ok({ path: a.containerPath, kind: a.kind, name: a.displayName });
@@ -789,16 +789,16 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
           await ctx.sessions.renewLock(src.id, GIT_CLIENT_ID, Number(ttl));
         }
         const copy = await ctx.sessions.create(src.projectId, src.branch ? { fromBranch: src.branch } : {});
-        // Copy the source's scratch pad into the copy's folder — same filenames,
+        // Copy the source's scratch pad into the copy's workspace — same filenames,
         // the copy's container mounts them at the same /workspace/scratch/ path,
         // so every reference in the transcript works without rewriting.
-        const srcScratch = path.join(sessionDir(ctx.paths, folderOf(src)), 'scratch');
+        const srcScratch = path.join(sessionDir(ctx.paths, workspaceOf(src)), 'scratch');
         const dstScratch = path.join(sessionDir(ctx.paths, copy.id), 'scratch');
         await fs.cp(srcScratch, dstScratch, { recursive: true }).catch(() => {});
         await ctx.sessions.seedCopy(copy, src);
         return reply.code(201).send(ok({ ...copy, copied_from: src.id }));
       } catch (e) {
-        if (e instanceof SessionError || e instanceof FolderError) {
+        if (e instanceof SessionError || e instanceof WorkspaceError) {
           const status = e.code === 'source_branch_gone' ? 409 : 400;
           return reply.code(status).send(err(e.code, e.message, e.retryable));
         }
@@ -860,7 +860,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   // Delete = push + teardown: the flush-before-destroy rule. force=true
   // skips the safety only, never the flush attempt. purge=true goes further:
   // the row and the transcript go too — the session stops existing, only its
-  // pushed branch on origin survives. Only a session that OWNS its folder
+  // pushed branch on origin survives. Only a session that OWNS its workspace
   // has files to push and remove; a supervisor's or the assistant's has
   // nothing to tear down, so without purge there is nothing to do.
   app.delete<{ Params: { id: string }; Querystring: { force?: string; purge?: string } }>(
@@ -876,8 +876,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       const purge = req.query.purge === 'true';
       if (purge && heldByOther(s, clientOf(req))) return reply.code(409).send(lockedErr(s));
-      const hasFiles = ownsFolder(s) && s.status === 'active';
-      if (!purge && !hasFiles) return ok({ already: ownsFolder(s) ? s.status : 'no files' });
+      const hasFiles = ownsWorkspace(s) && s.status === 'active';
+      if (!purge && !hasFiles) return ok({ already: ownsWorkspace(s) ? s.status : 'no files' });
       if (hasFiles && ctx.engine) {
         const project = await ctx.projects.get(s.projectId);
         if (project) {
@@ -899,8 +899,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         await ctx.sessions.purge(s.id);
         return ok({ purged: s.id });
       } catch (e) {
-        // unpushed_work (Folders.removeFiles) — the caller's call to force.
-        if (e instanceof SessionError || e instanceof FolderError) return reply.code(409).send(err(e.code, e.message));
+        // unpushed_work (Workspaces.removeFiles) — the caller's call to force.
+        if (e instanceof SessionError || e instanceof WorkspaceError) return reply.code(409).send(err(e.code, e.message));
         throw e;
       }
     });
@@ -919,7 +919,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
     '/sessions/assistant', { schema: { ...TAG,
       summary: 'Create an assistant session',
       description: 'Creates a conversation-only session for the assistant: no checkout of its own, its ' +
-        'folder is the on-screen session\'s (its file tools run as this session and open that folder). ' +
+        'workspace is the on-screen session\'s (its file tools run as this session and open that workspace). ' +
         'It runs on the row\'s model like every session, and its model calls are billed to it. ' +
         '`system_prompt_layout` as on POST /sessions. Returns the row.',
       body: { ...target, required: [...target.required, 'system_prompt_layout'],
@@ -932,7 +932,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   app.post<{ Params: { id: string }; Body: { project_id: string; session_id?: string | null } }>(
     '/sessions/:id/follow', { schema: { ...TAG,
       summary: 'Point an assistant session at the session on screen',
-      description: 'Re-points the assistant row\'s project and folder at what the user is looking at, ' +
+      description: 'Re-points the assistant row\'s project and workspace at what the user is looking at, ' +
         'so its tools read that session\'s files. Assistant sessions only. Returns the row.',
       params: idParam, body: target } },
     async (req, reply) => {
@@ -943,19 +943,19 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       return ok(await ctx.sessions.get(s.id));
     });
 
-  // The supervisor's session: conversation-only, on the coder's folder, on
+  // The supervisor's session: conversation-only, on the coder's workspace, on
   // the card. The looper creates one per run.
-  app.post<{ Body: { project_id: string; folder_id: string; card_id: number; system_prompt_layout: SystemPromptLayout } }>(
+  app.post<{ Body: { project_id: string; workspace_id: string; card_id: number; system_prompt_layout: SystemPromptLayout } }>(
     '/sessions/supervisor', { schema: { ...TAG,
       summary: 'Create a supervisor session',
       description: 'Creates a conversation-only session for a card run\'s supervisor: no checkout of its own, its ' +
-        'folder is the coder\'s (`folder_id`), so its file tools read the coder\'s work. ' +
+        'workspace is the coder\'s (`workspace_id`), so its file tools read the coder\'s work. ' +
         '`system_prompt_layout` as on POST /sessions. Returns the row.',
-      body: { type: 'object', required: ['project_id', 'folder_id', 'card_id', 'system_prompt_layout'], additionalProperties: false, properties: {
-        project_id: { type: 'string' }, folder_id: { type: 'string' }, card_id: { type: 'integer' },
+      body: { type: 'object', required: ['project_id', 'workspace_id', 'card_id', 'system_prompt_layout'], additionalProperties: false, properties: {
+        project_id: { type: 'string' }, workspace_id: { type: 'string' }, card_id: { type: 'integer' },
         system_prompt_layout: SYSTEM_PROMPT_LAYOUT } } } },
     async (req, reply) => {
-      try { return ok(await ctx.sessions.createSupervisor(req.body.project_id, req.body.folder_id, req.body.card_id, req.body.system_prompt_layout)); }
+      try { return ok(await ctx.sessions.createSupervisor(req.body.project_id, req.body.workspace_id, req.body.card_id, req.body.system_prompt_layout)); }
       catch (e) { if (unknownBlock(reply, e)) return; throw e; }
     });
 

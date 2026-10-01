@@ -1,11 +1,11 @@
-// Per-FOLDER workspace container lifecycle: one container per checkout,
+// The workspace container lifecycle: one container per workspace (checkout),
 // shared by every session on it (the coder, its supervisor, the assistant).
 // The container is STATELESS — repo/, scratch/, logs/ live on the shared
 // volume — so removal is a latency event, never a data event. It boots on the
 // first tool call, dies after container_idle_ms of no calls, and is recreated
 // transparently.
 //
-// No in-memory tracking: idle time comes from the folder's lastUsedAt
+// No in-memory tracking: idle time comes from the workspace's lastUsedAt
 // (moved by every tool call and turn save on any of its sessions); running-
 // task status comes from background_tasks. Both survive a process restart, so
 // containers are never wiped at boot — they stay up and the normal idle reaper
@@ -22,7 +22,7 @@ import { logger, errStr } from '../log.js';
 
 const log = logger('container');
 
-/** A container is named by the FOLDER it serves: `phantom-looper-ws-<folder
+/** A container is named by the WORKSPACE it serves: `phantom-looper-ws-<workspace
  *  id>`. The name is the ONE key — it is what ensure/remove open and what the
  *  running-container list reads the id back off. (A label used to carry the
  *  same id under the old "session" name: two keys for one fact; gone.) */
@@ -113,12 +113,12 @@ export interface ContainerOpts {
    *  resolves only there. Unset (dev, no compose) = the URL is handed out
    *  but the container stays on the default bridge. */
   network?: string;
-  /** A container came up for this folder — awaited before `ensure` returns,
+  /** A container came up for this workspace — awaited before `ensure` returns,
    *  so whatever the caller does next (a file write) happens after the
    *  listener is in place. Instant sync attaches its watcher here. */
-  onStarted?: (folderId: string, project: ProjectRow | undefined) => Promise<void>;
-  /** The folder's container was removed (idle reap, an explicit remove). */
-  onRemoved?: (folderId: string) => Promise<void>;
+  onStarted?: (workspaceId: string, project: ProjectRow | undefined) => Promise<void>;
+  /** The workspace's container was removed (idle reap, an explicit remove). */
+  onRemoved?: (workspaceId: string) => Promise<void>;
 }
 
 export class ContainerManager {
@@ -131,12 +131,12 @@ export class ContainerManager {
     private opts: ContainerOpts = {},
   ) {}
 
-  name(folderId: string): string { return `${NAME_PREFIX}${folderId}`; }
+  name(workspaceId: string): string { return `${NAME_PREFIX}${workspaceId}`; }
 
-  /** Folder ids that have a running container, read from Docker off the
+  /** Workspace ids that have a running container, read from Docker off the
    *  container names. (Docker's name filter is a substring match, so the
    *  prefix is checked again here.) */
-  async activeFolders(): Promise<string[]> {
+  async activeWorkspaces(): Promise<string[]> {
     const list = await this.docker.listContainers({ filters: { name: [NAME_PREFIX], status: ['running'] } })
       .catch((e) => { log.warn({ err: errStr(e) }, 'could not list containers'); return []; });
     return list.flatMap((c) => (c.Names ?? [])
@@ -145,16 +145,16 @@ export class ContainerManager {
       .map((n) => n.slice(NAME_PREFIX.length)));
   }
 
-  /** The running container for a FOLDER, created if absent. Containers
-   *  belong to folders (they mount the checkout): every session on the
-   *  folder — the coder, its supervisor, the assistant — shares the one.
-   *  Serialized per folder so two simultaneous tool calls cannot
+  /** The running container for a WORKSPACE, created if absent. Containers
+   *  belong to workspaces (they mount the checkout): every session on the
+   *  workspace — the coder, its supervisor, the assistant — shares the one.
+   *  Serialized per workspace so two simultaneous tool calls cannot
    *  double-create. */
-  async ensure(folderId: string, project: ProjectRow | undefined): Promise<Docker.Container> {
-    const existing = this.inflight.get(folderId);
+  async ensure(workspaceId: string, project: ProjectRow | undefined): Promise<Docker.Container> {
+    const existing = this.inflight.get(workspaceId);
     if (existing) return existing;
-    const p = this.ensureInner(folderId, project).finally(() => this.inflight.delete(folderId));
-    this.inflight.set(folderId, p);
+    const p = this.ensureInner(workspaceId, project).finally(() => this.inflight.delete(workspaceId));
+    this.inflight.set(workspaceId, p);
     return p;
   }
 
@@ -197,14 +197,14 @@ export class ContainerManager {
       // box (or one just upgraded) has nothing local until here. Any other
       // failure surfaces as-is.
       if ((e as { statusCode?: number }).statusCode !== 404) throw e;
-      log.info({ folder: key, image }, 'workspace image not present — pulling');
+      log.info({ workspace: key, image }, 'workspace image not present — pulling');
       await this.images.pull(String(image));
       created = await this.docker.createContainer(spec);
     }
     await created.start();
-    log.info({ folder: key, image }, 'workspace container started');
+    log.info({ workspace: key, image }, 'workspace container started');
     await this.opts.onStarted?.(key, project)
-      .catch((e) => log.warn({ folder: key, err: errStr(e) }, 'onStarted listener failed — container is up regardless'));
+      .catch((e) => log.warn({ workspace: key, err: errStr(e) }, 'onStarted listener failed — container is up regardless'));
     return created;
   }
 
@@ -247,27 +247,27 @@ export class ContainerManager {
     return [`AGENT_DATABASE_URL=${await this.opts.databases.urlFor(project.id)}`];
   }
 
-  /** Remove the folder's container. None there (404) is fine — that is the
+  /** Remove the workspace's container. None there (404) is fine — that is the
    *  goal; any other failure throws, so no caller logs a removal that did
    *  not happen. */
-  async remove(folderId: string): Promise<void> {
-    await this.docker.getContainer(this.name(folderId)).remove({ force: true, v: true }).catch((e) => {
+  async remove(workspaceId: string): Promise<void> {
+    await this.docker.getContainer(this.name(workspaceId)).remove({ force: true, v: true }).catch((e) => {
       if ((e as { statusCode?: number }).statusCode !== 404) throw e;
     });
-    await this.opts.onRemoved?.(folderId)
-      .catch((e) => log.warn({ folder: folderId, err: errStr(e) }, 'onRemoved listener failed'));
+    await this.opts.onRemoved?.(workspaceId)
+      .catch((e) => log.warn({ workspace: workspaceId, err: errStr(e) }, 'onRemoved listener failed'));
   }
 
-  /** Kill idle containers. `idleFolders` answers from the folder's lastUsedAt,
+  /** Kill idle containers. `idleWorkspaces` answers from the workspace's lastUsedAt,
    *  background_tasks and session locks — no in-memory state. */
-  async reap(idleMs: number, idleFolders: (idleMs: number) => Promise<string[]>): Promise<void> {
-    const stale = await idleFolders(idleMs);
-    for (const folderId of stale) {
+  async reap(idleMs: number, idleWorkspaces: (idleMs: number) => Promise<string[]>): Promise<void> {
+    const stale = await idleWorkspaces(idleMs);
+    for (const workspaceId of stale) {
       try {
-        await this.remove(folderId);
-        log.info({ folder: folderId }, 'idle workspace container removed');
+        await this.remove(workspaceId);
+        log.info({ workspace: workspaceId }, 'idle workspace container removed');
       } catch (e) {
-        log.warn({ folder: folderId, err: errStr(e) }, 'idle workspace container could not be removed');
+        log.warn({ workspace: workspaceId, err: errStr(e) }, 'idle workspace container could not be removed');
       }
     }
   }

@@ -54,10 +54,10 @@ export interface OpenSessionConfig {
 
 export interface SessionInfo {
   id: string; projectId: string; branch: string | null; status: string;
-  /** The folder this session's tools open — its own for a coder, the
+  /** The workspace this session's tools open — its own for a coder, the
    *  coder's for a supervisor. Null only on an assistant with no session
    *  on screen. */
-  folderId: string | null;
+  workspaceId: string | null;
   agent?: string | null; card?: number | null;
   /** The row's pinned model — what this session runs on (Sessions.birthModel
    *  writes it; phantom-backend/agentConfig.ts sessionPin reads it). */

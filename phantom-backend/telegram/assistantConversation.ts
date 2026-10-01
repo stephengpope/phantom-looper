@@ -80,10 +80,10 @@ export class AssistantConversation {
   // ── session row ──────────────────────────────────────────────────────────
 
   /** The assistant's session row, pointed at what the user is looking at —
-   *  created the first time, re-pointed (project + folder) every turn
+   *  created the first time, re-pointed (project + workspace) every turn
    *  after, since the active session moves between turns. Called BEFORE the
    *  turn's agent is built: the turn runs on the row's model, its tools open
-   *  the row's folder, and every call is billed to it. */
+   *  the row's workspace, and every call is billed to it. */
   async ensureSession(projectId: string | null, activeSessionId?: string | null): Promise<SessionRow> {
     if (!projectId) throw new Error('no active project — /projects to pick one');
     if (this.sessionId) {

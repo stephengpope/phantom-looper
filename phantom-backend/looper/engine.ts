@@ -34,7 +34,7 @@ import type { FastifyInstance } from 'fastify';
 
 import type { ModelMessage } from 'ai';
 import type { ProjectRow } from '../db/schema.js';
-import { LOOP_CLIENT_ID, folderOf, type Sessions } from '../sessions.js';
+import { LOOP_CLIENT_ID, workspaceOf, type Sessions } from '../sessions.js';
 import type { Projects } from '../projects.js';
 import type { Cards, CardFields } from '../cards.js';
 import type { Settings } from '../settings.js';
@@ -277,9 +277,9 @@ export class LooperEngine {
         const sup = await this.deps.sessions.supervisorOf(project.id, card.number);
         supervisorSessionId = sup && sup.createdAt.getTime() >= coder.createdAt.getTime()
           ? sup.id
-          : (await this.deps.sessions.createSupervisor(project.id, folderOf(coder), card.id, SupervisorAgentOnSdk.systemPromptLayout)).id;
+          : (await this.deps.sessions.createSupervisor(project.id, workspaceOf(coder), card.id, SupervisorAgentOnSdk.systemPromptLayout)).id;
       } else {
-        // A new run: the coder (with its folder), put on the card the moment
+        // A new run: the coder (with its workspace), put on the card the moment
         // it exists.
         opened = await openSession({
           baseUrl: BASE, apiKey, clientId: CLIENT_ID, label: heldBy('coding', card.status),
@@ -299,9 +299,9 @@ export class LooperEngine {
         this.deps.events?.publish(project.id,
           { event: 'session_lock', card: card.number, id: opened.session.id, locked: true });
         // A new coder gets a new supervisor: a conversation on the coder's
-        // folder, on the same card.
+        // workspace, on the same card.
         supervisorSessionId = (await this.deps.sessions.createSupervisor(project.id,
-          folderOf(opened.session), card.id, SupervisorAgentOnSdk.systemPromptLayout)).id;
+          workspaceOf(opened.session), card.id, SupervisorAgentOnSdk.systemPromptLayout)).id;
       }
     } catch (e) {
       if (e instanceof SessionLockedError) {
@@ -393,8 +393,8 @@ export class LooperEngine {
         const model = { ...sup.model, fetch: this.deps.modelFetch,
           onRetry: (t: string) => log.warn({ card: card.number, agent: 'supervisor' }, t) };
         // The supervisor's tools run as the SUPERVISOR's session: the server
-        // opens its folder — the coder's — and the coder's checkout counts
-        // the activity. One rule for every session; no client picks a folder.
+        // opens its workspace — the coder's — and the coder's checkout counts
+        // the activity. One rule for every session; no client picks a workspace.
         const tools = {
           ...await phantomTools({ baseUrl: BASE, apiKey, sessionId: supOpened.session.id,
             pick: 'readonly', fetch: this.f }),

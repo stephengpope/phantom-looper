@@ -22,7 +22,7 @@
 //   A session is SKIPPED, never forced, when its work has not landed on
 //   base (an unmerged session is someone's live work — its files stay,
 //   whatever the disk says), when it is busy (a turn holds a lock on its
-//   folder, or a background task runs there), or when its backup fails
+//   workspace, or a background task runs there), or when its backup fails
 //   (tried again on the next run). So the disk can only stay full when
 //   what is left is unmerged, busy, cannot be backed up, or one session
 //   alone fills it — and the final log names those sessions.
@@ -86,7 +86,7 @@ const rounded = (d: DiskState) => ({ usedPct: Math.round(d.usedPct), freeGB: Mat
 /** The sessions whose files are on disk (only owners hold disk), each with
  *  its project row. Fails CLOSED like every sweep: an unreadable list
  *  aborts the run — not knowing what is protected never licenses deletion. */
-async function folderOwners(projects: Projects, sessions: Sessions): Promise<Array<{ s: SessionRow; w: ProjectRow }>> {
+async function workspaceOwners(projects: Projects, sessions: Sessions): Promise<Array<{ s: SessionRow; w: ProjectRow }>> {
   const rows = await sessions.listOwnersOnDisk();
   const byId = new Map((await projects.list()).map((w) => [w.id, w]));
   return rows
@@ -108,7 +108,7 @@ const backupOf = async (engine: GitEngine, s: SessionRow, w: ProjectRow): Promis
  *  push is never touched — the common case costs no lock, no git, no push. */
 export async function idleBackupSweep(projects: Projects, sessions: Sessions, engine: GitEngine): Promise<void> {
   let owners: Array<{ s: SessionRow; w: ProjectRow }>;
-  try { owners = await folderOwners(projects, sessions); } catch (e) {
+  try { owners = await workspaceOwners(projects, sessions); } catch (e) {
     log.warn({ err: errStr(e) }, 'skipping idle backup — could not read state');
     return;
   }
@@ -141,9 +141,9 @@ export interface CleanupDeps {
   measure: () => Promise<DiskState>;
   /** The sessions with files on disk, with their projects. */
   owners: () => Promise<Array<{ s: SessionRow; w: ProjectRow }>>;
-  /** Of these folder ids, the busy ones: a turn holds a lock there, or a
+  /** Of these workspace ids, the busy ones: a turn holds a lock there, or a
    *  background task runs there. */
-  busy: (folderIds: string[]) => Promise<Set<string>>;
+  busy: (workspaceIds: string[]) => Promise<Set<string>>;
   /** Has this session's work landed on base? Unknown counts as no — the
    *  sweep never deletes on a guess. */
   landed: (s: SessionRow, w: ProjectRow) => Promise<boolean>;
@@ -217,13 +217,13 @@ export async function diskCleanup(d: CleanupDeps): Promise<void> {
 /** Disk cleanup against the real system. */
 export async function pressureSweep(
   settings: Settings, projects: Projects, sessions: Sessions, p: Paths, images: Images,
-  containers: ContainerManager, engine: GitEngine, busy: (folderIds: string[]) => Promise<Set<string>>,
+  containers: ContainerManager, engine: GitEngine, busy: (workspaceIds: string[]) => Promise<Set<string>>,
 ): Promise<void> {
   const currents = [String(await settings.resolve('container_image')), API_IMAGE_CURRENT];
   await diskCleanup({
     pct: Number(await settings.resolve('disk_cleanup_percent')),
     measure: () => measureDisk(p.root),
-    owners: () => folderOwners(projects, sessions),
+    owners: () => workspaceOwners(projects, sessions),
     busy,
     // Measured live from the checkout: the stored `work` column is cleared
     // once the container is gone, which is exactly the idle session here.

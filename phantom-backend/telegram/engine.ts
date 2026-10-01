@@ -433,7 +433,7 @@ export class TelegramEngine {
     let active = bot.activeSessionId ?? null;
     try {
       // The assistant's session row exists BEFORE its agent is built: the
-      // turn runs on the row's model, its tools open the row's folder, and
+      // turn runs on the row's model, its tools open the row's workspace, and
       // every call is billed to it.
       const own = await conv.ensureSession(bot.activeProjectId, bot.activeSessionId);
       const project = bot.activeProjectId ? await this.deps.projects.get(bot.activeProjectId) : undefined;
@@ -443,8 +443,8 @@ export class TelegramEngine {
         const r = await this.switchSession(client, dm, id);
         if ('error' in r) return r;
         active = r.id;
-        // The assistant's folder follows the switch mid-turn: its read tools
-        // open the row's folder, so the very next call sees the new files.
+        // The assistant's workspace follows the switch mid-turn: its read tools
+        // open the row's workspace, so the very next call sees the new files.
         await this.deps.sessions.follow(own.id, bot.activeProjectId!, r.id);
         return { active: r.id, title: r.title,
           note: "You are still the assistant — this session's files are now what your read tools see. " +

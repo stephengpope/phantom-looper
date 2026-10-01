@@ -24,7 +24,7 @@ import { SESSION_HEADER } from '../sessionHeader.js';
 import { fileTools } from './fs.js';
 
 const STATUS: Record<string, number> = {
-  not_found: 404, session_not_found: 404, duplicate_name: 409, database_off: 409, database_unavailable: 503, telegram_unavailable: 503, sql_error: 400, session_destroyed: 410, no_folder: 400, no_session: 400,
+  not_found: 404, session_not_found: 404, duplicate_name: 409, database_off: 409, database_unavailable: 503, telegram_unavailable: 503, sql_error: 400, session_destroyed: 410, no_workspace: 400, no_session: 400,
   invalid_args: 400, no_match: 422, not_unique: 422, binary_file: 422, skill_not_found: 404,
   is_directory: 400, not_a_directory: 400, too_large: 413, credential_required: 400, search_failed: 502,
   busy: 409, container_start_failed: 503, container_unavailable: 503, exec_timeout: 504, not_ready: 409, interrupted: 499,
@@ -38,7 +38,7 @@ const clientOf = (req: { headers: Record<string, unknown> }): string => {
 /** The session a tool call or listing names: known and still active, with
  *  its project. A tool call is use — the checkout is touched. Files are
  *  NOT required here: a tool that needs them asks `files()`, which refuses a
- *  session without a folder. */
+ *  session without a workspace. */
 async function sessionOf(ctx: AppCtx, id: string): Promise<{ session: SessionRow; project: ProjectRow }> {
   if (!id) throw new ToolError('session_not_found', `missing ${SESSION_HEADER} header`);
   const session = await ctx.sessions.get(id);
@@ -97,8 +97,8 @@ export function toolRoutes(app: FastifyInstance, ctx: AppCtx) {
             if (!files) {
               const fs = ctx.fs;
               if (!fs) throw new ToolError('container_unavailable', 'containers are not wired on this server', false);
-              if (!session.folderId) throw new ToolError('no_folder', 'this session has no files — nothing to read');
-              files = fileTools(ctx, fs, session, session.folderId, ac.signal);
+              if (!session.workspaceId) throw new ToolError('no_workspace', 'this session has no files — nothing to read');
+              files = fileTools(ctx, fs, session, session.workspaceId, ac.signal);
             }
             return files;
           },

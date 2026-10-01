@@ -128,9 +128,9 @@ export async function webSearch(ctx: AppCtx, b: SearchBody): Promise<Array<Recor
 /** Scrape each URL (in parallel), write the markdown under the session's
  *  work directory and answer the /workspace/web/ path per URL. A failed URL
  *  is an error entry; the call itself succeeds. */
-export async function webFetch(ctx: AppCtx, folderId: string, urls: string[]): Promise<FetchEntry[]> {
+export async function webFetch(ctx: AppCtx, workspaceId: string, urls: string[]): Promise<FetchEntry[]> {
   const key = await keyOf(ctx);
-  const hostDir = path.join(sessionDir(ctx.paths, folderId), 'web');
+  const hostDir = path.join(sessionDir(ctx.paths, workspaceId), 'web');
   await fsp.mkdir(hostDir, { recursive: true });
   const taken = new Set<string>();
   // In input order; fetched in parallel — the slug set is claimed

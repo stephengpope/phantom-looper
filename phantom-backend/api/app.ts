@@ -29,7 +29,7 @@ import type { Sessions } from '../sessions.js';
 import type { Settings } from '../settings.js';
 import type { Projects } from '../projects.js';
 import type { Databases } from '../databases.js';
-import type { Folders } from '../folders.js';
+import type { Workspaces } from '../workspaces.js';
 import type { Cards } from '../cards.js';
 import type { BackgroundTasks } from '../backgroundTasks.js';
 import type { Presets } from '../presets.js';
@@ -57,7 +57,7 @@ export interface AppCtx {
   // (and every change notice) live in the object.
   settings: Settings;
   projects: Projects;
-  folders: Folders;
+  workspaces: Workspaces;
   cards: Cards;
   sessions: Sessions;
   backgroundTasks: BackgroundTasks;

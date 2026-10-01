@@ -73,20 +73,20 @@ async function imageFor(ctx: AppCtx, session: SessionRow): Promise<string> {
 
 /** Every skill the session sees: a live scan of its working tree merged with
  *  the image's system tier (repo shadows). */
-export async function listSkills(ctx: AppCtx, deps: FsDeps, session: SessionRow, folderId: string) {
+export async function listSkills(ctx: AppCtx, deps: FsDeps, session: SessionRow, workspaceId: string) {
   return { skills: mergeSkills(
-    await scanSkills(repoDir(ctx.paths, folderId)),
+    await scanSkills(repoDir(ctx.paths, workspaceId)),
     await systemSkills(deps.docker, await imageFor(ctx, session))) };
 }
 
 /** The whole SKILL.md plus the names of its bundled files in ONE answer;
  *  `file` fetches one bundled file instead. */
-export async function loadSkill(ctx: AppCtx, deps: FsDeps, session: SessionRow, folderId: string,
+export async function loadSkill(ctx: AppCtx, deps: FsDeps, session: SessionRow, workspaceId: string,
   name: string, file?: string): Promise<unknown> {
   const nameErr = validateSkillName(name);
   if (nameErr) throw new ToolError('invalid_args', nameErr);
-  const dir = skillDirHost(ctx, folderId, name);
-  if (!(await skillExists(ctx, folderId, name))) {
+  const dir = skillDirHost(ctx, workspaceId, name);
+  if (!(await skillExists(ctx, workspaceId, name))) {
     // Not in the repo — fall through to the image's system tier (repo
     // shadows system, so this only answers un-shadowed names).
     const sys = (await systemSkillTree(deps.docker, await imageFor(ctx, session))).get(name);
@@ -112,13 +112,13 @@ export async function loadSkill(ctx: AppCtx, deps: FsDeps, session: SessionRow, 
 }
 
 /** Every write, validated, through the container. */
-export async function manageSkill(ctx: AppCtx, deps: FsDeps, session: SessionRow, folderId: string, body: ManageBody): Promise<unknown> {
+export async function manageSkill(ctx: AppCtx, deps: FsDeps, session: SessionRow, workspaceId: string, body: ManageBody): Promise<unknown> {
   const nameErr = validateSkillName(body.name);
   if (nameErr) throw new ToolError('invalid_args', nameErr);
   const project = await ctx.projects.get(session.projectId);
   let container;
   try {
-    container = await deps.containers.ensure(folderId, project);
+    container = await deps.containers.ensure(workspaceId, project);
   } catch (e) {
     throw new ToolError('container_start_failed', (e as Error).message, true);
   }
@@ -126,16 +126,16 @@ export async function manageSkill(ctx: AppCtx, deps: FsDeps, session: SessionRow
   // Writes reach the REPO tier only. When the name exists solely in the
   // image's system tier, say so — "no skill" would gaslight an agent that
   // just saw it in skill_list.
-  const systemHas = !(await skillExists(ctx, folderId, body.name))
+  const systemHas = !(await skillExists(ctx, workspaceId, body.name))
     && (await systemSkillTree(deps.docker, await imageFor(ctx, session))).has(body.name);
-  return manage(ctx, ws, folderId, body, systemHas);
+  return manage(ctx, ws, workspaceId, body, systemHas);
 }
 
-async function manage(ctx: AppCtx, ws: Sandbox, folderId: string, body: ManageBody,
+async function manage(ctx: AppCtx, ws: Sandbox, workspaceId: string, body: ManageBody,
   systemHas = false): Promise<unknown> {
   const { action, name } = body;
-  const exists = await skillExists(ctx, folderId, name);
-  const hostDir = skillDirHost(ctx, folderId, name);
+  const exists = await skillExists(ctx, workspaceId, name);
+  const hostDir = skillDirHost(ctx, workspaceId, name);
   const notFound = () => new ToolError('skill_not_found', systemHas
     ? `'${name}' is a read-only system skill (baked into the workspace image). To change what the agent ` +
       `sees, create a repo skill named '${name}' — it shadows the system one.`

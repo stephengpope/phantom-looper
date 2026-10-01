@@ -39,7 +39,7 @@ import type { ProjectRow, SessionRow } from '../db/schema.js';
 import { resolveAuth } from '../pool/pool.js';
 import { repoDir, type Paths } from '../pool/paths.js';
 import type { Sessions } from '../sessions.js';
-import type { Folders } from '../folders.js';
+import type { Workspaces } from '../workspaces.js';
 import type { Cards } from '../cards.js';
 import type { Settings } from '../settings.js';
 import {
@@ -136,7 +136,7 @@ async function cardIntentFor(deps: SyncDeps, session: SessionRow): Promise<strin
 
 export interface SyncDeps {
   sessions: Sessions;
-  folders: Folders;
+  workspaces: Workspaces;
   cards: Cards;
   settings: Settings;
   paths: Paths;
@@ -184,9 +184,9 @@ export interface SyncOptions {
 export async function syncBranch(
   deps: SyncDeps, session: SessionRow, project: ProjectRow, opts: SyncOptions,
 ): Promise<SyncResult> {
-  const folder = session.folderId ? await deps.folders.get(session.folderId) : undefined;
-  if (!folder) return { outcome: 'error', reason: 'session has no folder — nothing to sync' };
-  const dir = repoDir(deps.paths, folder.id);
+  const workspace = session.workspaceId ? await deps.workspaces.get(session.workspaceId) : undefined;
+  if (!workspace) return { outcome: 'error', reason: 'session has no workspace — nothing to sync' };
+  const dir = repoDir(deps.paths, workspace.id);
   const base = project.baseBranch;
   const auth = await resolveAuth(deps.settings, project);
   const ev = async (step: SyncStep, detail?: string) => { await deps.onEvent?.({ step, label: syncStepLabel(step, opts.landOnBase), detail }); };
@@ -202,22 +202,22 @@ export async function syncBranch(
   }
 
   // 0 — the locks ARE the concurrency test. The CHECKOUT lock first, always:
-  // one sync writes a checkout at a time, whoever asked (Folders owns it;
+  // one sync writes a checkout at a time, whoever asked (Workspaces owns it;
   // fresh id per run, never re-entered). Then, when holding, the SESSION
   // lock: no turn runs under the sync. Held by someone else means someone
   // else is writing; there is nothing further to check.
   await ev('lock');
   const holder = newId();
-  if (!(await deps.folders.acquireSyncLock(folder.id, holder, LOCK_TTL_MS))) {
+  if (!(await deps.workspaces.acquireSyncLock(workspace.id, holder, LOCK_TTL_MS))) {
     return { outcome: 'busy', reason: 'another sync is writing this checkout — try again when it finishes' };
   }
   if (hold && !(await deps.sessions.acquireLock(session, GIT_CLIENT_ID, LOCK_TTL_MS, opts.label))) {
-    await deps.folders.releaseSyncLock(folder.id, holder);
+    await deps.workspaces.releaseSyncLock(workspace.id, holder);
     return { outcome: 'busy', reason: 'the session is busy — try again when its turn finishes' };
   }
   const heartbeat = setInterval(() => {
-    void deps.folders.renewSyncLock(folder.id, holder, LOCK_TTL_MS)
-      .catch((e) => log.warn({ folder: folder.id, err: errStr(e) }, 'checkout lock renewal failed'));
+    void deps.workspaces.renewSyncLock(workspace.id, holder, LOCK_TTL_MS)
+      .catch((e) => log.warn({ workspace: workspace.id, err: errStr(e) }, 'checkout lock renewal failed'));
     if (hold) {
       void deps.sessions.renewLock(session.id, GIT_CLIENT_ID, LOCK_TTL_MS)
         .catch((e) => log.warn({ session: session.id, err: errStr(e) }, 'lock renewal failed'));
@@ -244,7 +244,7 @@ export async function syncBranch(
     // left for it. Origin's copy is then history HEAD has already replaced;
     // folding it back in (a merge) re-creates the conflict it came from.
     await ev('backup');
-    const backed = await pushSession(dir, folder.branch, auth);
+    const backed = await pushSession(dir, workspace.branch, auth);
     if (backed === 'error') return { outcome: 'error', reason: 'could not back the branch up — nothing was rewritten' };
 
     // 3 — the commit. The message is written BEFORE anything is rewritten:
@@ -290,7 +290,7 @@ export async function syncBranch(
         // 5 — the session's own coding agent, in its own transcript.
         const { stdout: conflicted } = await git(dir, ['diff', '--name-only', '--diff-filter=U']);
         const ctx: ConflictContext = {
-          branch: folder.branch, baseBranch: base,
+          branch: workspace.branch, baseBranch: base,
           files: conflicted.trim().split('\n').filter(Boolean), arrived,
         };
         // No fixer (instant sync): the rebase is LEFT STOPPED, markers in the
@@ -338,9 +338,9 @@ export async function syncBranch(
 
       // 7 — the branch, rewritten by the rebase, so this forces with a lease.
       await ev('push_branch');
-      const pushed = await pushSessionForced(dir, folder.branch, auth);
+      const pushed = await pushSessionForced(dir, workspace.branch, auth);
       if (pushed === 'pushed') {
-        await deps.folders.markPushed(folder.id);
+        await deps.workspaces.markPushed(workspace.id);
       } else if (opts.landOnBase) {
         // The backup must exist before base is touched.
         return { outcome: 'error', reason: `branch push failed (${pushed})`, rounds: round };
@@ -388,6 +388,6 @@ export async function syncBranch(
   } finally {
     clearInterval(heartbeat);
     if (hold) await deps.sessions.releaseLock(session.id, GIT_CLIENT_ID);
-    await deps.folders.releaseSyncLock(folder.id, holder);
+    await deps.workspaces.releaseSyncLock(workspace.id, holder);
   }
 }

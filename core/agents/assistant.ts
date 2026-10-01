@@ -1,6 +1,6 @@
 // The Assistant. Its system prompt layout: its own document
 // (core/prompts/assistant) and the date. Its session follows the one the
-// user is looking at (`follow`): its file tools open that session's folder.
+// user is looking at (`follow`): its file tools open that session's workspace.
 import { Agent, agentText, type AgentHandlers, type PhantomBackend, type SystemPromptLayout } from 'phantom-client-sdk';
 import { systemPrompt as assistantInstructions } from '../prompts/assistant/wiring.js';
 
@@ -20,7 +20,7 @@ export class AssistantAgent extends Agent {
         system_prompt_layout: AssistantAgent.systemPromptLayout }));
   }
 
-  /** Point the assistant's file tools at another session's folder. */
+  /** Point the assistant's file tools at another session's workspace. */
   follow(projectId: string, activeSessionId: string | null): Promise<unknown> {
     return this.backend.call('POST', `/sessions/${this.session.id}/follow`, { project_id: projectId, session_id: activeSessionId });
   }

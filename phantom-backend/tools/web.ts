@@ -6,7 +6,7 @@ import { ToolError } from './envelope.js';
 import { obj, type OfferCtx, type ToolDef } from './def.js';
 
 const AGENTS = ['coding', 'supervisor', 'assistant'] as const;
-const hasFiles = ({ session }: OfferCtx) => Promise.resolve(!!session.folderId);
+const hasFiles = ({ session }: OfferCtx) => Promise.resolve(!!session.workspaceId);
 
 export const WEB_TOOLS: ToolDef[] = [
   {
@@ -47,8 +47,8 @@ export const WEB_TOOLS: ToolDef[] = [
     }, ['urls']),
     mutates: false, agents: AGENTS, offered: hasFiles,
     execute(ctx, a) {
-      if (!ctx.session.folderId) throw new ToolError('no_folder', 'this session has no files — nowhere to save a page');
-      return webFetch(ctx.app, ctx.session.folderId, a.urls as string[]);
+      if (!ctx.session.workspaceId) throw new ToolError('no_workspace', 'this session has no files — nowhere to save a page');
+      return webFetch(ctx.app, ctx.session.workspaceId, a.urls as string[]);
     },
   },
 ];

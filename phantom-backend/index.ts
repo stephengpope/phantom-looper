@@ -8,7 +8,7 @@ import { Sessions } from './sessions.js';
 import { Settings } from './settings.js';
 import { Projects } from './projects.js';
 import { Databases } from './databases.js';
-import { Folders } from './folders.js';
+import { Workspaces } from './workspaces.js';
 import { Cards } from './cards.js';
 import { BackgroundTasks } from './backgroundTasks.js';
 import { Presets } from './presets.js';
@@ -49,7 +49,7 @@ import { LooperEngine } from './looper/engine.js';
 import { TelegramEngine } from './telegram/engine.js';
 import { refreshWorkState } from './git/workRefresh.js';
 import { InstantSync } from './git/instantSync.js';
-import { FolderWatcher } from './git/folderWatcher.js';
+import { WorkspaceWatcher } from './git/workspaceWatcher.js';
 import { reconcileDbUi } from './api/routes/dbUi.js';
 import { logger, errStr } from './log.js';
 
@@ -75,13 +75,13 @@ async function main() {
   const settings = new Settings(db, env.encryptionKey, settingsEvents);
   const databases = new Databases(pgPool, env.databaseUrl, env.encryptionKey);
   const projects = new Projects(db, settings, settingsEvents, databases);
-  const folders = new Folders(db, paths, settings, sessionEvents);
+  const workspaces = new Workspaces(db, paths, settings, sessionEvents);
   const cards = new Cards(db, projects, events);
   const docker = makeDocker();
   // THE image puller/remover — every pull and every removal in this process
   // (update, first-use, disk sweep) goes through it so they never overlap.
   const images = new Images(docker);
-  const sessions = new Sessions(db, settings, projects, folders, sessionEvents, { paths, docker: docker ?? undefined });
+  const sessions = new Sessions(db, settings, projects, workspaces, sessionEvents, { paths, docker: docker ?? undefined });
   // A settings write reaches every session nothing has been said to yet: its
   // row takes the settings' model (Sessions.followModelSettings — THE rule).
   settingsEvents.subscribe(() => {
@@ -105,8 +105,8 @@ async function main() {
   // is captured lazily, like `app`: containers start long after boot.
   const containers = new ContainerManager(docker, images, paths, {
     volume: process.env.WORKSPACE_VOLUME, network: process.env.WORKSPACE_NETWORK, settings, databases,
-    onStarted: (folderId, project) => instantSync.watchFolder(folderId, project),
-    onRemoved: (folderId) => instantSync.unwatchFolder(folderId),
+    onStarted: (workspaceId, project) => instantSync.watchWorkspace(workspaceId, project),
+    onRemoved: (workspaceId) => instantSync.unwatchWorkspace(workspaceId),
   });
   // THE CONFLICT RESOLVER — the session's own coding agent, not a separate
   // fixer. Shared by auto-push, auto-pull and the manual /git/pull.
@@ -181,7 +181,7 @@ async function main() {
       { event: 'sync', op, step: e.step, label: e.label, detail: e.detail });
   // The manual /git/pull has no stream of its own — the feed is how anyone
   // sees it run, so its steps publish under the git client (no caller to echo).
-  const engine = new GitEngine({ sessions, folders, cards, settings, paths,
+  const engine = new GitEngine({ sessions, workspaces, cards, settings, paths,
     resolve: resolveConflict, messageConfig }, (sessionId, e) => publishSync(sessionId, 'pull')(e));
 
   // After a successful sync, drop a summary into the session's transcript so
@@ -216,7 +216,7 @@ async function main() {
     await cards.update(project, card.number, { status: 'blocked', blocked_reason: reason, resolution: null }, undefined, GIT_CLIENT_ID)
       .catch((e) => log.warn({ session: session.id, err: errStr(e) }, 'could not block card after unresolved conflict'));
   };
-  const syncDeps = { sessions, folders, cards, settings, paths,
+  const syncDeps = { sessions, workspaces, cards, settings, paths,
     resolve: resolveConflict, recordSummary, messageConfig };
   const autoPushFn = async (session: SessionRow, project: ProjectRow,
     onEvent?: (e: AutoPushEvent) => void | Promise<void>, by?: string) => {
@@ -258,9 +258,9 @@ async function main() {
     } else return;
     if (!backdoor.has(session.id, message)) backdoor.push(session.id, message);
   };
-  const instantDeps = { sessions, folders, cards, settings, paths, messageConfig, recordSummary: noteForNextTurn };
+  const instantDeps = { sessions, workspaces, cards, settings, paths, messageConfig, recordSummary: noteForNextTurn };
   const instantSync = new InstantSync({
-    sessions, folders, projects, settings, paths, watcher: new FolderWatcher(),
+    sessions, workspaces, projects, settings, paths, watcher: new WorkspaceWatcher(),
     autoPush: (session, project) => autoPush(instantDeps, session, project, { hold: false }),
     autoPull: (session, project) => autoPull(instantDeps, session, project, { hold: false }),
     failed: (session, op, reason) =>
@@ -270,7 +270,7 @@ async function main() {
   // (the settings bus announces every write), and containers already running
   // when this process came up (they outlive it). Each brings the watcher set
   // in line with the running containers once — never on a clock.
-  const reconcileInstantSync = () => containers.activeFolders()
+  const reconcileInstantSync = () => containers.activeWorkspaces()
     .then((active) => instantSync.reconcile(active))
     .catch((e) => log.error({ err: errStr(e) }, 'instant sync reconcile threw'));
   settingsEvents.subscribe(() => { void reconcileInstantSync(); });
@@ -278,20 +278,20 @@ async function main() {
 
   // One loop drives both the pool tick and the session sweep. The interval is a
   // SETTING read per tick, so a change takes effect without a restart.
-  // THE busy rule, for the idle timeout and disk cleanup alike: a folder is
+  // THE busy rule, for the idle timeout and disk cleanup alike: a workspace is
   // busy while a background task runs there or any session on it (coder,
   // supervisor, assistant) holds a live lock — a turn is running. A task's
-  // session is the folder's owner (only a coder has `bash`), so the ids line up.
-  const busyFolders = async (ids: string[]): Promise<Set<string>> => {
-    const [tasks, held] = await Promise.all([backgroundTasks.sessionsWithRunning(ids), sessions.foldersHeld(ids)]);
+  // session is the workspace's owner (only a coder has `bash`), so the ids line up.
+  const busyWorkspaces = async (ids: string[]): Promise<Set<string>> => {
+    const [tasks, held] = await Promise.all([backgroundTasks.sessionsWithRunning(ids), sessions.workspacesHeld(ids)]);
     return new Set([...tasks, ...held]);
   };
-  // Folders with a running container not touched for the threshold and not
+  // Workspaces with a running container not touched for the threshold and not
   // busy — the set the idle timeout reaps.
-  const idleContainerFolders = async (ms: number): Promise<string[]> => {
-    const active = await containers.activeFolders();
-    const idle = await folders.listIdle(active, ms);
-    const busy = await busyFolders(idle);
+  const idleContainerWorkspaces = async (ms: number): Promise<string[]> => {
+    const active = await containers.activeWorkspaces();
+    const idle = await workspaces.listIdle(active, ms);
+    const busy = await busyWorkspaces(idle);
     return idle.filter((id) => !busy.has(id));
   };
 
@@ -301,8 +301,8 @@ async function main() {
       await tick(projects, settings, paths).catch((e) => log.error({ err: errStr(e) }, 'pool tick threw'));
       await idleBackupSweep(projects, sessions, engine).catch((e) => log.error({ err: errStr(e) }, 'idle backup sweep threw'));
       const idleMs = await settings.resolve('container_idle_ms').catch(() => 30 * 60_000);
-      await containers.reap(Number(idleMs), idleContainerFolders).catch((e) => log.error({ err: errStr(e) }, 'container reap threw'));
-      await pressureSweep(settings, projects, sessions, paths, images, containers, engine, busyFolders).catch((e) => log.error({ err: errStr(e) }, 'pressure sweep threw'));
+      await containers.reap(Number(idleMs), idleContainerWorkspaces).catch((e) => log.error({ err: errStr(e) }, 'container reap threw'));
+      await pressureSweep(settings, projects, sessions, paths, images, containers, engine, busyWorkspaces).catch((e) => log.error({ err: errStr(e) }, 'pressure sweep threw'));
       const ms = await settings.resolve('maintenance_interval_ms').catch(() => 60_000);
       await new Promise((r) => setTimeout(r, Number(ms)));
     }
@@ -310,13 +310,13 @@ async function main() {
 
   const backdoor = new BackdoorQueue();
 
-  // Work-state refresh: every 10s, recompute `work` for folders with a
+  // Work-state refresh: every 10s, recompute `work` for workspaces with a
   // running container. A change writes the row and publishes on the board
   // event stream so the kanban board and the toolbar hear it live.
   (async () => {
     while (!stopped) {
       await new Promise((r) => setTimeout(r, 10_000));
-      await refreshWorkState({ folders, projects, paths, containers, events })
+      await refreshWorkState({ workspaces, projects, paths, containers, events })
         .catch((e) => log.error({ err: errStr(e) }, 'work-state refresh threw'));
     }
   })();
@@ -327,7 +327,7 @@ async function main() {
   const system = new System(paths, logTokens, docker ?? undefined, images, process.env.UPDATE_TRIGGER_DIR || undefined,
     () => ctx.looper?.runningCount() ?? 0);
   const ctx: AppCtx = {
-    settings, projects, folders, cards, sessions, backgroundTasks, presets, crons, logTokens,
+    settings, projects, workspaces, cards, sessions, backgroundTasks, presets, crons, logTokens,
     paths, apiKey: env.apiKey, version: VERSION,
     databases,
     fs: { docker, containers, engine },

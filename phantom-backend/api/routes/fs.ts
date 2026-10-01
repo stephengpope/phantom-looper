@@ -14,7 +14,7 @@ import type { FileTools } from '../../tools/def.js';
 import { ToolError } from '../../tools/envelope.js';
 import type { AppCtx } from '../app.js';
 import { killProcessGroup } from '../foreground.js';
-import { folderOf } from '../../sessions.js';
+import { workspaceOf } from '../../sessions.js';
 import type { ContainerManager } from '../../workspace/container.js';
 import type Docker from 'dockerode';
 import type { GitEngine } from '../../git/engine.js';
@@ -202,7 +202,7 @@ async function runBash(
       const total = stdout.length + stderr.length;
       if (total > maxOut) {
         const spillName = `bash-${newId()}.out`;
-        const spillHost = path.join(sessionDir(ctx.paths, folderOf(session)), 'logs', spillName);
+        const spillHost = path.join(sessionDir(ctx.paths, workspaceOf(session)), 'logs', spillName);
         await fsp.mkdir(path.dirname(spillHost), { recursive: true });
         await fsp.writeFile(spillHost, Buffer.concat([
           stdout, Buffer.from('\n--- stderr ---\n'), stderr,
@@ -245,7 +245,7 @@ async function runBash(
   }
 
   const taskId = newId();
-  const logPath = path.join(sessionDir(ctx.paths, folderOf(session)), 'logs', `${taskId}.ndjson`);
+  const logPath = path.join(sessionDir(ctx.paths, workspaceOf(session)), 'logs', `${taskId}.ndjson`);
   await fsp.mkdir(path.dirname(logPath), { recursive: true });
   await ctx.backgroundTasks.start({ id: taskId, sessionId: session.id, argv, logPath });
   // The same $$-to-pidfile idiom as unary above (pid == sid, runc setsids the
@@ -404,11 +404,11 @@ async function tailLog(logPath: string, lines: number): Promise<string[]> {
  *  container started (or already up), the sandbox on it, the bash and task
  *  plumbing wired around it. `signal` is the client's disconnect — a unary
  *  bash command is killed on it. Throws ToolError container_start_failed. */
-export async function fileTools(ctx: AppCtx, deps: FsDeps, session: SessionRow, folderId: string, signal: AbortSignal): Promise<FileTools> {
+export async function fileTools(ctx: AppCtx, deps: FsDeps, session: SessionRow, workspaceId: string, signal: AbortSignal): Promise<FileTools> {
   const project = await ctx.projects.get(session.projectId);
   let container;
   try {
-    container = await deps.containers.ensure(folderId, project);
+    container = await deps.containers.ensure(workspaceId, project);
   } catch (e) {
     throw new ToolError('container_start_failed', (e as Error).message, true);
   }

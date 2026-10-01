@@ -9,7 +9,7 @@
 //      GitHub API, so no rate limit); nothing new and it stops right there.
 //   2. auto-push — only when a file changed and the files have then been
 //      quiet for `instant_sync_push_debounce_ms`. The watcher on the checkout
-//      (FolderWatcher — @parcel/watcher in its own child process) does
+//      (WorkspaceWatcher — @parcel/watcher in its own child process) does
 //      nothing but record WHEN the last change happened.
 //
 // The beat knows no git. It calls the two functions and logs every result.
@@ -18,7 +18,7 @@
 // on the next beat ("a rebase is in progress") is the same news, and
 // `busy` (a manual sync holds the checkout) is no news at all. One
 // timer per checkout is only how the two calls are scheduled; what keeps
-// any two syncs off one checkout is the CHECKOUT LOCK (folders.ts), taken
+// any two syncs off one checkout is the CHECKOUT LOCK (workspaces.ts), taken
 // inside the sync itself by every caller.
 //
 // It is NOT a second sync. Both are the SAME `autoPush` / `autoPull` the cli,
@@ -38,31 +38,31 @@
 // A LIVE CHECKOUT IS A RUNNING CONTAINER. Files only change through the
 // container (an agent's tool call) or through the sync itself. The container
 // starts on the first tool call and is removed when idle, and ContainerManager
-// says so as it happens: `watchFolder` runs inside the start, BEFORE the tool
-// call that started it returns, so the first write is seen; `unwatchFolder`
+// says so as it happens: `watchWorkspace` runs inside the start, BEFORE the tool
+// call that started it returns, so the first write is seen; `unwatchWorkspace`
 // runs on removal. `reconcile` covers what those two cannot: containers
 // already running when this process boots, and the switch or a timing
 // changed (the settings bus says so) — never a poll.
 import type { SessionRow, ProjectRow } from '../db/schema.js';
 import type { Sessions } from '../sessions.js';
-import type { Folders } from '../folders.js';
+import type { Workspaces } from '../workspaces.js';
 import type { Projects } from '../projects.js';
 import type { Settings } from '../settings.js';
 import { repoDir, type Paths } from '../pool/paths.js';
 import type { AutoPushResult } from './autoPush.js';
 import type { AutoPullResult } from './autoPull.js';
-import type { FolderWatcher } from './folderWatcher.js';
+import type { WorkspaceWatcher } from './workspaceWatcher.js';
 import { logger, errStr } from '../log.js';
 
 const log = logger('instant-sync');
 
 export interface InstantSyncDeps {
   sessions: Sessions;
-  folders: Folders;
+  workspaces: Workspaces;
   projects: Projects;
   settings: Settings;
   paths: Paths;
-  watcher: FolderWatcher;
+  watcher: WorkspaceWatcher;
   /** Auto-push / auto-pull as index.ts wires them for instant sync: no
    *  hold, no fixer, notes to the backdoor queue. */
   autoPush: (session: SessionRow, project: ProjectRow) => Promise<AutoPushResult>;
@@ -72,7 +72,7 @@ export interface InstantSyncDeps {
 }
 
 interface Watched {
-  folderId: string;
+  workspaceId: string;
   project: ProjectRow;
   debounceMs: number;
   pullMs: number;
@@ -94,26 +94,26 @@ export class InstantSync {
 
   constructor(private deps: InstantSyncDeps) {}
 
-  /** A container came up for this folder. Attach if its project has the
+  /** A container came up for this workspace. Attach if its project has the
    *  switch on; a no-op if already attached. */
-  async watchFolder(folderId: string, project: ProjectRow | undefined): Promise<void> {
-    if (!project || this.watched.has(folderId)) return;
+  async watchWorkspace(workspaceId: string, project: ProjectRow | undefined): Promise<void> {
+    if (!project || this.watched.has(workspaceId)) return;
     const c = await this.configOf(project);
-    if (c.on) await this.attach(folderId, project, c);
+    if (c.on) await this.attach(workspaceId, project, c);
   }
 
-  /** The folder's container is gone. */
-  async unwatchFolder(folderId: string): Promise<void> {
-    const w = this.watched.get(folderId);
+  /** The workspace's container is gone. */
+  async unwatchWorkspace(workspaceId: string): Promise<void> {
+    const w = this.watched.get(workspaceId);
     if (w) await this.detach(w);
   }
 
-  /** Bring the watcher set in line with `activeFolderIds` (the running
+  /** Bring the watcher set in line with `activeWorkspaceIds` (the running
    *  containers) and each project's switch and timings: attach the new,
    *  detach the gone or switched off, retime the rest. For boot and for a
    *  settings change — the two facts no container event carries. */
-  async reconcile(activeFolderIds: string[]): Promise<void> {
-    const rows = await this.deps.folders.listForWorkRefresh(activeFolderIds);
+  async reconcile(activeWorkspaceIds: string[]): Promise<void> {
+    const rows = await this.deps.workspaces.listForWorkRefresh(activeWorkspaceIds);
     const projects = new Map((await this.deps.projects.list()).map((w) => [w.id, w]));
     const configs = new Map<string, Config>();
     for (const id of new Set(rows.map((r) => r.projectId))) {
@@ -133,7 +133,7 @@ export class InstantSync {
         current.pullMs = c.pullMs;
       } else {
         await this.attach(row.id, project, c)
-          .catch((e) => log.warn({ folder: row.id, err: errStr(e) }, 'could not start watching'));
+          .catch((e) => log.warn({ workspace: row.id, err: errStr(e) }, 'could not start watching'));
       }
     }
     for (const [id, w] of this.watched) {
@@ -152,23 +152,23 @@ export class InstantSync {
     return { on: c.instant_sync, debounceMs: c.instant_sync_push_debounce_ms, pullMs: c.instant_sync_pull_interval_ms };
   }
 
-  private async attach(folderId: string, project: ProjectRow, c: Config): Promise<void> {
+  private async attach(workspaceId: string, project: ProjectRow, c: Config): Promise<void> {
     // `changedAt` far in the past: the first beat runs a push check, so work
     // left unpushed before this watcher existed (a server restart) goes now.
-    const w: Watched = { folderId, project, debounceMs: c.debounceMs, pullMs: c.pullMs,
+    const w: Watched = { workspaceId, project, debounceMs: c.debounceMs, pullMs: c.pullMs,
       changedAt: 0, lastFailure: { push: null, pull: null }, stopped: false };
-    this.deps.watcher.watch(folderId, repoDir(this.deps.paths, folderId), () => { w.changedAt = Date.now(); });
-    this.watched.set(folderId, w);
-    log.info({ folder: folderId, project: project.id, debounceMs: c.debounceMs, pullMs: c.pullMs }, 'instant sync on');
+    this.deps.watcher.watch(workspaceId, repoDir(this.deps.paths, workspaceId), () => { w.changedAt = Date.now(); });
+    this.watched.set(workspaceId, w);
+    log.info({ workspace: workspaceId, project: project.id, debounceMs: c.debounceMs, pullMs: c.pullMs }, 'instant sync on');
     void this.beat(w);
   }
 
   private async detach(w: Watched): Promise<void> {
     w.stopped = true;
     clearTimeout(w.timer);
-    this.watched.delete(w.folderId);
-    this.deps.watcher.unwatch(w.folderId);
-    log.info({ folder: w.folderId }, 'instant sync off');
+    this.watched.delete(w.workspaceId);
+    this.deps.watcher.unwatch(w.workspaceId);
+    log.info({ workspace: w.workspaceId }, 'instant sync off');
   }
 
   /** The beat: pull, then push if the files have settled. A timeout chain,
@@ -177,7 +177,7 @@ export class InstantSync {
   private async beat(w: Watched): Promise<void> {
     if (w.stopped) return;
     try {
-      const session = await this.deps.sessions.get(w.folderId);
+      const session = await this.deps.sessions.get(w.workspaceId);
       if (!session) return;
       const pulled = await this.deps.autoPull(session, w.project);
       this.settle(w, session, 'pull', pulled);
@@ -195,7 +195,7 @@ export class InstantSync {
         if ((pushed.result === 'pushed' || pushed.result === 'nothing') && w.changedAt === since) w.changedAt = null;
       }
     } catch (e) {
-      log.warn({ folder: w.folderId, err: errStr(e) }, 'instant sync beat threw');
+      log.warn({ workspace: w.workspaceId, err: errStr(e) }, 'instant sync beat threw');
     } finally {
       if (!w.stopped) w.timer = setTimeout(() => void this.beat(w), w.pullMs);
     }
@@ -204,7 +204,7 @@ export class InstantSync {
   /** One sync's result: logged whatever it is; a failure reported once. */
   private settle(w: Watched, session: SessionRow, op: 'push' | 'pull',
     r: AutoPushResult | AutoPullResult): void {
-    const at = { folder: w.folderId, op, result: r.result };
+    const at = { workspace: w.workspaceId, op, result: r.result };
     if (r.result === 'error' || r.result === 'blocked') {
       const reason = r.reason ?? r.result;
       // Every failure is logged; only a NEW one is reported to a person.

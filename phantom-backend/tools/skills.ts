@@ -6,13 +6,13 @@ import { listSkills, loadSkill, manageSkill, type ManageBody } from '../skills.j
 import { ToolError } from './envelope.js';
 import { obj, oneOf, str, type OfferCtx, type ToolCtx, type ToolDef } from './def.js';
 
-const hasRepo = ({ app, session }: OfferCtx) => Promise.resolve(!!app.fs && !!session.folderId);
+const hasRepo = ({ app, session }: OfferCtx) => Promise.resolve(!!app.fs && !!session.workspaceId);
 
 /** The container wiring, or the refusal the model can act on. */
 function deps(ctx: ToolCtx) {
   if (!ctx.app.fs) throw new ToolError('container_unavailable', 'containers are not wired on this server', false);
-  if (!ctx.session.folderId) throw new ToolError('no_folder', 'this session has no files — no skills to read');
-  return { fs: ctx.app.fs, folderId: ctx.session.folderId };
+  if (!ctx.session.workspaceId) throw new ToolError('no_workspace', 'this session has no files — no skills to read');
+  return { fs: ctx.app.fs, workspaceId: ctx.session.workspaceId };
 }
 
 export const SKILL_TOOLS: ToolDef[] = [
@@ -27,7 +27,7 @@ export const SKILL_TOOLS: ToolDef[] = [
     mutates: false, agents: ['coding'], offered: hasRepo,
     execute(ctx) {
       const d = deps(ctx);
-      return listSkills(ctx.app, d.fs, ctx.session, d.folderId);
+      return listSkills(ctx.app, d.fs, ctx.session, d.workspaceId);
     },
   },
   {
@@ -44,7 +44,7 @@ export const SKILL_TOOLS: ToolDef[] = [
     mutates: false, agents: ['coding'], offered: hasRepo,
     execute(ctx, a) {
       const d = deps(ctx);
-      return loadSkill(ctx.app, d.fs, ctx.session, d.folderId, String(a.name), a.file === undefined ? undefined : String(a.file));
+      return loadSkill(ctx.app, d.fs, ctx.session, d.workspaceId, String(a.name), a.file === undefined ? undefined : String(a.file));
     },
   },
   {
@@ -77,7 +77,7 @@ export const SKILL_TOOLS: ToolDef[] = [
     mutates: true, agents: ['coding'], offered: hasRepo,
     execute(ctx, a) {
       const d = deps(ctx);
-      return manageSkill(ctx.app, d.fs, ctx.session, d.folderId, a as unknown as ManageBody);
+      return manageSkill(ctx.app, d.fs, ctx.session, d.workspaceId, a as unknown as ManageBody);
     },
   },
 ];

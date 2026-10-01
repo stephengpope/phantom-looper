@@ -4,8 +4,8 @@
 // upstream issue #141, open since 2023. In the API process, with its HTTP
 // server, database pool, container management and timers all generating
 // signals, that is a matter of time, and one death silently ended instant
-// sync for the folder. A process that does nothing but watch sees almost
-// none of that traffic; when it does die, FolderWatcher (the parent) forks
+// sync for the workspace. A process that does nothing but watch sees almost
+// none of that traffic; when it does die, WorkspaceWatcher (the parent) forks
 // a new one and replays every watch. Same pattern VS Code uses with this
 // same library.
 //

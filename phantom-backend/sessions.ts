@@ -5,34 +5,34 @@
 // written once, a manual name the titler never overwrites, the lock's
 // conditional UPDATE) and what gives a future list feed one place to hang.
 //
-// A session is a CONVERSATION. It uses one FOLDER (folder_id) — the
-// checkout: files, branch, container. A coder's folder is its own (same id),
+// A session is a CONVERSATION. It uses one WORKSPACE (workspace_id) — the
+// checkout: files, branch, container. A coder's workspace is its own (same id),
 // a supervisor's is its coder's, the assistant's is the on-screen session's.
 // The checkout's facts — files present, last touched, last pushed, git state
-// — are the folder's (Folders); every read here joins them in (`view`), so
+// — are the workspace's (Workspaces); every read here joins them in (`view`), so
 // the row a caller gets carries `status`, `lastUsedAt`, `lastPushAt`,
-// `work` and `branch` as before. `folderOf` is the ONE answer to "which
-// folder does this session use".
+// `work` and `branch` as before. `workspaceOf` is the ONE answer to "which
+// workspace does this session use".
 //
 // Events: a write that changes a fact a watcher draws (name, plan mode, agent,
 // the record landing) publishes it here, with the write; EVERY other write
 // publishes a bare `session` record — "this row moved" — which is what the
 // session LIST feed (GET /sessions/events) is built on, so no writer anywhere
-// has to remember to tell the list. The folder's writes (touch, work, push)
-// publish the same way under the folder's id (Folders). Lock events proper
+// has to remember to tell the list. The workspace's writes (touch, work, push)
+// publish the same way under the workspace's id (Workspaces). Lock events proper
 // stay with their callers: a hold means different things to a window (its
 // spinner) and to a git sync (nothing to show), so the caller says.
 import { and, desc, eq, gt, ilike, inArray, isNull, isNotNull, lt, ne, not, or, count, sql as sqlRaw } from 'drizzle-orm';
 import type { Db } from './db/client.js';
 import type { PgColumn } from 'drizzle-orm/pg-core';
-// `folders` and `cards` appear here for JOINs only: every session read
-// carries its folder's checkout facts, the list carries the card number and
-// column, the card reads take a number. Their rows are Folders' and Cards'
+// `workspaces` and `cards` appear here for JOINs only: every session read
+// carries its workspace's checkout facts, the list carries the card number and
+// column, the card reads take a number. Their rows are Workspaces' and Cards'
 // to write.
-import { sessions, sessionColumns, folders, cards, logTokens, type SessionRow } from './db/schema.js';
+import { sessions, sessionColumns, workspaces, cards, logTokens, type SessionRow } from './db/schema.js';
 import type { Settings } from './settings.js';
 import type { Projects } from './projects.js';
-import type { Folders } from './folders.js';
+import type { Workspaces } from './workspaces.js';
 import { newId } from '../core/ids.js';
 import { logger } from './log.js';
 import { lastUserFromJsonl, stripUsageFromJsonl } from '../core/llm/transcript.js';
@@ -49,7 +49,7 @@ export class SessionError extends Error {
   constructor(public code: string, message: string, public retryable = false) { super(message); }
 }
 
-/** A freshly created session: its folder's branch is known and the commit
+/** A freshly created session: its workspace's branch is known and the commit
  *  it was cut from rides along for the response. */
 export type SessionFull = SessionRow & { branch: string; cutFromSha: string };
 
@@ -129,12 +129,12 @@ export function copyName(name: string | null): string | null {
   return name.startsWith(DUP_PREFIX) ? name : `${DUP_PREFIX}${name}`;
 }
 
-/** THE folder this session's tools open. Null only on an assistant with no
+/** THE workspace this session's tools open. Null only on an assistant with no
  *  session on screen yet — then there are no files, and a caller that needs
  *  them is refused; nothing ever falls back to the session's own id. */
-export function folderOf(s: Pick<SessionRow, 'id' | 'folderId'>): string {
-  if (!s.folderId) throw new SessionError('no_folder', `session ${s.id} has no folder — nothing to read`);
-  return s.folderId;
+export function workspaceOf(s: Pick<SessionRow, 'id' | 'workspaceId'>): string {
+  if (!s.workspaceId) throw new SessionError('no_workspace', `session ${s.id} has no workspace — nothing to read`);
+  return s.workspaceId;
 }
 
 /** How many lines a record holds — the count `transcript_lines` keeps and
@@ -143,10 +143,10 @@ export function folderOf(s: Pick<SessionRow, 'id' | 'folderId'>): string {
  *  reads from it. */
 export const lineCount = (jsonl: string): number => jsonl.split('\n').filter((l) => l.trim()).length;
 
-/** Does the session own its files — is the folder its own? A coder does; a
+/** Does the session own its files — is the workspace its own? A coder does; a
  *  supervisor and the assistant borrow another's. Only an owner has files to
  *  destroy, restart, back up or sweep. */
-export const ownsFolder = (s: Pick<SessionRow, 'id' | 'folderId'>): boolean => s.folderId === s.id;
+export const ownsWorkspace = (s: Pick<SessionRow, 'id' | 'workspaceId'>): boolean => s.workspaceId === s.id;
 
 /** Is the hold live right now — someone holds it and the clock has not run
  *  out. THE rule every `locked` on the wire and every guard reads. */
@@ -189,7 +189,7 @@ export class Sessions {
     private readonly db: Db,
     private readonly settings: Settings,
     private readonly projects: Projects,
-    private readonly folders: Folders,
+    private readonly workspaces: Workspaces,
     /** The per-session feed; absent in tests that have no watchers. */
     private readonly events?: SessionEvents,
     /** What freezing a session's prompt reads: the checkout's skills and the
@@ -214,14 +214,14 @@ export class Sessions {
   }
 
   /** Assemble the agent's layout from the session's facts and freeze it on
-   *  the row. The checkout the blocks read is the session's own folder, or
+   *  the row. The checkout the blocks read is the session's own workspace, or
    *  the one it borrows (a supervisor's coder, the assistant's on-screen
    *  session); none when there is nothing to read. */
   private async writeSystemPrompt(s: SessionRow, layout: SystemPromptLayout): Promise<StoredSystemPrompt> {
     const project = (await this.projects.get(s.projectId))!;
     const prompt = await SystemPrompt.assemble(layout, {
       projectId: s.projectId, project, settings: this.settings,
-      checkout: this.promptDeps && s.folderId ? repoDir(this.promptDeps.paths, s.folderId) : null,
+      checkout: this.promptDeps && s.workspaceId ? repoDir(this.promptDeps.paths, s.workspaceId) : null,
       docker: this.promptDeps?.docker,
     });
     return this.freezeSystemPrompt(s.id, prompt.sections());
@@ -246,23 +246,23 @@ export class Sessions {
   private changed(id: string): void { this.events?.publish(id, '', { event: 'session' }); }
 
   // ── the view ───────────────────────────────────────────────────────────────
-  // A session read is the row plus its folder's checkout facts. ONE select
+  // A session read is the row plus its workspace's checkout facts. ONE select
   // shape and ONE join, used by every read below, so `status`, `lastUsedAt`,
   // `lastPushAt`, `work` and `branch` mean the same thing everywhere.
 
-  /** The files' presence as the wire says it. No folder = nothing to have
+  /** The files' presence as the wire says it. No workspace = nothing to have
    *  destroyed, so active. */
-  private static readonly status = sqlRaw<'active' | 'destroyed'>`case when ${folders.id} is null or ${folders.onDisk} then 'active' else 'destroyed' end`;
-  /** A session with no folder has never touched a checkout: its birth is
+  private static readonly status = sqlRaw<'active' | 'destroyed'>`case when ${workspaces.id} is null or ${workspaces.onDisk} then 'active' else 'destroyed' end`;
+  /** A session with no workspace has never touched a checkout: its birth is
    *  its last activity. */
-  private static readonly lastUsedAt = sqlRaw<Date>`coalesce(${folders.lastUsedAt}, ${sessions.createdAt})`.mapWith((v) => new Date(v));
+  private static readonly lastUsedAt = sqlRaw<Date>`coalesce(${workspaces.lastUsedAt}, ${sessions.createdAt})`.mapWith((v) => new Date(v));
   private static readonly view = {
-    ...sessionColumns, branch: folders.branch, status: Sessions.status, lastUsedAt: Sessions.lastUsedAt,
-    lastPushAt: folders.lastPushAt, work: folders.work,
+    ...sessionColumns, branch: workspaces.branch, status: Sessions.status, lastUsedAt: Sessions.lastUsedAt,
+    lastPushAt: workspaces.lastPushAt, work: workspaces.work,
   };
-  /** `select view from sessions left join folders` — every read starts here. */
+  /** `select view from sessions left join workspaces` — every read starts here. */
   private from() {
-    return this.db.select(Sessions.view).from(sessions).leftJoin(folders, eq(folders.id, sessions.folderId));
+    return this.db.select(Sessions.view).from(sessions).leftJoin(workspaces, eq(workspaces.id, sessions.workspaceId));
   }
 
   // ── the model ──────────────────────────────────────────────────────────────
@@ -362,7 +362,7 @@ export class Sessions {
     const text = q.q?.trim();
     if (text) {
       const needle = `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-      filters.push(or(ilike(sessions.name, needle), ilike(sessions.lastUserMessage, needle), ilike(folders.branch, needle)));
+      filters.push(or(ilike(sessions.name, needle), ilike(sessions.lastUserMessage, needle), ilike(workspaces.branch, needle)));
     }
     if (q.project) filters.push(eq(sessions.projectId, q.project));
     filters.push(or(isNull(sessions.agent), ne(sessions.agent, 'assistant')));
@@ -393,38 +393,38 @@ export class Sessions {
         tokensCacheWrite: sum(logTokens.tokensCacheWrite).as('tokens_cache_write'),
       })
       .from(sessions)
-      .leftJoin(folders, eq(folders.id, sessions.folderId))
+      .leftJoin(workspaces, eq(workspaces.id, sessions.workspaceId))
       .leftJoin(cards, eq(cards.id, sessions.cardId))
       .leftJoin(logTokens, eq(logTokens.sessionId, sessions.id))
       .where(and(...filters, ...(cursor ? [cursor] : [])))
-      .groupBy(sessions.id, folders.id, cards.number, cards.status)
+      .groupBy(sessions.id, workspaces.id, cards.number, cards.status)
       .orderBy(desc(sessions.pinned), desc(Sessions.lastUsedAt), desc(sessions.id))
       .$dynamic();
     if (q.limit) page = page.limit(q.limit);
     const [rows, [{ total }]] = await Promise.all([
       page,
-      // The same joins as the page: the filters reach folders (branch).
+      // The same joins as the page: the filters reach workspaces (branch).
       this.db.select({ total: count() }).from(sessions)
-        .leftJoin(folders, eq(folders.id, sessions.folderId))
+        .leftJoin(workspaces, eq(workspaces.id, sessions.workspaceId))
         .where(and(...filters)),
     ]);
     return { sessions: rows, total };
   }
 
-  /** Of `folderIds`, those where a turn is running: any session on the
-   *  folder — the coder, its supervisor, the assistant — holds a live lock. */
-  async foldersHeld(folderIds: string[]): Promise<Set<string>> {
-    if (!folderIds.length) return new Set();
-    const rows = await this.db.select({ folderId: sessions.folderId }).from(sessions)
-      .where(and(inArray(sessions.folderId, folderIds),
+  /** Of `workspaceIds`, those where a turn is running: any session on the
+   *  workspace — the coder, its supervisor, the assistant — holds a live lock. */
+  async workspacesHeld(workspaceIds: string[]): Promise<Set<string>> {
+    if (!workspaceIds.length) return new Set();
+    const rows = await this.db.select({ workspaceId: sessions.workspaceId }).from(sessions)
+      .where(and(inArray(sessions.workspaceId, workspaceIds),
         isNotNull(sessions.lockedBy), gt(sessions.lockExpiresAt, new Date())));
-    return new Set(rows.flatMap((r) => (r.folderId ? [r.folderId] : [])));
+    return new Set(rows.flatMap((r) => (r.workspaceId ? [r.workspaceId] : [])));
   }
 
   /** The sessions that own files on disk — the disk sweeps' set: each is the
-   *  session whose folder is its own and present. */
+   *  session whose workspace is its own and present. */
   async listOwnersOnDisk(): Promise<SessionRow[]> {
-    return this.from().where(and(eq(folders.id, sessions.id), eq(folders.onDisk, true)));
+    return this.from().where(and(eq(workspaces.id, sessions.id), eq(workspaces.onDisk, true)));
   }
 
   // ── the card ───────────────────────────────────────────────────────────────────────
@@ -461,7 +461,7 @@ export class Sessions {
   async codersByCard(projectId: string): Promise<Array<SessionRow & { card: number }>> {
     return this.db.selectDistinctOn([sessions.cardId], { ...Sessions.view, card: cards.number })
       .from(sessions)
-      .leftJoin(folders, eq(folders.id, sessions.folderId))
+      .leftJoin(workspaces, eq(workspaces.id, sessions.workspaceId))
       .innerJoin(cards, eq(cards.id, sessions.cardId))
       .where(and(eq(cards.project_id, projectId), isCodingSession))
       .orderBy(sessions.cardId, desc(sessions.createdAt));
@@ -494,9 +494,9 @@ export class Sessions {
   // ── lifecycle ──────────────────────────────────────────────────────────────
 
   /** Create a session: a conversation born with its own checkout
-   *  (Folders.checkout), sharing the id. Passing `id` RESTARTS a session
-   *  whose files were removed: the folder remembers the branch, so the same
-   *  id comes back exactly where it stopped (Folders.restore). `fromBranch`
+   *  (Workspaces.checkout), sharing the id. Passing `id` RESTARTS a session
+   *  whose files were removed: the workspace remembers the branch, so the same
+   *  id comes back exactly where it stopped (Workspaces.restore). `fromBranch`
    *  cuts a NEW session's branch from a source branch on origin instead of
    *  base (the duplicate route). */
   async create(projectId: string, opts: { id?: string; fromBranch?: string } = {}): Promise<SessionFull> {
@@ -507,9 +507,9 @@ export class Sessions {
     if (prior && prior.projectId !== projectId) {
       throw new SessionError('project_mismatch', `session ${prior.id} belongs to another project`);
     }
-    // A session that does not own its folder has no files of its own — there
+    // A session that does not own its workspace has no files of its own — there
     // is nothing to restart.
-    if (prior && !ownsFolder(prior)) {
+    if (prior && !ownsWorkspace(prior)) {
       throw new SessionError('invalid_args',
         'a supervisor session holds only its conversation — there are no files to restart; the looper creates these');
     }
@@ -519,40 +519,40 @@ export class Sessions {
       throw new SessionError('already_active', `session ${prior.id} is still active`);
     }
     // A cut point belongs to a NEW session alone: a restart's start point is the
-    // branch the folder remembers, never a second opinion.
+    // branch the workspace remembers, never a second opinion.
     if (prior && opts.fromBranch) {
       throw new SessionError('invalid_args', 'fromBranch cuts a NEW session\'s branch — a restart has its own');
     }
 
     if (prior) {
-      const folder = (await this.folders.get(prior.id))!;
-      await this.folders.restore(folder, project);
-      log.info({ session: prior.id, branch: folder.branch }, 'session restarted');
+      const workspace = (await this.workspaces.get(prior.id))!;
+      await this.workspaces.restore(workspace, project);
+      log.info({ session: prior.id, branch: workspace.branch }, 'session restarted');
       const row = (await this.get(prior.id))!;
-      return { ...row, branch: folder.branch, cutFromSha: folder.cutFromSha };
+      return { ...row, branch: workspace.branch, cutFromSha: workspace.cutFromSha };
     }
 
-    // The folder (the checkout) and the session (the conversation) are born
+    // The workspace (the checkout) and the session (the conversation) are born
     // together, sharing the id.
     const id = opts.id ?? newId();
-    const folder = await this.folders.checkout(project, id, { fromBranch: opts.fromBranch });
-    await this.db.insert(sessions).values({ id, projectId, folderId: id, ...await this.birthModel(projectId) });
+    const workspace = await this.workspaces.checkout(project, id, { fromBranch: opts.fromBranch });
+    await this.db.insert(sessions).values({ id, projectId, workspaceId: id, ...await this.birthModel(projectId) });
     const row = (await this.get(id))!;
-    log.info({ session: id, branch: folder.branch }, 'session created');
+    log.info({ session: id, branch: workspace.branch }, 'session created');
     this.changed(id);
-    return { ...row, branch: folder.branch, cutFromSha: folder.cutFromSha };
+    return { ...row, branch: workspace.branch, cutFromSha: workspace.cutFromSha };
   }
 
-  /** A conversation-only session: no checkout of its own — `folderId` points at
-   *  another session's folder (the files it can read), or is null when there is
+  /** A conversation-only session: no checkout of its own — `workspaceId` points at
+   *  another session's workspace (the files it can read), or is null when there is
    *  nothing to read. The shared base for supervisor and assistant sessions. */
   private async createConversation(
-    projectId: string, opts: { agent: 'supervisor' | 'assistant'; folderId?: string | null; cardId?: number },
+    projectId: string, opts: { agent: 'supervisor' | 'assistant'; workspaceId?: string | null; cardId?: number },
   ): Promise<SessionRow> {
     const id = newId();
     await this.db.insert(sessions).values({
       id, projectId, agent: opts.agent,
-      ...(opts.folderId ? { folderId: opts.folderId } : {}),
+      ...(opts.workspaceId ? { workspaceId: opts.workspaceId } : {}),
       ...(opts.cardId ? { cardId: opts.cardId } : {}),
       ...await this.birthModel(projectId, opts.agent),
     });
@@ -561,23 +561,23 @@ export class Sessions {
   }
 
   /** The supervisor's conversation-only session, on its coder's card: no
-   *  folder of its own — its folder_id points at the coder's, which is where
+   *  workspace of its own — its workspace_id points at the coder's, which is where
    *  the files are. */
-  async createSupervisor(projectId: string, folderId: string, cardId: number, layout: SystemPromptLayout): Promise<SessionRow> {
+  async createSupervisor(projectId: string, workspaceId: string, cardId: number, layout: SystemPromptLayout): Promise<SessionRow> {
     SystemPrompt.check(layout);
-    const s = await this.createConversation(projectId, { agent: 'supervisor', folderId, cardId });
+    const s = await this.createConversation(projectId, { agent: 'supervisor', workspaceId, cardId });
     await this.writeSystemPrompt(s, layout);
     return s;
   }
 
-  /** Where the assistant's row points: the project, and the folder of the
-   *  session on screen (that session's own folderId — a coder owns its
-   *  folder, a supervisor borrows the coder's). No session on screen = the
-   *  project alone, no folder. The same resolution for creating the row
+  /** Where the assistant's row points: the project, and the workspace of the
+   *  session on screen (that session's own workspaceId — a coder owns its
+   *  workspace, a supervisor borrows the coder's). No session on screen = the
+   *  project alone, no workspace. The same resolution for creating the row
    *  and re-pointing it. */
   private async assistantTarget(projectId: string, activeSessionId?: string | null) {
     const active = activeSessionId ? await this.get(activeSessionId) : undefined;
-    return { projectId, folderId: active?.folderId ?? null };
+    return { projectId, workspaceId: active?.workspaceId ?? null };
   }
 
   /** The assistant's conversation-only session, pointed at what the user is
@@ -585,19 +585,19 @@ export class Sessions {
   async createAssistant(projectId: string, activeSessionId: string | null | undefined, layout: SystemPromptLayout): Promise<SessionRow> {
     SystemPrompt.check(layout);
     const t = await this.assistantTarget(projectId, activeSessionId);
-    const s = await this.createConversation(t.projectId, { agent: 'assistant', folderId: t.folderId });
+    const s = await this.createConversation(t.projectId, { agent: 'assistant', workspaceId: t.workspaceId });
     await this.writeSystemPrompt(s, layout);
     return s;
   }
 
   /** The assistant's row follows the session on screen: its tools read that
-   *  session's files, so its project and folder are re-pointed at it on
+   *  session's files, so its project and workspace are re-pointed at it on
    *  every switch. Assistant rows only; a no-op when nothing moved. */
   async follow(id: string, projectId: string, activeSessionId?: string | null): Promise<void> {
     const s = await this.get(id);
     if (!s || s.agent !== 'assistant') return;
     const t = await this.assistantTarget(projectId, activeSessionId);
-    if (s.projectId === t.projectId && s.folderId === t.folderId) return;
+    if (s.projectId === t.projectId && s.workspaceId === t.workspaceId) return;
     await this.db.update(sessions).set(t).where(eq(sessions.id, id));
     this.changed(id);
   }
@@ -627,13 +627,13 @@ export class Sessions {
 
   /** Explicit delete honors the request even when work would be lost — that is
    *  the caller's decision to make. The automatic sweep (disk.ts) never does.
-   *  Deletes the session's FILES and nothing else (Folders.removeFiles) — the
-   *  folder keeps the branch, so `create` with the same id restarts it where
-   *  it stopped. Only a session that owns its folder has files; a caller
-   *  checks `ownsFolder`. */
+   *  Deletes the session's FILES and nothing else (Workspaces.removeFiles) — the
+   *  workspace keeps the branch, so `create` with the same id restarts it where
+   *  it stopped. Only a session that owns its workspace has files; a caller
+   *  checks `ownsWorkspace`. */
   async destroy(session: SessionRow, opts: { force: boolean }): Promise<void> {
-    if (!ownsFolder(session)) throw new SessionError('no_files', `session ${session.id} has no files of its own`);
-    await this.folders.removeFiles((await this.folders.get(session.id))!, opts);
+    if (!ownsWorkspace(session)) throw new SessionError('no_files', `session ${session.id} has no files of its own`);
+    await this.workspaces.removeFiles((await this.workspaces.get(session.id))!, opts);
     log.info({ session: session.id }, 'session destroyed');
   }
 
@@ -671,7 +671,7 @@ export class Sessions {
       .where(eq(sessions.id, s.id))
       .returning({ name: sessions.name, turnCount: sessions.turnCount, nameManual: sessions.nameManual });
     // Saving a turn is activity on the checkout: it stays off the idle sweep.
-    if (s.folderId) await this.folders.touch(s.folderId);
+    if (s.workspaceId) await this.workspaces.touch(s.workspaceId);
     // The record landed: the one moment a client can trust that the server's
     // copy moved. Watchers pull the transcript on this. `by` is the writer,
     // so the window that just uploaded its OWN turn ignores the echo instead
@@ -689,7 +689,7 @@ export class Sessions {
     await this.db.update(sessions)
       .set({ transcript: data, transcriptLines: lineCount(data), transcriptUpdatedAt: stamp })
       .where(eq(sessions.id, s.id));
-    if (s.folderId) await this.folders.touch(s.folderId);
+    if (s.workspaceId) await this.workspaces.touch(s.workspaceId);
     return stamp;
   }
 
@@ -719,7 +719,7 @@ export class Sessions {
       throw new SessionError('transcript_conflict',
         `transcript has ${cur?.lines ?? 0} lines, the append said ${body.after} — another writer moved it; read it again`);
     }
-    if (s.folderId) await this.folders.touch(s.folderId);
+    if (s.workspaceId) await this.workspaces.touch(s.workspaceId);
     this.events?.publish(s.id, client, { event: 'transcript', updated_at: stamp.toISOString(), by: client });
     return { lines: rows[0].lines, applied: true, stamp };
   }
@@ -772,7 +772,7 @@ export class Sessions {
       .set({ ...(wrote ? { turnCount: sqlRaw`${sessions.turnCount} + 1` } : {}), agent })
       .where(eq(sessions.id, s.id))
       .returning({ name: sessions.name, turnCount: sessions.turnCount, nameManual: sessions.nameManual });
-    if (s.folderId) await this.folders.touch(s.folderId);
+    if (s.workspaceId) await this.workspaces.touch(s.workspaceId);
     this.changed(s.id);
     if (agent !== s.agent) this.events?.publish(s.id, client, { event: 'session', agent });
     return { agent, name: saved.name, turnCount: saved.turnCount, nameManual: saved.nameManual };
@@ -833,7 +833,7 @@ export class Sessions {
    *  it is — a supervisor's read keeps the coder's container warm the same
    *  as the coder's own. Background jobs never touch, or nothing goes cold. */
   async touch(s: SessionRow): Promise<void> {
-    if (s.folderId) await this.folders.touch(s.folderId);
+    if (s.workspaceId) await this.workspaces.touch(s.workspaceId);
   }
 
   /** Tag a conversation with who drives it. The loop stamps its coder seat

@@ -83,7 +83,7 @@ are what agree after a rewrite.
 - Do not add an in-process mutex. Two locks, each on the thing it guards: the
   session lock (held under `GIT_CLIENT_ID` by every git operation so the
   conflict turn can re-take its own hold) keeps a turn and a sync apart; the
-  checkout lock on the folder (038, fresh id per run, never re-entered) keeps
+  checkout lock on the workspace (038, fresh id per run, never re-entered) keeps
   two syncs apart — see instant-sync.md.
 - Do not give the pull its own resolver agent. One conversation per session is
   the point.

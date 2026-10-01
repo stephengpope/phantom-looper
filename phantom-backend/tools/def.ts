@@ -47,7 +47,7 @@ export interface ToolDef {
   mutates: boolean;
   /** Which agents have it. */
   agents: readonly AgentName[];
-  /** Whether it exists right now for this session (a setting, a folder).
+  /** Whether it exists right now for this session (a setting, a workspace).
    *  Absent = always, for the agents named. */
   offered?: (ctx: OfferCtx) => Promise<boolean>;
   execute: (ctx: ToolCtx, args: Record<string, unknown>) => Promise<unknown>;

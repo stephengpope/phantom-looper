@@ -154,7 +154,7 @@ function telegramHost(deps: AssistantDeps, ctx: AssistantCtx): AssistantHost {
 }
 
 /** The Assistant's whole kit for a telegram turn. File tools + web bind to
- *  the assistant's OWN session — the server opens its folder, the on-screen
+ *  the assistant's OWN session — the server opens its workspace, the on-screen
  *  session's, re-pointed on every switch (Sessions.follow) — when it has one
  *  (read-only); the cron kit to the active project when there is one and
  *  its crons are switched on;
@@ -175,7 +175,7 @@ export async function assistantKit(deps: AssistantDeps, ctx: AssistantCtx, own: 
   // them so the model never wastes a call on a dead end.
   delete kit.kanban_screen;
   delete kit.session_close;
-  if (own.folderId) {
+  if (own.workspaceId) {
     const common = { baseUrl: BASE, apiKey: deps.apiKey, sessionId: own.id, fetch: deps.f };
     Object.assign(kit,
       await phantomTools({ ...common, pick: 'readonly' }),
@@ -202,7 +202,7 @@ export interface AssistantTurnResult {
  *  session_switch fires — the caller moves the active-session pointer.
  *  `own` is the assistant's session row: like every session it runs on ITS
  *  ROW's model (the pin, frozen after its first turn), and its file tools
- *  open its folder. */
+ *  open its workspace. */
 export async function runAssistantTurn(
   deps: AssistantDeps, history: ModelMessage[], message: string, sink: TelegramSink,
   ctx: AssistantCtx, abortSignal: AbortSignal | undefined, transcript: Transcript | undefined,

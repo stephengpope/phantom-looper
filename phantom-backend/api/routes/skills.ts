@@ -10,7 +10,7 @@ import { listSkills, loadSkill, manageSkill, type ManageBody } from '../../skill
 const TAG = { tags: ['skills'] };
 
 const STATUS: Record<string, number> = {
-  session_not_found: 404, session_destroyed: 410, no_folder: 400, skill_not_found: 404,
+  session_not_found: 404, session_destroyed: 410, no_workspace: 400, skill_not_found: 404,
   invalid_args: 400, busy: 409, container_start_failed: 503,
 };
 
@@ -34,8 +34,8 @@ export function skillsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
         type: 'object', properties: { name: { type: 'string' }, description: { type: 'string' } } } } } } } } } } },
   async (req, reply) => {
     try {
-      const { session, folderId } = await toolSession(ctx.sessions, req.headers);
-      return ok(await listSkills(ctx, deps, session, folderId));
+      const { session, workspaceId } = await toolSession(ctx.sessions, req.headers);
+      return ok(await listSkills(ctx, deps, session, workspaceId));
     } catch (e) { return handle(reply, e); }
   });
 
@@ -48,8 +48,8 @@ export function skillsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
       querystring: { type: 'object', properties: { file: { type: 'string', description: 'bundled file to fetch instead (references/… etc.)' } } } } },
     async (req, reply) => {
       try {
-        const { session, folderId } = await toolSession(ctx.sessions, req.headers);
-        return ok(await loadSkill(ctx, deps, session, folderId, req.params.name, req.query.file));
+        const { session, workspaceId } = await toolSession(ctx.sessions, req.headers);
+        return ok(await loadSkill(ctx, deps, session, workspaceId, req.params.name, req.query.file));
       } catch (e) { return handle(reply, e); }
     });
 
@@ -68,8 +68,8 @@ export function skillsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
     } } } },
   async (req, reply) => {
     try {
-      const { session, folderId } = await toolSession(ctx.sessions, req.headers);
-      return ok(await manageSkill(ctx, deps, session, folderId, req.body));
+      const { session, workspaceId } = await toolSession(ctx.sessions, req.headers);
+      return ok(await manageSkill(ctx, deps, session, workspaceId, req.body));
     } catch (e) { return handle(reply, e); }
   });
 }

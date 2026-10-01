@@ -240,9 +240,9 @@ export function projectRoutes(app: FastifyInstance, ctx: AppCtx) {
     async (req, reply) => {
       if (!await ctx.projects.get(req.params.id)) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
       // What stands in the way is files on disk (and their containers): the
-      // folders still checked out. A conversation with no files of its own
+      // workspaces still checked out. A conversation with no files of its own
       // — a supervisor's, the assistant's — blocks nothing.
-      const live = await ctx.folders.countOnDisk(req.params.id);
+      const live = await ctx.workspaces.countOnDisk(req.params.id);
       if (live) return reply.code(409).send(err('sessions_exist', `project ${req.params.id} still has ${live} active session(s) — close them first`));
       if (req.query.confirm !== 'true') {
         return reply.code(409).send(err('confirm_required', 'pass ?confirm=true'));

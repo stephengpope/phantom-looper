@@ -5,7 +5,7 @@
 // through the same interface with `agent.addToolKit(kit)`.
 //
 // Every kit is built before every turn — what an agent has can change
-// between turns (a setting, a folder). `build` answers the tools AND which
+// between turns (a setting, a workspace). `build` answers the tools AND which
 // of them change things — the kit that knows says so (the server kit reads
 // it off each definition's `mutates`). `readonly` is asked at EXECUTE time:
 // a mutating tool called while it says true answers the model with
@@ -18,8 +18,8 @@ export interface ToolKitContext {
   backend: PhantomBackend;
   sessionId: string;
   projectId: string;
-  /** The folder the session's tools open. */
-  folderId: string | null;
+  /** The workspace the session's tools open. */
+  workspaceId: string | null;
   readonly: () => boolean;
 }
 

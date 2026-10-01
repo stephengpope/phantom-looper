@@ -9,7 +9,7 @@
 import type { ProjectRow, SessionRow } from '../db/schema.js';
 import { git, commitAll, pushSession, GIT_CLIENT_ID, type PushResult, type PullResult, type GitAuth } from './git.js';
 import type { Sessions } from '../sessions.js';
-import type { FolderRow } from '../db/schema.js';
+import type { WorkspaceRow } from '../db/schema.js';
 import { resolveAuth } from '../pool/pool.js';
 import { repoDir, type Paths } from '../pool/paths.js';
 import { syncBranch, LOCK_TTL_MS, RENEW_MS, type ConflictContext, type SyncDeps, type SyncEvent } from './sync.js';
@@ -46,12 +46,12 @@ export class GitEngine {
 
   private auth(project: ProjectRow): Promise<GitAuth> { return resolveAuth(this.deps.settings, project); }
 
-  /** Git operates on FOLDERS — the branch and the directory live there. A
-   *  session with no folder has nothing git-shaped to do. */
-  private async folderOf(s: SessionRow): Promise<FolderRow> {
-    const folder = s.folderId ? await this.deps.folders.get(s.folderId) : undefined;
-    if (!folder) throw new Error(`session ${s.id} has no folder — nothing to push or pull`);
-    return folder;
+  /** Git operates on WORKSPACES — the branch and the directory live there. A
+   *  session with no workspace has nothing git-shaped to do. */
+  private async workspaceOf(s: SessionRow): Promise<WorkspaceRow> {
+    const workspace = s.workspaceId ? await this.deps.workspaces.get(s.workspaceId) : undefined;
+    if (!workspace) throw new Error(`session ${s.id} has no workspace — nothing to push or pull`);
+    return workspace;
   }
 
   /** BACKUP — the branch to origin and nothing else: commitAll + pushSession
@@ -84,26 +84,26 @@ export class GitEngine {
    *  one branch, checked out at creation, pushed back to here. Porcelain inside
    *  commitAll is the authoritative dirty check. */
   async push(s: SessionRow, project: ProjectRow): Promise<PushResult | 'busy'> {
-    const folder = await this.folderOf(s);
-    const dir = repoDir(this.paths, folder.id);
+    const workspace = await this.workspaceOf(s);
+    const dir = repoDir(this.paths, workspace.id);
     // The checkout lock: commit + push is a sequence too, and a sync may be
     // rewriting this checkout right now. Short, so no renewal.
     const holder = newId();
-    if (!(await this.deps.folders.acquireSyncLock(folder.id, holder, LOCK_TTL_MS))) return 'busy';
+    if (!(await this.deps.workspaces.acquireSyncLock(workspace.id, holder, LOCK_TTL_MS))) return 'busy';
     try {
       const committed = await commitAll(dir, `phantom push ${new Date().toISOString()}\n\nPhantom-Session: ${s.id}`);
-      const { stdout: ahead } = await git(dir, ['rev-list', '--count', `origin/${folder.branch}..HEAD`]).catch(() => ({ stdout: '1' }));
+      const { stdout: ahead } = await git(dir, ['rev-list', '--count', `origin/${workspace.branch}..HEAD`]).catch(() => ({ stdout: '1' }));
       if (!committed && Number(ahead.trim()) === 0) return 'nothing';
-      const r = await pushSession(dir, folder.branch, await this.auth(project));
+      const r = await pushSession(dir, workspace.branch, await this.auth(project));
       if (r !== 'pushed') return r;
-      await this.deps.folders.markPushed(folder.id);
-      log.info({ session: s.id, branch: folder.branch }, 'pushed');
+      await this.deps.workspaces.markPushed(workspace.id);
+      log.info({ session: s.id, branch: workspace.branch }, 'pushed');
       return 'pushed';
     } catch (e) {
       log.error({ session: s.id, err: errStr(e) }, 'push failed');
       return 'error';
     } finally {
-      await this.deps.folders.releaseSyncLock(folder.id, holder);
+      await this.deps.workspaces.releaseSyncLock(workspace.id, holder);
     }
   }
 
@@ -140,14 +140,14 @@ export class GitEngine {
     sinceCut: number;
     pulled: Arrival[];
   }> {
-    const folder = await this.folderOf(s);
-    const dir = repoDir(this.paths, folder.id);
+    const workspace = await this.workspaceOf(s);
+    const dir = repoDir(this.paths, workspace.id);
     await git(dir, ['fetch', 'origin', project.baseBranch], await this.auth(project)).catch((e: Error) => {
       log.warn({ dir, base: project.baseBranch, err: e.message }, 'fetch of base failed — arrivals are measured against the last copy');
     });
     const { stdout: commits } = await git(dir, ['log', '--format=%h %s', `HEAD..origin/${project.baseBranch}`]).catch(() => ({ stdout: '' }));
     const { stdout: files } = await git(dir, ['diff', '--name-only', `HEAD...origin/${project.baseBranch}`]).catch(() => ({ stdout: '' }));
-    const { stdout: since } = await git(dir, ['rev-list', '--count', `${folder.cutFromSha}..origin/${project.baseBranch}`]).catch(() => ({ stdout: '0' }));
+    const { stdout: since } = await git(dir, ['rev-list', '--count', `${workspace.cutFromSha}..origin/${project.baseBranch}`]).catch(() => ({ stdout: '0' }));
     return {
       pending: {
         commits: commits.trim().split('\n').filter(Boolean),

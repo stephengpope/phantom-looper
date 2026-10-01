@@ -177,7 +177,7 @@ export function sessionChoices(
       ? formatTokensIn(s.tokensInput) + (pct != null ? ` (${pct}%)` : '') : '';
     const outMeter = s.tokensOutput ? formatTokensOut(s.tokensOutput) : '';
     const tokensCol = [inMeter, outMeter].filter(Boolean).join(' ') || '·';
-    // ☠ = no folder (the disk sweep took it). The time stays — when it was
+    // ☠ = no workspace (the disk sweep took it). The time stays — when it was
     // last touched is still the fact that matters.
     const whenCol: Cell = dead ? { text: when, mark: 'gray', markChar: '☠', markAfter: true } : when;
     return {

@@ -23,7 +23,7 @@ import type { StoredSystemPrompt } from './systemPrompt.js';
 export interface SessionRow {
   id: string;
   projectId: string;
-  folderId: string | null;
+  workspaceId: string | null;
   status: string;
   agent: string | null;
   name: string | null;
@@ -35,7 +35,7 @@ export interface SessionRow {
 export interface SessionInfo {
   readonly id: string;
   readonly projectId: string;
-  readonly folderId: string | null;
+  readonly workspaceId: string | null;
   /** Read-only mode: mutating tools refuse. The row's, kept live from the
    *  session feed while a turn runs. */
   readonly planMode: boolean;
@@ -76,7 +76,7 @@ export class Session implements SessionInfo {
 
   get id(): string { return this.#row.id; }
   get projectId(): string { return this.#row.projectId; }
-  get folderId(): string | null { return this.#row.folderId; }
+  get workspaceId(): string | null { return this.#row.workspaceId; }
   get planMode(): boolean { return this.#row.planMode; }
   get row(): Readonly<SessionRow> { return this.#row; }
   get messages(): readonly ModelMessage[] { return this.#messages; }

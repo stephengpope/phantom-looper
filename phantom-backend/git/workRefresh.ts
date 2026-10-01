@@ -1,10 +1,10 @@
-// Periodic refresh of the folders' `work` column — the checkout's git state
-// — for folders with a running container. Called every 10s from index.ts:
-// recomputes workState() per folder and writes the row when the value
+// Periodic refresh of the workspaces' `work` column — the checkout's git state
+// — for workspaces with a running container. Called every 10s from index.ts:
+// recomputes workState() per workspace and writes the row when the value
 // changes. A change publishes on the board event stream as `session_work`
 // (named by the owning session's card) so the kanban board hears it live,
 // and on the session feed through the row write.
-import type { Folders } from '../folders.js';
+import type { Workspaces } from '../workspaces.js';
 import type { Projects } from '../projects.js';
 import { workState } from './git.js';
 import { repoDir, type Paths } from '../pool/paths.js';
@@ -15,33 +15,33 @@ import { logger, errStr } from '../log.js';
 const log = logger('work-refresh');
 
 export interface WorkRefreshDeps {
-  folders: Folders; projects: Projects; paths: Paths;
+  workspaces: Workspaces; projects: Projects; paths: Paths;
   containers: ContainerManager;
   events: BoardEvents;
 }
 
-export async function refreshWorkState({ folders, projects, paths, containers, events }: WorkRefreshDeps): Promise<void> {
-  const active = await containers.activeFolders();
+export async function refreshWorkState({ workspaces, projects, paths, containers, events }: WorkRefreshDeps): Promise<void> {
+  const active = await containers.activeWorkspaces();
 
-  // Clear stale work states: folders that still show a git status but whose
+  // Clear stale work states: workspaces that still show a git status but whose
   // container is gone. The value is unverifiable, so null it out.
-  const stale = await folders.listStaleWork(active);
+  const stale = await workspaces.listStaleWork(active);
   if (stale.length) {
     await Promise.all(stale.map(async (f) => {
-      await folders.setWork(f.id, null);
+      await workspaces.setWork(f.id, null);
       events.publish(f.projectId, { event: 'session_work', card: f.card ?? 0, id: f.id, work: null });
     }));
   }
 
   if (!active.length) return;
 
-  const rows = await folders.listForWorkRefresh(active);
+  const rows = await workspaces.listForWorkRefresh(active);
   if (!rows.length) return;
 
   // Resolve base branches per project (one lookup for the batch).
   const baseOf = new Map((await projects.list()).map((w) => [w.id, w.baseBranch]));
 
-  // Check each folder in parallel.
+  // Check each workspace in parallel.
   await Promise.all(rows.map(async (f) => {
     const base = baseOf.get(f.projectId);
     if (!base) return;
@@ -50,7 +50,7 @@ export async function refreshWorkState({ folders, projects, paths, containers, e
     try {
       work = await workState(repoDir(paths, f.id), f.branch, base);
     } catch (e) {
-      log.warn({ folder: f.id, err: errStr(e) }, 'could not read work state');
+      log.warn({ workspace: f.id, err: errStr(e) }, 'could not read work state');
       return;
     }
 
@@ -58,7 +58,7 @@ export async function refreshWorkState({ folders, projects, paths, containers, e
     if (work === f.work) return;
     // The row write publishes on the session stream too, so a window
     // watching this session sees the work-state dot update without polling.
-    await folders.setWork(f.id, work);
+    await workspaces.setWork(f.id, work);
     // Publish on the board stream so the kanban board picks it up.
     events.publish(f.projectId, { event: 'session_work', card: f.card ?? 0, id: f.id, work });
   }));

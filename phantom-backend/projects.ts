@@ -102,7 +102,7 @@ export class Projects {
 
   /** The row goes; the agent's database and its settings layer (overrides,
    *  its own token) went first — a scope whose project is gone is a row
-   *  nothing will ever read. Its cards, history, sessions and folders
+   *  nothing will ever read. Its cards, history, sessions and workspaces
    *  cascade; the route gates that behind its own confirm. */
   async remove(id: string, by?: string): Promise<void> {
     await this.databases?.drop(id);

@@ -1,4 +1,4 @@
-// The session title — a one-shot HELPER (this folder: prompts that belong to
+// The session title — a one-shot HELPER (this workspace: prompts that belong to
 // no agent), not an agent: after a transcript save, one generateText call
 // names what the session is building (phantom-backend/sessionTitle.ts). No
 // conversation, no tools. It runs on the Assistant's model config only because

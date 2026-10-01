@@ -95,8 +95,8 @@ export const cardRevisions = phantomLooper.table('card_revisions', {
 // disk is named by this id (which equals the owning session's id). The row is
 // permanent — it is what remembers the branch; the FILES can be deleted and
 // re-cloned from it. Goes with its project (cascade, 026). Every fact about
-// the checkout lives here (036); a session reads them through its folder_id.
-export const folders = phantomLooper.table('folders', {
+// the checkout lives here (036); a session reads them through its workspace_id.
+export const workspaces = phantomLooper.table('workspaces', {
   id: text('id').primaryKey(),
   projectId: text('project_id').notNull(),
   branch: text('branch').notNull(),
@@ -113,7 +113,7 @@ export const folders = phantomLooper.table('folders', {
   // When its branch last reached origin.
   lastPushAt: timestamp('last_push_at', { withTimezone: true }),
   // Its git state: not_pushed, not_merged, merged. Written by the periodic
-  // refresh for folders with a running container; null = never measured.
+  // refresh for workspaces with a running container; null = never measured.
   work: text('work'),
   // The checkout lock (038): the one git sync writing this checkout right
   // now, and when its hold lapses. Fresh id per run, never re-entered.
@@ -123,7 +123,7 @@ export const folders = phantomLooper.table('folders', {
 });
 
 // A conversation. Its checkout facts — files present, last touched, last
-// pushed, git state — are its FOLDER's (036); reads join them in.
+// pushed, git state — are its WORKSPACE's (036); reads join them in.
 export const sessions = phantomLooper.table('sessions', {
   id: text('id').primaryKey(),
   projectId: text('project_id').notNull(),
@@ -153,11 +153,11 @@ export const sessions = phantomLooper.table('sessions', {
   // sessions in motion. The row is the record so every client agrees. (018,
   // renamed from starred in 019)
   pinned: boolean('pinned').notNull().default(false),
-  // WHICH FOLDER MY TOOLS OPEN. A coder points at its own id; a supervisor
+  // WHICH WORKSPACE MY TOOLS OPEN. A coder points at its own id; a supervisor
   // at its coder's; the assistant at the on-screen session's. Null only for
   // an assistant with no session on screen yet (no files to read). Resolved
-  // in ONE place (Sessions.folderOf) — nothing falls back to the session id.
-  folderId: text('folder_id'),
+  // in ONE place (Sessions.workspaceOf) — nothing falls back to the session id.
+  workspaceId: text('workspace_id'),
   // THE CARD THIS SESSION WORKS ON — the card's key (cards.id), null when it
   // is on no card. A coder and its supervisor both carry it. The pairing is
   // derived: a card's coder is its newest coding session, its supervisor its
@@ -209,7 +209,7 @@ export const sessions = phantomLooper.table('sessions', {
   systemPrompt: jsonb('system_prompt').$type<StoredSystemPrompt>(),
 });
 
-// Every sessions read selects THESE (plus the folder's facts, joined —
+// Every sessions read selects THESE (plus the workspace's facts, joined —
 // Sessions.view), never the bare table: the columns left out are the blobs —
 // the conversation and the frozen prompt — so no list or lookup hauls them
 // through Postgres by accident. The transcript routes and the one-session
@@ -335,10 +335,10 @@ export const crons = phantomLooper.table('crons', {
 export type ProjectRow = typeof projects.$inferSelect;
 export type CardRow = typeof cards.$inferSelect;
 export type CronRow = typeof crons.$inferSelect;
-export type FolderRow = typeof folders.$inferSelect;
-/** The checkout's facts as a session carries them: joined from its folder
+export type WorkspaceRow = typeof workspaces.$inferSelect;
+/** The checkout's facts as a session carries them: joined from its workspace
  *  on every read. `status` says whether the files exist ('active' /
- *  'destroyed' — the wire's words); a session with no folder reads as
+ *  'destroyed' — the wire's words); a session with no workspace reads as
  *  active with nothing to measure. */
 export interface CheckoutFacts {
   branch: string | null;
@@ -348,5 +348,5 @@ export interface CheckoutFacts {
   work: string | null;
 }
 /** A session as reads return it — sessionColumns' shape, blobs excluded,
- *  its folder's facts joined in (Sessions.view). */
+ *  its workspace's facts joined in (Sessions.view). */
 export type SessionRow = Omit<typeof sessions.$inferSelect, 'transcript' | 'systemPrompt'> & CheckoutFacts;

@@ -1,4 +1,4 @@
-// FolderWatcher — "tell me when a file in this folder changes", backed by a
+// WorkspaceWatcher — "tell me when a file in this workspace changes", backed by a
 // child process running @parcel/watcher (watcherChild.ts says why). This is
 // the parent side: it forks the child, forwards every watch to it, and when
 // the child exits for ANY reason forks a new one and replays every watch.
@@ -9,13 +9,13 @@
 import { fork, type ChildProcess } from 'node:child_process';
 import { logger, errStr } from '../log.js';
 
-const log = logger('folder-watcher');
+const log = logger('workspace-watcher');
 
 const CHILD = new URL('./watcherChild.js', import.meta.url);
 
 interface Watch { dir: string; onChange: () => void }
 
-export class FolderWatcher {
+export class WorkspaceWatcher {
   private watches = new Map<string, Watch>();
   private child: ChildProcess | undefined;
   private stopped = false;

@@ -10,7 +10,7 @@
 // model toward the structured tool over raw shell where structure wins.
 //
 // Every file tool needs the session's container: `ctx.files()` starts it on
-// first use. Offered only to a session with files (a folder).
+// first use. Offered only to a session with files (a workspace).
 import { Sandbox } from '../workspace/sandbox.js';
 import { fuzzyFindAndReplace, formatNoMatchHint } from './fuzzy.js';
 import { unifiedDiff } from './diff.js';
@@ -71,7 +71,7 @@ function readRange(
 
 const FILE_AGENTS = ['coding', 'supervisor', 'assistant'] as const;
 /** Offered only to a session with files. */
-const hasFiles = ({ session }: { session: { folderId: string | null } }) => Promise.resolve(!!session.folderId);
+const hasFiles = ({ session }: { session: { workspaceId: string | null } }) => Promise.resolve(!!session.workspaceId);
 
 export const FILE_TOOLS: ToolDef[] = [
   {

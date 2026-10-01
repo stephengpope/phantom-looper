@@ -66,8 +66,8 @@ A sync is a sequence of git commands; git's own `index.lock` guards one
 command, not the sequence. Two syncs on one checkout interleave and wreck
 the branch — and the session lock never prevented it: every sync took it
 under one shared id, which the lock lets back in, and instant sync cannot
-take it at all. So the lock sits on the checkout: `folders.sync_locked_by`
-/ `sync_lock_expires_at` (038), owned by `Folders`, taken inside
+take it at all. So the lock sits on the checkout: `workspaces.sync_locked_by`
+/ `sync_lock_expires_at` (038), owned by `Workspaces`, taken inside
 `syncBranch` and `GitEngine.push` by **every** writer — instant, manual,
 card archive, idle backup — under a fresh id per run, so it is never
 re-entered. Manual sync takes it AND the session lock (no turn under the
@@ -76,7 +76,7 @@ them, said as locks.
 
 ## What is watched
 
-Folders with a **running container**, in a project with the switch on.
+Workspaces with a **running container**, in a project with the switch on.
 Files only change through a container or through the sync itself. The
 container tells instant sync as it happens: the watcher attaches inside the
 container start, before the tool call that started it returns, and lets go
@@ -118,4 +118,4 @@ would otherwise trigger itself. Anything else that changes fires, and
 - Do not add a busy flag or an in-process mutex here. The checkout lock is
   the one thing that keeps syncs apart, and it lives with the sync. A flag
   here once dropped pushes for a whole extra debounce.
-- Do not watch every folder on disk.
+- Do not watch every workspace on disk.
