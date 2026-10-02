@@ -1,2 +1,5 @@
-// phantom-server-sdk — what phantom-backend runs.
-export { ServerUserMessageQueue, MAX_PER_SESSION, type SessionAccess } from './serverUserMessageQueue.js';
+// @phantom-agent-sdk/server — what a phantom server runs. User space hands
+// PhantomServer.create a config and gets the server back.
+export { PhantomServer, type PhantomServerConfig } from './PhantomServer.js';
+export * from './members.js';
+export type { SettingDefinition, AgentTypeDefinition, ToolDefinition, ToolRunContext, ToolGroup, RouteRegistrar } from './doors.js';

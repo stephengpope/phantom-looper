@@ -1,39 +1,20 @@
-# phantom-server-sdk
+# @phantom-agent-sdk/server
 
-What phantom-backend runs. Today: the user message queue.
+What a phantom server runs. `PhantomServer.create(config)` builds every
+service; `start()` runs it. User space hands in a config — its settings,
+agent types, tools, routes and hooks — and never subclasses.
 
-## The user message queue
-
-The one way the server puts a message in front of a session's AI. Background
-tasks, instant sync, auto-push / auto-pull and cron all push here. Nothing
-here starts a turn.
-
-```ts
-import { ServerUserMessageQueue } from 'phantom-server-sdk';
-
-const queue = new ServerUserMessageQueue({ appendTranscript });   // the backend's transcript write
-
-queue.add(sessionId, 'task 7 exited 0');
-
-// Where a session lock is taken, under that lock, before the taker runs:
-await queue.drain(sessionId);
-```
-
-- `add` queues. `drain` writes what is waiting into the transcript as user
-  messages.
-- `drain` runs when a lock is taken — so the messages land right before the
-  next turn reads the transcript. Nothing reads them sooner. The client SDK
-  sees the transcript changed when it takes the lock and reloads it.
-- The same text already waiting is not queued again.
-- A write that fails leaves the messages queued.
-- In memory: a message held across a server restart is lost.
-
-Not wired into phantom-backend: writing into the transcript at lock time is safe only once every client appends to the record. Today the cli, the looper and Telegram save the whole file, and a line appended under the lock would be overwritten by their next save. The client SDK takes the server's notes at turn start instead (POST /sessions/:id/backdoor/drain); this queue is wired when the hosts run on the client SDK.
-
-## Develop
+Status: stubs. Every object's public surface is declared with a one-line
+doc; bodies move in one object at a time (docs/phantom-agent-sdk-plan.md).
 
 ```
-npm run sdk:build          # once — this package imports the transcript line format from phantom-client-sdk
-npm run server-sdk:lint
-npm run server-sdk:build
+src/PhantomServer.ts     the root: members, boot order, start/stop
+src/doors.ts             what user space registers: settings, agent types, tools, routes
+src/members.ts           the 45 members, one file each
+src/storage/             Database, Settings, the table owners, AgentDatabases
+src/agents/              AgentTypes, AgentConfig, SystemPrompt, ModelCatalog, SessionTitler, UserMessageQueue, Tools, the feeds
+src/runtime/             Docker, Images, WorkspaceContainers, Sandbox, CheckoutPool, Disk, Skills, SystemSkills, Web
+src/git/                 Git, GitSync, InstantSync, WorkspaceWatcher, GitHub, CommitMessages
+src/telegram/            TelegramBot, TelegramRenderer, TelegramAttachments, TelegramVoice, TelegramApprovals, TelegramDedupe
+src/api/                 HttpApi, DbConsole
 ```
