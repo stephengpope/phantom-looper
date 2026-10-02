@@ -15,10 +15,11 @@
 // in code (CREDENTIALS), never decided by a write.
 import type { FastifyInstance } from 'fastify';
 import type { FastifyRequest } from 'fastify';
-import type { ProjectRow } from 'phantom-backend-sdk/schema';
-import { SettingsWriteError } from 'phantom-backend-sdk';
-import { GLOBAL, projectScope } from 'phantom-backend-sdk';
-import { ok, err, type AppCtx } from '../app.js';
+import type { ProjectRow } from '../../storage/schema.js';
+import { SettingsWriteError } from '../../storage/Settings.js';
+import { GLOBAL, projectScope } from '../../lib/scopes.js';
+import { ok, err } from '../HttpApi.js';
+import type { PhantomBackend } from '../../PhantomBackend.js';
 
 const writerOf = (req: FastifyRequest): string | undefined =>
   String(req.headers['x-phantom-looper-client'] ?? '') || undefined;
@@ -28,7 +29,7 @@ const scopeQuery = { type: 'object', properties: {
   project: { type: 'string', description: 'Read/write at this project\'s layer.' },
 } };
 
-export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
+export function settingsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   /** The scope one request addresses. Verifying the project exists is what
    *  stops a typo becoming an override nothing will ever read — the row would
    *  be perfectly valid and perfectly dead. */

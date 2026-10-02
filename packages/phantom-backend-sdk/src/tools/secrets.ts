@@ -1,8 +1,8 @@
 // The SECRET tools — secret_list, secret_get: the stored secrets, over
 // Settings' secret layer. Read-only by design. Bound to the session's
 // project: its secrets shadow global ones by name.
-import { GLOBAL, projectScope } from 'phantom-backend-sdk';
-import { secretName } from '../../core/secretName.js';
+import { GLOBAL, projectScope } from '../lib/scopes.js';
+import { secretName } from 'phantom-client-sdk';
 import { obj, refusal, str, type ToolCtx, type ToolDef } from './def.js';
 
 const chain = (ctx: ToolCtx) => [GLOBAL, projectScope(ctx.project.id)];

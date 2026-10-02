@@ -3,7 +3,7 @@
 // on: Telegram off means no tool.
 import { obj, refusal, str, type OfferCtx, type ToolDef } from './def.js';
 
-const enabled = async ({ app }: OfferCtx) => !!app.telegram && Boolean(await app.settings.resolve('telegram_enabled'));
+const enabled = async ({ app }: OfferCtx) => app.notifications.available && Boolean(await app.settings.resolve('telegram_enabled'));
 
 export const NOTIFY_TOOLS: ToolDef[] = [
   {
@@ -16,9 +16,8 @@ export const NOTIFY_TOOLS: ToolDef[] = [
     input: obj({ text: str('The message to send.') }, ['text']),
     mutates: false, group: 'notify', offered: enabled,
     async execute(ctx, a) {
-      if (!ctx.app.telegram) throw refusal('telegram_unavailable', 'telegram is not wired on this server (no public address)');
       try {
-        await ctx.app.telegram.notify(ctx.session.id, String(a.text ?? ''));
+        await ctx.app.notifications.send(String(a.text ?? ''), { sessionId: ctx.session.id });
         return { sent: true };
       } catch (e) {
         throw refusal('telegram_unavailable', `could not send the message: ${(e as Error).message}`);

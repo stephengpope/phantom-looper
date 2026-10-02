@@ -79,5 +79,14 @@ export { TelegramSentMessages, type TelegramSentMessage } from './telegram/sentM
 export { TelegramBotState, MODE_MESSAGE, type TelegramBotStateRow, type TelegramMode } from './telegram/botState.js';
 export { telegramChannel } from './telegram/telegramChannel.js';
 export { lastAssistantFromJsonl } from './telegram/transcriptHelper.js';
-export type { NotificationChannel } from './Notifications.js';
+export { NotificationsError, type NotificationChannel } from './Notifications.js';
 export { readEnv, APP_VERSION, API_IMAGE, type Env } from './lib/env.js';
+
+// the API: envelope helpers and the route helpers user space's routes share
+export { ok, err } from './api/HttpApi.js';
+export { clientOf, lockedErr } from './api/routes/sessions.js';
+export { fsDeps, fileTools, type FsDeps } from './api/routes/fs.js';
+export { TOOLS, toolByName, toolsFor, grantedTools, registerTools } from './tools/registry.js';
+export { str, int, bool, nullable, oneOf, obj, s, refusal, type ToolDef, type ToolCtx, type OfferCtx, type FileTools, type PublishedTool } from './tools/def.js';
+export { userMessagesContext, titleContext, cleanTitle, type TitleContext, type TitleWriter } from './agents/SessionTitler.js';
+export type { Hooks } from './PhantomBackend.js';

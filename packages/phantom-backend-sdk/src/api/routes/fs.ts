@@ -4,24 +4,27 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import type { SessionRow } from 'phantom-backend-sdk/schema';
-import type { BackgroundTaskRow, BackgroundTaskEnd } from 'phantom-backend-sdk';
-import { newId } from 'phantom-backend-sdk';
-import { sessionDir } from 'phantom-backend-sdk';
-import { logger, errStr } from 'phantom-backend-sdk';
-import { Sandbox } from 'phantom-backend-sdk';
+import type { SessionRow } from '../../storage/schema.js';
+import type { BackgroundTaskRow } from '../../storage/BackgroundTasks.js';
+import type { BackgroundTaskEnd } from '../../storage/BackgroundTasks.js';
+import { newId } from 'phantom-client-sdk';
+import { sessionDir } from '../../lib/paths.js';
+import { logger, errStr } from '../../lib/log.js';
+import { Sandbox } from '../../runtime/Sandbox.js';
 import type { FileTools } from '../../tools/def.js';
-import { ToolError } from 'phantom-backend-sdk';
-import type { AppCtx } from '../app.js';
-import { killProcessGroup } from 'phantom-backend-sdk';
-import { workspaceOf } from 'phantom-backend-sdk';
-import type { SessionContainers } from 'phantom-backend-sdk';
+import { ToolError } from '../../tools/envelope.js';
+import type { PhantomBackend } from '../../PhantomBackend.js';
+import { killProcessGroup } from '../../agents/ForegroundCommands.js';
+import { workspaceOf } from '../../storage/Sessions.js';
+import type { ContainerManager as SessionContainers } from '../../runtime/SessionContainers.js';
 import type Docker from 'dockerode';
-import type { GitEngine } from '../../git/engine.js';
 
 const log = logger('bash');
 
-export interface FsDeps { docker: Docker; containers: SessionContainers; engine?: GitEngine }
+/** The container plumbing the file tools run on. */
+export interface FsDeps { docker: Docker; containers: SessionContainers }
+/** The backend's own. */
+export const fsDeps = (ctx: PhantomBackend): FsDeps => ({ docker: ctx.docker, containers: ctx.sessionContainers });
 
 
 /** Kill one process SESSION by sid: TERM, ~1s grace, KILL. A second exec is
@@ -139,7 +142,7 @@ export const commandTextFromArgv = (argv: unknown): string => {
 const SID_CAPTURE_GRACE_MS = 15_000;
 
 export async function reconcileRunning(
-  ctx: AppCtx, running: BackgroundTaskRow[], groups: LiveGroup[],
+  ctx: PhantomBackend, running: BackgroundTaskRow[], groups: LiveGroup[],
 ): Promise<void> {
   const live = new Set(groups.map((g) => g.sid));
   const now = Date.now();
@@ -161,7 +164,7 @@ export async function reconcileRunning(
  *  kill reaches turns that have no socket to close (server-side turns ride
  *  injectFetch) — one kill, two doors. */
 async function runBash(
-  ctx: AppCtx, deps: FsDeps, sandbox: Sandbox, session: SessionRow,
+  ctx: PhantomBackend, deps: FsDeps, sandbox: Sandbox, session: SessionRow,
   args: { cmd: string; cwd?: string; detached?: boolean; timeout?: number },
   signal?: AbortSignal,
 ): Promise<unknown> {
@@ -322,7 +325,7 @@ const shapeBackgroundTask = (r: BackgroundTaskRow) => ({
   log_file: `/workspace/logs/${r.id}.ndjson`,
 });
 
-async function taskList(ctx: AppCtx, sandbox: Sandbox, session: SessionRow): Promise<unknown> {
+async function taskList(ctx: PhantomBackend, sandbox: Sandbox, session: SessionRow): Promise<unknown> {
   const rows = await ctx.backgroundTasks.listForSession(session.id, 20);
   const running = rows.filter((r) => r.status === 'running');
   if (running.length) {
@@ -339,7 +342,7 @@ async function taskList(ctx: AppCtx, sandbox: Sandbox, session: SessionRow): Pro
 }
 
 /** One command row of THIS session, or a not_found the model can act on. */
-async function ownBackgroundTask(ctx: AppCtx, session: SessionRow, taskId: string): Promise<BackgroundTaskRow> {
+async function ownBackgroundTask(ctx: PhantomBackend, session: SessionRow, taskId: string): Promise<BackgroundTaskRow> {
   const row = await ctx.backgroundTasks.getInSession(taskId, session.id);
   if (!row) throw new ToolError('not_found', `no task ${taskId} in this session — task_list shows what is running`);
   return row;
@@ -349,7 +352,7 @@ async function ownBackgroundTask(ctx: AppCtx, session: SessionRow, taskId: strin
  *  unbounded. */
 const WAIT_MAX_MS = 300_000;
 
-async function taskWait(ctx: AppCtx, session: SessionRow, taskId: string, timeoutMs: number): Promise<unknown> {
+async function taskWait(ctx: PhantomBackend, session: SessionRow, taskId: string, timeoutMs: number): Promise<unknown> {
   let row = await ownBackgroundTask(ctx, session, taskId);
   const deadline = Date.now() + Math.min(Math.max(0, timeoutMs), WAIT_MAX_MS);
   while (row.status === 'running' && Date.now() < deadline) {
@@ -362,7 +365,7 @@ async function taskWait(ctx: AppCtx, session: SessionRow, taskId: string, timeou
   return { ...shapeBackgroundTask(row), tail: await tailLog(row.logPath, 10) };
 }
 
-async function taskKill(ctx: AppCtx, sandbox: Sandbox, session: SessionRow, taskId: string): Promise<unknown> {
+async function taskKill(ctx: PhantomBackend, sandbox: Sandbox, session: SessionRow, taskId: string): Promise<unknown> {
   const row = await ownBackgroundTask(ctx, session, taskId);
   if (row.status !== 'running') return { ...shapeBackgroundTask(row), note: 'not running — nothing to kill' };
   if (!row.sid) {
@@ -404,7 +407,7 @@ async function tailLog(logPath: string, lines: number): Promise<string[]> {
  *  container started (or already up), the sandbox on it, the bash and task
  *  plumbing wired around it. `signal` is the client's disconnect — a unary
  *  bash command is killed on it. Throws ToolError container_start_failed. */
-export async function fileTools(ctx: AppCtx, deps: FsDeps, session: SessionRow, workspaceId: string, signal: AbortSignal): Promise<FileTools> {
+export async function fileTools(ctx: PhantomBackend, deps: FsDeps, session: SessionRow, workspaceId: string, signal: AbortSignal): Promise<FileTools> {
   const project = await ctx.projects.get(session.projectId);
   let container;
   try {

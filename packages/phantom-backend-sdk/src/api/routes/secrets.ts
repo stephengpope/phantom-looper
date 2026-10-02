@@ -11,9 +11,10 @@
 //   GET    /secrets/:name      the decrypted value, project → global
 //   DELETE /secrets/:name      remove at one layer
 import type { FastifyInstance } from 'fastify';
-import { GLOBAL, projectScope } from 'phantom-backend-sdk';
-import { ok, err, type AppCtx } from '../app.js';
-import { secretName, SECRET_NAME_RULE } from '../../../core/secretName.js';
+import { GLOBAL, projectScope } from '../../lib/scopes.js';
+import { ok, err } from '../HttpApi.js';
+import type { PhantomBackend } from '../../PhantomBackend.js';
+import { secretName, SECRET_NAME_RULE } from 'phantom-client-sdk';
 
 const TAG = { tags: ['secrets'] };
 const scopeQuery = { type: 'object', properties: {
@@ -22,7 +23,7 @@ const scopeQuery = { type: 'object', properties: {
 const nameParam = { type: 'object', required: ['name'],
   properties: { name: { type: 'string' } } };
 
-export function secretsRoutes(app: FastifyInstance, ctx: AppCtx) {
+export function secretsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   /** The scopes a request reads, most specific LAST — and the one it writes.
    *  A project id is verified to exist, or a typo becomes a row nothing
    *  will ever read. */

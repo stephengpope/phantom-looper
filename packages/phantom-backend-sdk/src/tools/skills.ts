@@ -2,17 +2,17 @@
 // repo's .agents/skills/ and the image's system skills, merged; repo wins a
 // name collision). Offered only to a session with files: a skill lives in a
 // repo.
-import { listSkills, loadSkill, manageSkill, type ManageBody } from '../skills.js';
-import { ToolError } from 'phantom-backend-sdk';
+import { listSkills, loadSkill, manageSkill, type ManageBody } from '../runtime/Skills.js';
+import { ToolError } from './envelope.js';
+import { fsDeps } from '../api/routes/fs.js';
 import { obj, oneOf, str, type OfferCtx, type ToolCtx, type ToolDef } from './def.js';
 
-const hasRepo = ({ app, session }: OfferCtx) => Promise.resolve(!!app.fs && !!session.workspaceId);
+const hasRepo = ({ session }: OfferCtx) => Promise.resolve(!!session.workspaceId);
 
 /** The container wiring, or the refusal the model can act on. */
 function deps(ctx: ToolCtx) {
-  if (!ctx.app.fs) throw new ToolError('container_unavailable', 'containers are not wired on this server', false);
   if (!ctx.session.workspaceId) throw new ToolError('no_workspace', 'this session has no files — no skills to read');
-  return { fs: ctx.app.fs, workspaceId: ctx.session.workspaceId };
+  return { fs: fsDeps(ctx.app), workspaceId: ctx.session.workspaceId };
 }
 
 export const SKILL_TOOLS: ToolDef[] = [

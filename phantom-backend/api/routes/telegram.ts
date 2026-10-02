@@ -8,18 +8,19 @@
 // path through (see api/app.ts).
 
 import type { FastifyInstance } from 'fastify';
-import type { AppCtx } from '../app.js';
+import type { PhantomBackend } from 'phantom-backend-sdk';
+import type { AppExtras } from '../appRoutes.js';
 
-export function telegramRoutes(app: FastifyInstance, ctx: AppCtx) {
+export function telegramRoutes(app: FastifyInstance, ctx: PhantomBackend, extras: AppExtras) {
   app.post('/telegram/webhook', {
     // No schema validation on the body: Telegram's update shape is large and
     // versioned, and the engine reads only the fields it knows.
     schema: { tags: ['telegram'], summary: 'Telegram webhook',
       description: 'Receives a Telegram update. Auth is the secret-token header, not the API bearer.' },
   }, async (req, reply) => {
-    if (!ctx.telegram) return reply.code(200).send('ok');
+    if (!extras.telegram) return reply.code(200).send('ok');
     const secret = String(req.headers['x-telegram-bot-api-secret-token'] ?? '');
-    const status = await ctx.telegram.handleUpdate(secret, req.body ?? {});
+    const status = await extras.telegram.handleUpdate(secret, req.body ?? {});
     return reply.code(status).send('ok');
   });
 }

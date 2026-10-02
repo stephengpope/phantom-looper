@@ -41,6 +41,12 @@ import { TelegramBotState } from './telegram/botState.js';
 import { TelegramSentMessages } from './telegram/sentMessages.js';
 import { TelegramHandledUpdates } from './telegram/handledUpdates.js';
 import type { SettingDefinition, AgentTypeDefinition, ToolDefinition, RouteRegistrar } from './doors.js';
+import { Notifications } from './Notifications.js';
+import { SessionTitler, type TitleWriter } from './agents/SessionTitler.js';
+import { HttpApi } from './api/HttpApi.js';
+import { registerTools } from './tools/registry.js';
+import { reconcileDbUi } from './api/routes/dbUi.js';
+import type { SessionRow, ProjectRow } from './storage/schema.js';
 import type Docker from 'dockerode';
 
 const log = logger('backend');
@@ -68,6 +74,21 @@ export interface PhantomBackendConfig {
   onStart?: (backend: PhantomBackend) => Promise<void>;
   /** Run first on stop, before the API closes. */
   onStop?: (backend: PhantomBackend) => Promise<void>;
+  /** Transitional — what the backend still asks user space to do, until it
+   *  does it itself on the client SDK (docs/phantom-agent-sdk-plan.md). */
+  transitional?: {
+    /** Write a session's title from the selected user messages (a model call). → SessionTitler on billedModel. */
+    writeTitle?: TitleWriter;
+  };
+}
+
+/** What the backend still reaches user space through at run time. Each
+ *  entry leaves with the plan step named on it. */
+export interface Hooks {
+  /** The git sync the session routes push and detach through. → GitSync (§4). */
+  gitSync?: { push(session: SessionRow, project: ProjectRow): Promise<unknown>; detach(sessionId: string): Promise<void> };
+  /** The card runs in flight — /health's `loops_running`. → the looper reads its own count (§5). */
+  runningLoops?: () => number;
 }
 
 export class PhantomBackend {
@@ -98,6 +119,10 @@ export class PhantomBackend {
   readonly boardEvents: BoardEvents;
   readonly settingsEvents: SettingsEvents;
   readonly foregroundCommands: ForegroundCommands;
+  readonly notifications = new Notifications();
+  readonly sessionTitler: SessionTitler;
+  readonly httpApi: HttpApi;
+  readonly hooks: Hooks = {};
   /** Turns the backend itself runs, by session id — the interrupt route
    *  aborts one. Goes when every turn runs on the client SDK. */
   readonly activeTurns = new Map<string, AbortController>();
@@ -126,6 +151,9 @@ export class PhantomBackend {
     this.docker = built.docker; this.images = built.images; this.sessionContainers = built.sessionContainers;
     this.workspaceWatcher = built.workspaceWatcher; this.telegramBotState = built.telegramBotState;
     this.telegramSentMessages = built.telegramSentMessages; this.telegramHandledUpdates = built.telegramHandledUpdates;
+    this.sessionTitler = new SessionTitler(this.sessions, config.transitional?.writeTitle);
+    this.httpApi = new HttpApi(this, this.env.apiKey);
+    if (config.routes) this.httpApi.addRoutes(config.routes);
   }
 
   /** Build every service, connected but not running. Boot order:
@@ -151,6 +179,7 @@ export class PhantomBackend {
     void modelCatalog.refresh();
     const agentTypes = new AgentTypes();
     agentTypes.register(config.agentTypes);
+    registerTools(config.tools ?? []);
 
     const settings = new Settings(database.drizzle, env.encryptionKey, modelCatalog, settingsEvents);
     for (const type of agentTypes.list()) settings.register(agentTypeSettings(type, { first: type.name === agentTypes.first() }));
@@ -221,6 +250,13 @@ export class PhantomBackend {
       await sweeps.pressure().catch((error) => log.error({ err: errStr(error) }, 'pressure sweep threw'));
       return Number(await this.settings.resolve<number>('maintenance_interval_ms').catch(() => 60_000));
     }));
+    // Database console lifecycle: stop CloudBeaver if the setting is off,
+    // start it when toggled on. The boot reconciliation catches the container
+    // compose started; the settings listener handles ongoing changes.
+    void reconcileDbUi(this.docker, this.settings);
+    this.settingsEvents.subscribe((change) => {
+      if (change.keys.includes('db_ui_enabled')) void reconcileDbUi(this.docker, this.settings);
+    });
     this.#loops.push(this.#loop(async () => {
       await refreshWorkState({ workspaces: this.workspaces, projects: this.projects, paths: this.paths, containers: this.sessionContainers, events: this.boardEvents })
         .catch((error) => log.error({ err: errStr(error) }, 'work-state refresh threw'));
@@ -239,11 +275,21 @@ export class PhantomBackend {
 
   get stopped(): boolean { return this.#stopped; }
 
-  /** Stop the loops and close the database. The API and user space's
-   *  engines stop in the app's shutdown; this is the SDK's part. */
+  /** Run: the routes are built, `config.onStart` runs (user space's engines
+   *  may call the API in-process from here), then the API listens. */
+  async start(): Promise<void> {
+    await this.httpApi.build();
+    await this.config.onStart?.(this);
+    await this.httpApi.listen(this.env.port);
+    log.info({ port: this.env.port, version: this.version }, 'backend up');
+  }
+
+  /** Stop in reverse: `config.onStop`, the API closes, the loops halt, the
+   *  watcher ends, the database closes. */
   async stop(): Promise<void> {
     this.#stopped = true;
     await this.config.onStop?.(this);
+    await this.httpApi.close();
     this.workspaceWatcher.stop();
     await this.database.close();
   }

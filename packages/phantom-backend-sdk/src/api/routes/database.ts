@@ -5,13 +5,14 @@
 //   GET  /projects/:id/database         { enabled }   — the tool kit asks before it offers database_query
 //   POST /projects/:id/database/query   { sql, limit } — run it, connected as the project's role
 import type { FastifyInstance } from 'fastify';
-import { SqlError } from 'phantom-backend-sdk';
-import { ok, err, type AppCtx } from '../app.js';
+import { SqlError } from '../../storage/AgentDatabases.js';
+import { ok, err } from '../HttpApi.js';
+import type { PhantomBackend } from '../../PhantomBackend.js';
 
 const TAG = { tags: ['database'] };
 const idParam = { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] };
 
-export function databaseRoutes(app: FastifyInstance, ctx: AppCtx) {
+export function databaseRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   app.get<{ Params: { id: string } }>(
     '/projects/:id/database', { schema: { ...TAG,
       summary: 'Whether the agent has its own database in this project',

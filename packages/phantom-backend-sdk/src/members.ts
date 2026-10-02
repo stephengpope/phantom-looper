@@ -28,7 +28,7 @@ export { ContainerManager as SessionContainers } from './runtime/SessionContaine
 export { Sandbox } from './runtime/Sandbox.js';
 export * as CheckoutPool from './runtime/CheckoutPool.js';
 export { Disk } from './runtime/Disk.js';
-export { Skills } from './runtime/Skills.js';
+export * as Skills from './runtime/Skills.js';
 export * as SystemSkills from './runtime/SystemSkills.js';
 export * as Web from './runtime/Web.js';
 export * as Git from './git/Git.js';
@@ -44,6 +44,6 @@ export * as TelegramVoice from './telegram/TelegramVoice.js';
 export { Approvals as TelegramApprovals } from './telegram/TelegramApprovals.js';
 export { HttpApi } from './api/HttpApi.js';
 export { DbConsole } from './api/DbConsole.js';
-export type { NotificationChannel as Notifications } from './Notifications.js';
+export { Notifications } from './Notifications.js';
 export { SessionDigest } from './SessionDigest.js';
 export { Upgrader } from './Upgrader.js';

@@ -1,10 +1,11 @@
 // The web surface — thin routes over web.ts (the web_* tools run the same
 // code).
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { ok, err, type AppCtx } from '../app.js';
-import { SESSION_HEADER, toolSession } from 'phantom-backend-sdk';
-import { ToolError } from 'phantom-backend-sdk';
-import { webFetch, webSearch, type SearchBody } from 'phantom-backend-sdk';
+import { ok, err } from '../HttpApi.js';
+import type { PhantomBackend } from '../../PhantomBackend.js';
+import { SESSION_HEADER, toolSession } from '../../agents/sessionHeader.js';
+import { ToolError } from '../../tools/envelope.js';
+import { webFetch, webSearch, type SearchBody } from '../../runtime/Web.js';
 
 const STATUS: Record<string, number> = {
   session_not_found: 404, session_destroyed: 410, no_workspace: 400, credential_required: 400, search_failed: 502,
@@ -12,7 +13,7 @@ const STATUS: Record<string, number> = {
 
 const TAG = { tags: ['web'] };
 
-export function webRoutes(app: FastifyInstance, ctx: AppCtx) {
+export function webRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   const handle = (reply: FastifyReply, e: unknown) => {
     if (e instanceof ToolError) return reply.code(STATUS[e.code] ?? 502).send(err(e.code, e.message, e.retryable));
     throw e;

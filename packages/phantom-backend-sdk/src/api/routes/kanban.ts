@@ -2,12 +2,13 @@
 // routes — the API owns the writes. The column list and the card prefix are project fields
 // (PATCH /projects/:id); defaults live here in code, the DB stores overrides.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import type { ProjectRow } from 'phantom-backend-sdk/schema';
-import { columnsOf } from 'phantom-backend-sdk';
-import { isHeld } from 'phantom-backend-sdk';
-import { CardError, CARD_FIELDS, CARD_JSON_FIELDS, type CardFields, type ItemOp } from 'phantom-backend-sdk';
-import { logger, errStr } from 'phantom-backend-sdk';
-import { ok, err, type AppCtx } from '../app.js';
+import type { ProjectRow } from '../../storage/schema.js';
+import { columnsOf } from '../../storage/Projects.js';
+import { isHeld } from '../../storage/Sessions.js';
+import { CardError, CARD_FIELDS, CARD_JSON_FIELDS, type CardFields, type ItemOp } from '../../storage/Cards.js';
+import { logger, errStr } from '../../lib/log.js';
+import { ok, err } from '../HttpApi.js';
+import type { PhantomBackend } from '../../PhantomBackend.js';
 
 const TAG = { tags: ['kanban'] };
 // Cards are addressed by number everywhere a person or an agent names one
@@ -58,7 +59,7 @@ for (const f of [...CARD_FIELDS, ...CARD_JSON_FIELDS]) {
   if (!(f in cardBodyProps)) throw new Error(`cardBodyProps is missing '${f}' — the one field list must cover it`);
 }
 
-export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
+export function kanbanRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   const log = logger('kanban');
   const projectOf = (id: string) => ctx.projects.get(id);
   /** A card's own refusal, as the API's answer. */

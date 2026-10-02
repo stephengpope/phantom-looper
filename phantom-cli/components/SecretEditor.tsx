@@ -17,7 +17,7 @@ import { Text } from './Text.js';
 import { useRef, useState } from 'react';
 import { isMouseInput } from '../mouse.js';
 import { TextInput } from './TextInput.js';
-import { secretName, SECRET_NAME_RULE } from '../../core/secretName.js';
+import { secretName, SECRET_NAME_RULE } from 'phantom-client-sdk';
 
 /** A place a secret can live: global (id null) or one project. */
 export interface SecretTarget { id: string | null; label: string }

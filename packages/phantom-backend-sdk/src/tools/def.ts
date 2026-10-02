@@ -1,16 +1,17 @@
 // The shape every tool definition has, and the schema helpers the
 // definition files share. The list itself is registry.ts.
-import type { AppCtx } from '../api/app.js';
-import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
-import type { Sandbox } from 'phantom-backend-sdk';
-import { ToolError, type ToolGroup } from 'phantom-backend-sdk';
+import type { PhantomBackend } from '../PhantomBackend.js';
+import type { SessionRow, ProjectRow } from '../storage/schema.js';
+import type { Sandbox } from '../runtime/Sandbox.js';
+import { ToolError } from './envelope.js';
+import type { ToolGroup } from '../doors.js';
 
 /** What a tool call runs with: the row owners, the calling session and its
  *  project, who called (the lock identity), the client's abort, and the
  *  session's files — started on first use, so a tool that never touches a
  *  file never starts a container. */
 export interface ToolCtx {
-  app: AppCtx;
+  app: PhantomBackend;
   session: SessionRow;
   project: ProjectRow;
   /** The caller's x-phantom-looper-client — rides card writes as the writer. */
@@ -33,7 +34,7 @@ export interface FileTools {
 }
 
 /** What deciding whether a tool is offered may look at. */
-export interface OfferCtx { app: AppCtx; session: SessionRow; project: ProjectRow }
+export interface OfferCtx { app: PhantomBackend; session: SessionRow; project: ProjectRow }
 
 export interface ToolDef {
   name: string;

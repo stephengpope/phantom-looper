@@ -32,3 +32,4 @@ export { agentText, systemPromptBlocks, SYSTEM_PROMPT_SECTIONS,
 export { newId, idTime } from './ids.js';
 export { DEFAULT_COLUMNS, STATUS_ICON, normalizeKey, newKey, keyedItems, type ChecklistItem } from './cards.js';
 export { pullLine, type PullProgress, type UpdateEvent } from './update.js';
+export { secretName, SECRET_NAME_RULE } from './secretName.js';

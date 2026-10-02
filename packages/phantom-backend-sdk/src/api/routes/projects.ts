@@ -1,12 +1,13 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import type { ProjectRow } from 'phantom-backend-sdk/schema';
-import { parseRepoRef, remoteUrl } from 'phantom-backend-sdk';
-import { createRepo, listRepos, whoami } from 'phantom-backend-sdk';
-import { initializeRemote, classifyGitFailure } from 'phantom-backend-sdk/git';
-import { ProjectError } from 'phantom-backend-sdk';
-import { projectScope } from 'phantom-backend-sdk';
-import { newId } from 'phantom-backend-sdk';
-import { ok, err, type AppCtx } from '../app.js';
+import type { ProjectRow } from '../../storage/schema.js';
+import { parseRepoRef, remoteUrl } from '../../git/remote.js';
+import { createRepo, listRepos, whoami } from '../../git/GitHub.js';
+import { initializeRemote, classifyGitFailure } from '../../git/Git.js';
+import { ProjectError } from '../../storage/Projects.js';
+import { projectScope } from '../../lib/scopes.js';
+import { newId } from 'phantom-client-sdk';
+import { ok, err } from '../HttpApi.js';
+import type { PhantomBackend } from '../../PhantomBackend.js';
 
 /** What leaves the API. The credential is no longer a column — it is
  *  `github_token` at this project's scope, so hasCredential is a lookup. */
@@ -26,7 +27,7 @@ const idParam = { type: 'object', properties: { id: { type: 'string' } }, requir
 const writerOf = (req: FastifyRequest): string | undefined =>
   String(req.headers['x-phantom-looper-client'] ?? '') || undefined;
 
-export function projectRoutes(app: FastifyInstance, ctx: AppCtx) {
+export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // The stored github_token, checked against GitHub itself — what the /keys
   // screen calls right after a save, so a dead or mistyped token is caught
   // where it was pasted instead of at the next clone. Reads the GLOBAL layer

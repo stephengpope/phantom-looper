@@ -14,13 +14,14 @@
 // Tools take no lock — an agent fans out parallel calls in one turn and they
 // all just run; the session/turn lock is the only lock.
 import type { FastifyInstance } from 'fastify';
-import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
+import type { SessionRow, ProjectRow } from '../../storage/schema.js';
 import { TOOLS, toolsFor, type FileTools, type ToolCtx } from '../../tools/registry.js';
 import { FILE_TOOLS } from '../../tools/files.js';
-import { ToolError } from 'phantom-backend-sdk';
-import { ok, err, type AppCtx } from '../app.js';
-import { SESSION_HEADER } from 'phantom-backend-sdk';
-import { fileTools } from './fs.js';
+import { ToolError } from '../../tools/envelope.js';
+import { ok, err } from '../HttpApi.js';
+import type { PhantomBackend } from '../../PhantomBackend.js';
+import { SESSION_HEADER } from '../../agents/sessionHeader.js';
+import { fileTools, fsDeps } from './fs.js';
 
 const STATUS: Record<string, number> = {
   not_found: 404, session_not_found: 404, duplicate_name: 409, database_off: 409, database_unavailable: 503, telegram_unavailable: 503, sql_error: 400, session_destroyed: 410, no_workspace: 400, no_session: 400,
@@ -38,7 +39,7 @@ const clientOf = (req: { headers: Record<string, unknown> }): string => {
  *  its project. A tool call is use — the checkout is touched. Files are
  *  NOT required here: a tool that needs them asks `files()`, which refuses a
  *  session without a workspace. */
-async function sessionOf(ctx: AppCtx, id: string): Promise<{ session: SessionRow; project: ProjectRow }> {
+async function sessionOf(ctx: PhantomBackend, id: string): Promise<{ session: SessionRow; project: ProjectRow }> {
   if (!id) throw new ToolError('session_not_found', `missing ${SESSION_HEADER} header`);
   const session = await ctx.sessions.get(id);
   if (!session) throw new ToolError('session_not_found', `no session ${id}`);
@@ -49,7 +50,7 @@ async function sessionOf(ctx: AppCtx, id: string): Promise<{ session: SessionRow
   return { session, project };
 }
 
-export function toolRoutes(app: FastifyInstance, ctx: AppCtx) {
+export function toolRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   const send = (reply: { code: (n: number) => { send: (b: unknown) => unknown } }, e: unknown) => {
     if (e instanceof ToolError) return reply.code(STATUS[e.code] ?? 400).send(err(e.code, e.message, e.retryable, e.detail));
     throw e;
@@ -94,10 +95,8 @@ export function toolRoutes(app: FastifyInstance, ctx: AppCtx) {
           app: ctx, session, project, client: clientOf(req), signal: ac.signal,
           files: () => {
             if (!files) {
-              const fs = ctx.fs;
-              if (!fs) throw new ToolError('container_unavailable', 'containers are not wired on this server', false);
               if (!session.workspaceId) throw new ToolError('no_workspace', 'this session has no files — nothing to read');
-              files = fileTools(ctx, fs, session, session.workspaceId, ac.signal);
+              files = fileTools(ctx, fsDeps(ctx), session, session.workspaceId, ac.signal);
             }
             return files;
           },

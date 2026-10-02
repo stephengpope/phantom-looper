@@ -1,11 +1,12 @@
 // The skills surface — thin routes over skills.ts (the skill_* tools run the
 // same code). Session travels in the same header as the tool routes.
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { ToolError } from 'phantom-backend-sdk';
-import { ok, err, type AppCtx } from '../app.js';
-import { SESSION_HEADER, toolSession } from 'phantom-backend-sdk';
-import type { FsDeps } from './fs.js';
-import { listSkills, loadSkill, manageSkill, type ManageBody } from '../../skills.js';
+import { ToolError } from '../../tools/envelope.js';
+import { ok, err } from '../HttpApi.js';
+import type { PhantomBackend } from '../../PhantomBackend.js';
+import { SESSION_HEADER, toolSession } from '../../agents/sessionHeader.js';
+import { fsDeps } from './fs.js';
+import { listSkills, loadSkill, manageSkill, type ManageBody } from '../../runtime/Skills.js';
 
 const TAG = { tags: ['skills'] };
 
@@ -14,7 +15,8 @@ const STATUS: Record<string, number> = {
   invalid_args: 400, busy: 409, container_start_failed: 503,
 };
 
-export function skillsRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
+export function skillsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
+  const deps = fsDeps(ctx);
   const sessionHeader = {
     type: 'object',
     properties: { [SESSION_HEADER]: { type: 'string', description: 'Session id (ULID). Required.' } },

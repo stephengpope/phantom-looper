@@ -1,8 +1,8 @@
 // The WEB tools — web_search, web_fetch, over web.ts. Fetched pages land in
 // the session's /workspace/web/, where `read` opens them, so web_fetch needs
 // a session with files; web_search does not.
-import { webFetch, webSearch, type SearchBody } from 'phantom-backend-sdk';
-import { ToolError } from 'phantom-backend-sdk';
+import { webFetch, webSearch, type SearchBody } from '../runtime/Web.js';
+import { ToolError } from './envelope.js';
 import { obj, type OfferCtx, type ToolDef } from './def.js';
 
 const hasFiles = ({ session }: OfferCtx) => Promise.resolve(!!session.workspaceId);

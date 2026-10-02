@@ -8,22 +8,24 @@
 // not used — its numbers can never meet a `pkill` in the container.
 import type { FastifyInstance } from 'fastify';
 import fsp from 'node:fs/promises';
-import { Sandbox } from 'phantom-backend-sdk';
-import { ok, err, type AppCtx } from '../app.js';
-import { workspaceOf } from 'phantom-backend-sdk';
+import { Sandbox } from '../../runtime/Sandbox.js';
+import { ok, err } from '../HttpApi.js';
+import type { PhantomBackend } from '../../PhantomBackend.js';
+import { workspaceOf } from '../../storage/Sessions.js';
 import {
   killSid, probeGroups, reconcileRunning, commandTextFromArgv, elapsedSeconds,
-  type LiveGroup, type FsDeps,
+  type LiveGroup, fsDeps,
 } from './fs.js';
-import type { BackgroundTaskRow } from 'phantom-backend-sdk';
-import { logger, errStr } from 'phantom-backend-sdk';
+import type { BackgroundTaskRow } from '../../storage/BackgroundTasks.js';
+import { logger, errStr } from '../../lib/log.js';
 
 const log = logger('tasks');
 
 const TAG = { tags: ['tasks'] };
 const idParam = { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] };
 
-export function tasksRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps) {
+export function tasksRoutes(app: FastifyInstance, ctx: PhantomBackend) {
+  const deps = fsDeps(ctx);
   /** The session's container, probed WITHOUT creating one — listing must
    *  never boot a container just to answer "nothing". */
   const probe = async (workspaceId: string) => {

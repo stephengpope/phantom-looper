@@ -3,14 +3,15 @@
 // and their conflict fixer (core/llm, until GitSync), the HTTP app, the
 // looper, the cron scheduler, the Telegram engine, the digest, the upgrade
 // check — then listen.
-import { PhantomBackend, APP_VERSION as VERSION, telegramChannel, logger, errStr } from 'phantom-backend-sdk';
+import { PhantomBackend, APP_VERSION as VERSION, telegramChannel, registerTools, logger, errStr } from 'phantom-backend-sdk';
 import { config } from './config.js';
 import { oldAgentConfig, sessionPin } from './agentConfig.js';
 import { CronEngine } from './crons/engine.js';
 import { setTokenRecorder } from '../core/llm/createAgent.js';
 import { System } from './system.js';
 import { idleBackupSweep, pressureSweep } from './disk.js';
-import { buildApp, type AppCtx, type AppExtras } from './api/app.js';
+import { appRoutes, type AppExtras } from './api/appRoutes.js';
+import { gitTools } from './tools/git.js';
 import { shutdown as updateShutdown } from './api/updateTask.js';
 import { GitEngine } from './git/engine.js';
 import { autoPush, type AutoPushEvent, type ConflictContext } from './git/autoPush.js';
@@ -27,7 +28,6 @@ import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
 import { LooperEngine } from './looper/engine.js';
 import { TelegramEngine } from './telegram/engine.js';
 import { InstantSync } from './git/instantSync.js';
-import { reconcileDbUi } from './api/routes/dbUi.js';
 
 const log = logger('boot');
 /** Fake base URL for in-process API calls via injectFetch — the host part is
@@ -232,21 +232,18 @@ async function main() {
     pressure: () => pressureSweep(settings, projects, sessions, paths, images, containers, engine, (ids) => backend.busyWorkspaces(ids)),
   });
 
-  // `ctx` is a named object because the looper is wired into it AFTER the
-  // app exists — the engine is a headless client of this app, so it is built
-  // second; routes read ctx.looper per request, so the late set is seen.
   const system = new System(paths, logTokens, docker ?? undefined, images, process.env.UPDATE_TRIGGER_DIR || undefined,
-    () => ctx.looper?.runningCount() ?? 0);
-  const ctx: AppCtx = Object.assign(backend, {
-    apiKey: env.apiKey,
-    fs: { docker, containers, engine },
-    engine,
-    system,
-    autoPush: autoPushFn,
-    autoPull: autoPullFn,
+    () => backend.hooks.runningLoops?.() ?? 0);
+  const extras: AppExtras = {
+    apiKey: env.apiKey, engine, system, autoPush: autoPushFn, autoPull: autoPullFn,
     updateTriggerDir: process.env.UPDATE_TRIGGER_DIR || undefined,
-  } satisfies AppExtras);
-  const app = await buildApp(ctx);
+  };
+  backend.hooks.gitSync = { push: (session, project) => engine.push(session, project), detach: (sessionId) => engine.detach(sessionId) };
+  backend.httpApi.addRoutes(appRoutes(backend, extras));
+  backend.httpApi.addPublicPath('/api/telegram/webhook');
+  registerTools(gitTools(extras));
+  await backend.httpApi.build();
+  const app = backend.httpApi.app;
 
   // Archiving a DONE card auto-pushes its session's work, when
   // `auto_push_on_archive` says so — a listener on the board bus, so it
@@ -285,31 +282,21 @@ async function main() {
     })().catch((err) => log.error({ card: card.number, err: errStr(err) }, 'auto-push on archive threw'));
   });
 
-  await app.listen({ port: env.port, host: '0.0.0.0' });
-  log.info({ port: env.port, version: VERSION }, 'phantom-backend up');
-
-  // Database console lifecycle: stop CloudBeaver if the setting is off,
-  // start it when toggled on. The boot reconciliation catches the container
-  // that compose started; the settings listener handles ongoing changes.
-  void reconcileDbUi(docker ?? undefined, settings);
-  settingsEvents.subscribe((e) => {
-    if (e.keys.includes('db_ui_enabled')) void reconcileDbUi(docker ?? undefined, settings);
-  });
 
   // The looper — built after listen: its turns' TOOLS are clients of this
   // server's own surface (the same tools every client runs), so the routes
   // must be answering. Event-driven: every card write reaches it over the
   // board bus; start() is ONE recovery sweep, not a poll.
-  const looper = new LooperEngine({ sessions, projects, cards, settings, agentConfig, logTokens, app, apiKey: env.apiKey, events: ctx.boardEvents, settingsEvents,
-    sessionEvents: ctx.sessionEvents, activeTurns: ctx.activeTurns, backdoor: ctx.userMessageQueue });
-  ctx.looper = looper;
+  const looper = new LooperEngine({ sessions, projects, cards, settings, agentConfig, logTokens, app, apiKey: env.apiKey, events, settingsEvents,
+    sessionEvents, activeTurns: backend.activeTurns, backdoor });
+  backend.hooks.runningLoops = () => looper.runningCount();
   looper.start();
 
   // The cron scheduler — the same shape: a client of this app, built after
   // listen. One croner job per cron row fires at its time; registrations
   // follow the table's writes and the settings' (events, no polling).
   const cronEngine = new CronEngine({ crons, projects, settings, agentConfig, sessions, app, apiKey: env.apiKey,
-    sessionEvents: ctx.sessionEvents, settingsEvents, activeTurns: ctx.activeTurns, backdoor: ctx.userMessageQueue });
+    sessionEvents, settingsEvents, activeTurns: backend.activeTurns, backdoor });
   cronEngine.start();
 
   // The Telegram engine — a client of this app like the looper. The webhook
@@ -319,18 +306,23 @@ async function main() {
   const telegram = new TelegramEngine({
     botState: telegramBotState, sentMessages: telegramSentMessages, handledUpdates: telegramHandledUpdates,
     settings, agentConfig, modelCatalog, sessions, cards, projects, presets, system, paths, app, apiKey: env.apiKey,
-    events: ctx.boardEvents, settingsEvents, foreground: ctx.foregroundCommands, loopsRunning: () => looper.runningCount(), backdoor: ctx.userMessageQueue,
-    sessionEvents: ctx.sessionEvents, publicAddress: process.env.PHANTOM_BACKEND_ADDRESS,
+    events, settingsEvents, foreground: backend.foregroundCommands, loopsRunning: () => looper.runningCount(), backdoor,
+    sessionEvents, publicAddress: process.env.PHANTOM_BACKEND_ADDRESS,
     autoPush: autoPushFn, autoPull: autoPullFn,
   });
-  ctx.telegram = telegram;
+  extras.telegram = telegram;
+  // The agents' send_message and the digest go out through the bot.
+  backend.notifications.addChannel({
+    name: 'telegram',
+    send: (text, context) => context?.sessionId ? telegram.notify(context.sessionId, text) : telegramChannel(settings).send(text),
+  });
   void telegram.reconcile();
 
   // Session idle digest — a periodic notification listing sessions that
   // finished. Standalone timer, no dependency on the engine's turn machinery.
   const digest = new SessionDigest({
     sessions, cards, settings, agentConfig, projects,
-    channels: [telegramChannel(settings)],
+    channels: backend.notifications.channels(),
   });
   void digest.start();
 
@@ -358,10 +350,11 @@ async function main() {
     cronEngine.stop();
     digest.stop();
     await instantSync.stop();
-    await app.close();
     await backend.stop();
     process.exit(0);
   };
+  await backend.httpApi.listen(env.port);
+  log.info({ port: env.port, version: VERSION }, 'phantom-backend up');
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
 }

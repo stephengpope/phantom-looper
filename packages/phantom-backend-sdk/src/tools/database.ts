@@ -2,7 +2,7 @@
 // the project (databases.ts). Offered when the project's `agent_database`
 // is on and the server has database wiring; absent otherwise — a missing
 // tool, never a failing one.
-import { SqlError } from 'phantom-backend-sdk';
+import { SqlError } from '../storage/AgentDatabases.js';
 import { obj, refusal, type OfferCtx, type ToolDef } from './def.js';
 
 const enabled = async ({ app, project }: OfferCtx) =>

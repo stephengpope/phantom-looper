@@ -3,8 +3,9 @@
 // assistant runs the whole board. A card run's card-bound powers
 // (kanban_card_move / kanban_card_items / kanban_card_block bound to THE
 // card) are the coding agent's and the supervisor's own tools for that run, added by the run — not here.
-import { CardError, type CardFields, type CardRow, type ItemOp } from 'phantom-backend-sdk';
-import { columnsOf } from 'phantom-backend-sdk';
+import { CardError, type CardFields, type ItemOp } from '../storage/Cards.js';
+import type { CardRow } from '../storage/schema.js';
+import { columnsOf } from '../storage/Projects.js';
 import { int, nullable, obj, oneOf, refusal, str, type ToolCtx, type ToolDef } from './def.js';
 
 const cardNo = int('card number — PHA-7 is card 7');

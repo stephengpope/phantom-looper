@@ -105,25 +105,10 @@ export interface AgentTypeDefinition {
   listed?: boolean;
 }
 
-/** A tool user space serves from the backend. Same shape as the SDK's own
- *  definitions; the backend publishes and runs it like any other. */
-export interface ToolDefinition {
-  name: string;
-  group: ToolGroup;
-  summary: string;
-  description?: string;
-  input: Record<string, unknown>;
-  mutates: boolean;
-  run(args: unknown, ctx: ToolRunContext): Promise<unknown>;
-}
-
-/** What a running tool is given: the session it runs for, and the backend. */
-export interface ToolRunContext {
-  sessionId: string;
-  projectId: string;
-  workspaceId: string | null;
-  backend: unknown;   // PhantomBackend — typed when the stub becomes real
-}
+/** A tool user space serves from the backend: the same shape as the SDK's
+ *  own definitions (tools/def.ts); the backend publishes and runs it like
+ *  any other. */
+export type { ToolDef as ToolDefinition, ToolCtx as ToolRunContext } from './tools/def.js';
 
 /** User space's routes: called with the Fastify instance after the SDK's
  *  routes and auth are in place. */

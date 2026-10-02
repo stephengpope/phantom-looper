@@ -4,9 +4,10 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
 import { ToolError } from 'phantom-backend-sdk';
-import { ok, err, type AppCtx } from '../app.js';
+import { ok, err, type PhantomBackend } from 'phantom-backend-sdk';
+import type { AppExtras } from '../appRoutes.js';
 import { SESSION_HEADER, toolSession } from 'phantom-backend-sdk';
-import type { FsDeps } from './fs.js';
+import { fsDeps } from 'phantom-backend-sdk';
 import type { GitEngine } from '../../git/engine.js';
 import { logger, errStr } from 'phantom-backend-sdk';
 
@@ -17,7 +18,9 @@ const sessionHeader = {
   properties: { [SESSION_HEADER]: { type: 'string', description: 'Session id (ULID)' } },
 };
 
-export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engine: GitEngine) {
+export function gitRoutes(app: FastifyInstance, ctx: PhantomBackend, extras: AppExtras) {
+  const deps = fsDeps(ctx);
+  const engine = extras.engine;
   // The caller's lock identity ('' when absent — publishSync falls back to
   // the git client). Handed to auto-push/auto-pull as `by`, so the session
   // feed's echo rule skips the window that is already drawing this stream.
@@ -116,7 +119,7 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
     let session: SessionRow; let project: ProjectRow;
     try { ({ session, project } = await resolveSession(req)); }
     catch (e) { return send(reply, e); }
-    const autoPush = ctx.autoPush;
+    const autoPush = extras.autoPush;
     if (!autoPush) return reply.code(503).send(err('unavailable', 'auto-push is not wired on this server', true));
     return streamRun(reply, 'auto-push', session.id, (onStep) => autoPush(session, project, onStep, clientOf(req)));
   });
@@ -134,7 +137,7 @@ export function gitRoutes(app: FastifyInstance, ctx: AppCtx, deps: FsDeps, engin
     let session: SessionRow; let project: ProjectRow;
     try { ({ session, project } = await resolveSession(req)); }
     catch (e) { return send(reply, e); }
-    const autoPull = ctx.autoPull;
+    const autoPull = extras.autoPull;
     if (!autoPull) return reply.code(503).send(err('unavailable', 'auto-pull is not wired on this server', true));
     return streamRun(reply, 'auto-pull', session.id, (onStep) => autoPull(session, project, onStep, clientOf(req)));
   });

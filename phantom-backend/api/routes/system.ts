@@ -10,8 +10,9 @@
 import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { AppCtx } from '../app.js';
-import { err, ok } from '../app.js';
+import type { PhantomBackend } from 'phantom-backend-sdk';
+import type { AppExtras } from '../appRoutes.js';
+import { err, ok } from 'phantom-backend-sdk';
 import { logger, errStr } from 'phantom-backend-sdk';
 import { PROVIDERS, isProvider } from '../../../core/llm/createAgent.js';
 import { SystemError, LOG_MAX_TAIL, LOG_SERVICES } from '../../system.js';
@@ -26,7 +27,7 @@ const systemErr = (reply: { code: (n: number) => { send: (b: unknown) => unknown
   return reply.code(e.code === 'no_such_service' ? 404 : 503).send(err(e.code, e.message));
 };
 
-export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
+export function systemRoutes(app: FastifyInstance, ctx: PhantomBackend, extras: AppExtras) {
   // The model catalog, served by the server so every client and the `model`
   // default read ONE list (models.ts: models.dev, an hour in memory, the
   // release's snapshot when it cannot be reached).
@@ -75,10 +76,10 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
     // alive. The refusals are thrown before the first event; attaching to an
     // update in progress replays events synchronously, so the head goes out
     // with the first write, whichever comes first.
-    let run: ReturnType<typeof ctx.system.update>;
+    let run: ReturnType<typeof extras.system.update>;
     const head = () => { if (!reply.raw.headersSent) reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' }); };
     const write = (o: unknown) => { head(); reply.raw.write(`${JSON.stringify(o)}\n`); };
-    try { run = ctx.system.update(tag, { restartAnyway }, write); }
+    try { run = extras.system.update(tag, { restartAnyway }, write); }
     catch (e) {
       if (!(e instanceof SystemError)) throw e;
       return reply.code(e.code === 'loops_running' ? 409 : 503).send(err(e.code, e.message, e.retryable));
@@ -113,7 +114,7 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
       },
     },
   }, async (req, reply) => {
-    try { return ok(await ctx.system.logs(req.body ?? {})); }
+    try { return ok(await extras.system.logs(req.body ?? {})); }
     catch (e) { return systemErr(reply, e); }
   });
 
@@ -126,7 +127,7 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
         'statfs on it is the disk docker\'s data lives on. Answers as preformatted `text` — render it ' +
         'as-is (the cli\'s /cpu and telegram\'s /cpu both do).',
     },
-  }, async () => ok(await ctx.system.status()));
+  }, async () => ok(await extras.system.status()));
 
   app.post<{ Body: { service?: string } }>('/system/restart', {
     schema: {
@@ -144,7 +145,7 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
       },
     },
   }, async (req, reply) => {
-    try { return ok(await ctx.system.restart(req.body?.service)); }
+    try { return ok(await extras.system.restart(req.body?.service)); }
     catch (e) { return systemErr(reply, e); }
   });
 
@@ -157,5 +158,5 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
       summary: 'Token usage report — today, last 7 days, last 30 days; agents and helpers by model',
       description: 'Sums the log_tokens entries. Answers as preformatted `text`.',
     },
-  }, async () => ok(await ctx.system.tokenUsage(await ctx.settings.clockFor())));
+  }, async () => ok(await extras.system.tokenUsage(await ctx.settings.clockFor())));
 }

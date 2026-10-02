@@ -3,8 +3,8 @@
 // crons off means no cron tools. The rules (what a schedule may be, name
 // clashes) live in Crons; its refusals come back verbatim, written for the
 // agent.
-import { CronError, type CronFields } from 'phantom-backend-sdk';
-import { REASONINGS } from '../../core/llm/createAgent.js';
+import { CronError, type CronFields } from '../storage/Crons.js';
+import { REASONINGS } from 'phantom-client-sdk';
 import { nullable, obj, refusal, str, type OfferCtx, type ToolCtx, type ToolDef } from './def.js';
 
 const WHAT_A_RUN_IS = 'A RUN HAS NO USER IN IT: it opens a fresh coding session in this project (its own checkout, ' +

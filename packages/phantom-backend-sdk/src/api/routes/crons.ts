@@ -9,11 +9,12 @@
 //   PATCH  /projects/:id/crons/:name      any subset of those fields
 //   DELETE /projects/:id/crons/:name
 import type { FastifyInstance } from 'fastify';
-import type { ProjectRow } from 'phantom-backend-sdk/schema';
-import type { Clock } from 'phantom-backend-sdk';
-import { CronError, CRON_FIELDS, type CronFields } from 'phantom-backend-sdk';
-import { REASONINGS } from '../../../core/llm/createAgent.js';
-import { ok, err, type AppCtx } from '../app.js';
+import type { ProjectRow } from '../../storage/schema.js';
+import type { Clock } from '../../lib/clock.js';
+import { CronError, CRON_FIELDS, type CronFields } from '../../storage/Crons.js';
+import { REASONINGS } from 'phantom-client-sdk';
+import { ok, err } from '../HttpApi.js';
+import type { PhantomBackend } from '../../PhantomBackend.js';
 
 const TAG = { tags: ['crons'] };
 const idParam = { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] };
@@ -35,7 +36,7 @@ for (const f of CRON_FIELDS) {
   if (!(f in cronBodyProps)) throw new Error(`cronBodyProps is missing '${f}' — the one field list must cover it`);
 }
 
-export function cronRoutes(app: FastifyInstance, ctx: AppCtx) {
+export function cronRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   const projectOf = (id: string) => ctx.projects.get(id);
   const clockOf = (project: ProjectRow) => ctx.settings.clockFor({ projectId: project.id });
   /** Every answer carries the zone and the time there — what a caller

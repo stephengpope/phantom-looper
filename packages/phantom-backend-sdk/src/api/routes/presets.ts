@@ -8,12 +8,13 @@
 // (values or nulls), and calls the existing PATCH /settings — one write path,
 // no duplicate validation, no second set of side effects.
 import type { FastifyInstance } from 'fastify';
-import { ok, err, type AppCtx } from '../app.js';
-import { PresetError } from 'phantom-backend-sdk';
+import { ok, err } from '../HttpApi.js';
+import type { PhantomBackend } from '../../PhantomBackend.js';
+import { PresetError } from '../../storage/Presets.js';
 
 const TAG = { tags: ['presets'] };
 
-export function presetRoutes(app: FastifyInstance, ctx: AppCtx) {
+export function presetRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   app.get('/presets', { schema: { ...TAG, summary: 'List presets',
     description: 'Every saved provider preset, ordered by name.' } },
   async () => {
