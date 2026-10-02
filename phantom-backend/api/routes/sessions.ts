@@ -3,7 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import type { SessionRow } from 'phantom-backend-sdk/schema';
 import type { TokenRecord } from 'phantom-backend-sdk';
-import { SessionError, heldByOther, isHeld, expiredHold, assertDuplicable, ownsWorkspace, workspaceOf } from 'phantom-backend-sdk';
+import { SessionError, startedByClient, heldByOther, isHeld, expiredHold, assertDuplicable, ownsWorkspace, workspaceOf } from 'phantom-backend-sdk';
 import { WorkspaceError } from 'phantom-backend-sdk';
 import { GIT_CLIENT_ID } from 'phantom-backend-sdk/git';
 import { sessionDir } from 'phantom-backend-sdk';
@@ -137,7 +137,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       } } } }, async (req, reply) => {
     if (!req.body?.project_id) return reply.code(400).send(err('missing_project', 'body.project_id required'));
     try {
-      return reply.code(201).send(ok(await ctx.sessions.start(req.body.project_id, req.body.system_prompt_layout, { id: req.body.id })));
+      return reply.code(201).send(ok(await ctx.sessions.start(req.body.project_id, req.body.system_prompt_layout, { id: req.body.id, startedBy: startedByClient(clientOf(req)) })));
     } catch (e) {
       if (unknownBlock(reply, e)) return;
       // The session's own refusals, and the checkout's (a dead token, a repo
@@ -447,15 +447,13 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       const data = req.body.data;
       // One statement lands the record, its preview and the turn count (the
       // count leaving 0 is what freezes the row's model) — Sessions.saveTranscript;
-      // the record event goes out with it. Who drove it is read off the
-      // writer: a person's turn into a card run's coding session takes the
-      // session over (agentAfterSave).
+      // the record event goes out with it.
       const saved = await ctx.sessions.saveTranscript(s, data, client);
-      const { stamp, agent } = saved;
+      const { stamp } = saved;
       if (client && s.lockedBy === client) {
         const ttl = await ctx.settings.resolve('session_lock_ttl_ms');
         const expires = await ctx.sessions.renewLock(s.id, client, Number(ttl));
-        ctx.sessionEvents.publish(s.id, client, lockEvent({ ...s, agent }, { locked: true, expires }));
+        ctx.sessionEvents.publish(s.id, client, lockEvent(s, { locked: true, expires }));
       }
       // Naming rides the save but never blocks it — fire-and-forget; any
       // failure leaves the old name (or null) standing. A manual name

@@ -213,9 +213,7 @@ export class CronEngine {
       });
       sessionId = opened.session.id;
       await sessions.nameIfUnnamed(sessionId, row.name);
-      await sessions.stampAgent(sessionId, 'cron');
       if (row.provider && row.model) await sessions.stampModel(sessionId, { provider: row.provider, model: row.model });
-      this.deps.sessionEvents?.publish(sessionId, CRON_CLIENT_ID, { event: 'session', agent: 'cron' });
 
       const ac = new AbortController();
       this.deps.activeTurns?.set(sessionId, ac);

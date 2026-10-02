@@ -54,8 +54,8 @@ export { refreshWorkState, type WorkRefreshDeps } from './git/workRefresh.js';
 export { SystemPromptError, SERVER_PROMPT_BLOCKS, SOUL_FILENAME, AGENTS_FILENAME, type SystemPromptSource, type ServerPromptBlockName } from './agents/SystemPrompt.js';
 export { killProcessGroup } from './agents/ForegroundCommands.js';
 export { toolSession, SESSION_HEADER } from './agents/sessionHeader.js';
-export { SessionError, conversationOnly, heldByOther, isHeld, lineCount, ownsWorkspace, agentAfterSave, assertDuplicable, copyName, expiredHold, workspaceOf,
-  BACKGROUND_AGENTS, CRON_CLIENT_ID, LOOP_CLIENT_ID, DUP_PREFIX, LAST_MESSAGE_CHARS, type ListQuery, type ListedSession, type SessionFull } from './storage/Sessions.js';
+export { SessionError, conversationOnly, heldByOther, isHeld, lineCount, ownsWorkspace, startedByClient, assertDuplicable, copyName, expiredHold, workspaceOf,
+  BACKGROUND_STARTERS, CRON_CLIENT_ID, LOOP_CLIENT_ID, DUP_PREFIX, LAST_MESSAGE_CHARS, type ListQuery, type ListedSession, type SessionFull, type StartedBy } from './storage/Sessions.js';
 export { formatTokenReport, reportWindows, groupOf, type TokenGroup } from './storage/tokenReport.js';
 export { ToolError, looksBinary, type Truncation } from './tools/envelope.js';
 export { fuzzyFindAndReplace, formatNoMatchHint, findClosestLines, ratio, type FuzzyResult } from './tools/fuzzy.js';

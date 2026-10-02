@@ -63,16 +63,13 @@ export const LAST_MESSAGE_CHARS = 200;
  *  release hook ignores it, and the transcript save reads who drove the turn
  *  off it. */
 export const LOOP_CLIENT_ID = 'supervisor';
-/** The cron engine's client id — the holder whose saves are a cron's run
- *  (crons/engine.ts). Same role as the card run's: the transcript save reads
- *  who drove the turn off it. */
+/** The cron scheduler's client id — a session it opens is `started_by: cron`. */
 export const CRON_CLIENT_ID = 'cron';
 
-/** The seats no person and no coder sits in — the supervisor's session
- *  and a cron's run. /resume hides them unless asked (`background=false`);
- *  a person who types into a cron's session takes it over (agentAfterSave)
- *  and it stops being one. */
-export const BACKGROUND_AGENTS = ['supervisor', 'cron'] as const;
+/** Who may open a session. */
+export type StartedBy = 'person' | 'looper' | 'cron' | 'telegram';
+/** Sessions a default list leaves out: a supervisor's record, and the runs the looper and cron open for themselves. */
+export const BACKGROUND_STARTERS: readonly StartedBy[] = ['looper', 'cron'];
 
 /** What GET /sessions accepts — the object owns what the list IS: the
  *  filters and the count share one WHERE, so `total` is exactly the rows the
@@ -80,8 +77,8 @@ export const BACKGROUND_AGENTS = ['supervisor', 'cron'] as const;
 export interface ListQuery {
   /** Only sessions something was typed into (a last message exists). */
   typed?: boolean;
-  /** false = leave out the background seats (BACKGROUND_AGENTS): the
-   *  supervisor sessions and cron runs. */
+  /** false = leave out the background sessions: a supervisor's record, and
+   *  the runs the looper and cron opened for themselves (BACKGROUND_STARTERS). */
   background?: boolean;
   /** One substring, case-insensitive, anywhere in the name, the last user
    *  message or the branch. */
@@ -100,16 +97,13 @@ export type ListedSession = SessionRow & { card: number | null; cardStatus: stri
 
 // ── Pure rules — no row in hand, nothing to await ────────────────────────────
 
-/** A session that holds only its conversation — no checkout, no container,
- *  nothing on disk. Supervisor and assistant
- *  (the voice/Telegram conversation) are both this shape. */
-export const conversationOnly = (s: SessionRow): boolean =>
-  s.agent === 'supervisor' || s.agent === 'assistant';
+/** A session that holds only its conversation — no checkout of its own, no
+ *  container, nothing on disk: it borrows another session's workspace or
+ *  has none. The supervisor and the assistant are this shape. */
+export const conversationOnly = (s: SessionRow): boolean => !ownsWorkspace(s);
 
-/** The rows that are coding sessions: a coder's seat ('coding') or a
- *  person's (null) — never a supervisor's record or the assistant's. The
- *  SQL twin of `!conversationOnly`. */
-const isCodingSession = or(isNull(sessions.agent), not(inArray(sessions.agent, ['supervisor', 'assistant'])));
+/** The rows that own their checkout — the SQL twin of `ownsWorkspace`. */
+const ownsItsWorkspace = eq(sessions.workspaceId, sessions.id);
 
 /** Duplicating copies a conversation into a fresh checkout — meaningless for
  *  a record that has no checkout and belongs to its card's run. */
@@ -168,19 +162,14 @@ export function expiredHold(s: Pick<SessionRow, 'lockedBy' | 'lockedLabel' | 'lo
   return { by: s.lockedBy, label: s.lockedLabel, at: s.lockExpiresAt };
 }
 
-/** `sessions.agent` after `client` saved a turn: WHO DROVE THE LAST TURN.
- *  The supervisor's record is the supervisor's for life (read-only in every
- *  client), and the assistant's is the assistant's. The coder's seat is 'coding' while a card run's turns land in it,
- *  a cron's session is 'cron' while the cron engine's do, and either is a
- *  PERSON's (null) the moment anyone else's does — typing into it takes it
- *  over; the loop takes its seat back the next time it drives. Read off the
- *  writer's identity at the record's one door, never off a client's claim,
- *  which is what keeps the column trustworthy. */
-export function agentAfterSave(current: string | null, client: string): 'coding' | 'supervisor' | 'assistant' | 'cron' | null {
-  if (current === 'supervisor' || current === 'assistant') return current;
-  if (client === LOOP_CLIENT_ID) return 'coding';
+/** Who a session is opened for, read off the opener's client id: the
+ *  looper's and the cron scheduler's ids name themselves; anyone else is a
+ *  person unless the caller says otherwise. */
+export function startedByClient(client: string | undefined, said?: StartedBy): StartedBy {
+  if (said) return said;
+  if (client === LOOP_CLIENT_ID) return 'looper';
   if (client === CRON_CLIENT_ID) return 'cron';
-  return null;
+  return 'person';
 }
 
 // ── The object ───────────────────────────────────────────────────────────────
@@ -209,7 +198,7 @@ export class Sessions {
    *  SOUL.md, the date), sent as stored on every turn after. A restart keeps
    *  the prompt the session was born with. The row and the prompt come back
    *  together — what POST /sessions answers with. */
-  async start(projectId: string, layout: SystemPromptLayout, opts: { id?: string } = {}): Promise<SessionFull & { system_prompt: StoredSystemPrompt }> {
+  async start(projectId: string, layout: SystemPromptLayout, opts: { id?: string; type?: string; startedBy?: StartedBy } = {}): Promise<SessionFull & { system_prompt: StoredSystemPrompt }> {
     SystemPrompt.check(layout);
     const s = await this.create(projectId, opts);
     return { ...s, system_prompt: await this.writeSystemPrompt(s, layout) };
@@ -276,13 +265,12 @@ export class Sessions {
   // a session you have not spoken to yet. The first saved turn moves the
   // count to 1 and the row never changes again. Every runner reads the row.
 
-  /** What a session born in this project runs on right now. `agent` picks
-   *  the cascade (the supervisor's / assistant's trio, else the coding one). */
-  private async birthModel(projectId: string, agent: 'supervisor' | 'assistant' | null = null):
+  /** What a session of `type` born in this project runs on right now. */
+  private async birthModel(projectId: string, type: string):
   Promise<{ provider: string | null; model: string | null; baseUrl: string | null }> {
     const project = await this.projects.get(projectId);
     try {
-      const m = await this.agentConfig.modelFor(agent ?? 'coding', project ? { projectId: project.id } : {});
+      const m = await this.agentConfig.modelFor(type, project ? { projectId: project.id } : {});
       // A whole pin or none: a provider with no model is nothing to run on.
       return m.provider && m.model ? m : { provider: null, model: null, baseUrl: null };
     } catch { return { provider: null, model: null, baseUrl: null }; } // a half-set pair — the row stays empty
@@ -296,7 +284,7 @@ export class Sessions {
     const now = Date.now();
     for (const s of rows) {
       if (isHeld(s, now)) continue;
-      const m = await this.birthModel(s.projectId, s.agent as 'supervisor' | 'assistant' | null);
+      const m = await this.birthModel(s.projectId, s.agent);
       if (m.provider === s.provider && m.model === s.model && m.baseUrl === s.baseUrl) continue;
       await this.db.update(sessions).set(m).where(eq(sessions.id, s.id));
       this.events?.publish(s.id, '', { event: 'session', provider: m.provider, model: m.model, base_url: m.baseUrl });
@@ -357,7 +345,7 @@ export class Sessions {
   async list(q: ListQuery): Promise<{ sessions: ListedSession[]; total: number }> {
     const filters = [];
     if (q.typed === true) filters.push(isNotNull(sessions.lastUserMessage));
-    if (q.background === false) filters.push(or(isNull(sessions.agent), not(inArray(sessions.agent, [...BACKGROUND_AGENTS]))));
+    if (q.background === false) filters.push(and(ne(sessions.agent, 'supervisor'), not(inArray(sessions.startedBy, [...BACKGROUND_STARTERS]))));
     // ONE substring, wherever it appears — no word splitting, no ranking; the
     // list keeps its order and just gets shorter. `%` and `_` are LIKE's own
     // wildcards, so typed ones are escaped.
@@ -367,7 +355,7 @@ export class Sessions {
       filters.push(or(ilike(sessions.name, needle), ilike(sessions.lastUserMessage, needle), ilike(workspaces.branch, needle)));
     }
     if (q.project) filters.push(eq(sessions.projectId, q.project));
-    filters.push(or(isNull(sessions.agent), ne(sessions.agent, 'assistant')));
+    filters.push(ne(sessions.agent, 'assistant'));
     // The cursor is the whole sort key of the last row the client saw:
     // pinned first (a pinned tail means only unpinned rows follow), then
     // the (last_used_at, id) pair. id descends too: a page boundary between
@@ -443,7 +431,7 @@ export class Sessions {
     const rows = await this.from()
       .innerJoin(cards, eq(cards.id, sessions.cardId))
       .where(and(eq(cards.project_id, projectId), eq(cards.number, cardNumber),
-        kind === 'coding' ? isCodingSession : eq(sessions.agent, 'supervisor')))
+        kind === 'coding' ? ownsItsWorkspace : eq(sessions.agent, 'supervisor')))
       .orderBy(desc(sessions.createdAt)).limit(1);
     return rows[0];
   }
@@ -465,7 +453,7 @@ export class Sessions {
       .from(sessions)
       .leftJoin(workspaces, eq(workspaces.id, sessions.workspaceId))
       .innerJoin(cards, eq(cards.id, sessions.cardId))
-      .where(and(eq(cards.project_id, projectId), isCodingSession))
+      .where(and(eq(cards.project_id, projectId), ownsItsWorkspace))
       .orderBy(sessions.cardId, desc(sessions.createdAt));
   }
 
@@ -501,7 +489,8 @@ export class Sessions {
    *  id comes back exactly where it stopped (Workspaces.restore). `fromBranch`
    *  cuts a NEW session's branch from a source branch on origin instead of
    *  base (the duplicate route). */
-  async create(projectId: string, opts: { id?: string; fromBranch?: string } = {}): Promise<SessionFull> {
+  async create(projectId: string, opts: { id?: string; fromBranch?: string; type?: string; startedBy?: StartedBy } = {}): Promise<SessionFull> {
+    const type = opts.type ?? this.agentConfig.firstType();
     const project = await this.projects.get(projectId);
     if (!project) throw new SessionError('not_found', `no project ${projectId}`);
 
@@ -538,7 +527,7 @@ export class Sessions {
     // together, sharing the id.
     const id = opts.id ?? newId();
     const workspace = await this.workspaces.checkout(project, id, { fromBranch: opts.fromBranch });
-    await this.db.insert(sessions).values({ id, projectId, workspaceId: id, ...await this.birthModel(projectId) });
+    await this.db.insert(sessions).values({ id, projectId, workspaceId: id, agent: type, startedBy: opts.startedBy ?? 'person', ...await this.birthModel(projectId, type) });
     const row = (await this.get(id))!;
     log.info({ session: id, branch: workspace.branch }, 'session created');
     this.changed(id);
@@ -549,11 +538,11 @@ export class Sessions {
    *  another session's workspace (the files it can read), or is null when there is
    *  nothing to read. The shared base for supervisor and assistant sessions. */
   private async createConversation(
-    projectId: string, opts: { agent: 'supervisor' | 'assistant'; workspaceId?: string | null; cardId?: number },
+    projectId: string, opts: { agent: string; startedBy: StartedBy; workspaceId?: string | null; cardId?: number },
   ): Promise<SessionRow> {
     const id = newId();
     await this.db.insert(sessions).values({
-      id, projectId, agent: opts.agent,
+      id, projectId, agent: opts.agent, startedBy: opts.startedBy,
       ...(opts.workspaceId ? { workspaceId: opts.workspaceId } : {}),
       ...(opts.cardId ? { cardId: opts.cardId } : {}),
       ...await this.birthModel(projectId, opts.agent),
@@ -567,7 +556,7 @@ export class Sessions {
    *  the files are. */
   async createSupervisor(projectId: string, workspaceId: string, cardId: number, layout: SystemPromptLayout): Promise<SessionRow> {
     SystemPrompt.check(layout);
-    const s = await this.createConversation(projectId, { agent: 'supervisor', workspaceId, cardId });
+    const s = await this.createConversation(projectId, { agent: 'supervisor', startedBy: 'looper', workspaceId, cardId });
     await this.writeSystemPrompt(s, layout);
     return s;
   }
@@ -584,10 +573,10 @@ export class Sessions {
 
   /** The assistant's conversation-only session, pointed at what the user is
    *  looking at. */
-  async createAssistant(projectId: string, activeSessionId: string | null | undefined, layout: SystemPromptLayout): Promise<SessionRow> {
+  async createAssistant(projectId: string, activeSessionId: string | null | undefined, layout: SystemPromptLayout, startedBy: StartedBy = 'person'): Promise<SessionRow> {
     SystemPrompt.check(layout);
     const t = await this.assistantTarget(projectId, activeSessionId);
-    const s = await this.createConversation(t.projectId, { agent: 'assistant', workspaceId: t.workspaceId });
+    const s = await this.createConversation(t.projectId, { agent: 'assistant', startedBy, workspaceId: t.workspaceId });
     await this.writeSystemPrompt(s, layout);
     return s;
   }
@@ -655,8 +644,7 @@ export class Sessions {
    *  the id so the writer ignores its own echo. Returns what the naming
    *  decision needs. */
   async saveTranscript(s: SessionRow, data: string, client: string): Promise<{
-    stamp: Date; agent: 'coding' | 'supervisor' | 'assistant' | 'cron' | null;
-    name: string | null; turnCount: number; nameManual: boolean;
+    stamp: Date; name: string | null; turnCount: number; nameManual: boolean;
   }> {
     // A list preview, not the record: the UI shows a few dozen characters,
     // and an uncapped copy of a pasted wall of text would ride every
@@ -666,10 +654,9 @@ export class Sessions {
     // Token totals are per-call entries in log_tokens — the list
     // query JOINs that table directly. No re-parsing, no row cache.
     // Every save is one turn: the counter that paces session naming.
-    const agent = agentAfterSave(s.agent, client);
     const [saved] = await this.db.update(sessions)
       .set({ transcript: data, transcriptLines: lineCount(data), lastUserMessage, transcriptUpdatedAt: stamp,
-        turnCount: sqlRaw`${sessions.turnCount} + 1`, agent })
+        turnCount: sqlRaw`${sessions.turnCount} + 1` })
       .where(eq(sessions.id, s.id))
       .returning({ name: sessions.name, turnCount: sessions.turnCount, nameManual: sessions.nameManual });
     // Saving a turn is activity on the checkout: it stays off the idle sweep.
@@ -679,8 +666,7 @@ export class Sessions {
     // so the window that just uploaded its OWN turn ignores the echo instead
     // of re-pulling and repainting the reply it already drew.
     this.events?.publish(s.id, client, { event: 'transcript', updated_at: stamp.toISOString(), by: client });
-    if (agent !== s.agent) this.events?.publish(s.id, client, { event: 'session', agent });
-    return { stamp, agent, name: saved.name, turnCount: saved.turnCount, nameManual: saved.nameManual };
+    return { stamp, name: saved.name, turnCount: saved.turnCount, nameManual: saved.nameManual };
   }
 
   /** Step-level save: updates ONLY the transcript text and touches the
@@ -738,10 +724,10 @@ export class Sessions {
     const rows = await this.db.update(sessions)
       .set({ lastUserMessage: message.slice(0, LAST_MESSAGE_CHARS) })
       .where(eq(sessions.id, id))
-      .returning({ name: sessions.name, turnCount: sessions.turnCount, agent: sessions.agent });
+      .returning({ name: sessions.name, turnCount: sessions.turnCount, startedBy: sessions.startedBy });
     const r = rows[0];
     this.changed(id);
-    return { firstMessage: !!r && r.name === null && r.turnCount === 0 && r.agent === null };
+    return { firstMessage: !!r && r.name === null && r.turnCount === 0 && r.startedBy === 'person' };
   }
 
   /** The record's line count when a turn started, per session — so the
@@ -758,26 +744,22 @@ export class Sessions {
   /** A turn ended on a session, whoever ran it: bump the turn count — only
    *  when the turn wrote to the record, because leaving 0 is what freezes
    *  the row's model and a turn that said nothing (stopped before the first
-   *  word, failed to start) must not freeze it — seat the agent after the
-   *  writer (agentAfterSave — a person's turn into a card run's session
-   *  takes it over), touch its checkout. Tokens are not here — every model
+   *  word, failed to start) must not freeze it — touch its checkout. Tokens are not here — every model
    *  call records its own row in log_tokens. Returns what the naming
    *  decision needs. */
-  async turnEnded(s: SessionRow, client: string): Promise<{
-    agent: 'coding' | 'supervisor' | 'assistant' | 'cron' | null; name: string | null; turnCount: number; nameManual: boolean;
+  async turnEnded(s: SessionRow, _client: string): Promise<{
+    name: string | null; turnCount: number; nameManual: boolean;
   }> {
-    const agent = agentAfterSave(s.agent, client);
     const linesAtStart = this.#linesAtTurnStart.get(s.id);
     this.#linesAtTurnStart.delete(s.id);
     const wrote = linesAtStart === undefined || s.transcriptLines !== linesAtStart;
     const [saved] = await this.db.update(sessions)
-      .set({ ...(wrote ? { turnCount: sqlRaw`${sessions.turnCount} + 1` } : {}), agent })
+      .set(wrote ? { turnCount: sqlRaw`${sessions.turnCount} + 1` } : {})
       .where(eq(sessions.id, s.id))
       .returning({ name: sessions.name, turnCount: sessions.turnCount, nameManual: sessions.nameManual });
     if (s.workspaceId) await this.workspaces.touch(s.workspaceId);
     this.changed(s.id);
-    if (agent !== s.agent) this.events?.publish(s.id, client, { event: 'session', agent });
-    return { agent, name: saved.name, turnCount: saved.turnCount, nameManual: saved.nameManual };
+    return { name: saved.name, turnCount: saved.turnCount, nameManual: saved.nameManual };
   }
 
   // ── facts a person or a job sets ───────────────────────────────────────────
@@ -836,15 +818,6 @@ export class Sessions {
    *  as the coder's own. Background jobs never touch, or nothing goes cold. */
   async touch(s: SessionRow): Promise<void> {
     if (s.workspaceId) await this.workspaces.touch(s.workspaceId);
-  }
-
-  /** Tag a conversation with who drives it. The loop stamps its coder seat
-   *  (and the cron engine its run) at every turn START (so the row is right
-   *  while the turn runs); the transcript save re-derives it from the writer
-   *  at turn END (agentAfterSave). */
-  async stampAgent(id: string, agent: 'coding' | 'supervisor' | 'cron'): Promise<void> {
-    await this.db.update(sessions).set({ agent }).where(eq(sessions.id, id));
-    this.changed(id);
   }
 
   /** A cron that names its model: its run's newborn row takes it, so the

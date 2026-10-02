@@ -83,6 +83,9 @@ export class AgentConfig {
     };
   }
 
+  /** The type the others fall back to — the first registered. */
+  firstType(): string { return this.agentTypes.first(); }
+
   /** Provider/model/endpoint from the settings alone (no pin) — what a newborn session is pinned to. */
   async modelFor(type: string, scope: SettingScope = {}): Promise<ResolvedModel> {
     const first = this.agentTypes.first();

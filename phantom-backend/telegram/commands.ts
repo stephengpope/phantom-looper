@@ -178,7 +178,7 @@ export async function handleCommand(
       const projectId = bot.activeProjectId;
       if (!projectId) { await reply('⚠️ No active project — /projects to pick one first.'); return; }
       let started;
-      try { started = await engine.sessions.start(projectId, CodingAgent.systemPromptLayout); }
+      try { started = await engine.sessions.start(projectId, CodingAgent.systemPromptLayout, { startedBy: 'telegram' }); }
       catch (e) { await reply(`⚠️ Couldn't start a session: ${(e as Error).message}`); return; }
       // Create + point at it. The mode is untouched: from home the assistant
       // keeps the conversation; in code mode the next message starts the coder.

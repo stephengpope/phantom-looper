@@ -314,17 +314,6 @@ export class LooperEngine {
     }
     let supOpened: OpenedSession | undefined;
     try {
-      // The loop drives this seat now: say so on the row BEFORE the turn
-      // runs, so a window watching it reads `coding agent ⠹ building` and
-      // /resume reads `coder` while it lasts — not only once the save lands.
-      // A person who typed into it since (agent null) handed it back by
-      // moving the card.
-      await this.deps.sessions.stampAgent(opened.session.id, 'coding');
-      // The lock event went out before stampAgent, so its agent field was
-      // stale.  Publish the corrected seat so a watching window shows
-      // "coding agent" immediately rather than after the next lock renew.
-      this.deps.sessionEvents?.publish(opened.session.id, CLIENT_ID,
-        { event: 'session', agent: 'coding' });
       // ── the token budget — seeded once per loop, checked before every
       // turn, each turn's own numbers added as they land. Breach is a card
       // state a human can see, like every other loop exit. ─────────────────

@@ -57,7 +57,7 @@ export const label = (project: ProjectInfo) => project.displayName || project.na
 export function lastProjectId(projects: ProjectInfo[], sessions: SessionInfo[]): string | undefined {
   const known = new Set(projects.map((project) => project.id));
   return sessions
-    .filter((s) => !s.agent && known.has(s.projectId))
+    .filter((s) => s.startedBy !== 'looper' && s.startedBy !== 'cron' && known.has(s.projectId))
     .sort((a, b) => Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt))[0]?.projectId;
 }
 
@@ -140,7 +140,7 @@ export function sessionChoices(
     // card — read-only. A cron's run is a normal coding session that a
     // schedule opened; typing into it takes it over.
     const sup = s.agent === 'supervisor';
-    const cron = s.agent === 'cron';
+    const cron = s.startedBy === 'cron';
     const dead = s.status !== 'active';
     // Loaded in THIS window's memory (running wins the marker slot).
     const open = !dead && loaded(s.id);

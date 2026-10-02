@@ -14,9 +14,10 @@ export interface SessionRow {
   lastUserMessage?: string | null;
   /** The model-written title — what the session is building. */
   name?: string | null;
-  /** Who drove the last turn: 'coding' or 'supervisor' when a card run did,
-   *  'cron' for a scheduled run, 'assistant', null = a person's. */
+  /** The agent type the session runs: coding, supervisor, assistant. */
   agent?: string | null;
+  /** Who opened it: person, looper, cron, telegram. */
+  startedBy?: string | null;
   card?: number | null;
   /** The card's board column, from the project's cards table. */
   cardStatus?: string | null;
@@ -33,16 +34,15 @@ export interface SessionRow {
   pinned?: boolean;
 }
 
-/** WHO DRIVES THE SESSION — the one three-way. Off the row's `agent` alone,
- *  never the card: the card link is permanent, but who is driving is not — a
- *  person who types into a card's coding session takes it over, and the row
- *  says so from the next save. `coder` names the seat, not the loop. */
+/** WHOSE SESSION IT IS, for a list: the supervisor's and the assistant's by
+ *  type; a coding session by who opened it — the looper's ('coding'), a
+ *  cron's, or a person's ('manual'). */
 export type Driver = 'supervisor' | 'coding' | 'cron' | 'assistant' | 'manual';
-export function whoDrives(s: Pick<SessionRow, 'agent'>): Driver {
+export function whoDrives(s: Pick<SessionRow, 'agent' | 'startedBy'>): Driver {
   return s.agent === 'supervisor' ? 'supervisor'
-    : s.agent === 'coding' ? 'coding'
-    : s.agent === 'cron' ? 'cron'
     : s.agent === 'assistant' ? 'assistant'
+    : s.startedBy === 'looper' ? 'coding'
+    : s.startedBy === 'cron' ? 'cron'
     : 'manual';
 }
 

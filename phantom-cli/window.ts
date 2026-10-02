@@ -1070,7 +1070,7 @@ export class WindowStore {
     const extras: SessionInfo[] = this.sessions.list()
       .filter((e) => !seen.has(e.id) && (e.lastMessageAt > 0 || e.pinned) && this.matchesPickerQuery(e))
       .map((e) => ({
-        id: e.id, projectId: e.projectId, branch: e.branch, status: 'active', agent: null,
+        id: e.id, projectId: e.projectId, branch: e.branch, status: 'active', agent: 'coding', startedBy: 'person',
         model: e.summary.model, pinned: e.pinned,
         tokensInput: e.usage.input || null, tokensOutput: e.usage.output || null,
         tokensCacheRead: e.usage.cacheRead || null, tokensCacheWrite: e.usage.cacheWrite || null,

@@ -456,7 +456,7 @@ export class TelegramEngine {
       const onProjectCreated = async (projectId: string) => {
         await this.deps.botState.setActiveProject(projectId);
         let started;
-        try { started = await this.deps.sessions.start(projectId, CodingAgent.systemPromptLayout); }
+        try { started = await this.deps.sessions.start(projectId, CodingAgent.systemPromptLayout, { startedBy: 'telegram' }); }
         catch (e) { return { error: (e as Error).message }; }
         await this.deps.botState.setActiveSession(started.id);
         await this.enterMode(client, dm, 'code');
