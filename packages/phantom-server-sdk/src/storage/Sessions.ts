@@ -15,8 +15,6 @@ export interface SessionRow {
   turnCount: number; lastUserMessage: string | null; lastUsedAt: Date; createdAt: Date;
   lockedBy: string | null; lockedLabel: string | null; lockExpiresAt: Date | null;
   transcriptLines: number; transcriptUpdatedAt: Date | null;
-  /** Who drove the last turn (a client id or a server engine). Not the type. */
-  lastDriver: string | null;
 }
 export interface SessionListQuery {
   projectId?: string; text?: string; types?: string[]; archived?: boolean; pinnedFirst?: boolean; limit?: number; offset?: number;
@@ -61,7 +59,7 @@ export class Sessions {
   // ── the turn ──────────────────────────────────────────────────────────
   /** Note the user's message and whether it is the session's first. */
   async turnStarted(id: string, message: string): Promise<{ firstMessage: boolean }> { throw stub(); }
-  /** Bump the turn count, record who drove, touch, name on cadence. */
+  /** Bump the turn count, touch, name on cadence. */
   async turnEnded(id: string, client: string): Promise<SessionRow> { throw stub(); }
   /** Interrupt a server-run turn: abort its stream, kill its foreground commands. */
   interrupt(id: string, by: string): { interrupted: boolean } { throw stub(); }
