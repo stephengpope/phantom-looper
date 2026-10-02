@@ -11,7 +11,7 @@ import type {
   Docker, Images, SessionContainers, CheckoutPool, Disk, Skills, SystemSkills, Web,
   Git, GitSync, InstantSync, WorkspaceWatcher, GitHub, CommitMessages,
   CronScheduler, TelegramBot, TelegramRenderer, TelegramAttachments, TelegramVoice, TelegramApprovals, TelegramDedupe,
-  HttpApi, DbConsole, Notifications,
+  HttpApi, DbConsole, Notifications, SessionDigest, Upgrader,
 } from './members.js';
 import type { SettingDefinition, AgentTypeDefinition, ToolDefinition, RouteRegistrar } from './doors.js';
 
@@ -98,6 +98,8 @@ export class PhantomBackend {
   readonly httpApi!: HttpApi;
   readonly dbConsole!: DbConsole;
   readonly notifications!: Notifications;
+  readonly sessionDigest!: SessionDigest;
+  readonly upgrader!: Upgrader;
 
   /** The server's own address and key, for a client in this process
    *  (the server's agents reach the API over loopback like any client). */
@@ -113,7 +115,7 @@ export class PhantomBackend {
    *   5. Tools (SDK's + config.tools, grouped; published per AgentTypes), UserMessageQueue, the three event feeds, ForegroundCommands
    *   6. Docker → Images → SessionContainers, CheckoutPool, Disk, Skills, SystemSkills, Web
    *   7. Git → GitSync, WorkspaceWatcher → InstantSync, GitHub, CommitMessages
-   *   8. CronScheduler, Telegram plumbing, Notifications, DbConsole
+   *   8. CronScheduler, Telegram plumbing, Notifications, SessionDigest, Upgrader, DbConsole
    *   9. HttpApi (SDK routes + config.routes), loopback
    *  Nothing listens or ticks until `start`. */
   static async create(config: PhantomBackendConfig): Promise<PhantomBackend> { throw stub(); }

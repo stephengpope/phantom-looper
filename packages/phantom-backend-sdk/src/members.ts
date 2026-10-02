@@ -47,3 +47,5 @@ export { TelegramDedupe } from './telegram/TelegramDedupe.js';
 export { HttpApi } from './api/HttpApi.js';
 export { DbConsole } from './api/DbConsole.js';
 export { Notifications } from './Notifications.js';
+export { SessionDigest } from './SessionDigest.js';
+export { Upgrader } from './Upgrader.js';
