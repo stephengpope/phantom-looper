@@ -137,6 +137,12 @@ export class LooperEngine {
       const projectId = e.scope === GLOBAL ? undefined : e.scope.replace(/^project:/, '');
       void this.runAllLoops(projectId).catch((err) => log.warn({ err: errStr(err) }, 'looper settings pass failed'));
     });
+    // A session let go of (its hold released, by anyone but this engine):
+    // its card, if any, may be runnable again. The release is a `lock`
+    // event on the session feed, published under the releasing client.
+    this.deps.sessionEvents?.subscribeAll((sessionId, e, by) => {
+      if (e.event === 'lock' && e.locked === false) void this.runLoopOfSession(sessionId, by);
+    });
     void this.runAllLoops().catch((e) => log.warn({ err: errStr(e) }, 'looper boot pass failed'));
   }
   stop(): void {
