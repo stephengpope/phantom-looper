@@ -6,20 +6,20 @@ import type { SettingDefinition } from 'phantom-backend-sdk';
 
 export const appSettings: SettingDefinition[] = [
   // ── the looper ────────────────────────────────────────────────────────
-  { key: 'auto_plan', default: false, type: 'boolean', label: 'auto plan', group: 'looper', projectOverridable: true,
+  { key: 'auto_plan', default: false, type: 'boolean', label: 'auto plan', group: 'board', projectOverridable: true,
     description: 'Start a planning run on every card that enters the plan column. A card may override it.' },
-  { key: 'auto_build', default: false, type: 'boolean', label: 'auto build', group: 'looper', projectOverridable: true,
+  { key: 'auto_build', default: false, type: 'boolean', label: 'auto build', group: 'board', projectOverridable: true,
     description: 'Start a build run on every card that enters in progress. A card may override it.' },
-  { key: 'auto_push_on_archive', default: true, type: 'boolean', label: 'auto-push on archive', group: 'looper', projectOverridable: true,
+  { key: 'auto_push_on_archive', default: true, type: 'boolean', label: 'auto-push on archive', group: 'git', projectOverridable: true,
     description: "Archiving a done card auto-pushes its session's work to the base branch; a failed push un-archives the card into blocked. Archiving from any other column never pushes." },
-  { key: 'loop_budget_tokens', default: null, type: 'number', label: 'loop token budget', group: 'looper', unit: 'count', min: 1, projectOverridable: true,
+  { key: 'loop_budget_tokens', default: null, type: 'number', label: 'loop token budget', group: 'board', unit: 'count', min: 1, projectOverridable: true,
     description: "Maximum tokens one card run may spend — input + output summed across both agents' sessions; cache reads and writes not counted. Checked between turns; exceeding it blocks the card. Empty = no limit." },
   // ── the Telegram bot's behaviour ──────────────────────────────────────
-  { key: 'telegram_reply_mode', default: 'text', type: 'string', choices: ['text', 'voice', 'both'], label: 'reply mode', group: 'chat',
+  { key: 'telegram_reply_mode', default: 'text', type: 'string', choices: ['text', 'voice', 'both'], label: 'reply mode', group: 'telegram',
     description: 'How the bot answers: text, a spoken voice note, or both. Read at the start of each turn.' },
-  { key: 'telegram_transcript_echo', default: false, type: 'boolean', label: 'echo transcripts', group: 'chat',
+  { key: 'telegram_transcript_echo', default: false, type: 'boolean', label: 'transcript echo', group: 'telegram',
     description: 'Send the heard text of a voice note back before answering it.' },
-  { key: 'telegram_auto_build_notifications', default: true, type: 'boolean', label: 'build alerts', group: 'chat', projectOverridable: true,
+  { key: 'telegram_auto_build_notifications', default: true, type: 'boolean', label: 'auto build alerts', group: 'telegram', projectOverridable: true,
     description: 'A message when the looper moves a card to in progress, blocked, or done. Moves made by people are never announced.' },
   // ── the cli's voice pane — rendered by the cli, stored here so every cli you open is the same one ──
   { key: 'voice_enabled', default: false, type: 'boolean', label: 'enabled', group: 'assistant', subgroup: 'voice',

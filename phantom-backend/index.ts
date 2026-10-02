@@ -85,8 +85,10 @@ async function main() {
   const agentTypes = new AgentTypes();
   agentTypes.register(config.agentTypes);
   const settings = new Settings(db, env.encryptionKey, modelCatalog, settingsEvents);
-  settings.register(sdkSettings({ sessionImageTag: SESSION_IMAGE_TAG }));
+  // Registration order is screen order: the agent types first, then the
+  // SDK's areas, then this app's own.
   for (const type of agentTypes.names()) settings.register(agentTypeSettings(type, { fallbackTo: type === agentTypes.first() ? null : agentTypes.first() }));
+  settings.register(sdkSettings({ sessionImageTag: SESSION_IMAGE_TAG }));
   settings.register(config.settings ?? []);
   const agentConfig = new AgentConfig(settings, agentTypes, modelCatalog);
   const databases = new AgentDatabases(pgPool, env.databaseUrl, env.encryptionKey);
