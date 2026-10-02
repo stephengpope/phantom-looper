@@ -5,7 +5,6 @@ import { webFetch, webSearch, type SearchBody } from 'phantom-backend-sdk';
 import { ToolError } from 'phantom-backend-sdk';
 import { obj, type OfferCtx, type ToolDef } from './def.js';
 
-const AGENTS = ['coding', 'supervisor', 'assistant'] as const;
 const hasFiles = ({ session }: OfferCtx) => Promise.resolve(!!session.workspaceId);
 
 export const WEB_TOOLS: ToolDef[] = [
@@ -32,7 +31,7 @@ export const WEB_TOOLS: ToolDef[] = [
       excludeDomains: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string' },
         description: 'drop results from these domains' },
     }, ['query']),
-    mutates: false, agents: AGENTS,
+    mutates: false, group: 'web',
     execute: (ctx, a) => webSearch(ctx.app, a as unknown as SearchBody),
   },
   {
@@ -45,7 +44,7 @@ export const WEB_TOOLS: ToolDef[] = [
     input: obj({
       urls: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string' }, description: 'the pages to fetch — always an array, even for one URL' },
     }, ['urls']),
-    mutates: false, agents: AGENTS, offered: hasFiles,
+    mutates: false, group: 'web', offered: hasFiles,
     execute(ctx, a) {
       if (!ctx.session.workspaceId) throw new ToolError('no_workspace', 'this session has no files — nowhere to save a page');
       return webFetch(ctx.app, ctx.session.workspaceId, a.urls as string[]);

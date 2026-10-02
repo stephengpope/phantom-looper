@@ -54,7 +54,7 @@ const autoSwitch = (field: 'auto_plan' | 'auto_build', column: string, job: stri
     `Turning it on while the card is in ${column} starts the looper on it at once; kanban_card_move puts it there. ` +
     'The result states the switch as it now stands — report that.',
   input: obj({ card: cardNo, state: oneOf(['on', 'off', 'inherit'], 'inherit = follow the project setting') }, ['card', 'state']),
-  mutates: true, agents: ['assistant'],
+  mutates: true, group: 'board',
   execute: (ctx, a) => patch(ctx, Number(a.card), { [field]: a.state === 'inherit' ? null : a.state === 'on' }),
 });
 
@@ -67,7 +67,7 @@ export const BOARD_TOOLS: ToolDef[] = [
       'the card is the source of truth, not your memory of it. Cards are numbered: PHA-7 is card 7. ' +
       'Use the board only when the user points you at a card; a task needs no card.',
     input: obj({ card: cardNo }, ['card']),
-    mutates: false, agents: ['coding', 'supervisor', 'assistant'],
+    mutates: false, group: 'board',
     async execute(ctx, a) {
       const t = await ctx.app.cards.byNumber(ctx.project, Number(a.card));
       if (!t) throw refusal('not_found', `no card ${String(a.card)} — pass the card number`);
@@ -81,7 +81,7 @@ export const BOARD_TOOLS: ToolDef[] = [
       'task, todo, or ticket. Cards are numbered — PHA-7 is card 7. ' +
       'Call before referring to cards by number; numbers come from here, never invented.',
     input: obj({}),
-    mutates: false, agents: ['assistant'],
+    mutates: false, group: 'board',
     async execute(ctx) {
       const cards = await ctx.app.cards.list(ctx.project);
       return { prefix: await ctx.app.projects.prefixOf(ctx.project), columns: columnsOf(ctx.project),
@@ -100,7 +100,7 @@ export const BOARD_TOOLS: ToolDef[] = [
       requirements: { type: 'array', description: 'what must be true for the card to be done — done means VERIFIED, not written',
         items: obj({ text: str('the requirement'), done: { type: 'boolean' } }, ['text']) },
     }, ['title']),
-    mutates: true, agents: ['assistant'],
+    mutates: true, group: 'board',
     execute: (ctx, a) => cardCall(async () =>
       renderCard(await ctx.app.cards.create(ctx.project, a as CardFields & { title: string }, ctx.client))),
   },
@@ -114,7 +114,7 @@ export const BOARD_TOOLS: ToolDef[] = [
       blocked_reason: nullable('string', 'set to mark the card blocked; null clears it'),
       archived: { type: 'boolean', description: 'true takes the card off the board' },
     }, ['card']),
-    mutates: true, agents: ['assistant'],
+    mutates: true, group: 'board',
     execute: (ctx, { card, ...rest }) => patch(ctx, Number(card), rest as CardFields),
   },
   {
@@ -122,7 +122,7 @@ export const BOARD_TOOLS: ToolDef[] = [
     summary: 'Change requirements on a card.',
     description: 'Change requirements on a card — ' + ITEMS_DESCRIPTION,
     input: obj({ card: cardNo, ops: itemsSchema }, ['card', 'ops']),
-    mutates: true, agents: ['assistant'],
+    mutates: true, group: 'board',
     execute: (ctx, a) => patch(ctx, Number(a.card), {}, a.ops as ItemOp[]),
   },
   autoSwitch('auto_plan', 'plan', 'plans it — has the coding agent write a plan, verifies it, and moves the card on'),
@@ -134,7 +134,7 @@ export const BOARD_TOOLS: ToolDef[] = [
       '(still sortable inside the group); unpinning drops the card back into the column\'s normal order. ' +
       'A plain on/off — pinning says nothing to the looper.',
     input: obj({ card: cardNo, state: oneOf(['on', 'off'], 'pinned or not') }, ['card', 'state']),
-    mutates: true, agents: ['assistant'],
+    mutates: true, group: 'board',
     execute: (ctx, a) => patch(ctx, Number(a.card), { pinned: a.state === 'on' }),
   },
   {
@@ -142,7 +142,7 @@ export const BOARD_TOOLS: ToolDef[] = [
     summary: 'Move a card to a column.',
     description: 'Send card to the end of a status column.',
     input: obj({ card: cardNo, status: statusField('the column to move to') }, ['card', 'status']),
-    mutates: true, agents: ['assistant'],
+    mutates: true, group: 'board',
     execute: (ctx, a) => patch(ctx, Number(a.card), { status: a.status }),
   },
   {
@@ -152,7 +152,7 @@ export const BOARD_TOOLS: ToolDef[] = [
       'the fields that changed and the value each had before. An archived card still answers; ' +
       'a deleted card has no history.',
     input: obj({ card: cardNo, limit: int('revisions to return (default 20, newest first)', 20) }, ['card']),
-    mutates: false, agents: ['assistant'],
+    mutates: false, group: 'board',
     async execute(ctx, a) {
       return { card: Number(a.card), revisions: await ctx.app.cards.revisions(ctx.project, Number(a.card), Number(a.limit ?? 20)) };
     },

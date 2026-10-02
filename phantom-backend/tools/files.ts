@@ -69,7 +69,6 @@ function readRange(
   return { text };
 }
 
-const FILE_AGENTS = ['coding', 'supervisor', 'assistant'] as const;
 /** Offered only to a session with files. */
 const hasFiles = ({ session }: { session: { workspaceId: string | null } }) => Promise.resolve(!!session.workspaceId);
 
@@ -92,7 +91,7 @@ export const FILE_TOOLS: ToolDef[] = [
       timeout: int('Milliseconds before the command is killed. Unset = the 2-minute default.'),
       detached: bool('true = background: return {background_task_id, log_file} now and keep the command running.'),
     }, ['cmd']),
-    mutates: true, agents: ['coding'], offered: hasFiles,
+    mutates: true, group: 'files', offered: hasFiles,
     async execute(ctx, a) {
       return (await ctx.files()).runBash({
         cmd: s(a.cmd), cwd: a.cwd ? s(a.cwd) : undefined, detached: Boolean(a.detached),
@@ -107,7 +106,7 @@ export const FILE_TOOLS: ToolDef[] = [
       'recent finished ones with exit codes. Each entry carries its background_task_id and log_file. Rows ' +
       'whose process is gone are reconciled on read, so `running` is the truth.',
     input: obj({}, []),
-    mutates: false, agents: FILE_AGENTS, offered: hasFiles,
+    mutates: false, group: 'tasks', offered: hasFiles,
     async execute(ctx) {
       return (await ctx.files()).tasks.list();
     },
@@ -123,7 +122,7 @@ export const FILE_TOOLS: ToolDef[] = [
       background_task_id: str('The background_task_id a detached bash call returned (or one from task_list).'),
       timeout: int('Milliseconds to wait (default 30000, max 300000).', 30000),
     }, ['background_task_id']),
-    mutates: false, agents: FILE_AGENTS, offered: hasFiles,
+    mutates: false, group: 'tasks', offered: hasFiles,
     async execute(ctx, a) {
       return (await ctx.files()).tasks.wait(s(a.background_task_id), a.timeout === undefined ? 30_000 : Number(a.timeout));
     },
@@ -137,7 +136,7 @@ export const FILE_TOOLS: ToolDef[] = [
     input: obj({
       background_task_id: str('The background_task_id of the running task (from task_list).'),
     }, ['background_task_id']),
-    mutates: true, agents: ['coding'], offered: hasFiles,
+    mutates: true, group: 'tasks', offered: hasFiles,
     async execute(ctx, a) {
       return (await ctx.files()).tasks.kill(s(a.background_task_id));
     },
@@ -154,7 +153,7 @@ export const FILE_TOOLS: ToolDef[] = [
       offset: int('1-indexed first line (default 1).', 1),
       limit: int('Max lines (default 2000).', 2000),
     }, ['path']),
-    mutates: false, agents: FILE_AGENTS, offered: hasFiles,
+    mutates: false, group: 'files', offered: hasFiles,
     async execute(ctx, a) {
       const f = await ctx.files();
       const p = s(a.path);
@@ -178,7 +177,7 @@ export const FILE_TOOLS: ToolDef[] = [
     description: 'Creates parent directories. Overwrites the whole file — for targeted changes to ' +
       'an existing file use edit instead, which is safer and cheaper than rewriting.',
     input: obj({ path: str('File to write.'), content: str('Complete file content.') }, ['path', 'content']),
-    mutates: true, agents: ['coding'], offered: hasFiles,
+    mutates: true, group: 'files', offered: hasFiles,
     async execute(ctx, a) {
       const p = s(a.path);
       await (await ctx.files()).sandbox.writeFile(p, Buffer.from(s(a.content), 'utf8'));
@@ -208,7 +207,7 @@ export const FILE_TOOLS: ToolDef[] = [
         }, ['old_string', 'new_string']),
       },
     }, ['path']),
-    mutates: true, agents: ['coding'], offered: hasFiles,
+    mutates: true, group: 'files', offered: hasFiles,
     async execute(ctx, a) {
       const f = await ctx.files();
       const p = s(a.path);
@@ -255,7 +254,7 @@ export const FILE_TOOLS: ToolDef[] = [
       path: { ...str('Directory, repo-relative or absolute.'), default: '.' },
       limit: int('Max entries to return (default 500).', 500),
     }, []),
-    mutates: false, agents: FILE_AGENTS, offered: hasFiles,
+    mutates: false, group: 'files', offered: hasFiles,
     async execute(ctx, a) {
       const p = Sandbox.resolvePath(s(a.path ?? '.'));
       const r = await (await ctx.files()).sandbox.run(['ls', '-1Ap', p]);
@@ -287,7 +286,7 @@ export const FILE_TOOLS: ToolDef[] = [
       include_ignored: bool('Include .gitignore-d files.'),
       limit: int('Max results (default: the max_search_results setting).'),
     }, ['pattern']),
-    mutates: false, agents: FILE_AGENTS, offered: hasFiles,
+    mutates: false, group: 'files', offered: hasFiles,
     async execute(ctx, a) {
       const f = await ctx.files();
       const dir = Sandbox.resolvePath(s(a.path ?? '.'));
@@ -319,7 +318,7 @@ export const FILE_TOOLS: ToolDef[] = [
       limit: int('Max matches (default: the max_search_results setting).'),
       glob: str('Restrict to files matching this glob (optional).'),
     }, ['pattern']),
-    mutates: false, agents: FILE_AGENTS, offered: hasFiles,
+    mutates: false, group: 'files', offered: hasFiles,
     async execute(ctx, a) {
       const f = await ctx.files();
       const dir = Sandbox.resolvePath(s(a.path ?? '.'));

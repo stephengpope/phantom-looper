@@ -18,7 +18,7 @@ const toModelConfig = (model: AgentRunConfig['model']): ModelConfig => ({
 
 /** The old shape for `type`, in a scope, with the session's pin. */
 export async function oldAgentConfig(
-  agentConfig: AgentConfig, settings: Settings, type: AgentName, scope: SettingScope, pin: ModelPin | null = null,
+  agentConfig: AgentConfig, settings: Settings, type: string, scope: SettingScope, pin: ModelPin | null = null,
 ): Promise<OldAgentConfig> {
   const [run, compaction, supervisor, timezone] = await Promise.all([
     agentConfig.resolve(type, scope, pin),
@@ -27,7 +27,7 @@ export async function oldAgentConfig(
     settings.resolve<string>('timezone', scope),
   ]);
   return {
-    agent: type, model: toModelConfig(run.model), maxSteps: run.maxSteps,
+    agent: type as AgentName, model: toModelConfig(run.model), maxSteps: run.maxSteps,
     compaction: { ...compaction, model: toModelConfig(supervisor.model) },
     timezone,
   };

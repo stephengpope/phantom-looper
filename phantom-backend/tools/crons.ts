@@ -47,7 +47,6 @@ async function stamped<T>(ctx: ToolCtx, fn: (clock: Awaited<ReturnType<ToolCtx['
   }
 }
 
-const AGENTS = ['coding', 'assistant'] as const;
 
 export const CRON_TOOLS: ToolDef[] = [
   {
@@ -58,7 +57,7 @@ export const CRON_TOOLS: ToolDef[] = [
       'runs use (`provider`/`model`/`reasoning`; null = the project\'s). Call this before naming a cron — never guess a name. How a run went is ' +
       'in its session, named after the cron. The answer also carries the project\'s `timezone` and the time there `now`.',
     input: obj({}),
-    mutates: false, agents: AGENTS, offered: enabled,
+    mutates: false, group: 'crons', offered: enabled,
     execute: (ctx) => stamped(ctx, async () => ({ crons: await ctx.app.crons.list(ctx.project) })),
   },
   {
@@ -76,7 +75,7 @@ export const CRON_TOOLS: ToolDef[] = [
       ...MODEL_FIELDS,
       enabled: { type: 'boolean', description: 'false creates it paused; omit for on' },
     }, ['name', 'schedule']),
-    mutates: true, agents: AGENTS, offered: enabled,
+    mutates: true, group: 'crons', offered: enabled,
     execute: (ctx, a) => stamped(ctx, async (clock) => ({ cron: await ctx.app.crons.create(ctx.project, a as CronFields, clock) })),
   },
   {
@@ -94,7 +93,7 @@ export const CRON_TOOLS: ToolDef[] = [
       ...MODEL_FIELDS,
       enabled: { type: 'boolean' },
     }, ['name']),
-    mutates: true, agents: AGENTS, offered: enabled,
+    mutates: true, group: 'crons', offered: enabled,
     execute: (ctx, { name, new_name, ...rest }) => stamped(ctx, async (clock) => ({
       cron: await ctx.app.crons.update(ctx.project, String(name),
         { ...(rest as CronFields), ...(new_name !== undefined ? { name: String(new_name) } : {}) }, clock) })),
@@ -104,7 +103,7 @@ export const CRON_TOOLS: ToolDef[] = [
     summary: 'Remove a cron.',
     description: 'Remove a cron. The sessions its runs opened stay. Call cron_list first for the name.',
     input: obj({ name: str('the cron to remove, from cron_list') }, ['name']),
-    mutates: true, agents: AGENTS, offered: enabled,
+    mutates: true, group: 'crons', offered: enabled,
     async execute(ctx, a) {
       const name = String(a.name);
       if (!(await ctx.app.crons.remove(ctx.project, name))) throw refusal('not_found', `no cron named "${name}" in this project`);

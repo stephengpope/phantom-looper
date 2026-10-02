@@ -3,10 +3,7 @@
 import type { AppCtx } from '../api/app.js';
 import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
 import type { Sandbox } from 'phantom-backend-sdk';
-import type { AgentName } from '../../core/llm/agentConfig.js';
-import { ToolError } from 'phantom-backend-sdk';
-
-export type { AgentName };
+import { ToolError, type ToolGroup } from 'phantom-backend-sdk';
 
 /** What a tool call runs with: the row owners, the calling session and its
  *  project, who called (the lock identity), the client's abort, and the
@@ -45,10 +42,10 @@ export interface ToolDef {
   input: Record<string, unknown>;   // JSON Schema
   /** Changes things. A client refuses it while its agent is read-only. */
   mutates: boolean;
-  /** Which agents have it. */
-  agents: readonly AgentName[];
+  /** The area it belongs to — what a type grants whole or read-only. */
+  group: ToolGroup;
   /** Whether it exists right now for this session (a setting, a workspace).
-   *  Absent = always, for the agents named. */
+   *  Absent = always, for the types granted it. */
   offered?: (ctx: OfferCtx) => Promise<boolean>;
   execute: (ctx: ToolCtx, args: Record<string, unknown>) => Promise<unknown>;
 }

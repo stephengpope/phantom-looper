@@ -44,7 +44,7 @@ export const GIT_TOOLS: ToolDef[] = [
       'The session this assistant is following unless an id is given. Reports how it went ' +
       '(pushed | nothing | blocked | error | busy).',
     input: obj({ id: idField }),
-    mutates: true, agents: ['assistant'], offered: wired,
+    mutates: true, group: 'git', offered: wired,
     async execute(ctx, a) {
       const t = await target(ctx, a);
       return { session: t.session.id, ...await run(() => ctx.app.autoPush!(t.session, t.project, undefined, ctx.client)) };
@@ -57,7 +57,7 @@ export const GIT_TOOLS: ToolDef[] = [
       'The session this assistant is following unless an id is given. Reports how it went ' +
       '(merged | clean | blocked | error | busy).',
     input: obj({ id: idField }),
-    mutates: true, agents: ['assistant'], offered: wired,
+    mutates: true, group: 'git', offered: wired,
     async execute(ctx, a) {
       const t = await target(ctx, a);
       return { session: t.session.id, ...await run(() => ctx.app.autoPull!(t.session, t.project, undefined, ctx.client)) };

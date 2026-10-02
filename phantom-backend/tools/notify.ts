@@ -14,7 +14,7 @@ export const NOTIFY_TOOLS: ToolDef[] = [
       + 'THIS, not write it down. Markdown is rendered; name a file\'s path (/workspace/...) or put '
       + 'MEDIA:/workspace/path/to/file on its own line and it is delivered with the message.',
     input: obj({ text: str('The message to send.') }, ['text']),
-    mutates: false, agents: ['coding'], offered: enabled,
+    mutates: false, group: 'notify', offered: enabled,
     async execute(ctx, a) {
       if (!ctx.app.telegram) throw refusal('telegram_unavailable', 'telegram is not wired on this server (no public address)');
       try {

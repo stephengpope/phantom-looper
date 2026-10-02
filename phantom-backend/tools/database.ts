@@ -26,7 +26,7 @@ export const DATABASE_TOOLS: ToolDef[] = [
       maxCellChars: { type: 'integer', minimum: 1, default: 1000, description: 'longest cell returned whole (default 1000); longer ones end in …[truncated, N chars]' },
       params: { type: 'array', description: 'values for $1…$n; single statement only' },
     }, ['sql']),
-    mutates: true, agents: ['coding'], offered: enabled,
+    mutates: true, group: 'database', offered: enabled,
     async execute(ctx, a) {
       if (!ctx.app.agentDatabases) throw refusal('database_unavailable', 'this server has no agent database wiring');
       if (!(await ctx.app.settings.resolve('agent_database', { projectId: ctx.project.id }))) {

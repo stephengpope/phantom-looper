@@ -6,7 +6,7 @@
 // never holds a definition of its own; which agent gets which tool, and
 // whether a tool exists at all (a feature switched off is a missing tool),
 // is decided here and nowhere else.
-import type { AgentName, OfferCtx, PublishedTool, ToolDef } from './def.js';
+import type { OfferCtx, PublishedTool, ToolDef } from './def.js';
 import { FILE_TOOLS } from './files.js';
 import { BOARD_TOOLS } from './board.js';
 import { CRON_TOOLS } from './crons.js';
@@ -27,15 +27,29 @@ export const toolByName = new Map(TOOLS.map((t) => [t.name, t]));
 const dupes = TOOLS.map((t) => t.name).filter((n, i, a) => a.indexOf(n) !== i);
 if (dupes.length) throw new Error(`tool names defined twice: ${dupes.join(', ')}`);
 
-/** The tools an agent of `agent` has on this session right now. */
-export async function toolsFor(agent: AgentName, ctx: OfferCtx): Promise<PublishedTool[]> {
+/** The tool names a type's grants name: a grant is a tool name, a group
+ *  (every tool of it), or `group:read` (its non-mutating tools). */
+export function grantedTools(grants: readonly string[]): ToolDef[] {
+  const names = new Set<string>();
+  for (const grant of grants) {
+    const [group, mode] = grant.split(':');
+    for (const tool of TOOLS) {
+      if (tool.name === grant) names.add(tool.name);
+      else if (tool.group === group && (mode === undefined || (mode === 'read' && !tool.mutates))) names.add(tool.name);
+    }
+  }
+  return TOOLS.filter((tool) => names.has(tool.name));
+}
+
+/** The tools a session of `type` has right now: the type's grants, minus
+ *  what the session cannot have (no files → no file tools, a feature off). */
+export async function toolsFor(type: string, ctx: OfferCtx): Promise<PublishedTool[]> {
   const out: PublishedTool[] = [];
-  for (const t of TOOLS) {
-    if (!t.agents.includes(agent)) continue;
-    if (t.offered && !(await t.offered(ctx))) continue;
-    out.push({ name: t.name, summary: t.summary, description: t.description, input: t.input, mutates: t.mutates });
+  for (const tool of grantedTools(ctx.app.agentTypes.require(type).tools)) {
+    if (tool.offered && !(await tool.offered(ctx))) continue;
+    out.push({ name: tool.name, summary: tool.summary, description: tool.description, input: tool.input, mutates: tool.mutates });
   }
   return out;
 }
 
-export type { AgentName, FileTools, OfferCtx, PublishedTool, ToolCtx, ToolDef } from './def.js';
+export type { FileTools, OfferCtx, PublishedTool, ToolCtx, ToolDef } from './def.js';

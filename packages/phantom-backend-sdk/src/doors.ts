@@ -65,11 +65,14 @@ export interface SettingDefinition {
   defaultsToLatestModel?: boolean;
 }
 
-/** The tool groups the SDK ships. A tool belongs to one; an agent type
- *  names the groups it gets. The SDK's tools never name an agent type. */
+/** The area a tool belongs to — a label a type may grant whole (`files`)
+ *  or read-only (`files:read` = its non-mutating tools) instead of naming
+ *  every tool. The SDK's tools never name an agent type. */
 export type ToolGroup = 'files' | 'tasks' | 'skills' | 'web' | 'secrets' | 'crons' | 'database' | 'board' | 'git' | 'notify';
-/** A whole group, or only its non-mutating tools (`files:read` = read, ls, find, grep). */
-export type ToolGrant = ToolGroup | `${ToolGroup}:read`;
+/** What a type is granted: a tool by name (`kanban_card_read`), a whole
+ *  group (`files`), or a group's read-only tools (`files:read`). Each agent
+ *  is custom; name exactly what it gets. */
+export type ToolGrant = string;
 
 /** The ten settings every agent type carries — its model and its
  *  compaction — keyed by the suffix after `<name>_`. The SDK gives each its
@@ -93,7 +96,7 @@ export interface AgentTypeDefinition {
   name: string;
   /** What each of its ten settings means, its default, its overridability. */
   settings: Record<AgentTypeSettingSuffix, AgentTypeSetting>;
-  /** Which tool groups, whole or read-only, a session of this type is offered. */
+  /** The tools a session of this type is offered: names, or a group / group:read. */
   tools: ToolGrant[];
   /** Does a session of this type own a checkout, borrow another
    *  session's, or run with no files? Decides what POST /sessions makes. */
@@ -106,7 +109,7 @@ export interface AgentTypeDefinition {
  *  definitions; the backend publishes and runs it like any other. */
 export interface ToolDefinition {
   name: string;
-  group: ToolGroup | string;
+  group: ToolGroup;
   summary: string;
   description?: string;
   input: Record<string, unknown>;

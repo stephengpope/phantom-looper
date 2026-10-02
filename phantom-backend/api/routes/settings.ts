@@ -18,8 +18,6 @@ import type { FastifyRequest } from 'fastify';
 import type { ProjectRow } from 'phantom-backend-sdk/schema';
 import { SettingsWriteError } from 'phantom-backend-sdk';
 import { GLOBAL, projectScope } from 'phantom-backend-sdk';
-import { sessionPin, type AgentName } from '../../agentConfig.js';
-import { AGENT_NAMES } from '../../../core/llm/agentConfig.js';
 import { ok, err, type AppCtx } from '../app.js';
 
 const writerOf = (req: FastifyRequest): string | undefined =>

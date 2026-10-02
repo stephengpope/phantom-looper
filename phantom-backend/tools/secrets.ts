@@ -15,7 +15,7 @@ export const SECRET_TOOLS: ToolDef[] = [
       'instructions was written when this session started; use this when a secret might have ' +
       'been added since, or the one you expected is missing.',
     input: obj({}),
-    mutates: false, agents: ['coding'],
+    mutates: false, group: 'secrets',
     async execute(ctx) {
       const raw = await ctx.app.settings.listSecrets(chain(ctx));
       return { secrets: raw.map((s) => ({ name: s.name, description: s.description, scope: s.scope === GLOBAL ? 'global' : 'project' })) };
@@ -29,7 +29,7 @@ export const SECRET_TOOLS: ToolDef[] = [
       'in commands, config and .env files; never invent a placeholder when a stored secret ' +
       'covers the need. The names are in your instructions\' secrets index, or secret_list.',
     input: obj({ name: str('the secret\'s name, from the index in your instructions or secret_list') }, ['name']),
-    mutates: false, agents: ['coding'],
+    mutates: false, group: 'secrets',
     async execute(ctx, a) {
       const name = secretName(String(a.name));
       const value = name ? await ctx.app.settings.readSecret(name, chain(ctx)) : undefined;

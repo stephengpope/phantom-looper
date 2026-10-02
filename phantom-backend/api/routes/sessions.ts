@@ -16,7 +16,6 @@ import { oldAgentConfig } from '../../agentConfig.js';
 import { sessionPin } from '../../agentConfig.js';
 import type { SystemPromptLayout } from 'phantom-client-sdk/systemPrompt';
 import { SystemPromptError } from 'phantom-backend-sdk';
-import { AGENT_NAMES, type AgentName } from '../../../core/llm/agentConfig.js';
 import { toolsFor } from '../../tools/registry.js';
 import { messageLine, userMessage } from 'phantom-client-sdk/transcript';
 import { writeAttachment } from 'phantom-backend-sdk';
@@ -966,7 +965,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
   // agent of `type` has right now. The stamp the record was last changed at
   // rides along so the caller knows whether its copy is current. Everything
   // a client needs before its first model call, one round trip.
-  app.post<{ Params: { id: string }; Body: { type: AgentName; label?: string } }>(
+  app.post<{ Params: { id: string }; Body: { type: string; label?: string } }>(
     '/sessions/:id/turn-start', { schema: { ...TAG,
       summary: 'Start a turn: hold the session and answer what it runs on',
       description: 'Holds the session for x-phantom-looper-client (409 session_locked while someone else does), ' +
@@ -975,7 +974,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         'session right now, plus the record\'s transcript_updated_at. POST /sessions/:id/turn-ended releases the hold.',
       params: idParam,
       body: { type: 'object', required: ['type'], additionalProperties: false, properties: {
-        type: { type: 'string', enum: [...AGENT_NAMES] },
+        type: { type: 'string', enum: ctx.agentTypes.names() },
         label: { type: 'string', maxLength: 200, description: 'What to show others (a hostname).' } } } } },
     async (req, reply) => {
       const client = clientOf(req);

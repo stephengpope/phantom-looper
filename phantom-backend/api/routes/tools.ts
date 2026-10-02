@@ -15,7 +15,6 @@
 // all just run; the session/turn lock is the only lock.
 import type { FastifyInstance } from 'fastify';
 import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
-import { AGENT_NAMES, type AgentName } from '../../../core/llm/agentConfig.js';
 import { TOOLS, toolsFor, type FileTools, type ToolCtx } from '../../tools/registry.js';
 import { FILE_TOOLS } from '../../tools/files.js';
 import { ToolError } from 'phantom-backend-sdk';

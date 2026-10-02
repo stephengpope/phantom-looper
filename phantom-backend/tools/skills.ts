@@ -24,7 +24,7 @@ export const SKILL_TOOLS: ToolDef[] = [
       '(created mid-session). Repo skills (.agents/skills/) shadow system ones (baked into ' +
       'this machine) on a collision.',
     input: obj({}),
-    mutates: false, agents: ['coding'], offered: hasRepo,
+    mutates: false, group: 'skills', offered: hasRepo,
     execute(ctx) {
       const d = deps(ctx);
       return listSkills(ctx.app, d.fs, ctx.session, d.workspaceId);
@@ -41,7 +41,7 @@ export const SKILL_TOOLS: ToolDef[] = [
       name: str('the skill name, from the index in your instructions or skill_list'),
       file: str("a bundled file to read instead (e.g. 'references/api.md')"),
     }, ['name']),
-    mutates: false, agents: ['coding'], offered: hasRepo,
+    mutates: false, group: 'skills', offered: hasRepo,
     execute(ctx, a) {
       const d = deps(ctx);
       return loadSkill(ctx.app, d.fs, ctx.session, d.workspaceId, String(a.name), a.file === undefined ? undefined : String(a.file));
@@ -74,7 +74,7 @@ export const SKILL_TOOLS: ToolDef[] = [
       file_path: str('bundled-file path under references/templates/scripts/assets — required for write_file/remove_file; patch defaults to SKILL.md'),
       file_content: str('the file content, for write_file'),
     }, ['action', 'name']),
-    mutates: true, agents: ['coding'], offered: hasRepo,
+    mutates: true, group: 'skills', offered: hasRepo,
     execute(ctx, a) {
       const d = deps(ctx);
       return manageSkill(ctx.app, d.fs, ctx.session, d.workspaceId, a as unknown as ManageBody);
