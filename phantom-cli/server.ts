@@ -1,5 +1,5 @@
 // The window's one connection to the server. One HTTP/2 socket
-// (`ServerConnection`) carries every call, feed and turn; `PhantomBackend`
+// (`BackendConnection`) carries every call, feed and turn; `BackendClient`
 // puts the headers on, reads the envelope, hands back streams. Every request
 // this window makes — the agents', the screens', the kits' — goes through
 // here, with this window's lock identity and label.
@@ -13,14 +13,14 @@
 // The server is always https behind Caddy — dev included — so this is the one
 // transport; any other URL is a setup error, said in the error.
 import { rootCertificates } from 'node:tls';
-import { PhantomBackend, ServerConnection, isPhantomError } from 'phantom-client-sdk';
+import { BackendClient, BackendConnection, isPhantomError } from 'phantom-client-sdk';
 import { localValues } from './local.js';
 import { savedCaFor } from './provision.js';
 import { requestError, type Api } from './request.js';
 
 export class Server {
-  #connection: ServerConnection | null = null;
-  #backend: PhantomBackend | null = null;
+  #connection: BackendConnection | null = null;
+  #backend: BackendClient | null = null;
   #base: string | null = null;
 
   constructor(readonly clientId: string, readonly label: string) {}
@@ -33,7 +33,7 @@ export class Server {
 
   /** The backend for the address in the file right now — rebuilt when the
    *  address moved. Throws when nothing is paired or the URL is not https. */
-  backend(): PhantomBackend {
+  backend(): BackendClient {
     const { base, key } = Server.connection();
     if (!base) throw new Error('no phantom-backend paired — setup-backend, or /server to enter one');
     const origin = new URL(base).origin;
@@ -41,8 +41,8 @@ export class Server {
     if (this.#backend && this.#base === base) return this.#backend;
     this.#connection?.close();
     const savedCa = savedCaFor(base);
-    this.#connection = new ServerConnection({ origin, ...(savedCa ? { ca: [...rootCertificates, savedCa] } : {}) });
-    this.#backend = new PhantomBackend({ url: `${base}/api`, apiKey: key, clientId: this.clientId, label: this.label, fetch: this.#connection.fetch });
+    this.#connection = new BackendConnection({ origin, ...(savedCa ? { ca: [...rootCertificates, savedCa] } : {}) });
+    this.#backend = new BackendClient({ url: `${base}/api`, apiKey: key, clientId: this.clientId, label: this.label, fetch: this.#connection.fetch });
     this.#base = base;
     return this.#backend;
   }

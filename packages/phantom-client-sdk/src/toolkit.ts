@@ -11,11 +11,11 @@
 // a mutating tool called while it says true answers the model with
 // { ok:false, error:{ code:'readonly' } } and runs nothing.
 import { jsonSchema, tool, type Tool } from 'ai';
-import type { PhantomBackend } from './backend.js';
+import type { BackendClient } from './backend.js';
 import type { PublishedTool } from './session.js';
 
 export interface ToolKitContext {
-  backend: PhantomBackend;
+  backend: BackendClient;
   sessionId: string;
   projectId: string;
   /** The workspace the session's tools open. */

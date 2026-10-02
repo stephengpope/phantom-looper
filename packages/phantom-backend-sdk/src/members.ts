@@ -1,4 +1,4 @@
-// PhantomServer's members, one file each, same name. Re-exported here so
+// PhantomBackend's members, one file each, same name. Re-exported here so
 // the root and user space import from one place.
 export { Database } from './storage/Database.js';
 export { Settings } from './storage/Settings.js';

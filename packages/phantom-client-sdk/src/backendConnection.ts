@@ -4,25 +4,25 @@
 // the first request after a quiet spell. The session reconnects on its own
 // when the socket drops; a request that finds it closed opens a new one.
 //
-// `fetch` is what it speaks — what `PhantomBackend` takes — so nothing above
+// `fetch` is what it speaks — what `BackendClient` takes — so nothing above
 // this file knows the transport. Node's own fetch could not be made to
 // negotiate HTTP/2 reliably; `node:http2` does it directly.
 import http2, { type ClientHttp2Session, type OutgoingHttpHeaders } from 'node:http2';
 import { Readable } from 'node:stream';
 
-export interface ServerConnectionOptions {
+export interface BackendConnectionOptions {
   /** The server's origin, e.g. `https://phantom.example.com`. */
   origin: string;
   /** Extra root certificates to trust (a server on its own CA). */
   ca?: string | Buffer | Array<string | Buffer>;
 }
 
-export class ServerConnection {
+export class BackendConnection {
   readonly origin: string;
-  readonly #ca: ServerConnectionOptions['ca'];
+  readonly #ca: BackendConnectionOptions['ca'];
   #session: ClientHttp2Session | null = null;
 
-  constructor(o: ServerConnectionOptions) {
+  constructor(o: BackendConnectionOptions) {
     this.origin = o.origin;
     this.#ca = o.ca;
     this.fetch = this.fetch.bind(this);
@@ -76,7 +76,7 @@ export class ServerConnection {
       });
       if (body === undefined || body === null) req.end();
       else if (typeof body === 'string' || body instanceof Uint8Array) req.end(body);
-      else reject(new TypeError('ServerConnection: only string or bytes bodies are supported'));
+      else reject(new TypeError('BackendConnection: only string or bytes bodies are supported'));
     });
   }
 }

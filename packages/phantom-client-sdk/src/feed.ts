@@ -14,7 +14,7 @@
 // interrupt would — and {event:"session", planMode?} when the row moves, so
 // a plan-mode flip lands on the running turn's tools. The feed never echoes
 // a client its own events.
-import type { PhantomBackend } from './backend.js';
+import type { BackendClient } from './backend.js';
 import type { StreamPart } from './turn.js';
 
 /** How long parts may sit before they are sent. Parts arrive many times a
@@ -27,7 +27,7 @@ class Relay {
   private chain: Promise<void> = Promise.resolve();
   private alive = true;
 
-  constructor(private readonly backend: PhantomBackend, private readonly sessionId: string,
+  constructor(private readonly backend: BackendClient, private readonly sessionId: string,
     private readonly onFailed: (reason: string) => void) {}
 
   turnStart(e: { agent: string; message: string; provider: string; model: string }): void {
@@ -79,7 +79,7 @@ export class TurnFeed {
   readonly #relay: Relay;
   readonly #stop: () => void;
 
-  constructor(backend: PhantomBackend, sessionId: string, opening: { agent: string; message: string; provider: string; model: string }, l: FeedListener) {
+  constructor(backend: BackendClient, sessionId: string, opening: { agent: string; message: string; provider: string; model: string }, l: FeedListener) {
     this.#relay = new Relay(backend, sessionId,
       (reason) => l.onNotice(`live relay stopped for this turn (${reason}) — watchers see the record when it lands`));
     this.#stop = watchSession(backend, sessionId, l,
@@ -92,7 +92,7 @@ export class TurnFeed {
   end(): Promise<void> { this.#stop(); return this.#relay.turnEnd(); }
 }
 
-function watchSession(backend: PhantomBackend, sessionId: string, l: FeedListener, onFailed: (reason: string) => void): () => void {
+function watchSession(backend: BackendClient, sessionId: string, l: FeedListener, onFailed: (reason: string) => void): () => void {
   const ac = new AbortController();
   const run = async () => {
     try {

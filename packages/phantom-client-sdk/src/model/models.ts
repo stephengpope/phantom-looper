@@ -3,7 +3,7 @@
 // only when the config moved. Every call through it is billed to the
 // session.
 import type { LanguageModel } from 'ai';
-import type { PhantomBackend } from '../backend.js';
+import type { BackendClient } from '../backend.js';
 import { PhantomError } from '../errors.js';
 import { billedModel, effectiveReasoning, type ModelHooks } from './languageModel.js';
 import type { LlmConfig, ModelSpec, Reasoning } from './llmConfig.js';
@@ -19,7 +19,7 @@ export interface ResolvedModel {
 export class Models {
   #cached: { key: string; model: LanguageModel } | null = null;
 
-  constructor(private readonly backend: PhantomBackend, private readonly type: string, private readonly sessionId: string,
+  constructor(private readonly backend: BackendClient, private readonly type: string, private readonly sessionId: string,
     private readonly hooks: ModelHooks) {}
 
   /** The handle for this turn's config. */

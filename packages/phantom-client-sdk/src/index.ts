@@ -9,7 +9,7 @@ export type { QueueEntry, UserMessages } from './userMessages.js';
 export type { TokenTotals } from './transcript.js';
 
 // The connection — for an app's own kits and calls.
-export { PhantomBackend, type BackendOptions, type CallOptions, type Envelope } from './backend.js';
+export { BackendClient, type BackendOptions, type CallOptions, type Envelope } from './backend.js';
 export { PhantomError, isPhantomError, SDK_ERROR_CODES, type ErrorCode, type SdkErrorCode } from './errors.js';
 export type { RetryPolicy } from './model/retry.js';
 
@@ -20,8 +20,8 @@ export type { ToolKit, ToolKitContext, BuiltTools } from './toolkit.js';
 export { billedModel, type Billing, type ModelHooks } from './model/languageModel.js';
 export type { ModelSpec, Provider, Reasoning } from './model/llmConfig.js';
 
-// One connection for everything — the transport an app hands `PhantomBackend`.
-export { ServerConnection, type ServerConnectionOptions } from './serverConnection.js';
+// One connection for everything — the transport an app hands `BackendClient`.
+export { BackendConnection, type BackendConnectionOptions } from './backendConnection.js';
 
 // The system prompt: the layout an agent declares, the shape the row stores.
 export { agentText, systemPromptBlocks, SYSTEM_PROMPT_SECTIONS,

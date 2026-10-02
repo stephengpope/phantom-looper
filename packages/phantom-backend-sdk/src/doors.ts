@@ -1,4 +1,4 @@
-// The extension doors: what user space registers through PhantomServerConfig.
+// The extension doors: what user space registers through PhantomBackendConfig.
 // Each is a plain description; the server builds the real thing from it.
 // Stub: shapes only.
 
@@ -58,7 +58,7 @@ export interface ToolRunContext {
   sessionId: string;
   projectId: string;
   workspaceId: string | null;
-  server: unknown;   // PhantomServer — typed when the stub becomes real
+  server: unknown;   // PhantomBackend — typed when the stub becomes real
 }
 
 /** User space's routes: called with the Fastify instance after the SDK's

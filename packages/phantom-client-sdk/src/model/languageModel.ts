@@ -6,7 +6,7 @@
 // its turns; an app uses it for a one-shot call (a title, a commit message).
 import { wrapLanguageModel, type LanguageModel, type LanguageModelMiddleware } from 'ai';
 import type { LanguageModelV4Usage } from '@ai-sdk/provider';
-import type { PhantomBackend } from '../backend.js';
+import type { BackendClient } from '../backend.js';
 import type { TokenUsage } from '../transcript.js';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -198,7 +198,7 @@ function billingMiddleware(s: ModelSpec, usage: (u: TokenUsage) => void): Langua
 
 /** A provider model handle with retries, every call billed to `bill` on
  *  the backend (POST /log-tokens). The one way to get a model. */
-export function billedModel(backend: PhantomBackend, s: ModelSpec, bill: Billing, hooks: ModelHooks): LanguageModel {
+export function billedModel(backend: BackendClient, s: ModelSpec, bill: Billing, hooks: ModelHooks): LanguageModel {
   const model = providerModel(s, withRetry(undefined, hooks.notice, 'model', hooks.retry));
   const post = (u: TokenUsage) => backend.call('POST', '/log-tokens', { kind: bill.type, sessionId: bill.sessionId, ...u })
     .then(() => undefined, (e: unknown) => hooks.onBillingError(asPhantomError(e, 'internal', 'billing')));

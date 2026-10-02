@@ -13,7 +13,7 @@ import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { Tool } from 'ai';
 import { SessionStore, activeHold, type LoadedSession, type ModelLine } from './sessions.js';
-import type { AgentHandlers, PhantomBackend, ToolKit } from 'phantom-client-sdk';
+import type { AgentHandlers, BackendClient, ToolKit } from 'phantom-client-sdk';
 import { parseLines, conversationFrom, usageTotals } from 'phantom-client-sdk/transcript';
 import { CodingAgent } from '../core/agents/coding.js';
 import { AssistantAgent } from '../core/agents/assistant.js';
@@ -108,7 +108,7 @@ export interface WindowOptions {
   api: Api;
   /** The window's connection, for the agents: every open session runs its
    *  turns through it, under this window's identity. */
-  backend: () => PhantomBackend;
+  backend: () => BackendClient;
   /** GET a server ND-JSON stream as records — each BoardStore follows its
    *  project's `/events` through it. Absent (tests): boards load once. */
   stream?: Stream;

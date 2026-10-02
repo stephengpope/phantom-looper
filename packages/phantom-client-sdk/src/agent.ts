@@ -12,7 +12,7 @@
 //   const agent = await CodingAgent.resumeSession(backend, handlers, sessionId);
 //
 // Resuming only reads: nothing is locked or written until a turn starts.
-import type { PhantomBackend } from './backend.js';
+import type { BackendClient } from './backend.js';
 import { PhantomError, asPhantomError } from './errors.js';
 import { Emitter, type AgentEvents } from './events.js';
 import { TurnFeed } from './feed.js';
@@ -44,7 +44,7 @@ export interface AgentHandlers {
 
 /** What the base builds a subclass from — `resumeSession` / `create` are
  *  the only callers. Subclasses declare no constructor. */
-interface AgentDeps { backend: PhantomBackend; handlers: AgentHandlers; session: Session }
+interface AgentDeps { backend: BackendClient; handlers: AgentHandlers; session: Session }
 type AgentClass<T extends Agent> = new (deps: AgentDeps) => T;
 
 export abstract class Agent {
@@ -54,7 +54,7 @@ export abstract class Agent {
   /** The connection, retrying: a network failure or a 5xx is retried per
    *  the handlers' policy, each attempt a notice; 409s (locked, conflict)
    *  are facts and never retried. For a subclass's own calls too. */
-  readonly backend: PhantomBackend;
+  readonly backend: BackendClient;
   readonly session: SessionInfo;
 
   readonly #session: Session;
@@ -82,14 +82,14 @@ export abstract class Agent {
   // ── resuming / creating ────────────────────────────────────────────────
 
   /** An existing session: the row as it stands, then the record. */
-  static async resumeSession<T extends Agent>(this: AgentClass<T>, backend: PhantomBackend, handlers: AgentHandlers, sessionId: string): Promise<T> {
+  static async resumeSession<T extends Agent>(this: AgentClass<T>, backend: BackendClient, handlers: AgentHandlers, sessionId: string): Promise<T> {
     return Agent.#build(this, backend, handlers, () => Promise.resolve(sessionId), `resuming session ${sessionId}`);
   }
 
   /** A new session: the app makes the row its own way (the route is the
    *  app's) and answers its id; then as `resumeSession`. */
-  static async create<T extends Agent>(this: AgentClass<T>, backend: PhantomBackend, handlers: AgentHandlers,
-    createRow: (backend: PhantomBackend) => Promise<{ id: string }>): Promise<T> {
+  static async create<T extends Agent>(this: AgentClass<T>, backend: BackendClient, handlers: AgentHandlers,
+    createRow: (backend: BackendClient) => Promise<{ id: string }>): Promise<T> {
     return Agent.#build(this, backend, handlers, async (b) => (await createRow(b)).id, 'creating the session');
   }
 
@@ -283,8 +283,8 @@ export abstract class Agent {
   /** The one way an agent comes to be: the session id (made or given), the
    *  session read, the agent built and wired. Every failure reaches onError
    *  first, then the caller. */
-  static async #build<T extends Agent>(ctor: AgentClass<T>, backend: PhantomBackend, handlers: AgentHandlers,
-    sessionId: (b: PhantomBackend) => Promise<string>, what: string): Promise<T> {
+  static async #build<T extends Agent>(ctor: AgentClass<T>, backend: BackendClient, handlers: AgentHandlers,
+    sessionId: (b: BackendClient) => Promise<string>, what: string): Promise<T> {
     try {
       const b = backend.withRetry({ ...BACKEND_RETRY, ...handlers.retry?.backend }, (text) => handlers.onNotice({ type: 'retry', text }));
       return new ctor({ backend: b, handlers, session: await Session.load(b, handlers, await sessionId(b)) }).#wire();

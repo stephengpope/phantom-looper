@@ -17,8 +17,8 @@
     "phantom-backend": "tsx phantom-backend/index.ts",
     "sdk:build": "npm run build -w phantom-client-sdk",
     "sdk:lint": "npm run lint -w phantom-client-sdk",
-    "server-sdk:build": "npm run build -w phantom-server-sdk",
-    "server-sdk:lint": "npm run lint -w phantom-server-sdk"
+    "backend-sdk:build": "npm run build -w phantom-backend-sdk",
+    "backend-sdk:lint": "npm run lint -w phantom-backend-sdk"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.40",

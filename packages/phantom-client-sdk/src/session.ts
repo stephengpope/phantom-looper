@@ -9,7 +9,7 @@
 // calls with no results) is answered then, so the next model call is one the
 // provider accepts.
 import type { ModelMessage, ToolCallPart } from 'ai';
-import type { PhantomBackend } from './backend.js';
+import type { BackendClient } from './backend.js';
 import { asPhantomError, type PhantomError } from './errors.js';
 import { interruptedResultMessage } from './messages.js';
 import { SessionRecord } from './record.js';
@@ -61,7 +61,7 @@ export class Session implements SessionInfo {
   #row: SessionRow;
   #messages: ModelMessage[];
 
-  private constructor(private readonly backend: PhantomBackend, private readonly handlers: { onError(e: PhantomError): void },
+  private constructor(private readonly backend: BackendClient, private readonly handlers: { onError(e: PhantomError): void },
     row: SessionRow, private readonly record: SessionRecord) {
     this.#row = row;
     this.#messages = conversationFrom(record.lines);
@@ -69,7 +69,7 @@ export class Session implements SessionInfo {
 
   /** The row as it stands, then the record. Loading only reads. `handlers`
    *  hears the one failure that must not throw over another: a lock release. */
-  static async load(backend: PhantomBackend, handlers: { onError(e: PhantomError): void }, sessionId: string): Promise<Session> {
+  static async load(backend: BackendClient, handlers: { onError(e: PhantomError): void }, sessionId: string): Promise<Session> {
     const row = await backend.call<SessionRow>('GET', `/sessions/${sessionId}`);
     return new Session(backend, handlers, row, await SessionRecord.load(backend, sessionId));
   }

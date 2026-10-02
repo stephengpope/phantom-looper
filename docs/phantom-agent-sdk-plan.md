@@ -2,7 +2,7 @@
 
 phantom-looper is a user-space app. It runs on **phantom-agent-sdk**: a
 client SDK (`@phantom-agent-sdk/client`) that gives an app an agent and a
-session, and a server SDK (`@phantom-agent-sdk/server`) that gives a server
+session, and a backend SDK (`@phantom@phantom-agent-sdk/backend`) that gives a server
 the services, tables, API, auth and the framework to extend them. The SDK
 supports; user space is one implementation of that support. This doc is
 what is left to make that true, in order. It replaces `sdk-conversion.md`.
@@ -38,7 +38,7 @@ what is left to make that true, in order. It replaces `sdk-conversion.md`.
   with its own. User space FKs into the SDK's tables at will. No user-space
   column on an SDK table. Drizzle shipped as the default; the user may
   bring their own.
-- Server SDK includes: data owners, docker/images/containers/pool/disk,
+- Backend SDK includes: data owners, docker/images/containers/pool/disk,
   prompt assembly, agent config, models, skills, web, tools, the queue,
   events, git, the cron scheduler, Telegram plumbing (setup, linking, keys,
   webhook, rendering, voice, approval gates, dedupe/reply tables), the HTTP
@@ -48,7 +48,7 @@ what is left to make that true, in order. It replaces `sdk-conversion.md`.
 - User space (this app): boot/composition, the looper, the three agents and
   their prompts, the bot's behaviour (commands, modes, personality), the
   idle digest, the app's upgrade system and images.
-- The server's agents reach the API as clients: a `PhantomBackend` on Node
+- The server's agents reach the API as clients: a `BackendClient` on Node
   fetch at loopback. The cli's HTTP/2-over-TLS socket is the cli's
   transport, not an SDK rule; streaming needs neither.
 - A session has a transcript, a container, and a workspace (the checkout)
@@ -74,11 +74,11 @@ container names `phantom-looper-ws-<id>`.
 ## 2. The SDK folder takes its final shape
 
 `packages/phantom-client-sdk` → `phantom-agent-sdk/packages/client`
-(`@phantom-agent-sdk/client`); `packages/phantom-server-sdk` →
-`…/packages/server` (`@phantom-agent-sdk/server`). Dependency ranges
+(`@phantom-agent-sdk/client`); `packages/phantom-backend-sdk` →
+`…/packages/server` (`@phantom@phantom-agent-sdk/backend`). Dependency ranges
 pinned (today's `*` is monorepo-only). The app imports by the new names.
 
-## 3. Server SDK — the extension doors
+## 3. Backend SDK — the extension doors
 
 The two registries user space declares into, before any table moves:
 - **Settings registry** — names, defaults, labels, descriptions, groups;
@@ -95,7 +95,7 @@ each — with the side tables that take user-space columns off SDK tables:
 the SDK's link row (webhook, secret, bot username) and the app's behaviour
 row (mode, active session, active project).
 
-## 4. Server SDK — the services move in
+## 4. Backend SDK — the services move in
 
 Per the list under Decided. `phantom-backend` is left with its user-space
 list. The HTTP surface moves with its auth and gains the door user space
@@ -103,7 +103,7 @@ registers routes through (the upgrade endpoint is the first user of it).
 
 ## 5. The server's agents onto the client SDK
 
-- A loopback `PhantomBackend` in the server; `looper/injectFetch.ts` deleted.
+- A loopback `BackendClient` in the server; `looper/injectFetch.ts` deleted.
 - The card run opens `CodingAgent` / `SupervisorAgent` and adds its
   card-bound tools with `addToolKit()`; the run's move tool renamed (the
   server publishes `kanban_card_move` with another contract).
@@ -157,7 +157,7 @@ runs, cron, Telegram.
 ## Names — keep
 
 `Agent`, `CodingAgent` / `AssistantAgent` / `SupervisorAgent`,
-`PhantomBackend`, `ToolKit`, `SystemPrompt`, `StoredSystemPrompt`,
+`BackendClient`, `ToolKit`, `SystemPrompt`, `StoredSystemPrompt`,
 `SERVER_PROMPT_BLOCKS`. `resumeSession` / `create` / `newSession` /
 `addToolKit` / `sendMessage` / `interrupt` / `partialMessage`.
 `systemPromptLayout`, `agentText`. Server blocks: `soul_md`, `agents_md`,

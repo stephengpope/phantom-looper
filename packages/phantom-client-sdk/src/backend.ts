@@ -1,4 +1,4 @@
-// The one way the SDK reaches a phantom-backend. A `PhantomBackend` owns the
+// The one way the SDK reaches a phantom-backend. A `BackendClient` owns the
 // address, the key, this client's lock identity, and the transport (`fetch`
 // — real HTTP, or whatever the app injects). Every request goes through it:
 // the headers are written in one place, the envelope is read in one place,
@@ -71,7 +71,7 @@ async function* ndjson(body: ReadableStream<Uint8Array>): AsyncGenerator<Record<
   }
 }
 
-export class PhantomBackend {
+export class BackendClient {
   readonly url: string;
   readonly clientId: string;
   readonly label: string;
@@ -89,8 +89,8 @@ export class PhantomBackend {
   }
 
   /** The same connection with a retry rule — the Agent's, from its handlers. */
-  withRetry(policy: RetryPolicy, notice: (text: string) => void): PhantomBackend {
-    return new PhantomBackend({ url: this.url, apiKey: this.#apiKey, clientId: this.clientId, label: this.label,
+  withRetry(policy: RetryPolicy, notice: (text: string) => void): BackendClient {
+    return new BackendClient({ url: this.url, apiKey: this.#apiKey, clientId: this.clientId, label: this.label,
       fetch: this.#fetch, retry: { policy, notice } });
   }
 

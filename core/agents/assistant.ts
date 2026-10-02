@@ -1,7 +1,7 @@
 // The Assistant. Its system prompt layout: its own document
 // (core/prompts/assistant) and the date. Its session follows the one the
 // user is looking at (`follow`): its file tools open that session's workspace.
-import { Agent, agentText, type AgentHandlers, type PhantomBackend, type SystemPromptLayout } from 'phantom-client-sdk';
+import { Agent, agentText, type AgentHandlers, type BackendClient, type SystemPromptLayout } from 'phantom-client-sdk';
 import { systemPrompt as assistantInstructions } from '../prompts/assistant/wiring.js';
 
 export class AssistantAgent extends Agent {
@@ -13,7 +13,7 @@ export class AssistantAgent extends Agent {
     volatile: ['time_date'],
   };
 
-  static newSession(backend: PhantomBackend, handlers: AgentHandlers,
+  static newSession(backend: BackendClient, handlers: AgentHandlers,
     opts: { projectId: string; activeSessionId?: string | null }): Promise<AssistantAgent> {
     return AssistantAgent.create(backend, handlers, (b) => b.call('POST', '/sessions/assistant',
       { project_id: opts.projectId, ...(opts.activeSessionId ? { session_id: opts.activeSessionId } : {}),

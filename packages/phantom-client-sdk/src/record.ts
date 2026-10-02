@@ -12,7 +12,7 @@
 // the session lock). `stamp` is the server's last-changed mark for the copy
 // held here; taking the lock answers the server's current one, and a turn
 // that sees them differ reads the lines after its own (`catchUp`) first.
-import type { PhantomBackend } from './backend.js';
+import type { BackendClient } from './backend.js';
 import { PhantomError } from './errors.js';
 import { addTotals, lineId, parseLines, usageTotals, type TokenTotals, type TranscriptLine } from './transcript.js';
 
@@ -25,7 +25,7 @@ export class SessionRecord {
   #chain: Promise<void> = Promise.resolve();
   readonly lines: TranscriptLine[];
 
-  private constructor(private readonly backend: PhantomBackend, private readonly sessionId: string,
+  private constructor(private readonly backend: BackendClient, private readonly sessionId: string,
     lines: TranscriptLine[], count: number, stamp: string | null) {
     this.lines = lines;
     this.#count = count;
@@ -34,7 +34,7 @@ export class SessionRecord {
   }
 
   /** Read the whole record from the server. */
-  static async load(backend: PhantomBackend, sessionId: string): Promise<SessionRecord> {
+  static async load(backend: BackendClient, sessionId: string): Promise<SessionRecord> {
     const r = await backend.call<TranscriptReply>('GET', `/sessions/${sessionId}/transcript`);
     const lines = parseLines(r.data ?? '');
     return new SessionRecord(backend, sessionId, lines, r.lines, r.updated_at);

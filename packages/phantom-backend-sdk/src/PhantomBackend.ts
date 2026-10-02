@@ -1,4 +1,4 @@
-// PhantomServer — the root of @phantom-agent-sdk/server. One object owns
+// PhantomBackend — the root of @phantom@phantom-agent-sdk/backend. One object owns
 // every service, boots them in order, runs the API, and is the only thing
 // user space talks to. User space does not subclass it: it hands `create`
 // a config carrying its registrations (settings, agent types, tools,
@@ -15,9 +15,9 @@ import type {
 } from './members.js';
 import type { SettingDefinition, AgentTypeDefinition, ToolDefinition, RouteRegistrar } from './doors.js';
 
-/** What user space hands `PhantomServer.create`. Everything optional:
+/** What user space hands `PhantomBackend.create`. Everything optional:
  *  an empty config boots a server with the SDK's defaults. */
-export interface PhantomServerConfig {
+export interface PhantomBackendConfig {
   /** Boot-and-connect values only (database URL, volume root, API key…).
    *  Defaults to process.env. Every behavioural knob is a setting. */
   env?: NodeJS.ProcessEnv;
@@ -37,12 +37,12 @@ export interface PhantomServerConfig {
   routes?: RouteRegistrar;
   /** Run after every service is up and before the API listens. User space
    *  starts its engines here (the looper, its bot) with the server in hand. */
-  onStart?: (server: PhantomServer) => Promise<void>;
+  onStart?: (server: PhantomBackend) => Promise<void>;
   /** Run first on stop, before the API closes. */
-  onStop?: (server: PhantomServer) => Promise<void>;
+  onStop?: (server: PhantomBackend) => Promise<void>;
 }
 
-export class PhantomServer {
+export class PhantomBackend {
   // ── storage ──────────────────────────────────────────────────────────
   readonly database!: Database;
   readonly settings!: Settings;
@@ -103,7 +103,7 @@ export class PhantomServer {
    *  (the server's agents reach the API over loopback like any client). */
   readonly loopback!: { url: string; apiKey: string };
 
-  private constructor(readonly config: PhantomServerConfig) {}
+  private constructor(readonly config: PhantomBackendConfig) {}
 
   /** Build every service, connected but not running. Boot order:
    *   1. env → Database (pool) → migrations: SDK schema, then user space's
@@ -116,7 +116,7 @@ export class PhantomServer {
    *   8. CronScheduler, Telegram plumbing, Notifications, DbConsole
    *   9. HttpApi (SDK routes + config.routes), loopback
    *  Nothing listens or ticks until `start`. */
-  static async create(config: PhantomServerConfig): Promise<PhantomServer> { throw stub(); }
+  static async create(config: PhantomBackendConfig): Promise<PhantomBackend> { throw stub(); }
 
   /** Run: `config.onStart`, then the API listens, the scheduler ticks, the
    *  maintenance loop and instant sync begin. Resolves when listening. */
@@ -127,4 +127,4 @@ export class PhantomServer {
   async stop(): Promise<void> { throw stub(); }
 }
 
-const stub = () => new Error('PhantomServer: stub — not built yet');
+const stub = () => new Error('PhantomBackend: stub — not built yet');

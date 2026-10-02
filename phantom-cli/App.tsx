@@ -39,7 +39,7 @@ import { Box, useApp, useBoxMetrics, useInput, useWindowSize } from 'ink';
 import { Text } from './components/Text.js';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { Tool } from 'ai';
-import type { PhantomBackend } from 'phantom-client-sdk';
+import type { BackendClient } from 'phantom-client-sdk';
 import { phaseLabel, tokenCount, formatTokensIn, formatTokensOut, cachePct } from './state.js';
 import { activeHold } from './sessions.js';
 import { COMMANDS, complete, matches } from './commands.js';
@@ -80,7 +80,7 @@ export function App({
 }: {
   api: Api;
   /** The window's connection, for the agents (server.ts). */
-  backend: () => PhantomBackend;
+  backend: () => BackendClient;
   /** GET a server ND-JSON stream as records — each BoardStore follows its
    *  project's `/events` through it. index.tsx wires the real one; absent
    *  (tests), boards load once and hear nothing. */
