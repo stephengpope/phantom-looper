@@ -37,7 +37,7 @@ import type { ProjectRow } from 'phantom-backend-sdk/schema';
 import { LOOP_CLIENT_ID, workspaceOf, type Sessions } from '../sessions.js';
 import type { Projects } from '../projects.js';
 import type { Cards, CardFields } from '../cards.js';
-import type { Settings } from '../settings.js';
+import type { Settings, AgentConfig as SdkAgentConfig } from 'phantom-backend-sdk';
 import type { TokenLog } from 'phantom-backend-sdk';
 import type { SettingsEvents } from '../api/settingsEvents.js';
 import { GLOBAL } from 'phantom-backend-sdk';
@@ -45,6 +45,7 @@ import { openSession, SessionLockedError, type OpenedSession } from '../../core/
 import { SupervisorAgent as SupervisorAgentOnSdk } from '../../core/agents/supervisor.js';
 import { memoryRecorder, serializeTranscript } from '../../core/llm/transcript.js';
 import { agentClock, type AgentConfig } from '../../core/llm/agentConfig.js';
+import { oldAgentConfig } from '../agentConfig.js';
 import { sessionPin } from '../agentConfig.js';
 import { phantomTools } from '../../core/llm/tools/workspace.js';
 import { webTools } from '../../core/llm/tools/web.js';
@@ -70,6 +71,7 @@ export interface LooperDeps {
   projects: Projects;
   cards: Cards;
   settings: Settings;
+  agentConfig: SdkAgentConfig;
   /** The token log — the budget's coin is read off it directly. */
   logTokens: TokenLog;
   app: FastifyInstance;
@@ -208,7 +210,7 @@ export class LooperEngine {
         try {
           project = await this.deps.projects.get(projectId);
           if (!project) continue;
-          const auto = await this.deps.settings.resolveMany(['auto_plan', 'auto_build'], { project })
+          const auto = await this.deps.settings.resolveMany(['auto_plan', 'auto_build'], { projectId: project.id })
             .catch(() => ({ auto_plan: false, auto_build: false }));
           card = await this.deps.cards.activeByNumber(project, cardNumber);
           if (!card || !canTurn(card, { plan: Boolean(auto.auto_plan), build: Boolean(auto.auto_build) })) continue;
@@ -326,7 +328,7 @@ export class LooperEngine {
       // ── the token budget — seeded once per loop, checked before every
       // turn, each turn's own numbers added as they land. Breach is a card
       // state a human can see, like every other loop exit. ─────────────────
-      const b = await this.deps.settings.resolveMany(['loop_budget_tokens'], { project })
+      const b = await this.deps.settings.resolveMany(['loop_budget_tokens'], { projectId: project.id })
         .catch(() => ({ loop_budget_tokens: null }));
       const limit = b.loop_budget_tokens == null ? null : Number(b.loop_budget_tokens);
       if (!budget.seeded) {
@@ -357,7 +359,7 @@ export class LooperEngine {
       this.deps.activeTurns?.set(opened.session.id, ac);
       const coderDeps = { ...this.turnDeps(card.number, ac.signal), extraTools: loopBlockTool(cardCfg) };
       // The coder's config, on its ROW's model (the pin) — the one door.
-      const cfg = await this.deps.settings.agentConfig('coding', { project, pin: sessionPin(opened.session) });
+      const cfg = await oldAgentConfig(this.deps.agentConfig, this.deps.settings, 'coding', { projectId: project.id }, sessionPin(opened.session));
 
       const opener = unsentKickoff(card, opened.messages);
       if (opener) {
@@ -389,7 +391,7 @@ export class LooperEngine {
         // traffic included — the step rule reads terminal turns off it). ────
         // The same rule as the coding half: a supervisor conversation that has
         // said anything runs on its pin, not on whatever the settings say now.
-        const sup = await this.deps.settings.agentConfig('supervisor', { project, pin: sessionPin(supOpened.session) });
+        const sup = await oldAgentConfig(this.deps.agentConfig, this.deps.settings, 'supervisor', { projectId: project.id }, sessionPin(supOpened.session));
         const model = { ...sup.model, fetch: this.deps.modelFetch,
           onRetry: (t: string) => log.warn({ card: card.number, agent: 'supervisor' }, t) };
         // The supervisor's tools run as the SUPERVISOR's session: the server

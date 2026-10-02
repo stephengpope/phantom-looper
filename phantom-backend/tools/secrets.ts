@@ -32,7 +32,7 @@ export const SECRET_TOOLS: ToolDef[] = [
     mutates: false, agents: ['coding'],
     async execute(ctx, a) {
       const name = secretName(String(a.name));
-      const value = name ? await ctx.app.settings.readSecretValue(name, chain(ctx)) : undefined;
+      const value = name ? await ctx.app.settings.readSecret(name, chain(ctx)) : undefined;
       if (value === undefined) {
         const names = (await ctx.app.settings.listSecrets(chain(ctx))).map((s) => s.name);
         throw refusal('not_found', `no secret named "${String(a.name)}" — stored: ${names.length ? names.join(', ') : '(none)'}`);

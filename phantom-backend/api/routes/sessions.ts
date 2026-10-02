@@ -12,6 +12,7 @@ import { ok, err, type AppCtx } from '../app.js';
 import { openSession, SessionLockedError } from '../../../core/session.js';
 import { injectFetch } from '../../looper/injectFetch.js';
 import { runCodingTurn } from '../../looper/turn.js';
+import { oldAgentConfig } from '../../agentConfig.js';
 import { sessionPin } from '../../agentConfig.js';
 import type { SystemPromptLayout } from 'phantom-client-sdk/systemPrompt';
 import { SystemPromptError } from '../../systemPrompt/SystemPrompt.js';
@@ -686,7 +687,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       });
       try {
         const project = await ctx.projects.get(opened.session.projectId);
-        const cfg = await ctx.settings.agentConfig('coding', { project: project ?? undefined, pin: sessionPin(opened.session) });
+        const cfg = await oldAgentConfig(ctx.agentConfig, ctx.settings, 'coding', project ? { projectId: project.id } : {}, sessionPin(opened.session));
         const { text } = await runCodingTurn(
           { f, apiKey: ctx.apiKey, base: 'http://looper/api', modelFetch: ctx.modelFetch,
             sessionEvents: ctx.sessionEvents, client, backdoor: ctx.backdoor },
@@ -998,7 +999,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         callerGone = true;
         if (held) void releaseHold(ctx, s, client);
       });
-      const settings = await ctx.settings.resolveMany(['session_lock_ttl_ms'], { project });
+      const settings = await ctx.settings.resolveMany(['session_lock_ttl_ms'], { projectId: project.id });
       const expires = await ctx.sessions.acquireLock(s, client, Number(settings.session_lock_ttl_ms), req.body.label);
       if (!expires) return reply.code(409).send(lockedErr(s));
       held = true;
@@ -1018,7 +1019,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       }
       ctx.sessions.rememberLinesAtTurnStart(s.id, atStart.transcriptLines);
       let config;
-      try { config = await ctx.settings.agentConfig(req.body.type, { project, pin: sessionPin(s) }); }
+      try { config = await oldAgentConfig(ctx.agentConfig, ctx.settings, req.body.type, { projectId: project.id }, sessionPin(s)); }
       catch (e) { return reply.code(400).send(err('config_invalid', (e as Error).message)); }
       const tools = await toolsFor(req.body.type, { app: ctx, session: s, project });
       return ok({ expires_at: expires.toISOString(), transcript_updated_at: atStart.transcriptUpdatedAt?.toISOString() ?? null,

@@ -20,7 +20,7 @@ import { SKILLS_LIST, SECRETS_LIST, GITHUB_TOKEN, AGENT_DATABASE, AGENT_DATABASE
 import { scanSkills, mergeSkills, type SkillMeta } from '../../core/skills/skills.js';
 import { Clock } from 'phantom-backend-sdk';
 import { systemSkills } from '../systemSkills.js';
-import type { Settings } from '../settings.js';
+import type { Settings } from 'phantom-backend-sdk';
 import type { ProjectRow } from 'phantom-backend-sdk/schema';
 import { GLOBAL, projectScope } from 'phantom-backend-sdk';
 
@@ -126,7 +126,7 @@ export class SystemPrompt {
   /** Fill the agent's layout from the session. */
   static async assemble(layout: SystemPromptLayout, source: SystemPromptSource): Promise<SystemPrompt> {
     SystemPrompt.check(layout);
-    const resolved = await source.settings.resolveMany(SETTINGS_READ, { project: source.project }) as Resolved;
+    const resolved = await source.settings.resolveMany(SETTINGS_READ, { projectId: source.project.id }) as Resolved;
     const src: BlockSource = { ...source, resolved };
     const text = async (entry: SystemPromptEntry): Promise<string> =>
       typeof entry === 'string' ? SERVER_PROMPT_BLOCKS[entry as ServerPromptBlockName](src) : entry.text;

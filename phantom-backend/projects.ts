@@ -10,7 +10,7 @@ import { eq, sql } from 'drizzle-orm';
 import { Database, type Drizzle, type Transaction } from 'phantom-backend-sdk';
 import { projects, type ProjectRow } from 'phantom-backend-sdk/schema';
 import { DEFAULT_COLUMNS } from 'phantom-backend-sdk';
-import type { Settings } from './settings.js';
+import type { Settings } from 'phantom-backend-sdk';
 import { projectScope } from 'phantom-backend-sdk';
 import type { SettingsEvents } from './api/settingsEvents.js';
 import type { AgentDatabases } from 'phantom-backend-sdk';
@@ -66,7 +66,7 @@ export class Projects {
   /** The card number prefix ("PHA"): the `card_prefix` setting at this
    *  project's layer, else the repo name's first three letters. */
   async prefixOf(project: ProjectRow): Promise<string> {
-    return (await this.settings.resolve('card_prefix', { project })) ?? defaultPrefix(project.name);
+    return (await this.settings.resolve('card_prefix', { projectId: project.id })) ?? defaultPrefix(project.name);
   }
 
   /** Refuses a repo that is already a project (`owner, name` is unique). */
@@ -106,7 +106,7 @@ export class Projects {
    *  cascade; the route gates that behind its own confirm. */
   async remove(id: string, by?: string): Promise<void> {
     await this.databases?.drop(id);
-    await this.settings.dropScope(projectScope(id));
+    await this.settings.deleteScope(projectScope(id));
     await this.db.delete(projects).where(eq(projects.id, id));
     this.events?.publish(projectScope(id), [], by);
   }

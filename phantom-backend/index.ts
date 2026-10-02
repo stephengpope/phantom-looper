@@ -1,16 +1,18 @@
 // Boot: env -> db -> migrations -> project dirs -> looper -> HTTP.
 import { readEnv, APP_VERSION as VERSION } from './env.js';
-import { Database, SDK_MIGRATIONS } from 'phantom-backend-sdk';
+import { Database, SDK_MIGRATIONS, ModelCatalog, AgentTypes, AgentConfig, sdkSettings, agentTypeSettings } from 'phantom-backend-sdk';
+import { config } from './config.js';
+import { oldAgentConfig } from './agentConfig.js';
 import { makePaths } from 'phantom-backend-sdk';
 import { bootCleanup, tick } from './pool/pool.js';
 import { Sessions } from './sessions.js';
-import { Settings } from './settings.js';
+import { Settings } from 'phantom-backend-sdk';
 import { Projects } from './projects.js';
 import { AgentDatabases } from 'phantom-backend-sdk';
 import { Workspaces } from './workspaces.js';
 import { Cards } from './cards.js';
 import { BackgroundTasks } from 'phantom-backend-sdk';
-import { Presets } from './presets.js';
+import { Presets } from 'phantom-backend-sdk';
 import { Crons } from './crons.js';
 import { CronEngine } from './crons/engine.js';
 import { setTokenRecorder } from '../core/llm/createAgent.js';
@@ -56,6 +58,11 @@ const log = logger('boot');
 /** Fake base URL for in-process API calls via injectFetch — the host part is
  *  discarded, only the /api path prefix matters. */
 const INTERNAL_API = 'http://internal/api';
+/** The session image a fresh install pulls tracks THIS backend's release: a
+ *  tagged build names the image at the same tag (both are published together
+ *  by the release workflow), a dev build names :latest (scripts/setup.sh
+ *  builds it locally under that tag). */
+const SESSION_IMAGE_TAG = /^v\d+\.\d+\.\d+/.test(VERSION) ? VERSION : 'latest';
 
 async function main() {
   const env = readEnv();
@@ -73,7 +80,15 @@ async function main() {
   const events = new BoardEvents();
   const sessionEvents = new SessionEvents();
   const settingsEvents = new SettingsEvents();
-  const settings = new Settings(db, env.encryptionKey, settingsEvents);
+  const modelCatalog = new ModelCatalog();
+  void modelCatalog.refresh();
+  const agentTypes = new AgentTypes();
+  agentTypes.register(config.agentTypes);
+  const settings = new Settings(db, env.encryptionKey, modelCatalog, settingsEvents);
+  settings.register(sdkSettings({ sessionImageTag: SESSION_IMAGE_TAG }));
+  for (const type of agentTypes.names()) settings.register(agentTypeSettings(type, { fallbackTo: type === agentTypes.first() ? null : agentTypes.first() }));
+  settings.register(config.settings ?? []);
+  const agentConfig = new AgentConfig(settings, agentTypes, modelCatalog);
   const databases = new AgentDatabases(pgPool, env.databaseUrl, env.encryptionKey);
   const projects = new Projects(db, settings, settingsEvents, databases);
   const workspaces = new Workspaces(db, paths, settings, sessionEvents);
@@ -82,14 +97,14 @@ async function main() {
   // THE image puller/remover — every pull and every removal in this process
   // (update, first-use, disk sweep) goes through it so they never overlap.
   const images = new Images(docker);
-  const sessions = new Sessions(db, settings, projects, workspaces, sessionEvents, { paths, docker: docker ?? undefined });
+  const sessions = new Sessions(db, settings, agentConfig, projects, workspaces, sessionEvents, { paths, docker: docker ?? undefined });
   // A settings write reaches every session nothing has been said to yet: its
   // row takes the settings' model (Sessions.followModelSettings — THE rule).
   settingsEvents.subscribe(() => {
     sessions.followModelSettings().catch((e) => log.warn({ err: (e as Error).message }, 'newborn sessions could not follow the model settings'));
   });
   const backgroundTasks = new BackgroundTasks(db);
-  const presets = new Presets(db);
+  const presets = new Presets(db, settings);
   const crons = new Crons(db, settings);
   const logTokens = new TokenLog(db);
   // Every model call in this process records here (core languageModel).
@@ -147,7 +162,7 @@ async function main() {
         ctx.branch, ctx.baseBranch, ctx.files, ctx.arrived);
       // planMode false: resolving means writing files.
       await runCodingTurn(deps, opened, project.id, message, false,
-        await settings.agentConfig('coding', { project, pin: sessionPin(opened.session) }));
+        await oldAgentConfig(agentConfig, settings, 'coding', { projectId: project.id }, sessionPin(opened.session)));
       return true;
     } catch (e) {
       log.error({ session: session.id, err: errStr(e) }, 'conflict turn failed');
@@ -167,7 +182,7 @@ async function main() {
   // event); onRetry is what makes the retry loop's waits VISIBLE — without
   // it the call retried in silence, which was the original bug.
   const messageConfig: SyncDeps['messageConfig'] = async (report) => {
-    const { model } = await settings.agentConfig('assistant'); // a bad pair throws with the fix in the message
+    const { model } = await oldAgentConfig(agentConfig, settings, 'assistant', {}); // a bad pair throws with the fix in the message
     model.onRetry = (note: string) => { log.warn(`commit message: ${note}`); report?.(note); };
     return model;
   };
@@ -328,7 +343,7 @@ async function main() {
   const system = new System(paths, logTokens, docker ?? undefined, images, process.env.UPDATE_TRIGGER_DIR || undefined,
     () => ctx.looper?.runningCount() ?? 0);
   const ctx: AppCtx = {
-    settings, projects, workspaces, cards, sessions, backgroundTasks, presets, crons, logTokens,
+    settings, agentConfig, modelCatalog, projects, workspaces, cards, sessions, backgroundTasks, presets, crons, logTokens,
     paths, apiKey: env.apiKey, version: VERSION,
     databases,
     fs: { docker, containers, engine },
@@ -361,7 +376,7 @@ async function main() {
       const project = await projects.get(projectId);
       const session = project && await sessions.coderOf(project.id, card.number);
       if (!project || !session || session.status !== 'active') return;
-      if (await settings.resolve('auto_push_on_archive', { project }) !== true) return;
+      if (await settings.resolve('auto_push_on_archive', { projectId: project.id }) !== true) return;
       let result: Awaited<ReturnType<typeof autoPushFn>> | undefined;
       for (let i = 0; i < 30; i++) {
         try { result = await autoPushFn(session, project); break; }
@@ -396,7 +411,7 @@ async function main() {
   // server's own surface (the same tools every client runs), so the routes
   // must be answering. Event-driven: every card write reaches it over the
   // board bus; start() is ONE recovery sweep, not a poll.
-  const looper = new LooperEngine({ sessions, projects, cards, settings, logTokens, app, apiKey: env.apiKey, events: ctx.events, settingsEvents,
+  const looper = new LooperEngine({ sessions, projects, cards, settings, agentConfig, logTokens, app, apiKey: env.apiKey, events: ctx.events, settingsEvents,
     sessionEvents: ctx.sessionEvents, activeTurns: ctx.activeTurns, backdoor: ctx.backdoor });
   ctx.looper = looper;
   looper.start();
@@ -404,7 +419,7 @@ async function main() {
   // The cron scheduler — the same shape: a client of this app, built after
   // listen. One croner job per cron row fires at its time; registrations
   // follow the table's writes and the settings' (events, no polling).
-  const cronEngine = new CronEngine({ crons, projects, settings, sessions, app, apiKey: env.apiKey,
+  const cronEngine = new CronEngine({ crons, projects, settings, agentConfig, sessions, app, apiKey: env.apiKey,
     sessionEvents: ctx.sessionEvents, settingsEvents, activeTurns: ctx.activeTurns, backdoor: ctx.backdoor });
   cronEngine.start();
 
@@ -414,7 +429,7 @@ async function main() {
   // re-registers a stale webhook and pushes the command menu.
   const telegram = new TelegramEngine({
     botState: telegramBotState, sentMessages: telegramSentMessages, handledUpdates: telegramHandledUpdates,
-    settings, sessions, cards, projects, presets, system, paths, app, apiKey: env.apiKey,
+    settings, agentConfig, modelCatalog, sessions, cards, projects, presets, system, paths, app, apiKey: env.apiKey,
     events: ctx.events, settingsEvents, foreground: ctx.foreground, loopsRunning: () => looper.runningCount(), backdoor: ctx.backdoor,
     sessionEvents: ctx.sessionEvents, publicAddress: process.env.PHANTOM_BACKEND_ADDRESS,
     autoPush: autoPushFn, autoPull: autoPullFn,
@@ -425,7 +440,7 @@ async function main() {
   // Session idle digest — a periodic notification listing sessions that
   // finished. Standalone timer, no dependency on the engine's turn machinery.
   const digest = new SessionDigest({
-    sessions, cards, settings, projects,
+    sessions, cards, settings, agentConfig, projects,
     channels: [telegramChannel(settings)],
   });
   void digest.start();

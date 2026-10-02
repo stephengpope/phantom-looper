@@ -9,7 +9,7 @@
 // no duplicate validation, no second set of side effects.
 import type { FastifyInstance } from 'fastify';
 import { ok, err, type AppCtx } from '../app.js';
-import { PresetError } from '../../presets.js';
+import { PresetError } from 'phantom-backend-sdk';
 
 const TAG = { tags: ['presets'] };
 

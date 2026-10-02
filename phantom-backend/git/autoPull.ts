@@ -16,7 +16,7 @@ import { syncBranch, type SyncEvent, type SyncDeps } from './sync.js';
 import type { Sessions } from '../sessions.js';
 import type { Workspaces } from '../workspaces.js';
 import type { Cards } from '../cards.js';
-import type { Settings } from '../settings.js';
+import type { Settings } from 'phantom-backend-sdk';
 
 export type AutoPullEvent = SyncEvent;
 

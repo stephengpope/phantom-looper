@@ -72,8 +72,8 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
   // came from. One pair per switch: auto_plan gates the plan column,
   // auto_build gates in_progress.
   const board = async (project: ProjectRow) => {
-    const plan = await ctx.settings.resolveWithSource('auto_plan', { project });
-    const build = await ctx.settings.resolveWithSource('auto_build', { project });
+    const plan = await ctx.settings.resolveWithSource('auto_plan', { projectId: project.id });
+    const build = await ctx.settings.resolveWithSource('auto_build', { projectId: project.id });
     return { prefix: await ctx.projects.prefixOf(project), columns: columnsOf(project),
       project: project.displayName ?? project.name,
       auto_plan_default: Boolean(plan.value), auto_plan_source: plan.source,

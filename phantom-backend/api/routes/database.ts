@@ -20,7 +20,7 @@ export function databaseRoutes(app: FastifyInstance, ctx: AppCtx) {
     async (req, reply) => {
       const project = await ctx.projects.get(req.params.id);
       if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
-      const enabled = Boolean(await ctx.settings.resolve('agent_database', { project }));
+      const enabled = Boolean(await ctx.settings.resolve('agent_database', { projectId: project.id }));
       return ok({ enabled });
     });
 
@@ -45,7 +45,7 @@ export function databaseRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (!ctx.databases) return reply.code(503).send(err('database_unavailable', 'this server has no agent database wiring'));
       const project = await ctx.projects.get(req.params.id);
       if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
-      if (!(await ctx.settings.resolve('agent_database', { project }))) {
+      if (!(await ctx.settings.resolve('agent_database', { projectId: project.id }))) {
         return reply.code(409).send(err('database_off', 'agent_database is off for this project'));
       }
       try {

@@ -74,7 +74,7 @@ export function projectRoutes(app: FastifyInstance, ctx: AppCtx) {
       'number prefix, e.g. "PHA"). Credentials are never returned by any route.' } }, async () => {
     const rows = await ctx.projects.list();
     return ok(await Promise.all(rows.map(async (r) => ({
-      ...publicProject(r, await ctx.settings.hasAt('github_token', projectScope(r.id))),
+      ...publicProject(r, await ctx.settings.hasCredentialAt('github_token', projectScope(r.id))),
       cardPrefix: await ctx.projects.prefixOf(r),
     }))));
   });
@@ -167,7 +167,7 @@ export function projectRoutes(app: FastifyInstance, ctx: AppCtx) {
       }
       // A token handed to create= belongs to this project: `github_token` at
       // its own scope, the same key the global one uses one layer down.
-      if (ownToken) await ctx.settings.write('project', projectScope(id), { github_token: ownToken }, writerOf(req));
+      if (ownToken) await ctx.settings.writeAtScope('project', projectScope(id), { github_token: ownToken }, writerOf(req));
       return reply.code(201).send(ok(publicProject(created, !!ownToken)));
     });
 
@@ -184,12 +184,12 @@ export function projectRoutes(app: FastifyInstance, ctx: AppCtx) {
     const project = await ctx.projects.get(req.params.id);
     if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
     return ok({
-      ...publicProject(project, await ctx.settings.hasAt('github_token', projectScope(project.id))),
+      ...publicProject(project, await ctx.settings.hasCredentialAt('github_token', projectScope(project.id))),
       // Same fact, same name as GET /projects: a client that reads one
       // project (the cli, opening a session) must not have to list them all
       // to learn how this project names its cards.
       cardPrefix: await ctx.projects.prefixOf(project),
-      settings: await ctx.settings.block({ project }) });
+      settings: await ctx.settings.layersForScope({ projectId: project.id }) });
   });
 
   // The project's OWN three fields — no global to fall back to, so they
@@ -226,7 +226,7 @@ export function projectRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (!Object.keys(patch).length) return reply.code(400).send(err('empty_patch', 'nothing to update'));
       await ctx.projects.update(req.params.id, patch, writerOf(req));
       const updated = (await ctx.projects.get(req.params.id))!;
-      return ok(publicProject(updated, await ctx.settings.hasAt('github_token', projectScope(req.params.id))));
+      return ok(publicProject(updated, await ctx.settings.hasCredentialAt('github_token', projectScope(req.params.id))));
     });
 
   // Refuses while sessions exist — they are the agent's accumulated work, not

@@ -47,7 +47,7 @@ import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
 import type { Sessions } from '../sessions.js';
 import type { Workspaces } from '../workspaces.js';
 import type { Projects } from '../projects.js';
-import type { Settings } from '../settings.js';
+import type { Settings } from 'phantom-backend-sdk';
 import { repoDir, type Paths } from 'phantom-backend-sdk';
 import type { AutoPushResult } from './autoPush.js';
 import type { AutoPullResult } from './autoPull.js';
@@ -148,7 +148,7 @@ export class InstantSync {
 
   private async configOf(project: ProjectRow): Promise<Config> {
     const c = await this.deps.settings.resolveMany(
-      ['instant_sync', 'instant_sync_push_debounce_ms', 'instant_sync_pull_interval_ms'], { project });
+      ['instant_sync', 'instant_sync_push_debounce_ms', 'instant_sync_pull_interval_ms'], { projectId: project.id }) as { instant_sync: boolean; instant_sync_push_debounce_ms: number; instant_sync_pull_interval_ms: number };
     return { on: c.instant_sync, debounceMs: c.instant_sync_push_debounce_ms, pullMs: c.instant_sync_pull_interval_ms };
   }
 

@@ -30,7 +30,7 @@ import type { PgColumn } from 'drizzle-orm/pg-core';
 // column, the card reads take a number. Their rows are Workspaces' and Cards'
 // to write.
 import { sessions, sessionColumns, workspaces, cards, logTokens, type SessionRow } from 'phantom-backend-sdk/schema';
-import type { Settings } from './settings.js';
+import type { Settings, AgentConfig } from 'phantom-backend-sdk';
 import type { Projects } from './projects.js';
 import type { Workspaces } from './workspaces.js';
 import { newId } from 'phantom-backend-sdk';
@@ -188,6 +188,7 @@ export class Sessions {
   constructor(
     private readonly db: Drizzle,
     private readonly settings: Settings,
+    private readonly agentConfig: AgentConfig,
     private readonly projects: Projects,
     private readonly workspaces: Workspaces,
     /** The per-session feed; absent in tests that have no watchers. */
@@ -280,7 +281,7 @@ export class Sessions {
   Promise<{ provider: string | null; model: string | null; baseUrl: string | null }> {
     const project = await this.projects.get(projectId);
     try {
-      const m = await this.settings.agentModel(agent ?? 'coding', project ? { project } : {});
+      const m = await this.agentConfig.modelFor(agent ?? 'coding', project ? { projectId: project.id } : {});
       // A whole pin or none: a provider with no model is nothing to run on.
       return m.provider && m.model ? m : { provider: null, model: null, baseUrl: null };
     } catch { return { provider: null, model: null, baseUrl: null }; } // a half-set pair — the row stays empty

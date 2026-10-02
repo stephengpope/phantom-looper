@@ -2,8 +2,10 @@
 // server answers it. Read at the start of every turn and never kept: which
 // model a session runs on is the server's rule, applied there; the key rides
 // the same answer.
-export type Provider = 'anthropic' | 'openai' | 'openai-codex' | 'google' | 'deepseek' | 'kimi' | 'xai' | 'mistral' | 'groq' | 'openai-compatible';
-export type Reasoning = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+export const PROVIDERS = ['anthropic', 'openai', 'openai-codex', 'google', 'deepseek', 'kimi', 'xai', 'mistral', 'groq', 'openai-compatible'] as const;
+export type Provider = typeof PROVIDERS[number];
+export const REASONINGS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+export type Reasoning = typeof REASONINGS[number];
 
 export interface ModelSpec {
   provider: Provider;

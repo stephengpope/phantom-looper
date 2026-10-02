@@ -9,7 +9,7 @@ import { syncBranch, type SyncEvent, type SyncDeps, type ConflictContext } from 
 import type { Sessions } from '../sessions.js';
 import type { Workspaces } from '../workspaces.js';
 import type { Cards } from '../cards.js';
-import type { Settings } from '../settings.js';
+import type { Settings } from 'phantom-backend-sdk';
 
 export { LOCK_TTL_MS, RENEW_MS, type ConflictContext } from './sync.js';
 

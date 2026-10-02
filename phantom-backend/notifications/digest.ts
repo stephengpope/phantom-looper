@@ -14,7 +14,8 @@
 
 import { expiredHold, type Sessions } from '../sessions.js';
 import type { Cards } from '../cards.js';
-import type { Settings } from '../settings.js';
+import type { Settings, AgentConfig as SdkAgentConfig } from 'phantom-backend-sdk';
+import { oldAgentConfig } from '../agentConfig.js';
 import type { Projects } from '../projects.js';
 import { PhantomHelper } from '../../core/llm/helper.js';
 import { lastAssistantFromJsonl } from './transcriptHelper.js';
@@ -53,6 +54,7 @@ export interface DigestDeps {
   sessions: Sessions;
   cards: Cards;
   settings: Settings;
+  agentConfig: SdkAgentConfig;
   projects: Projects;
   channels: NotificationChannel[];
 }
@@ -197,7 +199,7 @@ export class SessionDigest {
 
     // ── LLM call ─────────────────────────────────────────────────────────────
 
-    const { model } = await this.deps.settings.agentConfig('assistant');
+    const { model } = await oldAgentConfig(this.deps.agentConfig, this.deps.settings, 'assistant', {});
     const text = await new SessionDigestHelper(model, null).run(payload);
     const message = titled(TITLE(rows.length), text.trim());
 

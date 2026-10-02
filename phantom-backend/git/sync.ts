@@ -41,7 +41,7 @@ import { repoDir, type Paths } from 'phantom-backend-sdk';
 import type { Sessions } from '../sessions.js';
 import type { Workspaces } from '../workspaces.js';
 import type { Cards } from '../cards.js';
-import type { Settings } from '../settings.js';
+import type { Settings } from 'phantom-backend-sdk';
 import {
   git, fetchBase, squashToMergeBase, commitStaged, rebaseOntoBase, rebaseAbort, rebaseInProgress,
   landingProblems, pushSession, pushSessionForced, pushToBase, hasWorkToLand, GIT_CLIENT_ID,

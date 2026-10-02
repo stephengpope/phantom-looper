@@ -13,7 +13,7 @@ export const appSettings: SettingDefinition[] = [
   { key: 'auto_push_on_archive', default: true, type: 'boolean', label: 'auto-push on archive', group: 'looper',
     description: "Archiving a done card auto-pushes its session's work to the base branch." },
   // ── the Telegram bot's behaviour ──────────────────────────────────────
-  { key: 'telegram_reply_mode', default: 'text', type: 'choice', choices: ['text', 'voice', 'both'], label: 'reply mode', group: 'chat',
+  { key: 'telegram_reply_mode', default: 'text', type: 'string', choices: ['text', 'voice', 'both'], label: 'reply mode', group: 'chat',
     description: 'How the bot answers: text, a spoken voice note, or both. Read at the start of each turn.' },
   { key: 'telegram_transcript_echo', default: false, type: 'boolean', label: 'echo transcripts', group: 'chat',
     description: 'Send the heard text of a voice note back before answering it.' },

@@ -4,7 +4,7 @@
 // Route schemas stay — they are Fastify's validation — but nothing serves
 // them as documentation any more (Swagger UI was cut).
 import Fastify from 'fastify';
-import { timingSafeEqualStr } from '../crypto.js';
+import { timingSafeEqualStr } from 'phantom-backend-sdk';
 
 // @fastify/swagger used to augment FastifySchema with these. The docs page is
 // cut, but summary/description/tags stay on every route — they are the API's
@@ -26,13 +26,13 @@ import type { GitEngine } from '../git/engine.js';
 import { BoardEvents } from './boardEvents.js';
 import { SessionEvents } from './sessionEvents.js';
 import type { Sessions } from '../sessions.js';
-import type { Settings } from '../settings.js';
+import type { Settings, AgentConfig as SdkAgentConfig, ModelCatalog } from 'phantom-backend-sdk';
 import type { Projects } from '../projects.js';
 import type { AgentDatabases } from 'phantom-backend-sdk';
 import type { Workspaces } from '../workspaces.js';
 import type { Cards } from '../cards.js';
 import type { BackgroundTasks } from 'phantom-backend-sdk';
-import type { Presets } from '../presets.js';
+import type { Presets } from 'phantom-backend-sdk';
 import type { Crons } from '../crons.js';
 import type { TokenLog } from 'phantom-backend-sdk';
 import { SettingsEvents } from './settingsEvents.js';
@@ -56,6 +56,8 @@ export interface AppCtx {
   // A route parses, checks, calls one method, shapes the reply; the rules
   // (and every change notice) live in the object.
   settings: Settings;
+  agentConfig: SdkAgentConfig;
+  modelCatalog: ModelCatalog;
   projects: Projects;
   workspaces: Workspaces;
   cards: Cards;

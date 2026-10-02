@@ -26,8 +26,7 @@ import { toTelegram } from './entities.js';
 import type { TelegramEngine } from './engine.js';
 import { MODE_MESSAGE, type TelegramMode } from './botState.js';
 import { PROVIDERS } from '../../core/llm/createAgent.js';
-import { hasCatalog, latestModel, modelsFor } from '../models.js';
-import { credentialForProvider } from '../settings.js';
+import { hasCatalog } from 'phantom-backend-sdk';
 import { isHeld } from '../sessions.js';
 import { GLOBAL } from 'phantom-backend-sdk';
 import { CLIENT_ID } from './assistant.js';
@@ -276,9 +275,9 @@ export async function handleCommand(
       if (arg !== undefined) {
         const p = listed(providerList, dm, arg);
         if (!p) { await reply('⚠️ Send /providers first to see the list, then /providers <number>.'); return; }
-        try { await engine.settings.write('global', GLOBAL, { coding_provider: p, coding_model: null }, CLIENT_ID); }
+        try { await engine.settings.writeAtScope('global', GLOBAL, { coding_provider: p, coding_model: null }, CLIENT_ID); }
         catch (e) { await reply(`⚠️ Couldn't switch provider: ${(e as Error).message}`); return; }
-        const model = latestModel(p);
+        const model = engine.modelCatalog.latestFor(p);
         await client.sendMarkdown(dm, titled(
           `✅ Provider: ${p}${model ? ` — model: ${model} (the catalog's newest)` : ''}`,
           [...(p === 'openai-compatible'
@@ -291,7 +290,7 @@ export async function handleCommand(
       const keyed: string[] = [];
       for (const p of PROVIDERS) {
         if (p === current) { keyed.push(p); continue; }          // always show the active one
-        const name = credentialForProvider(p);
+        const name = engine.settings.credentialKeyForProvider(p);
         // A provider that holds no key here (openai-codex) is always callable.
         if (!name || await engine.settings.credential(name)) keyed.push(p);
       }
@@ -301,7 +300,7 @@ export async function handleCommand(
       }
       providerList.set(dm, keyed);
       const rows = keyed.map((p, i) => {
-        const d = latestModel(p);
+        const d = engine.modelCatalog.latestFor(p);
         const note = d ? ` → ${d}`
           : hasCatalog(p) ? ' — catalog list unavailable right now'
             : ' — no catalog (set model + endpoint in the cli)';
@@ -317,7 +316,7 @@ export async function handleCommand(
       // convenience, never a fence — any other id can be typed in the cli.
       const { coding_provider: provider, coding_model: model } = await engine.settings.resolveMany(['coding_provider', 'coding_model']);
       if (!provider) { await reply('⚠️ No provider yet — pick one with /providers.'); return; }
-      const models = modelsFor(provider).slice(0, 10);
+      const models = engine.modelCatalog.modelsFor(String(provider)).slice(0, 10);
       if (!models.length) {
         await reply(`ℹ️ ${provider} has no catalog list — the model is set by id in the cli under /settings.`);
         return;
@@ -325,7 +324,7 @@ export async function handleCommand(
       if (arg !== undefined) {
         const id = listed(modelList, dm, arg);
         if (!id) { await reply('⚠️ Send /models first to see the list, then /models <number>.'); return; }
-        try { await engine.settings.write('global', GLOBAL, { coding_model: id }, CLIENT_ID); }
+        try { await engine.settings.writeAtScope('global', GLOBAL, { coding_model: id }, CLIENT_ID); }
         catch (e) { await reply(`⚠️ Couldn't switch model: ${(e as Error).message}`); return; }
         await reply(`✅ Model: ${id}`);
         return;
@@ -348,7 +347,7 @@ export async function handleCommand(
         const id = listed(presetList, dm, arg);
         if (!id) { await reply('⚠️ Send /presets first to see the list, then /presets <number>.'); return; }
         const p = list.find((x) => x.id === id)!;
-        try { await engine.settings.write('global', GLOBAL, p.values, CLIENT_ID); }
+        try { await engine.settings.writeAtScope('global', GLOBAL, p.values, CLIENT_ID); }
         catch (e) { await reply(`⚠️ Couldn't apply "${p.name}": ${(e as Error).message}`); return; }
         const { coding_provider: provider, coding_model: model } = await engine.settings.resolveMany(['coding_provider', 'coding_model']);
         await client.sendMarkdown(dm, titled(
@@ -444,7 +443,7 @@ export async function handleCommand(
 
     case 'tokens': {
       let text: string;
-      try { text = (await engine.system.tokenUsage(await engine.settings.clock())).text; }
+      try { text = (await engine.system.tokenUsage(await engine.settings.clockFor())).text; }
       catch (e) { await reply(`⚠️ Couldn't read token usage: ${(e as Error).message}`); return; }
       // A code block: the report is a fixed-column table, monospace only.
       await client.sendMarkdown(dm, titled('📊 Token usage', text ? '```\n' + text + '\n```' : '(no usage data)'));

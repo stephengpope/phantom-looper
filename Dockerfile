@@ -15,7 +15,7 @@ COPY phantom-backend/ phantom-backend/
 COPY scripts/models-snapshot.ts scripts/
 # A fresh model catalog for THIS release, fetched at build (models.ts reads it
 # beside itself in dist/). Dies if models.dev is down: never ship a stale list.
-RUN npm run build && npx tsx scripts/models-snapshot.ts dist/phantom-backend/models-snapshot.json && npm prune --omit=dev
+RUN npm run build && npx tsx scripts/models-snapshot.ts packages/phantom-backend-sdk/dist/agents/models-snapshot.json && npm prune --omit=dev
 
 FROM node:22-bookworm-slim
 ARG VERSION=dev

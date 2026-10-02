@@ -28,7 +28,7 @@ import { Database, type Drizzle } from 'phantom-backend-sdk';
 import { crons, type CronRow, type ProjectRow } from 'phantom-backend-sdk/schema';
 import type { Clock } from 'phantom-backend-sdk';
 import { keyedProviders, REASONINGS } from '../core/llm/createAgent.js';
-import type { Settings } from './settings.js';
+import type { Settings } from 'phantom-backend-sdk';
 
 export type { CronRow };
 
@@ -191,7 +191,7 @@ export class Crons {
       throw new CronError('invalid_args', 'provider and model go together — give both to run this cron on another ' +
         'model, or neither (null) to run on the project\'s. A model id means nothing without its provider.');
     }
-    const keyed = keyedProviders(await this.settings.block({ project }));
+    const keyed = keyedProviders(await this.settings.layersForScope({ projectId: project.id }));
     if (!keyed.includes(provider as never)) {
       throw new CronError('invalid_args', `"${provider}" is not a provider this project can call — one with a key on /keys: ` +
         `${keyed.join(', ')}. Save a key there first.`);

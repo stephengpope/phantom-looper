@@ -12,8 +12,8 @@
 // the Postgres connection, both over its GraphQL API. Idempotent.
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import proxy from '@fastify/http-proxy';
-import { timingSafeEqualStr } from '../../crypto.js';
-import type { Settings } from '../../settings.js';
+import { timingSafeEqualStr } from 'phantom-backend-sdk';
+import type { Settings } from 'phantom-backend-sdk';
 import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('db-ui');

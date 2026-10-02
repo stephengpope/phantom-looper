@@ -1,59 +1,459 @@
-// Settings — every behavioural knob: defaults live in code, the table holds
-// only overrides, resolved default → global → project. Credentials are
-// settings stored encrypted; secrets are user-named encrypted values. The
-// settings REGISTRY is the door: the SDK registers its own definitions at
-// boot and user space's come in through config.settings; from then on
-// nothing tells them apart. Stub.
+// Settings — every behavioural knob, resolved default → global row →
+// project row. Defaults live in the REGISTRY, in code; the table holds only
+// overrides. Read at the point of use, never cached at boot: a change must
+// take effect without a restart or the API lies.
+//
+// ONE store for settings and secrets — a row is (scope, namespace, key).
+// `namespace` separates the declared settings world ('general' — every
+// registered key; a credential's value sits in value_enc, everything else's
+// in value) from user-named secrets ('secret' — free names, token in
+// value_enc, description in plain value). This is the only file that
+// touches the table; every reader resolves through it, every writer writes
+// through it, and a write announces its scope on the settings feed.
+import { and, eq, inArray } from 'drizzle-orm';
+import type { Drizzle } from './Database.js';
+import { settings } from './schema.js';
+import { GLOBAL, projectScope } from '../lib/scopes.js';
+import { encrypt, decrypt } from '../lib/crypto.js';
+import { Clock } from '../lib/clock.js';
+import { logger } from '../lib/log.js';
 import type { SettingDefinition } from '../doors.js';
+import type { ModelCatalog } from '../agents/ModelCatalog.js';
+import type { SettingsEvents } from '../agents/SettingsEvents.js';
 
-/** Where a value may come from. */
+const log = logger('settings');
+
+/** Where a value came from — the layer's own name. */
 export type SettingSource = 'default' | 'global' | 'project';
-/** One key's value at every layer, and which layer won. */
-export interface SettingLayers { default: unknown; global?: unknown; project?: unknown; value: unknown; source: SettingSource }
 /** What resolution is relative to: nothing (global only) or a project. */
 export interface SettingScope { projectId?: string }
 
+/** One setting with its LAYERS exposed, not just the winner — what a client
+ *  needs to render an editor (VS Code's inspect(), git's --show-origin). */
+export interface SettingLayers {
+  default: unknown;
+  global: unknown;
+  project: unknown;
+  value: unknown;
+  source: SettingSource;
+}
+
+/** The layers plus what a screen needs: the description, the rendering
+ *  meta, whether a project may override, whether it is a credential. One
+ *  shape for settings and credentials, so a client files both with the
+ *  same code. A credential's values are always null — a token is never
+ *  shown back; its `source` says where one is stored. */
+export type SettingEntry = SettingLayers & {
+  description: string;
+  meta: SettingMeta;
+  overridable: boolean;
+  secret?: boolean;
+};
+export interface SettingMeta {
+  type: SettingDefinition['type'];
+  label: string;
+  group: string;
+  subgroup?: string;
+  nullable?: boolean;
+  choices?: readonly string[];
+  choiceLabels?: Readonly<Record<string, string>>;
+  suggestions?: readonly string[];
+  unit?: SettingDefinition['unit'];
+  min?: number;
+  max?: number;
+  /** A credential's: which LLM provider its key authenticates. */
+  provider?: string;
+}
+
+/** A write that cannot be stored, with the API's error code already chosen. */
+export class SettingsWriteError extends Error {
+  constructor(readonly code: string, message: string) { super(message); this.name = 'SettingsWriteError'; }
+}
+
+/** A secret as listed — name and description, NEVER the value. */
+export interface SecretMeta { name: string; description: string; scope: string }
+
+const GENERAL = 'general';
+const SECRET_NS = 'secret';
+/** scope -> key -> stored value (decrypted where it was encrypted). */
+type ByScope = Map<string, Map<string, unknown>>;
+interface RawLayers { global?: unknown; project?: unknown }
+
+const secretMeta = (row: { key: string; scope: string; value: unknown }): SecretMeta => ({
+  name: row.key, scope: row.scope,
+  description: String((row.value as { description?: unknown } | null)?.description ?? ''),
+});
+const sortSecrets = (secrets: SecretMeta[]) => secrets.sort((a, b) =>
+  (a.scope === b.scope ? a.name.localeCompare(b.name) : a.scope === GLOBAL ? -1 : a.scope.localeCompare(b.scope)));
+
 export class Settings {
+  readonly #definitions = new Map<string, SettingDefinition>();
+
+  constructor(
+    private readonly db: Drizzle,
+    private readonly encryptionKey: Buffer,
+    /** The catalog the "newest model" default reads. */
+    private readonly modelCatalog: ModelCatalog,
+    /** The settings feed; absent in tests with no listeners. */
+    private readonly events?: SettingsEvents,
+  ) {}
+
   // ── the registry ──────────────────────────────────────────────────────
-  /** Add definitions. A key already registered is an error (no shadowing). */
-  register(definitions: SettingDefinition[]): void { throw stub(); }
-  /** The definition behind a key, or undefined. */
-  definitionOf(key: string): SettingDefinition | undefined { throw stub(); }
-  /** Is `key` registered? */
-  isRegistered(key: string): boolean { throw stub(); }
-  /** Why `value` is not acceptable for `key`, or null when it is. */
-  validate(key: string, value: unknown): string | null { throw stub(); }
+
+  /** Add definitions. A key already registered is an error (no shadowing);
+   *  a nullable setting with a non-null default is an error (null always
+   *  means "clear", never a stored value). Registration order is screen
+   *  order. */
+  register(definitions: readonly SettingDefinition[]): void {
+    for (const definition of definitions) {
+      if (this.#definitions.has(definition.key)) throw new Error(`setting '${definition.key}' is registered twice`);
+      if (definition.secret && (definition.type !== 'string' || definition.default !== null)) {
+        throw new Error(`setting '${definition.key}': a credential is a string with a null default`);
+      }
+      this.#definitions.set(definition.key, definition);
+    }
+  }
+
+  definitionOf(key: string): SettingDefinition | undefined { return this.#definitions.get(key); }
+  isRegistered(key: string): boolean { return this.#definitions.has(key); }
+  /** Every registered key, in registration order. */
+  keys(): string[] { return [...this.#definitions.keys()]; }
+  isCredential(key: string): boolean { return this.#definitions.get(key)?.secret === true; }
+  /** The credential holding one provider's API key, or undefined for a
+   *  provider that holds no key here (openai-codex reads its own login). */
+  credentialKeyForProvider(provider: string): string | undefined {
+    for (const definition of this.#definitions.values()) if (definition.secret && definition.provider === provider) return definition.key;
+    return undefined;
+  }
+  isProjectOverridable(key: string): boolean {
+    const definition = this.#definitions.get(key);
+    return !!definition && (definition.projectOverridable === true || definition.projectOnly === true);
+  }
+  isGlobalSettable(key: string): boolean { return this.#definitions.get(key)?.projectOnly !== true; }
+
+  /** Validate one value against its definition. null when fine, else why.
+   *  The table is not typed per key, so this is the only thing between a
+   *  typo and a setting that explodes at its point of use hours later. */
+  validate(key: string, value: unknown): string | null {
+    const definition = this.#definitions.get(key);
+    if (!definition) return `unknown setting: ${key}`;
+    if (value === null) return `${key}: null clears the key (it is never a stored value)`;
+    if (definition.choices) {
+      return typeof value === 'string' && definition.choices.includes(value)
+        ? null : `${key} must be one of: ${definition.choices.join(', ')}`;
+    }
+    if (definition.type === 'number') {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return `${key} must be a number`;
+      if (definition.min !== undefined && value < definition.min) return `${key} must be >= ${definition.min}`;
+      if (definition.max !== undefined && value > definition.max) return `${key} must be <= ${definition.max}`;
+      return null;
+    }
+    if (definition.type === 'boolean') return typeof value === 'boolean' ? null : `${key} must be true or false`;
+    if (typeof value !== 'string') return `${key} must be a string`;
+    if (definition.pattern && !definition.pattern.test(value)) return `${key} is not a valid ${definition.label}: "${value}"`;
+    if (definition.check) return definition.check(value);
+    return null;
+  }
+
+  /** The rendering meta a client reads off the wire. */
+  metaOf(key: string): SettingMeta {
+    const d = this.requireDefinition(key);
+    return {
+      type: d.type, label: d.label, group: d.group,
+      ...(d.subgroup ? { subgroup: d.subgroup } : {}),
+      ...(d.default === null ? { nullable: true } : {}),
+      ...(d.choices ? { choices: d.choices } : {}),
+      ...(d.choiceLabels ? { choiceLabels: d.choiceLabels } : {}),
+      ...(d.suggestions ? { suggestions: d.suggestions } : {}),
+      ...(d.unit ? { unit: d.unit } : {}),
+      ...(d.min !== undefined ? { min: d.min } : {}),
+      ...(d.max !== undefined ? { max: d.max } : {}),
+      ...(d.provider ? { provider: d.provider } : {}),
+    };
+  }
+
+  private requireDefinition(key: string): SettingDefinition {
+    const definition = this.#definitions.get(key);
+    if (!definition) throw new Error(`unknown setting: ${key}`);
+    return definition;
+  }
+
+  // ── the table, privately ──────────────────────────────────────────────
+
+  /** Every row at the scopes asked for, as scope -> key -> value. ONE
+   *  query: resolving 30 settings must not be 30 round trips.
+   *  `credentials` false means PLAIN VALUES ONLY — encrypted rows are
+   *  skipped, not decrypted. `onlyKey` narrows to one key: a credential
+   *  read decrypts that one and no other. */
+  private async readStore(scopes: string[], credentials: boolean, onlyKey?: string): Promise<ByScope> {
+    const out: ByScope = new Map();
+    for (const scope of scopes) out.set(scope, new Map());
+    const rows = await this.db.select().from(settings).where(and(
+      inArray(settings.scope, scopes), eq(settings.namespace, GENERAL),
+      ...(onlyKey ? [eq(settings.key, onlyKey)] : [])));
+    for (const row of rows) {
+      // A row that will not decrypt is KEPT and reported, never treated as
+      // unset — unset is what a caller deletes, and one bad row must not
+      // lose the rest.
+      let value: unknown;
+      if (row.valueEnc) {
+        if (!credentials) continue;
+        try { value = decrypt(this.encryptionKey, Buffer.from(row.valueEnc)); }
+        catch { log.warn({ scope: row.scope, key: row.key }, 'stored credential could not be decrypted — kept, not deleted'); continue; }
+      } else value = row.value;
+      out.get(row.scope)?.set(row.key, value);
+    }
+    return out;
+  }
+
+  private async writeRow(scopeName: string, key: string, value: unknown): Promise<void> {
+    const row = this.isCredential(key)
+      ? { value: null, valueEnc: encrypt(this.encryptionKey, value as string) }
+      : { value: value as never, valueEnc: null };
+    await this.db.insert(settings)
+      .values({ scope: scopeName, namespace: GENERAL, key, ...row })
+      .onConflictDoUpdate({ target: [settings.scope, settings.namespace, settings.key], set: { ...row, updatedAt: new Date() } });
+  }
+
+  private async deleteRow(scopeName: string, key: string): Promise<void> {
+    await this.db.delete(settings).where(and(eq(settings.scope, scopeName), eq(settings.namespace, GENERAL), eq(settings.key, key)));
+  }
+
+  // ── resolution ────────────────────────────────────────────────────────
+
+  /** The scopes to read for a context, in order. Every read goes through here. */
+  private scopesFor(scope: SettingScope): string[] {
+    return scope.projectId ? [GLOBAL, projectScope(scope.projectId)] : [GLOBAL];
+  }
+
+  private rawLayers(byScope: ByScope, scope: SettingScope, key: string): RawLayers {
+    const at = (scopeName: string) => byScope.get(scopeName)?.get(key);
+    return { global: at(GLOBAL), project: scope.projectId ? at(projectScope(scope.projectId)) : undefined };
+  }
+
+  /** THE precedence rule, written once: default → global row → project
+   *  row. Row PRESENCE decides at every level — null is never stored, so
+   *  "there is a row" and "there is an override" are the same statement. */
+  private computeLayers(key: string, raw: RawLayers): SettingLayers {
+    const definition = this.requireDefinition(key);
+    let value: unknown = definition.default;
+    let source: SettingSource = 'default';
+    if (raw.global !== undefined) { value = raw.global; source = 'global'; }
+    if (raw.project !== undefined) { value = raw.project; source = 'project'; }
+    return { default: definition.default, global: raw.global ?? null, project: raw.project ?? null, value, source };
+  }
+
+  /** The layers with the provider rules applied (doors.ts:
+   *  `boundToProvider`, `defaultsToLatestModel`). */
+  private layersOf(key: string, byScope: ByScope, scope: SettingScope): SettingLayers {
+    const definition = this.requireDefinition(key);
+    const layers = this.computeLayers(key, this.rawLayers(byScope, scope, key));
+    if (!definition.boundToProvider) return layers;
+    const providerRaw = this.rawLayers(byScope, scope, definition.boundToProvider);
+    const globalProvider = this.computeLayers(definition.boundToProvider, { global: providerRaw.global }).value;
+    const provider = this.computeLayers(definition.boundToProvider, providerRaw).value;
+    const own = { ...layers };
+    if (providerRaw.project !== undefined && provider !== globalProvider && layers.source === 'global') {
+      own.value = definition.default; own.source = 'default';
+    }
+    if (!definition.defaultsToLatestModel || own.value != null) return own;
+    const latest = this.modelCatalog.latestFor(typeof provider === 'string' ? provider : null);
+    return { ...own, default: latest, value: latest };
+  }
 
   // ── reading ───────────────────────────────────────────────────────────
-  /** One key's winning value for the scope. */
-  async resolve<T = unknown>(key: string, scope?: SettingScope): Promise<T> { throw stub(); }
-  /** Several keys' winning values, one query. */
-  async resolveMany(keys: readonly string[], scope?: SettingScope): Promise<Record<string, unknown>> { throw stub(); }
-  /** One key's value and which layer it came from. */
-  async resolveWithSource(key: string, scope?: SettingScope): Promise<{ value: unknown; source: SettingSource }> { throw stub(); }
-  /** Every key with all its layers — what a settings editor renders. */
-  async layersForScope(scope?: SettingScope): Promise<Record<string, SettingLayers>> { throw stub(); }
+
+  async resolveWithSource(key: string, scope: SettingScope = {}): Promise<{ value: unknown; source: SettingSource }> {
+    const byScope = await this.readStore(this.scopesFor(scope), false);
+    const { value, source } = this.layersOf(key, byScope, scope);
+    return { value, source };
+  }
+
+  async resolve<T = unknown>(key: string, scope: SettingScope = {}): Promise<T> {
+    return (await this.resolveWithSource(key, scope)).value as T;
+  }
+
+  async resolveMany<K extends string>(keys: readonly K[], scope: SettingScope = {}): Promise<Record<K, unknown>> {
+    const byScope = await this.readStore(this.scopesFor(scope), false);
+    const out = {} as Record<K, unknown>;
+    for (const key of keys) out[key] = this.layersOf(key, byScope, scope).value;
+    return out;
+  }
+
+  /** Every registered setting with its layers, plus every credential with
+   *  its SOURCE only — what a settings editor renders from one call. */
+  async layersForScope(scope: SettingScope = {}): Promise<Record<string, SettingEntry>> {
+    const byScope = await this.readStore(this.scopesFor(scope), false);
+    const out: Record<string, SettingEntry> = {};
+    for (const [key, definition] of this.#definitions) {
+      if (definition.secret) {
+        const here = scope.projectId && this.isProjectOverridable(key) ? await this.hasCredentialAt(key, projectScope(scope.projectId)) : false;
+        const shared = await this.hasCredentialAt(key, GLOBAL);
+        out[key] = { default: null, global: null, project: null, value: null,
+          source: here ? 'project' : shared ? 'global' : 'default',
+          description: definition.description, meta: this.metaOf(key), overridable: this.isProjectOverridable(key), secret: true };
+        continue;
+      }
+      out[key] = { ...this.layersOf(key, byScope, scope), description: definition.description, meta: this.metaOf(key),
+        overridable: this.isProjectOverridable(key) };
+    }
+    return out;
+  }
+
+  /** A Clock in the `timezone` setting — the project's own zone when one
+   *  is given, else the global one. THE door for anything that shows or
+   *  reads a date. */
+  async clockFor(scope: SettingScope = {}): Promise<Clock> {
+    return new Clock(await this.resolve<string>('timezone', scope));
+  }
+
+  // ── credentials ───────────────────────────────────────────────────────
+
+  /** A credential, most specific layer first — the ONE path that decrypts
+   *  one. undefined = unset at every layer. */
+  async credential(key: string, scope: SettingScope = {}): Promise<string | undefined> {
+    if (!this.isCredential(key)) throw new Error(`${key} is not a credential`);
+    const byScope = await this.readStore(this.scopesFor(scope), true, key);
+    const raw = this.rawLayers(byScope, scope, key);
+    const value = raw.project ?? raw.global;
+    return typeof value === 'string' && value.length ? value : undefined;
+  }
+
+  /** Every credential's stored value at both layers, decrypted — the
+   *  settings editor's view (flagged secret there). */
+  async credentialLayers(scope: SettingScope = {}): Promise<Record<string, { global: string | null; project: string | null }>> {
+    const byScope = await this.readStore(this.scopesFor(scope), true);
+    const out: Record<string, { global: string | null; project: string | null }> = {};
+    for (const [key, definition] of this.#definitions) {
+      if (!definition.secret) continue;
+      const raw = this.rawLayers(byScope, scope, key);
+      out[key] = { global: typeof raw.global === 'string' ? raw.global : null, project: typeof raw.project === 'string' ? raw.project : null };
+    }
+    return out;
+  }
+
+  /** Is a credential set at exactly this scope (not inherited)? */
+  async hasCredentialAt(key: string, scopeName: string): Promise<boolean> {
+    const rows = await this.db.select({ key: settings.key }).from(settings).where(and(
+      eq(settings.scope, scopeName), eq(settings.namespace, GENERAL), eq(settings.key, key)));
+    return rows.length > 0;
+  }
 
   // ── writing ───────────────────────────────────────────────────────────
-  /** Set or clear (null) keys at one layer. Validated; a project-only or
-   *  global-only key at the wrong layer is refused. Publishes to SettingsEvents. */
-  async writeAtScope(layer: 'global' | 'project', scopeName: string, patch: Record<string, unknown>, by?: string): Promise<void> { throw stub(); }
-  /** Delete every row of a scope — a project being removed. */
-  async deleteScope(scopeName: string): Promise<void> { throw stub(); }
 
-  // ── credentials (API keys, tokens — registered with `secret: true`) ───
-  /** The decrypted value, project layer first, or undefined when unset. */
-  async credential(key: string, scope?: SettingScope): Promise<string | undefined> { throw stub(); }
-  /** Is a credential set at exactly this scope? (never the value) */
-  async hasCredentialAt(key: string, scopeName: string): Promise<boolean> { throw stub(); }
+  /** THE settings writer. Every route that changes a setting — global or
+   *  project — goes through this one validation + store path, so a second
+   *  door cannot accept a value the first refused. null clears; it is
+   *  never stored. Announces the scope when anything was written. Returns
+   *  the keys written. `by` is the writer's client id, so its own window
+   *  ignores the echo. */
+  async writeAtScope(layer: 'global' | 'project', scopeName: string, patch: Record<string, unknown>, by?: string): Promise<string[]> {
+    const values = { ...patch };
+    const unknown = Object.keys(values).filter((key) => !this.isRegistered(key));
+    if (unknown.length) throw new SettingsWriteError('unknown_setting', `unknown settings: ${unknown.join(', ')}`);
+    const invalid = Object.entries(values)
+      .filter(([key, value]) => value !== null && !this.isCredential(key))
+      .map(([key, value]) => this.validate(key, value))
+      .filter((problem): problem is string => problem !== null);
+    if (invalid.length) throw new SettingsWriteError('invalid_setting', invalid.join('; '));
+    for (const [key, value] of Object.entries(values)) {
+      if (this.isCredential(key) && value !== null && typeof value !== 'string') {
+        throw new SettingsWriteError('invalid_args', `${key} must be a string to be stored encrypted`);
+      }
+      if (layer === 'global') {
+        if (!this.isGlobalSettable(key)) throw new SettingsWriteError('not_overridable', `${key} is a fact about one project — set it there`);
+        continue;
+      }
+      if (!this.isProjectOverridable(key)) throw new SettingsWriteError('not_overridable', `${key} cannot be set per project`);
+    }
+    if (layer === 'project') await this.providerFirst(scopeName, values);
+    const entries = Object.entries(values);
+    for (const [key, value] of entries) {
+      if (value === null) await this.deleteRow(scopeName, key);
+      else await this.writeRow(scopeName, key, value);
+    }
+    if (entries.length) this.events?.publish(scopeName, entries.map(([key]) => key), by);
+    return entries.map(([key]) => key);
+  }
 
-  // ── secrets (user-named encrypted values the agent reads by name) ─────
-  async listSecrets(scopeNames?: string[]): Promise<Array<{ scope: string; name: string; description: string }>> { throw stub(); }
-  async readSecret(name: string, scopeNames?: string[]): Promise<string | undefined> { throw stub(); }
-  async writeSecret(scopeName: string, name: string, description: string, value?: string): Promise<void> { throw stub(); }
-  async deleteSecret(scopeName: string, name: string): Promise<void> { throw stub(); }
+  /** The PROVIDER-FIRST rule on one project patch: a setting bound to a
+   *  provider needs the project's own provider row — already stored, or in
+   *  this patch — and clearing the provider clears what is bound to it,
+   *  added to the patch so they go out on the same write. */
+  private async providerFirst(scopeName: string, values: Record<string, unknown>): Promise<void> {
+    const sets = (key: string) => values[key] !== undefined && values[key] !== null;
+    const bound = Object.keys(values).filter((key) => sets(key) && this.#definitions.get(key)?.boundToProvider);
+    for (const key of bound) {
+      const providerKey = this.#definitions.get(key)!.boundToProvider!;
+      if (sets(providerKey)) continue;
+      const stored = await this.readStore([scopeName], false, providerKey);
+      if (stored.get(scopeName)?.get(providerKey) === undefined) {
+        throw new SettingsWriteError('provider_first', `set this project's ${this.requireDefinition(providerKey).label} before its ${this.requireDefinition(key).label}`);
+      }
+    }
+    for (const [providerKey, value] of Object.entries(values)) {
+      if (value !== null) continue;
+      for (const definition of this.#definitions.values()) if (definition.boundToProvider === providerKey) values[definition.key] = null;
+    }
+  }
 
-  /** A Clock in the scope's timezone setting. */
-  async clockFor(scope?: SettingScope): Promise<unknown /* Clock */> { throw stub(); }
+  /** A whole scope goes — a project that no longer exists. Both namespaces: its overrides and its secrets. */
+  async deleteScope(scopeName: string): Promise<void> {
+    await this.db.delete(settings).where(eq(settings.scope, scopeName));
+  }
+
+  // ── secrets — the `secret` namespace ──────────────────────────────────
+  // One row per secret: token encrypted in value_enc, description in plain
+  // value. Listing reads the plain column only and never decrypts.
+
+  /** Every secret at the scopes asked for — names and descriptions, NEVER values. Global-first, then by name. */
+  async listSecrets(scopeNames: string[] = [GLOBAL]): Promise<SecretMeta[]> {
+    const rows = await this.db.select().from(settings).where(and(inArray(settings.scope, scopeNames), eq(settings.namespace, SECRET_NS)));
+    return sortSecrets(rows.map(secretMeta));
+  }
+
+  /** EVERY secret, every layer — a list that offers every project as a save target. */
+  async listAllSecrets(): Promise<SecretMeta[]> {
+    const rows = await this.db.select().from(settings).where(eq(settings.namespace, SECRET_NS));
+    return sortSecrets(rows.map(secretMeta));
+  }
+
+  /** One secret's value, most-specific-first over the scopes given (pass
+   *  [GLOBAL, projectScope(id)] — project wins). undefined = no such
+   *  secret, or it would not decrypt. */
+  async readSecret(name: string, scopeNames: string[] = [GLOBAL]): Promise<string | undefined> {
+    const rows = await this.db.select().from(settings).where(and(
+      inArray(settings.scope, scopeNames), eq(settings.namespace, SECRET_NS), eq(settings.key, name)));
+    const byScope = new Map(rows.map((row) => [row.scope, row]));
+    for (const scopeName of [...scopeNames].reverse()) {
+      const row = byScope.get(scopeName);
+      if (!row) continue;
+      try { return decrypt(this.encryptionKey, Buffer.from(row.valueEnc as Buffer)); }
+      catch { log.warn({ scope: scopeName, name }, 'stored secret could not be decrypted — kept, not deleted'); return undefined; }
+    }
+    return undefined;
+  }
+
+  /** Create or overwrite one secret at ONE scope. No `value` = keep the
+   *  stored one and change only the description. False when there was no
+   *  value to keep. */
+  async writeSecret(scopeName: string, name: string, description: string, value?: string): Promise<boolean> {
+    const where = and(eq(settings.scope, scopeName), eq(settings.namespace, SECRET_NS), eq(settings.key, name));
+    if (value === undefined) {
+      const kept = await this.db.update(settings).set({ value: { description } as never, updatedAt: new Date() }).where(where).returning({ key: settings.key });
+      return kept.length > 0;
+    }
+    const row = { value: { description } as never, valueEnc: encrypt(this.encryptionKey, value) };
+    await this.db.insert(settings)
+      .values({ scope: scopeName, namespace: SECRET_NS, key: name, ...row })
+      .onConflictDoUpdate({ target: [settings.scope, settings.namespace, settings.key], set: { ...row, updatedAt: new Date() } });
+    return true;
+  }
+
+  /** Delete one secret at ONE scope. Whether a row was there. */
+  async deleteSecret(scopeName: string, name: string): Promise<boolean> {
+    const gone = await this.db.delete(settings).where(and(
+      eq(settings.scope, scopeName), eq(settings.namespace, SECRET_NS), eq(settings.key, name))).returning({ key: settings.key });
+    return gone.length > 0;
+  }
 }
-const stub = () => new Error('stub');

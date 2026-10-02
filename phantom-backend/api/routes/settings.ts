@@ -16,12 +16,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { FastifyRequest } from 'fastify';
 import type { ProjectRow } from 'phantom-backend-sdk/schema';
-import {
-  CREDENTIALS, CREDENTIAL_NAMES, type CredentialMeta, credentialMeta,
-  isProjectOverridable, isCredentialProjectScoped, isGlobalSettable,
-  SettingsWriteError, type SettingKey,
-  DEFAULTS, DESCRIPTIONS, META,
-} from '../../settings.js';
+import { SettingsWriteError } from 'phantom-backend-sdk';
 import { GLOBAL, projectScope } from 'phantom-backend-sdk';
 import { sessionPin, type AgentName } from '../../agentConfig.js';
 import { AGENT_NAMES } from '../../../core/llm/agentConfig.js';
@@ -57,27 +52,20 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
     async (req, reply) => {
       const sc = await scopeOf(req.query);
       if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
-      const resolveCtx = { project: sc.project };
-      const layers = await ctx.settings.layers(resolveCtx);
-      const creds = await ctx.settings.credentialLayers(resolveCtx);
+      const scope = sc.project ? { projectId: sc.project.id } : {};
+      const entries = await ctx.settings.layersForScope(scope);
+      const credentials = await ctx.settings.credentialLayers(scope);
       const out: Record<string, unknown> = {};
-      for (const key of Object.keys(DEFAULTS) as SettingKey[]) {
+      for (const [key, entry] of Object.entries(entries)) {
         // A project-only key has no global meaning — the global list omits it.
-        if (sc.kind === 'global' && !isGlobalSettable(key)) continue;
-        out[key] = { ...layers[key], secret: false, description: DESCRIPTIONS[key], meta: META[key],
-          overridable: isProjectOverridable(key) };
-      }
-      // Credentials are keys of the same store — same table, same chain.
-      for (const name of CREDENTIAL_NAMES) {
-        const globalValue = creds[name].global;
-        const projectValue = sc.kind !== 'global' ? creds[name].project : null;
-        out[name] = {
-          default: null, global: globalValue, project: projectValue,
-          value: projectValue ?? globalValue, source: projectValue != null ? 'project' : globalValue != null ? 'global' : 'default',
-          secret: true, description: (CREDENTIALS[name] as CredentialMeta).description,
-          meta: credentialMeta(name),
-          overridable: isCredentialProjectScoped(name),
-        };
+        if (sc.kind === 'global' && !ctx.settings.isGlobalSettable(key)) continue;
+        if (!entry.secret) { out[key] = { ...entry, secret: false }; continue; }
+        // Credentials are keys of the same store — same table, same chain —
+        // and this route answers them decrypted.
+        const globalValue = credentials[key]?.global ?? null;
+        const projectValue = sc.kind !== 'global' ? credentials[key]?.project ?? null : null;
+        out[key] = { ...entry, global: globalValue, project: projectValue, value: projectValue ?? globalValue,
+          source: projectValue != null ? 'project' : globalValue != null ? 'global' : 'default' };
       }
       return ok(out);
     });
@@ -95,7 +83,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
       if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
       let updated: string[];
       try {
-        updated = await ctx.settings.write(sc.kind, sc.write, req.body ?? {}, writerOf(req));
+        updated = await ctx.settings.writeAtScope(sc.kind, sc.write, req.body ?? {}, writerOf(req));
       } catch (e) {
         if (e instanceof SettingsWriteError) return reply.code(400).send(err(e.code, e.message));
         throw e;
@@ -115,7 +103,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppCtx) {
       const sc = await scopeOf(req.query);
       if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
       try {
-        await ctx.settings.write(sc.kind, sc.write, { [req.params.key]: null }, writerOf(req));
+        await ctx.settings.writeAtScope(sc.kind, sc.write, { [req.params.key]: null }, writerOf(req));
       } catch (e) {
         if (e instanceof SettingsWriteError) return reply.code(400).send(err(e.code, e.message));
         throw e;

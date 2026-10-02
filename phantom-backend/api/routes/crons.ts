@@ -37,7 +37,7 @@ for (const f of CRON_FIELDS) {
 
 export function cronRoutes(app: FastifyInstance, ctx: AppCtx) {
   const projectOf = (id: string) => ctx.projects.get(id);
-  const clockOf = (project: ProjectRow) => ctx.settings.clock({ project });
+  const clockOf = (project: ProjectRow) => ctx.settings.clockFor({ projectId: project.id });
   /** Every answer carries the zone and the time there — what a caller
    *  writing a datetime needs and never otherwise has. */
   const stamp = (clock: Clock) => ({ timezone: clock.timezone, now: clock.now().toISOString() });

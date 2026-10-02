@@ -14,7 +14,7 @@ import path from 'node:path';
 import type { ProjectRow } from 'phantom-backend-sdk/schema';
 import type { Projects } from '../projects.js';
 
-import type { Settings } from '../settings.js';
+import type { Settings } from 'phantom-backend-sdk';
 import { remoteUrl } from '../git/remote.js';
 import { cloneFresh, refreshPristine, type GitAuth } from '../git/git.js';
 import { newId, idTime } from 'phantom-backend-sdk';
@@ -39,7 +39,7 @@ const rm = (p: string) => fs.rm(p, { recursive: true, force: true }).catch(() =>
 // — is no longer written out here. It is `github_token` resolved through the
 // same layers every other setting uses.
 export async function resolveAuth(settings: Settings, r: ProjectRow): Promise<GitAuth> {
-  return { url: remoteUrl(r.owner, r.name), pat: await settings.credential('github_token', { project: r }) };
+  return { url: remoteUrl(r.owner, r.name), pat: await settings.credential('github_token', { projectId: r.id }) };
 }
 
 /** Claim a ready slot for a project into `dest`. The claim is a RENAME and nothing
@@ -105,7 +105,7 @@ export async function tick(projects: Projects, settings: Settings, p: Paths): Pr
     await Promise.all([...wanted.entries()].map(async ([prefix, project]) => {
       const cfg = await settings.resolveMany(
         ['spare_clones', 'spare_clone_refresh_ms', 'spare_clone_max_age_ms', 'initial_history_depth'],
-        { project });
+        { projectId: project.id }) as { spare_clones: number; spare_clone_refresh_ms: number; spare_clone_max_age_ms: number; initial_history_depth: string };
       const { spare_clones: target, spare_clone_refresh_ms: refreshMs,
         spare_clone_max_age_ms: maxAgeMs, initial_history_depth: depth } = cfg;
       const auth = await resolveAuth(settings, project);

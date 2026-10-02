@@ -33,12 +33,12 @@ const MODEL_FIELDS = {
     description: 'ONLY when the user asks: how hard the run thinks. Omit = the project\'s level; null clears.' },
 };
 
-const enabled = async ({ app, project }: OfferCtx) => Boolean(await app.settings.resolve('cron_enabled', { project }));
+const enabled = async ({ app, project }: OfferCtx) => Boolean(await app.settings.resolve('cron_enabled', { projectId: project.id }));
 
 /** Every answer carries the zone and the time there — what a caller
  *  writing a datetime needs and never otherwise has. */
-async function stamped<T>(ctx: ToolCtx, fn: (clock: Awaited<ReturnType<ToolCtx['app']['settings']['clock']>>) => Promise<T>) {
-  const clock = await ctx.app.settings.clock({ project: ctx.project });
+async function stamped<T>(ctx: ToolCtx, fn: (clock: Awaited<ReturnType<ToolCtx['app']['settings']['clockFor']>>) => Promise<T>) {
+  const clock = await ctx.app.settings.clockFor({ projectId: ctx.project.id });
   try {
     return { timezone: clock.timezone, now: clock.now().toISOString(), ...(await fn(clock)) };
   } catch (e) {

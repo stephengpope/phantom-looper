@@ -13,7 +13,6 @@ import path from 'node:path';
 import type { AppCtx } from '../app.js';
 import { err, ok } from '../app.js';
 import { logger, errStr } from 'phantom-backend-sdk';
-import { catalog, modelsFor } from '../../models.js';
 import { PROVIDERS, isProvider } from '../../../core/llm/createAgent.js';
 import { SystemError, LOG_MAX_TAIL, LOG_SERVICES } from '../../system.js';
 
@@ -45,7 +44,7 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
   }, async (req, reply) => {
     const p = req.query.provider ?? '';
     if (!isProvider(p)) return reply.code(400).send(err('invalid_args', `provider must be one of: ${PROVIDERS.join(', ')}`));
-    return ok({ provider: p, source: catalog().source, models: modelsFor(p) });
+    return ok({ provider: p, source: ctx.modelCatalog.source(), models: ctx.modelCatalog.modelsFor(p) });
   });
 
   app.post('/update', {
@@ -158,5 +157,5 @@ export function systemRoutes(app: FastifyInstance, ctx: AppCtx) {
       summary: 'Token usage report — today, last 7 days, last 30 days; agents and helpers by model',
       description: 'Sums the log_tokens entries. Answers as preformatted `text`.',
     },
-  }, async () => ok(await ctx.system.tokenUsage(await ctx.settings.clock())));
+  }, async () => ok(await ctx.system.tokenUsage(await ctx.settings.clockFor())));
 }

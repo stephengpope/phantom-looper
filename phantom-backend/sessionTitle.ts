@@ -12,7 +12,8 @@ import type { ModelConfig } from '../core/llm/createAgent.js';
 import { PhantomHelper } from '../core/llm/helper.js';
 import { titleRequest, type TitleContext } from '../core/prompts/helpers/wiring.js';
 import { parseLines, conversationFrom } from 'phantom-client-sdk/transcript';
-import type { Settings } from './settings.js';
+import type { Settings, AgentConfig } from 'phantom-backend-sdk';
+import { oldAgentConfig } from './agentConfig.js';
 import type { Sessions } from './sessions.js';
 import { logger, errStr } from 'phantom-backend-sdk';
 
@@ -96,9 +97,9 @@ export function cleanTitle(raw: string): string | null {
  *  auto-title, said once in the log — a title is never worth an error. A
  *  missing key or provider is languageModel's problem: it fails fast and the
  *  tries below log it. */
-async function titleConfig(settings: Settings): Promise<ModelConfig | null> {
+async function titleConfig(deps: { settings: Settings; agentConfig: AgentConfig }): Promise<ModelConfig | null> {
   try {
-    return (await settings.agentConfig('assistant')).model;
+    return (await oldAgentConfig(deps.agentConfig, deps.settings, 'assistant', {})).model;
   } catch (e) {
     log.warn({ err: (e as Error).message }, 'assistant model config cannot build — sessions are not auto-titled');
     return null;
@@ -117,7 +118,7 @@ class TitleHelper extends PhantomHelper {
  *  nothing was written. Never throws. `modelFetch` is the test seam
  *  (createAgent's own), threaded from AppCtx like the turn route's. */
 export async function nameSession(
-  deps: { settings: Settings; sessions: Sessions },
+  deps: { settings: Settings; agentConfig: AgentConfig; sessions: Sessions },
   sessionId: string, context: TitleContext, modelFetch?: typeof fetch,
 ): Promise<string | null> {
   try {
@@ -126,7 +127,7 @@ export async function nameSession(
     const s = await deps.sessions.get(sessionId);
     if (s?.cardId != null && s.name !== null) return null;
 
-    const config = await titleConfig(deps.settings);
+    const config = await titleConfig(deps);
     if (!config) return null;
     config.fetch = modelFetch;
     if (!context.userMessages.trim()) return null;

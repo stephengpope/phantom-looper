@@ -39,11 +39,12 @@ import { Cron } from 'croner';
 import { CRON_CLIENT_ID, type Sessions } from '../sessions.js';
 import type { Crons, CronRow } from '../crons.js';
 import type { Projects } from '../projects.js';
-import type { Settings } from '../settings.js';
+import type { Settings, AgentConfig as SdkAgentConfig } from 'phantom-backend-sdk';
 import { openSession, type OpenedSession } from '../../core/session.js';
 import { serializeTranscript } from '../../core/llm/transcript.js';
 import { runCodingTurn } from '../looper/turn.js';
 import { SESSION_HEADER } from '../api/sessionHeader.js';
+import { oldAgentConfig } from '../agentConfig.js';
 import { sessionPin } from '../agentConfig.js';
 import { injectFetch } from '../looper/injectFetch.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
@@ -62,6 +63,7 @@ export interface CronEngineDeps {
   crons: Crons;
   projects: Projects;
   settings: Settings;
+  agentConfig: SdkAgentConfig;
   sessions: Sessions;
   app: FastifyInstance;
   apiKey: string;
@@ -127,13 +129,13 @@ export class CronEngine {
     const seen = new Set<number>();
     const zones = new Map<string, { enabled: boolean; timezone: string }>();
     for (const row of rows) {
-      let zone = zones.get(row.project_id);
+      let zone: { enabled: boolean; timezone: string } | undefined = zones.get(row.project_id);
       if (!zone) {
         const project = await this.deps.projects.get(row.project_id);
         if (!project) continue;
         try {
-          const s = await this.deps.settings.resolveMany(['cron_enabled', 'timezone'], { project });
-          zone = { enabled: s.cron_enabled === true, timezone: s.timezone };
+          const s = await this.deps.settings.resolveMany(['cron_enabled', 'timezone'], { projectId: project.id });
+          zone = { enabled: s.cron_enabled === true, timezone: String(s.timezone) };
         } catch (e) {
           log.error({ project: project.name, err: errStr(e) }, 'could not read the project\'s cron settings — its crons are not scheduled');
           continue;
@@ -228,7 +230,7 @@ export class CronEngine {
           // The row, re-read: it may carry the cron's model now (stampModel).
           const pin = { ...sessionPin(await sessions.get(sessionId)), reasoning: row.reasoning };
           const t = await runCodingTurn(deps, opened, project.id, row.prompt ?? '', false,
-            await this.deps.settings.agentConfig('coding', { project, pin }));
+            await oldAgentConfig(this.deps.agentConfig, this.deps.settings, 'coding', { projectId: project.id }, pin));
           log.info({ project: project.name, cron: row.name, session: sessionId, tokens: t.tokens, interrupted: t.interrupted }, 'cron run finished');
         }
       } finally {

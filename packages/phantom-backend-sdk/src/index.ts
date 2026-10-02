@@ -1,15 +1,30 @@
-// @phantom@phantom-agent-sdk/backend — what a phantom server runs. User space hands
-// PhantomBackend.create a config and gets the server back.
+// @phantom-agent-sdk/backend — what a phantom backend runs. User space hands
+// PhantomBackend.create a config and gets the backend back.
 export { PhantomBackend, type PhantomBackendConfig } from './PhantomBackend.js';
 export * from './members.js';
 export type { SettingDefinition, AgentTypeDefinition, ToolDefinition, ToolRunContext, ToolGroup, ToolGrant, RouteRegistrar } from './doors.js';
-export { Database, SDK_MIGRATIONS, type Drizzle, type Transaction, type MigrationSet } from './storage/Database.js';
+
+// storage
+export { SDK_MIGRATIONS, type Drizzle, type Transaction, type MigrationSet } from './storage/Database.js';
 export * as schema from './storage/schema.js';
+export { SettingsWriteError, type SettingScope, type SettingSource, type SettingLayers, type SettingEntry, type SettingMeta, type SecretMeta } from './storage/Settings.js';
+export { sdkSettings, agentTypeSettings } from './storage/sdkSettings.js';
+export type { TokenRecord, ReportRow, Windows, WindowTotals } from './storage/TokenLog.js';
+export type { BackgroundTaskRow, BackgroundTaskEnd } from './storage/BackgroundTasks.js';
+export { SqlError, locate, type QueryOptions, type StatementResult } from './storage/AgentDatabases.js';
+
+// agents
+export { AgentTypesError } from './agents/AgentTypes.js';
+export { sessionPin, cascade, pinned, type ModelPin, type ResolvedModel, type AgentRunConfig, type CompactionSettings } from './agents/AgentConfig.js';
+export { CATALOG_PROVIDERS, hasCatalog, fromModelsDev, fetchCatalog, writeSnapshot, type CatalogProvider, type CatalogModel, type Catalog, type CatalogSource } from './agents/ModelCatalog.js';
+
+// lib
 export { logger, errStr } from './lib/log.js';
 export { Clock, TIMEZONES } from './lib/clock.js';
 export { GLOBAL, projectScope } from './lib/scopes.js';
 export { makePaths, sessionDir, repoDir, slotPrefix, slotUlid, type Paths } from './lib/paths.js';
+export { encrypt, decrypt, timingSafeEqualStr } from './lib/crypto.js';
+
+// the vocabulary both halves speak
 export { newId, idTime, DEFAULT_COLUMNS, STATUS_ICON, normalizeKey, newKey, keyedItems, type ChecklistItem } from 'phantom-client-sdk';
-export type { TokenRecord, ReportRow, Windows, WindowTotals } from './storage/TokenLog.js';
-export type { BackgroundTaskRow, BackgroundTaskEnd } from './storage/BackgroundTasks.js';
-export { SqlError, locate, type QueryOptions, type StatementResult } from './storage/AgentDatabases.js';
+export { PresetError, type PresetRow } from './storage/Presets.js';

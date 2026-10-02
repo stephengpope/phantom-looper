@@ -33,7 +33,7 @@
 import fs from 'node:fs/promises';
 import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
 import { API_IMAGE, APP_VERSION } from './env.js';
-import type { Settings } from './settings.js';
+import type { Settings } from 'phantom-backend-sdk';
 import type { Projects } from './projects.js';
 import type { Sessions } from './sessions.js';
 import type { Paths } from 'phantom-backend-sdk';

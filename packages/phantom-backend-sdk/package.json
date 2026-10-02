@@ -24,7 +24,7 @@
     "migrations"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && cp src/agents/models-snapshot.json dist/agents/",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src"
   },

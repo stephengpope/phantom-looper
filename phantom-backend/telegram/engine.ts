@@ -12,23 +12,22 @@
 
 import { CodingAgent } from '../../core/agents/coding.js';
 import crypto from 'node:crypto';
-import { timingSafeEqualStr } from '../crypto.js';
+import { timingSafeEqualStr, type Settings, type AgentConfig as SdkAgentConfig, type ModelCatalog } from 'phantom-backend-sdk';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { Paths } from 'phantom-backend-sdk';
 import { sessionDir } from 'phantom-backend-sdk';
 import { injectFetch } from '../looper/injectFetch.js';
 import { runCodingTurn, type TurnDeps } from '../looper/turn.js';
+import { oldAgentConfig } from '../agentConfig.js';
 import { sessionPin } from '../agentConfig.js';
-import type { SettingKey } from '../settings.js';
 import type { SettingsEvents } from '../api/settingsEvents.js';
 import { APP_VERSION } from '../env.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
 import type { Sessions } from '../sessions.js';
 import type { Cards } from '../cards.js';
-import type { Presets } from '../presets.js';
+import type { Presets } from 'phantom-backend-sdk';
 import type { System } from '../system.js';
-import type { Settings } from '../settings.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
 import type { BackdoorQueue } from '../api/backdoor.js';
 import type { BoardEvents, BoardEvent } from '../api/boardEvents.js';
@@ -77,6 +76,8 @@ export interface TelegramEngineDeps {
   sentMessages: TelegramSentMessages;
   handledUpdates: TelegramHandledUpdates;
   settings: Settings;
+  agentConfig: SdkAgentConfig;
+  modelCatalog: ModelCatalog;
   sessions: Sessions;
   cards: Cards;
   projects: Projects;
@@ -154,7 +155,7 @@ export class TelegramEngine {
           return last === 'error' ? { ok: false, error: 'update failed' } : { ok: true };
         } catch (e) { return { ok: false, error: (e as Error).message }; }
       },
-      setting: (key) => deps.settings.resolve(key as SettingKey),
+      setting: (key) => deps.settings.resolve(key),
       token: () => this.token(),
       authorizedUser: () => this.authorizedUser(),
       makeClient: (token, dm) => this.trackedClient(token, dm, () => null),
@@ -198,7 +199,7 @@ export class TelegramEngine {
     if (!alertMsg) return;
     // The switch resolved at this project's layer.
     const s = await this.deps.settings.resolveMany(
-      ['telegram_auto_build_notifications', 'telegram_enabled', 'telegram_authorized_user'], { project });
+      ['telegram_auto_build_notifications', 'telegram_enabled', 'telegram_authorized_user'], { projectId: project.id });
     if (s.telegram_auto_build_notifications !== true || s.telegram_enabled !== true) return;
     const dm = Number(s.telegram_authorized_user ?? '');
     if (!dm || !Number.isFinite(dm)) return;
@@ -437,7 +438,7 @@ export class TelegramEngine {
       // every call is billed to it.
       const own = await conv.ensureSession(bot.activeProjectId, bot.activeSessionId);
       const project = bot.activeProjectId ? await this.deps.projects.get(bot.activeProjectId) : undefined;
-      const config = await this.deps.settings.agentConfig('assistant', { project, pin: sessionPin(own) });
+      const config = await oldAgentConfig(this.deps.agentConfig, this.deps.settings, 'assistant', project ? { projectId: project.id } : {}, sessionPin(own));
       conv.compaction = config.compaction;
       const onSwitch = async (id: string) => {
         const r = await this.switchSession(client, dm, id);
@@ -530,7 +531,7 @@ export class TelegramEngine {
       const projectId = s?.projectId ?? '';
       const planMode = s?.planMode === true;
       const project = s ? await this.deps.projects.get(s.projectId) : undefined;
-      const cfg = await this.deps.settings.agentConfig('coding', { project, pin: sessionPin(opened.session) });
+      const cfg = await oldAgentConfig(this.deps.agentConfig, this.deps.settings, 'coding', project ? { projectId: project.id } : {}, sessionPin(opened.session));
       // `signal` is what makes the turn stoppable at all: /stop aborts this
       // controller through the inFlight map, a remote interrupt through the feed
       // subscription above — runCodingTurn ends it cleanly (interrupted, not
@@ -799,6 +800,7 @@ export class TelegramEngine {
 
   get botState() { return this.deps.botState; }
   get settings() { return this.deps.settings; }
+  get modelCatalog() { return this.deps.modelCatalog; }
   get sessions() { return this.deps.sessions; }
   get projects() { return this.deps.projects; }
   get presets() { return this.deps.presets; }

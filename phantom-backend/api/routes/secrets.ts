@@ -74,7 +74,7 @@ export function secretsRoutes(app: FastifyInstance, ctx: AppCtx) {
       }
       const sc = await scopesOf(req.query);
       if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
-      const stored = await ctx.settings.putSecret(sc.write, name,
+      const stored = await ctx.settings.writeSecret(sc.write, name,
         String(req.body?.description ?? ''), value);
       if (!stored) {
         return reply.code(400).send(err('invalid_args',
@@ -92,7 +92,7 @@ export function secretsRoutes(app: FastifyInstance, ctx: AppCtx) {
       const sc = await scopesOf(req.query);
       if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
       const name = secretName(req.params.name);
-      const value = name ? await ctx.settings.readSecretValue(name, sc.chain) : undefined;
+      const value = name ? await ctx.settings.readSecret(name, sc.chain) : undefined;
       if (value === undefined) {
         const names = (await ctx.settings.listSecrets(sc.chain)).map((s) => s.name);
         return reply.code(404).send(err('not_found',
@@ -110,7 +110,7 @@ export function secretsRoutes(app: FastifyInstance, ctx: AppCtx) {
       const sc = await scopesOf(req.query);
       if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
       const name = secretName(req.params.name);
-      const gone = name ? await ctx.settings.dropSecret(sc.write, name) : false;
+      const gone = name ? await ctx.settings.deleteSecret(sc.write, name) : false;
       if (!gone) {
         return reply.code(404).send(err('not_found',
           `no secret named "${req.params.name}" at the ${sc.label} layer`));

@@ -8,7 +8,7 @@
 import { eq } from 'drizzle-orm';
 import type { Drizzle } from 'phantom-backend-sdk';
 import { telegramBotState } from 'phantom-backend-sdk/schema';
-import { encrypt, decrypt } from '../crypto.js';
+import { encrypt, decrypt } from 'phantom-backend-sdk';
 
 export type TelegramMode = 'assistant' | 'code';
 

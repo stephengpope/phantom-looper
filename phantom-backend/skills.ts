@@ -68,7 +68,7 @@ async function writeViaContainer(sandbox: Sandbox, name: string, rel: string, co
 /** The session's workspace image — the system skill tier lives inside it. */
 async function imageFor(ctx: AppCtx, session: SessionRow): Promise<string> {
   const project = await ctx.projects.get(session.projectId);
-  return String(await ctx.settings.resolve('container_image', { project }));
+  return String(await ctx.settings.resolve('container_image', project ? { projectId: project.id } : {}));
 }
 
 /** Every skill the session sees: a live scan of its working tree merged with

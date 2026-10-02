@@ -25,7 +25,7 @@ import { and, eq, inArray, isNotNull, isNull, lt, not, or, count } from 'drizzle
 import type { Drizzle } from 'phantom-backend-sdk';
 import { workspaces, sessions, cards, type WorkspaceRow, type ProjectRow } from 'phantom-backend-sdk/schema';
 import type { SessionEvents } from './api/sessionEvents.js';
-import type { Settings } from './settings.js';
+import type { Settings } from 'phantom-backend-sdk';
 import { git, cloneFresh, checkoutBranch, classifyGitFailure, localState, type WorkState } from './git/git.js';
 import { claimSlot, resolveAuth } from './pool/pool.js';
 import { sessionDir, repoDir, type Paths } from 'phantom-backend-sdk';
@@ -89,7 +89,7 @@ export class Workspaces {
         await git(dir, ['fetch', 'origin', project.baseBranch], auth);
         await git(dir, ['reset', '--hard', `origin/${project.baseBranch}`]);
       } else {
-        const depth = await this.settings.resolve('initial_history_depth', { project });
+        const depth = await this.settings.resolve<string>('initial_history_depth', { projectId: project.id });
         await cloneFresh(dir, auth, project.baseBranch, depth);
         await fs.mkdir(`${dest}/scratch`, { recursive: true });
       }
