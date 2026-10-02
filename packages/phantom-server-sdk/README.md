@@ -13,7 +13,7 @@ src/doors.ts             what user space registers: settings, agent types, tools
 src/members.ts           the 45 members, one file each
 src/storage/             Database, Settings, the table owners, AgentDatabases
 src/agents/              AgentTypes, AgentConfig, SystemPrompt, ModelCatalog, SessionTitler, UserMessageQueue, Tools, the feeds
-src/runtime/             Docker, Images, WorkspaceContainers, Sandbox, CheckoutPool, Disk, Skills, SystemSkills, Web
+src/runtime/             Docker, Images, SessionContainers, Sandbox, CheckoutPool, Disk, Skills, SystemSkills, Web
 src/git/                 Git, GitSync, InstantSync, WorkspaceWatcher, GitHub, CommitMessages
 src/telegram/            TelegramBot, TelegramRenderer, TelegramAttachments, TelegramVoice, TelegramApprovals, TelegramDedupe
 src/api/                 HttpApi, DbConsole

@@ -1,4 +1,4 @@
-// Sandbox — run a command, read or write a file inside a workspace's
+// Sandbox — run a command, read or write a file inside a session's
 // container. The ONLY object that talks to the container SDK. Stub.
 export interface RunResult { exitCode: number; stdout: string; stderr: string; truncated: boolean }
 export interface RunOptions { timeoutMs?: number; cwd?: string; env?: Record<string, string>; stdin?: string; maxBytes?: number }

@@ -51,9 +51,11 @@ what is left to make that true, in order. It replaces `sdk-conversion.md`.
 - The server's agents reach the API as clients: a `PhantomBackend` on Node
   fetch at loopback. The cli's HTTP/2-over-TLS socket is the cli's
   transport, not an SDK rule; streaming needs neither.
-- The image a workspace runs in is the **workspace image**
-  (`build/workspace/`), named for what it is: one container per workspace,
-  shared by its sessions.
+- A session has a transcript, a container, and a workspace (the checkout)
+  inside it. The container is the session's (`SessionContainers`); a session
+  that borrows a workspace runs inside the owner's container. The image is
+  the **session image** (`phantom-backend-session`); `build/workspace/` becomes
+  `build/session/` when the runtime moves.
 - A workspace's id equals its first session's id today. Kept through the
   rename; splitting them is its own item later.
 - No tests. Proof is a run on the real stack.

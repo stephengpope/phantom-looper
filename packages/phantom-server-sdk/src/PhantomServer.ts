@@ -8,7 +8,7 @@ import type {
   Database, Settings, Projects, Workspaces, Sessions, Cards, Crons, Presets, BackgroundTasks, TokenLog, AgentDatabases,
   AgentTypes, AgentConfig, SystemPrompt, ModelCatalog, SessionTitler, UserMessageQueue, Tools,
   SessionEvents, BoardEvents, SettingsEvents, ForegroundCommands,
-  Docker, Images, WorkspaceContainers, CheckoutPool, Disk, Skills, SystemSkills, Web,
+  Docker, Images, SessionContainers, CheckoutPool, Disk, Skills, SystemSkills, Web,
   Git, GitSync, InstantSync, WorkspaceWatcher, GitHub, CommitMessages,
   CronScheduler, TelegramBot, TelegramRenderer, TelegramAttachments, TelegramVoice, TelegramApprovals, TelegramDedupe,
   HttpApi, DbConsole, Notifications,
@@ -72,7 +72,7 @@ export class PhantomServer {
   // ── runtime ──────────────────────────────────────────────────────────
   readonly docker!: Docker;
   readonly images!: Images;
-  readonly workspaceContainers!: WorkspaceContainers;
+  readonly sessionContainers!: SessionContainers;
   readonly checkoutPool!: CheckoutPool;
   readonly disk!: Disk;
   readonly skills!: Skills;
@@ -111,7 +111,7 @@ export class PhantomServer {
    *   3. table owners: Projects, Workspaces, Sessions, Cards, Crons, Presets, BackgroundTasks, TokenLog, AgentDatabases
    *   4. AgentTypes (config.agentTypes) → AgentConfig, SystemPrompt, ModelCatalog, SessionTitler
    *   5. Tools (SDK's + config.tools, grouped; published per AgentTypes), UserMessageQueue, the three event feeds, ForegroundCommands
-   *   6. Docker → Images → WorkspaceContainers, CheckoutPool, Disk, Skills, SystemSkills, Web
+   *   6. Docker → Images → SessionContainers, CheckoutPool, Disk, Skills, SystemSkills, Web
    *   7. Git → GitSync, WorkspaceWatcher → InstantSync, GitHub, CommitMessages
    *   8. CronScheduler, Telegram plumbing, Notifications, DbConsole
    *   9. HttpApi (SDK routes + config.routes), loopback

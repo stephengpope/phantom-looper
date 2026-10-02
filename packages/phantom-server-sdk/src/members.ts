@@ -24,7 +24,7 @@ export { SettingsEvents } from './agents/SettingsEvents.js';
 export { ForegroundCommands } from './agents/ForegroundCommands.js';
 export { Docker } from './runtime/Docker.js';
 export { Images } from './runtime/Images.js';
-export { WorkspaceContainers } from './runtime/WorkspaceContainers.js';
+export { SessionContainers } from './runtime/SessionContainers.js';
 export { Sandbox } from './runtime/Sandbox.js';
 export { CheckoutPool } from './runtime/CheckoutPool.js';
 export { Disk } from './runtime/Disk.js';
