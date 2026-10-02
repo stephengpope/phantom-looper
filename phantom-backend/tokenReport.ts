@@ -4,8 +4,8 @@
 // theirs. Cache is a percentage — the share of prompt tokens served from
 // cache — since the raw read/write counts say nothing on their own.
 import { groupOf, type TokenGroup } from '../core/llm/createAgent.js';
-import type { ReportRow, WindowTotals, Windows } from './logTokens.js';
-import type { Clock } from '../core/clock.js';
+import type { ReportRow, WindowTotals, Windows } from 'phantom-backend-sdk';
+import type { Clock } from 'phantom-backend-sdk';
 
 // NUM_W: widest value `k` emits is 6 (`999.9B`), +4 gutter so columns never touch.
 const KIND_W = 14, MODEL_W = 22, NUM_W = 10;
@@ -51,11 +51,11 @@ function table(title: string, window: keyof Windows<unknown>, rows: ReportRow[])
     line('total', live.reduce((a, r) => add(a, r[window]), ZERO)),
   ];
   for (const group of ['agent', 'helper'] as TokenGroup[]) {
-    const mine = live.filter((r) => groupOf(r.kind) === group)
+    const mine = live.filter((r) => groupOf(r.type) === group)
       .sort((a, b) => (b[window].input + b[window].output) - (a[window].input + a[window].output));
     out.push(line(`${group}s`, mine.reduce((a, r) => add(a, r[window]), ZERO)));
     for (const r of mine) {
-      const kind = clip(r.kind.replace(/_/g, ' '), KIND_W);
+      const kind = clip(r.type.replace(/_/g, ' '), KIND_W);
       const model = clip(modelName(r), MODEL_W);
       out.push(line(`  ${kind.padEnd(KIND_W + 2)}${model}`, r[window]));
     }

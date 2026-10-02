@@ -29,7 +29,7 @@ import { PROVIDERS } from '../../core/llm/createAgent.js';
 import { hasCatalog, latestModel, modelsFor } from '../models.js';
 import { credentialForProvider } from '../settings.js';
 import { isHeld } from '../sessions.js';
-import { GLOBAL } from '../store.js';
+import { GLOBAL } from 'phantom-backend-sdk';
 import { CLIENT_ID } from './assistant.js';
 
 interface Cmd { command: string; description: string }

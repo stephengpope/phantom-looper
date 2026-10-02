@@ -14,7 +14,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import proxy from '@fastify/http-proxy';
 import { timingSafeEqualStr } from '../../crypto.js';
 import type { Settings } from '../../settings.js';
-import { logger, errStr } from '../../log.js';
+import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('db-ui');
 

@@ -2,7 +2,7 @@
   "name": "phantom-client-sdk",
   "version": "0.1.0",
   "private": true,
-  "description": "The agent runtime for a phantom-backend: an Agent base class with the turn, the shared append-only transcript, the session lock, model resolution, billing, and the server\u2019s tools over the API.",
+  "description": "The agent runtime for a phantom-backend: an Agent base class with the turn, the shared append-only transcript, the session lock, model resolution, billing, and the server’s tools over the API.",
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -46,7 +46,8 @@
     "@ai-sdk/openai-compatible": "*",
     "@ai-sdk/provider": "*",
     "@ai-sdk/xai": "*",
-    "@openai-oauth/core": "*"
+    "@openai-oauth/core": "*",
+    "ulid": "2.4.0"
   },
   "devDependencies": {
     "@types/node": "*",

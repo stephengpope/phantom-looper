@@ -49,7 +49,7 @@ import { injectFetch } from '../looper/injectFetch.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
 import type { SettingsEvents } from '../api/settingsEvents.js';
 import type { BackdoorQueue } from '../api/backdoor.js';
-import { logger, errStr } from '../log.js';
+import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('cron');
 const BASE = 'http://cron/api';

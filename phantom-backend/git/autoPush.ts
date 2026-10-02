@@ -3,7 +3,7 @@
 // argument for it. This file is the result vocabulary the routes and the app
 // already speak, and nothing else.
 import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
-import type { Paths } from '../pool/paths.js';
+import type { Paths } from 'phantom-backend-sdk';
 import type { ModelConfig } from '../../core/llm/createAgent.js';
 import { syncBranch, type SyncEvent, type SyncDeps, type ConflictContext } from './sync.js';
 import type { Sessions } from '../sessions.js';

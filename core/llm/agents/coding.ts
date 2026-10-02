@@ -10,7 +10,7 @@
 // server, the session id, and — for the board — the window) and hands them in.
 import type { SystemModelMessage, Tool } from 'ai';
 import { PhantomAgent, CACHE_TTL, type ModelConfig } from '../createAgent.js';
-import type { Clock } from '../../clock.js';
+import type { Clock } from 'phantom-backend-sdk';
 import { systemPromptBlocks, type StoredSystemPrompt } from 'phantom-client-sdk/systemPrompt';
 
 /** The old path (core/llm) on the new row: the stored prompt, as it stands.

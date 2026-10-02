@@ -15,8 +15,8 @@ import {
   killSid, probeGroups, reconcileRunning, commandTextFromArgv, elapsedSeconds,
   type LiveGroup, type FsDeps,
 } from './fs.js';
-import type { BackgroundTaskRow } from '../../backgroundTasks.js';
-import { logger, errStr } from '../../log.js';
+import type { BackgroundTaskRow } from 'phantom-backend-sdk';
+import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('tasks');
 

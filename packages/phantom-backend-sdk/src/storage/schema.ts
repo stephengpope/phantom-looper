@@ -291,7 +291,7 @@ export type PresetRow = typeof presets.$inferSelect;
 export const logTokens = phantomLooper.table('log_tokens', {
   id: text('id').primaryKey(),
   sessionId: text('session_id'),
-  kind: text('kind').notNull(),
+  type: text('type').notNull(),
   provider: text('provider'),
   model: text('model'),
   responseId: text('response_id'),

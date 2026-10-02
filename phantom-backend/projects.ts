@@ -9,11 +9,11 @@
 import { eq, sql } from 'drizzle-orm';
 import { Database, type Drizzle, type Transaction } from 'phantom-backend-sdk';
 import { projects, type ProjectRow } from 'phantom-backend-sdk/schema';
-import { DEFAULT_COLUMNS } from '../core/kanban.js';
+import { DEFAULT_COLUMNS } from 'phantom-backend-sdk';
 import type { Settings } from './settings.js';
-import { projectScope } from './store.js';
+import { projectScope } from 'phantom-backend-sdk';
 import type { SettingsEvents } from './api/settingsEvents.js';
-import type { Databases } from './databases.js';
+import type { AgentDatabases } from 'phantom-backend-sdk';
 
 export { DEFAULT_COLUMNS };
 
@@ -45,7 +45,7 @@ export class Projects {
     private readonly settings: Settings,
     private readonly events?: SettingsEvents,
     /** The agent's own database per project — dropped with the row. */
-    private readonly databases?: Databases,
+    private readonly databases?: AgentDatabases,
   ) {}
 
   async get(id: string): Promise<ProjectRow | undefined> {

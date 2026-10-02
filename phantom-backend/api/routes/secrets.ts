@@ -11,7 +11,7 @@
 //   GET    /secrets/:name      the decrypted value, project → global
 //   DELETE /secrets/:name      remove at one layer
 import type { FastifyInstance } from 'fastify';
-import { GLOBAL, projectScope } from '../../store.js';
+import { GLOBAL, projectScope } from 'phantom-backend-sdk';
 import { ok, err, type AppCtx } from '../app.js';
 import { secretName, SECRET_NAME_RULE } from '../../../core/secretName.js';
 

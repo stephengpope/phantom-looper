@@ -12,7 +12,7 @@ import { timingSafeEqualStr } from '../crypto.js';
 declare module 'fastify' {
   interface FastifySchema { tags?: readonly string[]; summary?: string; description?: string }
 }
-import type { Paths } from '../pool/paths.js';
+import type { Paths } from 'phantom-backend-sdk';
 import { settingsRoutes } from './routes/settings.js';
 import { secretsRoutes } from './routes/secrets.js';
 import { databaseRoutes } from './routes/database.js';
@@ -28,13 +28,13 @@ import { SessionEvents } from './sessionEvents.js';
 import type { Sessions } from '../sessions.js';
 import type { Settings } from '../settings.js';
 import type { Projects } from '../projects.js';
-import type { Databases } from '../databases.js';
+import type { AgentDatabases } from 'phantom-backend-sdk';
 import type { Workspaces } from '../workspaces.js';
 import type { Cards } from '../cards.js';
-import type { BackgroundTasks } from '../backgroundTasks.js';
+import type { BackgroundTasks } from 'phantom-backend-sdk';
 import type { Presets } from '../presets.js';
 import type { Crons } from '../crons.js';
-import type { LogTokens } from '../logTokens.js';
+import type { TokenLog } from 'phantom-backend-sdk';
 import { SettingsEvents } from './settingsEvents.js';
 import { ForegroundCommands } from './foreground.js';
 import type { System } from '../system.js';
@@ -63,13 +63,13 @@ export interface AppCtx {
   backgroundTasks: BackgroundTasks;
   presets: Presets;
   crons: Crons;
-  logTokens: LogTokens;
+  logTokens: TokenLog;
   paths: Paths;
   apiKey: string;
   version: string;
   /** The agent's own database per project (databases.ts). Absent in
    *  DB-only tests: the query route answers 503. */
-  databases?: Databases;
+  databases?: AgentDatabases;
   /** Docker wiring; absent in DB-only tests, and /fs then 404s. */
   fs?: FsDeps;
   engine?: GitEngine;

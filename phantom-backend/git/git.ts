@@ -15,7 +15,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { logger, errStr } from '../log.js';
+import { logger, errStr } from 'phantom-backend-sdk';
 
 const exec = promisify(execFile);
 const log = logger('git');

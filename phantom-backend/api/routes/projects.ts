@@ -4,8 +4,8 @@ import { parseRepoRef, remoteUrl } from '../../git/remote.js';
 import { createRepo, listRepos, whoami } from '../../git/github.js';
 import { initializeRemote, classifyGitFailure } from '../../git/git.js';
 import { ProjectError } from '../../projects.js';
-import { projectScope } from '../../store.js';
-import { newId } from '../../../core/ids.js';
+import { projectScope } from 'phantom-backend-sdk';
+import { newId } from 'phantom-backend-sdk';
 import { ok, err, type AppCtx } from '../app.js';
 
 /** What leaves the API. The credential is no longer a column — it is

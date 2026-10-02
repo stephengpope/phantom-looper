@@ -22,7 +22,7 @@ import {
   SettingsWriteError, type SettingKey,
   DEFAULTS, DESCRIPTIONS, META,
 } from '../../settings.js';
-import { GLOBAL, projectScope } from '../../store.js';
+import { GLOBAL, projectScope } from 'phantom-backend-sdk';
 import { sessionPin, type AgentName } from '../../agentConfig.js';
 import { AGENT_NAMES } from '../../../core/llm/agentConfig.js';
 import { ok, err, type AppCtx } from '../app.js';

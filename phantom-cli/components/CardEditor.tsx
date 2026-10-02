@@ -31,7 +31,7 @@ import { Text } from './Text.js';
 import { useEffect, useRef, useState } from 'react';
 import { isMouseInput, parseMouse } from '../mouse.js';
 import { TextInput, TextArea } from './TextInput.js';
-import { newKey } from '../../core/kanban.js';
+import { newKey } from 'phantom-client-sdk';
 import type { BoardStore, CardStep, Card, CardPatch } from '../board.js';
 
 type ListName = 'details' | 'requirements';

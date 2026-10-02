@@ -11,7 +11,7 @@
 // call; and there are no rounds, because nothing races a pull — base moving
 // afterward is simply the next pull.
 import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
-import type { Paths } from '../pool/paths.js';
+import type { Paths } from 'phantom-backend-sdk';
 import { syncBranch, type SyncEvent, type SyncDeps } from './sync.js';
 import type { Sessions } from '../sessions.js';
 import type { Workspaces } from '../workspaces.js';

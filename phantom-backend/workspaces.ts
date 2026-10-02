@@ -28,8 +28,8 @@ import type { SessionEvents } from './api/sessionEvents.js';
 import type { Settings } from './settings.js';
 import { git, cloneFresh, checkoutBranch, classifyGitFailure, localState, type WorkState } from './git/git.js';
 import { claimSlot, resolveAuth } from './pool/pool.js';
-import { sessionDir, repoDir, type Paths } from './pool/paths.js';
-import { logger } from './log.js';
+import { sessionDir, repoDir, type Paths } from 'phantom-backend-sdk';
+import { logger } from 'phantom-backend-sdk';
 
 const log = logger('workspaces');
 

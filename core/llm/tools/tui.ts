@@ -13,7 +13,7 @@
  */
 import { tool, type ModelMessage, type Tool } from 'ai';
 import { z } from 'zod';
-import { DEFAULT_COLUMNS } from '../../kanban.js';
+import { DEFAULT_COLUMNS } from 'phantom-client-sdk';
 
 /** `status` is an ENUM of the real column names — the model cannot send
  *  "in progress" for in_progress. Pass the project's columns when they

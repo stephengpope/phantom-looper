@@ -20,8 +20,8 @@ import { PhantomHelper } from '../../core/llm/helper.js';
 import { lastAssistantFromJsonl } from './transcriptHelper.js';
 import type { NotificationChannel } from './channel.js';
 import { titled } from '../telegram/client.js';
-import { STATUS_ICON } from '../../core/kanban.js';
-import { logger } from '../log.js';
+import { STATUS_ICON } from 'phantom-backend-sdk';
+import { logger } from 'phantom-backend-sdk';
 
 const log = logger('digest');
 

@@ -37,7 +37,7 @@
 // single lock the rest of the system uses — no new mutex.
 import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
 import { resolveAuth } from '../pool/pool.js';
-import { repoDir, type Paths } from '../pool/paths.js';
+import { repoDir, type Paths } from 'phantom-backend-sdk';
 import type { Sessions } from '../sessions.js';
 import type { Workspaces } from '../workspaces.js';
 import type { Cards } from '../cards.js';
@@ -47,9 +47,9 @@ import {
   landingProblems, pushSession, pushSessionForced, pushToBase, hasWorkToLand, GIT_CLIENT_ID,
 } from './git.js';
 import { commitMessageFor } from './commitMessage.js';
-import { newId } from '../../core/ids.js';
+import { newId } from 'phantom-backend-sdk';
 import type { ModelConfig } from '../../core/llm/createAgent.js';
-import { logger, errStr } from '../log.js';
+import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('git-sync');
 

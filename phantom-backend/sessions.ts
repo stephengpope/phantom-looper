@@ -33,14 +33,14 @@ import { sessions, sessionColumns, workspaces, cards, logTokens, type SessionRow
 import type { Settings } from './settings.js';
 import type { Projects } from './projects.js';
 import type { Workspaces } from './workspaces.js';
-import { newId } from '../core/ids.js';
-import { logger } from './log.js';
+import { newId } from 'phantom-backend-sdk';
+import { logger } from 'phantom-backend-sdk';
 import { lastUserFromJsonl, stripUsageFromJsonl } from '../core/llm/transcript.js';
 import type { SystemPromptLayout, StoredSystemPrompt } from 'phantom-client-sdk/systemPrompt';
 import { SystemPrompt } from './systemPrompt/SystemPrompt.js';
-import { repoDir, type Paths } from './pool/paths.js';
+import { repoDir, type Paths } from 'phantom-backend-sdk';
 import type Docker from 'dockerode';
-import { GLOBAL, projectScope } from './store.js';
+import { GLOBAL, projectScope } from 'phantom-backend-sdk';
 import type { SessionEvents } from './api/sessionEvents.js';
 
 const log = logger('sessions');

@@ -17,9 +17,9 @@ import type { Projects } from '../projects.js';
 import type { Settings } from '../settings.js';
 import { remoteUrl } from '../git/remote.js';
 import { cloneFresh, refreshPristine, type GitAuth } from '../git/git.js';
-import { newId, idTime } from '../../core/ids.js';
-import { slotPrefix, slotUlid, type Paths } from './paths.js';
-import { logger, errStr } from '../log.js';
+import { newId, idTime } from 'phantom-backend-sdk';
+import { slotPrefix, slotUlid, type Paths } from 'phantom-backend-sdk';
+import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('pool');
 

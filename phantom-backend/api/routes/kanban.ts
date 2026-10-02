@@ -6,7 +6,7 @@ import type { ProjectRow } from 'phantom-backend-sdk/schema';
 import { columnsOf } from '../../projects.js';
 import { isHeld } from '../../sessions.js';
 import { CardError, CARD_FIELDS, CARD_JSON_FIELDS, type CardFields, type ItemOp } from '../../cards.js';
-import { logger, errStr } from '../../log.js';
+import { logger, errStr } from 'phantom-backend-sdk';
 import { ok, err, type AppCtx } from '../app.js';
 
 const TAG = { tags: ['kanban'] };

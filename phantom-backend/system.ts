@@ -7,15 +7,15 @@ import os from 'node:os';
 import { statfsSync } from 'node:fs';
 import { PassThrough, Readable } from 'node:stream';
 import type Docker from 'dockerode';
-import type { Paths } from './pool/paths.js';
+import type { Paths } from 'phantom-backend-sdk';
 import type { Images } from './images.js';
-import type { LogTokens } from './logTokens.js';
+import type { TokenLog } from 'phantom-backend-sdk';
 import { formatTokenReport, reportWindows } from './tokenReport.js';
-import type { Clock } from '../core/clock.js';
+import type { Clock } from 'phantom-backend-sdk';
 import { startUpdate, subscribe, isRunning } from './api/updateTask.js';
 import type { UpdateEvent } from '../core/update.js';
 import { API_IMAGE } from './env.js';
-import { logger, errStr } from './log.js';
+import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('system');
 
@@ -38,7 +38,7 @@ export interface LogsQuery { service?: string; tail?: number; since?: string; gr
 export class System {
   constructor(
     private readonly paths: Paths,
-    private readonly logTokens: LogTokens,
+    private readonly logTokens: TokenLog,
     /** Absent when this server has no docker access: logs and restarts refuse. */
     private readonly docker?: Docker,
     /** The one image puller — the update's pulls go through it so the disk

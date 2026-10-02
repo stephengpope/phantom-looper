@@ -12,7 +12,7 @@
 // sees. Same host-write pattern as the detached-bash logs in fs.ts.
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { sessionDir } from './pool/paths.js';
+import { sessionDir } from 'phantom-backend-sdk';
 import type { AppCtx } from './api/app.js';
 import { ToolError } from './tools/envelope.js';
 

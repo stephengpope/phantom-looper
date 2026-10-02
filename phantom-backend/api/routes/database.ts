@@ -5,7 +5,7 @@
 //   GET  /projects/:id/database         { enabled }   — the tool kit asks before it offers database_query
 //   POST /projects/:id/database/query   { sql, limit } — run it, connected as the project's role
 import type { FastifyInstance } from 'fastify';
-import { SqlError } from '../../databases.js';
+import { SqlError } from 'phantom-backend-sdk';
 import { ok, err, type AppCtx } from '../app.js';
 
 const TAG = { tags: ['database'] };

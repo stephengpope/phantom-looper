@@ -20,7 +20,7 @@ import type { Tool } from 'ai';
 import { PhantomAgent, type ModelConfig } from '../createAgent.js';
 import { withCurrentDate } from '../../prompts/template.js';
 import { systemPrompt } from '../../prompts/assistant/wiring.js';
-import type { Clock } from '../../clock.js';
+import type { Clock } from 'phantom-backend-sdk';
 
 export function assistantInstructions(): string {
   return systemPrompt();

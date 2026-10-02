@@ -2,11 +2,11 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import type { SessionRow } from 'phantom-backend-sdk/schema';
-import type { TokenRecord } from '../../logTokens.js';
+import type { TokenRecord } from 'phantom-backend-sdk';
 import { SessionError, heldByOther, isHeld, expiredHold, assertDuplicable, ownsWorkspace, workspaceOf } from '../../sessions.js';
 import { WorkspaceError } from '../../workspaces.js';
 import { GIT_CLIENT_ID } from '../../git/git.js';
-import { sessionDir } from '../../pool/paths.js';
+import { sessionDir } from 'phantom-backend-sdk';
 
 import { ok, err, type AppCtx } from '../app.js';
 import { openSession, SessionLockedError } from '../../../core/session.js';
@@ -41,7 +41,7 @@ function lockEvent(s: SessionRow, over: Partial<{ locked: boolean; by: string | 
     ...(died ? { died_on: died.label ?? died.by, died_at: died.at.toISOString() } : {}) };
 }
 import { shouldName, nameSession, titleContext, firstMessageContext } from '../../sessionTitle.js';
-import { logger, errStr } from '../../log.js';
+import { logger, errStr } from 'phantom-backend-sdk';
 
 const TAG = { tags: ['sessions'] };
 const idParam = { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] };
@@ -1055,14 +1055,14 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
 
   // The CLI's door to log_tokens: core's languageModel records every call
   // the CLI process makes, and the CLI's recorder posts it here — the same
-  // LogTokens.record the server's own calls land in.
+  // TokenLog.record the server's own calls land in.
   app.post<{ Body: TokenRecord }>(
     '/log-tokens', { schema: { ...TAG,
       summary: 'Record one model call',
       description: 'Appends one log_tokens entry. For model calls made in the CLI process.',
-      body: { type: 'object', required: ['kind', 'provider', 'model', 'input', 'output', 'cacheRead', 'cacheWrite'],
+      body: { type: 'object', required: ['type', 'provider', 'model', 'input', 'output', 'cacheRead', 'cacheWrite'],
         properties: {
-          sessionId: { type: ['string', 'null'] }, kind: { type: 'string' },
+          sessionId: { type: ['string', 'null'] }, type: { type: 'string' },
           provider: { type: 'string' }, model: { type: 'string' },
           responseId: { type: 'string' },
           input: { type: 'number' }, output: { type: 'number' },

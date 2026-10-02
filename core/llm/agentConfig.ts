@@ -7,7 +7,7 @@ import type { Tool } from 'ai';
 import type { Agent, ModelConfig } from './createAgent.js';
 import type { CompactionConfig } from './compaction.js';
 import { CodingAgent, type CodingPrompt } from './agents/coding.js';
-import { Clock } from '../clock.js';
+import { Clock } from 'phantom-backend-sdk';
 
 export type AgentName = 'coding' | 'assistant' | 'supervisor';
 export const AGENT_NAMES: readonly AgentName[] = ['coding', 'assistant', 'supervisor'];

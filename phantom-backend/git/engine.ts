@@ -11,10 +11,10 @@ import { git, commitAll, pushSession, GIT_CLIENT_ID, type PushResult, type PullR
 import type { Sessions } from '../sessions.js';
 import type { WorkspaceRow } from 'phantom-backend-sdk/schema';
 import { resolveAuth } from '../pool/pool.js';
-import { repoDir, type Paths } from '../pool/paths.js';
+import { repoDir, type Paths } from 'phantom-backend-sdk';
 import { syncBranch, LOCK_TTL_MS, RENEW_MS, type ConflictContext, type SyncDeps, type SyncEvent } from './sync.js';
-import { newId } from '../../core/ids.js';
-import { logger, errStr } from '../log.js';
+import { newId } from 'phantom-backend-sdk';
+import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('git');
 

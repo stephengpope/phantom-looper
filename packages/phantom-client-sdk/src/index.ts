@@ -26,3 +26,8 @@ export { BackendConnection, type BackendConnectionOptions } from './backendConne
 // The system prompt: the layout an agent declares, the shape the row stores.
 export { agentText, systemPromptBlocks, SYSTEM_PROMPT_SECTIONS,
   type SystemPromptLayout, type SystemPromptEntry, type SystemPromptSection, type StoredSystemPrompt } from './systemPrompt.js';
+
+// Shared vocabulary both halves speak: ids (ULIDs) and the board's card
+// shapes — status icons, requirement keys.
+export { newId, idTime } from './ids.js';
+export { DEFAULT_COLUMNS, STATUS_ICON, normalizeKey, newKey, keyedItems, type ChecklistItem } from './cards.js';

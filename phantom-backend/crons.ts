@@ -26,7 +26,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { Cron } from 'croner';
 import { Database, type Drizzle } from 'phantom-backend-sdk';
 import { crons, type CronRow, type ProjectRow } from 'phantom-backend-sdk/schema';
-import type { Clock } from '../core/clock.js';
+import type { Clock } from 'phantom-backend-sdk';
 import { keyedProviders, REASONINGS } from '../core/llm/createAgent.js';
 import type { Settings } from './settings.js';
 

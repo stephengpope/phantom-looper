@@ -12,7 +12,7 @@ import type { SessionRow } from 'phantom-backend-sdk/schema';
 import { loadTranscriptFile, newestTranscriptFile, Transcript, transcriptStamp } from '../../core/llm/transcript.js';
 import { compact, compactionDue, compactionOpts, CompactionLock, type CompactionConfig } from '../../core/llm/compaction.js';
 import type { TelegramClient } from './client.js';
-import { logger } from '../log.js';
+import { logger } from 'phantom-backend-sdk';
 
 const log = logger('telegram');
 

@@ -7,7 +7,7 @@
 // `git status`) makes a false positive free while a missed change is
 // stranded work.
 import { fork, type ChildProcess } from 'node:child_process';
-import { logger, errStr } from '../log.js';
+import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('workspace-watcher');
 

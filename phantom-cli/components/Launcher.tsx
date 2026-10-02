@@ -38,8 +38,8 @@ export const WORK = {
 
 /** The icon per card status — core's one map (core/kanban.ts), for /resume's
  *  card column and the board's column headers. The icon replaces the word. */
-export { STATUS_ICON } from '../../core/kanban.js';
-import { STATUS_ICON } from '../../core/kanban.js';
+export { STATUS_ICON } from 'phantom-client-sdk';
+import { STATUS_ICON } from 'phantom-client-sdk';
 
 export type Launch =
   | { kind: 'resume'; sessionId: string }

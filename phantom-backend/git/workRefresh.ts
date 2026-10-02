@@ -7,10 +7,10 @@
 import type { Workspaces } from '../workspaces.js';
 import type { Projects } from '../projects.js';
 import { workState } from './git.js';
-import { repoDir, type Paths } from '../pool/paths.js';
+import { repoDir, type Paths } from 'phantom-backend-sdk';
 import type { ContainerManager } from '../workspace/container.js';
 import type { BoardEvents } from '../api/boardEvents.js';
-import { logger, errStr } from '../log.js';
+import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('work-refresh');
 

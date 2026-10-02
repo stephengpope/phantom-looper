@@ -48,11 +48,11 @@ import type { Sessions } from '../sessions.js';
 import type { Workspaces } from '../workspaces.js';
 import type { Projects } from '../projects.js';
 import type { Settings } from '../settings.js';
-import { repoDir, type Paths } from '../pool/paths.js';
+import { repoDir, type Paths } from 'phantom-backend-sdk';
 import type { AutoPushResult } from './autoPush.js';
 import type { AutoPullResult } from './autoPull.js';
 import type { WorkspaceWatcher } from './workspaceWatcher.js';
-import { logger, errStr } from '../log.js';
+import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('instant-sync');
 

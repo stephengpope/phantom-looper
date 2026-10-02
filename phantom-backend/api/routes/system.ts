@@ -12,7 +12,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { AppCtx } from '../app.js';
 import { err, ok } from '../app.js';
-import { logger, errStr } from '../../log.js';
+import { logger, errStr } from 'phantom-backend-sdk';
 import { catalog, modelsFor } from '../../models.js';
 import { PROVIDERS, isProvider } from '../../../core/llm/createAgent.js';
 import { SystemError, LOG_MAX_TAIL, LOG_SERVICES } from '../../system.js';

@@ -16,7 +16,7 @@
 import type Docker from 'dockerode';
 import { extract } from 'tar-stream';
 import { parseDescription, type SkillMeta } from '../core/skills/skills.js';
-import { logger, errStr } from './log.js';
+import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('systemSkills');
 

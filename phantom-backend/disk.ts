@@ -36,13 +36,13 @@ import { API_IMAGE, APP_VERSION } from './env.js';
 import type { Settings } from './settings.js';
 import type { Projects } from './projects.js';
 import type { Sessions } from './sessions.js';
-import type { Paths } from './pool/paths.js';
+import type { Paths } from 'phantom-backend-sdk';
 import type { ContainerManager } from './workspace/container.js';
 import type { Images } from './images.js';
 import type { GitEngine } from './git/engine.js';
 import { workState, type PushResult } from './git/git.js';
-import { repoDir } from './pool/paths.js';
-import { logger, errStr } from './log.js';
+import { repoDir } from 'phantom-backend-sdk';
+import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('disk');
 

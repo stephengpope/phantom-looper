@@ -16,7 +16,7 @@
 // than the one in use, and only when nothing is pulling.
 import type Docker from 'dockerode';
 import type { PullProgress } from '../core/update.js';
-import { logger, errStr } from './log.js';
+import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('images');
 

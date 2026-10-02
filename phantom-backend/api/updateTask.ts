@@ -23,7 +23,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { Images } from '../images.js';
 import type { UpdateEvent } from '../../core/update.js';
-import { logger, errStr } from '../log.js';
+import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('update-task');
 

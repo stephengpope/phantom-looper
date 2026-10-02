@@ -20,7 +20,7 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { format } from 'node:util';
 import { render } from 'ink';
-import { newId } from '../core/ids.js';
+import { newId } from 'phantom-client-sdk';
 import { App } from './App.js';
 import type { WindowStore } from './window.js';
 import { createScreen } from './screen.js';

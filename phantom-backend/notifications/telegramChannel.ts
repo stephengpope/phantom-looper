@@ -5,7 +5,7 @@
 import type { NotificationChannel } from './channel.js';
 import { TelegramClient } from '../telegram/client.js';
 import type { Settings } from '../settings.js';
-import { logger } from '../log.js';
+import { logger } from 'phantom-backend-sdk';
 
 const log = logger('notifications');
 

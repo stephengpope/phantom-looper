@@ -8,7 +8,7 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type { SessionRow } from 'phantom-backend-sdk/schema';
-import { repoDir } from './pool/paths.js';
+import { repoDir } from 'phantom-backend-sdk';
 import { Sandbox } from './workspace/sandbox.js';
 import { ToolError } from './tools/envelope.js';
 import { fuzzyFindAndReplace, formatNoMatchHint } from './tools/fuzzy.js';

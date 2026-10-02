@@ -1,20 +1,20 @@
 // Boot: env -> db -> migrations -> project dirs -> looper -> HTTP.
 import { readEnv, APP_VERSION as VERSION } from './env.js';
 import { Database, SDK_MIGRATIONS } from 'phantom-backend-sdk';
-import { makePaths } from './pool/paths.js';
+import { makePaths } from 'phantom-backend-sdk';
 import { bootCleanup, tick } from './pool/pool.js';
 import { Sessions } from './sessions.js';
 import { Settings } from './settings.js';
 import { Projects } from './projects.js';
-import { Databases } from './databases.js';
+import { AgentDatabases } from 'phantom-backend-sdk';
 import { Workspaces } from './workspaces.js';
 import { Cards } from './cards.js';
-import { BackgroundTasks } from './backgroundTasks.js';
+import { BackgroundTasks } from 'phantom-backend-sdk';
 import { Presets } from './presets.js';
 import { Crons } from './crons.js';
 import { CronEngine } from './crons/engine.js';
 import { setTokenRecorder } from '../core/llm/createAgent.js';
-import { LogTokens } from './logTokens.js';
+import { TokenLog } from 'phantom-backend-sdk';
 import { System } from './system.js';
 import { TelegramBotState } from './telegram/botState.js';
 import { TelegramSentMessages } from './telegram/sentMessages.js';
@@ -50,7 +50,7 @@ import { refreshWorkState } from './git/workRefresh.js';
 import { InstantSync } from './git/instantSync.js';
 import { WorkspaceWatcher } from './git/workspaceWatcher.js';
 import { reconcileDbUi } from './api/routes/dbUi.js';
-import { logger, errStr } from './log.js';
+import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('boot');
 /** Fake base URL for in-process API calls via injectFetch — the host part is
@@ -74,7 +74,7 @@ async function main() {
   const sessionEvents = new SessionEvents();
   const settingsEvents = new SettingsEvents();
   const settings = new Settings(db, env.encryptionKey, settingsEvents);
-  const databases = new Databases(pgPool, env.databaseUrl, env.encryptionKey);
+  const databases = new AgentDatabases(pgPool, env.databaseUrl, env.encryptionKey);
   const projects = new Projects(db, settings, settingsEvents, databases);
   const workspaces = new Workspaces(db, paths, settings, sessionEvents);
   const cards = new Cards(db, projects, events);
@@ -91,10 +91,10 @@ async function main() {
   const backgroundTasks = new BackgroundTasks(db);
   const presets = new Presets(db);
   const crons = new Crons(db, settings);
-  const logTokens = new LogTokens(db);
+  const logTokens = new TokenLog(db);
   // Every model call in this process records here (core languageModel).
   setTokenRecorder((r) => {
-    logTokens.record(r).catch((e) => log.warn({ err: (e as Error).message }, 'token recording failed'));
+    logTokens.record({ ...r, type: r.kind }).catch((e) => log.warn({ err: (e as Error).message }, 'token recording failed'));
   });
   const telegramBotState = new TelegramBotState(db, env.encryptionKey);
   const telegramSentMessages = new TelegramSentMessages(db);

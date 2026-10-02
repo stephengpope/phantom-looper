@@ -18,11 +18,11 @@ import { SYSTEM_PROMPT_SECTIONS } from 'phantom-client-sdk/systemPrompt';
 import { fill } from '../../core/prompts/template.js';
 import { SKILLS_LIST, SECRETS_LIST, GITHUB_TOKEN, AGENT_DATABASE, AGENT_DATABASE_SHARED, TIME_DATE } from '../../core/prompts/serverBlocks.js';
 import { scanSkills, mergeSkills, type SkillMeta } from '../../core/skills/skills.js';
-import { Clock } from '../../core/clock.js';
+import { Clock } from 'phantom-backend-sdk';
 import { systemSkills } from '../systemSkills.js';
 import type { Settings } from '../settings.js';
 import type { ProjectRow } from 'phantom-backend-sdk/schema';
-import { GLOBAL, projectScope } from '../store.js';
+import { GLOBAL, projectScope } from 'phantom-backend-sdk';
 
 /** What the blocks read: the session's checkout (null for a session with
  *  no files of its own), its project, the settings, and docker for the

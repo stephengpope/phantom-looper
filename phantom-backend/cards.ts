@@ -13,7 +13,7 @@ import type { Drizzle } from 'phantom-backend-sdk';
 // sessions.card_id. Read through the join only; the row is Sessions' to write.
 import { cards, cardRevisions, sessions, type CardRow, type ProjectRow } from 'phantom-backend-sdk/schema';
 import { columnsOf, type Projects } from './projects.js';
-import { keyedItems, newKey, normalizeKey, type ChecklistItem } from '../core/kanban.js';
+import { keyedItems, newKey, normalizeKey, type ChecklistItem } from 'phantom-backend-sdk';
 import type { BoardEvents } from './api/boardEvents.js';
 
 export type { CardRow };

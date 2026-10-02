@@ -7,7 +7,7 @@
 // missing key or a vendor failure comes back as a reason the caller can say.
 
 import { connectFetch, isConnectFailure } from './connect.js';
-import { logger } from '../log.js';
+import { logger } from 'phantom-backend-sdk';
 
 const log = logger('deepgram');
 

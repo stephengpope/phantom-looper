@@ -8,14 +8,14 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import type { Drizzle } from 'phantom-backend-sdk';
 import { settings, type ProjectRow } from 'phantom-backend-sdk/schema';
-import { GLOBAL, projectScope } from './store.js';
+import { GLOBAL, projectScope } from 'phantom-backend-sdk';
 import { encrypt, decrypt } from './crypto.js';
 import { latestModel } from './models.js';
 import { PROVIDERS, REASONINGS, type Provider } from '../core/llm/createAgent.js';
-import { Clock, TIMEZONES } from '../core/clock.js';
+import { Clock, TIMEZONES } from 'phantom-backend-sdk';
 import { agentConfigFrom, resolveModel, type AgentConfig, type AgentName, type AgentRows, type ModelPin } from './agentConfig.js';
 import { APP_VERSION } from './env.js';
-import { logger } from './log.js';
+import { logger } from 'phantom-backend-sdk';
 import type { SettingsEvents } from './api/settingsEvents.js';
 
 const log = logger('settings');

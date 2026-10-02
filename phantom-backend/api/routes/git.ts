@@ -8,7 +8,7 @@ import { ok, err, type AppCtx } from '../app.js';
 import { SESSION_HEADER, toolSession } from '../sessionHeader.js';
 import type { FsDeps } from './fs.js';
 import type { GitEngine } from '../../git/engine.js';
-import { logger, errStr } from '../../log.js';
+import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('exec');
 

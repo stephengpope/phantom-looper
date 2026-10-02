@@ -14,7 +14,7 @@ import { titleRequest, type TitleContext } from '../core/prompts/helpers/wiring.
 import { parseLines, conversationFrom } from 'phantom-client-sdk/transcript';
 import type { Settings } from './settings.js';
 import type { Sessions } from './sessions.js';
-import { logger, errStr } from './log.js';
+import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('session-title');
 

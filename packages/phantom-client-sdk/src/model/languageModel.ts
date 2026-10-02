@@ -200,7 +200,7 @@ function billingMiddleware(s: ModelSpec, usage: (u: TokenUsage) => void): Langua
  *  the backend (POST /log-tokens). The one way to get a model. */
 export function billedModel(backend: BackendClient, s: ModelSpec, bill: Billing, hooks: ModelHooks): LanguageModel {
   const model = providerModel(s, withRetry(undefined, hooks.notice, 'model', hooks.retry));
-  const post = (u: TokenUsage) => backend.call('POST', '/log-tokens', { kind: bill.type, sessionId: bill.sessionId, ...u })
+  const post = (u: TokenUsage) => backend.call('POST', '/log-tokens', { type: bill.type, sessionId: bill.sessionId, ...u })
     .then(() => undefined, (e: unknown) => hooks.onBillingError(asPhantomError(e, 'internal', 'billing')));
   return wrapLanguageModel({ model, middleware: billingMiddleware(s, (u) => { void post(u); }) });
 }

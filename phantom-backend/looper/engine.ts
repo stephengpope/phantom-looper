@@ -38,9 +38,9 @@ import { LOOP_CLIENT_ID, workspaceOf, type Sessions } from '../sessions.js';
 import type { Projects } from '../projects.js';
 import type { Cards, CardFields } from '../cards.js';
 import type { Settings } from '../settings.js';
-import type { LogTokens } from '../logTokens.js';
+import type { TokenLog } from 'phantom-backend-sdk';
 import type { SettingsEvents } from '../api/settingsEvents.js';
-import { GLOBAL } from '../store.js';
+import { GLOBAL } from 'phantom-backend-sdk';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
 import { SupervisorAgent as SupervisorAgentOnSdk } from '../../core/agents/supervisor.js';
 import { memoryRecorder, serializeTranscript } from '../../core/llm/transcript.js';
@@ -59,7 +59,7 @@ import { injectFetch } from './injectFetch.js';
 import type { BoardEvents } from '../api/boardEvents.js';
 import type { SessionEvents } from '../api/sessionEvents.js';
 import type { BackdoorQueue } from '../api/backdoor.js';
-import { logger, errStr } from '../log.js';
+import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('looper');
 const CLIENT_ID = LOOP_CLIENT_ID;
@@ -71,7 +71,7 @@ export interface LooperDeps {
   cards: Cards;
   settings: Settings;
   /** The token log — the budget's coin is read off it directly. */
-  logTokens: LogTokens;
+  logTokens: TokenLog;
   app: FastifyInstance;
   apiKey: string;
   /** The board's event bus (api/boardEvents.ts): the engine's card writes go

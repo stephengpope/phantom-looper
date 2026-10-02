@@ -13,12 +13,12 @@
 import type Docker from 'dockerode';
 import type { ProjectRow } from 'phantom-backend-sdk/schema';
 import type { Settings } from '../settings.js';
-import type { Databases } from '../databases.js';
+import type { AgentDatabases } from 'phantom-backend-sdk';
 import { resolveAuth } from '../pool/pool.js';
-import type { Paths } from '../pool/paths.js';
+import type { Paths } from 'phantom-backend-sdk';
 import type { Images } from '../images.js';
-import { sessionDir } from '../pool/paths.js';
-import { logger, errStr } from '../log.js';
+import { sessionDir } from 'phantom-backend-sdk';
+import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('container');
 
@@ -107,7 +107,7 @@ export interface ContainerOpts {
   /** The agent databases, for `agent_database_shared`: the container gets
    *  the project's connection string as AGENT_DATABASE_URL. Absent (tests)
    *  means never. */
-  databases?: Databases;
+  databases?: AgentDatabases;
   /** The stack's Docker network (compose's `<project>_default`), which a
    *  container joins when it carries AGENT_DATABASE_URL — the URL's host
    *  resolves only there. Unset (dev, no compose) = the URL is handed out

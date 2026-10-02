@@ -11,7 +11,7 @@
 // route is the one place every stop path crosses, so the kill hangs off it:
 // abort the stream AND kill what it was running, whoever ran the turn.
 // Detached commands are not here by design — detached means "keep running".
-import { logger, errStr } from '../log.js';
+import { logger, errStr } from 'phantom-backend-sdk';
 import type { Sandbox } from '../workspace/sandbox.js';
 
 const log = logger('bash');
