@@ -10,13 +10,13 @@
 // anything is committed so a no-op pull mints no commit and spends no model
 // call; and there are no rounds, because nothing races a pull — base moving
 // afterward is simply the next pull.
-import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
-import type { Paths } from 'phantom-backend-sdk';
+import type { ProjectRow, SessionRow } from '../storage/schema.js';
+import type { Paths } from '../lib/paths.js';
 import { syncBranch, type SyncEvent, type SyncDeps } from './sync.js';
-import type { Sessions } from 'phantom-backend-sdk';
-import type { Workspaces } from 'phantom-backend-sdk';
-import type { Cards } from 'phantom-backend-sdk';
-import type { Settings } from 'phantom-backend-sdk';
+import type { Sessions } from '../storage/Sessions.js';
+import type { Workspaces } from '../storage/Workspaces.js';
+import type { Cards } from '../storage/Cards.js';
+import type { Settings } from '../storage/Settings.js';
 
 export type AutoPullEvent = SyncEvent;
 
@@ -45,7 +45,7 @@ export interface AutoPullDeps {
   paths: Paths;
   resolve?: SyncDeps['resolve'];
   recordSummary?: SyncDeps['recordSummary'];
-  messageConfig?: SyncDeps['messageConfig'];
+  writeCommitMessage?: SyncDeps['writeCommitMessage'];
   onEvent?: (e: AutoPullEvent) => void | Promise<void>;
 }
 

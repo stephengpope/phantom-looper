@@ -8,7 +8,7 @@ import { ok, err, type PhantomBackend } from 'phantom-backend-sdk';
 import type { AppExtras } from '../appRoutes.js';
 import { SESSION_HEADER, toolSession } from 'phantom-backend-sdk';
 import { fsDeps } from 'phantom-backend-sdk';
-import type { GitEngine } from '../../git/engine.js';
+import type { GitSync } from 'phantom-backend-sdk';
 import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('exec');

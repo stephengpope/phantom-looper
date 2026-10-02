@@ -9,13 +9,11 @@ import { oldAgentConfig, sessionPin } from './agentConfig.js';
 import { CronEngine } from './crons/engine.js';
 import { setTokenRecorder } from '../core/llm/createAgent.js';
 import { System } from './system.js';
-import { idleBackupSweep, pressureSweep } from './disk.js';
 import { appRoutes, type AppExtras } from './api/appRoutes.js';
 import { gitTools } from './tools/git.js';
 import { shutdown as updateShutdown } from './api/updateTask.js';
-import { GitEngine } from './git/engine.js';
-import { autoPush, type AutoPushEvent, type ConflictContext } from './git/autoPush.js';
-import { autoPull, type AutoPullEvent } from './git/autoPull.js';
+import { GitSync, autoPush, autoPull, InstantSync, idleBackupSweep, pressureSweep, type AutoPushEvent, type AutoPullEvent, type ConflictContext, type SyncDeps, type SyncEvent } from 'phantom-backend-sdk';
+import { writeCommitMessage } from './git/commitMessage.js';
 import { GIT_CLIENT_ID } from 'phantom-backend-sdk/git';
 import { SessionDigest } from './notifications/digest.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../core/session.js';
@@ -23,11 +21,9 @@ import { runCodingTurn } from './looper/turn.js';
 import { injectFetch } from './looper/injectFetch.js';
 import { toCodingAgent } from '../core/prompts/autoPush/wiring.js';
 import { serializeTranscript } from '../core/llm/transcript.js';
-import type { SyncDeps, SyncEvent } from './git/sync.js';
 import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
 import { LooperEngine } from './looper/engine.js';
 import { TelegramEngine } from './telegram/engine.js';
-import { InstantSync } from './git/instantSync.js';
 
 const log = logger('boot');
 /** Fake base URL for in-process API calls via injectFetch — the host part is
@@ -107,17 +103,12 @@ async function main() {
   // The sync's commit message rides the ASSISTANT's model — the small-fast
   // slot; writing one subject line from a diff is not work for the model doing
   // the engineering. A config that cannot build THROWS, and the sync fails
-  // with that reason: there is no file-name fallback anywhere — a commit
-  // message that cannot be written is a broken setup the person must hear
-  // about, not paper over. Shared by auto-push, auto-pull and the manual
-  // pull (the engine below).
-  // `report` comes from the sync (it streams each note as a commit-step
-  // event); onRetry is what makes the retry loop's waits VISIBLE — without
-  // it the call retried in silence, which was the original bug.
-  const messageConfig: SyncDeps['messageConfig'] = async (report) => {
+  // with that reason: there is no file-name fallback anywhere. `report` is
+  // the sync's commit-step event stream, so a retry's waits are visible.
+  const commitMessage: SyncDeps['writeCommitMessage'] = async (input, report) => {
     const { model } = await oldAgentConfig(agentConfig, settings, 'assistant', {}); // a bad pair throws with the fix in the message
-    model.onRetry = (note: string) => { log.warn(`commit message: ${note}`); report?.(note); };
-    return model;
+    model.onRetry = (note: string) => { log.warn(`commit message: ${note}`); report(note); };
+    return writeCommitMessage(model, input);
   };
   // Every sync step also lands on the session's live feed, so a window
   // WATCHING the session sees the sync whoever kicked it off — a card
@@ -130,8 +121,8 @@ async function main() {
       { event: 'sync', op, step: e.step, label: e.label, detail: e.detail });
   // The manual /git/pull has no stream of its own — the feed is how anyone
   // sees it run, so its steps publish under the git client (no caller to echo).
-  const engine = new GitEngine({ sessions, workspaces, cards, settings, paths,
-    resolve: resolveConflict, messageConfig }, (sessionId, e) => publishSync(sessionId, 'pull')(e));
+  const engine = new GitSync({ sessions, workspaces, cards, settings, paths,
+    resolve: resolveConflict, writeCommitMessage: commitMessage }, (sessionId, e) => publishSync(sessionId, 'pull')(e));
 
   // After a successful sync, drop a summary into the session's transcript so
   // the coding agent knows what happened on its next turn. Same lock, same
@@ -166,7 +157,7 @@ async function main() {
       .catch((e) => log.warn({ session: session.id, err: errStr(e) }, 'could not block card after unresolved conflict'));
   };
   const syncDeps = { sessions, workspaces, cards, settings, paths,
-    resolve: resolveConflict, recordSummary, messageConfig };
+    resolve: resolveConflict, recordSummary, writeCommitMessage: commitMessage };
   const autoPushFn = async (session: SessionRow, project: ProjectRow,
     onEvent?: (e: AutoPushEvent) => void | Promise<void>, by?: string) => {
     const publish = publishSync(session.id, 'push', by);
@@ -207,7 +198,7 @@ async function main() {
     } else return;
     if (!backdoor.has(session.id, message)) backdoor.push(session.id, message);
   };
-  const instantDeps = { sessions, workspaces, cards, settings, paths, messageConfig, recordSummary: noteForNextTurn };
+  const instantDeps = { sessions, workspaces, cards, settings, paths, writeCommitMessage: commitMessage, recordSummary: noteForNextTurn };
   instantSync = new InstantSync({
     sessions, workspaces, projects, settings, paths, watcher: backend.workspaceWatcher,
     autoPush: (session, project) => autoPush(instantDeps, session, project, { hold: false }),

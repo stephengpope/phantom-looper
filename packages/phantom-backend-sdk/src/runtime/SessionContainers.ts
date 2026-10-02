@@ -121,7 +121,7 @@ export interface ContainerOpts {
   onRemoved?: (workspaceId: string) => Promise<void>;
 }
 
-export class ContainerManager {
+export class SessionContainers {
   private inflight = new Map<string, Promise<Docker.Container>>();
 
   constructor(
@@ -168,7 +168,7 @@ export class ContainerManager {
       await c.remove({ force: true, v: true }).catch(() => {});
     } catch { /* no such container */ }
 
-    if (!this.opts.settings) throw new Error('ContainerManager needs settings to create a container');
+    if (!this.opts.settings) throw new Error('SessionContainers needs settings to create a container');
     const limits = await this.opts.settings.resolveMany(
       ['container_image', 'container_memory_mb', 'container_cpus', 'container_pids_limit', 'container_docker'],
       project ? { projectId: project.id } : {}) as { container_image: string; container_memory_mb: number | null; container_cpus: number | null; container_pids_limit: number | null; container_docker: boolean };

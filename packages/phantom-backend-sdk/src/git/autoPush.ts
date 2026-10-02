@@ -2,14 +2,13 @@
 // `syncBranch` with `landOnBase: true`; sync.ts holds the flow and the whole
 // argument for it. This file is the result vocabulary the routes and the app
 // already speak, and nothing else.
-import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
-import type { Paths } from 'phantom-backend-sdk';
-import type { ModelConfig } from '../../core/llm/createAgent.js';
+import type { ProjectRow, SessionRow } from '../storage/schema.js';
+import type { Paths } from '../lib/paths.js';
 import { syncBranch, type SyncEvent, type SyncDeps, type ConflictContext } from './sync.js';
-import type { Sessions } from 'phantom-backend-sdk';
-import type { Workspaces } from 'phantom-backend-sdk';
-import type { Cards } from 'phantom-backend-sdk';
-import type { Settings } from 'phantom-backend-sdk';
+import type { Sessions } from '../storage/Sessions.js';
+import type { Workspaces } from '../storage/Workspaces.js';
+import type { Cards } from '../storage/Cards.js';
+import type { Settings } from '../storage/Settings.js';
 
 export { LOCK_TTL_MS, RENEW_MS, type ConflictContext } from './sync.js';
 
@@ -31,7 +30,7 @@ export interface AutoPushDeps {
   paths: Paths;
   resolve?: SyncDeps['resolve'];
   recordSummary?: SyncDeps['recordSummary'];
-  messageConfig?: SyncDeps['messageConfig'];
+  writeCommitMessage?: SyncDeps['writeCommitMessage'];
   onEvent?: (e: AutoPushEvent) => void | Promise<void>;
 }
 
@@ -48,4 +47,3 @@ export async function autoPush(
 }
 
 // Re-exported so callers that only import autoPush keep type access.
-export type { ModelConfig };

@@ -2,8 +2,8 @@
 // Run: npx tsx --test phantom-backend/disk.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { tooFull, diskCleanup, MIN_FREE_GB, type CleanupDeps, type DiskState } from './disk.js';
-import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
+import { tooFull, diskCleanup, MIN_FREE_GB, type CleanupDeps, type DiskState } from './Disk.js';
+import type { SessionRow, ProjectRow } from '../storage/schema.js';
 
 const HOUR = 60 * 60_000;
 const NOW = 1_000 * HOUR;

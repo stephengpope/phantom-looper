@@ -35,21 +35,19 @@
 // THE LOCK is the only concurrency test. The sync takes the session lock and
 // fails when it cannot; it never inspects whether anything is running. Same
 // single lock the rest of the system uses — no new mutex.
-import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
-import { checkoutPool } from 'phantom-backend-sdk';
-import { repoDir, type Paths } from 'phantom-backend-sdk';
-import type { Sessions } from 'phantom-backend-sdk';
-import type { Workspaces } from 'phantom-backend-sdk';
-import type { Cards } from 'phantom-backend-sdk';
-import type { Settings } from 'phantom-backend-sdk';
+import type { ProjectRow, SessionRow } from '../storage/schema.js';
+import * as checkoutPool from '../runtime/CheckoutPool.js';
+import { repoDir, type Paths } from '../lib/paths.js';
+import type { Sessions } from '../storage/Sessions.js';
+import type { Workspaces } from '../storage/Workspaces.js';
+import type { Cards } from '../storage/Cards.js';
+import type { Settings } from '../storage/Settings.js';
 import {
   git, fetchBase, squashToMergeBase, commitStaged, rebaseOntoBase, rebaseAbort, rebaseInProgress,
   landingProblems, pushSession, pushSessionForced, pushToBase, hasWorkToLand, GIT_CLIENT_ID,
-} from 'phantom-backend-sdk/git';
-import { commitMessageFor } from './commitMessage.js';
-import { newId } from 'phantom-backend-sdk';
-import type { ModelConfig } from '../../core/llm/createAgent.js';
-import { logger, errStr } from 'phantom-backend-sdk';
+} from './Git.js';
+import { newId } from 'phantom-client-sdk';
+import { logger, errStr } from '../lib/log.js';
 
 const log = logger('git-sync');
 
@@ -156,7 +154,12 @@ export interface SyncDeps {
    *  only ever gets a real message. `report` is the retry loop's voice
    *  (withRetry): each failed attempt and the final give-up, as they happen
    *  — hand it to the config's onRetry or the wait is invisible. */
-  messageConfig?: (report?: (note: string) => void) => Promise<ModelConfig | null>;
+  /** The commit's subject line from the staged diff: `stat` and `diff`
+   *  (capped) against the merge-base, the card's intent, and `report` for
+   *  each retry note (shown as a commit-step event). A model call — the
+   *  app's until the backend writes it on the client SDK's billed model.
+   *  Absent, or throwing: the sync fails with the reason; nothing guesses. */
+  writeCommitMessage?: (input: { stat: string; diff: string; card: string; sessionId: string }, report: (note: string) => void) => Promise<string>;
   /** Progress, one event per step — awaited, so a streaming route can write
    *  in order (and tests can inject races). */
   onEvent?: (e: SyncEvent) => void | Promise<void>;
@@ -265,11 +268,8 @@ export async function syncBranch(
         // Retry notes stream as commit-step events, so a rate-limited message
         // call shows its recovery (and its give-up) where the sync's progress
         // already shows — silence here was the original bug.
-        const config = deps.messageConfig
-          ? await deps.messageConfig((note) => { void ev('commit', note); })
-          : null;
         const card = await cardIntentFor(deps, session);
-        const msg = await commitMessageFor(dir, config, card, mb.trim(), session.id);
+        const msg = await commitMessageFromDiff(dir, mb.trim(), card, session.id, deps.writeCommitMessage, (note) => { void ev('commit', note); });
         await squashToMergeBase(dir, mb.trim());
         await commitStaged(dir, `${msg}\n\nPhantom-Session: ${session.id}`);
       } catch (e) {
@@ -390,4 +390,21 @@ export async function syncBranch(
     if (hold) await deps.sessions.releaseLock(session.id, GIT_CLIENT_ID);
     await deps.workspaces.releaseSyncLock(workspace.id, holder);
   }
+}
+
+const MAX_DIFF_BYTES = 60_000;
+/** The staged diff against `base` (stat + patch, the patch capped), handed
+ *  to the message writer. Throws when none is wired or none can be written:
+ *  the sync's answer is to fail, not to guess. */
+async function commitMessageFromDiff(
+  dir: string, base: string, card: string, sessionId: string,
+  write: SyncDeps['writeCommitMessage'], report: (note: string) => void,
+): Promise<string> {
+  if (!write) throw new Error('no model configured to write the commit message — set one on /settings (phantom-cli), or PATCH /settings {coding_provider, coding_model}');
+  const { stdout: stat } = await git(dir, ['diff', '--cached', '--stat', base]);
+  const { stdout: patch } = await git(dir, ['diff', '--cached', base]);
+  const diff = patch.length > MAX_DIFF_BYTES ? `${patch.slice(0, MAX_DIFF_BYTES)}\n… (truncated)` : patch;
+  const message = (await write({ stat, diff, card, sessionId }, report)).trim();
+  if (!message || message.length > 2000) throw new Error('the model could not produce a usable commit message');
+  return message;
 }

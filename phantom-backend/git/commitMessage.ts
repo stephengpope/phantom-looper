@@ -16,12 +16,10 @@
 import type { ModelConfig } from '../../core/llm/createAgent.js';
 import { commitMessagePrompt } from '../../core/prompts/autoPush/wiring.js';
 import { PhantomHelper } from '../../core/llm/helper.js';
-import { git } from 'phantom-backend-sdk/git';
 import { logger } from 'phantom-backend-sdk';
 
 const log = logger('auto-push');
 
-const MAX_DIFF_BYTES = 60_000;
 const TRIES = 3;
 // No timeout and no retry loop HERE, on purpose: this call rides the ONE
 // retry loop every model call rides (withRetry in core/llm/createAgent.ts —
@@ -37,31 +35,23 @@ class CommitMessageHelper extends PhantomHelper {
   }
 }
 
-/** A subject line from the STAGED diff against `base` (the merge-base — the
- *  caller has staged everything but rewritten nothing). Throws when no real
- *  message can be produced: the sync's answer is to fail, not to guess. */
-export async function commitMessageFor(
-  dir: string, config: ModelConfig | null, card = '', base?: string, sessionId?: string,
+/** The sync's commit-message writer (SyncDeps.writeCommitMessage), on the
+ *  OLD path's model helper. `config` is the model that writes it — null
+ *  throws, the sync fails with that reason: no file-name fallback anywhere.
+ *  Up to TRIES answers that are empty or oversized; a refusal or a transport
+ *  failure withRetry already gave up on is thrown as is — one retry loop,
+ *  never stacked. */
+export async function writeCommitMessage(
+  config: ModelConfig | null, input: { stat: string; diff: string; card: string; sessionId: string },
 ): Promise<string> {
   if (!config) {
     throw new Error('no model configured to write the commit message — set one on /settings (phantom-cli), or PATCH /settings {coding_provider, coding_model}');
   }
-  const range = base ? [base] : [];
-  const { stdout: stat } = await git(dir, ['diff', '--cached', '--stat', ...range]);
-  const { stdout: patch } = await git(dir, ['diff', '--cached', ...range]);
-  const diff = patch.length > MAX_DIFF_BYTES ? `${patch.slice(0, MAX_DIFF_BYTES)}\n… (truncated)` : patch;
-  const helper = new CommitMessageHelper(config, sessionId ?? null);
+  const helper = new CommitMessageHelper(config, input.sessionId);
   for (let attempt = 1; attempt <= TRIES; attempt++) {
-    try {
-      const msg = (await helper.run(stat, diff, card)).trim();
-      if (msg && msg.length <= 2000) return msg;
-      log.warn({ dir, attempt }, 'commit message attempt answered nonsense — trying again');
-    } catch (e) {
-      // A refusal or a transport failure that withRetry's budget already
-      // gave up on: permanent for this run, reported with the provider's
-      // own words. Never retried here — one retry loop, never stacked.
-      throw e;
-    }
+    const message = (await helper.run(input.stat, input.diff, input.card)).trim();
+    if (message && message.length <= 2000) return message;
+    log.warn({ attempt }, 'commit message attempt answered nonsense — trying again');
   }
   throw new Error(`the model could not produce a usable commit message (${TRIES} empty or oversized answers)`);
 }

@@ -33,7 +33,7 @@ import { SettingsEvents } from './agents/SettingsEvents.js';
 import { ForegroundCommands } from './agents/ForegroundCommands.js';
 import { makeDocker } from './runtime/Docker.js';
 import { Images } from './runtime/Images.js';
-import { ContainerManager as SessionContainers } from './runtime/SessionContainers.js';
+import { SessionContainers } from './runtime/SessionContainers.js';
 import * as checkoutPool from './runtime/CheckoutPool.js';
 import { WorkspaceWatcher } from './git/WorkspaceWatcher.js';
 import { refreshWorkState } from './git/workRefresh.js';

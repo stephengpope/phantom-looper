@@ -5,10 +5,8 @@
 import type { FastifyInstance } from 'fastify';
 import type { PhantomBackend } from 'phantom-backend-sdk';
 import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
-import type { GitEngine } from '../git/engine.js';
 import type { System } from '../system.js';
-import type { AutoPushResult, AutoPushEvent } from '../git/autoPush.js';
-import type { AutoPullResult, AutoPullEvent } from '../git/autoPull.js';
+import type { GitSync, AutoPushResult, AutoPushEvent, AutoPullResult, AutoPullEvent } from 'phantom-backend-sdk';
 import { gitRoutes } from './routes/git.js';
 import { systemRoutes } from './routes/system.js';
 import { telegramRoutes } from './routes/telegram.js';
@@ -17,7 +15,7 @@ import { turnRoute } from './routes/turn.js';
 export interface AppExtras {
   apiKey: string;
   /** The manual git operations and the two auto syncs. → GitSync (§4). */
-  engine: GitEngine;
+  engine: GitSync;
   autoPush: (session: SessionRow, project: ProjectRow,
     onEvent?: (e: AutoPushEvent) => void | Promise<void>, by?: string) => Promise<AutoPushResult>;
   autoPull: (session: SessionRow, project: ProjectRow,

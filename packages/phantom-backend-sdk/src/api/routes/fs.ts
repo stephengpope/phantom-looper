@@ -16,7 +16,7 @@ import { ToolError } from '../../tools/envelope.js';
 import type { PhantomBackend } from '../../PhantomBackend.js';
 import { killProcessGroup } from '../../agents/ForegroundCommands.js';
 import { workspaceOf } from '../../storage/Sessions.js';
-import type { ContainerManager as SessionContainers } from '../../runtime/SessionContainers.js';
+import type { SessionContainers } from '../../runtime/SessionContainers.js';
 import type Docker from 'dockerode';
 
 const log = logger('bash');
