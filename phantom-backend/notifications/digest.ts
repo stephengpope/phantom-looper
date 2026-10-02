@@ -18,9 +18,9 @@ import type { Settings, AgentConfig as SdkAgentConfig } from 'phantom-backend-sd
 import { oldAgentConfig } from '../agentConfig.js';
 import type { Projects } from 'phantom-backend-sdk';
 import { PhantomHelper } from '../../core/llm/helper.js';
-import { lastAssistantFromJsonl } from './transcriptHelper.js';
-import type { NotificationChannel } from './channel.js';
-import { titled } from '../telegram/client.js';
+import { lastAssistantFromJsonl } from 'phantom-backend-sdk';
+import type { NotificationChannel } from 'phantom-backend-sdk';
+import { titled } from 'phantom-backend-sdk';
 import { STATUS_ICON } from 'phantom-backend-sdk';
 import { logger } from 'phantom-backend-sdk';
 

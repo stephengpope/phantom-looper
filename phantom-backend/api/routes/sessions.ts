@@ -19,7 +19,7 @@ import { SystemPromptError } from 'phantom-backend-sdk';
 import { AGENT_NAMES, type AgentName } from '../../../core/llm/agentConfig.js';
 import { toolsFor } from '../../tools/registry.js';
 import { messageLine, userMessage } from 'phantom-client-sdk/transcript';
-import { writeAttachment } from '../../telegram/attachments.js';
+import { writeAttachment } from 'phantom-backend-sdk';
 import type { SessionEvent } from 'phantom-backend-sdk';
 
 const log = logger('sessions');

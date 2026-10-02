@@ -5,8 +5,8 @@
 // passing — update ids climb per bot, so anything far behind is done.
 
 import { lt } from 'drizzle-orm';
-import type { Drizzle } from 'phantom-backend-sdk';
-import { telegramHandledUpdates } from 'phantom-backend-sdk/schema';
+import type { Drizzle } from '../storage/Database.js';
+import { telegramHandledUpdates } from '../storage/schema.js';
 
 const PRUNE_BEHIND = 10_000;
 

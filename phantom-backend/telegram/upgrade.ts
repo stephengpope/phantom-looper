@@ -8,8 +8,8 @@
 // approvals in approvals.ts) so the engine's callback router can dispatch.
 
 import crypto from 'node:crypto';
-import type { TelegramClient } from './client.js';
-import { titled } from './client.js';
+import type { TelegramBot } from 'phantom-backend-sdk';
+import { titled } from 'phantom-backend-sdk';
 import { checkLatest, isBehind, bare } from '../../core/version.js';
 import { pullLine, type PullProgress, type UpdateEvent } from 'phantom-client-sdk';
 import { logger, errStr } from 'phantom-backend-sdk';
@@ -39,8 +39,8 @@ export interface UpgradeCheckerDeps {
   token(): Promise<string>;
   /** Get the authorized user's chat id, or null. */
   authorizedUser(): Promise<number | null>;
-  /** Build a TelegramClient that records sent messages. */
-  makeClient(token: string, dm: number): TelegramClient;
+  /** Build a TelegramBot that records sent messages. */
+  makeClient(token: string, dm: number): TelegramBot;
 }
 
 export class UpgradeChecker {
@@ -79,7 +79,7 @@ export class UpgradeChecker {
   // ── /update command ───────────────────────────────────────────────────
 
   /** Manual check from /update. Always responds — even when current. */
-  async manualCheck(client: TelegramClient, dm: number): Promise<void> {
+  async manualCheck(client: TelegramBot, dm: number): Promise<void> {
     if (this.pending) {
       await client.sendMessage(dm, `⬆️ Already waiting for your answer on ${bare(this.pending.tag)}.`);
       return;
@@ -103,7 +103,7 @@ export class UpgradeChecker {
   // ── callback handling ─────────────────────────────────────────────────
 
   /** A tap on an upgrade approval button. Returns true if handled. */
-  async handleCallback(client: TelegramClient, dm: number,
+  async handleCallback(client: TelegramBot, dm: number,
     query: { id: string; data?: string }): Promise<boolean> {
     const [prefix, id, verdict] = String(query.data ?? '').split(':');
     if (prefix !== PREFIX) return false;
@@ -138,7 +138,7 @@ export class UpgradeChecker {
   // ── internals ─────────────────────────────────────────────────────────
 
   private async sendApproval(token: string, dm: number, tag: string,
-    existingClient?: TelegramClient): Promise<void> {
+    existingClient?: TelegramBot): Promise<void> {
     const id = crypto.randomBytes(6).toString('hex');
     const v = bare(tag);
     const current = bare(this.deps.version);
@@ -157,7 +157,7 @@ export class UpgradeChecker {
     log.info({ tag, dm }, 'upgrade notification sent');
   }
 
-  private async doUpgrade(client: TelegramClient, dm: number, p: Pending): Promise<void> {
+  private async doUpgrade(client: TelegramBot, dm: number, p: Pending): Promise<void> {
     const tag = p.tag;
     const v = bare(tag);
     this.pending = null;

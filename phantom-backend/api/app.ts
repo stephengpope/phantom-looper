@@ -38,7 +38,7 @@ import type { TokenLog } from 'phantom-backend-sdk';
 import { SettingsEvents } from 'phantom-backend-sdk';
 import { ForegroundCommands } from 'phantom-backend-sdk';
 import type { System } from '../system.js';
-import { BackdoorQueue } from './backdoor.js';
+import { UserMessageQueue } from 'phantom-backend-sdk';
 import type { AutoPushResult, AutoPushEvent } from '../git/autoPush.js';
 import type { AutoPullResult, AutoPullEvent } from '../git/autoPull.js';
 import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
@@ -115,7 +115,7 @@ export interface AppCtx {
    *  NEXT turn carries without a turn being started for them (a detached
    *  command exiting, a file dropped onto the cli window). Defaulted at
    *  registration like the buses above. */
-  backdoor?: BackdoorQueue;
+  backdoor?: UserMessageQueue;
   /** Where POST /update drops a release tag for the updater sidecar
    *  (UPDATE_TRIGGER_DIR). Absent: the route answers `updater_unavailable`. */
   updateTriggerDir?: string;
@@ -216,7 +216,7 @@ export async function buildApp(ctx: AppCtx) {
     ctx.settingsEvents ??= new SettingsEvents();
     ctx.activeTurns ??= new Map();
     ctx.foreground ??= new ForegroundCommands();
-    ctx.backdoor ??= new BackdoorQueue();
+    ctx.backdoor ??= new UserMessageQueue();
     settingsRoutes(api, ctx);
     secretsRoutes(api, ctx);
     projectRoutes(api, ctx);

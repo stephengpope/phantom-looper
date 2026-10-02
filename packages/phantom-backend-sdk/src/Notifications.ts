@@ -1,12 +1,11 @@
-// Notifications — channels a message can go out on (Telegram today; cli,
-// Slack, Teams later) and the send. User space's digest and alerts call
-// here; the notify tool does too. Stub.
-export interface NotificationChannel { name: string; send(message: string): Promise<void> }
+// A notification channel — Telegram, CLI, Slack, Teams. Each platform
+// implements `send()` and the digest timer delivers through whatever
+// channels are registered.
 
-export class Notifications {
-  addChannel(channel: NotificationChannel): void { throw stub(); }
-  channels(): NotificationChannel[] { throw stub(); }
-  /** Send on every channel that is up. */
-  async send(message: string): Promise<void> { throw stub(); }
+export interface NotificationChannel {
+  /** The platform name — for logging. */
+  name: string;
+  /** Send a plain-text notification. Best-effort: a failure is logged, never
+   *  retried, and never blocks the caller. */
+  send(message: string): Promise<void>;
 }
-const stub = () => new Error('stub');

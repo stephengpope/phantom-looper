@@ -59,7 +59,7 @@ import { canTurn, unsentKickoff, nextStep, needsFreshSession, heldBy, LOOP_COLUM
 import { injectFetch } from './injectFetch.js';
 import type { BoardEvents } from 'phantom-backend-sdk';
 import type { SessionEvents } from 'phantom-backend-sdk';
-import type { BackdoorQueue } from '../api/backdoor.js';
+import type { UserMessageQueue } from 'phantom-backend-sdk';
 import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('looper');
@@ -93,7 +93,7 @@ export interface LooperDeps {
   activeTurns?: Map<string, AbortController>;
   /** The backdoor message queue (api/backdoor.ts) — every turn this engine
    *  runs drains its session's queue into the turn's messages. */
-  backdoor?: BackdoorQueue;
+  backdoor?: UserMessageQueue;
   /** Test seam: the fetch every MODEL call uses (createAgent's own seam).
    *  Production never sets it. */
   modelFetch?: typeof fetch;

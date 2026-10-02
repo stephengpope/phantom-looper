@@ -6,9 +6,9 @@
 // or project clears them, so no reader guards against a phantom.
 
 import { eq } from 'drizzle-orm';
-import type { Drizzle } from 'phantom-backend-sdk';
-import { telegramBotState } from 'phantom-backend-sdk/schema';
-import { encrypt, decrypt } from 'phantom-backend-sdk';
+import type { Drizzle } from '../storage/Database.js';
+import { telegramBotState } from '../storage/schema.js';
+import { encrypt, decrypt } from '../lib/crypto.js';
 
 export type TelegramMode = 'assistant' | 'code';
 

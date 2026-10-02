@@ -29,21 +29,21 @@ import type { Cards } from 'phantom-backend-sdk';
 import type { Presets } from 'phantom-backend-sdk';
 import type { System } from '../system.js';
 import type { SessionEvents } from 'phantom-backend-sdk';
-import type { BackdoorQueue } from '../api/backdoor.js';
+import type { UserMessageQueue } from 'phantom-backend-sdk';
 import type { BoardEvents, BoardEvent } from 'phantom-backend-sdk';
 import { autoBuildAlert } from './alerts.js';
 import { logger, errStr } from 'phantom-backend-sdk';
-import { TelegramClient, ALLOWED_UPDATES, titled } from './client.js';
-import { makeTelegramSink, type DeliverConfig } from './sink.js';
-import { startWaitingBubble } from './bubble.js';
-import { transcribeVoice, speakVoice, splitForSpeech, SPEAK_MAX_CHARS, type Transcription } from './deepgram.js';
-import { writeAttachment, composeMessage, MAX_INBOUND_BYTES, type StoredAttachment } from './attachments.js';
+import { TelegramBot, ALLOWED_UPDATES, titled } from 'phantom-backend-sdk';
+import { makeTelegramSink, type DeliverConfig } from 'phantom-backend-sdk';
+import { startWaitingBubble } from 'phantom-backend-sdk';
+import { transcribeVoice, speakVoice, splitForSpeech, SPEAK_MAX_CHARS, type Transcription } from 'phantom-backend-sdk';
+import { writeAttachment, composeMessage, MAX_INBOUND_BYTES, type StoredAttachment } from 'phantom-backend-sdk';
 import { runAssistantTurn, CLIENT_ID, type AssistantDeps } from './assistant.js';
-import { Approvals, type Ask } from './approvals.js';
+import { TelegramApprovals, type Ask } from 'phantom-backend-sdk';
 import { UpgradeChecker } from './upgrade.js';
-import type { TelegramBotState, TelegramBotStateRow, TelegramMode } from './botState.js';
-import type { TelegramSentMessages } from './sentMessages.js';
-import type { TelegramHandledUpdates } from './handledUpdates.js';
+import type { TelegramBotState, TelegramBotStateRow, TelegramMode } from 'phantom-backend-sdk';
+import type { TelegramSentMessages } from 'phantom-backend-sdk';
+import type { TelegramHandledUpdates } from 'phantom-backend-sdk';
 import { menuFor, handleCommand } from './commands.js';
 import { AUTO_PUSH_STEPS, AUTO_PULL_STEPS, type AutoPushOutcome, type AutoPullOutcome } from '../../core/llm/tools/git.js';
 import type { AutoPushEvent } from '../git/autoPush.js';
@@ -99,7 +99,7 @@ export interface TelegramEngineDeps {
   settingsEvents?: SettingsEvents;
   /** The backdoor message queue (api/backdoor.ts) — each turn drains its
    *  session's queue. */
-  backdoor?: BackdoorQueue;
+  backdoor?: UserMessageQueue;
   modelFetch?: typeof fetch;
   /** https://PHANTOM_BACKEND_ADDRESS — the only source of the webhook URL. */
   publicAddress?: string;
@@ -131,7 +131,7 @@ export class TelegramEngine {
   readonly conversation: AssistantConversation;
 
   /** The approval gate — gated tools ask the user here (approvals.ts). */
-  private approvals = new Approvals();
+  private approvals = new TelegramApprovals();
   /** The upgrade checker — periodic GitHub release check + Telegram notification. */
   upgradeChecker: UpgradeChecker;
 
@@ -173,11 +173,11 @@ export class TelegramEngine {
 
   // ── client factory ────────────────────────────────────────────────────────
 
-  /** A TelegramClient that records every sent/deleted message in
+  /** A TelegramBot that records every sent/deleted message in
    *  sentMessages. `sessionId` is a function so it can track a mutable
    *  pointer (the active session changes mid-turn); null = the assistant's. */
-  private trackedClient(token: string, dm: number, sessionId: () => string | null): TelegramClient {
-    return new TelegramClient(token,
+  private trackedClient(token: string, dm: number, sessionId: () => string | null): TelegramBot {
+    return new TelegramBot(token,
       (id, text) => { this.deps.sentMessages.record(dm, id, text, sessionId()).catch(
         (e) => log.warn({ err: errStr(e) }, 'sent message not recorded')); },
       (id) => { this.deps.sentMessages.delete(dm, id).catch(
@@ -249,14 +249,14 @@ export class TelegramEngine {
 
       if (!enabled || !token || !url) {
         if (bot.webhookUrl) {
-          if (token) await new TelegramClient(token).deleteWebhook().catch(() => {});
+          if (token) await new TelegramBot(token).deleteWebhook().catch(() => {});
           await this.deps.botState.clearRegistration();
           log.info({ enabled, hasToken: !!token, hasUrl: !!url }, 'telegram disabled — webhook torn down');
         }
         return;
       }
 
-      const client = new TelegramClient(token);
+      const client = new TelegramBot(token);
       const me = await client.getMe().catch((e: Error) => { log.warn({ err: e.message }, 'getMe failed — the bot has no name this boot'); return null; });
       const secret = bot.webhookSecret ?? crypto.randomBytes(32).toString('hex');
       // A read on every boot after the first: only re-register when the URL or
@@ -313,7 +313,7 @@ export class TelegramEngine {
     if (tap) {
       if (String(tap.from?.id) !== authorized) return 200;
       if (!(await this.deps.handledUpdates.markHandled(update.update_id))) return 200;
-      const client = new TelegramClient(await this.token());
+      const client = new TelegramBot(await this.token());
       const q = { id: String(tap.id), data: tap.data as string | undefined };
       if (UpgradeChecker.isUpgradeCallback(tap.data)) {
         this.upgradeChecker.handleCallback(client, dm, q)
@@ -413,7 +413,7 @@ export class TelegramEngine {
   /** An assistant-mode turn: the in-memory Assistant conversation, streamed to
    *  the bubble. session_switch moves the active-session POINTER only — the
    *  assistant keeps the conversation; /code is how the user hands it over. */
-  private async assistantTurn(client: TelegramClient, dm: number, message: string): Promise<void> {
+  private async assistantTurn(client: TelegramBot, dm: number, message: string): Promise<void> {
     const conv = this.conversation;
     conv.chat = { client, dm };
     conv.load();
@@ -496,7 +496,7 @@ export class TelegramEngine {
 
   /** A code-mode turn: a real coding turn on the session, via runCodingTurn,
    *  streamed from the session feed into the bubble. */
-  private async codeTurn(client: TelegramClient, dm: number, sessionId: string, message: string): Promise<void> {
+  private async codeTurn(client: TelegramBot, dm: number, sessionId: string, message: string): Promise<void> {
     let opened: OpenedSession;
     try {
       opened = await openSession({ baseUrl: BASE, apiKey: this.deps.apiKey, clientId: CLIENT_ID,
@@ -564,7 +564,7 @@ export class TelegramEngine {
    *  sink withheld the text, so a failed synthesis falls back to sending it.
    *  `typing` is the turn's indicator loop — swapped to `record_voice` while
    *  synthesis runs so the user sees "recording audio…" instead of "typing…". */
-  private async maybeSpeak(client: TelegramClient, dm: number, text?: string,
+  private async maybeSpeak(client: TelegramBot, dm: number, text?: string,
     typing?: { set(a: string): void }): Promise<void> {
     const mode = String(await this.deps.settings.resolve('telegram_reply_mode'));
     if (mode !== 'voice' && mode !== 'both') return;
@@ -624,7 +624,7 @@ export class TelegramEngine {
   /** Transcribe an inbound voice or video note: download, react, transcribe.
    *  Returns the text or null when it couldn't be heard. */
   private async transcribeInbound(
-    client: TelegramClient, dm: number, msg: any,
+    client: TelegramBot, dm: number, msg: any,
     file: { file_id: string; file_size?: number },
   ): Promise<string | null> {
     const react = (emoji?: string) => client.setMessageReaction(dm, msg.message_id, emoji).catch(() => {});
@@ -646,7 +646,7 @@ export class TelegramEngine {
     return heard.text;
   }
 
-  private async resolveInput(client: TelegramClient, dm: number, msgs: any[],
+  private async resolveInput(client: TelegramBot, dm: number, msgs: any[],
     bot: TelegramBotStateRow): Promise<string | null> {
     const msg = msgs[0];
     // Telegram puts the caption on only one album item.
@@ -690,7 +690,7 @@ export class TelegramEngine {
 
   // ── sent messages: reply-switch and reaction-speak ───────────────────────
 
-  private async switchForReply(client: TelegramClient, dm: number, msg: any): Promise<void> {
+  private async switchForReply(client: TelegramBot, dm: number, msg: any): Promise<void> {
     const replied = msg.reply_to_message;
     if (!replied?.message_id) return;
     const stored = await this.deps.sentMessages.get(dm, Number(replied.message_id));
@@ -719,7 +719,7 @@ export class TelegramEngine {
    *  accident. Announces the switch unless `silent` — callers that immediately
    *  follow with enterMode('code') pass silent because the code-mode label
    *  already carries the session name. */
-  async switchSession(client: TelegramClient, dm: number, id: string, opts?: { silent?: boolean }):
+  async switchSession(client: TelegramBot, dm: number, id: string, opts?: { silent?: boolean }):
   Promise<{ id: string; title: string | null } | { error: string }> {
     const s = await this.deps.sessions.get(id);
     if (!s) return { error: `no session ${id}` };
@@ -732,7 +732,7 @@ export class TelegramEngine {
    *  changed and swaps the chat's command menu to the mode's list. Returns
    *  whether the mode changed. Code mode presumes an active session — the
    *  caller checks (/code) or has just switched (a reply to a coder's bubble). */
-  async enterMode(client: TelegramClient, dm: number, mode: TelegramMode): Promise<boolean> {
+  async enterMode(client: TelegramBot, dm: number, mode: TelegramMode): Promise<boolean> {
     const msg = mode === 'code'
       ? await this.codeModeLabel(dm)
       : undefined;
@@ -773,7 +773,7 @@ export class TelegramEngine {
     const stored = await this.deps.sentMessages.get(chatId, messageId);
     if (!stored) return;
     const token = await this.token();
-    const client = new TelegramClient(token);
+    const client = new TelegramBot(token);
     const apiKey = (await this.deps.settings.credential('deepgram_api_key')) ?? '';
     const voice = String(await this.deps.settings.resolve('voice_spoken_voice'));
     client.sendChatAction(dm, 'record_voice').catch(() => {});
@@ -815,7 +815,7 @@ export class TelegramEngine {
 
   /** The approval gate, for slash commands that need a confirm (today:
    *  /restart). Same gate gated tools use — one question per chat. */
-  askApproval(client: TelegramClient, dm: number, ask: Ask): Promise<boolean> {
+  askApproval(client: TelegramBot, dm: number, ask: Ask): Promise<boolean> {
     return this.approvals.request(client, dm, ask);
   }
 
@@ -895,7 +895,7 @@ const TYPING_MS = 4000;
  *  one. Telegram expires an action after ~5s, so it has to be re-sent on a
  *  timer — a one-off `record_voice` from elsewhere would be overwritten by the
  *  next `typing` tick. The switch belongs to the loop. */
-function startTyping(client: TelegramClient, dm: number, initial = 'typing') {
+function startTyping(client: TelegramBot, dm: number, initial = 'typing') {
   let action = initial;
   const ping = () => { client.sendChatAction(dm, action).catch(() => {}); };
   ping();

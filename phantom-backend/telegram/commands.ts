@@ -20,11 +20,11 @@
 // edited in place — a line per step as it happens, the result on the last line.
 
 import { CodingAgent } from '../../core/agents/coding.js';
-import type { TelegramClient } from './client.js';
-import { titled } from './client.js';
-import { toTelegram } from './entities.js';
+import type { TelegramBot } from 'phantom-backend-sdk';
+import { titled } from 'phantom-backend-sdk';
+import { toTelegram } from 'phantom-backend-sdk';
 import type { TelegramEngine } from './engine.js';
-import { MODE_MESSAGE, type TelegramMode } from './botState.js';
+import { MODE_MESSAGE, type TelegramMode } from 'phantom-backend-sdk';
 import { PROVIDERS } from '../../core/llm/createAgent.js';
 import { hasCatalog } from 'phantom-backend-sdk';
 import { isHeld } from 'phantom-backend-sdk';
@@ -84,7 +84,7 @@ const presetList = new Map<number, string[]>();
 
 /** Handle a slash command. `text` starts with '/'. */
 export async function handleCommand(
-  engine: TelegramEngine, client: TelegramClient, dm: number, text: string,
+  engine: TelegramEngine, client: TelegramBot, dm: number, text: string,
 ): Promise<void> {
   const [raw, ...rest] = text.slice(1).trim().split(/\s+/);
   const cmd = raw.toLowerCase().split('@')[0];
@@ -479,7 +479,7 @@ export async function handleCommand(
  *  client that hands back no message id (or an edit that fails — an unchanged
  *  body, a deleted message) falls back to a fresh message for the result, so
  *  the outcome is never lost. */
-async function stepBubble(client: TelegramClient, dm: number, title: string) {
+async function stepBubble(client: TelegramBot, dm: number, title: string) {
   const steps: string[] = [];
   const m = await client.sendMessage(dm, title).catch(() => null);
   const id: number | null = m?.message_id ?? null;

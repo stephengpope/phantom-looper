@@ -32,7 +32,7 @@ import { phantomTools } from '../../core/llm/tools/workspace.js';
 import { webTools } from '../../core/llm/tools/web.js';
 import { cronTools } from '../../core/llm/tools/crons.js';
 import { usageEvent, type Transcript } from '../../core/llm/transcript.js';
-import type { TelegramSink } from './sink.js';
+import type { TelegramSink } from 'phantom-backend-sdk';
 
 const BASE = 'http://looper/api';
 /** The bot's session-lock id — one declaration, the engine imports it. */

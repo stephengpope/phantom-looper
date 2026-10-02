@@ -10,7 +10,7 @@ import type {
   SessionEvents, BoardEvents, SettingsEvents, ForegroundCommands,
   Docker, Images, SessionContainers, CheckoutPool, Disk, Skills, SystemSkills, Web,
   Git, GitSync, InstantSync, WorkspaceWatcher, GitHub, CommitMessages,
-  CronScheduler, TelegramBot, TelegramRenderer, TelegramAttachments, TelegramVoice, TelegramApprovals, TelegramDedupe,
+  CronScheduler, TelegramBot, TelegramAttachments, TelegramVoice, TelegramApprovals,
   HttpApi, DbConsole, Notifications, SessionDigest, Upgrader,
 } from './members.js';
 import type { SettingDefinition, AgentTypeDefinition, ToolDefinition, RouteRegistrar } from './doors.js';
@@ -90,11 +90,9 @@ export class PhantomBackend {
   // ── scheduling, telegram, api ────────────────────────────────────────
   readonly cronScheduler!: CronScheduler;
   readonly telegramBot!: TelegramBot;
-  readonly telegramRenderer!: TelegramRenderer;
-  readonly telegramAttachments!: TelegramAttachments;
-  readonly telegramVoice!: TelegramVoice;
+  readonly telegramAttachments!: typeof TelegramAttachments;
+  readonly telegramVoice!: typeof TelegramVoice;
   readonly telegramApprovals!: TelegramApprovals;
-  readonly telegramDedupe!: TelegramDedupe;
   readonly httpApi!: HttpApi;
   readonly dbConsole!: DbConsole;
   readonly notifications!: Notifications;

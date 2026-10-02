@@ -18,16 +18,16 @@ import { CronEngine } from './crons/engine.js';
 import { setTokenRecorder } from '../core/llm/createAgent.js';
 import { TokenLog } from 'phantom-backend-sdk';
 import { System } from './system.js';
-import { TelegramBotState } from './telegram/botState.js';
-import { TelegramSentMessages } from './telegram/sentMessages.js';
-import { TelegramHandledUpdates } from './telegram/handledUpdates.js';
+import { TelegramBotState } from 'phantom-backend-sdk';
+import { TelegramSentMessages } from 'phantom-backend-sdk';
+import { TelegramHandledUpdates } from 'phantom-backend-sdk';
 import { SettingsEvents } from 'phantom-backend-sdk';
 import { idleBackupSweep, pressureSweep } from './disk.js';
 import { buildApp, type AppCtx } from './api/app.js';
 import { shutdown as updateShutdown } from './api/updateTask.js';
 import { BoardEvents } from 'phantom-backend-sdk';
 import { SessionEvents } from 'phantom-backend-sdk';
-import { BackdoorQueue } from './api/backdoor.js';
+import { UserMessageQueue } from 'phantom-backend-sdk';
 import { makeDocker } from 'phantom-backend-sdk';
 import { SessionContainers } from 'phantom-backend-sdk';
 import { Images } from 'phantom-backend-sdk';
@@ -37,7 +37,7 @@ import { autoPull, type AutoPullEvent } from './git/autoPull.js';
 import type { ConflictContext } from './git/autoPush.js';
 import { GIT_CLIENT_ID } from 'phantom-backend-sdk/git';
 import { SessionDigest } from './notifications/digest.js';
-import { telegramChannel } from './notifications/telegramChannel.js';
+import { telegramChannel } from 'phantom-backend-sdk';
 import { openSession, SessionLockedError, type OpenedSession } from '../core/session.js';
 import { runCodingTurn } from './looper/turn.js';
 import { sessionPin } from './agentConfig.js';
@@ -326,7 +326,7 @@ async function main() {
     }
   })();
 
-  const backdoor = new BackdoorQueue();
+  const backdoor = new UserMessageQueue();
 
   // Work-state refresh: every 10s, recompute `work` for workspaces with a
   // running container. A change writes the row and publishes on the board

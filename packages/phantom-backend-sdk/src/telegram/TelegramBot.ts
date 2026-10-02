@@ -1,31 +1,248 @@
-// TelegramBot — the Bot API client (raw fetch, no library), the webhook
-// registration and its secret (the link row), and the one door every
-// inbound update goes through to user space. The SDK answers nothing on
-// its own. Stub.
-export interface TelegramUpdate { update_id: number; message?: Record<string, unknown>; callback_query?: Record<string, unknown> }
-export interface TelegramLink { webhookUrl: string | null; botUsername: string | null; registeredAt: Date | null }
-export type TelegramEntity = { type: string; offset: number; length: number; url?: string; language?: string };
+// Minimal Telegram Bot API client — raw fetch, no library. One 429 retry
+// honoring retry_after. Chunking for the 4096 limit lives in `entities.ts`
+// (`splitFormatted`), because a chunk boundary has to cut the formatting spans
+// as well as the text. Ported from ../shockwave (api/src/telegram/client.ts);
+// the PEM-upload webhook path is dropped — the address here is always a real
+// hostname (PHANTOM_BACKEND_ADDRESS), never a bare-IP self-signed cert.
+
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import type { Entity } from './entities.js';
+import { toTelegram, splitFormatted } from './entities.js';
+import { connectFetch } from './connect.js';
+
+/** Telegram's ceiling for anything a bot uploads. Checked before the read, so
+ *  an oversize send is reported as itself, not as a generic API failure. */
+export const MAX_OUTBOUND_BYTES = 50 * 1024 * 1024;
+
+/** A header + message bubble: the header line, a blank line, the content.
+ *  The ONE way titled status bubbles are composed — title and content are
+ *  separate arguments so the blank line under a header is structural, never
+ *  remembered. NOT for the agent's streamed replies (those have no header)
+ *  and NOT for a heading that spans two lines of its own (the approval
+ *  bubble's kind + subject is ONE heading — its message already follows a
+ *  blank line). */
+export function titled(title: string, body: string): string {
+  return `${title}\n\n${body}`;
+}
+
+/** Which Telegram method a file goes out through. */
+export type SendKind = 'photo' | 'video' | 'voice' | 'audio' | 'document';
+
+const KIND_METHOD: Record<SendKind, { method: string; field: string }> = {
+  photo: { method: 'sendPhoto', field: 'photo' },
+  video: { method: 'sendVideo', field: 'video' },
+  voice: { method: 'sendVoice', field: 'voice' },
+  audio: { method: 'sendAudio', field: 'audio' },
+  document: { method: 'sendDocument', field: 'document' },
+};
+
+// What the webhook subscribes to. Telegram sends ONLY the listed kinds and
+// keeps the list until the next setWebhook — the boot reconcile re-registers
+// when a kind is missing. `message_reaction` is the speak-it-back gesture;
+// `callback_query` is a tap on an approval bubble's button (approvals.ts).
+export const ALLOWED_UPDATES = ['message', 'message_reaction', 'callback_query'];
+
+type TgResponse = {
+  ok?: boolean;
+  result?: unknown;
+  description?: string;
+  parameters?: { retry_after?: number };
+};
+
+async function readEnvelope(res: Response): Promise<TgResponse> {
+  return (await res.json().catch(() => ({}))) as TgResponse;
+}
 
 export class TelegramBot {
-  // ── the link ──────────────────────────────────────────────────────────
-  /** Register the webhook with Telegram when enabled, token, authorized user and address are all set; tear down otherwise. */
-  async reconcileWebhook(): Promise<TelegramLink> { throw stub(); }
-  async link(): Promise<TelegramLink> { throw stub(); }
-  /** Is this sender the authorized user? */
-  isAuthorized(userId: number): boolean { throw stub(); }
-  /** Every verified, unduplicated update, handed to user space. */
-  onUpdate(handler: (update: TelegramUpdate) => Promise<void>): () => void { throw stub(); }
-  // ── sending ───────────────────────────────────────────────────────────
-  async sendText(chatId: number, text: string, options?: { entities?: TelegramEntity[]; replyToMessageId?: number; replyMarkup?: unknown }): Promise<{ messageId: number }> { throw stub(); }
-  async sendMarkdown(chatId: number, markdown: string, options?: { replyToMessageId?: number }): Promise<{ messageId: number }> { throw stub(); }
-  async editText(chatId: number, messageId: number, text: string, entities?: TelegramEntity[]): Promise<void> { throw stub(); }
-  async deleteMessage(chatId: number, messageId: number): Promise<void> { throw stub(); }
-  async sendFile(chatId: number, filePath: string, options?: { as?: 'photo' | 'video' | 'audio' | 'voice' | 'document'; caption?: string }): Promise<{ messageId: number }> { throw stub(); }
-  async sendVoice(chatId: number, audio: Buffer): Promise<{ messageId: number }> { throw stub(); }
-  async sendChatAction(chatId: number, action?: string): Promise<void> { throw stub(); }
-  async setReaction(chatId: number, messageId: number, emoji?: string): Promise<void> { throw stub(); }
-  async answerCallback(callbackQueryId: string, text?: string): Promise<void> { throw stub(); }
-  async setCommands(commands: Array<{ command: string; description: string }>): Promise<void> { throw stub(); }
-  async downloadFile(fileId: string): Promise<{ data: Buffer; path: string }> { throw stub(); }
+  /**
+   * `onSent` fires for every text bubble this client writes — sent or edited —
+   * with the message number and what it now says. That is what makes ANY of
+   * the bot's messages point-at-able later (a reply switches into its
+   * conversation, a reaction reads it aloud): the record exists because the
+   * message went out, not because the code that sent it remembered to save
+   * one. NOT fired for file sends — a voice bubble's text is the spoken
+   * script, which only the caller holds. `onDeleted` is the same rule pointed
+   * the other way. Injected, never imported: this file keeps no db access.
+   */
+  constructor(
+    private token: string,
+    private onSent?: (messageId: number, text: string) => void,
+    private onDeleted?: (messageId: number) => void,
+  ) {}
+
+  async call(method: string, body: Record<string, unknown> = {}): Promise<any> {
+    const url = `https://api.telegram.org/bot${this.token}/${method}`;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const json = await readEnvelope(res);
+      if (res.ok && json.ok) return json.result;
+      if (res.status === 429 && attempt === 0) {
+        const wait = ((json.parameters?.retry_after ?? 1) * 1000) + 200;
+        await new Promise((r) => setTimeout(r, wait));
+        continue;
+      }
+      throw new Error(`telegram ${method} failed: ${json.description || res.status}`);
+    }
+  }
+
+  getMe() { return this.call('getMe'); }
+
+  /** `dropPending: false` is the boot re-register path — its whole point is a
+   *  fresh allowed_updates list, and dropping the queue there would lose
+   *  messages sent while the server was down. */
+  setWebhook(url: string, secretToken: string, opts: { dropPending?: boolean } = {}) {
+    return this.call('setWebhook', {
+      url, secret_token: secretToken, allowed_updates: ALLOWED_UPDATES,
+      drop_pending_updates: opts.dropPending !== false,
+    });
+  }
+  deleteWebhook() { return this.call('deleteWebhook', { drop_pending_updates: true }); }
+  getWebhookInfo() { return this.call('getWebhookInfo'); }
+
+  /** The command menu — global, or scoped to one chat (how the menu follows
+   *  the mode: assistant-mode commands at home, code-mode commands in a
+   *  session). The menu is a HINT (clients cache it a few seconds); the
+   *  handlers answer every command correctly regardless. */
+  setMyCommands(commands: Array<{ command: string; description: string }>, chatId?: number) {
+    return this.call('setMyCommands', {
+      commands,
+      ...(chatId != null ? { scope: { type: 'chat', chat_id: chatId } } : {}),
+    });
+  }
+
+  /** Markdown out, the normal way: formatted to entities and chunked under
+   *  the 4096 ceiling, each chunk a sendMessage. A keyboard rides the LAST
+   *  chunk — the question it answers ends there. Compose the text first
+   *  (titled() for a header + message bubble); this never re-shapes it. */
+  async sendMarkdown(chatId: number, md: string,
+    opts: { replyToMessageId?: number; replyMarkup?: unknown } = {}) {
+    const chunks = splitFormatted(toTelegram(md));
+    let last;
+    for (let i = 0; i < chunks.length; i++) {
+      last = await this.sendMessage(chatId, chunks[i].text, {
+        replyToMessageId: opts.replyToMessageId,
+        entities: chunks[i].entities,
+        replyMarkup: i === chunks.length - 1 ? opts.replyMarkup : undefined,
+      });
+    }
+    return last;
+  }
+
+  /** `replyMarkup` is a Telegram reply_markup object (an inline keyboard for
+   *  the approval gate). */
+  async sendMessage(chatId: number, text: string,
+    opts: { replyToMessageId?: number; entities?: Entity[]; replyMarkup?: unknown } = {}) {
+    const m = await this.call('sendMessage', {
+      chat_id: chatId, text,
+      ...(opts.entities?.length ? { entities: opts.entities } : {}),
+      ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+      ...(opts.replyToMessageId
+        ? { reply_parameters: { message_id: opts.replyToMessageId, allow_sending_without_reply: true } }
+        : {}),
+    });
+    if (m?.message_id != null) this.onSent?.(m.message_id, text);
+    return m;
+  }
+
+  /** Every button tap MUST be answered or the user's client spins on it;
+   *  `text` shows as a small notification. */
+  answerCallbackQuery(callbackQueryId: string, text?: string) {
+    return this.call('answerCallbackQuery', { callback_query_id: callbackQueryId, ...(text ? { text } : {}) });
+  }
+
+  // An edit records too, so the streamed bubble ends up stored as what it
+  // finally says. An unchanged body throws ("message is not modified") and
+  // never reaches the hook — right, since the record already matches. An edit
+  // without a reply_markup drops the message's keyboard — how an answered
+  // approval loses its buttons.
+  async editMessageText(chatId: number, messageId: number, text: string, entities?: Entity[]) {
+    const r = await this.call('editMessageText', {
+      chat_id: chatId, message_id: messageId, text,
+      ...(entities?.length ? { entities } : {}),
+    });
+    this.onSent?.(messageId, text);
+    return r;
+  }
+
+  async deleteMessage(chatId: number, messageId: number) {
+    const r = await this.call('deleteMessage', { chat_id: chatId, message_id: messageId });
+    this.onDeleted?.(messageId);
+    return r;
+  }
+
+  sendChatAction(chatId: number, action = 'typing') {
+    return this.call('sendChatAction', { chat_id: chatId, action });
+  }
+
+  /** Bots get ONE reaction per message and a new one replaces the old — the
+   *  ✍ → 👍 progress signal. No emoji clears it. The emoji must be spelled
+   *  EXACTLY as Telegram spells it (escape constants in engine.ts — no
+   *  variation selectors, ever). */
+  setMessageReaction(chatId: number, messageId: number, emoji?: string) {
+    return this.call('setMessageReaction', {
+      chat_id: chatId, message_id: messageId,
+      reaction: emoji ? [{ type: 'emoji', emoji }] : [],
+    });
+  }
+
+  /** Fetch an inbound file. Telegram's getFile caps at 20 MB — callers check
+   *  the declared size first so an oversize file is declined readably. The
+   *  byte fetch rides the connection policy (connect.ts): a voice note is
+   *  the message itself, so a hung connection here is a message lost. */
+  async downloadFile(fileId: string): Promise<Buffer> {
+    const file = await this.call('getFile', { file_id: fileId });
+    if (!file?.file_path) throw new Error('Telegram did not return a file path.');
+    const res = await connectFetch(`https://api.telegram.org/file/bot${this.token}/${file.file_path}`);
+    if (!res.ok) throw new Error(`downloading the file failed (HTTP ${res.status}).`);
+    return Buffer.from(await res.arrayBuffer());
+  }
+
+  private async uploadBytes(kind: SendKind, chatId: number, data: Buffer, name: string,
+    caption?: string, opts: { replyToMessageId?: number } = {}): Promise<any> {
+    const { method, field } = KIND_METHOD[kind];
+    if (data.length > MAX_OUTBOUND_BYTES) {
+      throw new Error(`the file is ${Math.round(data.length / 1024 / 1024)} MB, over Telegram's 50 MB limit for bots.`);
+    }
+    const form = new FormData();
+    form.set('chat_id', String(chatId));
+    form.set(field, new Blob([new Uint8Array(data)]), name);
+    // Telegram truncates captions at 1024; longer is an API error.
+    if (caption) form.set('caption', caption.slice(0, 1024));
+    if (opts.replyToMessageId) {
+      form.set('reply_parameters',
+        JSON.stringify({ message_id: opts.replyToMessageId, allow_sending_without_reply: true }));
+    }
+    const res = await fetch(`https://api.telegram.org/bot${this.token}/${method}`, { method: 'POST', body: form });
+    const json = await readEnvelope(res);
+    if (!(res.ok && json.ok)) throw new Error(`telegram ${method} failed: ${json.description || res.status}`);
+    return json.result;
+  }
+
+  /** A voice note straight from memory — synthesis hands us bytes, and a
+   *  temp file would be a step with its own failure modes. */
+  sendVoiceBytes(chatId: number, data: Buffer, opts: { replyToMessageId?: number } = {}) {
+    return this.uploadBytes('voice', chatId, data, 'voice.ogg', undefined, opts);
+  }
+
+  /**
+   * Send a local file the way its type deserves. Photos fall back to a
+   * document send: Telegram rejects images outside its dimension limits
+   * (tall screenshots) even when the file is valid, and arriving as a file
+   * beats not arriving.
+   */
+  async sendFile(kind: SendKind, chatId: number, filePath: string, caption?: string): Promise<any> {
+    const data = await fs.readFile(filePath);
+    const name = path.basename(filePath);
+    if (kind !== 'photo') return this.uploadBytes(kind, chatId, data, name, caption);
+    try {
+      return await this.uploadBytes('photo', chatId, data, name, caption);
+    } catch {
+      return this.uploadBytes('document', chatId, data, name, caption);
+    }
+  }
 }
-const stub = () => new Error('stub');

@@ -49,7 +49,7 @@ import { sessionPin } from '../agentConfig.js';
 import { injectFetch } from '../looper/injectFetch.js';
 import type { SessionEvents } from 'phantom-backend-sdk';
 import type { SettingsEvents } from 'phantom-backend-sdk';
-import type { BackdoorQueue } from '../api/backdoor.js';
+import type { UserMessageQueue } from 'phantom-backend-sdk';
 import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('cron');
@@ -72,7 +72,7 @@ export interface CronEngineDeps {
   settingsEvents?: SettingsEvents;
   /** Active turns by session id — the interrupt route aborts these. */
   activeTurns?: Map<string, AbortController>;
-  backdoor?: BackdoorQueue;
+  backdoor?: UserMessageQueue;
   /** Test seam: the fetch every MODEL call uses. Production never sets it. */
   modelFetch?: typeof fetch;
 }

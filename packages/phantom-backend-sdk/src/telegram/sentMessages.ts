@@ -7,8 +7,8 @@
 // message.
 
 import { eq, and, sql } from 'drizzle-orm';
-import type { Drizzle } from 'phantom-backend-sdk';
-import { telegramSentMessages } from 'phantom-backend-sdk/schema';
+import type { Drizzle } from '../storage/Database.js';
+import { telegramSentMessages } from '../storage/schema.js';
 
 export interface TelegramSentMessage { content: string; sessionId: string | null }
 

@@ -16,7 +16,7 @@
 // Every call is best-effort. A bubble that can't be posted is simply absent, and
 // the caller falls back to posting its own message.
 
-import type { TelegramClient } from './client.js';
+import type { TelegramBot } from './TelegramBot.js';
 
 /** The frames the bubble cycles through, one per `FRAME_MS`. */
 const DOTS = ['...', '....', '.....', '......'];
@@ -41,7 +41,7 @@ export interface WaitingBubble {
 // It is always a plain message, never a reply. A bubble stands in for an answer
 // that has not arrived; pointing it at something is the answer's job, and this
 // one is going to be deleted or written over either way.
-export function startWaitingBubble(client: TelegramClient, chatId: number): WaitingBubble {
+export function startWaitingBubble(client: TelegramBot, chatId: number): WaitingBubble {
   let messageId: number | null = null;
   let owned = true;
   let frame = 0;

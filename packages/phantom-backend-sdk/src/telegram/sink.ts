@@ -8,7 +8,7 @@
 // entities modules are ported from ../shockwave (stream.ts + waitingBubble.ts),
 // but the event SOURCE is our session bus, not a removed onEvent callback.
 
-import type { TelegramClient } from './client.js';
+import type { TelegramBot } from './TelegramBot.js';
 import { toTelegram, splitFormatted, truncateFormatted } from './entities.js';
 import { startWaitingBubble, type WaitingBubble } from './bubble.js';
 import { collectDeliverables, extractMedia, type Deliverable } from './mediaTags.js';
@@ -56,7 +56,7 @@ export interface TelegramSink {
  * is what this flag prevents.
  */
 export function makeTelegramSink(
-  client: TelegramClient, chatId: number, deliver?: DeliverConfig,
+  client: TelegramBot, chatId: number, deliver?: DeliverConfig,
   opts: { voiceOnly?: boolean; bubble?: boolean } = {},
 ): TelegramSink {
   const voiceOnly = opts.voiceOnly === true;

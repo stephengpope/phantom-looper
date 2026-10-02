@@ -16,7 +16,7 @@ import { databaseTools } from '../../core/llm/tools/database.js';
 import { kanbanReadTool } from '../../core/llm/tools/kanban.js';
 import { notifyTools } from '../../core/llm/tools/notify.js';
 import type { SessionEvents } from 'phantom-backend-sdk';
-import type { BackdoorQueue } from '../api/backdoor.js';
+import type { UserMessageQueue } from 'phantom-backend-sdk';
 
 export interface TurnDeps {
   f: typeof fetch;               // the server's own surface (injectFetch)
@@ -43,7 +43,7 @@ export interface TurnDeps {
   signal?: AbortSignal;
   /** The backdoor message queue (api/backdoor.ts): drained into the turn's
    *  messages below, restored if the turn fails before they are saved. */
-  backdoor?: BackdoorQueue;
+  backdoor?: UserMessageQueue;
 }
 
 /** Run one coding turn on an opened session and save the record whole. Plan

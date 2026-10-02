@@ -63,3 +63,20 @@ export { SKILLS_DIR, scanSkills, mergeSkills, parseDescription, splitFrontmatter
 export { lintSkillMd, validateSkillMd, validateSkillName, validateFilePath, MAX_DESCRIPTION, MAX_FILE_BYTES, MAX_NAME, MAX_SKILL_CONTENT, FILE_SUBDIRS } from './skills/validate.js';
 export { fill, withCurrentDate, firstLineOf } from './prompt/template.js';
 export { SKILLS_LIST, SECRETS_LIST, GITHUB_TOKEN, AGENT_DATABASE, AGENT_DATABASE_SHARED, TIME_DATE } from './prompt/serverBlocks.js';
+
+// telegram plumbing, notifications, the queue
+export { titled, ALLOWED_UPDATES, MAX_OUTBOUND_BYTES, type SendKind } from './telegram/TelegramBot.js';
+export { toTelegram, splitFormatted, truncateFormatted, clampEntities, type Formatted, type Entity as TelegramEntity } from './telegram/entities.js';
+export { collectDeliverables, extractMedia, extractBarePaths, maskJsonStringMedia, maskProtectedSpans, validateDeliveryPath, deliveryKind, MEDIA_DELIVERY_EXTS, type Deliverable, type Media } from './telegram/mediaTags.js';
+export { makeTelegramSink, type TelegramSink, type DeliverConfig } from './telegram/sink.js';
+export { startWaitingBubble, type WaitingBubble } from './telegram/bubble.js';
+export { writeAttachment, composeMessage, classify, safeName, sniffImageMime, MAX_INBOUND_BYTES, type StoredAttachment, type MediaKind } from './telegram/TelegramAttachments.js';
+export { transcribeVoice, speakVoice, splitForSpeech, SPEAK_MAX_CHARS, type Transcription } from './telegram/TelegramVoice.js';
+export { connectFetch, isConnectFailure, CONNECT_RETRIES, CONNECT_TIMEOUT_MS, KEEP_ALIVE_MS } from './telegram/connect.js';
+export { askText, answeredText, parseAnswer, type Ask, type ApprovalClient } from './telegram/TelegramApprovals.js';
+export { TelegramHandledUpdates } from './telegram/handledUpdates.js';
+export { TelegramSentMessages, type TelegramSentMessage } from './telegram/sentMessages.js';
+export { TelegramBotState, MODE_MESSAGE, type TelegramBotStateRow, type TelegramMode } from './telegram/botState.js';
+export { telegramChannel } from './telegram/telegramChannel.js';
+export { lastAssistantFromJsonl } from './telegram/transcriptHelper.js';
+export type { NotificationChannel } from './Notifications.js';
