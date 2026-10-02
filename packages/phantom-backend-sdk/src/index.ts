@@ -2,4 +2,4 @@
 // PhantomBackend.create a config and gets the server back.
 export { PhantomBackend, type PhantomBackendConfig } from './PhantomBackend.js';
 export * from './members.js';
-export type { SettingDefinition, AgentTypeDefinition, ToolDefinition, ToolRunContext, ToolGroup, RouteRegistrar } from './doors.js';
+export type { SettingDefinition, AgentTypeDefinition, ToolDefinition, ToolRunContext, ToolGroup, ToolGrant, RouteRegistrar } from './doors.js';

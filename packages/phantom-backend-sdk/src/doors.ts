@@ -26,14 +26,16 @@ export interface SettingDefinition {
 /** The tool groups the SDK ships. A tool belongs to one; an agent type
  *  names the groups it gets. The SDK's tools never name an agent type. */
 export type ToolGroup = 'files' | 'tasks' | 'skills' | 'web' | 'secrets' | 'crons' | 'database' | 'board' | 'git' | 'notify';
+/** A whole group, or only its non-mutating tools (`files:read` = read, ls, find, grep). */
+export type ToolGrant = ToolGroup | `${ToolGroup}:read`;
 
 /** An agent type this server runs. The name is what sessions carry in
  *  `type`, what turn-start asks for, what the settings keys are prefixed
  *  with (`<name>_provider`, `<name>_model`, …). */
 export interface AgentTypeDefinition {
   name: string;
-  /** Which tool groups a session of this type is offered. */
-  tools: ToolGroup[];
+  /** Which tool groups, whole or read-only, a session of this type is offered. */
+  tools: ToolGrant[];
   /** Does a session of this type own a checkout, borrow another
    *  session's, or run with no files? Decides what POST /sessions makes. */
   workspace: 'own' | 'borrow' | 'none';
