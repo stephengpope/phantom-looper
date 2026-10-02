@@ -1,9 +1,9 @@
 // The skills surface — thin routes over skills.ts (the skill_* tools run the
 // same code). Session travels in the same header as the tool routes.
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { ToolError } from '../../tools/envelope.js';
+import { ToolError } from 'phantom-backend-sdk';
 import { ok, err, type AppCtx } from '../app.js';
-import { SESSION_HEADER, toolSession } from '../sessionHeader.js';
+import { SESSION_HEADER, toolSession } from 'phantom-backend-sdk';
 import type { FsDeps } from './fs.js';
 import { listSkills, loadSkill, manageSkill, type ManageBody } from '../../skills.js';
 

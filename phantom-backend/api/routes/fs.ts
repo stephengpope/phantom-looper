@@ -9,19 +9,19 @@ import type { BackgroundTaskRow, BackgroundTaskEnd } from 'phantom-backend-sdk';
 import { newId } from 'phantom-backend-sdk';
 import { sessionDir } from 'phantom-backend-sdk';
 import { logger, errStr } from 'phantom-backend-sdk';
-import { Sandbox } from '../../workspace/sandbox.js';
+import { Sandbox } from 'phantom-backend-sdk';
 import type { FileTools } from '../../tools/def.js';
-import { ToolError } from '../../tools/envelope.js';
+import { ToolError } from 'phantom-backend-sdk';
 import type { AppCtx } from '../app.js';
-import { killProcessGroup } from '../foreground.js';
-import { workspaceOf } from '../../sessions.js';
-import type { ContainerManager } from '../../workspace/container.js';
+import { killProcessGroup } from 'phantom-backend-sdk';
+import { workspaceOf } from 'phantom-backend-sdk';
+import type { SessionContainers } from 'phantom-backend-sdk';
 import type Docker from 'dockerode';
 import type { GitEngine } from '../../git/engine.js';
 
 const log = logger('bash');
 
-export interface FsDeps { docker: Docker; containers: ContainerManager; engine?: GitEngine }
+export interface FsDeps { docker: Docker; containers: SessionContainers; engine?: GitEngine }
 
 
 /** Kill one process SESSION by sid: TERM, ~1s grace, KILL. A second exec is

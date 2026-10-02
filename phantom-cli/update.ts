@@ -19,7 +19,7 @@
 // Everything reaches this module through `deps`, so a caller can script a
 // release, a server and a clock without a network or a terminal.
 import { isBehind } from './selfUpdate.js';
-import { pullLine, type PullProgress, type UpdateEvent } from '../core/update.js';
+import { pullLine, type PullProgress, type UpdateEvent } from 'phantom-client-sdk';
 
 export type Target = 'both' | 'client' | 'server';
 

@@ -13,7 +13,7 @@
 import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
 import type { Paths } from 'phantom-backend-sdk';
 import { syncBranch, type SyncEvent, type SyncDeps } from './sync.js';
-import type { Sessions } from '../sessions.js';
+import type { Sessions } from 'phantom-backend-sdk';
 import type { Workspaces } from 'phantom-backend-sdk';
 import type { Cards } from 'phantom-backend-sdk';
 import type { Settings } from 'phantom-backend-sdk';

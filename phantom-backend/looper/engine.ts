@@ -34,7 +34,7 @@ import type { FastifyInstance } from 'fastify';
 
 import type { ModelMessage } from 'ai';
 import type { ProjectRow } from 'phantom-backend-sdk/schema';
-import { LOOP_CLIENT_ID, workspaceOf, type Sessions } from '../sessions.js';
+import { LOOP_CLIENT_ID, workspaceOf, type Sessions } from 'phantom-backend-sdk';
 import type { Projects } from 'phantom-backend-sdk';
 import type { Cards, CardFields } from 'phantom-backend-sdk';
 import type { Settings, AgentConfig as SdkAgentConfig } from 'phantom-backend-sdk';

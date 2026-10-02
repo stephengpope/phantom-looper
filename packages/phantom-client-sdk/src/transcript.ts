@@ -99,3 +99,29 @@ export function parseLines(text: string): TranscriptLine[] {
   }
   return out;
 }
+
+/** The last user message in a record, as one line — what a session list
+ *  shows under the title. undefined when no user has spoken. */
+export function lastUserMessageText(text: string): string | undefined {
+  let last: string | undefined;
+  for (const line of parseLines(text)) {
+    if (line.type !== 'message') continue;
+    const message = line.message;
+    if (message.role !== 'user') continue;
+    const content = typeof message.content === 'string'
+      ? message.content
+      : message.content.map((part) => (part.type === 'text' ? part.text : '')).join('');
+    if (content.trim()) last = content.trim().replace(/\s+/g, ' ');
+  }
+  return last;
+}
+
+/** The record without its usage lines — what a duplicate copies: the
+ *  conversation, not the spend. */
+export function withoutUsageLines(text: string): string {
+  return text.split('\n').filter((line) => {
+    if (!line.includes('"usage"')) return true;
+    try { return (JSON.parse(line) as { type?: string }).type !== 'usage'; }
+    catch { return true; }
+  }).join('\n');
+}

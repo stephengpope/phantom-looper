@@ -11,7 +11,7 @@ import crypto from 'node:crypto';
 import type { TelegramClient } from './client.js';
 import { titled } from './client.js';
 import { checkLatest, isBehind, bare } from '../../core/version.js';
-import { pullLine, type PullProgress, type UpdateEvent } from '../../core/update.js';
+import { pullLine, type PullProgress, type UpdateEvent } from 'phantom-client-sdk';
 import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('upgrade');

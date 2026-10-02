@@ -1,5 +1,5 @@
 // The Assistant's wiring — fills ./assistant.ts (the document).
-import { fill } from '../template.js';
+import { fill } from 'phantom-backend-sdk';
 import { STAKEHOLDERS } from '../stakeholders.js';
 import { VALUES } from '../values.js';
 import { GIT } from '../git.js';

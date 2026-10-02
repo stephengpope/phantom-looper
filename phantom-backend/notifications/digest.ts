@@ -12,7 +12,7 @@
 // so it's never reported twice for the same activity. If it runs again and
 // finishes again, it'll be reported again.
 
-import { expiredHold, type Sessions } from '../sessions.js';
+import { expiredHold, type Sessions } from 'phantom-backend-sdk';
 import type { Cards } from 'phantom-backend-sdk';
 import type { Settings, AgentConfig as SdkAgentConfig } from 'phantom-backend-sdk';
 import { oldAgentConfig } from '../agentConfig.js';

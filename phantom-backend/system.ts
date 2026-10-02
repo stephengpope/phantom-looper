@@ -8,12 +8,12 @@ import { statfsSync } from 'node:fs';
 import { PassThrough, Readable } from 'node:stream';
 import type Docker from 'dockerode';
 import type { Paths } from 'phantom-backend-sdk';
-import type { Images } from './images.js';
+import type { Images } from 'phantom-backend-sdk';
 import type { TokenLog } from 'phantom-backend-sdk';
-import { formatTokenReport, reportWindows } from './tokenReport.js';
+import { formatTokenReport, reportWindows } from 'phantom-backend-sdk';
 import type { Clock } from 'phantom-backend-sdk';
 import { startUpdate, subscribe, isRunning } from './api/updateTask.js';
-import type { UpdateEvent } from '../core/update.js';
+import type { UpdateEvent } from 'phantom-client-sdk';
 import { API_IMAGE } from './env.js';
 import { logger, errStr } from 'phantom-backend-sdk';
 

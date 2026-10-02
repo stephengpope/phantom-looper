@@ -3,9 +3,9 @@
 // under project/, where the next push's add -A would commit them.
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
-import { ToolError } from '../../tools/envelope.js';
+import { ToolError } from 'phantom-backend-sdk';
 import { ok, err, type AppCtx } from '../app.js';
-import { SESSION_HEADER, toolSession } from '../sessionHeader.js';
+import { SESSION_HEADER, toolSession } from 'phantom-backend-sdk';
 import type { FsDeps } from './fs.js';
 import type { GitEngine } from '../../git/engine.js';
 import { logger, errStr } from 'phantom-backend-sdk';

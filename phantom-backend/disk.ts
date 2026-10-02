@@ -35,10 +35,10 @@ import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
 import { API_IMAGE, APP_VERSION } from './env.js';
 import type { Settings } from 'phantom-backend-sdk';
 import type { Projects } from 'phantom-backend-sdk';
-import type { Sessions } from './sessions.js';
+import type { Sessions } from 'phantom-backend-sdk';
 import type { Paths } from 'phantom-backend-sdk';
-import type { ContainerManager } from './workspace/container.js';
-import type { Images } from './images.js';
+import type { SessionContainers } from 'phantom-backend-sdk';
+import type { Images } from 'phantom-backend-sdk';
 import type { GitEngine } from './git/engine.js';
 import { workState, type PushResult } from 'phantom-backend-sdk/git';
 import { repoDir } from 'phantom-backend-sdk';
@@ -217,7 +217,7 @@ export async function diskCleanup(d: CleanupDeps): Promise<void> {
 /** Disk cleanup against the real system. */
 export async function pressureSweep(
   settings: Settings, projects: Projects, sessions: Sessions, p: Paths, images: Images,
-  containers: ContainerManager, engine: GitEngine, busy: (workspaceIds: string[]) => Promise<Set<string>>,
+  containers: SessionContainers, engine: GitEngine, busy: (workspaceIds: string[]) => Promise<Set<string>>,
 ): Promise<void> {
   const currents = [String(await settings.resolve('container_image')), API_IMAGE_CURRENT];
   await diskCleanup({

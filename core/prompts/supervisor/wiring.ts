@@ -2,7 +2,7 @@
 // document). No prompt text lives here. The loop is a dialogue: these are
 // the loop-authored fixed messages; everything else the agents say crosses
 // verbatim, and a status TOOL call ends the run (core/llm/tools/kanban.ts).
-import { fill, firstLineOf } from '../template.js';
+import { fill, firstLineOf } from 'phantom-backend-sdk';
 import { STAKEHOLDERS } from '../stakeholders.js';
 import { VALUES } from '../values.js';
 import { COMMUNICATION } from '../communication.js';

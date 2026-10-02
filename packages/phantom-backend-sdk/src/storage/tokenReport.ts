@@ -3,9 +3,13 @@
 // fixed-column table: total, then agents and their rows, then helpers and
 // theirs. Cache is a percentage — the share of prompt tokens served from
 // cache — since the raw read/write counts say nothing on their own.
-import { groupOf, type TokenGroup } from '../core/llm/createAgent.js';
-import type { ReportRow, WindowTotals, Windows } from 'phantom-backend-sdk';
-import type { Clock } from 'phantom-backend-sdk';
+/** The two kinds of model call: an agent's turn, or a one-shot the system
+ *  makes for itself (title, commit_message, compaction, session_digest). */
+export type TokenGroup = 'agent' | 'helper';
+const HELPER_TYPES = new Set(['title', 'commit_message', 'compaction', 'session_digest']);
+export const groupOf = (type: string): TokenGroup => (HELPER_TYPES.has(type) ? 'helper' : 'agent');
+import type { ReportRow, WindowTotals, Windows } from './TokenLog.js';
+import type { Clock } from '../lib/clock.js';
 
 // NUM_W: widest value `k` emits is 6 (`999.9B`), +4 gutter so columns never touch.
 const KIND_W = 14, MODEL_W = 22, NUM_W = 10;

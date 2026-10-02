@@ -41,3 +41,25 @@ export type { SettingsChanged } from './agents/SettingsEvents.js';
 export { hasEmbeddedCredentials, parseGitHubUrl, parseRepoRef, remoteUrl } from './git/remote.js';
 export type { CardRow, CronRow, ProjectRow, WorkspaceRow, SessionRow } from './storage/schema.js';
 export * as checkoutPool from './runtime/CheckoutPool.js';
+
+// runtime, git, prompt, skills, tools — the moved modules' companions
+export { makeDocker } from './runtime/Docker.js';
+export { PullTracker } from './runtime/Images.js';
+export { buildContainerSpec, type ContainerOpts } from './runtime/SessionContainers.js';
+export type { RunOpts, RunResult } from './runtime/Sandbox.js';
+export { systemSkills, systemSkillTree, SYSTEM_SKILLS_DIR, type SystemSkill, type SystemSkillTree } from './runtime/SystemSkills.js';
+export { webSearch, webFetch, urlSlug, type SearchBody, type WebDeps } from './runtime/Web.js';
+export { createRepo, listRepos, whoami, type GitHubRepo, type CreateRepoResult, type ListReposResult, type WhoamiResult } from './git/GitHub.js';
+export { refreshWorkState, type WorkRefreshDeps } from './git/workRefresh.js';
+export { SystemPromptError, SERVER_PROMPT_BLOCKS, SOUL_FILENAME, AGENTS_FILENAME, type SystemPromptSource, type ServerPromptBlockName } from './agents/SystemPrompt.js';
+export { killProcessGroup } from './agents/ForegroundCommands.js';
+export { toolSession, SESSION_HEADER } from './agents/sessionHeader.js';
+export { SessionError, conversationOnly, heldByOther, isHeld, lineCount, ownsWorkspace, agentAfterSave, assertDuplicable, copyName, expiredHold, workspaceOf,
+  BACKGROUND_AGENTS, CRON_CLIENT_ID, LOOP_CLIENT_ID, DUP_PREFIX, LAST_MESSAGE_CHARS, type ListQuery, type ListedSession, type SessionFull } from './storage/Sessions.js';
+export { formatTokenReport, reportWindows, groupOf, type TokenGroup } from './storage/tokenReport.js';
+export { ToolError, looksBinary, type Truncation } from './tools/envelope.js';
+export { fuzzyFindAndReplace, formatNoMatchHint, findClosestLines, ratio, type FuzzyResult } from './tools/fuzzy.js';
+export { SKILLS_DIR, scanSkills, mergeSkills, parseDescription, splitFrontmatter, type SkillMeta } from './skills/skills.js';
+export { lintSkillMd, validateSkillMd, validateSkillName, validateFilePath, MAX_DESCRIPTION, MAX_FILE_BYTES, MAX_NAME, MAX_SKILL_CONTENT, FILE_SUBDIRS } from './skills/validate.js';
+export { fill, withCurrentDate, firstLineOf } from './prompt/template.js';
+export { SKILLS_LIST, SECRETS_LIST, GITHUB_TOKEN, AGENT_DATABASE, AGENT_DATABASE_SHARED, TIME_DATE } from './prompt/serverBlocks.js';

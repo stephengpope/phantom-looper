@@ -4,7 +4,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ProjectRow } from 'phantom-backend-sdk/schema';
 import { columnsOf } from 'phantom-backend-sdk';
-import { isHeld } from '../../sessions.js';
+import { isHeld } from 'phantom-backend-sdk';
 import { CardError, CARD_FIELDS, CARD_JSON_FIELDS, type CardFields, type ItemOp } from 'phantom-backend-sdk';
 import { logger, errStr } from 'phantom-backend-sdk';
 import { ok, err, type AppCtx } from '../app.js';

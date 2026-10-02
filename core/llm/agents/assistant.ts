@@ -18,7 +18,7 @@
 // lowest effort on a model that cannot stop thinking.
 import type { Tool } from 'ai';
 import { PhantomAgent, type ModelConfig } from '../createAgent.js';
-import { withCurrentDate } from '../../prompts/template.js';
+import { withCurrentDate } from 'phantom-backend-sdk';
 import { systemPrompt } from '../../prompts/assistant/wiring.js';
 import type { Clock } from 'phantom-backend-sdk';
 

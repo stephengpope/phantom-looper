@@ -70,21 +70,21 @@ export class PhantomBackend {
   readonly foregroundCommands!: ForegroundCommands;
 
   // ── runtime ──────────────────────────────────────────────────────────
-  readonly docker!: Docker;
+  readonly docker!: typeof Docker;
   readonly images!: Images;
   readonly sessionContainers!: SessionContainers;
   readonly checkoutPool!: typeof CheckoutPool;
   readonly disk!: Disk;
   readonly skills!: Skills;
-  readonly systemSkills!: SystemSkills;
-  readonly web!: Web;
+  readonly systemSkills!: typeof SystemSkills;
+  readonly web!: typeof Web;
 
   // ── git ──────────────────────────────────────────────────────────────
   readonly git!: typeof Git;
   readonly gitSync!: GitSync;
   readonly instantSync!: InstantSync;
   readonly workspaceWatcher!: WorkspaceWatcher;
-  readonly github!: GitHub;
+  readonly github!: typeof GitHub;
   readonly commitMessages!: CommitMessages;
 
   // ── scheduling, telegram, api ────────────────────────────────────────

@@ -27,7 +27,7 @@ import type { TelegramEngine } from './engine.js';
 import { MODE_MESSAGE, type TelegramMode } from './botState.js';
 import { PROVIDERS } from '../../core/llm/createAgent.js';
 import { hasCatalog } from 'phantom-backend-sdk';
-import { isHeld } from '../sessions.js';
+import { isHeld } from 'phantom-backend-sdk';
 import { GLOBAL } from 'phantom-backend-sdk';
 import { CLIENT_ID } from './assistant.js';
 

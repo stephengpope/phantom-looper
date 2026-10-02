@@ -18,9 +18,9 @@ import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
 import { AGENT_NAMES, type AgentName } from '../../../core/llm/agentConfig.js';
 import { TOOLS, toolsFor, type FileTools, type ToolCtx } from '../../tools/registry.js';
 import { FILE_TOOLS } from '../../tools/files.js';
-import { ToolError } from '../../tools/envelope.js';
+import { ToolError } from 'phantom-backend-sdk';
 import { ok, err, type AppCtx } from '../app.js';
-import { SESSION_HEADER } from '../sessionHeader.js';
+import { SESSION_HEADER } from 'phantom-backend-sdk';
 import { fileTools } from './fs.js';
 
 const STATUS: Record<string, number> = {

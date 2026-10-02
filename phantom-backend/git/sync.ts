@@ -38,7 +38,7 @@
 import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
 import { checkoutPool } from 'phantom-backend-sdk';
 import { repoDir, type Paths } from 'phantom-backend-sdk';
-import type { Sessions } from '../sessions.js';
+import type { Sessions } from 'phantom-backend-sdk';
 import type { Workspaces } from 'phantom-backend-sdk';
 import type { Cards } from 'phantom-backend-sdk';
 import type { Settings } from 'phantom-backend-sdk';

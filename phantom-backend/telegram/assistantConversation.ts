@@ -7,7 +7,7 @@
 import { AssistantAgent } from '../../core/agents/assistant.js';
 import path from 'node:path';
 import type { ModelMessage } from 'ai';
-import type { Sessions } from '../sessions.js';
+import type { Sessions } from 'phantom-backend-sdk';
 import type { SessionRow } from 'phantom-backend-sdk/schema';
 import { loadTranscriptFile, newestTranscriptFile, Transcript, transcriptStamp } from '../../core/llm/transcript.js';
 import { compact, compactionDue, compactionOpts, CompactionLock, type CompactionConfig } from '../../core/llm/compaction.js';

@@ -3,8 +3,8 @@
 // routes read the header name at LOAD time, to build their route schemas:
 // importing it from fs.ts pulled every reader into fs.ts's import cycle
 // (fs → app → git → fs), which crashes any entry that loads fs.ts first.
-import type { SessionRow } from 'phantom-backend-sdk/schema';
-import { workspaceOf, type Sessions } from '../sessions.js';
+import type { SessionRow } from '../storage/schema.js';
+import { workspaceOf, type Sessions } from '../storage/Sessions.js';
 import { ToolError } from '../tools/envelope.js';
 
 export const SESSION_HEADER = 'x-phantom-looper-session';

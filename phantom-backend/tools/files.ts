@@ -11,10 +11,10 @@
 //
 // Every file tool needs the session's container: `ctx.files()` starts it on
 // first use. Offered only to a session with files (a workspace).
-import { Sandbox } from '../workspace/sandbox.js';
-import { fuzzyFindAndReplace, formatNoMatchHint } from './fuzzy.js';
+import { Sandbox } from 'phantom-backend-sdk';
+import { fuzzyFindAndReplace, formatNoMatchHint } from 'phantom-backend-sdk';
 import { unifiedDiff } from './diff.js';
-import { ToolError, looksBinary, type Truncation } from './envelope.js';
+import { ToolError, looksBinary, type Truncation } from 'phantom-backend-sdk';
 import { bool, int, obj, str, s, type FileTools, type ToolDef } from './def.js';
 
 const IMAGE_TYPES: Record<string, string> = {

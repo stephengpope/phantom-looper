@@ -3,7 +3,7 @@
 // name collision). Offered only to a session with files: a skill lives in a
 // repo.
 import { listSkills, loadSkill, manageSkill, type ManageBody } from '../skills.js';
-import { ToolError } from './envelope.js';
+import { ToolError } from 'phantom-backend-sdk';
 import { obj, oneOf, str, type OfferCtx, type ToolCtx, type ToolDef } from './def.js';
 
 const hasRepo = ({ app, session }: OfferCtx) => Promise.resolve(!!app.fs && !!session.workspaceId);

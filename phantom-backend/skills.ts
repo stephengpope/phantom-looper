@@ -9,16 +9,16 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type { SessionRow } from 'phantom-backend-sdk/schema';
 import { repoDir } from 'phantom-backend-sdk';
-import { Sandbox } from './workspace/sandbox.js';
-import { ToolError } from './tools/envelope.js';
-import { fuzzyFindAndReplace, formatNoMatchHint } from './tools/fuzzy.js';
+import { Sandbox } from 'phantom-backend-sdk';
+import { ToolError } from 'phantom-backend-sdk';
+import { fuzzyFindAndReplace, formatNoMatchHint } from 'phantom-backend-sdk';
 import type { AppCtx } from './api/app.js';
 import type { FsDeps } from './api/routes/fs.js';
-import { SKILLS_DIR, mergeSkills, parseDescription, scanSkills } from '../core/skills/skills.js';
-import { systemSkills, systemSkillTree } from './systemSkills.js';
+import { SKILLS_DIR, mergeSkills, parseDescription, scanSkills } from 'phantom-backend-sdk';
+import { systemSkills, systemSkillTree } from 'phantom-backend-sdk';
 import {
   MAX_FILE_BYTES, lintSkillMd, validateFilePath, validateSkillMd, validateSkillName,
-} from '../core/skills/validate.js';
+} from 'phantom-backend-sdk';
 
 export interface ManageBody {
   action: 'create' | 'edit' | 'patch' | 'delete' | 'write_file' | 'remove_file';

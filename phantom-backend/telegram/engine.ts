@@ -24,7 +24,7 @@ import { sessionPin } from '../agentConfig.js';
 import type { SettingsEvents } from 'phantom-backend-sdk';
 import { APP_VERSION } from '../env.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
-import type { Sessions } from '../sessions.js';
+import type { Sessions } from 'phantom-backend-sdk';
 import type { Cards } from 'phantom-backend-sdk';
 import type { Presets } from 'phantom-backend-sdk';
 import type { System } from '../system.js';

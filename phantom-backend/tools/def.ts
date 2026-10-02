@@ -2,9 +2,9 @@
 // definition files share. The list itself is registry.ts.
 import type { AppCtx } from '../api/app.js';
 import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
-import type { Sandbox } from '../workspace/sandbox.js';
+import type { Sandbox } from 'phantom-backend-sdk';
 import type { AgentName } from '../../core/llm/agentConfig.js';
-import { ToolError } from './envelope.js';
+import { ToolError } from 'phantom-backend-sdk';
 
 export type { AgentName };
 

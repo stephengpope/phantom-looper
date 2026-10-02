@@ -5,7 +5,7 @@ import { config } from './config.js';
 import { oldAgentConfig } from './agentConfig.js';
 import { makePaths } from 'phantom-backend-sdk';
 import { checkoutPool } from 'phantom-backend-sdk';
-import { Sessions } from './sessions.js';
+import { Sessions } from 'phantom-backend-sdk';
 import { Settings } from 'phantom-backend-sdk';
 import { Projects } from 'phantom-backend-sdk';
 import { AgentDatabases } from 'phantom-backend-sdk';
@@ -28,9 +28,9 @@ import { shutdown as updateShutdown } from './api/updateTask.js';
 import { BoardEvents } from 'phantom-backend-sdk';
 import { SessionEvents } from 'phantom-backend-sdk';
 import { BackdoorQueue } from './api/backdoor.js';
-import { makeDocker } from './docker.js';
-import { ContainerManager } from './workspace/container.js';
-import { Images } from './images.js';
+import { makeDocker } from 'phantom-backend-sdk';
+import { SessionContainers } from 'phantom-backend-sdk';
+import { Images } from 'phantom-backend-sdk';
 import { GitEngine } from './git/engine.js';
 import { autoPush, type AutoPushEvent } from './git/autoPush.js';
 import { autoPull, type AutoPullEvent } from './git/autoPull.js';
@@ -48,9 +48,9 @@ import type { SyncDeps, SyncEvent } from './git/sync.js';
 import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
 import { LooperEngine } from './looper/engine.js';
 import { TelegramEngine } from './telegram/engine.js';
-import { refreshWorkState } from './git/workRefresh.js';
+import { refreshWorkState } from 'phantom-backend-sdk';
 import { InstantSync } from './git/instantSync.js';
-import { WorkspaceWatcher } from './git/workspaceWatcher.js';
+import { WorkspaceWatcher } from 'phantom-backend-sdk';
 import { reconcileDbUi } from './api/routes/dbUi.js';
 import { logger, errStr } from 'phantom-backend-sdk';
 
@@ -121,7 +121,7 @@ async function main() {
   // inside the container start — before the tool call that started it
   // returns, so the first write is seen — and lets go on removal. `instantSync`
   // is captured lazily, like `app`: containers start long after boot.
-  const containers = new ContainerManager(docker, images, paths, {
+  const containers = new SessionContainers(docker, images, paths, {
     volume: process.env.WORKSPACE_VOLUME, network: process.env.WORKSPACE_NETWORK, settings, databases,
     onStarted: (workspaceId, project) => instantSync.watchWorkspace(workspaceId, project),
     onRemoved: (workspaceId) => instantSync.unwatchWorkspace(workspaceId),

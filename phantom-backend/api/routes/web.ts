@@ -2,9 +2,9 @@
 // code).
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { ok, err, type AppCtx } from '../app.js';
-import { SESSION_HEADER, toolSession } from '../sessionHeader.js';
-import { ToolError } from '../../tools/envelope.js';
-import { webFetch, webSearch, type SearchBody } from '../../web.js';
+import { SESSION_HEADER, toolSession } from 'phantom-backend-sdk';
+import { ToolError } from 'phantom-backend-sdk';
+import { webFetch, webSearch, type SearchBody } from 'phantom-backend-sdk';
 
 const STATUS: Record<string, number> = {
   session_not_found: 404, session_destroyed: 410, no_workspace: 400, credential_required: 400, search_failed: 502,

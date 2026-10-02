@@ -9,7 +9,7 @@
 // card's status change — never on the agent's word.
 import { type Tool } from 'ai';
 import { PhantomAgent, type ModelConfig } from '../createAgent.js';
-import { withCurrentDate } from '../../prompts/template.js';
+import { withCurrentDate } from 'phantom-backend-sdk';
 import { systemPrompt } from '../../prompts/supervisor/wiring.js';
 import type { Clock } from 'phantom-backend-sdk';
 

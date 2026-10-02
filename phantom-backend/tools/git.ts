@@ -8,7 +8,7 @@
 // assistant's on their behalf. The coding agent does not carry these. The
 // target is the session named by `id`, else the one this assistant is
 // following (its workspace is that session's).
-import { ToolError } from './envelope.js';
+import { ToolError } from 'phantom-backend-sdk';
 import { obj, refusal, str, type OfferCtx, type ToolCtx, type ToolDef } from './def.js';
 
 const wired = ({ app }: OfferCtx) => Promise.resolve(!!app.autoPush && !!app.autoPull);

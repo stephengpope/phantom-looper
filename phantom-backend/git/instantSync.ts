@@ -37,21 +37,21 @@
 //
 // A LIVE CHECKOUT IS A RUNNING CONTAINER. Files only change through the
 // container (an agent's tool call) or through the sync itself. The container
-// starts on the first tool call and is removed when idle, and ContainerManager
+// starts on the first tool call and is removed when idle, and SessionContainers
 // says so as it happens: `watchWorkspace` runs inside the start, BEFORE the tool
 // call that started it returns, so the first write is seen; `unwatchWorkspace`
 // runs on removal. `reconcile` covers what those two cannot: containers
 // already running when this process boots, and the switch or a timing
 // changed (the settings bus says so) — never a poll.
 import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
-import type { Sessions } from '../sessions.js';
+import type { Sessions } from 'phantom-backend-sdk';
 import type { Workspaces } from 'phantom-backend-sdk';
 import type { Projects } from 'phantom-backend-sdk';
 import type { Settings } from 'phantom-backend-sdk';
 import { repoDir, type Paths } from 'phantom-backend-sdk';
 import type { AutoPushResult } from './autoPush.js';
 import type { AutoPullResult } from './autoPull.js';
-import type { WorkspaceWatcher } from './workspaceWatcher.js';
+import type { WorkspaceWatcher } from 'phantom-backend-sdk';
 import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('instant-sync');

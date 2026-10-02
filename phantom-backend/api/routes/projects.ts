@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ProjectRow } from 'phantom-backend-sdk/schema';
 import { parseRepoRef, remoteUrl } from 'phantom-backend-sdk';
-import { createRepo, listRepos, whoami } from '../../git/github.js';
+import { createRepo, listRepos, whoami } from 'phantom-backend-sdk';
 import { initializeRemote, classifyGitFailure } from 'phantom-backend-sdk/git';
 import { ProjectError } from 'phantom-backend-sdk';
 import { projectScope } from 'phantom-backend-sdk';

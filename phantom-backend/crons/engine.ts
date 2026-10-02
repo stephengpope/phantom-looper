@@ -36,14 +36,14 @@
 // owners it is handed.
 import type { FastifyInstance } from 'fastify';
 import { Cron } from 'croner';
-import { CRON_CLIENT_ID, type Sessions } from '../sessions.js';
+import { CRON_CLIENT_ID, type Sessions } from 'phantom-backend-sdk';
 import type { Crons, CronRow } from 'phantom-backend-sdk';
 import type { Projects } from 'phantom-backend-sdk';
 import type { Settings, AgentConfig as SdkAgentConfig } from 'phantom-backend-sdk';
 import { openSession, type OpenedSession } from '../../core/session.js';
 import { serializeTranscript } from '../../core/llm/transcript.js';
 import { runCodingTurn } from '../looper/turn.js';
-import { SESSION_HEADER } from '../api/sessionHeader.js';
+import { SESSION_HEADER } from 'phantom-backend-sdk';
 import { oldAgentConfig } from '../agentConfig.js';
 import { sessionPin } from '../agentConfig.js';
 import { injectFetch } from '../looper/injectFetch.js';

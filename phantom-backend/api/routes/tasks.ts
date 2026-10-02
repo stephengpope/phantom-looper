@@ -8,9 +8,9 @@
 // not used — its numbers can never meet a `pkill` in the container.
 import type { FastifyInstance } from 'fastify';
 import fsp from 'node:fs/promises';
-import { Sandbox } from '../../workspace/sandbox.js';
+import { Sandbox } from 'phantom-backend-sdk';
 import { ok, err, type AppCtx } from '../app.js';
-import { workspaceOf } from '../../sessions.js';
+import { workspaceOf } from 'phantom-backend-sdk';
 import {
   killSid, probeGroups, reconcileRunning, commandTextFromArgv, elapsedSeconds,
   type LiveGroup, type FsDeps,

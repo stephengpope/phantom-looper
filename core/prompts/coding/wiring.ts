@@ -2,7 +2,7 @@
 // document) with the shared agent texts. No prompt text lives here. What
 // comes out is the agent's own words; the server's blocks are named in the
 // layout (core/agents/coding.ts) and filled there.
-import { fill } from '../template.js';
+import { fill } from 'phantom-backend-sdk';
 import { STAKEHOLDERS } from '../stakeholders.js';
 import { VALUES } from '../values.js';
 import { COMMUNICATION } from '../communication.js';

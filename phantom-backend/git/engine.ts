@@ -8,7 +8,7 @@
 // simultaneous op.
 import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
 import { git, commitAll, pushSession, GIT_CLIENT_ID, type PushResult, type PullResult, type GitAuth } from 'phantom-backend-sdk/git';
-import type { Sessions } from '../sessions.js';
+import type { Sessions } from 'phantom-backend-sdk';
 import type { WorkspaceRow } from 'phantom-backend-sdk/schema';
 import { checkoutPool } from 'phantom-backend-sdk';
 import { repoDir, type Paths } from 'phantom-backend-sdk';
