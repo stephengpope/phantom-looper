@@ -157,7 +157,7 @@ export async function reconcileRunning(
  *  `signal` is the client's disconnect (esc aborted the tool fetch): a unary
  *  command runs under setsid as its own process-group leader, pgid in a
  *  pidfile, and abort or timeout kills the GROUP — children included. The
- *  pidfile is also registered in ctx.foreground, so the interrupt route's
+ *  pidfile is also registered in ctx.foregroundCommands, so the interrupt route's
  *  kill reaches turns that have no socket to close (server-side turns ride
  *  injectFetch) — one kill, two doors. */
 async function runBash(
@@ -193,7 +193,7 @@ async function runBash(
       'echo $$ >"$0"; /bin/sh -c "$1"; s=$?; rm -f "$0"; exit $s', pidfile, args.cmd];
     const onAbort = () => { void killProcessGroup(sandbox, pidfile); };
     signal?.addEventListener('abort', onAbort, { once: true });
-    ctx.foreground?.add(session.id, pidfile, sandbox);
+    ctx.foregroundCommands.add(session.id, pidfile, sandbox);
     // Keep the TAIL (errors live at the end) and spill the full output to a
     // file the agent can read — nothing is lost. One shape for a finished
     // command and for one the timeout killed.
@@ -239,7 +239,7 @@ async function runBash(
       throw e;
     } finally {
       signal?.removeEventListener('abort', onAbort);
-      ctx.foreground?.remove(session.id, pidfile);
+      ctx.foregroundCommands.remove(session.id, pidfile);
       void ctx.sessions.touch(session);
     }
   }
@@ -280,7 +280,7 @@ async function runBash(
       // row's final word rather than the local `status`: a kill from /tasks
       // or task_kill marks the row first, and the row is the truth.
       const final = await ctx.backgroundTasks.get(taskId).catch(() => undefined);
-      if (final) ctx.backdoor?.push(session.id, noticeOf(final));
+      if (final) ctx.userMessageQueue.push(session.id, noticeOf(final));
     }
   })();
   // Sid capture, fire-and-forget beside the stream: retry-read the pidfile

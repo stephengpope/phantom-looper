@@ -79,7 +79,7 @@ const lockedErr = (s: SessionRow) =>
 async function publishBoardLock(ctx: AppCtx, sessionId: string, locked: boolean): Promise<void> {
   try {
     const card = await ctx.cards.ofSession(sessionId);
-    if (card) ctx.events?.publish(card.project_id,
+    if (card) ctx.boardEvents.publish(card.project_id,
       { event: 'session_lock', card: card.number, id: sessionId, locked });
   } catch { /* best-effort — the board refreshes on reconnect anyway */ }
 }
@@ -92,7 +92,7 @@ async function publishBoardLock(ctx: AppCtx, sessionId: string, locked: boolean)
 async function releaseHold(ctx: AppCtx, s: SessionRow, client: string): Promise<boolean> {
   const released = await ctx.sessions.releaseLock(s.id, client);
   if (released) {
-    ctx.sessionEvents?.publish(s.id, client, lockEvent(s, { locked: false }));
+    ctx.sessionEvents.publish(s.id, client, lockEvent(s, { locked: false }));
     void publishBoardLock(ctx, s.id, false);
     ctx.looper?.runLoopOfSession(s.id, client);
   }
@@ -236,13 +236,13 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       // the session to a second writer while the first is still streaming:
       // that is two conversations on one transcript, and the last save wins.
       // The holder itself still renews normally.
-      if (ctx.activeTurns?.has(s.id) && s.lockedBy && s.lockedBy !== client) {
+      if (ctx.activeTurns.has(s.id) && s.lockedBy && s.lockedBy !== client) {
         return reply.code(409).send(lockedErr(s));
       }
       const ttl = await ctx.settings.resolve('session_lock_ttl_ms');
       const expires = await ctx.sessions.acquireLock(s, client, Number(ttl), req.body?.label);
       if (!expires) return reply.code(409).send(lockedErr(s));
-      ctx.sessionEvents?.publish(s.id, client, lockEvent(s, { locked: true, by: client,
+      ctx.sessionEvents.publish(s.id, client, lockEvent(s, { locked: true, by: client,
         label: req.body?.label ?? s.lockedLabel ?? null, expires }));
       // Notify the board when a session transitions from unlocked to locked
       // (not on renewals — those fire on every transcript save). The pre-
@@ -442,7 +442,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       // idle session while its turn is still streaming. Without this a lapsed
       // TTL lets a second client overwrite the record the live turn is about
       // to save — the whole file, not a merge.
-      if (ctx.activeTurns?.has(s.id) && s.lockedBy && s.lockedBy !== client) {
+      if (ctx.activeTurns.has(s.id) && s.lockedBy && s.lockedBy !== client) {
         return reply.code(409).send(lockedErr(s));
       }
       const data = req.body.data;
@@ -456,7 +456,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (client && s.lockedBy === client) {
         const ttl = await ctx.settings.resolve('session_lock_ttl_ms');
         const expires = await ctx.sessions.renewLock(s.id, client, Number(ttl));
-        ctx.sessionEvents?.publish(s.id, client, lockEvent({ ...s, agent }, { locked: true, expires }));
+        ctx.sessionEvents.publish(s.id, client, lockEvent({ ...s, agent }, { locked: true, expires }));
       }
       // Naming rides the save but never blocks it — fire-and-forget; any
       // failure leaves the old name (or null) standing. A manual name
@@ -690,7 +690,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         const cfg = await oldAgentConfig(ctx.agentConfig, ctx.settings, 'coding', project ? { projectId: project.id } : {}, sessionPin(opened.session));
         const { text } = await runCodingTurn(
           { f, apiKey: ctx.apiKey, base: 'http://looper/api', modelFetch: ctx.modelFetch,
-            sessionEvents: ctx.sessionEvents, client, backdoor: ctx.backdoor },
+            sessionEvents: ctx.sessionEvents, client, backdoor: ctx.userMessageQueue },
           opened, opened.session.projectId, req.body.message, req.body.plan === true, cfg);
         line({ type: 'result', text });
       } catch (e) {
@@ -766,11 +766,11 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       // The same ground truth as the lock route: an expired hold is not an
       // idle session while its turn is still streaming — duplicating would
       // flush a tree the live turn is halfway through writing.
-      if (ctx.activeTurns?.has(src.id) && src.lockedBy) return reply.code(409).send(lockedErr(src));
+      if (ctx.activeTurns.has(src.id) && src.lockedBy) return reply.code(409).send(lockedErr(src));
       const ttl = await ctx.settings.resolve('session_lock_ttl_ms');
       const expires = await ctx.sessions.acquireLock(src, GIT_CLIENT_ID, Number(ttl), 'duplicate');
       if (!expires) return reply.code(409).send(lockedErr(src));
-      ctx.sessionEvents?.publish(src.id, GIT_CLIENT_ID, lockEvent(src, { locked: true, by: GIT_CLIENT_ID,
+      ctx.sessionEvents.publish(src.id, GIT_CLIENT_ID, lockEvent(src, { locked: true, by: GIT_CLIENT_ID,
         label: 'duplicate', expires }));
       void publishBoardLock(ctx, src.id, true);
       try {
@@ -806,7 +806,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
         throw e;
       } finally {
         await ctx.sessions.releaseLock(src.id, GIT_CLIENT_ID);
-        ctx.sessionEvents?.publish(src.id, GIT_CLIENT_ID, lockEvent(src, { locked: false }));
+        ctx.sessionEvents.publish(src.id, GIT_CLIENT_ID, lockEvent(src, { locked: false }));
         void publishBoardLock(ctx, src.id, false);
       }
     });
@@ -983,7 +983,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       const s = await ctx.sessions.get(req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (s.status !== 'active') return reply.code(410).send(err('session_destroyed', `session is ${s.status}`));
-      if (ctx.activeTurns?.has(s.id) && s.lockedBy && s.lockedBy !== client) return reply.code(409).send(lockedErr(s));
+      if (ctx.activeTurns.has(s.id) && s.lockedBy && s.lockedBy !== client) return reply.code(409).send(lockedErr(s));
       const project = await ctx.projects.get(s.projectId);
       if (!project) return reply.code(404).send(err('not_found', 'project vanished'));
       // The caller hanging up (a stop pressed while this request was in
@@ -1004,11 +1004,11 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
       if (!expires) return reply.code(409).send(lockedErr(s));
       held = true;
       if (callerGone) { await releaseHold(ctx, s, client); return; }
-      ctx.sessionEvents?.publish(s.id, client, lockEvent(s, { locked: true, by: client, label: req.body.label ?? s.lockedLabel ?? null, expires }));
+      ctx.sessionEvents.publish(s.id, client, lockEvent(s, { locked: true, by: client, label: req.body.label ?? s.lockedLabel ?? null, expires }));
       if (s.lockedBy !== client) void publishBoardLock(ctx, s.id, true);
       // The server's queued messages land now, under the hold, ahead of
       // whatever the caller sends: the caller reads the record after this.
-      const queued = ctx.backdoor?.drain(s.id) ?? [];
+      const queued = ctx.userMessageQueue.drain(s.id) ?? [];
       // The row as the turn starts: after the hold, after the queued writes.
       let atStart = s;
       if (queued.length) {
@@ -1070,7 +1070,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: AppCtx) {
           cacheRead: { type: 'number' }, cacheWrite: { type: 'number' },
         } } } },
     async (req) => {
-      await ctx.logTokens.record(req.body);
+      await ctx.tokenLog.record(req.body);
       return ok({});
     });
 }

@@ -4,7 +4,7 @@
 // Route schemas stay — they are Fastify's validation — but nothing serves
 // them as documentation any more (Swagger UI was cut).
 import Fastify from 'fastify';
-import { timingSafeEqualStr } from 'phantom-backend-sdk';
+import { timingSafeEqualStr, type PhantomBackend } from 'phantom-backend-sdk';
 
 // @fastify/swagger used to augment FastifySchema with these. The docs page is
 // cut, but summary/description/tags stay on every route — they are the API's
@@ -12,7 +12,6 @@ import { timingSafeEqualStr } from 'phantom-backend-sdk';
 declare module 'fastify' {
   interface FastifySchema { tags?: readonly string[]; summary?: string; description?: string }
 }
-import type { Paths } from 'phantom-backend-sdk';
 import { settingsRoutes } from './routes/settings.js';
 import { secretsRoutes } from './routes/secrets.js';
 import { databaseRoutes } from './routes/database.js';
@@ -23,22 +22,7 @@ import { kanbanRoutes } from './routes/kanban.js';
 import { skillsRoutes } from './routes/skills.js';
 import { webRoutes } from './routes/web.js';
 import type { GitEngine } from '../git/engine.js';
-import { BoardEvents } from 'phantom-backend-sdk';
-import { SessionEvents } from 'phantom-backend-sdk';
-import type { Sessions } from 'phantom-backend-sdk';
-import type { Settings, AgentConfig as SdkAgentConfig, ModelCatalog } from 'phantom-backend-sdk';
-import type { Projects } from 'phantom-backend-sdk';
-import type { AgentDatabases } from 'phantom-backend-sdk';
-import type { Workspaces } from 'phantom-backend-sdk';
-import type { Cards } from 'phantom-backend-sdk';
-import type { BackgroundTasks } from 'phantom-backend-sdk';
-import type { Presets } from 'phantom-backend-sdk';
-import type { Crons } from 'phantom-backend-sdk';
-import type { TokenLog } from 'phantom-backend-sdk';
-import { SettingsEvents } from 'phantom-backend-sdk';
-import { ForegroundCommands } from 'phantom-backend-sdk';
 import type { System } from '../system.js';
-import { UserMessageQueue } from 'phantom-backend-sdk';
 import type { AutoPushResult, AutoPushEvent } from '../git/autoPush.js';
 import type { AutoPullResult, AutoPullEvent } from '../git/autoPull.js';
 import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
@@ -51,102 +35,36 @@ import { presetRoutes } from './routes/presets.js';
 import { cronRoutes } from './routes/crons.js';
 import { dbUiRoutes } from './routes/dbUi.js';
 
-export interface AppCtx {
-  // The row owners — one object per table, each the ONLY door to its rows.
-  // A route parses, checks, calls one method, shapes the reply; the rules
-  // (and every change notice) live in the object.
-  settings: Settings;
-  agentConfig: SdkAgentConfig;
-  modelCatalog: ModelCatalog;
-  projects: Projects;
-  workspaces: Workspaces;
-  cards: Cards;
-  sessions: Sessions;
-  backgroundTasks: BackgroundTasks;
-  presets: Presets;
-  crons: Crons;
-  logTokens: TokenLog;
-  paths: Paths;
+/** What every route reads: the backend itself, plus what this app still
+ *  wires around it. The extras are transitional — each leaves with the
+ *  step named on it (docs/phantom-agent-sdk-plan.md). */
+export type AppCtx = PhantomBackend & AppExtras;
+export interface AppExtras {
   apiKey: string;
-  version: string;
-  /** The agent's own database per project (databases.ts). Absent in
-   *  DB-only tests: the query route answers 503. */
-  databases?: AgentDatabases;
-  /** Docker wiring; absent in DB-only tests, and /fs then 404s. */
+  /** Docker wiring for the file routes. → HttpApi (§4). */
   fs?: FsDeps;
+  /** The manual git operations and the two auto syncs. → GitSync (§4). */
   engine?: GitEngine;
-  /** Auto-push (git/autoPush.ts), wired in index.ts with the fixer and the
-   *  message model. Absent in DB-only tests — the auto-push route answers 503
-   *  and the archive trigger no-ops. */
-  /** `by` is the caller's client id: every step also lands on the session's
-   *  live feed, published under it, so the feed's echo rule skips the one
-   *  window that already draws this stream. */
   autoPush?: (session: SessionRow, project: ProjectRow,
     onEvent?: (e: AutoPushEvent) => void | Promise<void>, by?: string) => Promise<AutoPushResult>;
-  /** Auto-pull (git/autoPull.ts) — base INTO the branch, same fixer. Absent
-   *  in DB-only tests: the auto-pull route answers 503. */
   autoPull?: (session: SessionRow, project: ProjectRow,
     onEvent?: (e: AutoPullEvent) => void | Promise<void>, by?: string) => Promise<AutoPullResult>;
-  /** The board's event bus (boardEvents.ts) — the card routes publish, the
-   *  events route streams, the looper engine publishes its pairings. index.ts
-   *  makes one and hands it to both; a ctx built without one gets its own at
-   *  registration, so every app can stream. */
-  events?: BoardEvents;
-  /** A session's live feed (sessionEvents.ts) — the server-side turn runner
-   *  publishes every part, the transcript PUT publishes the record landing,
-   *  and both GET /sessions/:id/events and the turn route read it. Defaulted
-   *  at registration like the board's, so it is never absent: the turn
-   *  route's own ND-JSON reply is built off it. */
-  sessionEvents?: SessionEvents;
-  /** Settings write notifications. The event names the scope only; listeners
-   *  re-read the settings route rather than receiving a second copy. */
-  settingsEvents?: SettingsEvents;
-  /** Active server-side turns, keyed by session id. The interrupt route aborts
-   *  the controller; the turn runner registers on entry and removes on exit.
-   *  Absent only in tests that never run a turn. */
-  /** The server's own housekeeping — logs, status, restart, token report (system.ts). */
+  /** This backend's own housekeeping — logs, status, restart, token report. → Upgrader (§4). */
   system: System;
-  activeTurns?: Map<string, AbortController>;
-  /** In-flight foreground (unary bash) commands per session (foreground.ts).
-   *  The interrupt route kills them: aborting the stream alone leaves the
-   *  command running in the container for turns with no socket to close. */
-  foreground?: ForegroundCommands;
-  /** The backdoor message queue (backdoor.ts) — one-liners a session's
-   *  NEXT turn carries without a turn being started for them (a detached
-   *  command exiting, a file dropped onto the cli window). Defaulted at
-   *  registration like the buses above. */
-  backdoor?: UserMessageQueue;
-  /** Where POST /update drops a release tag for the updater sidecar
-   *  (UPDATE_TRIGGER_DIR). Absent: the route answers `updater_unavailable`. */
+  /** Where POST /update drops a release tag for the updater sidecar. → Upgrader (§4). */
   updateTriggerDir?: string;
-  /** Test seam: the fetch MODEL calls use (createAgent's own seam) — the turn
-   *  route and the looper thread it through. Production never sets it. */
+  /** Test seam: the fetch MODEL calls use. Goes with core/llm (§7). */
   modelFetch?: typeof fetch;
-  /** The looper's event surface — set by index.ts AFTER the engine exists
-   *  (the engine is a client of this app, so it is built second; routes read
-   *  ctx.looper at request time, never at registration). The looper is
-   *  event-driven, no polling: these calls are how card writes, supervision
-   *  setting changes and lock releases reach it. Absent in tests — every
-   *  call site guards with `?.`. */
+  /** The looper's event surface — user space, set after the app exists. → the route door (§5). */
   looper?: {
-    /** A card was written — run its loop while it canTurn. */
-    /** A session lock was released — its card, if any, may be runnable.
-     *  `releasedBy` is the releasing client id: the engine ignores its own
-     *  releases (every turn ends in one — reacting would spin). */
     runLoopOfSession(sessionId: string, releasedBy: string): void;
-    /** auto_plan/auto_build changed — run every loop in a project (or all). */
     runAllLoops(projectId?: string): void;
-    /** Cards with a round in flight — GET /health's `loops_running`. */
     runningCount(): number;
   };
-  /** The Telegram engine — set by index.ts AFTER listen (a client of this app
-   *  like the looper). The webhook route calls handleUpdate; the settings
-   *  routes poke reconcile() when a telegram_* key or the token is written.
-   *  Absent in tests and when no public address is configured. */
+  /** The Telegram engine — user space, set after listen. → TelegramBot.onUpdate (§6). */
   telegram?: {
     handleUpdate(secretHeader: string, update: unknown): Promise<number>;
     reconcile(): Promise<void>;
-    /** POST /sessions/:id/notify — the send_message tool's delivery. */
     notify(sessionId: string, text: string): Promise<void>;
   };
 }
@@ -212,11 +130,6 @@ export async function buildApp(ctx: AppCtx) {
       reply.code(500).send(err('internal', e instanceof Error ? e.message : String(e)));
     });
 
-    ctx.sessionEvents ??= new SessionEvents();
-    ctx.settingsEvents ??= new SettingsEvents();
-    ctx.activeTurns ??= new Map();
-    ctx.foreground ??= new ForegroundCommands();
-    ctx.backdoor ??= new UserMessageQueue();
     settingsRoutes(api, ctx);
     secretsRoutes(api, ctx);
     projectRoutes(api, ctx);
@@ -227,7 +140,6 @@ export async function buildApp(ctx: AppCtx) {
     if (ctx.fs) skillsRoutes(api, ctx, ctx.fs);
     if (ctx.fs && ctx.engine) gitRoutes(api, ctx, ctx.fs, ctx.engine);
     webRoutes(api, ctx);
-    ctx.events ??= new BoardEvents();
     kanbanRoutes(api, ctx);
     systemRoutes(api, ctx);
     presetRoutes(api, ctx);

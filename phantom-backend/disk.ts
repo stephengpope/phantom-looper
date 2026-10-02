@@ -32,7 +32,7 @@
 //   it; deleting it made the update fail with "image not on this machine").
 import fs from 'node:fs/promises';
 import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
-import { API_IMAGE, APP_VERSION } from './env.js';
+import { API_IMAGE, APP_VERSION } from 'phantom-backend-sdk';
 import type { Settings } from 'phantom-backend-sdk';
 import type { Projects } from 'phantom-backend-sdk';
 import type { Sessions } from 'phantom-backend-sdk';

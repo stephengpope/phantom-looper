@@ -6,7 +6,7 @@ import { SqlError } from 'phantom-backend-sdk';
 import { obj, refusal, type OfferCtx, type ToolDef } from './def.js';
 
 const enabled = async ({ app, project }: OfferCtx) =>
-  !!app.databases && Boolean(await app.settings.resolve('agent_database', { projectId: project.id }));
+  !!app.agentDatabases && Boolean(await app.settings.resolve('agent_database', { projectId: project.id }));
 
 export const DATABASE_TOOLS: ToolDef[] = [
   {
@@ -28,12 +28,12 @@ export const DATABASE_TOOLS: ToolDef[] = [
     }, ['sql']),
     mutates: true, agents: ['coding'], offered: enabled,
     async execute(ctx, a) {
-      if (!ctx.app.databases) throw refusal('database_unavailable', 'this server has no agent database wiring');
+      if (!ctx.app.agentDatabases) throw refusal('database_unavailable', 'this server has no agent database wiring');
       if (!(await ctx.app.settings.resolve('agent_database', { projectId: ctx.project.id }))) {
         throw refusal('database_off', 'agent_database is off for this project');
       }
       try {
-        const results = await ctx.app.databases.query(ctx.project.id, String(a.sql), {
+        const results = await ctx.app.agentDatabases.query(ctx.project.id, String(a.sql), {
           limit: Number(a.limit ?? 10), maxCellChars: Number(a.maxCellChars ?? 1000), params: a.params as unknown[] | undefined,
         });
         return { results };

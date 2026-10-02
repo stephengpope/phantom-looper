@@ -42,14 +42,14 @@ export function databaseRoutes(app: FastifyInstance, ctx: AppCtx) {
           params: { type: 'array', description: 'values for $1…$n; single statement only' },
         } } } },
     async (req, reply) => {
-      if (!ctx.databases) return reply.code(503).send(err('database_unavailable', 'this server has no agent database wiring'));
+      if (!ctx.agentDatabases) return reply.code(503).send(err('database_unavailable', 'this server has no agent database wiring'));
       const project = await ctx.projects.get(req.params.id);
       if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
       if (!(await ctx.settings.resolve('agent_database', { projectId: project.id }))) {
         return reply.code(409).send(err('database_off', 'agent_database is off for this project'));
       }
       try {
-        const results = await ctx.databases.query(project.id, req.body.sql, {
+        const results = await ctx.agentDatabases.query(project.id, req.body.sql, {
           limit: req.body.limit ?? 10, maxCellChars: req.body.maxCellChars ?? 1000, params: req.body.params,
         });
         return ok({ results });

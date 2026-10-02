@@ -22,7 +22,7 @@ import { runCodingTurn, type TurnDeps } from '../looper/turn.js';
 import { oldAgentConfig } from '../agentConfig.js';
 import { sessionPin } from '../agentConfig.js';
 import type { SettingsEvents } from 'phantom-backend-sdk';
-import { APP_VERSION } from '../env.js';
+import { APP_VERSION } from 'phantom-backend-sdk';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
 import type { Sessions } from 'phantom-backend-sdk';
 import type { Cards } from 'phantom-backend-sdk';

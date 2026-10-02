@@ -1,46 +1,24 @@
-// Boot: env -> db -> migrations -> project dirs -> looper -> HTTP.
-import { readEnv, APP_VERSION as VERSION } from './env.js';
-import { Database, SDK_MIGRATIONS, ModelCatalog, AgentTypes, AgentConfig, sdkSettings, agentTypeSettings } from 'phantom-backend-sdk';
+// Boot: the backend (PhantomBackend.create: env -> database -> migrations
+// -> every service), then this app's own wiring around it — the git syncs
+// and their conflict fixer (core/llm, until GitSync), the HTTP app, the
+// looper, the cron scheduler, the Telegram engine, the digest, the upgrade
+// check — then listen.
+import { PhantomBackend, APP_VERSION as VERSION, telegramChannel, logger, errStr } from 'phantom-backend-sdk';
 import { config } from './config.js';
-import { oldAgentConfig } from './agentConfig.js';
-import { makePaths } from 'phantom-backend-sdk';
-import { checkoutPool } from 'phantom-backend-sdk';
-import { Sessions } from 'phantom-backend-sdk';
-import { Settings } from 'phantom-backend-sdk';
-import { Projects } from 'phantom-backend-sdk';
-import { AgentDatabases } from 'phantom-backend-sdk';
-import { Workspaces } from 'phantom-backend-sdk';
-import { Cards } from 'phantom-backend-sdk';
-import { BackgroundTasks } from 'phantom-backend-sdk';
-import { Presets } from 'phantom-backend-sdk';
-import { Crons } from 'phantom-backend-sdk';
+import { oldAgentConfig, sessionPin } from './agentConfig.js';
 import { CronEngine } from './crons/engine.js';
 import { setTokenRecorder } from '../core/llm/createAgent.js';
-import { TokenLog } from 'phantom-backend-sdk';
 import { System } from './system.js';
-import { TelegramBotState } from 'phantom-backend-sdk';
-import { TelegramSentMessages } from 'phantom-backend-sdk';
-import { TelegramHandledUpdates } from 'phantom-backend-sdk';
-import { SettingsEvents } from 'phantom-backend-sdk';
 import { idleBackupSweep, pressureSweep } from './disk.js';
-import { buildApp, type AppCtx } from './api/app.js';
+import { buildApp, type AppCtx, type AppExtras } from './api/app.js';
 import { shutdown as updateShutdown } from './api/updateTask.js';
-import { BoardEvents } from 'phantom-backend-sdk';
-import { SessionEvents } from 'phantom-backend-sdk';
-import { UserMessageQueue } from 'phantom-backend-sdk';
-import { makeDocker } from 'phantom-backend-sdk';
-import { SessionContainers } from 'phantom-backend-sdk';
-import { Images } from 'phantom-backend-sdk';
 import { GitEngine } from './git/engine.js';
-import { autoPush, type AutoPushEvent } from './git/autoPush.js';
+import { autoPush, type AutoPushEvent, type ConflictContext } from './git/autoPush.js';
 import { autoPull, type AutoPullEvent } from './git/autoPull.js';
-import type { ConflictContext } from './git/autoPush.js';
 import { GIT_CLIENT_ID } from 'phantom-backend-sdk/git';
 import { SessionDigest } from './notifications/digest.js';
-import { telegramChannel } from 'phantom-backend-sdk';
 import { openSession, SessionLockedError, type OpenedSession } from '../core/session.js';
 import { runCodingTurn } from './looper/turn.js';
-import { sessionPin } from './agentConfig.js';
 import { injectFetch } from './looper/injectFetch.js';
 import { toCodingAgent } from '../core/prompts/autoPush/wiring.js';
 import { serializeTranscript } from '../core/llm/transcript.js';
@@ -48,11 +26,8 @@ import type { SyncDeps, SyncEvent } from './git/sync.js';
 import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
 import { LooperEngine } from './looper/engine.js';
 import { TelegramEngine } from './telegram/engine.js';
-import { refreshWorkState } from 'phantom-backend-sdk';
 import { InstantSync } from './git/instantSync.js';
-import { WorkspaceWatcher } from 'phantom-backend-sdk';
 import { reconcileDbUi } from './api/routes/dbUi.js';
-import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('boot');
 /** Fake base URL for in-process API calls via injectFetch — the host part is
@@ -65,67 +40,23 @@ const INTERNAL_API = 'http://internal/api';
 const SESSION_IMAGE_TAG = /^v\d+\.\d+\.\d+/.test(VERSION) ? VERSION : 'latest';
 
 async function main() {
-  const env = readEnv();
-  const database = Database.connect(env.databaseUrl);
-  await database.migrate(SDK_MIGRATIONS);
-  const pgPool = database.pool;
-  const db = database.drizzle;
-  const paths = makePaths(env.workspaceRoot);
-  await checkoutPool.bootCleanup(paths);
-
-  // The event buses, then THE ROW OWNERS over them — one object per table,
-  // built once here in dependency order and handed to everything else. No
-  // module below reads or writes a table any other way, so every rule and
-  // every change notice has exactly one home.
-  const events = new BoardEvents();
-  const sessionEvents = new SessionEvents();
-  const settingsEvents = new SettingsEvents();
-  const modelCatalog = new ModelCatalog();
-  void modelCatalog.refresh();
-  const agentTypes = new AgentTypes();
-  agentTypes.register(config.agentTypes);
-  const settings = new Settings(db, env.encryptionKey, modelCatalog, settingsEvents);
-  // Registration order is screen order: the agent types first, then the
-  // SDK's areas, then this app's own.
-  for (const type of agentTypes.list()) settings.register(agentTypeSettings(type, { first: type.name === agentTypes.first() }));
-  settings.register(sdkSettings({ sessionImageTag: SESSION_IMAGE_TAG }));
-  settings.register(config.settings ?? []);
-  const agentConfig = new AgentConfig(settings, agentTypes, modelCatalog);
-  const databases = new AgentDatabases(pgPool, env.databaseUrl, env.encryptionKey);
-  const projects = new Projects(db, settings, settingsEvents, databases);
-  const workspaces = new Workspaces(db, paths, settings, sessionEvents);
-  const cards = new Cards(db, projects, events);
-  const docker = makeDocker();
-  // THE image puller/remover — every pull and every removal in this process
-  // (update, first-use, disk sweep) goes through it so they never overlap.
-  const images = new Images(docker);
-  const sessions = new Sessions(db, settings, agentConfig, projects, workspaces, sessionEvents, { paths, docker: docker ?? undefined });
-  // A settings write reaches every session nothing has been said to yet: its
-  // row takes the settings' model (Sessions.followModelSettings — THE rule).
-  settingsEvents.subscribe(() => {
-    sessions.followModelSettings().catch((e) => log.warn({ err: (e as Error).message }, 'newborn sessions could not follow the model settings'));
+  // The backend: every service built and connected (PhantomBackend.create),
+  // nothing running yet. The container hooks are closures: instant sync is
+  // wired below, long before any container starts.
+  let instantSync: InstantSync;
+  const backend = await PhantomBackend.create(config, {
+    sessionImageTag: SESSION_IMAGE_TAG,
+    onContainerStarted: (workspaceId, project) => instantSync.watchWorkspace(workspaceId, project),
+    onContainerRemoved: (workspaceId) => instantSync.unwatchWorkspace(workspaceId),
   });
-  const backgroundTasks = new BackgroundTasks(db);
-  const presets = new Presets(db, settings);
-  const crons = new Crons(db, settings);
-  const logTokens = new TokenLog(db);
+  const { env, paths, database, settings, agentConfig, modelCatalog, projects, workspaces, cards, sessions, backgroundTasks, presets, crons,
+    agentDatabases: databases, tokenLog: logTokens, sessionEvents, boardEvents: events, settingsEvents, docker, images,
+    sessionContainers: containers, userMessageQueue: backdoor, telegramBotState, telegramSentMessages, telegramHandledUpdates } = backend;
   // Every model call in this process records here (core languageModel).
   setTokenRecorder((r) => {
     logTokens.record({ ...r, type: r.kind }).catch((e) => log.warn({ err: (e as Error).message }, 'token recording failed'));
   });
-  const telegramBotState = new TelegramBotState(db, env.encryptionKey);
-  const telegramSentMessages = new TelegramSentMessages(db);
-  const telegramHandledUpdates = new TelegramHandledUpdates(db);
 
-  // Instant sync (built below, once auto-push exists) attaches its watcher
-  // inside the container start — before the tool call that started it
-  // returns, so the first write is seen — and lets go on removal. `instantSync`
-  // is captured lazily, like `app`: containers start long after boot.
-  const containers = new SessionContainers(docker, images, paths, {
-    volume: process.env.WORKSPACE_VOLUME, network: process.env.WORKSPACE_NETWORK, settings, databases,
-    onStarted: (workspaceId, project) => instantSync.watchWorkspace(workspaceId, project),
-    onRemoved: (workspaceId) => instantSync.unwatchWorkspace(workspaceId),
-  });
   // THE CONFLICT RESOLVER — the session's own coding agent, not a separate
   // fixer. Shared by auto-push, auto-pull and the manual /git/pull.
   //
@@ -277,8 +208,8 @@ async function main() {
     if (!backdoor.has(session.id, message)) backdoor.push(session.id, message);
   };
   const instantDeps = { sessions, workspaces, cards, settings, paths, messageConfig, recordSummary: noteForNextTurn };
-  const instantSync = new InstantSync({
-    sessions, workspaces, projects, settings, paths, watcher: new WorkspaceWatcher(),
+  instantSync = new InstantSync({
+    sessions, workspaces, projects, settings, paths, watcher: backend.workspaceWatcher,
     autoPush: (session, project) => autoPush(instantDeps, session, project, { hold: false }),
     autoPull: (session, project) => autoPull(instantDeps, session, project, { hold: false }),
     failed: (session, op, reason) =>
@@ -294,71 +225,27 @@ async function main() {
   settingsEvents.subscribe(() => { void reconcileInstantSync(); });
   void reconcileInstantSync();
 
-  // One loop drives both the pool tick and the session sweep. The interval is a
-  // SETTING read per tick, so a change takes effect without a restart.
-  // THE busy rule, for the idle timeout and disk cleanup alike: a workspace is
-  // busy while a background task runs there or any session on it (coder,
-  // supervisor, assistant) holds a live lock — a turn is running. A task's
-  // session is the workspace's owner (only a coder has `bash`), so the ids line up.
-  const busyWorkspaces = async (ids: string[]): Promise<Set<string>> => {
-    const [tasks, held] = await Promise.all([backgroundTasks.sessionsWithRunning(ids), sessions.workspacesHeld(ids)]);
-    return new Set([...tasks, ...held]);
-  };
-  // Workspaces with a running container not touched for the threshold and not
-  // busy — the set the idle timeout reaps.
-  const idleContainerWorkspaces = async (ms: number): Promise<string[]> => {
-    const active = await containers.activeWorkspaces();
-    const idle = await workspaces.listIdle(active, ms);
-    const busy = await busyWorkspaces(idle);
-    return idle.filter((id) => !busy.has(id));
-  };
-
-  let stopped = false;
-  (async () => {
-    while (!stopped) {
-      await checkoutPool.tick(projects, settings, paths).catch((e) => log.error({ err: errStr(e) }, 'pool tick threw'));
-      await idleBackupSweep(projects, sessions, engine).catch((e) => log.error({ err: errStr(e) }, 'idle backup sweep threw'));
-      const idleMs = await settings.resolve('container_idle_ms').catch(() => 30 * 60_000);
-      await containers.reap(Number(idleMs), idleContainerWorkspaces).catch((e) => log.error({ err: errStr(e) }, 'container reap threw'));
-      await pressureSweep(settings, projects, sessions, paths, images, containers, engine, busyWorkspaces).catch((e) => log.error({ err: errStr(e) }, 'pressure sweep threw'));
-      const ms = await settings.resolve('maintenance_interval_ms').catch(() => 60_000);
-      await new Promise((r) => setTimeout(r, Number(ms)));
-    }
-  })();
-
-  const backdoor = new UserMessageQueue();
-
-  // Work-state refresh: every 10s, recompute `work` for workspaces with a
-  // running container. A change writes the row and publishes on the board
-  // event stream so the kanban board and the toolbar hear it live.
-  (async () => {
-    while (!stopped) {
-      await new Promise((r) => setTimeout(r, 10_000));
-      await refreshWorkState({ workspaces, projects, paths, containers, events })
-        .catch((e) => log.error({ err: errStr(e) }, 'work-state refresh threw'));
-    }
-  })();
+  // The backend's own loops: pool stock, idle reaping, the two disk sweeps
+  // (which need the git engine, so they are handed in), work-state refresh.
+  backend.startLoops({
+    idleBackup: () => idleBackupSweep(projects, sessions, engine),
+    pressure: () => pressureSweep(settings, projects, sessions, paths, images, containers, engine, (ids) => backend.busyWorkspaces(ids)),
+  });
 
   // `ctx` is a named object because the looper is wired into it AFTER the
   // app exists — the engine is a headless client of this app, so it is built
   // second; routes read ctx.looper per request, so the late set is seen.
   const system = new System(paths, logTokens, docker ?? undefined, images, process.env.UPDATE_TRIGGER_DIR || undefined,
     () => ctx.looper?.runningCount() ?? 0);
-  const ctx: AppCtx = {
-    settings, agentConfig, modelCatalog, projects, workspaces, cards, sessions, backgroundTasks, presets, crons, logTokens,
-    paths, apiKey: env.apiKey, version: VERSION,
-    databases,
+  const ctx: AppCtx = Object.assign(backend, {
+    apiKey: env.apiKey,
     fs: { docker, containers, engine },
     engine,
     system,
     autoPush: autoPushFn,
     autoPull: autoPullFn,
-    events,
-    sessionEvents,
-    settingsEvents,
-    backdoor,
     updateTriggerDir: process.env.UPDATE_TRIGGER_DIR || undefined,
-  };
+  } satisfies AppExtras);
   const app = await buildApp(ctx);
 
   // Archiving a DONE card auto-pushes its session's work, when
@@ -413,8 +300,8 @@ async function main() {
   // server's own surface (the same tools every client runs), so the routes
   // must be answering. Event-driven: every card write reaches it over the
   // board bus; start() is ONE recovery sweep, not a poll.
-  const looper = new LooperEngine({ sessions, projects, cards, settings, agentConfig, logTokens, app, apiKey: env.apiKey, events: ctx.events, settingsEvents,
-    sessionEvents: ctx.sessionEvents, activeTurns: ctx.activeTurns, backdoor: ctx.backdoor });
+  const looper = new LooperEngine({ sessions, projects, cards, settings, agentConfig, logTokens, app, apiKey: env.apiKey, events: ctx.boardEvents, settingsEvents,
+    sessionEvents: ctx.sessionEvents, activeTurns: ctx.activeTurns, backdoor: ctx.userMessageQueue });
   ctx.looper = looper;
   looper.start();
 
@@ -422,7 +309,7 @@ async function main() {
   // listen. One croner job per cron row fires at its time; registrations
   // follow the table's writes and the settings' (events, no polling).
   const cronEngine = new CronEngine({ crons, projects, settings, agentConfig, sessions, app, apiKey: env.apiKey,
-    sessionEvents: ctx.sessionEvents, settingsEvents, activeTurns: ctx.activeTurns, backdoor: ctx.backdoor });
+    sessionEvents: ctx.sessionEvents, settingsEvents, activeTurns: ctx.activeTurns, backdoor: ctx.userMessageQueue });
   cronEngine.start();
 
   // The Telegram engine — a client of this app like the looper. The webhook
@@ -432,7 +319,7 @@ async function main() {
   const telegram = new TelegramEngine({
     botState: telegramBotState, sentMessages: telegramSentMessages, handledUpdates: telegramHandledUpdates,
     settings, agentConfig, modelCatalog, sessions, cards, projects, presets, system, paths, app, apiKey: env.apiKey,
-    events: ctx.events, settingsEvents, foreground: ctx.foreground, loopsRunning: () => looper.runningCount(), backdoor: ctx.backdoor,
+    events: ctx.boardEvents, settingsEvents, foreground: ctx.foregroundCommands, loopsRunning: () => looper.runningCount(), backdoor: ctx.userMessageQueue,
     sessionEvents: ctx.sessionEvents, publicAddress: process.env.PHANTOM_BACKEND_ADDRESS,
     autoPush: autoPushFn, autoPull: autoPullFn,
   });
@@ -453,18 +340,17 @@ async function main() {
   // waste a GitHub API call). The interval is a setting read per tick, so a
   // change takes effect without a restart. 0 disables the check.
   (async () => {
-    while (!stopped) {
+    while (!backend.stopped) {
       const ms = await settings.resolve('update_check_interval_ms').catch(() => 86_400_000);
       if (Number(ms) <= 0) { await new Promise((r) => setTimeout(r, 60_000)); continue; }
       await new Promise((r) => setTimeout(r, Number(ms)));
-      if (stopped) break;
+      if (backend.stopped) break;
       await telegram.upgradeChecker.check()
         .catch((e) => log.warn({ err: errStr(e) }, 'upgrade check failed'));
     }
   })();
 
   const shutdown = async () => {
-    stopped = true;
     // First: an update in flight ends its stream cleanly (this restart IS
     // the update) before app.close() force-closes every connection.
     updateShutdown();
@@ -473,7 +359,7 @@ async function main() {
     digest.stop();
     await instantSync.stop();
     await app.close();
-    await database.close();
+    await backend.stop();
     process.exit(0);
   };
   process.on('SIGTERM', shutdown);

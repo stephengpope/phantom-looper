@@ -80,3 +80,4 @@ export { TelegramBotState, MODE_MESSAGE, type TelegramBotStateRow, type Telegram
 export { telegramChannel } from './telegram/telegramChannel.js';
 export { lastAssistantFromJsonl } from './telegram/transcriptHelper.js';
 export type { NotificationChannel } from './Notifications.js';
+export { readEnv, APP_VERSION, API_IMAGE, type Env } from './lib/env.js';

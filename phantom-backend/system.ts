@@ -14,7 +14,7 @@ import { formatTokenReport, reportWindows } from 'phantom-backend-sdk';
 import type { Clock } from 'phantom-backend-sdk';
 import { startUpdate, subscribe, isRunning } from './api/updateTask.js';
 import type { UpdateEvent } from 'phantom-client-sdk';
-import { API_IMAGE } from './env.js';
+import { API_IMAGE } from 'phantom-backend-sdk';
 import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('system');

@@ -11,7 +11,6 @@ import { TelegramAssistantBot } from './telegram/TelegramAssistantBot.js';
 const engines: { looper?: Looper; bot?: TelegramAssistantBot } = {};
 
 export const config: PhantomBackendConfig = {
-  migrations: { dir: 'migrations/app', schema: 'phantom_looper' },
   settings: appSettings,
   agentTypes: appAgentTypes,
   // tools: the looper's card-bound tools are added per run through the client SDK's addToolKit, not here.

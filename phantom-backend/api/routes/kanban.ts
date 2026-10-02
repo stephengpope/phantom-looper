@@ -209,7 +209,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: AppCtx) {
       reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
       const write = (o: unknown) => { reply.raw.write(`${JSON.stringify(o)}\n`); };
       const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
-      const unsubscribe = ctx.events!.subscribe(project.id, write);
+      const unsubscribe = ctx.boardEvents!.subscribe(project.id, write);
       write({ event: 'heartbeat' });
       await new Promise<void>((resolve) => reply.raw.on('close', resolve));
       clearInterval(heartbeat);
