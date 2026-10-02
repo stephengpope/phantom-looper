@@ -1,38 +1,35 @@
 // The settings this app adds to the backend SDK's own — registered through
 // the settings door; resolved, validated and shown exactly like the SDK's.
 // Each belongs to a user-space feature: the looper's switches, the bot's
-// behaviour, the cli's launch.
+// behaviour, the cli's voice pane and launch. `before` files one among the
+// SDK's rows where it belongs on screen.
 import type { SettingDefinition } from 'phantom-backend-sdk';
 
 export const appSettings: SettingDefinition[] = [
-  // ── the looper ────────────────────────────────────────────────────────
-  { key: 'auto_plan', default: false, type: 'boolean', label: 'auto plan', group: 'board', projectOverridable: true,
-    description: 'Start a planning run on every card that enters the plan column. A card may override it.' },
-  { key: 'auto_build', default: false, type: 'boolean', label: 'auto build', group: 'board', projectOverridable: true,
-    description: 'Start a build run on every card that enters in progress. A card may override it.' },
-  { key: 'auto_push_on_archive', default: true, type: 'boolean', label: 'auto-push on archive', group: 'git', projectOverridable: true,
-    description: "Archiving a done card auto-pushes its session's work to the base branch; a failed push un-archives the card into blocked. Archiving from any other column never pushes." },
-  { key: 'loop_budget_tokens', default: null, type: 'number', label: 'loop token budget', group: 'board', unit: 'count', min: 1, projectOverridable: true,
-    description: "Maximum tokens one card run may spend — input + output summed across both agents' sessions; cache reads and writes not counted. Checked between turns; exceeding it blocks the card. Empty = no limit." },
-  // ── the Telegram bot's behaviour ──────────────────────────────────────
-  { key: 'telegram_reply_mode', default: 'text', type: 'string', choices: ['text', 'voice', 'both'], label: 'reply mode', group: 'telegram',
-    description: 'How the bot answers: text, a spoken voice note, or both. Read at the start of each turn.' },
-  { key: 'telegram_transcript_echo', default: false, type: 'boolean', label: 'transcript echo', group: 'telegram',
-    description: 'Send the heard text of a voice note back before answering it.' },
-  { key: 'telegram_auto_build_notifications', default: true, type: 'boolean', label: 'auto build alerts', group: 'telegram', projectOverridable: true,
-    description: 'A message when the looper moves a card to in progress, blocked, or done. Moves made by people are never announced.' },
-  // ── the cli's voice pane — rendered by the cli, stored here so every cli you open is the same one ──
-  { key: 'voice_enabled', default: false, type: 'boolean', label: 'enabled', group: 'assistant', subgroup: 'voice',
-    description: 'Start the Assistant with the cli. It listens on the mic, answers out loud and in the voice pane (ctrl+g), and can act on the cli through its tools.' },
-  { key: 'sidebar_width', default: 20, type: 'number', label: 'voice pane width', group: 'assistant', subgroup: 'voice', unit: 'count', min: 10,
-    description: 'Width of the voice pane as a percent of the terminal.' },
-  { key: 'voice_wake_word', default: false, type: 'boolean', label: 'wake word only', group: 'assistant', subgroup: 'voice',
-    description: 'On = the Assistant only answers when it hears one of the wake words (and for a few seconds after). Off = it answers everything it hears.' },
-  { key: 'voice_wake_words', default: 'computer', type: 'string', label: 'wake words', group: 'assistant', subgroup: 'voice',
-    description: 'Words that address the Assistant when wake is on, comma-separated.' },
-  { key: 'voice_wake_timeout', default: 8, type: 'number', label: 'wake timeout', group: 'assistant', subgroup: 'voice', unit: 'count', min: 1,
-    description: "Seconds of silence after the wake word before it is needed again. Any speech — yours or the Assistant's — restarts the clock." },
-  // ── the cli's launch ──────────────────────────────────────────────────
-  { key: 'boot_last_project', default: true, type: 'boolean', label: 'boot into last project', group: 'sessions', projectOverridable: false,
-    description: 'On, launching the cli skips the project picker and starts a session in the project you last drove yourself.' },
+  { key: "auto_plan", type: "boolean", default: false, label: "auto plan", group: "board",
+    description: "Cards in plan are driven by the supervisor: it has the coding agent write a plan, verifies it, and moves the card to in progress. Each card's own Auto plan switch overrides this default.", projectOverridable: true, before: "card_prefix" },
+  { key: "auto_build", type: "boolean", default: false, label: "auto build", group: "board",
+    description: "Cards in progress are driven by the supervisor: it prompts the coding agent, verifies the work against the repo, and moves the card. Each card's own Auto build switch overrides this default.", projectOverridable: true, before: "card_prefix" },
+  { key: "loop_budget_tokens", type: "number", default: null, label: "loop token budget", group: "board",
+    description: "Maximum tokens one card run may spend — input + output summed across both agents' sessions; cache reads and writes not counted. Checked between turns; exceeding it blocks the card. Empty = no limit.", unit: "count", min: 1, projectOverridable: true, before: "card_prefix" },
+  { key: "auto_push_on_archive", type: "boolean", default: true, label: "auto-push on archive", group: "git",
+    description: "Archiving a done card auto-pushes its session's work to the base branch; a failed push un-archives the card into blocked. Archiving from any other column never pushes.", projectOverridable: true, before: "agent_git_credentials" },
+  { key: "telegram_reply_mode", type: "string", default: "text", label: "reply mode", group: "telegram",
+    description: "How the bot answers: text, voice (a spoken note, on the Assistant's Deepgram voice), or both. Read at the start of each turn.", choices: ["text", "voice", "both"], before: "session_digest_interval" },
+  { key: "telegram_transcript_echo", type: "boolean", default: false, label: "transcript echo", group: "telegram",
+    description: "On, a voice note's transcript is posted back as 🎤 \"…\" before the turn runs, so a misheard word is distinguishable from a misunderstood instruction.", before: "session_digest_interval" },
+  { key: "telegram_auto_build_notifications", type: "boolean", default: true, label: "auto build alerts", group: "telegram",
+    description: "A message when the loop moves a card to in progress, blocked, or done. Moves made by people are never announced. Reply to one to enter the card's coding session. Per project: override on the project.", projectOverridable: true, before: "session_digest_interval" },
+  { key: "voice_enabled", type: "boolean", default: false, label: "enabled", group: "assistant",
+    description: "Start the Assistant with the cli. It listens on the mic, answers out loud and in the voice pane (ctrl+g), and can act on the cli through its tools.", subgroup: "voice", before: "voice_spoken_voice" },
+  { key: "sidebar_width", type: "number", default: 20, label: "voice pane width", group: "assistant",
+    description: "Width of the voice pane as a percent of the terminal.", subgroup: "voice", unit: "count", min: 10, before: "voice_spoken_voice" },
+  { key: "voice_wake_word", type: "boolean", default: false, label: "wake word only", group: "assistant",
+    description: "On = the Assistant only answers when it hears one of the wake words (and for a few seconds after). Off = it answers everything it hears.", subgroup: "voice" },
+  { key: "voice_wake_words", type: "string", default: "computer", label: "wake words", group: "assistant",
+    description: "Words that address the Assistant when wake is on, comma-separated.", subgroup: "voice" },
+  { key: "voice_wake_timeout", type: "number", default: 8, label: "wake timeout", group: "assistant",
+    description: "Seconds of silence after the wake word before it is needed again. Any speech — yours or the Assistant's — restarts the clock.", subgroup: "voice", unit: "count", min: 1 },
+  { key: "boot_last_project", type: "boolean", default: true, label: "boot into last project", group: "sessions",
+    description: "On (the default), launching the cli skips the project picker: it starts a new session in the project of the most recent session you drove yourself (looper-run sessions do not count). Off, launching opens the picker. --resume is unaffected." },
 ];

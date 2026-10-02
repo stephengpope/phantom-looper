@@ -1,7 +1,10 @@
 // The three agent types this app runs, registered through the agent-type
 // door. The SDK ships no types: what a coder, a supervisor and an
 // assistant ARE — which tools, which workspace relationship, whether their
-// sessions show in lists — is said here and nowhere else.
+// sessions show in lists, and what each of their settings means to a
+// person — is said here and nowhere else. Registration order is the
+// settings screen's order; the first type is the one the others' models
+// fall back to.
 import type { AgentTypeDefinition } from 'phantom-backend-sdk';
 
 export const appAgentTypes: AgentTypeDefinition[] = [
@@ -11,14 +14,18 @@ export const appAgentTypes: AgentTypeDefinition[] = [
     workspace: 'own',
     tools: ['files', 'tasks', 'skills', 'web', 'secrets', 'crons', 'database', 'board:read', 'notify'],
     listed: true,
-  },
-  {
-    // Judges a card run: reads the coder's checkout, never writes it. Its
-    // card-bound powers (move, items) are the looper's own tools, added per run.
-    name: 'supervisor',
-    workspace: 'borrow',
-    tools: ['files:read', 'web', 'board:read'],
-    listed: false,
+    settings: {
+      provider: { description: "The coding agent's LLM provider. Its key is set on /keys. Nothing runs until one is chosen. Per project: override on the project — set its provider first, then its model.", projectOverridable: true },
+      model: { description: "Model id for the chosen provider. Empty = the newest model the catalog lists for it, so it follows releases. A project with its own provider picks its own model.", projectOverridable: true },
+      base_url: { description: "Endpoint for openai / openai-compatible. Required by openai-compatible.", projectOverridable: true },
+      reasoning: { description: "How much the model thinks before answering. Providers map this to their own setting.", default: "medium", projectOverridable: true },
+      max_steps: { description: "Tool calls allowed per turn before the agent must stop and answer. Empty = unlimited.", projectOverridable: true },
+      context_window: { description: "Context window size in tokens — fallback for when the model catalog doesn't know your model. Empty = use the catalog (the normal path).", projectOverridable: true },
+      compact_threshold_pct: { description: "Percentage of the model's context window that triggers auto-compaction. 0 = off. Checked after every turn.", default: 0, projectOverridable: true },
+      compact_strategy: { description: "The compaction strategy. fast = user/assistant text only.", default: "fast", projectOverridable: true },
+      compact_summarize_pct: { description: "Percentage of user+assistant messages to summarize when compaction fires. The rest stay as-is.", default: 75, projectOverridable: true },
+      compact_max_tokens: { description: "Output token cap for the compaction summary. Empty = the model decides how long the summary is.", projectOverridable: true },
+    },
   },
   {
     // The user's assistant: works the board and the sessions, reads the
@@ -27,5 +34,37 @@ export const appAgentTypes: AgentTypeDefinition[] = [
     workspace: 'borrow',
     tools: ['files:read', 'web', 'crons', 'board', 'git'],
     listed: false,
+    settings: {
+      provider: { description: "The AI provider the Assistant answers on, on its key from /keys. Empty = the coding agent's provider." },
+      model: { description: "Model the Assistant answers with. Empty = the coding agent's model; required when the provider differs from the coding agent's. A small fast model keeps replies quick." },
+      base_url: { description: "Endpoint when the Assistant's provider is openai-compatible. Empty inherits the coding agent's only while the provider matches." },
+      reasoning: { description: "How much the Assistant thinks before answering. Empty = the coding agent's reasoning level." },
+      max_steps: { description: "Tool calls allowed per turn for the Assistant. Empty = unlimited." },
+      context_window: { description: "Context window override for the Assistant. Empty = the coding agent's context window." },
+      compact_threshold_pct: { description: "Auto-compaction threshold for the Assistant. 0 = off. Default 50%.", default: 50 },
+      compact_strategy: { description: "Compaction strategy for the Assistant. Empty = the coding agent's strategy.", default: "fast" },
+      compact_summarize_pct: { description: "Summarize % for the Assistant. Empty = the coding agent's summarize %." },
+      compact_max_tokens: { description: "Summary output cap for the Assistant. Empty = the coding agent's cap." },
+    },
+  },
+  {
+    // Judges a card run: reads the coder's checkout, never writes it. Its
+    // card-bound powers (move, items) are the looper's own tools, added per run.
+    name: 'supervisor',
+    workspace: 'borrow',
+    tools: ['files:read', 'web', 'board:read'],
+    listed: false,
+    settings: {
+      provider: { description: "The AI provider the supervisor judges on, on its key from /keys. Empty = the coding agent's provider." },
+      model: { description: "Model the supervisor judges with. Empty = the coding agent's model; required when the provider differs from the coding agent's." },
+      base_url: { description: "Endpoint when the supervisor's provider is openai-compatible. Empty inherits the coding agent's only while the provider matches." },
+      reasoning: { description: "How much the supervisor thinks before answering. Empty = the coding agent's reasoning level." },
+      max_steps: { description: "Tool calls allowed per turn for the supervisor. Empty = unlimited." },
+      context_window: { description: "Context window override for the Supervisor. Empty = the coding agent's context window." },
+      compact_threshold_pct: { description: "Auto-compaction threshold for the Supervisor. Empty = the coding agent's threshold." },
+      compact_strategy: { description: "Compaction strategy for the Supervisor. Empty = the coding agent's strategy." },
+      compact_summarize_pct: { description: "Summarize % for the Supervisor. Empty = the coding agent's summarize %." },
+      compact_max_tokens: { description: "Summary output cap for the Supervisor. Empty = the coding agent's cap." },
+    },
   },
 ];

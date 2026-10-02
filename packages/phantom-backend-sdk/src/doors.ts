@@ -43,6 +43,11 @@ export interface SettingDefinition {
   projectOverridable?: boolean;
   /** A fact about ONE project (a card prefix names one board): never settable globally. Implies projectOverridable. */
   projectOnly?: boolean;
+  /** Where it files on screen: right before this key's row, when that key is
+   *  registered; otherwise at the end. Registration order is screen order,
+   *  and user space's settings register last — this puts one among the
+   *  SDK's where it belongs (a looper switch beside the board's prefix). */
+  before?: string;
   /** A credential: stored encrypted, served masked, read only through `Settings.credential`. */
   secret?: boolean;
   /** For a credential: the LLM provider this key authenticates — the one
@@ -66,11 +71,28 @@ export type ToolGroup = 'files' | 'tasks' | 'skills' | 'web' | 'secrets' | 'cron
 /** A whole group, or only its non-mutating tools (`files:read` = read, ls, find, grep). */
 export type ToolGrant = ToolGroup | `${ToolGroup}:read`;
 
+/** The ten settings every agent type carries — its model and its
+ *  compaction — keyed by the suffix after `<name>_`. The SDK gives each its
+ *  shape (type, label, choices, limits, what it is bound to); the type says
+ *  what it MEANS to a person, its default, and whether a project may
+ *  override it. No wording is the SDK's. */
+export type AgentTypeSettingSuffix =
+  | 'provider' | 'model' | 'base_url' | 'reasoning' | 'max_steps'
+  | 'context_window' | 'compact_threshold_pct' | 'compact_strategy' | 'compact_summarize_pct' | 'compact_max_tokens';
+export interface AgentTypeSetting {
+  description: string;
+  /** Unset = null (clearable; for a type other than the first, "the first type's"). */
+  default?: unknown;
+  projectOverridable?: boolean;
+}
+
 /** An agent type this backend runs. The name is what sessions carry in
  *  `type`, what turn-start asks for, what the settings keys are prefixed
  *  with (`<name>_provider`, `<name>_model`, …). */
 export interface AgentTypeDefinition {
   name: string;
+  /** What each of its ten settings means, its default, its overridability. */
+  settings: Record<AgentTypeSettingSuffix, AgentTypeSetting>;
   /** Which tool groups, whole or read-only, a session of this type is offered. */
   tools: ToolGrant[];
   /** Does a session of this type own a checkout, borrow another

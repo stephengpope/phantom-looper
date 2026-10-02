@@ -87,7 +87,7 @@ async function main() {
   const settings = new Settings(db, env.encryptionKey, modelCatalog, settingsEvents);
   // Registration order is screen order: the agent types first, then the
   // SDK's areas, then this app's own.
-  for (const type of agentTypes.names()) settings.register(agentTypeSettings(type, { fallbackTo: type === agentTypes.first() ? null : agentTypes.first() }));
+  for (const type of agentTypes.list()) settings.register(agentTypeSettings(type, { first: type.name === agentTypes.first() }));
   settings.register(sdkSettings({ sessionImageTag: SESSION_IMAGE_TAG }));
   settings.register(config.settings ?? []);
   const agentConfig = new AgentConfig(settings, agentTypes, modelCatalog);

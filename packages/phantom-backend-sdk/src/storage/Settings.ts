@@ -110,6 +110,16 @@ export class Settings {
       if (definition.secret && (definition.type !== 'string' || definition.default !== null)) {
         throw new Error(`setting '${definition.key}': a credential is a string with a null default`);
       }
+      if (definition.before && this.#definitions.has(definition.before)) {
+        // Rebuild the map with this key just before its anchor: the map's
+        // order IS the screen order.
+        const entries = [...this.#definitions.entries()];
+        const at = entries.findIndex(([key]) => key === definition.before);
+        entries.splice(at, 0, [definition.key, definition]);
+        this.#definitions.clear();
+        for (const [key, value] of entries) this.#definitions.set(key, value);
+        continue;
+      }
       this.#definitions.set(definition.key, definition);
     }
   }
