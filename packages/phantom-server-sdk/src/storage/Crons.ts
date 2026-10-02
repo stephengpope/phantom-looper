@@ -2,10 +2,12 @@
 // scripts, addressed by name. Writes notify the scheduler. Stub.
 export interface CronRow {
   id: number; projectId: string; name: string; schedule: string; prompt: string | null; script: string | null;
+  /** The agent type a run opens a session of. */
+  type: string;
   enabled: boolean; once: boolean; provider: string | null; model: string | null; reasoning: string | null;
   lastRunAt: Date | null; createdAt: Date;
 }
-export interface CronFields { name?: string; schedule?: string; prompt?: string | null; script?: string | null; enabled?: boolean; provider?: string | null; model?: string | null; reasoning?: string | null }
+export interface CronFields { name?: string; type?: string; schedule?: string; prompt?: string | null; script?: string | null; enabled?: boolean; provider?: string | null; model?: string | null; reasoning?: string | null }
 
 export class Crons {
   async list(projectId: string): Promise<CronRow[]> { throw stub(); }
@@ -13,7 +15,7 @@ export class Crons {
   async byId(id: number): Promise<CronRow | undefined> { throw stub(); }
   /** Enabled crons, all projects or one — the scheduler's input. */
   async listEnabled(projectId?: string): Promise<CronRow[]> { throw stub(); }
-  async create(projectId: string, fields: CronFields & { name: string; schedule: string }): Promise<CronRow> { throw stub(); }
+  async create(projectId: string, fields: CronFields & { name: string; schedule: string; type: string }): Promise<CronRow> { throw stub(); }
   async update(projectId: string, name: string, fields: CronFields): Promise<CronRow> { throw stub(); }
   async remove(projectId: string, name: string): Promise<void> { throw stub(); }
   /** A run fired: stamp it; a one-time cron is deleted. */

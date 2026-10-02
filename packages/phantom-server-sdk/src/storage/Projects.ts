@@ -13,7 +13,7 @@ export class Projects {
   /** Register a repo. Rejects a second row for the same owner/name. */
   async create(project: NewProject, by?: string): Promise<ProjectRow> { throw stub(); }
   async update(id: string, patch: Partial<Pick<ProjectRow, 'displayName' | 'baseBranch' | 'branchPrefix'>>, by?: string): Promise<ProjectRow> { throw stub(); }
-  /** Delete the project and, by cascade, its workspaces, sessions, cards, crons, settings scope. */
+  /** Delete the project: SQL cascades its workspaces, sessions, cards, crons; this method also deletes its settings scope, drops its agent database, removes its containers. Refused while any workspace is on disk. */
   async remove(id: string, by?: string): Promise<void> { throw stub(); }
   /** The board's column list: the row's, or the default. */
   columnsOf(project: ProjectRow): string[] { throw stub(); }

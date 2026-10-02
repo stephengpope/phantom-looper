@@ -1,14 +1,18 @@
 // Sessions — the sessions table's one owner: the row, the record (the
 // typed-line transcript), the hold a turn takes, and the bookkeeping a
 // turn's start and end do. A session has a registered TYPE and one of
-// three workspace relationships: it owns its checkout (workspaceId ===
-// id), borrows another session's, or has none. Nothing here knows any
+// three workspace relationships: it owns its checkout (the workspace row
+// carries the session's id and cascades with it), borrows another
+// session's (workspaceId = that owner's id; null when the owner is purged),
+// or has none. Nothing here knows any
 // particular type by name. Stub.
 import type { StoredSystemPrompt, SystemPromptLayout } from 'phantom-client-sdk/systemPrompt';
 
 export interface SessionRow {
   id: string; projectId: string; workspaceId: string | null; type: string;
-  name: string | null; nameManual: boolean; status: 'active' | 'destroyed';
+  name: string | null; nameManual: boolean;
+  /** Derived, never stored: active while the owned workspace's files are on disk (or the session owns none), destroyed once they were removed. */
+  status: 'active' | 'destroyed';
   planMode: boolean; pinned: boolean; archived: boolean;
   provider: string | null; model: string | null; baseUrl: string | null;
   systemPrompt: StoredSystemPrompt | null;
@@ -30,9 +34,9 @@ export class Sessions {
   async repointWorkspace(id: string, projectId: string, borrowFromSessionId: string | null): Promise<void> { throw stub(); }
   /** A copy of a session: new row, record seeded from the source. */
   async duplicate(sourceId: string): Promise<SessionRow> { throw stub(); }
-  /** Mark destroyed; files go with it when the session owns them. */
+  /** Remove the owned workspace's files; the row and its branch stay (status reads destroyed). */
   async destroy(id: string): Promise<void> { throw stub(); }
-  /** Delete the row for good. */
+  /** Delete the row for good — its owned workspace row cascades, borrowers of it lose their files (workspace null), its tasks and Telegram replies go. */
   async purge(id: string): Promise<void> { throw stub(); }
 
   // ── reading ───────────────────────────────────────────────────────────

@@ -1,8 +1,9 @@
 // Workspaces — the workspaces table's one owner: a checkout — its files
 // on disk, its branch, the commit it was cut from, when it was last used,
 // whether its branch reached origin, its git work state, and the sync lock.
-// The row is permanent; the files can be removed and restored. Its id is
-// its owning session's id (kept through the rename; its own item later). Stub.
+// Its id IS its owning session's id, enforced: workspaces.id references
+// sessions(id) on delete cascade. The row lives as long as the session;
+// the files can be removed and restored. Stub.
 export interface WorkspaceRow {
   id: string; projectId: string; branch: string; cutFromSha: string | null; onDisk: boolean;
   lastUsedAt: Date | null; lastPushedAt: Date | null; work: WorkState | null;
@@ -12,8 +13,8 @@ export type WorkState = 'clean' | 'dirty' | 'ahead' | 'merged' | 'conflict' | 'u
 
 export class Workspaces {
   async get(id: string): Promise<WorkspaceRow | undefined> { throw stub(); }
-  /** Make the checkout: claim a warm clone or clone fresh, cut the branch, record the commit. */
-  async checkout(projectId: string, id: string, options: { branch: string }): Promise<WorkspaceRow> { throw stub(); }
+  /** Make the checkout for a session that exists: claim a warm clone or clone fresh, cut the branch, record the commit. */
+  async checkout(projectId: string, ownerSessionId: string, options: { branch: string }): Promise<WorkspaceRow> { throw stub(); }
   /** Re-clone a workspace whose files were removed, on the branch the row remembers. */
   async restore(id: string): Promise<WorkspaceRow> { throw stub(); }
   /** Delete the files, keep the row. */
