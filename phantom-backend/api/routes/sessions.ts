@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import type { SessionRow } from '../../db/schema.js';
+import type { SessionRow } from 'phantom-backend-sdk/schema';
 import type { TokenRecord } from '../../logTokens.js';
 import { SessionError, heldByOther, isHeld, expiredHold, assertDuplicable, ownsWorkspace, workspaceOf } from '../../sessions.js';
 import { WorkspaceError } from '../../workspaces.js';

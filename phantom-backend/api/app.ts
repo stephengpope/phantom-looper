@@ -41,7 +41,7 @@ import type { System } from '../system.js';
 import { BackdoorQueue } from './backdoor.js';
 import type { AutoPushResult, AutoPushEvent } from '../git/autoPush.js';
 import type { AutoPullResult, AutoPullEvent } from '../git/autoPull.js';
-import type { ProjectRow, SessionRow } from '../db/schema.js';
+import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
 import { projectRoutes } from './routes/projects.js';
 import { sessionRoutes } from './routes/sessions.js';
 import { systemRoutes } from './routes/system.js';

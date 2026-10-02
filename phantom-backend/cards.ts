@@ -8,10 +8,10 @@
 // sit in, THE field list (create, update and the API schema all derive from
 // it), how checklist items are edited by key, and what a move publishes.
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
-import type { Db } from './db/client.js';
+import type { Drizzle } from 'phantom-backend-sdk';
 // `sessions` is here for ONE read: the card a session works on is a join on
 // sessions.card_id. Read through the join only; the row is Sessions' to write.
-import { cards, cardRevisions, sessions, type CardRow, type ProjectRow } from './db/schema.js';
+import { cards, cardRevisions, sessions, type CardRow, type ProjectRow } from 'phantom-backend-sdk/schema';
 import { columnsOf, type Projects } from './projects.js';
 import { keyedItems, newKey, normalizeKey, type ChecklistItem } from '../core/kanban.js';
 import type { BoardEvents } from './api/boardEvents.js';
@@ -36,7 +36,7 @@ export interface ItemOp { op: 'add' | 'edit' | 'remove' | 'tick'; key?: string; 
 type Requirement = CardRow['requirements'][number];
 
 export class Cards {
-  constructor(private readonly db: Db, private readonly projects: Projects, private readonly events?: BoardEvents) {}
+  constructor(private readonly db: Drizzle, private readonly projects: Projects, private readonly events?: BoardEvents) {}
 
   private publish(project: ProjectRow, card: CardRow, extra: { from?: string; client?: string; archivedBefore?: boolean } = {}): void {
     this.events?.publish(project.id, { event: 'card', card: card as unknown as Record<string, unknown>, ...extra });

@@ -14,7 +14,7 @@
 // Tools take no lock — an agent fans out parallel calls in one turn and they
 // all just run; the session/turn lock is the only lock.
 import type { FastifyInstance } from 'fastify';
-import type { SessionRow, ProjectRow } from '../../db/schema.js';
+import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
 import { AGENT_NAMES, type AgentName } from '../../../core/llm/agentConfig.js';
 import { TOOLS, toolsFor, type FileTools, type ToolCtx } from '../../tools/registry.js';
 import { FILE_TOOLS } from '../../tools/files.js';

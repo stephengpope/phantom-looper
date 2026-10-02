@@ -49,7 +49,7 @@ import { menuFor, handleCommand } from './commands.js';
 import { AUTO_PUSH_STEPS, AUTO_PULL_STEPS, type AutoPushOutcome, type AutoPullOutcome } from '../../core/llm/tools/git.js';
 import type { AutoPushEvent } from '../git/autoPush.js';
 import type { AutoPullEvent } from '../git/autoPull.js';
-import type { SessionRow, ProjectRow } from '../db/schema.js';
+import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
 import type { Projects } from '../projects.js';
 import { AssistantConversation } from './assistantConversation.js';
 

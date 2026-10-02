@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import type { SessionRow } from '../../db/schema.js';
+import type { SessionRow } from 'phantom-backend-sdk/schema';
 import type { BackgroundTaskRow, BackgroundTaskEnd } from '../../backgroundTasks.js';
 import { newId } from '../../../core/ids.js';
 import { sessionDir } from '../../pool/paths.js';

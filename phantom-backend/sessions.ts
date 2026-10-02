@@ -23,13 +23,13 @@
 // stay with their callers: a hold means different things to a window (its
 // spinner) and to a git sync (nothing to show), so the caller says.
 import { and, desc, eq, gt, ilike, inArray, isNull, isNotNull, lt, ne, not, or, count, sql as sqlRaw } from 'drizzle-orm';
-import type { Db } from './db/client.js';
+import type { Drizzle } from 'phantom-backend-sdk';
 import type { PgColumn } from 'drizzle-orm/pg-core';
 // `workspaces` and `cards` appear here for JOINs only: every session read
 // carries its workspace's checkout facts, the list carries the card number and
 // column, the card reads take a number. Their rows are Workspaces' and Cards'
 // to write.
-import { sessions, sessionColumns, workspaces, cards, logTokens, type SessionRow } from './db/schema.js';
+import { sessions, sessionColumns, workspaces, cards, logTokens, type SessionRow } from 'phantom-backend-sdk/schema';
 import type { Settings } from './settings.js';
 import type { Projects } from './projects.js';
 import type { Workspaces } from './workspaces.js';
@@ -186,7 +186,7 @@ export function agentAfterSave(current: string | null, client: string): 'coding'
 
 export class Sessions {
   constructor(
-    private readonly db: Db,
+    private readonly db: Drizzle,
     private readonly settings: Settings,
     private readonly projects: Projects,
     private readonly workspaces: Workspaces,

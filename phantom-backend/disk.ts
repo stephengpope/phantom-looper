@@ -31,7 +31,7 @@
 //   and an image newer than the running release (an update in flight pulled
 //   it; deleting it made the update fail with "image not on this machine").
 import fs from 'node:fs/promises';
-import type { SessionRow, ProjectRow } from './db/schema.js';
+import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
 import { API_IMAGE, APP_VERSION } from './env.js';
 import type { Settings } from './settings.js';
 import type { Projects } from './projects.js';

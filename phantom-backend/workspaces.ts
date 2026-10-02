@@ -22,8 +22,8 @@
 // moved") for the list, `work` with its value for the watcher's dot.
 import fs from 'node:fs/promises';
 import { and, eq, inArray, isNotNull, isNull, lt, not, or, count } from 'drizzle-orm';
-import type { Db } from './db/client.js';
-import { workspaces, sessions, cards, type WorkspaceRow, type ProjectRow } from './db/schema.js';
+import type { Drizzle } from 'phantom-backend-sdk';
+import { workspaces, sessions, cards, type WorkspaceRow, type ProjectRow } from 'phantom-backend-sdk/schema';
 import type { SessionEvents } from './api/sessionEvents.js';
 import type { Settings } from './settings.js';
 import { git, cloneFresh, checkoutBranch, classifyGitFailure, localState, type WorkState } from './git/git.js';
@@ -48,7 +48,7 @@ export interface WorkRefreshWorkspace {
 
 export class Workspaces {
   constructor(
-    private readonly db: Db,
+    private readonly db: Drizzle,
     private readonly paths: Paths,
     private readonly settings: Settings,
     /** The per-session feed; absent in tests that have no watchers. */

@@ -6,10 +6,10 @@
 // the disk sweeps fire it unattended, so it holds the session lock while a
 // person-driven push/pull relies on git's own index.lock to error a true
 // simultaneous op.
-import type { ProjectRow, SessionRow } from '../db/schema.js';
+import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
 import { git, commitAll, pushSession, GIT_CLIENT_ID, type PushResult, type PullResult, type GitAuth } from './git.js';
 import type { Sessions } from '../sessions.js';
-import type { WorkspaceRow } from '../db/schema.js';
+import type { WorkspaceRow } from 'phantom-backend-sdk/schema';
 import { resolveAuth } from '../pool/pool.js';
 import { repoDir, type Paths } from '../pool/paths.js';
 import { syncBranch, LOCK_TTL_MS, RENEW_MS, type ConflictContext, type SyncDeps, type SyncEvent } from './sync.js';

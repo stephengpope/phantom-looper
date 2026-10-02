@@ -6,8 +6,8 @@
 // or project clears them, so no reader guards against a phantom.
 
 import { eq } from 'drizzle-orm';
-import type { Db } from '../db/client.js';
-import { telegramBotState } from '../db/schema.js';
+import type { Drizzle } from 'phantom-backend-sdk';
+import { telegramBotState } from 'phantom-backend-sdk/schema';
 import { encrypt, decrypt } from '../crypto.js';
 
 export type TelegramMode = 'assistant' | 'code';
@@ -30,7 +30,7 @@ const EMPTY: TelegramBotStateRow = { mode: 'assistant', activeSessionId: null, a
   webhookSecret: null, webhookUrl: null, botUsername: null };
 
 export class TelegramBotState {
-  constructor(private readonly db: Db, private readonly encryptionKey: Buffer) {}
+  constructor(private readonly db: Drizzle, private readonly encryptionKey: Buffer) {}
 
   /** The one row, created on first read. */
   async read(): Promise<TelegramBotStateRow> {

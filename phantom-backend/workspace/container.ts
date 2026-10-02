@@ -11,7 +11,7 @@
 // containers are never wiped at boot — they stay up and the normal idle reaper
 // handles them.
 import type Docker from 'dockerode';
-import type { ProjectRow } from '../db/schema.js';
+import type { ProjectRow } from 'phantom-backend-sdk/schema';
 import type { Settings } from '../settings.js';
 import type { Databases } from '../databases.js';
 import { resolveAuth } from '../pool/pool.js';

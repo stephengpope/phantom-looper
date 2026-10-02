@@ -2,7 +2,7 @@
 // unary. Detached logs are ND-JSON on the volume at work/<id>/logs/ — NEVER
 // under project/, where the next push's add -A would commit them.
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import type { SessionRow, ProjectRow } from '../../db/schema.js';
+import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
 import { ToolError } from '../../tools/envelope.js';
 import { ok, err, type AppCtx } from '../app.js';
 import { SESSION_HEADER, toolSession } from '../sessionHeader.js';

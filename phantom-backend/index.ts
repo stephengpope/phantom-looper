@@ -1,7 +1,6 @@
 // Boot: env -> db -> migrations -> project dirs -> looper -> HTTP.
 import { readEnv, APP_VERSION as VERSION } from './env.js';
-import { makeDb } from './db/client.js';
-import { migrate } from './db/migrate.js';
+import { Database, SDK_MIGRATIONS } from 'phantom-backend-sdk';
 import { makePaths } from './pool/paths.js';
 import { bootCleanup, tick } from './pool/pool.js';
 import { Sessions } from './sessions.js';
@@ -44,7 +43,7 @@ import { injectFetch } from './looper/injectFetch.js';
 import { toCodingAgent } from '../core/prompts/autoPush/wiring.js';
 import { serializeTranscript } from '../core/llm/transcript.js';
 import type { SyncDeps, SyncEvent } from './git/sync.js';
-import type { ProjectRow, SessionRow } from './db/schema.js';
+import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
 import { LooperEngine } from './looper/engine.js';
 import { TelegramEngine } from './telegram/engine.js';
 import { refreshWorkState } from './git/workRefresh.js';
@@ -60,8 +59,10 @@ const INTERNAL_API = 'http://internal/api';
 
 async function main() {
   const env = readEnv();
-  const { pool: pgPool, db } = makeDb(env.databaseUrl);
-  await migrate(pgPool);
+  const database = Database.connect(env.databaseUrl);
+  await database.migrate(SDK_MIGRATIONS);
+  const pgPool = database.pool;
+  const db = database.drizzle;
   const paths = makePaths(env.workspaceRoot);
   await bootCleanup(paths);
 
@@ -455,7 +456,7 @@ async function main() {
     digest.stop();
     await instantSync.stop();
     await app.close();
-    await pgPool.end();
+    await database.close();
     process.exit(0);
   };
   process.on('SIGTERM', shutdown);

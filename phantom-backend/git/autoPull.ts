@@ -10,7 +10,7 @@
 // anything is committed so a no-op pull mints no commit and spends no model
 // call; and there are no rounds, because nothing races a pull — base moving
 // afterward is simply the next pull.
-import type { ProjectRow, SessionRow } from '../db/schema.js';
+import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
 import type { Paths } from '../pool/paths.js';
 import { syncBranch, type SyncEvent, type SyncDeps } from './sync.js';
 import type { Sessions } from '../sessions.js';

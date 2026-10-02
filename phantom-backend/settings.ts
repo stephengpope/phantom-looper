@@ -6,8 +6,8 @@
 // Read at the point of use, never cached at boot: a settings change must take
 // effect without a restart or the config API lies.
 import { and, eq, inArray } from 'drizzle-orm';
-import type { Db } from './db/client.js';
-import { settings, type ProjectRow } from './db/schema.js';
+import type { Drizzle } from 'phantom-backend-sdk';
+import { settings, type ProjectRow } from 'phantom-backend-sdk/schema';
 import { GLOBAL, projectScope } from './store.js';
 import { encrypt, decrypt } from './crypto.js';
 import { latestModel } from './models.js';
@@ -672,7 +672,7 @@ function computeLayersFor(key: SettingKey, byScope: ByScope, ctx: ResolveCtx): S
 
 export class Settings {
   constructor(
-    private readonly db: Db,
+    private readonly db: Drizzle,
     private readonly encryptionKey: Buffer,
     /** The settings feed; absent in tests with no listeners. */
     private readonly events?: SettingsEvents,

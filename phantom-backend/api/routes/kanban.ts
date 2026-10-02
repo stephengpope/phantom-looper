@@ -2,7 +2,7 @@
 // routes — the API owns the writes. The column list and the card prefix are project fields
 // (PATCH /projects/:id); defaults live here in code, the DB stores overrides.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import type { ProjectRow } from '../../db/schema.js';
+import type { ProjectRow } from 'phantom-backend-sdk/schema';
 import { columnsOf } from '../../projects.js';
 import { isHeld } from '../../sessions.js';
 import { CardError, CARD_FIELDS, CARD_JSON_FIELDS, type CardFields, type ItemOp } from '../../cards.js';

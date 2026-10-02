@@ -35,7 +35,7 @@
 // THE LOCK is the only concurrency test. The sync takes the session lock and
 // fails when it cannot; it never inspects whether anything is running. Same
 // single lock the rest of the system uses — no new mutex.
-import type { ProjectRow, SessionRow } from '../db/schema.js';
+import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
 import { resolveAuth } from '../pool/pool.js';
 import { repoDir, type Paths } from '../pool/paths.js';
 import type { Sessions } from '../sessions.js';

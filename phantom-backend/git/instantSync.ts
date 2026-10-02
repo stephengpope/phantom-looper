@@ -43,7 +43,7 @@
 // runs on removal. `reconcile` covers what those two cannot: containers
 // already running when this process boots, and the switch or a timing
 // changed (the settings bus says so) — never a poll.
-import type { SessionRow, ProjectRow } from '../db/schema.js';
+import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
 import type { Sessions } from '../sessions.js';
 import type { Workspaces } from '../workspaces.js';
 import type { Projects } from '../projects.js';

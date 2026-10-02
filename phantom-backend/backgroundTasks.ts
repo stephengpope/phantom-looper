@@ -5,8 +5,8 @@
 // reconciler's 'exited' are final; a late stream teardown must not overwrite
 // them, so every terminal write is conditioned on the row still running.
 import { and, desc, eq, inArray } from 'drizzle-orm';
-import type { Db } from './db/client.js';
-import { backgroundTasks } from './db/schema.js';
+import type { Drizzle } from 'phantom-backend-sdk';
+import { backgroundTasks } from 'phantom-backend-sdk/schema';
 
 export type BackgroundTaskRow = typeof backgroundTasks.$inferSelect;
 /** How a running task ends: on its own, by a kill, or because its
@@ -14,7 +14,7 @@ export type BackgroundTaskRow = typeof backgroundTasks.$inferSelect;
 export type BackgroundTaskEnd = 'exited' | 'killed' | 'orphaned';
 
 export class BackgroundTasks {
-  constructor(private readonly db: Db) {}
+  constructor(private readonly db: Drizzle) {}
 
   async get(id: string): Promise<BackgroundTaskRow | undefined> {
     const rows = await this.db.select().from(backgroundTasks).where(eq(backgroundTasks.id, id));

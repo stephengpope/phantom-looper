@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { tooFull, diskCleanup, MIN_FREE_GB, type CleanupDeps, type DiskState } from './disk.js';
-import type { SessionRow, ProjectRow } from './db/schema.js';
+import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
 
 const HOUR = 60 * 60_000;
 const NOW = 1_000 * HOUR;

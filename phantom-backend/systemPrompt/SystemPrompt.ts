@@ -21,7 +21,7 @@ import { scanSkills, mergeSkills, type SkillMeta } from '../../core/skills/skill
 import { Clock } from '../../core/clock.js';
 import { systemSkills } from '../systemSkills.js';
 import type { Settings } from '../settings.js';
-import type { ProjectRow } from '../db/schema.js';
+import type { ProjectRow } from 'phantom-backend-sdk/schema';
 import { GLOBAL, projectScope } from '../store.js';
 
 /** What the blocks read: the session's checkout (null for a session with

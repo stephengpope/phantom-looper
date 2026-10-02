@@ -9,7 +9,7 @@
 //   PATCH  /projects/:id/crons/:name      any subset of those fields
 //   DELETE /projects/:id/crons/:name
 import type { FastifyInstance } from 'fastify';
-import type { ProjectRow } from '../../db/schema.js';
+import type { ProjectRow } from 'phantom-backend-sdk/schema';
 import type { Clock } from '../../../core/clock.js';
 import { CronError, CRON_FIELDS, type CronFields } from '../../crons.js';
 import { REASONINGS } from '../../../core/llm/createAgent.js';

@@ -11,7 +11,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { ProjectRow } from '../db/schema.js';
+import type { ProjectRow } from 'phantom-backend-sdk/schema';
 import type { Projects } from '../projects.js';
 
 import type { Settings } from '../settings.js';

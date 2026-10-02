@@ -7,7 +7,7 @@
 // routes and the skill_* tools.
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import type { SessionRow } from './db/schema.js';
+import type { SessionRow } from 'phantom-backend-sdk/schema';
 import { repoDir } from './pool/paths.js';
 import { Sandbox } from './workspace/sandbox.js';
 import { ToolError } from './tools/envelope.js';

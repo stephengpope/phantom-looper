@@ -33,7 +33,7 @@ import type { FastifyInstance } from 'fastify';
 
 
 import type { ModelMessage } from 'ai';
-import type { ProjectRow } from '../db/schema.js';
+import type { ProjectRow } from 'phantom-backend-sdk/schema';
 import { LOOP_CLIENT_ID, workspaceOf, type Sessions } from '../sessions.js';
 import type { Projects } from '../projects.js';
 import type { Cards, CardFields } from '../cards.js';

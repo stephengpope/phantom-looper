@@ -15,7 +15,7 @@
 // in code (CREDENTIALS), never decided by a write.
 import type { FastifyInstance } from 'fastify';
 import type { FastifyRequest } from 'fastify';
-import type { ProjectRow } from '../../db/schema.js';
+import type { ProjectRow } from 'phantom-backend-sdk/schema';
 import {
   CREDENTIALS, CREDENTIAL_NAMES, type CredentialMeta, credentialMeta,
   isProjectOverridable, isCredentialProjectScoped, isGlobalSettable,

@@ -3,8 +3,8 @@
 // as one gesture. The values a preset may hold, and how each is validated,
 // are decided here — the same rules PATCH /settings applies.
 import { eq } from 'drizzle-orm';
-import { isUniqueViolation, type Db } from './db/client.js';
-import { presets, type PresetRow } from './db/schema.js';
+import { Database, type Drizzle } from 'phantom-backend-sdk';
+import { presets, type PresetRow } from 'phantom-backend-sdk/schema';
 import { META, isSettingKey, validateSetting, type SettingKey } from './settings.js';
 
 /** The setting keys a preset may hold: every agent's `model` rows — read off
@@ -20,7 +20,7 @@ export class PresetError extends Error {
 }
 
 export class Presets {
-  constructor(private readonly db: Db) {}
+  constructor(private readonly db: Drizzle) {}
 
   /** Every preset, by name. */
   async list(): Promise<PresetRow[]> {
@@ -52,7 +52,7 @@ export class Presets {
         .onConflictDoUpdate({ target: [presets.id], set: { name, values: clean, updatedAt: now } });
     } catch (e) {
       // The only unique here besides the key is `name`.
-      if (isUniqueViolation(e)) throw new PresetError('duplicate_preset_name', `a preset named "${name}" already exists`);
+      if (Database.isUniqueViolation(e)) throw new PresetError('duplicate_preset_name', `a preset named "${name}" already exists`);
       throw e;
     }
     return clean;

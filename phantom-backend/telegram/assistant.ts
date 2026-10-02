@@ -19,7 +19,7 @@
 import type { ModelMessage, Tool } from 'ai';
 import { AssistantAgent } from '../../core/llm/agents/assistant.js';
 import { agentClock, type AgentConfig } from '../../core/llm/agentConfig.js';
-import type { SessionRow } from '../db/schema.js';
+import type { SessionRow } from 'phantom-backend-sdk/schema';
 import type { Cards, CardFields, ItemOp, CardRow } from '../cards.js';
 import type { Projects } from '../projects.js';
 import { assistantKanbanTool, sessionsTool, projectCreateTool, gitAutoPushTool, gitAutoPullTool, dockerLogsTool,

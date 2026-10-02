@@ -1,7 +1,7 @@
 // The shape every tool definition has, and the schema helpers the
 // definition files share. The list itself is registry.ts.
 import type { AppCtx } from '../api/app.js';
-import type { SessionRow, ProjectRow } from '../db/schema.js';
+import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
 import type { Sandbox } from '../workspace/sandbox.js';
 import type { AgentName } from '../../core/llm/agentConfig.js';
 import { ToolError } from './envelope.js';

@@ -7,13 +7,13 @@
 // message.
 
 import { eq, and, sql } from 'drizzle-orm';
-import type { Db } from '../db/client.js';
-import { telegramSentMessages } from '../db/schema.js';
+import type { Drizzle } from 'phantom-backend-sdk';
+import { telegramSentMessages } from 'phantom-backend-sdk/schema';
 
 export interface TelegramSentMessage { content: string; sessionId: string | null }
 
 export class TelegramSentMessages {
-  constructor(private readonly db: Db) {}
+  constructor(private readonly db: Drizzle) {}
 
   /** A message the bot sent, remembered so a reply to it can be traced. */
   async record(chatId: number, messageId: number, content: string, sessionId: string | null): Promise<void> {

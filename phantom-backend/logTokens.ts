@@ -5,8 +5,8 @@
 // Nothing else writes the table; readers join it freely.
 import { gte, eq, sql } from 'drizzle-orm';
 import type { PgColumn } from 'drizzle-orm/pg-core';
-import type { Db } from './db/client.js';
-import { logTokens } from './db/schema.js';
+import type { Drizzle } from 'phantom-backend-sdk';
+import { logTokens } from 'phantom-backend-sdk/schema';
 import { newId } from '../core/ids.js';
 import type { TokenRecord } from '../core/llm/createAgent.js';
 
@@ -17,7 +17,7 @@ export type { TokenRecord };
 const sum = (col: PgColumn) => sql<number>`coalesce(sum(${col}), 0)`.mapWith(Number);
 
 export class LogTokens {
-  constructor(private readonly db: Db) {}
+  constructor(private readonly db: Drizzle) {}
 
   /** Record one LLM call. */
   async record(r: TokenRecord): Promise<void> {

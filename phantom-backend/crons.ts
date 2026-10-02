@@ -24,8 +24,8 @@
 // lays them over the run's session (agentConfig.ts pinned).
 import { and, eq, sql } from 'drizzle-orm';
 import { Cron } from 'croner';
-import { isUniqueViolation, type Db } from './db/client.js';
-import { crons, type CronRow, type ProjectRow } from './db/schema.js';
+import { Database, type Drizzle } from 'phantom-backend-sdk';
+import { crons, type CronRow, type ProjectRow } from 'phantom-backend-sdk/schema';
 import type { Clock } from '../core/clock.js';
 import { keyedProviders, REASONINGS } from '../core/llm/createAgent.js';
 import type { Settings } from './settings.js';
@@ -78,7 +78,7 @@ function checkSchedule(schedule: string, clock: Clock, now: Date): void {
 
 export class Crons {
   private listeners: Array<(projectId: string) => void> = [];
-  constructor(private readonly db: Db, private readonly settings: Settings) {}
+  constructor(private readonly db: Drizzle, private readonly settings: Settings) {}
 
   /** Hear every write, by project — the scheduler re-registers that
    *  project's crons on each. Events, not polling: the table is written
@@ -139,7 +139,7 @@ export class Crons {
       this.changed(project.id);
       return row;
     } catch (e) {
-      if (isUniqueViolation(e)) throw new CronError('duplicate_name', `a cron named "${name}" already exists — update it, or pick another name`);
+      if (Database.isUniqueViolation(e)) throw new CronError('duplicate_name', `a cron named "${name}" already exists — update it, or pick another name`);
       throw e;
     }
   }
@@ -166,7 +166,7 @@ export class Crons {
       this.changed(project.id);
       return row;
     } catch (e) {
-      if (isUniqueViolation(e)) throw new CronError('duplicate_name', `a cron named "${set.name}" already exists`);
+      if (Database.isUniqueViolation(e)) throw new CronError('duplicate_name', `a cron named "${set.name}" already exists`);
       throw e;
     }
   }

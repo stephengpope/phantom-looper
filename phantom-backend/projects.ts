@@ -7,8 +7,8 @@
 // prefixes, the scopes), and the settings feed is what they already follow to
 // re-read /projects. One bus, not a second one saying the same thing.
 import { eq, sql } from 'drizzle-orm';
-import { isUniqueViolation, type Db, type Tx } from './db/client.js';
-import { projects, type ProjectRow } from './db/schema.js';
+import { Database, type Drizzle, type Transaction } from 'phantom-backend-sdk';
+import { projects, type ProjectRow } from 'phantom-backend-sdk/schema';
 import { DEFAULT_COLUMNS } from '../core/kanban.js';
 import type { Settings } from './settings.js';
 import { projectScope } from './store.js';
@@ -41,7 +41,7 @@ export class ProjectError extends Error {
 
 export class Projects {
   constructor(
-    private readonly db: Db,
+    private readonly db: Drizzle,
     private readonly settings: Settings,
     private readonly events?: SettingsEvents,
     /** The agent's own database per project — dropped with the row. */
@@ -74,7 +74,7 @@ export class Projects {
     try {
       await this.db.insert(projects).values(row);
     } catch (e) {
-      if (isUniqueViolation(e)) throw new ProjectError('already_registered', `${row.owner}/${row.name} is already a project`);
+      if (Database.isUniqueViolation(e)) throw new ProjectError('already_registered', `${row.owner}/${row.name} is already a project`);
       throw e;
     }
     this.events?.publish(projectScope(row.id), [], by);
@@ -93,7 +93,7 @@ export class Projects {
   /** Hand out the next card number and move the counter, in the caller's
    *  transaction so the number and the card land together. Numbers are
    *  never reused: a deleted card's stays taken. */
-  async claimCardNumber(id: string, tx: Tx | Db = this.db): Promise<number> {
+  async claimCardNumber(id: string, tx: Transaction | Drizzle = this.db): Promise<number> {
     const [{ number }] = await tx.update(projects)
       .set({ nextCardNumber: sql`${projects.nextCardNumber} + 1` })
       .where(eq(projects.id, id)).returning({ number: sql<number>`${projects.nextCardNumber} - 1` });

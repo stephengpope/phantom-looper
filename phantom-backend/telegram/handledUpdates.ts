@@ -5,13 +5,13 @@
 // passing — update ids climb per bot, so anything far behind is done.
 
 import { lt } from 'drizzle-orm';
-import type { Db } from '../db/client.js';
-import { telegramHandledUpdates } from '../db/schema.js';
+import type { Drizzle } from 'phantom-backend-sdk';
+import { telegramHandledUpdates } from 'phantom-backend-sdk/schema';
 
 const PRUNE_BEHIND = 10_000;
 
 export class TelegramHandledUpdates {
-  constructor(private readonly db: Db) {}
+  constructor(private readonly db: Drizzle) {}
 
   /** True the FIRST time an update id is seen; false for a repeat. */
   async markHandled(updateId: number): Promise<boolean> {
