@@ -73,14 +73,14 @@ export class PhantomBackend {
   readonly docker!: Docker;
   readonly images!: Images;
   readonly sessionContainers!: SessionContainers;
-  readonly checkoutPool!: CheckoutPool;
+  readonly checkoutPool!: typeof CheckoutPool;
   readonly disk!: Disk;
   readonly skills!: Skills;
   readonly systemSkills!: SystemSkills;
   readonly web!: Web;
 
   // ── git ──────────────────────────────────────────────────────────────
-  readonly git!: Git;
+  readonly git!: typeof Git;
   readonly gitSync!: GitSync;
   readonly instantSync!: InstantSync;
   readonly workspaceWatcher!: WorkspaceWatcher;

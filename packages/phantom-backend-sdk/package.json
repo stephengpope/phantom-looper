@@ -17,6 +17,10 @@
     "./schema": {
       "types": "./dist/storage/schema.d.ts",
       "import": "./dist/storage/schema.js"
+    },
+    "./git": {
+      "types": "./dist/git/Git.d.ts",
+      "import": "./dist/git/Git.js"
     }
   },
   "files": [

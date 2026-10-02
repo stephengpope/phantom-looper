@@ -7,8 +7,8 @@ import type { Paths } from 'phantom-backend-sdk';
 import type { ModelConfig } from '../../core/llm/createAgent.js';
 import { syncBranch, type SyncEvent, type SyncDeps, type ConflictContext } from './sync.js';
 import type { Sessions } from '../sessions.js';
-import type { Workspaces } from '../workspaces.js';
-import type { Cards } from '../cards.js';
+import type { Workspaces } from 'phantom-backend-sdk';
+import type { Cards } from 'phantom-backend-sdk';
 import type { Settings } from 'phantom-backend-sdk';
 
 export { LOCK_TTL_MS, RENEW_MS, type ConflictContext } from './sync.js';

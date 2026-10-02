@@ -15,7 +15,7 @@ import { cronTools } from '../../core/llm/tools/crons.js';
 import { databaseTools } from '../../core/llm/tools/database.js';
 import { kanbanReadTool } from '../../core/llm/tools/kanban.js';
 import { notifyTools } from '../../core/llm/tools/notify.js';
-import type { SessionEvents } from '../api/sessionEvents.js';
+import type { SessionEvents } from 'phantom-backend-sdk';
 import type { BackdoorQueue } from '../api/backdoor.js';
 
 export interface TurnDeps {

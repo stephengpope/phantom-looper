@@ -23,3 +23,15 @@ export interface LlmConfig {
    *  model stops calling tools. */
   maxSteps: number | null;
 }
+
+/** THE rule for which providers may be picked: those with a key stored,
+ *  plus any that takes no key (openai-codex reads its own login). Read off
+ *  the settings entries — each credential entry names its `meta.provider`
+ *  and where its value comes from (`source`; 'default' = no key stored).
+ *  The settings picker, the cron tools' enum and the backend's cron
+ *  validation all call this, so a provider you cannot call is never a
+ *  choice anywhere. */
+export function keyedProviders(entries: Record<string, { source?: string; meta?: object }>): Provider[] {
+  const keyEntry = (provider: string) => Object.values(entries).find((entry) => (entry.meta as { provider?: string } | undefined)?.provider === provider);
+  return PROVIDERS.filter((provider) => { const entry = keyEntry(provider); return !entry || entry.source !== 'default'; });
+}

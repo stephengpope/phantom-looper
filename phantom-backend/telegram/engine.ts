@@ -21,16 +21,16 @@ import { injectFetch } from '../looper/injectFetch.js';
 import { runCodingTurn, type TurnDeps } from '../looper/turn.js';
 import { oldAgentConfig } from '../agentConfig.js';
 import { sessionPin } from '../agentConfig.js';
-import type { SettingsEvents } from '../api/settingsEvents.js';
+import type { SettingsEvents } from 'phantom-backend-sdk';
 import { APP_VERSION } from '../env.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
 import type { Sessions } from '../sessions.js';
-import type { Cards } from '../cards.js';
+import type { Cards } from 'phantom-backend-sdk';
 import type { Presets } from 'phantom-backend-sdk';
 import type { System } from '../system.js';
-import type { SessionEvents } from '../api/sessionEvents.js';
+import type { SessionEvents } from 'phantom-backend-sdk';
 import type { BackdoorQueue } from '../api/backdoor.js';
-import type { BoardEvents, BoardEvent } from '../api/boardEvents.js';
+import type { BoardEvents, BoardEvent } from 'phantom-backend-sdk';
 import { autoBuildAlert } from './alerts.js';
 import { logger, errStr } from 'phantom-backend-sdk';
 import { TelegramClient, ALLOWED_UPDATES, titled } from './client.js';
@@ -49,7 +49,7 @@ import { AUTO_PUSH_STEPS, AUTO_PULL_STEPS, type AutoPushOutcome, type AutoPullOu
 import type { AutoPushEvent } from '../git/autoPush.js';
 import type { AutoPullEvent } from '../git/autoPull.js';
 import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
-import type { Projects } from '../projects.js';
+import type { Projects } from 'phantom-backend-sdk';
 import { AssistantConversation } from './assistantConversation.js';
 
 

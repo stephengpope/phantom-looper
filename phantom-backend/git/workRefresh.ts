@@ -4,12 +4,12 @@
 // changes. A change publishes on the board event stream as `session_work`
 // (named by the owning session's card) so the kanban board hears it live,
 // and on the session feed through the row write.
-import type { Workspaces } from '../workspaces.js';
-import type { Projects } from '../projects.js';
-import { workState } from './git.js';
+import type { Workspaces } from 'phantom-backend-sdk';
+import type { Projects } from 'phantom-backend-sdk';
+import { workState } from 'phantom-backend-sdk/git';
 import { repoDir, type Paths } from 'phantom-backend-sdk';
 import type { ContainerManager } from '../workspace/container.js';
-import type { BoardEvents } from '../api/boardEvents.js';
+import type { BoardEvents } from 'phantom-backend-sdk';
 import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('work-refresh');

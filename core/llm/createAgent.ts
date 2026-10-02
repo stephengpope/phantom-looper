@@ -39,19 +39,7 @@ export type Provider = typeof PROVIDERS[number];
 export const REASONINGS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 export type Reasoning = typeof REASONINGS[number];
 
-/** THE rule for which providers may be picked: those with a key on /keys,
- *  plus any that takes no key (openai-codex reads its own login). Read off
- *  the settings block — each credential entry names its `meta.provider`
- *  and where its value comes from (`source`; 'default' = no key stored).
- *  The /settings picker, the cron tools' enum and the server's cron
- *  validation all call this, so a provider you cannot call is never a
- *  choice anywhere. */
-export function keyedProviders(
-  entries: Record<string, { source?: string; meta?: object }>,
-): Provider[] {
-  const keyEntry = (p: string) => Object.values(entries).find((e) => (e.meta as { provider?: string } | undefined)?.provider === p);
-  return PROVIDERS.filter((p) => { const e = keyEntry(p); return !e || e.source !== 'default'; });
-}
+export { keyedProviders } from 'phantom-client-sdk';
 
 // ── token recording ───────────────────────────────────────────────────────
 // Every model handle in the tree is built by `languageModel()` below, and

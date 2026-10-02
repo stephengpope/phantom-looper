@@ -4,8 +4,8 @@ import fs from 'node:fs/promises';
 import type { SessionRow } from 'phantom-backend-sdk/schema';
 import type { TokenRecord } from 'phantom-backend-sdk';
 import { SessionError, heldByOther, isHeld, expiredHold, assertDuplicable, ownsWorkspace, workspaceOf } from '../../sessions.js';
-import { WorkspaceError } from '../../workspaces.js';
-import { GIT_CLIENT_ID } from '../../git/git.js';
+import { WorkspaceError } from 'phantom-backend-sdk';
+import { GIT_CLIENT_ID } from 'phantom-backend-sdk/git';
 import { sessionDir } from 'phantom-backend-sdk';
 
 import { ok, err, type AppCtx } from '../app.js';
@@ -20,7 +20,7 @@ import { AGENT_NAMES, type AgentName } from '../../../core/llm/agentConfig.js';
 import { toolsFor } from '../../tools/registry.js';
 import { messageLine, userMessage } from 'phantom-client-sdk/transcript';
 import { writeAttachment } from '../../telegram/attachments.js';
-import type { SessionEvent } from '../sessionEvents.js';
+import type { SessionEvent } from 'phantom-backend-sdk';
 
 const log = logger('sessions');
 

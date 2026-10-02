@@ -35,11 +35,11 @@ import type { FastifyInstance } from 'fastify';
 import type { ModelMessage } from 'ai';
 import type { ProjectRow } from 'phantom-backend-sdk/schema';
 import { LOOP_CLIENT_ID, workspaceOf, type Sessions } from '../sessions.js';
-import type { Projects } from '../projects.js';
-import type { Cards, CardFields } from '../cards.js';
+import type { Projects } from 'phantom-backend-sdk';
+import type { Cards, CardFields } from 'phantom-backend-sdk';
 import type { Settings, AgentConfig as SdkAgentConfig } from 'phantom-backend-sdk';
 import type { TokenLog } from 'phantom-backend-sdk';
-import type { SettingsEvents } from '../api/settingsEvents.js';
+import type { SettingsEvents } from 'phantom-backend-sdk';
 import { GLOBAL } from 'phantom-backend-sdk';
 import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
 import { SupervisorAgent as SupervisorAgentOnSdk } from '../../core/agents/supervisor.js';
@@ -57,8 +57,8 @@ import { compactionDue, compactionOpts, CompactionLock, compact } from '../../co
 import { SupervisorAgent } from '../../core/llm/agents/supervisor.js';
 import { canTurn, unsentKickoff, nextStep, needsFreshSession, heldBy, LOOP_COLUMNS, type CardRow } from './logic.js';
 import { injectFetch } from './injectFetch.js';
-import type { BoardEvents } from '../api/boardEvents.js';
-import type { SessionEvents } from '../api/sessionEvents.js';
+import type { BoardEvents } from 'phantom-backend-sdk';
+import type { SessionEvents } from 'phantom-backend-sdk';
 import type { BackdoorQueue } from '../api/backdoor.js';
 import { logger, errStr } from 'phantom-backend-sdk';
 

@@ -36,16 +36,16 @@
 // fails when it cannot; it never inspects whether anything is running. Same
 // single lock the rest of the system uses — no new mutex.
 import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
-import { resolveAuth } from '../pool/pool.js';
+import { checkoutPool } from 'phantom-backend-sdk';
 import { repoDir, type Paths } from 'phantom-backend-sdk';
 import type { Sessions } from '../sessions.js';
-import type { Workspaces } from '../workspaces.js';
-import type { Cards } from '../cards.js';
+import type { Workspaces } from 'phantom-backend-sdk';
+import type { Cards } from 'phantom-backend-sdk';
 import type { Settings } from 'phantom-backend-sdk';
 import {
   git, fetchBase, squashToMergeBase, commitStaged, rebaseOntoBase, rebaseAbort, rebaseInProgress,
   landingProblems, pushSession, pushSessionForced, pushToBase, hasWorkToLand, GIT_CLIENT_ID,
-} from './git.js';
+} from 'phantom-backend-sdk/git';
 import { commitMessageFor } from './commitMessage.js';
 import { newId } from 'phantom-backend-sdk';
 import type { ModelConfig } from '../../core/llm/createAgent.js';
@@ -188,7 +188,7 @@ export async function syncBranch(
   if (!workspace) return { outcome: 'error', reason: 'session has no workspace — nothing to sync' };
   const dir = repoDir(deps.paths, workspace.id);
   const base = project.baseBranch;
-  const auth = await resolveAuth(deps.settings, project);
+  const auth = await checkoutPool.resolveAuth(deps.settings, project);
   const ev = async (step: SyncStep, detail?: string) => { await deps.onEvent?.({ step, label: syncStepLabel(step, opts.landOnBase), detail }); };
   const rounds = opts.landOnBase ? ROUNDS : 1;
   const hold = opts.hold ?? true;

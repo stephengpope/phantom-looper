@@ -28,3 +28,16 @@ export { encrypt, decrypt, timingSafeEqualStr } from './lib/crypto.js';
 // the vocabulary both halves speak
 export { newId, idTime, DEFAULT_COLUMNS, STATUS_ICON, normalizeKey, newKey, keyedItems, type ChecklistItem } from 'phantom-client-sdk';
 export { PresetError, type PresetRow } from './storage/Presets.js';
+
+// table owners' companions
+export { ProjectError, defaultPrefix, columnsOf, type NewProject } from './storage/Projects.js';
+export { WorkspaceError, type WorkRefreshWorkspace } from './storage/Workspaces.js';
+export { CardError, CARD_FIELDS, CARD_JSON_FIELDS, type CardFields, type ItemOp } from './storage/Cards.js';
+export { CronError, CRON_FIELDS, isOnce, nextFire, type CronFields } from './storage/Crons.js';
+export { CAP_BYTES, capPart, type SessionEvent } from './agents/SessionEvents.js';
+export type { BoardEvent } from './agents/BoardEvents.js';
+export type { SettingsChanged } from './agents/SettingsEvents.js';
+
+export { hasEmbeddedCredentials, parseGitHubUrl, parseRepoRef, remoteUrl } from './git/remote.js';
+export type { CardRow, CronRow, ProjectRow, WorkspaceRow, SessionRow } from './storage/schema.js';
+export * as checkoutPool from './runtime/CheckoutPool.js';

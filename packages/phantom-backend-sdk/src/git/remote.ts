@@ -15,7 +15,7 @@ export function remoteUrl(owner: string, name: string): string {
 export function hasEmbeddedCredentials(url: string): boolean {
   if (typeof url !== 'string') return false;
   const afterScheme = url.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
-  const authority = afterScheme.split(/[/?#]/)[0];
+  const authority = afterScheme.split(/[/?#]/)[0] ?? '';
   return authority.includes('@');
 }
 
@@ -25,7 +25,7 @@ export function parseGitHubUrl(url: string): { owner: string; name: string } {
   if (hasEmbeddedCredentials(url)) throw new Error('repo URL must not embed credentials');
   const m = url.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/);
   if (!m) throw new Error('repo URL must look like https://github.com/{owner}/{name}');
-  return { owner: m[1], name: m[2] };
+  return { owner: m[1]!, name: m[2]! };
 }
 
 /** A repo reference the way a person types one: a full GitHub URL,
@@ -38,5 +38,5 @@ export function parseRepoRef(ref: string): { owner?: string; name: string } {
   if (/^[a-z][a-z0-9+.-]*:/i.test(clean) || clean.includes('@')) return parseGitHubUrl(clean);
   const m = clean.match(/^(?:([A-Za-z0-9][A-Za-z0-9-]*)\/)?([A-Za-z0-9_.-]+?)(?:\.git)?$/);
   if (!m) throw new Error('give a GitHub URL, owner/name, or a repo name');
-  return m[1] ? { owner: m[1], name: m[2] } : { name: m[2] };
+  return m[1] ? { owner: m[1], name: m[2]! } : { name: m[2]! };
 }

@@ -11,7 +11,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { ProjectRow } from 'phantom-backend-sdk/schema';
 import type { Clock } from 'phantom-backend-sdk';
-import { CronError, CRON_FIELDS, type CronFields } from '../../crons.js';
+import { CronError, CRON_FIELDS, type CronFields } from 'phantom-backend-sdk';
 import { REASONINGS } from '../../../core/llm/createAgent.js';
 import { ok, err, type AppCtx } from '../app.js';
 

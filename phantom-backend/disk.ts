@@ -34,13 +34,13 @@ import fs from 'node:fs/promises';
 import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
 import { API_IMAGE, APP_VERSION } from './env.js';
 import type { Settings } from 'phantom-backend-sdk';
-import type { Projects } from './projects.js';
+import type { Projects } from 'phantom-backend-sdk';
 import type { Sessions } from './sessions.js';
 import type { Paths } from 'phantom-backend-sdk';
 import type { ContainerManager } from './workspace/container.js';
 import type { Images } from './images.js';
 import type { GitEngine } from './git/engine.js';
-import { workState, type PushResult } from './git/git.js';
+import { workState, type PushResult } from 'phantom-backend-sdk/git';
 import { repoDir } from 'phantom-backend-sdk';
 import { logger, errStr } from 'phantom-backend-sdk';
 

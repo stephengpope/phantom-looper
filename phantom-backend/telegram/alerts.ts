@@ -5,7 +5,7 @@
 // x-phantom-looper-client rides the event, and the loop's is LOOP_CLIENT_ID.
 // `from` is the status before the write, so an edit inside a column (a tick, a
 // retitle) is not a move, and nothing is remembered across a restart.
-import type { BoardEvent } from '../api/boardEvents.js';
+import type { BoardEvent } from 'phantom-backend-sdk';
 import { LOOP_CLIENT_ID } from '../sessions.js';
 
 /** The statuses worth a message, and their glyphs. plan is the looper's

@@ -37,8 +37,8 @@
 import type { FastifyInstance } from 'fastify';
 import { Cron } from 'croner';
 import { CRON_CLIENT_ID, type Sessions } from '../sessions.js';
-import type { Crons, CronRow } from '../crons.js';
-import type { Projects } from '../projects.js';
+import type { Crons, CronRow } from 'phantom-backend-sdk';
+import type { Projects } from 'phantom-backend-sdk';
 import type { Settings, AgentConfig as SdkAgentConfig } from 'phantom-backend-sdk';
 import { openSession, type OpenedSession } from '../../core/session.js';
 import { serializeTranscript } from '../../core/llm/transcript.js';
@@ -47,8 +47,8 @@ import { SESSION_HEADER } from '../api/sessionHeader.js';
 import { oldAgentConfig } from '../agentConfig.js';
 import { sessionPin } from '../agentConfig.js';
 import { injectFetch } from '../looper/injectFetch.js';
-import type { SessionEvents } from '../api/sessionEvents.js';
-import type { SettingsEvents } from '../api/settingsEvents.js';
+import type { SessionEvents } from 'phantom-backend-sdk';
+import type { SettingsEvents } from 'phantom-backend-sdk';
 import type { BackdoorQueue } from '../api/backdoor.js';
 import { logger, errStr } from 'phantom-backend-sdk';
 

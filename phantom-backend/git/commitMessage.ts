@@ -16,7 +16,7 @@
 import type { ModelConfig } from '../../core/llm/createAgent.js';
 import { commitMessagePrompt } from '../../core/prompts/autoPush/wiring.js';
 import { PhantomHelper } from '../../core/llm/helper.js';
-import { git } from './git.js';
+import { git } from 'phantom-backend-sdk/git';
 import { logger } from 'phantom-backend-sdk';
 
 const log = logger('auto-push');

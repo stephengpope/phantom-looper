@@ -7,10 +7,10 @@
 // person-driven push/pull relies on git's own index.lock to error a true
 // simultaneous op.
 import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
-import { git, commitAll, pushSession, GIT_CLIENT_ID, type PushResult, type PullResult, type GitAuth } from './git.js';
+import { git, commitAll, pushSession, GIT_CLIENT_ID, type PushResult, type PullResult, type GitAuth } from 'phantom-backend-sdk/git';
 import type { Sessions } from '../sessions.js';
 import type { WorkspaceRow } from 'phantom-backend-sdk/schema';
-import { resolveAuth } from '../pool/pool.js';
+import { checkoutPool } from 'phantom-backend-sdk';
 import { repoDir, type Paths } from 'phantom-backend-sdk';
 import { syncBranch, LOCK_TTL_MS, RENEW_MS, type ConflictContext, type SyncDeps, type SyncEvent } from './sync.js';
 import { newId } from 'phantom-backend-sdk';
@@ -44,7 +44,7 @@ export class GitEngine {
     this.arrivals.delete(sessionId);
   }
 
-  private auth(project: ProjectRow): Promise<GitAuth> { return resolveAuth(this.deps.settings, project); }
+  private auth(project: ProjectRow): Promise<GitAuth> { return checkoutPool.resolveAuth(this.deps.settings, project); }
 
   /** Git operates on WORKSPACES — the branch and the directory live there. A
    *  session with no workspace has nothing git-shaped to do. */

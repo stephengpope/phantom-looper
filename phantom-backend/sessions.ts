@@ -31,8 +31,8 @@ import type { PgColumn } from 'drizzle-orm/pg-core';
 // to write.
 import { sessions, sessionColumns, workspaces, cards, logTokens, type SessionRow } from 'phantom-backend-sdk/schema';
 import type { Settings, AgentConfig } from 'phantom-backend-sdk';
-import type { Projects } from './projects.js';
-import type { Workspaces } from './workspaces.js';
+import type { Projects } from 'phantom-backend-sdk';
+import type { Workspaces } from 'phantom-backend-sdk';
 import { newId } from 'phantom-backend-sdk';
 import { logger } from 'phantom-backend-sdk';
 import { lastUserFromJsonl, stripUsageFromJsonl } from '../core/llm/transcript.js';
@@ -41,7 +41,7 @@ import { SystemPrompt } from './systemPrompt/SystemPrompt.js';
 import { repoDir, type Paths } from 'phantom-backend-sdk';
 import type Docker from 'dockerode';
 import { GLOBAL, projectScope } from 'phantom-backend-sdk';
-import type { SessionEvents } from './api/sessionEvents.js';
+import type { SessionEvents } from 'phantom-backend-sdk';
 
 const log = logger('sessions');
 

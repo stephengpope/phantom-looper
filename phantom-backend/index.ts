@@ -4,16 +4,16 @@ import { Database, SDK_MIGRATIONS, ModelCatalog, AgentTypes, AgentConfig, sdkSet
 import { config } from './config.js';
 import { oldAgentConfig } from './agentConfig.js';
 import { makePaths } from 'phantom-backend-sdk';
-import { bootCleanup, tick } from './pool/pool.js';
+import { checkoutPool } from 'phantom-backend-sdk';
 import { Sessions } from './sessions.js';
 import { Settings } from 'phantom-backend-sdk';
-import { Projects } from './projects.js';
+import { Projects } from 'phantom-backend-sdk';
 import { AgentDatabases } from 'phantom-backend-sdk';
-import { Workspaces } from './workspaces.js';
-import { Cards } from './cards.js';
+import { Workspaces } from 'phantom-backend-sdk';
+import { Cards } from 'phantom-backend-sdk';
 import { BackgroundTasks } from 'phantom-backend-sdk';
 import { Presets } from 'phantom-backend-sdk';
-import { Crons } from './crons.js';
+import { Crons } from 'phantom-backend-sdk';
 import { CronEngine } from './crons/engine.js';
 import { setTokenRecorder } from '../core/llm/createAgent.js';
 import { TokenLog } from 'phantom-backend-sdk';
@@ -21,12 +21,12 @@ import { System } from './system.js';
 import { TelegramBotState } from './telegram/botState.js';
 import { TelegramSentMessages } from './telegram/sentMessages.js';
 import { TelegramHandledUpdates } from './telegram/handledUpdates.js';
-import { SettingsEvents } from './api/settingsEvents.js';
+import { SettingsEvents } from 'phantom-backend-sdk';
 import { idleBackupSweep, pressureSweep } from './disk.js';
 import { buildApp, type AppCtx } from './api/app.js';
 import { shutdown as updateShutdown } from './api/updateTask.js';
-import { BoardEvents } from './api/boardEvents.js';
-import { SessionEvents } from './api/sessionEvents.js';
+import { BoardEvents } from 'phantom-backend-sdk';
+import { SessionEvents } from 'phantom-backend-sdk';
 import { BackdoorQueue } from './api/backdoor.js';
 import { makeDocker } from './docker.js';
 import { ContainerManager } from './workspace/container.js';
@@ -35,7 +35,7 @@ import { GitEngine } from './git/engine.js';
 import { autoPush, type AutoPushEvent } from './git/autoPush.js';
 import { autoPull, type AutoPullEvent } from './git/autoPull.js';
 import type { ConflictContext } from './git/autoPush.js';
-import { GIT_CLIENT_ID } from './git/git.js';
+import { GIT_CLIENT_ID } from 'phantom-backend-sdk/git';
 import { SessionDigest } from './notifications/digest.js';
 import { telegramChannel } from './notifications/telegramChannel.js';
 import { openSession, SessionLockedError, type OpenedSession } from '../core/session.js';
@@ -71,7 +71,7 @@ async function main() {
   const pgPool = database.pool;
   const db = database.drizzle;
   const paths = makePaths(env.workspaceRoot);
-  await bootCleanup(paths);
+  await checkoutPool.bootCleanup(paths);
 
   // The event buses, then THE ROW OWNERS over them — one object per table,
   // built once here in dependency order and handed to everything else. No
@@ -316,7 +316,7 @@ async function main() {
   let stopped = false;
   (async () => {
     while (!stopped) {
-      await tick(projects, settings, paths).catch((e) => log.error({ err: errStr(e) }, 'pool tick threw'));
+      await checkoutPool.tick(projects, settings, paths).catch((e) => log.error({ err: errStr(e) }, 'pool tick threw'));
       await idleBackupSweep(projects, sessions, engine).catch((e) => log.error({ err: errStr(e) }, 'idle backup sweep threw'));
       const idleMs = await settings.resolve('container_idle_ms').catch(() => 30 * 60_000);
       await containers.reap(Number(idleMs), idleContainerWorkspaces).catch((e) => log.error({ err: errStr(e) }, 'container reap threw'));

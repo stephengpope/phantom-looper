@@ -13,10 +13,10 @@
 // finishes again, it'll be reported again.
 
 import { expiredHold, type Sessions } from '../sessions.js';
-import type { Cards } from '../cards.js';
+import type { Cards } from 'phantom-backend-sdk';
 import type { Settings, AgentConfig as SdkAgentConfig } from 'phantom-backend-sdk';
 import { oldAgentConfig } from '../agentConfig.js';
-import type { Projects } from '../projects.js';
+import type { Projects } from 'phantom-backend-sdk';
 import { PhantomHelper } from '../../core/llm/helper.js';
 import { lastAssistantFromJsonl } from './transcriptHelper.js';
 import type { NotificationChannel } from './channel.js';

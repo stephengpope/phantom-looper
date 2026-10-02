@@ -14,7 +14,7 @@ import type Docker from 'dockerode';
 import type { ProjectRow } from 'phantom-backend-sdk/schema';
 import type { Settings } from 'phantom-backend-sdk';
 import type { AgentDatabases } from 'phantom-backend-sdk';
-import { resolveAuth } from '../pool/pool.js';
+import { checkoutPool } from 'phantom-backend-sdk';
 import type { Paths } from 'phantom-backend-sdk';
 import type { Images } from '../images.js';
 import { sessionDir } from 'phantom-backend-sdk';
@@ -222,7 +222,7 @@ export class ContainerManager {
   private async credentialEnv(project: ProjectRow | undefined): Promise<string[]> {
     if (!project || !this.opts.settings) return [];
     if (!(await this.opts.settings.resolve('agent_git_credentials', { projectId: project.id }))) return [];
-    const { pat } = await resolveAuth(this.opts.settings, project);
+    const { pat } = await checkoutPool.resolveAuth(this.opts.settings, project);
     if (!pat) {
       log.warn({ project: project.name }, 'agent_git_credentials is on but no PAT resolved — container gets none');
       return [];

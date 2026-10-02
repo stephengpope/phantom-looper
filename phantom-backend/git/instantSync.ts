@@ -45,8 +45,8 @@
 // changed (the settings bus says so) — never a poll.
 import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
 import type { Sessions } from '../sessions.js';
-import type { Workspaces } from '../workspaces.js';
-import type { Projects } from '../projects.js';
+import type { Workspaces } from 'phantom-backend-sdk';
+import type { Projects } from 'phantom-backend-sdk';
 import type { Settings } from 'phantom-backend-sdk';
 import { repoDir, type Paths } from 'phantom-backend-sdk';
 import type { AutoPushResult } from './autoPush.js';
