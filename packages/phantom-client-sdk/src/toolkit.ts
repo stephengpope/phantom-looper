@@ -28,6 +28,10 @@ export interface BuiltTools {
   tools: Record<string, Tool>;
   /** Names from `tools` that change things. Refused while readonly. */
   mutating: readonly string[];
+  /** Names from `tools` whose call ENDS the turn: the result lands, the
+   *  record is written, and the model is not called again (a verdict, a
+   *  hand-off). Absent = none. */
+  terminal?: readonly string[];
 }
 
 export interface ToolKit {
@@ -61,10 +65,15 @@ export class ToolKitSet {
 
   add(kit: ToolKit): void { this.kits.set(kit.name, kit); }
 
-  async resolve(ctx: ToolKitContext): Promise<Record<string, Tool>> {
-    const all: Record<string, Tool> = {};
-    for (const kit of this.kits.values()) Object.assign(all, guardReadonly(await kit.build(ctx), ctx));
-    return all;
+  async resolve(ctx: ToolKitContext): Promise<{ tools: Record<string, Tool>; terminal: string[] }> {
+    const tools: Record<string, Tool> = {};
+    const terminal: string[] = [];
+    for (const kit of this.kits.values()) {
+      const built = await kit.build(ctx);
+      Object.assign(tools, guardReadonly(built, ctx));
+      terminal.push(...(built.terminal ?? []));
+    }
+    return { tools, terminal };
   }
 }
 

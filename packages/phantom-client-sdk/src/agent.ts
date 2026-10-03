@@ -182,7 +182,7 @@ export abstract class Agent {
         try {
           r = await runTurn({
             model: ready.model.model, spec: ready.model.spec, reasoning: ready.model.reasoning,
-            system: ready.system, tools: ready.tools, history: this.session.messages, maxSteps: ready.model.maxSteps,
+            system: ready.system, tools: ready.tools, terminal: ready.terminal, history: this.session.messages, maxSteps: ready.model.maxSteps,
             opening,
             loopSignal: () => this.#nextSignal(),
             pending: () => this.#sent(),
@@ -233,7 +233,7 @@ export abstract class Agent {
    *  it now), plan mode, the model, the prompt as stored, the tools. Null when a stop
    *  landed meanwhile — nothing was sent, nothing recorded, the queue
    *  untouched. */
-  async #prepare(start: TurnStart & { recordMoved: boolean }, signal: AbortSignal): Promise<{ model: ResolvedModel; system: SystemModelMessage[]; tools: Record<string, Tool> } | null> {
+  async #prepare(start: TurnStart & { recordMoved: boolean }, signal: AbortSignal): Promise<{ model: ResolvedModel; system: SystemModelMessage[]; tools: Record<string, Tool>; terminal: string[] } | null> {
     try {
       if (await this.#session.makeCurrent(start.recordMoved, signal)) this.#emit('reloaded', { messages: this.session.messages });
       await this.#flushPartials();
@@ -244,9 +244,9 @@ export abstract class Agent {
       const { messages: system, uncached } = systemMessages(systemPromptBlocks(stored), model.spec.provider);
       if (uncached) this.#handlers.onNotice({ type: 'cache', text: `${uncached} system prompt block(s) beyond the first ${CACHED_BLOCKS} are not cached on ${model.spec.provider}` });
       this.#kits.add(serverToolKit(start.tools));
-      const tools = await this.#kits.resolve({ backend: this.backend, sessionId: this.session.id, projectId: this.session.projectId,
+      const { tools, terminal } = await this.#kits.resolve({ backend: this.backend, sessionId: this.session.id, projectId: this.session.projectId,
         workspaceId: this.session.workspaceId, readonly: () => this.session.planMode });
-      return { model, system, tools };
+      return { model, system, tools, terminal };
     } catch (e) {
       if (signal.aborted) return null;
       throw e;

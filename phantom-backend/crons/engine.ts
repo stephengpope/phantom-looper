@@ -228,15 +228,23 @@ export class CronEngine {
    *  never thrown. Returns the exit code, null when the command never ran. */
   private async runScript(agent: CodingAgent, script: string): Promise<number | null> {
     const cmd = `sh ${shellQuote(script)}`;
-    const envelope = await this.client.callRaw<{ exitCode: number; stdout: string; stderr: string }>('POST', '/tools/bash',
-      { cmd, timeout: SCRIPT_TIMEOUT_MS }, { sessionId: agent.session.id });
-    const exit = envelope.ok ? envelope.data.exitCode : null;
-    const report = envelope.ok
-      ? `exit ${envelope.data.exitCode}\n\n${envelope.data.stdout}${envelope.data.stderr ? `\n--- stderr ---\n${envelope.data.stderr}` : ''}`
-      : `did not finish: ${envelope.error.message}${envelope.error.detail ? `\n\n${JSON.stringify(envelope.error.detail)}` : ''}`;
-    await this.client.call('POST', `/sessions/${agent.session.id}/transcript/append`,
-      { after: 0, deliveryId: `cron-${Date.now()}`, lines: [messageLine(userMessage(cmd)), messageLine(assistantMessage(report))] });
-    return exit;
+    const sessionId = agent.session.id;
+    // The run is a turn like any other: held for its duration (the record is
+    // written under the hold), the hold let go at the end, always.
+    await this.client.call('POST', `/sessions/${sessionId}/turn-start`, { type: 'coding', label: 'cron script' });
+    try {
+      const envelope = await this.client.callRaw<{ exitCode: number; stdout: string; stderr: string }>('POST', '/tools/bash',
+        { cmd, timeout: SCRIPT_TIMEOUT_MS }, { sessionId });
+      const exit = envelope.ok ? envelope.data.exitCode : null;
+      const report = envelope.ok
+        ? `exit ${envelope.data.exitCode}\n\n${envelope.data.stdout}${envelope.data.stderr ? `\n--- stderr ---\n${envelope.data.stderr}` : ''}`
+        : `did not finish: ${envelope.error.message}${envelope.error.detail ? `\n\n${JSON.stringify(envelope.error.detail)}` : ''}`;
+      await this.client.call('POST', `/sessions/${sessionId}/transcript/append`,
+        { after: 0, deliveryId: `cron-${Date.now()}`, lines: [messageLine(userMessage(cmd)), messageLine(assistantMessage(report))] });
+      return exit;
+    } finally {
+      await this.client.call('POST', `/sessions/${sessionId}/turn-ended`).catch(() => {});
+    }
   }
 }
 

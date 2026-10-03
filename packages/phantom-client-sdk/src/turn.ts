@@ -20,7 +20,7 @@
 //                            rest, then an `interrupted` line.
 // A record that fails after retries STOPS the turn (transcript_write_failed).
 // Nothing runs unrecorded.
-import { streamText, stepCountIs, type AssistantContent, type LanguageModel, type ModelMessage, type SystemModelMessage,
+import { streamText, stepCountIs, hasToolCall, type AssistantContent, type LanguageModel, type ModelMessage, type SystemModelMessage,
   type TextStreamPart, type Tool, type ToolCallPart } from 'ai';
 import { PhantomError, asPhantomError } from './errors.js';
 import { isContextTooLong } from './model/languageModel.js';
@@ -52,6 +52,8 @@ export interface TurnInput {
   spec: ModelSpec;
   system: SystemModelMessage[];
   tools: Record<string, Tool>;
+  /** Tools whose call ends the turn after its result lands. */
+  terminal: readonly string[];
   /** The conversation so far, as it stands when the turn starts. The
    *  caller's copy may grow as `record` lands lines; the turn reads it once. */
   history: readonly ModelMessage[];
@@ -158,7 +160,10 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
     instructions: input.system,
     messages: [...history, ...tally.added, ...st.pendingMessages],
     tools: input.tools,
-    stopWhen: input.maxSteps == null ? () => false : stepCountIs(input.maxSteps),
+    stopWhen: [
+      ...(input.maxSteps == null ? [] : [stepCountIs(input.maxSteps)]),
+      ...(input.terminal.length ? [hasToolCall(...input.terminal)] : []),
+    ],
     maxRetries: 0,                       // retries are the fetch wrapper's, never stacked
     abortSignal: abort.signal,
     ...(input.reasoning ? { reasoning: input.reasoning } : {}),

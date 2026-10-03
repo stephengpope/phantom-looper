@@ -46,7 +46,7 @@ export function codingAgentCardKit(card: CardRunCard): ToolKit {
           execute: ({ reason }) => patchCard(ctx, card, { status: 'blocked', blocked_reason: reason, resolution: null }),
         }),
       };
-      return Promise.resolve({ tools, mutating: [] });
+      return Promise.resolve({ tools, mutating: [], terminal: ['kanban_card_block'] });
     },
   };
 }
@@ -96,7 +96,7 @@ export function supervisorCardKit(card: CardRunCard, column: LoopColumn): ToolKi
           execute: ({ ops }) => patchCard(ctx, card, { items: ops }),
         }),
       };
-      return Promise.resolve({ tools, mutating: [] });
+      return Promise.resolve({ tools, mutating: [], terminal: ['kanban_card_move'] });
     },
   };
 }
