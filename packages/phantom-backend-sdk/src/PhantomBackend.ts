@@ -40,6 +40,7 @@ import { refreshWorkState } from './git/workRefresh.js';
 import { TelegramBotState } from './telegram/botState.js';
 import { TelegramSentMessages } from './telegram/sentMessages.js';
 import { TelegramHandledUpdates } from './telegram/handledUpdates.js';
+import { TelegramBot, type TelegramCommand } from './telegram/TelegramBot.js';
 import type { SettingDefinition, AgentTypeDefinition, ToolDefinition, RouteRegistrar } from './doors.js';
 import { Notifications } from './Notifications.js';
 import { SessionTitler, type TitleWriter } from './agents/SessionTitler.js';
@@ -80,6 +81,9 @@ export interface PhantomBackendConfig {
     /** Write a session's title from the selected user messages (a model call). → SessionTitler on billedModel. */
     writeTitle?: TitleWriter;
   };
+  /** The Telegram command menu the bot registers: the global default and
+   *  the authorized chat's (its mode's). The commands are the app's. */
+  telegramCommandMenu?: (state: import('./telegram/botState.js').TelegramBotStateRow) => Promise<{ global: TelegramCommand[]; forChat?: TelegramCommand[] }>;
 }
 
 /** What the backend still reaches user space through at run time. Each
@@ -137,6 +141,7 @@ export class PhantomBackend {
   readonly telegramBotState: TelegramBotState;
   readonly telegramSentMessages: TelegramSentMessages;
   readonly telegramHandledUpdates: TelegramHandledUpdates;
+  readonly telegramBot: TelegramBot;
 
   #stopped = false;
   #loops: Promise<void>[] = [];
@@ -152,6 +157,9 @@ export class PhantomBackend {
     this.workspaceWatcher = built.workspaceWatcher; this.telegramBotState = built.telegramBotState;
     this.telegramSentMessages = built.telegramSentMessages; this.telegramHandledUpdates = built.telegramHandledUpdates;
     this.sessionTitler = new SessionTitler(this.sessions, config.transitional?.writeTitle);
+    this.telegramBot = new TelegramBot({ settings: this.settings, settingsEvents: this.settingsEvents, botState: this.telegramBotState,
+      sentMessages: this.telegramSentMessages, handledUpdates: this.telegramHandledUpdates, paths: this.paths,
+      publicAddress: process.env.PHANTOM_BACKEND_ADDRESS, commandMenu: config.telegramCommandMenu });
     this.httpApi = new HttpApi(this, this.env.apiKey);
     if (config.routes) this.httpApi.addRoutes(config.routes);
   }

@@ -32,7 +32,7 @@ import { phantomTools } from '../../core/llm/tools/workspace.js';
 import { webTools } from '../../core/llm/tools/web.js';
 import { cronTools } from '../../core/llm/tools/crons.js';
 import { usageEvent, type Transcript } from '../../core/llm/transcript.js';
-import type { TelegramSink } from 'phantom-backend-sdk';
+import type { ReplyBubble } from 'phantom-backend-sdk';
 
 const BASE = 'http://looper/api';
 /** The bot's session-lock id — one declaration, the engine imports it. */
@@ -204,7 +204,7 @@ export interface AssistantTurnResult {
  *  ROW's model (the pin, frozen after its first turn), and its file tools
  *  open its workspace. */
 export async function runAssistantTurn(
-  deps: AssistantDeps, history: ModelMessage[], message: string, sink: TelegramSink,
+  deps: AssistantDeps, history: ModelMessage[], message: string, sink: ReplyBubble,
   ctx: AssistantCtx, abortSignal: AbortSignal | undefined, transcript: Transcript | undefined,
   own: SessionRow,
 ): Promise<AssistantTurnResult> {
@@ -253,7 +253,7 @@ export async function runAssistantTurn(
       const p = part as Record<string, unknown>;
       if (p.type === 'error' && failure === undefined) failure = p.error;
       if (p.type === 'text-delta' && typeof p.text === 'string') text += p.text;
-      sink.part(p);
+      sink.appendPart(p);
     }
     if (failure !== undefined) {
       // The SDK's r.response rejects with a generic "No output generated" —
@@ -266,9 +266,9 @@ export async function runAssistantTurn(
     history.push(user, ...(resp.messages as ModelMessage[]));
   } catch (e) {
     // History is untouched — the user message was never added.
-    await sink.dispose();
+    await sink.discard();
     throw e;
   }
-  const said = await sink.done(text);
+  const said = await sink.finish(text);
   return { text, said, usage };
 }

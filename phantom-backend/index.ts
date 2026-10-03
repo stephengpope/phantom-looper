@@ -23,7 +23,7 @@ import { toCodingAgent } from '../core/prompts/autoPush/wiring.js';
 import { serializeTranscript } from '../core/llm/transcript.js';
 import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
 import { LooperEngine } from './looper/engine.js';
-import { TelegramEngine } from './telegram/engine.js';
+import { TelegramAssistantBot } from './telegram/TelegramAssistantBot.js';
 
 const log = logger('boot');
 /** Fake base URL for in-process API calls via injectFetch — the host part is
@@ -294,8 +294,8 @@ async function main() {
   // URL is always https + PHANTOM_BACKEND_ADDRESS (the same fact the https
   // profile runs on); with no address, telegram stays off. Reconcile at boot
   // re-registers a stale webhook and pushes the command menu.
-  const telegram = new TelegramEngine({
-    botState: telegramBotState, sentMessages: telegramSentMessages, handledUpdates: telegramHandledUpdates,
+  const telegram = new TelegramAssistantBot({
+    bot: backend.telegramBot, botState: telegramBotState, sentMessages: telegramSentMessages, handledUpdates: telegramHandledUpdates,
     settings, agentConfig, modelCatalog, sessions, cards, projects, presets, system, paths, app, apiKey: env.apiKey,
     events, settingsEvents, foreground: backend.foregroundCommands, loopsRunning: () => looper.runningCount(), backdoor,
     sessionEvents, publicAddress: process.env.PHANTOM_BACKEND_ADDRESS,

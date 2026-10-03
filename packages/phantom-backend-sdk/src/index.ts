@@ -65,7 +65,8 @@ export { fill, withCurrentDate, firstLineOf } from './prompt/template.js';
 export { SKILLS_LIST, SECRETS_LIST, GITHUB_TOKEN, AGENT_DATABASE, AGENT_DATABASE_SHARED, TIME_DATE } from './prompt/serverBlocks.js';
 
 // telegram plumbing, notifications, the queue
-export { titled, ALLOWED_UPDATES, MAX_OUTBOUND_BYTES, type SendKind } from './telegram/TelegramBot.js';
+export { TelegramApi, titled, ALLOWED_UPDATES, MAX_OUTBOUND_BYTES, type SendKind } from './telegram/TelegramApi.js';
+export { collectFiles, type TelegramBotDeps, type TelegramCommand, type WebhookStatus, type MessageHandler, type ReactionHandler, type ButtonHandler, type ReplyBubble } from './telegram/TelegramBot.js';
 export { toTelegram, splitFormatted, truncateFormatted, clampEntities, type Formatted, type Entity as TelegramEntity } from './telegram/entities.js';
 export { collectDeliverables, extractMedia, extractBarePaths, maskJsonStringMedia, maskProtectedSpans, validateDeliveryPath, deliveryKind, MEDIA_DELIVERY_EXTS, type Deliverable, type Media } from './telegram/mediaTags.js';
 export { makeTelegramSink, type TelegramSink, type DeliverConfig } from './telegram/sink.js';

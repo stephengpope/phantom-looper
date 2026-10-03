@@ -20,10 +20,10 @@
 // edited in place — a line per step as it happens, the result on the last line.
 
 import { CodingAgent } from '../../core/agents/coding.js';
-import type { TelegramBot } from 'phantom-backend-sdk';
+import type { TelegramApi } from 'phantom-backend-sdk';
 import { titled } from 'phantom-backend-sdk';
 import { toTelegram } from 'phantom-backend-sdk';
-import type { TelegramEngine } from './engine.js';
+import type { TelegramAssistantBot } from './TelegramAssistantBot.js';
 import { MODE_MESSAGE, type TelegramMode } from 'phantom-backend-sdk';
 import { PROVIDERS } from '../../core/llm/createAgent.js';
 import { hasCatalog } from 'phantom-backend-sdk';
@@ -84,7 +84,7 @@ const presetList = new Map<number, string[]>();
 
 /** Handle a slash command. `text` starts with '/'. */
 export async function handleCommand(
-  engine: TelegramEngine, client: TelegramBot, dm: number, text: string,
+  engine: TelegramAssistantBot, client: TelegramApi, dm: number, text: string,
 ): Promise<void> {
   const [raw, ...rest] = text.slice(1).trim().split(/\s+/);
   const cmd = raw.toLowerCase().split('@')[0];
@@ -479,7 +479,7 @@ export async function handleCommand(
  *  client that hands back no message id (or an edit that fails — an unchanged
  *  body, a deleted message) falls back to a fresh message for the result, so
  *  the outcome is never lost. */
-async function stepBubble(client: TelegramBot, dm: number, title: string) {
+async function stepBubble(client: TelegramApi, dm: number, title: string) {
   const steps: string[] = [];
   const m = await client.sendMessage(dm, title).catch(() => null);
   const id: number | null = m?.message_id ?? null;
@@ -539,7 +539,7 @@ function presetSummary(values: Record<string, unknown>): string {
   return bits.length ? ` — ${bits.join(' / ')}` : '';
 }
 
-const projectRow = (engine: TelegramEngine, id: string) => engine.projects.get(id);
+const projectRow = (engine: TelegramAssistantBot, id: string) => engine.projects.get(id);
 
 /** The first line of a message, clipped — enough to recognise a request. */
 function oneLine(text: string, max = 120): string {
@@ -548,7 +548,7 @@ function oneLine(text: string, max = 120): string {
 }
 
 /** The session row, with `locked` computed here as the routes compute it. */
-async function sessionRow(engine: TelegramEngine, id: string) {
+async function sessionRow(engine: TelegramAssistantBot, id: string) {
   const s = await engine.sessions.get(id);
   return s ? { ...s, locked: isHeld(s, Date.now()) } : null;
 }

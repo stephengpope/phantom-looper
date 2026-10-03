@@ -3,7 +3,7 @@
 // channel created at boot picks up config changes without a restart.
 
 import type { NotificationChannel } from '../Notifications.js';
-import { TelegramBot } from './TelegramBot.js';
+import { TelegramApi } from './TelegramApi.js';
 import type { Settings } from '../storage/Settings.js';
 import { logger } from '../lib/log.js';
 
@@ -22,7 +22,7 @@ export function telegramChannel(settings: Settings): NotificationChannel {
         if (!dm || !Number.isFinite(dm)) return;
         const token = (await settings.credential('telegram_bot_token')) ?? '';
         if (!token) return;
-        await new TelegramBot(token).sendMarkdown(dm, message);
+        await new TelegramApi(token).sendMarkdown(dm, message);
       } catch (e) {
         log.warn({ err: (e as Error).message }, 'telegram notification failed');
       }

@@ -26,7 +26,7 @@ export interface AppExtras {
   updateTriggerDir?: string;
   /** Test seam: the fetch MODEL calls use. Goes with core/llm (§7). */
   modelFetch?: typeof fetch;
-  /** The Telegram engine — set after listen. → TelegramBot.onUpdate (§6). */
+  /** The Telegram engine — set after listen. → TelegramApi.onUpdate (§6). */
   telegram?: {
     handleUpdate(secretHeader: string, update: unknown): Promise<number>;
     reconcile(): Promise<void>;

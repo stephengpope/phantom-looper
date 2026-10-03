@@ -19,7 +19,7 @@
 
 import crypto from 'node:crypto';
 
-/** The slice of TelegramBot this needs — injected so a test can fake it. */
+/** The slice of TelegramApi this needs — injected so a test can fake it. */
 export interface ApprovalClient {
   sendMessage(chatId: number, text: string, opts?: { replyMarkup?: unknown }): Promise<{ message_id?: number } | undefined>;
   editMessageText(chatId: number, messageId: number, text: string): Promise<unknown>;
@@ -93,6 +93,9 @@ export class Approvals {
       }).then((m) => { entry.messageId = m?.message_id ?? null; }, () => done(false));
     });
   }
+
+  /** Is this tap one of ours (an approval button)? */
+  static isApprovalCallback(data: string | undefined): boolean { return String(data ?? '').startsWith(`${PREFIX}:`); }
 
   /** A button tap. Answers the query (mandatory — the client spins until we
    *  do), then resolves the ask it belongs to. A tap on a stale bubble says so. */

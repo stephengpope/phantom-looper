@@ -1,248 +1,455 @@
-// Minimal Telegram Bot API client — raw fetch, no library. One 429 retry
-// honoring retry_after. Chunking for the 4096 limit lives in `entities.ts`
-// (`splitFormatted`), because a chunk boundary has to cut the formatting spans
-// as well as the text. Ported from ../shockwave (api/src/telegram/client.ts);
-// the PEM-upload webhook path is dropped — the address here is always a real
-// hostname (PHANTOM_BACKEND_ADDRESS), never a bare-IP self-signed cert.
-
-import fs from 'node:fs/promises';
+// TelegramBot — everything that lets an app talk to a person on Telegram,
+// up to "here is a verified message from you" and from "here is the reply"
+// onward. The link (webhook, secret, menu), inbound verification and
+// de-duplication, album grouping, which session a bubble belongs to, the
+// approval gate, voice in and out, attachments into a session's files, and
+// delivery — a streamed reply bubble, a message tied to a session. What to
+// DO with a message — modes, commands, which turn to run — is the app's: it
+// hangs off onMessageReceived / onReactionReceived / onButtonTapped.
+//
+// The bot talks to ONE person: `telegram_authorized_user`. The webhook URL
+// is never a setting — always https + the public address.
+import crypto from 'node:crypto';
 import path from 'node:path';
-import type { Entity } from './entities.js';
-import { toTelegram, splitFormatted } from './entities.js';
-import { connectFetch } from './connect.js';
+import { TelegramApi, ALLOWED_UPDATES } from './TelegramApi.js';
+import { makeTelegramSink, type DeliverConfig, type TelegramSink } from './sink.js';
+import { startWaitingBubble } from './bubble.js';
+import { transcribeVoice, speakVoice, splitForSpeech, SPEAK_MAX_CHARS, type Transcription } from './TelegramVoice.js';
+import { writeAttachment, composeMessage, MAX_INBOUND_BYTES, type StoredAttachment } from './TelegramAttachments.js';
+import { Approvals, type Ask } from './TelegramApprovals.js';
+import type { TelegramBotState, TelegramBotStateRow } from './botState.js';
+import type { TelegramSentMessages } from './sentMessages.js';
+import type { TelegramHandledUpdates } from './handledUpdates.js';
+import type { Settings } from '../storage/Settings.js';
+import type { SettingsEvents } from '../agents/SettingsEvents.js';
+import { timingSafeEqualStr } from '../lib/crypto.js';
+import { sessionDir, type Paths } from '../lib/paths.js';
+import { logger, errStr } from '../lib/log.js';
 
-/** Telegram's ceiling for anything a bot uploads. Checked before the read, so
- *  an oversize send is reported as itself, not as a generic API failure. */
-export const MAX_OUTBOUND_BYTES = 50 * 1024 * 1024;
+const log = logger('telegram');
 
-/** A header + message bubble: the header line, a blank line, the content.
- *  The ONE way titled status bubbles are composed — title and content are
- *  separate arguments so the blank line under a header is structural, never
- *  remembered. NOT for the agent's streamed replies (those have no header)
- *  and NOT for a heading that spans two lines of its own (the approval
- *  bubble's kind + subject is ONE heading — its message already follows a
- *  blank line). */
-export function titled(title: string, body: string): string {
-  return `${title}\n\n${body}`;
+const REACT_TRANSCRIBING = '\u{270D}';   // ✍ writing hand, no U+FE0F — replaced by 👍 when heard
+const REACT_HEARD = '\u{1F44D}';         // 👍 — transcription done
+const REACT_SPEAK = '\u{1F92C}';         // 🤬 — the user's "read this back" gesture
+
+// What the user reads when a voice note could not be heard, by reason.
+const NOT_HEARD: Record<Extract<Transcription, { error: string }>['error'], string> = {
+  no_key: '🎤 Voice transcription needs a Deepgram key — add one in /keys.',
+  unreachable: "🎤 Couldn't reach Deepgram — send that again in a moment.",
+  vendor: "🎤 Deepgram couldn't transcribe that — send it again.",
+};
+
+const MEDIA_FIELDS: Array<{ field: string; kind?: 'image' | 'video' | 'audio' }> = [
+  { field: 'photo', kind: 'image' }, { field: 'document' },
+  { field: 'video', kind: 'video' }, { field: 'video_note', kind: 'video' },
+  { field: 'animation', kind: 'video' }, { field: 'audio', kind: 'audio' },
+];
+/** The file-bearing fields of a message, each resolved to its largest size. */
+export function collectFiles(msg: any): Array<{ file: any; kind?: 'image' | 'video' | 'audio' }> {
+  const out: Array<{ file: any; kind?: 'image' | 'video' | 'audio' }> = [];
+  for (const { field, kind } of MEDIA_FIELDS) {
+    const v = msg?.[field];
+    if (!v) continue;
+    out.push({ file: Array.isArray(v) ? v[v.length - 1] : v, kind });
+  }
+  return out;
+}
+function hasEmoji(list: any, emoji: string): boolean {
+  return Array.isArray(list) && list.some((r) => r?.type === 'emoji' && r?.emoji === emoji);
 }
 
-/** Which Telegram method a file goes out through. */
-export type SendKind = 'photo' | 'video' | 'voice' | 'audio' | 'document';
+export interface TelegramBotDeps {
+  settings: Settings;
+  settingsEvents?: SettingsEvents;
+  botState: TelegramBotState;
+  sentMessages: TelegramSentMessages;
+  handledUpdates: TelegramHandledUpdates;
+  paths: Paths;
+  /** https://PHANTOM_BACKEND_ADDRESS — the only source of the webhook URL. */
+  publicAddress?: string;
+  /** The command menu to register with Telegram (the app's commands): the
+   *  global default, and the authorized chat's for its current mode. */
+  commandMenu?: (state: TelegramBotStateRow) => Promise<{ global: TelegramCommand[]; forChat?: TelegramCommand[] }>;
+}
+export interface TelegramCommand { command: string; description: string }
 
-const KIND_METHOD: Record<SendKind, { method: string; field: string }> = {
-  photo: { method: 'sendPhoto', field: 'photo' },
-  video: { method: 'sendVideo', field: 'video' },
-  voice: { method: 'sendVoice', field: 'voice' },
-  audio: { method: 'sendAudio', field: 'audio' },
-  document: { method: 'sendDocument', field: 'document' },
-};
+/** What the webhook registration looks like right now. */
+export interface WebhookStatus { registered: boolean; url: string | null; botUsername: string | null }
 
-// What the webhook subscribes to. Telegram sends ONLY the listed kinds and
-// keeps the list until the next setWebhook — the boot reconcile re-registers
-// when a kind is missing. `message_reaction` is the speak-it-back gesture;
-// `callback_query` is a tap on an approval bubble's button (approvals.ts).
-export const ALLOWED_UPDATES = ['message', 'message_reaction', 'callback_query'];
+/** A message from the authorized user, verified and de-duplicated; an album
+ *  arrives as one call with every photo in `messages`. */
+export type MessageHandler = (chatId: number, messages: any[]) => Promise<void>;
+export type ReactionHandler = (chatId: number, reaction: any) => Promise<void>;
+/** A button tap the bot did not answer itself (approvals are). */
+export type ButtonHandler = (chatId: number, query: { id: string; data: string | undefined }, api: TelegramApi) => Promise<void>;
 
-type TgResponse = {
-  ok?: boolean;
-  result?: unknown;
-  description?: string;
-  parameters?: { retry_after?: number };
-};
-
-async function readEnvelope(res: Response): Promise<TgResponse> {
-  return (await res.json().catch(() => ({}))) as TgResponse;
+/** A reply streamed into one chat as it is written. */
+export interface ReplyBubble {
+  appendPart(part: Record<string, unknown>): void;
+  /** The reply is complete; answers what was said (in voice mode the text was withheld, so it comes back here to be spoken). */
+  finish(finalText: string): Promise<string>;
+  discard(): void;
 }
 
 export class TelegramBot {
-  /**
-   * `onSent` fires for every text bubble this client writes — sent or edited —
-   * with the message number and what it now says. That is what makes ANY of
-   * the bot's messages point-at-able later (a reply switches into its
-   * conversation, a reaction reads it aloud): the record exists because the
-   * message went out, not because the code that sent it remembered to save
-   * one. NOT fired for file sends — a voice bubble's text is the spoken
-   * script, which only the caller holds. `onDeleted` is the same rule pointed
-   * the other way. Injected, never imported: this file keeps no db access.
-   */
-  constructor(
-    private token: string,
-    private onSent?: (messageId: number, text: string) => void,
-    private onDeleted?: (messageId: number) => void,
-  ) {}
+  readonly #approvals = new Approvals();
+  readonly #albums = new Map<string, { msgs: any[]; timer: NodeJS.Timeout }>();
+  #onMessage: MessageHandler | null = null;
+  #onReaction: ReactionHandler | null = null;
+  #onButton: ButtonHandler | null = null;
 
-  async call(method: string, body: Record<string, unknown> = {}): Promise<any> {
-    const url = `https://api.telegram.org/bot${this.token}/${method}`;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const json = await readEnvelope(res);
-      if (res.ok && json.ok) return json.result;
-      if (res.status === 429 && attempt === 0) {
-        const wait = ((json.parameters?.retry_after ?? 1) * 1000) + 200;
-        await new Promise((r) => setTimeout(r, wait));
+  constructor(private readonly deps: TelegramBotDeps) {
+    deps.settingsEvents?.subscribe((change) => {
+      if (change.keys.some((key) => key === 'telegram_enabled' || key === 'telegram_authorized_user' || key === 'telegram_bot_token')) void this.reconcileLink();
+    });
+  }
+
+  // ── the link ──────────────────────────────────────────────────────────
+
+  /** The webhook URL — never a setting: always https + the public address. */
+  webhookUrl(): string | null {
+    const addr = this.deps.publicAddress?.trim();
+    if (!addr) return null;
+    const host = addr.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    return `https://${host}/api/telegram/webhook`;
+  }
+
+  async token(): Promise<string> {
+    return (await this.deps.settings.credential('telegram_bot_token')) ?? '';
+  }
+
+  /** The one chat the bot talks to, or null when none is set. */
+  async authorizedUser(): Promise<number | null> {
+    const dm = Number(await this.deps.settings.resolve('telegram_authorized_user') ?? '');
+    return Number.isFinite(dm) && dm ? dm : null;
+  }
+
+  async isAuthorizedUser(userId: unknown): Promise<boolean> {
+    const dm = await this.authorizedUser();
+    return dm !== null && String(userId) === String(dm);
+  }
+
+  async webhookStatus(): Promise<WebhookStatus> {
+    const bot = await this.deps.botState.read();
+    return { registered: !!bot.webhookUrl, url: bot.webhookUrl ?? null, botUsername: bot.botUsername ?? null };
+  }
+
+  /** Register the webhook (minting a secret if needed) and push the command
+   *  menu. Only re-registers when the URL or the subscription drifted
+   *  (dropPending:false keeps queued messages). */
+  async registerWebhook(): Promise<void> {
+    const token = await this.token();
+    const url = this.webhookUrl();
+    if (!token || !url) return;
+    const bot = await this.deps.botState.read();
+    const api = new TelegramApi(token);
+    const me = await api.getMe().catch((e: Error) => { log.warn({ err: e.message }, 'getMe failed — the bot has no name this boot'); return null; });
+    const secret = bot.webhookSecret ?? crypto.randomBytes(32).toString('hex');
+    const info = await api.getWebhookInfo().catch((e: Error) => { log.warn({ err: e.message }, 'getWebhookInfo failed — re-registering'); return null; });
+    const registered = info?.url === url
+      && ALLOWED_UPDATES.every((u) => (info?.allowed_updates ?? []).includes(u));
+    if (!registered || bot.webhookSecret !== secret) {
+      await api.setWebhook(url, secret, { dropPending: false });
+      await this.deps.botState.saveRegistration(secret, url, me?.username ?? null);
+      log.info({ url }, 'telegram webhook registered');
+    }
+    // The menu lives in code, so a bot connected before a command existed
+    // still gets it; set on every boot so a restart never leaves a stale one.
+    const menu = await this.deps.commandMenu?.(bot);
+    if (menu) {
+      await api.setMyCommands(menu.global).catch(() => {});
+      const dm = await this.authorizedUser();
+      if (dm && menu.forChat) await api.setMyCommands(menu.forChat, dm).catch(() => {});
+    }
+  }
+
+  /** Tear the webhook down and forget the registration. */
+  async unregisterWebhook(): Promise<void> {
+    const bot = await this.deps.botState.read();
+    if (!bot.webhookUrl) return;
+    const token = await this.token();
+    if (token) await new TelegramApi(token).deleteWebhook().catch(() => {});
+    await this.deps.botState.clearRegistration();
+  }
+
+  /** The link as the settings say: enabled + token + address → registered;
+   *  otherwise torn down. Run at boot and on every telegram setting write. */
+  async reconcileLink(): Promise<void> {
+    try {
+      const enabled = await this.deps.settings.resolve('telegram_enabled') === true;
+      const token = await this.token();
+      const url = this.webhookUrl();
+      if (!enabled || !token || !url) {
+        const bot = await this.deps.botState.read();
+        if (bot.webhookUrl) {
+          await this.unregisterWebhook();
+          log.info({ enabled, hasToken: !!token, hasUrl: !!url }, 'telegram disabled — webhook torn down');
+        }
+        return;
+      }
+      await this.registerWebhook();
+    } catch (e) {
+      log.warn({ err: errStr(e) }, 'telegram reconcile failed');
+    }
+  }
+
+  /** Push a command menu: the global default, or one chat's. */
+  async setCommandMenu(commands: TelegramCommand[], chatId?: number): Promise<void> {
+    const api = new TelegramApi(await this.token());
+    await api.setMyCommands(commands, chatId).catch(() => {});
+  }
+
+  // ── the client for a chat ─────────────────────────────────────────────
+
+  /** A Bot API client that records every sent and deleted message against
+   *  the session it belongs to, so a reply or reaction to a bubble can find
+   *  its way back. `sessionId` is a function so it can track a pointer that
+   *  moves mid-turn; null = not a session's. */
+  clientForChat(token: string, chatId: number, sessionId: () => string | null): TelegramApi {
+    return new TelegramApi(token,
+      (id, text) => { this.deps.sentMessages.record(chatId, id, text, sessionId()).catch(
+        (e) => log.warn({ err: errStr(e) }, 'sent message not recorded')); },
+      (id) => { this.deps.sentMessages.delete(chatId, id).catch(
+        (e) => log.warn({ err: errStr(e) }, 'sent message not forgotten')); });
+  }
+
+  // ── inbound ───────────────────────────────────────────────────────────
+
+  onMessageReceived(handler: MessageHandler): void { this.#onMessage = handler; }
+  onReactionReceived(handler: ReactionHandler): void { this.#onReaction = handler; }
+  onButtonTapped(handler: ButtonHandler): void { this.#onButton = handler; }
+
+  /** The webhook's body. Fast-ack, then run out-of-band. Answers the HTTP
+   *  status: 200 for anything handled or ignored, 403 for a bad secret. A
+   *  settings read that fails THROWS (the route answers 500 and Telegram
+   *  retries) instead of the message being dropped as "disabled". */
+  async receiveUpdate(secretHeader: string, update: any): Promise<number> {
+    const bot = await this.deps.botState.read();
+    if (await this.deps.settings.resolve('telegram_enabled') !== true) return 200;
+    if (!bot.webhookSecret || !timingSafeEqualStr(secretHeader, bot.webhookSecret)) return 403;
+    const dm = await this.authorizedUser();
+    if (!dm) return 200;
+    const authorized = String(dm);
+
+    const reaction = update.message_reaction;
+    if (reaction) {
+      if (String(reaction.user?.id) !== authorized) return 200;
+      if (!(await this.deps.handledUpdates.markHandled(update.update_id))) return 200;
+      // 🤬 on a bubble: read it back aloud. The bot's own gesture; the app hears the rest.
+      if (hasEmoji(reaction.new_reaction, REACT_SPEAK) && !hasEmoji(reaction.old_reaction, REACT_SPEAK)) {
+        this.speakRepliedMessage(reaction, dm).catch((e) => log.warn({ err: errStr(e) }, 'speak-reacted failed'));
+      } else {
+        this.#onReaction?.(dm, reaction).catch((e) => log.warn({ err: errStr(e) }, 'reaction handler failed'));
+      }
+      return 200;
+    }
+
+    const tap = update.callback_query;
+    if (tap) {
+      if (String(tap.from?.id) !== authorized) return 200;
+      if (!(await this.deps.handledUpdates.markHandled(update.update_id))) return 200;
+      const api = new TelegramApi(await this.token());
+      const query = { id: String(tap.id), data: tap.data as string | undefined };
+      if (Approvals.isApprovalCallback(query.data)) {
+        this.#approvals.handleCallback(api, dm, query).catch((e) => log.warn({ err: errStr(e) }, 'approval tap failed'));
+      } else {
+        this.#onButton?.(dm, query, api).catch((e) => log.warn({ err: errStr(e) }, 'button handler failed'));
+      }
+      return 200;
+    }
+
+    const msg = update.message;
+    if (!msg || String(msg.from?.id) !== authorized) return 200;
+    if (!(await this.deps.handledUpdates.markHandled(update.update_id))) return 200;
+
+    // An album (several photos sent at once) arrives as SEPARATE updates
+    // sharing a media_group_id. Collect them briefly and hand over once, so
+    // the app sees all photos together instead of each as its own task.
+    const groupId = msg.media_group_id ? String(msg.media_group_id) : null;
+    const deliver = (msgs: any[]) => this.#onMessage?.(dm, msgs).catch((e) => log.error({ err: errStr(e) }, 'telegram message handler failed'));
+    if (groupId) {
+      const entry = this.#albums.get(groupId) ?? { msgs: [] as any[], timer: null as unknown as NodeJS.Timeout };
+      entry.msgs.push(msg);
+      clearTimeout(entry.timer);
+      entry.timer = setTimeout(() => { this.#albums.delete(groupId); void deliver(entry.msgs); }, 800);
+      this.#albums.set(groupId, entry);
+      return 200;
+    }
+    void deliver([msg]);
+    return 200;
+  }
+
+  /** The session a replied-to bubble belongs to: a session's id, null for a
+   *  bubble that was not a session's (the assistant's), undefined when the
+   *  message is not a reply to one of ours. */
+  async sessionOfRepliedMessage(chatId: number, msg: any): Promise<string | null | undefined> {
+    const replied = msg.reply_to_message;
+    if (!replied?.message_id) return undefined;
+    const stored = await this.deps.sentMessages.get(chatId, Number(replied.message_id));
+    return stored ? stored.sessionId : undefined;
+  }
+
+  // ── approvals ─────────────────────────────────────────────────────────
+
+  /** A gated tool asks the user yes/no and waits. */
+  askForApproval(api: TelegramApi, chatId: number, ask: Ask, signal?: AbortSignal): Promise<boolean> {
+    return this.#approvals.request(api, chatId, ask, signal);
+  }
+  /** A typed message while a question stands: the exact word answers it. True when it did. */
+  answerApprovalByText(chatId: number, text: string): boolean { return this.#approvals.handleText(chatId, text); }
+
+  // ── voice in, files in ────────────────────────────────────────────────
+
+  /** Transcribe an inbound voice or video note: download, react, transcribe.
+   *  The text, or null when it couldn't be heard (the user was told why). */
+  async transcribeVoiceNote(api: TelegramApi, chatId: number, msg: any, file: { file_id: string; file_size?: number }): Promise<string | null> {
+    const react = (emoji?: string) => api.setMessageReaction(chatId, msg.message_id, emoji).catch(() => {});
+    if (file.file_size && file.file_size > MAX_INBOUND_BYTES) {
+      await api.sendMessage(chatId, "⚠️ That voice note is over Telegram's 20 MB limit for bots.");
+      return null;
+    }
+    const apiKey = await this.deps.settings.credential('deepgram_api_key');
+    if (!apiKey) { await api.sendMessage(chatId, NOT_HEARD.no_key); return null; }
+    const [, audio] = await Promise.all([react(REACT_TRANSCRIBING), api.downloadFile(file.file_id)])
+      .catch(async (e) => { await react(); throw e; });
+    const { voice_stt_model: sttModel, telegram_transcript_echo: echo } =
+      await this.deps.settings.resolveMany(['voice_stt_model', 'telegram_transcript_echo']);
+    const heard = await transcribeVoice(apiKey, audio, String(sttModel));
+    if ('error' in heard) { await react(); await api.sendMessage(chatId, NOT_HEARD[heard.error]); return null; }
+    if (!heard.text) { await react(); await api.sendMessage(chatId, "🎤 I couldn't make out any speech in that."); return null; }
+    await react(REACT_HEARD);
+    if (echo === true) await api.sendMessage(chatId, `🎤 "${heard.text}"`);
+    return heard.text;
+  }
+
+  /** Save the files of these messages into the session's scratch pad, and
+   *  answer the line the agent is told (the user's text with the files
+   *  described). Null when nothing was stored. */
+  async saveAttachmentsToSession(api: TelegramApi, chatId: number, msgs: any[], sessionId: string, typed: string): Promise<string | null> {
+    const files = msgs.flatMap(collectFiles);
+    if (!files.length) return null;
+    const scratch = sessionDir(this.deps.paths, sessionId) + '/scratch';
+    const stored: StoredAttachment[] = [];
+    for (const { file, kind } of files) {
+      if (file.file_size && file.file_size > MAX_INBOUND_BYTES) {
+        await api.sendMessage(chatId, `⚠️ "${file.file_name ?? 'that file'}" is over Telegram's 20 MB limit.`);
         continue;
       }
-      throw new Error(`telegram ${method} failed: ${json.description || res.status}`);
+      const a = await writeAttachment(scratch, await api.downloadFile(file.file_id),
+        { filename: file.file_name, mimeType: file.mime_type, defaultKind: kind });
+      if (a) stored.push(a);
     }
+    if (!stored.length) return null;
+    return composeMessage(stored, typed);
   }
 
-  getMe() { return this.call('getMe'); }
+  // ── outbound ──────────────────────────────────────────────────────────
 
-  /** `dropPending: false` is the boot re-register path — its whole point is a
-   *  fresh allowed_updates list, and dropping the queue there would lose
-   *  messages sent while the server was down. */
-  setWebhook(url: string, secretToken: string, opts: { dropPending?: boolean } = {}) {
-    return this.call('setWebhook', {
-      url, secret_token: secretToken, allowed_updates: ALLOWED_UPDATES,
-      drop_pending_updates: opts.dropPending !== false,
-    });
-  }
-  deleteWebhook() { return this.call('deleteWebhook', { drop_pending_updates: true }); }
-  getWebhookInfo() { return this.call('getWebhookInfo'); }
-
-  /** The command menu — global, or scoped to one chat (how the menu follows
-   *  the mode: assistant-mode commands at home, code-mode commands in a
-   *  session). The menu is a HINT (clients cache it a few seconds); the
-   *  handlers answer every command correctly regardless. */
-  setMyCommands(commands: Array<{ command: string; description: string }>, chatId?: number) {
-    return this.call('setMyCommands', {
-      commands,
-      ...(chatId != null ? { scope: { type: 'chat', chat_id: chatId } } : {}),
-    });
+  /** File delivery for a session's reply: map the agent's /workspace/...
+   *  paths to host files under the session's work dir, and confine delivery there. */
+  deliveryFor(sessionId: string): DeliverConfig {
+    const root = sessionDir(this.deps.paths, sessionId);   // host view of /workspace
+    return { roots: [root], toHost: (p) => p.startsWith('/workspace') ? path.join(root, p.slice('/workspace'.length)) : p };
   }
 
-  /** Markdown out, the normal way: formatted to entities and chunked under
-   *  the 4096 ceiling, each chunk a sendMessage. A keyboard rides the LAST
-   *  chunk — the question it answers ends there. Compose the text first
-   *  (titled() for a header + message bubble); this never re-shapes it. */
-  async sendMarkdown(chatId: number, md: string,
-    opts: { replyToMessageId?: number; replyMarkup?: unknown } = {}) {
-    const chunks = splitFormatted(toTelegram(md));
-    let last;
+  /** The reply mode, read where a reply is about to be sent. */
+  async voiceOnly(): Promise<boolean> {
+    return String(await this.deps.settings.resolve('telegram_reply_mode')) === 'voice';
+  }
+
+  /** A reply bubble for one chat: a "…" placeholder, the text edited in
+   *  place as it streams, files the agent named delivered at the end. */
+  async startReplyBubble(api: TelegramApi, chatId: number, sessionId: string | null, options: { bubble?: boolean } = {}): Promise<ReplyBubble> {
+    const sink: TelegramSink = makeTelegramSink(api, chatId, sessionId ? this.deliveryFor(sessionId) : undefined,
+      { voiceOnly: await this.voiceOnly(), ...(options.bubble === false ? { bubble: false } : {}) });
+    return { appendPart: (part) => sink.part(part), finish: (text) => sink.done(text), discard: () => sink.dispose() };
+  }
+
+  /** One deliberate message from a session (the send_message tool), through
+   *  the same sink a reply takes so it arrives exactly as a reply would, and
+   *  recorded against the session so a reply to it enters that session.
+   *  Throws with the reason when the bot is off or unconfigured. */
+  async sendMessageForSession(sessionId: string, text: string): Promise<void> {
+    if (!text.trim()) throw new Error('empty message');
+    if (await this.deps.settings.resolve('telegram_enabled') !== true) throw new Error('telegram is off (/settings)');
+    const dm = await this.authorizedUser();
+    if (!dm) throw new Error('no telegram_authorized_user set (/settings)');
+    const token = await this.token();
+    if (!token) throw new Error('no telegram_bot_token stored (/keys)');
+    const api = this.clientForChat(token, dm, () => sessionId);
+    const bubble = await this.startReplyBubble(api, dm, sessionId, { bubble: false });
+    const said = await bubble.finish(text);
+    await this.speakText(api, dm, said);
+  }
+
+  /** A plain message to the authorized user, not a session's (the digest, an alert). */
+  async sendText(chatId: number, text: string, options?: { replyToMessageId?: number }): Promise<void> {
+    const api = new TelegramApi(await this.token());
+    await api.sendMessage(chatId, text, options);
+  }
+
+  /** Speak the reply when the mode asks. Long replies are split so audio
+   *  starts in under a second — two synthesis requests fly in parallel,
+   *  sent in order, dots between pieces. In `voice` mode the sink withheld
+   *  the text, so a failed synthesis falls back to sending it. `typing` is
+   *  the turn's indicator loop, swapped to record_voice while synthesis runs. */
+  async speakText(api: TelegramApi, chatId: number, text?: string, typing?: { set(a: string): void }): Promise<void> {
+    const mode = String(await this.deps.settings.resolve('telegram_reply_mode'));
+    if (mode !== 'voice' && mode !== 'both') return;
+    const say = (text ?? '').trim();
+    if (!say) return;
+    const apiKey = await this.deps.settings.credential('deepgram_api_key');
+    if (!apiKey) {
+      if (mode === 'voice') await api.sendMarkdown(chatId, say).catch(() => {});
+      return;
+    }
+    typing?.set('record_voice');
+    const voice = String(await this.deps.settings.resolve('voice_spoken_voice'));
+    const chunks = splitForSpeech(say);
+    if (!chunks.length) return;
+    if (chunks.length === 1) {
+      const audio = await speakVoice(apiKey, voice, chunks[0]);
+      if (audio) await api.sendVoiceBytes(chatId, audio).catch(() => {});
+      else if (mode === 'voice') await api.sendMarkdown(chatId, say).catch(() => {});
+      return;
+    }
+    const jobs: (Promise<Buffer | null> | undefined)[] = [];
+    const startJob = (i: number) => {
+      if (i >= chunks.length || jobs[i]) return;
+      jobs[i] = speakVoice(apiKey, voice, chunks[i]);
+    };
+    startJob(0); startJob(1);
+    let sent = 0;
     for (let i = 0; i < chunks.length; i++) {
-      last = await this.sendMessage(chatId, chunks[i].text, {
-        replyToMessageId: opts.replyToMessageId,
-        entities: chunks[i].entities,
-        replyMarkup: i === chunks.length - 1 ? opts.replyMarkup : undefined,
-      });
+      const bubble = i === 0 ? null : startWaitingBubble(api, chatId);
+      try {
+        const audio = await jobs[i]!;
+        startJob(i + 2);
+        if (!audio) break;
+        await bubble?.remove();
+        await api.sendVoiceBytes(chatId, audio);
+        sent++;
+      } catch {
+        await bubble?.remove();
+        break;
+      }
     }
-    return last;
+    if (!sent && mode === 'voice') await api.sendMarkdown(chatId, say).catch(() => {});
   }
 
-  /** `replyMarkup` is a Telegram reply_markup object (an inline keyboard for
-   *  the approval gate). */
-  async sendMessage(chatId: number, text: string,
-    opts: { replyToMessageId?: number; entities?: Entity[]; replyMarkup?: unknown } = {}) {
-    const m = await this.call('sendMessage', {
-      chat_id: chatId, text,
-      ...(opts.entities?.length ? { entities: opts.entities } : {}),
-      ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-      ...(opts.replyToMessageId
-        ? { reply_parameters: { message_id: opts.replyToMessageId, allow_sending_without_reply: true } }
-        : {}),
-    });
-    if (m?.message_id != null) this.onSent?.(m.message_id, text);
-    return m;
-  }
-
-  /** Every button tap MUST be answered or the user's client spins on it;
-   *  `text` shows as a small notification. */
-  answerCallbackQuery(callbackQueryId: string, text?: string) {
-    return this.call('answerCallbackQuery', { callback_query_id: callbackQueryId, ...(text ? { text } : {}) });
-  }
-
-  // An edit records too, so the streamed bubble ends up stored as what it
-  // finally says. An unchanged body throws ("message is not modified") and
-  // never reaches the hook — right, since the record already matches. An edit
-  // without a reply_markup drops the message's keyboard — how an answered
-  // approval loses its buttons.
-  async editMessageText(chatId: number, messageId: number, text: string, entities?: Entity[]) {
-    const r = await this.call('editMessageText', {
-      chat_id: chatId, message_id: messageId, text,
-      ...(entities?.length ? { entities } : {}),
-    });
-    this.onSent?.(messageId, text);
-    return r;
-  }
-
-  async deleteMessage(chatId: number, messageId: number) {
-    const r = await this.call('deleteMessage', { chat_id: chatId, message_id: messageId });
-    this.onDeleted?.(messageId);
-    return r;
-  }
-
-  sendChatAction(chatId: number, action = 'typing') {
-    return this.call('sendChatAction', { chat_id: chatId, action });
-  }
-
-  /** Bots get ONE reaction per message and a new one replaces the old — the
-   *  ✍ → 👍 progress signal. No emoji clears it. The emoji must be spelled
-   *  EXACTLY as Telegram spells it (escape constants in engine.ts — no
-   *  variation selectors, ever). */
-  setMessageReaction(chatId: number, messageId: number, emoji?: string) {
-    return this.call('setMessageReaction', {
-      chat_id: chatId, message_id: messageId,
-      reaction: emoji ? [{ type: 'emoji', emoji }] : [],
-    });
-  }
-
-  /** Fetch an inbound file. Telegram's getFile caps at 20 MB — callers check
-   *  the declared size first so an oversize file is declined readably. The
-   *  byte fetch rides the connection policy (connect.ts): a voice note is
-   *  the message itself, so a hung connection here is a message lost. */
-  async downloadFile(fileId: string): Promise<Buffer> {
-    const file = await this.call('getFile', { file_id: fileId });
-    if (!file?.file_path) throw new Error('Telegram did not return a file path.');
-    const res = await connectFetch(`https://api.telegram.org/file/bot${this.token}/${file.file_path}`);
-    if (!res.ok) throw new Error(`downloading the file failed (HTTP ${res.status}).`);
-    return Buffer.from(await res.arrayBuffer());
-  }
-
-  private async uploadBytes(kind: SendKind, chatId: number, data: Buffer, name: string,
-    caption?: string, opts: { replyToMessageId?: number } = {}): Promise<any> {
-    const { method, field } = KIND_METHOD[kind];
-    if (data.length > MAX_OUTBOUND_BYTES) {
-      throw new Error(`the file is ${Math.round(data.length / 1024 / 1024)} MB, over Telegram's 50 MB limit for bots.`);
-    }
-    const form = new FormData();
-    form.set('chat_id', String(chatId));
-    form.set(field, new Blob([new Uint8Array(data)]), name);
-    // Telegram truncates captions at 1024; longer is an API error.
-    if (caption) form.set('caption', caption.slice(0, 1024));
-    if (opts.replyToMessageId) {
-      form.set('reply_parameters',
-        JSON.stringify({ message_id: opts.replyToMessageId, allow_sending_without_reply: true }));
-    }
-    const res = await fetch(`https://api.telegram.org/bot${this.token}/${method}`, { method: 'POST', body: form });
-    const json = await readEnvelope(res);
-    if (!(res.ok && json.ok)) throw new Error(`telegram ${method} failed: ${json.description || res.status}`);
-    return json.result;
-  }
-
-  /** A voice note straight from memory — synthesis hands us bytes, and a
-   *  temp file would be a step with its own failure modes. */
-  sendVoiceBytes(chatId: number, data: Buffer, opts: { replyToMessageId?: number } = {}) {
-    return this.uploadBytes('voice', chatId, data, 'voice.ogg', undefined, opts);
-  }
-
-  /**
-   * Send a local file the way its type deserves. Photos fall back to a
-   * document send: Telegram rejects images outside its dimension limits
-   * (tall screenshots) even when the file is valid, and arriving as a file
-   * beats not arriving.
-   */
-  async sendFile(kind: SendKind, chatId: number, filePath: string, caption?: string): Promise<any> {
-    const data = await fs.readFile(filePath);
-    const name = path.basename(filePath);
-    if (kind !== 'photo') return this.uploadBytes(kind, chatId, data, name, caption);
-    try {
-      return await this.uploadBytes('photo', chatId, data, name, caption);
-    } catch {
-      return this.uploadBytes('document', chatId, data, name, caption);
-    }
+  /** 🤬 on one of our bubbles: read it back as a voice note. */
+  private async speakRepliedMessage(reaction: any, dm: number): Promise<void> {
+    const chatId = Number(reaction.chat?.id);
+    const messageId = Number(reaction.message_id);
+    if (!Number.isFinite(chatId) || !Number.isFinite(messageId)) return;
+    const stored = await this.deps.sentMessages.get(chatId, messageId);
+    if (!stored) return;
+    const api = new TelegramApi(await this.token());
+    const apiKey = (await this.deps.settings.credential('deepgram_api_key')) ?? '';
+    const voice = String(await this.deps.settings.resolve('voice_spoken_voice'));
+    api.sendChatAction(dm, 'record_voice').catch(() => {});
+    const audio = await speakVoice(apiKey, voice, stored.content.replace(/\n\n\(\d+\/\d+\)$/, '').slice(0, SPEAK_MAX_CHARS));
+    if (audio) await api.sendVoiceBytes(chatId, audio, { replyToMessageId: messageId }).catch(() => {});
+    else await api.sendMessage(chatId, "⚠️ I couldn't turn that into audio — check the Deepgram key.", { replyToMessageId: messageId }).catch(() => {});
   }
 }

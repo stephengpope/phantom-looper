@@ -11,7 +11,7 @@ import type { Sessions } from 'phantom-backend-sdk';
 import type { SessionRow } from 'phantom-backend-sdk/schema';
 import { loadTranscriptFile, newestTranscriptFile, Transcript, transcriptStamp } from '../../core/llm/transcript.js';
 import { compact, compactionDue, compactionOpts, CompactionLock, type CompactionConfig } from '../../core/llm/compaction.js';
-import type { TelegramBot } from 'phantom-backend-sdk';
+import type { TelegramApi } from 'phantom-backend-sdk';
 import { logger } from 'phantom-backend-sdk';
 
 const log = logger('telegram');
@@ -23,7 +23,7 @@ export interface AssistantConversationDeps {
 }
 
 /** Who to notify about compaction events — set before each turn. */
-export interface AssistantChat { client: TelegramBot; dm: number }
+export interface AssistantChat { client: TelegramApi; dm: number }
 
 export class AssistantConversation {
   /** The in-memory conversation. */
