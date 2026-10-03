@@ -14,10 +14,9 @@
 
 import { expiredHold, type Sessions } from 'phantom-backend-sdk';
 import type { Cards } from 'phantom-backend-sdk';
-import type { Settings, AgentConfig as SdkAgentConfig } from 'phantom-backend-sdk';
-import { oldAgentConfig } from '../agentConfig.js';
+import type { Settings } from 'phantom-backend-sdk';
 import type { Projects } from 'phantom-backend-sdk';
-import { PhantomHelper } from '../../core/llm/helper.js';
+import { oneShot, type OneShotDeps } from '../oneShot.js';
 import { lastAssistantFromJsonl } from 'phantom-backend-sdk';
 import type { NotificationChannel } from 'phantom-backend-sdk';
 import { titled } from 'phantom-backend-sdk';
@@ -54,19 +53,13 @@ export interface DigestDeps {
   sessions: Sessions;
   cards: Cards;
   settings: Settings;
-  agentConfig: SdkAgentConfig;
+  oneShot: OneShotDeps;
   projects: Projects;
   channels: NotificationChannel[];
 }
 
 /** The summary call: the grouped sessions in, the digest text out. It
  *  serves every quiet session at once, so it belongs to no one session. */
-class SessionDigestHelper extends PhantomHelper {
-  run(payload: unknown): Promise<string> {
-    return this.call({ system: SYSTEM, prompt: JSON.stringify(payload) });
-  }
-}
-
 export class SessionDigest {
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
@@ -199,8 +192,7 @@ export class SessionDigest {
 
     // ── LLM call ─────────────────────────────────────────────────────────────
 
-    const { model } = await oldAgentConfig(this.deps.agentConfig, this.deps.settings, 'assistant', {});
-    const text = await new SessionDigestHelper(model, null).run(payload);
+    const text = await oneShot(this.deps.oneShot, 'assistant', { type: 'session_digest', sessionId: null }, { system: SYSTEM, prompt: JSON.stringify(payload) });
     const message = titled(TITLE(rows.length), text.trim());
 
     if (!message) return;

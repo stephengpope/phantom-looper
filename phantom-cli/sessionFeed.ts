@@ -12,7 +12,7 @@
 // session on screen repaints — the store's fold paints the active id alone —
 // so a background feed costs its connection and its parts, never a redraw.
 import { FLUSH_MS } from './sessions.js';
-import { AUTO_PUSH_STEPS } from '../core/llm/tools/git.js';
+import { AUTO_PUSH_STEPS } from '../core/agents/assistant/gitSteps.js';
 import { followStream, type Stream } from './follow.js';
 import type { SessionStore, LoadedSession } from './sessions.js';
 import type { StreamPart } from './state.js';

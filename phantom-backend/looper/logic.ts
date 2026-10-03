@@ -10,7 +10,7 @@ import type { ModelMessage } from 'ai';
 import {
   firstLine, toCodingAgent, toSupervisor, type CardShape,
 } from '../../core/prompts/supervisor/wiring.js';
-import { ENDING_TOOLS } from '../../core/llm/tools/kanban.js';
+import { ENDING_TOOLS } from './cardRunTools.js';
 
 export const LOOP_COLUMNS = ['plan', 'in_progress'] as const;
 
@@ -49,14 +49,14 @@ export function canTurn(card: CardRow, defaults: { plan: boolean; build: boolean
   return false;
 }
 
-const userTexts = (messages: ModelMessage[]): string[] =>
+const userTexts = (messages: readonly ModelMessage[]): string[] =>
   messages.filter((m) => m.role === 'user')
     .map((m) => typeof m.content === 'string' ? m.content
       : m.content.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join(''));
 
 /** Was a fixed message already sent? Read off the conversation itself — the
  *  templates' first lines are frozen, so the session IS the state. */
-export function wasSent(messages: ModelMessage[], firstLine: string): boolean {
+export function wasSent(messages: readonly ModelMessage[], firstLine: string): boolean {
   return userTexts(messages).some((t) => t.startsWith(firstLine));
 }
 
@@ -67,7 +67,7 @@ export function wasSent(messages: ModelMessage[], firstLine: string): boolean {
  *    card → in_progress, planned here  same session           → 2: execute the plan
  *    card → in_progress, no plan ever  new/empty conversation → 3: execute directly
  */
-export function unsentKickoff(card: CardShape, messages: ModelMessage[]): { text: string; planMode: boolean } | null {
+export function unsentKickoff(card: CardShape, messages: readonly ModelMessage[]): { text: string; planMode: boolean } | null {
   if (card.status === 'plan') {
     return wasSent(messages, firstLine.planCard(card.number))
       ? null : { text: toCodingAgent.planCard(card), planMode: true };
@@ -106,7 +106,7 @@ interface Turn { text: string; terminal: boolean }
 
 const NO_REPLY = '(no reply)';
 
-function assistantTurns(messages: ModelMessage[]): Turn[] {
+function assistantTurns(messages: readonly ModelMessage[]): Turn[] {
   const turns: Turn[] = [];
   let current: Turn | null = null;
   for (const m of messages) {
@@ -132,7 +132,7 @@ function assistantTurns(messages: ModelMessage[]): Turn[] {
  *  other agent's conversation. A turn that called an ending tool is skipped:
  *  the run is over, nothing crosses. Empty text becomes a placeholder so the
  *  two sides never drift out of step. */
-export function replies(messages: ModelMessage[]): string[] {
+export function replies(messages: readonly ModelMessage[]): string[] {
   return assistantTurns(messages)
     .filter((t) => !t.terminal)
     .map((t) => t.text || NO_REPLY);
@@ -152,7 +152,7 @@ function repliesReceived(sent: string[], received: string[]): number {
  *  before that phase's first copied reply. Self-contained: the assignment
  *  plus the reply's format; the card rides only the briefing that opens the
  *  conversation. */
-function unsentBriefings(card: CardShape, coder: ModelMessage[], supervisor: ModelMessage[]): string[] {
+function unsentBriefings(card: CardShape, coder: readonly ModelMessage[], supervisor: readonly ModelMessage[]): string[] {
   const supTexts = userTexts(supervisor);
   const has = (line: string) => supTexts.some((t) => t.startsWith(line));
   const seeds: string[] = [];
@@ -183,7 +183,7 @@ export type LoopStep =
   | { kind: 'return'; text: string }
   | null;
 
-export function nextStep(card: CardShape, coder: ModelMessage[], supervisor: ModelMessage[]): LoopStep {
+export function nextStep(card: CardShape, coder: readonly ModelMessage[], supervisor: readonly ModelMessage[]): LoopStep {
   if (!coder.length) return null;
 
   const coderSent = replies(coder);

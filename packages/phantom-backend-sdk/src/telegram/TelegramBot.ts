@@ -289,6 +289,13 @@ export class TelegramBot {
     return stored ? stored.sessionId : undefined;
   }
 
+  /** The last bubble this bot sent for a session in a chat — what a code-mode
+   *  label quotes under the session's title. */
+  async lastMessageForSession(chatId: number, sessionId: string): Promise<string | null> {
+    const stored = await this.deps.sentMessages.lastForSession(chatId, sessionId).catch(() => null);
+    return stored ?? null;
+  }
+
   // ── approvals ─────────────────────────────────────────────────────────
 
   /** A gated tool asks the user yes/no and waits. */

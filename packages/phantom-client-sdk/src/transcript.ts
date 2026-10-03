@@ -42,6 +42,7 @@ export const usageLine = (u: TokenUsage): UsageLine => ({ type: 'usage', id: lin
 export const interruptedLine = (): InterruptedLine => ({ type: 'interrupted', id: lineId(), at: now() });
 export const partialMessageLine = (text: string): PartialMessageLine => ({ type: 'partial_message', id: lineId(), at: now(), text });
 export const userMessage = (content: string): ModelMessage => ({ role: 'user', content });
+export const assistantMessage = (content: string): ModelMessage => ({ role: 'assistant', content });
 
 /** The last assistant message with its text replaced by what the person
  *  actually received (tool calls and anything else kept): the model must

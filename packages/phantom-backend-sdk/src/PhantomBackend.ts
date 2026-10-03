@@ -195,7 +195,7 @@ export class PhantomBackend {
     registerTools(config.tools ?? []);
 
     const settings = new Settings(database.drizzle, env.encryptionKey, modelCatalog, settingsEvents);
-    for (const type of agentTypes.list()) settings.register(agentTypeSettings(type, { first: type.name === agentTypes.first() }));
+    for (const type of agentTypes.list()) settings.register(agentTypeSettings(type));
     settings.register(sdkSettings({ sessionImageTag: options.sessionImageTag ?? (/^v\d+\.\d+\.\d+/.test(APP_VERSION) ? APP_VERSION : 'latest') }));
     settings.register(config.settings ?? []);
     const agentConfig = new AgentConfig(settings, agentTypes, modelCatalog);

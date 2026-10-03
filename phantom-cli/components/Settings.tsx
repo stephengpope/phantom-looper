@@ -34,7 +34,7 @@ import { human, labelFor } from '../settingLabels.js';
 import { groupBlocks, headedChoices, type Block } from '../settingGroups.js';
 import { ValueInput, type EditSpec } from './ValueInput.js';
 import { Screen } from './Screen.js';
-import { PROVIDERS, keyedProviders } from '../../core/llm/createAgent.js';
+import { PROVIDERS, keyedProviders } from 'phantom-client-sdk';
 
 export type { Api } from '../request.js';
 import type { Api } from '../request.js';

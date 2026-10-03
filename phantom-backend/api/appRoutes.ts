@@ -10,7 +10,6 @@ import type { GitSync, AutoPushResult, AutoPushEvent, AutoPullResult, AutoPullEv
 import { gitRoutes } from './routes/git.js';
 import { systemRoutes } from './routes/system.js';
 import { telegramRoutes } from './routes/telegram.js';
-import { turnRoute } from './routes/turn.js';
 
 export interface AppExtras {
   apiKey: string;
@@ -36,7 +35,6 @@ export interface AppExtras {
 /** The app's routes, for `config.routes`. */
 export const appRoutes = (backend: PhantomBackend, extras: AppExtras) => (api: unknown): void => {
   const app = api as FastifyInstance;
-  turnRoute(app, backend, extras);
   gitRoutes(app, backend, extras);
   systemRoutes(app, backend, extras);
   telegramRoutes(app, backend, extras);

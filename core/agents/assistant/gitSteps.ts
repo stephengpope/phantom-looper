@@ -19,7 +19,7 @@
  * screen, or an id) are in tui.ts: same host-handler shape as the rest of
  * that kit.
  */
-import { ndjson } from '../../ndjson.js';
+import { ndjson } from 'phantom-client-sdk';
 
 const SESSION_HEADER = 'x-phantom-looper-session';
 

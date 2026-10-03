@@ -14,11 +14,12 @@
 // BoardStore (an optimistic copy the board screen draws from) and moves the
 // screen; Telegram answers over the card routes (kanban.ts `cardOpsOverApi`).
 import type { ModelMessage } from 'ai';
-import type { ApiCall } from '../../session.js';
+/** A call on the backend's API, the envelope unwrapped: the data, or a throw with the server's message. */
+export type ApiCall = (method: string, path: string, body?: unknown) => Promise<unknown>;
 import { kebabName, renderRead, renderRaw,
-  type SessionsArgs, type ProjectCreateArgs, type GitAutoPushArgs, type GitAutoPullArgs, type DockerLogsArgs } from './tui.js';
-import type { AutoPushOutcome, AutoPullOutcome } from './git.js';
-import { parseTranscript } from '../transcript.js';
+  type SessionsArgs, type ProjectCreateArgs, type GitAutoPushArgs, type GitAutoPullArgs, type DockerLogsArgs } from './tools.js';
+import type { AutoPushOutcome, AutoPullOutcome } from './gitSteps.js';
+import { parseLines, conversationFrom } from 'phantom-client-sdk/transcript';
 import { whoDrives, isRunning, ago, type SessionRow } from '../../sessionRows.js';
 
 /** `session_list`'s page, for the ASSISTANT rather than a screen. 50 is a
@@ -157,8 +158,8 @@ export function sessionsHandler(host: AssistantHost) {
           return { text: renderRaw(String(j?.data ?? '')) };
         }
         const held = host.history?.(id);
-        const messages = held ?? parseTranscript(String(
-          ((await host.call('GET', `/sessions/${id}/transcript`)) as { data?: string })?.data ?? '')).messages;
+        const messages = held ?? conversationFrom(parseLines(String(
+          ((await host.call('GET', `/sessions/${id}/transcript`)) as { data?: string })?.data ?? '')));
         return { text: renderRead(id, messages, { limit: args.limit, offset: args.offset, tools: args.tools }) };
       } catch (e) {
         return { error: `could not read session ${id}: ${(e as Error).message}` };

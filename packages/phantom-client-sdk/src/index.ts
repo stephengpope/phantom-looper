@@ -18,7 +18,7 @@ export type { ToolKit, ToolKitContext, BuiltTools } from './toolkit.js';
 
 // A billed model for an app's one-shot call (a title, a commit message).
 export { billedModel, type Billing, type ModelHooks } from './model/languageModel.js';
-export { PROVIDERS, REASONINGS, keyedProviders, type ModelSpec, type Provider, type Reasoning } from './model/llmConfig.js';
+export { PROVIDERS, REASONINGS, isProvider, keyedProviders, type ModelSpec, type Provider, type Reasoning } from './model/llmConfig.js';
 
 // One connection for everything — the transport an app hands `BackendClient`.
 export { BackendConnection, type BackendConnectionOptions } from './backendConnection.js';
@@ -34,3 +34,4 @@ export { DEFAULT_COLUMNS, STATUS_ICON, normalizeKey, newKey, keyedItems, type Ch
 export { pullLine, type PullProgress, type UpdateEvent } from './update.js';
 export { secretName, SECRET_NAME_RULE } from './secretName.js';
 export { REPO, parseVersion, isBehind, bare, checkLatest } from './version.js';
+export { ndjson } from './ndjson.js';

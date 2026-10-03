@@ -32,7 +32,7 @@ const NAME_PREFIX = 'phantom-looper-ws-';
  *  real filesystem. An anonymous volume (no Source) is disk-backed, so the inner
  *  dockerd gets the overlay2 graph driver — nesting it on the container's own
  *  overlay upperdir would fall back to vfs (copy-per-layer, unusably slow). It
- *  never touches /project, so nothing the agent's docker builds is ever
+ *  never touches /workspace, so nothing the agent's docker builds is ever
  *  committed by auto-push, and it dies with the container (remove passes v). */
 const DOCKER_GRAPH_MOUNT = { Type: 'volume', Target: '/var/lib/docker' } as const;
 
@@ -74,10 +74,10 @@ export function buildContainerSpec(i: SpecInput): Record<string, unknown> {
   };
   const mounts: Array<Record<string, unknown>> = [];
   if ('volume' in i.mount) {
-    mounts.push({ Type: 'volume', Source: i.mount.volume, Target: '/project',
+    mounts.push({ Type: 'volume', Source: i.mount.volume, Target: '/workspace',
       VolumeOptions: { Subpath: i.mount.subpath } });
   } else {
-    HostConfig.Binds = [`${i.mount.bind}:/project`];
+    HostConfig.Binds = [`${i.mount.bind}:/workspace`];
   }
   if (i.docker) {
     HostConfig.Privileged = true;

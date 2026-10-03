@@ -14,7 +14,7 @@ import type { PhantomBackend } from 'phantom-backend-sdk';
 import type { AppExtras } from '../appRoutes.js';
 import { err, ok } from 'phantom-backend-sdk';
 import { logger, errStr } from 'phantom-backend-sdk';
-import { PROVIDERS, isProvider } from '../../../core/llm/createAgent.js';
+import { PROVIDERS, isProvider } from 'phantom-client-sdk';
 import { SystemError, LOG_MAX_TAIL, LOG_SERVICES } from 'phantom-backend-sdk';
 
 const log = logger('system');

@@ -8,15 +8,14 @@
 // two transcripts (logic.ts reads the next owed step off them). Every card
 // write lands on the board bus; that is what runs the loop. A session's hold
 // released by anyone but this engine re-runs its card's loop.
-import type { ModelMessage } from 'ai';
 import { BackendClient, type AgentHandlers, type Agent } from 'phantom-client-sdk';
 import { CodingAgent } from '../../core/agents/coding.js';
 import { SupervisorAgent } from '../../core/agents/supervisor.js';
-import type { ProjectRow, CardRow as CardTableRow } from 'phantom-backend-sdk/schema';
+import type { ProjectRow } from 'phantom-backend-sdk/schema';
 import { workspaceOf, LOOP_CLIENT_ID, GLOBAL, type CardFields } from 'phantom-backend-sdk';
 import type { Sessions, Projects, Cards, Settings, TokenLog, SettingsEvents, BoardEvents, SessionEvents } from 'phantom-backend-sdk';
 import { logger, errStr } from 'phantom-backend-sdk';
-import { canTurn, heldBy, unsentKickoff, nextStep, needsFreshSession, type CardRow } from './logic.js';
+import { canTurn, unsentKickoff, nextStep, needsFreshSession, LOOP_COLUMNS, type CardRow } from './logic.js';
 import { codingAgentCardKit, supervisorCardKit, type LoopColumn } from './cardRunTools.js';
 
 const log = logger('looper');

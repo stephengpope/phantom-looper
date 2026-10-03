@@ -110,7 +110,7 @@ const unknownBlock = (reply: FastifyReply, e: unknown) =>
   e instanceof SystemPromptError ? reply.code(400).send(err(e.code, e.message)) : undefined;
 
 export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
-  app.post<{ Body: { project_id: string; id?: string; system_prompt_layout: SystemPromptLayout } }>('/sessions', { schema: { ...TAG,
+  app.post<{ Body: { project_id: string; type: string; id?: string; system_prompt_layout: SystemPromptLayout } }>('/sessions', { schema: { ...TAG,
     summary: 'Create — or restart — a session',
     description: 'Claims a pre-cloned pool directory (or clones) and checks out the session\'s branch: ' +
       'its own {prefix}/{id}, cut from the base branch. That one branch ' +
@@ -122,17 +122,18 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       '`system_prompt_layout` is the agent\'s prompt layout; the server fills its blocks from that moment\'s ' +
       'skills, secrets, SOUL.md and date, writes the three sections with the row, and answers them as ' +
       '`system_prompt` — sent as stored on every turn. A restart keeps the prompt the session was born with.',
-    body: { type: 'object', required: ['project_id', 'system_prompt_layout'], additionalProperties: false,
-      examples: [{ project_id: 'paste the id from POST /projects',
+    body: { type: 'object', required: ['project_id', 'type', 'system_prompt_layout'], additionalProperties: false,
+      examples: [{ project_id: 'paste the id from POST /projects', type: 'coding',
         system_prompt_layout: { stable: [{ text: 'You are…' }], context: ['agents_md'], volatile: ['time_date'] } }],
       properties: {
         project_id: { type: 'string' },
+        type: { type: 'string', enum: ctx.agentTypes.names(), description: 'The agent type the session runs — a registered type.' },
         id: { type: 'string', description: 'Restart this session id instead of starting a new one.' },
         system_prompt_layout: SYSTEM_PROMPT_LAYOUT,
       } } } }, async (req, reply) => {
     if (!req.body?.project_id) return reply.code(400).send(err('missing_project', 'body.project_id required'));
     try {
-      return reply.code(201).send(ok(await ctx.sessions.start(req.body.project_id, req.body.system_prompt_layout, { id: req.body.id, startedBy: startedByClient(clientOf(req)) })));
+      return reply.code(201).send(ok(await ctx.sessions.start(req.body.project_id, req.body.system_prompt_layout, { id: req.body.id, type: req.body.type, startedBy: startedByClient(clientOf(req)) })));
     } catch (e) {
       if (unknownBlock(reply, e)) return;
       // The session's own refusals, and the checkout's (a dead token, a repo
@@ -202,67 +203,6 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     return ok({ total, sessions: rows.map((r) => ({ ...r, locked: isHeld(r, now) })) });
   });
 
-  // ---- the session lock ----------------------------------------------------
-  // One holder per session, named by the x-phantom-looper-client header. Acquire and
-  // renew are the same call; there is no takeover — a hold ends by release or
-  // by expiry (session_lock_ttl_ms). Duplicating forks a session, but it too
-  // takes this lock first: its flush commits the tree, and a live writer
-  // mid-turn must not be committed half-written.
-  app.post<{ Params: { id: string }; Body: { label?: string } }>(
-    '/sessions/:id/lock', { schema: { ...TAG,
-      summary: 'Hold a session',
-      description: 'Claims the session for the client named in x-phantom-looper-client (an opaque id the client invents). ' +
-        'While held, no other client may read or write the transcript. Calling again renews the hold; ' +
-        'it also expires on its own after session_lock_ttl_ms without renewal. 409 while someone else holds it — ' +
-        'there is no takeover: release it there, or wait for the hold to expire.',
-      params: idParam,
-      body: { type: 'object', additionalProperties: false, properties: {
-        label: { type: 'string', maxLength: 200, description: 'What to show others (a hostname).' } } } } },
-    async (req, reply) => {
-      const client = clientOf(req);
-      if (!client) return reply.code(400).send(err('missing_client', 'x-phantom-looper-client header required'));
-      const s = await ctx.sessions.get(req.params.id);
-      if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
-      // A running server turn is the truth the clock is not. `activeTurns`
-      // holds the live turn's abort controller IN THIS PROCESS, so it cannot
-      // outlive the work the way a hold in SQL can — kill the process and the
-      // map and the turns die together. A lapsed TTL must therefore never hand
-      // the session to a second writer while the first is still streaming:
-      // that is two conversations on one transcript, and the last save wins.
-      // The holder itself still renews normally.
-      if (ctx.activeTurns.has(s.id) && s.lockedBy && s.lockedBy !== client) {
-        return reply.code(409).send(lockedErr(s));
-      }
-      const ttl = await ctx.settings.resolve('session_lock_ttl_ms');
-      const expires = await ctx.sessions.acquireLock(s, client, Number(ttl), req.body?.label);
-      if (!expires) return reply.code(409).send(lockedErr(s));
-      ctx.sessionEvents.publish(s.id, client, lockEvent(s, { locked: true, by: client,
-        label: req.body?.label ?? s.lockedLabel ?? null, expires }));
-      // Notify the board when a session transitions from unlocked to locked
-      // (not on renewals — those fire on every transcript save). The pre-
-      // acquire row `s` tells us: same client = renewal, anything else = fresh.
-      if (s.lockedBy !== client) void publishBoardLock(ctx, s.id, true);
-      // The transcript's stamp rides along so a turn can tell whether its
-      // memory is current WITHOUT downloading anything: stamp unchanged =
-      // run on memory; moved = someone advanced it, pull once first.
-      const stamp = await ctx.sessions.transcriptStamp(s.id);
-      return ok({ locked: true, expires_at: expires.toISOString(),
-        transcript_updated_at: stamp?.toISOString() ?? null });
-    });
-
-  app.delete<{ Params: { id: string } }>(
-    '/sessions/:id/lock', { schema: { ...TAG,
-      summary: 'Release a session',
-      description: 'Releases the hold if x-phantom-looper-client is the holder. Idempotent — releasing a session you do not hold changes nothing.',
-      params: idParam } },
-    async (req, reply) => {
-      const client = clientOf(req);
-      if (!client) return reply.code(400).send(err('missing_client', 'x-phantom-looper-client header required'));
-      const s = await ctx.sessions.get(req.params.id);
-      if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
-      return ok({ released: await releaseHold(ctx, s, client) });
-    });
-
   // ---- ping a container -----------------------------------------------------
   // Bring the session back up, whichever layer went: files gone (the disk
   // sweep took them) → clone its branch back; then start the container so
@@ -291,7 +231,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       if (!project) return reply.code(404).send(err('not_found', 'project not found'));
       if (s.status !== 'active') {
         if (!ownsWorkspace(s)) return reply.code(400).send(err('no_files', 'this session has no files of its own'));
-        await ctx.sessions.create(s.projectId, { id: s.id });
+        await ctx.sessions.create(s.projectId, { id: s.id, type: s.agent });
       }
       await ctx.sessions.touch(s);
       await ctx.sessionContainers.ensure(workspaceOf(s), project);
@@ -331,7 +271,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     '/sessions/:id/notify', { schema: { ...TAG,
       summary: 'DM the user on Telegram from a session',
       description: 'Sends `text` to the authorized Telegram user as the session\'s agent: markdown formatted, ' +
-        'MEDIA:/workspace/... tags and bare /project paths delivered as files, spoken when the reply mode says so. ' +
+        'MEDIA:/workspace/... tags and bare /workspace paths delivered as files, spoken when the reply mode says so. ' +
         'The bubble is recorded against the session, so a reply to it enters the session. ' +
         '503 when Telegram is not wired or not enabled — the message says which setting is missing.',
       params: idParam,
@@ -413,84 +353,6 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       return ok({ lines: r.lines, applied: r.applied, updated_at: r.stamp.toISOString() });
     });
 
-  app.put<{ Params: { id: string }; Body: { data: string } }>(
-    '/sessions/:id/transcript', {
-      // A conversation with fat tool results outgrows Fastify's default 1MB;
-      // the biggest transcript observed in the wild is ~17MB.
-      bodyLimit: 64 * 1024 * 1024,
-      schema: { ...TAG,
-        summary: 'Save a session\'s transcript',
-        description: 'Replaces the stored conversation with the client\'s file, whole — one session, one ' +
-          'transcript. 409 while another client holds the session; a holder\'s write renews ' +
-          'its hold. The last user message is extracted here for the list.',
-        params: idParam,
-        body: { type: 'object', required: ['data'], additionalProperties: false,
-          properties: { data: { type: 'string' } } } } },
-    async (req, reply) => {
-      const client = clientOf(req);
-      const s = await ctx.sessions.get(req.params.id);
-      if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
-      if (heldByOther(s, client)) return reply.code(409).send(lockedErr(s));
-      // The same ground truth as the lock route: an expired hold is not an
-      // idle session while its turn is still streaming. Without this a lapsed
-      // TTL lets a second client overwrite the record the live turn is about
-      // to save — the whole file, not a merge.
-      if (ctx.activeTurns.has(s.id) && s.lockedBy && s.lockedBy !== client) {
-        return reply.code(409).send(lockedErr(s));
-      }
-      const data = req.body.data;
-      // One statement lands the record, its preview and the turn count (the
-      // count leaving 0 is what freezes the row's model) — Sessions.saveTranscript;
-      // the record event goes out with it.
-      const saved = await ctx.sessions.saveTranscript(s, data, client);
-      const { stamp } = saved;
-      if (client && s.lockedBy === client) {
-        const ttl = await ctx.settings.resolve('session_lock_ttl_ms');
-        const expires = await ctx.sessions.renewLock(s.id, client, Number(ttl));
-        ctx.sessionEvents.publish(s.id, client, lockEvent(s, { locked: true, expires }));
-      }
-      // Naming rides the save but never blocks it — fire-and-forget; any
-      // failure leaves the old name (or null) standing. A manual name
-      // (/rename) turns the titler off for the session.
-      if (!saved.nameManual && ctx.sessionTitler.isDue(saved.name, saved.turnCount)) void ctx.sessionTitler.name(s.id);
-      return ok({ saved: true, bytes: Buffer.byteLength(data), updated_at: stamp.toISOString() });
-    });
-
-  // Step-level save: updates the transcript and renews the lock, but does NOT
-  // bump turn count, trigger naming, pin the model, or publish a transcript
-  // event. The lightweight per-step counterpart to the full turn-end PUT above.
-  app.post<{ Params: { id: string }; Body: { data: string } }>(
-    '/sessions/:id/step', {
-      bodyLimit: 64 * 1024 * 1024,
-      schema: { ...TAG,
-        summary: 'Step-level transcript save',
-        description: 'Saves the transcript and renews the lock without the turn-end ceremony ' +
-          '(turn count, naming, pinning, events). 409 if the caller does not hold the lock.',
-        params: idParam,
-        body: { type: 'object', required: ['data'], additionalProperties: false,
-          properties: { data: { type: 'string' } } } } },
-    async (req, reply) => {
-      const client = clientOf(req);
-      const s = await ctx.sessions.get(req.params.id);
-      if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
-      // The lock must be held by THIS client — the step save is part of a turn.
-      if (!s.lockedBy || s.lockedBy !== client) {
-        return reply.code(409).send(err('session_locked', 'step save requires the lock'));
-      }
-      const stamp = await ctx.sessions.stepSave(s, req.body.data);
-      // Renew the lock — a long turn with many steps must not expire mid-turn.
-      const ttl = await ctx.settings.resolve('session_lock_ttl_ms');
-      await ctx.sessions.renewLock(s.id, client, Number(ttl));
-      return ok({ saved: true, updated_at: stamp.toISOString() });
-    });
-
-  // The LIST's feed: every session's row changes, as notices. No rows ride it
-  // — the list is the server's query (Sessions.list: filters, cursor, pinned
-  // block), so a listener re-reads GET /sessions rather than adopting a
-  // second copy of the list rule. Built on the same bus as the per-session
-  // feeds: a turn's tokens (`part`) are left out, everything else — a hold,
-  // a save, a name, a pin, a create, a purge — is "this row moved". Not
-  // echo-filtered on purpose: the list draws the caller's own sessions too.
   app.get('/sessions/events', { schema: { ...TAG, summary: 'Session list events stream',
     description: 'ND-JSON, open until the client hangs up: {event:"changed",id} whenever any session row ' +
       'changes in a way the list shows (hold, save, name, pin, plan mode, work state, create, destroy, ' +
@@ -712,7 +574,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
           // nobody else takes the source mid-copy.
           await ctx.sessions.renewLock(src.id, GIT_CLIENT_ID, Number(ttl));
         }
-        const copy = await ctx.sessions.create(src.projectId, src.branch ? { fromBranch: src.branch } : {});
+        const copy = await ctx.sessions.create(src.projectId, { type: src.agent, ...(src.branch ? { fromBranch: src.branch } : {}) });
         // Copy the source's scratch pad into the copy's workspace — same filenames,
         // the copy's container mounts them at the same /workspace/scratch/ path,
         // so every reference in the transcript works without rewriting.

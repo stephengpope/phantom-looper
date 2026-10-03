@@ -1,64 +1,28 @@
 // The Assistant, server-side, for Telegram — assistant MODE, the home the bot
 // answers in by default. It is the SAME agent as the cli's side pane
-// (core AssistantAgent: same prompt, same Settings.agentConfig('assistant')) — reached over the webhook instead of the
-// Python voice sidecar, with HEADLESS tool handlers hitting this server's own
-// routes instead of the app's BoardStore.
-//
-// The conversation is one ModelMessage[] held by the engine, backed by the
-// newest transcript file in the server's assistant dir — written as it goes,
-// loaded back on boot, so a restart continues the chat. Past the message
-// limit it compacts (core/llm/compaction.ts): the summary opens a fresh file
-// and the old ones stay as the archive.
-//
-// Board and sessions are the Assistant's job (create/move cards, list/read
-// sessions); the file tools + web are bound to the bot's active session,
-// so "what does the auth code look like?" works from home. session_switch
-// moves that pointer and nothing else — the Assistant keeps the conversation.
-// It never SENDS into a session — /code (code mode) is how you talk to a coder.
-
-import type { ModelMessage, Tool } from 'ai';
-import { AssistantAgent } from '../../core/llm/agents/assistant.js';
-import { agentClock, type AgentConfig } from '../../core/llm/agentConfig.js';
-import type { SessionRow } from 'phantom-backend-sdk/schema';
-import type { Cards, CardFields, ItemOp, CardRow } from 'phantom-backend-sdk';
-import type { Projects } from 'phantom-backend-sdk';
-import { assistantKanbanTool, sessionsTool, projectCreateTool, gitAutoPushTool, gitAutoPullTool, dockerLogsTool,
-  type KanbanArgs } from '../../core/llm/tools/tui.js';
+// (core/agents/assistant: same prompt, same tools, same handlers) run on the
+// client SDK over loopback: its session row is its record, its tools are the
+// server's for its type plus this kit — the board, the sessions, the gated
+// project_create_repo, git auto-push/pull, docker logs — bound to what only
+// the bot knows: the active project, the pointer, the switch, the yes/no.
+import type { Tool } from 'ai';
+import type { ToolKit, ToolKitContext } from 'phantom-client-sdk';
+import { sessionsTool, assistantKanbanTool, projectCreateTool, gitAutoPushTool, gitAutoPullTool, dockerLogsTool,
+  type KanbanArgs } from '../../core/agents/assistant/tools.js';
 import { sessionsHandler, projectCreateHandler, gitHandlers, dockerLogsHandler,
-  type AssistantHost } from '../../core/llm/tools/assistantHandlers.js';
-import type { ApiCall } from '../../core/session.js';
-import { autoPushSession, autoPullSession } from '../../core/llm/tools/git.js';
-import { phantomTools } from '../../core/llm/tools/workspace.js';
-import { webTools } from '../../core/llm/tools/web.js';
-import { cronTools } from '../../core/llm/tools/crons.js';
-import { usageEvent, type Transcript } from '../../core/llm/transcript.js';
-import type { ReplyBubble } from 'phantom-backend-sdk';
+  type AssistantHost } from '../../core/agents/assistant/handlers.js';
+import { autoPushSession, autoPullSession } from '../../core/agents/assistant/gitSteps.js';
+import type { Cards, Projects, CardFields, ItemOp } from 'phantom-backend-sdk';
+import type { CardRow } from 'phantom-backend-sdk/schema';
 
-const BASE = 'http://looper/api';
-/** The bot's session-lock id — one declaration, the engine imports it. */
 export const CLIENT_ID = 'telegram';
 
 export interface AssistantDeps {
-  f: typeof fetch;
-  apiKey: string;
   /** The board's owner, and the project rows it is addressed by. */
   cards: Cards;
   projects: Projects;
-  modelFetch?: typeof fetch;
-}
-
-type Envelope = { ok: boolean; data?: any; error?: { message?: string } };
-
-async function api(deps: AssistantDeps, path: string,
-  init?: { method?: string; body?: unknown; session?: string }): Promise<Envelope> {
-  const headers: Record<string, string> = { authorization: `Bearer ${deps.apiKey}` };
-  if (init?.body !== undefined) headers['content-type'] = 'application/json';
-  if (init?.session) headers['x-phantom-looper-session'] = init.session;
-  const r = await deps.f(`${BASE}${path}`, {
-    method: init?.method ?? 'GET', headers,
-    ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
-  });
-  return r.json() as Promise<Envelope>;
+  /** Where this process reaches its own API (the git streams). */
+  loopback: { url: string; apiKey: string };
 }
 
 /** The board handler, at the Cards object — the same rows and refusals the
@@ -69,8 +33,7 @@ function boardHandler(deps: AssistantDeps, projectId: () => string | null) {
   const cardOf = (c: CardRow) => ({ card: c.number, title: c.title, status: c.status });
   // Card rows carry Date fields. Every other door serializes them over HTTP;
   // here the row would go into the model's history as-is, and the SDK
-  // rejects a non-JSON tool result on the NEXT turn ("messages do not match
-  // the ModelMessage[] schema"). The same round-trip the API does.
+  // rejects a non-JSON tool result on the NEXT turn. The same round-trip the API does.
   const json = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
   return async (args: KanbanArgs): Promise<unknown> => json(await handle(args));
   async function handle(args: KanbanArgs): Promise<unknown> {
@@ -111,37 +74,28 @@ function boardHandler(deps: AssistantDeps, projectId: () => string | null) {
   }
 }
 
-/** What the engine supplies for a turn: where it is, and the two things only
- *  the engine can do — enter a session, and ask the user a yes/no question. */
+/** What the bot supplies for a turn: where it is, and the things only the
+ *  bot can do — enter a session, make a new project active, ask a yes/no. */
 export interface AssistantCtx {
-  /** The assistant's config on ITS ROW's model — Settings.agentConfig('assistant', { pin: sessionPin(own) }). */
-  config: AgentConfig;
   projectId: () => string | null;
   activeSession: () => string | null;
-  /** session_switch fired — the caller enters code mode. */
+  /** session_switch fired — the caller moves the pointer. */
   onSwitch: (id: string) => Promise<unknown>;
-  /** The approval gate: show the ask, resolve with the user's answer; the
-   *  tool's abort declines. */
+  /** The approval gate: show the ask, resolve with the user's answer; the tool's abort declines. */
   approve: (ask: { label: string; subject: string }, signal?: AbortSignal) => Promise<boolean>;
-  /** A project was just created — make it the active one and open a session
-   *  in it (the telegram meaning of the cli's "on screen"). */
+  /** A project was just created — make it the active one and open a session in it. */
   onProjectCreated: (projectId: string) => Promise<{ session?: string; error?: string }>;
 }
 
-/** This bot as an AssistantHost (core/llm/tools/assistantHandlers.ts — the
- *  same handlers the cli's pane answers with). The API is this server's own
- *  surface over `deps.f`; the pointer, the switch and the yes/no are the
- *  engine's. No local turns (`busy`) and no held history: the bot holds no
- *  session in memory, so a read is always the record. */
-function telegramHost(deps: AssistantDeps, ctx: AssistantCtx): AssistantHost {
-  const call: ApiCall = async (method, path, body) => {
-    const j = await api(deps, path, { method, body });
-    if (!j.ok) throw new Error(j.error?.message ?? `${method} ${path} failed`);
-    return j.data;
-  };
-  const gitCfg = (sessionId: string) => ({ baseUrl: BASE, apiKey: deps.apiKey, sessionId, fetch: deps.f });
+/** This bot as an AssistantHost (core/agents/assistant/handlers — the same
+ *  handlers the cli's pane answers with). The API is reached through the
+ *  agent's own client; the pointer, the switch and the yes/no are the bot's.
+ *  No local turns (`busy`) and no held history: the bot holds no session in
+ *  memory, so a read is always the record. */
+function telegramHost(deps: AssistantDeps, ctx: AssistantCtx, kit: ToolKitContext): AssistantHost {
+  const gitCfg = (sessionId: string) => ({ baseUrl: deps.loopback.url, apiKey: deps.loopback.apiKey, sessionId });
   return {
-    call,
+    call: (method, path, body) => kit.backend.call(method, path, body),
     clientId: CLIENT_ID,
     autoPush: (id, onStep) => autoPushSession(gitCfg(id), onStep),
     autoPull: (id, onStep) => autoPullSession(gitCfg(id), onStep),
@@ -153,122 +107,28 @@ function telegramHost(deps: AssistantDeps, ctx: AssistantCtx): AssistantHost {
   };
 }
 
-/** The Assistant's whole kit for a telegram turn. File tools + web bind to
- *  the assistant's OWN session — the server opens its workspace, the on-screen
- *  session's, re-pointed on every switch (Sessions.follow) — when it has one
- *  (read-only); the cron kit to the active project when there is one and
- *  its crons are switched on;
- *  board + sessions + the gated project_create_repo + git_auto_push +
- *  git_auto_pull + docker_logs always. */
-export async function assistantKit(deps: AssistantDeps, ctx: AssistantCtx, own: SessionRow): Promise<Record<string, Tool>> {
-  const host = telegramHost(deps, ctx);
-  const git = gitHandlers(host);
-  const kit: Record<string, Tool> = {
-    ...assistantKanbanTool(boardHandler(deps, ctx.projectId)),
-    ...sessionsTool(sessionsHandler(host)),
-    ...projectCreateTool(projectCreateHandler(host)),
-    ...gitAutoPushTool(git.push),
-    ...gitAutoPullTool(git.pull),
-    ...dockerLogsTool(dockerLogsHandler(host)),
+/** The Assistant's kit for a telegram turn — what the server's tools for the
+ *  assistant type (files, web, crons) do not cover: the board, the sessions,
+ *  the gated project_create_repo, git auto-push / auto-pull, docker logs.
+ *  Tools that exist in the shared kit but do nothing on Telegram are left out
+ *  so the model never wastes a call on a dead end. */
+export function telegramAssistantKit(deps: AssistantDeps, ctx: AssistantCtx): ToolKit {
+  return {
+    name: 'telegram-assistant',
+    build(kit) {
+      const host = telegramHost(deps, ctx, kit);
+      const git = gitHandlers(host);
+      const tools: Record<string, Tool> = {
+        ...assistantKanbanTool(boardHandler(deps, ctx.projectId)),
+        ...sessionsTool(sessionsHandler(host)),
+        ...projectCreateTool(projectCreateHandler(host)),
+        ...gitAutoPushTool(git.push),
+        ...gitAutoPullTool(git.pull),
+        ...dockerLogsTool(dockerLogsHandler(host)),
+      };
+      delete tools.kanban_screen;
+      delete tools.session_close;
+      return Promise.resolve({ tools, mutating: [] });
+    },
   };
-  // Tools that exist in the shared kit but do nothing on Telegram — remove
-  // them so the model never wastes a call on a dead end.
-  delete kit.kanban_screen;
-  delete kit.session_close;
-  if (own.workspaceId) {
-    const common = { baseUrl: BASE, apiKey: deps.apiKey, sessionId: own.id, fetch: deps.f };
-    Object.assign(kit,
-      await phantomTools({ ...common, pick: 'readonly' }),
-      webTools(common));
-  }
-  const id = ctx.projectId();
-  if (id) Object.assign(kit, await cronTools({ baseUrl: BASE, apiKey: deps.apiKey, projectId: id, fetch: deps.f }));
-  return kit;
-}
-
-/** The result of one assistant turn — the reply text, the text as the sink
- *  sent it (files cut out — what to speak), and the token usage across all
- *  steps (the compaction trigger reads the input size). */
-export interface AssistantTurnResult {
-  text: string;
-  said: string;
-  usage: { input: number; output: number; cacheRead: number; cacheWrite: number };
-}
-
-/** Run ONE Assistant turn on the conversation, streaming to the telegram
- *  sink. Appends the user + reply to `history` (and to `transcript`, the
- *  on-disk record, when given). Returns the reply text and the turn's
- *  accumulated token usage. `onSwitch` is called if the Assistant's
- *  session_switch fires — the caller moves the active-session pointer.
- *  `own` is the assistant's session row: like every session it runs on ITS
- *  ROW's model (the pin, frozen after its first turn), and its file tools
- *  open its workspace. */
-export async function runAssistantTurn(
-  deps: AssistantDeps, history: ModelMessage[], message: string, sink: ReplyBubble,
-  ctx: AssistantCtx, abortSignal: AbortSignal | undefined, transcript: Transcript | undefined,
-  own: SessionRow,
-): Promise<AssistantTurnResult> {
-  const tools = await assistantKit(deps, ctx, own);
-  const agent = new AssistantAgent({ ...ctx.config.model, fetch: deps.modelFetch }, tools,
-    { sessionId: own.id, maxSteps: ctx.config.maxSteps, clock: agentClock(ctx.config) });
-
-  // Accumulate usage across all steps in this turn.
-  const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-
-  // The user message is NOT added to history until the turn succeeds — a
-  // failed turn (prompt too long, auth error, anything) never touches the
-  // stored conversation. The model sees it in the messages copy below.
-  const user: ModelMessage = { role: 'user', content: message };
-  let text = '';
-  try {
-    // A COPY with the user message appended: compaction may splice the
-    // stored history mid-turn, and the turn in flight must finish on the
-    // conversation it started with — also the warm cached prefix.
-    // The `record` seam writes each step's messages AND its usage line to the
-    // transcript — the same per-step recording the voice assistant and coding
-    // sessions use. No step is lost, no usage is missed.
-    const messages = [...history, user];
-    // Write the user message to the transcript BEFORE the turn so step
-    // messages (written by appendStep during the turn) land after it — the
-    // same order the conversation happened in.  A failed turn leaves the
-    // user message on disk; compaction or a fresh file will clean it up,
-    // and one orphan line is better than a misordered conversation that
-    // breaks the model on reload.
-    transcript?.append(user);
-    const r = await agent.stream({
-      messages, abortSignal,
-      record: transcript ? {
-        appendStep: (msgs, u) => {
-          transcript.appendStep(msgs, u);
-          const ev = usageEvent(u);
-          usage.input += ev.input as number;
-          usage.output += ev.output as number;
-          usage.cacheRead += ev.cacheRead as number;
-          usage.cacheWrite += ev.cacheWrite as number;
-        },
-      } : undefined,
-    });
-    let failure: unknown;
-    for await (const part of r.stream) {
-      const p = part as Record<string, unknown>;
-      if (p.type === 'error' && failure === undefined) failure = p.error;
-      if (p.type === 'text-delta' && typeof p.text === 'string') text += p.text;
-      sink.appendPart(p);
-    }
-    if (failure !== undefined) {
-      // The SDK's r.response rejects with a generic "No output generated" —
-      // the real reason is in the error part. Throw it so the caller sees it.
-      Promise.resolve(r.response).catch(() => {});
-      throw failure instanceof Error ? failure : new Error(String(failure));
-    }
-    const resp = await r.response;
-    // Success: commit the user message and the turn's response to history.
-    history.push(user, ...(resp.messages as ModelMessage[]));
-  } catch (e) {
-    // History is untouched — the user message was never added.
-    await sink.discard();
-    throw e;
-  }
-  const said = await sink.finish(text);
-  return { text, said, usage };
 }

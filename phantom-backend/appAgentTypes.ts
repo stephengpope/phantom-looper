@@ -3,8 +3,8 @@
 // assistant ARE — which tools, which workspace relationship, whether their
 // sessions show in lists, and what each of their settings means to a
 // person — is said here and nowhere else. Registration order is the
-// settings screen's order; the first type is the one the others' models
-// fall back to.
+// settings screen's order. The coding agent is the root: the assistant's
+// and the supervisor's models fall back to it.
 import type { AgentTypeDefinition } from 'phantom-backend-sdk';
 
 export const appAgentTypes: AgentTypeDefinition[] = [
@@ -31,6 +31,7 @@ export const appAgentTypes: AgentTypeDefinition[] = [
     // The user's assistant: works the board and the sessions, reads the
     // files of whatever session is on screen.
     name: 'assistant',
+    modelFallsBackTo: 'coding',
     workspace: 'borrow',
     tools: ['task_list', 'task_wait', 'read', 'ls', 'find', 'grep', 'web_search', 'web_fetch', 'cron_list', 'cron_create', 'cron_update', 'cron_remove', 'kanban_card_read', 'kanban_card_list', 'kanban_card_create', 'kanban_card_update', 'kanban_card_items', 'kanban_card_auto_plan', 'kanban_card_auto_build', 'kanban_card_pin', 'kanban_card_move', 'kanban_card_history', 'git_auto_push', 'git_auto_pull'],
     listed: false,
@@ -51,6 +52,7 @@ export const appAgentTypes: AgentTypeDefinition[] = [
     // Judges a card run: reads the coder's checkout, never writes it. Its
     // card-bound powers (move, items) are the looper's own tools, added per run.
     name: 'supervisor',
+    modelFallsBackTo: 'coding',
     workspace: 'borrow',
     tools: ['task_list', 'task_wait', 'read', 'ls', 'find', 'grep', 'web_search', 'web_fetch', 'kanban_card_read'],
     listed: false,

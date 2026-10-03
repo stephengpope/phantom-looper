@@ -103,6 +103,11 @@ export interface AgentTypeDefinition {
   workspace: 'own' | 'borrow' | 'none';
   /** Shown in session lists by default? (A supervisor's record is not.) */
   listed?: boolean;
+  /** The type whose model this one falls back to when its own provider /
+   *  model / endpoint / reasoning / compaction are unset (the cascade,
+   *  AgentConfig). Absent = a root: unset means empty, and the first model
+   *  call says what to set. Must name a registered type; no cycles. */
+  modelFallsBackTo?: string;
 }
 
 /** A tool user space serves from the backend: the same shape as the SDK's

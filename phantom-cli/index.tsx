@@ -31,7 +31,7 @@ import { CLI_LOG_PATH, logLine } from './cliLog.js';
 import { resolveLocal, localValues } from './local.js';
 import { apiFor, streamFor, savedCaFor } from './provision.js';
 import { Server } from './server.js';
-import { AUTO_PUSH_STEPS, AUTO_PULL_STEPS, type AutoPushOutcome, type AutoPullOutcome } from '../core/llm/tools/git.js';
+import { AUTO_PUSH_STEPS, AUTO_PULL_STEPS, type AutoPushOutcome, type AutoPullOutcome } from '../core/agents/assistant/gitSteps.js';
 import { hostname } from 'node:os';
 import { APP_ROOT, APP_VERSION, checkLatest, installVersion, selfUpdate, thisBuildDir } from './selfUpdate.js';
 import { CHECK_INTERVAL_MS, autoUpdateCycle, dueForCheck, prelaunchReconcile, stampChecked } from './autoUpdate.js';

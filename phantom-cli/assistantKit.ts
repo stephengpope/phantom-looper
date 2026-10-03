@@ -10,7 +10,7 @@ import type { ToolKit } from 'phantom-client-sdk';
 import { sessionsTool, assistantKanbanTool, projectCreateTool, gitAutoPushTool,
   gitAutoPullTool, assistantModeTool, dockerLogsTool, type KanbanArgs } from './voice.js';
 import { sessionsHandler, projectCreateHandler, gitHandlers, dockerLogsHandler,
-  type AssistantHost } from '../core/llm/tools/assistantHandlers.js';
+  type AssistantHost } from '../core/agents/assistant/handlers.js';
 import type { ProjectInfo } from './components/Launcher.js';
 import { kanbanOps, resolveColumn } from './kanban.js';
 import type { WindowStore } from './window.js';

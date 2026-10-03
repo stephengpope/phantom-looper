@@ -2,8 +2,8 @@
 // none; user space registers its own (config.agentTypes). A type is a
 // name, the tool grants its sessions get, how its sessions relate to a
 // workspace, and whether its sessions are listed. Every other object asks
-// here instead of knowing a type by name. The FIRST registered type is the
-// one the others' model settings fall back to (AgentConfig's cascade).
+// here instead of knowing a type by name. A type's model settings fall back
+// to the type it names (`modelFallsBackTo`); a root falls back to nothing.
 import type { AgentTypeDefinition, ToolGrant } from '../doors.js';
 
 export class AgentTypesError extends Error {
@@ -18,6 +18,15 @@ export class AgentTypes {
       if (this.#types.has(definition.name)) throw new AgentTypesError('duplicate_agent_type', `agent type '${definition.name}' is registered twice`);
       this.#types.set(definition.name, definition);
     }
+    // Every fallback names a registered type, and following them ends at a root.
+    for (const definition of definitions) {
+      const seen = new Set<string>();
+      for (let name: string | undefined = definition.name; name; name = this.#types.get(name)?.modelFallsBackTo) {
+        if (seen.has(name)) throw new AgentTypesError('unknown_agent_type', `agent type '${definition.name}': modelFallsBackTo forms a cycle`);
+        seen.add(name);
+        if (!this.#types.has(name)) throw new AgentTypesError('unknown_agent_type', `agent type '${definition.name}' falls back to '${name}', which is not registered`);
+      }
+    }
   }
 
   get(name: string): AgentTypeDefinition | undefined { return this.#types.get(name); }
@@ -30,12 +39,8 @@ export class AgentTypes {
   }
   list(): AgentTypeDefinition[] { return [...this.#types.values()]; }
   names(): string[] { return [...this.#types.keys()]; }
-  /** The type the others fall back to: the first registered. */
-  first(): string {
-    const [first] = this.#types.keys();
-    if (!first) throw new AgentTypesError('unknown_agent_type', 'no agent types are registered');
-    return first;
-  }
+  /** The type `name` falls back to, or null for a root. */
+  fallbackOf(name: string): string | null { return this.require(name).modelFallsBackTo ?? null; }
   toolGrantsOf(name: string): ToolGrant[] { return this.require(name).tools; }
   /** Only the sessions of these types appear in a default listing. */
   listedNames(): string[] { return this.list().filter((definition) => definition.listed !== false).map((definition) => definition.name); }

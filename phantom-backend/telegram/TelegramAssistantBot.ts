@@ -1,6 +1,6 @@
-// The Telegram engine: the bot as a client of this server. Started after
-// listen (like the looper), reaching the routes through injectFetch. One
-// authorized user, DM-only, webhook (never polling). Two modes on one sticky
+// The Telegram bot's BEHAVIOUR: modes, commands, which turn to run, alerts —
+// on the SDK's TelegramBot (the link, verified inbound, delivery) and the
+// client SDK's agents over loopback. One authorized user, DM-only, webhook. Two modes on one sticky
 // bot state row: ASSISTANT (home — the Assistant answers, board/cards/sessions)
 // and CODE (inside a session — a plain message runs a coding turn on it).
 //
@@ -11,40 +11,31 @@
 // attachments, the escape-spelled reactions) are ported from ../shockwave.
 
 import { CodingAgent } from '../../core/agents/coding.js';
-import type { Settings, AgentConfig as SdkAgentConfig, ModelCatalog } from 'phantom-backend-sdk';
+import { AssistantAgent } from '../../core/agents/assistant.js';
+import { BackendClient, type Agent, type AgentHandlers } from 'phantom-client-sdk';
+import { telegramAssistantKit, CLIENT_ID } from './assistant.js';
+import type { Settings, ModelCatalog } from 'phantom-backend-sdk';
 import type { FastifyInstance } from 'fastify';
-import type { Paths } from 'phantom-backend-sdk';
-import { sessionDir } from 'phantom-backend-sdk';
-import { injectFetch } from '../looper/injectFetch.js';
-import { runCodingTurn, type TurnDeps } from '../looper/turn.js';
-import { oldAgentConfig } from '../agentConfig.js';
-import { sessionPin } from '../agentConfig.js';
-import type { SettingsEvents } from 'phantom-backend-sdk';
 import { APP_VERSION } from 'phantom-backend-sdk';
-import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
 import type { Sessions } from 'phantom-backend-sdk';
 import type { Cards } from 'phantom-backend-sdk';
 import type { Presets } from 'phantom-backend-sdk';
 import type { System } from 'phantom-backend-sdk';
-import type { SessionEvents } from 'phantom-backend-sdk';
-import type { UserMessageQueue } from 'phantom-backend-sdk';
 import type { BoardEvents, BoardEvent } from 'phantom-backend-sdk';
 import { autoBuildAlert } from './alerts.js';
 import { logger, errStr } from 'phantom-backend-sdk';
 import { TelegramApi, titled } from 'phantom-backend-sdk';
 import { collectFiles, type TelegramBot } from 'phantom-backend-sdk';
-import { runAssistantTurn, CLIENT_ID, type AssistantDeps } from './assistant.js';
 import type { Ask } from 'phantom-backend-sdk';
 import { UpgradeChecker } from 'phantom-backend-sdk';
 import type { TelegramBotState, TelegramBotStateRow, TelegramMode } from 'phantom-backend-sdk';
 import type { TelegramSentMessages } from 'phantom-backend-sdk';
 import type { TelegramHandledUpdates } from 'phantom-backend-sdk';
 import { menuFor, handleCommand } from './commands.js';
-import { AUTO_PUSH_STEPS, AUTO_PULL_STEPS, type AutoPushOutcome, type AutoPullOutcome } from '../../core/llm/tools/git.js';
+import { AUTO_PUSH_STEPS, AUTO_PULL_STEPS, type AutoPushOutcome, type AutoPullOutcome } from '../../core/agents/assistant/gitSteps.js';
 import type { AutoPushEvent, AutoPullEvent } from 'phantom-backend-sdk';
 import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
 import type { Projects } from 'phantom-backend-sdk';
-import { AssistantConversation } from './assistantConversation.js';
 
 
 const log = logger('telegram');
@@ -58,72 +49,48 @@ const BASE = 'http://looper/api';
 export interface TelegramAssistantBotDeps {
   /** The SDK's Telegram plumbing: the link, verified inbound, delivery. */
   bot: TelegramBot;
-  /** Telegram's own rows — one owner per table (see each file). */
   botState: TelegramBotState;
-  sentMessages: TelegramSentMessages;
-  handledUpdates: TelegramHandledUpdates;
   settings: Settings;
-  agentConfig: SdkAgentConfig;
   modelCatalog: ModelCatalog;
   sessions: Sessions;
   cards: Cards;
   projects: Projects;
   presets: Presets;
   system: System;
-  paths: Paths;
-  /** The turn runtime an interrupt reaches: in-process turns and foreground commands. */
-  activeTurns?: Map<string, AbortController>;
+  /** Where this process reaches its own API: the backend's loopback. */
+  loopback: { url: string; apiKey: string };
+  /** The in-flight foreground commands, for /stop to kill. */
   foreground?: { killAll(id: string): void };
-  /** The loops in flight — what an api restart would cut (the upgrade checker warns). */
+  /** The card runs in flight — the upgrade's health line. */
   loopsRunning?: () => number;
-  app: FastifyInstance;
-  apiKey: string;
-  sessionEvents?: SessionEvents;
-  /** The board bus — the auto build alerts listen on it (alerts.ts). */
+  /** The board bus: the supervisor's moves become alerts. */
   events?: BoardEvents;
-  /** The settings feed — a telegram_* key or the bot token written, through
-   *  any door, reconciles the webhook and the command menu. */
-  settingsEvents?: SettingsEvents;
-  /** The backdoor message queue (api/backdoor.ts) — each turn drains its
-   *  session's queue. */
-  backdoor?: UserMessageQueue;
-  modelFetch?: typeof fetch;
-  /** https://PHANTOM_BACKEND_ADDRESS — the only source of the webhook URL. */
-  publicAddress?: string;
-  /** Direct auto-push / auto-pull — bypasses injectFetch so onEvent fires
-   *  as each step completes instead of all at once after the stream ends. */
-  autoPush?: (session: SessionRow, project: ProjectRow,
+  /** Direct auto-push / auto-pull so onEvent fires as each step completes. */
+  autoPush: (session: SessionRow, project: ProjectRow,
     onEvent?: (e: AutoPushEvent) => void | Promise<void>, by?: string) => Promise<AutoPushOutcome>;
-  autoPull?: (session: SessionRow, project: ProjectRow,
+  autoPull: (session: SessionRow, project: ProjectRow,
     onEvent?: (e: AutoPullEvent) => void | Promise<void>, by?: string) => Promise<AutoPullOutcome>;
 }
 
-/** A turn in flight on THIS server, keyed per session (code mode) or
+/** A turn in flight on THIS bot, keyed per session (code mode) or
  *  'assistant'. A second message to the SAME key is queued and sent as one
  *  follow-up turn (the cli's queue shape); a message to a DIFFERENT key
- *  starts its own turn — so multiple sessions can run concurrently. A code
- *  turn's AbortController rides into runCodingTurn and is aborted two ways:
- *  /stop through this map, a remote interrupt through the turn's feed
- *  subscription; the assistant's stop is local (it is not a session). */
-interface InFlightTurn { queue: string[]; abort: AbortController }
+ *  starts its own turn — so multiple sessions can run concurrently. /stop
+ *  interrupts the agent; a remote interrupt reaches it over the session feed
+ *  the agent itself listens to. */
+interface InFlightTurn { queue: string[]; agent: Agent }
 
 export class TelegramAssistantBot {
-  private fetch: typeof globalThis.fetch;
   private inFlight = new Map<string, InFlightTurn>();
+  /** One client, this bot's lock identity, for every agent it opens. */
+  private readonly client: BackendClient;
 
-  /** The Assistant's conversation — history, transcript, compaction. */
-  readonly conversation: AssistantConversation;
 
   /** The upgrade checker — periodic GitHub release check + Telegram notification. */
   upgradeChecker: UpgradeChecker;
 
   constructor(private deps: TelegramAssistantBotDeps) {
-    this.fetch = injectFetch(deps.app);
-    this.conversation = new AssistantConversation({
-      dataRoot: deps.paths.root,
-      sessions: deps.sessions,
-
-    });
+    this.client = new BackendClient({ url: deps.loopback.url, apiKey: deps.loopback.apiKey, clientId: CLIENT_ID, label: 'telegram' });
     this.upgradeChecker = new UpgradeChecker({
       version: APP_VERSION,
       health: async () => ({ version: APP_VERSION, loops_running: deps.loopsRunning?.() ?? 0 }),
@@ -251,41 +218,33 @@ export class TelegramAssistantBot {
     }
   }
 
-  /** An assistant-mode turn: the in-memory Assistant conversation, streamed to
-   *  the bubble. session_switch moves the active-session POINTER only — the
-   *  assistant keeps the conversation; /code is how the user hands it over. */
+  /** An assistant-mode turn: the Assistant's own session (its record IS the
+   *  conversation), on the client SDK, streamed to the bubble. session_switch
+   *  moves the active-session POINTER only — the assistant keeps the
+   *  conversation; /code is how the user hands it over. */
   private async assistantTurn(client: TelegramApi, dm: number, message: string): Promise<void> {
-    const conv = this.conversation;
-    conv.chat = { client, dm };
-    conv.load();
     const typing = startTyping(client, dm);
-    const abort = new AbortController();
     const busyKey = 'assistant';
-    this.inFlight.set(busyKey, { queue: [], abort });
     const bot = await this.deps.botState.read();
     // The assistant can deliver a file it names from the active session's work
     // dir (its file tools are read-only, but it can point at one the coder made).
     const sink = await this.deps.bot.startReplyBubble(client, dm, bot.activeSessionId ?? null);
-    const deps: AssistantDeps = { f: this.fetch, apiKey: this.deps.apiKey, modelFetch: this.deps.modelFetch,
-      cards: this.deps.cards, projects: this.deps.projects };
-    let replyText = '';
     // The pointer as this turn sees it — live across a switch within the turn.
     let active = bot.activeSessionId ?? null;
+    let agent: AssistantAgent | undefined;
     try {
-      // The assistant's session row exists BEFORE its agent is built: the
-      // turn runs on the row's model, its tools open the row's workspace, and
-      // every call is billed to it.
-      const own = await conv.ensureSession(bot.activeProjectId, bot.activeSessionId);
-      const project = bot.activeProjectId ? await this.deps.projects.get(bot.activeProjectId) : undefined;
-      const config = await oldAgentConfig(this.deps.agentConfig, this.deps.settings, 'assistant', project ? { projectId: project.id } : {}, sessionPin(own));
-      conv.compaction = config.compaction;
+      // The assistant's session row exists BEFORE its agent is built: the turn
+      // runs on the row's model, its tools open the row's workspace, every call is billed to it.
+      const own = await this.ensureAssistantSession(bot.activeProjectId, bot.activeSessionId);
+      agent = await AssistantAgent.resumeSession(this.client, this.agentHandlers('assistant'), own.id);
+      this.inFlight.set(busyKey, { queue: [], agent });
       const onSwitch = async (id: string) => {
         const r = await this.switchSession(client, dm, id);
         if ('error' in r) return r;
         active = r.id;
         // The assistant's workspace follows the switch mid-turn: its read tools
         // open the row's workspace, so the very next call sees the new files.
-        await this.deps.sessions.follow(own.id, bot.activeProjectId!, r.id);
+        await agent!.follow(bot.activeProjectId!, r.id);
         return { active: r.id, title: r.title,
           note: "You are still the assistant — this session's files are now what your read tools see. " +
             'The user sends /code to talk to its coding agent; you never enter it.' };
@@ -295,106 +254,104 @@ export class TelegramAssistantBot {
       const onProjectCreated = async (projectId: string) => {
         await this.deps.botState.setActiveProject(projectId);
         let started;
-        try { started = await this.deps.sessions.start(projectId, CodingAgent.systemPromptLayout, { startedBy: 'telegram' }); }
+        try { started = await this.deps.sessions.start(projectId, CodingAgent.systemPromptLayout, { type: 'coding', startedBy: 'telegram' }); }
         catch (e) { return { error: (e as Error).message }; }
         await this.deps.botState.setActiveSession(started.id);
         await this.enterMode(client, dm, 'code');
         await client.sendMessage(dm, '🆕 New session in the new project. Send your first message to begin.');
         return { session: started.id };
       };
-      const result = await runAssistantTurn(deps, conv.history, message, sink, {
-        config,
-        projectId: () => bot.activeProjectId ?? null,
-        activeSession: () => active,
-        onSwitch,
-        approve: (ask, signal) => this.deps.bot.askForApproval(client, dm, ask, signal),
-        onProjectCreated,
-      }, abort.signal, conv.getTranscript(), own);
-      replyText = result.said;
-      await this.deps.sessions.turnEnded(own, CLIENT_ID).catch(
-        (e) => log.warn({ err: errStr(e) }, 'assistant session update failed'));
-      // Long chat? Summarize it in the background — turns never wait on it.
-      conv.kickCompaction(result.usage.input);
+      agent.addToolKit(telegramAssistantKit(
+        { cards: this.deps.cards, projects: this.deps.projects, loopback: this.deps.loopback },
+        { projectId: () => bot.activeProjectId ?? null, activeSession: () => active, onSwitch,
+          approve: (ask, signal) => this.deps.bot.askForApproval(client, dm, ask, signal), onProjectCreated }));
+      const off = agent.on('part', (part) => sink.appendPart(part as Record<string, unknown>));
+      let result;
+      try { result = await agent.sendMessage(message); } finally { off(); }
+      const said = await sink.finish(result?.text ?? '');
       // Any messages queued while we ran go out as one follow-up turn.
       const queued = this.inFlight.get(busyKey)?.queue ?? [];
       this.inFlight.delete(busyKey);
-      await this.deps.bot.speakText(client, dm, replyText, typing);
+      await agent.close();
+      await this.deps.bot.speakText(client, dm, said, typing);
       typing.stop();
       if (queued.length) await this.assistantTurn(client, dm, queued.join('\n\n'));
     } catch (e) {
       this.inFlight.delete(busyKey);
+      await agent?.close().catch(() => {});
+      sink.discard();
       typing.stop();
       const msg = (e as Error).message;
-      const isPromptTooLong = /prompt is too long|request too large/i.test(msg);
+      const isPromptTooLong = /prompt is too long|request too large|context_too_long/i.test(msg);
       log.error({ err: errStr(e) }, 'assistant turn failed');
       await client.sendMessage(dm, isPromptTooLong
-        ? '⚠️ Chat history exceeds the model\'s limit — send /compact to free space, then try again.'
+        ? '⚠️ Chat history exceeds the model\'s limit.'
         : `⚠️ ${msg}`).catch(() => {});
     }
   }
 
-  /** A code-mode turn: a real coding turn on the session, via runCodingTurn,
-   *  streamed from the session feed into the bubble. */
-  private async codeTurn(client: TelegramApi, dm: number, sessionId: string, message: string): Promise<void> {
-    let opened: OpenedSession;
-    try {
-      opened = await openSession({ baseUrl: BASE, apiKey: this.deps.apiKey, clientId: CLIENT_ID,
-        label: CLIENT_ID, fetch: this.fetch, lock: true, sessionId });
-    } catch (e) {
-      if (e instanceof SessionLockedError) {
-        const s = await this.deps.sessions.get(sessionId);
-        await client.sendMessage(dm, `🔒 That session is busy${s?.lockedLabel ? ` (${s.lockedLabel})` : ''} — try again in a moment.`);
-        return;
-      }
-      throw e;
+  /** The assistant's session row, pointed at what the user is looking at:
+   *  made on first use, re-pointed on every turn (Sessions.follow). */
+  private assistantSessionId: string | null = null;
+  private async ensureAssistantSession(projectId: string | null, activeSessionId?: string | null): Promise<{ id: string }> {
+    if (!projectId) throw new Error('no active project — /projects to pick one');
+    if (this.assistantSessionId) {
+      await this.deps.sessions.follow(this.assistantSessionId, projectId, activeSessionId);
+      const row = await this.deps.sessions.get(this.assistantSessionId);
+      if (row) return row;
+      this.assistantSessionId = null; // purged underneath us — make a new one
     }
+    const row = await this.deps.sessions.createAssistant(projectId, activeSessionId, AssistantAgent.systemPromptLayout, 'telegram');
+    this.assistantSessionId = row.id;
+    return row;
+  }
 
+  /** A code-mode turn: the coding agent on its session, on the client SDK,
+   *  streamed into the bubble. A session held elsewhere is refused with a
+   *  note; an interrupt from anywhere (esc-esc in a cli window, the
+   *  interrupt route, /stop) ends the turn cleanly. */
+  private async codeTurn(client: TelegramApi, dm: number, sessionId: string, message: string): Promise<void> {
     const typing = startTyping(client, dm);
-    const abort = new AbortController();
-    this.inFlight.set(sessionId, { queue: [], abort });
-    // Files the agent names in its reply are delivered from this session's work
-    // dir; the agent writes /workspace/... container paths, which map there.
     const sink = await this.deps.bot.startReplyBubble(client, dm, sessionId);
-    // The bubble reads the session feed — the ONE place a coding turn's parts
-    // are published. Subscribe before the run; the lock makes this the only
-    // turn on the session, so there is no gap. The same feed carries the stop
-    // signal: an `interrupt` (esc-esc in a cli window, the interrupt route)
-    // aborts this turn exactly as /stop does.
-    const unsubscribe = this.deps.sessionEvents?.subscribe(sessionId, (e) => {
-      if (e.event === 'part') sink.appendPart(e.part as Record<string, unknown>);
-      else if (e.event === 'interrupt') abort.abort();
-    });
-
+    let agent: CodingAgent | undefined;
     try {
-      const s = await this.deps.sessions.get(sessionId);
-      const projectId = s?.projectId ?? '';
-      const planMode = s?.planMode === true;
-      const project = s ? await this.deps.projects.get(s.projectId) : undefined;
-      const cfg = await oldAgentConfig(this.deps.agentConfig, this.deps.settings, 'coding', project ? { projectId: project.id } : {}, sessionPin(opened.session));
-      // `signal` is what makes the turn stoppable at all: /stop aborts this
-      // controller through the inFlight map, a remote interrupt through the feed
-      // subscription above — runCodingTurn ends it cleanly (interrupted, not
-      // failed) either way.
-      const deps: TurnDeps = { ...this.turnDeps(), signal: abort.signal };
-      const r = await runCodingTurn(deps, opened, projectId, message, planMode, cfg);
-      unsubscribe?.();
-      const said = await sink.finish(r.text);
+      agent = await CodingAgent.resumeSession(this.client, this.agentHandlers('coding'), sessionId);
+      this.inFlight.set(sessionId, { queue: [], agent });
+      const off = agent.on('part', (part) => sink.appendPart(part as Record<string, unknown>));
+      let result;
+      try { result = await agent.sendMessage(message); }
+      catch (e) {
+        if ((e as { code?: string }).code === 'session_locked') {
+          off(); sink.discard(); this.inFlight.delete(sessionId); await agent.close(); typing.stop();
+          const s = await this.deps.sessions.get(sessionId);
+          await client.sendMessage(dm, `🔒 That session is busy${s?.lockedLabel ? ` (${s.lockedLabel})` : ''} — try again in a moment.`);
+          return;
+        }
+        throw e;
+      } finally { off(); }
+      const said = await sink.finish(result?.text ?? '');
       const queued = this.inFlight.get(sessionId)?.queue ?? [];
       this.inFlight.delete(sessionId);
-      await opened.close();
+      await agent.close();
       await this.deps.bot.speakText(client, dm, said, typing);
       typing.stop();
       if (queued.length) await this.codeTurn(client, dm, sessionId, queued.join('\n\n'));
-      return;
     } catch (e) {
-      unsubscribe?.();
-      await sink.discard();
+      sink.discard();
       this.inFlight.delete(sessionId);
-      await opened.close().catch(() => {});
+      await agent?.close().catch(() => {});
       typing.stop();
       log.error({ err: errStr(e) }, 'code turn failed');
       await client.sendMessage(dm, `⚠️ ${(e as Error).message}`).catch(() => {});
     }
+  }
+
+  /** What an agent this bot runs tells it: errors and notices go to the log. */
+  private agentHandlers(seat: 'coding' | 'assistant'): AgentHandlers {
+    return {
+      onError: (error) => log.warn({ agent: seat, code: error.code, err: error.message }, 'agent error'),
+      onNotice: (notice) => log.info({ agent: seat, type: notice.type }, notice.text),
+    };
   }
 
   // ── input: voice, video notes, attachments, text ────────────────────────
@@ -500,7 +457,7 @@ export class TelegramAssistantBot {
     parts.push(s.name ?? 'untitled');
     const title = parts.join(' · ');
     if (dm != null) {
-      const last = await this.deps.sentMessages.lastForSession(dm, bot.activeSessionId).catch(() => null);
+      const last = await this.deps.bot.lastMessageForSession(dm, bot.activeSessionId);
       if (last) return titled(title, last);
     }
     return title;
@@ -516,7 +473,7 @@ export class TelegramAssistantBot {
     const b = this.inFlight.get(key);
     if (!b) return false;
     b.queue.length = 0;
-    b.abort.abort();
+    b.agent.interrupt({ keepQueue: true });
     return true;
   }
 
@@ -532,7 +489,7 @@ export class TelegramAssistantBot {
    *  and, through Sessions.interrupt, any other runner's. */
   interrupt(sessionId: string): void {
     this.stop(sessionId);
-    this.deps.sessions.interrupt(sessionId, CLIENT_ID, { activeTurns: this.deps.activeTurns, foreground: this.deps.foreground });
+    this.deps.sessions.interrupt(sessionId, CLIENT_ID, { foreground: this.deps.foreground });
   }
 
   /** The approval gate, for slash commands that need a confirm (today:
@@ -572,11 +529,6 @@ export class TelegramAssistantBot {
     } catch (e) { return { result: 'error', reason: (e as Error).message } as T; }
   }
 
-  private turnDeps(): TurnDeps {
-    return { f: this.fetch, apiKey: this.deps.apiKey, base: BASE,
-      modelFetch: this.deps.modelFetch, sessionEvents: this.deps.sessionEvents, client: CLIENT_ID,
-      backdoor: this.deps.backdoor };
-  }
 
 }
 

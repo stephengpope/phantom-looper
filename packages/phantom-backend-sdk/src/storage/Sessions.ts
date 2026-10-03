@@ -36,7 +36,7 @@ import type { Projects } from './Projects.js';
 import type { Workspaces } from './Workspaces.js';
 import { newId } from 'phantom-client-sdk';
 import { logger } from '../lib/log.js';
-import { lastUserMessageText, withoutUsageLines } from 'phantom-client-sdk/transcript';
+import { withoutUsageLines } from 'phantom-client-sdk/transcript';
 import type { SystemPromptLayout, StoredSystemPrompt } from 'phantom-client-sdk/systemPrompt';
 import { SystemPrompt } from '../agents/SystemPrompt.js';
 import { repoDir, type Paths } from '../lib/paths.js';
@@ -198,7 +198,7 @@ export class Sessions {
    *  SOUL.md, the date), sent as stored on every turn after. A restart keeps
    *  the prompt the session was born with. The row and the prompt come back
    *  together — what POST /sessions answers with. */
-  async start(projectId: string, layout: SystemPromptLayout, opts: { id?: string; type?: string; startedBy?: StartedBy } = {}): Promise<SessionFull & { system_prompt: StoredSystemPrompt }> {
+  async start(projectId: string, layout: SystemPromptLayout, opts: { id?: string; type: string; startedBy?: StartedBy }): Promise<SessionFull & { system_prompt: StoredSystemPrompt }> {
     SystemPrompt.check(layout);
     const s = await this.create(projectId, opts);
     return { ...s, system_prompt: await this.writeSystemPrompt(s, layout) };
@@ -489,8 +489,8 @@ export class Sessions {
    *  id comes back exactly where it stopped (Workspaces.restore). `fromBranch`
    *  cuts a NEW session's branch from a source branch on origin instead of
    *  base (the duplicate route). */
-  async create(projectId: string, opts: { id?: string; fromBranch?: string; type?: string; startedBy?: StartedBy } = {}): Promise<SessionFull> {
-    const type = opts.type ?? this.agentConfig.firstType();
+  async create(projectId: string, opts: { id?: string; fromBranch?: string; type: string; startedBy?: StartedBy }): Promise<SessionFull> {
+    const type = opts.type;
     const project = await this.projects.get(projectId);
     if (!project) throw new SessionError('not_found', `no project ${projectId}`);
 
@@ -637,50 +637,6 @@ export class Sessions {
 
   // ── the record ─────────────────────────────────────────────────────────────
 
-  /** A client's turn ended and the whole transcript lands: one statement
-   *  writes the text, the list preview and the turn count (the count leaving
-   *  0 is what freezes the row's model). `client` is who wrote it: the agent
-   *  seat follows the writer (agentAfterSave), and the record event carries
-   *  the id so the writer ignores its own echo. Returns what the naming
-   *  decision needs. */
-  async saveTranscript(s: SessionRow, data: string, client: string): Promise<{
-    stamp: Date; name: string | null; turnCount: number; nameManual: boolean;
-  }> {
-    // A list preview, not the record: the UI shows a few dozen characters,
-    // and an uncapped copy of a pasted wall of text would ride every
-    // GET /sessions response for the life of the session.
-    const lastUserMessage = lastUserMessageText(data)?.slice(0, LAST_MESSAGE_CHARS) ?? null;
-    const stamp = new Date();
-    // Token totals are per-call entries in log_tokens — the list
-    // query JOINs that table directly. No re-parsing, no row cache.
-    // Every save is one turn: the counter that paces session naming.
-    const [saved] = await this.db.update(sessions)
-      .set({ transcript: data, transcriptLines: lineCount(data), lastUserMessage, transcriptUpdatedAt: stamp,
-        turnCount: sqlRaw`${sessions.turnCount} + 1` })
-      .where(eq(sessions.id, s.id))
-      .returning({ name: sessions.name, turnCount: sessions.turnCount, nameManual: sessions.nameManual });
-    // Saving a turn is activity on the checkout: it stays off the idle sweep.
-    if (s.workspaceId) await this.workspaces.touch(s.workspaceId);
-    // The record landed: the one moment a client can trust that the server's
-    // copy moved. Watchers pull the transcript on this. `by` is the writer,
-    // so the window that just uploaded its OWN turn ignores the echo instead
-    // of re-pulling and repainting the reply it already drew.
-    this.events?.publish(s.id, client, { event: 'transcript', updated_at: stamp.toISOString(), by: client });
-    return { stamp, name: saved.name, turnCount: saved.turnCount, nameManual: saved.nameManual };
-  }
-
-  /** Step-level save: updates ONLY the transcript text and touches the
-   *  checkout. No turn count bump, no naming, no transcript event. The
-   *  lightweight per-step counterpart to saveTranscript. */
-  async stepSave(s: SessionRow, data: string): Promise<Date> {
-    const stamp = new Date();
-    await this.db.update(sessions)
-      .set({ transcript: data, transcriptLines: lineCount(data), transcriptUpdatedAt: stamp })
-      .where(eq(sessions.id, s.id));
-    if (s.workspaceId) await this.workspaces.touch(s.workspaceId);
-    return stamp;
-  }
-
   /** Append typed lines to the record (POST /sessions/:id/transcript/append).
    *  One statement, conditional on the count: the lines land only if the
    *  record holds exactly `after` lines — else someone else wrote, and the
@@ -824,8 +780,8 @@ export class Sessions {
    *  record shows what ran and the runner reads the row like every other.
    *  No endpoint: the run inherits the project's while the provider
    *  matches (agentConfig.ts pinned). */
-  async stampModel(id: string, m: { provider: string; model: string }): Promise<void> {
-    await this.db.update(sessions).set({ provider: m.provider, model: m.model, baseUrl: null }).where(eq(sessions.id, id));
+  async stampModel(id: string, m: { provider: string; model: string; reasoning?: string | null }): Promise<void> {
+    await this.db.update(sessions).set({ provider: m.provider, model: m.model, baseUrl: null, reasoning: m.reasoning ?? null }).where(eq(sessions.id, id));
     this.events?.publish(id, '', { event: 'session', provider: m.provider, model: m.model, base_url: null });
   }
 

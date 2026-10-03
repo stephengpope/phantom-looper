@@ -32,7 +32,7 @@ import {
 } from './provision.js';
 import { setLocal } from './local.js';
 import { makeSettings } from './settings.js';
-import { PROVIDERS } from '../core/llm/createAgent.js';
+import { PROVIDERS } from 'phantom-client-sdk';
 
 /** The questions, as an interface: the wizard asks through it, tests script
  *  it. `undefined` is the person backing out (esc / ctrl-c). */

@@ -17,14 +17,15 @@ const credential = (key: string, label: string, group: string, description: stri
 /** The ten settings an agent type carries, from what the type declared
  *  (doors.ts AgentTypeSetting): the SDK supplies each one's shape; the
  *  type supplies its words, default and overridability. The model and
- *  endpoint are bound to the type's provider; the FIRST registered type's
- *  model defaults to the newest in the catalog. */
-export function agentTypeSettings(type: AgentTypeDefinition, options: { first: boolean }): SettingDefinition[] {
+ *  endpoint are bound to the type's provider; a ROOT type's (one with no
+ *  fallback) model defaults to the newest in the catalog. */
+export function agentTypeSettings(type: AgentTypeDefinition): SettingDefinition[] {
   const group = type.name;
+  const root = !type.modelFallsBackTo;
   const providerKey = `${type.name}_provider`;
   const shape: Record<AgentTypeSettingSuffix, Omit<Def, 'key' | 'default' | 'description' | 'group'>> = {
     provider: { type: 'string', label: 'provider', subgroup: 'model', choices: PROVIDERS },
-    model: { type: 'string', label: 'model', subgroup: 'model', boundToProvider: providerKey, defaultsToLatestModel: options.first },
+    model: { type: 'string', label: 'model', subgroup: 'model', boundToProvider: providerKey, defaultsToLatestModel: root },
     base_url: { type: 'string', label: 'endpoint', subgroup: 'model', boundToProvider: providerKey },
     reasoning: { type: 'string', label: 'reasoning', subgroup: 'model', choices: REASONINGS },
     max_steps: { type: 'number', label: 'steps per turn', subgroup: 'model', unit: 'count', min: 1 },

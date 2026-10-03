@@ -35,7 +35,7 @@ const CLIENT_HEADER = 'x-phantom-looper-client';
 /** What every route answers. */
 export type Envelope<T> =
   | { ok: true; data: T }
-  | { ok: false; error: { code: string; message: string; retryable: boolean } };
+  | { ok: false; error: { code: string; message: string; retryable: boolean; detail?: unknown } };
 
 export interface CallOptions {
   /** Sent as the session header. */

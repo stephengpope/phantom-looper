@@ -58,7 +58,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN useradd -m -u ${UID} agent
 # Passwordless sudo: the container is the boundary, the user is not. Without it
 # the agent cannot apt-get anything and burns turns on ~-local workarounds.
-# Caveat sudo does NOT lift: files under /project must stay uid ${UID} — the
+# Caveat sudo does NOT lift: files under /workspace must stay uid ${UID} — the
 # API process shares that volume and root-owned files break its git operations.
 RUN echo 'agent ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/agent \
   && chmod 0440 /etc/sudoers.d/agent
@@ -252,9 +252,9 @@ ENV XDG_CACHE_HOME=/workspace/.cache
 # The excludes stay as the backstop for an overridden output dir.
 RUN printf '.playwright-cli/\n' > /etc/gitexcludes \
   && git config --system core.excludesFile /etc/gitexcludes
-# /project is normally the mounted session volume (agent-owned by uid);
+# /workspace is normally the mounted session volume (agent-owned by uid);
 # own the build-time copy too so a bare `docker run` behaves the same.
-RUN mkdir -p /workspace/repo && chown -R ${UID}:${UID} /project
+RUN mkdir -p /workspace/repo && chown -R ${UID}:${UID} /workspace
 # The CLI's default browser is the chrome CHANNEL — real Google Chrome, not
 # installed here — so a bare `playwright-cli open` would fail. Point the default
 # at what is actually baked; the CLI reads this wherever --browser is omitted.

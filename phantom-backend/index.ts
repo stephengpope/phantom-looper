@@ -5,9 +5,10 @@
 // check — then listen.
 import { PhantomBackend, APP_VERSION as VERSION, telegramChannel, registerTools, logger, errStr } from 'phantom-backend-sdk';
 import { config } from './config.js';
-import { oldAgentConfig, sessionPin } from './agentConfig.js';
+import { BackendClient } from 'phantom-client-sdk';
+import { CodingAgent } from '../core/agents/coding.js';
+import { writeTitle } from './sessionTitle.js';
 import { CronEngine } from './crons/engine.js';
-import { setTokenRecorder } from '../core/llm/createAgent.js';
 import { System } from 'phantom-backend-sdk';
 import { appRoutes, type AppExtras } from './api/appRoutes.js';
 import { gitTools } from './tools/git.js';
@@ -16,19 +17,12 @@ import { GitSync, autoPush, autoPull, InstantSync, idleBackupSweep, pressureSwee
 import { writeCommitMessage } from './git/commitMessage.js';
 import { GIT_CLIENT_ID } from 'phantom-backend-sdk/git';
 import { SessionDigest } from './notifications/digest.js';
-import { openSession, SessionLockedError, type OpenedSession } from '../core/session.js';
-import { runCodingTurn } from './looper/turn.js';
-import { injectFetch } from './looper/injectFetch.js';
 import { toCodingAgent } from '../core/prompts/autoPush/wiring.js';
-import { serializeTranscript } from '../core/llm/transcript.js';
 import type { ProjectRow, SessionRow } from 'phantom-backend-sdk/schema';
 import { LooperEngine } from './looper/engine.js';
 import { TelegramAssistantBot } from './telegram/TelegramAssistantBot.js';
 
 const log = logger('boot');
-/** Fake base URL for in-process API calls via injectFetch — the host part is
- *  discarded, only the /api path prefix matters. */
-const INTERNAL_API = 'http://internal/api';
 /** The session image a fresh install pulls tracks THIS backend's release: a
  *  tagged build names the image at the same tag (both are published together
  *  by the release workflow), a dev build names :latest (scripts/setup.sh
@@ -48,11 +42,6 @@ async function main() {
   const { env, paths, database, settings, agentConfig, modelCatalog, projects, workspaces, cards, sessions, backgroundTasks, presets, crons,
     agentDatabases: databases, tokenLog: logTokens, sessionEvents, boardEvents: events, settingsEvents, docker, images,
     sessionContainers: containers, userMessageQueue: backdoor, telegramBotState, telegramSentMessages, telegramHandledUpdates } = backend;
-  // Every model call in this process records here (core languageModel).
-  setTokenRecorder((r) => {
-    logTokens.record({ ...r, type: r.kind }).catch((e) => log.warn({ err: (e as Error).message }, 'token recording failed'));
-  });
-
   // THE CONFLICT RESOLVER — the session's own coding agent, not a separate
   // fixer. Shared by auto-push, auto-pull and the manual /git/pull.
   //
@@ -66,38 +55,28 @@ async function main() {
   //
   // `app` is captured lazily: the hook is built before buildApp and only ever
   // runs long after boot.
+  const gitClient = new BackendClient({ url: backend.loopback.url, apiKey: env.apiKey, clientId: GIT_CLIENT_ID, label: 'git sync' });
   const resolveConflict = async (
     session: SessionRow, project: ProjectRow, _dir: string, ctx: ConflictContext,
   ): Promise<boolean> => {
-    const f = injectFetch(app);
-    // The SAME client id auto-push locks under — a holder may re-take its own
-    // hold, and any other id would find the session locked by us.
-    let opened: OpenedSession;
+    // The SAME client id the sync holds the session under — a holder may
+    // re-take its own hold; any other id would find the session locked by us.
+    let agent: CodingAgent | undefined;
     try {
-      opened = await openSession({ baseUrl: INTERNAL_API, apiKey: env.apiKey, clientId: GIT_CLIENT_ID,
-        label: 'resolving a conflict', fetch: f, lock: true, sessionId: session.id });
+      agent = await CodingAgent.resumeSession(gitClient, {
+        onError: (error) => log.warn({ session: session.id, code: error.code, err: error.message }, 'conflict turn error'),
+        onNotice: (notice) => log.info({ session: session.id }, notice.text),
+      }, session.id);
+      // Resolving means writing files: never in plan mode.
+      await sessions.setPlanMode(session.id, false);
+      const result = await agent.sendMessage(toCodingAgent.resolveConflict(ctx.branch, ctx.baseBranch, ctx.files, ctx.arrived));
+      return result?.outcome === 'done';
     } catch (e) {
-      if (e instanceof SessionLockedError) {
-        log.warn({ session: session.id }, 'conflict turn could not open the session — it is busy');
-        return false;
-      }
-      throw e;
-    }
-    const deps = { f, apiKey: env.apiKey, base: INTERNAL_API, sessionEvents: sessionEvents,
-      backdoor,
-      client: GIT_CLIENT_ID, onRetry: (t: string) => log.warn({ session: session.id }, t) };
-    try {
-      const message = toCodingAgent.resolveConflict(
-        ctx.branch, ctx.baseBranch, ctx.files, ctx.arrived);
-      // planMode false: resolving means writing files.
-      await runCodingTurn(deps, opened, project.id, message, false,
-        await oldAgentConfig(agentConfig, settings, 'coding', { projectId: project.id }, sessionPin(opened.session)));
-      return true;
-    } catch (e) {
-      log.error({ session: session.id, err: errStr(e) }, 'conflict turn failed');
+      if ((e as { code?: string }).code === 'session_locked') log.warn({ session: session.id }, 'conflict turn could not open the session — it is busy');
+      else log.error({ session: session.id, err: errStr(e) }, 'conflict turn failed');
       return false;
     } finally {
-      await opened.close().catch(() => {});
+      await agent?.close().catch(() => {});
     }
   };
   // The sync's commit message rides the ASSISTANT's model — the small-fast
@@ -105,11 +84,8 @@ async function main() {
   // the engineering. A config that cannot build THROWS, and the sync fails
   // with that reason: there is no file-name fallback anywhere. `report` is
   // the sync's commit-step event stream, so a retry's waits are visible.
-  const commitMessage: SyncDeps['writeCommitMessage'] = async (input, report) => {
-    const { model } = await oldAgentConfig(agentConfig, settings, 'assistant', {}); // a bad pair throws with the fix in the message
-    model.onRetry = (note: string) => { log.warn(`commit message: ${note}`); report(note); };
-    return writeCommitMessage(model, input);
-  };
+  const oneShotDeps = { agentConfig, client: gitClient };
+  const commitMessage: SyncDeps['writeCommitMessage'] = (input, report) => writeCommitMessage(oneShotDeps, input, report);
   // Every sync step also lands on the session's live feed, so a window
   // WATCHING the session sees the sync whoever kicked it off — a card
   // archive fires one detached, with no stream of its own. Published under
@@ -124,28 +100,13 @@ async function main() {
   const engine = new GitSync({ sessions, workspaces, cards, settings, paths,
     resolve: resolveConflict, writeCommitMessage: commitMessage }, (sessionId, e) => publishSync(sessionId, 'pull')(e));
 
-  // After a successful sync, drop a summary into the session's transcript so
-  // the coding agent knows what happened on its next turn. Same lock, same
-  // openSession pattern as the conflict resolver — the sync still holds the
-  // session under GIT_CLIENT_ID when this runs.
+  // After a successful sync, the coding agent hears what happened on its next
+  // turn: a user message the backend holds for the session (the queue), written
+  // into the record at turn-start — the same door instant sync's notes take.
   const recordSummary: SyncDeps['recordSummary'] = async (session, project, result, opts) => {
     if (result.outcome !== 'ok') return;
-    const message = toCodingAgent.syncSummary(
-      project.baseBranch, opts.landOnBase, result.arrived ?? [], result.files ?? []);
-    const f = injectFetch(app);
-    let opened: OpenedSession;
-    try {
-      opened = await openSession({ baseUrl: INTERNAL_API, apiKey: env.apiKey, clientId: GIT_CLIENT_ID,
-        label: 'recording sync summary', fetch: f, lock: true, sessionId: session.id });
-    } catch { return; }
-    try {
-      const messages = [...opened.messages, { role: 'user' as const, content: message }];
-      await opened.saveTranscript(serializeTranscript(messages, opened.events));
-    } finally {
-      await opened.close().catch(() => {});
-    }
+    backdoor.push(session.id, toCodingAgent.syncSummary(project.baseBranch, opts.landOnBase, result.arrived ?? [], result.files ?? []));
   };
-
 
   // When a sync comes back blocked and the session is running a card, the card
   // is blocked deterministically — the system decides, not the agent. The
@@ -278,16 +239,14 @@ async function main() {
   // server's own surface (the same tools every client runs), so the routes
   // must be answering. Event-driven: every card write reaches it over the
   // board bus; start() is ONE recovery sweep, not a poll.
-  const looper = new LooperEngine({ sessions, projects, cards, settings, agentConfig, logTokens, app, apiKey: env.apiKey, events, settingsEvents,
-    sessionEvents, activeTurns: backend.activeTurns, backdoor });
+  const looper = new LooperEngine({ sessions, projects, cards, settings, logTokens, loopback: backend.loopback, events, settingsEvents, sessionEvents });
   backend.hooks.runningLoops = () => looper.runningCount();
   looper.start();
 
   // The cron scheduler — the same shape: a client of this app, built after
   // listen. One croner job per cron row fires at its time; registrations
   // follow the table's writes and the settings' (events, no polling).
-  const cronEngine = new CronEngine({ crons, projects, settings, agentConfig, sessions, app, apiKey: env.apiKey,
-    sessionEvents, settingsEvents, activeTurns: backend.activeTurns, backdoor });
+  const cronEngine = new CronEngine({ crons, projects, settings, sessions, loopback: backend.loopback, settingsEvents });
   cronEngine.start();
 
   // The Telegram engine — a client of this app like the looper. The webhook
@@ -295,10 +254,8 @@ async function main() {
   // profile runs on); with no address, telegram stays off. Reconcile at boot
   // re-registers a stale webhook and pushes the command menu.
   const telegram = new TelegramAssistantBot({
-    bot: backend.telegramBot, botState: telegramBotState, sentMessages: telegramSentMessages, handledUpdates: telegramHandledUpdates,
-    settings, agentConfig, modelCatalog, sessions, cards, projects, presets, system, paths, app, apiKey: env.apiKey,
-    events, settingsEvents, foreground: backend.foregroundCommands, loopsRunning: () => looper.runningCount(), backdoor,
-    sessionEvents, publicAddress: process.env.PHANTOM_BACKEND_ADDRESS,
+    bot: backend.telegramBot, botState: telegramBotState, settings, modelCatalog, sessions, cards, projects, presets, system,
+    loopback: backend.loopback, foreground: backend.foregroundCommands, loopsRunning: () => looper.runningCount(), events,
     autoPush: autoPushFn, autoPull: autoPullFn,
   });
   extras.telegram = telegram;
@@ -311,8 +268,9 @@ async function main() {
 
   // Session idle digest — a periodic notification listing sessions that
   // finished. Standalone timer, no dependency on the engine's turn machinery.
+  backend.sessionTitler.writeTitle = writeTitle(oneShotDeps);
   const digest = new SessionDigest({
-    sessions, cards, settings, agentConfig, projects,
+    sessions, cards, settings, oneShot: oneShotDeps, projects,
     channels: backend.notifications.channels(),
   });
   void digest.start();

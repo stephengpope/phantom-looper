@@ -34,22 +34,11 @@
 // Like a card run, this is a headless client of the server's own HTTP
 // surface (injectFetch); the database is reached only through the row
 // owners it is handed.
-import type { FastifyInstance } from 'fastify';
 import { Cron } from 'croner';
-import { CRON_CLIENT_ID, type Sessions } from 'phantom-backend-sdk';
-import type { Crons, CronRow } from 'phantom-backend-sdk';
-import type { Projects } from 'phantom-backend-sdk';
-import type { Settings, AgentConfig as SdkAgentConfig } from 'phantom-backend-sdk';
-import { openSession, type OpenedSession } from '../../core/session.js';
-import { serializeTranscript } from '../../core/llm/transcript.js';
-import { runCodingTurn } from '../looper/turn.js';
-import { SESSION_HEADER } from 'phantom-backend-sdk';
-import { oldAgentConfig } from '../agentConfig.js';
-import { sessionPin } from '../agentConfig.js';
-import { injectFetch } from '../looper/injectFetch.js';
-import type { SessionEvents } from 'phantom-backend-sdk';
-import type { SettingsEvents } from 'phantom-backend-sdk';
-import type { UserMessageQueue } from 'phantom-backend-sdk';
+import { BackendClient, type AgentHandlers } from 'phantom-client-sdk';
+import { messageLine, userMessage, assistantMessage } from 'phantom-client-sdk/transcript';
+import { CodingAgent } from '../../core/agents/coding.js';
+import { CRON_CLIENT_ID, type Sessions, type Crons, type CronRow, type Projects, type Settings, type SettingsEvents } from 'phantom-backend-sdk';
 import { logger, errStr } from 'phantom-backend-sdk';
 
 const log = logger('cron');
@@ -63,18 +52,11 @@ export interface CronEngineDeps {
   crons: Crons;
   projects: Projects;
   settings: Settings;
-  agentConfig: SdkAgentConfig;
   sessions: Sessions;
-  app: FastifyInstance;
-  apiKey: string;
-  sessionEvents?: SessionEvents;
-  /** Settings writes — a project's cron switch or zone moved. */
+  /** Where this process reaches its own API: the backend's loopback. */
+  loopback: { url: string; apiKey: string };
+  /** The settings feed: a project's cron switch or timezone moved. */
   settingsEvents?: SettingsEvents;
-  /** Active turns by session id — the interrupt route aborts these. */
-  activeTurns?: Map<string, AbortController>;
-  backdoor?: UserMessageQueue;
-  /** Test seam: the fetch every MODEL call uses. Production never sets it. */
-  modelFetch?: typeof fetch;
 }
 
 /** A registration. The zone is part of it, not just the schedule: the same
@@ -86,10 +68,13 @@ export class CronEngine {
   private registered = new Map<number, Registration>();   // cron row id → croner job
   private queue: Promise<void> = Promise.resolve();       // reconciles run one after another
   private unsubscribe: Array<() => void> = [];
-  private f: typeof fetch;
+  /** One client, the scheduler's lock identity, for every run it opens. */
+  private readonly client: BackendClient;
+  /** The agents with a run in flight, by session id — stop() interrupts them. */
+  private agents = new Map<string, CodingAgent>();
 
   constructor(private deps: CronEngineDeps) {
-    this.f = injectFetch(deps.app);
+    this.client = new BackendClient({ url: deps.loopback.url, apiKey: deps.loopback.apiKey, clientId: CRON_CLIENT_ID, label: 'cron' });
   }
 
   /** Boot: register everything once, then follow the writes. */
@@ -197,76 +182,60 @@ export class CronEngine {
   }
 
   private async run(row: CronRow): Promise<void> {
-    const { apiKey, sessions } = this.deps;
-    let opened: OpenedSession | undefined;
-    let sessionId: string | null = null;
+    const { sessions } = this.deps;
+    let agent: CodingAgent | undefined;
     try {
       const project = await this.deps.projects.get(row.project_id);
       if (!project) throw new Error(`project ${row.project_id} is gone`);
       log.info({ project: project.name, cron: row.name }, 'cron run started');
-      // A fresh session, with its checkout, named after the cron. The seat
-      // is stamped before the turn so a window watching reads `cron` at
-      // once; the transcript save re-derives it from the writer (CRON_CLIENT_ID).
-      opened = await openSession({
-        baseUrl: BASE, apiKey, clientId: CRON_CLIENT_ID, label: `cron: ${row.name}`,
-        fetch: this.f, lock: true, projectId: project.id,
-      });
-      sessionId = opened.session.id;
+      const handlers: AgentHandlers = {
+        onError: (error) => log.warn({ cron: row.name, code: error.code, err: error.message }, 'cron agent error'),
+        onNotice: (notice) => log.info({ cron: row.name, type: notice.type }, notice.text),
+      };
+      // A fresh session, with its checkout, named after the cron, pinned to
+      // the cron's model when it names one. The agent is resumed AFTER the
+      // pin lands so its first turn-start reads it.
+      const born = await CodingAgent.newSession(this.client, handlers, project.id);
+      const sessionId = born.session.id;
+      await born.close();
       await sessions.nameIfUnnamed(sessionId, row.name);
-      if (row.provider && row.model) await sessions.stampModel(sessionId, { provider: row.provider, model: row.model });
-
-      const ac = new AbortController();
-      this.deps.activeTurns?.set(sessionId, ac);
-      try {
-        if (row.script) {
-          const exit = await this.runScript(opened, row.script, ac.signal);
-          log.info({ project: project.name, cron: row.name, session: sessionId, script: row.script, exit }, 'cron script finished');
-        } else {
-          const deps = { f: this.f, apiKey, base: BASE, modelFetch: this.deps.modelFetch,
-            sessionEvents: this.deps.sessionEvents, client: CRON_CLIENT_ID, backdoor: this.deps.backdoor,
-            onRetry: (t: string) => log.warn({ cron: row.name }, t), signal: ac.signal };
-          // The row, re-read: it may carry the cron's model now (stampModel).
-          const pin = { ...sessionPin(await sessions.get(sessionId)), reasoning: row.reasoning };
-          const t = await runCodingTurn(deps, opened, project.id, row.prompt ?? '', false,
-            await oldAgentConfig(this.deps.agentConfig, this.deps.settings, 'coding', { projectId: project.id }, pin));
-          log.info({ project: project.name, cron: row.name, session: sessionId, tokens: t.tokens, interrupted: t.interrupted }, 'cron run finished');
-        }
-      } finally {
-        this.deps.activeTurns?.delete(sessionId);
+      if (row.provider && row.model) await sessions.stampModel(sessionId, { provider: row.provider, model: row.model, reasoning: row.reasoning });
+      agent = await CodingAgent.resumeSession(this.client, handlers, sessionId);
+      this.agents.set(sessionId, agent);
+      if (row.script) {
+        const exit = await this.runScript(agent, row.script);
+        log.info({ project: project.name, cron: row.name, session: sessionId, script: row.script, exit }, 'cron script finished');
+      } else {
+        const result = await agent.sendMessage(row.prompt ?? '');
+        log.info({ project: project.name, cron: row.name, session: sessionId,
+          tokens: result ? result.usage.input + result.usage.output : 0, interrupted: result?.outcome === 'interrupted' }, 'cron run finished');
       }
     } catch (e) {
       // The session, when one opened, carries the error on its feed; this
       // line is the trace for a run that never got that far.
-      log.warn({ cron: row.name, session: sessionId, err: errStr(e) }, 'cron run failed');
+      log.warn({ cron: row.name, session: agent?.session.id, err: errStr(e) }, 'cron run failed');
     } finally {
-      await opened?.close().catch((e) => log.warn({ cron: row.name, err: errStr(e) }, 'cron session did not close cleanly'));
+      if (agent) {
+        this.agents.delete(agent.session.id);
+        await agent.close().catch((e) => log.warn({ cron: row.name, err: errStr(e) }, 'cron session did not close cleanly'));
+      }
     }
   }
 
   /** `sh <script>` in the session's container, over the bash tool route.
    *  Whatever comes back — exit code, output, or the route's refusal (no
-   *  such file, timeout) — is the record: saved as the session's
-   *  transcript, never thrown. Returns the exit code, null when the
-   *  command never ran. */
-  private async runScript(opened: OpenedSession, script: string, signal: AbortSignal): Promise<number | null> {
+   *  such file, timeout) — is the record: appended to the session's record,
+   *  never thrown. Returns the exit code, null when the command never ran. */
+  private async runScript(agent: CodingAgent, script: string): Promise<number | null> {
     const cmd = `sh ${shellQuote(script)}`;
-    const r = await this.f(`${BASE}/tools/bash`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${this.deps.apiKey}`,
-        [SESSION_HEADER]: opened.session.id },
-      body: JSON.stringify({ cmd, timeout: SCRIPT_TIMEOUT_MS }),
-      signal,
-    });
-    const j = await r.json() as { ok: true; data: { exitCode: number; stdout: string; stderr: string } }
-      | { ok: false; error: { code: string; message: string; detail?: unknown } };
-    const exit = j.ok ? j.data.exitCode : null;
-    const report = j.ok
-      ? `exit ${j.data.exitCode}\n\n${j.data.stdout}${j.data.stderr ? `\n--- stderr ---\n${j.data.stderr}` : ''}`
-      : `did not finish: ${j.error.message}${j.error.detail ? `\n\n${JSON.stringify(j.error.detail)}` : ''}`;
-    await opened.saveTranscript(serializeTranscript([
-      { role: 'user', content: cmd },
-      { role: 'assistant', content: report },
-    ]));
+    const envelope = await this.client.callRaw<{ exitCode: number; stdout: string; stderr: string }>('POST', '/tools/bash',
+      { cmd, timeout: SCRIPT_TIMEOUT_MS }, { sessionId: agent.session.id });
+    const exit = envelope.ok ? envelope.data.exitCode : null;
+    const report = envelope.ok
+      ? `exit ${envelope.data.exitCode}\n\n${envelope.data.stdout}${envelope.data.stderr ? `\n--- stderr ---\n${envelope.data.stderr}` : ''}`
+      : `did not finish: ${envelope.error.message}${envelope.error.detail ? `\n\n${JSON.stringify(envelope.error.detail)}` : ''}`;
+    await this.client.call('POST', `/sessions/${agent.session.id}/transcript/append`,
+      { after: 0, deliveryId: `cron-${Date.now()}`, lines: [messageLine(userMessage(cmd)), messageLine(assistantMessage(report))] });
     return exit;
   }
 }

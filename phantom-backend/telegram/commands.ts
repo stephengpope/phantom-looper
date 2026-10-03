@@ -25,7 +25,7 @@ import { titled } from 'phantom-backend-sdk';
 import { toTelegram } from 'phantom-backend-sdk';
 import type { TelegramAssistantBot } from './TelegramAssistantBot.js';
 import { MODE_MESSAGE, type TelegramMode } from 'phantom-backend-sdk';
-import { PROVIDERS } from '../../core/llm/createAgent.js';
+import { PROVIDERS } from 'phantom-client-sdk';
 import { hasCatalog } from 'phantom-backend-sdk';
 import { isHeld } from 'phantom-backend-sdk';
 import { GLOBAL } from 'phantom-backend-sdk';
@@ -42,7 +42,6 @@ export const MENU: Record<TelegramMode, Cmd[]> = {
     { command: 'code', description: 'Talk to the coding agent' },
     { command: 'projects', description: 'List or switch projects' },
     { command: 'sessions', description: 'List or switch sessions' },
-    { command: 'compact', description: 'Summarize older messages to free space' },
     { command: 'stop', description: 'Stop the assistant' },
     { command: 'status', description: 'Server, project and session overview' },
     { command: 'presets', description: 'List or apply model presets' },
@@ -178,7 +177,7 @@ export async function handleCommand(
       const projectId = bot.activeProjectId;
       if (!projectId) { await reply('⚠️ No active project — /projects to pick one first.'); return; }
       let started;
-      try { started = await engine.sessions.start(projectId, CodingAgent.systemPromptLayout, { startedBy: 'telegram' }); }
+      try { started = await engine.sessions.start(projectId, CodingAgent.systemPromptLayout, { type: 'coding', startedBy: 'telegram' }); }
       catch (e) { await reply(`⚠️ Couldn't start a session: ${(e as Error).message}`); return; }
       // Create + point at it. The mode is untouched: from home the assistant
       // keeps the conversation; in code mode the next message starts the coder.
@@ -358,16 +357,6 @@ export async function handleCommand(
       presetList.set(dm, list.map((p) => p.id));
       const rows = list.map((p, i) => `${i + 1}. ${p.name}${presetSummary(p.values)}`);
       await client.sendMarkdown(dm, titled('🧰 Presets:', [...rows, '', 'Apply one with /presets <number>'].join('\n')));
-      return;
-    }
-
-    case 'compact': {
-      try {
-        const compacted = await engine.conversation.runCompaction();
-        if (!compacted) await reply('ℹ️ Nothing to compact — the conversation is short enough.');
-      } catch (e) {
-        await reply(`⚠️ Compaction failed: ${(e as Error).message}`);
-      }
       return;
     }
 
@@ -579,7 +568,6 @@ const HELP = [
   '/stop all — Stop every running session',
   '',
   'Chat',
-  '/compact — Summarize older messages to free space',
   '',
   'Model',
   '/presets — List or apply model presets',

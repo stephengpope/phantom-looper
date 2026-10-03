@@ -67,7 +67,9 @@ export function cleanTitle(raw: string): string | null {
 }
 
 export class SessionTitler {
-  constructor(private readonly sessions: Sessions, private readonly writeTitle: TitleWriter | undefined) {}
+  /** The model call, set once the app has what it needs to make one (the backend's loopback). */
+  writeTitle: TitleWriter | undefined;
+  constructor(private readonly sessions: Sessions, writeTitle: TitleWriter | undefined) { this.writeTitle = writeTitle; }
 
   /** Should this session be (re)named now? */
   isDue(name: string | null, turnCount: number): boolean {

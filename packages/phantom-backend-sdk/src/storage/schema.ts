@@ -196,6 +196,8 @@ export const sessions = phantomLooper.table('sessions', {
   provider: text('provider'),
   model: text('model'),
   baseUrl: text('base_url'),
+  // The pin's reasoning level, when the opener named one (a cron's). Null = the settings' (051).
+  reasoning: text('reasoning'),
   // THE system prompt this session runs on, in its three sections — stable,
   // context, volatile (phantom-client-sdk/systemPrompt; one system block and
   // one cache mark each). Assembled ONCE at birth from the agent's layout

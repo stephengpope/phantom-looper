@@ -4,6 +4,7 @@
 // the same answer.
 export const PROVIDERS = ['anthropic', 'openai', 'openai-codex', 'google', 'deepseek', 'kimi', 'xai', 'mistral', 'groq', 'openai-compatible'] as const;
 export type Provider = typeof PROVIDERS[number];
+export const isProvider = (value: string): value is Provider => (PROVIDERS as readonly string[]).includes(value);
 export const REASONINGS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 export type Reasoning = typeof REASONINGS[number];
 

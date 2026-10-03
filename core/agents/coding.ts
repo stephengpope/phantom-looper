@@ -17,6 +17,6 @@ export class CodingAgent extends Agent {
 
   static newSession(backend: BackendClient, handlers: AgentHandlers, projectId: string): Promise<CodingAgent> {
     return CodingAgent.create(backend, handlers, (b) => b.call('POST', '/sessions',
-      { project_id: projectId, system_prompt_layout: CodingAgent.systemPromptLayout }));
+      { project_id: projectId, type: 'coding', system_prompt_layout: CodingAgent.systemPromptLayout }));
   }
 }
