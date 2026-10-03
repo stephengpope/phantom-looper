@@ -1,102 +1,45 @@
-// The looper: the supervisor loop over kanban cards.
+// The looper: the supervisor loop over kanban cards. User space, on the
+// backend SDK's objects (cards, sessions, settings, the feeds) and the client
+// SDK's agents over loopback — a card run is two agents, a coder and a
+// supervisor, each a normal client of this backend's own API, holding its
+// session like a cli window would.
 //
 // There is NO loop object and NO polling. Loop state = card status plus the
-// two transcripts; turns are EVENT-driven: a card write runs its loop (the
-// every card write reaches runLoop over the board bus), a supervision setting change runs every loop
-// in the project, boot does ONE recovery pass, a released session lock runs
-// that session's card, and a turn that ran chains straight into the next
-// turn. The loop is a DIALOGUE: the supervisor and the coding agent talk
-// directly — before each turn the step rule (logic.ts) reads both transcripts and
-// does the one owed thing: send a kickoff, copy the coder's reply to the
-// supervisor and run it, deliver the supervisor's reply to the coder and run
-// it, or hand a returned card back to the coder. The run ends when a status
-// TOOL fires (the supervisor's `kanban_card_move`, the coder's
-// `kanban_card_block` — the card's own PATCH is the event that starts the
-// next phase) — the break is `canTurn` no longer matching, never the
-// agent's word — or when the token budget runs out, or a turn FAILS (model
-// error after retries, anything thrown), which blocks the card with the
-// error as blocked_reason. Nothing refires a failed turn. A crash loses
-// nothing: the card and its two transcripts are the state, and the boot
-// pass picks them up.
-//
-// The engine is a headless client of this server's own HTTP surface
-// (injectFetch): sessions, locks, transcripts, tools, card writes all go
-// through the same routes the cli uses. The database is touched directly only
-// to DISCOVER (scan cards, find the card's sessions, read the revision
-// clock), to STAMP sessions.agent — the loop marks its coder seat at every
-// turn START; the transcript save re-derives the column from the writer at
-// turn END (sessions.ts agentAfterSave), which is what makes it trustworthy —
-// to put the round's coder ON its card (sessions.card_id), and to CREATE the
-// supervisor's conversation-only session rows (no checkout; the loop is
-// their sole creator).
-import type { FastifyInstance } from 'fastify';
-
-
+// two transcripts (logic.ts reads the next owed step off them). Every card
+// write lands on the board bus; that is what runs the loop. A session's hold
+// released by anyone but this engine re-runs its card's loop.
 import type { ModelMessage } from 'ai';
-import type { ProjectRow } from 'phantom-backend-sdk/schema';
-import { LOOP_CLIENT_ID, workspaceOf, type Sessions } from 'phantom-backend-sdk';
-import type { Projects } from 'phantom-backend-sdk';
-import type { Cards, CardFields } from 'phantom-backend-sdk';
-import type { Settings, AgentConfig as SdkAgentConfig } from 'phantom-backend-sdk';
-import type { TokenLog } from 'phantom-backend-sdk';
-import type { SettingsEvents } from 'phantom-backend-sdk';
-import { GLOBAL } from 'phantom-backend-sdk';
-import { openSession, SessionLockedError, type OpenedSession } from '../../core/session.js';
-import { SupervisorAgent as SupervisorAgentOnSdk } from '../../core/agents/supervisor.js';
-import { memoryRecorder, serializeTranscript } from '../../core/llm/transcript.js';
-import { agentClock, type AgentConfig } from '../../core/llm/agentConfig.js';
-import { oldAgentConfig } from '../agentConfig.js';
-import { sessionPin } from '../agentConfig.js';
-import { phantomTools } from '../../core/llm/tools/workspace.js';
-import { webTools } from '../../core/llm/tools/web.js';
-import {
-  kanbanReadTool, loopSupervisorTools, loopBlockTool, type LoopColumn, type LoopCardConfig,
-} from '../../core/llm/tools/kanban.js';
-import { runCodingTurn, drain, sumTokens } from './turn.js';
-import { compactionDue, compactionOpts, CompactionLock, compact } from '../../core/llm/compaction.js';
-import { SupervisorAgent } from '../../core/llm/agents/supervisor.js';
-import { canTurn, unsentKickoff, nextStep, needsFreshSession, heldBy, LOOP_COLUMNS, type CardRow } from './logic.js';
-import { injectFetch } from './injectFetch.js';
-import type { BoardEvents } from 'phantom-backend-sdk';
-import type { SessionEvents } from 'phantom-backend-sdk';
-import type { UserMessageQueue } from 'phantom-backend-sdk';
+import { BackendClient, type AgentHandlers, type Agent } from 'phantom-client-sdk';
+import { CodingAgent } from '../../core/agents/coding.js';
+import { SupervisorAgent } from '../../core/agents/supervisor.js';
+import type { ProjectRow, CardRow as CardTableRow } from 'phantom-backend-sdk/schema';
+import { workspaceOf, LOOP_CLIENT_ID, GLOBAL, type CardFields } from 'phantom-backend-sdk';
+import type { Sessions, Projects, Cards, Settings, TokenLog, SettingsEvents, BoardEvents, SessionEvents } from 'phantom-backend-sdk';
 import { logger, errStr } from 'phantom-backend-sdk';
+import { canTurn, heldBy, unsentKickoff, nextStep, needsFreshSession, type CardRow } from './logic.js';
+import { codingAgentCardKit, supervisorCardKit, type LoopColumn } from './cardRunTools.js';
 
 const log = logger('looper');
 const CLIENT_ID = LOOP_CLIENT_ID;
-const BASE = 'http://looper/api';
 
 export interface LooperDeps {
   sessions: Sessions;
   projects: Projects;
   cards: Cards;
   settings: Settings;
-  agentConfig: SdkAgentConfig;
   /** The token log — the budget's coin is read off it directly. */
   logTokens: TokenLog;
-  app: FastifyInstance;
-  apiKey: string;
-  /** The board's event bus (api/boardEvents.ts): the engine's card writes go
-   *  over HTTP and publish there by themselves; the one thing only the
-   *  engine knows is the link — a card and its coding session — published
-   *  the moment the session is put on the card. */
+  /** Where this process reaches its own API: the backend's loopback. */
+  loopback: { url: string; apiKey: string };
+  /** The board's event bus: the engine's card writes publish there by
+   *  themselves; the one thing only the engine knows is the link — a card
+   *  and its coding session — published the moment the session is put on the card. */
   events?: BoardEvents;
   /** The settings feed: a write of either loop switch re-examines the
    *  affected project (or every one, when the global layer changed). */
   settingsEvents?: SettingsEvents;
-  /** The sessions' live feed (api/sessionEvents.ts), handed straight to every
-   *  turn this engine runs: that is how a builder watching a card's session
-   *  sees the round happen instead of waiting for the record. */
+  /** The sessions' live feed: a hold's release re-runs its card's loop. */
   sessionEvents?: SessionEvents;
-  /** Active turns by session id — the interrupt route aborts these. The engine
-   *  registers on entry and deregisters on exit. */
-  activeTurns?: Map<string, AbortController>;
-  /** The backdoor message queue (api/backdoor.ts) — every turn this engine
-   *  runs drains its session's queue into the turn's messages. */
-  backdoor?: UserMessageQueue;
-  /** Test seam: the fetch every MODEL call uses (createAgent's own seam).
-   *  Production never sets it. */
-  modelFetch?: typeof fetch;
 }
 
 /** What a turn did — the card run's chaining signal. `turn` means an agent
@@ -114,10 +57,21 @@ export class LooperEngine {
   private stopped = false;
   private running = new Set<string>();          // projectId:cardNumber — one live loop per card
   private pending = new Set<string>();          // called while running — go again after
-  private f: typeof fetch;
+  /** The agents with a turn in flight, by session id — stop() interrupts them. */
+  private agents = new Map<string, Agent>();
+  /** One client, this engine's lock identity, for every agent it opens. */
+  private readonly client: BackendClient;
 
   constructor(private deps: LooperDeps) {
-    this.f = injectFetch(deps.app);
+    this.client = new BackendClient({ url: deps.loopback.url, apiKey: deps.loopback.apiKey, clientId: CLIENT_ID, label: 'card run' });
+  }
+
+  /** What an agent this engine runs tells it: errors and notices go to the log. */
+  private handlers(card: number, seat: 'coding' | 'supervisor'): AgentHandlers {
+    return {
+      onError: (error) => log.warn({ card, agent: seat, code: error.code, err: error.message }, 'agent error'),
+      onNotice: (notice) => log.info({ card, agent: seat, type: notice.type }, notice.text),
+    };
   }
 
   /** Boot: ONE recovery pass — cards that were mid-loop when the process
@@ -147,6 +101,7 @@ export class LooperEngine {
   }
   stop(): void {
     this.stopped = true;
+    for (const agent of this.agents.values()) agent.interrupt({ keepQueue: true });
   }
   /** Cards with a round in flight right now — what an api restart would
    *  interrupt (they resume after boot). GET /health carries it so callers can warn. */
@@ -253,227 +208,127 @@ export class LooperEngine {
     });
   }
 
-  /** One turn for one card: seat the CODING session, then do the ONE owed
-   *  step — a kickoff, a supervisor turn (the coder's reply copied in), a
-   *  delivery (the supervisor's reply out), or the return message. Two
-   *  sessions, one transcript each: the coder's is the work, the
+  /** One turn for one card: open the CODING agent on its session, then do
+   *  the ONE owed step — a kickoff, a supervisor turn (the coder's reply
+   *  copied in), a delivery (the supervisor's reply out), or the return
+   *  message. Two sessions, one record each: the coder's is the work, the
    *  supervisor's is its side of the dialogue. The supervisor holds no
-   *  checkout — its read-only tools point at the coder's session, where the
-   *  files are; its board powers are bound to THE card.
-   *  Throws on failure — runLoop turns that into a blocked card. */
+   *  checkout — its read-only tools open the coder's workspace; its board
+   *  powers are bound to THE card. Throws on failure — runLoop turns that
+   *  into a blocked card. */
   async runTurn(project: ProjectRow, card: CardRow, budget: Budget): Promise<TurnOutcome> {
-    const { apiKey } = this.deps;
-
     // The card's coder — its newest coding session (Sessions.coderOf).
     const coder = await this.deps.sessions.coderOf(project.id, card.number);
-
     // Entering plan is a NEW run, always — the revision history is the
     // transition clock (logic.ts).
     const fresh = needsFreshSession(card.status, coder?.createdAt ?? null,
       await this.deps.cards.lastMovedAt(project, card.number));
 
-    let opened: OpenedSession;
+    let codingAgent: CodingAgent;
     let supervisorSessionId: string;
-    try {
-      if (coder && !fresh) {
-        opened = await openSession({
-          baseUrl: BASE, apiKey, clientId: CLIENT_ID, label: heldBy('coding', card.status),
-          fetch: this.f, lock: true, sessionId: coder.id,
-        });
-        // The supervisor: born for THIS coder. One older than the coder
-        // belonged to an earlier run — a fresh one is made.
-        const sup = await this.deps.sessions.supervisorOf(project.id, card.number);
-        supervisorSessionId = sup && sup.createdAt.getTime() >= coder.createdAt.getTime()
-          ? sup.id
-          : (await this.deps.sessions.createSupervisor(project.id, workspaceOf(coder), card.id, SupervisorAgentOnSdk.systemPromptLayout)).id;
-      } else {
-        // A new run: the coder (with its workspace), put on the card the moment
-        // it exists.
-        opened = await openSession({
-          baseUrl: BASE, apiKey, clientId: CLIENT_ID, label: heldBy('coding', card.status),
-          fetch: this.f, lock: true, projectId: project.id,
-        });
-        await this.deps.sessions.setCard(opened.session.id, card.id);
-        // The coder's session is named after its card from birth — /resume
-        // never shows a nameless row while the first (long) plan turn runs.
-        await this.deps.sessions.nameIfUnnamed(opened.session.id, card.title);
-        // The lock announcement rides RIGHT AFTER the card link because it is
-        // a fact — openSession locked the session above and close() releases
-        // it. The lock route's own board publish found the session on no
-        // card yet (setCard had not run), so without this the board's
-        // spinner missed the whole first turn.
-        this.deps.events?.publish(project.id,
-          { event: 'session', card: card.number, id: opened.session.id, name: card.title });
-        this.deps.events?.publish(project.id,
-          { event: 'session_lock', card: card.number, id: opened.session.id, locked: true });
-        // A new coder gets a new supervisor: a conversation on the coder's
-        // workspace, on the same card.
-        supervisorSessionId = (await this.deps.sessions.createSupervisor(project.id,
-          workspaceOf(opened.session), card.id, SupervisorAgentOnSdk.systemPromptLayout)).id;
-      }
-    } catch (e) {
-      if (e instanceof SessionLockedError) {
-        log.info({ card: card.number }, 'card session held elsewhere — skipped; the lock release will re-run the loop');
-        return 'skipped';
-      }
-      throw e;
+    if (coder && !fresh) {
+      codingAgent = await CodingAgent.resumeSession(this.client, this.handlers(card.number, 'coding'), coder.id);
+      // The supervisor: born for THIS coder. One older than the coder
+      // belonged to an earlier run — a fresh one is made.
+      const sup = await this.deps.sessions.supervisorOf(project.id, card.number);
+      supervisorSessionId = sup && sup.createdAt.getTime() >= coder.createdAt.getTime()
+        ? sup.id
+        : (await this.deps.sessions.createSupervisor(project.id, workspaceOf(coder), card.id, SupervisorAgent.systemPromptLayout)).id;
+    } else {
+      // A new run: the coder (with its workspace), put on the card the moment it exists.
+      codingAgent = await CodingAgent.newSession(this.client, this.handlers(card.number, 'coding'), project.id);
+      const sessionId = codingAgent.session.id;
+      await this.deps.sessions.setCard(sessionId, card.id);
+      // The coder's session is named after its card from birth — /resume
+      // never shows a nameless row while the first (long) plan turn runs.
+      await this.deps.sessions.nameIfUnnamed(sessionId, card.title);
+      this.deps.events?.publish(project.id, { event: 'session', card: card.number, id: sessionId, name: card.title });
+      // A new coder gets a new supervisor: a conversation on the coder's workspace, on the same card.
+      supervisorSessionId = (await this.deps.sessions.createSupervisor(project.id,
+        workspaceOf(codingAgent.session.row as never), card.id, SupervisorAgent.systemPromptLayout)).id;
     }
-    let supOpened: OpenedSession | undefined;
-    try {
-      // ── the token budget — seeded once per loop, checked before every
-      // turn, each turn's own numbers added as they land. Breach is a card
-      // state a human can see, like every other loop exit. ─────────────────
-      const b = await this.deps.settings.resolveMany(['loop_budget_tokens'], { projectId: project.id })
-        .catch(() => ({ loop_budget_tokens: null }));
-      const limit = b.loop_budget_tokens == null ? null : Number(b.loop_budget_tokens);
-      if (!budget.seeded) {
-        if (limit != null) {
-          budget.spent = await this.tokensOf(opened.session.id)
-            + await this.tokensOf(supervisorSessionId);
-        }
-        budget.seeded = true;
-      }
-      if (limit != null && budget.spent >= limit) {
-        await this.patchCard(project, card.number, {
-          status: 'blocked',
-          blocked_reason: `token budget exhausted: ${budget.spent} of ${limit} tokens used`,
-          resolution: null,
-        });
-        log.info({ card: card.number, spent: budget.spent, limit }, 'looper budget exhausted');
-        return 'moved';
-      }
 
-      // The run's card-bound tools: the coding agent's block, the supervisor's
-      // move + items. Bound at build time — no card input, so neither agent
-      // can ever act on a card other than the one it is running.
-      const cardCfg: LoopCardConfig = { baseUrl: BASE, apiKey, projectId: project.id,
-        number: card.number, fetch: this.f, clientId: CLIENT_ID };
-      // The interrupt controller: registered so POST /sessions/:id/interrupt
-      // can abort this turn. Deregistered in finally (below the close calls).
-      const ac = new AbortController();
-      this.deps.activeTurns?.set(opened.session.id, ac);
-      const coderDeps = { ...this.turnDeps(card.number, ac.signal), extraTools: loopBlockTool(cardCfg) };
-      // The coder's config, on its ROW's model (the pin) — the one door.
-      const cfg = await oldAgentConfig(this.deps.agentConfig, this.deps.settings, 'coding', { projectId: project.id }, sessionPin(opened.session));
+    // ── the token budget — seeded once per loop, checked before every turn,
+    // each turn's own numbers added as they land. Breach is a card state a
+    // human can see, like every other loop exit. ──────────────────────────
+    const b = await this.deps.settings.resolveMany(['loop_budget_tokens'], { projectId: project.id })
+      .catch(() => ({ loop_budget_tokens: null }));
+    const limit = b.loop_budget_tokens == null ? null : Number(b.loop_budget_tokens);
+    if (!budget.seeded) {
+      if (limit != null) budget.spent = await this.tokensOf(codingAgent.session.id) + await this.tokensOf(supervisorSessionId);
+      budget.seeded = true;
+    }
+    if (limit != null && budget.spent >= limit) {
+      await this.patchCard(project, card.number, {
+        status: 'blocked', blocked_reason: `token budget exhausted: ${budget.spent} of ${limit} tokens used`, resolution: null,
+      });
+      log.info({ card: card.number, spent: budget.spent, limit }, 'looper budget exhausted');
+      return 'moved';
+    }
 
-      const opener = unsentKickoff(card, opened.messages);
-      if (opener) {
-        const t = await runCodingTurn(coderDeps, opened, project.id, opener.text, opener.planMode, cfg);
-        budget.spent += t.tokens;
-        if (!t.interrupted) this.kickCompaction(opened.session.id, t.inputTokens, opened.messages, cfg);
-        return t.interrupted ? 'interrupted' : 'turn';
-      }
+    const runCard = { projectId: project.id, number: card.number };
+    codingAgent.addToolKit(codingAgentCardKit(runCard));
 
+    // A session held elsewhere: `sendMessage` rejects session_locked and
+    // nothing is recorded — the lock's release re-runs the loop.
+    const run = async (agent: Agent, text: string): Promise<TurnOutcome | 'locked'> => {
+      this.agents.set(agent.session.id, agent);
       try {
-        supOpened = await openSession({
-          baseUrl: BASE, apiKey, clientId: CLIENT_ID, label: heldBy('supervisor', card.status),
-          fetch: this.f, lock: true, sessionId: supervisorSessionId,
-        });
-      } catch (e) {
-        if (e instanceof SessionLockedError) {
-          log.info({ card: card.number }, 'supervisor session held elsewhere — skipped; the lock release will re-run the loop');
-          return 'skipped';
-        }
-        throw e;
+        const result = await agent.sendMessage(text);
+        if (!result) return 'turn';
+        budget.spent += result.usage.input + result.usage.output;
+        return result.outcome === 'interrupted' ? 'interrupted' : 'turn';
+      } catch (error) {
+        if ((error as { code?: string }).code === 'session_locked') return 'locked';
+        throw error;
+      } finally {
+        this.agents.delete(agent.session.id);
+        await agent.close();
       }
+    };
+    const skippedIfLocked = (outcome: TurnOutcome | 'locked', seat: string): TurnOutcome => {
+      if (outcome !== 'locked') return outcome;
+      log.info({ card: card.number }, `${seat} session held elsewhere — skipped; the lock release will re-run the loop`);
+      return 'skipped';
+    };
 
-      const step = nextStep(card, opened.messages, supOpened.messages);
-      if (!step) return 'idle';
-
-      if (step.kind === 'supervisor') {
-        // ── the supervisor's turn: the missing seeds and the coder's reply
-        // land as user messages; its reply is its own, recorded whole (tool
-        // traffic included — the step rule reads terminal turns off it). ────
-        // The same rule as the coding half: a supervisor conversation that has
-        // said anything runs on its pin, not on whatever the settings say now.
-        const sup = await oldAgentConfig(this.deps.agentConfig, this.deps.settings, 'supervisor', { projectId: project.id }, sessionPin(supOpened.session));
-        const model = { ...sup.model, fetch: this.deps.modelFetch,
-          onRetry: (t: string) => log.warn({ card: card.number, agent: 'supervisor' }, t) };
-        // The supervisor's tools run as the SUPERVISOR's session: the server
-        // opens its workspace — the coder's — and the coder's checkout counts
-        // the activity. One rule for every session; no client picks a workspace.
-        const tools = {
-          ...await phantomTools({ baseUrl: BASE, apiKey, sessionId: supOpened.session.id,
-            pick: 'readonly', fetch: this.f }),
-          ...kanbanReadTool({ baseUrl: BASE, apiKey, projectId: project.id, fetch: this.f }),
-          // Web search + fetch are capabilities, not mutations: fetched pages
-          // land outside repo/, and a judge may need the docs the card cites.
-          ...webTools({ baseUrl: BASE, apiKey, sessionId: supOpened.session.id, fetch: this.f }),
-          ...loopSupervisorTools(cardCfg, card.status as LoopColumn),
-        };
-        const incoming: ModelMessage[] = step.append.map((t) => ({ role: 'user', content: t }));
-        const messages = [...supOpened.messages, ...incoming];
-        const agent = new SupervisorAgent(model, tools, { sessionId: supOpened.session.id, maxSteps: sup.maxSteps, clock: agentClock(sup) });
-        // Cache marks on a copy — the supervisor's growing conversation reads
-        // its own prefix back each turn; the transcript stays clean. The
-        // step seam collects the WHOLE turn (tool calls included — the step
-        // rule reads terminal turns off this record).
-        const { record, events, messages: turnMessages } = memoryRecorder(messages.length);
-        // Streamed, not generated, for one reason: a supervisor session is
-        // openable read-only from /resume, and the review half of a run
-        // should be watchable as it happens like the coding half. The record
-        // is identical either way — createAgent's `record` seam collects the
-        // same steps — and the reply text is never read here (the step rule
-        // reads the saved transcript).
-        const feed = this.deps.sessionEvents;
-        const supId = supOpened.session.id;
-        feed?.publish(supId, CLIENT_ID, { event: 'turn-start', agent: 'supervisor', message: step.append.join('\n\n') });
-        try {
-          const r = await agent.stream({ messages, record });
-          await drain(r, (part) => feed?.publishPart(supId, CLIENT_ID, part));
-        } catch (e) {
-          feed?.publish(supId, CLIENT_ID, { event: 'error', message: (e as Error).message });
-          throw e;
-        } finally {
-          feed?.publish(supId, CLIENT_ID, { event: 'turn-end' });
-        }
-        await supOpened.saveTranscript(serializeTranscript(
-          [...messages, ...turnMessages],
-          [...supOpened.events, ...events]));
-        budget.spent += sumTokens(events);
-        return 'turn';
-      }
-
-      // ── deliver / return: one coding turn with the owed text. A returned
-      // card's block is resolved and its resolution consumed: clear both
-      // AFTER the turn landed, so a crash mid-turn re-delivers instead of
-      // losing the human's answer. ──────────────────────────────────────────
-      const t = await runCodingTurn(coderDeps, opened, project.id,
-        step.text, card.status === 'plan', cfg);
-      budget.spent += t.tokens;
-      if (t.interrupted) return 'interrupted';
-      this.kickCompaction(opened.session.id, t.inputTokens, opened.messages, cfg);
-      if (step.kind === 'return' && (card.blocked_reason || card.resolution)) {
-        await this.patchCard(project, card.number, { blocked_reason: null, resolution: null });
-      }
-      return 'turn';
-    } finally {
-      this.deps.activeTurns?.delete(opened.session.id);
-      // close() surfaces a failed background save (the record did not land)
-      // — a throw here is a turn failure like any other. The nested finally
-      // keeps one throwing close from leaking the other seat's lock.
-      try { await supOpened?.close(); }
-      finally { await opened.close(); }
+    const opener = unsentKickoff(card, codingAgent.session.messages);
+    if (opener) {
+      await this.setPlanMode(codingAgent.session.id, opener.planMode);
+      return skippedIfLocked(await run(codingAgent, opener.text), 'card');
     }
+
+    const supervisor = await SupervisorAgent.resumeSession(this.client, this.handlers(card.number, 'supervisor'), supervisorSessionId);
+    const step = nextStep(card, codingAgent.session.messages, supervisor.session.messages);
+    if (!step) { await codingAgent.close(); await supervisor.close(); return 'idle'; }
+
+    if (step.kind === 'supervisor') {
+      // ── the supervisor's turn: the missing seeds and the coder's reply
+      // land as user messages; its reply is its own, recorded whole (tool
+      // traffic included — the step rule reads terminal turns off it). ────
+      await codingAgent.close();
+      supervisor.addToolKit(supervisorCardKit(runCard, card.status as LoopColumn));
+      return skippedIfLocked(await run(supervisor, step.append.join('\n\n')), 'supervisor');
+    }
+
+    // ── deliver / return: one coding turn with the owed text. A returned
+    // card's block is resolved and its resolution consumed: clear both
+    // AFTER the turn landed, so a crash mid-turn re-delivers instead of
+    // losing the human's answer. ──────────────────────────────────────────
+    await supervisor.close();
+    await this.setPlanMode(codingAgent.session.id, card.status === 'plan');
+    const outcome = skippedIfLocked(await run(codingAgent, step.text), 'card');
+    if (outcome !== 'turn') return outcome;
+    if (step.kind === 'return' && (card.blocked_reason || card.resolution)) {
+      await this.patchCard(project, card.number, { blocked_reason: null, resolution: null });
+    }
+    return 'turn';
   }
 
-  /** Per-session compaction locks — one compaction at a time per session. */
-  private compactionLocks = new Map<string, CompactionLock>();
-
-  /** Fire-and-forget compaction check after a coding turn, under the coder's
-   *  compaction config (its thresholds; the supervisor's model writes). */
-  private kickCompaction(sessionId: string, inputTokens: number, history: ModelMessage[], cfg: AgentConfig): void {
-    if (!compactionDue(cfg.compaction, inputTokens)) return;
-
-    let lock = this.compactionLocks.get(sessionId);
-    if (!lock) { lock = new CompactionLock(); this.compactionLocks.set(sessionId, lock); }
-    if (lock.active) return;
-
-    void compact(lock, compactionOpts(cfg.compaction, history, sessionId)).then((result) => {
-      if (result) log.info({ session: sessionId, removed: result.removed }, 'coding session compacted');
-    }).catch((err) => {
-      log.warn({ session: sessionId, err: (err as Error).message }, 'coding session compaction failed');
-    });
+  /** Plan mode on the coder's row: a planning turn runs read-only; a build
+   *  turn writes. The row is what turn-start answers the agent. */
+  private async setPlanMode(sessionId: string, on: boolean): Promise<void> {
+    await this.deps.sessions.setPlanMode(sessionId, on);
   }
 
   /** One session's spend so far, the budget's coin: input + output tokens,
@@ -491,11 +346,4 @@ export class LooperEngine {
     return this.deps.cards.update(project, cardNumber, fields, undefined, CLIENT_ID);
   }
 
-  private turnDeps(card?: number, signal?: AbortSignal) {
-    return { f: this.f, apiKey: this.deps.apiKey, base: BASE,
-      modelFetch: this.deps.modelFetch, sessionEvents: this.deps.sessionEvents, client: CLIENT_ID,
-      backdoor: this.deps.backdoor,
-      onRetry: (t: string) => log.warn({ card, agent: 'coding' }, t),
-      signal };
-  }
 }

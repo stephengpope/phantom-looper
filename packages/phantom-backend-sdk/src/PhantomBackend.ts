@@ -130,6 +130,11 @@ export class PhantomBackend {
   /** Turns the backend itself runs, by session id — the interrupt route
    *  aborts one. Goes when every turn runs on the client SDK. */
   readonly activeTurns = new Map<string, AbortController>();
+  /** Where a client in this process reaches the API: plain HTTP on
+   *  loopback. The backend's own agents are clients like any other. */
+  get loopback(): { url: string; apiKey: string } {
+    return { url: `http://127.0.0.1:${this.env.port}/api`, apiKey: this.env.apiKey };
+  }
 
   // ── runtime ──────────────────────────────────────────────────────────
   readonly docker: Docker;
