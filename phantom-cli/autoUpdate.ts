@@ -22,7 +22,7 @@ import { existsSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { CONFIG_PATH } from './config.js';
 import { readOverrides, setBookkeeping } from './local.js';
-import { bare, isBehind } from '../core/version.js';
+import { bare, isBehind } from 'phantom-client-sdk';
 import { logLine } from './cliLog.js';
 import { readHealth, runUpdate, type UpdateDeps } from './update.js';
 

@@ -13,11 +13,11 @@ export function parseVersion(v: string): [number, number, number] | null {
 /** Is `mine` behind `theirs`? Unparseable on either side — 'dev', a
  *  prerelease — is never behind: only two release builds compare. */
 export function isBehind(mine: string, theirs: string): boolean {
-  const a = parseVersion(mine), b = parseVersion(theirs);
-  if (!a || !b) return false;
+  const own = parseVersion(mine), other = parseVersion(theirs);
+  if (!own || !other) return false;
   for (let i = 0; i < 3; i++) {
-    if (a[i] < b[i]) return true;
-    if (a[i] > b[i]) return false;
+    if (own[i]! < other[i]!) return true;
+    if (own[i]! > other[i]!) return false;
   }
   return false;
 }

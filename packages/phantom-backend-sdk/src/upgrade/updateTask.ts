@@ -21,9 +21,9 @@ import type Docker from 'dockerode';
 import { PassThrough } from 'node:stream';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { Images } from 'phantom-backend-sdk';
+import type { Images } from '../runtime/Images.js';
 import type { UpdateEvent } from 'phantom-client-sdk';
-import { logger, errStr } from 'phantom-backend-sdk';
+import { logger, errStr } from '../lib/log.js';
 
 const log = logger('update-task');
 

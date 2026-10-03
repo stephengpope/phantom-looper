@@ -5,7 +5,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { PhantomBackend } from 'phantom-backend-sdk';
 import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
-import type { System } from '../system.js';
+import type { System } from 'phantom-backend-sdk';
 import type { GitSync, AutoPushResult, AutoPushEvent, AutoPullResult, AutoPullEvent } from 'phantom-backend-sdk';
 import { gitRoutes } from './routes/git.js';
 import { systemRoutes } from './routes/system.js';

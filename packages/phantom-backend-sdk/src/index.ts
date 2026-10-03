@@ -99,3 +99,8 @@ export { autoPull, type AutoPullEvent, type AutoPullResult, type AutoPullDeps } 
 export type { Arrival } from './git/GitSync.js';
 export type { InstantSyncDeps } from './git/InstantSync.js';
 export { idleBackupSweep, pressureSweep, diskCleanup, tooFull, type DiskState, type CleanupDeps } from './runtime/Disk.js';
+
+// upgrade
+export { System, SystemError, LOG_MAX_BYTES, LOG_MAX_TAIL, LOG_SERVICES, type LogsQuery } from './upgrade/System.js';
+export { UpgradeChecker, type UpgradeCheckerDeps } from './upgrade/UpgradeChecker.js';
+export { subscribe as subscribeUpdate, isRunning as updateRunning, shutdown as updateShutdown, startUpdate, HELPER_NAME, type UpdateDeps, type UpdateListener } from './upgrade/updateTask.js';

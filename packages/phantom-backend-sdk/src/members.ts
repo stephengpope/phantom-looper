@@ -46,4 +46,4 @@ export { HttpApi } from './api/HttpApi.js';
 export { DbConsole } from './api/DbConsole.js';
 export { Notifications } from './Notifications.js';
 export { SessionDigest } from './SessionDigest.js';
-export { Upgrader } from './Upgrader.js';
+export { System as Upgrader } from './upgrade/System.js';

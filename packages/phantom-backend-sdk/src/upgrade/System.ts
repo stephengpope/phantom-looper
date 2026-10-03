@@ -7,15 +7,15 @@ import os from 'node:os';
 import { statfsSync } from 'node:fs';
 import { PassThrough, Readable } from 'node:stream';
 import type Docker from 'dockerode';
-import type { Paths } from 'phantom-backend-sdk';
-import type { Images } from 'phantom-backend-sdk';
-import type { TokenLog } from 'phantom-backend-sdk';
-import { formatTokenReport, reportWindows } from 'phantom-backend-sdk';
-import type { Clock } from 'phantom-backend-sdk';
-import { startUpdate, subscribe, isRunning } from './api/updateTask.js';
+import type { Paths } from '../lib/paths.js';
+import type { Images } from '../runtime/Images.js';
+import type { TokenLog } from '../storage/TokenLog.js';
+import { formatTokenReport, reportWindows } from '../storage/tokenReport.js';
+import type { Clock } from '../lib/clock.js';
+import { startUpdate, subscribe, isRunning } from './updateTask.js';
 import type { UpdateEvent } from 'phantom-client-sdk';
-import { API_IMAGE } from 'phantom-backend-sdk';
-import { logger, errStr } from 'phantom-backend-sdk';
+import { API_IMAGE } from '../lib/env.js';
+import { logger, errStr } from '../lib/log.js';
 
 const log = logger('system');
 

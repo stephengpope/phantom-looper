@@ -8,11 +8,11 @@
 // approvals in approvals.ts) so the engine's callback router can dispatch.
 
 import crypto from 'node:crypto';
-import type { TelegramApi } from 'phantom-backend-sdk';
-import { titled } from 'phantom-backend-sdk';
-import { checkLatest, isBehind, bare } from '../../core/version.js';
+import type { TelegramApi } from '../telegram/TelegramApi.js';
+import { titled } from '../telegram/TelegramApi.js';
+import { checkLatest, isBehind, bare } from 'phantom-client-sdk';
 import { pullLine, type PullProgress, type UpdateEvent } from 'phantom-client-sdk';
-import { logger, errStr } from 'phantom-backend-sdk';
+import { logger, errStr } from '../lib/log.js';
 
 const log = logger('upgrade');
 

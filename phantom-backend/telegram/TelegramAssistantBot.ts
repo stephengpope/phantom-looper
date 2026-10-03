@@ -25,7 +25,7 @@ import { openSession, SessionLockedError, type OpenedSession } from '../../core/
 import type { Sessions } from 'phantom-backend-sdk';
 import type { Cards } from 'phantom-backend-sdk';
 import type { Presets } from 'phantom-backend-sdk';
-import type { System } from '../system.js';
+import type { System } from 'phantom-backend-sdk';
 import type { SessionEvents } from 'phantom-backend-sdk';
 import type { UserMessageQueue } from 'phantom-backend-sdk';
 import type { BoardEvents, BoardEvent } from 'phantom-backend-sdk';
@@ -35,7 +35,7 @@ import { TelegramApi, titled } from 'phantom-backend-sdk';
 import { collectFiles, type TelegramBot } from 'phantom-backend-sdk';
 import { runAssistantTurn, CLIENT_ID, type AssistantDeps } from './assistant.js';
 import type { Ask } from 'phantom-backend-sdk';
-import { UpgradeChecker } from './upgrade.js';
+import { UpgradeChecker } from 'phantom-backend-sdk';
 import type { TelegramBotState, TelegramBotStateRow, TelegramMode } from 'phantom-backend-sdk';
 import type { TelegramSentMessages } from 'phantom-backend-sdk';
 import type { TelegramHandledUpdates } from 'phantom-backend-sdk';
