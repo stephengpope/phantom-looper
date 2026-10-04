@@ -1,5 +1,5 @@
 # The phantom-backend image — thin. The agent's toolchain lives in the WORKSPACE image
-# (build/workspace), not here.
+# (build/session), not here.
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
 COPY package*.json ./

@@ -4,7 +4,7 @@ name: Release
 #
 # One tag → two images, both multi-arch (amd64 + arm64), pushed to ghcr.io:
 #   ghcr.io/stephengpope/phantom-backend-api       the API server (Dockerfile)
-#   ghcr.io/stephengpope/phantom-backend-session   every session's container (build/project)
+#   ghcr.io/stephengpope/phantom-backend-session   every session's container (build/session)
 # Each platform builds NATIVELY (images, 4 jobs) and pushes by digest; the
 # manifests job (2 jobs) stitches each pair into one multi-arch tag.
 #
@@ -50,8 +50,8 @@ jobs:
             context: .
             dockerfile: Dockerfile
           - name: phantom-backend-session
-            context: build/project
-            dockerfile: build/workspace/Dockerfile
+            context: build/session
+            dockerfile: build/session/Dockerfile
         platform:
           - { os: linux/amd64, arch: amd64, runner: ubuntu-latest }
           - { os: linux/arm64, arch: arm64, runner: ubuntu-24.04-arm }

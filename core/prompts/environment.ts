@@ -1,6 +1,6 @@
 // The environment — the machine the file tools run in. This file IS the
 // source; edit the text here. A prompt adopts it with an {{environment}}
-// blank. Static text only — the OS line tracks build/workspace/Dockerfile
+// blank. Static text only — the OS line tracks build/session/Dockerfile
 // by hand. Today the coding agent carries it.
 
 export const ENVIRONMENT = `

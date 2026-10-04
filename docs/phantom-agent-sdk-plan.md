@@ -54,8 +54,8 @@ what is left to make that true, in order. It replaces `sdk-conversion.md`.
 - A session has a transcript, a container, and a workspace (the checkout)
   inside it. The container is the session's (`SessionContainers`); a session
   that borrows a workspace runs inside the owner's container. The image is
-  the **session image** (`phantom-backend-session`); `build/workspace/` becomes
-  `build/session/` when the runtime moves.
+  the **session image** (`phantom-backend-session`) built from `build/session/`
+  (renamed from `build/workspace/` once the runtime moved).
 - A workspace's id equals its first session's id today. Kept through the
   rename; splitting them is its own item later.
 - No tests. Proof is a run on the real stack.
@@ -68,8 +68,7 @@ routes, settings scope values (`workspace:<id>` → `project:<id>`),
 per-project databases (`workspace_<id>` → `project_<id>`), image names,
 files, folders, objects, functions, variables, cli screens, prompts, docs.
 Migration 047 moves live data. Already right and untouched: the container
-path `/workspace`, `phantom-backend/workspace/`, `build/workspace/`,
-container names `phantom-looper-ws-<id>`.
+path `/workspace`, container names `phantom-looper-ws-<id>`.
 
 ## 2. The SDK folder takes its final shape
 
