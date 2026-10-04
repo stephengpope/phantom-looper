@@ -1,16 +1,20 @@
 // The secret editor — one card-style popup, every field on screen at once
 // (the CardEditor's shape: focused row is a live TextInput, tab/↑↓ walk the
-// rows, the ❯ marker and cyan label say where you are). UNLIKE the card it
-// never auto-saves: a half-entered secret is nothing to store, so [esc]
-// KILLS the whole thing and only the Save row writes. Value is masked as it
-// is typed and never echoed back.
+// rows, the ❯ marker and cyan label say where you are). It AUTO-SAVES the
+// card's way, with one difference forced by the data: a secret has no id —
+// its name + Where IS the row — so a field saves when you LEAVE it (enter,
+// tab, arrows, esc), not on every keystroke, or typing a name would write a
+// row per pause. There is no Save row. Esc saves the field you are on and
+// closes. Value is masked as it is typed and never echoed back.
 //
-// The SAME rows in both modes — Name, Description, Value, Where, Save —
-// nothing is locked. new: value required. edit: the row's name, description
-// and layer are pre-filled and all editable; the value starts EMPTY and
-// empty means "keep it" (the server never hands a secret back, and a typo
-// in a description must not cost re-pasting the token). A changed name or
-// Where is a move — the screen that owns the list does it.
+// The SAME rows in both modes — Name, Description, Value, Where. new:
+// nothing is written until the name is valid AND a value is typed; from
+// then on it is an edit. edit: name, description and Where are pre-filled;
+// the value starts EMPTY and empty means "keep it" (the server never hands
+// a secret back, and a typo in a description must not cost re-pasting the
+// token). A changed name or Where is a move — the screen that owns the list
+// does it. Saves queue one behind another, so a value write always lands
+// before the move that would read it.
 import { Box } from 'ink';
 import { useInput } from './useInput.js';
 import { Text } from './Text.js';
@@ -22,15 +26,16 @@ import { secretName, SECRET_NAME_RULE } from 'phantom-client-sdk';
 /** A place a secret can live: global (id null) or one project. */
 export interface SecretTarget { id: string | null; label: string }
 
-export interface SecretDraft {
-  name: string; description: string;
-  /** edit: '' = keep the stored value. */
+/** Where a secret is stored: the two that make it one row. */
+export interface SecretId { name: string; projectId: string | null }
+
+export interface SecretDraft extends SecretId {
+  description: string;
+  /** '' = keep the stored value. */
   value: string;
-  /** null = global, else the project id. */
-  projectId: string | null;
 }
 
-export function SecretEditor({ mode, initial, targets, isActive = true, onSave, onCancel }: {
+export function SecretEditor({ mode, initial, targets, isActive = true, onSave, onClose }: {
   mode: 'new' | 'edit';
   /** edit: the row being edited (value always starts empty).
    *  new: where the Where row starts (the list's current project filter). */
@@ -38,8 +43,10 @@ export function SecretEditor({ mode, initial, targets, isActive = true, onSave, 
   /** Every place a secret can go — global first, then the projects. */
   targets: SecretTarget[];
   isActive?: boolean;
-  onSave: (d: SecretDraft) => void;
-  onCancel: () => void;
+  /** Write the draft; `from` is where it is stored now (absent = create).
+   *  Rejects with the reason when the server would not take it. */
+  onSave: (d: SecretDraft, from?: SecretId) => Promise<void>;
+  onClose: () => void;
 }) {
   const [draft, setDraft] = useState<SecretDraft>({
     name: initial?.name ?? '',
@@ -48,17 +55,62 @@ export function SecretEditor({ mode, initial, targets, isActive = true, onSave, 
     projectId: initial?.projectId ?? null,
   });
   const [error, setError] = useState<string | undefined>();
+  const [saveState, setSaveState] = useState<'rest' | 'saving' | 'saved' | 'failed'>('rest');
 
   // Focus lives in a ref (two keys in one React batch both need the fresh
   // index — the CardEditor/TextInput rule).
-  const rows = ['name', 'description', 'value', ...(targets.length > 1 ? ['where'] : []), 'save'];
+  const rows = ['name', 'description', 'value', ...(targets.length > 1 ? ['where'] : [])];
   const atRef = useRef(0);
   const [, bump] = useState(0);
   const draftRef = useRef(draft);
   draftRef.current = draft;
   const at = Math.min(atRef.current, rows.length - 1);
   const focused = rows[at];
-  const move = (d: number) => { atRef.current = (at + d + rows.length) % rows.length; bump((n) => n + 1); };
+
+  // What the server holds: where the row is (null until a new one is
+  // created) and the last draft it took — a leave that changed nothing
+  // sends nothing.
+  const storedRef = useRef<SecretId | null>(
+    mode === 'edit' && initial?.name ? { name: initial.name, projectId: initial.projectId ?? null } : null);
+  const sentRef = useRef<Omit<SecretDraft, 'value'> | null>(
+    storedRef.current ? { name: draft.name, description: draft.description, projectId: draft.projectId } : null);
+  const queueRef = useRef<Promise<void>>(Promise.resolve());
+
+  /** Save the draft if it differs from what the server holds. Runs on
+   *  leaving a field. Queued behind any save still in flight. */
+  const commit = () => {
+    const d = draftRef.current;
+    const stored = storedRef.current;
+    const name = secretName(d.name);
+    // Nothing exists yet and there is not enough to create: wait.
+    if (!stored && (!name || !d.value)) {
+      if (d.value && !name) setError(`name: ${SECRET_NAME_RULE}`);
+      return;
+    }
+    if (!name) { setError(`name: ${SECRET_NAME_RULE}`); return; }
+    const sent = sentRef.current;
+    const changed = !sent || d.value !== '' || sent.name !== name
+      || sent.description !== d.description || sent.projectId !== d.projectId;
+    if (!changed) return;
+    const out: SecretDraft = { ...d, name };
+    setError(undefined);
+    setSaveState('saving');
+    queueRef.current = queueRef.current
+      .then(() => onSave(out, stored ?? undefined))
+      .then(() => {
+        storedRef.current = { name, projectId: out.projectId };
+        sentRef.current = { name, description: out.description, projectId: out.projectId };
+        // The value went; the field goes back to "keep it".
+        setDraft((cur) => ({ ...cur, value: '' }));
+        setSaveState('saved');
+      }, (e: Error) => { setError(e.message); setSaveState('failed'); });
+  };
+
+  const move = (d: number) => {
+    commit();
+    atRef.current = (at + d + rows.length) % rows.length;
+    bump((n) => n + 1);
+  };
 
   /** Cycle Where through the targets, either direction. */
   const cycleWhere = (dir: 1 | -1) => setDraft((d) => {
@@ -67,25 +119,19 @@ export function SecretEditor({ mode, initial, targets, isActive = true, onSave, 
     return { ...d, projectId: next.id };
   });
 
-  const save = () => {
-    const d = draftRef.current;
-    const name = secretName(d.name);
-    if (!name) { setError(`name: ${SECRET_NAME_RULE}`); return; }
-    if (mode === 'new' && !d.value) { setError('value: required — a secret with no value is nothing to store'); return; }
-    onSave({ ...d, name });
-  };
-
   useInput((ch, key) => {
     if (isMouseInput(ch)) return;
-    if (key.escape) { onCancel(); return; }
+    if (key.escape) { commit(); onClose(); return; }
     if (key.tab || key.downArrow) { move(key.shift ? -1 : 1); return; }
     if (key.upArrow) { move(-1); return; }
+    // Enter on a text row is the TextInput's (onSubmit moves); Where has no
+    // input, so it is taken here.
     const r = rows[Math.min(atRef.current, rows.length - 1)];
     if (r === 'where') {
-      if (key.return || ch === ' ' || key.rightArrow) { cycleWhere(1); return; }
+      if (key.return) { move(1); return; }
+      if (ch === ' ' || key.rightArrow) { cycleWhere(1); return; }
       if (key.leftArrow) { cycleWhere(-1); return; }
     }
-    if (r === 'save' && (key.return || ch === ' ')) save();
   }, { isActive });
 
   // 15 = the 2-cell marker + "Description" (11, the widest label) + the
@@ -109,18 +155,17 @@ export function SecretEditor({ mode, initial, targets, isActive = true, onSave, 
         ? <Text wrap="truncate">{mask ? mask.repeat(draft[k].length) : draft[k]}</Text>
         : <Text dimColor>{placeholder}</Text>;
 
+  const exists = storedRef.current !== null;
   const whereLabel = targets.find((t) => t.id === draft.projectId)?.label ?? 'global — every project';
-  const moved = mode === 'edit'
-    && (draft.name !== initial?.name || draft.projectId !== (initial?.projectId ?? null));
-  const saveSays = mode === 'new' ? `stores ${whereLabel}`
-    : moved ? `moves it to ${draft.name || '?'} · ${whereLabel}`
-      : draft.value ? 'stores the new value' : 'keeps the value, saves the rest';
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
       <Box justifyContent="space-between">
-        <Text bold color="cyan">{mode === 'new' ? 'new secret' : initial?.name}</Text>
-        <Text dimColor>nothing saves until Save</Text>
+        <Text bold color="cyan">{exists ? storedRef.current?.name : 'new secret'}</Text>
+        {saveState === 'saving' ? <Text color="yellow">saving…</Text>
+          : saveState === 'saved' ? <Text color="green">saved ✓</Text>
+          : saveState === 'failed' ? <Text color="red">save failed — edit to retry</Text>
+          : <Text dimColor>{exists ? 'saves as you leave a field · esc closes' : 'stored once it has a name and a value'}</Text>}
       </Box>
       <Box marginTop={1}>
         {label('Name', 'name')}
@@ -132,9 +177,9 @@ export function SecretEditor({ mode, initial, targets, isActive = true, onSave, 
       </Box>
       <Box marginTop={1}>
         {label('Value', 'value')}
-        {input('value', mode === 'new'
-          ? 'the secret itself — stored encrypted, never shown back'
-          : 'leave empty to keep the stored value — never shown back', '•')}
+        {input('value', exists
+          ? 'leave empty to keep the stored value — never shown back'
+          : 'the secret itself — stored encrypted, never shown back', '•')}
       </Box>
       {targets.length > 1 && (
         <Box marginTop={1}>
@@ -142,19 +187,13 @@ export function SecretEditor({ mode, initial, targets, isActive = true, onSave, 
           <Text color={draft.projectId !== null ? 'cyan' : undefined} dimColor={draft.projectId === null}>
             {whereLabel}
           </Text>
-          {focused === 'where' ? <Text dimColor> · [enter/←→] next of {targets.length}</Text> : null}
+          {focused === 'where' ? <Text dimColor> · [space/←→] next of {targets.length}</Text> : null}
         </Box>
       )}
       <Box marginTop={1}>
-        {label('Save', 'save')}
         {error
           ? <Text color="red" wrap="truncate">{error}</Text>
-          : <Text dimColor={focused !== 'save'} color={focused === 'save' ? 'green' : undefined}>
-              {focused === 'save' ? `[enter] saves — ${saveSays}` : saveSays}
-            </Text>}
-      </Box>
-      <Box marginTop={1}>
-        <Text dimColor>[tab/↑↓] move · [enter] next · [esc] kill — nothing is kept</Text>
+          : <Text dimColor>[tab/↑↓] move · [enter] next · [esc] close</Text>}
       </Box>
     </Box>
   );
