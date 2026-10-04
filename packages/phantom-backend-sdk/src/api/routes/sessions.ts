@@ -263,14 +263,14 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   app.post<{ Params: { id: string } }>(
     '/sessions/:id/interrupt', { schema: { ...TAG,
       summary: 'Interrupt a running turn',
-      description: 'Stops the turn running on this session, whoever runs it: a server-side turn is ' +
-        'aborted in place, an {event:"interrupt"} record on GET /sessions/:id/events tells every other ' +
-        'client running a turn here (a cli window, the telegram engine) to stop its own, and any ' +
+      description: 'Stops the turn running on this session, whoever runs it: an {event:"interrupt"} record on ' +
+        'GET /sessions/:id/events tells the client running a turn here (a cli window, the backend\'s own engines) ' +
+        'to stop its own, and any ' +
         'foreground bash commands the session has in flight are killed in their container (detached ' +
         'commands are left running by design). The turn saves what it recorded and ends cleanly — the ' +
         'card is not blocked. 200 whether or not a turn was running (idempotent).',
       params: idParam } },
-    async (req) => ok(ctx.sessions.interrupt(req.params.id, clientOf(req), ctx)));
+    async (req) => { ctx.sessions.interrupt(req.params.id, clientOf(req), { foreground: ctx.foregroundCommands }); return ok({}); });
 
   // ---- notify ---------------------------------------------------------------
   // The `send_message` tool's door (core/llm/tools/notify.ts): the session's
@@ -503,7 +503,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // LOCAL file and posts it here. It lands in the session's scratch pad —
   // the same policy telegram attachments follow (attachments.ts). The cli
   // inserts a chip into the user's prompt that expands to the scratch path
-  // on submit, so the agent sees the path inline — no backdoor message.
+  // on submit, so the agent sees the path inline — no queued message.
   app.post<{ Params: { id: string }; Body: { name: string; data: string } }>(
     '/sessions/:id/attachments', { schema: { ...TAG,
       summary: 'Attach a file to the session',
@@ -558,10 +558,6 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         if (e instanceof SessionError) return reply.code(400).send(err(e.code, e.message));
         throw e;
       }
-      // The same ground truth as the lock route: an expired hold is not an
-      // idle session while its turn is still streaming — duplicating would
-      // flush a tree the live turn is halfway through writing.
-      if (ctx.activeTurns.has(src.id) && src.lockedBy) return reply.code(409).send(lockedErr(src));
       const ttl = await ctx.settings.resolve('session_lock_ttl_ms');
       const expires = await ctx.sessions.acquireLock(src, GIT_CLIENT_ID, Number(ttl), 'duplicate');
       if (!expires) return reply.code(409).send(lockedErr(src));
@@ -735,7 +731,6 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       const s = await ctx.sessions.get(req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (s.status !== 'active') return reply.code(410).send(err('session_destroyed', `session is ${s.status}`));
-      if (ctx.activeTurns.has(s.id) && s.lockedBy && s.lockedBy !== client) return reply.code(409).send(lockedErr(s));
       const project = await ctx.projects.get(s.projectId);
       if (!project) return reply.code(404).send(err('not_found', 'project vanished'));
       // The caller hanging up (a stop pressed while this request was in

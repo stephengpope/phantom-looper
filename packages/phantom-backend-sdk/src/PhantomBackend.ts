@@ -131,9 +131,6 @@ export class PhantomBackend {
   /** The backend's git: manual ops, auto-push/pull, instant sync, the archive policy. */
   readonly git: GitService;
   readonly #httpApi: HttpApi;
-  /** Turns the backend itself runs, by session id — the interrupt route
-   *  aborts one. Goes when every turn runs on the client SDK. */
-  readonly activeTurns = new Map<string, AbortController>();
   /** Where a client in this process reaches the API: plain HTTP on
    *  loopback. The backend's own agents are clients like any other. */
   get loopback(): { url: string; apiKey: string } {
@@ -172,7 +169,7 @@ export class PhantomBackend {
     this.git = new GitService({
       sessions: this.sessions, workspaces: this.workspaces, cards: this.cards, projects: this.projects, settings: this.settings, paths: this.paths,
       sessionEvents: this.sessionEvents, boardEvents: this.boardEvents, settingsEvents: this.settingsEvents,
-      userMessageQueue: this.userMessageQueue, containers: this.sessionContainers, watcher: this.workspaceWatcher,
+      userMessageQueue: this.userMessageQueue, sessionContainers: this.sessionContainers, workspaceWatcher: this.workspaceWatcher,
     }, config.git ?? {});
     this.#httpApi = new HttpApi(this, this.env.apiKey, config.routes);
   }
@@ -290,7 +287,7 @@ export class PhantomBackend {
       if (change.keys.includes('db_ui_enabled')) void reconcileDbUi(this.docker, this.settings);
     });
     this.#loops.push(this.#loop(async () => {
-      await refreshWorkState({ workspaces: this.workspaces, projects: this.projects, paths: this.paths, containers: this.sessionContainers, events: this.boardEvents })
+      await refreshWorkState({ workspaces: this.workspaces, projects: this.projects, paths: this.paths, sessionContainers: this.sessionContainers, boardEvents: this.boardEvents })
         .catch((error) => log.error({ err: errStr(error) }, 'work-state refresh threw'));
       return 10_000;
     }, 10_000));

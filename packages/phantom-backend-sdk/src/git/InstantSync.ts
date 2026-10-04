@@ -64,7 +64,7 @@ export interface InstantSyncDeps {
   paths: Paths;
   watcher: WorkspaceWatcher;
   /** Auto-push / auto-pull as index.ts wires them for instant sync: no
-   *  hold, no fixer, notes to the backdoor queue. */
+   *  hold, no fixer, notes to the user message queue. */
   autoPush: (session: SessionRow, project: ProjectRow) => Promise<AutoPushResult>;
   autoPull: (session: SessionRow, project: ProjectRow) => Promise<AutoPullResult>;
   /** A sync that did not complete, in the sync's own words. */

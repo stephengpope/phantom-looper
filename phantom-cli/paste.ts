@@ -18,7 +18,7 @@
 // File chips — a drag-and-drop file gets a `[📎 file.txt]` chip at the
 // cursor. The store maps the chip's name to the scratch pad path the
 // backend returned. On submit, each file chip expands to its path — the
-// agent sees the path inline in the user's message, alongside the backdoor
+// agent sees the path inline in the user's message, alongside the queued
 // message that describes the file.
 
 /** One whole paste chip, e.g. `[Pasted #2 ~12 lines]`. */

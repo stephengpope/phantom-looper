@@ -16,7 +16,7 @@ export interface ResolvedModel {
   reasoning: Reasoning | undefined;
 }
 
-export class Models {
+export class ModelHandle {
   #cached: { key: string; model: LanguageModel } | null = null;
 
   constructor(private readonly backend: BackendClient, private readonly type: string, private readonly sessionId: string,

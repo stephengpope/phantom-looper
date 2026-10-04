@@ -20,6 +20,8 @@ The plan is `docs/phantom-agent-sdk-plan.md`. This file is where the work stands
 | Script cron | Passed (run recorded as a turn with exit code) |
 | Live Telegram proof of step 6 | Not run, needs a real bot token stored as a secret |
 
+- Review follow-ups: `last_turn_by` (who drove the last turn; the list's background rule reads it before `started_by`); `GitService` — the backend's git is the SDK's, the app brings `config.git` (fixer, commit message, sync note); `PhantomBackend.create(config)` → `start()` is the only way in (`httpApi`, loops, tool registry private; `hooks`, `startLoops`, `addRoutes`, `addPublicPath`, `transitional`, `activeTurns` gone); app engines take the `PhantomBackend` itself — no `Deps` bags, no second names (`logTokens`, `events`, `containers`, `engine`); the five SDK stubs and two export aliases deleted; `Out` → `TelegramText`, `Models` → `ModelHandle`.
+
 ## Left in the plan
 
 - Step 2: SDK folder final shape (`phantom-agent-sdk/packages/client|server`, package names, pinned ranges).

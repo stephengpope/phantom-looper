@@ -12,8 +12,7 @@ import { BackendClient, type AgentHandlers, type Agent } from 'phantom-client-sd
 import { CodingAgent } from '../../core/agents/coding.js';
 import { SupervisorAgent } from '../../core/agents/supervisor.js';
 import type { ProjectRow } from 'phantom-backend-sdk/schema';
-import { GLOBAL, type CardFields } from 'phantom-backend-sdk';
-import type { Sessions, Projects, Cards, Settings, TokenLog, SettingsEvents, BoardEvents, SessionEvents } from 'phantom-backend-sdk';
+import { GLOBAL, type CardFields, type PhantomBackend } from 'phantom-backend-sdk';
 import { logger, errStr } from 'phantom-backend-sdk';
 import { canTurn, unsentKickoff, nextStep, needsFreshSession, LOOP_COLUMNS, type CardRow } from './logic.js';
 import { codingAgentCardKit, supervisorCardKit, type LoopColumn } from './cardRunTools.js';
@@ -27,26 +26,6 @@ const CLIENT_ID = LOOP_CLIENT_ID;
 /** The looper as an actor — what its sessions record as started_by and
  *  last_turn_by; a default session list leaves those out (config.backgroundStarters). */
 export const LOOPER_STARTER = 'looper';
-
-export interface LooperDeps {
-  sessions: Sessions;
-  projects: Projects;
-  cards: Cards;
-  settings: Settings;
-  /** The token log — the budget's coin is read off it directly. */
-  logTokens: TokenLog;
-  /** Where this process reaches its own API: the backend's loopback. */
-  loopback: { url: string; apiKey: string };
-  /** The board's event bus: the engine's card writes publish there by
-   *  themselves; the one thing only the engine knows is the link — a card
-   *  and its coding session — published the moment the session is put on the card. */
-  events?: BoardEvents;
-  /** The settings feed: a write of either loop switch re-examines the
-   *  affected project (or every one, when the global layer changed). */
-  settingsEvents?: SettingsEvents;
-  /** The sessions' live feed: a hold's release re-runs its card's loop. */
-  sessionEvents?: SessionEvents;
-}
 
 /** What a turn did — the card run's chaining signal. `turn` means an agent
  *  turn ran and the next step is owed NOW; `moved`/`idle` mean the card was
@@ -68,8 +47,12 @@ export class LooperEngine {
   /** One client, this engine's lock identity, for every agent it opens. */
   private readonly client: BackendClient;
 
-  constructor(private deps: LooperDeps) {
-    this.client = new BackendClient({ url: deps.loopback.url, apiKey: deps.loopback.apiKey, clientId: CLIENT_ID, label: 'card run', actor: LOOPER_STARTER });
+  /** On the backend's objects: the board, the sessions, the settings, the
+   *  token log (the budget's coin), and its three feeds — the board bus runs
+   *  the loop, the settings feed re-examines a project when a loop switch
+   *  moves, the session feed re-runs a card when a hold is released. */
+  constructor(private readonly backend: PhantomBackend) {
+    this.client = new BackendClient({ url: backend.loopback.url, apiKey: backend.loopback.apiKey, clientId: CLIENT_ID, label: 'card run', actor: LOOPER_STARTER });
   }
 
   /** What an agent this engine runs tells it: errors and notices go to the log. */
@@ -86,13 +69,13 @@ export class LooperEngine {
     // Every card write, from any door (a route, the Assistant, this engine
     // itself), lands on the board bus: that is what runs the loop. The engine
     // re-reads the row and checks canTurn, so an irrelevant edit is a no-op.
-    this.deps.events?.subscribeAll((projectId, e) => {
+    this.backend.boardEvents.subscribeAll((projectId, e) => {
       if (e.event === 'card') void this.runLoop(projectId, Number((e.card as { number: number }).number));
     });
     // Supervision flipped (either switch, at any layer, through any door):
     // re-examine the affected project — every one when the global layer
     // moved. Event-driven, no poll.
-    this.deps.settingsEvents?.subscribe((e) => {
+    this.backend.settingsEvents.subscribe((e) => {
       if (!e.keys.some((k) => k === 'auto_plan' || k === 'auto_build')) return;
       const projectId = e.scope === GLOBAL ? undefined : e.scope.replace(/^project:/, '');
       void this.runAllLoops(projectId).catch((err) => log.warn({ err: errStr(err) }, 'looper settings pass failed'));
@@ -100,7 +83,7 @@ export class LooperEngine {
     // A session let go of (its hold released, by anyone but this engine):
     // its card, if any, may be runnable again. The release is a `lock`
     // event on the session feed, published under the releasing client.
-    this.deps.sessionEvents?.subscribeAll((sessionId, e, by) => {
+    this.backend.sessionEvents.subscribeAll((sessionId, e, by) => {
       if (e.event === 'lock' && e.locked === false) void this.runLoopOfSession(sessionId, by);
     });
     void this.runAllLoops().catch((e) => log.warn({ err: errStr(e) }, 'looper boot pass failed'));
@@ -117,12 +100,12 @@ export class LooperEngine {
    *  supervision setting changed) or all of them (boot). `canTurn` is
    *  re-checked before every turn off fresh rows, so over-calling is harmless. */
   async runAllLoops(projectId?: string): Promise<void> {
-    const one = projectId ? await this.deps.projects.get(projectId) : undefined;
-    const rows = projectId ? (one ? [one] : []) : await this.deps.projects.list();
+    const one = projectId ? await this.backend.projects.get(projectId) : undefined;
+    const rows = projectId ? (one ? [one] : []) : await this.backend.projects.list();
     for (const project of rows) {
       let cards: CardRow[];
       try {
-        cards = await this.deps.cards.listInColumns(project, LOOP_COLUMNS);
+        cards = await this.backend.cards.listInColumns(project, LOOP_COLUMNS);
       } catch (e) {
         // Its loops never start this sweep — a card sitting in plan or
         // in_progress with nothing happening; the log is the only trace.
@@ -140,7 +123,7 @@ export class LooperEngine {
   async runLoopOfSession(sessionId: string, releasedBy: string): Promise<void> {
     if (releasedBy === CLIENT_ID) return;
     let card;
-    try { card = await this.deps.cards.ofSession(sessionId); }
+    try { card = await this.backend.cards.ofSession(sessionId); }
     catch (e) {
       log.error({ session: sessionId, err: (e as Error).message }, 'could not look up the session\'s card — its round did not run');
       return;
@@ -175,11 +158,11 @@ export class LooperEngine {
         let project: ProjectRow | undefined;
         let card: CardRow | undefined;
         try {
-          project = await this.deps.projects.get(projectId);
+          project = await this.backend.projects.get(projectId);
           if (!project) continue;
-          const auto = await this.deps.settings.resolveMany(['auto_plan', 'auto_build'], { projectId: project.id })
+          const auto = await this.backend.settings.resolveMany(['auto_plan', 'auto_build'], { projectId: project.id })
             .catch(() => ({ auto_plan: false, auto_build: false }));
-          card = await this.deps.cards.activeByNumber(project, cardNumber);
+          card = await this.backend.cards.activeByNumber(project, cardNumber);
           if (!card || !canTurn(card, { plan: Boolean(auto.auto_plan), build: Boolean(auto.auto_build) })) continue;
         } catch (e) {
           log.warn({ card: cardNumber, err: errStr(e) }, 'looper could not read the card');
@@ -217,9 +200,9 @@ export class LooperEngine {
   /** A new supervisor session for the card: a conversation on the coder's
    *  workspace (the type borrows), opened by the looper, put on the card. */
   private async newSupervisor(project: ProjectRow, card: CardRow, coderSessionId: string): Promise<string> {
-    const sup = await this.deps.sessions.start(project.id, SupervisorAgent.systemPromptLayout,
+    const sup = await this.backend.sessions.start(project.id, SupervisorAgent.systemPromptLayout,
       { type: 'supervisor', startedBy: LOOPER_STARTER, workspaceSessionId: coderSessionId });
-    await this.deps.sessions.setCard(sup.id, card.id);
+    await this.backend.sessions.setCard(sup.id, card.id);
     return sup.id;
   }
 
@@ -233,11 +216,11 @@ export class LooperEngine {
    *  into a blocked card. */
   async runTurn(project: ProjectRow, card: CardRow, budget: Budget): Promise<TurnOutcome> {
     // The card's coder — its newest coding session (Sessions.coderOf).
-    const coder = await this.deps.sessions.coderOf(project.id, card.number);
+    const coder = await this.backend.sessions.coderOf(project.id, card.number);
     // Entering plan is a NEW run, always — the revision history is the
     // transition clock (logic.ts).
     const fresh = needsFreshSession(card.status, coder?.createdAt ?? null,
-      await this.deps.cards.lastMovedAt(project, card.number));
+      await this.backend.cards.lastMovedAt(project, card.number));
 
     let codingAgent: CodingAgent;
     let supervisorSessionId: string;
@@ -245,7 +228,7 @@ export class LooperEngine {
       codingAgent = await CodingAgent.resumeSession(this.client, this.handlers(card.number, 'coding'), coder.id);
       // The supervisor: born for THIS coder. One older than the coder
       // belonged to an earlier run — a fresh one is made.
-      const sup = await this.deps.sessions.newestOnCard(project.id, card.number, 'supervisor');
+      const sup = await this.backend.sessions.newestOnCard(project.id, card.number, 'supervisor');
       supervisorSessionId = sup && sup.createdAt.getTime() >= coder.createdAt.getTime()
         ? sup.id
         : await this.newSupervisor(project, card, coder.id);
@@ -253,11 +236,11 @@ export class LooperEngine {
       // A new run: the coder (with its workspace), put on the card the moment it exists.
       codingAgent = await CodingAgent.newSession(this.client, this.handlers(card.number, 'coding'), project.id);
       const sessionId = codingAgent.session.id;
-      await this.deps.sessions.setCard(sessionId, card.id);
+      await this.backend.sessions.setCard(sessionId, card.id);
       // The coder's session is named after its card from birth — /resume
       // never shows a nameless row while the first (long) plan turn runs.
-      await this.deps.sessions.nameIfUnnamed(sessionId, card.title);
-      this.deps.events?.publish(project.id, { event: 'session', card: card.number, id: sessionId, name: card.title });
+      await this.backend.sessions.nameIfUnnamed(sessionId, card.title);
+      this.backend.boardEvents.publish(project.id, { event: 'session', card: card.number, id: sessionId, name: card.title });
       // A new coder gets a new supervisor: a conversation on the coder's workspace, on the same card.
       supervisorSessionId = await this.newSupervisor(project, card, sessionId);
     }
@@ -265,7 +248,7 @@ export class LooperEngine {
     // ── the token budget — seeded once per loop, checked before every turn,
     // each turn's own numbers added as they land. Breach is a card state a
     // human can see, like every other loop exit. ──────────────────────────
-    const b = await this.deps.settings.resolveMany(['loop_budget_tokens'], { projectId: project.id })
+    const b = await this.backend.settings.resolveMany(['loop_budget_tokens'], { projectId: project.id })
       .catch(() => ({ loop_budget_tokens: null }));
     const limit = b.loop_budget_tokens == null ? null : Number(b.loop_budget_tokens);
     if (!budget.seeded) {
@@ -342,14 +325,14 @@ export class LooperEngine {
   /** Plan mode on the coder's row: a planning turn runs read-only; a build
    *  turn writes. The row is what turn-start answers the agent. */
   private async setPlanMode(sessionId: string, on: boolean): Promise<void> {
-    await this.deps.sessions.setPlanMode(sessionId, on);
+    await this.backend.sessions.setPlanMode(sessionId, on);
   }
 
   /** One session's spend so far, the budget's coin: input + output tokens,
    *  summed off the token log — the same rows GET /sessions/:id/token-usage
    *  serves, read at the object. */
   private async tokensOf(sessionId: string): Promise<number> {
-    const t = await this.deps.logTokens.sessionTotals(sessionId);
+    const t = await this.backend.tokenLog.sessionTotals(sessionId);
     return Number(t.input ?? 0) + Number(t.output ?? 0);
   }
 
@@ -357,7 +340,7 @@ export class LooperEngine {
    *  every listener (this engine's own runLoop included, which then reads
    *  the new status and stops). */
   private patchCard(project: ProjectRow, cardNumber: number, fields: CardFields): Promise<unknown> {
-    return this.deps.cards.update(project, cardNumber, fields, undefined, CLIENT_ID);
+    return this.backend.cards.update(project, cardNumber, fields, undefined, CLIENT_ID);
   }
 
 }

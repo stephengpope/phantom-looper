@@ -4,7 +4,7 @@
 // spaces, some as a file:// URL. Caught in TextInput's paste channel before
 // the chip check: the path never lands in the prompt as text — the window
 // uploads the file into the session's scratch pad (POST /sessions/:id/attachments)
-// and the agent hears where it landed through the backdoor message queue.
+// and the agent hears where it landed through the user message queue.
 //
 // The gate is strict so an ordinary paste can never trip it: EVERY word must
 // LOOK dropped — a slash or the file:// scheme — AND exist as a file on

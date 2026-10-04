@@ -2,15 +2,14 @@
 // agent on its NEXT turn, without a turn being started for them. Sources are
 // things that happened behind the conversation's back — a detached command
 // exiting, a file dropped onto the cli window landing in the scratch pad.
-// In-memory by design: a backdoor message is a courtesy, never the record —
+// In-memory by design: a queued message is a courtesy, never the record —
 // the fact it reports lives in its own row (a dead queue after a restart
 // loses nothing the commands table does not still say).
 //
-// One home (ctx.backdoor), two doors out: server-side turns drain it inside
-// runCodingTurn, a cli window drains it over POST /sessions/:id/backdoor/drain
-// as its send starts. What is drained joins the turn's messages and is saved
-// with the transcript, so a backdoor message lands in the conversation
-// exactly once.
+// One home (backend.userMessageQueue), one door out: turn-start drains the
+// session's queue into the record before the turn's first model call,
+// whichever client runs the turn. So a queued message lands in the
+// conversation exactly once.
 
 /** Per-session cap: a session that never gets a turn must not grow the map
  *  for ever. Oldest drop first — the newest fact is the one that matters. */

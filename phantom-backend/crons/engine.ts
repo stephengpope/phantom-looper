@@ -38,7 +38,7 @@ import { Cron } from 'croner';
 import { BackendClient, type AgentHandlers } from 'phantom-client-sdk';
 import { messageLine, userMessage, assistantMessage } from 'phantom-client-sdk/transcript';
 import { CodingAgent } from '../../core/agents/coding.js';
-import type { Sessions, Crons, CronRow, Projects, Settings, SettingsEvents } from 'phantom-backend-sdk';
+import type { CronRow, PhantomBackend } from 'phantom-backend-sdk';
 import { logger, errStr } from 'phantom-backend-sdk';
 
 /** The cron scheduler's client id — its lock identity on the sessions it runs. */
@@ -52,17 +52,6 @@ const BASE = 'http://cron/api';
  *  minutes) is sized for an agent waiting on a command; a nightly job is
  *  not. `bash_timeout_max_ms`, when set, still caps this. */
 const SCRIPT_TIMEOUT_MS = 60 * 60 * 1000;
-
-export interface CronEngineDeps {
-  crons: Crons;
-  projects: Projects;
-  settings: Settings;
-  sessions: Sessions;
-  /** Where this process reaches its own API: the backend's loopback. */
-  loopback: { url: string; apiKey: string };
-  /** The settings feed: a project's cron switch or timezone moved. */
-  settingsEvents?: SettingsEvents;
-}
 
 /** A registration. The zone is part of it, not just the schedule: the same
  *  string is a different instant in a different zone, so a zone change
@@ -78,22 +67,23 @@ export class CronEngine {
   /** The agents with a run in flight, by session id — stop() interrupts them. */
   private agents = new Map<string, CodingAgent>();
 
-  constructor(private deps: CronEngineDeps) {
-    this.client = new BackendClient({ url: deps.loopback.url, apiKey: deps.loopback.apiKey, clientId: CRON_CLIENT_ID, label: 'cron', actor: CRON_STARTER });
+  /** On the backend's objects: the cron rows, the projects (zone, switch),
+   *  the sessions a run opens, and the settings feed (a project's cron
+   *  switch or timezone moved). */
+  constructor(private readonly backend: PhantomBackend) {
+    this.client = new BackendClient({ url: backend.loopback.url, apiKey: backend.loopback.apiKey, clientId: CRON_CLIENT_ID, label: 'cron', actor: CRON_STARTER });
   }
 
   /** Boot: register everything once, then follow the writes. */
   start(): void {
     this.reconcile();
-    this.unsubscribe.push(this.deps.crons.subscribe((projectId) => this.reconcile(projectId)));
+    this.unsubscribe.push(this.backend.crons.subscribe((projectId) => this.reconcile(projectId)));
     // A settings write names its scope: one project, or global — which
     // may be the switch or the zone every project inherits.
-    if (this.deps.settingsEvents) {
-      this.unsubscribe.push(this.deps.settingsEvents.subscribe((e) => {
-        const projectId = e.scope.startsWith('project:') ? e.scope.slice('project:'.length) : undefined;
-        if (projectId || e.scope === 'global') this.reconcile(projectId);
-      }));
-    }
+    this.unsubscribe.push(this.backend.settingsEvents.subscribe((e) => {
+      const projectId = e.scope.startsWith('project:') ? e.scope.slice('project:'.length) : undefined;
+      if (projectId || e.scope === 'global') this.reconcile(projectId);
+    }));
     log.info('cron scheduler started');
   }
 
@@ -115,16 +105,16 @@ export class CronEngine {
   /** Register new and changed crons, leave unchanged ones alone (a running
    *  job is never touched), drop what is gone, disabled, or switched off. */
   private async reconcileNow(projectId?: string): Promise<void> {
-    const rows = await this.deps.crons.listEnabled(projectId);
+    const rows = await this.backend.crons.listEnabled(projectId);
     const seen = new Set<number>();
     const zones = new Map<string, { enabled: boolean; timezone: string }>();
     for (const row of rows) {
       let zone: { enabled: boolean; timezone: string } | undefined = zones.get(row.project_id);
       if (!zone) {
-        const project = await this.deps.projects.get(row.project_id);
+        const project = await this.backend.projects.get(row.project_id);
         if (!project) continue;
         try {
-          const s = await this.deps.settings.resolveMany(['cron_enabled', 'timezone'], { projectId: project.id });
+          const s = await this.backend.settings.resolveMany(['cron_enabled', 'timezone'], { projectId: project.id });
           zone = { enabled: s.cron_enabled === true, timezone: String(s.timezone) };
         } catch (e) {
           log.error({ project: project.name, err: errStr(e) }, 'could not read the project\'s cron settings — its crons are not scheduled');
@@ -152,7 +142,7 @@ export class CronEngine {
           seen.delete(row.id);
           if (row.once) {
             log.warn({ cron: row.name }, 'one-time cron missed its moment while the server was down — removed');
-            await this.deps.crons.removeById(row.id);
+            await this.backend.crons.removeById(row.id);
           }
           continue;
         }
@@ -176,9 +166,9 @@ export class CronEngine {
   private async fire(id: number): Promise<void> {
     let row: CronRow | undefined;
     try {
-      row = await this.deps.crons.byId(id);
+      row = await this.backend.crons.byId(id);
       if (!row) { this.registered.get(id)?.cron.stop(); this.registered.delete(id); return; }
-      await this.deps.crons.markFired(row);
+      await this.backend.crons.markFired(row);
       if (row.once) { this.registered.get(id)?.cron.stop(); this.registered.delete(id); }
       await this.run(row);
     } catch (e) {
@@ -187,10 +177,10 @@ export class CronEngine {
   }
 
   private async run(row: CronRow): Promise<void> {
-    const { sessions } = this.deps;
+    const { sessions } = this.backend;
     let agent: CodingAgent | undefined;
     try {
-      const project = await this.deps.projects.get(row.project_id);
+      const project = await this.backend.projects.get(row.project_id);
       if (!project) throw new Error(`project ${row.project_id} is gone`);
       log.info({ project: project.name, cron: row.name }, 'cron run started');
       const handlers: AgentHandlers = {

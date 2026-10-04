@@ -118,7 +118,7 @@ export async function manageSkill(ctx: PhantomBackend, deps: FsDeps, session: Se
   const project = await ctx.projects.get(session.projectId);
   let container;
   try {
-    container = await deps.containers.ensure(workspaceId, project);
+    container = await deps.sessionContainers.ensure(workspaceId, project);
   } catch (e) {
     throw new ToolError('container_start_failed', (e as Error).message, true);
   }

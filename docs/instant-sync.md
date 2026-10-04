@@ -47,8 +47,8 @@ a manual sync, both in `index.ts`:
 ## What the agent is told
 
 A manual sync writes its note into the transcript under the session lock.
-An instant sync has no lock, so its notes ride the backdoor queue
-(`api/backdoor.ts`) — the same queue detached commands use — and land in
+An instant sync has no lock, so its notes ride the user message queue
+(the SDK's `UserMessageQueue`) — the same queue detached commands use — and land in
 front of the agent's next turn wherever that turn runs (server, cli,
 Telegram). A note already waiting is not queued again.
 

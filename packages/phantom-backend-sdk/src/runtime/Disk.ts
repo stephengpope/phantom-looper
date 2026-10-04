@@ -1,7 +1,7 @@
 // Disk — two sweeps, both driven from the maintenance loop in index.ts:
 //
 //   idleBackupSweep — the AUTOMATIC BACKUP: an idle session's work is pushed
-//   to its branch on origin (engine.backup: commit + push, never a rebase or
+//   to its branch on origin (gitSync.backup: commit + push, never a rebase or
 //   a landing). After it, nothing exists only on this disk, and reopening a
 //   deleted session re-clones the branch with its work in it.
 //
@@ -96,8 +96,8 @@ async function workspaceOwners(projects: Projects, sessions: Sessions): Promise<
     });
 }
 
-const backupOf = async (engine: GitSync, s: SessionRow, project: ProjectRow): Promise<PushResult | 'busy'> =>
-  engine.backup(s, project).catch((e) => {
+const backupOf = async (gitSync: GitSync, s: SessionRow, project: ProjectRow): Promise<PushResult | 'busy'> =>
+  gitSync.backup(s, project).catch((e) => {
     log.warn({ session: s.id, err: errStr(e) }, 'backup failed');
     return 'error';
   });
@@ -106,7 +106,7 @@ const backupOf = async (engine: GitSync, s: SessionRow, project: ProjectRow): Pr
  *  strand work that exists only on this disk. The gate
  *  `lastPushAt < lastUsedAt` means a session with nothing new since its last
  *  push is never touched — the common case costs no lock, no git, no push. */
-export async function idleBackupSweep(projects: Projects, sessions: Sessions, engine: GitSync): Promise<void> {
+export async function idleBackupSweep(projects: Projects, sessions: Sessions, gitSync: GitSync): Promise<void> {
   let owners: Array<{ s: SessionRow; project: ProjectRow }>;
   try { owners = await workspaceOwners(projects, sessions); } catch (e) {
     log.warn({ err: errStr(e) }, 'skipping idle backup — could not read state');
@@ -117,7 +117,7 @@ export async function idleBackupSweep(projects: Projects, sessions: Sessions, en
     if (s.turnCount < BACKUP_MIN_TURNS) continue;
     if (now - s.lastUsedAt.getTime() < BACKUP_IDLE_MS) continue;
     if (s.lastPushAt && s.lastPushAt.getTime() >= s.lastUsedAt.getTime()) continue;
-    const r = await backupOf(engine, s, project);
+    const r = await backupOf(gitSync, s, project);
     if (r === 'pushed') log.info({ session: s.id }, 'idle session backed up');
   }
 }
@@ -149,7 +149,7 @@ export interface CleanupDeps {
   landed: (s: SessionRow, project: ProjectRow) => Promise<boolean>;
   /** Delete release images older than the running one that no container uses. */
   removeOldImages: () => Promise<void>;
-  /** engine.backup: push, then run `whenSafe` under the same lock only if
+  /** gitSync.backup: push, then run `whenSafe` under the same lock only if
    *  everything is on origin. */
   backup: (s: SessionRow, project: ProjectRow, whenSafe: () => Promise<void>) => Promise<PushResult | 'busy'>;
   /** The container, then the files (which refuses anything not on origin). */
@@ -217,7 +217,7 @@ export async function diskCleanup(d: CleanupDeps): Promise<void> {
 /** Disk cleanup against the real system. */
 export async function pressureSweep(
   settings: Settings, projects: Projects, sessions: Sessions, p: Paths, images: Images,
-  containers: SessionContainers, engine: GitSync, busy: (workspaceIds: string[]) => Promise<Set<string>>,
+  sessionContainers: SessionContainers, gitSync: GitSync, busy: (workspaceIds: string[]) => Promise<Set<string>>,
 ): Promise<void> {
   const currents = [String(await settings.resolve('container_image')), API_IMAGE_CURRENT];
   await diskCleanup({
@@ -231,9 +231,9 @@ export async function pressureSweep(
     // Images owns the rule and refuses while a pull is in flight (images.ts).
     removeOldImages: () => images.removeOlderThan(currents)
       .catch((e) => log.warn({ err: errStr(e) }, 'image cleanup failed')),
-    backup: (s, project, whenSafe) => engine.backup(s, project, whenSafe),
+    backup: (s, project, whenSafe) => gitSync.backup(s, project, whenSafe),
     deleteSession: async (s) => {
-      await containers.remove(s.id);
+      await sessionContainers.remove(s.id);
       await sessions.destroy(s, { force: false });
     },
   });

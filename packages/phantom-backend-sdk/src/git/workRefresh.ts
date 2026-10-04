@@ -16,12 +16,12 @@ const log = logger('work-refresh');
 
 export interface WorkRefreshDeps {
   workspaces: Workspaces; projects: Projects; paths: Paths;
-  containers: SessionContainers;
-  events: BoardEvents;
+  sessionContainers: SessionContainers;
+  boardEvents: BoardEvents;
 }
 
-export async function refreshWorkState({ workspaces, projects, paths, containers, events }: WorkRefreshDeps): Promise<void> {
-  const active = await containers.activeWorkspaces();
+export async function refreshWorkState({ workspaces, projects, paths, sessionContainers, boardEvents }: WorkRefreshDeps): Promise<void> {
+  const active = await sessionContainers.activeWorkspaces();
 
   // Clear stale work states: workspaces that still show a git status but whose
   // container is gone. The value is unverifiable, so null it out.
@@ -29,7 +29,7 @@ export async function refreshWorkState({ workspaces, projects, paths, containers
   if (stale.length) {
     await Promise.all(stale.map(async (f) => {
       await workspaces.setWork(f.id, null);
-      events.publish(f.projectId, { event: 'session_work', card: f.card ?? 0, id: f.id, work: null });
+      boardEvents.publish(f.projectId, { event: 'session_work', card: f.card ?? 0, id: f.id, work: null });
     }));
   }
 
@@ -60,6 +60,6 @@ export async function refreshWorkState({ workspaces, projects, paths, containers
     // watching this session sees the work-state dot update without polling.
     await workspaces.setWork(f.id, work);
     // Publish on the board stream so the kanban board picks it up.
-    events.publish(f.projectId, { event: 'session_work', card: f.card ?? 0, id: f.id, work });
+    boardEvents.publish(f.projectId, { event: 'session_work', card: f.card ?? 0, id: f.id, work });
   }));
 }

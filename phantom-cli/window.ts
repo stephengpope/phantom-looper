@@ -686,7 +686,7 @@ export class WindowStore {
   /** Files dragged onto the window (drop.ts caught the paste before it
    *  became text). Each is read locally and uploaded into the active
    *  session's scratch pad; the agent hears where it landed through the
-   *  backdoor message queue on the next turn — the drop itself sends
+   *  user message queue on the next turn — the drop itself sends
    *  nothing, the user is still typing.
    *
    *  Returns a combined chip string to insert at the cursor (one chip per

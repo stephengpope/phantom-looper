@@ -60,7 +60,7 @@ export interface GitHooks {
 export interface GitServiceDeps {
   sessions: Sessions; workspaces: Workspaces; cards: Cards; projects: Projects; settings: Settings; paths: Paths;
   sessionEvents: SessionEvents; boardEvents: BoardEvents; settingsEvents: SettingsEvents;
-  userMessageQueue: UserMessageQueue; containers: SessionContainers; watcher: WorkspaceWatcher;
+  userMessageQueue: UserMessageQueue; sessionContainers: SessionContainers; workspaceWatcher: WorkspaceWatcher;
 }
 
 export type AutoPushFn = (session: SessionRow, project: ProjectRow,
@@ -100,7 +100,7 @@ export class GitService {
     const instantDeps = { sessions, workspaces, cards, settings, paths,
       writeCommitMessage: hooks.writeCommitMessage, recordSummary: this.noteForNextTurn };
     this.instantSync = new InstantSync({
-      sessions, workspaces, projects, settings, paths, watcher: deps.watcher,
+      sessions, workspaces, projects, settings, paths, watcher: deps.workspaceWatcher,
       autoPush: (session, project) => autoPush(instantDeps, session, project, { hold: false }),
       autoPull: (session, project) => autoPull(instantDeps, session, project, { hold: false }),
       failed: (session, op, reason) =>
@@ -169,7 +169,7 @@ export class GitService {
    *  say: the switch or a timing changed (the settings bus announces every
    *  write), and containers already running when this process came up. */
   reconcileInstantSync(): Promise<void> {
-    return this.deps.containers.activeWorkspaces()
+    return this.deps.sessionContainers.activeWorkspaces()
       .then((active) => this.instantSync.reconcile(active))
       .catch((e) => log.error({ err: errStr(e) }, 'instant sync reconcile threw'));
   }

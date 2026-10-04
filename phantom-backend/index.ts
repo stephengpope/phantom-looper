@@ -72,28 +72,23 @@ async function main() {
     writeTitle: (sessionId, context) => writeTitle(oneShotDeps())(sessionId, context),
 
     onStart: async (backend) => {
-      const { settings, sessions, cards, projects, presets, modelCatalog, tokenLog, boardEvents, settingsEvents, sessionEvents } = backend;
+      const { settings } = backend;
 
       // The looper — a client of this backend's own API (the same tools every
       // client runs), so it starts once the routes answer. Event-driven: every
       // card write reaches it over the board bus; start() is ONE recovery
       // sweep, not a poll.
-      looper = new LooperEngine({ sessions, projects, cards, settings, logTokens: tokenLog, loopback: backend.loopback,
-        events: boardEvents, settingsEvents, sessionEvents });
+      looper = new LooperEngine(backend);
       looper.start();
 
       // The cron scheduler — the same shape. One croner job per cron row fires
       // at its time; registrations follow the table's writes and the settings'.
-      cronEngine = new CronEngine({ crons: backend.crons, projects, settings, sessions, loopback: backend.loopback, settingsEvents });
+      cronEngine = new CronEngine(backend);
       cronEngine.start();
 
       // The Telegram bot's behaviour — a client of this app like the looper.
       // Reconcile at boot re-registers a stale webhook and pushes the command menu.
-      telegram = new TelegramAssistantBot({
-        bot: backend.telegramBot, botState: backend.telegramBotState, settings, modelCatalog, sessions, cards, projects, presets, system,
-        loopback: backend.loopback, foreground: backend.foregroundCommands, loopsRunning: () => looper.runningCount(), events: boardEvents,
-        autoPush: backend.git.autoPush, autoPull: backend.git.autoPull,
-      });
+      telegram = new TelegramAssistantBot(backend, system, () => looper.runningCount());
       // The agents' send_message and the digest go out through the bot.
       backend.notifications.addChannel({
         name: 'telegram',
@@ -103,7 +98,7 @@ async function main() {
 
       // Session idle digest — a periodic notification listing sessions that
       // finished. Standalone timer, no dependency on the engines' turn machinery.
-      digest = new SessionDigest({ sessions, cards, settings, oneShot: oneShotDeps(), projects, channels: backend.notifications.channels() });
+      digest = new SessionDigest(backend, oneShotDeps());
       void digest.start();
 
       // Upgrade checker — periodic GitHub release check, notification via Telegram.

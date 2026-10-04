@@ -38,7 +38,7 @@ export interface LogsQuery { service?: string; tail?: number; since?: string; gr
 export class System {
   constructor(
     private readonly paths: Paths,
-    private readonly logTokens: TokenLog,
+    private readonly tokenLog: TokenLog,
     /** Absent when this server has no docker access: logs and restarts refuse. */
     private readonly docker?: Docker,
     /** The one image puller — the update's pulls go through it so the disk
@@ -194,6 +194,6 @@ export class System {
   /** The token report: today / 7 days / 30 days, per kind × model. "Today"
    *  is the clock's — the builder's midnight, not the container's. */
   async tokenUsage(clock: Clock, now = clock.now()): Promise<{ text: string }> {
-    return { text: formatTokenReport(await this.logTokens.report(reportWindows(clock, now)), clock, now) };
+    return { text: formatTokenReport(await this.tokenLog.report(reportWindows(clock, now)), clock, now) };
   }
 }

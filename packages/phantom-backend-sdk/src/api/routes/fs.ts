@@ -22,9 +22,9 @@ import type Docker from 'dockerode';
 const log = logger('bash');
 
 /** The container plumbing the file tools run on. */
-export interface FsDeps { docker: Docker; containers: SessionContainers }
+export interface FsDeps { docker: Docker; sessionContainers: SessionContainers }
 /** The backend's own. */
-export const fsDeps = (ctx: PhantomBackend): FsDeps => ({ docker: ctx.docker, containers: ctx.sessionContainers });
+export const fsDeps = (ctx: PhantomBackend): FsDeps => ({ docker: ctx.docker, sessionContainers: ctx.sessionContainers });
 
 
 /** Kill one process SESSION by sid: TERM, ~1s grace, KILL. A second exec is
@@ -278,8 +278,8 @@ async function runBash(
       // reconciler's 'exited' are final — a late stream teardown must not
       // overwrite them.
       await ctx.backgroundTasks.finish(taskId, status, exitCode).catch(() => {});
-      // The exit message rides the session's NEXT turn through the backdoor
-      // message queue (backdoor.ts) — no turn is started for it. Read the
+      // The exit message rides the session's NEXT turn through the user
+      // message queue (UserMessageQueue) — no turn is started for it. Read the
       // row's final word rather than the local `status`: a kill from /tasks
       // or task_kill marks the row first, and the row is the truth.
       const final = await ctx.backgroundTasks.get(taskId).catch(() => undefined);
@@ -411,7 +411,7 @@ export async function fileTools(ctx: PhantomBackend, deps: FsDeps, session: Sess
   const project = await ctx.projects.get(session.projectId);
   let container;
   try {
-    container = await deps.containers.ensure(workspaceId, project);
+    container = await deps.sessionContainers.ensure(workspaceId, project);
   } catch (e) {
     throw new ToolError('container_start_failed', (e as Error).message, true);
   }

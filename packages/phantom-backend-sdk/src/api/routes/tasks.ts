@@ -29,7 +29,7 @@ export function tasksRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   /** The session's container, probed WITHOUT creating one — listing must
    *  never boot a container just to answer "nothing". */
   const probe = async (workspaceId: string) => {
-    const c = deps.docker.getContainer(deps.containers.name(workspaceId));
+    const c = deps.docker.getContainer(deps.sessionContainers.name(workspaceId));
     const info = await c.inspect().catch((e: { statusCode?: number; message?: string }) => {
       // 404 IS "absent"; anything else is docker failing to answer.
       if (e.statusCode !== 404) log.warn({ workspace: workspaceId, err: e.message }, 'container inspect failed — listed as absent');

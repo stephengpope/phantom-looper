@@ -221,18 +221,15 @@ export class Sessions {
     return this.freezeSystemPrompt(s.id, prompt.sections());
   }
 
-  /** Stop whatever turn is running on a session: the in-process turn is
-   *  aborted, foreground commands in its container are killed (detached ones
-   *  are left by design), and an `interrupt` record goes out on the feed so
-   *  every OTHER client running a turn here — a cli window, the Telegram
-   *  engine — stops its own. Published under `by`: the feed never echoes a
-   *  client its own events. Idempotent. */
-  interrupt(id: string, by: string, runtime: { activeTurns?: Map<string, AbortController>; foreground?: { killAll(id: string): void } }): { interrupted: boolean } {
-    const ac = runtime.activeTurns?.get(id);
-    if (ac) ac.abort();
+  /** Stop whatever turn is running on a session: foreground commands in
+   *  its container are killed (detached ones are left by design), and an
+   *  `interrupt` record goes out on the feed so the client running a turn
+   *  here — a cli window, the backend's own engines — stops its own.
+   *  Published under `by`: the feed never echoes a client its own events.
+   *  Idempotent. */
+  interrupt(id: string, by: string, runtime: { foreground?: { killAll(id: string): void } }): void {
     runtime.foreground?.killAll(id);
     this.events?.publish(id, by, { event: 'interrupt' });
-    return { interrupted: !!ac };
   }
 
   /** The row moved in a way no richer event names: the list re-reads. Under

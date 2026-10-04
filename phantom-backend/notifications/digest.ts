@@ -12,13 +12,9 @@
 // so it's never reported twice for the same activity. If it runs again and
 // finishes again, it'll be reported again.
 
-import { expiredHold, type Sessions } from 'phantom-backend-sdk';
-import type { Cards } from 'phantom-backend-sdk';
-import type { Settings } from 'phantom-backend-sdk';
-import type { Projects } from 'phantom-backend-sdk';
+import { expiredHold, type PhantomBackend } from 'phantom-backend-sdk';
 import { oneShot, type OneShotDeps } from '../oneShot.js';
 import { lastAssistantFromJsonl } from 'phantom-backend-sdk';
-import type { NotificationChannel } from 'phantom-backend-sdk';
 import { titled } from 'phantom-backend-sdk';
 import { STATUS_ICON } from 'phantom-backend-sdk';
 import { logger } from 'phantom-backend-sdk';
@@ -49,22 +45,15 @@ Example output:
 **FOO**
 • populated test fixtures with realistic data`;
 
-export interface DigestDeps {
-  sessions: Sessions;
-  cards: Cards;
-  settings: Settings;
-  oneShot: OneShotDeps;
-  projects: Projects;
-  channels: NotificationChannel[];
-}
-
 /** The summary call: the grouped sessions in, the digest text out. It
  *  serves every quiet session at once, so it belongs to no one session. */
 export class SessionDigest {
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
 
-  constructor(private deps: DigestDeps) {}
+  /** On the backend's sessions, cards, projects, settings and notification
+   *  channels; `oneShot` is the app's model call for the summary. */
+  constructor(private readonly backend: PhantomBackend, private readonly oneShot: OneShotDeps) {}
 
   /** Start the periodic check. Call once at boot; reconcile() restarts it
    *  when the interval setting changes. */
@@ -87,7 +76,7 @@ export class SessionDigest {
 
   private async intervalMs(): Promise<number> {
     try {
-      const min = Number(await this.deps.settings.resolve('session_digest_interval'));
+      const min = Number(await this.backend.settings.resolve('session_digest_interval'));
       if (!Number.isFinite(min) || min <= 0) return 0;
       return min * 60_000;
     } catch { return 0; }
@@ -111,7 +100,7 @@ export class SessionDigest {
     // 2. Are not held now (released — or expired: the holder died mid-turn)
     // 3. Have been idle longer than the interval
     // 4. Haven't been digested since their last activity
-    const rows = await this.deps.sessions.listIdleSince(threshold);
+    const rows = await this.backend.sessions.listIdleSince(threshold);
 
     if (!rows.length) return;
 
@@ -120,8 +109,8 @@ export class SessionDigest {
     const wsIds = [...new Set(rows.map((r) => r.projectId))];
     const prefixByProjectId = new Map<string, string>();
     for (const projectId of wsIds) {
-      const project = await this.deps.projects.get(projectId);
-      if (project) prefixByProjectId.set(projectId, await this.deps.projects.prefixOf(project));
+      const project = await this.backend.projects.get(projectId);
+      if (project) prefixByProjectId.set(projectId, await this.backend.projects.prefixOf(project));
       else prefixByProjectId.set(projectId, projectId.slice(0, 3).toUpperCase());
     }
 
@@ -136,12 +125,12 @@ export class SessionDigest {
     };
     const items: Item[] = [];
     for (const s of rows) {
-      const transcript = (await this.deps.sessions.transcript(s.id)) ?? '';
+      const transcript = (await this.backend.sessions.transcript(s.id)) ?? '';
       const lastMsg = lastAssistantFromJsonl(transcript);
 
       let card: number | undefined;
       let icon: string | undefined;
-      const onCard = await this.deps.cards.ofSession(s.id);
+      const onCard = await this.backend.cards.ofSession(s.id);
       if (onCard) {
         card = onCard.number;
         icon = STATUS_ICON[onCard.status]?.char ?? onCard.status;
@@ -192,21 +181,21 @@ export class SessionDigest {
 
     // ── LLM call ─────────────────────────────────────────────────────────────
 
-    const text = await oneShot(this.deps.oneShot, 'assistant', { type: 'session_digest', sessionId: null }, { system: SYSTEM, prompt: JSON.stringify(payload) });
+    const text = await oneShot(this.oneShot, 'assistant', { type: 'session_digest', sessionId: null }, { system: SYSTEM, prompt: JSON.stringify(payload) });
     const message = titled(TITLE(rows.length), text.trim());
 
     if (!message) return;
 
     // Deliver to all channels.
-    for (const ch of this.deps.channels) {
+    for (const ch of this.backend.notifications.channels()) {
       await ch.send(message).catch((e) =>
         log.warn({ channel: ch.name, err: (e as Error).message }, 'digest delivery failed'));
     }
 
     // Mark all as digested.
     const now = new Date();
-    for (const s of rows) await this.deps.sessions.markDigested(s.id, now);
+    for (const s of rows) await this.backend.sessions.markDigested(s.id, now);
 
-    log.info({ sessions: rows.length, channels: this.deps.channels.length }, 'digest sent');
+    log.info({ sessions: rows.length, channels: this.backend.notifications.channels().length }, 'digest sent');
   }
 }

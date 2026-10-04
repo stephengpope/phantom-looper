@@ -53,7 +53,7 @@ export type Formatted = { text: string; entities: Entity[] };
  * what lets nesting fall out of ordinary recursion rather than needing a
  * separate pass.
  */
-class Out {
+class TelegramText {
   text = '';
   entities: Entity[] = [];
 
@@ -74,7 +74,7 @@ class Out {
 }
 
 /** Inline nodes — everything that lives inside a paragraph, heading or list item. */
-function inline(node: any, out: Out) {
+function inline(node: any, out: TelegramText) {
   switch (node.type) {
     case 'text':
       out.add(node.value);
@@ -147,7 +147,7 @@ function inline(node: any, out: Out) {
  * than translations. Both are taken from hermes, which landed on the same two
  * after considerably more Telegram traffic than we have had.
  */
-function block(node: any, out: Out, depth = 0) {
+function block(node: any, out: TelegramText, depth = 0) {
   switch (node.type) {
     case 'root':
       (node.children || []).forEach((c: any, i: number) => {
@@ -225,7 +225,7 @@ export function toTelegram(md: string): Formatted {
   const text = md ?? '';
   if (!text) return { text: '', entities: [] };
   try {
-    const out = new Out();
+    const out = new TelegramText();
     block(fromMarkdown(text), out);
     // Block separators leave a trailing blank line on the last block.
     out.text = out.text.replace(/\s+$/, '');
