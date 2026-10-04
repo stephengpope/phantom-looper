@@ -20,13 +20,14 @@ The plan is `docs/phantom-agent-sdk-plan.md`. This file is where the work stands
 | Script cron | Passed (run recorded as a turn with exit code) |
 | Live Telegram proof of step 6 | Not run, needs a real bot token stored as a secret |
 
-- Review follow-ups: `last_turn_by` (who drove the last turn; the list's background rule reads it before `started_by`); `GitService` — the backend's git is the SDK's, the app brings `config.git` (fixer, commit message, sync note); `PhantomBackend.create(config)` → `start()` is the only way in (`httpApi`, loops, tool registry private; `hooks`, `startLoops`, `addRoutes`, `addPublicPath`, `transitional`, `activeTurns` gone); app engines take the `PhantomBackend` itself — no `Deps` bags, no second names (`logTokens`, `events`, `containers`, `engine`); the five SDK stubs and two export aliases deleted; `Out` → `TelegramText`, `Models` → `ModelHandle`.
+- Review follow-ups: `last_turn_by` (who drove the last turn; the list's background rule reads it before `started_by`); `GitService` — the backend's git is the SDK's, the app brings `config.git` (fixer, commit message, sync note); `PhantomBackend.create(config)` → `start()` is the only way in (`httpApi`, loops, tool registry private; `hooks`, `startLoops`, `addRoutes`, `addPublicPath`, `transitional`, `activeTurns` gone); app engines take the `PhantomBackend` itself — no `Deps` bags, no second names (`logTokens`, `events`, `containers`, `engine`); the five SDK stubs and two export aliases deleted; `Out` → `TelegramText`, `Models` → `ModelResolver`, `System` → `Deployment`, `LooperEngine` → `Looper`, `CronEngine` → `CronScheduler`, workspaces `work` → `work_state` / `workState` (migration 053; board `card_work_state`, event `session_work_state`); stale comments naming deleted files (`core/llm`, `injectFetch`, `runCodingTurn`, `agentAfterSave`) rewritten.
 
 ## Left in the plan
 
 - Step 2: SDK folder final shape (`phantom-agent-sdk/packages/client|server`, package names, pinned ranges).
 - Step 3, second half: schema split `phantom_agent_sdk` + `phantom_looper`, one ledger each, with `card_automation`, `card_runs`, and the `telegram_bot_state` split.
-- Step 7 tail: sort what remains of `core/` (agents, prompts shared by cli and backend); stale comments in `phantom-cli/assistantKit.ts` and `phantom-cli/voice.ts` still name `core/llm/tools/*`.
+- Step 7 tail: sort what remains of `core/` (agents, prompts shared by cli and backend).
+- `docs/naming-pass.md`: the one-letter locals (`s`, `e`, `r`, `q`…) catalogued there, conventions C1–C9 — awaiting approval; its line numbers predate the SDK lift.
 - Step 8: the broken features (volatile prompt section rebuild, assistant resumes newest row, failed model call returns the user's words).
 - Step 9: ship.
 
