@@ -54,9 +54,9 @@ export const isOnce = (schedule: string): boolean => !schedule.includes(' ') && 
  *  when it will never fire again (a datetime that has passed). Throws
  *  croner's own message for a schedule or zone it cannot read. */
 export function nextFire(schedule: string, timezone: string, after: Date): Date | null {
-  const c = new Cron(schedule, { timezone });
-  try { return c.nextRun(after); }
-  finally { c.stop(); }   // constructing a Cron starts a timer; nothing here wants one running
+  const cron = new Cron(schedule, { timezone });
+  try { return cron.nextRun(after); }
+  finally { cron.stop(); }   // constructing a Cron starts a timer; nothing here wants one running
 }
 
 /** Refuse a schedule that does not parse or will never fire — written for
@@ -64,9 +64,9 @@ export function nextFire(schedule: string, timezone: string, after: Date): Date 
 function checkSchedule(schedule: string, clock: Clock, now: Date): void {
   let fire: Date | null;
   try { fire = nextFire(schedule, clock.timezone, now); }
-  catch (e) {
+  catch (error) {
     throw new CronError('invalid_args',
-      `"${schedule}" is not a valid schedule (${(e as Error).message}). Use a 5-field cron expression like ` +
+      `"${schedule}" is not a valid schedule (${(error as Error).message}). Use a 5-field cron expression like ` +
       '"0 9 * * *", or an ISO datetime like "2026-03-14T18:50:00" for a one-time run.');
   }
   if (!fire) {
@@ -78,29 +78,29 @@ function checkSchedule(schedule: string, clock: Clock, now: Date): void {
 
 export class Crons {
   private listeners: Array<(projectId: string) => void> = [];
-  constructor(private readonly db: Drizzle, private readonly settings: Settings) {}
+  constructor(private readonly database: Drizzle, private readonly settings: Settings) {}
 
   /** Hear every write, by project — the scheduler re-registers that
    *  project's crons on each. Events, not polling: the table is written
    *  only here, so here is where a change is known. */
-  subscribe(fn: (projectId: string) => void): () => void {
-    this.listeners.push(fn);
-    return () => { this.listeners = this.listeners.filter((l) => l !== fn); };
+  subscribe(listener: (projectId: string) => void): () => void {
+    this.listeners.push(listener);
+    return () => { this.listeners = this.listeners.filter((listener) => listener !== listener); };
   }
   private changed(projectId: string): void {
-    for (const l of this.listeners) l(projectId);
+    for (const listener of this.listeners) listener(projectId);
   }
 
   // ── reads ──────────────────────────────────────────────────────────────────
 
   /** A project's crons, by name. */
   async list(project: ProjectRow): Promise<CronRow[]> {
-    return this.db.select().from(crons).where(eq(crons.project_id, project.id)).orderBy(crons.name);
+    return this.database.select().from(crons).where(eq(crons.project_id, project.id)).orderBy(crons.name);
   }
 
   /** The cron with this name (case-insensitive). */
   async byName(project: ProjectRow, name: string): Promise<CronRow | undefined> {
-    const rows = await this.db.select().from(crons)
+    const rows = await this.database.select().from(crons)
       .where(and(eq(crons.project_id, project.id), sql`lower(${crons.name}) = lower(${name})`));
     return rows[0];
   }
@@ -108,7 +108,7 @@ export class Crons {
   /** Every enabled cron — what the scheduler registers, each in its
    *  project's zone. One project's, or all. */
   async listEnabled(projectId?: string): Promise<CronRow[]> {
-    return this.db.select().from(crons)
+    return this.database.select().from(crons)
       .where(and(eq(crons.enabled, true), projectId ? eq(crons.project_id, projectId) : undefined))
       .orderBy(crons.id);
   }
@@ -116,7 +116,7 @@ export class Crons {
   /** The row behind a registration — re-read at fire time, so an edited
    *  prompt is what runs. Undefined once removed. */
   async byId(id: number): Promise<CronRow | undefined> {
-    const rows = await this.db.select().from(crons).where(eq(crons.id, id));
+    const rows = await this.database.select().from(crons).where(eq(crons.id, id));
     return rows[0];
   }
 
@@ -132,15 +132,15 @@ export class Crons {
     const model = await this.cleanModel(project, fields.provider, fields.model);
     const reasoning = cleanReasoning(fields.reasoning);
     try {
-      const [row] = await this.db.insert(crons)
+      const [row] = await this.database.insert(crons)
         .values({ project_id: project.id, name, schedule, once: isOnce(schedule), ...body, ...model, reasoning,
           enabled: fields.enabled ?? true, created_at: now, updated_at: now })
         .returning();
       this.changed(project.id);
       return row!;
-    } catch (e) {
-      if (Database.isUniqueViolation(e)) throw new CronError('duplicate_name', `a cron named "${name}" already exists — update it, or pick another name`);
-      throw e;
+    } catch (error) {
+      if (Database.isUniqueViolation(error)) throw new CronError('duplicate_name', `a cron named "${name}" already exists — update it, or pick another name`);
+      throw error;
     }
   }
 
@@ -162,19 +162,19 @@ export class Crons {
     const prior = await this.byName(project, name);
     if (!prior) throw new CronError('not_found', `no cron named "${name}" in this project`);
     try {
-      const [row] = await this.db.update(crons).set({ ...set, updated_at: now }).where(eq(crons.id, prior.id)).returning();
+      const [row] = await this.database.update(crons).set({ ...set, updated_at: now }).where(eq(crons.id, prior.id)).returning();
       this.changed(project.id);
       return row!;
-    } catch (e) {
-      if (Database.isUniqueViolation(e)) throw new CronError('duplicate_name', `a cron named "${set.name}" already exists`);
-      throw e;
+    } catch (error) {
+      if (Database.isUniqueViolation(error)) throw new CronError('duplicate_name', `a cron named "${set.name}" already exists`);
+      throw error;
     }
   }
 
   async remove(project: ProjectRow, name: string): Promise<boolean> {
     const prior = await this.byName(project, name);
     if (!prior) return false;
-    await this.db.delete(crons).where(eq(crons.id, prior.id));
+    await this.database.delete(crons).where(eq(crons.id, prior.id));
     this.changed(project.id);
     return true;
   }
@@ -183,9 +183,9 @@ export class Crons {
    *  Both columns come back so a write of one (or a null) resets the pair —
    *  a provider with no model is nothing to run on, a model with no
    *  provider could be anyone's. */
-  private async cleanModel(project: ProjectRow, p: unknown, m: unknown): Promise<{ provider: string | null; model: string | null }> {
-    const provider = String(p ?? '').trim();
-    const model = String(m ?? '').trim();
+  private async cleanModel(project: ProjectRow, rawProvider: unknown, rawModel: unknown): Promise<{ provider: string | null; model: string | null }> {
+    const provider = String(rawProvider ?? '').trim();
+    const model = String(rawModel ?? '').trim();
     if (!provider && !model) return { provider: null, model: null };
     if (!provider || !model) {
       throw new CronError('invalid_args', 'provider and model go together — give both to run this cron on another ' +
@@ -203,29 +203,29 @@ export class Crons {
    *  while the server was down can never fire and is not a cron any more.
    *  Not announced: the scheduler is the one listening. */
   async removeById(id: number): Promise<void> {
-    await this.db.delete(crons).where(eq(crons.id, id));
+    await this.database.delete(crons).where(eq(crons.id, id));
   }
 
   /** It fired. A one-time cron has done the one thing it existed for — its
    *  row goes (the scheduler drops its registration); a recurring one
    *  records when. */
   async markFired(row: CronRow, at = new Date()): Promise<void> {
-    if (row.once) { await this.db.delete(crons).where(eq(crons.id, row.id)); return; }
-    await this.db.update(crons).set({ last_run_at: at }).where(eq(crons.id, row.id));
+    if (row.once) { await this.database.delete(crons).where(eq(crons.id, row.id)); return; }
+    await this.database.update(crons).set({ last_run_at: at }).where(eq(crons.id, row.id));
   }
 }
 
-function cleanName(v: unknown): string {
-  const name = String(v ?? '').trim();
+function cleanName(value: unknown): string {
+  const name = String(value ?? '').trim();
   if (!name) throw new CronError('invalid_args', 'a cron needs a name — it is how the cron is addressed');
   if (name.length > NAME_MAX) throw new CronError('invalid_args', `a cron name is at most ${NAME_MAX} characters`);
   return name;
 }
 /** The body: a prompt or a script, never both, never neither. Both columns
  *  come back so a write of one clears the other. */
-function cleanBody(p: unknown, s: unknown): { prompt: string | null; script: string | null } {
-  const prompt = String(p ?? '').trim();
-  const script = String(s ?? '').trim();
+function cleanBody(rawPrompt: unknown, rawScript: unknown): { prompt: string | null; script: string | null } {
+  const prompt = String(rawPrompt ?? '').trim();
+  const script = String(rawScript ?? '').trim();
   if (prompt && script) throw new CronError('invalid_args', 'a cron runs a prompt OR a script — give one, not both');
   if (!prompt && !script) {
     throw new CronError('invalid_args', 'a cron needs a prompt or a script. A prompt is what an agent run is asked to do — ' +
@@ -234,16 +234,16 @@ function cleanBody(p: unknown, s: unknown): { prompt: string | null; script: str
   }
   return { prompt: prompt || null, script: script || null };
 }
-function cleanReasoning(v: unknown): string | null {
-  const reasoning = String(v ?? '').trim();
+function cleanReasoning(value: unknown): string | null {
+  const reasoning = String(value ?? '').trim();
   if (!reasoning) return null;
   if (!(REASONINGS as readonly string[]).includes(reasoning)) {
     throw new CronError('invalid_args', `"${reasoning}" is not a reasoning level — one of: ${REASONINGS.join(', ')}`);
   }
   return reasoning;
 }
-function cleanSchedule(v: unknown): string {
-  const schedule = String(v ?? '').trim();
+function cleanSchedule(value: unknown): string {
+  const schedule = String(value ?? '').trim();
   if (!schedule) {
     throw new CronError('invalid_args', 'a cron needs a schedule — a cron expression like "0 9 * * *", ' +
       'or an ISO datetime like "2026-03-14T18:50:00" for a one-time run');

@@ -57,7 +57,7 @@ class TelegramText {
   text = '';
   entities: Entity[] = [];
 
-  add(s: string) { this.text += s; }
+  add(text: string) { this.text += text; }
 
   /** Close a span that began at `start`. Zero-length spans are dropped —
    *  Telegram rejects them, and they mean the node rendered nothing. */
@@ -82,14 +82,14 @@ function inline(node: any, out: TelegramText) {
 
     case 'strong': {
       const start = out.text.length;
-      (node.children || []).forEach((c: any) => inline(c, out));
+      (node.children || []).forEach((child: any) => inline(child, out));
       out.mark('bold', start);
       break;
     }
 
     case 'emphasis': {
       const start = out.text.length;
-      (node.children || []).forEach((c: any) => inline(c, out));
+      (node.children || []).forEach((child: any) => inline(child, out));
       out.mark('italic', start);
       break;
     }
@@ -105,7 +105,7 @@ function inline(node: any, out: TelegramText) {
 
     case 'link': {
       const start = out.text.length;
-      (node.children || []).forEach((c: any) => inline(c, out));
+      (node.children || []).forEach((child: any) => inline(child, out));
       // A link whose text rendered to nothing still deserves to be reachable,
       // so fall back to showing the URL itself.
       if (out.text.length === start) out.add(node.url || '');
@@ -135,7 +135,7 @@ function inline(node: any, out: TelegramText) {
       break;
 
     default:
-      (node.children || []).forEach((c: any) => inline(c, out));
+      (node.children || []).forEach((child: any) => inline(child, out));
   }
 }
 
@@ -150,19 +150,19 @@ function inline(node: any, out: TelegramText) {
 function block(node: any, out: TelegramText, depth = 0) {
   switch (node.type) {
     case 'root':
-      (node.children || []).forEach((c: any, i: number) => {
+      (node.children || []).forEach((child: any, i: number) => {
         if (i) out.block();
-        block(c, out, depth);
+        block(child, out, depth);
       });
       break;
 
     case 'paragraph':
-      (node.children || []).forEach((c: any) => inline(c, out));
+      (node.children || []).forEach((child: any) => inline(child, out));
       break;
 
     case 'heading': {
       const start = out.text.length;
-      (node.children || []).forEach((c: any) => inline(c, out));
+      (node.children || []).forEach((child: any) => inline(child, out));
       out.mark('bold', start);
       break;
     }
@@ -186,9 +186,9 @@ function block(node: any, out: TelegramText, depth = 0) {
 
     case 'blockquote': {
       const start = out.text.length;
-      (node.children || []).forEach((c: any, i: number) => {
+      (node.children || []).forEach((child: any, i: number) => {
         if (i) out.add('\n');
-        block(c, out, depth);
+        block(child, out, depth);
       });
       // Telegram forbids nested blockquotes, so only the outermost is marked —
       // an inner one contributes its text and nothing else.
@@ -210,7 +210,7 @@ function block(node: any, out: TelegramText, depth = 0) {
     // Paragraph-level content reached directly (loose list items, html blocks).
     default:
       if (node.value != null) out.add(String(node.value));
-      else (node.children || []).forEach((c: any) => inline(c, out));
+      else (node.children || []).forEach((child: any) => inline(child, out));
   }
 }
 
@@ -221,8 +221,8 @@ function block(node: any, out: TelegramText, depth = 0) {
  * formatting, which is exactly what Telegram receives today — the failure mode
  * is "not bold", never "not delivered".
  */
-export function toTelegram(md: string): Formatted {
-  const text = md ?? '';
+export function toTelegram(markdown: string): Formatted {
+  const text = markdown ?? '';
   if (!text) return { text: '', entities: [] };
   try {
     const out = new TelegramText();
@@ -246,10 +246,10 @@ export function toTelegram(md: string): Formatted {
  */
 export function clampEntities(entities: Entity[], start: number, end: number): Entity[] {
   const out: Entity[] = [];
-  for (const e of entities) {
-    const from = Math.max(e.offset, start);
-    const to = Math.min(e.offset + e.length, end);
-    if (to > from) out.push({ ...e, offset: from - start, length: to - from });
+  for (const entity of entities) {
+    const from = Math.max(entity.offset, start);
+    const entityEnd = Math.min(entity.offset + entity.length, end);
+    if (entityEnd > from) out.push({ ...entity, offset: from - start, length: entityEnd - from });
   }
   return out;
 }
@@ -259,9 +259,9 @@ export function clampEntities(entities: Entity[], start: number, end: number): E
  * streaming path, where a reply longer than Telegram's limit is shown cut off
  * until the final message splits it properly.
  */
-export function truncateFormatted(f: Formatted, limit: number): Formatted {
-  if (f.text.length <= limit) return f;
-  return { text: f.text.slice(0, limit), entities: clampEntities(f.entities, 0, limit) };
+export function truncateFormatted(formatted: Formatted, limit: number): Formatted {
+  if (formatted.text.length <= limit) return formatted;
+  return { text: formatted.text.slice(0, limit), entities: clampEntities(formatted.entities, 0, limit) };
 }
 
 /**
@@ -276,33 +276,33 @@ export function truncateFormatted(f: Formatted, limit: number): Formatted {
  * both sides render as code. The `(i/n)` marker is appended AFTER the spans are
  * rebased, so it cannot shift them.
  */
-export function splitFormatted(f: Formatted, limit = 4096): Formatted[] {
-  if (f.text.length <= limit) return [f];
+export function splitFormatted(formatted: Formatted, limit = 4096): Formatted[] {
+  if (formatted.text.length <= limit) return [formatted];
   const chunks: Formatted[] = [];
   let at = 0;
 
-  while (at < f.text.length) {
+  while (at < formatted.text.length) {
     const budget = limit - 12;        // room for the "\n\n(i/n)" marker
-    const remaining = f.text.length - at;
+    const remaining = formatted.text.length - at;
     if (remaining <= budget) {
-      chunks.push({ text: f.text.slice(at), entities: clampEntities(f.entities, at, f.text.length) });
+      chunks.push({ text: formatted.text.slice(at), entities: clampEntities(formatted.entities, at, formatted.text.length) });
       break;
     }
 
-    const window = f.text.slice(at, at + budget);
+    const window = formatted.text.slice(at, at + budget);
     let cut = window.lastIndexOf('\n\n');
     if (cut < budget * 0.5) cut = window.lastIndexOf('\n');
     if (cut < budget * 0.5) cut = window.lastIndexOf(' ');
     if (cut <= 0) cut = budget;
 
     const end = at + cut;
-    chunks.push({ text: f.text.slice(at, end), entities: clampEntities(f.entities, at, end) });
+    chunks.push({ text: formatted.text.slice(at, end), entities: clampEntities(formatted.entities, at, end) });
     // Leading newlines belong to the break, not to the next chunk's first line.
     at = end;
-    while (f.text[at] === '\n') at++;
+    while (formatted.text[at] === '\n') at++;
   }
 
-  const n = chunks.length;
-  if (n <= 1) return chunks;
-  return chunks.map((c, i) => ({ ...c, text: `${c.text}\n\n(${i + 1}/${n})` }));
+  const chunkCount = chunks.length;
+  if (chunkCount <= 1) return chunks;
+  return chunks.map((chunk, i) => ({ ...chunk, text: `${chunk.text}\n\n(${i + 1}/${chunkCount})` }));
 }

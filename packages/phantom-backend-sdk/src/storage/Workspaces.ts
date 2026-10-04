@@ -48,7 +48,7 @@ export interface WorkRefreshWorkspace {
 
 export class Workspaces {
   constructor(
-    private readonly db: Drizzle,
+    private readonly database: Drizzle,
     private readonly paths: Paths,
     private readonly settings: Settings,
     /** The per-session feed; absent in tests that have no watchers. */
@@ -58,7 +58,7 @@ export class Workspaces {
   private changed(id: string): void { this.events?.publish(id, '', { event: 'session' }); }
 
   async get(id: string): Promise<WorkspaceRow | undefined> {
-    const rows = await this.db.select().from(workspaces).where(eq(workspaces.id, id));
+    const rows = await this.database.select().from(workspaces).where(eq(workspaces.id, id));
     return rows[0];
   }
 
@@ -111,13 +111,13 @@ export class Workspaces {
         // out from base instead would silently lose it.
         try {
           await git(dir, ['fetch', 'origin', `+refs/heads/${fromBranch}:refs/remotes/origin/${fromBranch}`], auth);
-        } catch (e) {
-          const msg = String((e as { stderr?: string }).stderr ?? e);
+        } catch (error) {
+          const msg = String((error as { stderr?: string }).stderr ?? error);
           if (/couldn't find remote ref|not found in upstream|no such ref/i.test(msg)) {
             throw new WorkspaceError('source_branch_gone',
               `the source branch ${fromBranch} is not on origin — its work never made it there, so there is nothing to copy`);
           }
-          throw e;
+          throw error;
         }
         await git(dir, ['checkout', '-B', branch, `refs/remotes/origin/${fromBranch}`]);
         found = 'new';
@@ -126,11 +126,11 @@ export class Workspaces {
       }
       const { stdout } = await git(dir, ['rev-parse', 'HEAD']);
       return { head: stdout.trim(), found, claimed };
-    } catch (e) {
-      if (e instanceof WorkspaceError) throw e;
-      const why = classifyGitFailure(e, { hadToken: !!auth.pat });
+    } catch (error) {
+      if (error instanceof WorkspaceError) throw error;
+      const why = classifyGitFailure(error, { hadToken: !!auth.pat });
       if (why) throw new WorkspaceError(why.code, `cannot check out ${project.owner}/${project.name}: ${why.message}`, why.retryable);
-      throw e;
+      throw error;
     }
   }
 
@@ -142,7 +142,7 @@ export class Workspaces {
   async checkout(project: ProjectRow, id: string, opts: { fromBranch?: string } = {}): Promise<WorkspaceRow> {
     const branch = `${project.branchPrefix}/${id}`;
     const { head, found, claimed } = await this.obtain(project, id, branch, opts.fromBranch);
-    const [row] = await this.db.insert(workspaces)
+    const [row] = await this.database.insert(workspaces)
       .values({ id, projectId: project.id, branch, cutFromSha: head, createdAt: new Date() }).returning();
     log.info({ workspace: id, project: `${project.owner}/${project.name}`, branch, found, claimed, cutFromSha: head },
       'checkout made');
@@ -155,7 +155,7 @@ export class Workspaces {
    *  cut point stays what it was. */
   async restore(workspace: WorkspaceRow, project: ProjectRow): Promise<void> {
     const { found } = await this.obtain(project, workspace.id, workspace.branch);
-    await this.db.update(workspaces).set({ onDisk: true, lastUsedAt: new Date() }).where(eq(workspaces.id, workspace.id));
+    await this.database.update(workspaces).set({ onDisk: true, lastUsedAt: new Date() }).where(eq(workspaces.id, workspace.id));
     log.info({ workspace: workspace.id, branch: workspace.branch, found }, 'checkout restored');
     this.changed(workspace.id);
   }
@@ -172,7 +172,7 @@ export class Workspaces {
       throw new WorkspaceError('unpushed_work', `session holds ${state} work; delete with force=true to discard`);
     }
     await fs.rm(sessionDir(this.paths, workspace.id), { recursive: true, force: true });
-    await this.db.update(workspaces).set({ onDisk: false }).where(eq(workspaces.id, workspace.id));
+    await this.database.update(workspaces).set({ onDisk: false }).where(eq(workspaces.id, workspace.id));
     log.info({ workspace: workspace.id, state }, 'files removed');
     this.changed(workspace.id);
   }
@@ -180,7 +180,7 @@ export class Workspaces {
   /** Workspaces in a project whose files exist — what stands in the way of
    *  deleting it (files and containers; a conversation holds neither). */
   async countOnDisk(projectId: string): Promise<number> {
-    const [counted] = await this.db.select({ n: count() }).from(workspaces)
+    const [counted] = await this.database.select({ n: count() }).from(workspaces)
       .where(and(eq(workspaces.projectId, projectId), eq(workspaces.onDisk, true)));
     return counted!.n;
   }
@@ -190,7 +190,7 @@ export class Workspaces {
   /** A person or an agent used the checkout: a tool call, a saved turn.
    *  Background jobs never touch, or nothing ever goes cold. */
   async touch(id: string): Promise<void> {
-    await this.db.update(workspaces).set({ lastUsedAt: new Date() }).where(eq(workspaces.id, id));
+    await this.database.update(workspaces).set({ lastUsedAt: new Date() }).where(eq(workspaces.id, id));
     this.changed(id);
   }
 
@@ -199,9 +199,9 @@ export class Workspaces {
   async listIdle(candidates: string[], idleMs: number): Promise<string[]> {
     if (!candidates.length) return [];
     const cutoff = new Date(Date.now() - idleMs);
-    const rows = await this.db.select({ id: workspaces.id }).from(workspaces)
+    const rows = await this.database.select({ id: workspaces.id }).from(workspaces)
       .where(and(inArray(workspaces.id, candidates), lt(workspaces.lastUsedAt, cutoff)));
-    return rows.map((r) => r.id);
+    return rows.map((row) => row.id);
   }
 
   // ── the checkout lock ──────────────────────────────────────────────────────
@@ -213,7 +213,7 @@ export class Workspaces {
   /** Take the checkout for `holder`: free, or lapsed. Returns whether it
    *  was taken. */
   async acquireSyncLock(id: string, holder: string, ttlMs: number): Promise<boolean> {
-    const rows = await this.db.update(workspaces)
+    const rows = await this.database.update(workspaces)
       .set({ syncLockedBy: holder, syncLockExpiresAt: new Date(Date.now() + ttlMs) })
       .where(and(eq(workspaces.id, id),
         or(isNull(workspaces.syncLockedBy), isNull(workspaces.syncLockExpiresAt),
@@ -224,13 +224,13 @@ export class Workspaces {
 
   /** Slide `holder`'s expiry forward. */
   async renewSyncLock(id: string, holder: string, ttlMs: number): Promise<void> {
-    await this.db.update(workspaces).set({ syncLockExpiresAt: new Date(Date.now() + ttlMs) })
+    await this.database.update(workspaces).set({ syncLockExpiresAt: new Date(Date.now() + ttlMs) })
       .where(and(eq(workspaces.id, id), eq(workspaces.syncLockedBy, holder)));
   }
 
   /** Release `holder`'s hold. Releasing what you do not hold changes nothing. */
   async releaseSyncLock(id: string, holder: string): Promise<void> {
-    await this.db.update(workspaces).set({ syncLockedBy: null, syncLockExpiresAt: null })
+    await this.database.update(workspaces).set({ syncLockedBy: null, syncLockExpiresAt: null })
       .where(and(eq(workspaces.id, id), eq(workspaces.syncLockedBy, holder)));
   }
 
@@ -238,14 +238,14 @@ export class Workspaces {
 
   /** The branch reached origin. */
   async markPushed(id: string): Promise<void> {
-    await this.db.update(workspaces).set({ lastPushAt: new Date() }).where(eq(workspaces.id, id));
+    await this.database.update(workspaces).set({ lastPushAt: new Date() }).where(eq(workspaces.id, id));
     this.changed(id);
   }
 
   /** Where the checkout's work stands, as the git refresh measured it. A
    *  watcher's work-state dot follows the event. */
   async setWorkState(id: string, workState: WorkState | null): Promise<void> {
-    await this.db.update(workspaces).set({ workState }).where(eq(workspaces.id, id));
+    await this.database.update(workspaces).set({ workState }).where(eq(workspaces.id, id));
     this.events?.publish(id, '', { event: 'session', workState });
   }
 
@@ -254,7 +254,7 @@ export class Workspaces {
    *  session's — the join reaches it for the board event's name. */
   async listForWorkRefresh(ids: string[]): Promise<WorkRefreshWorkspace[]> {
     if (!ids.length) return [];
-    return this.db.select({
+    return this.database.select({
       id: workspaces.id, projectId: workspaces.projectId, branch: workspaces.branch, workState: workspaces.workState,
       card: cards.number,
     }).from(workspaces)
@@ -269,7 +269,7 @@ export class Workspaces {
     const where = activeIds.length
       ? and(isNotNull(workspaces.workState), not(inArray(workspaces.id, activeIds)))
       : isNotNull(workspaces.workState);
-    return this.db.select({
+    return this.database.select({
       id: workspaces.id, projectId: workspaces.projectId, branch: workspaces.branch, workState: workspaces.workState,
       card: cards.number,
     }).from(workspaces)

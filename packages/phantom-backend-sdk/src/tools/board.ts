@@ -11,15 +11,15 @@ import { int, nullable, obj, oneOf, refusal, str, type ToolCtx, type ToolDef } f
 const cardNo = int('card number — PHA-7 is card 7');
 
 /** The same read shape whichever agent reads it. */
-const renderCard = (t: CardRow) => ({ card: t.number, title: t.title, status: t.status, details: t.details,
-  requirements: t.requirements, blocked_reason: t.blocked_reason, archived: t.archived });
+const renderCard = (card: CardRow) => ({ card: card.number, title: card.title, status: card.status, details: card.details,
+  requirements: card.requirements, blocked_reason: card.blocked_reason, archived: card.archived });
 
 /** A card's own refusal, as the tool's answer — written for the agent. */
-async function cardCall<T>(fn: () => Promise<T>): Promise<T> {
-  try { return await fn(); }
-  catch (e) {
-    if (e instanceof CardError) throw refusal(e.code, e.message);
-    throw e;
+async function cardCall<T>(body: () => Promise<T>): Promise<T> {
+  try { return await body(); }
+  catch (error) {
+    if (error instanceof CardError) throw refusal(error.code, error.message);
+    throw error;
   }
 }
 
@@ -45,7 +45,7 @@ const ITEMS_DESCRIPTION = 'add, edit (reword), remove, tick — each op touches 
 /** The card's column, as the board has it: the project's own columns are
  *  in the description, since a listing is built per session and the schema
  *  itself stays static. */
-const statusField = (d: string) => str(`${d} — one of the project's columns (kanban_card_list names them)`);
+const statusField = (description: string) => str(`${description} — one of the project's columns (kanban_card_list names them)`);
 
 const autoSwitch = (field: 'auto_plan' | 'auto_build', column: string, job: string): ToolDef => ({
   name: `kanban_card_${field}`,
@@ -70,9 +70,9 @@ export const BOARD_TOOLS: ToolDef[] = [
     input: obj({ card: cardNo }, ['card']),
     mutates: false, group: 'board',
     async execute(ctx, a) {
-      const t = await ctx.app.cards.byNumber(ctx.project, Number(a.card));
-      if (!t) throw refusal('not_found', `no card ${String(a.card)} — pass the card number`);
-      return renderCard(t);
+      const card = await ctx.app.cards.byNumber(ctx.project, Number(a.card));
+      if (!card) throw refusal('not_found', `no card ${String(a.card)} — pass the card number`);
+      return renderCard(card);
     },
   },
   {
@@ -86,7 +86,7 @@ export const BOARD_TOOLS: ToolDef[] = [
     async execute(ctx) {
       const cards = await ctx.app.cards.list(ctx.project);
       return { prefix: await ctx.app.projects.prefixOf(ctx.project), columns: columnsOf(ctx.project),
-        cards: cards.map((c) => ({ card: c.number, title: c.title, status: c.status })) };
+        cards: cards.map((card) => ({ card: card.number, title: card.title, status: card.status })) };
     },
   },
   {

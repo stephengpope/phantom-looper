@@ -23,12 +23,12 @@ export class ModelResolver {
     private readonly hooks: ModelHooks) {}
 
   /** The handle for this turn's config. */
-  resolve(c: LlmConfig): ResolvedModel {
-    if (!c.model?.provider || !c.model.model) throw new PhantomError('config_invalid', 'no model is set for this agent — pick one on /settings');
-    const key = JSON.stringify(c.model);
+  resolve(config: LlmConfig): ResolvedModel {
+    if (!config.model?.provider || !config.model.model) throw new PhantomError('config_invalid', 'no model is set for this agent — pick one on /settings');
+    const key = JSON.stringify(config.model);
     if (this.#cached?.key !== key) {
-      this.#cached = { key, model: billedModel(this.backend, c.model, { type: this.type, sessionId: this.sessionId }, this.hooks) };
+      this.#cached = { key, model: billedModel(this.backend, config.model, { type: this.type, sessionId: this.sessionId }, this.hooks) };
     }
-    return { spec: c.model, maxSteps: c.maxSteps, model: this.#cached.model, reasoning: effectiveReasoning(c.model) };
+    return { spec: config.model, maxSteps: config.maxSteps, model: this.#cached.model, reasoning: effectiveReasoning(config.model) };
   }
 }

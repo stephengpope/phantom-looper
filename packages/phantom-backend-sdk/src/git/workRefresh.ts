@@ -27,9 +27,9 @@ export async function refreshWorkState({ workspaces, projects, paths, sessionCon
   // container is gone. The value is unverifiable, so null it out.
   const stale = await workspaces.listStaleWork(active);
   if (stale.length) {
-    await Promise.all(stale.map(async (f) => {
-      await workspaces.setWorkState(f.id, null);
-      boardEvents.publish(f.projectId, { event: 'session_work_state', card: f.card ?? 0, id: f.id, workState: null });
+    await Promise.all(stale.map(async (workspace) => {
+      await workspaces.setWorkState(workspace.id, null);
+      boardEvents.publish(workspace.projectId, { event: 'session_work_state', card: workspace.card ?? 0, id: workspace.id, workState: null });
     }));
   }
 
@@ -42,24 +42,24 @@ export async function refreshWorkState({ workspaces, projects, paths, sessionCon
   const baseOf = new Map((await projects.list()).map((project) => [project.id, project.baseBranch]));
 
   // Check each workspace in parallel.
-  await Promise.all(rows.map(async (f) => {
-    const base = baseOf.get(f.projectId);
+  await Promise.all(rows.map(async (workspace) => {
+    const base = baseOf.get(workspace.projectId);
     if (!base) return;
 
     let work;
     try {
-      work = await workState(repoDir(paths, f.id), f.branch, base);
-    } catch (e) {
-      log.warn({ workspace: f.id, err: errStr(e) }, 'could not read work state');
+      work = await workState(repoDir(paths, workspace.id), workspace.branch, base);
+    } catch (error) {
+      log.warn({ workspace: workspace.id, err: errStr(error) }, 'could not read work state');
       return;
     }
 
     // Only write and publish when the value actually changed.
-    if (work === f.workState) return;
+    if (work === workspace.workState) return;
     // The row write publishes on the session stream too, so a window
     // watching this session sees the work-state dot update without polling.
-    await workspaces.setWorkState(f.id, work);
+    await workspaces.setWorkState(workspace.id, work);
     // Publish on the board stream so the kanban board picks it up.
-    boardEvents.publish(f.projectId, { event: 'session_work_state', card: f.card ?? 0, id: f.id, workState: work });
+    boardEvents.publish(workspace.projectId, { event: 'session_work_state', card: workspace.card ?? 0, id: workspace.id, workState: work });
   }));
 }

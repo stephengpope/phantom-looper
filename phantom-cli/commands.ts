@@ -18,7 +18,7 @@ export interface Command { name: string; summary: string; args?: string; picks?:
  *  which two repos can share, and fills its repo name, which they cannot. */
 export interface Choice { name: string; summary: string; fill?: string }
 /** The text a picked row stands for on the line. */
-export const fillOf = (c: Choice) => c.fill ?? c.name;
+export const fillOf = (choice: Choice) => choice.fill ?? choice.name;
 /** The live list for a command whose argument is picked. */
 export type Choices = (command: Command) => Choice[];
 
@@ -66,17 +66,17 @@ export const COMMANDS: Command[] = [
 ];
 
 /** Is this input a slash command attempt at all? */
-export const isCommand = (s: string) => s.startsWith('/');
+export const isCommand = (text: string) => text.startsWith('/');
 
 /** The command word and whatever follows it. */
 function split(input: string): { head: string; args: string; hasArgs: boolean } {
   const body = input.slice(1);
-  const m = /^(\S*)(\s+([\s\S]*))?$/.exec(body);
-  const head = (m?.[1] ?? '').toLowerCase();
-  const args = (m?.[3] ?? '').trim();
+  const match = /^(\S*)(\s+([\s\S]*))?$/.exec(body);
+  const head = (match?.[1] ?? '').toLowerCase();
+  const args = (match?.[3] ?? '').trim();
   // "/ask " (a space after a complete name) already means "the argument comes
   // next": the menu steps aside so typing is not fighting a highlighted row.
-  return { head, args, hasArgs: m?.[2] !== undefined && head.length > 0 };
+  return { head, args, hasArgs: match?.[2] !== undefined && head.length > 0 };
 }
 
 /** What the live menu shows: command rows, or — once a picking command's name
@@ -90,25 +90,25 @@ const prefixed = (name: string, typed: string) => name.toLowerCase().startsWith(
 export function matches(input: string, choices?: Choices): Menu {
   if (!isCommand(input)) return { rows: [] };
   const { head, args, hasArgs } = split(input);
-  if (!hasArgs) return { rows: COMMANDS.filter((c) => c.name.startsWith(head)) };
-  const command = COMMANDS.find((c) => c.name === head);
+  if (!hasArgs) return { rows: COMMANDS.filter((command) => command.name.startsWith(head)) };
+  const command = COMMANDS.find((command) => command.name === head);
   if (!command?.picks || !choices) return { rows: [] };
   // The whole line after the name is the argument, spaces and all — a
   // project called "Marketing Site" is one choice, not two words. A row
   // answers to what it shows AND what it fills: `pha` finds `PHA` and
   // `phantom-looper` alike.
-  return { command, rows: choices(command).filter((c) => prefixed(c.name, args) || prefixed(fillOf(c), args)) };
+  return { command, rows: choices(command).filter((choice) => prefixed(choice.name, args) || prefixed(fillOf(choice), args)) };
 }
 
 /** Resolve typed input to exactly one command (plus its argument), or say why not. */
 export function parse(input: string): { command?: Command; args?: string; error?: string } {
   const { head, args } = split(input);
   if (!head) return { error: 'type a command name' };
-  const exact = COMMANDS.find((c) => c.name === head);
+  const exact = COMMANDS.find((command) => command.name === head);
   if (exact) return { command: exact, args };
-  const partial = COMMANDS.filter((c) => c.name.startsWith(head));
+  const partial = COMMANDS.filter((command) => command.name.startsWith(head));
   if (partial.length === 1) return { command: partial[0], args };
-  if (partial.length > 1) return { error: `/${head} is ambiguous: ${partial.map((c) => `/${c.name}`).join(', ')}` };
+  if (partial.length > 1) return { error: `/${head} is ambiguous: ${partial.map((command) => `/${command.name}`).join(', ')}` };
   return { error: `unknown command /${head} — try /help` };
 }
 
@@ -116,9 +116,9 @@ export function parse(input: string): { command?: Command; args?: string; error?
 function commonPrefix(names: string[]): string {
   if (!names.length) return '';
   let out = names[0];
-  for (const n of names.slice(1)) {
+  for (const name of names.slice(1)) {
     let i = 0;
-    while (i < out.length && i < n.length && out[i] === n[i]) i++;
+    while (i < out.length && i < name.length && out[i] === name[i]) i++;
     out = out.slice(0, i);
   }
   return out;
@@ -137,11 +137,11 @@ const filled = (menu: Menu, row: Choice) =>
  */
 export function complete(input: string, index?: number, choices?: Choices): string {
   const menu = matches(input, choices);
-  const m = menu.rows;
-  if (!m.length) return input;
-  if (index !== undefined && m[index]) return filled(menu, m[index]);
-  if (m.length === 1) return filled(menu, m[0]);
-  const shared = commonPrefix(m.map(fillOf));
+  const rows = menu.rows;
+  if (!rows.length) return input;
+  if (index !== undefined && rows[index]) return filled(menu, rows[index]);
+  if (rows.length === 1) return filled(menu, rows[0]);
+  const shared = commonPrefix(rows.map(fillOf));
   const typed = menu.command ? split(input).args : input.slice(1);
   return shared.length > typed.length ? (menu.command ? `/${menu.command.name} ${shared}` : `/${shared}`) : input;
 }

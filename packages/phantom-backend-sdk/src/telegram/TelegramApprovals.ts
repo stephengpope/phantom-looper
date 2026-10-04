@@ -90,7 +90,7 @@ export class Approvals {
           { text: '✅ Accept', callback_data: `${PREFIX}:${id}:y` },
           { text: '✖️ Decline', callback_data: `${PREFIX}:${id}:n` },
         ]] },
-      }).then((m) => { entry.messageId = m?.message_id ?? null; }, () => done(false));
+      }).then((sent) => { entry.messageId = sent?.message_id ?? null; }, () => done(false));
     });
   }
 

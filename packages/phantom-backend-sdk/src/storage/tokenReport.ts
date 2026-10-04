@@ -18,23 +18,23 @@ const LABEL_W = 2 + KIND_W + 2 + MODEL_W;  // indent, kind, gutter, model
 /** Window starts, from `now`: today's midnight in the builder's zone, and
  *  7 / 30 days back to the minute. */
 export function reportWindows(clock: Clock, now: Date): Windows<Date> {
-  const daysAgo = (n: number) => new Date(now.getTime() - n * 86_400_000);
+  const daysAgo = (days: number) => new Date(now.getTime() - days * 86_400_000);
   return { today: clock.startOfDay(now), week: daysAgo(7), month: daysAgo(30) };
 }
 
 /** 1234 → 1.2k, 45000 → 45.0k, 1234567 → 1.2M, 2e9 → 2.0B. Always one
  *  decimal so every abbreviated value has the same shape down a column. */
-const k = (n: number) => n >= 1e9 ? `${(n / 1e9).toFixed(1)}B`
-  : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M`
-  : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k`
-  : String(n);
+const compact = (count: number) => count >= 1e9 ? `${(count / 1e9).toFixed(1)}B`
+  : count >= 1e6 ? `${(count / 1e6).toFixed(1)}M`
+  : count >= 1e3 ? `${(count / 1e3).toFixed(1)}k`
+  : String(count);
 
-const pct = (t: WindowTotals) => t.input ? `${Math.round(t.cacheRead / t.input * 100)}%` : '–';
+const pct = (totals: WindowTotals) => totals.input ? `${Math.round(totals.cacheRead / totals.input * 100)}%` : '–';
 
-const clip = (s: string, width: number) => s.length > width ? s.slice(0, width - 1) + '…' : s;
+const clip = (text: string, width: number) => text.length > width ? text.slice(0, width - 1) + '…' : text;
 /** Display name for a model: the dated snapshot suffix (`-20250514`) is
  *  noise in a column this narrow. */
-const modelName = (r: ReportRow) => (r.model ?? r.provider ?? '?').replace(/-\d{8}$/, '');
+const modelName = (row: ReportRow) => (row.model ?? row.provider ?? '?').replace(/-\d{8}$/, '');
 
 const add = (a: WindowTotals, b: WindowTotals): WindowTotals => ({
   input: a.input + b.input, output: a.output + b.output,
@@ -42,26 +42,26 @@ const add = (a: WindowTotals, b: WindowTotals): WindowTotals => ({
 });
 const ZERO: WindowTotals = { input: 0, output: 0, cacheRead: 0, calls: 0 };
 
-const line = (label: string, t: WindowTotals) =>
+const line = (label: string, totals: WindowTotals) =>
   label.padEnd(LABEL_W)
-  + k(t.input).padStart(NUM_W) + k(t.output).padStart(NUM_W)
-  + pct(t).padStart(NUM_W) + k(t.calls).padStart(NUM_W);
+  + compact(totals.input).padStart(NUM_W) + compact(totals.output).padStart(NUM_W)
+  + pct(totals).padStart(NUM_W) + compact(totals.calls).padStart(NUM_W);
 
 function table(title: string, window: keyof Windows<unknown>, rows: ReportRow[]): string {
-  const live = rows.filter((r) => r[window].calls > 0);
+  const live = rows.filter((row) => row[window].calls > 0);
   const out = [
     title,
-    ''.padEnd(LABEL_W) + ['in', 'out', 'cache', 'calls'].map((h) => h.padStart(NUM_W)).join(''),
-    line('total', live.reduce((a, r) => add(a, r[window]), ZERO)),
+    ''.padEnd(LABEL_W) + ['in', 'out', 'cache', 'calls'].map((heading) => heading.padStart(NUM_W)).join(''),
+    line('total', live.reduce((a, row) => add(a, row[window]), ZERO)),
   ];
   for (const group of ['agent', 'helper'] as TokenGroup[]) {
-    const mine = live.filter((r) => groupOf(r.type) === group)
+    const mine = live.filter((row) => groupOf(row.type) === group)
       .sort((a, b) => (b[window].input + b[window].output) - (a[window].input + a[window].output));
-    out.push(line(`${group}s`, mine.reduce((a, r) => add(a, r[window]), ZERO)));
-    for (const r of mine) {
-      const kind = clip(r.type.replace(/_/g, ' '), KIND_W);
-      const model = clip(modelName(r), MODEL_W);
-      out.push(line(`  ${kind.padEnd(KIND_W + 2)}${model}`, r[window]));
+    out.push(line(`${group}s`, mine.reduce((a, row) => add(a, row[window]), ZERO)));
+    for (const row of mine) {
+      const kind = clip(row.type.replace(/_/g, ' '), KIND_W);
+      const model = clip(modelName(row), MODEL_W);
+      out.push(line(`  ${kind.padEnd(KIND_W + 2)}${model}`, row[window]));
     }
   }
   return out.join('\n');

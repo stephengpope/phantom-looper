@@ -25,7 +25,7 @@ import { APP_VERSION } from '../selfUpdate.js';
 import type { PasteStore } from '../paste.js';
 
 export function Prompt({ value, onChange, onSubmit, focus = true, onMeasure, pastes, onFileDrop, updateReady, columns, onBoundary, historyAt, historyTotal }: {
-  value: string; onChange: (v: string) => void; onSubmit: (v: string) => void;
+  value: string; onChange: (value: string) => void; onSubmit: (value: string) => void;
   pastes?: PasteStore;
   /** A paste that IS a dragged file's path (drop.ts) goes to the window.
    *  Returns chip text to insert at the cursor, or null. */

@@ -53,8 +53,8 @@ export interface CallOptions {
 /** The server's refusal as the error the app reads: the server's code,
  *  message and status, exactly as sent — the message is the sentence a
  *  person reads; the request it answers is in `cause`. */
-const refused = (e: { code: string; message: string; retryable: boolean }, status: number, what: string): PhantomError =>
-  new PhantomError(e.code, e.message, { retryable: e.retryable, status, cause: new Error(`${what} answered ${status} ${e.code}`) });
+const refused = (refusal: { code: string; message: string; retryable: boolean }, status: number, what: string): PhantomError =>
+  new PhantomError(refusal.code, refusal.message, { retryable: refusal.retryable, status, cause: new Error(`${what} answered ${status} ${refusal.code}`) });
 
 /** One JSON record per line off a streaming body. A torn last line is
  *  dropped; a line that is not JSON is skipped. */
@@ -66,10 +66,10 @@ async function* ndjson(body: ReadableStream<Uint8Array>): AsyncGenerator<Record<
     const { done, value } = await reader.read();
     if (done) break;
     buf += dec.decode(value, { stream: true });
-    let nl: number;
-    while ((nl = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
+    let newlineAt: number;
+    while ((newlineAt = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, newlineAt).trim();
+      buf = buf.slice(newlineAt + 1);
       if (!line) continue;
       try { yield JSON.parse(line) as Record<string, unknown>; } catch { continue; }
     }
@@ -85,14 +85,14 @@ export class BackendClient {
   readonly #fetch: typeof fetch;
   readonly #retrying: typeof fetch;
 
-  constructor(o: BackendOptions) {
-    this.url = o.url;
-    this.clientId = o.clientId;
-    this.label = o.label ?? o.clientId;
-    this.actor = o.actor;
-    this.#apiKey = o.apiKey;
-    this.#fetch = o.fetch ?? fetch;
-    this.#retrying = o.retry ? retryingFetch(this.#fetch, o.retry.notice, 'server', o.retry.policy) : this.#fetch;
+  constructor(options: BackendOptions) {
+    this.url = options.url;
+    this.clientId = options.clientId;
+    this.label = options.label ?? options.clientId;
+    this.actor = options.actor;
+    this.#apiKey = options.apiKey;
+    this.#fetch = options.fetch ?? fetch;
+    this.#retrying = options.retry ? retryingFetch(this.#fetch, options.retry.notice, 'server', options.retry.policy) : this.#fetch;
   }
 
   /** The same connection with a retry rule — the Agent's, from its handlers. */
@@ -117,23 +117,23 @@ export class BackendClient {
 
   /** One request. Only transport failures throw. */
   async #request(method: string, path: string, body: unknown, opts: CallOptions): Promise<Response> {
-    const f = opts.retry === false ? this.#fetch : this.#retrying;
+    const fetchWith = opts.retry === false ? this.#fetch : this.#retrying;
     try {
-      return await f(`${this.url}${path}`, {
+      return await fetchWith(`${this.url}${path}`, {
         method, headers: this.#headers({ sessionId: opts.sessionId, body: body !== undefined }),
         body: body === undefined ? undefined : JSON.stringify(body), signal: opts.signal,
       });
-    } catch (e) {
-      throw new PhantomError('unreachable', `${method} ${path}: ${(e as Error).message}`, { cause: e, retryable: true });
+    } catch (error) {
+      throw new PhantomError('unreachable', `${method} ${path}: ${(error as Error).message}`, { cause: error, retryable: true });
     }
   }
 
   /** One API call, unwrapped. Resolves with `data`; throws a PhantomError —
    *  with the server's code when it is one of ours. */
   async call<T = unknown>(method: string, path: string, body?: unknown, opts: CallOptions = {}): Promise<T> {
-    const r = await this.#request(method, path, body, opts);
-    const j = await this.#envelope<T>(r, method, path);
-    if (!j.ok) throw refused(j.error, r.status, `${method} ${path}`);
+    const response = await this.#request(method, path, body, opts);
+    const j = await this.#envelope<T>(response, method, path);
+    if (!j.ok) throw refused(j.error, response.status, `${method} ${path}`);
     return j.data;
   }
 
@@ -141,29 +141,29 @@ export class BackendClient {
    *  (a tool handing `{ok:false, error}` to the model). Only transport
    *  failures throw. */
   async callRaw<T = unknown>(method: string, path: string, body?: unknown, opts: CallOptions = {}): Promise<Envelope<T>> {
-    const r = await this.#request(method, path, body, opts);
-    return this.#envelope<T>(r, method, path);
+    const response = await this.#request(method, path, body, opts);
+    return this.#envelope<T>(response, method, path);
   }
 
   /** A route that answers ND-JSON, one record at a time, until the server
    *  closes it or `signal` aborts. A refusal (an envelope instead of a
    *  stream) throws with the server's code. */
   async *stream(method: string, path: string, body?: unknown, opts: CallOptions = {}): AsyncGenerator<Record<string, unknown>> {
-    const r = await this.#request(method, path, body, { ...opts, retry: false });
-    if ((r.headers.get('content-type') ?? '').includes('application/json')) {
-      const j = await this.#envelope(r, method, path);
-      throw j.ok ? new PhantomError('not_a_stream', `${method} ${path}: answered data, not a stream`, { status: r.status })
-        : refused(j.error, r.status, `${method} ${path}`);
+    const response = await this.#request(method, path, body, { ...opts, retry: false });
+    if ((response.headers.get('content-type') ?? '').includes('application/json')) {
+      const j = await this.#envelope(response, method, path);
+      throw j.ok ? new PhantomError('not_a_stream', `${method} ${path}: answered data, not a stream`, { status: response.status })
+        : refused(j.error, response.status, `${method} ${path}`);
     }
-    if (!r.ok || !r.body) throw new PhantomError('bad_response', `${method} ${path}: HTTP ${r.status} with no stream`, { status: r.status });
-    yield* ndjson(r.body);
+    if (!response.ok || !response.body) throw new PhantomError('bad_response', `${method} ${path}: HTTP ${response.status} with no stream`, { status: response.status });
+    yield* ndjson(response.body);
   }
 
-  async #envelope<T>(r: Response, method: string, path: string): Promise<Envelope<T>> {
+  async #envelope<T>(response: Response, method: string, path: string): Promise<Envelope<T>> {
     try {
-      return await r.json() as Envelope<T>;
-    } catch (e) {
-      throw new PhantomError('bad_response', `${method} ${path}: HTTP ${r.status}, not JSON`, { cause: e, status: r.status });
+      return await response.json() as Envelope<T>;
+    } catch (error) {
+      throw new PhantomError('bad_response', `${method} ${path}: HTTP ${response.status}, not JSON`, { cause: error, status: response.status });
     }
   }
 }

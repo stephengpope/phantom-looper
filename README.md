@@ -162,3 +162,12 @@ npm run phantom-cli    # the app from source; `-- --resume <id>` to reopen a ses
 ```bash
 npm run typecheck
 ```
+
+```
+packages/phantom-client-sdk    the agent runtime an app runs (Agent, Session, BackendClient)
+packages/phantom-backend-sdk   the backend an app configures (PhantomBackend, storage, API, git, Telegram)
+phantom-backend/               this app's backend: the looper, the cron scheduler, the Telegram bot, its config
+phantom-cli/                   this app's terminal client
+core/                          this app's agents and prompts, shared by the cli and the backend
+docs/v1-plan.md                what is left to v1
+```

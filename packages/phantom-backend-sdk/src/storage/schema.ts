@@ -16,8 +16,8 @@ const bytea = customType<{ data: Buffer }>({ dataType: () => 'bytea' });
 // ever showed it. Writes stringify exactly as drizzle's jsonb did.
 const json = customType<{ data: unknown; driverData: unknown }>({
   dataType: () => 'jsonb',
-  toDriver: (v) => JSON.stringify(v),
-  fromDriver: (v) => v,
+  toDriver: (value) => JSON.stringify(value),
+  fromDriver: (value) => value,
 });
 
 export const phantomLooper = pgSchema('phantom_looper');
@@ -36,7 +36,7 @@ export const settings = phantomLooper.table('settings', {
   value: json('value'),
   valueEnc: bytea('value_enc'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-}, (t) => [primaryKey({ columns: [t.scope, t.namespace, t.key] })]);
+}, (table) => [primaryKey({ columns: [table.scope, table.namespace, table.key] })]);
 
 // A registered GitHub repository. Its clone URL is derived from owner + name
 // (git/remote.ts remoteUrl), not stored (032).
@@ -78,7 +78,7 @@ export const cards = phantomLooper.table('cards', {
   archived: boolean('archived').notNull().default(false),
   created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-}, (t) => [unique().on(t.project_id, t.number)]);
+}, (table) => [unique().on(table.project_id, table.number)]);
 
 // A card's history, written by a trigger on every update (024, 028, 033) so
 // edits made over SQL are recorded too. `changed_from`: the keys that
@@ -248,7 +248,7 @@ export const telegramSentMessages = phantomLooper.table('telegram_sent_messages'
   // with its session (031).
   sessionId: text('session_id'),
   sentAt: timestamp('sent_at', { withTimezone: true }).notNull().defaultNow(),
-}, (t) => [primaryKey({ columns: [t.chatId, t.messageId] })]);
+}, (table) => [primaryKey({ columns: [table.chatId, table.messageId] })]);
 
 // One row per Telegram update_id already handled: Telegram re-delivers, the
 // repeat loses the insert and is dropped.

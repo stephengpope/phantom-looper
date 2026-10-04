@@ -96,8 +96,8 @@ async function runGitStream<T extends { result: string }>(
   route: 'auto-push' | 'auto-pull', steps: Record<string, string>,
   cfg: GitToolsConfig, onStep?: (label: string) => void,
 ): Promise<T> {
-  const f = cfg.fetch ?? fetch;
-  const r = await f(`${cfg.baseUrl}/git/${route}`, {
+  const fetchWith = cfg.fetch ?? fetch;
+  const response = await fetchWith(`${cfg.baseUrl}/git/${route}`, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${cfg.apiKey}`, 'content-type': 'application/json',
@@ -106,13 +106,13 @@ async function runGitStream<T extends { result: string }>(
     },
     body: '{}',
   });
-  if ((r.headers.get('content-type') ?? '').includes('application/json')) {
-    const j = await r.json() as { ok: boolean; error?: { code?: string; message?: string } };
-    throw new Error(j.error?.message ?? `phantom-backend at ${cfg.baseUrl} refused ${route} with HTTP ${r.status} and no message`);
+  if ((response.headers.get('content-type') ?? '').includes('application/json')) {
+    const j = await response.json() as { ok: boolean; error?: { code?: string; message?: string } };
+    throw new Error(j.error?.message ?? `phantom-backend at ${cfg.baseUrl} refused ${route} with HTTP ${response.status} and no message`);
   }
-  if (!r.body) throw new Error(`phantom-backend at ${cfg.baseUrl} answered ${route} with HTTP ${r.status} and no stream`);
+  if (!response.body) throw new Error(`phantom-backend at ${cfg.baseUrl} answered ${route} with HTTP ${response.status} and no stream`);
   let result: T | undefined;
-  for await (const rec of ndjson(r.body)) {
+  for await (const rec of ndjson(response.body)) {
     // `detail` is the part the step name cannot say — the conflicted files,
     // the round, a commit-message retry as it happens. Dropping it made a
     // rate-limited call look like a hang.
@@ -122,7 +122,7 @@ async function runGitStream<T extends { result: string }>(
       onStep?.(`${label}${detail}`);
     }
     else if (rec.event === 'result') {
-      const { event: _e, ...rest } = rec;
+      const { event: _event, ...rest } = rec;
       result = { result: 'error', ...rest } as unknown as T;
     }
   }

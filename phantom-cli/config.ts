@@ -61,7 +61,7 @@ export const DEFAULTS = {
 
 export type LocalKey = keyof typeof DEFAULTS;
 export const LOCAL_KEYS = Object.keys(DEFAULTS) as LocalKey[];
-export const isLocalKey = (k: string): k is LocalKey => Object.prototype.hasOwnProperty.call(DEFAULTS, k);
+export const isLocalKey = (key: string): key is LocalKey => Object.prototype.hasOwnProperty.call(DEFAULTS, key);
 
 /** A setting's value on the wire and in the file. */
 export type ConfigValue = string | number | boolean | null;
@@ -112,20 +112,20 @@ export const VOICE_BOOT_KEYS: string[] = [
 ];
 
 export function validate(key: LocalKey, value: ConfigValue): string | null {
-  const m = META[key];
+  const meta = META[key];
   if (value === null) return null;                       // null clears a setting
-  if (m.type === 'number') {
+  if (meta.type === 'number') {
     return typeof value === 'number' && Number.isFinite(value) && value > 0
       ? null : `${key} must be a positive number`;
   }
-  if (m.type === 'boolean') return typeof value === 'boolean' ? null : `${key} must be true or false`;
+  if (meta.type === 'boolean') return typeof value === 'boolean' ? null : `${key} must be true or false`;
   return typeof value === 'string' ? null : `${key} must be text`;
 }
 
 /** Last four characters of a secret — enough to tell two keys apart, not enough
  *  to leak one. Never a fake row of dots for a key that is not set. */
-export function mask(v: ConfigValue): string {
-  if (v === null || v === undefined || v === '') return 'not set';
-  const s = String(v);
-  return s.length <= 4 ? '••••' : `••••${s.slice(-4)}`;
+export function mask(value: ConfigValue): string {
+  if (value === null || value === undefined || value === '') return 'not set';
+  const text = String(value);
+  return text.length <= 4 ? '••••' : `••••${text.slice(-4)}`;
 }

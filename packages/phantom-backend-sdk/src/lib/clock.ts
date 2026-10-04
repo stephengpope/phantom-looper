@@ -12,7 +12,7 @@
 
 /** Every IANA zone this Node knows — the one list the setting is checked
  *  against and the cli offers. */
-export const TIMEZONES: readonly string[] = ['UTC', ...Intl.supportedValuesOf('timeZone').filter((z) => z !== 'UTC')];
+export const TIMEZONES: readonly string[] = ['UTC', ...Intl.supportedValuesOf('timeZone').filter((zone) => zone !== 'UTC')];
 
 /** Wall-clock fields of `at` as read in `timeZone`. */
 function wallClock(at: Date, timeZone: string) {
@@ -20,8 +20,8 @@ function wallClock(at: Date, timeZone: string) {
     timeZone, hourCycle: 'h23',
     year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
   }).formatToParts(at);
-  const n = (type: string) => Number(parts.find((p) => p.type === type)?.value);
-  return { year: n('year'), month: n('month'), day: n('day'), hour: n('hour'), minute: n('minute'), second: n('second') };
+  const partValue = (type: string) => Number(parts.find((part) => part.type === type)?.value);
+  return { year: partValue('year'), month: partValue('month'), day: partValue('day'), hour: partValue('hour'), minute: partValue('minute'), second: partValue('second') };
 }
 
 /** The zone's offset from UTC at `at`, in ms (positive east of Greenwich). */

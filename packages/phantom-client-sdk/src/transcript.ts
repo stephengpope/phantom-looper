@@ -38,7 +38,7 @@ export const messageLine = (message: ModelMessage): MessageLine => {
   }
   return { type: 'message', id: lineId(), at: now(), message };
 };
-export const usageLine = (u: TokenUsage): UsageLine => ({ type: 'usage', id: lineId(), at: now(), ...u });
+export const usageLine = (usage: TokenUsage): UsageLine => ({ type: 'usage', id: lineId(), at: now(), ...usage });
 export const interruptedLine = (): InterruptedLine => ({ type: 'interrupted', id: lineId(), at: now() });
 export const partialMessageLine = (text: string): PartialMessageLine => ({ type: 'partial_message', id: lineId(), at: now(), text });
 export const userMessage = (content: string): ModelMessage => ({ role: 'user', content });
@@ -50,13 +50,13 @@ export const assistantMessage = (content: string): ModelMessage => ({ role: 'ass
  *  message = nothing to cut. In place. */
 export function cutLastAssistantMessage(messages: ModelMessage[], text: string): void {
   for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i]!;
-    if (m.role !== 'assistant') continue;
-    if (typeof m.content === 'string') { messages[i] = { ...m, content: text }; return; }
-    const rest = m.content.filter((c) => c.type !== 'text');
-    const at = m.content.findIndex((c) => c.type === 'text');
+    const message = messages[i]!;
+    if (message.role !== 'assistant') continue;
+    if (typeof message.content === 'string') { messages[i] = { ...message, content: text }; return; }
+    const rest = message.content.filter((part) => part.type !== 'text');
+    const at = message.content.findIndex((part) => part.type === 'text');
     const part = { type: 'text' as const, text };
-    messages[i] = { ...m, content: at < 0 ? [part, ...rest] : [...rest.slice(0, at), part, ...rest.slice(at)] };
+    messages[i] = { ...message, content: at < 0 ? [part, ...rest] : [...rest.slice(0, at), part, ...rest.slice(at)] };
     return;
   }
 }
@@ -65,21 +65,21 @@ export function cutLastAssistantMessage(messages: ModelMessage[], text: string):
  *  line applied to the assistant message before it. */
 export function conversationFrom(lines: readonly TranscriptLine[]): ModelMessage[] {
   const out: ModelMessage[] = [];
-  for (const l of lines) {
-    if (l.type === 'message') out.push(l.message);
-    else if (l.type === 'partial_message') cutLastAssistantMessage(out, l.text);
+  for (const line of lines) {
+    if (line.type === 'message') out.push(line.message);
+    else if (line.type === 'partial_message') cutLastAssistantMessage(out, line.text);
   }
   return out;
 }
 
 /** The tokens the lines account for. */
 export function usageTotals(lines: readonly TranscriptLine[]): TokenTotals {
-  const t: TokenTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-  for (const l of lines) {
-    if (l.type !== 'usage') continue;
-    t.input += l.input; t.output += l.output; t.cacheRead += l.cacheRead; t.cacheWrite += l.cacheWrite;
+  const totals: TokenTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  for (const line of lines) {
+    if (line.type !== 'usage') continue;
+    totals.input += line.input; totals.output += line.output; totals.cacheRead += line.cacheRead; totals.cacheWrite += line.cacheWrite;
   }
-  return t;
+  return totals;
 }
 
 export const addTotals = (a: TokenTotals, b: TokenTotals): TokenTotals =>

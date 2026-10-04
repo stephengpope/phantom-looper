@@ -57,7 +57,7 @@ export const label = (project: ProjectInfo) => project.displayName || project.na
 export function lastProjectId(projects: ProjectInfo[], sessions: SessionInfo[]): string | undefined {
   const known = new Set(projects.map((project) => project.id));
   return sessions
-    .filter((s) => whoDrives(s) === 'manual' && known.has(s.projectId))
+    .filter((session) => whoDrives(session) === 'manual' && known.has(session.projectId))
     .sort((a, b) => Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt))[0]?.projectId;
 }
 
@@ -92,7 +92,7 @@ export function sessionChoices(
   // server cannot know: rows in MOTION (a turn here, a hold elsewhere — the
   // looper included) sort next; the rest by last use. A held row's own
   // lastUsedAt can be old, which made the list read as unordered.
-  const inMotion = (s: SessionInfo) => isRunning(s, { busy, clientId });
+  const inMotion = (session: SessionInfo) => isRunning(session, { busy, clientId });
   sessions = [...sessions].sort((a, b) =>
     Number(b.pinned === true) - Number(a.pinned === true)
     || Number(inMotion(b)) - Number(inMotion(a))
@@ -114,8 +114,8 @@ export function sessionChoices(
   // raw 26-char id — one such row (old sessions of a deleted project, which
   // lazy loading now reaches) blew the label column to its cap and pushed the
   // whole table past the terminal's edge.
-  const wsCol = (s: SessionInfo): string => {
-    const project = byId.get(s.projectId);
+  const wsCol = (session: SessionInfo): string => {
+    const project = byId.get(session.projectId);
     return project ? (project.cardPrefix ?? label(project)) : '·';
   };
   // Columns ride the shared table system (table.ts — /resume's geometry made
@@ -135,63 +135,63 @@ export function sessionChoices(
   // and how fresh"), one column.
 
   const COLS = { card: 8, workState: 14, name: 42, model: 20, tokens: 24 };
-  const rows = sessions.map((s): TableRow<Launch | null> => {
+  const rows = sessions.map((session): TableRow<Launch | null> => {
     // A supervisor session names itself: the supervisor's conversation for its
     // card — read-only. A cron's run is a normal coding session that a
     // schedule opened; typing into it takes it over (whoDrives).
-    const sup = s.agent === 'supervisor';
-    const cron = whoDrives(s) === 'cron';
-    const dead = s.status !== 'active';
+    const sup = session.agent === 'supervisor';
+    const cron = whoDrives(session) === 'cron';
+    const dead = session.status !== 'active';
     // Loaded in THIS window's memory (running wins the marker slot).
-    const open = !dead && loaded(s.id);
+    const open = !dead && loaded(session.id);
     // Locked by someone else = a turn IS running there right now (locks are
     // per turn) — same spinner as a local turn. One fact, one place.
-    const held = !dead && !!s.locked && s.lockedBy !== clientId;
-    const running = isRunning(s, { busy, clientId });   // a local turn, or held elsewhere
+    const held = !dead && !!session.locked && session.lockedBy !== clientId;
+    const running = isRunning(session, { busy, clientId });   // a local turn, or held elsewhere
     // The card this session works on — the BARE number, because the project
     // column beside it already shows the prefix (the board's own shape:
     // prefix in the header, number on the row). Either seat of a loop
     // carries it; a session with no card is the blank-fact dot.
     // Card number with a colored status icon as the mark: ▶ 7 (yellow = in_progress).
-    const cardNum = s.card != null ? String(s.card) : '·';
-    const icon = s.cardStatus ? STATUS_ICON[s.cardStatus] : undefined;
+    const cardNum = session.card != null ? String(session.card) : '·';
+    const icon = session.cardStatus ? STATUS_ICON[session.cardStatus] : undefined;
     const cardCol: Cell = icon
       ? { text: cardNum, mark: icon.color, markChar: icon.char, markAfter: true }
       : cardNum;
     // A blank fact is a dot — never the branch, which is just the session id
     // wearing a prefix and says nothing to a person.
-    const nameCol = s.name ?? '·';
+    const nameCol = session.name ?? '·';
     // A session open here that nothing was typed into carries no activity
     // time (App's merge fills epoch 0 so it sorts last) — the dot, not "2957w".
-    const when = Date.parse(s.lastUsedAt) > 0 ? ago(s.lastUsedAt, now) : '·';
+    const when = Date.parse(session.lastUsedAt) > 0 ? ago(session.lastUsedAt, now) : '·';
     // A blank work fact is the dot, UNMARKED — a color would claim a state
     // the server did not give: the list may not have been fetched with
     // git=true yet (the instant first paint), or there is nothing to measure.
-    const workCol = s.workState ? WORK[s.workState] : s.lastUserMessage ? { text: 'unknown', mark: 'gray' } : '·';
+    const workCol = session.workState ? WORK[session.workState] : session.lastUserMessage ? { text: 'unknown', mark: 'gray' } : '·';
     // The token meters are the status bar's own shapes (`↑ 12.4k`,
     // `↓ 1.7k`) and its own rule: zero or unknown is no news, the blank-fact
     // dot. The cache hit rate rides the INPUT meter — caching is a property
     // of prompt tokens, never of output — by state.ts's one rule.
-    const pct = cachePct(s.tokensInput ?? 0, s.tokensCacheRead ?? 0, s.tokensCacheWrite ?? 0);
-    const inMeter = s.tokensInput
-      ? formatTokensIn(s.tokensInput) + (pct != null ? ` (${pct}%)` : '') : '';
-    const outMeter = s.tokensOutput ? formatTokensOut(s.tokensOutput) : '';
+    const pct = cachePct(session.tokensInput ?? 0, session.tokensCacheRead ?? 0, session.tokensCacheWrite ?? 0);
+    const inMeter = session.tokensInput
+      ? formatTokensIn(session.tokensInput) + (pct != null ? ` (${pct}%)` : '') : '';
+    const outMeter = session.tokensOutput ? formatTokensOut(session.tokensOutput) : '';
     const tokensCol = [inMeter, outMeter].filter(Boolean).join(' ') || '·';
     // ☠ = no workspace (the disk sweep took it). The time stays — when it was
     // last touched is still the fact that matters.
     const whenCol: Cell = dead ? { text: when, mark: 'gray', markChar: '☠', markAfter: true } : when;
     return {
-      value: { kind: 'resume', sessionId: s.id } as Launch, id: s.id,
-      cells: [wsCol(s), cardCol, workCol, nameCol, s.model ?? '·', tokensCol, whenCol],
+      value: { kind: 'resume', sessionId: session.id } as Launch, id: session.id,
+      cells: [wsCol(session), cardCol, workCol, nameCol, session.model ?? '·', tokensCol, whenCol],
       busy: running,
       dot: open && !running,
       hint: [
-        s.name ?? undefined,
+        session.name ?? undefined,
         held
-          ? `A turn is running (${s.lockedLabel || 'another machine'}); read freely — sends are refused while it runs.`
+          ? `A turn is running (${session.lockedLabel || 'another machine'}); read freely — sends are refused while it runs.`
           : open
             ? 'Loaded in this window — enter switches to it.'
-            : sup ? `The supervisor's conversation for card ${s.card ?? '?'} — read-only.`
+            : sup ? `The supervisor's conversation for card ${session.card ?? '?'} — read-only.`
             : cron ? 'A scheduled prompt\'s run (cron) — chat into it and it is yours.' : undefined,
       ].filter(Boolean).join('\n') || undefined,
     };
@@ -208,7 +208,7 @@ export function sessionChoices(
   // groups exist: a list that is all-pinned or all-unpinned reads as one.
   // Inserted AFTER tableChoices so the column geometry never sees it (the
   // header sits at index 0, the pinned block right under it).
-  const pinnedCount = sessions.filter((s) => s.pinned === true).length;
+  const pinnedCount = sessions.filter((session) => session.pinned === true).length;
   if (pinnedCount > 0) {
     // A small group header: pin icon above the pinned block.
     table.splice(1, 0, { value: null, label: '📌', heading: true });
@@ -225,7 +225,7 @@ export function sessionChoices(
  *  `all`. A project the list no longer knows (deleted while the picker
  *  was up) reads as all rather than as a raw id. */
 export const projectTitle = (projects: ProjectInfo[], id: string | null): string => {
-  const project = id ? projects.find((x) => x.id === id) : undefined;
+  const project = id ? projects.find((project) => project.id === id) : undefined;
   return project ? label(project) : 'all';
 };
 
@@ -266,7 +266,7 @@ export function Launcher({ mode, projects, sessions, total, busy, loaded, client
    *  by one read, and the empty state must name what the rows are for, or
    *  esc on a zero-match filter draws "no sessions yet" for a frame. */
   rowsQuery?: string;
-  onQuery?: (q: string) => void;
+  onQuery?: (query: string) => void;
   projects: ProjectInfo[];
   sessions?: SessionInfo[];
   /** How many sessions the whole list holds (the server's count for the
@@ -286,7 +286,7 @@ export function Launcher({ mode, projects, sessions, total, busy, loaded, client
   loaded?: (sessionId: string) => boolean;
   /** This window's own lock id, so its own held sessions do not read "in use". */
   clientId?: string;
-  onPick: (l: Launch) => void;
+  onPick: (launch: Launch) => void;
   /** `e` on a project row. Absent => the key does nothing and is not offered. */
   onEdit?: (projectId: string) => void;
   /** `d` on a session row: duplicate it into a new session — the way past a lock. */
@@ -352,14 +352,14 @@ export function Launcher({ mode, projects, sessions, total, busy, loaded, client
           { key: '←→', does: 'project', when: canCycle, active: projectId !== null }]}>
         <Box marginBottom={1}>
           <FixedText color="cyan">{'  / '}</FixedText>
-          <TextInput value={query} onChange={(q) => onQuery!(q)} placeholder="name, last message or branch…" />
+          <TextInput value={query} onChange={(query) => onQuery!(query)} placeholder="name, last message or branch…" />
         </Box>
         <SelectList
           choices={choices}
           reserve={2}
           onNearEnd={onNearEnd}
           total={total}
-          onSelect={(v) => { if (v) onPick(v); }}
+          onSelect={(pick) => { if (pick) onPick(pick); }}
         />
       </Screen>
     );
@@ -389,20 +389,20 @@ export function Launcher({ mode, projects, sessions, total, busy, loaded, client
         // `total` counts against the real total — the "↓ N more" line says
         // what is really below, not what happens to be loaded.
         total={mode === 'sessions' ? total : undefined}
-        onSelect={(v) => { if (v) onPick(v); }}
-        onKey={canEdit ? (ch, v) => {
-          if (ch === 'e' && v?.kind === 'new') onEdit!(v.projectId);
+        onSelect={(pick) => { if (pick) onPick(pick); }}
+        onKey={canEdit ? (char, pick) => {
+          if (char === 'e' && pick?.kind === 'new') onEdit!(pick.projectId);
           // The same act as the "add a project…" row, one key from any row.
-          else if (ch === 'n' && (canAdd ?? true)) onPick({ kind: 'add' });
-        } : mode === 'sessions' ? (ch, v) => {
-          if (ch === '/' && canFilter) { setFiltering(true); return; }
-          if (ch === 's') { onToggleBackground?.(); return; }
-          if (v?.kind !== 'resume') return;
-          if (ch === 'd') onDuplicate?.(v.sessionId);
-          else if (ch === 'p') onPin?.(v.sessionId);
-          else if (ch === 'i') onPing?.(v.sessionId);
-          else if (ch === 'x') onClose?.(v.sessionId);
-          else if (ch === 't' || ch === 'c') onTrash?.(v.sessionId);
+          else if (char === 'n' && (canAdd ?? true)) onPick({ kind: 'add' });
+        } : mode === 'sessions' ? (char, pick) => {
+          if (char === '/' && canFilter) { setFiltering(true); return; }
+          if (char === 's') { onToggleBackground?.(); return; }
+          if (pick?.kind !== 'resume') return;
+          if (char === 'd') onDuplicate?.(pick.sessionId);
+          else if (char === 'p') onPin?.(pick.sessionId);
+          else if (char === 'i') onPing?.(pick.sessionId);
+          else if (char === 'x') onClose?.(pick.sessionId);
+          else if (char === 't' || char === 'c') onTrash?.(pick.sessionId);
         } : undefined}
         onCancel={onCancel}
       />

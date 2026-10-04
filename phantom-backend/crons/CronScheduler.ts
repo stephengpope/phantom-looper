@@ -80,17 +80,17 @@ export class CronScheduler {
     this.unsubscribe.push(this.backend.crons.subscribe((projectId) => this.reconcile(projectId)));
     // A settings write names its scope: one project, or global — which
     // may be the switch or the zone every project inherits.
-    this.unsubscribe.push(this.backend.settingsEvents.subscribe((e) => {
-      const projectId = e.scope.startsWith('project:') ? e.scope.slice('project:'.length) : undefined;
-      if (projectId || e.scope === 'global') this.reconcile(projectId);
+    this.unsubscribe.push(this.backend.settingsEvents.subscribe((change) => {
+      const projectId = change.scope.startsWith('project:') ? change.scope.slice('project:'.length) : undefined;
+      if (projectId || change.scope === 'global') this.reconcile(projectId);
     }));
     log.info('cron scheduler started');
   }
 
   stop(): void {
-    for (const u of this.unsubscribe) u();
+    for (const unsubscribe of this.unsubscribe) unsubscribe();
     this.unsubscribe = [];
-    for (const r of this.registered.values()) r.cron.stop();
+    for (const registration of this.registered.values()) registration.cron.stop();
     this.registered.clear();
   }
 
@@ -99,7 +99,7 @@ export class CronScheduler {
   reconcile(projectId?: string): void {
     this.queue = this.queue
       .then(() => this.reconcileNow(projectId))
-      .catch((e) => log.error({ project: projectId, err: errStr(e) }, 'cron reconcile failed'));
+      .catch((error) => log.error({ project: projectId, err: errStr(error) }, 'cron reconcile failed'));
   }
 
   /** Register new and changed crons, leave unchanged ones alone (a running
@@ -114,10 +114,10 @@ export class CronScheduler {
         const project = await this.backend.projects.get(row.project_id);
         if (!project) continue;
         try {
-          const s = await this.backend.settings.resolveMany(['cron_enabled', 'timezone'], { projectId: project.id });
-          zone = { enabled: s.cron_enabled === true, timezone: String(s.timezone) };
-        } catch (e) {
-          log.error({ project: project.name, err: errStr(e) }, 'could not read the project\'s cron settings — its crons are not scheduled');
+          const values = await this.backend.settings.resolveMany(['cron_enabled', 'timezone'], { projectId: project.id });
+          zone = { enabled: values.cron_enabled === true, timezone: String(values.timezone) };
+        } catch (error) {
+          log.error({ project: project.name, err: errStr(error) }, 'could not read the project\'s cron settings — its crons are not scheduled');
           continue;
         }
         zones.set(row.project_id, zone);
@@ -148,8 +148,8 @@ export class CronScheduler {
         }
         this.registered.set(row.id, { cron, projectId: row.project_id, schedule: row.schedule, timezone: zone.timezone });
         log.info({ cron: row.name, next: cron.nextRun()?.toISOString() }, 'cron scheduled');
-      } catch (e) {
-        log.warn({ cron: row.name, schedule: row.schedule, err: errStr(e) }, 'invalid cron schedule — not scheduled');
+      } catch (error) {
+        log.warn({ cron: row.name, schedule: row.schedule, err: errStr(error) }, 'invalid cron schedule — not scheduled');
       }
     }
     // Drop registrations (in scope) whose row vanished, was disabled, or
@@ -171,8 +171,8 @@ export class CronScheduler {
       await this.backend.crons.markFired(row);
       if (row.once) { this.registered.get(id)?.cron.stop(); this.registered.delete(id); }
       await this.run(row);
-    } catch (e) {
-      log.error({ cron: row?.name ?? id, err: errStr(e) }, 'cron fire failed');
+    } catch (error) {
+      log.error({ cron: row?.name ?? id, err: errStr(error) }, 'cron fire failed');
     }
   }
 
@@ -205,14 +205,14 @@ export class CronScheduler {
         log.info({ project: project.name, cron: row.name, session: sessionId,
           tokens: result ? result.usage.input + result.usage.output : 0, interrupted: result?.outcome === 'interrupted' }, 'cron run finished');
       }
-    } catch (e) {
+    } catch (error) {
       // The session, when one opened, carries the error on its feed; this
       // line is the trace for a run that never got that far.
-      log.warn({ cron: row.name, session: agent?.session.id, err: errStr(e) }, 'cron run failed');
+      log.warn({ cron: row.name, session: agent?.session.id, err: errStr(error) }, 'cron run failed');
     } finally {
       if (agent) {
         this.agents.delete(agent.session.id);
-        await agent.close().catch((e) => log.warn({ cron: row.name, err: errStr(e) }, 'cron session did not close cleanly'));
+        await agent.close().catch((error) => log.warn({ cron: row.name, err: errStr(error) }, 'cron session did not close cleanly'));
       }
     }
   }
@@ -245,6 +245,6 @@ export class CronScheduler {
 
 /** Single-quote a path for sh — the one thing a path may not contain
  *  unescaped is a single quote. */
-function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
+function shellQuote(text: string): string {
+  return `'${text.replace(/'/g, `'\\''`)}'`;
 }

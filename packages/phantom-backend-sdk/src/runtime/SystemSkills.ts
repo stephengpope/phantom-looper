@@ -40,8 +40,8 @@ export async function systemSkillTree(docker: Docker, image: string): Promise<Sy
   let id: string;
   try {
     id = (await docker.getImage(image).inspect()).Id;
-  } catch (e) {
-    log.info({ image, err: errStr(e) }, 'system skills: image not inspectable — empty tier');
+  } catch (error) {
+    log.info({ image, err: errStr(error) }, 'system skills: image not inspectable — empty tier');
     return new Map();
   }
   const hit = cache.get(id);
@@ -49,8 +49,8 @@ export async function systemSkillTree(docker: Docker, image: string): Promise<Sy
   let tree: SystemSkillTree;
   try {
     tree = await readTree(docker, image);
-  } catch (e) {
-    log.warn({ image, err: errStr(e) }, 'system skills: read failed — empty tier');
+  } catch (error) {
+    log.warn({ image, err: errStr(error) }, 'system skills: read failed — empty tier');
     tree = new Map();
   }
   cache.set(id, tree);
@@ -62,8 +62,8 @@ export async function systemSkillTree(docker: Docker, image: string): Promise<Sy
 export async function systemSkills(docker: Docker, image: string): Promise<SkillMeta[]> {
   const tree = await systemSkillTree(docker, image);
   const out: SkillMeta[] = [];
-  for (const [name, s] of tree) {
-    const description = parseDescription(s.md);
+  for (const [name, skill] of tree) {
+    const description = parseDescription(skill.md);
     if (description) out.push({ name, description });
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
@@ -90,8 +90,8 @@ function parseTar(stream: NodeJS.ReadableStream): Promise<SystemSkillTree> {
   return new Promise((resolve, reject) => {
     const tree: SystemSkillTree = new Map();
     let total = 0;
-    const ex = extract();
-    ex.on('entry', (header, content, next) => {
+    const extractor = extract();
+    extractor.on('entry', (header, content, next) => {
       const parts = header.name.split('/').filter(Boolean).slice(1); // drop 'skills/'
       const skill = parts[0];
       const rel = parts.slice(1).join('/');
@@ -101,23 +101,23 @@ function parseTar(stream: NodeJS.ReadableStream): Promise<SystemSkillTree> {
         return void content.on('end', next);
       }
       const chunks: Buffer[] = [];
-      content.on('data', (d: Buffer) => { chunks.push(d); total += d.length; });
+      content.on('data', (chunk: Buffer) => { chunks.push(chunk); total += chunk.length; });
       content.on('end', () => {
         const text = Buffer.concat(chunks).toString('utf8');
-        let s = tree.get(skill);
-        if (!s) { s = { name: skill, md: '', files: new Map() }; tree.set(skill, s); }
-        if (rel === 'SKILL.md') s.md = text; else s.files.set(rel, text);
+        let entry = tree.get(skill);
+        if (!entry) { entry = { name: skill, md: '', files: new Map() }; tree.set(skill, entry); }
+        if (rel === 'SKILL.md') entry.md = text; else entry.files.set(rel, text);
         next();
       });
       content.on('error', reject);
     });
-    ex.on('finish', () => {
+    extractor.on('finish', () => {
       // A folder with no SKILL.md is not a skill.
-      for (const [name, s] of tree) if (!s.md) tree.delete(name);
+      for (const [name, skill] of tree) if (!skill.md) tree.delete(name);
       resolve(tree);
     });
-    ex.on('error', reject);
+    extractor.on('error', reject);
     stream.on('error', reject);
-    stream.pipe(ex);
+    stream.pipe(extractor);
   });
 }

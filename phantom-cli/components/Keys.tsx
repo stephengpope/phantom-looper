@@ -17,9 +17,9 @@ import { groupBlocks, headedChoices } from '../settingGroups.js';
 
 /** The credential rows under the server's group headings, in its order. */
 const groupedChoices = (creds: Array<[string, Entry]>) =>
-  headedChoices(groupBlocks(creds, ([, e]) => e.meta), ([name, e]) => {
-    const stored = typeof e.value === 'string' && e.value.length > 0;
-    return { value: name, label: labelFor(name, e.meta), detail: stored ? 'stored' : 'not set', hint: e.description };
+  headedChoices(groupBlocks(creds, ([, entry]) => entry.meta), ([name, entry]) => {
+    const stored = typeof entry.value === 'string' && entry.value.length > 0;
+    return { value: name, label: labelFor(name, entry.meta), detail: stored ? 'stored' : 'not set', hint: entry.description };
   });
 
 export function Keys({ api, onClose, onChanged }: {
@@ -45,9 +45,9 @@ export function Keys({ api, onClose, onChanged }: {
       // One read of the server's store; a credential comes back with its
       // value, and the screen masks it rather than the API hiding it.
       const all = await settings.all();
-      setCreds(Object.entries(all).filter(([, e]) => e.secret));
+      setCreds(Object.entries(all).filter(([, entry]) => entry.secret));
       setNotice(undefined);
-    } catch (e) { setNotice(`could not load: ${(e as Error).message}`); setCreds([]); }
+    } catch (entry) { setNotice(`could not load: ${(entry as Error).message}`); setCreds([]); }
     finally { setBusy(false); }
   }, [settings]);
 
@@ -57,7 +57,7 @@ export function Keys({ api, onClose, onChanged }: {
     setBusy(true);
     void what()
       .then(async () => { await load(); setNotice(typeof after === 'function' ? await after() : after); if (changed) onChanged?.(changed); })
-      .catch((e: Error) => setNotice(e.message))
+      .catch((error: Error) => setNotice(error.message))
       .finally(() => { setBusy(false); setEditing(null); });
   };
 
@@ -67,25 +67,25 @@ export function Keys({ api, onClose, onChanged }: {
    *  only names the outcome. */
   const checkGithub = async (): Promise<string> => {
     try {
-      const r = await api('GET', '/github/whoami') as { login?: string };
-      return `github token saved — works, authenticated as ${String(r?.login ?? 'unknown')}`;
-    } catch (e) {
-      return `github token saved, but it does not work: ${(e as Error).message}`;
+      const whoami = await api('GET', '/github/whoami') as { login?: string };
+      return `github token saved — works, authenticated as ${String(whoami?.login ?? 'unknown')}`;
+    } catch (entry) {
+      return `github token saved, but it does not work: ${(entry as Error).message}`;
     }
   };
 
-  const stored = new Set((creds ?? []).filter(([, e]) => typeof e.value === 'string' && e.value.length > 0).map(([n]) => n));
+  const stored = new Set((creds ?? []).filter(([, entry]) => typeof entry.value === 'string' && entry.value.length > 0).map(([name]) => name));
 
   if (editing) {
-    const label = labelFor(editing, creds?.find(([n]) => n === editing)?.[1].meta);
+    const label = labelFor(editing, creds?.find(([name]) => name === editing)?.[1].meta);
     return (
       <ValueInput
         spec={{ title: label, type: 'string', secret: true, current: '',
           note: 'stored encrypted on the server · never shown back · empty cancels' }}
         onCancel={() => setEditing(null)}
-        onSubmit={(v) => {
-          if (v === null) { setEditing(null); return; }   // empty cancels rather than storing ""
-          run(() => settings.patch({ [editing]: String(v) }),
+        onSubmit={(value) => {
+          if (value === null) { setEditing(null); return; }   // empty cancels rather than storing ""
+          run(() => settings.patch({ [editing]: String(value) }),
             editing === 'github_token' ? checkGithub : `${label} saved`, editing);
         }}
       />
@@ -103,12 +103,12 @@ export function Keys({ api, onClose, onChanged }: {
       <SelectList
         choices={groupedChoices(creds ?? [])}
         initial={last}
-        onSelect={(n) => { setLast(n); setEditing(n); }}
+        onSelect={(name) => { setLast(name); setEditing(name); }}
         onCancel={onClose}
-        onKey={(ch, n) => {
-          if (ch !== 'd' || !n) return;
-          if (!stored.has(n)) { setNotice('nothing stored there to remove'); return; }
-          run(() => settings.clear(n), 'removed', n);
+        onKey={(char, name) => {
+          if (char !== 'd' || !name) return;
+          if (!stored.has(name)) { setNotice('nothing stored there to remove'); return; }
+          run(() => settings.clear(name), 'removed', name);
         }}
       />
     </Screen>

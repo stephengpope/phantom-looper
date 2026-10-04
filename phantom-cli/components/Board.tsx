@@ -40,13 +40,13 @@ export function Board({ store, width, height, isActive, onClose, card, confirm, 
   onArchived?: () => void;
 }) {
   const [, bump] = useState(0);
-  useEffect(() => store.subscribe(() => bump((n) => n + 1)), [store]);
+  useEffect(() => store.subscribe(() => bump((tick) => tick + 1)), [store]);
   // A running turn ages, so the board has to repaint even when nothing about
   // the card changed — the spinner's colour IS the warning, and without a tick
   // it would stay the colour it was born.
   useEffect(() => {
-    const t = setInterval(() => bump((n) => n + 1), TURN_AGE_TICK_MS);
-    return () => clearInterval(t);
+    const timer = setInterval(() => bump((tick) => tick + 1), TURN_AGE_TICK_MS);
+    return () => clearInterval(timer);
   }, []);
   // One load at open; from then on the store's event stream keeps it current.
   useEffect(() => { void store.load(); }, [store]);
@@ -69,21 +69,21 @@ export function Board({ store, width, height, isActive, onClose, card, confirm, 
   // for a column not drawn is a stale node with stale geometry).
   const shown = zoom && focusColName ? [focusColName] : columns;
 
-  const hit = (x: number, y: number): { col: string; row: number } | null => {
-    if (x >= width) return null; // the voice pane's side of the screen
+  const hit = (column: number, row: number): { col: string; row: number } | null => {
+    if (column >= width) return null; // the voice pane's side of the screen
     for (const col of shown) {
       const node = colRefs.current.get(col);
       if (!node) continue;
-      const m = measureElement(node);
-      if (x >= m.x && x < m.x + m.width && y >= m.y && y < m.y + m.height)
-        return { col, row: Math.max(0, y - m.y - HEADER_ROWS) };
+      const measured = measureElement(node);
+      if (column >= measured.x && column < measured.x + measured.width && row >= measured.y && row < measured.y + measured.height)
+        return { col, row: Math.max(0, row - measured.y - HEADER_ROWS) };
     }
     return null;
   };
 
-  const openEdit = (t: Card) => onOpenCard(t.number);
-  const clampRow = (ci: number, row: number) =>
-    Math.max(0, Math.min(store.cardsIn(columns[ci]).length - 1, row));
+  const openEdit = (card: Card) => onOpenCard(card.number);
+  const clampRow = (columnIndex: number, row: number) =>
+    Math.max(0, Math.min(store.cardsIn(columns[columnIndex]).length - 1, row));
   // A screen asked for from outside (the Assistant's "open card 7" / "expand
   // plan" / "show the board") — consumed once the board has data; before
   // that it waits.
@@ -92,12 +92,12 @@ export function Board({ store, width, height, isActive, onClose, card, confirm, 
     const req = store.consumeRequested();
     if (!req) return;
     if (req === 'board') { setZoom(false); return; }
-    const ci = columns.indexOf(req.column);
-    if (ci < 0) return;
+    const columnIndex = columns.indexOf(req.column);
+    if (columnIndex < 0) return;
     setZoom(true);
-    setFocus((f) => ({ col: ci, row: clampRow(ci, f.row) }));
+    setFocus((focus) => ({ col: columnIndex, row: clampRow(columnIndex, focus.row) }));
   });
-  useInput((ch, key) => {
+  useInput((char, key) => {
     // --- new-card title entry ---
     if (adding !== null) {
       if (key.return) {
@@ -106,36 +106,36 @@ export function Board({ store, width, height, isActive, onClose, card, confirm, 
         setAdding(null);
       } else if (key.escape) setAdding(null);
       else if (key.backspace || key.delete) setAdding(adding.slice(0, -1));
-      else if (ch && !key.ctrl && !key.meta) setAdding(adding + ch);
+      else if (char && !key.ctrl && !key.meta) setAdding(adding + char);
       return;
     }
     // --- mouse on the board ---
-    if (isMouseInput(ch)) {
-      const ev = parseMouse(ch);
-      if (!ev) return;
-      if (ev.kind === 'press' && ev.button === 0) {
-        const h = hit(ev.x, ev.y);
-        if (!h) return;
-        const cards = store.cardsIn(h.col);
-        const ci = columns.indexOf(h.col);
-        if (h.row < cards.length) {
-          setFocus({ col: ci, row: h.row });
-          setDrag({ cardId: cards[h.row].id, toCol: h.col, toRow: h.row, moved: false });
-        } else setFocus({ col: ci, row: Math.max(0, cards.length - 1) });
-      } else if (ev.kind === 'drag' && drag) {
-        const h = hit(ev.x, ev.y);
-        setDrag(h ? { ...drag, toCol: h.col, toRow: h.row, moved: true } : { ...drag, moved: true });
-      } else if (ev.kind === 'release' && drag) {
+    if (isMouseInput(char)) {
+      const mouse = parseMouse(char);
+      if (!mouse) return;
+      if (mouse.kind === 'press' && mouse.button === 0) {
+        const hitAt = hit(mouse.x, mouse.y);
+        if (!hitAt) return;
+        const cards = store.cardsIn(hitAt.col);
+        const columnIndex = columns.indexOf(hitAt.col);
+        if (hitAt.row < cards.length) {
+          setFocus({ col: columnIndex, row: hitAt.row });
+          setDrag({ cardId: cards[hitAt.row].id, toCol: hitAt.col, toRow: hitAt.row, moved: false });
+        } else setFocus({ col: columnIndex, row: Math.max(0, cards.length - 1) });
+      } else if (mouse.kind === 'drag' && drag) {
+        const hitAt = hit(mouse.x, mouse.y);
+        setDrag(hitAt ? { ...drag, toCol: hitAt.col, toRow: hitAt.row, moved: true } : { ...drag, moved: true });
+      } else if (mouse.kind === 'release' && drag) {
         if (drag.moved) {
           void store.move(drag.cardId, drag.toCol, drag.toRow);
           setFocus({ col: Math.max(0, columns.indexOf(drag.toCol)), row: drag.toRow });
         } else {
-          const clicked = store.state.cards.find((t) => t.id === drag.cardId);
+          const clicked = store.state.cards.find((card) => card.id === drag.cardId);
           if (clicked) openEdit(clicked);
         }
         setDrag(null);
-      } else if (ev.kind === 'wheel') {
-        setFocus((f) => ({ ...f, row: Math.max(0, Math.min(focusCards.length - 1, f.row + ev.button)) }));
+      } else if (mouse.kind === 'wheel') {
+        setFocus((focus) => ({ ...focus, row: Math.max(0, Math.min(focusCards.length - 1, focus.row + mouse.button)) }));
       }
       return;
     }
@@ -146,35 +146,35 @@ export function Board({ store, width, height, isActive, onClose, card, confirm, 
     // dropped — two ways to say the same thing made the footer unreadable);
     // tab/shift+tab move the card between columns, j/k (either case) within
     // its own.
-    if (key.leftArrow) setFocus((f) => { const c = Math.max(0, f.col - 1); return { col: c, row: clampRow(c, f.row) }; });
-    else if (key.rightArrow) setFocus((f) => { const c = Math.min(columns.length - 1, f.col + 1); return { col: c, row: clampRow(c, f.row) }; });
-    else if (key.downArrow) setFocus((f) => ({ ...f, row: clampRow(f.col, f.row + 1) }));
-    else if (key.upArrow) setFocus((f) => ({ ...f, row: clampRow(f.col, f.row - 1) }));
+    if (key.leftArrow) setFocus((focus) => { const column = Math.max(0, focus.col - 1); return { col: column, row: clampRow(column, focus.row) }; });
+    else if (key.rightArrow) setFocus((focus) => { const column = Math.min(columns.length - 1, focus.col + 1); return { col: column, row: clampRow(column, focus.row) }; });
+    else if (key.downArrow) setFocus((focus) => ({ ...focus, row: clampRow(focus.col, focus.row + 1) }));
+    else if (key.upArrow) setFocus((focus) => ({ ...focus, row: clampRow(focus.col, focus.row - 1) }));
     // Card moves land at the END of the target column: the row passed to
     // move() must be the real index past the last card (move computes pos
     // from the neighbours at that row — a huge row finds none and falls
     // through to pos 1, the top, while the focus went to the bottom row and
     // sat on the wrong card).
-    else if (key.tab && key.shift && focusCard && focus.col > 0) { const col = columns[focus.col - 1]; const end = store.cardsIn(col).length; void store.move(focusCard.id, col, end); setFocus((f) => ({ col: f.col - 1, row: end })); }
-    else if (key.tab && !key.shift && focusCard && focus.col < columns.length - 1) { const col = columns[focus.col + 1]; const end = store.cardsIn(col).length; void store.move(focusCard.id, col, end); setFocus((f) => ({ col: f.col + 1, row: end })); }
-    else if ((ch === 'j' || ch === 'J') && focusCard) { void store.move(focusCard.id, focusColName, focus.row + 2); setFocus((f) => ({ ...f, row: clampRow(f.col, f.row + 1) })); }
-    else if ((ch === 'k' || ch === 'K') && focusCard && focus.row > 0) { void store.move(focusCard.id, focusColName, focus.row - 1); setFocus((f) => ({ ...f, row: f.row - 1 })); }
+    else if (key.tab && key.shift && focusCard && focus.col > 0) { const col = columns[focus.col - 1]; const end = store.cardsIn(col).length; void store.move(focusCard.id, col, end); setFocus((focus) => ({ col: focus.col - 1, row: end })); }
+    else if (key.tab && !key.shift && focusCard && focus.col < columns.length - 1) { const col = columns[focus.col + 1]; const end = store.cardsIn(col).length; void store.move(focusCard.id, col, end); setFocus((focus) => ({ col: focus.col + 1, row: end })); }
+    else if ((char === 'j' || char === 'J') && focusCard) { void store.move(focusCard.id, focusColName, focus.row + 2); setFocus((focus) => ({ ...focus, row: clampRow(focus.col, focus.row + 1) })); }
+    else if ((char === 'k' || char === 'K') && focusCard && focus.row > 0) { void store.move(focusCard.id, focusColName, focus.row - 1); setFocus((focus) => ({ ...focus, row: focus.row - 1 })); }
     else if (key.return && focusCard) openEdit(focusCard);
-    else if (ch === 'n') setAdding('');
-    else if (ch === 'p' && focusCard) void store.update(focusCard.id, { pinned: !focusCard.pinned });
-    else if (ch === 'a' && focusCard) {
-      const t = focusCard;
-      void confirm(`archive #${t.number} ${t.title}?`, '[v] shows archived cards; [r] there restores it').then((yes) => {
+    else if (char === 'n') setAdding('');
+    else if (char === 'p' && focusCard) void store.update(focusCard.id, { pinned: !focusCard.pinned });
+    else if (char === 'a' && focusCard) {
+      const card = focusCard;
+      void confirm(`archive #${card.number} ${card.title}?`, '[v] shows archived cards; [r] there restores it').then((yes) => {
         if (!yes) return;
-        void store.update(t.id, { archived: true });
-        setFocus((f) => ({ ...f, row: clampRow(f.col, f.row) }));
+        void store.update(card.id, { archived: true });
+        setFocus((focus) => ({ ...focus, row: clampRow(focus.col, focus.row) }));
       });
     }
-    else if (ch === 'e' && focusColName) setZoom((z) => !z);
-    else if (ch === 'v') onArchived?.();
+    else if (char === 'e' && focusColName) setZoom((zoomed) => !zoomed);
+    else if (char === 'v') onArchived?.();
   }, { isActive: isActive && card === undefined });
 
-  const dragging = drag?.moved ? store.state.cards.find((t) => t.id === drag.cardId) : undefined;
+  const dragging = drag?.moved ? store.state.cards.find((card) => card.id === drag.cardId) : undefined;
 
   // ONE card-editor path, however the card was opened. esc is onCloseCard,
   // and the window decides where that lands. A card that is not on the
@@ -193,7 +193,7 @@ export function Board({ store, width, height, isActive, onClose, card, confirm, 
     );
   }
 
-  const cards = store.state.cards.filter((t) => !t.archived).length;
+  const cards = store.state.cards.filter((card) => !card.archived).length;
   return (
     <Box flexDirection="column" width={width} height={height}>
       <Box paddingX={1} justifyContent="space-between">
@@ -202,45 +202,45 @@ export function Board({ store, width, height, isActive, onClose, card, confirm, 
       </Box>
       <Box flexGrow={1}>
         {shown.map((col) => {
-          const ci = columns.indexOf(col);
+          const columnIndex = columns.indexOf(col);
           const cards = store.cardsIn(col);
           const isTarget = dragging && drag!.toCol === col;
           return (
-            <Box key={col} ref={(n) => { if (n) colRefs.current.set(col, n); }}
+            <Box key={col} ref={(node) => { if (node) colRefs.current.set(col, node); }}
               flexDirection="column" flexGrow={1} flexBasis={0}
-              borderStyle="round" borderColor={isTarget ? 'green' : ci === focus.col ? 'cyan' : 'gray'}
+              borderStyle="round" borderColor={isTarget ? 'green' : columnIndex === focus.col ? 'cyan' : 'gray'}
               paddingX={1} overflow="hidden">
-              <Text bold color={ci === focus.col ? 'cyan' : undefined}>
+              <Text bold color={columnIndex === focus.col ? 'cyan' : undefined}>
                 {STATUS_ICON[col]
                   ? <><Text color={STATUS_ICON[col].color}>{STATUS_ICON[col].char}</Text>{' '}</>
                   : null}
                 {col.replace(/_/g, ' ')} <Text dimColor>({cards.length})</Text>
               </Text>
               <Text> </Text>
-              {cards.map((t, ri) => {
-                const ghostHere = isTarget && ri === Math.min(drag!.toRow, cards.length - 1) && t.id !== dragging.id;
+              {cards.map((card, rowIndex) => {
+                const ghostHere = isTarget && rowIndex === Math.min(drag!.toRow, cards.length - 1) && card.id !== dragging.id;
                 // The whole row is the title: a blocked card is just red, card
                 // progress lives on the edit page — no suffixes eating width.
                 // The two-cell gutter: the drag ghost's ▸ first, else a
                 // spinner when the card's session is actively running, else a
                 // colored • for the git work state (red/yellow/green).
-                const lockedSince = store.state.cardLocked?.[t.number];
+                const lockedSince = store.state.cardLocked?.[card.number];
                 const locked = lockedSince != null;
                 const spinColor = turnAgeColor(lockedSince);
-                const work = store.state.cardWorkState?.[t.number];
+                const work = store.state.cardWorkState?.[card.number];
                 const WORK_COLOR: Record<string, string> = { not_pushed: 'red', not_merged: 'yellow', merged: 'green' };
                 const dotColor = work ? WORK_COLOR[work] : undefined;
-                const selected = ci === focus.col && ri === focus.row && !dragging;
+                const selected = columnIndex === focus.col && rowIndex === focus.row && !dragging;
                 return (
-                  <Text key={t.id} wrap="truncate"
+                  <Text key={card.id} wrap="truncate"
                     inverse={selected}
-                    dimColor={dragging?.id === t.id}
-                    color={ghostHere ? 'green' : t.blocked_reason ? 'red' : undefined}>
+                    dimColor={dragging?.id === card.id}
+                    color={ghostHere ? 'green' : card.blocked_reason ? 'red' : undefined}>
                     {ghostHere ? '▸ ' : locked
                       ? <><Text color={spinColor}><Spinner type="dots" /></Text>{' '}</>
                       : dotColor
                         ? <><Text color={dotColor} inverse={selected}>{'•'}</Text>{' '}</>
-                        : '  '}{t.number}-{t.title}{t.pinned ? ' 📌' : ''}
+                        : '  '}{card.number}-{card.title}{card.pinned ? ' 📌' : ''}
                   </Text>
                 );
               })}

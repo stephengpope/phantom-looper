@@ -23,22 +23,22 @@ const IMAGE_TYPES: Record<string, string> = {
 };
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 
-async function readText(f: FileTools, p: string): Promise<string> {
-  const r = await f.sandbox.readFile(p);
-  if (r.exitCode !== 0) {
-    if (/no such file/i.test(r.stderr)) throw new ToolError('not_found', `${p}: no such file`);
-    if (/is a directory/i.test(r.stderr)) throw new ToolError('is_directory', `${p} is a directory — use ls`);
-    throw new ToolError('internal', r.stderr.slice(0, 300));
+async function readText(files: FileTools, filePath: string): Promise<string> {
+  const read = await files.sandbox.readFile(filePath);
+  if (read.exitCode !== 0) {
+    if (/no such file/i.test(read.stderr)) throw new ToolError('not_found', `${filePath}: no such file`);
+    if (/is a directory/i.test(read.stderr)) throw new ToolError('is_directory', `${filePath} is a directory — use ls`);
+    throw new ToolError('internal', read.stderr.slice(0, 300));
   }
-  if (looksBinary(r.content)) {
-    throw new ToolError('binary_file', `${p} is binary (${r.content.length} bytes) — read handles text only`);
+  if (looksBinary(read.content)) {
+    throw new ToolError('binary_file', `${filePath} is binary (${read.content.length} bytes) — read handles text only`);
   }
-  return r.content.toString('utf8');
+  return read.content.toString('utf8');
 }
 
 /** Numbered presentation. Display only — edit takes raw text, never numbers. */
 function numbered(lines: string[], from: number): string {
-  return lines.map((l, i) => `${String(from + i).padStart(6)}\t${l}`).join('\n');
+  return lines.map((line, i) => `${String(from + i).padStart(6)}\t${line}`).join('\n');
 }
 
 function readRange(
@@ -47,13 +47,13 @@ function readRange(
   const lines = content.split('\n');
   const total = lines.length;
   const from = Math.max(1, offset);
-  let to = Math.min(total, from + limit - 1);
-  let slice = lines.slice(from - 1, to);
+  let last = Math.min(total, from + limit - 1);
+  let slice = lines.slice(from - 1, last);
   let text = numbered(slice, from);
-  let reason: Truncation['reason'] | null = to < total || from > 1 ? 'limit' : null;
+  let reason: Truncation['reason'] | null = last < total || from > 1 ? 'limit' : null;
   if (Buffer.byteLength(text) > maxBytes) {
     while (slice.length > 1 && Buffer.byteLength(numbered(slice, from)) > maxBytes) slice.pop();
-    to = from + slice.length - 1;
+    last = from + slice.length - 1;
     text = numbered(slice, from);
     reason = 'max_bytes';
   }
@@ -61,8 +61,8 @@ function readRange(
     return {
       text,
       truncated: {
-        reason, shown: { from, to }, total,
-        hint: to < total ? `call again with offset=${to + 1}` : 'showing a partial range',
+        reason, shown: { from, to: last }, total,
+        hint: last < total ? `call again with offset=${last + 1}` : 'showing a partial range',
       },
     };
   }
@@ -155,19 +155,19 @@ export const FILE_TOOLS: ToolDef[] = [
     }, ['path']),
     mutates: false, group: 'files', offered: hasFiles,
     async execute(ctx, a) {
-      const f = await ctx.files();
-      const p = s(a.path);
-      const ext = p.slice(p.lastIndexOf('.') + 1).toLowerCase();
+      const files = await ctx.files();
+      const filePath = s(a.path);
+      const ext = filePath.slice(filePath.lastIndexOf('.') + 1).toLowerCase();
       if (IMAGE_TYPES[ext]) {
-        const r = await f.sandbox.readFile(p);
-        if (r.exitCode !== 0) throw new ToolError('not_found', `${p}: no such file`);
-        if (r.content.length > MAX_IMAGE_BYTES) {
-          throw new ToolError('too_large', `${p} is ${r.content.length} bytes — image limit is ${MAX_IMAGE_BYTES}`);
+        const read = await files.sandbox.readFile(filePath);
+        if (read.exitCode !== 0) throw new ToolError('not_found', `${filePath}: no such file`);
+        if (read.content.length > MAX_IMAGE_BYTES) {
+          throw new ToolError('too_large', `${filePath} is ${read.content.length} bytes — image limit is ${MAX_IMAGE_BYTES}`);
         }
-        return { image: { media_type: IMAGE_TYPES[ext], base64: r.content.toString('base64'), bytes: r.content.length } };
+        return { image: { media_type: IMAGE_TYPES[ext], base64: read.content.toString('base64'), bytes: read.content.length } };
       }
-      const content = await readText(f, p);
-      const { text, truncated } = readRange(content, Number(a.offset ?? 1), Number(a.limit ?? 2000), f.limits.maxReadBytes);
+      const content = await readText(files, filePath);
+      const { text, truncated } = readRange(content, Number(a.offset ?? 1), Number(a.limit ?? 2000), files.limits.maxReadBytes);
       return truncated ? { content: text, truncated } : { content: text };
     },
   },
@@ -179,9 +179,9 @@ export const FILE_TOOLS: ToolDef[] = [
     input: obj({ path: str('File to write.'), content: str('Complete file content.') }, ['path', 'content']),
     mutates: true, group: 'files', offered: hasFiles,
     async execute(ctx, a) {
-      const p = s(a.path);
-      await (await ctx.files()).sandbox.writeFile(p, Buffer.from(s(a.content), 'utf8'));
-      return { path: Sandbox.resolvePath(p), bytes: Buffer.byteLength(s(a.content)) };
+      const filePath = s(a.path);
+      await (await ctx.files()).sandbox.writeFile(filePath, Buffer.from(s(a.content), 'utf8'));
+      return { path: Sandbox.resolvePath(filePath), bytes: Buffer.byteLength(s(a.content)) };
     },
   },
   {
@@ -209,11 +209,11 @@ export const FILE_TOOLS: ToolDef[] = [
     }, ['path']),
     mutates: true, group: 'files', offered: hasFiles,
     async execute(ctx, a) {
-      const f = await ctx.files();
-      const p = s(a.path);
-      const before = await readText(f, p).catch((e: ToolError) => {
-        if (e.code === 'not_found') throw new ToolError('not_found', `${p} does not exist — use write to create it`);
-        throw e;
+      const files = await ctx.files();
+      const filePath = s(a.path);
+      const before = await readText(files, filePath).catch((error: ToolError) => {
+        if (error.code === 'not_found') throw new ToolError('not_found', `${filePath} does not exist — use write to create it`);
+        throw error;
       });
       const list = Array.isArray(a.edits) && a.edits.length
         ? (a.edits as { old_string: unknown; new_string: unknown; replace_all?: unknown }[])
@@ -226,24 +226,24 @@ export const FILE_TOOLS: ToolDef[] = [
       let content = before;
       const applied: { strategy: string | null; replacements: number }[] = [];
       for (let i = 0; i < list.length; i++) {
-        const e = list[i];
-        const res = fuzzyFindAndReplace(content, s(e.old_string), s(e.new_string), Boolean(e.replace_all));
+        const entry = list[i];
+        const res = fuzzyFindAndReplace(content, s(entry.old_string), s(entry.new_string), Boolean(entry.replace_all));
         if (res.error) {
           const code = res.error.startsWith('Found ') ? 'not_unique' : 'no_match';
           const at = list.length > 1 ? `edits[${i}]: ` : '';
-          throw new ToolError(code, at + res.error + formatNoMatchHint(res.error, res.count, s(e.old_string), content));
+          throw new ToolError(code, at + res.error + formatNoMatchHint(res.error, res.count, s(entry.old_string), content));
         }
         content = res.content;
         applied.push({ strategy: res.strategy, replacements: res.count });
       }
-      await f.sandbox.writeFile(p, Buffer.from(content, 'utf8'));
-      const after = await readText(f, p);
+      await files.sandbox.writeFile(filePath, Buffer.from(content, 'utf8'));
+      const after = await readText(files, filePath);
       if (after !== content) {
         throw new ToolError('internal', 'post-write verification failed — re-read and retry', true);
       }
       return list.length > 1
-        ? { edits: applied, diff: unifiedDiff(p, before, content) }
-        : { replacements: applied[0].replacements, strategy: applied[0].strategy, diff: unifiedDiff(p, before, content) };
+        ? { edits: applied, diff: unifiedDiff(filePath, before, content) }
+        : { replacements: applied[0].replacements, strategy: applied[0].strategy, diff: unifiedDiff(filePath, before, content) };
     },
   },
   {
@@ -256,18 +256,18 @@ export const FILE_TOOLS: ToolDef[] = [
     }, []),
     mutates: false, group: 'files', offered: hasFiles,
     async execute(ctx, a) {
-      const p = Sandbox.resolvePath(s(a.path ?? '.'));
-      const r = await (await ctx.files()).sandbox.run(['ls', '-1Ap', p]);
-      if (r.exitCode !== 0) {
-        const e = r.stderr.toString('utf8');
-        if (/no such file/i.test(e)) throw new ToolError('not_found', `${p}: no such directory`);
-        if (/not a directory/i.test(e)) throw new ToolError('not_a_directory', `${p} is a file — use read`);
-        throw new ToolError('internal', e.slice(0, 300));
+      const dirPath = Sandbox.resolvePath(s(a.path ?? '.'));
+      const listed = await (await ctx.files()).sandbox.run(['ls', '-1Ap', dirPath]);
+      if (listed.exitCode !== 0) {
+        const stderrText = listed.stderr.toString('utf8');
+        if (/no such file/i.test(stderrText)) throw new ToolError('not_found', `${dirPath}: no such directory`);
+        if (/not a directory/i.test(stderrText)) throw new ToolError('not_a_directory', `${dirPath} is a file — use read`);
+        throw new ToolError('internal', stderrText.slice(0, 300));
       }
-      const all = r.stdout.toString('utf8').split('\n').filter(Boolean);
+      const all = listed.stdout.toString('utf8').split('\n').filter(Boolean);
       const lim = Math.max(1, Number(a.limit ?? 500));
       const entries = all.slice(0, lim);
-      const out: Record<string, unknown> = { path: p, entries };
+      const out: Record<string, unknown> = { path: dirPath, entries };
       if (all.length > entries.length) {
         out.truncated = { reason: 'limit', shown: { from: 1, to: entries.length }, total: all.length,
           hint: 'raise limit or list a subdirectory' } satisfies Truncation;
@@ -288,13 +288,13 @@ export const FILE_TOOLS: ToolDef[] = [
     }, ['pattern']),
     mutates: false, group: 'files', offered: hasFiles,
     async execute(ctx, a) {
-      const f = await ctx.files();
+      const fileTools = await ctx.files();
       const dir = Sandbox.resolvePath(s(a.path ?? '.'));
       const argv = ['rg', '--files', ...(a.include_ignored ? ['--no-ignore'] : []), '-g', s(a.pattern), dir];
-      const r = await f.sandbox.run(argv);
-      if (r.exitCode === 127) throw new ToolError('internal', 'ripgrep missing from workspace image — it is a required tool');
-      const all = r.stdout.toString('utf8').split('\n').filter(Boolean);
-      const files = all.slice(0, Math.max(1, Number(a.limit ?? f.limits.maxSearchResults)));
+      const ran = await fileTools.sandbox.run(argv);
+      if (ran.exitCode === 127) throw new ToolError('internal', 'ripgrep missing from workspace image — it is a required tool');
+      const all = ran.stdout.toString('utf8').split('\n').filter(Boolean);
+      const files = all.slice(0, Math.max(1, Number(a.limit ?? fileTools.limits.maxSearchResults)));
       const out: Record<string, unknown> = { files };
       if (all.length > files.length) {
         out.truncated = { reason: 'limit', shown: { from: 1, to: files.length }, total: all.length,
@@ -320,19 +320,19 @@ export const FILE_TOOLS: ToolDef[] = [
     }, ['pattern']),
     mutates: false, group: 'files', offered: hasFiles,
     async execute(ctx, a) {
-      const f = await ctx.files();
+      const fileTools = await ctx.files();
       const dir = Sandbox.resolvePath(s(a.path ?? '.'));
       const ctxLines = Math.max(0, Number(a.context ?? 0));
       const argv = ['rg', '--json', ...(a.ignore_case ? ['-i'] : []),
         ...(a.literal ? ['-F'] : []), ...(ctxLines ? ['-C', String(ctxLines)] : []),
         ...(a.glob ? ['-g', s(a.glob)] : []), '-e', s(a.pattern), dir];
-      const r = await f.sandbox.run(argv, { maxBytes: 8 * 1024 * 1024 });
-      if (r.exitCode === 127) throw new ToolError('internal', 'ripgrep missing from workspace image — it is a required tool');
-      if (r.exitCode === 2) throw new ToolError('invalid_args', r.stderr.toString('utf8').slice(0, 300));
-      const cap = Math.max(1, Number(a.limit ?? f.limits.maxSearchResults));
+      const ran = await fileTools.sandbox.run(argv, { maxBytes: 8 * 1024 * 1024 });
+      if (ran.exitCode === 127) throw new ToolError('internal', 'ripgrep missing from workspace image — it is a required tool');
+      if (ran.exitCode === 2) throw new ToolError('invalid_args', ran.stderr.toString('utf8').slice(0, 300));
+      const cap = Math.max(1, Number(a.limit ?? fileTools.limits.maxSearchResults));
       const matches: { file: string; line: number; content: string; context?: true }[] = [];
       let total = 0;
-      for (const lineText of r.stdout.toString('utf8').split('\n')) {
+      for (const lineText of ran.stdout.toString('utf8').split('\n')) {
         if (!lineText) continue;
         let j: { type?: string; data?: { path?: { text?: string }; line_number?: number; lines?: { text?: string } } };
         try { j = JSON.parse(lineText); } catch { continue; }

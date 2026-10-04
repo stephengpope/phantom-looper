@@ -33,19 +33,19 @@ export interface Entry {
 /** `?project=` reads and writes that project's layer. */
 export interface Scope { project?: string }
 
-const q = (s: Scope = {}) => (s.project ? `?project=${encodeURIComponent(s.project)}` : '');
+const projectQuery = (scope: Scope = {}) => (scope.project ? `?project=${encodeURIComponent(scope.project)}` : '');
 
 /** The settings client: one door for server settings and this machine's local
  *  ones. A read always asks its store; a write always routes by where the key
  *  lives. The returned values are for the operation in hand, never for keeping. */
 export function makeSettings(api: Api, configPath = CONFIG_PATH) {
   const all = (scope?: Scope) =>
-    api('GET', `/settings${q(scope)}`) as Promise<Record<string, Entry>>;
+    api('GET', `/settings${projectQuery(scope)}`) as Promise<Record<string, Entry>>;
   const remotePatch = (values: Record<string, ConfigValue>, scope?: Scope) =>
-    api('PATCH', `/settings${q(scope)}`, values) as Promise<{ updated: string[] }>;
+    api('PATCH', `/settings${projectQuery(scope)}`, values) as Promise<{ updated: string[] }>;
   const valuesOf = (entries: Record<string, Entry>): Record<string, ConfigValue> => {
     const out: Record<string, ConfigValue> = {};
-    for (const [k, v] of Object.entries(entries ?? {})) out[k] = v.value as ConfigValue;
+    for (const [key, entry] of Object.entries(entries ?? {})) out[key] = entry.value as ConfigValue;
     return out;
   };
 
@@ -69,15 +69,15 @@ export function makeSettings(api: Api, configPath = CONFIG_PATH) {
       if (scope) return remotePatch(values, scope);
       const remote: Record<string, ConfigValue> = {};
       const local: Array<[LocalKey, ConfigValue]> = [];
-      for (const [k, v] of Object.entries(values)) {
-        if (isLocalKey(k)) local.push([k, v]); else remote[k] = v;
+      for (const [key, value] of Object.entries(values)) {
+        if (isLocalKey(key)) local.push([key, value]); else remote[key] = value;
       }
       const result = Object.keys(remote).length ? await remotePatch(remote) : { updated: [] };
-      for (const [k, v] of local) {
-        const bad = v === null ? clearLocal(k, configPath) : setLocal(k, v, configPath);
+      for (const [key, value] of local) {
+        const bad = value === null ? clearLocal(key, configPath) : setLocal(key, value, configPath);
         if (bad) throw new Error(bad);
       }
-      return { updated: [...result.updated, ...local.map(([k]) => k)] };
+      return { updated: [...result.updated, ...local.map(([key]) => key)] };
     },
 
     /** Write one setting. null clears it at the store that owns it. */

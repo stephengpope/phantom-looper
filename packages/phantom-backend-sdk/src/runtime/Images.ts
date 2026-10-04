@@ -23,8 +23,8 @@ const log = logger('images');
 /** `vX.Y.Z` as a comparable triple; anything else (latest, dev, a digest)
  *  is not a release and never ordered. */
 const releaseOf = (tag: string): [number, number, number] | null => {
-  const m = /^v(\d+)\.(\d+)\.(\d+)$/.exec(tag);
-  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+  const match = /^v(\d+)\.(\d+)\.(\d+)$/.exec(tag);
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
 };
 const olderRelease = (a: [number, number, number], b: [number, number, number]): boolean =>
   a[0] !== b[0] ? a[0] < b[0] : a[1] !== b[1] ? a[1] < b[1] : a[2] < b[2];
@@ -72,16 +72,16 @@ export class PullTracker {
   private downloadHigh = 0;
 
   /** Fold one stream line in; true when it changed the picture. */
-  see(e: PullEvent): boolean {
-    const id = e.id;
+  see(event: PullEvent): boolean {
+    const id = event.id;
     if (!id) return false;
-    switch (e.status) {
+    switch (event.status) {
       case 'Pulling fs layer': this.layers.add(id); return true;
       case 'Already exists': this.existing.add(id); this.downloaded.add(id); return true;
       case 'Downloading': {
-        const total = e.progressDetail?.total;
+        const total = event.progressDetail?.total;
         if (!total) return false;
-        this.bytes.set(id, { current: e.progressDetail?.current ?? 0, total });
+        this.bytes.set(id, { current: event.progressDetail?.current ?? 0, total });
         return true;
       }
       case 'Download complete': {
@@ -127,21 +127,21 @@ export class Images {
    *  is unpacked and the tag is written: the image is on disk and usable.
    *  Attaches to an identical pull already running (its progress is reported
    *  too). */
-  pull(image: string, onProgress?: (p: PullProgress) => void): Promise<void> {
+  pull(image: string, onProgress?: (progress: PullProgress) => void): Promise<void> {
     const inflight = this.pulls.get(image);
     if (inflight) return inflight;
-    const p = (this.removal ?? Promise.resolve())
+    const pulling = (this.removal ?? Promise.resolve())
       .then(() => this.stream(image, onProgress))
       .then(() => log.info({ image }, 'image pulled'))
       .finally(() => this.pulls.delete(image));
-    this.pulls.set(image, p);
-    return p;
+    this.pulls.set(image, pulling);
+    return pulling;
   }
 
-  private stream(image: string, onProgress?: (p: PullProgress) => void): Promise<void> {
+  private stream(image: string, onProgress?: (progress: PullProgress) => void): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      this.docker.pull(image, (e: Error | null, stream: NodeJS.ReadableStream) => {
-        if (e) return reject(e);
+      this.docker.pull(image, (error: Error | null, stream: NodeJS.ReadableStream) => {
+        if (error) return reject(error);
         const tracker = new PullTracker();
         this.docker.modem.followProgress(
           stream,
@@ -174,11 +174,11 @@ export class Images {
   private async removeStale(currents: string[]): Promise<void> {
     const live = currents
       .map(splitRef)
-      .flatMap(({ repo, tag }) => { const r = releaseOf(tag); return r ? [{ repo, release: r }] : []; });
+      .flatMap(({ repo, tag }) => { const release = releaseOf(tag); return release ? [{ repo, release: release }] : []; });
     // An image a container still uses (running or stopped) cannot go —
     // Docker refuses. Skip it instead of asking and logging the refusal on
     // every sweep; it goes on the sweep after its last container does.
-    const inUse = new Set((await this.docker.listContainers({ all: true })).map((c) => c.ImageID));
+    const inUse = new Set((await this.docker.listContainers({ all: true })).map((container) => container.ImageID));
     const stale = new Set<string>();
     for (const img of await this.docker.listImages()) {
       if (inUse.has(img.Id)) continue;
@@ -186,13 +186,13 @@ export class Images {
         const { repo, tag } = splitRef(ref);
         const release = releaseOf(tag);
         if (!release) continue;
-        if (live.some((c) => c.repo === repo && olderRelease(release, c.release))) stale.add(ref);
+        if (live.some((live) => live.repo === repo && olderRelease(release, live.release))) stale.add(ref);
       }
     }
     for (const tag of stale) {
       await this.docker.getImage(tag).remove()
         .then(() => log.info({ image: tag }, 'old image removed'))
-        .catch((e) => log.warn({ image: tag, err: errStr(e) }, 'could not remove old image'));
+        .catch((error) => log.warn({ image: tag, err: errStr(error) }, 'could not remove old image'));
     }
   }
 }

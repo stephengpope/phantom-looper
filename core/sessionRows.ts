@@ -41,10 +41,10 @@ export interface SessionRow {
  *  opened it: the looper's ('coding'), a cron's, or a person's ('manual').
  *  A person typing into a cron's session makes it theirs. */
 export type Driver = 'supervisor' | 'coding' | 'cron' | 'assistant' | 'manual';
-export function whoDrives(s: Pick<SessionRow, 'agent' | 'startedBy' | 'lastTurnBy'>): Driver {
-  const by = s.lastTurnBy ?? s.startedBy;
-  return s.agent === 'supervisor' ? 'supervisor'
-    : s.agent === 'assistant' ? 'assistant'
+export function whoDrives(session: Pick<SessionRow, 'agent' | 'startedBy' | 'lastTurnBy'>): Driver {
+  const by = session.lastTurnBy ?? session.startedBy;
+  return session.agent === 'supervisor' ? 'supervisor'
+    : session.agent === 'assistant' ? 'assistant'
     : by === 'looper' ? 'coding'
     : by === 'cron' ? 'cron'
     : 'manual';
@@ -53,20 +53,20 @@ export function whoDrives(s: Pick<SessionRow, 'agent' | 'startedBy' | 'lastTurnB
 /** IS A TURN LIVE IN THIS SESSION. Two ways: a turn streaming in THIS host
  *  (`busy`), or someone else holding the lock — locks are per TURN, so a hold
  *  by anyone but us IS a turn running over there. An ended session never runs. */
-export function isRunning(s: SessionRow,
+export function isRunning(session: SessionRow,
   opts: { busy?: (sessionId: string) => boolean; clientId?: string } = {}): boolean {
-  if (s.status !== 'active') return false;
-  return (opts.busy?.(s.id) ?? false) || (!!s.locked && s.lockedBy !== (opts.clientId ?? ''));
+  if (session.status !== 'active') return false;
+  return (opts.busy?.(session.id) ?? false) || (!!session.locked && session.lockedBy !== (opts.clientId ?? ''));
 }
 
 /** "2h" — coarse on purpose; the exact minute never matters here. */
 export function ago(iso: string, now = Date.now()): string {
-  const s = Math.max(0, (now - Date.parse(iso)) / 1000);
-  if (s < 90) return 'now';
-  const m = s / 60;
-  if (m < 90) return `${Math.round(m)}m`;
-  const h = m / 60;
-  if (h < 36) return `${Math.round(h)}h`;
-  const d = Math.round(h / 24);
-  return d < 8 ? `${d}d` : `${Math.round(d / 7)}w`;
+  const seconds = Math.max(0, (now - Date.parse(iso)) / 1000);
+  if (seconds < 90) return 'now';
+  const minutes = seconds / 60;
+  if (minutes < 90) return `${Math.round(minutes)}m`;
+  const hours = minutes / 60;
+  if (hours < 36) return `${Math.round(hours)}h`;
+  const days = Math.round(hours / 24);
+  return days < 8 ? `${days}d` : `${Math.round(days / 7)}w`;
 }

@@ -8,20 +8,20 @@ import { useState } from 'react';
 function Probe() {
   const { exit } = useApp();
   const [lines, setLines] = useState<string[]>([]);
-  useInput((ch, key) => {
-    if (key.ctrl && ch === 'c') { exit(); return; }
+  useInput((char, key) => {
+    if (key.ctrl && char === 'c') { exit(); return; }
     const mods = [key.ctrl && 'ctrl', key.shift && 'shift', key.meta && 'alt'].filter(Boolean).join('+');
     const named = (['upArrow', 'downArrow', 'leftArrow', 'rightArrow', 'tab', 'return', 'escape',
-      'backspace', 'delete', 'pageUp', 'pageDown', 'home', 'end'] as const).find((k) => key[k]);
-    const name = named ?? (ch ? JSON.stringify(ch) : '(nothing)');
+      'backspace', 'delete', 'pageUp', 'pageDown', 'home', 'end'] as const).find((name) => key[name]);
+    const name = named ?? (char ? JSON.stringify(char) : '(nothing)');
     const label = mods ? `${mods}+${name}` : name;
-    setLines((l) => [...l.slice(-14), label]);
+    setLines((line) => [...line.slice(-14), label]);
   });
   return (
     <Box flexDirection="column">
       <Text>press any key — it prints what the TUI sees. ctrl+c quits.</Text>
       <Text> </Text>
-      {lines.map((l, i) => <Text key={i}>{`  ${l}`}</Text>)}
+      {lines.map((line, i) => <Text key={i}>{`  ${line}`}</Text>)}
     </Box>
   );
 }

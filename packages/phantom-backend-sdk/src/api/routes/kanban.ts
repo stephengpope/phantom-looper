@@ -18,8 +18,8 @@ const cardNumberParam = { type: 'integer', description: 'card number — PHA-7 i
 // session routes' lock reads the same one). Rides each card event so a
 // listener can tell the supervisor's moves from a person's.
 const writerOf = (req: FastifyRequest): string | undefined => {
-  const h = req.headers['x-phantom-looper-client'];
-  return typeof h === 'string' && h ? h : undefined;
+  const header = req.headers['x-phantom-looper-client'];
+  return typeof header === 'string' && header ? header : undefined;
 };
 
 // A whole-list write replaces the list: send it back with each item's key so
@@ -55,17 +55,17 @@ const itemsSchema = { type: 'array', minItems: 1, items: { type: 'object', addit
 
 // The schema must cover THE list (cards.ts) — a field added there without a
 // schema entry would be silently stripped by validation. Checked at load.
-for (const f of [...CARD_FIELDS, ...CARD_JSON_FIELDS]) {
-  if (!(f in cardBodyProps)) throw new Error(`cardBodyProps is missing '${f}' — the one field list must cover it`);
+for (const field of [...CARD_FIELDS, ...CARD_JSON_FIELDS]) {
+  if (!(field in cardBodyProps)) throw new Error(`cardBodyProps is missing '${field}' — the one field list must cover it`);
 }
 
 export function kanbanRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   const log = logger('kanban');
   const projectOf = (id: string) => ctx.projects.get(id);
   /** A card's own refusal, as the API's answer. */
-  const cardErr = (reply: { code: (n: number) => { send: (b: unknown) => unknown } }, e: unknown) => {
-    if (!(e instanceof CardError)) throw e;
-    return reply.code(e.code === 'not_found' ? 404 : 400).send(err(e.code, e.message));
+  const cardErr = (reply: { code: (status: number) => { send: (b: unknown) => unknown } }, error: unknown) => {
+    if (!(error instanceof CardError)) throw error;
+    return reply.code(error.code === 'not_found' ? 404 : 400).send(err(error.code, error.message));
   };
 
   // The resolved looper defaults ride every board payload so the card editor
@@ -88,10 +88,10 @@ export function kanbanRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // is the stored column the 10s refresh job maintains.
   const cardSessions = async (project: ProjectRow) => {
     const now = Date.now();
-    return (await ctx.sessions.codersByCard(project.id)).map((s) => ({
-      card: s.card, id: s.id, name: s.name,
-      locked: isHeld(s, now),
-      workState: s.workState }));
+    return (await ctx.sessions.codersByCard(project.id)).map((session) => ({
+      card: session.card, id: session.id, name: session.name,
+      locked: isHeld(session, now),
+      workState: session.workState }));
   };
 
   app.get<{ Params: { id: string };
@@ -122,13 +122,13 @@ export function kanbanRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         return ok({ ...await board(project), cards, total });
       }
       const rows = await ctx.cards.list(project, { includeArchived: req.query.archived === 'true' });
-      const cs = await cardSessions(project);
+      const sessionsByCard = await cardSessions(project);
       // card_work_state: where each card's work stands against base; card_locked:
       // whether the card's coding session is held right now.
       const cardWorkState: Record<number, string | null> = {};
       const cardLocked: Record<number, boolean> = {};
-      for (const c of cs) { if (c.workState) cardWorkState[c.card] = c.workState; if (c.locked) cardLocked[c.card] = true; }
-      return ok({ ...await board(project), cards: rows, card_sessions: cs.map(({ workState: _w, ...c }) => c),
+      for (const cardSession of sessionsByCard) { if (cardSession.workState) cardWorkState[cardSession.card] = cardSession.workState; if (cardSession.locked) cardLocked[cardSession.card] = true; }
+      return ok({ ...await board(project), cards: rows, card_sessions: sessionsByCard.map(({ workState: _workState, ...cardSession }: { workState: string | null; card: number; id: string; name: string | null; locked: boolean }) => cardSession),
         card_work_state: cardWorkState, card_locked: cardLocked });
     });
 
@@ -145,7 +145,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       // and the archive auto-push listen there, whichever door wrote.
       let card;
       try { card = await ctx.cards.create(project, req.body as CardFields & { title: string }, writerOf(req)); }
-      catch (e) { return cardErr(reply, e); }
+      catch (error) { return cardErr(reply, error); }
       return ok({ ...await board(project), card });
     });
 
@@ -163,7 +163,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       const { items, ...fields } = req.body as CardFields & { items?: ItemOp[] };
       let card;
       try { card = (await ctx.cards.update(project, req.params.number, fields, items, writerOf(req))).card; }
-      catch (e) { return cardErr(reply, e); }
+      catch (error) { return cardErr(reply, error); }
       return ok({ ...await board(project), card });
     });
 
@@ -208,7 +208,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       const project = await projectOf(req.params.id);
       if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
       reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
-      const write = (o: unknown) => { reply.raw.write(`${JSON.stringify(o)}\n`); };
+      const write = (record: unknown) => { reply.raw.write(`${JSON.stringify(record)}\n`); };
       const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
       const unsubscribe = ctx.boardEvents!.subscribe(project.id, write);
       write({ event: 'heartbeat' });

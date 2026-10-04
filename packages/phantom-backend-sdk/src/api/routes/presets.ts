@@ -19,9 +19,9 @@ export function presetRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     description: 'Every saved provider preset, ordered by name.' } },
   async () => {
     const rows = await ctx.presets.list();
-    return ok(rows.map((r) => ({
-      id: r.id, name: r.name, values: r.values,
-      created_at: r.createdAt.toISOString(), updated_at: r.updatedAt.toISOString(),
+    return ok(rows.map((row) => ({
+      id: row.id, name: row.name, values: row.values,
+      created_at: row.createdAt.toISOString(), updated_at: row.updatedAt.toISOString(),
     })));
   });
 
@@ -39,9 +39,9 @@ export function presetRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       try {
         const clean = await ctx.presets.save(req.params.id, name, values);
         return ok({ id: req.params.id, name, values: clean });
-      } catch (e) {
-        if (e instanceof PresetError) return reply.code(400).send(err(e.code, e.message));
-        throw e;
+      } catch (error) {
+        if (error instanceof PresetError) return reply.code(400).send(err(error.code, error.message));
+        throw error;
       }
     });
 

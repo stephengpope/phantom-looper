@@ -54,18 +54,18 @@ const firstArg = process.argv[2];
 
 /** The paired server as update.ts sees it — null when nothing is paired. */
 function pairedServer(): ServerLink | null {
-  const l = localValues();
-  if (!l.server_key || !l.server_url) return null;
-  const url = String(l.server_url);
-  const ca = savedCaFor(url);
-  const key = String(l.server_key);
-  return { url, call: apiFor(url, key, ca), stream: streamFor(url, key, ca) };
+  const local = localValues();
+  if (!local.server_key || !local.server_url) return null;
+  const url = String(local.server_url);
+  const certificateAuthority = savedCaFor(url);
+  const key = String(local.server_key);
+  return { url, call: apiFor(url, key, certificateAuthority), stream: streamFor(url, key, certificateAuthority) };
 }
 
 if (firstArg === '--version' || firstArg === '-v') {
   const server = pairedServer();
   const version = server
-    ? await server.call('GET', '/health').then((h) => String((h as { version?: string }).version ?? '') || null, () => null)
+    ? await server.call('GET', '/health').then((health) => String((health as { version?: string }).version ?? '') || null, () => null)
     : null;
   for (const line of versionLines(APP_VERSION, server ? { url: server.url, version } : null)) console.log(line);
   process.exit(0);
@@ -77,15 +77,15 @@ if (firstArg === '--version' || firstArg === '-v') {
 if (firstArg === 'install') {
   if (APP_VERSION === 'dev') die('a checkout runs from source — `install` is for a release build');
   try {
-    const r = installVersion(thisBuildDir());
-    console.log(`phantom-cli ${r.version} installed`);
-    for (const v of r.removed) console.log(`  removed ${v}`);
-  } catch (e) { die(`install failed: ${e instanceof Error ? e.message : String(e)}`); }
+    const installed = installVersion(thisBuildDir());
+    console.log(`phantom-cli ${installed.version} installed`);
+    for (const version of installed.removed) console.log(`  removed ${version}`);
+  } catch (error) { die(`install failed: ${error instanceof Error ? error.message : String(error)}`); }
   process.exit(0);
 }
 if (firstArg === 'update') {
   const flags = process.argv.slice(3);
-  const bad = flags.find((f) => f !== '--client' && f !== '--server');
+  const bad = flags.find((flag) => flag !== '--client' && flag !== '--server');
   if (bad) die(`unknown option ${bad}\nusage: phantom-cli update [--client] [--server]`);
   const target: Target = flags.includes('--client') && !flags.includes('--server') ? 'client'
     : flags.includes('--server') && !flags.includes('--client') ? 'server' : 'both';
@@ -96,7 +96,7 @@ if (firstArg === 'update') {
     installClient: selfUpdate,
     confirm: askYesNo,
     ...progressLines(),
-    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    sleep: (milliseconds) => new Promise((wake) => setTimeout(wake, milliseconds)),
     now: Date.now,
   });
   process.exit(code);
@@ -123,15 +123,15 @@ function progressLines(): Pick<UpdateDeps, 'out' | 'tick'> {
 
 /** One yes/no question on the terminal itself. No terminal — the answer is no. */
 async function askYesNo(question: string): Promise<boolean> {
-  let fd: number;
-  try { fd = openSync('/dev/tty', 'r+'); } catch { return false; }
+  let fileDescriptor: number;
+  try { fileDescriptor = openSync('/dev/tty', 'r+'); } catch { return false; }
   const { ReadStream } = await import('node:tty');
   const { createInterface } = await import('node:readline');
-  const input = new ReadStream(fd);
+  const input = new ReadStream(fileDescriptor);
   try {
-    const rl = createInterface({ input, output: process.stdout });
-    const answer = await new Promise<string>((r) => rl.question(question, r));
-    rl.close();
+    const readline = createInterface({ input, output: process.stdout });
+    const answer = await new Promise<string>((answer) => readline.question(question, answer));
+    readline.close();
     return /^y(es)?$/i.test(answer.trim());
   } finally { input.destroy(); }
 }
@@ -183,11 +183,11 @@ function versionWatch(): void {
     autoUpdate: localValues().auto_update !== false,
     latest: checkLatest,
     install: selfUpdate,
-  }).then((r) => {
-    latestRelease = r.latest;
-    if (r.installed) {
-      installedVersion = r.installed;
-      windowStore?.setUpdateReady(r.installed);
+  }).then((result) => {
+    latestRelease = result.latest;
+    if (result.installed) {
+      installedVersion = result.installed;
+      windowStore?.setUpdateReady(result.installed);
     }
   });
 }
@@ -203,17 +203,17 @@ await prelaunchReconcile({
   installClient: selfUpdate,
   confirm: askYesNo,
   ...progressLines(),
-  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  sleep: (milliseconds) => new Promise((wake) => setTimeout(wake, milliseconds)),
   now: Date.now,
   reexec: (version) => {
     // One hop, never a loop: the new process carries the marker, so a server
     // still ahead of it (ahead of the latest PUBLISHED release — a manual
     // tag) opens mismatched with the quit notice instead of re-execing forever.
     if (process.env.PHANTOM_CLI_REEXEC) return;
-    const r = spawnSync(join(APP_ROOT, version, 'bin', 'phantom-cli'), process.argv.slice(2), {
+    const spawned = spawnSync(join(APP_ROOT, version, 'bin', 'phantom-cli'), process.argv.slice(2), {
       stdio: 'inherit', env: { ...process.env, PHANTOM_CLI_REEXEC: '1' },
     });
-    process.exit(r.status ?? 0);
+    process.exit(spawned.status ?? 0);
   },
 });
 
@@ -233,7 +233,7 @@ export const autoPullSession = (sessionId: string, onStep?: (label: string) => v
 // The server's version, for the quit-time staleness notice. Fire-and-forget:
 // offline just means no notice.
 void api('GET', '/health')
-  .then((h) => { serverVersion = String((h as { version?: string }).version ?? ''); })
+  .then((health) => { serverVersion = String((health as { version?: string }).version ?? ''); })
   .catch(() => { /* unreachable is its own, louder failure elsewhere */ });
 
 const argv = process.argv.slice(2);
@@ -281,7 +281,7 @@ const CPR_DRAIN_MS = 150;
 // newline — and hands it to the next reader, the shell. That is the leak.
 const drainCpr = async (): Promise<void> => {
   try { process.stdin.setRawMode(true); } catch { /* not a tty */ }
-  await new Promise((r) => setTimeout(r, CPR_DRAIN_MS));
+  await new Promise((wake) => setTimeout(wake, CPR_DRAIN_MS));
   try { process.stdin.setRawMode(false); } catch { /* not a tty */ }
 };
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () => {
@@ -301,14 +301,14 @@ const CLI_LOG = CLI_LOG_PATH;
 const origConsole = { log: console.log, info: console.info, warn: console.warn, error: console.error, debug: console.debug };
 const origStderrWrite = process.stderr.write.bind(process.stderr);
 const toLog = logLine;
-for (const m of ['log', 'info', 'warn', 'error', 'debug'] as const) {
+for (const method of ['log', 'info', 'warn', 'error', 'debug'] as const) {
   // util.format, as console itself does: React's warnings are printf-style
   // ("same key, `%s`"), and a plain join logged the placeholder, not the key.
-  console[m] = (...args: unknown[]) => toLog(format(...args));
+  console[method] = (...args: unknown[]) => toLog(format(...args));
 }
-process.stderr.write = ((chunk: string | Uint8Array, enc?: unknown, cb?: unknown): boolean => {
+process.stderr.write = ((chunk: string | Uint8Array, enc?: unknown, callback?: unknown): boolean => {
   toLog(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
-  const done = typeof enc === 'function' ? enc : cb;
+  const done = typeof enc === 'function' ? enc : callback;
   if (typeof done === 'function') done();
   return true;
 }) as typeof process.stderr.write;
@@ -348,7 +348,7 @@ const app = render(
     autoPull={autoPullSession}
     boot={{ ...(resumeId ? { resumeId } : {}) }}
     backend={() => server.backend()}
-    onSession={(s) => { currentId = s.id; }}
+    onSession={(session) => { currentId = session.id; }}
     onWindow={(store) => { windowStore = store; if (installedVersion) store.setUpdateReady(installedVersion); }}
     clientId={CLIENT_ID}
     screen={screen}

@@ -26,8 +26,8 @@ export const SKILL_TOOLS: ToolDef[] = [
     input: obj({}),
     mutates: false, group: 'skills', offered: hasRepo,
     execute(ctx) {
-      const d = deps(ctx);
-      return listSkills(ctx.app, d.fs, ctx.session, d.workspaceId);
+      const skillDeps = deps(ctx);
+      return listSkills(ctx.app, skillDeps.fs, ctx.session, skillDeps.workspaceId);
     },
   },
   {
@@ -43,8 +43,8 @@ export const SKILL_TOOLS: ToolDef[] = [
     }, ['name']),
     mutates: false, group: 'skills', offered: hasRepo,
     execute(ctx, a) {
-      const d = deps(ctx);
-      return loadSkill(ctx.app, d.fs, ctx.session, d.workspaceId, String(a.name), a.file === undefined ? undefined : String(a.file));
+      const skillDeps = deps(ctx);
+      return loadSkill(ctx.app, skillDeps.fs, ctx.session, skillDeps.workspaceId, String(a.name), a.file === undefined ? undefined : String(a.file));
     },
   },
   {
@@ -76,8 +76,8 @@ export const SKILL_TOOLS: ToolDef[] = [
     }, ['action', 'name']),
     mutates: true, group: 'skills', offered: hasRepo,
     execute(ctx, a) {
-      const d = deps(ctx);
-      return manageSkill(ctx.app, d.fs, ctx.session, d.workspaceId, a as unknown as ManageBody);
+      const skillDeps = deps(ctx);
+      return manageSkill(ctx.app, skillDeps.fs, ctx.session, skillDeps.workspaceId, a as unknown as ManageBody);
     },
   },
 ];

@@ -90,7 +90,7 @@ export interface PhantomBackendConfig {
   onStop?: (backend: PhantomBackend) => Promise<void>;
   /** Write a session's title from the selected user messages — a model
    *  call, the app's until the backend makes it on the client SDK's billed
-   *  model (docs/phantom-agent-sdk-plan.md). The cadence, the selection and
+   *  model (docs/v1-plan.md). The cadence, the selection and
    *  the write-back are the SDK's (SessionTitler). */
   writeTitle?: TitleWriter;
   /** The Telegram command menu the bot registers: the global default and
@@ -274,7 +274,7 @@ export class PhantomBackend {
       await checkoutPool.tick(this.projects, this.settings, this.paths).catch((error) => log.error({ err: errStr(error) }, 'pool tick threw'));
       await idleBackupSweep(this.projects, this.sessions, this.git.sync).catch((error) => log.error({ err: errStr(error) }, 'idle backup sweep threw'));
       const idleMs = await this.settings.resolve<number>('container_idle_ms').catch(() => 30 * 60_000);
-      await this.sessionContainers.reap(Number(idleMs), (ms) => this.idleContainerWorkspaces(ms)).catch((error) => log.error({ err: errStr(error) }, 'container reap threw'));
+      await this.sessionContainers.reap(Number(idleMs), (idleMs) => this.idleContainerWorkspaces(idleMs)).catch((error) => log.error({ err: errStr(error) }, 'container reap threw'));
       await pressureSweep(this.settings, this.projects, this.sessions, this.paths, this.images, this.sessionContainers, this.git.sync, (ids) => this.busyWorkspaces(ids))
         .catch((error) => log.error({ err: errStr(error) }, 'pressure sweep threw'));
       return Number(await this.settings.resolve<number>('maintenance_interval_ms').catch(() => 60_000));
@@ -337,4 +337,4 @@ interface Built {
   telegramBotState: TelegramBotState; telegramSentMessages: TelegramSentMessages; telegramHandledUpdates: TelegramHandledUpdates;
 }
 
-const sleep = (ms: number) => new Promise<void>((wake) => setTimeout(wake, ms));
+const sleep = (milliseconds: number) => new Promise<void>((wake) => setTimeout(wake, milliseconds));

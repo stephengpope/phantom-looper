@@ -22,10 +22,10 @@ export const APP_VERSION: string = process.env.APP_VERSION ?? 'dev';
 export const API_IMAGE: string = process.env.API_IMAGE ?? 'ghcr.io/stephengpope/phantom-backend-api';
 
 export function readEnv(source: NodeJS.ProcessEnv = process.env): Env {
-  const need = (k: string): string => {
-    const v = source[k];
-    if (!v) throw new Error(`${k} is required (see .env.example)`);
-    return v;
+  const need = (name: string): string => {
+    const value = source[name];
+    if (!value) throw new Error(`${name} is required (see .env.example)`);
+    return value;
   };
   const rawKey = need('ENCRYPTION_KEY');
   const encryptionKey = Buffer.from(rawKey, 'base64');

@@ -138,11 +138,11 @@ export class SessionContainers {
    *  prefix is checked again here.) */
   async activeWorkspaces(): Promise<string[]> {
     const list = await this.docker.listContainers({ filters: { name: [NAME_PREFIX], status: ['running'] } })
-      .catch((e) => { log.warn({ err: errStr(e) }, 'could not list containers'); return []; });
-    return list.flatMap((c) => (c.Names ?? [])
-      .map((n) => n.replace(/^\//, ''))
-      .filter((n) => n.startsWith(NAME_PREFIX))
-      .map((n) => n.slice(NAME_PREFIX.length)));
+      .catch((error) => { log.warn({ err: errStr(error) }, 'could not list containers'); return []; });
+    return list.flatMap((container) => (container.Names ?? [])
+      .map((name) => name.replace(/^\//, ''))
+      .filter((name) => name.startsWith(NAME_PREFIX))
+      .map((name) => name.slice(NAME_PREFIX.length)));
   }
 
   /** The running container for a WORKSPACE, created if absent. Containers
@@ -153,19 +153,19 @@ export class SessionContainers {
   async ensure(workspaceId: string, project: ProjectRow | undefined): Promise<Docker.Container> {
     const existing = this.inflight.get(workspaceId);
     if (existing) return existing;
-    const p = this.ensureInner(workspaceId, project).finally(() => this.inflight.delete(workspaceId));
-    this.inflight.set(workspaceId, p);
-    return p;
+    const ensuring = this.ensureInner(workspaceId, project).finally(() => this.inflight.delete(workspaceId));
+    this.inflight.set(workspaceId, ensuring);
+    return ensuring;
   }
 
   private async ensureInner(key: string, project: ProjectRow | undefined): Promise<Docker.Container> {
-    const c = this.docker.getContainer(this.name(key));
+    const container = this.docker.getContainer(this.name(key));
     try {
-      const info = await c.inspect();
-      if (info.State.Running) return c;
+      const info = await container.inspect();
+      if (info.State.Running) return container;
       // Stopped or exited: it holds nothing, so recreate rather than reason
       // about resume states.
-      await c.remove({ force: true, v: true }).catch(() => {});
+      await container.remove({ force: true, v: true }).catch(() => {});
     } catch { /* no such container */ }
 
     if (!this.opts.settings) throw new Error('SessionContainers needs settings to create a container');
@@ -191,12 +191,12 @@ export class SessionContainers {
     let created: Docker.Container;
     try {
       created = await this.docker.createContainer(spec);
-    } catch (e) {
+    } catch (error) {
       // "No such image": pull it and try once more. The default image is the
       // published workspace image at this server's own version, so a fresh
       // box (or one just upgraded) has nothing local until here. Any other
       // failure surfaces as-is.
-      if ((e as { statusCode?: number }).statusCode !== 404) throw e;
+      if ((error as { statusCode?: number }).statusCode !== 404) throw error;
       log.info({ workspace: key, image }, 'workspace image not present — pulling');
       await this.images.pull(String(image));
       created = await this.docker.createContainer(spec);
@@ -204,7 +204,7 @@ export class SessionContainers {
     await created.start();
     log.info({ workspace: key, image }, 'workspace container started');
     await this.opts.onStarted?.(key, project)
-      .catch((e) => log.warn({ workspace: key, err: errStr(e) }, 'onStarted listener failed — container is up regardless'));
+      .catch((error) => log.warn({ workspace: key, err: errStr(error) }, 'onStarted listener failed — container is up regardless'));
     return created;
   }
 
@@ -251,11 +251,11 @@ export class SessionContainers {
    *  goal; any other failure throws, so no caller logs a removal that did
    *  not happen. */
   async remove(workspaceId: string): Promise<void> {
-    await this.docker.getContainer(this.name(workspaceId)).remove({ force: true, v: true }).catch((e) => {
-      if ((e as { statusCode?: number }).statusCode !== 404) throw e;
+    await this.docker.getContainer(this.name(workspaceId)).remove({ force: true, v: true }).catch((error) => {
+      if ((error as { statusCode?: number }).statusCode !== 404) throw error;
     });
     await this.opts.onRemoved?.(workspaceId)
-      .catch((e) => log.warn({ workspace: workspaceId, err: errStr(e) }, 'onRemoved listener failed'));
+      .catch((error) => log.warn({ workspace: workspaceId, err: errStr(error) }, 'onRemoved listener failed'));
   }
 
   /** Kill idle containers. `idleWorkspaces` answers from the workspace's lastUsedAt,
@@ -266,8 +266,8 @@ export class SessionContainers {
       try {
         await this.remove(workspaceId);
         log.info({ workspace: workspaceId }, 'idle workspace container removed');
-      } catch (e) {
-        log.warn({ workspace: workspaceId, err: errStr(e) }, 'idle workspace container could not be removed');
+      } catch (error) {
+        log.warn({ workspace: workspaceId, err: errStr(error) }, 'idle workspace container could not be removed');
       }
     }
   }

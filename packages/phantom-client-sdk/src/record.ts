@@ -35,9 +35,9 @@ export class SessionRecord {
 
   /** Read the whole record from the server. */
   static async load(backend: BackendClient, sessionId: string): Promise<SessionRecord> {
-    const r = await backend.call<TranscriptReply>('GET', `/sessions/${sessionId}/transcript`);
-    const lines = parseLines(r.data ?? '');
-    return new SessionRecord(backend, sessionId, lines, r.lines, r.updated_at);
+    const reply = await backend.call<TranscriptReply>('GET', `/sessions/${sessionId}/transcript`);
+    const lines = parseLines(reply.data ?? '');
+    return new SessionRecord(backend, sessionId, lines, reply.lines, reply.updated_at);
   }
 
   /** The server's last-changed mark for the copy held here. */
@@ -47,12 +47,12 @@ export class SessionRecord {
 
   /** Someone else wrote: read only the lines after ours and add them. */
   async catchUp(signal?: AbortSignal): Promise<TranscriptLine[]> {
-    const r = await this.backend.call<TranscriptReply>('GET',
+    const reply = await this.backend.call<TranscriptReply>('GET',
       `/sessions/${this.sessionId}/transcript?after=${this.#count}`, undefined, { signal });
-    const more = parseLines(r.data ?? '');
+    const more = parseLines(reply.data ?? '');
     this.#hold(more);
-    this.#count = r.lines;
-    this.#stamp = r.updated_at;
+    this.#count = reply.lines;
+    this.#stamp = reply.updated_at;
     return more;
   }
 
@@ -74,19 +74,19 @@ export class SessionRecord {
 
   async #send(lines: TranscriptLine[]): Promise<void> {
     const after = this.#count;
-    let r: { lines: number; applied: boolean; updated_at: string };
+    let reply: { lines: number; applied: boolean; updated_at: string };
     try {
-      r = await this.backend.call('POST', `/sessions/${this.sessionId}/transcript/append`, { after, deliveryId: lineId(), lines });
-    } catch (e) {
-      if (e instanceof PhantomError && e.code === 'transcript_conflict') throw e;
-      throw new PhantomError('transcript_write_failed', `transcript append failed: ${(e as Error).message}`, { cause: e });
+      reply = await this.backend.call('POST', `/sessions/${this.sessionId}/transcript/append`, { after, deliveryId: lineId(), lines });
+    } catch (error) {
+      if (error instanceof PhantomError && error.code === 'transcript_conflict') throw error;
+      throw new PhantomError('transcript_write_failed', `transcript append failed: ${(error as Error).message}`, { cause: error });
     }
-    if (r.lines !== after + lines.length) {
+    if (reply.lines !== after + lines.length) {
       throw new PhantomError('transcript_conflict',
-        `transcript has ${r.lines} lines on the server, expected ${after + lines.length} — another writer moved it`);
+        `transcript has ${reply.lines} lines on the server, expected ${after + lines.length} — another writer moved it`);
     }
-    this.#count = r.lines;
-    this.#stamp = r.updated_at;
+    this.#count = reply.lines;
+    this.#stamp = reply.updated_at;
     this.#hold(lines);
   }
 }

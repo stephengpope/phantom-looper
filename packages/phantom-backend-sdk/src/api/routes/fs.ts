@@ -42,7 +42,7 @@ export function killSid(sandbox: Sandbox, sid: string): Promise<unknown> {
     'pkill -TERM -s "$0" 2>/dev/null; sleep 1; ' +
     'pgrep -s "$0" >/dev/null 2>&1 && pkill -KILL -s "$0" 2>/dev/null; exit 0';
   return sandbox.run(['/bin/sh', '-c', script, sid], { timeoutMs: 15_000 })
-    .catch((e) => log.warn({ err: errStr(e) }, 'kill of command group failed'));
+    .catch((error) => log.warn({ err: errStr(error) }, 'kill of command group failed'));
 }
 
 // ---- live tasks: what the container is actually running ---------------------
@@ -63,9 +63,9 @@ export interface PsRow { pid: string; sid: string; elapsed: string; args: string
  *  alone (sid = pid) rather than the parse failing. args is everything after
  *  the fixed columns, spaces preserved. */
 export function parsePs(out: string): PsRow[] {
-  const lines = out.split('\n').filter((l) => l.trim() !== '');
+  const lines = out.split('\n').filter((line) => line.trim() !== '');
   if (!lines.length) return [];
-  const titles = lines[0].trim().split(/\s+/).map((t) => t.toUpperCase());
+  const titles = lines[0].trim().split(/\s+/).map((title) => title.toUpperCase());
   // args/command is last and open-ended; everything before it is one token.
   const fixed = titles.length - 1;
   const col = (name: string) => titles.indexOf(name);
@@ -75,15 +75,15 @@ export function parsePs(out: string): PsRow[] {
   if (iPid < 0) return [];
   const rows: PsRow[] = [];
   for (const line of lines.slice(1)) {
-    const m = line.trim().split(/\s+/);
-    if (m.length <= fixed) continue;
-    const args = m.slice(fixed).join(' ');
-    const pid = m[iPid] ?? '';
+    const columns = line.trim().split(/\s+/);
+    if (columns.length <= fixed) continue;
+    const args = columns.slice(fixed).join(' ');
+    const pid = columns[iPid] ?? '';
     if (!/^\d+$/.test(pid)) continue;
     rows.push({
       pid,
-      sid: iSid >= 0 && /^\d+$/.test(m[iSid] ?? '') ? m[iSid] : pid,
-      elapsed: iElapsed >= 0 ? (m[iElapsed] ?? '') : '',
+      sid: iSid >= 0 && /^\d+$/.test(columns[iSid] ?? '') ? columns[iSid] : pid,
+      elapsed: iElapsed >= 0 ? (columns[iElapsed] ?? '') : '',
       args,
     });
   }
@@ -95,9 +95,9 @@ export function parsePs(out: string): PsRow[] {
  *  vocabulary: an untracked task's start time is derived from this, so every
  *  row speaks one field. */
 export function elapsedSeconds(etime: string): number | null {
-  const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(etime.trim());
-  if (!m) return null;
-  return Number(m[1] ?? 0) * 86_400 + Number(m[2] ?? 0) * 3_600 + Number(m[3]) * 60 + Number(m[4]);
+  const match = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(etime.trim());
+  if (!match) return null;
+  return Number(match[1] ?? 0) * 86_400 + Number(match[2] ?? 0) * 3_600 + Number(match[3]) * 60 + Number(match[4]);
 }
 
 export interface LiveGroup { sid: string; command: string; elapsed: string; pids: number }
@@ -108,24 +108,24 @@ export interface LiveGroup { sid: string; command: string; elapsed: string; pids
  *  would otherwise appear as a task on every read. */
 export function liveGroups(rows: PsRow[]): LiveGroup[] {
   const bySid = new Map<string, PsRow[]>();
-  for (const r of rows) {
-    if (r.sid === '1') continue;
-    const g = bySid.get(r.sid);
-    if (g) g.push(r); else bySid.set(r.sid, [r]);
+  for (const row of rows) {
+    if (row.sid === '1') continue;
+    const group = bySid.get(row.sid);
+    if (group) group.push(row); else bySid.set(row.sid, [row]);
   }
   const groups: LiveGroup[] = [];
-  for (const [sid, g] of bySid) {
-    const leader = g.find((r) => r.pid === r.sid) ?? g[0];
-    if (g.length === 1 && leader.args === PS_ARGV.join(' ')) continue;
-    groups.push({ sid, command: leader.args, elapsed: leader.elapsed, pids: g.length });
+  for (const [sid, group] of bySid) {
+    const leader = group.find((row) => row.pid === row.sid) ?? group[0];
+    if (group.length === 1 && leader.args === PS_ARGV.join(' ')) continue;
+    groups.push({ sid, command: leader.args, elapsed: leader.elapsed, pids: group.length });
   }
   return groups;
 }
 
 /** The live groups of a container, one ps. */
 export async function probeGroups(sandbox: Sandbox): Promise<LiveGroup[]> {
-  const r = await sandbox.run(PS_ARGV, { timeoutMs: 15_000 });
-  return liveGroups(parsePs(r.stdout.toString('utf8')));
+  const ran = await sandbox.run(PS_ARGV, { timeoutMs: 15_000 });
+  return liveGroups(parsePs(ran.stdout.toString('utf8')));
 }
 
 /** The command a row ran, as the user typed it: argv is ['/bin/sh','-c',cmd]. */
@@ -144,7 +144,7 @@ const SID_CAPTURE_GRACE_MS = 15_000;
 export async function reconcileRunning(
   ctx: PhantomBackend, running: BackgroundTaskRow[], groups: LiveGroup[],
 ): Promise<void> {
-  const live = new Set(groups.map((g) => g.sid));
+  const live = new Set(groups.map((group) => group.sid));
   const now = Date.now();
   for (const row of running) {
     if (row.sid && live.has(row.sid)) continue;
@@ -225,11 +225,11 @@ async function runBash(
     };
     try {
       // Collect generously; shape() keeps the tail.
-      const r = await sandbox.run(wrapped, { cwd: args.cwd, timeoutMs, maxBytes: 16 * 1024 * 1024 });
-      return { exitCode: r.exitCode, ...(await shape(r.stdout, r.stderr)) };
-    } catch (e) {
-      const te = e as { code?: string; stdout?: Buffer; stderr?: Buffer };
-      if (te.code === 'exec_timeout') {
+      const ran = await sandbox.run(wrapped, { cwd: args.cwd, timeoutMs, maxBytes: 16 * 1024 * 1024 });
+      return { exitCode: ran.exitCode, ...(await shape(ran.stdout, ran.stderr)) };
+    } catch (error) {
+      const timedOut = error as { code?: string; stdout?: Buffer; stderr?: Buffer };
+      if (timedOut.code === 'exec_timeout') {
         // The sandbox timeout only tore down the stream; the process is
         // still running. Same kill as an esc — orphans were the old bug.
         void killProcessGroup(sandbox, pidfile);
@@ -237,9 +237,9 @@ async function runBash(
         // before it died rides in detail, shaped like a normal result.
         throw new ToolError('exec_timeout',
           `command killed after ${timeoutMs}ms; its output so far is in detail. If it is expected to take longer and is not waiting for input, retry with a larger timeout (or detached=true for something meant to keep running).`,
-          true, await shape(te.stdout ?? Buffer.alloc(0), te.stderr ?? Buffer.alloc(0)));
+          true, await shape(timedOut.stdout ?? Buffer.alloc(0), timedOut.stderr ?? Buffer.alloc(0)));
       }
-      throw e;
+      throw error;
     } finally {
       signal?.removeEventListener('abort', onAbort);
       ctx.foregroundCommands.remove(session.id, pidfile);
@@ -267,10 +267,10 @@ async function runBash(
         if (rec.event === 'exit') exitCode = rec.code ?? -1;
         if (rec.event === 'error') status = 'killed';
       }
-    } catch (e) {
+    } catch (error) {
       status = 'orphaned';
       out.write(JSON.stringify({ seq: -1, event: 'error', reason: 'container_gone' }) + '\n');
-      log.warn({ taskId, err: errStr(e) }, 'detached stream died');
+      log.warn({ taskId, err: errStr(error) }, 'detached stream died');
     } finally {
       out.end();
       void ctx.sessions.touch(session); // a long detached command is activity, seen only here at its end
@@ -294,10 +294,10 @@ async function runBash(
     const script =
       's=""; for i in 1 2 3 4 5 6 7 8 9 10; do s=$(cat "$0" 2>/dev/null) && [ -n "$s" ] && break; sleep 0.3; done; ' +
       'rm -f "$0"; printf %s "$s"';
-    const r = await sandbox.run(['/bin/sh', '-c', script, sidfile], { timeoutMs: 10_000 });
-    const sid = r.stdout.toString('utf8').trim();
+    const ran = await sandbox.run(['/bin/sh', '-c', script, sidfile], { timeoutMs: 10_000 });
+    const sid = ran.stdout.toString('utf8').trim();
     if (/^\d+$/.test(sid)) await ctx.backgroundTasks.setSid(taskId, sid);
-  })().catch((e) => log.warn({ taskId, err: errStr(e) }, 'detached sid capture failed'));
+  })().catch((error) => log.warn({ taskId, err: errStr(error) }, 'detached sid capture failed'));
   // log_file is the CONTAINER path — the one place the agent can actually
   // read it (the /background-tasks/:id/logs HTTP route is for API clients, which the
   // agent is not). Same mapping as the unary spill file above.
@@ -319,25 +319,25 @@ function noticeOf(row: BackgroundTaskRow): string {
   return `[background] task ${row.id} ${what}`;
 }
 
-const shapeBackgroundTask = (r: BackgroundTaskRow) => ({
-  background_task_id: r.id, command: commandTextFromArgv(r.argv), status: r.status,
-  exit_code: r.exitCode, started_at: r.startedAt, ended_at: r.endedAt,
-  log_file: `/workspace/logs/${r.id}.ndjson`,
+const shapeBackgroundTask = (row: BackgroundTaskRow) => ({
+  background_task_id: row.id, command: commandTextFromArgv(row.argv), status: row.status,
+  exit_code: row.exitCode, started_at: row.startedAt, ended_at: row.endedAt,
+  log_file: `/workspace/logs/${row.id}.ndjson`,
 });
 
 async function taskList(ctx: PhantomBackend, sandbox: Sandbox, session: SessionRow): Promise<unknown> {
   const rows = await ctx.backgroundTasks.listForSession(session.id, 20);
-  const running = rows.filter((r) => r.status === 'running');
+  const running = rows.filter((row) => row.status === 'running');
   if (running.length) {
     // Reconcile on read so `running` is the truth. A failed ps SKIPS it —
     // rows still answer unreconciled rather than live commands being closed
     // on a bad reading.
     try { await reconcileRunning(ctx, running, await probeGroups(sandbox)); }
-    catch (e) { log.warn({ err: errStr(e) }, 'task_list reconcile skipped — ps failed'); }
+    catch (error) { log.warn({ err: errStr(error) }, 'task_list reconcile skipped — ps failed'); }
   }
   return {
-    running: rows.filter((r) => r.status === 'running').map(shapeBackgroundTask),
-    recent: rows.filter((r) => r.status !== 'running').slice(0, 10).map(shapeBackgroundTask),
+    running: rows.filter((row) => row.status === 'running').map(shapeBackgroundTask),
+    recent: rows.filter((row) => row.status !== 'running').slice(0, 10).map(shapeBackgroundTask),
   };
 }
 
@@ -356,7 +356,7 @@ async function taskWait(ctx: PhantomBackend, session: SessionRow, taskId: string
   let row = await ownBackgroundTask(ctx, session, taskId);
   const deadline = Date.now() + Math.min(Math.max(0, timeoutMs), WAIT_MAX_MS);
   while (row.status === 'running' && Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 1_000));
+    await new Promise((wake) => setTimeout(wake, 1_000));
     row = await ownBackgroundTask(ctx, session, taskId);
   }
   if (row.status === 'running') {
@@ -383,12 +383,12 @@ async function taskKill(ctx: PhantomBackend, sandbox: Sandbox, session: SessionR
  *  from the end — a dev server's log can run for hours. */
 async function tailLog(logPath: string, lines: number): Promise<string[]> {
   try {
-    const st = await fsp.stat(logPath);
-    const from = Math.max(0, st.size - 16_384);
-    const fh = await fsp.open(logPath, 'r');
+    const stat = await fsp.stat(logPath);
+    const from = Math.max(0, stat.size - 16_384);
+    const fileHandle = await fsp.open(logPath, 'r');
     try {
-      const buf = Buffer.alloc(st.size - from);
-      await fh.read(buf, 0, buf.length, from);
+      const buf = Buffer.alloc(stat.size - from);
+      await fileHandle.read(buf, 0, buf.length, from);
       const out: string[] = [];
       for (const line of buf.toString('utf8').split('\n')) {
         if (!line) continue;
@@ -399,7 +399,7 @@ async function tailLog(logPath: string, lines: number): Promise<string[]> {
         } catch { /* the window's partial first line */ }
       }
       return out.slice(-lines);
-    } finally { await fh.close(); }
+    } finally { await fileHandle.close(); }
   } catch { return []; }
 }
 
@@ -412,8 +412,8 @@ export async function fileTools(ctx: PhantomBackend, deps: FsDeps, session: Sess
   let container;
   try {
     container = await deps.sessionContainers.ensure(workspaceId, project);
-  } catch (e) {
-    throw new ToolError('container_start_failed', (e as Error).message, true);
+  } catch (error) {
+    throw new ToolError('container_start_failed', (error as Error).message, true);
   }
   const sandbox = new Sandbox(deps.docker, container);
   const readLimits = await ctx.settings.resolveMany(['max_read_bytes', 'max_search_results']);

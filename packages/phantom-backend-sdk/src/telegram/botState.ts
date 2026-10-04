@@ -30,29 +30,29 @@ const EMPTY: TelegramBotStateRow = { mode: 'assistant', activeSessionId: null, a
   webhookSecret: null, webhookUrl: null, botUsername: null };
 
 export class TelegramBotState {
-  constructor(private readonly db: Drizzle, private readonly encryptionKey: Buffer) {}
+  constructor(private readonly database: Drizzle, private readonly encryptionKey: Buffer) {}
 
   /** The one row, created on first read. */
   async read(): Promise<TelegramBotStateRow> {
-    const rows = await this.db.select().from(telegramBotState).where(eq(telegramBotState.id, 1));
+    const rows = await this.database.select().from(telegramBotState).where(eq(telegramBotState.id, 1));
     if (!rows.length) {
-      await this.db.insert(telegramBotState).values({ id: 1 }).onConflictDoNothing();
+      await this.database.insert(telegramBotState).values({ id: 1 }).onConflictDoNothing();
       return { ...EMPTY };
     }
-    const r = rows[0];
+    const row = rows[0];
     let webhookSecret: string | null = null;
-    if (r.webhookSecretEnc) {
-      try { webhookSecret = decrypt(this.encryptionKey, r.webhookSecretEnc); } catch { /* re-mint on next register */ }
+    if (row.webhookSecretEnc) {
+      try { webhookSecret = decrypt(this.encryptionKey, row.webhookSecretEnc); } catch { /* re-mint on next register */ }
     }
     return {
-      mode: r.mode === 'code' ? 'code' : 'assistant',
-      activeSessionId: r.activeSessionId, activeProjectId: r.activeProjectId,
-      webhookSecret, webhookUrl: r.webhookUrl, botUsername: r.botUsername,
+      mode: row.mode === 'code' ? 'code' : 'assistant',
+      activeSessionId: row.activeSessionId, activeProjectId: row.activeProjectId,
+      webhookSecret, webhookUrl: row.webhookUrl, botUsername: row.botUsername,
     };
   }
 
   private async patch(values: Partial<typeof telegramBotState.$inferInsert>): Promise<void> {
-    await this.db.insert(telegramBotState).values({ id: 1, ...values })
+    await this.database.insert(telegramBotState).values({ id: 1, ...values })
       .onConflictDoUpdate({ target: telegramBotState.id, set: values });
   }
 

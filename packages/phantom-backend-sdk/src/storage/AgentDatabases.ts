@@ -78,22 +78,22 @@ export function locate(sql: string, position: string): SqlErrorLocation {
  *  override applies to the type's array too. Scoped to the agent's
  *  connection: our own pool keeps its own. */
 const SAFE = BigInt(Number.MAX_SAFE_INTEGER);
-const asIs = (v: string) => v;
+const asIs = (value: string) => value;
 /** A number when exact, the digits otherwise — never a wrong number. */
-const bigint = (v: string) => { const b = BigInt(v); return b <= SAFE && b >= -SAFE ? Number(b) : v; };
-const T = pg.types.builtins;
+const bigint = (value: string) => { const b = BigInt(value); return b <= SAFE && b >= -SAFE ? Number(b) : value; };
+const TYPES = pg.types.builtins;
 // element OID -> [parser, array OID]. Postgres's text is kept where the
 // driver's parse would add a claim the value never made (a zone) or a shape
 // nobody asked for.
-const OVERRIDES: Record<number, [(v: string) => unknown, number]> = {
-  [T.INT8]: [bigint, 1016],
-  [T.DATE]: [asIs, 1182],       // YYYY-MM-DD
-  [T.BYTEA]: [asIs, 1001],      // \x hex
-  [T.TIMESTAMP]: [asIs, 1115],  // no zone, so no Z: "2026-09-19 20:11:51.051"
-  [T.INTERVAL]: [asIs, 1187],   // "1 day 02:00:00"
+const OVERRIDES: Record<number, [(value: string) => unknown, number]> = {
+  [TYPES.INT8]: [bigint, 1016],
+  [TYPES.DATE]: [asIs, 1182],       // YYYY-MM-DD
+  [TYPES.BYTEA]: [asIs, 1001],      // \x hex
+  [TYPES.TIMESTAMP]: [asIs, 1115],  // no zone, so no Z: "2026-09-19 20:11:51.051"
+  [TYPES.INTERVAL]: [asIs, 1187],   // "1 day 02:00:00"
 };
 const ARRAY_OF = Object.fromEntries(Object.entries(OVERRIDES).map(([oid, [parse, arr]]) => [arr, parse])) as
-  Record<number, (v: string) => unknown>;
+  Record<number, (value: string) => unknown>;
 const AGENT_TYPES: pg.CustomTypesConfig = {
   getTypeParser: (oid, format) => {
     if (format === 'binary') return pg.types.getTypeParser(oid, format);
@@ -105,17 +105,17 @@ const AGENT_TYPES: pg.CustomTypesConfig = {
 };
 
 /** The cell the agent sees: strings past the cap end in the true length. */
-function cell(v: unknown, maxCellChars: number): unknown {
-  if (typeof v === 'string' && v.length > maxCellChars) return `${v.slice(0, maxCellChars)}…[truncated, ${v.length} chars]`;
-  if (v !== null && typeof v === 'object' && !(v instanceof Date)) {
-    const s = JSON.stringify(v);
-    if (s.length > maxCellChars) return `${s.slice(0, maxCellChars)}…[truncated, ${s.length} chars]`;
+function cell(value: unknown, maxCellChars: number): unknown {
+  if (typeof value === 'string' && value.length > maxCellChars) return `${value.slice(0, maxCellChars)}…[truncated, ${value.length} chars]`;
+  if (value !== null && typeof value === 'object' && !(value instanceof Date)) {
+    const json = JSON.stringify(value);
+    if (json.length > maxCellChars) return `${json.slice(0, maxCellChars)}…[truncated, ${json.length} chars]`;
   }
-  return v;
+  return value;
 }
 
-const quoteIdent = (s: string) => `"${s.replaceAll('"', '""')}"`;
-const quoteLiteral = (s: string) => `'${s.replaceAll("'", "''")}'`;
+const quoteIdent = (identifier: string) => `"${identifier.replaceAll('"', '""')}"`;
+const quoteLiteral = (literal: string) => `'${literal.replaceAll("'", "''")}'`;
 
 export class AgentDatabases {
   /** Projects whose database and role this process has already ensured. */
@@ -149,11 +149,11 @@ export class AgentDatabases {
   }
 
   private connectionString(projectId: string): string {
-    const u = new URL(this.server.toString());
-    u.username = this.nameOf(projectId);
-    u.password = this.passwordOf(projectId);
-    u.pathname = `/${this.nameOf(projectId)}`;
-    return u.toString();
+    const url = new URL(this.server.toString());
+    url.username = this.nameOf(projectId);
+    url.password = this.passwordOf(projectId);
+    url.pathname = `/${this.nameOf(projectId)}`;
+    return url.toString();
   }
 
   /** The role and database exist and the role's password is current. Once
@@ -163,11 +163,11 @@ export class AgentDatabases {
     if (this.ready.has(projectId)) return;
     const inflight = this.ensuring.get(projectId);
     if (inflight) return inflight;
-    const p = this.ensureInner(projectId)
+    const ensuring = this.ensureInner(projectId)
       .then(() => { this.ready.add(projectId); })
       .finally(() => this.ensuring.delete(projectId));
-    this.ensuring.set(projectId, p);
-    return p;
+    this.ensuring.set(projectId, ensuring);
+    return ensuring;
   }
 
   private async ensureInner(projectId: string): Promise<void> {
@@ -211,7 +211,7 @@ export class AgentDatabases {
    *  dropped past `limit`, so the server never holds a result bigger than
    *  what was asked for. Rows come back as arrays with the field list, so a
    *  duplicate column name is refused instead of silently overwriting. */
-  async query(projectId: string, sql: string, o: QueryOptions): Promise<StatementResult[]> {
+  async query(projectId: string, sql: string, options: QueryOptions): Promise<StatementResult[]> {
     await this.ensure(projectId);
     const client = new pg.Client({
       connectionString: this.connectionString(projectId), connectionTimeoutMillis: 5000, types: AGENT_TYPES,
@@ -225,36 +225,36 @@ export class AgentDatabases {
       // object identifies which statement the row belongs to.
       const kept = new Map<pg.Result, unknown[][]>();
       const results = await new Promise<pg.Result[]>((resolve, reject) => {
-        const config: pg.QueryArrayConfig = { text: sql, values: o.params, rowMode: 'array' };
-        const q = new pg.Query(config);
-        q.on('row', (row, result) => {
+        const config: pg.QueryArrayConfig = { text: sql, values: options.params, rowMode: 'array' };
+        const query = new pg.Query(config);
+        query.on('row', (row, result) => {
           if (!result) return;
           const rows = kept.get(result) ?? [];
-          if (rows.length < o.limit) rows.push(row as unknown[]);
+          if (rows.length < options.limit) rows.push(row as unknown[]);
           kept.set(result, rows);
         });
-        q.on('end', (r) => resolve(Array.isArray(r) ? r : [r]));
-        q.on('error', reject);
-        client.query(q);
+        query.on('end', (results) => resolve(Array.isArray(results) ? results : [results]));
+        query.on('error', reject);
+        client.query(query);
       });
-      return results.map((r) => {
-        const names = r.fields.map((f) => f.name);
-        const dup = names.find((n, i) => names.indexOf(n) !== i);
+      return results.map((result) => {
+        const names = result.fields.map((field) => field.name);
+        const dup = names.find((name, i) => names.indexOf(name) !== i);
         if (dup) throw new SqlError(`duplicate column name "${dup}" — alias one of them so both values come back`, {});
-        const rows = (kept.get(r) ?? []).map((row) =>
-          Object.fromEntries(names.map((n, i) => [n, cell(row[i], o.maxCellChars)])));
-        return { command: r.command, rowCount: r.rowCount, rows };
+        const rows = (kept.get(result) ?? []).map((row) =>
+          Object.fromEntries(names.map((name, i) => [name, cell(row[i], options.maxCellChars)])));
+        return { command: result.command, rowCount: result.rowCount, rows };
       });
-    } catch (e) {
-      if (e instanceof SqlError) throw e;
-      const pe = e as { message: string; code?: string; detail?: string; hint?: string; position?: string;
+    } catch (error) {
+      if (error instanceof SqlError) throw error;
+      const pgError = error as { message: string; code?: string; detail?: string; hint?: string; position?: string;
         table?: string; column?: string; constraint?: string };
       // Postgres errors carry a SQLSTATE; anything else (connection) is ours.
-      if (!pe.code) throw e;
-      throw new SqlError(pe.message, {
-        code: pe.code, detail: pe.detail, hint: pe.hint,
-        table: pe.table, column: pe.column, constraint: pe.constraint,
-        at: pe.position ? locate(sql, pe.position) : undefined,
+      if (!pgError.code) throw error;
+      throw new SqlError(pgError.message, {
+        code: pgError.code, detail: pgError.detail, hint: pgError.hint,
+        table: pgError.table, column: pgError.column, constraint: pgError.constraint,
+        at: pgError.position ? locate(sql, pgError.position) : undefined,
       });
     } finally {
       await client.end().catch(() => {});

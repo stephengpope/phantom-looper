@@ -31,8 +31,8 @@ export interface ChecklistItem { key?: string; text: string; done?: boolean }
 /** Keys are lowercase. Models echo them cased ("K7F2", "Three" for a v8 key
  *  "three") — so any key coming in, on a write or a tick, passes through
  *  this first and case can never miss. */
-export const normalizeKey = (k: string): string =>
-  k.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+export const normalizeKey = (key: string): string =>
+  key.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
 const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 export const newKey = (): string =>
@@ -43,10 +43,10 @@ export const newKey = (): string =>
  *  items, and re-id a duplicate so a key names exactly one item. */
 export function keyedItems(items: ChecklistItem[]): { key: string; text: string; done: boolean }[] {
   const used = new Set<string>();
-  return items.map((it) => {
-    let key = (it.key && normalizeKey(it.key)) || newKey();
+  return items.map((item) => {
+    let key = (item.key && normalizeKey(item.key)) || newKey();
     while (used.has(key)) key = newKey();
     used.add(key);
-    return { key, text: it.text, done: it.done ?? false };
+    return { key, text: item.text, done: item.done ?? false };
   });
 }

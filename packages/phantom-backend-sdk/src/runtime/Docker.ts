@@ -7,8 +7,8 @@ import Docker from 'dockerode';
 
 export function makeDocker(): Docker {
   if (process.env.DOCKER_HOST) return new Docker();
-  for (const p of ['/var/run/docker.sock', path.join(os.homedir(), '.docker/run/docker.sock')]) {
-    if (fs.existsSync(p)) return new Docker({ socketPath: p });
+  for (const socketPath of ['/var/run/docker.sock', path.join(os.homedir(), '.docker/run/docker.sock')]) {
+    if (fs.existsSync(socketPath)) return new Docker({ socketPath: socketPath });
   }
   return new Docker(); // dockerode's own default; fails loudly at first use
 }

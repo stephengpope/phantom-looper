@@ -31,15 +31,15 @@ const SETUP_STALE_MS = 30 * 60_000;
 async function listDir(dir: string): Promise<string[]> {
   try { return await fs.readdir(dir); } catch { return []; }
 }
-const rm = (p: string) => fs.rm(p, { recursive: true, force: true }).catch(() => {});
+const remove = (target: string) => fs.rm(target, { recursive: true, force: true }).catch(() => {});
 
 /** Credential resolution: project PAT -> global PAT -> unauthenticated. The
  *  specific overrides the general, same chain philosophy as settings. */
 // The chain — this project's token, else the global one, else unauthenticated
 // — is no longer written out here. It is `github_token` resolved through the
 // same layers every other setting uses.
-export async function resolveAuth(settings: Settings, r: ProjectRow): Promise<GitAuth> {
-  return { url: remoteUrl(r.owner, r.name), pat: await settings.credential('github_token', { projectId: r.id }) };
+export async function resolveAuth(settings: Settings, project: ProjectRow): Promise<GitAuth> {
+  return { url: remoteUrl(project.owner, project.name), pat: await settings.credential('github_token', { projectId: project.id }) };
 }
 
 /** Claim a ready slot for a project into `dest`. The claim is a RENAME and nothing
@@ -47,14 +47,14 @@ export async function resolveAuth(settings: Settings, r: ProjectRow): Promise<Gi
  *  one wins, the other gets ENOENT and takes the next or falls through to a
  *  clone at the call site. */
 export async function claimSlot(
-  p: Paths, owner: string, name: string, branch: string, dest: string,
+  paths: Paths, owner: string, name: string, branch: string, dest: string,
 ): Promise<boolean> {
   const prefix = slotPrefix(owner, name, branch);
-  for (const slot of await listDir(p.poolReady)) {
+  for (const slot of await listDir(paths.poolReady)) {
     if (!slot.startsWith(prefix)) continue;
     try {
       await fs.mkdir(path.dirname(dest), { recursive: true });
-      await fs.rename(path.join(p.poolReady, slot), dest);
+      await fs.rename(path.join(paths.poolReady, slot), dest);
       log.info({ dest, slot }, 'claimed a warm checkout');
       return true;
     } catch {
@@ -71,7 +71,7 @@ let ticking = false;
 /** Reconcile the pool to what it should be. Everything that is not claiming
  *  happens here; claiming has no side effects, so a session can never be
  *  slowed by maintenance work. */
-export async function tick(projects: Projects, settings: Settings, p: Paths): Promise<void> {
+export async function tick(projects: Projects, settings: Settings, paths: Paths): Promise<void> {
   if (ticking) return;
   ticking = true;
   try {
@@ -79,25 +79,25 @@ export async function tick(projects: Projects, settings: Settings, p: Paths): Pr
     // but with no list we cannot distinguish "project removed" from "db down",
     // so we also must not delete anything. Just stop.
     let projectRows: ProjectRow[];
-    try { projectRows = await projects.list(); } catch (e) {
-      log.warn({ err: errStr(e) }, 'skipping pool tick — could not read projects');
+    try { projectRows = await projects.list(); } catch (error) {
+      log.warn({ err: errStr(error) }, 'skipping pool tick — could not read projects');
       return;
     }
 
     const now = Date.now();
     // Abandoned clones: being in setup/ at all means unfinished; age is the only question.
-    for (const slot of await listDir(p.poolSetup)) {
-      const st = await fs.stat(path.join(p.poolSetup, slot)).catch(() => null);
-      if (!st || now - st.mtimeMs > SETUP_STALE_MS) await rm(path.join(p.poolSetup, slot));
+    for (const slot of await listDir(paths.poolSetup)) {
+      const stat = await fs.stat(path.join(paths.poolSetup, slot)).catch(() => null);
+      if (!stat || now - stat.mtimeMs > SETUP_STALE_MS) await remove(path.join(paths.poolSetup, slot));
     }
 
-    const wanted = new Map(projectRows.map((r) => [slotPrefix(r.owner, r.name, r.baseBranch), r]));
-    const ready = await listDir(p.poolReady);
+    const wanted = new Map(projectRows.map((project) => [slotPrefix(project.owner, project.name, project.baseBranch), project]));
+    const ready = await listDir(paths.poolReady);
 
     // Slots for projects we no longer serve.
     for (const slot of ready) {
       const prefix = slot.slice(0, slot.lastIndexOf('__') + 2);
-      if (!wanted.has(prefix)) await rm(path.join(p.poolReady, slot));
+      if (!wanted.has(prefix)) await remove(path.join(paths.poolReady, slot));
     }
 
     // Per-project maintenance, concurrently across projects — one at a time globally
@@ -110,7 +110,7 @@ export async function tick(projects: Projects, settings: Settings, p: Paths): Pr
         spare_clone_max_age_ms: maxAgeMs, initial_history_depth: depth } = cfg;
       const auth = await resolveAuth(settings, project);
 
-      let mine = ready.filter((s) => s.startsWith(prefix));
+      let mine = ready.filter((slot) => slot.startsWith(prefix));
 
       // Evict past spare_clone_max_age — a re-clone is always correct, and the shallow
       // boundary (cut at stock time, never moved) stays honest without graft
@@ -119,8 +119,8 @@ export async function tick(projects: Projects, settings: Settings, p: Paths): Pr
         let stocked = 0;
         try { stocked = idTime(slotUlid(slot)); } catch { /* not a ulid -> evict */ }
         if (now - stocked > maxAgeMs) {
-          await rm(path.join(p.poolReady, slot));
-          mine = mine.filter((s) => s !== slot);
+          await remove(path.join(paths.poolReady, slot));
+          mine = mine.filter((slot) => slot !== slot);
         }
       }
 
@@ -128,49 +128,49 @@ export async function tick(projects: Projects, settings: Settings, p: Paths): Pr
       // this can change how much that fetch pulls, never whether it is correct.
       // A slot that will not refresh is discarded, not repaired.
       for (const slot of [...mine]) {
-        const full = path.join(p.poolReady, slot);
-        const st = await fs.stat(full).catch(() => null);
-        if (!st) { mine = mine.filter((s) => s !== slot); continue; }
-        if (now - st.mtimeMs < refreshMs) continue;
+        const full = path.join(paths.poolReady, slot);
+        const stat = await fs.stat(full).catch(() => null);
+        if (!stat) { mine = mine.filter((slot) => slot !== slot); continue; }
+        if (now - stat.mtimeMs < refreshMs) continue;
         try {
           await refreshPristine(path.join(full, 'repo'), auth, project.baseBranch);
           await fs.utimes(full, new Date(), new Date());
-        } catch (e) {
-          log.warn({ slot, err: errStr(e) }, 'ready checkout would not refresh — discarding');
-          await rm(full);
-          mine = mine.filter((s) => s !== slot);
+        } catch (error) {
+          log.warn({ slot, err: errStr(error) }, 'ready checkout would not refresh — discarding');
+          await remove(full);
+          mine = mine.filter((slot) => slot !== slot);
         }
       }
 
       // Restock one per project per tick.
       if (mine.length < target) {
         const slot = `${prefix}${newId()}`;
-        const staging = path.join(p.poolSetup, slot);
+        const staging = path.join(paths.poolSetup, slot);
         try {
           await fs.mkdir(path.join(staging), { recursive: true });
           await cloneFresh(path.join(staging, 'repo'), auth, project.baseBranch, depth);
           await fs.mkdir(path.join(staging, 'scratch'), { recursive: true });
-          await fs.mkdir(p.poolReady, { recursive: true });
+          await fs.mkdir(paths.poolReady, { recursive: true });
           // Only NOW is it usable, and the rename is what says so.
-          await fs.rename(staging, path.join(p.poolReady, slot));
+          await fs.rename(staging, path.join(paths.poolReady, slot));
           log.info({ project: `${project.owner}/${project.name}`, have: mine.length + 1, want: target }, 'stocked a warm checkout');
-        } catch (e) {
-          log.warn({ project: `${project.owner}/${project.name}`, err: errStr(e) }, 'could not stock a warm checkout');
-          await rm(staging);
+        } catch (error) {
+          log.warn({ project: `${project.owner}/${project.name}`, err: errStr(error) }, 'could not stock a warm checkout');
+          await remove(staging);
         }
       }
     }));
-  } catch (e) {
-    log.error({ err: errStr(e) }, 'pool tick failed');
+  } catch (error) {
+    log.error({ err: errStr(error) }, 'pool tick failed');
   } finally {
     ticking = false;
   }
 }
 
 /** Anything in setup/ predates this process, so by definition its clone died. */
-export async function bootCleanup(p: Paths): Promise<void> {
-  await rm(p.poolSetup);
-  await fs.mkdir(p.poolSetup, { recursive: true });
-  await fs.mkdir(p.poolReady, { recursive: true });
-  await fs.mkdir(p.work, { recursive: true });
+export async function bootCleanup(paths: Paths): Promise<void> {
+  await remove(paths.poolSetup);
+  await fs.mkdir(paths.poolSetup, { recursive: true });
+  await fs.mkdir(paths.poolReady, { recursive: true });
+  await fs.mkdir(paths.work, { recursive: true });
 }

@@ -44,11 +44,11 @@ interface PresetKey { key: string; label: string; choices?: readonly string[]; g
 type PresetGroup = Block<PresetKey>;
 export function presetGroups(entries: Record<string, Entry>): PresetGroup[] {
   const keys = Object.entries(entries)
-    .filter(([, e]) => e.meta.subgroup === 'model' && e.meta.group)
-    .map(([key, e]): PresetKey => ({ key, label: e.meta.label ?? key, choices: e.meta.choices, group: e.meta.group! }));
-  return groupBlocks(keys, (k) => k);
+    .filter(([, entry]) => entry.meta.subgroup === 'model' && entry.meta.group)
+    .map(([key, entry]): PresetKey => ({ key, label: entry.meta.label ?? key, choices: entry.meta.choices, group: entry.meta.group! }));
+  return groupBlocks(keys, (key) => key);
 }
-const allKeys = (groups: PresetGroup[]) => groups.flatMap((g) => g.items.map((k) => k.key));
+const allKeys = (groups: PresetGroup[]) => groups.flatMap((group) => group.items.map((key) => key.key));
 
 export interface Preset { id: string; name: string; values: Record<string, unknown> }
 
@@ -69,17 +69,17 @@ type View =
 
 /** A summary cell: the value, or the system's empty-cell glyph (as /resume
  *  draws a missing model) — never a dot used as a SEPARATOR between facts. */
-const cell = (v: unknown): string => (typeof v === 'string' ? v : '·');
+const cell = (value: unknown): string => (typeof value === 'string' ? value : '·');
 
 /** The selection list's rows, through the shared table system: provider,
  *  model and reasoning each in their own aligned column under a header —
  *  the same shape /resume, /tasks and /archived draw. Replaces the old
  *  `detail` string that joined the three with ' · ' into one ragged blob. */
 export function presetChoices(presets: Preset[], groups: PresetGroup[]): Choice<string | null>[] {
-  const rows = presets.map((p): TableRow<string> => ({
-    value: p.id,
-    cells: [p.name, cell(p.values.coding_provider), cell(p.values.coding_model), cell(p.values.coding_reasoning)],
-    hint: presetHint(p, groups),
+  const rows = presets.map((preset): TableRow<string> => ({
+    value: preset.id,
+    cells: [preset.name, cell(preset.values.coding_provider), cell(preset.values.coding_model), cell(preset.values.coding_reasoning)],
+    hint: presetHint(preset, groups),
   }));
   return tableChoices('preset', [
     { title: 'provider', cap: 18 },   // fits 'openai-compatible' (17)
@@ -96,15 +96,15 @@ function displayValue(state: KeyState, value: unknown): string {
 }
 
 /** The full hint for the list's hint block: all 15 keys laid out. */
-function presetHint(p: Preset, groups: PresetGroup[]): string {
+function presetHint(preset: Preset, groups: PresetGroup[]): string {
   const lines: string[] = [];
-  for (const g of groups) {
-    lines.push(`${g.group}:`);
-    for (const k of g.items) {
-      const s = keyState(p.values, k.key);
-      const label = s === 'set' ? String(p.values[k.key])
-        : s === 'clear' ? 'clear' : 'leave unchanged';
-      lines.push(`  ${k.label}: ${label}`);
+  for (const group of groups) {
+    lines.push(`${group.group}:`);
+    for (const key of group.items) {
+      const state = keyState(preset.values, key.key);
+      const label = state === 'set' ? String(preset.values[key.key])
+        : state === 'clear' ? 'clear' : 'leave unchanged';
+      lines.push(`  ${key.label}: ${label}`);
     }
   }
   return lines.join('\n');
@@ -139,21 +139,21 @@ export function Presets({ api, confirm, onApplied, onClose }: {
   const [serverEntries, setServerEntries] = useState<Record<string, Entry> | null>(null);
   useEffect(() => {
     void settings.all()
-      .then((r) => setServerEntries(r))
-      .catch((e: unknown) => setNotice(`server unreachable: ${(e as Error).message}`));
+      .then((reply) => setServerEntries(reply))
+      .catch((error: unknown) => setNotice(`server unreachable: ${(error as Error).message}`));
   }, [settings]);
   const serverCfg = useMemo(() => serverEntries
-    ? Object.fromEntries(Object.entries(serverEntries).map(([k, e]) => [k, e.value as ConfigValue])) : null, [serverEntries]);
+    ? Object.fromEntries(Object.entries(serverEntries).map(([key, entry]) => [key, entry.value as ConfigValue])) : null, [serverEntries]);
   const groups = useMemo(() => presetGroups(serverEntries ?? {}), [serverEntries]);
   const keys = useMemo(() => allKeys(groups), [groups]);
 
   const load = useCallback(async () => {
     setBusy(true);
     try {
-      const r = await api('GET', '/presets') as Preset[];
-      setPresets(r);
+      const reply = await api('GET', '/presets') as Preset[];
+      setPresets(reply);
       setNotice(undefined);
-    } catch (e) { setNotice(`could not load presets: ${(e as Error).message}`); setPresets([]); }
+    } catch (entry) { setNotice(`could not load presets: ${(entry as Error).message}`); setPresets([]); }
     finally { setBusy(false); }
   }, [api]);
 
@@ -162,10 +162,10 @@ export function Presets({ api, confirm, onApplied, onClose }: {
   // Model catalog loader — same pattern as Settings.tsx.
   const loadModels = useCallback(async (provider: string): Promise<CatalogModel[]> => {
     try {
-      const r = await api('GET', `/models?provider=${encodeURIComponent(provider)}`) as { models?: CatalogModel[] };
-      return Array.isArray(r?.models) ? r.models : [];
-    } catch (e) {
-      setNotice(`could not load the model list: ${(e as Error).message}`);
+      const reply = await api('GET', `/models?provider=${encodeURIComponent(provider)}`) as { models?: CatalogModel[] };
+      return Array.isArray(reply?.models) ? reply.models : [];
+    } catch (entry) {
+      setNotice(`could not load the model list: ${(entry as Error).message}`);
       return [];
     }
   }, [api]);
@@ -177,15 +177,15 @@ export function Presets({ api, confirm, onApplied, onClose }: {
   };
 
   // ── Apply ──────────────────────────────────────────────────────────────────
-  const applyPreset = useCallback(async (p: Preset) => {
+  const applyPreset = useCallback(async (preset: Preset) => {
     setBusy(true);
     try {
       // Build a PATCH body from only the keys the preset has an opinion on.
       // set keys → their value, clear keys → null, leave-unchanged keys → skipped.
       const patch: Record<string, ConfigValue> = {};
-      for (const k of keys) {
-        if (!(k in p.values)) continue;            // leave unchanged — don't touch
-        patch[k] = p.values[k] as ConfigValue;     // value or null
+      for (const key of keys) {
+        if (!(key in preset.values)) continue;            // leave unchanged — don't touch
+        patch[key] = preset.values[key] as ConfigValue;     // value or null
       }
       if (Object.keys(patch).length) {
         await settings.patch(patch);
@@ -193,9 +193,9 @@ export function Presets({ api, confirm, onApplied, onClose }: {
       // Apply is the destination, not a step: back to the CLI, where
       // onApplied confirms the switch. A failure keeps the screen open
       // with the error.
-      onApplied(p.name);
+      onApplied(preset.name);
       onClose();
-    } catch (e) { setNotice(`could not apply: ${(e as Error).message}`); }
+    } catch (entry) { setNotice(`could not apply: ${(entry as Error).message}`); }
     finally { setBusy(false); }
   }, [settings, keys, onApplied, onClose]);
 
@@ -216,10 +216,10 @@ export function Presets({ api, confirm, onApplied, onClose }: {
     try {
       await api('PUT', `/presets/${preset.id}`, { name: preset.name, values: next });
       const updated = { ...preset, values: next };
-      setPresets((ps) => (ps ?? []).map((p) => p.id === preset.id ? updated : p));
+      setPresets((presets) => (presets ?? []).map((preset) => preset.id === preset.id ? updated : preset));
       setView({ at: 'editor', preset: updated });
       setNotice(undefined);
-    } catch (e) { setNotice(`could not save: ${(e as Error).message}`); }
+    } catch (entry) { setNotice(`could not save: ${(entry as Error).message}`); }
     finally { setBusy(false); }
   }, [api]);
 
@@ -229,13 +229,13 @@ export function Presets({ api, confirm, onApplied, onClose }: {
     try {
       const id = newId();
       // Clear is the default: a new preset resets every key it doesn't set.
-      const values = Object.fromEntries(keys.map((k) => [k, null]));
+      const values = Object.fromEntries(keys.map((key) => [key, null]));
       await api('PUT', `/presets/${id}`, { name, values });
       const preset: Preset = { id, name, values };
       await load();
       setView({ at: 'editor', preset });
       setNotice(undefined);
-    } catch (e) { setNotice(`could not create: ${(e as Error).message}`); }
+    } catch (entry) { setNotice(`could not create: ${(entry as Error).message}`); }
     finally { setBusy(false); }
   }, [api, keys, load]);
 
@@ -245,10 +245,10 @@ export function Presets({ api, confirm, onApplied, onClose }: {
     try {
       await api('PUT', `/presets/${preset.id}`, { name, values: preset.values });
       const updated = { ...preset, name };
-      setPresets((ps) => (ps ?? []).map((p) => p.id === preset.id ? updated : p));
+      setPresets((presets) => (presets ?? []).map((preset) => preset.id === preset.id ? updated : preset));
       setView({ at: 'editor', preset: updated });
       setNotice(undefined);
-    } catch (e) { setNotice(`could not rename: ${(e as Error).message}`); }
+    } catch (entry) { setNotice(`could not rename: ${(entry as Error).message}`); }
     finally { setBusy(false); }
   }, [api]);
 
@@ -259,7 +259,7 @@ export function Presets({ api, confirm, onApplied, onClose }: {
       await api('DELETE', `/presets/${id}`);
       await load();
       setNotice('preset deleted');
-    } catch (e) { setNotice(`could not delete: ${(e as Error).message}`); }
+    } catch (entry) { setNotice(`could not delete: ${(entry as Error).message}`); }
     finally { setBusy(false); }
   }, [api, keys, load]);
 
@@ -267,7 +267,7 @@ export function Presets({ api, confirm, onApplied, onClose }: {
   if (view.at === 'name') {
     return (
       <NameInput notice={notice} initial={nameText}
-        onSubmit={(n) => { void createPreset(n); }}
+        onSubmit={(name) => { void createPreset(name); }}
         onCancel={() => setView({ at: 'list' })}
         onNotice={setNotice} />
     );
@@ -277,7 +277,7 @@ export function Presets({ api, confirm, onApplied, onClose }: {
   if (view.at === 'rename') {
     return (
       <NameInput notice={notice} initial={view.preset.name} title="rename preset"
-        onSubmit={(n) => { void renamePreset(view.preset, n); }}
+        onSubmit={(name) => { void renamePreset(view.preset, name); }}
         onCancel={() => setView({ at: 'editor', preset: view.preset })}
         onNotice={setNotice} />
     );
@@ -289,10 +289,10 @@ export function Presets({ api, confirm, onApplied, onClose }: {
       <ValueInput
         spec={view.spec}
         onCancel={() => setView({ at: 'editor', preset: view.preset })}
-        onSubmit={(v) => {
+        onSubmit={(value) => {
           // ValueInput returns null for empty → that maps to "clear".
           // A real value → "set".
-          void savePresetKey(view.preset, view.key, v);
+          void savePresetKey(view.preset, view.key, value);
         }}
       />
     );
@@ -300,26 +300,26 @@ export function Presets({ api, confirm, onApplied, onClose }: {
 
   // ── Preset editor (the 15 keys) ───────────────────────────────────────────
   if (view.at === 'editor') {
-    const p = view.preset;
+    const preset = view.preset;
     // Merge preset values with server cfg so providerChoices can see API keys.
     // Only non-null preset values should override — null means "clear", not
     // "the provider IS null" for catalog purposes.
     const merged: Record<string, unknown> = { ...(serverCfg ?? {}) };
-    for (const [k, v] of Object.entries(p.values)) {
-      if (v !== null) merged[k] = v;
+    for (const [key, value] of Object.entries(preset.values)) {
+      if (value !== null) merged[key] = value;
     }
-    const choices = headedChoices(groups, (k) => {
-      const state = keyState(p.values, k.key);
-      const v = p.values[k.key];
+    const choices = headedChoices(groups, (key) => {
+      const state = keyState(preset.values, key.key);
+      const value = preset.values[key.key];
       return {
-        value: k.key,
-        label: k.label,
-        columns: [{ text: displayValue(state, v), width: 32 }],
-        hint: hintForKey(state, v),
+        value: key.key,
+        label: key.label,
+        columns: [{ text: displayValue(state, value), width: 32 }],
+        hint: hintForKey(state, value),
       };
     });
     return (
-      <Screen title={`edit: ${p.name}`} notice={notice} busy={busy}
+      <Screen title={`edit: ${preset.name}`} notice={notice} busy={busy}
         footer={[
           { key: 'enter', does: 'set a value' },
           { key: 'd', does: 'cycle: clear / leave unchanged' },
@@ -330,35 +330,35 @@ export function Presets({ api, confirm, onApplied, onClose }: {
           key="editor"
           initial={last}
           choices={choices}
-          onSelect={(k) => {
-            setLast(k);
-            const info = groups.flatMap((g) => g.items).find((x) => x.key === k);
+          onSelect={(key) => {
+            setLast(key);
+            const info = groups.flatMap((group) => group.items).find((item) => item.key === key);
             if (!info) return;
             const spec: EditSpec = {
               title: info.label,
               choices: info.choices,
-              type: serverEntries?.[k]?.meta.type ?? 'string',
-              current: p.values[k] ?? null,
+              type: serverEntries?.[key]?.meta.type ?? 'string',
+              current: preset.values[key] ?? null,
               note: 'pick a value · empty = clear',
             };
-            void finishSpec(k, spec, merged).then((s) =>
-              setView({ at: 'editValue', preset: p, key: k, spec: s }));
+            void finishSpec(key, spec, merged).then((spec) =>
+              setView({ at: 'editValue', preset, key, spec }));
           }}
-          onCancel={() => { setView({ at: 'list' }); setLast(p.id); }}
-          onKey={(ch, k) => {
-            if (ch === 'r') { setView({ at: 'rename', preset: p }); return; }
-            if (ch !== 'd' || !k) return;
+          onCancel={() => { setView({ at: 'list' }); setLast(preset.id); }}
+          onKey={(char, key) => {
+            if (char === 'r') { setView({ at: 'rename', preset }); return; }
+            if (char !== 'd' || !key) return;
             // Cycle: set → clear → leave unchanged → clear → leave unchanged → ...
-            const state = keyState(p.values, k);
+            const state = keyState(preset.values, key);
             if (state === 'set') {
               // set → clear
-              void savePresetKey(p, k, null);
+              void savePresetKey(preset, key, null);
             } else if (state === 'clear') {
               // clear → leave unchanged
-              void savePresetKey(p, k, undefined);
+              void savePresetKey(preset, key, undefined);
             } else {
               // leave → clear
-              void savePresetKey(p, k, null);
+              void savePresetKey(preset, key, null);
             }
           }}
         />
@@ -394,19 +394,19 @@ export function Presets({ api, confirm, onApplied, onClose }: {
           choices={listChoices}
           onSelect={(id) => {
             if (!id) return;         // the table header carries null
-            const p = presets.find((x) => x.id === id);
-            if (!p) return;
-            void confirm(`apply "${p.name}"?`, 'every session with nothing said yet moves to its model')
-              .then((yes) => { if (yes) void applyPreset(p); });
+            const preset = presets.find((preset) => preset.id === id);
+            if (!preset) return;
+            void confirm(`apply "${preset.name}"?`, 'every session with nothing said yet moves to its model')
+              .then((yes) => { if (yes) void applyPreset(preset); });
           }}
           onCancel={onClose}
-          onKey={(ch, id) => {
-            if (ch === 'n') { setNameText(''); setView({ at: 'name' }); return; }
+          onKey={(char, id) => {
+            if (char === 'n') { setNameText(''); setView({ at: 'name' }); return; }
             if (!id) return;
-            const p = presets.find((x) => x.id === id);
-            if (!p) return;
-            if (ch === 'e') { setLast(undefined); setView({ at: 'editor', preset: p }); return; }
-            if (ch === 'd') { void deletePreset(id); return; }
+            const preset = presets.find((preset) => preset.id === id);
+            if (!preset) return;
+            if (char === 'e') { setLast(undefined); setView({ at: 'editor', preset }); return; }
+            if (char === 'd') { void deletePreset(id); return; }
           }}
         />
       )}
@@ -419,7 +419,7 @@ export function Presets({ api, confirm, onApplied, onClose }: {
 function NameInput({ notice, initial, title = 'new preset', onSubmit, onCancel, onNotice }: {
   notice?: string; initial: string; title?: string;
   onSubmit: (name: string) => void; onCancel: () => void;
-  onNotice: (n: string | undefined) => void;
+  onNotice: (name: string | undefined) => void;
 }) {
   const [text, setText] = useState(initial);
   useInput((_ch, key) => { if (key.escape) onCancel(); });
@@ -430,11 +430,11 @@ function NameInput({ notice, initial, title = 'new preset', onSubmit, onCancel, 
         <FixedText color="cyan">{'  name: '}</FixedText>
         <TextInput
           value={text}
-          onChange={(v) => { setText(v); onNotice(undefined); }}
-          onSubmit={(v) => {
-            const n = v.trim();
-            if (!n) { onNotice('a preset needs a name'); return; }
-            onSubmit(n);
+          onChange={(value) => { setText(value); onNotice(undefined); }}
+          onSubmit={(value) => {
+            const name = value.trim();
+            if (!name) { onNotice('a preset needs a name'); return; }
+            onSubmit(name);
           }}
           placeholder="a short name for this configuration"
         />

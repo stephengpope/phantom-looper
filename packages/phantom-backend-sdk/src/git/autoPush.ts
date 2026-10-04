@@ -31,7 +31,7 @@ export interface AutoPushDeps {
   resolve?: SyncDeps['resolve'];
   recordSummary?: SyncDeps['recordSummary'];
   writeCommitMessage?: SyncDeps['writeCommitMessage'];
-  onEvent?: (e: AutoPushEvent) => void | Promise<void>;
+  onEvent?: (event: AutoPushEvent) => void | Promise<void>;
 }
 
 export async function autoPush(
@@ -39,11 +39,11 @@ export async function autoPush(
   /** `hold: false` — run without taking the session (instant sync; see sync.ts). */
   opts: { hold?: boolean } = {},
 ): Promise<AutoPushResult> {
-  const r = await syncBranch(deps, session, project,
+  const synced = await syncBranch(deps, session, project,
     { landOnBase: true, label: 'auto-push', ...opts });
-  const { reason, rounds, sha } = r;
-  if (r.outcome === 'ok') return { result: 'pushed', rounds, sha };
-  return { result: r.outcome === 'nothing' ? 'nothing' : r.outcome, reason, rounds };
+  const { reason, rounds, sha } = synced;
+  if (synced.outcome === 'ok') return { result: 'pushed', rounds, sha };
+  return { result: synced.outcome === 'nothing' ? 'nothing' : synced.outcome, reason, rounds };
 }
 
 // Re-exported so callers that only import autoPush keep type access.

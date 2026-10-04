@@ -6,23 +6,23 @@ import { createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from '
  *  match — the API bearer and the Telegram webhook secret both check with
  *  this. A plain `===` returns on the first differing byte. */
 export function timingSafeEqualStr(a: string, b: string): boolean {
-  const ab = Buffer.from(a); const bb = Buffer.from(b);
-  if (ab.length !== bb.length) return false;
-  return timingSafeEqual(ab, bb);
+  const bufferA = Buffer.from(a); const bufferB = Buffer.from(b);
+  if (bufferA.length !== bufferB.length) return false;
+  return timingSafeEqual(bufferA, bufferB);
 }
 
 export function encrypt(key: Buffer, plaintext: string): Buffer {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', key, iv);
-  const ct = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-  return Buffer.concat([iv, cipher.getAuthTag(), ct]);
+  const nonce = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, nonce);
+  const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  return Buffer.concat([nonce, cipher.getAuthTag(), ciphertext]);
 }
 
 export function decrypt(key: Buffer, blob: Buffer): string {
-  const iv = blob.subarray(0, 12);
+  const nonce = blob.subarray(0, 12);
   const tag = blob.subarray(12, 28);
-  const ct = blob.subarray(28);
-  const decipher = createDecipheriv('aes-256-gcm', key, iv);
+  const ciphertext = blob.subarray(28);
+  const decipher = createDecipheriv('aes-256-gcm', key, nonce);
   decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(ct), decipher.final()]).toString('utf8');
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
 }

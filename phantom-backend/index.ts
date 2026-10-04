@@ -53,9 +53,9 @@ async function main() {
           await backend.sessions.setPlanMode(session.id, false);
           const result = await agent.sendMessage(toCodingAgent.resolveConflict(ctx.branch, ctx.baseBranch, ctx.files, ctx.arrived));
           return result?.outcome === 'done';
-        } catch (e) {
-          if ((e as { code?: string }).code === 'session_locked') log.warn({ session: session.id }, 'conflict turn could not open the session — it is busy');
-          else log.error({ session: session.id, err: errStr(e) }, 'conflict turn failed');
+        } catch (error) {
+          if ((error as { code?: string }).code === 'session_locked') log.warn({ session: session.id }, 'conflict turn could not open the session — it is busy');
+          else log.error({ session: session.id, err: errStr(error) }, 'conflict turn failed');
           return false;
         } finally {
           await agent?.close().catch(() => {});
@@ -108,11 +108,11 @@ async function main() {
       // change takes effect without a restart. 0 disables the check.
       void (async () => {
         while (!backend.stopped) {
-          const ms = await settings.resolve('update_check_interval_ms').catch(() => 86_400_000);
-          if (Number(ms) <= 0) { await new Promise((wake) => setTimeout(wake, 60_000)); continue; }
-          await new Promise((wake) => setTimeout(wake, Number(ms)));
+          const intervalMs = await settings.resolve('update_check_interval_ms').catch(() => 86_400_000);
+          if (Number(intervalMs) <= 0) { await new Promise((wake) => setTimeout(wake, 60_000)); continue; }
+          await new Promise((wake) => setTimeout(wake, Number(intervalMs)));
           if (backend.stopped) break;
-          await telegram.upgradeChecker.check().catch((e) => log.warn({ err: errStr(e) }, 'upgrade check failed'));
+          await telegram.upgradeChecker.check().catch((error) => log.warn({ err: errStr(error) }, 'upgrade check failed'));
         }
       })();
     },
@@ -145,4 +145,4 @@ async function main() {
   process.on('SIGINT', shutdown);
 }
 
-main().catch((e) => { log.error({ err: errStr(e) }, 'boot failed'); process.exit(1); });
+main().catch((error) => { log.error({ err: errStr(error) }, 'boot failed'); process.exit(1); });

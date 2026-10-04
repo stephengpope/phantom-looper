@@ -30,7 +30,7 @@ export const MEDIA_DELIVERY_EXTS = [
 // Longest-first, so the alternation never matches a short extension where a
 // longer one was meant.
 const EXT_ALTERNATION = MEDIA_DELIVERY_EXTS
-  .map((e) => e.slice(1)).sort((a, b) => b.length - a.length).join('|');
+  .map((extension) => extension.slice(1)).sort((a, b) => b.length - a.length).join('|');
 
 const MEDIA_TAG_SRC =
   '[`"\']?MEDIA:\\s*'
@@ -60,13 +60,13 @@ function blank(chars: string[], start: number, end: number): void {
 export function maskProtectedSpans(content: string): string {
   const chars = units(content);
   const spans: Array<[number, number]> = [];
-  for (const m of content.matchAll(/```[^\n]*\n[\s\S]*?```/g)) spans.push([m.index!, m.index! + m[0].length]);
-  for (const m of content.matchAll(/`[^`\n]+`/g)) {
-    if (/MEDIA:\s*$/.test(content.slice(Math.max(0, m.index! - 20), m.index!))) continue;
-    spans.push([m.index!, m.index! + m[0].length]);
+  for (const match of content.matchAll(/```[^\n]*\n[\s\S]*?```/g)) spans.push([match.index!, match.index! + match[0].length]);
+  for (const match of content.matchAll(/`[^`\n]+`/g)) {
+    if (/MEDIA:\s*$/.test(content.slice(Math.max(0, match.index! - 20), match.index!))) continue;
+    spans.push([match.index!, match.index! + match[0].length]);
   }
-  for (const m of content.matchAll(/^>.*$/gm)) spans.push([m.index!, m.index! + m[0].length]);
-  for (const [s, e] of spans) blank(chars, s, e);
+  for (const match of content.matchAll(/^>.*$/gm)) spans.push([match.index!, match.index! + match[0].length]);
+  for (const [start, end] of spans) blank(chars, start, end);
   return chars.join('');
 }
 
@@ -75,18 +75,18 @@ export function maskProtectedSpans(content: string): string {
 export function maskJsonStringMedia(content: string): string {
   if (!content.includes('"') || !content.includes('MEDIA:')) return content;
   const chars = units(content);
-  for (const m of content.matchAll(/(?<=[:,{[])\s*"((?:[^"\\\n]|\\.)*)"/g)) {
-    if (!/MEDIA:\s*(?:~\/|\/|[A-Za-z]:[/\\])/.test(m[1])) continue;
-    const bodyStart = m.index! + m[0].indexOf('"') + 1;
-    blank(chars, bodyStart, bodyStart + m[1].length);
+  for (const match of content.matchAll(/(?<=[:,{[])\s*"((?:[^"\\\n]|\\.)*)"/g)) {
+    if (!/MEDIA:\s*(?:~\/|\/|[A-Za-z]:[/\\])/.test(match[1])) continue;
+    const bodyStart = match.index! + match[0].indexOf('"') + 1;
+    blank(chars, bodyStart, bodyStart + match[1].length);
   }
   return chars.join('');
 }
 
 function unquote(raw: string | undefined): string {
-  let p = String(raw ?? '').trim();
-  if (p.length >= 2 && p[0] === p[p.length - 1] && '`"\''.includes(p[0])) p = p.slice(1, -1).trim();
-  return p.replace(/^[`"']+/, '').replace(/[`"',.;:)}\]]+$/, '');
+  let path = String(raw ?? '').trim();
+  if (path.length >= 2 && path[0] === path[path.length - 1] && '`"\''.includes(path[0])) path = path.slice(1, -1).trim();
+  return path.replace(/^[`"']+/, '').replace(/[`"',.;:)}\]]+$/, '');
 }
 
 export interface Media { path: string; isVoice: boolean }
@@ -101,17 +101,17 @@ export function extractMedia(content: string): { media: Media[]; cleaned: string
 
   const scan = maskJsonStringMedia(maskProtectedSpans(src));
   const media: Media[] = [];
-  for (const m of scan.matchAll(mediaTagRe())) {
-    const p = unquote(m.groups?.path);
-    if (p) media.push({ path: p, isVoice });
+  for (const match of scan.matchAll(mediaTagRe())) {
+    const path = unquote(match.groups?.path);
+    if (path) media.push({ path: path, isVoice });
   }
   if (media.length) {
     const maskedCleaned = maskJsonStringMedia(maskProtectedSpans(cleaned));
     const spans: Array<[number, number]> = [];
-    for (const m of maskedCleaned.matchAll(mediaTagRe())) spans.push([m.index!, m.index! + m[0].length]);
+    for (const match of maskedCleaned.matchAll(mediaTagRe())) spans.push([match.index!, match.index! + match[0].length]);
     if (spans.length) {
       const chars = units(cleaned);
-      for (const [s, e] of spans.sort((a, b) => b[0] - a[0])) chars.splice(s, e - s);
+      for (const [start, end] of spans.sort((a, b) => b[0] - a[0])) chars.splice(start, end - start);
       cleaned = chars.join('').replace(/\n{3,}/g, '\n\n').trim();
     }
   }
@@ -124,14 +124,14 @@ export function extractMedia(content: string): { media: Media[]; cleaned: string
 export function extractBarePaths(content: string): { paths: string[]; cleaned: string } {
   const src = String(content ?? '');
   const codeSpans: Array<[number, number]> = [];
-  for (const m of src.matchAll(/```[^\n]*\n[\s\S]*?```/g)) codeSpans.push([m.index!, m.index! + m[0].length]);
-  for (const m of src.matchAll(/`[^`\n]+`/g)) codeSpans.push([m.index!, m.index! + m[0].length]);
-  const inCode = (pos: number) => codeSpans.some(([s, e]) => pos >= s && pos < e);
+  for (const match of src.matchAll(/```[^\n]*\n[\s\S]*?```/g)) codeSpans.push([match.index!, match.index! + match[0].length]);
+  for (const match of src.matchAll(/`[^`\n]+`/g)) codeSpans.push([match.index!, match.index! + match[0].length]);
+  const inCode = (pos: number) => codeSpans.some(([start, end]) => pos >= start && pos < end);
 
   const raws: string[] = [];
-  for (const m of src.matchAll(barePathRe())) {
-    if (inCode(m.index!)) continue;
-    if (!raws.includes(m[0])) raws.push(m[0]);
+  for (const match of src.matchAll(barePathRe())) {
+    if (inCode(match.index!)) continue;
+    if (!raws.includes(match[0])) raws.push(match[0]);
   }
   let cleaned = src;
   for (const raw of raws) cleaned = cleaned.split(raw).join('');
@@ -184,13 +184,13 @@ export interface Deliverable { path: string; kind: SendKind }
  * `work/<session>/X`; `allowedRoots` are host dirs.
  */
 export async function collectDeliverables(
-  text: string, toHost: (p: string) => string, allowedRoots: string[],
+  text: string, toHost: (path: string) => string, allowedRoots: string[],
 ): Promise<{ cleaned: string; files: Deliverable[] }> {
   const tagged = extractMedia(text);
   const bare = extractBarePaths(tagged.cleaned);
   const wanted: Media[] = [
     ...tagged.media,
-    ...bare.paths.map((p) => ({ path: p, isVoice: false })),
+    ...bare.paths.map((path) => ({ path: path, isVoice: false })),
   ];
   const files: Deliverable[] = [];
   const seen = new Set<string>();

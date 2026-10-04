@@ -37,13 +37,13 @@ const enabled = async ({ app, project }: OfferCtx) => Boolean(await app.settings
 
 /** Every answer carries the zone and the time there — what a caller
  *  writing a datetime needs and never otherwise has. */
-async function stamped<T>(ctx: ToolCtx, fn: (clock: Awaited<ReturnType<ToolCtx['app']['settings']['clockFor']>>) => Promise<T>) {
+async function stamped<T>(ctx: ToolCtx, body: (clock: Awaited<ReturnType<ToolCtx['app']['settings']['clockFor']>>) => Promise<T>) {
   const clock = await ctx.app.settings.clockFor({ projectId: ctx.project.id });
   try {
-    return { timezone: clock.timezone, now: clock.now().toISOString(), ...(await fn(clock)) };
-  } catch (e) {
-    if (e instanceof CronError) throw refusal(e.code, e.message);
-    throw e;
+    return { timezone: clock.timezone, now: clock.now().toISOString(), ...(await body(clock)) };
+  } catch (error) {
+    if (error instanceof CronError) throw refusal(error.code, error.message);
+    throw error;
   }
 }
 

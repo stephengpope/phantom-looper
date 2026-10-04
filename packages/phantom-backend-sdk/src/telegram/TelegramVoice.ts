@@ -34,8 +34,8 @@ export async function transcribeVoice(apiKey: string, audio: Buffer, model: stri
       results?: { channels?: Array<{ alternatives?: Array<{ transcript?: string }> }> };
     };
     return { text: json.results?.channels?.[0]?.alternatives?.[0]?.transcript?.trim() ?? '' };
-  } catch (e) {
-    return { error: isConnectFailure(e) ? 'unreachable' : 'vendor' };
+  } catch (error) {
+    return { error: isConnectFailure(error) ? 'unreachable' : 'vendor' };
   }
 }
 
@@ -94,9 +94,9 @@ export function splitForSpeech(text: string): string[] {
 
 /** Every index just past a sentence end in `text`. */
 function sentenceBreaks(text: string): number[] {
-  const re = new RegExp(SENTENCE_END.source, 'g');
+  const sentenceEnd = new RegExp(SENTENCE_END.source, 'g');
   const out: number[] = [];
-  for (const m of text.matchAll(re)) out.push(m.index + m[0].length);
+  for (const match of text.matchAll(sentenceEnd)) out.push(match.index + match[0].length);
   return out;
 }
 
@@ -115,8 +115,8 @@ export async function speakVoice(apiKey: string, voice: string, text: string): P
     });
     if (!res.ok) { log.warn({ status: res.status }, 'text-to-speech refused — the reply went as text'); return null; }
     return Buffer.from(await res.arrayBuffer());
-  } catch (e) {
-    log.warn({ err: (e as Error).message }, 'text-to-speech failed — the reply went as text');
+  } catch (error) {
+    log.warn({ err: (error as Error).message }, 'text-to-speech failed — the reply went as text');
     return null;
   }
 }

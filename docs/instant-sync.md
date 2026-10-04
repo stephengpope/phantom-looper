@@ -5,7 +5,7 @@ off by default) that keeps every running session's checkout in step with the
 base branch without anyone running `/auto-push` or `/auto-pull`. Built for a
 notes or second-brain repo shared across devices.
 
-One file decides WHEN: `phantom-backend/git/instantSync.ts`. HOW is the
+One file decides WHEN: the backend SDK's `git/InstantSync.ts`. HOW is the
 same `autoPush` / `autoPull` everything else calls (see auto-pull.md) —
 same backup, squash, commit message, rebase, verify, push.
 
@@ -68,7 +68,7 @@ the branch — and the session lock never prevented it: every sync took it
 under one shared id, which the lock lets back in, and instant sync cannot
 take it at all. So the lock sits on the checkout: `workspaces.sync_locked_by`
 / `sync_lock_expires_at` (038), owned by `Workspaces`, taken inside
-`syncBranch` and `GitEngine.push` by **every** writer — instant, manual,
+`syncBranch` and `GitSync.push` by **every** writer — instant, manual,
 card archive, idle backup — under a fresh id per run, so it is never
 re-entered. Manual sync takes it AND the session lock (no turn under the
 sync); instant sync takes it alone. That is the whole difference between

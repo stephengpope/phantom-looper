@@ -23,7 +23,7 @@ export const TOOLS: ToolDef[] = [
   ...DATABASE_TOOLS, ...BOARD_TOOLS, ...NOTIFY_TOOLS, ...GIT_TOOLS,
 ];
 
-export const toolByName = new Map(TOOLS.map((t) => [t.name, t]));
+export const toolByName = new Map(TOOLS.map((tool) => [tool.name, tool]));
 
 /** Add tools user space serves from the backend (config.tools). A name
  *  already taken is an error — one definition per tool. */
@@ -35,7 +35,7 @@ export function registerTools(definitions: readonly ToolDef[]): void {
   }
 }
 
-const dupes = TOOLS.map((t) => t.name).filter((n, i, a) => a.indexOf(n) !== i);
+const dupes = TOOLS.map((tool) => tool.name).filter((name, i, a) => a.indexOf(name) !== i);
 if (dupes.length) throw new Error(`tool names defined twice: ${dupes.join(', ')}`);
 
 /** The tool names a type's grants name: a grant is a tool name, a group

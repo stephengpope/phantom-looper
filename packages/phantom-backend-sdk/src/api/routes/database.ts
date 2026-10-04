@@ -54,12 +54,12 @@ export function databaseRoutes(app: FastifyInstance, ctx: PhantomBackend) {
           limit: req.body.limit ?? 10, maxCellChars: req.body.maxCellChars ?? 1000, params: req.body.params,
         });
         return ok({ results });
-      } catch (e) {
-        if (e instanceof SqlError) {
-          return reply.code(400).send(err('sql_error', e.message, false,
-            { ...e.info, rolledBack: 'nothing in this call was applied' }));
+      } catch (error) {
+        if (error instanceof SqlError) {
+          return reply.code(400).send(err('sql_error', error.message, false,
+            { ...error.info, rolledBack: 'nothing in this call was applied' }));
         }
-        throw e;
+        throw error;
       }
     });
 }

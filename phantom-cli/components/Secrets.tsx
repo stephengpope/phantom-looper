@@ -48,14 +48,14 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
       // The bare list is every layer; the projects call names the groups,
       // the ←→ ring and the editor's Where targets. One failure fails the
       // screen honestly.
-      const [r, projects] = await Promise.all([
+      const [reply, projects] = await Promise.all([
         api('GET', '/secrets') as Promise<{ secrets: Row[] }>,
         api('GET', '/projects') as Promise<Project[]>,
       ]);
       setProjects(projects);
-      setRows(r.secrets);
+      setRows(reply.secrets);
       setNotice(undefined);
-    } catch (e) { setNotice(`could not load: ${(e as Error).message}`); setRows([]); }
+    } catch (error) { setNotice(`could not load: ${(error as Error).message}`); setRows([]); }
     finally { setBusy(false); }
   }, [api]);
 
@@ -64,10 +64,10 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
   /** What a layer is called: the project's display name (a project the
    *  list no longer knows reads as its id), or `global`. */
   const wsName = (id?: string | null) => {
-    const project = id ? projects.find((x) => x.id === id) : undefined;
+    const project = id ? projects.find((project) => project.id === id) : undefined;
     return project ? (project.displayName || project.name) : id || GLOBAL_TAG;
   };
-  const layerOf = (r: Row) => (r.scope === 'project' ? wsName(r.project) : GLOBAL_TAG);
+  const layerOf = (row: Row) => (row.scope === 'project' ? wsName(row.project) : GLOBAL_TAG);
 
   // /resume's ring: all, then each project in the server's order, wrapping.
   const cycle = (dir: 1 | -1) => {
@@ -81,25 +81,25 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
   const run = (what: () => Promise<unknown>, after: string) => {
     setBusy(true);
     void what()
-      .then(() => after, (e: Error) => e.message)
+      .then(() => after, (error: Error) => error.message)
       .then(async (said) => { await load(); setNotice(said); })
       .finally(() => setBusy(false));
   };
 
   /** PUT at one layer. No value = the server keeps the stored one. */
-  const put = (d: SecretDraft, value?: string) =>
-    api('PUT', `/secrets/${encodeURIComponent(d.name)}${scopeQuery(d.projectId)}`,
-      { description: d.description, ...(value ? { value } : {}) });
+  const put = (draft: SecretDraft, value?: string) =>
+    api('PUT', `/secrets/${encodeURIComponent(draft.name)}${scopeQuery(draft.projectId)}`,
+      { description: draft.description, ...(value ? { value } : {}) });
 
   /** The editor's auto-save: one write, the editor stays open. Rejects so
    *  the editor can say why; the list re-reads either way. */
-  const save = async (d: SecretDraft, from?: SecretId) => {
-    setLast(keyOf(d.projectId, d.name));
-    const moved = from && (from.name !== d.name || from.projectId !== d.projectId);
+  const save = async (draft: SecretDraft, from?: SecretId) => {
+    setLast(keyOf(draft.projectId, draft.name));
+    const moved = from && (from.name !== draft.name || from.projectId !== draft.projectId);
     try {
       if (!moved) {
-        await put(d, d.value || undefined);
-        setNotice(`${d.name} saved (${wsName(d.projectId)})`);
+        await put(draft, draft.value || undefined);
+        setNotice(`${draft.name} saved (${wsName(draft.projectId)})`);
         return;
       }
       // A move: the value goes with it — typed fresh, or read back from the
@@ -107,17 +107,17 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
       // Write first, remove second: a failure in between leaves both rows
       // on the list, never neither.
       const oldPath = `/secrets/${encodeURIComponent(from.name)}${scopeQuery(from.projectId)}`;
-      const value = d.value || (await api('GET', oldPath) as { value: string }).value;
-      await put(d, value);
+      const value = draft.value || (await api('GET', oldPath) as { value: string }).value;
+      await put(draft, value);
       await api('DELETE', oldPath);
-      setNotice(`${from.name} (${wsName(from.projectId)}) moved to ${d.name} (${wsName(d.projectId)})`);
-    } catch (e) {
-      setNotice((e as Error).message);
-      throw e;
+      setNotice(`${from.name} (${wsName(from.projectId)}) moved to ${draft.name} (${wsName(draft.projectId)})`);
+    } catch (error) {
+      setNotice((error as Error).message);
+      throw error;
     } finally { await load(); }
   };
 
-  const shown = (rows ?? []).filter((r) => filter === null || r.project === filter);
+  const shown = (rows ?? []).filter((row) => filter === null || row.project === filter);
   // ←→ are the list's neighbours, not its own keys (SelectList leaves them
   // alone), so this screen takes them — over the rows and the empty state alike.
   useInput((_ch, key) => {
@@ -128,7 +128,7 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
   if (editing) {
     const targets: SecretTarget[] = [
       { id: null, label: 'global — every project' },
-      ...projects.map((w) => ({ id: w.id, label: `${w.displayName || w.name} only` })),
+      ...projects.map((project) => ({ id: project.id, label: `${project.displayName || project.name} only` })),
     ];
     return (
       <SecretEditor
@@ -145,16 +145,16 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
   // ‹ all ›: one group per layer — global, then each project that has
   // rows — under a heading, each row tagged with its layer. One project:
   // its rows alone, no heading and no tag — the title already names it.
-  const choice = (r: Row): Choice<string> => ({
-    value: keyOf(r.project, r.name), label: r.name,
-    ...(filter === null ? { detail: layerOf(r) } : {}),
-    hint: r.description || '(no description)',
+  const choice = (row: Row): Choice<string> => ({
+    value: keyOf(row.project, row.name), label: row.name,
+    ...(filter === null ? { detail: layerOf(row) } : {}),
+    hint: row.description || '(no description)',
   });
   const choices: Choice<string>[] = [];
   if (filter === null) {
     const groups: Array<[string, Row[]]> = [
-      [GLOBAL_TAG, shown.filter((r) => r.scope === 'global')],
-      ...projects.map((w): [string, Row[]] => [wsName(w.id), shown.filter((r) => r.project === w.id)]),
+      [GLOBAL_TAG, shown.filter((row) => row.scope === 'global')],
+      ...projects.map((project): [string, Row[]] => [wsName(project.id), shown.filter((row) => row.project === project.id)]),
     ];
     for (const [heading, members] of groups) {
       if (!members.length) continue;
@@ -180,16 +180,16 @@ export function Secrets({ api, onClose }: { api: Api; onClose: () => void }) {
       <SelectList
         choices={choices}
         initial={last}
-        onSelect={(v) => {
-          setLast(v);
-          const row = shown.find((r) => keyOf(r.project, r.name) === v);
+        onSelect={(value) => {
+          setLast(value);
+          const row = shown.find((row) => keyOf(row.project, row.name) === value);
           if (row) setEditing({ mode: 'edit', row });
         }}
         onCancel={onClose}
-        onKey={(ch, v) => {
-          if (ch === 'n') { setEditing({ mode: 'new' }); return; }
-          if (ch !== 'd' || !v) return;
-          const row = shown.find((r) => keyOf(r.project, r.name) === v);
+        onKey={(char, value) => {
+          if (char === 'n') { setEditing({ mode: 'new' }); return; }
+          if (char !== 'd' || !value) return;
+          const row = shown.find((row) => keyOf(row.project, row.name) === value);
           if (!row) return;
           run(() => api('DELETE', `/secrets/${encodeURIComponent(row.name)}${scopeQuery(row.project)}`),
             `${row.name} removed (${layerOf(row)})`);

@@ -96,8 +96,8 @@ interface Tally { added: ModelMessage[]; usage: TokenTotals; text: string }
 /** The record failure, if one landed during the callbacks. Read through a
  *  function: the field is set from AI SDK callbacks, which TypeScript cannot
  *  see, so an inline read is narrowed to its initial null. */
-function throwIfFailed(st: { recordFailure: PhantomError | null }): void {
-  if (st.recordFailure) throw st.recordFailure;
+function throwIfFailed(state: { recordFailure: PhantomError | null }): void {
+  if (state.recordFailure) throw state.recordFailure;
 }
 
 export async function runTurn(input: TurnInput): Promise<TurnResult> {
@@ -130,20 +130,20 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
   const step = new StepInFlight();
   // Set from the AI SDK's callbacks, read after the stream — a holder, so
   // the reads are not narrowed to their initial values.
-  const st: { pendingMessages: ModelMessage[]; recordFailure: PhantomError | null } =
+  const state: { pendingMessages: ModelMessage[]; recordFailure: PhantomError | null } =
     { pendingMessages: carry.map(userMessage), recordFailure: null };
 
   // Every record goes through here: a failure ends the turn and is kept to
   // be thrown once the stream has closed (the AI SDK swallows what a
   // callback throws — verified: util/notify.ts `catch {}`).
   const record = async (lines: TranscriptLine[]): Promise<void> => {
-    if (st.recordFailure) return;
+    if (state.recordFailure) return;
     try {
       await input.record(lines);
-      for (const l of lines) if (l.type === 'message') tally.added.push(l.message);
-    } catch (e) {
-      st.recordFailure = asPhantomError(e, 'transcript_write_failed', 'recording the turn');
-      abort.abort(st.recordFailure);
+      for (const line of lines) if (line.type === 'message') tally.added.push(line.message);
+    } catch (error) {
+      state.recordFailure = asPhantomError(error, 'transcript_write_failed', 'recording the turn');
+      abort.abort(state.recordFailure);
     }
   };
 
@@ -152,13 +152,13 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
   // arrived since, and does the same before every later call.
   const drain = () => {
     const more = input.pending();
-    if (more.length) st.pendingMessages = [...st.pendingMessages, ...more.map(userMessage)];
+    if (more.length) state.pendingMessages = [...state.pendingMessages, ...more.map(userMessage)];
   };
 
   const result = streamText({
     model: input.model,
     instructions: input.system,
-    messages: [...history, ...tally.added, ...st.pendingMessages],
+    messages: [...history, ...tally.added, ...state.pendingMessages],
     tools: input.tools,
     stopWhen: [
       ...(input.maxSteps == null ? [] : [stepCountIs(input.maxSteps)]),
@@ -171,31 +171,31 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
     prepareStep: ({ messages, stepNumber }) => {
       step.reset();
       // The first call's pending messages are already in `messages`.
-      const before = stepNumber === 0 ? st.pendingMessages.length : 0;
+      const before = stepNumber === 0 ? state.pendingMessages.length : 0;
       drain();
-      return { messages: withRollingCacheMark([...messages, ...st.pendingMessages.slice(before)]) };
+      return { messages: withRollingCacheMark([...messages, ...state.pendingMessages.slice(before)]) };
     },
 
-    onLanguageModelCallEnd: async (e) => {
+    onLanguageModelCallEnd: async (callEnd) => {
       // The model answered: the messages that rode in, the answer, its usage.
-      const assistant = assistantMessageFrom(e.content);
-      const u = {
-        provider: input.spec.provider, model: input.spec.model, responseId: e.responseId,
-        input: e.usage.inputTokens ?? 0, output: e.usage.outputTokens ?? 0,
-        cacheRead: e.usage.inputTokenDetails?.cacheReadTokens ?? 0,
-        cacheWrite: e.usage.inputTokenDetails?.cacheWriteTokens ?? 0,
+      const assistant = assistantMessageFrom(callEnd.content);
+      const callUsage = {
+        provider: input.spec.provider, model: input.spec.model, responseId: callEnd.responseId,
+        input: callEnd.usage.inputTokens ?? 0, output: callEnd.usage.outputTokens ?? 0,
+        cacheRead: callEnd.usage.inputTokenDetails?.cacheReadTokens ?? 0,
+        cacheWrite: callEnd.usage.inputTokenDetails?.cacheWriteTokens ?? 0,
       };
-      tally.usage.input += u.input; tally.usage.output += u.output;
-      tally.usage.cacheRead += u.cacheRead; tally.usage.cacheWrite += u.cacheWrite;
+      tally.usage.input += callUsage.input; tally.usage.output += callUsage.output;
+      tally.usage.cacheRead += callUsage.cacheRead; tally.usage.cacheWrite += callUsage.cacheWrite;
       const lines: TranscriptLine[] = [
-        ...st.pendingMessages.map(messageLine),
+        ...state.pendingMessages.map(messageLine),
         ...(assistant ? [messageLine(assistant)] : []),
-        usageLine(u),
+        usageLine(callUsage),
         ...step.held,
       ];
       step.held = [];
       step.assistantRecorded = true;
-      st.pendingMessages = [];
+      state.pendingMessages = [];
       await record(lines);
     },
   });
@@ -212,11 +212,11 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
         }
         case 'tool-result':
         case 'tool-error': {
-          const p = part as ToolResult;
-          const isError = p.type === 'tool-error';
-          if (isError) input.onToolError(p.toolName, p.error);
-          step.answered.add(p.toolCallId);
-          const line = messageLine(await toolResultMessage(p, input.tools[p.toolName], isError));
+          const toolResult = part as ToolResult;
+          const isError = toolResult.type === 'tool-error';
+          if (isError) input.onToolError(toolResult.toolName, toolResult.error);
+          step.answered.add(toolResult.toolCallId);
+          const line = messageLine(await toolResultMessage(toolResult, input.tools[toolResult.toolName], isError));
           if (step.assistantRecorded) await record([line]);
           else step.held.push(line);
           break;
@@ -227,11 +227,11 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
       }
       input.onPart(raw);
     }
-  } catch (e) {
+  } catch (error) {
     // A stop closes the stream by throwing its reason out of the iteration
     // (verified against the AI SDK: no `abort` part follows). The cut step
     // is recorded below; anything else is the stream's own failure.
-    if (!abort.signal.aborted) throw e;
+    if (!abort.signal.aborted) throw error;
   } finally {
     outer.removeEventListener('abort', onOuterAbort);
   }
@@ -239,22 +239,22 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
   // nothing is left dangling.
   await result.response.then(() => undefined, () => undefined);
 
-  throwIfFailed(st);
+  throwIfFailed(state);
 
   if (abort.signal.aborted) {
     // The cut step. Nothing streamed = nothing to record beyond the user
     // messages that were sent and the mark.
     const lines: TranscriptLine[] = [];
     if (!step.assistantRecorded) {
-      lines.push(...st.pendingMessages.map(messageLine));
+      lines.push(...state.pendingMessages.map(messageLine));
       const content: AssistantContent = [...(step.text ? [{ type: 'text' as const, text: step.text }] : []), ...step.calls];
       if (content.length) lines.push(messageLine({ role: 'assistant', content }));
       lines.push(...step.held);
     }
-    for (const c of step.calls) if (!step.answered.has(c.toolCallId)) lines.push(messageLine(interruptedResultMessage(c)));
+    for (const call of step.calls) if (!step.answered.has(call.toolCallId)) lines.push(messageLine(interruptedResultMessage(call)));
     lines.push(interruptedLine());
     await record(lines);
-    throwIfFailed(st);
+    throwIfFailed(state);
     if (step.text) tally.text = step.text;
     return true;
   }

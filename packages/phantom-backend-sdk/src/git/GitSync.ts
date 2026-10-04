@@ -34,7 +34,7 @@ export class GitSync {
     /** Every sync step of a manual pull, for the session's live feed — the
      *  pull's route is unary, so this is the only way a watcher sees it run
      *  (a commit-message retry included). Absent -> the pull runs quiet. */
-    private onSyncEvent?: (sessionId: string, e: SyncEvent) => void,
+    private onSyncEvent?: (sessionId: string, event: SyncEvent) => void,
   ) {}
 
   private get sessions(): Sessions { return this.deps.sessions; }
@@ -48,9 +48,9 @@ export class GitSync {
 
   /** Git operates on WORKSPACES — the branch and the directory live there. A
    *  session with no workspace has nothing git-shaped to do. */
-  private async workspaceOf(s: SessionRow): Promise<WorkspaceRow> {
-    const workspace = s.workspaceId ? await this.deps.workspaces.get(s.workspaceId) : undefined;
-    if (!workspace) throw new Error(`session ${s.id} has no workspace — nothing to push or pull`);
+  private async workspaceOf(session: SessionRow): Promise<WorkspaceRow> {
+    const workspace = session.workspaceId ? await this.deps.workspaces.get(session.workspaceId) : undefined;
+    if (!workspace) throw new Error(`session ${session.id} has no workspace — nothing to push or pull`);
     return workspace;
   }
 
@@ -64,43 +64,43 @@ export class GitSync {
    *  `whenSafe` runs only when everything is on origin ('pushed' or
    *  'nothing'), STILL under the lock — the disk sweep deletes the files
    *  there, so no turn can start between the backup and the delete. */
-  async backup(s: SessionRow, project: ProjectRow, whenSafe?: () => Promise<void>): Promise<PushResult | 'busy'> {
-    if (!(await this.sessions.acquireLock(s, GIT_CLIENT_ID, LOCK_TTL_MS, 'backup'))) return 'busy';
+  async backup(session: SessionRow, project: ProjectRow, whenSafe?: () => Promise<void>): Promise<PushResult | 'busy'> {
+    if (!(await this.sessions.acquireLock(session, GIT_CLIENT_ID, LOCK_TTL_MS, 'backup'))) return 'busy';
     const heartbeat = setInterval(() => {
-      void this.sessions.renewLock(s.id, GIT_CLIENT_ID, LOCK_TTL_MS)
-        .catch((e) => log.warn({ session: s.id, err: errStr(e) }, 'backup lock renewal failed'));
+      void this.sessions.renewLock(session.id, GIT_CLIENT_ID, LOCK_TTL_MS)
+        .catch((error) => log.warn({ session: session.id, err: errStr(error) }, 'backup lock renewal failed'));
     }, RENEW_MS);
     try {
-      const r = await this.push(s, project);
-      if (whenSafe && (r === 'pushed' || r === 'nothing')) await whenSafe();
-      return r;
+      const pushed = await this.push(session, project);
+      if (whenSafe && (pushed === 'pushed' || pushed === 'nothing')) await whenSafe();
+      return pushed;
     } finally {
       clearInterval(heartbeat);
-      await this.sessions.releaseLock(s.id, GIT_CLIENT_ID);
+      await this.sessions.releaseLock(session.id, GIT_CLIENT_ID);
     }
   }
 
   /** commit -> push the branch this session is on. That is the whole of it:
    *  one branch, checked out at creation, pushed back to here. Porcelain inside
    *  commitAll is the authoritative dirty check. */
-  async push(s: SessionRow, project: ProjectRow): Promise<PushResult | 'busy'> {
-    const workspace = await this.workspaceOf(s);
+  async push(session: SessionRow, project: ProjectRow): Promise<PushResult | 'busy'> {
+    const workspace = await this.workspaceOf(session);
     const dir = repoDir(this.paths, workspace.id);
     // The checkout lock: commit + push is a sequence too, and a sync may be
     // rewriting this checkout right now. Short, so no renewal.
     const holder = newId();
     if (!(await this.deps.workspaces.acquireSyncLock(workspace.id, holder, LOCK_TTL_MS))) return 'busy';
     try {
-      const committed = await commitAll(dir, `phantom push ${new Date().toISOString()}\n\nPhantom-Session: ${s.id}`);
+      const committed = await commitAll(dir, `phantom push ${new Date().toISOString()}\n\nPhantom-Session: ${session.id}`);
       const { stdout: ahead } = await git(dir, ['rev-list', '--count', `origin/${workspace.branch}..HEAD`]).catch(() => ({ stdout: '1' }));
       if (!committed && Number(ahead.trim()) === 0) return 'nothing';
-      const r = await pushSession(dir, workspace.branch, await this.auth(project));
-      if (r !== 'pushed') return r;
+      const pushed = await pushSession(dir, workspace.branch, await this.auth(project));
+      if (pushed !== 'pushed') return pushed;
       await this.deps.workspaces.markPushed(workspace.id);
-      log.info({ session: s.id, branch: workspace.branch }, 'pushed');
+      log.info({ session: session.id, branch: workspace.branch }, 'pushed');
       return 'pushed';
-    } catch (e) {
-      log.error({ session: s.id, err: errStr(e) }, 'push failed');
+    } catch (error) {
+      log.error({ session: session.id, err: errStr(error) }, 'push failed');
       return 'error';
     } finally {
       await this.deps.workspaces.releaseSyncLock(workspace.id, holder);
@@ -113,37 +113,37 @@ export class GitSync {
    *  "get base's new commits under my work", not three. Nothing reaches base.
    *
    *  It takes the session (sync does), which is why `busy` is a result here. */
-  async pull(s: SessionRow, project: ProjectRow): Promise<PullResult | 'busy'> {
-    const r = await syncBranch(
-      { ...this.deps, onEvent: (e) => this.onSyncEvent?.(s.id, e) },
-      s, project, { landOnBase: false, label: 'pull' });
-    if (r.outcome === 'ok') {
-      const list = this.arrivals.get(s.id) ?? [];
-      list.push({ at: Date.now(), commits: r.arrived ?? [] });
-      this.arrivals.set(s.id, list.slice(-20));
-      log.info({ session: s.id, commits: r.arrived?.length }, 'pulled base');
+  async pull(session: SessionRow, project: ProjectRow): Promise<PullResult | 'busy'> {
+    const synced = await syncBranch(
+      { ...this.deps, onEvent: (event) => this.onSyncEvent?.(session.id, event) },
+      session, project, { landOnBase: false, label: 'pull' });
+    if (synced.outcome === 'ok') {
+      const list = this.arrivals.get(session.id) ?? [];
+      list.push({ at: Date.now(), commits: synced.arrived ?? [] });
+      this.arrivals.set(session.id, list.slice(-20));
+      log.info({ session: session.id, commits: synced.arrived?.length }, 'pulled base');
       return 'merged';
     }
-    if (r.outcome === 'nothing') return 'clean';
-    if (r.outcome === 'busy') return 'busy';
-    if (r.outcome === 'blocked') {
-      log.warn({ session: s.id, reason: r.reason }, 'pull conflict unresolved — the branch is as it was');
+    if (synced.outcome === 'nothing') return 'clean';
+    if (synced.outcome === 'busy') return 'busy';
+    if (synced.outcome === 'blocked') {
+      log.warn({ session: session.id, reason: synced.reason }, 'pull conflict unresolved — the branch is as it was');
       return 'conflict';
     }
     return 'error';
   }
 
   /** What moved on base — read-only, changes nothing in the tree. */
-  async status(s: SessionRow, project: ProjectRow): Promise<{
+  async status(session: SessionRow, project: ProjectRow): Promise<{
     pending: { commits: string[]; files: string[] };
     /** Commits base has gained since this checkout was cut. */
     sinceCut: number;
     pulled: Arrival[];
   }> {
-    const workspace = await this.workspaceOf(s);
+    const workspace = await this.workspaceOf(session);
     const dir = repoDir(this.paths, workspace.id);
-    await git(dir, ['fetch', 'origin', project.baseBranch], await this.auth(project)).catch((e: Error) => {
-      log.warn({ dir, base: project.baseBranch, err: e.message }, 'fetch of base failed — arrivals are measured against the last copy');
+    await git(dir, ['fetch', 'origin', project.baseBranch], await this.auth(project)).catch((error: Error) => {
+      log.warn({ dir, base: project.baseBranch, err: error.message }, 'fetch of base failed — arrivals are measured against the last copy');
     });
     const { stdout: commits } = await git(dir, ['log', '--format=%h %s', `HEAD..origin/${project.baseBranch}`]).catch(() => ({ stdout: '' }));
     const { stdout: files } = await git(dir, ['diff', '--name-only', `HEAD...origin/${project.baseBranch}`]).catch(() => ({ stdout: '' }));
@@ -154,7 +154,7 @@ export class GitSync {
         files: files.trim().split('\n').filter(Boolean),
       },
       sinceCut: Number(since.trim()),
-      pulled: this.arrivals.get(s.id) ?? [],
+      pulled: this.arrivals.get(session.id) ?? [],
     };
   }
 }

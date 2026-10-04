@@ -24,7 +24,7 @@ export interface MigrationSet { dir: string; ledgerSchema: string }
 export const SDK_MIGRATIONS: MigrationSet = {
   dir: path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'migrations'),
   // The ledger has lived in public since the first install; it moves to the
-  // SDK's schema with the schema split (docs/phantom-agent-sdk-plan.md §3).
+  // SDK's schema with the schema split (docs/v1-plan.md §3).
   ledgerSchema: 'public',
 };
 
@@ -69,8 +69,8 @@ export class Database {
   }
 
   /** Run `fn` inside one transaction. */
-  transaction<T>(fn: (tx: Transaction) => Promise<T>): Promise<T> {
-    return this.drizzle.transaction(fn);
+  transaction<T>(body: (transaction: Transaction) => Promise<T>): Promise<T> {
+    return this.drizzle.transaction(body);
   }
 
   /** Postgres raised a unique constraint (23505): the row's owner turns it

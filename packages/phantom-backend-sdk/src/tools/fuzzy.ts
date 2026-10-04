@@ -24,7 +24,7 @@ const UNICODE_MAP: Record<string, string> = {
 
 function unicodeNormalize(text: string): string {
   let out = text;
-  for (const [ch, repl] of Object.entries(UNICODE_MAP)) out = out.split(ch).join(repl);
+  for (const [char, repl] of Object.entries(UNICODE_MAP)) out = out.split(char).join(repl);
   return out;
 }
 
@@ -36,7 +36,7 @@ export function fuzzyFindAndReplace(
     return { content, count: 0, strategy: null, error: 'old_string and new_string are identical' };
   }
 
-  const strategies: [string, (c: string, p: string) => Match[]][] = [
+  const strategies: [string, (content: string, pattern: string) => Match[]][] = [
     ['exact', strategyExact],
     ['line_trimmed', strategyLineTrimmed],
     ['whitespace_normalized', strategyWhitespaceNormalized],
@@ -48,8 +48,8 @@ export function fuzzyFindAndReplace(
     ['context_aware', strategyContextAware],
   ];
 
-  for (const [name, fn] of strategies) {
-    const matches = fn(content, oldString);
+  for (const [name, strategy] of strategies) {
+    const matches = strategy(content, oldString);
     if (matches.length === 0) continue;
     if (matches.length > 1 && !replaceAll) {
       return {
@@ -73,7 +73,7 @@ function detectEscapeDrift(
   content: string, matches: Match[], oldString: string, newString: string,
 ): string | null {
   if (!newString.includes("\\'") && !newString.includes('\\"')) return null;
-  const matchedRegions = matches.map(([s, e]) => content.slice(s, e)).join('');
+  const matchedRegions = matches.map(([start, end]) => content.slice(start, end)).join('');
   for (const suspect of ["\\'", '\\"']) {
     if (newString.includes(suspect) && oldString.includes(suspect) && !matchedRegions.includes(suspect)) {
       const plain = suspect[1];
@@ -118,7 +118,7 @@ function reindentReplacement(fileRegion: string, oldString: string, newString: s
 
 function maybeUnescapeNewString(newString: string, content: string, matches: Match[]): string {
   if (!newString.includes('\\t') && !newString.includes('\\r')) return newString;
-  const matchedRegions = matches.map(([s, e]) => content.slice(s, e)).join('');
+  const matchedRegions = matches.map(([start, end]) => content.slice(start, end)).join('');
   let out = newString;
   if (out.includes('\\t') && matchedRegions.includes('\t')) out = out.split('\\t').join('\t');
   if (out.includes('\\r') && matchedRegions.includes('\r')) out = out.split('\\r').join('\r');
@@ -152,14 +152,14 @@ function strategyExact(content: string, pattern: string): Match[] {
 }
 
 function strategyLineTrimmed(content: string, pattern: string): Match[] {
-  const patternNormalized = pattern.split('\n').map((l) => l.trim()).join('\n');
+  const patternNormalized = pattern.split('\n').map((line) => line.trim()).join('\n');
   const contentLines = content.split('\n');
-  const contentNormalizedLines = contentLines.map((l) => l.trim());
+  const contentNormalizedLines = contentLines.map((line) => line.trim());
   return findNormalizedMatches(content, contentLines, contentNormalizedLines, patternNormalized);
 }
 
 function strategyWhitespaceNormalized(content: string, pattern: string): Match[] {
-  const normalize = (s: string) => s.replace(/[ \t]+/g, ' ');
+  const normalize = (text: string) => text.replace(/[ \t]+/g, ' ');
   const matchesInNormalized = strategyExact(normalize(content), normalize(pattern));
   if (matchesInNormalized.length === 0) return [];
   return mapNormalizedPositions(content, normalize(content), matchesInNormalized);
@@ -167,13 +167,13 @@ function strategyWhitespaceNormalized(content: string, pattern: string): Match[]
 
 function strategyIndentationFlexible(content: string, pattern: string): Match[] {
   const contentLines = content.split('\n');
-  const contentStrippedLines = contentLines.map((l) => l.replace(/^\s+/, ''));
-  const patternNormalized = pattern.split('\n').map((l) => l.replace(/^\s+/, '')).join('\n');
+  const contentStrippedLines = contentLines.map((line) => line.replace(/^\s+/, ''));
+  const patternNormalized = pattern.split('\n').map((line) => line.replace(/^\s+/, '')).join('\n');
   return findNormalizedMatches(content, contentLines, contentStrippedLines, patternNormalized);
 }
 
 function strategyEscapeNormalized(content: string, pattern: string): Match[] {
-  const unescape = (s: string) => s.split('\\n').join('\n').split('\\t').join('\t').split('\\r').join('\r');
+  const unescape = (text: string) => text.split('\\n').join('\n').split('\\t').join('\t').split('\\r').join('\r');
   const patternUnescaped = unescape(pattern);
   if (patternUnescaped === pattern) return [];
   return strategyExact(content, patternUnescaped);
@@ -202,9 +202,9 @@ function strategyTrimmedBoundary(content: string, pattern: string): Match[] {
 function buildOrigToNormMap(original: string): number[] {
   const result: number[] = [];
   let normPos = 0;
-  for (const ch of original) {
+  for (const char of original) {
     result.push(normPos);
-    const repl = UNICODE_MAP[ch];
+    const repl = UNICODE_MAP[char];
     normPos += repl !== undefined ? repl.length : 1;
   }
   result.push(normPos);
@@ -350,7 +350,7 @@ function mapNormalizedPositions(
     let origStart: number;
     if (normToOrigStart.has(normStart)) origStart = normToOrigStart.get(normStart)!;
     else {
-      origStart = origToNorm.findIndex((n) => n >= normStart);
+      origStart = origToNorm.findIndex((offset) => offset >= normStart);
       if (origStart === -1) origStart = original.length;
     }
     let origEnd: number;
@@ -376,14 +376,14 @@ export function ratio(a: string, b: string): number {
     let j2len = new Map<number, number>();
     for (let i = alo; i < ahi; i++) {
       const newj2len = new Map<number, number>();
-      const js = b2j.get(a[i]);
-      if (js) {
-        for (const j of js) {
+      const positions = b2j.get(a[i]);
+      if (positions) {
+        for (const j of positions) {
           if (j < blo) continue;
           if (j >= bhi) break;
-          const k = (j2len.get(j - 1) ?? 0) + 1;
-          newj2len.set(j, k);
-          if (k > bestsize) { besti = i - k + 1; bestj = j - k + 1; bestsize = k; }
+          const length = (j2len.get(j - 1) ?? 0) + 1;
+          newj2len.set(j, length);
+          if (length > bestsize) { besti = i - length + 1; bestj = j - length + 1; bestsize = length; }
         }
       }
       j2len = newj2len;
@@ -394,11 +394,11 @@ export function ratio(a: string, b: string): number {
   const stack: [number, number, number, number][] = [[0, a.length, 0, b.length]];
   while (stack.length) {
     const [alo, ahi, blo, bhi] = stack.pop()!;
-    const [i, j, k] = longest(alo, ahi, blo, bhi);
-    if (k > 0) {
-      matches += k;
+    const [i, j, length] = longest(alo, ahi, blo, bhi);
+    if (length > 0) {
+      matches += length;
       if (alo < i && blo < j) stack.push([alo, i, blo, j]);
-      if (i + k < ahi && j + k < bhi) stack.push([i + k, ahi, j + k, bhi]);
+      if (i + length < ahi && j + length < bhi) stack.push([i + length, ahi, j + length, bhi]);
     }
   }
   return (2 * matches) / total;
@@ -414,7 +414,7 @@ export function findClosestLines(
   if (oldLines.length === 0 || contentLines.length === 0) return '';
   let anchor = oldLines[0].trim();
   if (!anchor) {
-    const candidates = oldLines.map((l) => l.trim()).filter(Boolean);
+    const candidates = oldLines.map((line) => line.trim()).filter(Boolean);
     if (candidates.length === 0) return '';
     anchor = candidates[0];
   }
@@ -422,8 +422,8 @@ export function findClosestLines(
   for (let i = 0; i < contentLines.length; i++) {
     const stripped = contentLines[i].trim();
     if (!stripped) continue;
-    const r = ratio(anchor, stripped);
-    if (r > 0.3) scored.push([r, i]);
+    const similarity = ratio(anchor, stripped);
+    if (similarity > 0.3) scored.push([similarity, i]);
   }
   if (scored.length === 0) return '';
   scored.sort((a, b) => b[0] - a[0]);

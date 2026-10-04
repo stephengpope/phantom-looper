@@ -19,8 +19,8 @@ export const NOTIFY_TOOLS: ToolDef[] = [
       try {
         await ctx.app.notifications.send(String(a.text ?? ''), { sessionId: ctx.session.id });
         return { sent: true };
-      } catch (e) {
-        throw refusal('telegram_unavailable', `could not send the message: ${(e as Error).message}`);
+      } catch (error) {
+        throw refusal('telegram_unavailable', `could not send the message: ${(error as Error).message}`);
       }
     },
   },

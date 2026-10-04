@@ -29,15 +29,15 @@ export function tasksRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   /** The session's container, probed WITHOUT creating one — listing must
    *  never boot a container just to answer "nothing". */
   const probe = async (workspaceId: string) => {
-    const c = deps.docker.getContainer(deps.sessionContainers.name(workspaceId));
-    const info = await c.inspect().catch((e: { statusCode?: number; message?: string }) => {
+    const container = deps.docker.getContainer(deps.sessionContainers.name(workspaceId));
+    const info = await container.inspect().catch((error: { statusCode?: number; message?: string }) => {
       // 404 IS "absent"; anything else is docker failing to answer.
-      if (e.statusCode !== 404) log.warn({ workspace: workspaceId, err: e.message }, 'container inspect failed — listed as absent');
+      if (error.statusCode !== 404) log.warn({ workspace: workspaceId, err: error.message }, 'container inspect failed — listed as absent');
       return null;
     });
     if (!info) return { state: 'absent' as const, container: null };
     if (!info.State.Running) return { state: 'stopped' as const, container: null };
-    return { state: 'running' as const, container: c };
+    return { state: 'running' as const, container: container };
   };
 
   app.get<{ Params: { id: string } }>('/sessions/:id/tasks', { schema: { ...TAG,
@@ -56,29 +56,29 @@ export function tasksRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     if (container) {
       try {
         groups = await probeGroups(new Sandbox(deps.docker, container));
-      } catch (e) {
-        log.warn({ session: session.id, err: errStr(e) }, 'ps in container failed');
+      } catch (error) {
+        log.warn({ session: session.id, err: errStr(error) }, 'ps in container failed');
       }
     }
 
     const rows: BackgroundTaskRow[] = await ctx.backgroundTasks.listForSession(session.id, 50);
-    const running = rows.filter((r) => r.status === 'running');
+    const running = rows.filter((row) => row.status === 'running');
 
-    const bySid = new Map(running.filter((r) => r.sid).map((r) => [r.sid as string, r]));
-    const tasks = groups.map((g) => {
-      const row = bySid.get(g.sid);
+    const bySid = new Map(running.filter((row) => row.sid).map((row) => [row.sid as string, row]));
+    const tasks = groups.map((group) => {
+      const row = bySid.get(group.sid);
       // An untracked task still says when it started — derived from ps's
       // elapsed, so the client renders one field the same way for every row.
-      const secs = elapsedSeconds(g.elapsed);
+      const secs = elapsedSeconds(group.elapsed);
       return {
-        sid: g.sid,
-        command: row ? commandTextFromArgv(row.argv) : g.command,
+        sid: group.sid,
+        command: row ? commandTextFromArgv(row.argv) : group.command,
         background_task_id: row?.id ?? null,
         logs: row ? `/background-tasks/${row.id}/logs` : null,
         log_file: row ? `/workspace/logs/${row.id}.ndjson` : null,
         started_at: row?.startedAt ?? (secs == null ? null : new Date(Date.now() - secs * 1000)),
-        elapsed: g.elapsed,
-        pids: g.pids,
+        elapsed: group.elapsed,
+        pids: group.pids,
       };
     });
 
@@ -86,19 +86,19 @@ export function tasksRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     // when the container is absent or stopped — nothing survives either.
     await reconcileRunning(ctx, running, groups);
 
-    const liveIds = new Set(tasks.map((t) => t.background_task_id).filter(Boolean));
+    const liveIds = new Set(tasks.map((task) => task.background_task_id).filter(Boolean));
     const recent = rows
-      .filter((r) => r.status !== 'running' && !liveIds.has(r.id))
+      .filter((row) => row.status !== 'running' && !liveIds.has(row.id))
       .slice(0, 10)
-      .map((r) => ({
-        background_task_id: r.id,
-        command: commandTextFromArgv(r.argv),
-        status: r.status,
-        exit_code: r.exitCode,
-        started_at: r.startedAt,
-        ended_at: r.endedAt,
-        logs: `/background-tasks/${r.id}/logs`,
-        log_file: `/workspace/logs/${r.id}.ndjson`,
+      .map((row) => ({
+        background_task_id: row.id,
+        command: commandTextFromArgv(row.argv),
+        status: row.status,
+        exit_code: row.exitCode,
+        started_at: row.startedAt,
+        ended_at: row.endedAt,
+        logs: `/background-tasks/${row.id}/logs`,
+        log_file: `/workspace/logs/${row.id}.ndjson`,
       }));
 
     return ok({ container: state, tasks, recent });
@@ -119,7 +119,7 @@ export function tasksRoutes(app: FastifyInstance, ctx: PhantomBackend) {
 
     const sandbox = new Sandbox(deps.docker, container);
     const groups = await probeGroups(sandbox);
-    if (!groups.some((g) => g.sid === req.params.sid)) {
+    if (!groups.some((group) => group.sid === req.params.sid)) {
       return reply.code(404).send(err('no_such_task', `no running task with sid ${req.params.sid}`));
     }
 
@@ -151,7 +151,7 @@ export function tasksRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         if (rest.length > offset) reply.raw.write(rest.subarray(offset));
         break;
       }
-      await new Promise((r) => setTimeout(r, 250));
+      await new Promise((wake) => setTimeout(wake, 250));
     }
     reply.raw.end();
     return reply;

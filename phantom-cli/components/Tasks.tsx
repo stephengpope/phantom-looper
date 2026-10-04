@@ -47,21 +47,21 @@ export function taskChoices(view: TasksView, now = Date.now()): Choice<TaskPick 
   // SelectList sizes the label column over the whole list, so the header
   // must be computed over the same data or a long finished command would
   // skew the live rows out from under it.
-  const live = view.tasks.map((t): TableRow<TaskPick | null> => ({
-    value: { kind: 'live', sid: t.sid, command: t.command },
-    cells: [t.command, 'running', started(t.started_at), '', t.sid],
+  const live = view.tasks.map((task): TableRow<TaskPick | null> => ({
+    value: { kind: 'live', sid: task.sid, command: task.command },
+    cells: [task.command, 'running', started(task.started_at), '', task.sid],
     busy: true,
-    hint: t.log_file ? `output: ${t.log_file}`
+    hint: task.log_file ? `output: ${task.log_file}`
       : 'not started by a tracked command — [k] still kills it',
   }));
-  const done = view.recent.map((r): TableRow<TaskPick | null> => ({
-    value: { kind: 'done', backgroundTaskId: r.background_task_id },
-    cells: [r.command,
-      r.status === 'exited' && r.exit_code != null ? `exited (${r.exit_code})` : r.status,
-      started(r.started_at),
-      r.ended_at ? ago(r.ended_at, now) : '·',
+  const done = view.recent.map((recent): TableRow<TaskPick | null> => ({
+    value: { kind: 'done', backgroundTaskId: recent.background_task_id },
+    cells: [recent.command,
+      recent.status === 'exited' && recent.exit_code != null ? `exited (${recent.exit_code})` : recent.status,
+      started(recent.started_at),
+      recent.ended_at ? ago(recent.ended_at, now) : '·',
       ''], // a finished command has no live process to name
-    hint: `output: ${r.log_file}`,
+    hint: `output: ${recent.log_file}`,
   }));
   const [header, ...rows] = tableChoices('command', COLS, [...live, ...done]);
   const out: Choice<TaskPick | null>[] = [];
@@ -92,7 +92,7 @@ export function Tasks({ view, notice, onKill, onCancel }: {
         choices={taskChoices(view)}
         onSelect={() => {}}
         onCancel={onCancel}
-        onKey={(ch, v) => { if ((ch === 'k' || ch === 'c') && v?.kind === 'live') onKill(v.sid, v.command); }}
+        onKey={(char, pick) => { if ((char === 'k' || char === 'c') && pick?.kind === 'live') onKill(pick.sid, pick.command); }}
       />
     </Screen>
   );

@@ -46,17 +46,17 @@ const GUTTER = 2;
 /** The mark and the space after it. */
 const MARK = 2;
 
-const cellOf = (c: Cell | undefined): { text: string; mark?: string; markChar?: string; markAfter?: boolean } =>
-  typeof c === 'string' ? { text: c } : c ?? { text: '' };
+const cellOf = (cell: Cell | undefined): { text: string; mark?: string; markChar?: string; markAfter?: boolean } =>
+  typeof cell === 'string' ? { text: cell } : cell ?? { text: '' };
 /** Cells the content takes on screen — the mark included. */
-const cellWidth = (c: Cell | undefined): number => {
-  const { text, mark } = cellOf(c);
+const cellWidth = (cell: Cell | undefined): number => {
+  const { text, mark } = cellOf(cell);
   return text.length + (mark ? MARK : 0);
 };
 /** The Column for a cell: `mark`/`markChar`/`markAfter` only when set, so an
  *  unmarked cell keeps the exact `{ text, width? }` shape. */
-const column = (c: Cell | undefined, width: number | undefined): Column => {
-  const { text, mark, markChar, markAfter } = cellOf(c);
+const column = (cell: Cell | undefined, width: number | undefined): Column => {
+  const { text, mark, markChar, markAfter } = cellOf(cell);
   return { text, ...(width ? { width } : {}), ...(mark ? { mark } : {}),
     ...(markChar ? { markChar } : {}), ...(markAfter ? { markAfter } : {}) };
 };
@@ -66,11 +66,11 @@ const column = (c: Cell | undefined, width: number | undefined): Column => {
 export function tableChoices<T>(
   labelTitle: string, cols: ColSpec[], rows: TableRow<T>[],
 ): Choice<T | null>[] {
-  const widths = cols.map((c, i) => {
-    if (c.width) return c.width;
+  const widths = cols.map((column, i) => {
+    if (column.width) return column.width;
     if (i === cols.length - 1) return undefined;
-    const widest = rows.reduce((widest, r) => Math.max(widest, cellWidth(r.cells[i + 1])), c.title.length);
-    return Math.min(c.cap ?? 32, widest) + GUTTER;
+    const widest = rows.reduce((widest, row) => Math.max(widest, cellWidth(row.cells[i + 1])), column.title.length);
+    return Math.min(column.cap ?? 32, widest) + GUTTER;
   });
   // The header IS a row: same label box, same column boxes, rendered dim by
   // SelectList's structured-heading path. It used to be a hand-padEnd'd
@@ -80,13 +80,13 @@ export function tableChoices<T>(
   // with itself.
   const header: Choice<T | null> = {
     value: null as T | null, heading: true, label: labelTitle,
-    columns: cols.map((c, i): Column =>
-      widths[i] ? { text: c.title, width: widths[i] } : { text: c.title }),
+    columns: cols.map((column, i): Column =>
+      widths[i] ? { text: column.title, width: widths[i] } : { text: column.title }),
   };
-  return [header, ...rows.map((r): Choice<T | null> => ({
-    value: r.value, id: r.id,
-    label: cellOf(r.cells[0]).text,
-    columns: r.cells.slice(1).map((cell, i): Column => column(cell, widths[i])),
-    busy: r.busy, dot: r.dot, lock: r.lock, hint: r.hint,
+  return [header, ...rows.map((row): Choice<T | null> => ({
+    value: row.value, id: row.id,
+    label: cellOf(row.cells[0]).text,
+    columns: row.cells.slice(1).map((cell, i): Column => column(cell, widths[i])),
+    busy: row.busy, dot: row.dot, lock: row.lock, hint: row.hint,
   }))];
 }

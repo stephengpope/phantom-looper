@@ -32,21 +32,21 @@ const NO_KEY = 'no firecrawl key set — set firecrawl_api_key ' +
 
 /** One upstream call: 60s ceiling so a hung socket cannot hang the tool. */
 async function firecrawl(key: string, route: string, body: unknown): Promise<Record<string, any>> {
-  const r = await fetch(`${apiBase()}${route}`, {
+  const response = await fetch(`${apiBase()}${route}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(60_000),
   });
-  return r.json() as Promise<Record<string, any>>;
+  return response.json() as Promise<Record<string, any>>;
 }
 
 /** A file name a URL deterministically maps to — the same page fetched twice
  *  lands in the same file. */
 export function urlSlug(url: string): string {
-  const s = url.replace(/^[a-z]+:\/\//i, '').replace(/[^A-Za-z0-9]+/g, '-')
+  const slug = url.replace(/^[a-z]+:\/\//i, '').replace(/[^A-Za-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '').toLowerCase();
-  return (s || 'page').slice(0, 60).replace(/-+$/, '');
+  return (slug || 'page').slice(0, 60).replace(/-+$/, '');
 }
 
 type FetchEntry = Record<string, unknown>;
@@ -57,32 +57,32 @@ async function fetchOne(
   const scrape = (extra: Record<string, unknown>) => firecrawl(key, '/v2/scrape', {
     url, formats: ['markdown'], onlyMainContent: true, maxAge: 3_600_000, ...extra,
   });
-  let r: Record<string, any>;
+  let body: Record<string, any>;
   try {
-    r = await scrape({});
+    body = await scrape({});
     // A page that came back unreadable — no markdown, or a bot wall
     // (403/429) — gets ONE more try through Firecrawl's enhanced proxy,
     // uncached. A hard failure (DNS, timeout) is not retried: the proxy
     // cannot help and the attempt costs seconds.
-    const blocked = (x: Record<string, any>) => x.success &&
-      (!String(x.data?.markdown ?? '').trim() || [403, 429].includes(x.data?.metadata?.statusCode));
-    if (blocked(r)) r = await scrape({ proxy: 'enhanced', waitFor: 3000, maxAge: 0 });
-  } catch (e) {
-    return { url, error_code: 'request_failed', error: (e as Error).message };
+    const blocked = (body: Record<string, any>) => body.success &&
+      (!String(body.data?.markdown ?? '').trim() || [403, 429].includes(body.data?.metadata?.statusCode));
+    if (blocked(body)) body = await scrape({ proxy: 'enhanced', waitFor: 3000, maxAge: 0 });
+  } catch (error) {
+    return { url, error_code: 'request_failed', error: (error as Error).message };
   }
-  if (!r.success) {
-    return { url, error_code: String(r.code ?? 'scrape_failed'), error: String(r.error ?? 'scrape failed') };
+  if (!body.success) {
+    return { url, error_code: String(body.code ?? 'scrape_failed'), error: String(body.error ?? 'scrape failed') };
   }
-  const markdown = String(r.data?.markdown ?? '');
-  const meta = (r.data?.metadata ?? {}) as Record<string, unknown>;
+  const markdown = String(body.data?.markdown ?? '');
+  const meta = (body.data?.metadata ?? {}) as Record<string, unknown>;
   if (!markdown.trim()) {
     return { url, error_code: 'empty_content',
       error: 'the page returned no readable content (retried through the enhanced proxy)',
       ...(meta.statusCode !== undefined ? { status_code: meta.statusCode } : {}) };
   }
   // Unique name within this call — two URLs may slug identically.
-  let name = urlSlug(url); let n = 2;
-  while (taken.has(name)) name = `${urlSlug(url)}-${n++}`;
+  let name = urlSlug(url); let suffix = 2;
+  while (taken.has(name)) name = `${urlSlug(url)}-${suffix++}`;
   taken.add(name);
   await fsp.writeFile(path.join(hostDir, `${name}.md`), markdown);
   return {
@@ -105,20 +105,20 @@ async function keyOf(ctx: WebDeps): Promise<string> {
  *  Throws ToolError: credential_required, search_failed (retryable). */
 export async function webSearch(ctx: WebDeps, b: SearchBody): Promise<Array<Record<string, unknown>>> {
   const key = await keyOf(ctx);
-  let r: Record<string, any>;
+  let body: Record<string, any>;
   try {
-    r = await firecrawl(key, '/v2/search', {
+    body = await firecrawl(key, '/v2/search', {
       query: b.query, limit: b.limit ?? 5,
       ...(b.tbs !== undefined ? { tbs: b.tbs } : {}),
       ...(b.categories !== undefined ? { categories: b.categories } : {}),
       ...(b.includeDomains !== undefined ? { includeDomains: b.includeDomains } : {}),
       ...(b.excludeDomains !== undefined ? { excludeDomains: b.excludeDomains } : {}),
     });
-  } catch (e) {
-    throw new ToolError('search_failed', (e as Error).message, true);
+  } catch (error) {
+    throw new ToolError('search_failed', (error as Error).message, true);
   }
-  if (!r.success) throw new ToolError(String(r.code ?? 'search_failed'), String(r.error ?? 'search failed'), true);
-  const web = (r.data?.web ?? []) as Array<Record<string, unknown>>;
+  if (!body.success) throw new ToolError(String(body.code ?? 'search_failed'), String(body.error ?? 'search failed'), true);
+  const web = (body.data?.web ?? []) as Array<Record<string, unknown>>;
   // Snippets are usually ~150 chars but Firecrawl sometimes inlines a page
   // of markdown there — clipped, ten results stay a snippet list.
   return web.map((hit) => ({
@@ -139,5 +139,5 @@ export async function webFetch(ctx: WebDeps, workspaceId: string, urls: string[]
   const taken = new Set<string>();
   // In input order; fetched in parallel — the slug set is claimed
   // synchronously per entry inside fetchOne before any await on the write.
-  return Promise.all(urls.map((u) => fetchOne(key, u, hostDir, taken)));
+  return Promise.all(urls.map((url) => fetchOne(key, url, hostDir, taken)));
 }

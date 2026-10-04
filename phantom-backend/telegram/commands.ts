@@ -83,23 +83,23 @@ const presetList = new Map<number, string[]>();
 
 /** Handle a slash command. `text` starts with '/'. */
 export async function handleCommand(
-  telegram: TelegramAssistantBot, client: TelegramApi, dm: number, text: string,
+  telegram: TelegramAssistantBot, client: TelegramApi, chatId: number, text: string,
 ): Promise<void> {
   const [raw, ...rest] = text.slice(1).trim().split(/\s+/);
   const cmd = raw.toLowerCase().split('@')[0];
   const arg = rest[0];
-  const reply = (m: string) => client.sendMessage(dm, m);
+  const reply = (text: string) => client.sendMessage(chatId, text);
   const bot = await telegram.backend.telegramBotState.read();
 
   switch (cmd) {
     case 'start':
     case 'help':
-      await client.sendMarkdown(dm, titled('ℹ️ phantom-looper', HELP));
+      await client.sendMarkdown(chatId, titled('ℹ️ phantom-looper', HELP));
       return;
 
     case 'assistant':
       // The switch line IS the reply; repeat it when there was nothing to switch.
-      if (!await telegram.enterMode(client, dm, 'assistant')) {
+      if (!await telegram.enterMode(client, chatId, 'assistant')) {
         await reply(MODE_MESSAGE.assistant);
       }
       return;
@@ -110,16 +110,16 @@ export async function handleCommand(
       // Silent: enterMode sends the code-mode label which already carries the
       // session name (and the last agent message), so the 🔀 line is redundant.
       if (arg !== undefined) {
-        const id = listedSession(dm, arg);
+        const id = listedSession(chatId, arg);
         if (!id) { await reply('⚠️ Send /sessions first to see the list, then /code <number>.'); return; }
-        const r = await telegram.switchSession(client, dm, id, { silent: true });
-        if ('error' in r) { await reply('⚠️ That session no longer exists — /sessions for a fresh list.'); return; }
+        const switched = await telegram.switchSession(client, chatId, id, { silent: true });
+        if ('error' in switched) { await reply('⚠️ That session no longer exists — /sessions for a fresh list.'); return; }
       } else if (!bot.activeSessionId) {
         await reply('⚠️ Pick a session first — /sessions or /new.');
         return;
       }
-      if (!await telegram.enterMode(client, dm, 'code')) {
-        await reply(await telegram.codeModeLabel(dm));
+      if (!await telegram.enterMode(client, chatId, 'code')) {
+        await reply(await telegram.codeModeLabel(chatId));
       }
       return;
     }
@@ -128,25 +128,25 @@ export async function handleCommand(
       // With a number: point at that session. The pointer only — whoever is
       // answering keeps answering; /code is the door to the coding agent.
       if (arg !== undefined) {
-        const id = listedSession(dm, arg);
+        const id = listedSession(chatId, arg);
         if (!id) { await reply('⚠️ Send /sessions first to see the list, then /sessions <number>.'); return; }
-        const r = await telegram.switchSession(client, dm, id);
-        if ('error' in r) { await reply('⚠️ That session no longer exists — /sessions for a fresh list.'); return; }
+        const switched = await telegram.switchSession(client, chatId, id);
+        if ('error' in switched) { await reply('⚠️ That session no longer exists — /sessions for a fresh list.'); return; }
         return;
       }
       // Bare: list them.  Fetch generously, then trim: all pinned + at
       // least 5 non-pinned (target 10 total, but pinned never push recent
       // sessions out of view).
       const { sessions: allSessions } = await telegram.backend.sessions.list({ typed: true, background: false, limit: 30 });
-      const pinned = allSessions.filter((s) => s.pinned);
-      const nonPinned = allSessions.filter((s) => !s.pinned);
+      const pinned = allSessions.filter((session) => session.pinned);
+      const nonPinned = allSessions.filter((session) => !session.pinned);
       const sessions = [...pinned, ...nonPinned.slice(0, Math.max(5, 10 - pinned.length))];
       if (!sessions.length) { await reply('ℹ️ No sessions yet. /new starts one.'); return; }
-      sessionList.set(dm, sessions.map((s) => s.id));
+      sessionList.set(chatId, sessions.map((session) => session.id));
       const now = Date.now();
-      const rows = sessions.map((s, i) =>
-        `${i + 1}. ${s.pinned ? '📌 ' : ''}${s.name ?? 'untitled'}${s.id === bot.activeSessionId ? ' (active)' : ''}${isHeld(s, now) ? ' (busy)' : ''}`);
-      await client.sendMarkdown(dm, titled('📋 Sessions:', [...rows, '',
+      const rows = sessions.map((session, i) =>
+        `${i + 1}. ${session.pinned ? '📌 ' : ''}${session.name ?? 'untitled'}${session.id === bot.activeSessionId ? ' (active)' : ''}${isHeld(session, now) ? ' (busy)' : ''}`);
+      await client.sendMarkdown(chatId, titled('📋 Sessions:', [...rows, '',
         'Pick one with /sessions <number>; /code <number> talks to its coding agent'].join('\n')));
       return;
     }
@@ -156,20 +156,20 @@ export async function handleCommand(
       if (!list.length) { await reply('ℹ️ No projects yet — add one in phantom-cli.'); return; }
       // With a number: switch.
       if (arg !== undefined) {
-        const ids = projectList.get(dm);
-        const n = Number.parseInt(arg, 10);
-        if (!ids || !Number.isInteger(n) || n < 1 || n > ids.length) {
+        const ids = projectList.get(chatId);
+        const pick = Number.parseInt(arg, 10);
+        if (!ids || !Number.isInteger(pick) || pick < 1 || pick > ids.length) {
           await reply('⚠️ Send /projects first to see the list, then /projects <number>.');
           return;
         }
-        const project = list.find((x) => x.id === ids[n - 1]);
-        await telegram.backend.telegramBotState.setActiveProject(ids[n - 1]);
-        await reply(`📁 Active project: ${project?.name ?? ids[n - 1]}`);
+        const project = list.find((project) => project.id === ids[pick - 1]);
+        await telegram.backend.telegramBotState.setActiveProject(ids[pick - 1]);
+        await reply(`📁 Active project: ${project?.name ?? ids[pick - 1]}`);
         return;
       }
-      projectList.set(dm, list.map((project) => project.id));
+      projectList.set(chatId, list.map((project) => project.id));
       const rows = list.map((project, i) => `${i + 1}. ${project.name}${project.id === bot.activeProjectId ? ' (active)' : ''}`);
-      await client.sendMarkdown(dm, titled('📋 Projects:', [...rows, '', 'Switch with /projects <number>'].join('\n')));
+      await client.sendMarkdown(chatId, titled('📋 Projects:', [...rows, '', 'Switch with /projects <number>'].join('\n')));
       return;
     }
 
@@ -178,7 +178,7 @@ export async function handleCommand(
       if (!projectId) { await reply('⚠️ No active project — /projects to pick one first.'); return; }
       let started;
       try { started = await telegram.backend.sessions.start(projectId, CodingAgent.systemPromptLayout, { type: 'coding', startedBy: TELEGRAM_STARTER }); }
-      catch (e) { await reply(`⚠️ Couldn't start a session: ${(e as Error).message}`); return; }
+      catch (error) { await reply(`⚠️ Couldn't start a session: ${(error as Error).message}`); return; }
       // Create + point at it. The mode is untouched: from home the assistant
       // keeps the conversation; in code mode the next message starts the coder.
       await telegram.backend.telegramBotState.setActiveSession(started.id);
@@ -192,25 +192,25 @@ export async function handleCommand(
       // The pointer's flag, whoever is answering — like /sessions, not a
       // coding-agent act. Toggles; the row says which way.
       if (!bot.activeSessionId) { await reply('⚠️ Pick a session first — /sessions or /new.'); return; }
-      const s = await sessionRow(telegram, bot.activeSessionId);
-      if (!s) { await reply('⚠️ That session no longer exists — /sessions for a fresh list.'); return; }
-      const next = !s.pinned;
+      const session = await sessionRow(telegram, bot.activeSessionId);
+      if (!session) { await reply('⚠️ That session no longer exists — /sessions for a fresh list.'); return; }
+      const next = !session.pinned;
       await telegram.backend.sessions.setPinned(bot.activeSessionId, next);
       await reply(next
-        ? `📌 Pinned ${s.name ?? 'untitled'} — it sits at the top of the session list.`
-        : `Unpinned ${s.name ?? 'untitled'}.`);
+        ? `📌 Pinned ${session.name ?? 'untitled'} — it sits at the top of the session list.`
+        : `Unpinned ${session.name ?? 'untitled'}.`);
       return;
     }
 
     case 'status': {
       // Project, session + state, agent, mode (code only), server.
       const project = bot.activeProjectId ? await projectRow(telegram, bot.activeProjectId) : null;
-      const s = bot.activeSessionId ? await sessionRow(telegram, bot.activeSessionId) : null;
+      const session = bot.activeSessionId ? await sessionRow(telegram, bot.activeSessionId) : null;
 
       let sessionLine: string;
-      if (s) {
-        const state = s.locked ? 'running' : 'idle';
-        sessionLine = `${s.name ?? 'untitled'} — ${state}`;
+      if (session) {
+        const state = session.locked ? 'running' : 'idle';
+        sessionLine = `${session.name ?? 'untitled'} — ${state}`;
       } else {
         sessionLine = 'none — /sessions or /new';
       }
@@ -219,7 +219,7 @@ export async function handleCommand(
         `Project: ${project?.name ?? bot.activeProjectId ?? 'none — /projects'}`,
         `Session: ${sessionLine}`,
         `Agent: ${bot.mode}`,
-        ...(bot.mode === 'code' && s ? [`Mode: ${s.planMode ? 'plan' : 'code'}`] : []),
+        ...(bot.mode === 'code' && session ? [`Mode: ${session.planMode ? 'plan' : 'code'}`] : []),
       ];
 
       // Server stats condensed to one line.
@@ -237,14 +237,14 @@ export async function handleCommand(
         lines.push(`Server: ${parts || raw.split('\n')[0]}`);
       }
 
-      await client.sendMarkdown(dm, titled('📊 Status', lines.join('\n')));
+      await client.sendMarkdown(chatId, titled('📊 Status', lines.join('\n')));
       return;
     }
 
     case 'plan': {
       if (bot.mode !== 'code' || !bot.activeSessionId) { await reply('⚠️ Plan mode belongs to the coding agent — /code first.'); return; }
-      const s = await sessionRow(telegram, bot.activeSessionId);
-      const next = !s?.planMode;
+      const session = await sessionRow(telegram, bot.activeSessionId);
+      const next = !session?.planMode;
       await telegram.backend.sessions.setPlanMode(bot.activeSessionId, next);
       await reply(next ? '📝 Plan mode on — file tools are read-only.' : '🔧 Plan mode off — full tools.');
       return;
@@ -258,11 +258,11 @@ export async function handleCommand(
         await reply(`⚠️ ${name} runs on the coding session — /code first.`);
         return;
       }
-      const bubble = await stepBubble(client, dm, `${pull ? '⬇️' : '🚀'} ${name}`);
-      const r = pull
+      const bubble = await stepBubble(client, chatId, `${pull ? '⬇️' : '🚀'} ${name}`);
+      const synced = pull
         ? await telegram.autoPull(bot.activeSessionId, bubble.step)
         : await telegram.autoPush(bot.activeSessionId, bubble.step);
-      await bubble.end(outcomeLine(pull, r));
+      await bubble.end(outcomeLine(pull, synced));
       return;
     }
 
@@ -272,14 +272,14 @@ export async function handleCommand(
       // clears `coding_model` so it follows that default (the cli's /settings rule).
       const { coding_provider: current } = await telegram.backend.settings.resolveMany(['coding_provider']);
       if (arg !== undefined) {
-        const p = listed(providerList, dm, arg);
-        if (!p) { await reply('⚠️ Send /providers first to see the list, then /providers <number>.'); return; }
-        try { await telegram.backend.settings.writeAtScope('global', GLOBAL, { coding_provider: p, coding_model: null }, CLIENT_ID); }
-        catch (e) { await reply(`⚠️ Couldn't switch provider: ${(e as Error).message}`); return; }
-        const model = telegram.backend.modelCatalog.latestFor(p);
-        await client.sendMarkdown(dm, titled(
-          `✅ Provider: ${p}${model ? ` — model: ${model} (the catalog's newest)` : ''}`,
-          [...(p === 'openai-compatible'
+        const provider = listed(providerList, chatId, arg);
+        if (!provider) { await reply('⚠️ Send /providers first to see the list, then /providers <number>.'); return; }
+        try { await telegram.backend.settings.writeAtScope('global', GLOBAL, { coding_provider: provider, coding_model: null }, CLIENT_ID); }
+        catch (error) { await reply(`⚠️ Couldn't switch provider: ${(error as Error).message}`); return; }
+        const model = telegram.backend.modelCatalog.latestFor(provider);
+        await client.sendMarkdown(chatId, titled(
+          `✅ Provider: ${provider}${model ? ` — model: ${model} (the catalog's newest)` : ''}`,
+          [...(provider === 'openai-compatible'
             ? ['⚠️ openai-compatible also needs an endpoint and a model id — set both in the cli under /settings.', ''] : []),
           'See the top models with /models; switch with /models <number>.',
           ].join('\n')));
@@ -287,25 +287,25 @@ export async function handleCommand(
       }
       // Only show providers the user has a key for (plus the current one).
       const keyed: string[] = [];
-      for (const p of PROVIDERS) {
-        if (p === current) { keyed.push(p); continue; }          // always show the active one
-        const name = telegram.backend.settings.credentialKeyForProvider(p);
+      for (const provider of PROVIDERS) {
+        if (provider === current) { keyed.push(provider); continue; }          // always show the active one
+        const name = telegram.backend.settings.credentialKeyForProvider(provider);
         // A provider that holds no key here (openai-codex) is always callable.
-        if (!name || await telegram.backend.settings.credential(name)) keyed.push(p);
+        if (!name || await telegram.backend.settings.credential(name)) keyed.push(provider);
       }
       if (!keyed.length) {
         await reply('⚠️ No provider keys configured yet.');
         return;
       }
-      providerList.set(dm, keyed);
-      const rows = keyed.map((p, i) => {
-        const d = telegram.backend.modelCatalog.latestFor(p);
-        const note = d ? ` → ${d}`
-          : hasCatalog(p) ? ' — catalog list unavailable right now'
+      providerList.set(chatId, keyed);
+      const rows = keyed.map((provider, i) => {
+        const latest = telegram.backend.modelCatalog.latestFor(provider);
+        const note = latest ? ` → ${latest}`
+          : hasCatalog(provider) ? ' — catalog list unavailable right now'
             : ' — no catalog (set model + endpoint in the cli)';
-        return `${i + 1}. ${p}${note}${p === current ? ' (current)' : ''}`;
+        return `${i + 1}. ${provider}${note}${provider === current ? ' (current)' : ''}`;
       });
-      await client.sendMarkdown(dm, titled('🧠 Providers:', [...rows, '',
+      await client.sendMarkdown(chatId, titled('🧠 Providers:', [...rows, '',
         'Switch with /providers <number> — the model follows the catalog\'s newest shown above'].join('\n')));
       return;
     }
@@ -321,16 +321,16 @@ export async function handleCommand(
         return;
       }
       if (arg !== undefined) {
-        const id = listed(modelList, dm, arg);
+        const id = listed(modelList, chatId, arg);
         if (!id) { await reply('⚠️ Send /models first to see the list, then /models <number>.'); return; }
         try { await telegram.backend.settings.writeAtScope('global', GLOBAL, { coding_model: id }, CLIENT_ID); }
-        catch (e) { await reply(`⚠️ Couldn't switch model: ${(e as Error).message}`); return; }
+        catch (error) { await reply(`⚠️ Couldn't switch model: ${(error as Error).message}`); return; }
         await reply(`✅ Model: ${id}`);
         return;
       }
-      modelList.set(dm, models.map((m) => m.id));
-      const rows = models.map((m, i) => `${i + 1}. ${m.id}${m.id === model ? ' (current)' : ''}`);
-      await client.sendMarkdown(dm, titled(`🧠 Models — ${provider} (current: ${model ?? 'none'}):`,
+      modelList.set(chatId, models.map((entry) => entry.id));
+      const rows = models.map((entry, i) => `${i + 1}. ${entry.id}${entry.id === model ? ' (current)' : ''}`);
+      await client.sendMarkdown(chatId, titled(`🧠 Models — ${provider} (current: ${model ?? 'none'}):`,
         [...rows, '',
         'Switch with /models <number>; any other id can be set in the cli under /settings'].join('\n')));
       return;
@@ -343,20 +343,20 @@ export async function handleCommand(
       const list = await telegram.backend.presets.list() as Array<{ id: string; name: string; values: Record<string, unknown> }>;
       if (!list.length) { await reply('ℹ️ No presets saved yet — save one in the cli under /presets.'); return; }
       if (arg !== undefined) {
-        const id = listed(presetList, dm, arg);
+        const id = listed(presetList, chatId, arg);
         if (!id) { await reply('⚠️ Send /presets first to see the list, then /presets <number>.'); return; }
-        const p = list.find((x) => x.id === id)!;
-        try { await telegram.backend.settings.writeAtScope('global', GLOBAL, p.values, CLIENT_ID); }
-        catch (e) { await reply(`⚠️ Couldn't apply "${p.name}": ${(e as Error).message}`); return; }
+        const preset = list.find((preset) => preset.id === id)!;
+        try { await telegram.backend.settings.writeAtScope('global', GLOBAL, preset.values, CLIENT_ID); }
+        catch (error) { await reply(`⚠️ Couldn't apply "${preset.name}": ${(error as Error).message}`); return; }
         const { coding_provider: provider, coding_model: model } = await telegram.backend.settings.resolveMany(['coding_provider', 'coding_model']);
-        await client.sendMarkdown(dm, titled(
-          `✅ Applied preset "${p.name}" — ${provider ?? 'no provider'}${model ? ` / ${model}` : ''}.`,
+        await client.sendMarkdown(chatId, titled(
+          `✅ Applied preset "${preset.name}" — ${provider ?? 'no provider'}${model ? ` / ${model}` : ''}.`,
           'See the top models with /models; switch with /models <number>.'));
         return;
       }
-      presetList.set(dm, list.map((p) => p.id));
-      const rows = list.map((p, i) => `${i + 1}. ${p.name}${presetSummary(p.values)}`);
-      await client.sendMarkdown(dm, titled('🧰 Presets:', [...rows, '', 'Apply one with /presets <number>'].join('\n')));
+      presetList.set(chatId, list.map((preset) => preset.id));
+      const rows = list.map((preset, i) => `${i + 1}. ${preset.name}${presetSummary(preset.values)}`);
+      await client.sendMarkdown(chatId, titled('🧰 Presets:', [...rows, '', 'Apply one with /presets <number>'].join('\n')));
       return;
     }
 
@@ -370,28 +370,28 @@ export async function handleCommand(
 
       if (arg === 'all') {
         const now = Date.now();
-        const locked = (await telegram.backend.sessions.list({ typed: true, background: false, limit: 50 })).sessions.filter((s) => isHeld(s, now));
+        const locked = (await telegram.backend.sessions.list({ typed: true, background: false, limit: 50 })).sessions.filter((session) => isHeld(session, now));
         if (!locked.length) { await reply('ℹ️ Nothing is running.'); return; }
         const names: string[] = [];
-        for (const s of locked) {
-          telegram.stop(s.id);
-          telegram.interrupt(s.id);
-          names.push(s.name ?? 'untitled');
+        for (const session of locked) {
+          telegram.stop(session.id);
+          telegram.interrupt(session.id);
+          names.push(session.name ?? 'untitled');
         }
-        await reply(`🛑 Stopped ${names.length}: ${names.map((n) => `'${n}'`).join(', ')}.`);
+        await reply(`🛑 Stopped ${names.length}: ${names.map((name) => `'${name}'`).join(', ')}.`);
         return;
       }
 
       // /stop n — a specific session by its number from /sessions.
       if (arg !== undefined) {
-        const id = listedSession(dm, arg);
+        const id = listedSession(chatId, arg);
         if (!id) { await reply('⚠️ Send /sessions first to see the list, then /stop <number>.'); return; }
-        const s = await sessionRow(telegram, id);
-        if (!s) { await reply('⚠️ That session no longer exists — /sessions for a fresh list.'); return; }
-        if (!s.locked) { await reply(`ℹ️ ${s.name ?? 'untitled'} isn't running.`); return; }
+        const session = await sessionRow(telegram, id);
+        if (!session) { await reply('⚠️ That session no longer exists — /sessions for a fresh list.'); return; }
+        if (!session.locked) { await reply(`ℹ️ ${session.name ?? 'untitled'} isn't running.`); return; }
         telegram.stop(id);
         telegram.interrupt(id);
-        await reply(`🛑 Stopping '${s.name ?? 'untitled'}'.`);
+        await reply(`🛑 Stopping '${session.name ?? 'untitled'}'.`);
         return;
       }
 
@@ -408,8 +408,8 @@ export async function handleCommand(
       if (!bot.activeSessionId) { await reply('⚠️ No active session — /sessions to pick one, or /stop all.'); return; }
       const own = telegram.stop(bot.activeSessionId);
       if (!own) {
-        const s = await sessionRow(telegram, bot.activeSessionId);
-        if (!s?.locked) { await reply('ℹ️ Nothing is running.'); return; }
+        const session = await sessionRow(telegram, bot.activeSessionId);
+        if (!session?.locked) { await reply('ℹ️ Nothing is running.'); return; }
       }
       telegram.interrupt(bot.activeSessionId);
       await reply('🛑 Stopping.');
@@ -417,7 +417,7 @@ export async function handleCommand(
     }
 
     case 'update': {
-      await telegram.upgradeChecker.manualCheck(client, dm);
+      await telegram.upgradeChecker.manualCheck(client, chatId);
       return;
     }
 
@@ -425,17 +425,17 @@ export async function handleCommand(
       // Legacy alias — folded into /status but still answered if typed.
       let text: string;
       try { text = (await telegram.deployment.status()).text; }
-      catch (e) { await reply(`⚠️ Couldn't read the server status: ${(e as Error).message}`); return; }
-      await client.sendMarkdown(dm, titled('🖥 Server status', text + '\n\nℹ️ /cpu is now part of /status'));
+      catch (error) { await reply(`⚠️ Couldn't read the server status: ${(error as Error).message}`); return; }
+      await client.sendMarkdown(chatId, titled('🖥 Server status', text + '\n\nℹ️ /cpu is now part of /status'));
       return;
     }
 
     case 'tokens': {
       let text: string;
       try { text = (await telegram.deployment.tokenUsage(await telegram.backend.settings.clockFor())).text; }
-      catch (e) { await reply(`⚠️ Couldn't read token usage: ${(e as Error).message}`); return; }
+      catch (error) { await reply(`⚠️ Couldn't read token usage: ${(error as Error).message}`); return; }
       // A code block: the report is a fixed-column table, monospace only.
-      await client.sendMarkdown(dm, titled('📊 Token usage', text ? '```\n' + text + '\n```' : '(no usage data)'));
+      await client.sendMarkdown(chatId, titled('📊 Token usage', text ? '```\n' + text + '\n```' : '(no usage data)'));
       return;
     }
 
@@ -443,7 +443,7 @@ export async function handleCommand(
       // Accept/decline first — restarting the api cuts every in-flight turn.
       // The gate's bubble records the verdict, so a decline needs no reply.
       const service = arg;
-      const accepted = await telegram.askApproval(client, dm, {
+      const accepted = await telegram.askApproval(client, chatId, {
         label: 'restart',
         subject: service
           ? `service: ${service}`
@@ -451,7 +451,7 @@ export async function handleCommand(
       });
       if (!accepted) return;
       try { await telegram.deployment.restart(service || undefined); }
-      catch (e) { await reply(`⚠️ Couldn't restart: ${(e as Error).message}`); return; }
+      catch (error) { await reply(`⚠️ Couldn't restart: ${(error as Error).message}`); return; }
       await reply(service
         ? `🔄 Restarting ${service}.`
         : '🔄 Restarting the api — back in a few seconds. Messages sent now queue until it is.');
@@ -459,7 +459,7 @@ export async function handleCommand(
     }
 
     default:
-      await client.sendMarkdown(dm, titled(`⚠️ I don't know /${cmd}`, titled('ℹ️ phantom-looper', HELP)));
+      await client.sendMarkdown(chatId, titled(`⚠️ I don't know /${cmd}`, titled('ℹ️ phantom-looper', HELP)));
   }
 }
 
@@ -468,10 +468,10 @@ export async function handleCommand(
  *  client that hands back no message id (or an edit that fails — an unchanged
  *  body, a deleted message) falls back to a fresh message for the result, so
  *  the outcome is never lost. */
-async function stepBubble(client: TelegramApi, dm: number, title: string) {
+async function stepBubble(client: TelegramApi, chatId: number, title: string) {
   const steps: string[] = [];
-  const m = await client.sendMessage(dm, title).catch(() => null);
-  const id: number | null = m?.message_id ?? null;
+  const sent = await client.sendMessage(chatId, title).catch(() => null);
+  const id: number | null = sent?.message_id ?? null;
   // Chain edits so the next waits for the previous — Telegram rate-limits
   // edits to the same message and silently drops fast ones.
   let pending: Promise<boolean> = Promise.resolve(true);
@@ -479,7 +479,7 @@ async function stepBubble(client: TelegramApi, dm: number, title: string) {
     if (id == null) return Promise.resolve(false);
     const fmt = toTelegram(titled(title, steps.join('\n')));
     pending = pending.then(
-      () => client.editMessageText(dm, id, fmt.text, fmt.entities).then(() => true, () => false),
+      () => client.editMessageText(chatId, id, fmt.text, fmt.entities).then(() => true, () => false),
     );
     return pending;
   };
@@ -487,44 +487,44 @@ async function stepBubble(client: TelegramApi, dm: number, title: string) {
     step(label: string) { steps.push(`· ${label}`); void edit(); },
     async end(result: string) {
       steps.push(result);
-      if (!await edit()) await client.sendMessage(dm, result);
+      if (!await edit()) await client.sendMessage(chatId, result);
     },
   };
 }
 
 /** The result of a push or a pull as one line. */
-export function outcomeLine(pull: boolean, r: { result: string; reason?: string; sha?: string;
+export function outcomeLine(pull: boolean, outcome: { result: string; reason?: string; sha?: string;
   arrived?: string[]; files?: string[]; pushed?: boolean }): string {
-  const why = r.reason ? ` — ${r.reason}` : '';
+  const why = outcome.reason ? ` — ${outcome.reason}` : '';
   if (pull) {
-    if (r.result === 'merged') {
-      const n = r.arrived?.length ?? 0;
-      const files = r.files?.length ? `, ${r.files.length} file${r.files.length === 1 ? '' : 's'} changed` : '';
-      const backup = r.pushed === false ? ` (branch push failed${why})` : '';
-      return `✅ merged ${n} commit${n === 1 ? '' : 's'} from the base branch${files}${backup}`;
+    if (outcome.result === 'merged') {
+      const arrivedCount = outcome.arrived?.length ?? 0;
+      const files = outcome.files?.length ? `, ${outcome.files.length} file${outcome.files.length === 1 ? '' : 's'} changed` : '';
+      const backup = outcome.pushed === false ? ` (branch push failed${why})` : '';
+      return `✅ merged ${arrivedCount} commit${arrivedCount === 1 ? '' : 's'} from the base branch${files}${backup}`;
     }
-    if (r.result === 'clean') return '✅ nothing to pull — the branch already has all of base';
-    return `⚠️ ${r.result}${why}`;
+    if (outcome.result === 'clean') return '✅ nothing to pull — the branch already has all of base';
+    return `⚠️ ${outcome.result}${why}`;
   }
-  if (r.result === 'pushed') return `✅ landed on the base branch (${(r.sha ?? '').slice(0, 10)})`;
-  if (r.result === 'nothing') return '✅ nothing to push — the base branch already has it all';
-  return `⚠️ ${r.result}${why}`;
+  if (outcome.result === 'pushed') return `✅ landed on the base branch (${(outcome.sha ?? '').slice(0, 10)})`;
+  if (outcome.result === 'nothing') return '✅ nothing to push — the base branch already has it all';
+  return `⚠️ ${outcome.result}${why}`;
 }
 
 /** The entry at position `arg` of the numbered list a command last printed
  *  to this chat, or null when there is no list or the number is off it. */
-function listed(list: Map<number, string[]>, dm: number, arg: string): string | null {
-  const ids = list.get(dm);
-  const n = Number.parseInt(arg, 10);
-  if (!ids || !Number.isInteger(n) || n < 1 || n > ids.length) return null;
-  return ids[n - 1];
+function listed(list: Map<number, string[]>, chatId: number, arg: string): string | null {
+  const ids = list.get(chatId);
+  const pick = Number.parseInt(arg, 10);
+  if (!ids || !Number.isInteger(pick) || pick < 1 || pick > ids.length) return null;
+  return ids[pick - 1];
 }
 
-const listedSession = (dm: number, arg: string) => listed(sessionList, dm, arg);
+const listedSession = (chatId: number, arg: string) => listed(sessionList, chatId, arg);
 
 /** A preset's provider / model as a short row suffix, when it sets them. */
 function presetSummary(values: Record<string, unknown>): string {
-  const bits = [values.coding_provider, values.coding_model].filter((v): v is string => typeof v === 'string');
+  const bits = [values.coding_provider, values.coding_model].filter((value): value is string => typeof value === 'string');
   return bits.length ? ` — ${bits.join(' / ')}` : '';
 }
 
@@ -538,8 +538,8 @@ function oneLine(text: string, max = 120): string {
 
 /** The session row, with `locked` computed here as the routes compute it. */
 async function sessionRow(telegram: TelegramAssistantBot, id: string) {
-  const s = await telegram.backend.sessions.get(id);
-  return s ? { ...s, locked: isHeld(s, Date.now()) } : null;
+  const session = await telegram.backend.sessions.get(id);
+  return session ? { ...session, locked: isHeld(session, Date.now()) } : null;
 }
 
 // /help's body — grouped by context. The 'ℹ️ phantom-looper' header is the

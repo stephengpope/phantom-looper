@@ -20,11 +20,11 @@ export function makePaths(root: string): Paths {
   };
 }
 
-export function sessionDir(p: Paths, sessionId: string): string {
-  return path.join(p.work, sessionId);
+export function sessionDir(paths: Paths, sessionId: string): string {
+  return path.join(paths.work, sessionId);
 }
-export function repoDir(p: Paths, sessionId: string): string {
-  return path.join(sessionDir(p, sessionId), 'repo');
+export function repoDir(paths: Paths, sessionId: string): string {
+  return path.join(sessionDir(paths, sessionId), 'repo');
 }
 
 /** Slot names carry their own metadata: which repo they serve, and — via the

@@ -57,18 +57,18 @@ export type PublishedTool = Pick<ToolDef, 'name' | 'summary' | 'description' | '
 
 // ── schema helpers, shared by every definition file ────────────────────────
 
-export const str = (d: string) => ({ type: 'string', description: d });
-export const int = (d: string, def?: number) => ({ type: 'integer', description: d, ...(def !== undefined ? { default: def } : {}) });
-export const bool = (d: string, def?: boolean) => ({ type: 'boolean', description: d, ...(def !== undefined ? { default: def } : {}) });
-export const nullable = (type: string, d: string) => ({ type: [type, 'null'], description: d });
-export const oneOf = (values: readonly string[], d: string) => ({ type: 'string', enum: [...values], description: d });
+export const str = (description: string) => ({ type: 'string', description: description });
+export const int = (description: string, def?: number) => ({ type: 'integer', description: description, ...(def !== undefined ? { default: def } : {}) });
+export const bool = (description: string, def?: boolean) => ({ type: 'boolean', description: description, ...(def !== undefined ? { default: def } : {}) });
+export const nullable = (type: string, description: string) => ({ type: [type, 'null'], description: description });
+export const oneOf = (values: readonly string[], description: string) => ({ type: 'string', enum: [...values], description: description });
 export const obj = (props: Record<string, unknown>, required: string[] = []) => ({
   type: 'object', properties: props, required, additionalProperties: false,
 });
 
-export function s(v: unknown): string {
-  if (typeof v !== 'string') throw new ToolError('invalid_args', 'expected a string');
-  return v;
+export function s(value: unknown): string {
+  if (typeof value !== 'string') throw new ToolError('invalid_args', 'expected a string');
+  return value;
 }
 
 /** A refusal the model reads: thrown, the route answers the envelope

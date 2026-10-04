@@ -73,9 +73,9 @@ export class BoardStore {
    *  ever makes on its own. No stream wired = nothing to follow. */
   follow(): void {
     if (!this.stream || this.following) return;
-    const ac = new AbortController();
-    this.following = ac;
-    void followStream(this.stream, `/projects/${this.projectId}/events`, ac.signal, {
+    const abort = new AbortController();
+    this.following = abort;
+    void followStream(this.stream, `/projects/${this.projectId}/events`, abort.signal, {
       onRecord: (rec) => this.applyEvent(rec),
       onReconnect: () => this.load(),   // records were missed — refill the board
     });
@@ -87,8 +87,8 @@ export class BoardStore {
     if (rec.event === 'card' && rec.card) this.adoptCard(rec.card as Card);
     else if (rec.event === 'deleted') {
       const id = Number(rec.id);
-      if (!this.state.cards.some((t) => t.id === id)) return;
-      this.state = { ...this.state, cards: this.state.cards.filter((t) => t.id !== id) };
+      if (!this.state.cards.some((card) => card.id === id)) return;
+      this.state = { ...this.state, cards: this.state.cards.filter((card) => card.id !== id) };
       this.notify();
     } else if (rec.event === 'session') {
       // The loop pairing — the ONE speaker for a card's session and its name.
@@ -115,23 +115,23 @@ export class BoardStore {
     }
   }
 
-  subscribe(fn: () => void): () => void {
-    this.listeners.add(fn);
-    return () => { this.listeners.delete(fn); };
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
   }
-  private notify(): void { for (const l of [...this.listeners]) l(); }
+  private notify(): void { for (const listener of [...this.listeners]) listener(); }
 
   /** Cards of one column, in board order: the pinned group first, pos still
    *  sorting inside each group. */
   cardsIn(status: string): Card[] {
-    return this.state.cards.filter((t) => t.status === status && !t.archived)
+    return this.state.cards.filter((card) => card.status === status && !card.archived)
       .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || a.pos - b.pos || a.id - b.id);
   }
   /** Find by the number people use ("7" of PHA-7). */
-  byNumber(number: number): Card | undefined { return this.state.cards.find((t) => t.number === number); }
+  byNumber(number: number): Card | undefined { return this.state.cards.find((card) => card.number === number); }
   /** The number of a card held by id — state is keyed by id, the routes by
    *  number (PHA-7 is card 7). */
-  private numberOf(id: number): number | undefined { return this.state.cards.find((t) => t.id === id)?.number; }
+  private numberOf(id: number): number | undefined { return this.state.cards.find((card) => card.id === id)?.number; }
 
   /** One card by number, straight from the server — archived or not. The
    *  board GET excludes archived cards, so a miss on byNumber comes here
@@ -139,18 +139,18 @@ export class BoardStore {
    *  state (cardsIn filters archived, so the board is untouched);
    *  undefined = no such card. */
   async fetchCard(number: number): Promise<Card | undefined> {
-    const d = await this.api('GET', `/projects/${this.projectId}/cards?number=${number}`) as Record<string, unknown>;
-    const card = (d.cards as Card[] | undefined)?.[0];
+    const reply = await this.api('GET', `/projects/${this.projectId}/cards?number=${number}`) as Record<string, unknown>;
+    const card = (reply.cards as Card[] | undefined)?.[0];
     if (!card) return undefined;
     this.adoptCard(card);
-    return this.state.cards.find((t) => t.id === card.id);
+    return this.state.cards.find((card) => card.id === card.id);
   }
 
   /** Seat one server-fetched card in state (replacing any copy of it) — the
    *  off-board entry path fetchCard and /archived's open use. */
   adoptCard(card: Card): void {
     const fresh = { ...card };
-    this.state = { ...this.state, cards: [...this.state.cards.filter((t) => t.id !== fresh.id), fresh] };
+    this.state = { ...this.state, cards: [...this.state.cards.filter((card) => card.id !== fresh.id), fresh] };
     this.notify();
   }
 
@@ -171,34 +171,34 @@ export class BoardStore {
 
   async load(): Promise<void> {
     try {
-      const d = await this.api('GET', `/projects/${this.projectId}/cards`) as Record<string, unknown>;
+      const reply = await this.api('GET', `/projects/${this.projectId}/cards`) as Record<string, unknown>;
       const sessions: Record<number, CardSession> = {};
-      for (const s of (d.card_sessions as { card: number; id: string; name: string | null }[] | undefined) ?? [])
-        sessions[s.card] = { id: s.id, name: s.name };
+      for (const cardSession of (reply.card_sessions as { card: number; id: string; name: string | null }[] | undefined) ?? [])
+        sessions[cardSession.card] = { id: cardSession.id, name: cardSession.name };
       // The board GET excludes archived cards, so absence from the response
       // says nothing about a card this store learned of by number (fetchCard —
       // an open archived card's editor): those survive a reload (the one
       // after a reconnect), or it would close the editor mid-edit. A card restored elsewhere
       // arrives in `fresh` unarchived and replaces its kept copy.
-      const fresh = d.cards as Card[];
-      const kept = this.state.cards.filter((t) => t.archived && !fresh.some((f) => f.id === t.id));
+      const fresh = reply.cards as Card[];
+      const kept = this.state.cards.filter((card) => card.archived && !fresh.some((fresh) => fresh.id === card.id));
       const cardWorkState: Record<number, string> = {};
-      for (const [k, v] of Object.entries((d.card_work_state as Record<string, string | null> | undefined) ?? {}))
-        if (v) cardWorkState[Number(k)] = v;
+      for (const [card, value] of Object.entries((reply.card_work_state as Record<string, string | null> | undefined) ?? {}))
+        if (value) cardWorkState[Number(card)] = value;
       const cardLocked: Record<number, number> = {};
-      for (const [k, v] of Object.entries((d.card_locked as Record<string, boolean> | undefined) ?? {}))
+      for (const [card, value] of Object.entries((reply.card_locked as Record<string, boolean> | undefined) ?? {}))
         // A refresh cannot know when a turn began — only that it is running.
         // Keep any start we already had; otherwise start the clock now.
-        if (v) cardLocked[Number(k)] = this.state.cardLocked?.[Number(k)] ?? Date.now();
-      this.state = { prefix: String(d.prefix), columns: d.columns as string[],
+        if (value) cardLocked[Number(card)] = this.state.cardLocked?.[Number(card)] ?? Date.now();
+      this.state = { prefix: String(reply.prefix), columns: reply.columns as string[],
         cards: [...fresh, ...kept], loaded: true, sessions, cardWorkState, cardLocked,
-        project: d.project ? String(d.project) : undefined,
-        autoPlanDefault: Boolean(d.auto_plan_default),
-        autoPlanSource: d.auto_plan_source ? String(d.auto_plan_source) : undefined,
-        autoBuildDefault: Boolean(d.auto_build_default),
-        autoBuildSource: d.auto_build_source ? String(d.auto_build_source) : undefined };
-    } catch (e) {
-      this.state = { ...this.state, loaded: true, error: (e as Error).message };
+        project: reply.project ? String(reply.project) : undefined,
+        autoPlanDefault: Boolean(reply.auto_plan_default),
+        autoPlanSource: reply.auto_plan_source ? String(reply.auto_plan_source) : undefined,
+        autoBuildDefault: Boolean(reply.auto_build_default),
+        autoBuildSource: reply.auto_build_source ? String(reply.auto_build_source) : undefined };
+    } catch (step) {
+      this.state = { ...this.state, loaded: true, error: (step as Error).message };
     }
     this.notify();
   }
@@ -209,8 +209,8 @@ export class BoardStore {
     // The server publishes the new row on the event stream BEFORE it answers
     // this POST, so the card is usually already here by the time the answer
     // lands — seat it (replace by id), never append, or the board shows two.
-    const d = await this.api('POST', `/projects/${this.projectId}/cards`, fields) as Record<string, unknown>;
-    const card = d.card as Card;
+    const reply = await this.api('POST', `/projects/${this.projectId}/cards`, fields) as Record<string, unknown>;
+    const card = reply.card as Card;
     this.adoptCard(card);
     return card;
   }
@@ -222,17 +222,17 @@ export class BoardStore {
     const number = this.numberOf(id);
     if (number === undefined) return `no card ${id} on the board`;
     const before = this.state;
-    this.state = { ...this.state, cards: this.state.cards.map((t) => t.id === id ? { ...t, ...patch } : t) };
+    this.state = { ...this.state, cards: this.state.cards.map((card) => card.id === id ? { ...card, ...patch } : card) };
     this.notify();
     try {
-      const d = await this.api('PATCH', `/projects/${this.projectId}/cards/${number}`, patch) as Record<string, unknown>;
-      this.adopt(d.card as Card | undefined);
+      const reply = await this.api('PATCH', `/projects/${this.projectId}/cards/${number}`, patch) as Record<string, unknown>;
+      this.adopt(reply.card as Card | undefined);
       return null;
     }
-    catch (e) {
-      this.state = { ...before, error: (e as Error).message }; this.notify();
+    catch (step) {
+      this.state = { ...before, error: (step as Error).message }; this.notify();
       await this.load();
-      return (e as Error).message;
+      return (step as Error).message;
     }
   }
 
@@ -244,7 +244,7 @@ export class BoardStore {
   private adopt(card: Card | undefined): void {
     if (!card) return;
     const fresh = { ...card };
-    this.state = { ...this.state, cards: this.state.cards.map((t) => t.id === fresh.id ? fresh : t) };
+    this.state = { ...this.state, cards: this.state.cards.map((card) => card.id === fresh.id ? fresh : card) };
     this.notify();
   }
 
@@ -258,29 +258,29 @@ export class BoardStore {
     const number = this.numberOf(id);
     if (number === undefined) return `no card ${id} on the board`;
     const before = this.state;
-    const apply = (t: Card): Card => {
-      const next = { ...t, requirements: [...t.requirements] };
-      for (const o of ops) {
-        const hit = (e: CardStep) => e.key !== undefined && o.key !== undefined
-          && normalizeKey(e.key) === normalizeKey(o.key);
-        if (o.op === 'add') next.requirements = [...next.requirements, { text: o.text ?? '', done: o.done ?? false }];
-        else if (o.op === 'remove') next.requirements = next.requirements.filter((e) => !hit(e));
-        else next.requirements = next.requirements.map((e) => !hit(e) ? e
-          : { ...e, ...(o.op === 'edit' && o.text !== undefined ? { text: o.text } : {}), ...(o.done !== undefined ? { done: o.done } : {}) });
+    const apply = (card: Card): Card => {
+      const next = { ...card, requirements: [...card.requirements] };
+      for (const operation of ops) {
+        const hit = (step: CardStep) => step.key !== undefined && operation.key !== undefined
+          && normalizeKey(step.key) === normalizeKey(operation.key);
+        if (operation.op === 'add') next.requirements = [...next.requirements, { text: operation.text ?? '', done: operation.done ?? false }];
+        else if (operation.op === 'remove') next.requirements = next.requirements.filter((step) => !hit(step));
+        else next.requirements = next.requirements.map((step) => !hit(step) ? step
+          : { ...step, ...(operation.op === 'edit' && operation.text !== undefined ? { text: operation.text } : {}), ...(operation.done !== undefined ? { done: operation.done } : {}) });
       }
       return next;
     };
-    this.state = { ...this.state, cards: this.state.cards.map((t) => t.id === id ? apply(t) : t) };
+    this.state = { ...this.state, cards: this.state.cards.map((card) => card.id === id ? apply(card) : card) };
     this.notify();
     try {
-      const d = await this.api('PATCH', `/projects/${this.projectId}/cards/${number}`, { items: ops }) as Record<string, unknown>;
-      this.adopt(d.card as Card | undefined);
+      const reply = await this.api('PATCH', `/projects/${this.projectId}/cards/${number}`, { items: ops }) as Record<string, unknown>;
+      this.adopt(reply.card as Card | undefined);
       return null;
     }
-    catch (e) {
-      this.state = { ...before, error: (e as Error).message }; this.notify();
+    catch (step) {
+      this.state = { ...before, error: (step as Error).message }; this.notify();
       await this.load();
-      return (e as Error).message;
+      return (step as Error).message;
     }
   }
 
@@ -288,14 +288,14 @@ export class BoardStore {
    *  state. By number straight to the server: an archived card is not on
    *  the board and its history still answers. */
   async revisions(number: number, limit?: number): Promise<unknown[]> {
-    const d = await this.api('GET', `/projects/${this.projectId}/cards/${number}/revisions` +
+    const reply = await this.api('GET', `/projects/${this.projectId}/cards/${number}/revisions` +
       (limit !== undefined ? `?limit=${limit}` : '')) as Record<string, unknown>;
-    return d.revisions as unknown[];
+    return reply.revisions as unknown[];
   }
 
   /** Move to a column at a row: pos is the midpoint of the new neighbours. */
   async move(id: number, status: string, row: number): Promise<string | null> {
-    const col = this.cardsIn(status).filter((t) => t.id !== id);
+    const col = this.cardsIn(status).filter((card) => card.id !== id);
     const before = col[row - 1]?.pos;
     const after = col[row]?.pos;
     const pos = before !== undefined && after !== undefined ? (before + after) / 2

@@ -40,7 +40,7 @@ export interface UpgradeCheckerDeps {
   /** Get the authorized user's chat id, or null. */
   authorizedUser(): Promise<number | null>;
   /** Build a TelegramApi that records sent messages. */
-  makeClient(token: string, dm: number): TelegramApi;
+  makeClient(token: string, chatId: number): TelegramApi;
 }
 
 export class UpgradeChecker {
@@ -62,8 +62,8 @@ export class UpgradeChecker {
 
     const enabled = await this.deps.setting('telegram_enabled');
     if (enabled !== true) return;
-    const dm = await this.deps.authorizedUser();
-    if (!dm) return;
+    const chatId = await this.deps.authorizedUser();
+    if (!chatId) return;
 
     const latest = await checkLatest();
     if (!latest) { log.debug('upgrade check: could not reach GitHub'); return; }
@@ -73,43 +73,43 @@ export class UpgradeChecker {
     const token = await this.deps.token();
     if (!token) return;
 
-    await this.sendApproval(token, dm, latest);
+    await this.sendApproval(token, chatId, latest);
   }
 
   // ── /update command ───────────────────────────────────────────────────
 
   /** Manual check from /update. Always responds — even when current. */
-  async manualCheck(client: TelegramApi, dm: number): Promise<void> {
+  async manualCheck(client: TelegramApi, chatId: number): Promise<void> {
     if (this.pending) {
-      await client.sendMessage(dm, `⬆️ Already waiting for your answer on ${bare(this.pending.tag)}.`);
+      await client.sendMessage(chatId, `⬆️ Already waiting for your answer on ${bare(this.pending.tag)}.`);
       return;
     }
 
     const latest = await checkLatest();
     if (!latest) {
-      await client.sendMessage(dm, "⚠️ Couldn't reach GitHub to check for updates — try again later.");
+      await client.sendMessage(chatId, "⚠️ Couldn't reach GitHub to check for updates — try again later.");
       return;
     }
 
     if (!isBehind(this.deps.version, latest)) {
-      await client.sendMessage(dm, `✅ You're on ${bare(this.deps.version)} — the latest.`);
+      await client.sendMessage(chatId, `✅ You're on ${bare(this.deps.version)} — the latest.`);
       return;
     }
 
     // Re-use the existing client's token for the approval message.
-    await this.sendApproval('', dm, latest, client);
+    await this.sendApproval('', chatId, latest, client);
   }
 
   // ── callback handling ─────────────────────────────────────────────────
 
   /** A tap on an upgrade approval button. Returns true if handled. */
-  async handleCallback(client: TelegramApi, dm: number,
+  async handleCallback(client: TelegramApi, chatId: number,
     query: { id: string; data?: string }): Promise<boolean> {
     const [prefix, id, verdict] = String(query.data ?? '').split(':');
     if (prefix !== PREFIX) return false;
 
-    const p = this.pending;
-    if (!p || p.id !== id) {
+    const pending = this.pending;
+    if (!pending || pending.id !== id) {
       await client.answerCallbackQuery(query.id, 'That update prompt has expired.').catch(() => {});
       return true;
     }
@@ -117,13 +117,13 @@ export class UpgradeChecker {
     await client.answerCallbackQuery(query.id).catch(() => {});
 
     if (verdict === 'y') {
-      await this.doUpgrade(client, dm, p);
+      await this.doUpgrade(client, chatId, pending);
     } else {
       // Denied — edit the message to show the decision.
       this.pending = null;
-      if (p.messageId != null) {
-        await client.editMessageText(dm, p.messageId,
-          `✖️ Update to ${bare(p.tag)} skipped.`).catch(() => {});
+      if (pending.messageId != null) {
+        await client.editMessageText(chatId, pending.messageId,
+          `✖️ Update to ${bare(pending.tag)} skipped.`).catch(() => {});
       }
     }
     return true;
@@ -137,13 +137,13 @@ export class UpgradeChecker {
 
   // ── internals ─────────────────────────────────────────────────────────
 
-  private async sendApproval(token: string, dm: number, tag: string,
+  private async sendApproval(token: string, chatId: number, tag: string,
     existingClient?: TelegramApi): Promise<void> {
     const id = crypto.randomBytes(6).toString('hex');
-    const v = bare(tag);
+    const version = bare(tag);
     const current = bare(this.deps.version);
-    const client = existingClient ?? this.deps.makeClient(token, dm);
-    const m = await client.sendMarkdown(dm, titled(`⬆️ ${v} is available — you're on ${current}.`,
+    const client = existingClient ?? this.deps.makeClient(token, chatId);
+    const sent = await client.sendMarkdown(chatId, titled(`⬆️ ${version} is available — you're on ${current}.`,
       'Updating restarts the server — any running turns are interrupted and resume after the restart.\n\n' +
       'Update?'), {
       replyMarkup: { inline_keyboard: [[
@@ -152,31 +152,31 @@ export class UpgradeChecker {
       ]] },
     });
 
-    this.pending = { id, tag, chatId: dm, messageId: m?.message_id ?? null };
+    this.pending = { id, tag, chatId: chatId, messageId: sent?.message_id ?? null };
     this.lastNotifiedTag = tag;
-    log.info({ tag, dm }, 'upgrade notification sent');
+    log.info({ tag, chatId }, 'upgrade notification sent');
   }
 
-  private async doUpgrade(client: TelegramApi, dm: number, p: Pending): Promise<void> {
-    const tag = p.tag;
-    const v = bare(tag);
+  private async doUpgrade(client: TelegramApi, chatId: number, pending: Pending): Promise<void> {
+    const tag = pending.tag;
+    const version = bare(tag);
     this.pending = null;
 
     // Edit the approval bubble to show the decision.
-    if (p.messageId != null) {
-      await client.editMessageText(dm, p.messageId,
-        `✅ Update to ${v} approved.`).catch(() => {});
+    if (pending.messageId != null) {
+      await client.editMessageText(chatId, pending.messageId,
+        `✅ Update to ${version} approved.`).catch(() => {});
     }
 
     // Send a progress message that we'll edit as events arrive.
-    const msg = await client.sendMessage(dm, `⬆️ Updating to ${v}...`);
+    const msg = await client.sendMessage(chatId, `⬆️ Updating to ${version}...`);
     const msgId = msg?.message_id ?? null;
 
     // One bubble, edited as the update moves: the pull line (core/update.ts
     // words it, the same as the cli), then the installer's latest line.
     const images: Record<string, PullProgress> = {};
-    const show = (line: string) => { if (msgId) client.editMessageText(dm, msgId, `⬆️ Updating to ${v}...\n${line}`).catch(() => {}); };
-    const r = await this.deps.triggerUpdate(tag, (event) => {
+    const show = (line: string) => { if (msgId) client.editMessageText(chatId, msgId, `⬆️ Updating to ${version}...\n${line}`).catch(() => {}); };
+    const triggered = await this.deps.triggerUpdate(tag, (event) => {
       if (event.event === 'pulling') {
         images[event.image] = { download: event.download, unpack: event.unpack };
         show(pullLine(images));
@@ -189,10 +189,10 @@ export class UpgradeChecker {
       }
     });
 
-    if (!r.ok) {
-      const errText = `⚠️ Update to ${v} failed: ${r.error ?? 'unknown error'}`;
-      if (msgId) { await client.editMessageText(dm, msgId, errText).catch(() => {}); }
-      else { await client.sendMessage(dm, errText); }
+    if (!triggered.ok) {
+      const errText = `⚠️ Update to ${version} failed: ${triggered.error ?? 'unknown error'}`;
+      if (msgId) { await client.editMessageText(chatId, msgId, errText).catch(() => {}); }
+      else { await client.sendMessage(chatId, errText); }
       return;
     }
 

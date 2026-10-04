@@ -29,5 +29,5 @@ export type StoredSystemPrompt = Record<SystemPromptSection, string>;
 
 /** The stored sections as the system blocks a turn sends — in order, the
  *  empty ones left out. */
-export const systemPromptBlocks = (p: StoredSystemPrompt): string[] =>
-  SYSTEM_PROMPT_SECTIONS.map((s) => p[s]).filter((text) => text.trim() !== '');
+export const systemPromptBlocks = (prompt: StoredSystemPrompt): string[] =>
+  SYSTEM_PROMPT_SECTIONS.map((section) => prompt[section]).filter((text) => text.trim() !== '');

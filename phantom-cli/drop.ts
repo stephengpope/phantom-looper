@@ -19,16 +19,16 @@ function splitWords(text: string): string[] | null {
   const out: string[] = [];
   let cur = '', quote: string | null = null, started = false;
   for (let i = 0; i < text.length; i++) {
-    const c = text[i];
+    const char = text[i];
     if (quote) {
-      if (c === quote) quote = null;
-      else if (c === '\\' && quote === '"' && i + 1 < text.length) cur += text[++i];
-      else cur += c;
-    } else if (c === "'" || c === '"') { quote = c; started = true; }
-    else if (c === '\\') { if (i + 1 >= text.length) return null; cur += text[++i]; started = true; }
-    else if (c === ' ' || c === '\t' || c === '\n') {
+      if (char === quote) quote = null;
+      else if (char === '\\' && quote === '"' && i + 1 < text.length) cur += text[++i];
+      else cur += char;
+    } else if (char === "'" || char === '"') { quote = char; started = true; }
+    else if (char === '\\') { if (i + 1 >= text.length) return null; cur += text[++i]; started = true; }
+    else if (char === ' ' || char === '\t' || char === '\n') {
       if (started) { out.push(cur); cur = ''; started = false; }
-    } else { cur += c; started = true; }
+    } else { cur += char; started = true; }
   }
   if (quote) return null;
   if (started) out.push(cur);
@@ -40,10 +40,10 @@ function splitWords(text: string): string[] | null {
  *  not this machine — cannot be read, so it is not a path at all. */
 function asLocalPath(word: string): { path: string; looked: boolean } | null {
   if (word.startsWith('file://')) {
-    let u: URL;
-    try { u = new URL(word); } catch { return null; }
-    if (u.hostname && u.hostname !== 'localhost') return null;
-    return { path: decodeURIComponent(u.pathname), looked: true };
+    let url: URL;
+    try { url = new URL(word); } catch { return null; }
+    if (url.hostname && url.hostname !== 'localhost') return null;
+    return { path: decodeURIComponent(url.pathname), looked: true };
   }
   return { path: word, looked: word.includes('/') };
 }
@@ -55,10 +55,10 @@ export function parseDrop(text: string): string[] | null {
   if (!words?.length) return null;
   const paths: string[] = [];
   for (const word of words) {
-    const p = asLocalPath(word);
-    if (!p?.looked) return null;
-    try { if (!fs.statSync(p.path).isFile()) return null; } catch { return null; }
-    paths.push(p.path);
+    const localPath = asLocalPath(word);
+    if (!localPath?.looked) return null;
+    try { if (!fs.statSync(localPath.path).isFile()) return null; } catch { return null; }
+    paths.push(localPath.path);
   }
   return paths;
 }

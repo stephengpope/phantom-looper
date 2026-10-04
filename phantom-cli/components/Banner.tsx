@@ -62,44 +62,44 @@ const GLYPH: Record<string, string> = { ' ': ' ', B: '█', b: '▄', t: '▀', 
 // the speckle is the texture. `[glyph, from, to]`: solid rows use `from`
 // alone. Half-block edges and the eye backgrounds take the row's dominant
 // band (`to` on a ▓ row, `from` otherwise) so the outline stays crisp.
-const C = ['#1230ff', '#1f5cff', '#2a8eff', '#3dc0ff', '#7fe9ff', '#b3f7ff'];
+const SHADES = ['#1230ff', '#1f5cff', '#2a8eff', '#3dc0ff', '#7fe9ff', '#b3f7ff'];
 const BANDS: [string, string, string][] = [
-  ['█', C[0]!, C[0]!],
-  ['█', C[0]!, C[0]!],
-  ['█', C[0]!, C[0]!],
-  ['░', C[0]!, C[1]!],
-  ['▒', C[0]!, C[1]!],
-  ['▓', C[0]!, C[1]!],
-  ['█', C[1]!, C[1]!],
-  ['░', C[1]!, C[2]!],
-  ['▒', C[1]!, C[2]!],
-  ['▓', C[1]!, C[2]!],
-  ['█', C[2]!, C[2]!],
-  ['░', C[2]!, C[3]!],
-  ['▒', C[2]!, C[3]!],
-  ['▓', C[2]!, C[3]!],
-  ['█', C[3]!, C[3]!],
-  ['▒', C[3]!, C[4]!],
-  ['█', C[4]!, C[4]!],
-  ['▒', C[4]!, C[5]!],
-  ['█', C[5]!, C[5]!],
-  ['█', C[5]!, C[5]!],
+  ['█', SHADES[0]!, SHADES[0]!],
+  ['█', SHADES[0]!, SHADES[0]!],
+  ['█', SHADES[0]!, SHADES[0]!],
+  ['░', SHADES[0]!, SHADES[1]!],
+  ['▒', SHADES[0]!, SHADES[1]!],
+  ['▓', SHADES[0]!, SHADES[1]!],
+  ['█', SHADES[1]!, SHADES[1]!],
+  ['░', SHADES[1]!, SHADES[2]!],
+  ['▒', SHADES[1]!, SHADES[2]!],
+  ['▓', SHADES[1]!, SHADES[2]!],
+  ['█', SHADES[2]!, SHADES[2]!],
+  ['░', SHADES[2]!, SHADES[3]!],
+  ['▒', SHADES[2]!, SHADES[3]!],
+  ['▓', SHADES[2]!, SHADES[3]!],
+  ['█', SHADES[3]!, SHADES[3]!],
+  ['▒', SHADES[3]!, SHADES[4]!],
+  ['█', SHADES[4]!, SHADES[4]!],
+  ['▒', SHADES[4]!, SHADES[5]!],
+  ['█', SHADES[5]!, SHADES[5]!],
+  ['█', SHADES[5]!, SHADES[5]!],
 ];
 
 /** One ghost row as a single styled string: runs of equal cells styled
  *  once each (few segments per row — the Shimmer file's rule for stable
  *  wrapping). Body cells take the row's band, dithered or solid; eye cells
  *  their own colors, with the half-block eye edges on the body's color. */
-function ghostRow(row: string, [shade, from, to]: [string, string, string]): string {
-  const body = shade === '▓' ? to : from;
-  const style = (cls: string, n: number): string => {
+function ghostRow(row: string, [shade, from, toColor]: [string, string, string]): string {
+  const body = shade === '▓' ? toColor : from;
+  const style = (cls: string, index: number): string => {
     switch (cls) {
-      case ' ': return ' '.repeat(n);
-      case 'B': return shade === '█' ? chalk.hex(from)('█'.repeat(n)) : chalk.bgHex(from).hex(to)(shade.repeat(n));
-      case 'W': return chalk.hex(EYE)('█'.repeat(n));
-      case 'P': return chalk.hex(PUPIL)('█'.repeat(n));
-      case 'w': case 'v': return chalk.bgHex(body).hex(EYE)(GLYPH[cls]!.repeat(n));
-      default: return chalk.hex(body)(GLYPH[cls]!.repeat(n));
+      case ' ': return ' '.repeat(index);
+      case 'B': return shade === '█' ? chalk.hex(from)('█'.repeat(index)) : chalk.bgHex(from).hex(toColor)(shade.repeat(index));
+      case 'W': return chalk.hex(EYE)('█'.repeat(index));
+      case 'P': return chalk.hex(PUPIL)('█'.repeat(index));
+      case 'w': case 'v': return chalk.bgHex(body).hex(EYE)(GLYPH[cls]!.repeat(index));
+      default: return chalk.hex(body)(GLYPH[cls]!.repeat(index));
     }
   };
   let out = '';

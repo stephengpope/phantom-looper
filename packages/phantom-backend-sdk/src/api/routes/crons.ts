@@ -32,8 +32,8 @@ const cronBodyProps = {
 };
 // The schema must cover THE list (crons.ts) — a field added there without a
 // schema entry would be silently stripped by validation. Checked at load.
-for (const f of CRON_FIELDS) {
-  if (!(f in cronBodyProps)) throw new Error(`cronBodyProps is missing '${f}' — the one field list must cover it`);
+for (const field of CRON_FIELDS) {
+  if (!(field in cronBodyProps)) throw new Error(`cronBodyProps is missing '${field}' — the one field list must cover it`);
 }
 
 export function cronRoutes(app: FastifyInstance, ctx: PhantomBackend) {
@@ -42,9 +42,9 @@ export function cronRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   /** Every answer carries the zone and the time there — what a caller
    *  writing a datetime needs and never otherwise has. */
   const stamp = (clock: Clock) => ({ timezone: clock.timezone, now: clock.now().toISOString() });
-  const cronErr = (reply: { code: (n: number) => { send: (b: unknown) => unknown } }, e: unknown) => {
-    if (!(e instanceof CronError)) throw e;
-    return reply.code(e.code === 'not_found' ? 404 : e.code === 'duplicate_name' ? 409 : 400).send(err(e.code, e.message));
+  const cronErr = (reply: { code: (status: number) => { send: (b: unknown) => unknown } }, error: unknown) => {
+    if (!(error instanceof CronError)) throw error;
+    return reply.code(error.code === 'not_found' ? 404 : error.code === 'duplicate_name' ? 409 : 400).send(err(error.code, error.message));
   };
 
   app.get<{ Params: { id: string } }>(
@@ -70,7 +70,7 @@ export function cronRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
       const clock = await clockOf(project);
       try { return ok({ ...stamp(clock), cron: await ctx.crons.create(project, req.body, clock) }); }
-      catch (e) { return cronErr(reply, e); }
+      catch (error) { return cronErr(reply, error); }
     });
 
   app.patch<{ Params: { id: string; name: string }; Body: CronFields }>(
@@ -83,7 +83,7 @@ export function cronRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
       const clock = await clockOf(project);
       try { return ok({ ...stamp(clock), cron: await ctx.crons.update(project, req.params.name, req.body, clock) }); }
-      catch (e) { return cronErr(reply, e); }
+      catch (error) { return cronErr(reply, error); }
     });
 
   app.delete<{ Params: { id: string; name: string } }>(

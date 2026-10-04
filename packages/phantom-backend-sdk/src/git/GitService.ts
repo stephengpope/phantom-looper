@@ -64,9 +64,9 @@ export interface GitServiceDeps {
 }
 
 export type AutoPushFn = (session: SessionRow, project: ProjectRow,
-  onEvent?: (e: AutoPushEvent) => void | Promise<void>, by?: string) => Promise<AutoPushResult>;
+  onEvent?: (event: AutoPushEvent) => void | Promise<void>, by?: string) => Promise<AutoPushResult>;
 export type AutoPullFn = (session: SessionRow, project: ProjectRow,
-  onEvent?: (e: AutoPullEvent) => void | Promise<void>, by?: string) => Promise<AutoPullResult>;
+  onEvent?: (event: AutoPullEvent) => void | Promise<void>, by?: string) => Promise<AutoPullResult>;
 
 export class GitService {
   /** The manual operations: push, pull, status, backup. */
@@ -85,7 +85,7 @@ export class GitService {
     // sees it run, so its steps publish under the git client (no caller to echo).
     this.sync = new GitSync({ sessions, workspaces, cards, settings, paths,
       resolve: hooks.resolveConflict, writeCommitMessage: hooks.writeCommitMessage },
-    (sessionId, e) => this.publishSync(sessionId, 'pull')(e));
+    (sessionId, event) => this.publishSync(sessionId, 'pull')(event));
 
     // Instant sync runs the same sync, turn or no turn: it never takes the
     // session (`hold: false`) and never runs the fixer (no `resolve`) — a
@@ -103,14 +103,14 @@ export class GitService {
       sessions, workspaces, projects, settings, paths, watcher: deps.workspaceWatcher,
       autoPush: (session, project) => autoPush(instantDeps, session, project, { hold: false }),
       autoPull: (session, project) => autoPull(instantDeps, session, project, { hold: false }),
-      failed: (session, op, reason) =>
-        sessionEvents.publish(session.id, GIT_CLIENT_ID, { event: 'sync-failed', op, reason }),
+      failed: (session, operation, reason) =>
+        sessionEvents.publish(session.id, GIT_CLIENT_ID, { event: 'sync-failed', op: operation, reason }),
     });
   }
 
-  private publishSync(sessionId: string, op: 'push' | 'pull', by?: string) {
-    return (e: SyncEvent) => this.deps.sessionEvents.publish(sessionId, by || GIT_CLIENT_ID,
-      { event: 'sync', op, step: e.step, label: e.label, detail: e.detail });
+  private publishSync(sessionId: string, operation: 'push' | 'pull', by?: string) {
+    return (event: SyncEvent) => this.deps.sessionEvents.publish(sessionId, by || GIT_CLIENT_ID,
+      { event: 'sync', op: operation, step: event.step, label: event.label, detail: event.detail });
   }
 
   /** After a successful held sync, the agent hears what happened on its
@@ -137,7 +137,7 @@ export class GitService {
     const card = await this.deps.cards.ofSession(session.id).catch(() => undefined);
     if (!card) return;
     await this.deps.cards.update(project, card.number, { status: 'blocked', blocked_reason: reason, resolution: null }, undefined, GIT_CLIENT_ID)
-      .catch((e) => log.warn({ session: session.id, err: errStr(e) }, 'could not block card after unresolved conflict'));
+      .catch((error) => log.warn({ session: session.id, err: errStr(error) }, 'could not block card after unresolved conflict'));
   }
 
   private get syncDeps(): Omit<SyncDeps, 'onEvent'> {
@@ -150,18 +150,18 @@ export class GitService {
    *  verify, push, land. Every step on the session's feed. */
   readonly autoPush: AutoPushFn = async (session, project, onEvent, by) => {
     const publish = this.publishSync(session.id, 'push', by);
-    const r = await autoPush({ ...this.syncDeps, onEvent: async (e) => { publish(e); await onEvent?.(e); } }, session, project);
-    if (r.result === 'blocked') await this.blockCardOnConflict(session, project, r.reason ?? 'a rebase conflict could not be resolved');
-    return r;
+    const pushed = await autoPush({ ...this.syncDeps, onEvent: async (event) => { publish(event); await onEvent?.(event); } }, session, project);
+    if (pushed.result === 'blocked') await this.blockCardOnConflict(session, project, pushed.reason ?? 'a rebase conflict could not be resolved');
+    return pushed;
   };
 
   /** Auto-pull rides the same resolver and the same message model — one
    *  configuration for every git operation that commits or resolves. */
   readonly autoPull: AutoPullFn = async (session, project, onEvent, by) => {
     const publish = this.publishSync(session.id, 'pull', by);
-    const r = await autoPull({ ...this.syncDeps, onEvent: async (e) => { publish(e); await onEvent?.(e); } }, session, project);
-    if (r.result === 'blocked') await this.blockCardOnConflict(session, project, r.reason ?? 'a rebase conflict could not be resolved');
-    return r;
+    const pulled = await autoPull({ ...this.syncDeps, onEvent: async (event) => { publish(event); await onEvent?.(event); } }, session, project);
+    if (pulled.result === 'blocked') await this.blockCardOnConflict(session, project, pulled.reason ?? 'a rebase conflict could not be resolved');
+    return pulled;
   };
 
   /** Bring the instant-sync watcher set in line with the running
@@ -171,7 +171,7 @@ export class GitService {
   reconcileInstantSync(): Promise<void> {
     return this.deps.sessionContainers.activeWorkspaces()
       .then((active) => this.instantSync.reconcile(active))
-      .catch((e) => log.error({ err: errStr(e) }, 'instant sync reconcile threw'));
+      .catch((error) => log.error({ err: errStr(error) }, 'instant sync reconcile threw'));
   }
 
   /** Wire what runs on its own: instant sync follows the settings bus and
@@ -189,9 +189,9 @@ export class GitService {
     // turn mid-flight): wait it out rather than blocking the card over a
     // moment's contention. Failure surfaces on the board: the card comes back
     // un-archived, in blocked, with the reason.
-    this.deps.boardEvents.subscribeAll((projectId, e) => {
-      if (e.event !== 'card' || e.archivedBefore !== false) return;
-      const card = e.card as { number: number; archived?: boolean; status?: string };
+    this.deps.boardEvents.subscribeAll((projectId, event) => {
+      if (event.event !== 'card' || event.archivedBefore !== false) return;
+      const card = event.card as { number: number; archived?: boolean; status?: string };
       if (card.archived !== true || card.status !== 'done') return;
       void (async () => {
         const project = await this.deps.projects.get(projectId);

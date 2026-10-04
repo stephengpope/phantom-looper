@@ -126,8 +126,8 @@ async function cardIntentFor(deps: SyncDeps, session: SessionRow): Promise<strin
     if (!card?.title) return session.name ?? '';
     const firstLine = (card.details ?? '').trim().split('\n')[0] ?? '';
     return firstLine ? `${card.title} — ${firstLine}` : card.title;
-  } catch (e) {
-    log.debug({ session: session.id, err: errStr(e) }, 'card intent unavailable — commit message goes without it');
+  } catch (error) {
+    log.debug({ session: session.id, err: errStr(error) }, 'card intent unavailable — commit message goes without it');
     return session.name ?? '';
   }
 }
@@ -162,7 +162,7 @@ export interface SyncDeps {
   writeCommitMessage?: (input: { stat: string; diff: string; card: string; sessionId: string }, report: (note: string) => void) => Promise<string>;
   /** Progress, one event per step — awaited, so a streaming route can write
    *  in order (and tests can inject races). */
-  onEvent?: (e: SyncEvent) => void | Promise<void>;
+  onEvent?: (event: SyncEvent) => void | Promise<void>;
 }
 
 export interface SyncOptions {
@@ -192,7 +192,7 @@ export async function syncBranch(
   const dir = repoDir(deps.paths, workspace.id);
   const base = project.baseBranch;
   const auth = await checkoutPool.resolveAuth(deps.settings, project);
-  const ev = async (step: SyncStep, detail?: string) => { await deps.onEvent?.({ step, label: syncStepLabel(step, opts.landOnBase), detail }); };
+  const report = async (step: SyncStep, detail?: string) => { await deps.onEvent?.({ step, label: syncStepLabel(step, opts.landOnBase), detail }); };
   const rounds = opts.landOnBase ? ROUNDS : 1;
   const hold = opts.hold ?? true;
 
@@ -209,7 +209,7 @@ export async function syncBranch(
   // fresh id per run, never re-entered). Then, when holding, the SESSION
   // lock: no turn runs under the sync. Held by someone else means someone
   // else is writing; there is nothing further to check.
-  await ev('lock');
+  await report('lock');
   const holder = newId();
   if (!(await deps.workspaces.acquireSyncLock(workspace.id, holder, LOCK_TTL_MS))) {
     return { outcome: 'busy', reason: 'another sync is writing this checkout — try again when it finishes' };
@@ -220,10 +220,10 @@ export async function syncBranch(
   }
   const heartbeat = setInterval(() => {
     void deps.workspaces.renewSyncLock(workspace.id, holder, LOCK_TTL_MS)
-      .catch((e) => log.warn({ workspace: workspace.id, err: errStr(e) }, 'checkout lock renewal failed'));
+      .catch((error) => log.warn({ workspace: workspace.id, err: errStr(error) }, 'checkout lock renewal failed'));
     if (hold) {
       void deps.sessions.renewLock(session.id, GIT_CLIENT_ID, LOCK_TTL_MS)
-        .catch((e) => log.warn({ session: session.id, err: errStr(e) }, 'lock renewal failed'));
+        .catch((error) => log.warn({ session: session.id, err: errStr(error) }, 'lock renewal failed'));
     }
   }, RENEW_MS);
 
@@ -246,7 +246,7 @@ export async function syncBranch(
     // never ran, or a rebase the agent finished itself after a conflict was
     // left for it. Origin's copy is then history HEAD has already replaced;
     // folding it back in (a merge) re-creates the conflict it came from.
-    await ev('backup');
+    await report('backup');
     const backed = await pushSession(dir, workspace.branch, auth);
     if (backed === 'error') return { outcome: 'error', reason: 'could not back the branch up — nothing was rewritten' };
 
@@ -261,20 +261,20 @@ export async function syncBranch(
     // the session has not touched anything. The replay below is then a plain
     // fast-forward, which is exactly what that pull wants.
     if (await hasWorkToLand(dir, base)) {
-      await ev('commit');
+      await report('commit');
       try {
         await git(dir, ['add', '-A']);
-        const { stdout: mb } = await git(dir, ['merge-base', 'HEAD', `origin/${base}`]);
+        const { stdout: mergeBase } = await git(dir, ['merge-base', 'HEAD', `origin/${base}`]);
         // Retry notes stream as commit-step events, so a rate-limited message
         // call shows its recovery (and its give-up) where the sync's progress
         // already shows — silence here was the original bug.
         const card = await cardIntentFor(deps, session);
-        const msg = await commitMessageFromDiff(dir, mb.trim(), card, session.id, deps.writeCommitMessage, (note) => { void ev('commit', note); });
-        await squashToMergeBase(dir, mb.trim());
+        const msg = await commitMessageFromDiff(dir, mergeBase.trim(), card, session.id, deps.writeCommitMessage, (note) => { void report('commit', note); });
+        await squashToMergeBase(dir, mergeBase.trim());
         await commitStaged(dir, `${msg}\n\nPhantom-Session: ${session.id}`);
-      } catch (e) {
+      } catch (error) {
         await git(dir, ['reset', '-q']).catch(() => {}); // index back to HEAD; the tree was never touched
-        return { outcome: 'error', reason: `could not write the commit message: ${(e as Error).message}` };
+        return { outcome: 'error', reason: `could not write the commit message: ${(error as Error).message}` };
       }
     }
     const before = (await git(dir, ['rev-parse', 'HEAD'])).stdout.trim();
@@ -283,7 +283,7 @@ export async function syncBranch(
       // 4 — replay onto base. Round 2+ re-fetches; there is no second squash
       // and no second commit message, because there is still just one commit.
       if (round > 1) arrived = await fetchBase(dir, base, auth);
-      await ev('rebase', `round ${round}`);
+      await report('rebase', `round ${round}`);
       const rebased = await rebaseOntoBase(dir, base);
 
       if (rebased === 'conflict') {
@@ -301,13 +301,13 @@ export async function syncBranch(
           const reason = `conflict in ${ctx.files.join(', ')} — left for the agent to resolve`;
           log.warn({ session: session.id, round, files: ctx.files }, 'sync: conflict left in progress for the agent');
           const blocked: SyncResult = { outcome: 'blocked', reason, rounds: round, arrived, files: ctx.files };
-          await deps.recordSummary?.(session, project, blocked, opts).catch((e) =>
-            log.warn({ session: session.id, err: errStr(e) }, 'could not record sync summary'));
+          await deps.recordSummary?.(session, project, blocked, opts).catch((error) =>
+            log.warn({ session: session.id, err: errStr(error) }, 'could not record sync summary'));
           return blocked;
         }
-        await ev('resolve', ctx.files.join(', '));
-        const ok = await deps.resolve(session, project, dir, ctx).catch((e) => {
-          log.error({ session: session.id, err: errStr(e) }, 'conflict turn threw'); return false;
+        await report('resolve', ctx.files.join(', '));
+        const ok = await deps.resolve(session, project, dir, ctx).catch((error) => {
+          log.error({ session: session.id, err: errStr(error) }, 'conflict turn threw'); return false;
         });
         // Verified against the repo, never against what the agent said. The
         // rebase-in-progress and ancestor checks are what make a `rebase
@@ -329,7 +329,7 @@ export async function syncBranch(
 
       // 6 — verify against the repo: clean tree, no unmerged entries, no
       // rebase still in flight, origin/<base> in HEAD's history — named.
-      await ev('verify');
+      await report('verify');
       const failed = await landingProblems(dir, base);
       if (failed.length > 0) {
         await rebaseAbort(dir);
@@ -337,7 +337,7 @@ export async function syncBranch(
       }
 
       // 7 — the branch, rewritten by the rebase, so this forces with a lease.
-      await ev('push_branch');
+      await report('push_branch');
       const pushed = await pushSessionForced(dir, workspace.branch, auth);
       if (pushed === 'pushed') {
         await deps.workspaces.markPushed(workspace.id);
@@ -356,8 +356,8 @@ export async function syncBranch(
       };
       if (!opts.landOnBase) {
         log.info({ session: session.id, base, arrived: arrived.length, pushed }, 'pulled base');
-        await deps.recordSummary?.(session, project, done, opts).catch((e) =>
-          log.warn({ session: session.id, err: errStr(e) }, 'could not record sync summary'));
+        await deps.recordSummary?.(session, project, done, opts).catch((error) =>
+          log.warn({ session: session.id, err: errStr(error) }, 'could not record sync summary'));
         return done;
       }
 
@@ -366,25 +366,25 @@ export async function syncBranch(
       if (Number(ahead.trim()) === 0) return { outcome: 'nothing', rounds: round, arrived };
 
       // 8 — the landing: HEAD to base, fast-forward by construction.
-      await ev('push_base');
+      await report('push_base');
       const landed = await pushToBase(dir, base, auth);
       if (landed === 'pushed') {
         log.info({ session: session.id, base, rounds: round }, 'pushed');
-        await deps.recordSummary?.(session, project, done, opts).catch((e) =>
-          log.warn({ session: session.id, err: errStr(e) }, 'could not record sync summary'));
+        await deps.recordSummary?.(session, project, done, opts).catch((error) =>
+          log.warn({ session: session.id, err: errStr(error) }, 'could not record sync summary'));
         return done;
       }
       if (landed === 'error') return { outcome: 'error', reason: 'push to base failed', rounds: round };
       // 9 — base moved between our rebase and our push. The resolution is
       // already in the branch's one commit; replay it again from there.
-      await ev('retry', `${base} moved`);
+      await report('retry', `${base} moved`);
     }
     // 10 — give up. Nothing on base, branch intact on origin.
     return { outcome: 'blocked', reason: `${base} kept moving — ${ROUNDS} rounds spent`, rounds: ROUNDS };
-  } catch (e) {
-    log.error({ session: session.id, err: errStr(e) }, 'sync failed');
+  } catch (error) {
+    log.error({ session: session.id, err: errStr(error) }, 'sync failed');
     await rebaseAbort(dir);
-    return { outcome: 'error', reason: (e as Error).message };
+    return { outcome: 'error', reason: (error as Error).message };
   } finally {
     clearInterval(heartbeat);
     if (hold) await deps.sessions.releaseLock(session.id, GIT_CLIENT_ID);

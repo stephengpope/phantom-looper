@@ -31,8 +31,8 @@ const STATUS: Record<string, number> = {
 };
 
 const clientOf = (req: { headers: Record<string, unknown> }): string => {
-  const h = req.headers['x-phantom-looper-client'];
-  return typeof h === 'string' ? h : '';
+  const header = req.headers['x-phantom-looper-client'];
+  return typeof header === 'string' ? header : '';
 };
 
 /** The session a tool call or listing names: known and still active, with
@@ -51,9 +51,9 @@ async function sessionOf(ctx: PhantomBackend, id: string): Promise<{ session: Se
 }
 
 export function toolRoutes(app: FastifyInstance, ctx: PhantomBackend) {
-  const send = (reply: { code: (n: number) => { send: (b: unknown) => unknown } }, e: unknown) => {
-    if (e instanceof ToolError) return reply.code(STATUS[e.code] ?? 400).send(err(e.code, e.message, e.retryable, e.detail));
-    throw e;
+  const send = (reply: { code: (status: number) => { send: (b: unknown) => unknown } }, error: unknown) => {
+    if (error instanceof ToolError) return reply.code(STATUS[error.code] ?? 400).send(err(error.code, error.message, error.retryable, error.detail));
+    throw error;
   };
 
   // The file tools alone — the listing the earlier clients build from.
@@ -88,21 +88,21 @@ export function toolRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         // (onRequestAbort keys off req.aborted, dead since Node 16: it never
         // fires once the JSON body has been read). On normal completion
         // writableFinished is true and nothing aborts.
-        const ac = new AbortController();
-        reply.raw.on('close', () => { if (!reply.raw.writableFinished) ac.abort(); });
+        const abort = new AbortController();
+        reply.raw.on('close', () => { if (!reply.raw.writableFinished) abort.abort(); });
         let files: Promise<FileTools> | undefined;
         const toolCtx: ToolCtx = {
-          app: ctx, session, project, client: clientOf(req), signal: ac.signal,
+          app: ctx, session, project, client: clientOf(req), signal: abort.signal,
           files: () => {
             if (!files) {
               if (!session.workspaceId) throw new ToolError('no_workspace', 'this session has no files — nothing to read');
-              files = fileTools(ctx, fsDeps(ctx), session, session.workspaceId, ac.signal);
+              files = fileTools(ctx, fsDeps(ctx), session, session.workspaceId, abort.signal);
             }
             return files;
           },
         };
         return ok(await def.execute(toolCtx, req.body ?? {}));
-      } catch (e) { return send(reply, e); }
+      } catch (error) { return send(reply, error); }
     });
   }
 }

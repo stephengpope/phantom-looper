@@ -35,7 +35,7 @@ export interface FeedHooks {
   /** An instant sync on this session did not complete. `reason` is the
    *  sync's own words. The window shows it where it will be seen (a toast),
    *  not as a line in the pane. */
-  onSyncFailed?: (op: 'push' | 'pull', reason: string) => void;
+  onSyncFailed?: (operation: 'push' | 'pull', reason: string) => void;
 }
 
 const agentName = (agent: string): string | undefined =>
@@ -104,8 +104,8 @@ export class SessionFeed {
         // be replaced by the truth at turn end rather than kept.
         if ((part as { capped?: boolean }).capped) this.whole = false;
         this.buf.push(part);
-        const t = part.type;
-        const isDelta = t === 'text-delta' || t === 'reasoning-delta' || t === 'tool-input-delta';
+        const partType = part.type;
+        const isDelta = partType === 'text-delta' || partType === 'reasoning-delta' || partType === 'tool-input-delta';
         if (isDelta) { if (!this.timer) this.timer = setTimeout(() => this.flush(), this.flushMs); }
         else this.flush();   // ordering: a non-delta flushes what is buffered ahead of it
         return;
@@ -128,9 +128,9 @@ export class SessionFeed {
         // draws its own stream and the feed's echo rule keeps this copy from
         // it — a note here is always news from somewhere else.
         const step = String(rec.step ?? '');
-        const op = rec.op === 'push' ? 'auto-push' : 'auto-pull';
+        const operation = rec.op === 'push' ? 'auto-push' : 'auto-pull';
         const detail = typeof rec.detail === 'string' && rec.detail ? ` — ${rec.detail}` : '';
-        this.store.note(this.sessionId, `${op}: ${AUTO_PUSH_STEPS[step] ?? step}${detail}`);
+        this.store.note(this.sessionId, `${operation}: ${AUTO_PUSH_STEPS[step] ?? step}${detail}`);
         return;
       }
       case 'sync-failed':

@@ -59,9 +59,9 @@ export class Deployment {
    *  round in flight (they resume after boot), so a call not told to restart
    *  anyway is refused while any card is mid-round. Resolves when the stream
    *  ends; `stop` (the caller went away) detaches. */
-  update(tag: string, o: { restartAnyway?: boolean }, onEvent: (e: UpdateEvent) => void): { done: Promise<void>; stop(): void } {
+  update(tag: string, options: { restartAnyway?: boolean }, onEvent: (event: UpdateEvent) => void): { done: Promise<void>; stop(): void } {
     const loops = this.loopsRunning();
-    if (loops > 0 && !o.restartAnyway) {
+    if (loops > 0 && !options.restartAnyway) {
       throw new DeploymentError('loops_running',
         `${loops === 1 ? '1 card has' : `${loops} cards have`} a round in flight — updating now would interrupt ${loops === 1 ? 'it' : 'them'} (${loops === 1 ? 'it resumes' : 'they resume'} after the restart); send restart_anyway: true to update anyway`, true);
     }
@@ -73,9 +73,9 @@ export class Deployment {
     }
     let unsub: (() => void) | null = null;
     const done = new Promise<void>((resolve) => {
-      unsub = subscribe((e) => {
-        onEvent(e);
-        if (e.event === 'restarting' || e.event === 'error') { unsub?.(); resolve(); }
+      unsub = subscribe((event) => {
+        onEvent(event);
+        if (event.event === 'restarting' || event.event === 'error') { unsub?.(); resolve(); }
       });
       if (!unsub) { onEvent({ event: 'error', message: 'no update in progress' } as UpdateEvent); resolve(); }
     });
@@ -98,7 +98,7 @@ export class Deployment {
     });
     const out: Buffer[] = [];
     const sink = new PassThrough();
-    sink.on('data', (d: Buffer) => out.push(d));
+    sink.on('data', (chunk: Buffer) => out.push(chunk));
     const source = Readable.from(raw);
     docker.modem.demuxStream(source, sink, sink);
     // demuxStream never ends the output streams — end the sink once the source
@@ -113,21 +113,21 @@ export class Deployment {
 
   /** A service's recent log lines, optionally filtered; the newest lines are
    *  the answer, so an over-cap page is cut from the FRONT. */
-  async logs(q: LogsQuery = {}): Promise<{ service: string; text: string; truncated?: boolean }> {
+  async logs(query: LogsQuery = {}): Promise<{ service: string; text: string; truncated?: boolean }> {
     const docker = this.docker;
     if (!docker) throw new DeploymentError('logs_unavailable', 'this server has no docker access');
-    const { service = 'api', tail = 100, since, grep } = q;
+    const { service = 'api', tail = 100, since, grep } = query;
     const container = await this.serviceContainer(docker, service).catch(() => null);
     if (!container) throw new DeploymentError('no_such_service', `no running container for service "${service}"`);
     let text: string;
     try { text = await this.readLogs(docker, container, { tail, since }); }
-    catch (e) {
-      log.error({ err: errStr(e), service }, 'log read failed');
-      throw new DeploymentError('logs_unavailable', `could not read ${service} logs: ${errStr(e)}`);
+    catch (error) {
+      log.error({ err: errStr(error), service }, 'log read failed');
+      throw new DeploymentError('logs_unavailable', `could not read ${service} logs: ${errStr(error)}`);
     }
     if (grep) {
       let keep: (line: string) => boolean;
-      try { const re = new RegExp(grep, 'i'); keep = (line) => re.test(line); }
+      try { const pattern = new RegExp(grep, 'i'); keep = (line) => pattern.test(line); }
       catch { const needle = grep.toLowerCase(); keep = (line) => line.toLowerCase().includes(needle); }
       text = text.split('\n').filter(keep).join('\n');
     }
@@ -140,9 +140,9 @@ export class Deployment {
    *  counters 250 ms apart: the same math top does, no subprocess. */
   async status(): Promise<{ text: string }> {
     const gib = (bytes: number) => `${(bytes / 2 ** 30).toFixed(1)}G`;
-    const times = () => os.cpus().map((c) => ({ ...c.times }));
+    const times = () => os.cpus().map((cpu) => ({ ...cpu.times }));
     const a = times();
-    await new Promise((r) => setTimeout(r, 250));
+    await new Promise((wake) => setTimeout(wake, 250));
     const b = times();
     let idle = 0, all = 0;
     for (let i = 0; i < a.length; i++) {
@@ -152,7 +152,7 @@ export class Deployment {
       all += totalB - totalA;
     }
     const cpuPct = all > 0 ? Math.round((1 - idle / all) * 100) : 0;
-    const load = os.loadavg().map((n) => n.toFixed(2)).join(' ');
+    const load = os.loadavg().map((average) => average.toFixed(2)).join(' ');
     const totalMem = os.totalmem(), freeMem = os.freemem();
     const disk = statfsSync(this.paths.root);
     const diskTotal = disk.blocks * disk.bsize, diskAvail = disk.bavail * disk.bsize;
@@ -169,24 +169,24 @@ export class Deployment {
   async restart(service = 'api'): Promise<{ restarting: string; note?: string }> {
     const docker = this.docker;
     if (!docker) throw new DeploymentError('restart_unavailable', 'this server has no docker access');
-    const all = await docker.listContainers().catch((e) => { log.error({ err: errStr(e) }, 'container list failed'); return null; });
+    const all = await docker.listContainers().catch((error) => { log.error({ err: errStr(error) }, 'container list failed'); return null; });
     if (!all) throw new DeploymentError('restart_unavailable', 'docker did not answer');
-    const target = all.find((c) => (c.Labels?.['com.docker.compose.service'] ?? '') === service);
+    const target = all.find((container) => (container.Labels?.['com.docker.compose.service'] ?? '') === service);
     if (!target) {
-      const services = [...new Set(all.map((c) => c.Labels?.['com.docker.compose.service']).filter(Boolean))].sort();
+      const services = [...new Set(all.map((container) => container.Labels?.['com.docker.compose.service']).filter(Boolean))].sort();
       throw new DeploymentError('no_such_service',
         `no running container for service "${service}" — running services: ${services.join(', ') || '(none)'}`);
     }
     const container = docker.getContainer(target.Id);
     if (service === 'api') {
-      setTimeout(() => { container.restart().catch((e) => log.warn({ err: errStr(e) }, 'api self-restart failed')); }, 500).unref();
+      setTimeout(() => { container.restart().catch((error) => log.warn({ err: errStr(error) }, 'api self-restart failed')); }, 500).unref();
       log.info('api restart requested');
       return { restarting: service, note: 'the api is restarting — back in a few seconds' };
     }
     try { await container.restart(); }
-    catch (e) {
-      log.error({ err: errStr(e), service }, 'restart failed');
-      throw new DeploymentError('restart_unavailable', `could not restart ${service}: ${errStr(e)}`);
+    catch (error) {
+      log.error({ err: errStr(error), service }, 'restart failed');
+      throw new DeploymentError('restart_unavailable', `could not restart ${service}: ${errStr(error)}`);
     }
     log.info({ service }, 'service restarted');
     return { restarting: service };

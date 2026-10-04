@@ -22,8 +22,8 @@ export function gitRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // the git client). Handed to auto-push/auto-pull as `by`, so the session
   // feed's echo rule skips the window that is already drawing this stream.
   const clientOf = (req: { headers: Record<string, unknown> }): string => {
-    const h = req.headers['x-phantom-looper-client'];
-    return typeof h === 'string' ? h : '';
+    const header = req.headers['x-phantom-looper-client'];
+    return typeof header === 'string' ? header : '';
   };
 
   /** The one gate (sessionHeader.ts), plus the project git needs. */
@@ -35,12 +35,12 @@ export function gitRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     return { session, project };
   }
 
-  const send = (reply: { code: (n: number) => { send: (b: unknown) => unknown } }, e: unknown) => {
-    if (e instanceof ToolError) {
-      const status = e.code === 'busy' ? 409 : e.code === 'session_destroyed' ? 410 : e.code.startsWith('session') ? 404 : 400;
-      return reply.code(status).send(err(e.code, e.message, e.retryable));
+  const send = (reply: { code: (status: number) => { send: (b: unknown) => unknown } }, error: unknown) => {
+    if (error instanceof ToolError) {
+      const status = error.code === 'busy' ? 409 : error.code === 'session_destroyed' ? 410 : error.code.startsWith('session') ? 404 : 400;
+      return reply.code(status).send(err(error.code, error.message, error.retryable));
     }
-    throw e;
+    throw error;
   };
 
   app.post('/git/push', { schema: { tags: ['git'], headers: sessionHeader,
@@ -51,7 +51,7 @@ export function gitRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       const { session, project } = await resolveSession(req);
       const result = await engine.push(session, project);
       return ok({ result });
-    } catch (e) { return send(reply, e); }
+    } catch (error) { return send(reply, error); }
   });
 
   app.post('/git/pull', { schema: { tags: ['git'], headers: sessionHeader,
@@ -62,7 +62,7 @@ export function gitRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       const { session, project } = await resolveSession(req);
       const result = await engine.pull(session, project);
       return ok({ result });
-    } catch (e) { return send(reply, e); }
+    } catch (error) { return send(reply, error); }
   });
 
   app.get('/git/status', { schema: { tags: ['git'], headers: sessionHeader,
@@ -72,7 +72,7 @@ export function gitRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     try {
       const { session, project } = await resolveSession(req);
       return ok(await engine.status(session, project));
-    } catch (e) { return send(reply, e); }
+    } catch (error) { return send(reply, error); }
   });
 
   // The streamed git operations (auto-push, auto-pull) share ONE wire: ND-JSON
@@ -82,19 +82,19 @@ export function gitRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // terminal {event:'result', ...} — the operation's own result, or
   // {result:'busy'} / {result:'error', reason} when it threw.
   async function streamRun<Step extends object, Result extends object>(reply: FastifyReply, name: string, sessionId: string,
-    run: (onStep: (e: Step) => void) => Promise<Result>): Promise<FastifyReply> {
+    run: (onStep: (step: Step) => void) => Promise<Result>): Promise<FastifyReply> {
     reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
-    const write = (o: unknown) => { reply.raw.write(`${JSON.stringify(o)}\n`); };
+    const write = (record: unknown) => { reply.raw.write(`${JSON.stringify(record)}\n`); };
     const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
     try {
-      const result = await run((e) => write({ event: 'step', ...e }));
+      const result = await run((step) => write({ event: 'step', ...step }));
       write({ event: 'result', ...result });
-    } catch (e) {
-      if (e instanceof ToolError && e.code === 'busy') {
-        write({ event: 'result', result: 'busy', reason: e.message });
+    } catch (error) {
+      if (error instanceof ToolError && error.code === 'busy') {
+        write({ event: 'result', result: 'busy', reason: error.message });
       } else {
-        log.error({ session: sessionId, err: errStr(e) }, `${name} threw`);
-        write({ event: 'result', result: 'error', reason: e instanceof Error ? e.message : String(e) });
+        log.error({ session: sessionId, err: errStr(error) }, `${name} threw`);
+        write({ event: 'result', result: 'error', reason: error instanceof Error ? error.message : String(error) });
       }
     } finally {
       clearInterval(heartbeat);
@@ -115,7 +115,7 @@ export function gitRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   async (req, reply) => {
     let session: SessionRow; let project: ProjectRow;
     try { ({ session, project } = await resolveSession(req)); }
-    catch (e) { return send(reply, e); }
+    catch (error) { return send(reply, error); }
     return streamRun(reply, 'auto-push', session.id, (onStep) => ctx.git.autoPush(session, project, onStep, clientOf(req)));
   });
 
@@ -131,7 +131,7 @@ export function gitRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   async (req, reply) => {
     let session: SessionRow; let project: ProjectRow;
     try { ({ session, project } = await resolveSession(req)); }
-    catch (e) { return send(reply, e); }
+    catch (error) { return send(reply, error); }
     return streamRun(reply, 'auto-pull', session.id, (onStep) => ctx.git.autoPull(session, project, onStep, clientOf(req)));
   });
 }

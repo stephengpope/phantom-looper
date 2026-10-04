@@ -21,15 +21,15 @@ const CONTROL = /[\x00-\x09\x0b-\x1a\x1c-\x1f\x7f-\x9f]/;
 
 /** Tabs expanded to `TAB`-column stops (per line, so aligned output stays
  *  aligned), every other control character dropped. */
-export function screenText(s: string): string {
-  if (!CONTROL.test(s)) return s;
+export function screenText(text: string): string {
+  if (!CONTROL.test(text)) return text;
   let out = '';
   let col = 0;
-  for (const ch of s) {
-    if (ch === '\t') { const n = TAB - (col % TAB); out += ' '.repeat(n); col += n; }
-    else if (ch === '\n') { out += ch; col = 0; }
-    else if (CONTROL.test(ch)) continue;
-    else { out += ch; col++; }
+  for (const char of text) {
+    if (char === '\t') { const spaces = TAB - (col % TAB); out += ' '.repeat(spaces); col += spaces; }
+    else if (char === '\n') { out += char; col = 0; }
+    else if (CONTROL.test(char)) continue;
+    else { out += char; col++; }
   }
   return out;
 }

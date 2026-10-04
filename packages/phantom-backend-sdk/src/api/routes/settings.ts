@@ -34,11 +34,11 @@ export function settingsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
    *  stops a typo becoming an override nothing will ever read — the row would
    *  be perfectly valid and perfectly dead. */
   type Scope = { error: string } | { write: string; kind: 'global' | 'project'; project?: ProjectRow };
-  async function scopeOf(q: { project?: string }): Promise<Scope> {
-    if (q.project) {
-      const project = await ctx.projects.get(q.project);
-      if (!project) return { error: `no project ${q.project}` };
-      return { write: projectScope(q.project), kind: 'project' as const, project };
+  async function scopeOf(query: { project?: string }): Promise<Scope> {
+    if (query.project) {
+      const project = await ctx.projects.get(query.project);
+      if (!project) return { error: `no project ${query.project}` };
+      return { write: projectScope(query.project), kind: 'project' as const, project };
     }
     return { write: GLOBAL, kind: 'global' as const };
   }
@@ -49,20 +49,20 @@ export function settingsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       description: 'Every setting with its LAYERS — `default` (code), `global`, `project` — plus the computed `value` and `source` (the layer it came from), and `description`/`meta`/`overridable` so a client renders an editor from this one call. Pass ?project= to fill in that layer. Credentials come back decrypted, flagged `secret`.',
       querystring: scopeQuery } },
     async (req, reply) => {
-      const sc = await scopeOf(req.query);
-      if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
-      const scope = sc.project ? { projectId: sc.project.id } : {};
+      const where = await scopeOf(req.query);
+      if ('error' in where) return reply.code(404).send(err('not_found', where.error));
+      const scope = where.project ? { projectId: where.project.id } : {};
       const entries = await ctx.settings.layersForScope(scope);
       const credentials = await ctx.settings.credentialLayers(scope);
       const out: Record<string, unknown> = {};
       for (const [key, entry] of Object.entries(entries)) {
         // A project-only key has no global meaning — the global list omits it.
-        if (sc.kind === 'global' && !ctx.settings.isGlobalSettable(key)) continue;
+        if (where.kind === 'global' && !ctx.settings.isGlobalSettable(key)) continue;
         if (!entry.secret) { out[key] = { ...entry, secret: false }; continue; }
         // Credentials are keys of the same store — same table, same chain —
         // and this route answers them decrypted.
         const globalValue = credentials[key]?.global ?? null;
-        const projectValue = sc.kind !== 'global' ? credentials[key]?.project ?? null : null;
+        const projectValue = where.kind !== 'global' ? credentials[key]?.project ?? null : null;
         out[key] = { ...entry, global: globalValue, project: projectValue, value: projectValue ?? globalValue,
           source: projectValue != null ? 'project' : globalValue != null ? 'global' : 'default' };
       }
@@ -78,14 +78,14 @@ export function settingsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       querystring: scopeQuery,
       body: { type: 'object', additionalProperties: true } } },
     async (req, reply) => {
-      const sc = await scopeOf(req.query);
-      if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
+      const scope = await scopeOf(req.query);
+      if ('error' in scope) return reply.code(404).send(err('not_found', scope.error));
       let updated: string[];
       try {
-        updated = await ctx.settings.writeAtScope(sc.kind, sc.write, req.body ?? {}, writerOf(req));
-      } catch (e) {
-        if (e instanceof SettingsWriteError) return reply.code(400).send(err(e.code, e.message));
-        throw e;
+        updated = await ctx.settings.writeAtScope(scope.kind, scope.write, req.body ?? {}, writerOf(req));
+      } catch (error) {
+        if (error instanceof SettingsWriteError) return reply.code(400).send(err(error.code, error.message));
+        throw error;
       }
       // Every write lands on the settings feed (Settings.write): the looper
       // and the Telegram engine listen there, whichever door wrote.
@@ -99,13 +99,13 @@ export function settingsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       params: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] },
       querystring: scopeQuery } },
     async (req, reply) => {
-      const sc = await scopeOf(req.query);
-      if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
+      const scope = await scopeOf(req.query);
+      if ('error' in scope) return reply.code(404).send(err('not_found', scope.error));
       try {
-        await ctx.settings.writeAtScope(sc.kind, sc.write, { [req.params.key]: null }, writerOf(req));
-      } catch (e) {
-        if (e instanceof SettingsWriteError) return reply.code(400).send(err(e.code, e.message));
-        throw e;
+        await ctx.settings.writeAtScope(scope.kind, scope.write, { [req.params.key]: null }, writerOf(req));
+      } catch (error) {
+        if (error instanceof SettingsWriteError) return reply.code(400).send(err(error.code, error.message));
+        throw error;
       }
       return ok({ cleared: req.params.key });
     });
@@ -118,7 +118,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       'plus {event:"heartbeat"}. The record carries no setting values — listeners re-read /settings.' } },
     async (req, reply) => {
       reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
-      const write = (o: unknown) => { reply.raw.write(`${JSON.stringify(o)}\n`); };
+      const write = (record: unknown) => { reply.raw.write(`${JSON.stringify(record)}\n`); };
       const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
       const unsubscribe = ctx.settingsEvents!.subscribe(write);
       write({ event: 'heartbeat' });

@@ -17,21 +17,21 @@ export interface TokenRecord { type: string; sessionId?: string | null; provider
 const sum = (col: PgColumn) => sql<number>`coalesce(sum(${col}), 0)`.mapWith(Number);
 
 export class TokenLog {
-  constructor(private readonly db: Drizzle) {}
+  constructor(private readonly database: Drizzle) {}
 
   /** Record one LLM call. */
-  async record(r: TokenRecord): Promise<void> {
-    await this.db.insert(logTokens).values({
+  async record(record: TokenRecord): Promise<void> {
+    await this.database.insert(logTokens).values({
       id: newId(),
-      sessionId: r.sessionId ?? null,
-      type: r.type,
-      provider: r.provider,
-      model: r.model,
-      responseId: r.responseId ?? null,
-      tokensInput: r.input,
-      tokensOutput: r.output,
-      tokensCacheRead: r.cacheRead,
-      tokensCacheWrite: r.cacheWrite,
+      sessionId: record.sessionId ?? null,
+      type: record.type,
+      provider: record.provider,
+      model: record.model,
+      responseId: record.responseId ?? null,
+      tokensInput: record.input,
+      tokensOutput: record.output,
+      tokensCacheRead: record.cacheRead,
+      tokensCacheWrite: record.cacheWrite,
     });
   }
 
@@ -39,7 +39,7 @@ export class TokenLog {
   async sessionTotals(sessionId: string): Promise<{
     input: number; output: number; cacheRead: number; cacheWrite: number;
   }> {
-    const [row] = await this.db
+    const [row] = await this.database
       .select({
         input: sum(logTokens.tokensInput),
         output: sum(logTokens.tokensOutput),
@@ -65,7 +65,7 @@ export class TokenLog {
       cacheRead: windowed(logTokens.tokensCacheRead, from),
       calls: windowed(null, from),
     });
-    const rows = await this.db
+    const rows = await this.database
       .select({
         type: logTokens.type, provider: logTokens.provider, model: logTokens.model,
         today: window(since.today), week: window(since.week), month: window(since.month),

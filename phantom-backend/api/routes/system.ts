@@ -22,9 +22,9 @@ const log = logger('system');
 export const RELEASE_TAG = /^v\d+\.\d+\.\d+$/;
 
 /** The Deployment object's refusal, as the API's answer. */
-const systemErr = (reply: { code: (n: number) => { send: (b: unknown) => unknown } }, e: unknown) => {
-  if (!(e instanceof DeploymentError)) throw e;
-  return reply.code(e.code === 'no_such_service' ? 404 : 503).send(err(e.code, e.message));
+const systemErr = (reply: { code: (status: number) => { send: (b: unknown) => unknown } }, error: unknown) => {
+  if (!(error instanceof DeploymentError)) throw error;
+  return reply.code(error.code === 'no_such_service' ? 404 : 503).send(err(error.code, error.message));
 };
 
 export function systemRoutes(app: FastifyInstance, ctx: PhantomBackend, extras: AppExtras) {
@@ -43,9 +43,9 @@ export function systemRoutes(app: FastifyInstance, ctx: PhantomBackend, extras: 
         provider: { type: 'string', enum: [...PROVIDERS] } } },
     },
   }, async (req, reply) => {
-    const p = req.query.provider ?? '';
-    if (!isProvider(p)) return reply.code(400).send(err('invalid_args', `provider must be one of: ${PROVIDERS.join(', ')}`));
-    return ok({ provider: p, source: ctx.modelCatalog.source(), models: ctx.modelCatalog.modelsFor(p) });
+    const provider = req.query.provider ?? '';
+    if (!isProvider(provider)) return reply.code(400).send(err('invalid_args', `provider must be one of: ${PROVIDERS.join(', ')}`));
+    return ok({ provider: provider, source: ctx.modelCatalog.source(), models: ctx.modelCatalog.modelsFor(provider) });
   });
 
   app.post('/update', {
@@ -78,11 +78,11 @@ export function systemRoutes(app: FastifyInstance, ctx: PhantomBackend, extras: 
     // with the first write, whichever comes first.
     let run: ReturnType<typeof extras.deployment.update>;
     const head = () => { if (!reply.raw.headersSent) reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' }); };
-    const write = (o: unknown) => { head(); reply.raw.write(`${JSON.stringify(o)}\n`); };
+    const write = (record: unknown) => { head(); reply.raw.write(`${JSON.stringify(record)}\n`); };
     try { run = extras.deployment.update(tag, { restartAnyway }, write); }
-    catch (e) {
-      if (!(e instanceof DeploymentError)) throw e;
-      return reply.code(e.code === 'loops_running' ? 409 : 503).send(err(e.code, e.message, e.retryable));
+    catch (error) {
+      if (!(error instanceof DeploymentError)) throw error;
+      return reply.code(error.code === 'loops_running' ? 409 : 503).send(err(error.code, error.message, error.retryable));
     }
     head();
     const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
@@ -115,7 +115,7 @@ export function systemRoutes(app: FastifyInstance, ctx: PhantomBackend, extras: 
     },
   }, async (req, reply) => {
     try { return ok(await extras.deployment.logs(req.body ?? {})); }
-    catch (e) { return systemErr(reply, e); }
+    catch (error) { return systemErr(reply, error); }
   });
 
   app.get('/system/status', {
@@ -146,7 +146,7 @@ export function systemRoutes(app: FastifyInstance, ctx: PhantomBackend, extras: 
     },
   }, async (req, reply) => {
     try { return ok(await extras.deployment.restart(req.body?.service)); }
-    catch (e) { return systemErr(reply, e); }
+    catch (error) { return systemErr(reply, error); }
   });
 
   // ---- token usage report ---------------------------------------------------

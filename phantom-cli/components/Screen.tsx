@@ -35,7 +35,7 @@ export interface FooterKey { key: string; does: string; when?: boolean; active?:
 /** `[enter] change · [esc] close` — the ONE formatter for key hints, footers
  *  and the slash menu's help line alike. */
 export const keyLine = (keys: FooterKey[]): string =>
-  keys.filter((k) => k.when !== false).map((k) => `[${k.key}] ${k.does}`).join(' · ');
+  keys.filter((hint) => hint.when !== false).map((hint) => `[${hint.key}] ${hint.does}`).join(' · ');
 
 /** The terminal, as App measured it. Defaulted so a bare component in a test
  *  still lays out like a standard 80×24 terminal. */
@@ -55,13 +55,13 @@ function CHROME_ROWS(): number { return 7; }
  *  not on the line: a line-wide dim wraps the active key too and greys its
  *  black text. */
 function footerSegments(keys: FooterKey[]): ReactNode {
-  const visible = keys.filter((k) => k.when !== false);
-  return visible.map((k, i) => {
-    const label = `[${k.key}] ${k.does}`;
+  const visible = keys.filter((hint) => hint.when !== false);
+  return visible.map((hint, i) => {
+    const label = `[${hint.key}] ${hint.does}`;
     const sep = i < visible.length - 1 ? ' · ' : '';
-    return k.active
-      ? <Text key={k.key}><Text color="black" backgroundColor="white">{label}</Text><Text dimColor>{sep}</Text></Text>
-      : <Text key={k.key} dimColor>{label}{sep}</Text>;
+    return hint.active
+      ? <Text key={hint.key}><Text color="black" backgroundColor="white">{label}</Text><Text dimColor>{sep}</Text></Text>
+      : <Text key={hint.key} dimColor>{label}{sep}</Text>;
   });
 }
 

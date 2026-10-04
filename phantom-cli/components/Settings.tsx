@@ -53,14 +53,14 @@ type View =
 /** Rows that cannot apply right now, hidden rather than shown dead: an
  *  endpoint for a provider that has none, wake words while wake is off.
  *  Presentation only — the server still stores and returns them. */
-const usesBaseUrl = (p: unknown) => p === 'openai' || p === 'deepseek' || p === 'kimi' || p === 'openai-compatible';
-const set = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
+const usesBaseUrl = (provider: unknown) => provider === 'openai' || provider === 'deepseek' || provider === 'kimi' || provider === 'openai-compatible';
+const set = (value: unknown): string | null => (typeof value === 'string' && value !== '' ? value : null);
 export const HIDDEN: Record<string, (values: Record<string, unknown>) => boolean> = {
-  coding_base_url: (v) => !usesBaseUrl(v.coding_provider),
-  assistant_base_url: (v) => !usesBaseUrl(set(v.assistant_provider) ?? v.coding_provider),
-  supervisor_base_url: (v) => !usesBaseUrl(set(v.supervisor_provider) ?? v.coding_provider),
-  voice_wake_words: (v) => v.voice_wake_word !== true,
-  voice_wake_timeout: (v) => v.voice_wake_word !== true,
+  coding_base_url: (values) => !usesBaseUrl(values.coding_provider),
+  assistant_base_url: (values) => !usesBaseUrl(set(values.assistant_provider) ?? values.coding_provider),
+  supervisor_base_url: (values) => !usesBaseUrl(set(values.supervisor_provider) ?? values.coding_provider),
+  voice_wake_words: (values) => values.voice_wake_word !== true,
+  voice_wake_timeout: (values) => values.voice_wake_word !== true,
 };
 
 export function Settings({ api, onClose, onChange, configPath = CONFIG_PATH, rows, title, startAt, suggestions, onOpenRow }: {
@@ -100,7 +100,7 @@ export function Settings({ api, onClose, onChange, configPath = CONFIG_PATH, row
   const loadServer = useCallback(async () => {
     setBusy(true);
     try { setServer(await settings.all()); setNotice(undefined); }
-    catch (e) { setNotice(`server unreachable: ${(e as Error).message}`); setServer({}); }
+    catch (entry) { setNotice(`server unreachable: ${(entry as Error).message}`); setServer({}); }
     finally { setBusy(false); }
   }, [settings]);
   useEffect(() => { if (rows.server) void loadServer(); }, [rows.server, loadServer]);
@@ -115,28 +115,28 @@ export function Settings({ api, onClose, onChange, configPath = CONFIG_PATH, row
   // opens; a server that cannot answer leaves the row free-text.
   const loadModels = useCallback(async (provider: string): Promise<CatalogModel[]> => {
     try {
-      const r = await api('GET', `/models?provider=${encodeURIComponent(provider)}`) as { models?: CatalogModel[] };
-      return Array.isArray(r?.models) ? r.models : [];
-    } catch (e) {
+      const reply = await api('GET', `/models?provider=${encodeURIComponent(provider)}`) as { models?: CatalogModel[] };
+      return Array.isArray(reply?.models) ? reply.models : [];
+    } catch (entry) {
       // The row stays free-text, and the notice says why the list is missing
       // — an empty picker must not read as "this provider has no models".
-      setNotice(`could not load the model list: ${(e as Error).message}`);
+      setNotice(`could not load the model list: ${(entry as Error).message}`);
       return [];
     }
   }, [api]);
 
   const serverValues = (): Record<string, unknown> =>
-    Object.fromEntries(Object.entries(server ?? {}).map(([k, e]) => [k, e.value]));
+    Object.fromEntries(Object.entries(server ?? {}).map(([key, entry]) => [key, entry.value]));
 
   const openServer = async (key: string) => {
-    const e = server![key];
+    const entry = server![key];
     setLast(key);
     const values = serverValues();
     const spec: EditSpec = {
-      title: `${labelFor(key, e.meta)} · everyone`,
-      choices: e.meta.choices, choiceLabels: e.meta.choiceLabels, suggestions: e.meta.suggestions,
-      type: e.meta.type, current: e.value, unit: e.meta.unit,
-      note: e.meta.unit === 'ms' ? 'e.g. 30m, 2h, 3d · applies to everyone' : 'applies to everyone',
+      title: `${labelFor(key, entry.meta)} · everyone`,
+      choices: entry.meta.choices, choiceLabels: entry.meta.choiceLabels, suggestions: entry.meta.suggestions,
+      type: entry.meta.type, current: entry.value, unit: entry.meta.unit,
+      note: entry.meta.unit === 'ms' ? 'e.g. 30m, 2h, 3d · applies to everyone' : 'applies to everyone',
     };
     const provider = providerForModelRow(key, values);
     const models = provider ? await loadModels(provider) : [];
@@ -146,13 +146,13 @@ export function Settings({ api, onClose, onChange, configPath = CONFIG_PATH, row
   const openLocal = (key: LocalKey) => {
     setLast(key);
     onOpenRow?.(key);
-    const m = META[key];
+    const meta = META[key];
     const spec: EditSpec = {
-      title: m.label, secret: m.secret, type: m.type,
-      current: m.secret ? '' : local[key].value,
+      title: meta.label, secret: meta.secret, type: meta.type,
+      current: meta.secret ? '' : local[key].value,
       note: local[key].envVar
         ? `${local[key].envVar} is set in your shell and beats this file — unset it for a saved value to take effect`
-        : m.secret ? `saved to ${configPath}, mode 0600` : undefined,
+        : meta.secret ? `saved to ${configPath}, mode 0600` : undefined,
     };
     // Device rows offer what the sidecar found; a name it did not list can
     // still be typed (a device plugged in later, or a sidecar not running yet).
@@ -165,13 +165,13 @@ export function Settings({ api, onClose, onChange, configPath = CONFIG_PATH, row
   // stored, never what was sent.
   const writeServer = async (patch: Record<string, ConfigValue>) => {
     setBusy(true);
-    try { await settings.patch(patch); await loadServer(); for (const k of Object.keys(patch)) onChange?.(k); }
-    catch (e) { setNotice((e as Error).message); }
+    try { await settings.patch(patch); await loadServer(); for (const key of Object.keys(patch)) onChange?.(key); }
+    catch (entry) { setNotice((entry as Error).message); }
     finally { setBusy(false); }
   };
-  const writeLocal = async (key: LocalKey, v: ConfigValue) => {
-    try { await settings.write(key, v); setNotice(undefined); setTick((t) => t + 1); onChange?.(key); }
-    catch (e) { setNotice(`could not save: ${(e as Error).message}`); }
+  const writeLocal = async (key: LocalKey, value: ConfigValue) => {
+    try { await settings.write(key, value); setNotice(undefined); setTick((tick) => tick + 1); onChange?.(key); }
+    catch (entry) { setNotice(`could not save: ${(entry as Error).message}`); }
   };
 
   if (view.at === 'edit') {
@@ -183,15 +183,15 @@ export function Settings({ api, onClose, onChange, configPath = CONFIG_PATH, row
       <ValueInput
         spec={spec}
         onCancel={() => setView({ at: 'list' })}
-        onSubmit={(v) => {
+        onSubmit={(value) => {
           setView({ at: 'list' });
-          if (view.kind === 'local') { void writeLocal(view.key as LocalKey, v as ConfigValue); return; }
+          if (view.kind === 'local') { void writeLocal(view.key as LocalKey, value as ConfigValue); return; }
           // A provider change invalidates its model — the old id belongs to
           // the old provider's catalog. Clear it in the same write so the row
           // shows "—" (= newest for the new provider) rather than a stale id.
           const modelKey = MODEL_FOR_PROVIDER[view.key];
-          const patch: Record<string, ConfigValue> = { [view.key]: v as ConfigValue };
-          if (modelKey && v !== view.spec.current) patch[modelKey] = null;
+          const patch: Record<string, ConfigValue> = { [view.key]: value as ConfigValue };
+          if (modelKey && value !== view.spec.current) patch[modelKey] = null;
           void writeServer(patch);
         }}
       />
@@ -207,8 +207,8 @@ export function Settings({ api, onClose, onChange, configPath = CONFIG_PATH, row
   }
 
   const blocks = screenRows(rows, server ?? {}, local);
-  const choices = headedChoices(blocks, (r): Choice<string> =>
-    ({ value: r.key, label: r.label, columns: [{ text: r.shown, width: 24 }, { text: r.source }], hint: r.hint }));
+  const choices = headedChoices(blocks, (row): Choice<string> =>
+    ({ value: row.key, label: row.label, columns: [{ text: row.shown, width: 24 }, { text: row.source }], hint: row.hint }));
   const first = startAt ? blocks.find((b) => b.group === startAt)?.items[0]?.key : undefined;
   return (
     <Screen title={title}
@@ -222,13 +222,13 @@ export function Settings({ api, onClose, onChange, configPath = CONFIG_PATH, row
           key={`rows-${rows.local ?? ''}`}
           initial={last ?? first}
           choices={choices}
-          onSelect={(k) => {
-            if (server?.[k] && !isLocal(k)) void openServer(k);
-            else if (isLocal(k)) openLocal(k);
+          onSelect={(key) => {
+            if (server?.[key] && !isLocal(key)) void openServer(key);
+            else if (isLocal(key)) openLocal(key);
           }}
           onCancel={onClose}
-          onKey={(ch: string, cursorValue?: string) => {
-            if (ch !== 'd' || !cursorValue) return;
+          onKey={(char: string, cursorValue?: string) => {
+            if (char !== 'd' || !cursorValue) return;
             if (isLocal(cursorValue)) { void writeLocal(cursorValue, null); return; }
             if (server?.[cursorValue]) void writeServer({ [cursorValue]: null });
           }}
@@ -238,7 +238,7 @@ export function Settings({ api, onClose, onChange, configPath = CONFIG_PATH, row
   );
 }
 
-const isLocal = (k: string): k is LocalKey => (LOCAL_KEYS as readonly string[]).includes(k);
+const isLocal = (key: string): key is LocalKey => (LOCAL_KEYS as readonly string[]).includes(key);
 
 /** One list row and where it files. A server row files where its wire meta
  *  says; a local row under "this machine" inside the group it belongs to. */
@@ -250,26 +250,26 @@ const LOCAL_HOME: Record<'voice' | 'server', string> = { voice: 'assistant', ser
 /** The rows a screen shows, in the server's order and grouping (hidden-when
  *  rules applied), with this machine's rows folded in. */
 export function screenRows(rows: Rows, server: Record<string, Entry>, local: ReturnType<typeof resolveLocal>['config']): Block<Row>[] {
-  const values = Object.fromEntries(Object.entries(server).map(([k, e]) => [k, e.value]));
+  const values = Object.fromEntries(Object.entries(server).map(([key, entry]) => [key, entry.value]));
   const out: Row[] = [];
   if (rows.server) {
-    for (const [k, e] of Object.entries(server)) {
-      if (e.secret || isLocal(k)) continue;                   // credentials are /keys; a local key never comes from the server
-      if (HIDDEN[k]?.(values)) continue;
-      out.push({ key: k, group: e.meta?.group ?? '', subgroup: e.meta?.subgroup ?? '',
-        label: `${e.overridable ? '↯ ' : ''}${labelFor(k, e.meta)}`,
-        shown: human(e.value, e.meta), source: e.source, hint: e.description });
+    for (const [key, entry] of Object.entries(server)) {
+      if (entry.secret || isLocal(key)) continue;                   // credentials are /keys; a local key never comes from the server
+      if (HIDDEN[key]?.(values)) continue;
+      out.push({ key, group: entry.meta?.group ?? '', subgroup: entry.meta?.subgroup ?? '',
+        label: `${entry.overridable ? '↯ ' : ''}${labelFor(key, entry.meta)}`,
+        shown: human(entry.value, entry.meta), source: entry.source, hint: entry.description });
     }
   }
   if (rows.local) {
-    for (const k of LOCAL_KEYS.filter((k) => META[k].group === rows.local)) {
-      const r = local[k];
-      out.push({ key: k, group: LOCAL_HOME[rows.local], subgroup: 'this machine', label: META[k].label,
-        shown: META[k].secret ? mask(r.value) : human(r.value),
-        source: `${r.source}${r.envVar ? ` (${r.envVar})` : ''}`, hint: DESCRIPTIONS[k] });
+    for (const key of LOCAL_KEYS.filter((key) => META[key].group === rows.local)) {
+      const resolved = local[key];
+      out.push({ key, group: LOCAL_HOME[rows.local], subgroup: 'this machine', label: META[key].label,
+        shown: META[key].secret ? mask(resolved.value) : human(resolved.value),
+        source: `${resolved.source}${resolved.envVar ? ` (${resolved.envVar})` : ''}`, hint: DESCRIPTIONS[key] });
     }
   }
-  return groupBlocks(out, (r) => r);
+  return groupBlocks(out, (row) => row);
 }
 
 /** One row of GET /models. */
@@ -287,13 +287,13 @@ export const PROVIDER_ROWS = new Set(Object.values(MODEL_ROWS));
 
 /** The model key to clear when a provider key changes. */
 export const MODEL_FOR_PROVIDER: Record<string, string> = Object.fromEntries(
-  Object.entries(MODEL_ROWS).map(([m, p]) => [p, m]));
+  Object.entries(MODEL_ROWS).map(([model, provider]) => [provider, model]));
 
 /** The provider a model row's catalog is for; null when it is not a model row
  *  or no provider is set yet. */
 export function providerForModelRow(key: string, values: Record<string, unknown>): string | null {
-  const p = MODEL_ROWS[key];
-  return p ? set(values[p]) ?? set(values.coding_provider) : null;
+  const provider = MODEL_ROWS[key];
+  return provider ? set(values[provider]) ?? set(values.coding_provider) : null;
 }
 
 /** A provider row lists only the providers with a key on /keys — a provider
@@ -308,7 +308,7 @@ export function providerChoices(key: string, choices: readonly string[] | undefi
   const all = choices ?? PROVIDERS;
   // THE rule (core keyedProviders): a key from any layer counts — the
   // project read carries a credential's source only, never its value.
-  const keyed = keyedProviders(entries).filter((p) => all.includes(p));
+  const keyed = keyedProviders(entries).filter((provider) => all.includes(provider));
   return keyed.length
     ? { choices: keyed, note: 'providers with a key on /keys' }
     : { choices: all, note: 'no provider key on /keys yet — save one there first' };
@@ -329,7 +329,7 @@ export function buildModelSpec(
   if (!provider) return spec;
   if (!models.length) return spec;
   return { ...spec,
-    suggestions: models.map((m) => m.id),
-    suggestionLabels: Object.fromEntries(models.map((m) => [m.id, m.name])),
+    suggestions: models.map((model) => model.id),
+    suggestionLabels: Object.fromEntries(models.map((model) => [model.id, model.name])),
     note: spec.note ?? `${provider} models, newest first · or type any model id · empty = the newest` };
 }

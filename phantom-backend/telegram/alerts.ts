@@ -20,15 +20,15 @@ export interface Alert { number: number; status: string; text: string }
 
 /** The alert for a board event, or null when it is not one: not a card write,
  *  not the supervisor's, not a status change, or not into an alert status. */
-export function autoBuildAlert(e: BoardEvent, prefix: string): Alert | null {
-  if (e.event !== 'card' || e.client !== LOOP_CLIENT_ID) return null;
-  const status = String(e.card.status ?? '');
-  if (!e.from || e.from === status) return null;
+export function autoBuildAlert(event: BoardEvent, prefix: string): Alert | null {
+  if (event.event !== 'card' || event.client !== LOOP_CLIENT_ID) return null;
+  const status = String(event.card.status ?? '');
+  if (!event.from || event.from === status) return null;
   const glyph = ALERT_STATUSES[status];
   if (!glyph) return null;
-  const number = Number(e.card.number);
-  const title = String(e.card.title ?? '').trim();
-  const reason = status === 'blocked' ? String(e.card.blocked_reason ?? '').trim() : '';
+  const number = Number(event.card.number);
+  const title = String(event.card.title ?? '').trim();
+  const reason = status === 'blocked' ? String(event.card.blocked_reason ?? '').trim() : '';
   const tail = reason || title;
   return { number, status,
     text: `${glyph} ${prefix}-${number} → ${status.replace('_', ' ')}${tail ? `  ${tail}` : ''}` };

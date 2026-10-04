@@ -32,11 +32,11 @@ export interface AssistantDeps {
  *  telegram meaning and says so. Every write lands on the board bus, so the
  *  card runs and the archive auto-push run exactly as for any other door. */
 function boardHandler(deps: AssistantDeps, projectId: () => string | null) {
-  const cardOf = (c: CardRow) => ({ card: c.number, title: c.title, status: c.status });
+  const cardOf = (card: CardRow) => ({ card: card.number, title: card.title, status: card.status });
   // Card rows carry Date fields. Every other door serializes them over HTTP;
   // here the row would go into the model's history as-is, and the SDK
   // rejects a non-JSON tool result on the NEXT turn. The same round-trip the API does.
-  const json = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
+  const json = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
   return async (args: KanbanArgs): Promise<unknown> => json(await handle(args));
   async function handle(args: KanbanArgs): Promise<unknown> {
     const id = projectId();
@@ -53,15 +53,15 @@ function boardHandler(deps: AssistantDeps, projectId: () => string | null) {
           return (await deps.cards.byNumber(project, args.card!)) ?? { error: `no card ${args.card}` };
         case 'create': {
           const body: Record<string, unknown> = { title: args.title };
-          for (const k of ['details', 'status'] as const) if (args[k] !== undefined) body[k] = args[k];
+          for (const field of ['details', 'status'] as const) if (args[field] !== undefined) body[field] = args[field];
           if (args.requirements) body.requirements = args.requirements;
           return deps.cards.create(project, body as CardFields & { title: string }, CLIENT_ID);
         }
         case 'update': case 'move': {
           const body: Record<string, unknown> = {};
-          for (const k of ['title', 'details', 'status', 'blocked_reason',
+          for (const field of ['title', 'details', 'status', 'blocked_reason',
             'archived', 'auto_plan', 'auto_build', 'pinned'] as const) {
-            if (args[k] !== undefined) body[k] = args[k];
+            if (args[field] !== undefined) body[field] = args[field];
           }
           return (await deps.cards.update(project, args.card!, body as CardFields, undefined, CLIENT_ID)).card;
         }
@@ -72,7 +72,7 @@ function boardHandler(deps: AssistantDeps, projectId: () => string | null) {
         default:
           return { error: `unknown board action: ${args.action}` };
       }
-    } catch (e) { return { error: (e as Error).message }; }
+    } catch (error) { return { error: (error as Error).message }; }
   }
 }
 

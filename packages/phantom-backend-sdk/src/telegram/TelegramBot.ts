@@ -49,14 +49,14 @@ const MEDIA_FIELDS: Array<{ field: string; kind?: 'image' | 'video' | 'audio' }>
 export function collectFiles(msg: any): Array<{ file: any; kind?: 'image' | 'video' | 'audio' }> {
   const out: Array<{ file: any; kind?: 'image' | 'video' | 'audio' }> = [];
   for (const { field, kind } of MEDIA_FIELDS) {
-    const v = msg?.[field];
-    if (!v) continue;
-    out.push({ file: Array.isArray(v) ? v[v.length - 1] : v, kind });
+    const value = msg?.[field];
+    if (!value) continue;
+    out.push({ file: Array.isArray(value) ? value[value.length - 1] : value, kind });
   }
   return out;
 }
 function hasEmoji(list: any, emoji: string): boolean {
-  return Array.isArray(list) && list.some((r) => r?.type === 'emoji' && r?.emoji === emoji);
+  return Array.isArray(list) && list.some((reaction) => reaction?.type === 'emoji' && reaction?.emoji === emoji);
 }
 
 export interface TelegramBotDeps {
@@ -121,13 +121,13 @@ export class TelegramBot {
 
   /** The one chat the bot talks to, or null when none is set. */
   async authorizedUser(): Promise<number | null> {
-    const dm = Number(await this.deps.settings.resolve('telegram_authorized_user') ?? '');
-    return Number.isFinite(dm) && dm ? dm : null;
+    const chatId = Number(await this.deps.settings.resolve('telegram_authorized_user') ?? '');
+    return Number.isFinite(chatId) && chatId ? chatId : null;
   }
 
   async isAuthorizedUser(userId: unknown): Promise<boolean> {
-    const dm = await this.authorizedUser();
-    return dm !== null && String(userId) === String(dm);
+    const chatId = await this.authorizedUser();
+    return chatId !== null && String(userId) === String(chatId);
   }
 
   async webhookStatus(): Promise<WebhookStatus> {
@@ -144,14 +144,14 @@ export class TelegramBot {
     if (!token || !url) return;
     const bot = await this.deps.botState.read();
     const api = new TelegramApi(token);
-    const me = await api.getMe().catch((e: Error) => { log.warn({ err: e.message }, 'getMe failed — the bot has no name this boot'); return null; });
+    const whoami = await api.getMe().catch((error: Error) => { log.warn({ err: error.message }, 'getMe failed — the bot has no name this boot'); return null; });
     const secret = bot.webhookSecret ?? crypto.randomBytes(32).toString('hex');
-    const info = await api.getWebhookInfo().catch((e: Error) => { log.warn({ err: e.message }, 'getWebhookInfo failed — re-registering'); return null; });
+    const info = await api.getWebhookInfo().catch((error: Error) => { log.warn({ err: error.message }, 'getWebhookInfo failed — re-registering'); return null; });
     const registered = info?.url === url
-      && ALLOWED_UPDATES.every((u) => (info?.allowed_updates ?? []).includes(u));
+      && ALLOWED_UPDATES.every((update) => (info?.allowed_updates ?? []).includes(update));
     if (!registered || bot.webhookSecret !== secret) {
       await api.setWebhook(url, secret, { dropPending: false });
-      await this.deps.botState.saveRegistration(secret, url, me?.username ?? null);
+      await this.deps.botState.saveRegistration(secret, url, whoami?.username ?? null);
       log.info({ url }, 'telegram webhook registered');
     }
     // The menu lives in code, so a bot connected before a command existed
@@ -159,8 +159,8 @@ export class TelegramBot {
     const menu = await this.deps.commandMenu?.(bot);
     if (menu) {
       await api.setMyCommands(menu.global).catch(() => {});
-      const dm = await this.authorizedUser();
-      if (dm && menu.forChat) await api.setMyCommands(menu.forChat, dm).catch(() => {});
+      const chatId = await this.authorizedUser();
+      if (chatId && menu.forChat) await api.setMyCommands(menu.forChat, chatId).catch(() => {});
     }
   }
 
@@ -189,8 +189,8 @@ export class TelegramBot {
         return;
       }
       await this.registerWebhook();
-    } catch (e) {
-      log.warn({ err: errStr(e) }, 'telegram reconcile failed');
+    } catch (error) {
+      log.warn({ err: errStr(error) }, 'telegram reconcile failed');
     }
   }
 
@@ -209,9 +209,9 @@ export class TelegramBot {
   clientForChat(token: string, chatId: number, sessionId: () => string | null): TelegramApi {
     return new TelegramApi(token,
       (id, text) => { this.deps.sentMessages.record(chatId, id, text, sessionId()).catch(
-        (e) => log.warn({ err: errStr(e) }, 'sent message not recorded')); },
+        (error) => log.warn({ err: errStr(error) }, 'sent message not recorded')); },
       (id) => { this.deps.sentMessages.delete(chatId, id).catch(
-        (e) => log.warn({ err: errStr(e) }, 'sent message not forgotten')); });
+        (error) => log.warn({ err: errStr(error) }, 'sent message not forgotten')); });
   }
 
   // ── inbound ───────────────────────────────────────────────────────────
@@ -228,9 +228,9 @@ export class TelegramBot {
     const bot = await this.deps.botState.read();
     if (await this.deps.settings.resolve('telegram_enabled') !== true) return 200;
     if (!bot.webhookSecret || !timingSafeEqualStr(secretHeader, bot.webhookSecret)) return 403;
-    const dm = await this.authorizedUser();
-    if (!dm) return 200;
-    const authorized = String(dm);
+    const chatId = await this.authorizedUser();
+    if (!chatId) return 200;
+    const authorized = String(chatId);
 
     const reaction = update.message_reaction;
     if (reaction) {
@@ -238,9 +238,9 @@ export class TelegramBot {
       if (!(await this.deps.handledUpdates.markHandled(update.update_id))) return 200;
       // 🤬 on a bubble: read it back aloud. The bot's own gesture; the app hears the rest.
       if (hasEmoji(reaction.new_reaction, REACT_SPEAK) && !hasEmoji(reaction.old_reaction, REACT_SPEAK)) {
-        this.speakRepliedMessage(reaction, dm).catch((e) => log.warn({ err: errStr(e) }, 'speak-reacted failed'));
+        this.speakRepliedMessage(reaction, chatId).catch((error) => log.warn({ err: errStr(error) }, 'speak-reacted failed'));
       } else {
-        this.#onReaction?.(dm, reaction).catch((e) => log.warn({ err: errStr(e) }, 'reaction handler failed'));
+        this.#onReaction?.(chatId, reaction).catch((error) => log.warn({ err: errStr(error) }, 'reaction handler failed'));
       }
       return 200;
     }
@@ -252,9 +252,9 @@ export class TelegramBot {
       const api = new TelegramApi(await this.token());
       const query = { id: String(tap.id), data: tap.data as string | undefined };
       if (Approvals.isApprovalCallback(query.data)) {
-        this.#approvals.handleCallback(api, dm, query).catch((e) => log.warn({ err: errStr(e) }, 'approval tap failed'));
+        this.#approvals.handleCallback(api, chatId, query).catch((error) => log.warn({ err: errStr(error) }, 'approval tap failed'));
       } else {
-        this.#onButton?.(dm, query, api).catch((e) => log.warn({ err: errStr(e) }, 'button handler failed'));
+        this.#onButton?.(chatId, query, api).catch((error) => log.warn({ err: errStr(error) }, 'button handler failed'));
       }
       return 200;
     }
@@ -267,7 +267,7 @@ export class TelegramBot {
     // sharing a media_group_id. Collect them briefly and hand over once, so
     // the app sees all photos together instead of each as its own task.
     const groupId = msg.media_group_id ? String(msg.media_group_id) : null;
-    const deliver = (msgs: any[]) => this.#onMessage?.(dm, msgs).catch((e) => log.error({ err: errStr(e) }, 'telegram message handler failed'));
+    const deliver = (msgs: any[]) => this.#onMessage?.(chatId, msgs).catch((error) => log.error({ err: errStr(error) }, 'telegram message handler failed'));
     if (groupId) {
       const entry = this.#albums.get(groupId) ?? { msgs: [] as any[], timer: null as unknown as NodeJS.Timeout };
       entry.msgs.push(msg);
@@ -319,7 +319,7 @@ export class TelegramBot {
     const apiKey = await this.deps.settings.credential('deepgram_api_key');
     if (!apiKey) { await api.sendMessage(chatId, NOT_HEARD.no_key); return null; }
     const [, audio] = await Promise.all([react(REACT_TRANSCRIBING), api.downloadFile(file.file_id)])
-      .catch(async (e) => { await react(); throw e; });
+      .catch(async (error) => { await react(); throw error; });
     const { voice_stt_model: sttModel, telegram_transcript_echo: echo } =
       await this.deps.settings.resolveMany(['voice_stt_model', 'telegram_transcript_echo']);
     const heard = await transcribeVoice(apiKey, audio, String(sttModel));
@@ -357,7 +357,7 @@ export class TelegramBot {
    *  paths to host files under the session's work dir, and confine delivery there. */
   deliveryFor(sessionId: string): DeliverConfig {
     const root = sessionDir(this.deps.paths, sessionId);   // host view of /workspace
-    return { roots: [root], toHost: (p) => p.startsWith('/workspace') ? path.join(root, p.slice('/workspace'.length)) : p };
+    return { roots: [root], toHost: (containerPath) => containerPath.startsWith('/workspace') ? path.join(root, containerPath.slice('/workspace'.length)) : containerPath };
   }
 
   /** The reply mode, read where a reply is about to be sent. */
@@ -380,14 +380,14 @@ export class TelegramBot {
   async sendMessageForSession(sessionId: string, text: string): Promise<void> {
     if (!text.trim()) throw new Error('empty message');
     if (await this.deps.settings.resolve('telegram_enabled') !== true) throw new Error('telegram is off (/settings)');
-    const dm = await this.authorizedUser();
-    if (!dm) throw new Error('no telegram_authorized_user set (/settings)');
+    const chatId = await this.authorizedUser();
+    if (!chatId) throw new Error('no telegram_authorized_user set (/settings)');
     const token = await this.token();
     if (!token) throw new Error('no telegram_bot_token stored (/keys)');
-    const api = this.clientForChat(token, dm, () => sessionId);
-    const bubble = await this.startReplyBubble(api, dm, sessionId, { bubble: false });
+    const api = this.clientForChat(token, chatId, () => sessionId);
+    const bubble = await this.startReplyBubble(api, chatId, sessionId, { bubble: false });
     const said = await bubble.finish(text);
-    await this.speakText(api, dm, said);
+    await this.speakText(api, chatId, said);
   }
 
   /** A plain message to the authorized user, not a session's (the digest, an alert). */
@@ -446,7 +446,7 @@ export class TelegramBot {
   }
 
   /** 🤬 on one of our bubbles: read it back as a voice note. */
-  private async speakRepliedMessage(reaction: any, dm: number): Promise<void> {
+  private async speakRepliedMessage(reaction: any, authorizedChatId: number): Promise<void> {
     const chatId = Number(reaction.chat?.id);
     const messageId = Number(reaction.message_id);
     if (!Number.isFinite(chatId) || !Number.isFinite(messageId)) return;
@@ -455,7 +455,7 @@ export class TelegramBot {
     const api = new TelegramApi(await this.token());
     const apiKey = (await this.deps.settings.credential('deepgram_api_key')) ?? '';
     const voice = String(await this.deps.settings.resolve('voice_spoken_voice'));
-    api.sendChatAction(dm, 'record_voice').catch(() => {});
+    api.sendChatAction(authorizedChatId, 'record_voice').catch(() => {});
     const audio = await speakVoice(apiKey, voice, stored.content.replace(/\n\n\(\d+\/\d+\)$/, '').slice(0, SPEAK_MAX_CHARS));
     if (audio) await api.sendVoiceBytes(chatId, audio, { replyToMessageId: messageId }).catch(() => {});
     else await api.sendMessage(chatId, "⚠️ I couldn't turn that into audio — check the Deepgram key.", { replyToMessageId: messageId }).catch(() => {});

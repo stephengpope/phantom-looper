@@ -22,8 +22,8 @@ export class SettingsEvents {
     this.emitter.emit('changed', { event: 'settings_changed', scope, keys, ...(client ? { client } : {}) });
   }
 
-  subscribe(fn: (e: SettingsChanged) => void): () => void {
-    this.emitter.on('changed', fn);
-    return () => { this.emitter.off('changed', fn); };
+  subscribe(listener: (change: SettingsChanged) => void): () => void {
+    this.emitter.on('changed', listener);
+    return () => { this.emitter.off('changed', listener); };
   }
 }

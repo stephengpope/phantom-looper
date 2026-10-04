@@ -32,7 +32,7 @@ export interface WireMeta {
 export const labelFor = (key: string, meta?: WireMeta) =>
   meta?.label ?? key.replace(/_/g, ' ');
 
-const MS = [
+const UNITS = [
   [86_400_000, 'd'], [3_600_000, 'h'], [60_000, 'm'], [1_000, 's'],
 ] as const;
 
@@ -43,7 +43,7 @@ export function human(value: unknown, meta?: WireMeta): string {
   if (typeof value === 'boolean') return value ? 'yes' : 'no';
   if (typeof value === 'string' && meta?.choiceLabels?.[value]) return meta.choiceLabels[value];
   if (typeof value === 'number' && meta?.unit === 'ms') {
-    for (const [size, suffix] of MS) {
+    for (const [size, suffix] of UNITS) {
       if (value >= size && value % size === 0) return `${value / size}${suffix}`;
       if (value >= size) return `${(value / size).toFixed(1).replace(/\.0$/, '')}${suffix}`;
     }
@@ -61,17 +61,17 @@ export function human(value: unknown, meta?: WireMeta): string {
  *  A plain number passes through as-is (raw ms). Returns null when the input
  *  is not a recognisable duration — the caller decides how to report it. */
 export function parseMs(input: string): number | null {
-  const v = input.trim();
-  const m = v.match(/^(\d+(?:\.\d+)?)\s*([dhms])$/i);
-  if (m) {
-    const n = Number(m[1]);
-    const unit = m[2].toLowerCase();
-    const scale = MS.find(([, s]) => s === unit);
-    return scale ? n * scale[0] : null;
+  const text = input.trim();
+  const match = text.match(/^(\d+(?:\.\d+)?)\s*([dhms])$/i);
+  if (match) {
+    const number = Number(match[1]);
+    const unit = match[2].toLowerCase();
+    const scale = UNITS.find(([, suffix]) => suffix === unit);
+    return scale ? number * scale[0] : null;
   }
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
+  const number = Number(text);
+  return Number.isFinite(number) ? number : null;
 }
 
 /** Fit a rendered value into the list's value column. */
-export const fit = (s: string, width = 26) => s.length > width ? `${s.slice(0, width - 1)}…` : s;
+export const fit = (text: string, width = 26) => text.length > width ? `${text.slice(0, width - 1)}…` : text;

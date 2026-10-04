@@ -47,7 +47,7 @@ type Resolved = Awaited<ReturnType<Settings['resolveMany']>> & Record<(typeof SE
 interface BlockSource extends SystemPromptSource { resolved: Resolved }
 
 const DESC_LIMIT = 60;
-const clip = (s: string) => (s.length > DESC_LIMIT ? s.slice(0, DESC_LIMIT - 3) + '...' : s);
+const clip = (text: string) => (text.length > DESC_LIMIT ? text.slice(0, DESC_LIMIT - 3) + '...' : text);
 
 /** A root file of the checkout, verbatim. No file is the normal case ('');
  *  any other read failure throws — a permissions problem never silently
@@ -55,9 +55,9 @@ const clip = (s: string) => (s.length > DESC_LIMIT ? s.slice(0, DESC_LIMIT - 3) 
 async function rootFile(checkout: string, name: string): Promise<string> {
   const file = path.join(checkout, name);
   try { return await fsp.readFile(file, 'utf8'); }
-  catch (e) {
-    if ((e as { code?: string }).code === 'ENOENT') return '';
-    throw new Error(`could not read ${file}: ${(e as Error).message}`);
+  catch (error) {
+    if ((error as { code?: string }).code === 'ENOENT') return '';
+    throw new Error(`could not read ${file}: ${(error as Error).message}`);
   }
 }
 
@@ -79,7 +79,7 @@ export const SERVER_PROMPT_BLOCKS = {
       await scanSkills(src.checkout),
       src.docker ? await systemSkills(src.docker, String(src.resolved.container_image)) : []);
     if (!skills.length) return '';
-    return fill(SKILLS_LIST, { skillsList: skills.map((s) => `- ${s.name}: ${clip(s.description)}`).join('\n') });
+    return fill(SKILLS_LIST, { skillsList: skills.map((skill) => `- ${skill.name}: ${clip(skill.description)}`).join('\n') });
   },
 
   secrets_list: async (src: BlockSource): Promise<string> => {
@@ -90,7 +90,7 @@ export const SERVER_PROMPT_BLOCKS = {
     }
     const secrets = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
     if (!secrets.length) return '';
-    return fill(SECRETS_LIST, { secretsList: secrets.map((s) => `- ${s.name}: ${clip(s.description)}`).join('\n') });
+    return fill(SECRETS_LIST, { secretsList: secrets.map((secret) => `- ${secret.name}: ${clip(secret.description)}`).join('\n') });
   },
 
   time_date: (src: BlockSource): Promise<string> =>
@@ -134,7 +134,7 @@ export class SystemPrompt {
     for (const section of SYSTEM_PROMPT_SECTIONS) {
       const parts: string[] = [];
       for (const entry of layout[section]) parts.push((await text(entry)).trim());
-      assembled[section] = parts.filter((p) => p !== '').join('\n\n');
+      assembled[section] = parts.filter((part) => part !== '').join('\n\n');
     }
     return new SystemPrompt(assembled);
   }

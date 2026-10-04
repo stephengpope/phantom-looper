@@ -126,7 +126,7 @@ export interface WindowOptions {
   autoPull?: (sessionId: string, onStep?: (label: string) => void) =>
     Promise<{ result: string; reason?: string; arrived?: string[]; files?: string[]; sha?: string; pushed?: boolean }>;
   /** Fired whenever the session on screen changes. */
-  onSession?: (s: { id: string; branch: string; projectId: string }) => void;
+  onSession?: (session: { id: string; branch: string; projectId: string }) => void;
   /** Ink's exit, so /exit and ctrl+c can end the process. */
   exit?: () => void;
   /** Width of the voice pane as a percent, when `sidebar_width` is not set. */
@@ -152,10 +152,10 @@ const SWITCH_KEY: Record<'mic' | 'speaker' | 'headphones' | 'wake', string> = {
 };
 
 /** The banner at the top of a session: where you are, then the model line. */
-function bannerParts(s: { project: string; branch: string },
+function bannerParts(banner: { project: string; branch: string },
   summary: { provider: string; model: string; reasoning: string }): Part[] {
   return [
-    `${s.project} · ${s.branch}`,
+    `${banner.project} · ${banner.branch}`,
     `${summary.provider}/${summary.model} · reasoning ${summary.reasoning}`,
   ].map((text) => ({ kind: 'note', id: nextId('note'), text }) as Part);
 }
@@ -199,10 +199,10 @@ export class WindowStore {
   toast: { text: string; bg: string } | null = null;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
 
-  setToast(text: string, bg: 'red' | 'cyan' = 'red', ms = 1750): void {
+  setToast(text: string, background: 'red' | 'cyan' = 'red', milliseconds = 1750): void {
     if (this.toastTimer) clearTimeout(this.toastTimer);
-    this.toast = { text, bg };
-    this.toastTimer = setTimeout(() => { this.toast = null; this.toastTimer = null; this.notify(); }, ms);
+    this.toast = { text, bg: background };
+    this.toastTimer = setTimeout(() => { this.toast = null; this.toastTimer = null; this.notify(); }, milliseconds);
     this.notify();
   }
 
@@ -210,7 +210,7 @@ export class WindowStore {
    *  or null. While set, the prompt's version label swaps to name it — the
    *  running process is still the old build; next launch runs this one. */
   updateReady: string | null = null;
-  setUpdateReady(v: string): void { this.updateReady = v; this.notify(); }
+  setUpdateReady(version: string): void { this.updateReady = version; this.notify(); }
 
   /** The window's paste chips: the prompt holds `[Pasted #1 ~12 lines]`,
    *  this holds the text, and submit swaps it back before anything downstream
@@ -254,15 +254,15 @@ export class WindowStore {
    *  splash, and one that polls starts its clock — a failed tick is silent,
    *  because an unreachable server must not nag every few seconds while
    *  old rows serve. */
-  showOverlay(o: Overlay): void {
+  showOverlay(overlay: Overlay): void {
     if (this.overlay) this.dismissOverlay(undefined);
-    this.overlay = o;
+    this.overlay = overlay;
     this.splash = false;
-    if (o.poll) {
-      this.overlayClock = setInterval(o.poll, this.pollMs);
+    if (overlay.poll) {
+      this.overlayClock = setInterval(overlay.poll, this.pollMs);
       this.overlayClock.unref?.();
     }
-    if (o.watch) this.overlayWatch = o.watch();
+    if (overlay.watch) this.overlayWatch = overlay.watch();
     this.notify();
   }
 
@@ -282,9 +282,9 @@ export class WindowStore {
 
   /** Put a question up. One at a time: a second one replaces the first,
    *  unanswered. */
-  showDialog(d: Dialog): void {
+  showDialog(reply: Dialog): void {
     if (this.dialog) this.dismissDialog(undefined);
-    this.dialog = d;
+    this.dialog = reply;
     this.splash = false;
     this.notify();
   }
@@ -331,7 +331,7 @@ export class WindowStore {
     return new Promise((resolve) => {
       if (ask?.signal?.aborted) { resolve(false); return; }
       const session = ask?.session;
-      const dismiss = session ? (r?: unknown) => this.sessions.answerAsk(session, r) : this.dismissDialog;
+      const dismiss = session ? (answer?: unknown) => this.sessions.answerAsk(session, answer) : this.dismissDialog;
       const standing = () => (session ? this.sessions.get(session)?.ask : this.dialog) === dialog;
       const dialog = confirmDialog(dismiss, title, message, ask?.who, (yes) => {
         ask?.signal?.removeEventListener('abort', onAbort);
@@ -344,8 +344,8 @@ export class WindowStore {
         // Asked from a session you are not on: say so where you are, once;
         // the session list (ctrl+n) keeps saying it until you answer.
         if (this.sessions.activeId !== session) {
-          const e = this.sessions.get(session);
-          this.setToast(`${e?.name ?? e?.branch ?? 'a session'} needs approval — tab or /resume`, 'cyan');
+          const entry = this.sessions.get(session);
+          this.setToast(`${entry?.name ?? entry?.branch ?? 'a session'} needs approval — tab or /resume`, 'cyan');
         }
       } else {
         this.showDialog(dialog);
@@ -355,17 +355,17 @@ export class WindowStore {
 
   /** /kanban, and the Assistant's "show the board". */
   openBoard(): void {
-    const e = this.sessions.active();
-    if (!e) { this.note('no session is open — the board belongs to a project; /project starts a session in one'); return; }
-    this.showOverlay(boardScreen(this, e.projectId));
+    const entry = this.sessions.active();
+    if (!entry) { this.note('no session is open — the board belongs to a project; /project starts a session in one'); return; }
+    this.showOverlay(boardScreen(this, entry.projectId));
   }
 
   /** A card's editor, and where esc leaves it: opened from the board it goes
    *  back to the columns; from anywhere else, to the chat. */
   openCard(number: number, back: 'chat' | 'board' = 'chat'): void {
-    const e = this.sessions.active();
-    if (!e) return;
-    this.showOverlay(boardScreen(this, e.projectId, { number, back }));
+    const entry = this.sessions.active();
+    if (!entry) return;
+    this.showOverlay(boardScreen(this, entry.projectId, { number, back }));
   }
 
   /** The open list's re-read clock (`Overlay.poll`), unref'd so it never
@@ -453,12 +453,12 @@ export class WindowStore {
     this.voice.intercept = this.answerBySpeech;
   }
 
-  subscribe(fn: () => void): () => void {
-    this.listeners.add(fn);
-    return () => { this.listeners.delete(fn); };
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
   }
 
-  private notify(): void { for (const l of [...this.listeners]) l(); }
+  private notify(): void { for (const listener of [...this.listeners]) listener(); }
 
   /** Settings, read where they are used. Never held: the settings object asks
    *  its store on every call, and the result lives only for this operation. */
@@ -495,35 +495,35 @@ export class WindowStore {
     const at = () => (sessionId ? this.sessions.get(sessionId) : this.sessions.active());
     return {
       getMode: async () => {
-        const e = at();
-        if (!e) return { error: 'no session is open' };
+        const entry = at();
+        if (!entry) return { error: 'no session is open' };
         try {
-          const r = await this.api('GET', `/sessions/${e.id}`) as { planMode?: boolean };
-          if (typeof r?.planMode !== 'boolean') throw new Error('the row carried no plan_mode');
-          await this.applyPlanMode(e.id, r.planMode);
-          return { mode: r.planMode ? 'plan' : 'code' };
+          const reply = await this.api('GET', `/sessions/${entry.id}`) as { planMode?: boolean };
+          if (typeof reply?.planMode !== 'boolean') throw new Error('the row carried no plan_mode');
+          await this.applyPlanMode(entry.id, reply.planMode);
+          return { mode: reply.planMode ? 'plan' : 'code' };
         } catch (err) {
           // The record is out of reach: answer with what this window holds and
           // SAY so — a mode the agent cannot check is worse than a noted one.
-          return { mode: e.planMode ? 'plan' : 'code',
+          return { mode: entry.planMode ? 'plan' : 'code',
             note: `could not read the session row (${(err as Error).message}) — this is what this window holds` };
         }
       },
       enterPlan: async () => {
-        const e = at();
-        if (!e) return { ok: false, error: 'no session is open' };
-        if (e.planMode) return { ok: false, error: 'already in plan mode' };
-        await this.api('PATCH', `/sessions/${e.id}`, { plan_mode: true });
-        await this.applyPlanMode(e.id, true);
+        const entry = at();
+        if (!entry) return { ok: false, error: 'no session is open' };
+        if (entry.planMode) return { ok: false, error: 'already in plan mode' };
+        await this.api('PATCH', `/sessions/${entry.id}`, { plan_mode: true });
+        await this.applyPlanMode(entry.id, true);
         return { ok: true };
       },
       // Direct code mode: the Assistant switches without approval.
       enterCode: async () => {
-        const e = at();
-        if (!e) return { ok: false, error: 'no session is open' };
-        if (!e.planMode) return { ok: false, error: 'already in code mode' };
-        await this.api('PATCH', `/sessions/${e.id}`, { plan_mode: false });
-        await this.applyPlanMode(e.id, false);
+        const entry = at();
+        if (!entry) return { ok: false, error: 'no session is open' };
+        if (!entry.planMode) return { ok: false, error: 'already in code mode' };
+        await this.api('PATCH', `/sessions/${entry.id}`, { plan_mode: false });
+        await this.applyPlanMode(entry.id, false);
         return { ok: true, mode: 'code', note: 'code mode is now active' };
       },
       // The one way the CODING agent LEAVES plan mode: through the user. The
@@ -535,15 +535,15 @@ export class WindowStore {
       // already streaming keeps the kit it started with, so code mode is
       // real from the next turn — the answer says so.
       askCodeMode: async (reason, { abortSignal }) => {
-        const e = at();
-        if (!e) return { ok: false, error: 'no session is open' };
-        if (!e.planMode) return { ok: false, error: 'already in code mode' };
+        const entry = at();
+        if (!entry) return { ok: false, error: 'no session is open' };
+        if (!entry.planMode) return { ok: false, error: 'already in code mode' };
         // Bound to a session = the coding agent; unbound = the Assistant.
         const yes = await this.confirm('enter code mode?', reason,
-          { who: `${sessionId ? 'coding agent' : 'the Assistant'} · ${e.name ?? e.card ?? e.branch}`, signal: abortSignal, session: e.id });
+          { who: `${sessionId ? 'coding agent' : 'the Assistant'} · ${entry.name ?? entry.card ?? entry.branch}`, signal: abortSignal, session: entry.id });
         if (!yes) return { ok: false, declined: true, mode: 'plan' };
-        await this.api('PATCH', `/sessions/${e.id}`, { plan_mode: false });
-        await this.applyPlanMode(e.id, false);
+        await this.api('PATCH', `/sessions/${entry.id}`, { plan_mode: false });
+        await this.applyPlanMode(entry.id, false);
         return { ok: true, mode: 'code', note: 'code mode is now active' };
       },
     };
@@ -557,8 +557,8 @@ export class WindowStore {
    *  streaming sees the flip immediately through the callback. No-op while
    *  nothing changed; a supervisor record never flips. */
   applyPlanMode = async (id: string, on: boolean): Promise<void> => {
-    const e = this.sessions.get(id);
-    if (!e || e.planMode === on) return;
+    const entry = this.sessions.get(id);
+    if (!entry || entry.planMode === on) return;
     this.sessions.setPlanMode(id, on);
   };
 
@@ -574,7 +574,7 @@ export class WindowStore {
           ...codingKanbanTool(this.codingKanbanHandler(projectId)),
           ...screenModeTools(this.screenOps(sessionId)),
         };
-        return { tools, mutating: Object.keys(tools).filter((n) => /create|update|move|block|enter_code|set_mode/.test(n)) };
+        return { tools, mutating: Object.keys(tools).filter((name) => /create|update|move|block|enter_code|set_mode/.test(name)) };
       },
     };
   }
@@ -584,16 +584,16 @@ export class WindowStore {
   private async modelLineFor(row: { provider?: string | null; model?: string | null }, projectId: string): Promise<ModelLine> {
     let reasoning = '';
     try {
-      const st = await this.api('GET', `/settings?project=${encodeURIComponent(projectId)}`) as Record<string, { value?: unknown }>;
-      reasoning = String(st.coding_reasoning?.value ?? '');
-    } catch (e) { quiet('read the reasoning setting')(e); }
+      const settings = await this.api('GET', `/settings?project=${encodeURIComponent(projectId)}`) as Record<string, { value?: unknown }>;
+      reasoning = String(settings.coding_reasoning?.value ?? '');
+    } catch (entry) { quiet('read the reasoning setting')(entry); }
     return { provider: row.provider || 'unset', model: row.model || 'unset', reasoning };
   }
 
   // ── the session store, and the turn's two ends ────────────────────────────
 
   private newSessionStore(): SessionStore {
-    const s: SessionStore = new SessionStore(() => {
+    const store: SessionStore = new SessionStore(() => {
       // The toolbar's task count follows every turn — a turn is when tasks
       // start and stop. Background: a failure goes to cli.log, not the pane.
       void this.onTurnEnded?.().catch(quiet('refresh tasks'));
@@ -601,11 +601,11 @@ export class WindowStore {
     // A refused send puts the words back: into the box when that session is
     // on screen, into its draft otherwise — either way the next switch to it
     // shows them.
-    s.onRefused = (id, text) => {
+    store.onRefused = (id, text) => {
       if (id === this.sessions.activeId) this.setPrompt(text);
-      else { const e = this.sessions.get(id); if (e) e.draft = text; }
+      else { const entry = this.sessions.get(id); if (entry) entry.draft = text; }
     };
-    return s;
+    return store;
   }
 
   /** Whatever wants to hear that a turn settled. The /tasks count hangs off
@@ -621,13 +621,13 @@ export class WindowStore {
     const cur = this.sessions.get(id);
     if (!cur || cur.busy) return;
     try {
-      const r = await this.api('GET', `/sessions/${id}`) as {
+      const reply = await this.api('GET', `/sessions/${id}`) as {
         planMode?: boolean; transcript_updated_at?: string | null;
         workState?: 'not_pushed' | 'not_merged' | 'merged' | null };
-      if (typeof r.planMode === 'boolean') await this.applyPlanMode(id, r.planMode);
-      this.sessions.setWorkState(id, r.workState ?? null);
-      await this.refreshIfMoved(id, r.transcript_updated_at ?? null);
-    } catch (e) { quiet(`re-read session ${id}`)(e); }
+      if (typeof reply.planMode === 'boolean') await this.applyPlanMode(id, reply.planMode);
+      this.sessions.setWorkState(id, reply.workState ?? null);
+      await this.refreshIfMoved(id, reply.transcript_updated_at ?? null);
+    } catch (entry) { quiet(`re-read session ${id}`)(entry); }
   };
 
   /** The server is reachable again after a stretch of failures (the
@@ -638,7 +638,7 @@ export class WindowStore {
    *  refreshed. One note says it happened, so a screen that fixes itself is
    *  not a mystery. */
   private recover = async (): Promise<void> => {
-    for (const e of this.sessions.list()) await this.recheckSession(e.id);
+    for (const entry of this.sessions.list()) await this.recheckSession(entry.id);
     // The open list, if one polls, re-reads now rather than on its next tick.
     this.overlay?.poll?.();
     this.note('back in touch with the server — everything re-synced');
@@ -654,9 +654,9 @@ export class WindowStore {
   refreshIfMoved = async (id: string, server: string | null, keepScreen = false): Promise<void> => {
     const cur = this.sessions.get(id);
     if (!cur || cur.busy || !server || server === cur.syncStamp) return;
-    const t = await this.api('GET', `/sessions/${id}/transcript`) as
+    const transcript = await this.api('GET', `/sessions/${id}/transcript`) as
       { data: string | null; updated_at?: string | null };
-    const lines = parseLines(t.data ?? '');
+    const lines = parseLines(transcript.data ?? '');
     // keepScreen: the feed showed us this whole turn as it happened, so the
     // record brings the stamp and the totals and the screen keeps what it
     // drew — richer than a replay, and no repaint to jump through.
@@ -664,7 +664,7 @@ export class WindowStore {
       ...cur.done.slice(0, 2),
       { kind: 'note', id: nextId('note'), text: 'refreshed — this session moved forward elsewhere' } as Part,
       ...messagesToParts(conversationFrom(lines)),
-    ], t.updated_at ?? server, usageTotals(lines));
+    ], transcript.updated_at ?? server, usageTotals(lines));
   };
 
   // ── what is on screen ─────────────────────────────────────────────────────
@@ -695,17 +695,17 @@ export class WindowStore {
     const session = this.sessions.active();
     if (!session) { this.note('a dropped file needs an open session — /new or /resume first'); return null; }
     const chips: string[] = [];
-    for (const p of paths) {
+    for (const filePath of paths) {
       try {
-        const data = await readFile(p);
-        const r = await this.api('POST', `/sessions/${session.id}/attachments`,
-          { name: basename(p), data: data.toString('base64') }) as { path?: string };
-        const name = basename(p);
-        const scratchPath = r.path ?? 'the scratch pad';
+        const data = await readFile(filePath);
+        const attached = await this.api('POST', `/sessions/${session.id}/attachments`,
+          { name: basename(filePath), data: data.toString('base64') }) as { path?: string };
+        const name = basename(filePath);
+        const scratchPath = attached.path ?? 'the scratch pad';
         chips.push(this.pastes.collapseFile(name, scratchPath));
         this.sessions.note(session.id, `${name} uploaded to the scratch pad`);
-      } catch (e) {
-        this.sessions.note(session.id, `drop failed: ${basename(p)} — ${(e as Error).message}`);
+      } catch (entry) {
+        this.sessions.note(session.id, `drop failed: ${basename(filePath)} — ${(entry as Error).message}`);
       }
     }
     return chips.length ? chips.join(' ') : null;
@@ -720,13 +720,13 @@ export class WindowStore {
     if (prev) prev.draft = this.draftOnScreen();
     if (!this.sessions.activate(id)) return;
     this.splash = false;
-    const e = this.sessions.get(id);
-    if (e) this.opts.onSession?.({ id: e.id, branch: e.branch, projectId: e.projectId });
+    const entry = this.sessions.get(id);
+    if (entry) this.opts.onSession?.({ id: entry.id, branch: entry.branch, projectId: entry.projectId });
     this.watchTasks();
     this.notify();
     // Cheap staleness check in the background: pull only when the server's
     // stamp actually moved.
-    if (e && !e.busy) {
+    if (entry && !entry.busy) {
       void (async () => {
         try {
           const row = await this.api('GET', `/sessions/${id}`) as
@@ -772,8 +772,8 @@ export class WindowStore {
       const facts: WsFacts = { label: found, ...(project.cardPrefix ? { cardPrefix: project.cardPrefix } : {}) };
       this.projectNames.set(id, facts);
       return facts;
-    } catch (e) {
-      return { label: id, error: `could not read project ${id}'s name: ${(e as Error).message}` };
+    } catch (entry) {
+      return { label: id, error: `could not read project ${id}'s name: ${(entry as Error).message}` };
     }
   }
 
@@ -786,9 +786,9 @@ export class WindowStore {
    *  the project's prefix alone (`PHA`) so the line always says which
    *  project you are in. Nothing at all when neither is known. */
   get cardMark(): string | undefined {
-    const e = this.sessions.active();
-    if (!e) return undefined;
-    return e.card ?? this.projectNames.get(e.projectId)?.cardPrefix;
+    const entry = this.sessions.active();
+    if (!entry) return undefined;
+    return entry.card ?? this.projectNames.get(entry.projectId)?.cardPrefix;
   }
 
   // ── opening and closing ───────────────────────────────────────────────────
@@ -823,8 +823,8 @@ export class WindowStore {
       let made: CodingAgent | null = null;
       const forEntry = () => (made && this.sessions.has(made.session.id) ? this.sessions.handlersFor(made.session.id) : null);
       const handlers: AgentHandlers = {
-        onError: (e) => forEntry()?.onError(e),
-        onNotice: (n) => forEntry()?.onNotice(n),
+        onError: (entry) => forEntry()?.onError(entry),
+        onNotice: (notice) => forEntry()?.onNotice(notice),
       };
       const backend = this.opts.backend();
       const agent: CodingAgent = target.kind === 'new'
@@ -875,13 +875,13 @@ export class WindowStore {
       this.notify();
       this.opts.onSession?.({ id: row.id, branch: row.branch, projectId: row.projectId });
       return true;
-    } catch (e) {
+    } catch (entry) {
       const what = target.kind === 'new'
         ? `could not start a session in ${this.wsLabel(target.projectId)}`
         : target.kind === 'duplicate' ? `could not duplicate session ${target.id}`
           : `could not open session ${target.id}`;
       this.opening = false;
-      this.note(`${what}: ${(e as Error).message}`);
+      this.note(`${what}: ${(entry as Error).message}`);
       return false;
     }
   };
@@ -896,7 +896,7 @@ export class WindowStore {
    *  "held" self-heals on the next refresh (kicked off right away), a stale
    *  "free" meets the server's 409 as before. */
   duplicateFromPicker = async (id: string): Promise<void> => {
-    const row = this.picker?.sessions.find((s) => s.id === id);
+    const row = this.picker?.sessions.find((row) => row.id === id);
     if (row?.locked) {
       this.pickerNotice = 'session is in use — stop it first, or wait for it to complete';
       this.notify();
@@ -911,7 +911,7 @@ export class WindowStore {
   /** What the window CALLS a session when it must name one: the server name
    *  (auto-title or /rename), else its card (`PHA-7`), else its branch —
    *  never a bare session id. */
-  private labelOf(e: LoadedSession): string { return e.name ?? e.card ?? e.branch; }
+  private labelOf(entry: LoadedSession): string { return entry.name ?? entry.card ?? entry.branch; }
 
   /** THE close: a session leaves local memory. Nothing on the server changes,
    *  so opening it again gets it back exactly as it was. Every door ([x] on
@@ -925,9 +925,9 @@ export class WindowStore {
   closeSession = async (id?: string, quiet = false): Promise<CloseResult> => {
     const target = id ?? this.sessions.activeId;
     if (!target) return { error: 'no session is open — nothing to close' };
-    const e = this.sessions.get(target);
-    if (!e) return { error: `session ${target} is not open in this window — nothing to close` };
-    const { projectId } = e;
+    const entry = this.sessions.get(target);
+    if (!entry) return { error: `session ${target} is not open in this window — nothing to close` };
+    const { projectId } = entry;
     const wasOnScreen = this.sessions.activeId === target;
     if (!this.sessions.close(target)) return { error: `a turn is running in ${target} — stop it first` };
     this.unwatchSession(target);
@@ -1030,22 +1030,22 @@ export class WindowStore {
    *  keystroke, not on every one — a word typed at speed is one request.
    *  Clearing (esc) re-reads at once: the filtered rows with no filter
    *  would draw as an empty list for the length of the wait. */
-  setPickerQuery(q: string): void {
-    if (this.pickerQuery === q) return;
-    this.pickerQuery = q;
+  setPickerQuery(query: string): void {
+    if (this.pickerQuery === query) return;
+    this.pickerQuery = query;
     this.notify();
     if (this.pickerQueryClock) clearTimeout(this.pickerQueryClock);
     const read = () => { this.pickerQueryClock = null; void this.refreshPicker().catch(quiet('refresh the session list')); };
-    if (!q) read();
+    if (!query) read();
     else this.pickerQueryClock = setTimeout(read, PICKER_FILTER_DEBOUNCE_MS);
   }
 
   /** Does an open-here row pass the filter? The server's rule (one
    *  substring, case-insensitive) applied to the two facts such a row has. */
-  private matchesPickerQuery(e: LoadedSession): boolean {
-    const q = this.pickerQuery.trim().toLowerCase();
-    return (!this.pickerProject || e.projectId === this.pickerProject)
-      && (!q || (e.name ?? '').toLowerCase().includes(q) || e.branch.toLowerCase().includes(q));
+  private matchesPickerQuery(entry: LoadedSession): boolean {
+    const query = this.pickerQuery.trim().toLowerCase();
+    return (!this.pickerProject || entry.projectId === this.pickerProject)
+      && (!query || (entry.name ?? '').toLowerCase().includes(query) || entry.branch.toLowerCase().includes(query));
   }
 
   /** The one addition only this window can make: sessions open HERE that the
@@ -1055,27 +1055,27 @@ export class WindowStore {
    *  ahead of the table while a turn's upload is in flight. The model is the
    *  row's, always — never a local guess over it. */
   private withOpenHere(rows: SessionInfo[], total: number) {
-    const local = new Map(this.sessions.list().map((e) => [e.id, e]));
-    const enriched = rows.map((s) => {
-      const e = local.get(s.id);
-      if (!e) return s;
-      return { ...s,
-        tokensInput: e.usage.input || s.tokensInput,
-        tokensOutput: e.usage.output || s.tokensOutput,
-        tokensCacheRead: e.usage.cacheRead || s.tokensCacheRead,
-        tokensCacheWrite: e.usage.cacheWrite || s.tokensCacheWrite,
+    const local = new Map(this.sessions.list().map((entry) => [entry.id, entry]));
+    const enriched = rows.map((row) => {
+      const entry = local.get(row.id);
+      if (!entry) return row;
+      return { ...row,
+        tokensInput: entry.usage.input || row.tokensInput,
+        tokensOutput: entry.usage.output || row.tokensOutput,
+        tokensCacheRead: entry.usage.cacheRead || row.tokensCacheRead,
+        tokensCacheWrite: entry.usage.cacheWrite || row.tokensCacheWrite,
       };
     });
-    const seen = new Set(rows.map((s) => s.id));
+    const seen = new Set(rows.map((row) => row.id));
     const extras: SessionInfo[] = this.sessions.list()
-      .filter((e) => !seen.has(e.id) && (e.lastMessageAt > 0 || e.pinned) && this.matchesPickerQuery(e))
-      .map((e) => ({
-        id: e.id, projectId: e.projectId, branch: e.branch, status: 'active', agent: 'coding', startedBy: 'person',
-        model: e.summary.model, pinned: e.pinned,
-        tokensInput: e.usage.input || null, tokensOutput: e.usage.output || null,
-        tokensCacheRead: e.usage.cacheRead || null, tokensCacheWrite: e.usage.cacheWrite || null,
+      .filter((entry) => !seen.has(entry.id) && (entry.lastMessageAt > 0 || entry.pinned) && this.matchesPickerQuery(entry))
+      .map((entry) => ({
+        id: entry.id, projectId: entry.projectId, branch: entry.branch, status: 'active', agent: 'coding', startedBy: 'person',
+        model: entry.summary.model, pinned: entry.pinned,
+        tokensInput: entry.usage.input || null, tokensOutput: entry.usage.output || null,
+        tokensCacheRead: entry.usage.cacheRead || null, tokensCacheWrite: entry.usage.cacheWrite || null,
         // Nothing typed = no activity: it sorts LAST, never ahead of real work.
-        lastUsedAt: new Date(e.lastMessageAt || 0).toISOString(), locked: false, lastUserMessage: null,
+        lastUsedAt: new Date(entry.lastMessageAt || 0).toISOString(), locked: false, lastUserMessage: null,
       }));
     return { sessions: [...enriched, ...extras], total: total + extras.length };
   }
@@ -1104,8 +1104,8 @@ export class WindowStore {
     ]);
     if (seq !== this.pickerSeq) return;
     if (!this.picker) this.seeProjects(projects);
-    const { sessions: ss, total } = got as { sessions: SessionInfo[]; total: number };
-    this.picker = { ...this.withOpenHere(ss, total), end: ss.length < want, query: this.pickerQuery, filter };
+    const { sessions: rows, total } = got as { sessions: SessionInfo[]; total: number };
+    this.picker = { ...this.withOpenHere(rows, total), end: rows.length < want, query: this.pickerQuery, filter };
     this.notify();
   };
   private pickerSeq = 0;
@@ -1116,9 +1116,9 @@ export class WindowStore {
    *  cursor and the refresh catches it at the top, but pages going down never
    *  repeat one. Failure keeps the loaded rows; scrolling again retries. */
   morePicker = async (): Promise<void> => {
-    const p = this.picker;
-    const tail = [...(p?.sessions ?? [])].reverse().find((r) => r.lastUserMessage !== null);
-    if (!p || p.end || !tail || this.morePickerInFlight) return;
+    const picker = this.picker;
+    const tail = [...(picker?.sessions ?? [])].reverse().find((row) => row.lastUserMessage !== null);
+    if (!picker || picker.end || !tail || this.morePickerInFlight) return;
     this.morePickerInFlight = true;
     try {
       const got = await this.api('GET', `/sessions?${this.listQuery()}&limit=${PICKER_PAGE}`
@@ -1127,14 +1127,14 @@ export class WindowStore {
         { sessions: SessionInfo[]; total: number };
       const prev = this.picker;
       if (prev) {
-        const seen = new Set(prev.sessions.map((s) => s.id));
-        const rows = [...prev.sessions, ...got.sessions.filter((s) => !seen.has(s.id))];
+        const seen = new Set(prev.sessions.map((row) => row.id));
+        const rows = [...prev.sessions, ...got.sessions.filter((row) => !seen.has(row.id))];
         this.picker = { ...prev,
-          ...this.withOpenHere(rows.filter((r) => r.lastUserMessage !== null), got.total),
+          ...this.withOpenHere(rows.filter((row) => row.lastUserMessage !== null), got.total),
           end: got.sessions.length < PICKER_PAGE };
         this.notify();
       }
-    } catch (e) { quiet('load more sessions')(e); }
+    } catch (entry) { quiet('load more sessions')(entry); }
     finally { this.morePickerInFlight = false; }
   };
 
@@ -1147,8 +1147,8 @@ export class WindowStore {
       await this.refreshPicker();
       this.pickerNotice = undefined;
       this.showOverlay(pickerScreen(this, which));
-    } catch (e) {
-      this.note(`could not list ${which === 'resume' ? 'sessions' : 'projects'}: ${(e as Error).message}`);
+    } catch (entry) {
+      this.note(`could not list ${which === 'resume' ? 'sessions' : 'projects'}: ${(entry as Error).message}`);
     }
   };
 
@@ -1164,14 +1164,14 @@ export class WindowStore {
   /** [p] on /resume: pin the row to the top of the list (or take it down).
    *  The row in hand says which way the toggle goes; the re-read draws it. */
   pinFromPicker = async (id: string): Promise<void> => {
-    const row = this.picker?.sessions.find((s) => s.id === id);
+    const row = this.picker?.sessions.find((row) => row.id === id);
     const on = !(row?.pinned ?? false);
     try {
       await this.setPinned(id, on);
       this.pickerNotice = undefined;
       await this.refreshPicker().catch(quiet('refresh the session list'));
-    } catch (e) {
-      this.pickerNotice = `could not pin session ${id}: ${(e as Error).message}`;
+    } catch (entry) {
+      this.pickerNotice = `could not pin session ${id}: ${(entry as Error).message}`;
     }
     this.notify();
   };
@@ -1183,8 +1183,8 @@ export class WindowStore {
     try {
       await this.api('POST', `/sessions/${id}/ping`, {});
       this.pickerNotice = 'pinging container — git status updates shortly';
-    } catch (e) {
-      this.pickerNotice = `could not ping session: ${(e as Error).message}`;
+    } catch (entry) {
+      this.pickerNotice = `could not ping session: ${(entry as Error).message}`;
     }
     this.notify();
   };
@@ -1211,12 +1211,12 @@ export class WindowStore {
   /** [x] on /resume: the close path, its result on the picker's own notice
    *  line, where the list is. */
   closeFromPicker = async (id: string): Promise<void> => {
-    const r = await this.closeSession(id);
-    if ('error' in r) {
-      this.pickerNotice = r.error.includes('a turn is running')
-        ? 'a turn is running there — esc stops it, then [x]' : r.error;
+    const closed = await this.closeSession(id);
+    if ('error' in closed) {
+      this.pickerNotice = closed.error.includes('a turn is running')
+        ? 'a turn is running there — esc stops it, then [x]' : closed.error;
     } else {
-      this.pickerNotice = r.opened_new
+      this.pickerNotice = closed.opened_new
         ? 'closed the last one — a new session is open behind this list'
         : 'closed — enter opens it again';
     }
@@ -1230,12 +1230,12 @@ export class WindowStore {
     try {
       await this.api('DELETE', `/sessions/${id}?purge=true${force ? '&force=true' : ''}`);
       return 'ok';
-    } catch (e) {
-      const m = (e as Error).message;
-      const code = (e as { code?: string }).code ?? '';
-      if (code === 'unpushed_work' || m.includes('unpushed_work')) return 'unpushed_work';
-      if (code === 'session_locked' || m.includes('session_locked')) return 'session_locked';
-      throw e;
+    } catch (entry) {
+      const reason = (entry as Error).message;
+      const code = (entry as { code?: string }).code ?? '';
+      if (code === 'unpushed_work' || reason.includes('unpushed_work')) return 'unpushed_work';
+      if (code === 'session_locked' || reason.includes('session_locked')) return 'session_locked';
+      throw entry;
     }
   }
 
@@ -1248,18 +1248,18 @@ export class WindowStore {
    *  `say` is where each door reports — the picker's notice line, or the
    *  pane and a toast. */
   private trash = async (id: string, label: string,
-    say: { refuse: (t: string) => void; done: () => void }, force = false): Promise<void> => {
+    say: { refuse: (text: string) => void; done: () => void }, force = false): Promise<void> => {
     const yes = force
       ? await this.confirm('unpushed work — discard it?', 'commits on this branch never reached origin; they go with the session')
       : await this.confirm(`trash "${label}" for good?`, 'the row, the transcript, the files — gone for good');
     if (!yes) return;
     if (this.sessions.has(id)) {
-      const r = await this.closeSession(id, true);
-      if ('error' in r) { say.refuse(`not trashed — ${r.error}`); return; }
+      const closed = await this.closeSession(id, true);
+      if ('error' in closed) { say.refuse(`not trashed — ${closed.error}`); return; }
     }
     let verdict: 'ok' | 'unpushed_work' | 'session_locked';
     try { verdict = await this.purgeSession(id, force); }
-    catch (e) { say.refuse(`could not trash session ${id}: ${(e as Error).message}`); return; }
+    catch (entry) { say.refuse(`could not trash session ${id}: ${(entry as Error).message}`); return; }
     if (verdict === 'unpushed_work') await this.trash(id, label, say, true);
     else if (verdict === 'session_locked') say.refuse('in use elsewhere — a held session cannot be trashed');
     else say.done();
@@ -1267,9 +1267,9 @@ export class WindowStore {
 
   /** [t] on /resume. */
   trashSession = (id: string): Promise<void> => {
-    const row = this.picker?.sessions.find((r) => r.id === id);
+    const row = this.picker?.sessions.find((row) => row.id === id);
     return this.trash(id, row?.name ?? row?.branch ?? id, {
-      refuse: (t) => { this.pickerNotice = t; this.notify(); },
+      refuse: (text) => { this.pickerNotice = text; this.notify(); },
       done: () => {
         this.pickerNotice = undefined;
         // The trash landed; a failed re-read must not report "could not trash".
@@ -1279,8 +1279,8 @@ export class WindowStore {
   };
 
   /** /trash in the chat: the session on screen. */
-  private trashActive = (e: LoadedSession): Promise<void> =>
-    this.trash(e.id, this.labelOf(e), { refuse: this.note, done: () => this.setToast('Session trashed') });
+  private trashActive = (entry: LoadedSession): Promise<void> =>
+    this.trash(entry.id, this.labelOf(entry), { refuse: this.note, done: () => this.setToast('Session trashed') });
 
   /** ctrl+n: the sessions open in this window. It shows FIRST and fills the
    *  project names in behind — the rows read fine as ids until they land. */
@@ -1289,7 +1289,7 @@ export class WindowStore {
     if (this.projectRows.length) return;
     void (async () => {
       try { this.seeProjects(await this.api('GET', '/projects') as unknown as ProjectInfo[]); this.notify(); }
-      catch (e) { this.note(`could not list projects: ${(e as Error).message}`); }
+      catch (entry) { this.note(`could not list projects: ${(entry as Error).message}`); }
     })();
   }
 
@@ -1318,7 +1318,7 @@ export class WindowStore {
   private findProject(arg: string): ProjectInfo | { error: string } {
     const typed = arg.toLowerCase();
     const names = (project: ProjectInfo) => [project.name, `${project.owner}/${project.name}`, project.cardPrefix, project.displayName];
-    const hits = this.projectRows.filter((project) => names(project).some((n) => n?.toLowerCase() === typed));
+    const hits = this.projectRows.filter((project) => names(project).some((name) => name?.toLowerCase() === typed));
     if (hits.length === 1) return hits[0];
     if (hits.length > 1) return { error: `"${arg}" is ambiguous: ${hits.map((project) => `${project.owner}/${project.name}`).join(', ')}` };
     return { error: `unknown project "${arg}" — /project lists them` };
@@ -1336,7 +1336,7 @@ export class WindowStore {
   /** `e` on a /project row: that project's settings, on their own screen
    *  (its close reopens the list). */
   editProject(id: string): void {
-    const project = this.projectRows.find((x) => x.id === id);
+    const project = this.projectRows.find((project) => project.id === id);
     if (project) this.showOverlay(projectSettingsScreen(this, project));
   }
 
@@ -1359,10 +1359,10 @@ export class WindowStore {
       this.dismissOverlay();
       await this.openSession({ kind: 'new', projectId: project.id });
       this.note(`project ${project.owner}/${project.name} added`);
-    } catch (e) {
+    } catch (entry) {
       // The form is still up and reads this on its next draw — it is NOT
       // re-shown, which would remount it and lose what was typed.
-      this.addError = (e as Error).message.replace(/^POST \/projects: /, '');
+      this.addError = (entry as Error).message.replace(/^POST \/projects: /, '');
       this.notify();
     }
   };
@@ -1375,9 +1375,9 @@ export class WindowStore {
   refreshTasks = async (): Promise<void> => {
     const id = this.sessions.activeId;
     if (!id) return;
-    const r = await this.api('GET', `/sessions/${id}/tasks`) as unknown as TasksView;
-    this.tasks = r;
-    this.taskCount = r.tasks.length;
+    const tasks = await this.api('GET', `/sessions/${id}/tasks`) as unknown as TasksView;
+    this.tasks = tasks;
+    this.taskCount = tasks.tasks.length;
     this.notify();
   };
 
@@ -1401,7 +1401,7 @@ export class WindowStore {
       await this.refreshTasks();
       this.tasksNotice = undefined;
       this.showOverlay(tasksScreen(this));
-    } catch (e) { this.note(`could not list tasks: ${(e as Error).message}`); }
+    } catch (entry) { this.note(`could not list tasks: ${(entry as Error).message}`); }
   };
 
   // ── the session feeds ────────────────────────────────────────────────────
@@ -1431,16 +1431,16 @@ export class WindowStore {
         this.refreshIfMoved(id, updatedAt || null, keepScreen),
       onPlanModeChanged: (on) => this.applyPlanMode(id, on),
       onModelChanged: async () => {
-        const e = store.get(id);
-        if (!e) return;
+        const entry = store.get(id);
+        if (!entry) return;
         const row = await this.api('GET', `/sessions/${id}`) as { provider?: string | null; model?: string | null };
-        store.setModelLine(id, await this.modelLineFor(row, e.projectId));
+        store.setModelLine(id, await this.modelLineFor(row, entry.projectId));
       },
       // Named, because the toast is the window's, not the session's: a
       // failure on a session in the background says which one.
-      onSyncFailed: (op, reason) => {
-        const e = store.get(id);
-        this.setToast(`${e ? `${this.labelOf(e)}: ` : ''}instant ${op} failed — ${reason}`);
+      onSyncFailed: (operation, reason) => {
+        const entry = store.get(id);
+        this.setToast(`${entry ? `${this.labelOf(entry)}: ` : ''}instant ${operation} failed — ${reason}`);
       },
     });
     this.feeds.set(id, feed);
@@ -1464,8 +1464,8 @@ export class WindowStore {
       this.tasksNotice = undefined;
       // The kill landed; a failed re-read must not report "could not kill".
       await this.refreshTasks().catch(quiet('refresh tasks'));
-    } catch (e) {
-      this.tasksNotice = `could not kill "${command}": ${(e as Error).message}`;
+    } catch (entry) {
+      this.tasksNotice = `could not kill "${command}": ${(entry as Error).message}`;
     }
     this.notify();
   };
@@ -1478,14 +1478,14 @@ export class WindowStore {
    *  /resume. Shared with the board's [v]. */
   openArchived = async (projectId: string): Promise<void> => {
     try {
-      const d = await this.api('GET',
+      const reply = await this.api('GET',
         `/projects/${projectId}/cards?archived=only&limit=${PICKER_PAGE}`) as { cards: Card[]; total?: number };
-      this.archivedEnd = d.cards.length < PICKER_PAGE;
-      this.archived = d.cards;
-      this.archivedTotal = d.total;
+      this.archivedEnd = reply.cards.length < PICKER_PAGE;
+      this.archived = reply.cards;
+      this.archivedTotal = reply.total;
       this.archivedNotice = undefined;
       this.showOverlay(archivedScreen(this, projectId));
-    } catch (e) { this.note(`could not list archived cards: ${(e as Error).message}`); }
+    } catch (entry) { this.note(`could not list archived cards: ${(entry as Error).message}`); }
   };
 
   /** The next page, appended in place — morePicker's shape. */
@@ -1494,14 +1494,14 @@ export class WindowStore {
     if (this.archivedEnd || !tail || this.moreArchivedInFlight) return;
     this.moreArchivedInFlight = true;
     try {
-      const d = await this.api('GET', `/projects/${projectId}/cards?archived=only&limit=${PICKER_PAGE}`
+      const reply = await this.api('GET', `/projects/${projectId}/cards?archived=only&limit=${PICKER_PAGE}`
         + `&before=${encodeURIComponent(tail.updated_at)}&before_id=${tail.id}`) as { cards: Card[]; total?: number };
-      this.archivedEnd = d.cards.length < PICKER_PAGE;
-      this.archivedTotal = d.total;
-      const seen = new Set(this.archived.map((t) => t.id));
-      this.archived = [...this.archived, ...d.cards.filter((t) => !seen.has(t.id))];
+      this.archivedEnd = reply.cards.length < PICKER_PAGE;
+      this.archivedTotal = reply.total;
+      const seen = new Set(this.archived.map((card) => card.id));
+      this.archived = [...this.archived, ...reply.cards.filter((card) => !seen.has(card.id))];
       this.notify();
-    } catch (e) { quiet('load more archived cards')(e); }
+    } catch (entry) { quiet('load more archived cards')(entry); }
     finally { this.moreArchivedInFlight = false; }
   };
 
@@ -1511,10 +1511,10 @@ export class WindowStore {
   restoreCard = async (projectId: string, card: Card): Promise<void> => {
     try {
       await this.api('PATCH', `/projects/${projectId}/cards/${card.id}`, { archived: false });
-      this.archived = this.archived.filter((x) => x.id !== card.id);
+      this.archived = this.archived.filter((card) => card.id !== card.id);
       this.archivedNotice = `restored ${card.number}-${card.title} → ${card.status.replace(/_/g, ' ')}`;
       void this.boardFor(projectId).load();   // the card is back on the board
-    } catch (e) { this.archivedNotice = `restore failed: ${(e as Error).message}`; }
+    } catch (entry) { this.archivedNotice = `restore failed: ${(entry as Error).message}`; }
     this.notify();
   };
 
@@ -1535,44 +1535,44 @@ export class WindowStore {
    *  returned, for the door that can say it. Never throws: a failure is a
    *  result too. */
   runAutoPush = async (id: string): Promise<{ result: string; reason?: string; sha?: string }> => {
-    const say = (t: string) => this.sessions.note(id, t);
+    const say = (text: string) => this.sessions.note(id, text);
     if (!this.opts.autoPush) {
       say('auto-push is unavailable in this build');
       return { result: 'error', reason: 'auto-push is unavailable in this build' };
     }
     say('auto-push: starting');
     try {
-      const r = await this.opts.autoPush(id, (label) => say(`auto-push: ${label}`));
-      if (r.result === 'pushed') say(`auto-push: landed on the base branch (${(r.sha ?? '').slice(0, 10)})`);
-      else if (r.result === 'nothing') say('auto-push: nothing to push — the base branch already has it all');
-      else say(`auto-push: ${r.result}${r.reason ? ` — ${r.reason}` : ''}`);
-      return r;
-    } catch (e) {
-      say(`auto-push failed: ${(e as Error).message}`);
-      return { result: 'error', reason: (e as Error).message };
+      const pushed = await this.opts.autoPush(id, (label) => say(`auto-push: ${label}`));
+      if (pushed.result === 'pushed') say(`auto-push: landed on the base branch (${(pushed.sha ?? '').slice(0, 10)})`);
+      else if (pushed.result === 'nothing') say('auto-push: nothing to push — the base branch already has it all');
+      else say(`auto-push: ${pushed.result}${pushed.reason ? ` — ${pushed.reason}` : ''}`);
+      return pushed;
+    } catch (entry) {
+      say(`auto-push failed: ${(entry as Error).message}`);
+      return { result: 'error', reason: (entry as Error).message };
     }
   };
 
   /** AUTO-PULL: base INTO the session's branch. Same shape as auto-push. */
   runAutoPull = async (id: string) => {
-    const say = (t: string) => this.sessions.note(id, t);
+    const say = (text: string) => this.sessions.note(id, text);
     if (!this.opts.autoPull) {
       say('auto-pull is unavailable in this build');
       return { result: 'error', reason: 'auto-pull is unavailable in this build' };
     }
     say('auto-pull: starting');
     try {
-      const r = await this.opts.autoPull(id, (label) => say(`auto-pull: ${label}`));
-      if (r.result === 'merged') {
-        say(`auto-pull: ${r.arrived?.length ?? 0} commit${r.arrived?.length === 1 ? '' : 's'} from the base branch merged in`
-          + `${r.files?.length ? ` — ${r.files.length} file${r.files.length === 1 ? '' : 's'} changed` : ''}`
-          + `${r.pushed === false ? ` (${r.reason ?? 'branch push failed'})` : ''}`);
-      } else if (r.result === 'clean') say('auto-pull: nothing to pull — the branch already has all of base');
-      else say(`auto-pull: ${r.result}${r.reason ? ` — ${r.reason}` : ''}`);
-      return r;
-    } catch (e) {
-      say(`auto-pull failed: ${(e as Error).message}`);
-      return { result: 'error', reason: (e as Error).message };
+      const pulled = await this.opts.autoPull(id, (label) => say(`auto-pull: ${label}`));
+      if (pulled.result === 'merged') {
+        say(`auto-pull: ${pulled.arrived?.length ?? 0} commit${pulled.arrived?.length === 1 ? '' : 's'} from the base branch merged in`
+          + `${pulled.files?.length ? ` — ${pulled.files.length} file${pulled.files.length === 1 ? '' : 's'} changed` : ''}`
+          + `${pulled.pushed === false ? ` (${pulled.reason ?? 'branch push failed'})` : ''}`);
+      } else if (pulled.result === 'clean') say('auto-pull: nothing to pull — the branch already has all of base');
+      else say(`auto-pull: ${pulled.result}${pulled.reason ? ` — ${pulled.reason}` : ''}`);
+      return pulled;
+    } catch (entry) {
+      say(`auto-pull failed: ${(entry as Error).message}`);
+      return { result: 'error', reason: (entry as Error).message };
     }
   };
 
@@ -1602,7 +1602,7 @@ export class WindowStore {
       try {
         audio = current ?? await this.readSettings();
         await this.rebuildAssistant(true);
-      } catch (e) { this.note(`assistant not started: ${(e as Error).message}`); return; }
+      } catch (entry) { this.note(`assistant not started: ${(entry as Error).message}`); return; }
       void this.voice.start(sidecarEnv(audio));
     })();
   }
@@ -1632,20 +1632,20 @@ export class WindowStore {
       agent.addToolKit(assistantToolKit(this, this.assistantDeps));
       this.assistant = agent;
       this.voice.setAgent(agent);
-    } catch (e) {
-      if (starting) throw e;
-      this.note(`assistant not pointed at this session: ${(e as Error).message}`);
+    } catch (entry) {
+      if (starting) throw entry;
+      this.note(`assistant not pointed at this session: ${(entry as Error).message}`);
     }
   }
 
   /** Launch: the chrome's two values and the voice decision, from one read. */
   async readChrome(): Promise<void> {
     try {
-      const c = await this.readSettings();
-      this.voiceEnabled = Boolean(c.voice_enabled);
-      this.sidebarWidth = Number(c.sidebar_width) || (this.opts.sidebarPercent ?? 20);
+      const settings = await this.readSettings();
+      this.voiceEnabled = Boolean(settings.voice_enabled);
+      this.sidebarWidth = Number(settings.sidebar_width) || (this.opts.sidebarPercent ?? 20);
       this.notify();
-      if (c.voice_enabled) this.startVoice(c);
+      if (settings.voice_enabled) this.startVoice(settings);
     } catch { /* index.tsx already refused to start without the server */ }
   }
 
@@ -1665,7 +1665,7 @@ export class WindowStore {
     void (async () => {
       let cfg: Record<string, ConfigValue>;
       try { cfg = await this.readSettings(); }
-      catch (e) { this.note(`could not read settings: ${(e as Error).message}`); return; }
+      catch (entry) { this.note(`could not read settings: ${(entry as Error).message}`); return; }
       this.voiceEnabled = Boolean(cfg.voice_enabled);
       this.sidebarWidth = Number(cfg.sidebar_width) || (this.opts.sidebarPercent ?? 20);
 
@@ -1728,10 +1728,10 @@ export class WindowStore {
       // everything again. A toggle is a read-modify-write, so it reads.
       let cfg: Record<string, ConfigValue>;
       try { cfg = await this.readSettings(); }
-      catch (e) { this.note(`could not read settings: ${(e as Error).message}`); return; }
+      catch (entry) { this.note(`could not read settings: ${(entry as Error).message}`); return; }
       const now = !cfg[key];
       try { await this.settings.write(key, now); }
-      catch (e) { this.note(`could not save ${key}: ${(e as Error).message}`); return; }
+      catch (entry) { this.note(`could not save ${key}: ${(entry as Error).message}`); return; }
       this.settingChanged(key);
       switch (which) {
         case 'mic': this.note(now ? 'voice: not listening' : 'voice: listening'); break;
@@ -1770,10 +1770,10 @@ export class WindowStore {
       }
       case 'resume': await this.openPicker('resume'); return;
       case 'close': {
-        const r = await this.closeSession();
-        if ('error' in r) {
-          this.note(r.error.includes('a turn is running')
-            ? 'a turn is running here — esc stops it, then /close' : r.error);
+        const closed = await this.closeSession();
+        if ('error' in closed) {
+          this.note(closed.error.includes('a turn is running')
+            ? 'a turn is running here — esc stops it, then /close' : closed.error);
         }
         return;
       }
@@ -1806,7 +1806,7 @@ export class WindowStore {
           await this.api('PATCH', `/sessions/${session.id}`, { name: args || null });
           this.sessions.setName(session.id, args || null);
           this.note(args ? `renamed: ${args}` : 'name cleared — auto-titles are back on');
-        } catch (e) { this.note(`could not rename session ${session.id}: ${(e as Error).message}`); }
+        } catch (entry) { this.note(`could not rename session ${session.id}: ${(entry as Error).message}`); }
         return;
       }
       case 'pin': {
@@ -1815,7 +1815,7 @@ export class WindowStore {
         try {
           await this.setPinned(session.id, on);
           this.note(on ? 'pinned — to the top of /resume' : 'unpinned');
-        } catch (e) { this.note(`could not pin session ${session.id}: ${(e as Error).message}`); }
+        } catch (entry) { this.note(`could not pin session ${session.id}: ${(entry as Error).message}`); }
         return;
       }
       case 'done': {
@@ -1830,10 +1830,10 @@ export class WindowStore {
         }
         if (session.pinned) {
           try { await this.setPinned(session.id, false); }
-          catch (e) { this.note(`could not unpin session ${session.id}: ${(e as Error).message}`); return; }
+          catch (entry) { this.note(`could not unpin session ${session.id}: ${(entry as Error).message}`); return; }
         }
-        const r = await this.closeSession();
-        if ('error' in r) this.note(r.error);
+        const closed = await this.closeSession();
+        if ('error' in closed) this.note(closed.error);
         return;
       }
       case 'kanban': this.openBoard(); return;
@@ -1848,7 +1848,7 @@ export class WindowStore {
         try {
           await this.api('PATCH', `/sessions/${session.id}`, { plan_mode: true });
           await this.applyPlanMode(session.id, true);
-        } catch (e) { this.note(`could not enter plan mode: ${(e as Error).message}`); }
+        } catch (entry) { this.note(`could not enter plan mode: ${(entry as Error).message}`); }
         return;
       }
       case 'code': {
@@ -1857,12 +1857,12 @@ export class WindowStore {
         try {
           await this.api('PATCH', `/sessions/${session.id}`, { plan_mode: false });
           await this.applyPlanMode(session.id, false);
-        } catch (e) { this.note(`could not enter code mode: ${(e as Error).message}`); }
+        } catch (entry) { this.note(`could not enter code mode: ${(entry as Error).message}`); }
         return;
       }
       case 'compact':
         // Compaction is the backend's, on the record — not built yet
-        // (docs/phantom-agent-sdk-plan.md §8).
+        // (docs/v1-plan.md §4).
         if (args.trim().toLowerCase() === 'assistant') {
             this.note('compaction is not available for the Assistant yet');
           return;
@@ -1885,16 +1885,16 @@ export class WindowStore {
       case 'server': this.showOverlay(serverScreen(this)); return;
       case 'cpu': {
         try {
-          const r = await this.api('GET', '/system/status') as { text?: string; warnings?: string };
-          this.note([r.text || '(empty status)', r.warnings ? `warnings: ${r.warnings}` : ''].filter(Boolean).join('\n'));
-        } catch (e) { this.note(`could not read the server status: ${(e as Error).message}`); }
+          const status = await this.api('GET', '/system/status') as { text?: string; warnings?: string };
+          this.note([status.text || '(empty status)', status.warnings ? `warnings: ${status.warnings}` : ''].filter(Boolean).join('\n'));
+        } catch (entry) { this.note(`could not read the server status: ${(entry as Error).message}`); }
         return;
       }
       case 'tokens': {
         try {
-          const r = await this.api('GET', '/system/token-usage') as { text?: string };
-          this.note(r.text || '(no usage data)');
-        } catch (e) { this.note(`could not read token usage: ${(e as Error).message}`); }
+          const usage = await this.api('GET', '/system/token-usage') as { text?: string };
+          this.note(usage.text || '(no usage data)');
+        } catch (entry) { this.note(`could not read token usage: ${(entry as Error).message}`); }
         return;
       }
       case 'restart': {
@@ -1907,7 +1907,7 @@ export class WindowStore {
           await this.api('POST', '/system/restart', svc ? { service: svc } : {});
           this.note(svc ? `restarting ${svc}`
             : 'restarting the api — back in a few seconds (the window reconnects on its own)');
-        } catch (e) { this.note(`could not restart: ${(e as Error).message}`); }
+        } catch (entry) { this.note(`could not restart: ${(entry as Error).message}`); }
         return;
       }
       case 'assistant':
@@ -1928,7 +1928,7 @@ export class WindowStore {
         if (!session) { this.note('no session is open'); return; }
         if (!session.agent.userMessages.length) { this.note('the queue is empty — nothing to pop'); return; }
         if (args === 'all') {
-          const all = session.agent.userMessages.pending().map((e) => e.text).filter(Boolean).join('\n\n');
+          const all = session.agent.userMessages.pending().map((entry) => entry.text).filter(Boolean).join('\n\n');
           this.sessions.clearQueue(session.id);
           this.setPrompt(all);
           return;
@@ -1938,7 +1938,7 @@ export class WindowStore {
         return;
       }
       case 'help':
-        this.note(COMMANDS.map((c) => `  /${c.name.padEnd(10)} ${c.summary}`).join('\n'));
+        this.note(COMMANDS.map((command) => `  /${command.name.padEnd(10)} ${command.summary}`).join('\n'));
         return;
       case 'exit': this.quit(); return;
     }
@@ -1968,7 +1968,7 @@ export class WindowStore {
     const line = expanded.text.trimStart();
     const msg = line.trimEnd();
     if (expanded.missing.length) {
-      const gone = expanded.missing.map((n) => `#${n}`).join(', ');
+      const gone = expanded.missing.map((number) => `#${number}`).join(', ');
       if (!msg || msg.startsWith('/')) {
         this.note(`paste ${gone} is gone (from an earlier run) — the line was kept; delete the chip and resend`);
         return;
@@ -2046,12 +2046,12 @@ export class WindowStore {
       ]);
       projects = rows;
       skipPicker = settings.boot_last_project === true;
-    } catch (e) {
+    } catch (entry) {
       // The request function already named the server and the failure; what
       // goes under it is the fix, and there are two: the server answered and
       // refused the key, or nothing answered at that address at all.
-      this.note((e as Error).message);
-      if ((e as { code?: string }).code === 'unauthorized') {
+      this.note((entry as Error).message);
+      if ((entry as { code?: string }).code === 'unauthorized') {
         this.note('fix the key under /server — a server box prints its key with `phantom-backend key`; a dev checkout gets it from ./scripts/setup.sh');
       } else {
         this.note('have a server? its address and key go under /server, then /project starts a session');
@@ -2072,10 +2072,10 @@ export class WindowStore {
     if (skipPicker) {
       this.setSplash(true);
       try {
-        const ss = ((await this.api('GET', '/sessions')) as unknown as { sessions: SessionInfo[] }).sessions;
-        const last = lastProjectId(projects, ss);
+        const rows = ((await this.api('GET', '/sessions')) as unknown as { sessions: SessionInfo[] }).sessions;
+        const last = lastProjectId(projects, rows);
         if (last) { await this.openSession({ kind: 'new', projectId: last }); return; }
-      } catch (e) { this.note(`could not reopen your last project: ${(e as Error).message}`); }
+      } catch (entry) { this.note(`could not reopen your last project: ${(entry as Error).message}`); }
     }
     await this.openPicker('project');
   };
@@ -2104,7 +2104,7 @@ export class WindowStore {
     if (this.taskClock) { clearInterval(this.taskClock); this.taskClock = null; }
     for (const b of this.boards.values()) b.close();
     this.boards.clear();
-    for (const f of this.feeds.values()) f.stop();
+    for (const feed of this.feeds.values()) feed.stop();
     this.feeds.clear();
   }
 }

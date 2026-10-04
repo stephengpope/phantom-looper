@@ -11,14 +11,14 @@ import { telegramHandledUpdates } from '../storage/schema.js';
 const PRUNE_BEHIND = 10_000;
 
 export class TelegramHandledUpdates {
-  constructor(private readonly db: Drizzle) {}
+  constructor(private readonly database: Drizzle) {}
 
   /** True the FIRST time an update id is seen; false for a repeat. */
   async markHandled(updateId: number): Promise<boolean> {
     if (!Number.isFinite(updateId)) return true;
-    const r = await this.db.insert(telegramHandledUpdates).values({ updateId }).onConflictDoNothing().returning();
-    this.db.delete(telegramHandledUpdates).where(lt(telegramHandledUpdates.updateId, updateId - PRUNE_BEHIND))
+    const inserted = await this.database.insert(telegramHandledUpdates).values({ updateId }).onConflictDoNothing().returning();
+    this.database.delete(telegramHandledUpdates).where(lt(telegramHandledUpdates.updateId, updateId - PRUNE_BEHIND))
       .catch(() => { /* housekeeping */ });
-    return r.length > 0;
+    return inserted.length > 0;
   }
 }

@@ -108,23 +108,23 @@ export class SessionEvents {
   private emitter = new EventEmitter();
   constructor() { this.emitter.setMaxListeners(0); }
   /** `by` is the publisher's client id — the session's lock holder. */
-  publish(sessionId: string, by: string, e: SessionEvent): void {
-    this.emitter.emit(sessionId, e, by);
-    this.emitter.emit(ALL, sessionId, e, by);
+  publish(sessionId: string, by: string, event: SessionEvent): void {
+    this.emitter.emit(sessionId, event, by);
+    this.emitter.emit(ALL, sessionId, event, by);
   }
   /** Publish one stream part, capped. Kept here so every publisher caps the
    *  same way — one rule, one place. */
   publishPart(sessionId: string, by: string, part: unknown): void {
     this.publish(sessionId, by, { event: 'part', part: capPart(part as Record<string, unknown>) });
   }
-  subscribe(sessionId: string, fn: (e: SessionEvent, by: string) => void): () => void {
-    this.emitter.on(sessionId, fn);
-    return () => { this.emitter.off(sessionId, fn); };
+  subscribe(sessionId: string, listener: (event: SessionEvent, by: string) => void): () => void {
+    this.emitter.on(sessionId, listener);
+    return () => { this.emitter.off(sessionId, listener); };
   }
   /** Every session's events — for the server's own reactions to a turn
    *  (the turn-start hook in the session routes), never for a client. */
-  subscribeAll(fn: (sessionId: string, e: SessionEvent, by: string) => void): () => void {
-    this.emitter.on(ALL, fn);
-    return () => { this.emitter.off(ALL, fn); };
+  subscribeAll(listener: (sessionId: string, event: SessionEvent, by: string) => void): () => void {
+    this.emitter.on(ALL, listener);
+    return () => { this.emitter.off(ALL, listener); };
   }
 }

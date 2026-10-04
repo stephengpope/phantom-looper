@@ -35,16 +35,16 @@ export function systemMessages(blocks: readonly string[], provider: string): { m
   return { messages, uncached: provider === 'anthropic' ? Math.max(0, blocks.length - CACHED_BLOCKS) : 0 };
 }
 
-const unmark = (m: ModelMessage): ModelMessage => {
-  if (!m.providerOptions?.anthropic) return m;
-  const { anthropic: _stale, ...rest } = m.providerOptions;
-  if (Object.keys(rest).length) return { ...m, providerOptions: rest };
-  const { providerOptions: _drop, ...bare } = m;
+const unmark = (message: ModelMessage): ModelMessage => {
+  if (!message.providerOptions?.anthropic) return message;
+  const { anthropic: _stale, ...rest } = message.providerOptions;
+  if (Object.keys(rest).length) return { ...message, providerOptions: rest };
+  const { providerOptions: _drop, ...bare } = message;
   return bare;
 };
 
-const mark = (m: ModelMessage): ModelMessage => ({
-  ...m, providerOptions: { ...m.providerOptions, ...cacheControl },
+const mark = (message: ModelMessage): ModelMessage => ({
+  ...message, providerOptions: { ...message.providerOptions, ...cacheControl },
 });
 
 /** Copies of `messages` with the rolling mark on the last one and any stale

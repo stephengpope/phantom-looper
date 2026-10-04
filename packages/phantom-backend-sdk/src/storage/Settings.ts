@@ -90,7 +90,7 @@ export class Settings {
   readonly #definitions = new Map<string, SettingDefinition>();
 
   constructor(
-    private readonly db: Drizzle,
+    private readonly database: Drizzle,
     private readonly encryptionKey: Buffer,
     /** The catalog the "newest model" default reads. */
     private readonly modelCatalog: ModelCatalog,
@@ -167,18 +167,18 @@ export class Settings {
 
   /** The rendering meta a client reads off the wire. */
   metaOf(key: string): SettingMeta {
-    const d = this.requireDefinition(key);
+    const definition = this.requireDefinition(key);
     return {
-      type: d.type, label: d.label, group: d.group,
-      ...(d.subgroup ? { subgroup: d.subgroup } : {}),
-      ...(d.default === null ? { nullable: true } : {}),
-      ...(d.choices ? { choices: d.choices } : {}),
-      ...(d.choiceLabels ? { choiceLabels: d.choiceLabels } : {}),
-      ...(d.suggestions ? { suggestions: d.suggestions } : {}),
-      ...(d.unit ? { unit: d.unit } : {}),
-      ...(d.min !== undefined ? { min: d.min } : {}),
-      ...(d.max !== undefined ? { max: d.max } : {}),
-      ...(d.provider ? { provider: d.provider } : {}),
+      type: definition.type, label: definition.label, group: definition.group,
+      ...(definition.subgroup ? { subgroup: definition.subgroup } : {}),
+      ...(definition.default === null ? { nullable: true } : {}),
+      ...(definition.choices ? { choices: definition.choices } : {}),
+      ...(definition.choiceLabels ? { choiceLabels: definition.choiceLabels } : {}),
+      ...(definition.suggestions ? { suggestions: definition.suggestions } : {}),
+      ...(definition.unit ? { unit: definition.unit } : {}),
+      ...(definition.min !== undefined ? { min: definition.min } : {}),
+      ...(definition.max !== undefined ? { max: definition.max } : {}),
+      ...(definition.provider ? { provider: definition.provider } : {}),
     };
   }
 
@@ -198,7 +198,7 @@ export class Settings {
   private async readStore(scopes: string[], credentials: boolean, onlyKey?: string): Promise<ByScope> {
     const out: ByScope = new Map();
     for (const scope of scopes) out.set(scope, new Map());
-    const rows = await this.db.select().from(settings).where(and(
+    const rows = await this.database.select().from(settings).where(and(
       inArray(settings.scope, scopes), eq(settings.namespace, GENERAL),
       ...(onlyKey ? [eq(settings.key, onlyKey)] : [])));
     for (const row of rows) {
@@ -220,13 +220,13 @@ export class Settings {
     const row = this.isCredential(key)
       ? { value: null, valueEnc: encrypt(this.encryptionKey, value as string) }
       : { value: value as never, valueEnc: null };
-    await this.db.insert(settings)
+    await this.database.insert(settings)
       .values({ scope: scopeName, namespace: GENERAL, key, ...row })
       .onConflictDoUpdate({ target: [settings.scope, settings.namespace, settings.key], set: { ...row, updatedAt: new Date() } });
   }
 
   private async deleteRow(scopeName: string, key: string): Promise<void> {
-    await this.db.delete(settings).where(and(eq(settings.scope, scopeName), eq(settings.namespace, GENERAL), eq(settings.key, key)));
+    await this.database.delete(settings).where(and(eq(settings.scope, scopeName), eq(settings.namespace, GENERAL), eq(settings.key, key)));
   }
 
   // ── resolution ────────────────────────────────────────────────────────
@@ -344,7 +344,7 @@ export class Settings {
 
   /** Is a credential set at exactly this scope (not inherited)? */
   async hasCredentialAt(key: string, scopeName: string): Promise<boolean> {
-    const rows = await this.db.select({ key: settings.key }).from(settings).where(and(
+    const rows = await this.database.select({ key: settings.key }).from(settings).where(and(
       eq(settings.scope, scopeName), eq(settings.namespace, GENERAL), eq(settings.key, key)));
     return rows.length > 0;
   }
@@ -409,7 +409,7 @@ export class Settings {
 
   /** A whole scope goes — a project that no longer exists. Both namespaces: its overrides and its secrets. */
   async deleteScope(scopeName: string): Promise<void> {
-    await this.db.delete(settings).where(eq(settings.scope, scopeName));
+    await this.database.delete(settings).where(eq(settings.scope, scopeName));
   }
 
   // ── secrets — the `secret` namespace ──────────────────────────────────
@@ -418,13 +418,13 @@ export class Settings {
 
   /** Every secret at the scopes asked for — names and descriptions, NEVER values. Global-first, then by name. */
   async listSecrets(scopeNames: string[] = [GLOBAL]): Promise<SecretMeta[]> {
-    const rows = await this.db.select().from(settings).where(and(inArray(settings.scope, scopeNames), eq(settings.namespace, SECRET_NS)));
+    const rows = await this.database.select().from(settings).where(and(inArray(settings.scope, scopeNames), eq(settings.namespace, SECRET_NS)));
     return sortSecrets(rows.map(secretMeta));
   }
 
   /** EVERY secret, every layer — a list that offers every project as a save target. */
   async listAllSecrets(): Promise<SecretMeta[]> {
-    const rows = await this.db.select().from(settings).where(eq(settings.namespace, SECRET_NS));
+    const rows = await this.database.select().from(settings).where(eq(settings.namespace, SECRET_NS));
     return sortSecrets(rows.map(secretMeta));
   }
 
@@ -432,7 +432,7 @@ export class Settings {
    *  [GLOBAL, projectScope(id)] — project wins). undefined = no such
    *  secret, or it would not decrypt. */
   async readSecret(name: string, scopeNames: string[] = [GLOBAL]): Promise<string | undefined> {
-    const rows = await this.db.select().from(settings).where(and(
+    const rows = await this.database.select().from(settings).where(and(
       inArray(settings.scope, scopeNames), eq(settings.namespace, SECRET_NS), eq(settings.key, name)));
     const byScope = new Map(rows.map((row) => [row.scope, row]));
     for (const scopeName of [...scopeNames].reverse()) {
@@ -450,11 +450,11 @@ export class Settings {
   async writeSecret(scopeName: string, name: string, description: string, value?: string): Promise<boolean> {
     const where = and(eq(settings.scope, scopeName), eq(settings.namespace, SECRET_NS), eq(settings.key, name));
     if (value === undefined) {
-      const kept = await this.db.update(settings).set({ value: { description } as never, updatedAt: new Date() }).where(where).returning({ key: settings.key });
+      const kept = await this.database.update(settings).set({ value: { description } as never, updatedAt: new Date() }).where(where).returning({ key: settings.key });
       return kept.length > 0;
     }
     const row = { value: { description } as never, valueEnc: encrypt(this.encryptionKey, value) };
-    await this.db.insert(settings)
+    await this.database.insert(settings)
       .values({ scope: scopeName, namespace: SECRET_NS, key: name, ...row })
       .onConflictDoUpdate({ target: [settings.scope, settings.namespace, settings.key], set: { ...row, updatedAt: new Date() } });
     return true;
@@ -462,7 +462,7 @@ export class Settings {
 
   /** Delete one secret at ONE scope. Whether a row was there. */
   async deleteSecret(scopeName: string, name: string): Promise<boolean> {
-    const gone = await this.db.delete(settings).where(and(
+    const gone = await this.database.delete(settings).where(and(
       eq(settings.scope, scopeName), eq(settings.namespace, SECRET_NS), eq(settings.key, name))).returning({ key: settings.key });
     return gone.length > 0;
   }

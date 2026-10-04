@@ -16,15 +16,15 @@ import { label as projectLabel } from './Launcher.js';
 
 /** The last thing you typed at this session — read from the history already in
  *  memory, so nothing is stored twice and nothing is read off disk. */
-export function lastSaid(s: Pick<LoadedSession, 'history'>): string | undefined {
-  for (let i = s.history.length - 1; i >= 0; i--) {
-    const m = s.history[i];
-    if (m.role !== 'user') continue;
-    const text = typeof m.content === 'string'
-      ? m.content
-      : Array.isArray(m.content)
-        ? m.content.filter((c) => (c as { type?: string }).type === 'text')
-            .map((c) => (c as { text?: string }).text ?? '').join('')
+export function lastSaid(session: Pick<LoadedSession, 'history'>): string | undefined {
+  for (let i = session.history.length - 1; i >= 0; i--) {
+    const message = session.history[i];
+    if (message.role !== 'user') continue;
+    const text = typeof message.content === 'string'
+      ? message.content
+      : Array.isArray(message.content)
+        ? message.content.filter((part) => (part as { type?: string }).type === 'text')
+            .map((part) => (part as { text?: string }).text ?? '').join('')
         : '';
     if (text.trim()) return text.trim().replace(/\s+/g, ' ');
   }
@@ -38,36 +38,36 @@ export function switcherChoices(
   now = Date.now(),
 ): Choice<string>[] {
   const byId = new Map(projects.map((project) => [project.id, project]));
-  return sessions.map((s) => {
-    const project = byId.get(s.projectId);
-    const said = lastSaid(s);
+  return sessions.map((session) => {
+    const project = byId.get(session.projectId);
+    const said = lastSaid(session);
     // The one status column. `waiting on you` beats `working` beats `new`
     // beats how long ago: a row whose agent is stopped on a question for you
     // is the first reason to look at this list, a row doing something the
     // second.
-    const state = s.ask
+    const state = session.ask
       ? '● waiting on you'
-      : s.busy
+      : session.busy
       ? 'working…'
-      : s.unseen
+      : session.unseen
         ? '● answered'
-        : s.lastMessageAt
-          ? ago(new Date(s.lastMessageAt).toISOString(), now)
+        : session.lastMessageAt
+          ? ago(new Date(session.lastMessageAt).toISOString(), now)
           : 'nothing said yet';
     // The project alone does not name a row: two sessions in one project
     // are two identical lines. The branch is the session's own name, so it is
     // what makes the row its subject rather than its category.
     return {
-      value: s.id,
-      label: `${project ? projectLabel(project) : s.projectId} · ${s.branch}`,
-      detail: `${s.summary.model}  ${said ? `"${said.slice(0, 40)}${said.length > 40 ? '…' : ''}"  ` : ''}${
-        s.id === activeId && !s.busy ? 'you are here' : state}`,
+      value: session.id,
+      label: `${project ? projectLabel(project) : session.projectId} · ${session.branch}`,
+      detail: `${session.summary.model}  ${said ? `"${said.slice(0, 40)}${said.length > 40 ? '…' : ''}"  ` : ''}${
+        session.id === activeId && !session.busy ? 'you are here' : state}`,
       // No spinner on a row that is stopped waiting for your answer.
-      busy: s.busy && !s.ask,
-      busySince: s.startedAt,
-      hint: s.id === activeId
+      busy: session.busy && !session.ask,
+      busySince: session.startedAt,
+      hint: session.id === activeId
         ? 'the session on screen — enter just closes this list'
-        : `switch to ${s.branch}`,
+        : `switch to ${session.branch}`,
     };
   });
 }

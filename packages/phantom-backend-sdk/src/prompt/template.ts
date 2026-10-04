@@ -26,17 +26,17 @@ const token = () => /\{\{([a-zA-Z]\w*)\}\}/g;
  *  the author's and stays verbatim. */
 export function fill(template: string, vars: Record<string, string | number>): string {
   const val = (name: string): string => {
-    const v = vars[name];
-    if (v === undefined) throw new Error(`template blank {${name}} has no value`);
-    return String(v).trim();
+    const value = vars[name];
+    if (value === undefined) throw new Error(`template blank {${name}} has no value`);
+    return String(value).trim();
   };
   const lines = template.split('\n').filter((line) => {
-    const names = [...line.matchAll(token())].map((m) => m[1]);
-    return !names.length || names.some((n) => val(n) !== '');
+    const names = [...line.matchAll(token())].map((match) => match[1]);
+    return !names.length || names.some((name) => val(name) !== '');
   });
   return lines.join('\n')
     .replace(/\n{3,}/g, '\n\n')                    // the gap a dropped line leaves
-    .replace(token(), (_, n: string) => val(n))    // values go in last, verbatim
+    .replace(token(), (_, name: string) => val(name))    // values go in last, verbatim
     .trim();
 }
 
@@ -46,7 +46,7 @@ export function fill(template: string, vars: Record<string, string | number>): s
  *  never drift apart, and a template that opens on a blank line is no
  *  different from one that doesn't (fill() trims the same way). */
 export function firstLineOf(template: string, vars: Record<string, string | number>): string {
-  const line = template.split('\n').find((l) => l.trim() !== '') ?? '';
+  const line = template.split('\n').find((line) => line.trim() !== '') ?? '';
   return fill(line, vars);
 }
 

@@ -30,7 +30,7 @@ export function killProcessGroup(sandbox: Sandbox, pidfile: string): Promise<unk
     'pgrep -s "$sid" >/dev/null 2>&1 && pkill -KILL -s "$sid" 2>/dev/null; ' +
     'rm -f "$0"; exit 0';
   return sandbox.run(['/bin/sh', '-c', script, pidfile], { timeoutMs: 15_000 })
-    .catch((e) => log.warn({ err: errStr(e) }, 'kill of command group failed'));
+    .catch((error) => log.warn({ err: errStr(error) }, 'kill of command group failed'));
 }
 
 /** pidfile → sandbox, per session. Entries are added before the command's
@@ -40,16 +40,16 @@ export class ForegroundCommands {
   private bySession = new Map<string, Map<string, Sandbox>>();
 
   add(sessionId: string, pidfile: string, sandbox: Sandbox): void {
-    let m = this.bySession.get(sessionId);
-    if (!m) this.bySession.set(sessionId, (m = new Map()));
-    m.set(pidfile, sandbox);
+    let pidfiles = this.bySession.get(sessionId);
+    if (!pidfiles) this.bySession.set(sessionId, (pidfiles = new Map()));
+    pidfiles.set(pidfile, sandbox);
   }
 
   remove(sessionId: string, pidfile: string): void {
-    const m = this.bySession.get(sessionId);
-    if (!m) return;
-    m.delete(pidfile);
-    if (!m.size) this.bySession.delete(sessionId);
+    const pidfiles = this.bySession.get(sessionId);
+    if (!pidfiles) return;
+    pidfiles.delete(pidfile);
+    if (!pidfiles.size) this.bySession.delete(sessionId);
   }
 
   /** TERM-then-KILL every foreground command the session has in flight.

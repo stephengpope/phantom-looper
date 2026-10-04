@@ -45,7 +45,7 @@ export function SecretEditor({ mode, initial, targets, isActive = true, onSave, 
   isActive?: boolean;
   /** Write the draft; `from` is where it is stored now (absent = create).
    *  Rejects with the reason when the server would not take it. */
-  onSave: (d: SecretDraft, from?: SecretId) => Promise<void>;
+  onSave: (draft: SecretDraft, from?: SecretId) => Promise<void>;
   onClose: () => void;
 }) {
   const [draft, setDraft] = useState<SecretDraft>({
@@ -79,20 +79,20 @@ export function SecretEditor({ mode, initial, targets, isActive = true, onSave, 
   /** Save the draft if it differs from what the server holds. Runs on
    *  leaving a field. Queued behind any save still in flight. */
   const commit = () => {
-    const d = draftRef.current;
+    const draft = draftRef.current;
     const stored = storedRef.current;
-    const name = secretName(d.name);
+    const name = secretName(draft.name);
     // Nothing exists yet and there is not enough to create: wait.
-    if (!stored && (!name || !d.value)) {
-      if (d.value && !name) setError(`name: ${SECRET_NAME_RULE}`);
+    if (!stored && (!name || !draft.value)) {
+      if (draft.value && !name) setError(`name: ${SECRET_NAME_RULE}`);
       return;
     }
     if (!name) { setError(`name: ${SECRET_NAME_RULE}`); return; }
     const sent = sentRef.current;
-    const changed = !sent || d.value !== '' || sent.name !== name
-      || sent.description !== d.description || sent.projectId !== d.projectId;
+    const changed = !sent || draft.value !== '' || sent.name !== name
+      || sent.description !== draft.description || sent.projectId !== draft.projectId;
     if (!changed) return;
-    const out: SecretDraft = { ...d, name };
+    const out: SecretDraft = { ...draft, name };
     setError(undefined);
     setSaveState('saving');
     queueRef.current = queueRef.current
@@ -103,33 +103,33 @@ export function SecretEditor({ mode, initial, targets, isActive = true, onSave, 
         // The value went; the field goes back to "keep it".
         setDraft((cur) => ({ ...cur, value: '' }));
         setSaveState('saved');
-      }, (e: Error) => { setError(e.message); setSaveState('failed'); });
+      }, (error: Error) => { setError(error.message); setSaveState('failed'); });
   };
 
-  const move = (d: number) => {
+  const move = (delta: number) => {
     commit();
-    atRef.current = (at + d + rows.length) % rows.length;
-    bump((n) => n + 1);
+    atRef.current = (at + delta + rows.length) % rows.length;
+    bump((tick) => tick + 1);
   };
 
   /** Cycle Where through the targets, either direction. */
-  const cycleWhere = (dir: 1 | -1) => setDraft((d) => {
-    const i = targets.findIndex((t) => t.id === d.projectId);
+  const cycleWhere = (dir: 1 | -1) => setDraft((draft) => {
+    const i = targets.findIndex((target) => target.id === draft.projectId);
     const next = targets[(Math.max(i, 0) + dir + targets.length) % targets.length];
-    return { ...d, projectId: next.id };
+    return { ...draft, projectId: next.id };
   });
 
-  useInput((ch, key) => {
-    if (isMouseInput(ch)) return;
+  useInput((char, key) => {
+    if (isMouseInput(char)) return;
     if (key.escape) { commit(); onClose(); return; }
     if (key.tab || key.downArrow) { move(key.shift ? -1 : 1); return; }
     if (key.upArrow) { move(-1); return; }
     // Enter on a text row is the TextInput's (onSubmit moves); Where has no
     // input, so it is taken here.
-    const r = rows[Math.min(atRef.current, rows.length - 1)];
-    if (r === 'where') {
+    const row = rows[Math.min(atRef.current, rows.length - 1)];
+    if (row === 'where') {
       if (key.return) { move(1); return; }
-      if (ch === ' ' || key.rightArrow) { cycleWhere(1); return; }
+      if (char === ' ' || key.rightArrow) { cycleWhere(1); return; }
       if (key.leftArrow) { cycleWhere(-1); return; }
     }
   }, { isActive });
@@ -137,26 +137,26 @@ export function SecretEditor({ mode, initial, targets, isActive = true, onSave, 
   // 15 = the 2-cell marker + "Description" (11, the widest label) + the
   // 2-cell gutter INSIDE the width — table.ts's rule, so the longest label
   // never sits flush against the value being typed.
-  const label = (text: string, k: string) => (
+  const label = (text: string, field: string) => (
     <Box width={15} flexShrink={0}>
-      <Text color={focused === k ? 'cyan' : undefined} dimColor={focused !== k} bold={focused === k}>
-        {focused === k ? '❯ ' : '  '}{text}
+      <Text color={focused === field ? 'cyan' : undefined} dimColor={focused !== field} bold={focused === field}>
+        {focused === field ? '❯ ' : '  '}{text}
       </Text>
     </Box>
   );
 
   /** The one live input, on whichever row holds focus (the CardEditor's). */
-  const input = (k: 'name' | 'description' | 'value', placeholder: string, mask?: string) =>
-    focused === k
-      ? <TextInput value={draft[k]} mask={mask}
-          onChange={(v) => { setError(undefined); setDraft((d) => ({ ...d, [k]: k === 'name' ? v.toUpperCase() : v })); }}
+  const input = (field: 'name' | 'description' | 'value', placeholder: string, mask?: string) =>
+    focused === field
+      ? <TextInput value={draft[field]} mask={mask}
+          onChange={(value) => { setError(undefined); setDraft((draft) => ({ ...draft, [field]: field === 'name' ? value.toUpperCase() : value })); }}
           onSubmit={() => move(1)} placeholder={placeholder} />
-      : draft[k]
-        ? <Text wrap="truncate">{mask ? mask.repeat(draft[k].length) : draft[k]}</Text>
+      : draft[field]
+        ? <Text wrap="truncate">{mask ? mask.repeat(draft[field].length) : draft[field]}</Text>
         : <Text dimColor>{placeholder}</Text>;
 
   const exists = storedRef.current !== null;
-  const whereLabel = targets.find((t) => t.id === draft.projectId)?.label ?? 'global — every project';
+  const whereLabel = targets.find((target) => target.id === draft.projectId)?.label ?? 'global — every project';
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>

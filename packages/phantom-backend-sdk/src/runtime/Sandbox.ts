@@ -31,8 +31,8 @@ export class Sandbox {
   /** Resolve a tool path. Relative paths are repo-relative; absolute paths are
    *  container-absolute. There is nothing to escape TO — the container's only
    *  mount is this session — so this is normalization, not a boundary. */
-  static resolvePath(p: string): string {
-    return path.posix.resolve('/workspace/repo', p);
+  static resolvePath(filePath: string): string {
+    return path.posix.resolve('/workspace/repo', filePath);
   }
 
   async run(argv: string[], opts: RunOpts = {}): Promise<RunResult> {
@@ -41,10 +41,10 @@ export class Sandbox {
     // nature — retry briefly rather than surfacing it to the agent.
     for (let attempt = 0; ; attempt++) {
       try { return await this.runOnce(argv, opts); }
-      catch (e) {
-        const msg = String((e as Error).message ?? e);
-        if (attempt >= 3 || !/broken pipe|OCI runtime|not running|is restarting/i.test(msg)) throw e;
-        await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
+      catch (error) {
+        const msg = String((error as Error).message ?? error);
+        if (attempt >= 3 || !/broken pipe|OCI runtime|not running|is restarting/i.test(msg)) throw error;
+        await new Promise((wake) => setTimeout(wake, 150 * (attempt + 1)));
       }
     }
   }
@@ -64,21 +64,21 @@ export class Sandbox {
     const out: Buffer[] = []; const errB: Buffer[] = [];
     let outLen = 0; let errLen = 0;
     const outSink = new PassThrough(); const errSink = new PassThrough();
-    outSink.on('data', (d: Buffer) => { if (outLen < max) { out.push(d); outLen += d.length; } });
-    errSink.on('data', (d: Buffer) => { if (errLen < max) { errB.push(d); errLen += d.length; } });
+    outSink.on('data', (chunk: Buffer) => { if (outLen < max) { out.push(chunk); outLen += chunk.length; } });
+    errSink.on('data', (chunk: Buffer) => { if (errLen < max) { errB.push(chunk); errLen += chunk.length; } });
     this.docker.modem.demuxStream(stream, outSink, errSink);
 
     if (opts.stdin !== undefined) { stream.write(opts.stdin); (stream as unknown as { end: () => void }).end(); }
 
     await new Promise<void>((resolveP, rejectP) => {
-      const t = opts.timeoutMs
+      const timer = opts.timeoutMs
         // The output collected so far rides on the error: a killed command's
         // last lines are what the agent needs to make its next call right.
         ? setTimeout(() => { stream.destroy(); rejectP(Object.assign(new Error('exec timeout'),
             { code: 'exec_timeout', stdout: Buffer.concat(out), stderr: Buffer.concat(errB) })); }, opts.timeoutMs)
         : null;
-      stream.on('end', () => { if (t) clearTimeout(t); resolveP(); });
-      stream.on('error', (e) => { if (t) clearTimeout(t); rejectP(e); });
+      stream.on('end', () => { if (timer) clearTimeout(timer); resolveP(); });
+      stream.on('error', (error) => { if (timer) clearTimeout(timer); rejectP(error); });
     });
     const info = await exec.inspect();
     return { stdout: Buffer.concat(out), stderr: Buffer.concat(errB), exitCode: info.ExitCode ?? 0 };
@@ -98,11 +98,11 @@ export class Sandbox {
     let done = false; let failed: Error | null = null;
     let wake: (() => void) | null = null;
     const outSink = new PassThrough(); const errSink = new PassThrough();
-    outSink.on('data', (d: Buffer) => { chunks.push({ stream: 'stdout', data: d }); wake?.(); });
-    errSink.on('data', (d: Buffer) => { chunks.push({ stream: 'stderr', data: d }); wake?.(); });
+    outSink.on('data', (chunk: Buffer) => { chunks.push({ stream: 'stdout', data: chunk }); wake?.(); });
+    errSink.on('data', (chunk: Buffer) => { chunks.push({ stream: 'stderr', data: chunk }); wake?.(); });
     this.docker.modem.demuxStream(stream, outSink, errSink);
     stream.on('end', () => { done = true; wake?.(); });
-    stream.on('error', (e) => { failed = e; done = true; wake?.(); });
+    stream.on('error', (error) => { failed = error; done = true; wake?.(); });
     const timer = opts.timeoutMs
       ? setTimeout(() => { failed = Object.assign(new Error('timeout'), { code: 'exec_timeout' }); stream.destroy(); }, opts.timeoutMs)
       : null;
@@ -111,11 +111,11 @@ export class Sandbox {
     try {
       for (;;) {
         while (chunks.length) {
-          const c = chunks.shift()!;
-          yield { seq: seq++, stream: c.stream, data: c.data.toString('utf8') };
+          const chunk = chunks.shift()!;
+          yield { seq: seq++, stream: chunk.stream, data: chunk.data.toString('utf8') };
         }
         if (done) break;
-        await new Promise<void>((r) => { wake = r; });
+        await new Promise<void>((resume) => { wake = resume; });
         wake = null;
       }
       if (failed) {
@@ -130,19 +130,19 @@ export class Sandbox {
     }
   }
 
-  async readFile(p: string, opts: { maxBytes?: number } = {}): Promise<{ content: Buffer; exitCode: number; stderr: string }> {
-    const abs = Sandbox.resolvePath(p);
-    const r = await this.run(['cat', abs], { maxBytes: opts.maxBytes });
-    return { content: r.stdout, exitCode: r.exitCode, stderr: r.stderr.toString('utf8') };
+  async readFile(filePath: string, opts: { maxBytes?: number } = {}): Promise<{ content: Buffer; exitCode: number; stderr: string }> {
+    const abs = Sandbox.resolvePath(filePath);
+    const ran = await this.run(['cat', abs], { maxBytes: opts.maxBytes });
+    return { content: ran.stdout, exitCode: ran.exitCode, stderr: ran.stderr.toString('utf8') };
   }
 
-  async writeFile(p: string, content: Buffer): Promise<void> {
-    const abs = Sandbox.resolvePath(p);
+  async writeFile(filePath: string, content: Buffer): Promise<void> {
+    const abs = Sandbox.resolvePath(filePath);
     const dir = path.posix.dirname(abs);
     await this.run(['mkdir', '-p', dir]);
     // `$1` is a positional parameter, not interpolation — the path never enters
     // the command text.
-    const r = await this.run(['sh', '-c', 'cat > "$1"', 'sh', abs], { stdin: content });
-    if (r.exitCode !== 0) throw new Error(`write failed: ${r.stderr.toString('utf8').slice(0, 200)}`);
+    const ran = await this.run(['sh', '-c', 'cat > "$1"', 'sh', abs], { stdin: content });
+    if (ran.exitCode !== 0) throw new Error(`write failed: ${ran.stderr.toString('utf8').slice(0, 200)}`);
   }
 }

@@ -29,8 +29,8 @@ export type UpdateEvent =
  *  is downloaded, then the unpack phase — the number never runs backwards
  *  within a phase, and the label says which phase it is. */
 export function pullLine(images: Record<string, PullProgress>): string {
-  const downloading = Object.values(images).some((p) => p.download < 100);
+  const downloading = Object.values(images).some((progress) => progress.download < 100);
   const parts = Object.entries(images)
-    .map(([img, p]) => `${img} ${downloading ? p.download : p.unpack}%`).join('  ');
+    .map(([img, progress]) => `${img} ${downloading ? progress.download : progress.unpack}%`).join('  ');
   return `${downloading ? 'Downloading' : 'Unpacking'} server images:  ${parts}`;
 }

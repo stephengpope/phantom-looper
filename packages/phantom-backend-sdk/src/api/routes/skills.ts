@@ -21,9 +21,9 @@ export function skillsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     type: 'object',
     properties: { [SESSION_HEADER]: { type: 'string', description: 'Session id (ULID). Required.' } },
   };
-  const handle = (reply: FastifyReply, e: unknown) => {
-    if (e instanceof ToolError) return reply.code(STATUS[e.code] ?? 400).send(err(e.code, e.message, e.retryable));
-    throw e;
+  const handle = (reply: FastifyReply, error: unknown) => {
+    if (error instanceof ToolError) return reply.code(STATUS[error.code] ?? 400).send(err(error.code, error.message, error.retryable));
+    throw error;
   };
 
   // List — live scan of the session's working tree, merged with the image's
@@ -38,7 +38,7 @@ export function skillsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     try {
       const { session, workspaceId } = await toolSession(ctx.sessions, req.headers);
       return ok(await listSkills(ctx, deps, session, workspaceId));
-    } catch (e) { return handle(reply, e); }
+    } catch (error) { return handle(reply, error); }
   });
 
   // Load — the whole SKILL.md plus the names of its bundled files in ONE
@@ -52,7 +52,7 @@ export function skillsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       try {
         const { session, workspaceId } = await toolSession(ctx.sessions, req.headers);
         return ok(await loadSkill(ctx, deps, session, workspaceId, req.params.name, req.query.file));
-      } catch (e) { return handle(reply, e); }
+      } catch (error) { return handle(reply, error); }
     });
 
   // Manage — every write, validated, through the container.
@@ -72,6 +72,6 @@ export function skillsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     try {
       const { session, workspaceId } = await toolSession(ctx.sessions, req.headers);
       return ok(await manageSkill(ctx, deps, session, workspaceId, req.body));
-    } catch (e) { return handle(reply, e); }
+    } catch (error) { return handle(reply, error); }
   });
 }

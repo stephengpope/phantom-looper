@@ -83,10 +83,10 @@ export function safeName(filename: string | undefined): string {
  *  nameless upload (a native photo has neither name nor mime). `document`
  *  stays unbiased: Telegram uses it for anything from the file picker. */
 export function classify(ext: string, mime: string | undefined, defaultKind?: MediaKind): MediaKind {
-  const m = String(mime || '').toLowerCase();
-  if (m.startsWith('image/') || ext in IMAGE_EXT_MIME || defaultKind === 'image') return 'image';
-  if (m.startsWith('video/') || VIDEO_EXTS.has(ext) || defaultKind === 'video') return 'video';
-  if (m.startsWith('audio/') || AUDIO_EXTS.has(ext) || defaultKind === 'audio') return 'audio';
+  const mimeType = String(mime || '').toLowerCase();
+  if (mimeType.startsWith('image/') || ext in IMAGE_EXT_MIME || defaultKind === 'image') return 'image';
+  if (mimeType.startsWith('video/') || VIDEO_EXTS.has(ext) || defaultKind === 'video') return 'video';
+  if (mimeType.startsWith('audio/') || AUDIO_EXTS.has(ext) || defaultKind === 'audio') return 'audio';
   return 'document';
 }
 
@@ -174,5 +174,5 @@ export function composeMessage(attachments: StoredAttachment[], userText: string
   const inlined = attachments
     .filter((a) => a.inlineText !== undefined)
     .map((a) => `[Content of ${a.displayName}]:\n${a.inlineText}`);
-  return [...notes, ...inlined, userText].filter((s) => s && s.trim()).join('\n\n');
+  return [...notes, ...inlined, userText].filter((text) => text && text.trim()).join('\n\n');
 }

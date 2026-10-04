@@ -32,7 +32,7 @@ export const HELPER_NAME = 'phantom-update-run';
 /** How long the sidecar gets to pick up the trigger (it polls every 3s). */
 const HELPER_WAIT_MS = 30_000;
 
-export type UpdateListener = (e: UpdateEvent) => void;
+export type UpdateListener = (event: UpdateEvent) => void;
 
 export interface UpdateDeps {
   images: Images;
@@ -54,14 +54,14 @@ interface Task {
 
 let current: Task | null = null;
 
-function emit(e: UpdateEvent) {
+function emit(event: UpdateEvent) {
   if (!current) return;
-  if (e.event === 'pulling') {
-    current.events = current.events.filter((ev) => !(ev.event === 'pulling' && ev.image === e.image));
+  if (event.event === 'pulling') {
+    current.events = current.events.filter((kept) => !(kept.event === 'pulling' && kept.image === event.image));
   }
-  current.events.push(e);
-  for (const fn of current.listeners) {
-    try { fn(e); } catch {}
+  current.events.push(event);
+  for (const listener of current.listeners) {
+    try { listener(event); } catch {}
   }
 }
 
@@ -70,8 +70,8 @@ function emit(e: UpdateEvent) {
  *  so far (replay). */
 export function subscribe(listener: UpdateListener): (() => void) | null {
   if (!current) return null;
-  for (const e of current.events) {
-    try { listener(e); } catch {}
+  for (const event of current.events) {
+    try { listener(event); } catch {}
   }
   current.listeners.add(listener);
   return () => { current?.listeners.delete(listener); };
@@ -84,7 +84,7 @@ export function isRunning(): boolean { return current !== null && !current.done;
  *  restart — say so; before it, the pull is being cut short — a failure. */
 export function shutdown(): void {
   if (!isRunning()) return;
-  const pulled = current!.events.some((e) => e.event === 'pulled');
+  const pulled = current!.events.some((event) => event.event === 'pulled');
   emit(pulled ? { event: 'restarting' } : { event: 'error', message: 'the server restarted before the images were pulled' });
   current!.done = true;
 }
@@ -94,9 +94,9 @@ export function startUpdate(deps: UpdateDeps, tag: string): boolean {
   if (current && !current.done) return false;
   current = { tag, events: [], done: false, listeners: new Set() };
   // Fire and forget — the task owns its lifecycle.
-  runUpdate(deps, tag).catch((e) => {
-    log.error({ err: errStr(e), tag }, 'update task failed');
-    emit({ event: 'error', message: errStr(e) });
+  runUpdate(deps, tag).catch((error) => {
+    log.error({ err: errStr(error), tag }, 'update task failed');
+    emit({ event: 'error', message: errStr(error) });
   }).finally(() => { if (current) current.done = true; });
   return true;
 }
@@ -108,8 +108,8 @@ async function runUpdate(deps: UpdateDeps, tag: string): Promise<void> {
 
   // ── 1. pull ───────────────────────────────────────────────────────────────
   const [apiResult, sessionResult] = await Promise.allSettled([
-    deps.images.pull(apiRef, (p) => emit({ event: 'pulling', image: 'api', ...p })),
-    deps.images.pull(sessionRef, (p) => emit({ event: 'pulling', image: 'session', ...p })),
+    deps.images.pull(apiRef, (progress) => emit({ event: 'pulling', image: 'api', ...progress })),
+    deps.images.pull(sessionRef, (progress) => emit({ event: 'pulling', image: 'session', ...progress })),
   ]);
   if (apiResult.status === 'rejected') {
     // A failed pull of an image already here (a re-run after a network blip)
@@ -168,7 +168,7 @@ async function waitForHelper(docker: Docker, previous: string | null): Promise<D
   while (Date.now() < deadline) {
     const id = await helperId(docker);
     if (id && id !== previous) return docker.getContainer(id);
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((wake) => setTimeout(wake, 1000));
   }
   return null;
 }
@@ -182,10 +182,10 @@ async function followLogs(container: Docker.Container, onLine: (line: string) =>
   let buf = '';
   out.on('data', (chunk: Buffer) => {
     buf += chunk.toString('utf8');
-    let nl: number;
-    while ((nl = buf.indexOf('\n')) !== -1) {
-      const line = buf.slice(0, nl).trimEnd();
-      buf = buf.slice(nl + 1);
+    let newlineAt: number;
+    while ((newlineAt = buf.indexOf('\n')) !== -1) {
+      const line = buf.slice(0, newlineAt).trimEnd();
+      buf = buf.slice(newlineAt + 1);
       if (line) onLine(line);
     }
   });

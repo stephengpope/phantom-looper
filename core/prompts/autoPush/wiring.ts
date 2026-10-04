@@ -5,7 +5,7 @@ import { RESOLVE_CONFLICT, COMMIT_MESSAGE } from './autoPush.js';
 /** A bullet, not an indent: fill trims a value's edges once, so leading spaces
  *  on the FIRST line never survive and a space-indented block comes out ragged. */
 const bullets = (lines: string[], empty: string) =>
-  (lines.length ? lines : [empty]).map((l) => `- ${l}`).join('\n');
+  (lines.length ? lines : [empty]).map((line) => `- ${line}`).join('\n');
 
 export const toCodingAgent = {
   /** The one message a stopped rebase sends. `arrived` is the log of what
@@ -28,7 +28,7 @@ export const toCodingAgent = {
     parts.push(landed
       ? `Your work has been pushed to ${base}${arrived.length ? ` along with ${arrived.length} new commit${arrived.length === 1 ? '' : 's'} that came in from ${base}` : ''}.`
       : `New changes from ${base} have been pulled into your working directory — ${arrived.length} commit${arrived.length === 1 ? '' : 's'} came in.`);
-    if (arrived.length) parts.push(arrived.map((l) => `- ${l}`).join('\n'));
+    if (arrived.length) parts.push(arrived.map((line) => `- ${line}`).join('\n'));
     if (files.length) parts.push(`Files changed: ${files.join(', ')}`);
     parts.push('Just letting you know, use as you see fit.');
     return parts.join('\n\n');
@@ -41,7 +41,7 @@ export const toCodingAgent = {
   syncConflict: (base: string, arrived: string[], files: string[]): string => {
     const parts: string[] = [];
     parts.push(`New changes from ${base} could not be pulled in — they conflict with your work.`);
-    if (arrived.length) parts.push(arrived.map((l) => `- ${l}`).join('\n'));
+    if (arrived.length) parts.push(arrived.map((line) => `- ${line}`).join('\n'));
     parts.push(`Conflicts: ${files.join(', ')}`);
     parts.push('Resolve the conflict.');
     return parts.join('\n\n');

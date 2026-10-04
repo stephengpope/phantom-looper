@@ -58,7 +58,7 @@ export class HttpApi {
     const { backend } = this;
     const app = this.#app;
     app.setNotFoundHandler((_req, reply) => { reply.code(401).send(); });
-    app.setErrorHandler((_e, _req, reply) => { reply.code(401).send(); });
+    app.setErrorHandler((_error, _req, reply) => { reply.code(401).send(); });
 
     // /db: CloudBeaver, proxied. Basic auth (phantom_admin + the API key),
     // not bearer — a browser cannot send bearer by typing a URL.
@@ -76,10 +76,10 @@ export class HttpApi {
       });
       // Unknown routes inside /api speak the envelope — the model may probe a tool name that does not exist.
       api.setNotFoundHandler((req, reply) => { reply.code(404).send(err('not_found', `no route ${req.method} ${req.url}`)); });
-      api.setErrorHandler((e: unknown, _req, reply) => {
-        const fe = e as { validation?: unknown; message?: string };
-        if (fe.validation) return reply.code(400).send(err('invalid_args', fe.message ?? 'invalid arguments'));
-        reply.code(500).send(err('internal', e instanceof Error ? e.message : String(e)));
+      api.setErrorHandler((error: unknown, _req, reply) => {
+        const fastifyError = error as { validation?: unknown; message?: string };
+        if (fastifyError.validation) return reply.code(400).send(err('invalid_args', fastifyError.message ?? 'invalid arguments'));
+        reply.code(500).send(err('internal', error instanceof Error ? error.message : String(error)));
       });
 
       settingsRoutes(api, backend);

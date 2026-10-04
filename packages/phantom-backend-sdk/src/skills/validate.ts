@@ -75,8 +75,8 @@ export function lintSkillMd(content: string): string[] {
     warnings.push('description is very short — say what the skill does AND when to use it.');
   }
   const body = splitFrontmatter(content)?.body ?? '';
-  for (const m of body.matchAll(/\]\(((?:references|templates|scripts|assets)\/[^)]+)\)/g)) {
-    warnings.push(`links to bundled file '${m[1]}' — make sure it exists (write_file adds it).`);
+  for (const match of body.matchAll(/\]\(((?:references|templates|scripts|assets)\/[^)]+)\)/g)) {
+    warnings.push(`links to bundled file '${match[1]}' — make sure it exists (write_file adds it).`);
   }
   return warnings;
 }

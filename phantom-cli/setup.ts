@@ -37,7 +37,7 @@ import { PROVIDERS } from 'phantom-client-sdk';
 /** The questions, as an interface: the wizard asks through it, tests script
  *  it. `undefined` is the person backing out (esc / ctrl-c). */
 export interface Asker {
-  text(message: string, validate?: (v: string) => string | undefined): Promise<string | undefined>;
+  text(message: string, validate?: (value: string) => string | undefined): Promise<string | undefined>;
   select(message: string, options: { value: string; label: string; hint?: string }[]): Promise<string | undefined>;
   password(message: string): Promise<string | undefined>;
   /** A combobox: typing filters `options`, and text that matches none of them
@@ -46,18 +46,18 @@ export interface Asker {
 }
 
 /** One question, one private terminal handle, closed after. */
-async function onTty<T>(fn: (input: ReadStream) => Promise<T | symbol>): Promise<T | undefined> {
-  let fd: number;
-  try { fd = openSync('/dev/tty', 'r+'); } catch { throw new Error('setup-backend needs a terminal'); }
-  const input = new ReadStream(fd);
+async function onTty<T>(body: (input: ReadStream) => Promise<T | symbol>): Promise<T | undefined> {
+  let fileDescriptor: number;
+  try { fileDescriptor = openSync('/dev/tty', 'r+'); } catch { throw new Error('setup-backend needs a terminal'); }
+  const input = new ReadStream(fileDescriptor);
   try {
-    const v = await fn(input);
-    return clack.isCancel(v) ? undefined : v as T;
+    const value = await body(input);
+    return clack.isCancel(value) ? undefined : value as T;
   } finally { input.destroy(); }
 }
 
 export const ttyAsker: Asker = {
-  text: (message, validate) => onTty((input) => clack.text({ message, input, validate: validate ? (v) => validate(v ?? '') : undefined })),
+  text: (message, validate) => onTty((input) => clack.text({ message, input, validate: validate ? (value) => validate(value ?? '') : undefined })),
   select: (message, options) => onTty((input) => clack.select({ message, input, options })),
   password: (message) => onTty((input) => clack.password({ message, input })),
   autocomplete: (message, options) => onTty((input) => clack.autocomplete<string>({
@@ -66,9 +66,9 @@ export const ttyAsker: Asker = {
     // typed, when it is not already a row, is the last row.
     options() {
       const typed = this.userInput.trim();
-      const q = typed.toLowerCase();
-      const rows = options.filter((o) => !q || o.value.toLowerCase().includes(q) || o.label.toLowerCase().includes(q));
-      if (typed && !options.some((o) => o.value === typed)) rows.push({ value: typed, label: `use "${typed}"` });
+      const typedLower = typed.toLowerCase();
+      const rows = options.filter((option) => !typedLower || option.value.toLowerCase().includes(typedLower) || option.label.toLowerCase().includes(typedLower));
+      if (typed && !options.some((option) => option.value === typed)) rows.push({ value: typed, label: `use "${typed}"` });
       return rows;
     },
     filter: () => true,   // the getter already filtered
@@ -83,23 +83,23 @@ interface Paired { url: string; key: string; ca?: string }
 async function catalogFor(settings: ReturnType<typeof makeSettings>, provider: string):
 Promise<{ id: string; name: string }[]> {
   try {
-    const r = await settings.api('GET', `/models?provider=${encodeURIComponent(provider)}`) as
+    const reply = await settings.api('GET', `/models?provider=${encodeURIComponent(provider)}`) as
       { models?: { id: string; name: string }[] };
-    return Array.isArray(r?.models) ? r.models : [];
-  } catch (e) {
-    clack.log.warn(`could not load the model list: ${(e as Error).message} — type a model id instead`);
+    return Array.isArray(reply?.models) ? reply.models : [];
+  } catch (entry) {
+    clack.log.warn(`could not load the model list: ${(entry as Error).message} — type a model id instead`);
     return [];
   }
 }
 
-function savePairing(p: Paired, configPath?: string): void {
-  if (p.ca) {
-    const path = caPathFor(new URL(p.url).hostname);
+function savePairing(paired: Paired, configPath?: string): void {
+  if (paired.ca) {
+    const path = caPathFor(new URL(paired.url).hostname);
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    writeFileSync(path, p.ca, { mode: 0o600 });
+    writeFileSync(path, paired.ca, { mode: 0o600 });
     chmodSync(path, 0o600);
   }
-  const bad = setLocal('server_url', p.url, configPath) ?? setLocal('server_key', p.key, configPath);
+  const bad = setLocal('server_url', paired.url, configPath) ?? setLocal('server_key', paired.key, configPath);
   if (bad) throw new Error(bad);
 }
 
@@ -133,8 +133,8 @@ export async function runSetup(deps: SetupDeps = {}): Promise<void> {
   };
   // Rig hooks ride the environment, never the UI.
   const env: Record<string, string> = {};
-  for (const k of ['PHANTOM_BACKEND_IMAGE', 'PHANTOM_BACKEND_FS_IMAGE', 'PHANTOM_BACKEND_DIR'] as const) {
-    if (process.env[k]) env[k] = process.env[k];
+  for (const name of ['PHANTOM_BACKEND_IMAGE', 'PHANTOM_BACKEND_FS_IMAGE', 'PHANTOM_BACKEND_DIR'] as const) {
+    if (process.env[name]) env[name] = process.env[name];
   }
   const flags = (process.env.PHANTOM_CLI_INSTALL_FLAGS ?? '').split(' ').filter(Boolean);
 
@@ -149,14 +149,14 @@ export async function runSetup(deps: SetupDeps = {}): Promise<void> {
   let target: Target | undefined;
   let paired: Paired | undefined;
   while (!paired) {
-    const answer = await ask.text('where does the server go? (user@host or user@host:port)', (v) => {
-      const t = parseTarget(v);
-      return 'error' in t ? t.error : undefined;
+    const answer = await ask.text('where does the server go? (user@host or user@host:port)', (value) => {
+      const target = parseTarget(value);
+      return 'error' in target ? target.error : undefined;
     });
     if (answer === undefined) { clack.cancel('nothing set up — run `phantom-cli setup-backend` any time'); return exit(0); }
-    const t = parseTarget(answer);
-    if ('error' in t) continue;   // validate already refused it; belt and braces
-    target = t;
+    const parsed = parseTarget(answer);
+    if ('error' in parsed) continue;   // validate already refused it; belt and braces
+    target = parsed;
     clack.log.step(`installing on ${target.user}@${target.host}${target.port ? `:${target.port}` : ''} — ssh has the terminal now: it may ask for the host fingerprint and your password, once`);
     try {
       await runInstall(target, { ...sshOpts, env, flags, tty: true });
@@ -164,8 +164,8 @@ export async function runSetup(deps: SetupDeps = {}): Promise<void> {
       paired = { url: `https://${facts.address}`, key: facts.key };
       if (facts.tls === 'internal') paired.ca = await readServerCa(target, sshOpts);
       savePairing(paired, deps.configPath);
-    } catch (e) {
-      clack.log.error((e as Error).message);
+    } catch (entry) {
+      clack.log.error((entry as Error).message);
       paired = undefined;
       continue;
     }
@@ -180,17 +180,17 @@ export async function runSetup(deps: SetupDeps = {}): Promise<void> {
   const spin = clack.spinner();
   spin.start(`checking ${paired.url} from this machine`);
   const deadline = Date.now() + waitMs;
-  let v = await verify(paired.url, paired.key, paired.ca);
-  while (!v.ok && Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 1_000));
-    v = await verify(paired.url, paired.key, paired.ca);
+  let value = await verify(paired.url, paired.key, paired.ca);
+  while (!value.ok && Date.now() < deadline) {
+    await new Promise((wake) => setTimeout(wake, 1_000));
+    value = await verify(paired.url, paired.key, paired.ca);
   }
-  spin.stop(v.ok ? `${paired.url} answers` : `${paired.url} does not answer yet`);
-  if (v.ok) {
-    clack.log.success(`paired with ${paired.url} (server ${v.version})`);
+  spin.stop(value.ok ? `${paired.url} answers` : `${paired.url} does not answer yet`);
+  if (value.ok) {
+    clack.log.success(`paired with ${paired.url} (server ${value.version})`);
   } else {
     clack.log.success(`pairing saved: ${paired.url}`);
-    clack.log.warn(`but it does not answer from this machine yet: ${v.reason}\nusually the cloud firewall — open ports 80 and 443 to the box, then run phantom-cli.`);
+    clack.log.warn(`but it does not answer from this machine yet: ${value.reason}\nusually the cloud firewall — open ports 80 and 443 to the box, then run phantom-cli.`);
     if (target) await closeSshMaster(target, sshOpts);
     return exit(0);
   }
@@ -205,19 +205,19 @@ export async function runSetup(deps: SetupDeps = {}): Promise<void> {
   };
 
   // 1. the provider — no default, no preselection.
-  const provider = await ask.select('which AI provider?', PROVIDERS.map((p) => ({
-    value: p as string, label: p as string,
-    hint: p === 'anthropic' ? 'API key or Claude subscription token'
-      : p === 'openai-codex' ? 'ChatGPT subscription — run `codex login` first'
-      : p === 'openai-compatible' ? 'Ollama, vLLM, OpenRouter — any OpenAI-shaped endpoint' : undefined,
+  const provider = await ask.select('which AI provider?', PROVIDERS.map((provider) => ({
+    value: provider as string, label: provider as string,
+    hint: provider === 'anthropic' ? 'API key or Claude subscription token'
+      : provider === 'openai-codex' ? 'ChatGPT subscription — run `codex login` first'
+      : provider === 'openai-compatible' ? 'Ollama, vLLM, OpenRouter — any OpenAI-shaped endpoint' : undefined,
   })));
   if (!provider) return bail();
 
   // 2. its endpoint, only where the provider IS an endpoint.
   let baseUrl: string | undefined;
   if (provider === 'openai-compatible') {
-    baseUrl = await ask.text('the endpoint (base URL)', (v) => {
-      try { new URL(v); return undefined; } catch { return 'a URL, like http://localhost:11434/v1'; }
+    baseUrl = await ask.text('the endpoint (base URL)', (value) => {
+      try { new URL(value); return undefined; } catch { return 'a URL, like http://localhost:11434/v1'; }
     });
     if (baseUrl === undefined) return bail();
   }
@@ -225,9 +225,9 @@ export async function runSetup(deps: SetupDeps = {}): Promise<void> {
   // 3. the model — the server's catalog, newest first, or any id typed.
   const models = await catalogFor(settings, provider);
   const model = models.length
-    ? await ask.autocomplete(`${provider} model — newest first`, models.map((m) => ({
-      value: m.id, label: m.name, hint: m.id === m.name ? undefined : m.id })))
-    : await ask.text(`${provider} model id`, (v) => (v.trim() ? undefined : 'a model id is needed'));
+    ? await ask.autocomplete(`${provider} model — newest first`, models.map((model) => ({
+      value: model.id, label: model.name, hint: model.id === model.name ? undefined : model.id })))
+    : await ask.text(`${provider} model id`, (value) => (value.trim() ? undefined : 'a model id is needed'));
   if (!model?.trim()) return bail();
 
   // 4. the key. A failed save is reported and asked again.
@@ -237,14 +237,14 @@ export async function runSetup(deps: SetupDeps = {}): Promise<void> {
     try {
       await settings.patch({ coding_provider: provider, coding_model: model.trim() });
       clack.log.success(`${provider} · ${model.trim()} — credentials from ~/.codex/auth.json`);
-    } catch (e) {
-      clack.log.error((e as Error).message);
+    } catch (entry) {
+      clack.log.error((entry as Error).message);
       return bail();
     }
   } else {
     // Which row holds this provider's key is the server's declaration: the
     // credential entry whose meta.provider names it (GET /settings).
-    const keyRow = Object.entries(await settings.all()).find(([, e]) => e.meta.provider === provider)?.[0];
+    const keyRow = Object.entries(await settings.all()).find(([, entry]) => entry.meta.provider === provider)?.[0];
     if (!keyRow) { clack.log.error(`the server declares no key row for ${provider}`); return bail(); }
     for (;;) {
       const key = await ask.password(`${provider} — paste the key`);
@@ -257,8 +257,8 @@ export async function runSetup(deps: SetupDeps = {}): Promise<void> {
         });
         clack.log.success(`${provider} · ${model.trim()} — key saved on the server`);
         break;
-      } catch (e) {
-        clack.log.error((e as Error).message);
+      } catch (entry) {
+        clack.log.error((entry as Error).message);
       }
     }
   }
@@ -274,8 +274,8 @@ export async function runSetup(deps: SetupDeps = {}): Promise<void> {
       const who = await settings.api('GET', '/github/whoami') as { login?: string };
       clack.log.success(`github token saved — authenticated as ${String(who?.login ?? 'unknown')}`);
       break;
-    } catch (e) {
-      clack.log.error(`${(e as Error).message} — paste it again`);
+    } catch (entry) {
+      clack.log.error(`${(entry as Error).message} — paste it again`);
     }
   }
   if (target) await closeSshMaster(target, sshOpts);

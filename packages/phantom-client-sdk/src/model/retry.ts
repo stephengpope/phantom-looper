@@ -24,7 +24,7 @@ export interface RetryPolicy {
 export const MODEL_RETRY: RetryPolicy = {
   waitsS: [2, 4, 8, 15, 30, 45, 60],
   budgetMs: 180_000,
-  retryable: (s) => s === 408 || s === 409 || s === 429 || s >= 500,
+  retryable: (status) => status === 408 || status === 409 || status === 429 || status >= 500,
 };
 /** The phantom-backend: local or one hop away — if it cannot answer in
  *  ~15s, waiting longer helps nobody. 409 means "locked" or "conflict": a
@@ -32,24 +32,24 @@ export const MODEL_RETRY: RetryPolicy = {
 export const BACKEND_RETRY: RetryPolicy = {
   waitsS: [1, 2, 4, 8],
   budgetMs: 15_000,
-  retryable: (s) => s === 408 || s === 429 || s >= 500,
+  retryable: (status) => status === 408 || status === 429 || status >= 500,
 };
 
 /** retry-after, when the server sent one: used if it asks for MORE than our
  *  scheduled wait, capped at 60s — the budget check still has the last word. */
-function serverDelayMs(r: Response, scheduledMs: number): number {
-  const h = r.headers.get('retry-after-ms') ?? r.headers.get('retry-after');
-  if (!h) return scheduledMs;
-  const n = parseFloat(h);
-  const ms = r.headers.get('retry-after-ms') ? n
-    : Number.isNaN(n) ? Date.parse(h) - Date.now() : n * 1000;
-  if (!Number.isFinite(ms) || ms <= 0) return scheduledMs;
-  return Math.min(60_000, Math.max(scheduledMs, ms));
+function serverDelayMs(response: Response, scheduledMs: number): number {
+  const retryAfter = response.headers.get('retry-after-ms') ?? response.headers.get('retry-after');
+  if (!retryAfter) return scheduledMs;
+  const parsed = parseFloat(retryAfter);
+  const delayMs = response.headers.get('retry-after-ms') ? parsed
+    : Number.isNaN(parsed) ? Date.parse(retryAfter) - Date.now() : parsed * 1000;
+  if (!Number.isFinite(delayMs) || delayMs <= 0) return scheduledMs;
+  return Math.min(60_000, Math.max(scheduledMs, delayMs));
 }
 
-const wait = (ms: number, signal?: AbortSignal | null) => new Promise<void>((res, rej) => {
-  const onAbort = () => { clearTimeout(t); rej(signal?.reason instanceof Error ? signal.reason : new DOMException('aborted', 'AbortError')); };
-  const t = setTimeout(() => { signal?.removeEventListener('abort', onAbort); res(); }, ms);
+const wait = (delayMs: number, signal?: AbortSignal | null) => new Promise<void>((res, rej) => {
+  const onAbort = () => { clearTimeout(timer); rej(signal?.reason instanceof Error ? signal.reason : new DOMException('aborted', 'AbortError')); };
+  const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); res(); }, delayMs);
   if (signal?.aborted) { onAbort(); return; }
   signal?.addEventListener('abort', onAbort, { once: true });
 });
@@ -57,35 +57,35 @@ const wait = (ms: number, signal?: AbortSignal | null) => new Promise<void>((res
 /** `who` names the other end in the notices: 'model' or 'server'. */
 export function withRetry(inner: typeof fetch | undefined, notice: (text: string) => void,
   who: 'model' | 'server', policy: RetryPolicy = MODEL_RETRY): typeof fetch {
-  const f = inner ?? fetch;
+  const fetchWith = inner ?? fetch;
   const { waitsS, budgetMs, retryable } = policy;
   return async (input, init) => {
     const replayable = init?.body == null || typeof init.body === 'string';
     let waited = 0;
     for (let attempt = 0; ; attempt++) {
-      let r: Response | undefined;
+      let response: Response | undefined;
       let netErr: unknown;
       try {
-        r = await f(input, init);
-      } catch (e) {
+        response = await fetchWith(input, init);
+      } catch (error) {
         // Only a genuine network failure retries — fetch rejects those as
         // TypeError ('fetch failed'). Aborts and everything else rethrow.
-        if (!(e instanceof TypeError)) throw e;
-        netErr = e;
+        if (!(error instanceof TypeError)) throw error;
+        netErr = error;
       }
-      if (r && !retryable(r.status)) return r;
+      if (response && !retryable(response.status)) return response;
 
       const what = netErr ? `${who} unreachable (${(netErr as Error).message})`
-        : r!.status === 429 ? `${who} answered 429 (rate limited)`
-        : r!.status === 529 ? `${who} answered 529 (overloaded)`
-        : `${who} answered ${r!.status}`;
+        : response!.status === 429 ? `${who} answered 429 (rate limited)`
+        : response!.status === 529 ? `${who} answered 529 (overloaded)`
+        : `${who} answered ${response!.status}`;
       const scheduled = waitsS[attempt];
       const delayMs = scheduled === undefined ? undefined
-        : r ? serverDelayMs(r, scheduled * 1000) : scheduled * 1000;
+        : response ? serverDelayMs(response, scheduled * 1000) : scheduled * 1000;
       if (!replayable || delayMs === undefined || waited + delayMs > budgetMs) {
         notice(`${what} — giving up after ${attempt} ${attempt === 1 ? 'retry' : 'retries'}`);
         if (netErr) throw netErr as Error;
-        return r!;
+        return response!;
       }
       notice(`${what} — retry ${attempt + 1}/${waitsS.length} in ${Math.round(delayMs / 1000)}s`);
       waited += delayMs;

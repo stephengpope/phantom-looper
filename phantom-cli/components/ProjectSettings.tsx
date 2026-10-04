@@ -72,8 +72,8 @@ type View =
 const setHere = (source: string) => source === 'project';
 const WHENCE = (source: string) => setHere(source) ? 'changed here' : 'same as everywhere';
 // A secret's value column: it is never shown back, so say whose it is.
-const shownValue = (s: Effective) =>
-  s.secret ? (setHere(s.source) ? 'its own' : s.source === 'global' ? 'the shared one from /keys' : 'none set') : human(s.value, s.meta);
+const shownValue = (effective: Effective) =>
+  effective.secret ? (setHere(effective.source) ? 'its own' : effective.source === 'global' ? 'the shared one from /keys' : 'none set') : human(effective.value, effective.meta);
 
 export function ProjectSettings({ api, project, onClose, onChanged }: {
   api: Api;
@@ -109,9 +109,9 @@ export function ProjectSettings({ api, project, onClose, onChanged }: {
   // server that cannot answer leaves the row free-text (as /settings).
   const loadModels = useCallback(async (provider: string): Promise<CatalogModel[]> => {
     try {
-      const r = await api('GET', `/models?provider=${encodeURIComponent(provider)}`) as { models?: CatalogModel[] };
-      return Array.isArray(r?.models) ? r.models : [];
-    } catch (e) { setNotice(`could not load the model list: ${(e as Error).message}`); return []; }
+      const reply = await api('GET', `/models?provider=${encodeURIComponent(provider)}`) as { models?: CatalogModel[] };
+      return Array.isArray(reply?.models) ? reply.models : [];
+    } catch (entry) { setNotice(`could not load the model list: ${(entry as Error).message}`); return []; }
   }, [api]);
 
   // One write path for everything on the list, so the reload and the error
@@ -158,24 +158,24 @@ export function ProjectSettings({ api, project, onClose, onChanged }: {
       <ValueInput
         spec={view.spec}
         onCancel={() => setView({ at: 'list' })}
-        onSubmit={(v) => {
+        onSubmit={(value) => {
           if (view.kind === 'setting') {
             // An empty secret = changed my mind, not "store an empty token".
-            if (view.spec.secret && v === null) { setView({ at: 'list' }); return; }
-            const patch: Record<string, ConfigValue> = { [view.key]: v as ConfigValue };
+            if (view.spec.secret && value === null) { setView({ at: 'list' }); return; }
+            const patch: Record<string, ConfigValue> = { [view.key]: value as ConfigValue };
             // A provider change invalidates its model (as /settings). A model
             // or endpoint carries the provider it was picked under, so the
             // project owns the pair (the server's provider-first rule).
             const modelKey = MODEL_FOR_PROVIDER[view.key];
-            if (modelKey && v !== view.spec.current) patch[modelKey] = null;
+            if (modelKey && value !== view.spec.current) patch[modelKey] = null;
             const provider = eff?.coding_provider.value;
-            if ((MODEL_ROWS[view.key] || view.key === 'coding_base_url') && v !== null && typeof provider === 'string') {
+            if ((MODEL_ROWS[view.key] || view.key === 'coding_base_url') && value !== null && typeof provider === 'string') {
               patch.coding_provider = provider;
             }
             void write(() => settings.patch(patch, { project: project.id }));
             return;
           }
-          void write(() => api('PATCH', `/projects/${project.id}`, { [view.key]: v }));
+          void write(() => api('PATCH', `/projects/${project.id}`, { [view.key]: value }));
         }}
       />
     );
@@ -189,20 +189,20 @@ export function ProjectSettings({ api, project, onClose, onChanged }: {
   // The overridable settings in the server's order, under the server's group
   // headings — the same fold /settings uses, so the two screens agree on
   // where a setting lives and nothing here names or orders a key.
-  const values = Object.fromEntries(Object.entries(eff).map(([k, e]) => [k, e.value]));
-  const overridable = Object.keys(eff).filter((k) => eff[k].overridable && !HIDDEN[k]?.(values));
-  const settingRows = headedChoices(groupBlocks(overridable, (k) => eff[k].meta), (k) => {
-    const s = eff[k];
+  const values = Object.fromEntries(Object.entries(eff).map(([key, entry]) => [key, entry.value]));
+  const overridable = Object.keys(eff).filter((key) => eff[key].overridable && !HIDDEN[key]?.(values));
+  const settingRows = headedChoices(groupBlocks(overridable, (key) => eff[key].meta), (key) => {
+    const effective = eff[key];
     return {
-      value: k,
-      label: labelFor(k, s.meta),
+      value: key,
+      label: labelFor(key, effective.meta),
       columns: [
-        { text: fit(shownValue(s), 30), width: 32 },
-        { text: WHENCE(s.source) },
+        { text: fit(shownValue(effective), 30), width: 32 },
+        { text: WHENCE(effective.source) },
       ],
       // The description alone; the columns already say the value and
       // whether this project differs.
-      hint: s.description,
+      hint: effective.description,
     };
   });
 
@@ -235,52 +235,52 @@ export function ProjectSettings({ api, project, onClose, onChanged }: {
         initial={last}
         choices={choices}
         onCancel={onClose}
-        onSelect={(k) => {
-          setLast(k);
-          if (k === 'delete') { setView({ at: 'confirm' }); return; }
-          if (k === 'display_name' || k === 'base_branch' || k === 'branch_prefix') {
-            const current = k === 'display_name' ? row.displayName ?? row.name
-              : k === 'base_branch' ? row.baseBranch : row.branchPrefix;
-            setView({ at: 'edit', kind: 'field', key: k, spec: {
-              title: k === 'display_name' ? 'name' : k.replace(/_/g, ' '), type: 'string', current,
-              note: k === 'display_name' ? 'empty goes back to the GitHub name' : undefined,
+        onSelect={(key) => {
+          setLast(key);
+          if (key === 'delete') { setView({ at: 'confirm' }); return; }
+          if (key === 'display_name' || key === 'base_branch' || key === 'branch_prefix') {
+            const current = key === 'display_name' ? row.displayName ?? row.name
+              : key === 'base_branch' ? row.baseBranch : row.branchPrefix;
+            setView({ at: 'edit', kind: 'field', key, spec: {
+              title: key === 'display_name' ? 'name' : key.replace(/_/g, ' '), type: 'string', current,
+              note: key === 'display_name' ? 'empty goes back to the GitHub name' : undefined,
             } });
             return;
           }
-          const s = eff[k];
-          if (!s) return;
+          const effective = eff[key];
+          if (!effective) return;
           const spec: EditSpec = {
-            title: `${labelFor(k, s.meta)} · ${label} only`,
-            choices: s.meta.choices,
-            choiceLabels: s.meta.choiceLabels,
-            suggestions: s.meta.suggestions,
-            type: s.meta.type,
-            secret: s.secret,
-            current: s.secret ? '' : s.value,
-            note: s.secret ? 'stored encrypted, never shown back · empty cancels'
-              : s.meta.unit === 'ms'
-                ? `in milliseconds · now ${human(s.value, s.meta)}, ${WHENCE(s.source)}`
-                : `changes this project only · now ${human(s.value, s.meta)}, ${WHENCE(s.source)}`,
+            title: `${labelFor(key, effective.meta)} · ${label} only`,
+            choices: effective.meta.choices,
+            choiceLabels: effective.meta.choiceLabels,
+            suggestions: effective.meta.suggestions,
+            type: effective.meta.type,
+            secret: effective.secret,
+            current: effective.secret ? '' : effective.value,
+            note: effective.secret ? 'stored encrypted, never shown back · empty cancels'
+              : effective.meta.unit === 'ms'
+                ? `in milliseconds · now ${human(effective.value, effective.meta)}, ${WHENCE(effective.source)}`
+                : `changes this project only · now ${human(effective.value, effective.meta)}, ${WHENCE(effective.source)}`,
           };
-          const provider = providerForModelRow(k, values);
+          const provider = providerForModelRow(key, values);
           void (async () => {
             const models = provider ? await loadModels(provider) : [];
-            setView({ at: 'edit', kind: 'setting', key: k, spec: buildModelSpec(k, spec, values, models, eff) });
+            setView({ at: 'edit', kind: 'setting', key, spec: buildModelSpec(key, spec, values, models, eff) });
           })();
         }}
-        onKey={(ch, k) => {
+        onKey={(char, key) => {
           // `d` only means something for a row this project actually sets —
           // on an inherited row there is nothing to remove, and sending null
           // anyway would look like it did something.
-          if (ch !== 'd' || !k) return;
-          if (k === 'display_name') {
+          if (char !== 'd' || !key) return;
+          if (key === 'display_name') {
             if ((row.displayName ?? null) !== null) void write(() => api('PATCH', `/projects/${project.id}`, { display_name: '' }));
             return;
           }
-          const s = eff[k];
-          if (!s?.overridable) return;
-          if (!setHere(s.source)) { setNotice(`"${labelFor(k, s.meta)}" is not set here — it already uses the shared value`); return; }
-          void write(() => settings.patch({ [k]: null }, { project: project.id }));
+          const effective = eff[key];
+          if (!effective?.overridable) return;
+          if (!setHere(effective.source)) { setNotice(`"${labelFor(key, effective.meta)}" is not set here — it already uses the shared value`); return; }
+          void write(() => settings.patch({ [key]: null }, { project: project.id }));
         }}
       />
     </Screen>

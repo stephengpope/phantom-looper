@@ -114,8 +114,8 @@ export interface LoadedSession {
  *  clock, and a turn that outruns it keeps streaming — so observed activity
  *  (parts arriving, no turn-end yet) counts too. THE one answer: the toolbar
  *  spinner, the esc-stop and the send guard all read this. */
-export const activeHold = (e: LoadedSession | undefined | null): LoadedSession['held'] =>
-  e?.held && (e.held.expiresAt > Date.now() || e.remoteBusy) ? e.held : null;
+export const activeHold = (entry: LoadedSession | undefined | null): LoadedSession['held'] =>
+  entry?.held && (entry.held.expiresAt > Date.now() || entry.remoteBusy) ? entry.held : null;
 
 export interface NewSession {
   id: string; branch: string; projectId: string;
@@ -145,20 +145,20 @@ export class SessionStore {
   /** Fires after every turn settles (answered, failed or interrupted). The
    *  window's task-count refresh hangs off it. Best effort: never throws
    *  into a turn. */
-  constructor(private onTurnEnd?: (e: LoadedSession) => void) {}
+  constructor(private onTurnEnd?: (entry: LoadedSession) => void) {}
 
-  subscribe(fn: () => void): () => void {
-    this.listeners.add(fn);
-    return () => { this.listeners.delete(fn); };
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
   }
 
-  private notify(): void { for (const l of [...this.listeners]) l(); }
+  private notify(): void { for (const listener of [...this.listeners]) listener(); }
 
   get(id: string): LoadedSession | undefined {
-    return this.entries.find((e) => e.id === id);
+    return this.entries.find((entry) => entry.id === id);
   }
 
-  has(id: string): boolean { return this.entries.some((e) => e.id === id); }
+  has(id: string): boolean { return this.entries.some((entry) => entry.id === id); }
 
   active(): LoadedSession | undefined { return this.get(this.activeId); }
 
@@ -166,33 +166,33 @@ export class SessionStore {
    *  sessions float to the top by recency among themselves, then the rest. */
   list(): LoadedSession[] {
     return [...this.entries].sort((a, b) => {
-      const ap = a.pinned && a.lastMessageAt > 0;
-      const bp = b.pinned && b.lastMessageAt > 0;
-      if (ap !== bp) return bp ? 1 : -1;
+      const pinnedA = a.pinned && a.lastMessageAt > 0;
+      const pinnedB = b.pinned && b.lastMessageAt > 0;
+      if (pinnedA !== pinnedB) return pinnedB ? 1 : -1;
       return (b.lastMessageAt - a.lastMessageAt) || (b.addedAt - a.addedAt);
     });
   }
 
   /** Add and make active. Adding one you already have just activates it —
    *  /resume on a session that is already open must not open it twice. */
-  add(s: NewSession): LoadedSession {
-    const existing = this.get(s.id);
+  add(fresh: NewSession): LoadedSession {
+    const existing = this.get(fresh.id);
     if (existing) { this.activate(existing.id); return existing; }
     const entry: LoadedSession = {
-      id: s.id, branch: s.branch, projectId: s.projectId, name: s.name ?? null, card: s.card,
-      agent: s.agent, summary: s.summary,
+      id: fresh.id, branch: fresh.branch, projectId: fresh.projectId, name: fresh.name ?? null, card: fresh.card,
+      agent: fresh.agent, summary: fresh.summary,
       get busy() { return this.agent.busy; },
       get history() { return this.agent.session.messages; },
       turnOpen: false,
-      done: [...(s.done ?? [])],
-      planMode: s.planMode ?? false,
-      pinned: s.pinned ?? false,
-      syncStamp: s.syncStamp ?? null,
+      done: [...(fresh.done ?? [])],
+      planMode: fresh.planMode ?? false,
+      pinned: fresh.pinned ?? false,
+      syncStamp: fresh.syncStamp ?? null,
       live: [], turn: [],
       remoteBusy: false, held: null, startedAt: 0, tokens: NO_TOKENS,
-      usage: { ...s.agent.session.usage }, caption: null, sending: null,
-      unseen: false, ask: null, lastMessageAt: s.agent.session.messages.length ? Date.now() : 0, addedAt: ++this.seq,
-      workState: null, draft: s.draft ?? '',
+      usage: { ...fresh.agent.session.usage }, caption: null, sending: null,
+      unseen: false, ask: null, lastMessageAt: fresh.agent.session.messages.length ? Date.now() : 0, addedAt: ++this.seq,
+      workState: null, draft: fresh.draft ?? '',
       unwire: () => undefined,
     };
     entry.unwire = this.wire(entry);
@@ -203,28 +203,28 @@ export class SessionStore {
   }
 
   /** What the agent says, folded into the entry it was wired for. */
-  private wire(e: LoadedSession): () => void {
-    const a = e.agent;
+  private wire(entry: LoadedSession): () => void {
+    const a = entry.agent;
     // Deltas arrive many times a second: buffered, flushed every FLUSH_MS;
     // any non-delta part flushes at once so ordering holds.
     let buf: StreamPart[] = [];
     let timer: ReturnType<typeof setTimeout> | null = null;
     const flush = () => {
       if (timer) { clearTimeout(timer); timer = null; }
-      if (buf.length) { const b = buf; buf = []; this.fold(e, b); }
+      if (buf.length) { const b = buf; buf = []; this.fold(entry, b); }
     };
     const offs = [
       a.on('turn-start', ({ texts, model }) => {
-        e.sending = null;
-        e.startedAt = Date.now();
-        e.tokens = NO_TOKENS;
-        e.caption = null;
-        e.lastMessageAt = Date.now();
-        this.userParts(e, texts);
+        entry.sending = null;
+        entry.startedAt = Date.now();
+        entry.tokens = NO_TOKENS;
+        entry.caption = null;
+        entry.lastMessageAt = Date.now();
+        this.userParts(entry, texts);
         const line: ModelLine = { provider: model.provider, model: model.model, reasoning: model.reasoning ?? '' };
-        if (line.provider !== e.summary.provider || line.model !== e.summary.model) {
-          e.summary = line;
-          e.done = [...e.done, { kind: 'note', id: nextId('note'), text: `model → ${line.provider}/${line.model}` }];
+        if (line.provider !== entry.summary.provider || line.model !== entry.summary.model) {
+          entry.summary = line;
+          entry.done = [...entry.done, { kind: 'note', id: nextId('note'), text: `model → ${line.provider}/${line.model}` }];
         }
         this.notify();
       }),
@@ -237,17 +237,17 @@ export class SessionStore {
         if (isDelta) { if (!timer) timer = setTimeout(flush, FLUSH_MS); }
         else flush();
       }),
-      a.on('user-message', ({ texts }) => { flush(); this.userParts(e, texts); this.notify(); }),
-      a.on('step', ({ usage }) => { e.usage = { ...usage }; }),
+      a.on('user-message', ({ texts }) => { flush(); this.userParts(entry, texts); this.notify(); }),
+      a.on('step', ({ usage }) => { entry.usage = { ...usage }; }),
       a.on('reloaded', ({ messages }) => {
         // Another writer moved the record; the agent re-read it. The pane
         // shows the conversation as it stands now.
         flush();
-        this.repaint(e, messages);
+        this.repaint(entry, messages);
       }),
       a.on('turn-end', () => {
         flush();
-        this.turnSettled(e);
+        this.turnSettled(entry);
       }),
     ];
     return () => { flush(); for (const off of offs) off(); };
@@ -255,73 +255,73 @@ export class SessionStore {
 
   /** The agent's required handlers, for the window to hand `CodingAgent`
    *  when it opens a session. Errors reach the pane exactly once, here. */
-  handlersFor(id: string): { onError(e: PhantomError): void; onNotice(n: { type: string; text: string }): void } {
+  handlersFor(id: string): { onError(error: PhantomError): void; onNotice(notice: { type: string; text: string }): void } {
     return {
       onError: (err) => {
-        const e = this.get(id);
-        if (!e) return;
+        const entry = this.get(id);
+        if (!entry) return;
         if (err.code === 'session_locked') {
           // Refused before anything ran: the session goes idle again, the
           // words go back into the box, and the note says why.
-          const text = e.sending;
-          e.sending = null;
-          e.turnOpen = false;
-          e.startedAt = 0;
+          const text = entry.sending;
+          entry.sending = null;
+          entry.turnOpen = false;
+          entry.startedAt = 0;
           this.note(id, 'not sent — session in use elsewhere');
           if (text) this.onRefused?.(id, text);
           setTimeout(() => this.notify(), 0);   // the agent lets go a tick after it told us
           return;
         }
-        e.turn = [...e.turn, { kind: 'error', id: nextId('err'), message: err.message }];
-        if (e.id === this.activeId) this.notify();
+        entry.turn = [...entry.turn, { kind: 'error', id: nextId('err'), message: err.message }];
+        if (entry.id === this.activeId) this.notify();
         // A turn that failed sends no turn-end: settle it once the agent has
         // let go (it tells us before its own promise settles).
-        setTimeout(() => { if (e.turnOpen && !e.agent.busy) this.turnSettled(e); }, 0);
+        setTimeout(() => { if (entry.turnOpen && !entry.agent.busy) this.turnSettled(entry); }, 0);
       },
-      onNotice: (n) => {
-        const e = this.get(id);
-        if (!e) return;
-        if (n.type === 'retry') { e.caption = n.text; if (e.id === this.activeId) this.notify(); return; }
-        this.note(id, n.text);
+      onNotice: (notice) => {
+        const entry = this.get(id);
+        if (!entry) return;
+        if (notice.type === 'retry') { entry.caption = notice.text; if (entry.id === this.activeId) this.notify(); return; }
+        this.note(id, notice.text);
       },
     };
   }
 
   /** The user's words, drawn where they were sent. */
-  private userParts(e: LoadedSession, texts: string[]): void {
-    for (const t of texts) if (t.trim()) e.done = [...e.done, { kind: 'user', id: nextId('user'), text: t }];
+  private userParts(entry: LoadedSession, texts: string[]): void {
+    for (const text of texts) if (text.trim()) entry.done = [...entry.done, { kind: 'user', id: nextId('user'), text }];
   }
 
   /** The turn is over, however it ended: the live tail closes, the elapsed
    *  total stays as a line, the totals take the record's sums. */
-  private turnSettled(e: LoadedSession): void {
-    if (!e.turnOpen) return;
-    e.turnOpen = false;
-    const rest = finalize(e.turn);
-    e.turn = [];
-    if (e.startedAt) {
+  private turnSettled(entry: LoadedSession): void {
+    if (!entry.turnOpen) return;
+    entry.turnOpen = false;
+    const rest = finalize(entry.turn);
+    entry.turn = [];
+    if (entry.startedAt) {
       const endedAt = Date.now();
-      rest.push({ kind: 'worked', id: nextId('worked'), ms: endedAt - e.startedAt, at: endedAt });
+      rest.push({ kind: 'worked', id: nextId('worked'), ms: endedAt - entry.startedAt, at: endedAt });
     }
-    e.done = [...e.done, ...rest];
-    e.live = [];
-    e.caption = null;
-    e.sending = null;
-    e.usage = { ...e.agent.session.usage };
+    entry.done = [...entry.done, ...rest];
+    entry.live = [];
+    entry.caption = null;
+    entry.sending = null;
+    entry.usage = { ...entry.agent.session.usage };
     // An error counts as something to come back to, same as an answer.
-    if (e.id !== this.activeId) e.unseen = true;
+    if (entry.id !== this.activeId) entry.unseen = true;
     this.notify();
-    try { this.onTurnEnd?.(e); }
-    catch (err) { this.note(e.id, `after the turn: ${(err as Error).message}`); }
+    try { this.onTurnEnd?.(entry); }
+    catch (err) { this.note(entry.id, `after the turn: ${(err as Error).message}`); }
   }
 
   /** Put an agent's question on the session it is about. One at a time per
    *  session — an agent awaits its answer, so a second cannot arrive while
    *  the first stands. */
-  setAsk(id: string, d: Dialog): void {
-    const e = this.get(id);
-    if (!e) return;
-    e.ask = d;
+  setAsk(id: string, dialog: Dialog): void {
+    const entry = this.get(id);
+    if (!entry) return;
+    entry.ask = dialog;
     this.notify();
   }
 
@@ -329,20 +329,20 @@ export class SessionStore {
    *  esc's false, `undefined` (or false) when its turn stopped. Cleared
    *  BEFORE the callback fires, as the window's dismissDialog does. */
   answerAsk = (id: string, result?: unknown): void => {
-    const e = this.get(id);
-    if (!e?.ask) return;
-    const prev = e.ask;
-    e.ask = null;
+    const entry = this.get(id);
+    if (!entry?.ask) return;
+    const prev = entry.ask;
+    entry.ask = null;
     prev.onDismiss(result);
     this.notify();
   };
 
   /** Switching to a session is how you read it, so its mark clears here. */
   activate(id: string): boolean {
-    const e = this.get(id);
-    if (!e || this.activeId === id) return false;
+    const entry = this.get(id);
+    if (!entry || this.activeId === id) return false;
     this.activeId = id;
-    e.unseen = false;
+    entry.unseen = false;
     this.notify();
     return true;
   }
@@ -355,11 +355,11 @@ export class SessionStore {
    *  Refused while a turn is running here: stop the turn first (esc), then
    *  drop. */
   close(id: string): boolean {
-    const e = this.get(id);
-    if (!e || e.agent.busy) return false;
-    e.unwire();
-    void e.agent.close();
-    this.entries = this.entries.filter((x) => x.id !== id);
+    const entry = this.get(id);
+    if (!entry || entry.agent.busy) return false;
+    entry.unwire();
+    void entry.agent.close();
+    this.entries = this.entries.filter((entry) => entry.id !== id);
     // Dropping the one on screen leaves NOTHING on screen, deliberately: what
     // comes next is the App's call through switchTo (the one path that puts a
     // session in the pane).
@@ -371,9 +371,9 @@ export class SessionStore {
   /** The window's copy of the server name moves with /rename and with the
    *  staleness GET each landing makes. */
   setName(id: string, name: string | null): void {
-    const e = this.get(id);
-    if (!e || e.name === name) return;
-    e.name = name;
+    const entry = this.get(id);
+    if (!entry || entry.name === name) return;
+    entry.name = name;
     this.notify();
   }
 
@@ -382,24 +382,24 @@ export class SessionStore {
   next(dir: 1 | -1 = 1): LoadedSession | undefined {
     const order = this.list();
     if (order.length < 2) return undefined;
-    const at = order.findIndex((e) => e.id === this.activeId);
-    const n = order.length;
+    const at = order.findIndex((entry) => entry.id === this.activeId);
+    const count = order.length;
     let idx = at < 0 ? 0 : at;
-    for (let i = 0; i < n - 1; i++) {
-      idx = (idx + dir + n) % n;
+    for (let i = 0; i < count - 1; i++) {
+      idx = (idx + dir + count) % count;
       if (order[idx].lastMessageAt > 0 || order[idx].pinned) return order[idx];
     }
     return undefined;
   }
 
   setStamp(id: string, stamp: string | null): void {
-    const e = this.get(id);
-    if (e) e.syncStamp = stamp;
+    const entry = this.get(id);
+    if (entry) entry.syncStamp = stamp;
   }
 
   setWorkState(id: string, workState: LoadedSession['workState']): void {
-    const e = this.get(id);
-    if (e && e.workState !== workState) { e.workState = workState; this.notify(); }
+    const entry = this.get(id);
+    if (entry && entry.workState !== workState) { entry.workState = workState; this.notify(); }
   }
 
   /** Another writer's record landed: the SCREEN takes the conversation as it
@@ -407,27 +407,27 @@ export class SessionStore {
    *  whole over the feed is richer than a replay). The agent reads the
    *  record itself at its next turn start. */
   reseat(id: string, parts: Part[] | null, stamp: string | null, usage?: TokenTotals): void {
-    const e = this.get(id);
-    if (!e) return;
+    const entry = this.get(id);
+    if (!entry) return;
     if (parts) {
-      e.done = [...parts];
-      e.live = [];
-      e.turn = [];
+      entry.done = [...parts];
+      entry.live = [];
+      entry.turn = [];
     }
-    e.syncStamp = stamp;
-    if (usage) e.usage = usage;
+    entry.syncStamp = stamp;
+    if (usage) entry.usage = usage;
     this.notify();
   }
 
   /** The conversation as the agent now holds it, drawn whole — after the
    *  agent re-read a record someone else moved. The banner (the first two
    *  notes) stays. */
-  private repaint(e: LoadedSession, messages: readonly ModelMessage[]): void {
-    const banner = e.done.slice(0, 2);
-    e.done = [...banner, { kind: 'note', id: nextId('note'), text: 'refreshed — this session moved forward elsewhere' },
+  private repaint(entry: LoadedSession, messages: readonly ModelMessage[]): void {
+    const banner = entry.done.slice(0, 2);
+    entry.done = [...banner, { kind: 'note', id: nextId('note'), text: 'refreshed — this session moved forward elsewhere' },
       ...messagesToParts([...messages])];
-    e.live = [];
-    e.turn = [];
+    entry.live = [];
+    entry.turn = [];
     this.notify();
   }
 
@@ -436,50 +436,50 @@ export class SessionStore {
   // in through these three. Same renderer as a local turn.
 
   remoteStart(id: string, text: string): void {
-    const e = this.get(id);
-    if (!e || e.agent.busy) return;
-    e.turn = [];
-    e.live = [];
-    e.remoteBusy = true;
-    e.startedAt = Date.now();
-    e.tokens = NO_TOKENS;
-    if (text.trim()) e.done = [...e.done, { kind: 'user', id: nextId('user'), text }];
+    const entry = this.get(id);
+    if (!entry || entry.agent.busy) return;
+    entry.turn = [];
+    entry.live = [];
+    entry.remoteBusy = true;
+    entry.startedAt = Date.now();
+    entry.tokens = NO_TOKENS;
+    if (text.trim()) entry.done = [...entry.done, { kind: 'user', id: nextId('user'), text }];
     this.notify();
   }
 
   remoteParts(id: string, parts: StreamPart[]): void {
-    const e = this.get(id);
-    if (!e || e.agent.busy) return;
-    if (!e.remoteBusy) { e.remoteBusy = true; e.startedAt = Date.now(); e.tokens = NO_TOKENS; }
-    this.fold(e, parts);
+    const entry = this.get(id);
+    if (!entry || entry.agent.busy) return;
+    if (!entry.remoteBusy) { entry.remoteBusy = true; entry.startedAt = Date.now(); entry.tokens = NO_TOKENS; }
+    this.fold(entry, parts);
   }
 
   remoteEnd(id: string): void {
-    const e = this.get(id);
-    if (!e || e.agent.busy) return;
-    if (!e.remoteBusy && !e.turn.length) return;
-    e.remoteBusy = false;
-    e.usage.output += tokenCount(e.tokens);
-    const rest = finalize(e.turn);
-    e.turn = [];
-    e.live = [];
-    if (rest.length) e.done = [...e.done, ...rest];
-    if (e.id !== this.activeId) e.unseen = true;
+    const entry = this.get(id);
+    if (!entry || entry.agent.busy) return;
+    if (!entry.remoteBusy && !entry.turn.length) return;
+    entry.remoteBusy = false;
+    entry.usage.output += tokenCount(entry.tokens);
+    const rest = finalize(entry.turn);
+    entry.turn = [];
+    entry.live = [];
+    if (rest.length) entry.done = [...entry.done, ...rest];
+    if (entry.id !== this.activeId) entry.unseen = true;
     this.notify();
   }
 
   /** The feed said who holds the session (or that nobody does). */
   setHeld(id: string, held: LoadedSession['held']): void {
-    const e = this.get(id);
-    if (!e) return;
-    e.held = held;
+    const entry = this.get(id);
+    if (!entry) return;
+    entry.held = held;
     this.notify();
   }
 
   note(id: string, text: string): void {
-    const e = this.get(id);
-    if (!e) return;
-    e.done = [...e.done, { kind: 'note', id: nextId('note'), text }];
+    const entry = this.get(id);
+    if (!entry) return;
+    entry.done = [...entry.done, { kind: 'note', id: nextId('note'), text }];
     this.notify();
   }
 
@@ -491,85 +491,85 @@ export class SessionStore {
    *  behind the running turn and rides its next model call. The spinner
    *  starts the moment enter lands. */
   say(id: string, text: string): void {
-    const e = this.get(id);
-    if (!e || !text.trim()) return;
-    if (!e.agent.busy) {
-      e.sending = text;
-      e.turnOpen = true;
-      e.startedAt = Date.now();
-      e.tokens = NO_TOKENS;
+    const entry = this.get(id);
+    if (!entry || !text.trim()) return;
+    if (!entry.agent.busy) {
+      entry.sending = text;
+      entry.turnOpen = true;
+      entry.startedAt = Date.now();
+      entry.tokens = NO_TOKENS;
     }
     // Never awaited: every failure reaches the pane through onError, once.
-    void e.agent.sendMessage(text).catch(() => undefined);
+    void entry.agent.sendMessage(text).catch(() => undefined);
     this.notify();
   }
 
   /** Drop everything queued — `/pop all`. */
   clearQueue(id: string): void {
-    const e = this.get(id);
-    if (!e || !e.agent.userMessages.length) return;
-    e.agent.userMessages.clear();
+    const entry = this.get(id);
+    if (!entry || !entry.agent.userMessages.length) return;
+    entry.agent.userMessages.clear();
     this.notify();
   }
 
   /** Take the last queued message back — `/pop`. */
   unqueue(id: string): string | undefined {
-    const e = this.get(id);
-    if (!e || !e.agent.userMessages.length) return undefined;
-    const last = e.agent.userMessages.pending().at(-1)!;
-    const taken = e.agent.userMessages.take(last.id);
+    const entry = this.get(id);
+    if (!entry || !entry.agent.userMessages.length) return undefined;
+    const last = entry.agent.userMessages.pending().at(-1)!;
+    const taken = entry.agent.userMessages.take(last.id);
     this.notify();
     return taken?.text;
   }
 
   /** Every turn, everywhere — what quitting does first. */
-  abortAll(): void { for (const e of this.entries) e.agent.interrupt(); }
+  abortAll(): void { for (const entry of this.entries) entry.agent.interrupt(); }
 
   /** Every agent closed: each turn interrupted and waited out, so every
    *  turn-ended reaches the server before the process goes. */
   closeAll(): Promise<void> {
-    return Promise.all(this.entries.map((e) => { e.unwire(); return e.agent.close(); })).then(() => undefined);
+    return Promise.all(this.entries.map((entry) => { entry.unwire(); return entry.agent.close(); })).then(() => undefined);
   }
 
   setPinned(id: string, on: boolean): void {
-    const e = this.get(id);
-    if (!e || e.pinned === on) return;
-    e.pinned = on;
+    const entry = this.get(id);
+    if (!entry || entry.pinned === on) return;
+    entry.pinned = on;
     this.notify();
   }
 
   /** /plan flipped (here or elsewhere): the toolbar's mirror. The agent
    *  reads the row at turn start and hears a mid-turn flip off the feed. */
   setPlanMode(id: string, on: boolean): void {
-    const e = this.get(id);
-    if (!e || e.planMode === on) return;
-    e.planMode = on;
+    const entry = this.get(id);
+    if (!entry || entry.planMode === on) return;
+    entry.planMode = on;
     this.notify();
   }
 
   /** The banner's model line moved on the server (a settings change reached
    *  a session nothing has been said to yet). */
   setModelLine(id: string, line: ModelLine): void {
-    const e = this.get(id);
-    if (!e || (e.summary.provider === line.provider && e.summary.model === line.model && e.summary.reasoning === line.reasoning)) return;
-    e.summary = line;
+    const entry = this.get(id);
+    if (!entry || (entry.summary.provider === line.provider && entry.summary.model === line.model && entry.summary.reasoning === line.reasoning)) return;
+    entry.summary = line;
     this.note(id, `model → ${line.provider}/${line.model}`);
   }
 
   /** Fold a flush of stream parts into the entry that produced them. */
-  private fold(e: LoadedSession, parts: StreamPart[]): void {
-    let t = e.turn;
-    let tokens = e.tokens;
-    for (const p of parts) {
-      t = applyPart(t, p);
-      tokens = applyTokens(tokens, p);
+  private fold(entry: LoadedSession, parts: StreamPart[]): void {
+    let turn = entry.turn;
+    let tokens = entry.tokens;
+    for (const part of parts) {
+      turn = applyPart(turn, part);
+      tokens = applyTokens(tokens, part);
     }
-    e.tokens = tokens;
-    const split = takeCompleted(t);
-    e.turn = split.live;
-    if (split.done.length) e.done = [...e.done, ...split.done];
-    e.live = split.live;
-    if (e.id === this.activeId) this.notify();
+    entry.tokens = tokens;
+    const split = takeCompleted(turn);
+    entry.turn = split.live;
+    if (split.done.length) entry.done = [...entry.done, ...split.done];
+    entry.live = split.live;
+    if (entry.id === this.activeId) this.notify();
   }
 }
 

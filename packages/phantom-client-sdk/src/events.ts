@@ -26,21 +26,21 @@ type Listener<T> = (payload: T) => void;
 export class Emitter {
   private listeners = new Map<keyof AgentEvents, Set<Listener<never>>>();
 
-  on<E extends keyof AgentEvents>(event: E, fn: Listener<AgentEvents[E]>): () => void {
+  on<E extends keyof AgentEvents>(event: E, listener: Listener<AgentEvents[E]>): () => void {
     let set = this.listeners.get(event);
     if (!set) { set = new Set(); this.listeners.set(event, set); }
-    set.add(fn);
-    return () => { set.delete(fn); };
+    set.add(listener);
+    return () => { set.delete(listener); };
   }
 
   /** A listener that throws is a client bug; it is reported through
    *  `onListenerError`, never swallowed and never allowed to break the turn. */
-  emit<E extends keyof AgentEvents>(event: E, payload: AgentEvents[E], onListenerError: (e: unknown) => void): void {
+  emit<E extends keyof AgentEvents>(event: E, payload: AgentEvents[E], onListenerError: (error: unknown) => void): void {
     const set = this.listeners.get(event);
     if (!set) return;
-    for (const fn of [...set]) {
-      try { (fn as Listener<AgentEvents[E]>)(payload); }
-      catch (e) { onListenerError(e); }
+    for (const listener of [...set]) {
+      try { (listener as Listener<AgentEvents[E]>)(payload); }
+      catch (error) { onListenerError(error); }
     }
   }
 }

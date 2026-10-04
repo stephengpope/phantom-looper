@@ -37,9 +37,9 @@ export const DATABASE_TOOLS: ToolDef[] = [
           limit: Number(a.limit ?? 10), maxCellChars: Number(a.maxCellChars ?? 1000), params: a.params as unknown[] | undefined,
         });
         return { results };
-      } catch (e) {
-        if (e instanceof SqlError) throw refusal('sql_error', e.message, { ...e.info, rolledBack: 'nothing in this call was applied' });
-        throw e;
+      } catch (error) {
+        if (error instanceof SqlError) throw refusal('sql_error', error.message, { ...error.info, rolledBack: 'nothing in this call was applied' });
+        throw error;
       }
     },
   },

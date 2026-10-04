@@ -34,7 +34,7 @@ export class ProjectDirectory {
   /** The name to say for a project id — the id itself when unknown, which
    *  is still an answer rather than a blank. */
   name(id: string): string {
-    const project = this.rows.find((n) => n.id === id);
+    const project = this.rows.find((project) => project.id === id);
     return project?.displayName || project?.name || id;
   }
 }
@@ -56,7 +56,7 @@ export function windowHost(win: WindowStore, deps: {
     projectId: () => store.active()?.projectId ?? null,
     activeSession: () => store.activeId || null,
     busy: (id) => store.get(id)?.busy ?? false,
-    history: (id) => { const h = store.get(id)?.history; return h ? [...h] : null; },
+    history: (id) => { const history = store.get(id)?.history; return history ? [...history] : null; },
     // ONE open path — openSession decides whether the session is already
     // here, needs attaching, or (swept) needs restarting. Then the chat view:
     // the builder sees the session regardless of which screen was up.
@@ -106,13 +106,13 @@ export function kanbanHandler(win: WindowStore) {
         return { ok: true, screen: `column ${col}, expanded` };
       }
       if (args.show === 'card') {
-        const up = win.boardUp;
-        if (args.card === undefined) return { error: 'show card needs the card number', screen: up ? 'board' : 'chat' };
-        if (!b.byNumber(args.card)) return { error: `no card ${args.card}`, screen: up ? 'board' : 'chat' };
+        const boardUp = win.boardUp;
+        if (args.card === undefined) return { error: 'show card needs the card number', screen: boardUp ? 'board' : 'chat' };
+        if (!b.byNumber(args.card)) return { error: `no card ${args.card}`, screen: boardUp ? 'board' : 'chat' };
         // Where esc will go is decided HERE, once: back to the columns when
         // the board was already up, back to the chat when it was not.
-        win.openCard(args.card, up ? 'board' : 'chat');
-        return { ok: true, screen: up ? `card ${args.card}, on the board` : `card ${args.card}` };
+        win.openCard(args.card, boardUp ? 'board' : 'chat');
+        return { ok: true, screen: boardUp ? `card ${args.card}, on the board` : `card ${args.card}` };
       }
       win.openBoard();
       b.requestBoard(); // every column: an open editor drops, an expanded column collapses

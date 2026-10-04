@@ -74,8 +74,8 @@ export function platformAsset(platform = process.platform, arch = process.arch):
 /** The sha256 recorded for an asset in a release's checksums.txt. */
 export function checksumFor(checksums: string, asset: string): string | null {
   for (const line of checksums.split('\n')) {
-    const m = /^([0-9a-f]{64})\s+(\S+)$/.exec(line.trim());
-    if (m && m[2] === asset) return m[1];
+    const match = /^([0-9a-f]{64})\s+(\S+)$/.exec(line.trim());
+    if (match && match[2] === asset) return match[1];
   }
   return null;
 }
@@ -86,7 +86,7 @@ export function checksumFor(checksums: string, asset: string): string | null {
 // progress), old (a folder being replaced). The pid says whose; a dead pid's
 // folder is anyone's to delete.
 const scratch = (appRoot: string, kind: string) => join(appRoot, `.${kind}-${process.pid}`);
-const scratchPid = (name: string): number | null => { const m = /^\.[a-z]+-(\d+)/.exec(name); return m ? Number(m[1]) : null; };
+const scratchPid = (name: string): number | null => { const match = /^\.[a-z]+-(\d+)/.exec(name); return match ? Number(match[1]) : null; };
 
 /** The version a launcher link points at, or null when there is no link or
  *  it points outside appRoot (a hand-made launcher — left alone). */
@@ -102,11 +102,11 @@ export function linkedVersion(launcher: string, appRoot = APP_ROOT): string | nu
 export function installedVersions(appRoot = APP_ROOT): string[] {
   let names: string[];
   try { names = readdirSync(appRoot); } catch { return []; }
-  return names.filter((n) => !n.startsWith('.') && existsSync(join(appRoot, n, 'VERSION')));
+  return names.filter((name) => !name.startsWith('.') && existsSync(join(appRoot, name, 'VERSION')));
 }
 
 function pidAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; }
+  try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
 }
 
 /** How many of the newest versions survive a prune: the current one and one
@@ -142,12 +142,12 @@ export function pruneVersions(opts: Layout = {}): string[] {
   const drop = (name: string) => {
     try { rmSync(join(appRoot, name), { recursive: true, force: true }); removed.push(name); } catch { /* next time */ }
   };
-  for (const v of installedVersions(appRoot)) if (!keep.has(v)) drop(v);
+  for (const version of installedVersions(appRoot)) if (!keep.has(version)) drop(version);
   let names: string[] = [];
   try { names = readdirSync(appRoot); } catch { /* nothing to sweep */ }
-  for (const n of names) {
-    const pid = scratchPid(n);
-    if (pid !== null && !pidAlive(pid)) drop(n);
+  for (const name of names) {
+    const pid = scratchPid(name);
+    if (pid !== null && !pidAlive(pid)) drop(name);
   }
   return removed;
 }
@@ -244,11 +244,11 @@ export async function selfUpdate(tag: string, opts: {
     rmSync(tarPath, { force: true });
     // The tarball's root folder is phantom-cli/; lift it out so staging IS the build.
     staged = join(work, 'phantom-cli');
-  } catch (e) {
+  } catch (error) {
     rmSync(work, { recursive: true, force: true });
-    throw e;
+    throw error;
   }
-  const r = installVersion(staged, { appRoot, launcher: opts.launcher });
+  const installed = installVersion(staged, { appRoot, launcher: opts.launcher });
   rmSync(work, { recursive: true, force: true });
-  return `phantom-cli ${r.version} installed — next launch runs it`;
+  return `phantom-cli ${installed.version} installed — next launch runs it`;
 }

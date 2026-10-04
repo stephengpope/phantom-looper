@@ -21,7 +21,7 @@ import { logger } from 'phantom-backend-sdk';
 
 const log = logger('digest');
 
-const TITLE = (n: number) => `📋 ${n} turn${n === 1 ? '' : 's'} completed:`;
+const TITLE = (count: number) => `📋 ${count} turn${count === 1 ? '' : 's'} completed:`;
 
 
 const SYSTEM = `You summarize completed coding session turns.
@@ -85,7 +85,7 @@ export class SessionDigest {
   private tick(): void {
     if (this.running) return;
     this.running = true;
-    this.run().catch((e) => log.warn({ err: (e as Error).message }, 'digest tick failed'))
+    this.run().catch((error) => log.warn({ err: (error as Error).message }, 'digest tick failed'))
       .finally(() => { this.running = false; });
   }
 
@@ -106,7 +106,7 @@ export class SessionDigest {
 
     // ── resolve project prefixes ───────────────────────────────────────────
 
-    const wsIds = [...new Set(rows.map((r) => r.projectId))];
+    const wsIds = [...new Set(rows.map((row) => row.projectId))];
     const prefixByProjectId = new Map<string, string>();
     for (const projectId of wsIds) {
       const project = await this.backend.projects.get(projectId);
@@ -124,13 +124,13 @@ export class SessionDigest {
       ranAt: number; // epoch ms, for sorting
     };
     const items: Item[] = [];
-    for (const s of rows) {
-      const transcript = (await this.backend.sessions.transcript(s.id)) ?? '';
+    for (const session of rows) {
+      const transcript = (await this.backend.sessions.transcript(session.id)) ?? '';
       const lastMsg = lastAssistantFromJsonl(transcript);
 
       let card: number | undefined;
       let icon: string | undefined;
-      const onCard = await this.backend.cards.ofSession(s.id);
+      const onCard = await this.backend.cards.ofSession(session.id);
       if (onCard) {
         card = onCard.number;
         icon = STATUS_ICON[onCard.status]?.char ?? onCard.status;
@@ -138,19 +138,19 @@ export class SessionDigest {
 
       // A hold that ran out is a turn that died. Said here in the log too:
       // the digest may be off or fail to send, and the death still happened.
-      const died = expiredHold(s);
+      const died = expiredHold(session);
       if (died) {
-        log.warn({ session: s.id, name: s.name, diedOn: died.label ?? died.by, expiredAt: died.at.toISOString() },
+        log.warn({ session: session.id, name: session.name, diedOn: died.label ?? died.by, expiredAt: died.at.toISOString() },
           'session turn died mid-turn — its hold expired without a release');
       }
 
       items.push({
-        name: s.name ?? 'untitled',
-        lastMessage: lastMsg ?? s.lastUserMessage ?? '(no messages)',
-        wsPrefix: prefixByProjectId.get(s.projectId)!,
+        name: session.name ?? 'untitled',
+        lastMessage: lastMsg ?? session.lastUserMessage ?? '(no messages)',
+        wsPrefix: prefixByProjectId.get(session.projectId)!,
         card, icon,
         ...(died ? { diedOn: died.label ?? died.by } : {}),
-        ranAt: s.transcriptUpdatedAt?.getTime() ?? 0,
+        ranAt: session.transcriptUpdatedAt?.getTime() ?? 0,
       });
     }
 
@@ -187,14 +187,14 @@ export class SessionDigest {
     if (!message) return;
 
     // Deliver to all channels.
-    for (const ch of this.backend.notifications.channels()) {
-      await ch.send(message).catch((e) =>
-        log.warn({ channel: ch.name, err: (e as Error).message }, 'digest delivery failed'));
+    for (const channel of this.backend.notifications.channels()) {
+      await channel.send(message).catch((error) =>
+        log.warn({ channel: channel.name, err: (error as Error).message }, 'digest delivery failed'));
     }
 
     // Mark all as digested.
     const now = new Date();
-    for (const s of rows) await this.backend.sessions.markDigested(s.id, now);
+    for (const session of rows) await this.backend.sessions.markDigested(session.id, now);
 
     log.info({ sessions: rows.length, channels: this.backend.notifications.channels().length }, 'digest sent');
   }

@@ -32,19 +32,19 @@ export type BoardEvent =
 export class BoardEvents {
   private emitter = new EventEmitter();
   constructor() { this.emitter.setMaxListeners(0); }
-  publish(projectId: string, e: BoardEvent): void {
-    this.emitter.emit(projectId, e);
-    this.emitter.emit(ALL, projectId, e);
+  publish(projectId: string, event: BoardEvent): void {
+    this.emitter.emit(projectId, event);
+    this.emitter.emit(ALL, projectId, event);
   }
-  subscribe(projectId: string, fn: (e: BoardEvent) => void): () => void {
-    this.emitter.on(projectId, fn);
-    return () => { this.emitter.off(projectId, fn); };
+  subscribe(projectId: string, listener: (event: BoardEvent) => void): () => void {
+    this.emitter.on(projectId, listener);
+    return () => { this.emitter.off(projectId, listener); };
   }
   /** Every project's events, tagged with the project — the Telegram
    *  alerts listen here. Events are keyed by project id, so `publish` also
    *  emits on ALL. */
-  subscribeAll(fn: (projectId: string, e: BoardEvent) => void): () => void {
-    this.emitter.on(ALL, fn);
-    return () => { this.emitter.off(ALL, fn); };
+  subscribeAll(listener: (projectId: string, event: BoardEvent) => void): () => void {
+    this.emitter.on(ALL, listener);
+    return () => { this.emitter.off(ALL, listener); };
   }
 }

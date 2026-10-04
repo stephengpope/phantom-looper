@@ -41,7 +41,7 @@ export class ProjectError extends Error {
 
 export class Projects {
   constructor(
-    private readonly db: Drizzle,
+    private readonly database: Drizzle,
     private readonly settings: Settings,
     private readonly events?: SettingsEvents,
     /** The agent's own database per project — dropped with the row. */
@@ -49,7 +49,7 @@ export class Projects {
   ) {}
 
   async get(id: string): Promise<ProjectRow | undefined> {
-    const rows = await this.db.select().from(projects).where(eq(projects.id, id));
+    const rows = await this.database.select().from(projects).where(eq(projects.id, id));
     return rows[0];
   }
 
@@ -59,7 +59,7 @@ export class Projects {
    *  else; without it the rows came back in table order, which is stable
    *  only by luck. */
   async list(): Promise<ProjectRow[]> {
-    return this.db.select().from(projects)
+    return this.database.select().from(projects)
       .orderBy(sql`lower(coalesce(${projects.displayName}, ${projects.name}))`, projects.id);
   }
 
@@ -72,10 +72,10 @@ export class Projects {
   /** Refuses a repo that is already a project (`owner, name` is unique). */
   async create(row: NewProject, by?: string): Promise<ProjectRow> {
     try {
-      await this.db.insert(projects).values(row);
-    } catch (e) {
-      if (Database.isUniqueViolation(e)) throw new ProjectError('already_registered', `${row.owner}/${row.name} is already a project`);
-      throw e;
+      await this.database.insert(projects).values(row);
+    } catch (error) {
+      if (Database.isUniqueViolation(error)) throw new ProjectError('already_registered', `${row.owner}/${row.name} is already a project`);
+      throw error;
     }
     this.events?.publish(projectScope(row.id), [], by);
     return (await this.get(row.id))!;
@@ -86,15 +86,15 @@ export class Projects {
   async update(id: string, patch: Partial<Pick<ProjectRow, 'displayName' | 'baseBranch' | 'branchPrefix'>>,
     by?: string): Promise<void> {
     if (!Object.keys(patch).length) return;
-    await this.db.update(projects).set(patch).where(eq(projects.id, id));
+    await this.database.update(projects).set(patch).where(eq(projects.id, id));
     this.events?.publish(projectScope(id), [], by);
   }
 
   /** Hand out the next card number and move the counter, in the caller's
    *  transaction so the number and the card land together. Numbers are
    *  never reused: a deleted card's stays taken. */
-  async claimCardNumber(id: string, tx: Transaction | Drizzle = this.db): Promise<number> {
-    const [claimed] = await tx.update(projects)
+  async claimCardNumber(id: string, transaction: Transaction | Drizzle = this.database): Promise<number> {
+    const [claimed] = await transaction.update(projects)
       .set({ nextCardNumber: sql`${projects.nextCardNumber} + 1` })
       .where(eq(projects.id, id)).returning({ number: sql<number>`${projects.nextCardNumber} - 1` });
     return claimed!.number;
@@ -107,7 +107,7 @@ export class Projects {
   async remove(id: string, by?: string): Promise<void> {
     await this.databases?.drop(id);
     await this.settings.deleteScope(projectScope(id));
-    await this.db.delete(projects).where(eq(projects.id, id));
+    await this.database.delete(projects).where(eq(projects.id, id));
     this.events?.publish(projectScope(id), [], by);
   }
 }

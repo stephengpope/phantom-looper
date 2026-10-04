@@ -108,8 +108,8 @@ export function splitCpr(data: string): { text: string; hold: string; replies: C
   while (i < data.length) {
     if (data[i] === '\x1b') {
       const tail = data.slice(i);
-      const m = CPR.exec(tail);
-      if (m) { replies.push({ row: Number(m[1]), col: Number(m[2]) }); i += m[0].length; continue; }
+      const match = CPR.exec(tail);
+      if (match) { replies.push({ row: Number(match[1]), col: Number(match[2]) }); i += match[0].length; continue; }
       if (CPR_PARTIAL.test(tail)) return { text, hold: tail, replies };
     }
     text += data[i++];
@@ -124,22 +124,22 @@ export function splitCpr(data: string): { text: string; hold: string; replies: C
  *  documented custom stdin), so raw mode and ref delegate to the real one. */
 export function createCprFilter(stdin: NodeJS.ReadStream, onCpr: (at: CursorAt) => void,
   { holdMs = 25 }: { holdMs?: number } = {}): NodeJS.ReadStream {
-  const pt = new PassThrough();
+  const passThrough = new PassThrough();
   let hold = '';
   let holdTimer: NodeJS.Timeout | null = null;
 
-  const flushHold = (): void => { if (hold) { pt.write(hold); hold = ''; } holdTimer = null; };
+  const flushHold = (): void => { if (hold) { passThrough.write(hold); hold = ''; } holdTimer = null; };
   stdin.on('data', (chunk: string | Buffer) => {
     if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
-    const { text, hold: h, replies } = splitCpr(hold + (typeof chunk === 'string' ? chunk : chunk.toString('utf8')));
-    hold = h;
-    for (const r of replies) onCpr(r);
-    if (text) pt.write(text);
+    const { text, hold: held, replies } = splitCpr(hold + (typeof chunk === 'string' ? chunk : chunk.toString('utf8')));
+    hold = held;
+    for (const reply of replies) onCpr(reply);
+    if (text) passThrough.write(text);
     if (hold) { holdTimer = setTimeout(flushHold, holdMs); holdTimer.unref(); }
   });
-  stdin.on('end', () => { flushHold(); pt.end(); });
+  stdin.on('end', () => { flushHold(); passThrough.end(); });
 
-  const tty = pt as unknown as NodeJS.ReadStream;
+  const tty = passThrough as unknown as NodeJS.ReadStream;
   Object.defineProperty(tty, 'isTTY', { get: () => true });
   tty.setRawMode = (mode: boolean) => { stdin.setRawMode(mode); return tty; };
   tty.ref = () => { stdin.ref(); return tty; };

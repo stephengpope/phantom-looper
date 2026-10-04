@@ -31,9 +31,9 @@ export const SESSION_PAGE = 50, SESSION_MAX = 100, SESSION_REACH = 500;
 
 /** One line, capped — a session's last message identifies it; the rest of a
  *  pasted essay is noise in a list of twenty. */
-const oneLine = (s: string | null | undefined, max = 80): string | null => {
-  if (!s) return null;
-  const flat = s.replace(/\s+/g, ' ').trim();
+const oneLine = (text: string | null | undefined, max = 80): string | null => {
+  if (!text) return null;
+  const flat = text.replace(/\s+/g, ' ').trim();
   if (!flat) return null;
   return flat.length > max ? `${flat.slice(0, max)}…` : flat;
 };
@@ -105,8 +105,8 @@ export function sessionsHandler(host: AssistantHost) {
         // server, not a crashed tool: say so and keep the host usable.
         rows = Array.isArray(got?.sessions) ? got.sessions as SessionRow[] : [];
         for (const project of Array.isArray(projects) ? projects : []) names.set(project.id, project.displayName || project.name);
-      } catch (e) {
-        return { error: `could not list sessions: ${(e as Error).message}`, on_screen };
+      } catch (error) {
+        return { error: `could not list sessions: ${(error as Error).message}`, on_screen };
       }
       const page = rows.slice(offset, offset + limit);
       return {
@@ -114,24 +114,24 @@ export function sessionsHandler(host: AssistantHost) {
           + (offset ? ` (skipping the ${offset} most recent)` : ''),
         more: rows.length > offset + limit,
         on_screen,
-        sessions: page.map((s) => ({
-          id: s.id,
-          name: s.name ?? null,
-          project: names.get(s.projectId) ?? s.projectId,
-          branch: s.branch ?? null,
-          card: s.card ?? null,
-          card_status: s.cardStatus ?? null,
+        sessions: page.map((session) => ({
+          id: session.id,
+          name: session.name ?? null,
+          project: names.get(session.projectId) ?? session.projectId,
+          branch: session.branch ?? null,
+          card: session.card ?? null,
+          card_status: session.cardStatus ?? null,
           // Supervisor rows are MARKED, not hidden: a list that silently
           // drops half of itself is a list that lies.
-          kind: whoDrives(s),
-          status: s.status === 'active' ? 'active' : 'ended',
-          running: isRunning(s, { busy: host.busy, clientId: host.clientId }),
-          on_screen: s.id === on_screen,
-          git_status: s.workState ?? null,
-          model: s.model ?? null,
-          tokens: s.tokensOutput ?? null,
-          last_message: oneLine(s.lastUserMessage),
-          when: ago(s.lastUsedAt),
+          kind: whoDrives(session),
+          status: session.status === 'active' ? 'active' : 'ended',
+          running: isRunning(session, { busy: host.busy, clientId: host.clientId }),
+          on_screen: session.id === on_screen,
+          git_status: session.workState ?? null,
+          model: session.model ?? null,
+          tokens: session.tokensOutput ?? null,
+          last_message: oneLine(session.lastUserMessage),
+          when: ago(session.lastUsedAt),
         })),
       };
     }
@@ -161,8 +161,8 @@ export function sessionsHandler(host: AssistantHost) {
         const messages = held ?? conversationFrom(parseLines(String(
           ((await host.call('GET', `/sessions/${id}/transcript`)) as { data?: string })?.data ?? '')));
         return { text: renderRead(id, messages, { limit: args.limit, offset: args.offset, tools: args.tools }) };
-      } catch (e) {
-        return { error: `could not read session ${id}: ${(e as Error).message}` };
+      } catch (error) {
+        return { error: `could not read session ${id}: ${(error as Error).message}` };
       }
     }
     return { error: `unknown action ${String(args.action)}` };
@@ -192,7 +192,7 @@ export function projectCreateHandler(host: AssistantHost) {
       return { ok: true, repo: `${project.owner}/${project.name}`, private: true, project_id: project.id,
         ...(opened.session ? { entered: 'a new session in the new project' }
           : { note: `project created, but no session could be opened: ${opened.error ?? 'unknown'}` }) };
-    } catch (e) { return { error: (e as Error).message }; }
+    } catch (error) { return { error: (error as Error).message }; }
   };
 }
 
@@ -207,13 +207,13 @@ export function gitHandlers(host: AssistantHost) {
       const id = target(args);
       if (!id) return { error: 'no session is open — nothing to push' };
       try { return { session: id, ...await host.autoPush(id, steps(id)) }; }
-      catch (e) { return { session: id, result: 'error', reason: (e as Error).message }; }
+      catch (error) { return { session: id, result: 'error', reason: (error as Error).message }; }
     },
     pull: async (args: GitAutoPullArgs): Promise<unknown> => {
       const id = target(args);
       if (!id) return { error: 'no session is open — nothing to pull into' };
       try { return { session: id, ...await host.autoPull(id, steps(id)) }; }
-      catch (e) { return { session: id, result: 'error', reason: (e as Error).message }; }
+      catch (error) { return { session: id, result: 'error', reason: (error as Error).message }; }
     },
   };
 }
@@ -222,13 +222,13 @@ export function gitHandlers(host: AssistantHost) {
  *  does the narrowing; the result is just shaped for the model. */
 export function dockerLogsHandler(host: AssistantHost) {
   return async (args: DockerLogsArgs): Promise<unknown> => {
-    let d: { service: string; text: string; truncated?: boolean };
-    try { d = await host.call('POST', '/system/logs', args) as typeof d; }
-    catch (e) { return { error: (e as Error).message }; }
+    let logs: { service: string; text: string; truncated?: boolean };
+    try { logs = await host.call('POST', '/system/logs', args) as typeof logs; }
+    catch (error) { return { error: (error as Error).message }; }
     return {
-      service: d.service,
-      text: d.text || '(no matching log lines)',
-      ...(d.truncated ? { truncated: 'output hit the 64 KB cap — narrow with tail/since/grep and retry' } : {}),
+      service: logs.service,
+      text: logs.text || '(no matching log lines)',
+      ...(logs.truncated ? { truncated: 'output hit the 64 KB cap — narrow with tail/since/grep and retry' } : {}),
     };
   };
 }

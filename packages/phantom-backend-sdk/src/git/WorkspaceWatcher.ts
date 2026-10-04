@@ -40,21 +40,21 @@ export class WorkspaceWatcher {
     this.child = undefined;
   }
 
-  private send(m: object): void {
+  private send(message: object): void {
     if (this.stopped) return;
     // No child yet: spawning replays the map, which already holds this change.
     if (!this.child) { this.spawn(); return; }
-    this.child.send(m);
+    this.child.send(message);
   }
 
   private spawn(): void {
     const child = fork(CHILD, [], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
     this.child = child;
     log.info({ pid: child.pid, watches: this.watches.size }, 'watcher child started');
-    child.on('message', (m: { op: string; id: string }) => {
-      if (m.op === 'changed') this.watches.get(m.id)?.onChange();
+    child.on('message', (message: { op: string; id: string }) => {
+      if (message.op === 'changed') this.watches.get(message.id)?.onChange();
     });
-    child.on('error', (e) => log.error({ pid: child.pid, err: errStr(e) }, 'watcher child error'));
+    child.on('error', (error) => log.error({ pid: child.pid, err: errStr(error) }, 'watcher child error'));
     child.on('exit', (code, signal) => {
       if (this.child !== child) return; // stop() or an older generation
       this.child = undefined;

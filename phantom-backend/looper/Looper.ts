@@ -69,24 +69,24 @@ export class Looper {
     // Every card write, from any door (a route, the Assistant, this looper
     // itself), lands on the board bus: that is what runs the loop. The looper
     // re-reads the row and checks canTurn, so an irrelevant edit is a no-op.
-    this.backend.boardEvents.subscribeAll((projectId, e) => {
-      if (e.event === 'card') void this.runLoop(projectId, Number((e.card as { number: number }).number));
+    this.backend.boardEvents.subscribeAll((projectId, event) => {
+      if (event.event === 'card') void this.runLoop(projectId, Number((event.card as { number: number }).number));
     });
     // Supervision flipped (either switch, at any layer, through any door):
     // re-examine the affected project — every one when the global layer
     // moved. Event-driven, no poll.
-    this.backend.settingsEvents.subscribe((e) => {
-      if (!e.keys.some((k) => k === 'auto_plan' || k === 'auto_build')) return;
-      const projectId = e.scope === GLOBAL ? undefined : e.scope.replace(/^project:/, '');
+    this.backend.settingsEvents.subscribe((change) => {
+      if (!change.keys.some((key) => key === 'auto_plan' || key === 'auto_build')) return;
+      const projectId = change.scope === GLOBAL ? undefined : change.scope.replace(/^project:/, '');
       void this.runAllLoops(projectId).catch((err) => log.warn({ err: errStr(err) }, 'looper settings pass failed'));
     });
     // A session let go of (its hold released, by anyone but this looper):
     // its card, if any, may be runnable again. The release is a `lock`
     // event on the session feed, published under the releasing client.
-    this.backend.sessionEvents.subscribeAll((sessionId, e, by) => {
-      if (e.event === 'lock' && e.locked === false) void this.runLoopOfSession(sessionId, by);
+    this.backend.sessionEvents.subscribeAll((sessionId, event, by) => {
+      if (event.event === 'lock' && event.locked === false) void this.runLoopOfSession(sessionId, by);
     });
-    void this.runAllLoops().catch((e) => log.warn({ err: errStr(e) }, 'looper boot pass failed'));
+    void this.runAllLoops().catch((error) => log.warn({ err: errStr(error) }, 'looper boot pass failed'));
   }
   stop(): void {
     this.stopped = true;
@@ -106,10 +106,10 @@ export class Looper {
       let cards: CardRow[];
       try {
         cards = await this.backend.cards.listInColumns(project, LOOP_COLUMNS);
-      } catch (e) {
+      } catch (error) {
         // Its loops never start this sweep — a card sitting in plan or
         // in_progress with nothing happening; the log is the only trace.
-        log.error({ project: project.id, err: (e as Error).message }, 'could not read the project\'s cards — its loops did not run');
+        log.error({ project: project.id, err: (error as Error).message }, 'could not read the project\'s cards — its loops did not run');
         continue;
       }
       for (const card of cards) void this.runLoop(project.id, card.number);
@@ -124,8 +124,8 @@ export class Looper {
     if (releasedBy === CLIENT_ID) return;
     let card;
     try { card = await this.backend.cards.ofSession(sessionId); }
-    catch (e) {
-      log.error({ session: sessionId, err: (e as Error).message }, 'could not look up the session\'s card — its round did not run');
+    catch (error) {
+      log.error({ session: sessionId, err: (error as Error).message }, 'could not look up the session\'s card — its round did not run');
       return;
     }
     if (card) void this.runLoop(card.project_id, card.number);
@@ -164,19 +164,19 @@ export class Looper {
             .catch(() => ({ auto_plan: false, auto_build: false }));
           card = await this.backend.cards.activeByNumber(project, cardNumber);
           if (!card || !canTurn(card, { plan: Boolean(auto.auto_plan), build: Boolean(auto.auto_build) })) continue;
-        } catch (e) {
-          log.warn({ card: cardNumber, err: errStr(e) }, 'looper could not read the card');
+        } catch (error) {
+          log.warn({ card: cardNumber, err: errStr(error) }, 'looper could not read the card');
           continue;
         }
 
         let outcome: TurnOutcome;
         try {
           outcome = await this.runTurn(project, card, budget);
-        } catch (e) {
-          log.warn({ project: project.name, card: cardNumber, err: errStr(e) },
+        } catch (error) {
+          log.warn({ project: project.name, card: cardNumber, err: errStr(error) },
             'looper turn failed — blocking the card');
-          await this.blockCard(project, card.number, errStr(e)).catch((be) =>
-            log.error({ card: cardNumber, err: errStr(be) }, 'could not block the failed card'));
+          await this.blockCard(project, card.number, errStr(error)).catch((blockError) =>
+            log.error({ card: cardNumber, err: errStr(blockError) }, 'could not block the failed card'));
           continue;
         }
         // A turn just ran — the next step is owed now, not on the next
@@ -332,8 +332,8 @@ export class Looper {
    *  summed off the token log — the same rows GET /sessions/:id/token-usage
    *  serves, read at the object. */
   private async tokensOf(sessionId: string): Promise<number> {
-    const t = await this.backend.tokenLog.sessionTotals(sessionId);
-    return Number(t.input ?? 0) + Number(t.output ?? 0);
+    const totals = await this.backend.tokenLog.sessionTotals(sessionId);
+    return Number(totals.input ?? 0) + Number(totals.output ?? 0);
   }
 
   /** A card write by the loop, at the object — the board bus carries it to

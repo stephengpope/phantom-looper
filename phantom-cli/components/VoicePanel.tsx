@@ -57,23 +57,23 @@ function Device({ name, on, accent }: { name: string; on: boolean; accent?: bool
  *  numbers, with a warning comment begging them to be kept in sync). */
 function spans(items: SwitchItem[]): Array<{ key: VoiceSwitch; from: number; to: number }> {
   const out: Array<{ key: VoiceSwitch; from: number; to: number }> = [];
-  let x = 0;
-  for (const it of items) {
-    if (out.length) x += 3;
-    out.push({ key: it.key, from: x, to: x + 2 + it.label.length });
-    x += 2 + it.label.length;
+  let column = 0;
+  for (const item of items) {
+    if (out.length) column += 3;
+    out.push({ key: item.key, from: column, to: column + 2 + item.label.length });
+    column += 2 + item.label.length;
   }
   return out;
 }
 
 function SwitchRow({ items, rowRef }: { items: SwitchItem[]; rowRef: MutableRefObject<DOMElement | null> }) {
   return (
-    <Box ref={(n) => { rowRef.current = n; }}>
+    <Box ref={(node) => { rowRef.current = node; }}>
       <Text wrap="truncate-end">
-        {items.map((it, i) => (
-          <Text key={it.key}>
+        {items.map((item, i) => (
+          <Text key={item.key}>
             {i > 0 ? <Text dimColor>{' · '}</Text> : null}
-            <Device name={it.label} on={it.on} accent={it.accent} />
+            <Device name={item.label} on={item.on} accent={item.accent} />
           </Text>
         ))}
       </Text>
@@ -83,8 +83,8 @@ function SwitchRow({ items, rowRef }: { items: SwitchItem[]; rowRef: MutableRefO
 
 /** The ttfb line: `dg stt 210ms · llm 480ms`. */
 function ttfbText(ttfb: VoiceSnapshot['ttfb']): string {
-  return Object.entries(ttfb).filter(([, v]) => v > 0)   // pipecat sends zeros at start
-    .map(([k, v]) => `${k.replace(/Service#\d+$/, '').replace(/^Deepgram/, 'dg ').replace(/LLM$/, '')} ${v}ms`).join(' · ');
+  return Object.entries(ttfb).filter(([, value]) => value > 0)   // pipecat sends zeros at start
+    .map(([key, value]) => `${key.replace(/Service#\d+$/, '').replace(/^Deepgram/, 'dg ').replace(/LLM$/, '')} ${value}ms`).join(' · ');
 }
 
 export function VoicePanel({ width, voice, expanded, offset = 0, onMeasure, onDevice, approval, onApproval }: {
@@ -114,8 +114,8 @@ export function VoicePanel({ width, voice, expanded, offset = 0, onMeasure, onDe
   const [, setTick] = useState(0);
   useEffect(() => {
     if (!awake || voice.awakeUntil === null) return;
-    const t = setInterval(() => setTick((x) => x + 1), 1000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => setTick((tick) => tick + 1), 1000);
+    return () => clearInterval(timer);
   }, [awake, voice.awakeUntil]);
   const left = awake && voice.awakeUntil !== null
     ? Math.max(0, Math.ceil((voice.awakeUntil - Date.now()) / 1000)) : 0;
@@ -144,38 +144,38 @@ export function VoicePanel({ width, voice, expanded, offset = 0, onMeasure, onDe
   const modesRef = useRef<DOMElement | null>(null);
   const answersRef = useRef<DOMElement | null>(null);
   const pressedRef = useRef<VoiceSwitch | 'accept' | 'decline' | null>(null);
-  const hitRow = (ref: MutableRefObject<DOMElement | null>, row: SwitchItem[], x: number, y: number): VoiceSwitch | null => {
+  const hitRow = (ref: MutableRefObject<DOMElement | null>, items: SwitchItem[], column: number, row: number): VoiceSwitch | null => {
     const node = ref.current;
     if (!node) return null;
-    const m = measureElement(node);
-    if (y < m.y || y >= m.y + m.height) return null;
-    const rel = x - m.x;
-    return spans(row).find((s) => rel >= s.from && rel < s.to)?.key ?? null;
+    const measured = measureElement(node);
+    if (row < measured.y || row >= measured.y + measured.height) return null;
+    const rel = column - measured.x;
+    return spans(items).find((span) => rel >= span.from && rel < span.to)?.key ?? null;
   };
   // `accept · decline` as a spans row of its own: accept is cells 0–5,
   // decline starts after the 3-cell separator.
-  const hitAnswer = (x: number, y: number): 'accept' | 'decline' | null => {
+  const hitAnswer = (column: number, row: number): 'accept' | 'decline' | null => {
     const node = answersRef.current;
     if (!node || !approval) return null;
-    const m = measureElement(node);
-    if (y < m.y || y >= m.y + m.height) return null;
-    const rel = x - m.x;
+    const measured = measureElement(node);
+    if (row < measured.y || row >= measured.y + measured.height) return null;
+    const rel = column - measured.x;
     if (rel >= 0 && rel < 'accept'.length) return 'accept';
     const from = 'accept'.length + 3;
     return rel >= from && rel < from + 'decline'.length ? 'decline' : null;
   };
-  const hit = (x: number, y: number): VoiceSwitch | 'accept' | 'decline' | null =>
-    hitRow(devicesRef, devices, x, y) ?? hitRow(modesRef, modes, x, y) ?? hitAnswer(x, y);
-  useInput((ch) => {
-    if ((!onDevice && !onApproval) || !isMouseInput(ch)) return;
-    const ev = parseMouse(ch);
-    if (!ev || ev.button !== 0) return;
-    if (ev.kind === 'press') { pressedRef.current = hit(ev.x, ev.y); return; }
-    if (ev.kind === 'drag') { pressedRef.current = null; return; }
-    if (ev.kind !== 'release') return;
+  const hit = (column: number, row: number): VoiceSwitch | 'accept' | 'decline' | null =>
+    hitRow(devicesRef, devices, column, row) ?? hitRow(modesRef, modes, column, row) ?? hitAnswer(column, row);
+  useInput((char) => {
+    if ((!onDevice && !onApproval) || !isMouseInput(char)) return;
+    const mouse = parseMouse(char);
+    if (!mouse || mouse.button !== 0) return;
+    if (mouse.kind === 'press') { pressedRef.current = hit(mouse.x, mouse.y); return; }
+    if (mouse.kind === 'drag') { pressedRef.current = null; return; }
+    if (mouse.kind !== 'release') return;
     const target = pressedRef.current;
     pressedRef.current = null;
-    if (!target || hit(ev.x, ev.y) !== target) return;
+    if (!target || hit(mouse.x, mouse.y) !== target) return;
     if (target === 'accept' || target === 'decline') onApproval?.(target === 'accept');
     else onDevice?.(target);
   });
@@ -206,8 +206,8 @@ export function VoicePanel({ width, voice, expanded, offset = 0, onMeasure, onDe
       {/* One blank row above and below the chat, so it never touches the header
           or the bottom edge. */}
       <Text> </Text>
-      <Pane items={items} offset={offset} width={inner} onMeasure={onMeasure} keyFor={(p) => p.id}
-        render={(p) => <PartView key={p.id} part={p} width={inner} expanded={expanded} maxRows={8} compactTools />} />
+      <Pane items={items} offset={offset} width={inner} onMeasure={onMeasure} keyFor={(part) => part.id}
+        render={(part) => <PartView key={part.id} part={part} width={inner} expanded={expanded} maxRows={8} compactTools />} />
       {/* The ask sits UNDER the chat — where the Assistant's newest words
           are — as a fixed block the Pane above shrinks around, so an ask
           arriving at the tail pushes the chat up rather than covering it. */}
@@ -215,7 +215,7 @@ export function VoicePanel({ width, voice, expanded, offset = 0, onMeasure, onDe
         <Box flexDirection="column" flexShrink={0}>
           <Text color="yellow" wrap="truncate-end">{`${approval.label}?`}</Text>
           <Text color="yellow" bold wrap="truncate-end">{approval.subject}</Text>
-          <Box ref={(n) => { answersRef.current = n; }}>
+          <Box ref={(node) => { answersRef.current = node; }}>
             <Text wrap="truncate-end">
               <Text color="green">accept</Text>
               <Text dimColor>{' · '}</Text>

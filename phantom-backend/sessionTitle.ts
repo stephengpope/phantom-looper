@@ -14,10 +14,10 @@ export const writeTitle = (deps: OneShotDeps) => async (sessionId: string, conte
     try {
       const title = await oneShot(deps, 'assistant', { type: 'title', sessionId }, titleRequest(context));
       if (title.trim()) return title;
-    } catch (e) {
-      log.warn({ session: sessionId, attempt, err: errStr(e) }, 'session title attempt failed');
+    } catch (error) {
+      log.warn({ session: sessionId, attempt, err: errStr(error) }, 'session title attempt failed');
       // HTTP failures were already retried inside the model call; these tries are for a model that ANSWERED nonsense.
-      if ((e as { statusCode?: number }).statusCode !== undefined) break;
+      if ((error as { statusCode?: number }).statusCode !== undefined) break;
     }
   }
   return null;

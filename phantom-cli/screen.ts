@@ -28,13 +28,13 @@ const { Terminal } = xterm;
  *  trimming, how many rows it repaints, whether it is a full clear — plus the
  *  raw bytes, so a flicker seen in a real session can be replayed and named
  *  instead of guessed at. One JSON object per line; off unless asked for. */
-function makeTracer(): ((e: Record<string, unknown>) => void) | null {
+function makeTracer(): ((record: Record<string, unknown>) => void) | null {
   const want = process.env.PHANTOM_CLI_TRACE_FRAMES;
   if (!want) return null;
   const path = want === '1' ? join(CONFIG_DIR, 'frames.log') : want;
   try { mkdirSync(join(path, '..'), { recursive: true }); } catch { /* exists */ }
-  return (e) => {
-    try { appendFileSync(path, `${JSON.stringify({ t: Date.now(), ...e })}\n`); }
+  return (record) => {
+    try { appendFileSync(path, `${JSON.stringify({ t: Date.now(), ...record })}\n`); }
     catch { /* the recorder must never take the screen down */ }
   };
 }
@@ -73,16 +73,16 @@ export function createScreen(real: NodeJS.WriteStream,
   let ranges: Range[] | null = null;
   let painted: Range[] | null = null;
 
-  const cellText = (y: number, x0: number, x1: number): string => {
-    const line = term.buffer.active.getLine(y);
+  const cellText = (row: number, firstColumn: number, lastColumn: number): string => {
+    const line = term.buffer.active.getLine(row);
     if (!line) return '';
     let out = '';
-    for (let x = x0; x <= x1 && x < term.cols; x++) {
-      const cell = line.getCell(x);
-      const ch = cell?.getChars() ?? '';
+    for (let column = firstColumn; column <= lastColumn && column < term.cols; column++) {
+      const cell = line.getCell(column);
+      const char = cell?.getChars() ?? '';
       // A wide glyph occupies two cells; the second is empty — skip it.
       if (cell && cell.getWidth() === 0) continue;
-      out += ch === '' ? ' ' : ch;
+      out += char === '' ? ' ' : char;
     }
     return out;
   };
@@ -103,10 +103,10 @@ export function createScreen(real: NodeJS.WriteStream,
     // previous ranges are overwritten by Ink's frame (the callback on line
     // term.write below), so we only need to paint the new ones.
     let seq = '\x1b7';
-    for (const r of painted ?? []) seq += `\x1b[${r.y + 1};${r.x0 + 1}H\x1b[0m${cellText(r.y, r.x0, r.x1)}`;
-    for (const r of ranges ?? []) seq += `\x1b[${r.y + 1};${r.x0 + 1}H\x1b[0;7m${cellText(r.y, r.x0, r.x1)}\x1b[0m`;
+    for (const range of painted ?? []) seq += `\x1b[${range.y + 1};${range.x0 + 1}H\x1b[0m${cellText(range.y, range.x0, range.x1)}`;
+    for (const range of ranges ?? []) seq += `\x1b[${range.y + 1};${range.x0 + 1}H\x1b[0;7m${cellText(range.y, range.x0, range.x1)}\x1b[0m`;
     seq += '\x1b8';
-    painted = ranges ? ranges.map((r) => ({ ...r })) : null;
+    painted = ranges ? ranges.map((range) => ({ ...range })) : null;
     real.write(seq);
   };
 
@@ -115,21 +115,21 @@ export function createScreen(real: NodeJS.WriteStream,
     get columns(): number { return real.columns; }
     get rows(): number { return real.rows; }
     write = (chunk: string | Uint8Array, ...rest: unknown[]): boolean => {
-      const s = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8');
+      const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8');
       // The real terminal gets the trimmed stream (trim.ts: a row rewrite
       // whose left part the row already holds starts at the first changed
       // column); the emulator gets the original — both land on the same
       // screen, and the emulator is the record of it.
-      const sent = trim.write(s);
-      trace?.({ kind: 'frame', in: s.length, out: sent.length,
-        rows: (sent.match(/\x1b\[K/g) ?? []).length, clear: sent.includes('\x1b[2J'), raw: s });
+      const sent = trim.write(text);
+      trace?.({ kind: 'frame', in: text.length, out: sent.length,
+        rows: (sent.match(/\x1b\[K/g) ?? []).length, clear: sent.includes('\x1b[2J'), raw: text });
       const ok = real.write(sent, ...(rest as []));
       // The tty driver turns "\n" into "\r\n" on the way to the real terminal
       // (ONLCR — raw mode only changes input); the emulator is a bare terminal,
       // so do the same or everything after a newline lands mid-row.
       // It parses asynchronously: repaint the highlight from ITS callback, or
       // the overlay is drawn with the previous frame's text.
-      term.write(s.replace(/\r?\n/g, '\r\n'), () => { if (ranges && ranges.length) paint(); });
+      term.write(text.replace(/\r?\n/g, '\r\n'), () => { if (ranges && ranges.length) paint(); });
       audit.frame();
       return ok;
     };
@@ -141,9 +141,9 @@ export function createScreen(real: NodeJS.WriteStream,
   // next full repaint. The reply rides stdin; index.tsx routes it to `cpr`.
   const screen: Screen = {
     stream: mirror as unknown as NodeJS.WriteStream,
-    textOf: (rs) => rs.map((r) => cellText(r.y, r.x0, r.x1).replace(/\s+$/, '')),
-    highlight: (rs) => {
-      ranges = rs && rs.length ? rs : null;
+    textOf: (wanted) => wanted.map((range) => cellText(range.y, range.x0, range.x1).replace(/\s+$/, '')),
+    highlight: (wanted) => {
+      ranges = wanted && wanted.length ? wanted : null;
       if (ranges || painted) paint();
     },
     size: () => ({ columns: term.cols, rows: term.rows }),

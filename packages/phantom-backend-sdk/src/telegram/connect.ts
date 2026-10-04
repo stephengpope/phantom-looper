@@ -29,8 +29,8 @@ const agent = new Agent({ connect: { timeout: CONNECT_TIMEOUT_MS }, keepAliveTim
 /** A connection-level failure: never reached the far end, or lost it before
  *  a response. Anything else — a 4xx/5xx, a body that fails to parse — is
  *  the far end's answer and is not retried. */
-export function isConnectFailure(e: unknown): boolean {
-  const code = String((e as { cause?: { code?: string } })?.cause?.code ?? (e as { code?: string })?.code ?? '');
+export function isConnectFailure(error: unknown): boolean {
+  const code = String((error as { cause?: { code?: string } })?.cause?.code ?? (error as { code?: string })?.code ?? '');
   return /^(UND_ERR_CONNECT_TIMEOUT|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|EPIPE|UND_ERR_SOCKET)$/.test(code);
 }
 
@@ -40,9 +40,9 @@ export async function connectFetch(url: string, init: Parameters<typeof fetch>[1
   for (let attempt = 0; ; attempt++) {
     try {
       return await fetch(url, { ...init, dispatcher: agent }) as unknown as Response;
-    } catch (e) {
-      if (attempt < CONNECT_RETRIES && isConnectFailure(e)) continue;
-      throw e;
+    } catch (error) {
+      if (attempt < CONNECT_RETRIES && isConnectFailure(error)) continue;
+      throw error;
     }
   }
 }

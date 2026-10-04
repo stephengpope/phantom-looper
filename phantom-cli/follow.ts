@@ -61,7 +61,7 @@ export async function followStream(
       signal.removeEventListener('abort', onAbort);
     }
     if (signal.aborted) return;
-    await new Promise((r) => setTimeout(r, backoff));
+    await new Promise((wake) => setTimeout(wake, backoff));
     backoff = Math.min(backoff * 2, 10_000);
   }
 }

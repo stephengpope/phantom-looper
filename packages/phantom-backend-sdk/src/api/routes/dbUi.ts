@@ -46,38 +46,38 @@ function parseBasic(header: string | undefined): { user: string; pass: string } 
  *  operation keyword is the caller's to pick (configureServer must be `query`
  *  or it answers FieldUndefined). */
 async function gql(
-  base: string, op: string, jar: { cookie?: string }, headers: Record<string, string> = {},
+  base: string, operation: string, jar: { cookie?: string }, headers: Record<string, string> = {},
 ): Promise<any> {
-  const r = await fetch(`${base}${DB_UI_PREFIX}/api/gql`, {
+  const response = await fetch(`${base}${DB_UI_PREFIX}/api/gql`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       ...(jar.cookie ? { cookie: jar.cookie } : {}),
       ...headers,
     },
-    body: op,
+    body: operation,
     signal: AbortSignal.timeout(30_000),
   });
-  const set = r.headers.get('set-cookie');
+  const set = response.headers.get('set-cookie');
   if (set) jar.cookie = set.split(';')[0];
-  const body = await r.json() as { data?: any; errors?: Array<{ message: string }> };
-  if (body.errors?.length) throw new Error(body.errors.map(e => e.message).join('; '));
+  const body = await response.json() as { data?: any; errors?: Array<{ message: string }> };
+  if (body.errors?.length) throw new Error(body.errors.map(graphqlError => graphqlError.message).join('; '));
   return body.data;
 }
 
-const q = (query: string, variables?: unknown) => JSON.stringify({ query, variables });
+const graphql = (query: string, variables?: unknown) => JSON.stringify({ query, variables });
 
 /** postgres://user:pass@host:port/db → the fields CloudBeaver wants. */
 function connectionFromDsn(dsn: string) {
-  const u = new URL(dsn);
+  const url = new URL(dsn);
   return {
-    name: u.pathname.replace(/^\//, '') || 'postgres',
+    name: url.pathname.replace(/^\//, '') || 'postgres',
     driverId: 'postgresql:postgres-jdbc',
-    host: u.hostname,
-    port: u.port || '5432',
-    databaseName: u.pathname.replace(/^\//, ''),
-    userName: decodeURIComponent(u.username),
-    userPassword: decodeURIComponent(u.password),
+    host: url.hostname,
+    port: url.port || '5432',
+    databaseName: url.pathname.replace(/^\//, ''),
+    userName: decodeURIComponent(url.username),
+    userPassword: decodeURIComponent(url.password),
     saveCredentials: true,
     // Show every database on the server (including agent project_* dbs),
     // not just the one named in the connection string.
@@ -89,11 +89,11 @@ function connectionFromDsn(dsn: string) {
  *  console and preload the connection. Idempotent. */
 async function bootstrap(base: string, dsn: string | undefined): Promise<void> {
   const jar: { cookie?: string } = {};
-  await gql(base, q('mutation{openSession{valid}}'), jar);
+  await gql(base, graphql('mutation{openSession{valid}}'), jar);
 
-  const { serverConfig } = await gql(base, q('{serverConfig{configurationMode}}'), jar);
+  const { serverConfig } = await gql(base, graphql('{serverConfig{configurationMode}}'), jar);
   if (serverConfig.configurationMode) {
-    await gql(base, q(
+    await gql(base, graphql(
       'query($c:ServerConfigInput!){configureServer(configuration:$c)}',
       {
         c: {
@@ -113,23 +113,23 @@ async function bootstrap(base: string, dsn: string | undefined): Promise<void> {
   // Past the wizard the console is authenticated by header.
   const admin = { 'x-user': DB_UI_USER, 'x-team': DB_UI_TEAM };
   const jar2: { cookie?: string } = {};
-  await gql(base, q('mutation{openSession{valid}}'), jar2, admin);
+  await gql(base, graphql('mutation{openSession{valid}}'), jar2, admin);
 
   const conn = connectionFromDsn(dsn);
-  const { connections } = await gql(base, q(
+  const { connections } = await gql(base, graphql(
     'query($p:ID!){connections:userConnections(projectId:$p){id name}}',
     { p: 'g_GlobalConfiguration' },
   ), jar2, admin).catch(() => ({ connections: [] }));
-  const existing = (connections ?? []).find((c: { name: string }) => c.name === conn.name) as
+  const existing = (connections ?? []).find((connection: { name: string }) => connection.name === conn.name) as
     { id: string; name: string } | undefined;
   if (existing) {
-    await gql(base, q(
+    await gql(base, graphql(
       'mutation($id:ID!,$p:ID!){deleteConnection(id:$id,projectId:$p)}',
       { id: existing.id, p: 'g_GlobalConfiguration' },
     ), jar2, admin).catch(() => {});
   }
 
-  await gql(base, q(
+  await gql(base, graphql(
     'mutation($p:ID!,$c:ConnectionConfig!){createConnection(projectId:$p,config:$c){id name}}',
     { p: 'g_GlobalConfiguration', c: conn },
   ), jar2, admin);
@@ -140,9 +140,9 @@ async function bootstrap(base: string, dsn: string | undefined): Promise<void> {
 let bootstrapped: Promise<void> | null = null;
 function ensureBootstrapped(base: string): Promise<void> {
   if (!bootstrapped) {
-    bootstrapped = bootstrap(base, process.env.DB_UI_DSN).catch((e) => {
+    bootstrapped = bootstrap(base, process.env.DB_UI_DSN).catch((error) => {
       bootstrapped = null;
-      throw e;
+      throw error;
     });
   }
   return bootstrapped;
@@ -174,10 +174,10 @@ export function dbUiRoutes(app: FastifyInstance, settings: Settings, apiKey: str
 
     try {
       await ensureBootstrapped(base);
-    } catch (e) {
-      log.error({ err: errStr(e) }, 'database console bootstrap failed');
+    } catch (error) {
+      log.error({ err: errStr(error) }, 'database console bootstrap failed');
       return reply.code(503).send({ ok: false, error: { code: 'db_ui_unavailable',
-        message: `the database console is not ready: ${errStr(e)}`, retryable: true } });
+        message: `the database console is not ready: ${errStr(error)}`, retryable: true } });
     }
   };
 
@@ -233,7 +233,7 @@ export async function reconcileDbUi(docker: import('dockerode') | undefined, set
       await container.stop();
       log.info('database console container stopped');
     }
-  } catch (e) {
-    log.warn({ err: errStr(e) }, 'database console container reconciliation failed');
+  } catch (error) {
+    log.warn({ err: errStr(error) }, 'database console container reconciliation failed');
   }
 }

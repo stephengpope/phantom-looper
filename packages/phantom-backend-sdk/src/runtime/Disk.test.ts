@@ -38,7 +38,7 @@ function world(opts: {
   const deps: CleanupDeps = {
     pct: 80,
     measure: async (): Promise<DiskState> => ({ usedPct: ((TOTAL - free) / TOTAL) * 100, freeGB: free }),
-    owners: async () => rows.map(({ s, project }) => ({ s, project })),
+    owners: async () => rows.map(({ s, project }) => ({ session: s, project })),
     busy: async (ids) => new Set(ids.filter((id) => opts.busy?.includes(id))),
     landed: async (s) => !opts.unmerged?.includes(s.id),
     removeOldImages: async () => { calls.push('images'); },

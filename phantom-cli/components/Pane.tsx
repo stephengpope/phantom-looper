@@ -80,7 +80,7 @@ export function Pane<T>({ items, render, offset, width, onMeasure, fill, topGap 
   const report = useCallback((key: string, rows: number) => {
     if (heights.current.get(key) === rows) return;
     heights.current.set(key, rows);
-    setVersion((v) => v + 1);
+    setVersion((version) => version + 1);
   }, []);
 
   const total = items.length;
@@ -95,8 +95,8 @@ export function Pane<T>({ items, render, offset, width, onMeasure, fill, topGap 
     // sessions) by averaging only over items that are in the list now.
     let sum = 0, seen = 0;
     for (let i = 0; i < total; i++) {
-      const h = map.get(key(i));
-      if (h !== undefined) { sum += h; seen++; }
+      const height = map.get(key(i));
+      if (height !== undefined) { sum += height; seen++; }
     }
     const guess = seen ? Math.max(1, Math.round(sum / seen)) : GUESS_ROWS;
     const rowsAt = (i: number) => map.get(key(i)) ?? guess;
@@ -113,9 +113,9 @@ export function Pane<T>({ items, render, offset, width, onMeasure, fill, topGap 
     let end = total - 1, below = 0;
     const skip = Math.max(0, at - overscan);
     while (end > 0) {
-      const h = rowsAt(end);
-      if (below + h > skip) break;
-      below += h; end--;
+      const height = rowsAt(end);
+      if (below + height > skip) break;
+      below += height; end--;
     }
     let start = end, taken = 0;
     const need = (at - below) + view + overscan;
@@ -141,8 +141,8 @@ export function Pane<T>({ items, render, offset, width, onMeasure, fill, topGap 
   const blind = !measured || paneRows === 0;
   const drawn: ReactNode[] = [];
   for (let i = window.start; i <= window.end && i < total && !blind; i++) {
-    const k = key(i);
-    drawn.push(<Measured key={k} id={k} report={report}>{render(items[i], i)}</Measured>);
+    const itemKey = key(i);
+    drawn.push(<Measured key={itemKey} id={itemKey} report={report}>{render(items[i], i)}</Measured>);
   }
   return (
     <Box ref={frame} flexDirection="column" flexGrow={1} flexShrink={1} flexBasis={0}

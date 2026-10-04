@@ -38,11 +38,11 @@ export class UserMessageQueue implements UserMessages {
 
   /** Everything waiting, taken, in order. */
   drain(): string[] {
-    return this.entries.splice(0).map((e) => e.text);
+    return this.entries.splice(0).map((entry) => entry.text);
   }
 
   take(id: number): QueueEntry | undefined {
-    const i = this.entries.findIndex((e) => e.id === id);
+    const i = this.entries.findIndex((entry) => entry.id === id);
     return i < 0 ? undefined : this.entries.splice(i, 1)[0];
   }
   clear(): QueueEntry[] { return this.entries.splice(0); }

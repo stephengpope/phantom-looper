@@ -35,25 +35,25 @@ class SgrState {
   get clean(): boolean { return !this.fg && !this.bg && this.attrs.size === 0; }
   reset(): void { this.fg = null; this.bg = null; this.attrs.clear(); }
   apply(params: string): void {
-    const p = params === '' ? [0] : params.split(';').map((x) => (x === '' ? 0 : Number(x)));
-    for (let i = 0; i < p.length; i++) {
-      const c = p[i];
-      if (c === 0) this.reset();
-      else if (c === 38 || c === 48) {
+    const codes = params === '' ? [0] : params.split(';').map((text) => (text === '' ? 0 : Number(text)));
+    for (let i = 0; i < codes.length; i++) {
+      const code = codes[i];
+      if (code === 0) this.reset();
+      else if (code === 38 || code === 48) {
         // Extended colour: consumes 5;n or 2;r;g;b.
-        const take = p[i + 1] === 5 ? 2 : p[i + 1] === 2 ? 4 : 0;
-        const val = p.slice(i, i + 1 + take).join(';');
-        if (c === 38) this.fg = val; else this.bg = val;
+        const take = codes[i + 1] === 5 ? 2 : codes[i + 1] === 2 ? 4 : 0;
+        const val = codes.slice(i, i + 1 + take).join(';');
+        if (code === 38) this.fg = val; else this.bg = val;
         i += take;
-      } else if (c === 39) this.fg = null;
-      else if (c === 49) this.bg = null;
-      else if ((c >= 30 && c <= 37) || (c >= 90 && c <= 97)) this.fg = String(c);
-      else if ((c >= 40 && c <= 47) || (c >= 100 && c <= 107)) this.bg = String(c);
-      else if (c >= 1 && c <= 9) this.attrs.add(c);
-      else if (c === 22) { this.attrs.delete(1); this.attrs.delete(2); }
-      else if (c >= 23 && c <= 29) this.attrs.delete(c - 20);
+      } else if (code === 39) this.fg = null;
+      else if (code === 49) this.bg = null;
+      else if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97)) this.fg = String(code);
+      else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) this.bg = String(code);
+      else if (code >= 1 && code <= 9) this.attrs.add(code);
+      else if (code === 22) { this.attrs.delete(1); this.attrs.delete(2); }
+      else if (code >= 23 && code <= 29) this.attrs.delete(code - 20);
       // Anything else is ignored: unknown codes do not make the state clean.
-      else this.attrs.add(c);
+      else this.attrs.add(code);
     }
   }
 }
@@ -96,9 +96,9 @@ export function createTrim(): Trim {
     while (i < run.length) {
       let unitLen: number, unitWidth: number, unitSgr: string | null = null;
       if (run[i] === '\x1b') {
-        const m = CSI.exec(run.slice(i));
-        if (!m || m[2] !== 'm') return null;
-        unitLen = m[0].length; unitWidth = 0; unitSgr = m[0];
+        const match = CSI.exec(run.slice(i));
+        if (!match || match[2] !== 'm') return null;
+        unitLen = match[0].length; unitWidth = 0; unitSgr = match[0];
       } else {
         let end = run.indexOf('\x1b', i);
         if (end === -1) end = run.length;
@@ -118,18 +118,18 @@ export function createTrim(): Trim {
   /** A run written from column 0 of a known row: trim it against what the row
    *  already holds, and remember it. Returns what to send. */
   const flushRow = (run: string): string => {
-    const y = row as number;
-    const old = shadow.get(y);
+    const rowIndex = row as number;
+    const old = shadow.get(rowIndex);
     const cleanEntry = sgr.clean;
     // Advance the style state and the cursor through the run either way.
-    for (const m of run.matchAll(/\x1b\[([0-9;]*)m/g)) sgr.apply(m[1]);
-    shadow.set(y, { raw: run, cleanEntry });
+    for (const match of run.matchAll(/\x1b\[([0-9;]*)m/g)) sgr.apply(match[1]);
+    shadow.set(rowIndex, { raw: run, cleanEntry });
     col = null; // end column is knowable but nothing downstream needs it
     if (!old || !old.cleanEntry || !cleanEntry) return run;
-    let p = 0;
+    let shared = 0;
     const max = Math.min(old.raw.length, run.length);
-    while (p < max && old.raw[p] === run[p]) p++;
-    const cut = boundary(run, p);
+    while (shared < max && old.raw[shared] === run[shared]) shared++;
+    const cut = boundary(run, shared);
     if (!cut || cut.width < MIN_SAVED_COLS) return run;
     return `\x1b[${cut.width + 1}G${cut.codes.join('')}${run.slice(cut.bytes)}`;
   };
@@ -139,28 +139,28 @@ export function createTrim(): Trim {
     let run: string | null = null;   // pending row write (started at col 0)
     const endRun = (): void => {
       if (run === null) return;
-      const r = run;
+      const text = run;
       run = null;
       // Style codes alone do not overwrite the row — only a run with visible
       // text is a row write the shadow may remember.
-      const hasText = r.replace(/\x1b\[[0-9;]*m/g, '') !== '';
-      if (row !== null && hasText) { out.push(flushRow(r)); return; }
-      for (const m of r.matchAll(/\x1b\[([0-9;]*)m/g)) sgr.apply(m[1]);
-      out.push(r);
+      const hasText = text.replace(/\x1b\[[0-9;]*m/g, '') !== '';
+      if (row !== null && hasText) { out.push(flushRow(text)); return; }
+      for (const match of text.matchAll(/\x1b\[([0-9;]*)m/g)) sgr.apply(match[1]);
+      out.push(text);
     };
     let i = 0;
     while (i < chunk.length) {
-      const ch = chunk[i];
-      if (ch === '\x1b') {
-        const m = CSI.exec(chunk.slice(i));
-        if (!m) {
+      const char = chunk[i];
+      if (char === '\x1b') {
+        const match = CSI.exec(chunk.slice(i));
+        if (!match) {
           // An escape Ink does not emit (OSC, charset, save/restore): give up
           // on this chunk — verbatim from here, and trust nothing after it.
           endRun(); invalidate();
           out.push(chunk.slice(i));
           return out.join('');
         }
-        const [tok, params, final] = m;
+        const [tok, params, final] = match;
         i += tok.length;
         if (final === 'm') {
           // Zero-width: part of the run if one is open — and a row's first
@@ -175,15 +175,15 @@ export function createTrim(): Trim {
         const endedRun = run !== null;
         endRun();
         out.push(tok);
-        const n = params === '' ? 1 : Number(params.split(';')[0]) || 1;
+        const count = params === '' ? 1 : Number(params.split(';')[0]) || 1;
         switch (final) {
-          case 'A': if (row !== null) row -= n; break;
-          case 'B': if (row !== null) row += n; break;
-          case 'E': if (row !== null) row += n; col = 0; break;
+          case 'A': if (row !== null) row -= count; break;
+          case 'B': if (row !== null) row += count; break;
+          case 'E': if (row !== null) row += count; col = 0; break;
           case 'G': col = (params === '' ? 1 : Number(params) || 1) - 1; break;
           case 'H': {
-            const [r, c] = params.split(';').map((x) => Number(x) || 1);
-            row = (r || 1) - 1; col = (c || 1) - 1;
+            const [toRow, toColumn] = params.split(';').map((text) => Number(text) || 1);
+            row = (toRow || 1) - 1; col = (toColumn || 1) - 1;
             break;
           }
           case 'J': shadow.clear(); break;                        // 2J/3J: screen cleared
@@ -197,17 +197,17 @@ export function createTrim(): Trim {
         }
         continue;
       }
-      if (ch === '\n' || ch === '\r') {
+      if (char === '\n' || char === '\r') {
         i += 1;
         endRun();
-        out.push(ch);
-        if (ch === '\n' && row !== null) row += 1;
+        out.push(char);
+        if (char === '\n' && row !== null) row += 1;
         col = 0;
         continue;
       }
       let end = chunk.indexOf('\x1b', i);
-      const nl = chunk.indexOf('\n', i), cr = chunk.indexOf('\r', i);
-      for (const stop of [nl, cr]) if (stop !== -1 && (end === -1 || stop < end)) end = stop;
+      const newlineAt = chunk.indexOf('\n', i), carriageReturnAt = chunk.indexOf('\r', i);
+      for (const stop of [newlineAt, carriageReturnAt]) if (stop !== -1 && (end === -1 || stop < end)) end = stop;
       if (end === -1) end = chunk.length;
       const text = chunk.slice(i, end);
       i = end;

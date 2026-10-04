@@ -83,7 +83,7 @@ export class TelegramApi {
       if (res.ok && json.ok) return json.result;
       if (res.status === 429 && attempt === 0) {
         const wait = ((json.parameters?.retry_after ?? 1) * 1000) + 200;
-        await new Promise((r) => setTimeout(r, wait));
+        await new Promise((wake) => setTimeout(wake, wait));
         continue;
       }
       throw new Error(`telegram ${method} failed: ${json.description || res.status}`);
@@ -119,9 +119,9 @@ export class TelegramApi {
    *  the 4096 ceiling, each chunk a sendMessage. A keyboard rides the LAST
    *  chunk — the question it answers ends there. Compose the text first
    *  (titled() for a header + message bubble); this never re-shapes it. */
-  async sendMarkdown(chatId: number, md: string,
+  async sendMarkdown(chatId: number, markdown: string,
     opts: { replyToMessageId?: number; replyMarkup?: unknown } = {}) {
-    const chunks = splitFormatted(toTelegram(md));
+    const chunks = splitFormatted(toTelegram(markdown));
     let last;
     for (let i = 0; i < chunks.length; i++) {
       last = await this.sendMessage(chatId, chunks[i].text, {
@@ -137,7 +137,7 @@ export class TelegramApi {
    *  the approval gate). */
   async sendMessage(chatId: number, text: string,
     opts: { replyToMessageId?: number; entities?: Entity[]; replyMarkup?: unknown } = {}) {
-    const m = await this.call('sendMessage', {
+    const sent = await this.call('sendMessage', {
       chat_id: chatId, text,
       ...(opts.entities?.length ? { entities: opts.entities } : {}),
       ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
@@ -145,8 +145,8 @@ export class TelegramApi {
         ? { reply_parameters: { message_id: opts.replyToMessageId, allow_sending_without_reply: true } }
         : {}),
     });
-    if (m?.message_id != null) this.onSent?.(m.message_id, text);
-    return m;
+    if (sent?.message_id != null) this.onSent?.(sent.message_id, text);
+    return sent;
   }
 
   /** Every button tap MUST be answered or the user's client spins on it;
@@ -161,18 +161,18 @@ export class TelegramApi {
   // without a reply_markup drops the message's keyboard — how an answered
   // approval loses its buttons.
   async editMessageText(chatId: number, messageId: number, text: string, entities?: Entity[]) {
-    const r = await this.call('editMessageText', {
+    const edited = await this.call('editMessageText', {
       chat_id: chatId, message_id: messageId, text,
       ...(entities?.length ? { entities } : {}),
     });
     this.onSent?.(messageId, text);
-    return r;
+    return edited;
   }
 
   async deleteMessage(chatId: number, messageId: number) {
-    const r = await this.call('deleteMessage', { chat_id: chatId, message_id: messageId });
+    const deleted = await this.call('deleteMessage', { chat_id: chatId, message_id: messageId });
     this.onDeleted?.(messageId);
-    return r;
+    return deleted;
   }
 
   sendChatAction(chatId: number, action = 'typing') {

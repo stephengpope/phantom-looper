@@ -19,8 +19,8 @@ import { useEffect, useRef, useState } from 'react';
 const TAIL = 6;        // cells the window travels past each end before wrapping
 const WINDOW = 3;
 
-const paint = (s: string, c: string, bold: boolean) =>
-  s ? (bold ? chalk.bold(chalk.hex(c)(s)) : chalk.hex(c)(s)) : '';
+const paint = (text: string, color: string, bold: boolean) =>
+  text ? (bold ? chalk.bold(chalk.hex(color)(text)) : chalk.hex(color)(text)) : '';
 
 const sweepText = (
   text: string, offset: number, color: string, shimmerColor: string, bold: boolean,
@@ -66,11 +66,11 @@ function useGlintSweep(
   const first = useRef(true);
   useEffect(() => {
     if (!active || legs !== null) return;
-    const [lo, hi] = first.current ? firstRestMs : restMs;
+    const [restMin, restMax] = first.current ? firstRestMs : restMs;
     first.current = false;
     const roll = () => cellMs[0] + Math.random() * (cellMs[1] - cellMs[0]);
-    const t = setTimeout(() => setLegs([roll(), roll()]), lo + Math.random() * (hi - lo));
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setLegs([roll(), roll()]), restMin + Math.random() * (restMax - restMin));
+    return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the ranges are config, not state
   }, [active, legs]);
 
@@ -111,7 +111,7 @@ export function GlintRows({
   rows: string[]; colors: string[]; active?: boolean; shimmerColor?: string; bold?: boolean;
   restMs?: [number, number]; cellMs?: [number, number]; firstRestMs?: [number, number];
 }) {
-  const width = rows.reduce((widest, r) => Math.max(widest, r.length), 0);
+  const width = rows.reduce((widest, row) => Math.max(widest, row.length), 0);
   const offset = useGlintSweep(width + TAIL * 2, active, restMs, cellMs, firstRestMs);
   return (
     <>

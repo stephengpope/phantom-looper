@@ -47,8 +47,8 @@ export function Toolbar({ groups = [], spin, spinWho, spinSince, toast, pinned }
     <Box paddingLeft={1} width={cols} height={1} overflow="hidden"><Text backgroundColor={toast.bg} color="white" bold>{` ${toast.text} `}</Text></Box>
   );
   const shown = groups
-    .map((g) => g.filter((p) => (typeof p === 'string' ? p : p.text)))
-    .filter((g) => g.length);
+    .map((group) => group.filter((part) => (typeof part === 'string' ? part : part.text)))
+    .filter((group) => group.length);
   if (!shown.length && !spin) return (
     // The held blank row — same shape as the real line, one cell of content
     // so yoga keeps the height.
@@ -57,13 +57,13 @@ export function Toolbar({ groups = [], spin, spinWho, spinSince, toast, pinned }
   return (
     <Box paddingLeft={1} width={cols} height={1} overflow="hidden">
       <Text color="yellow">{pinned ? '📌 ' : '» '}</Text>
-      {shown.map((g, gi) => (
-        <Text key={gi} color="yellow">
-          {gi > 0 ? ' · ' : ''}
-          {g.map((p, pi) => (
-            <Text key={pi} color="yellow">
-              {pi > 0 ? ' ' : ''}
-              {typeof p === 'string' ? p : <><Text color={p.mark}>•</Text>{` ${p.text}`}</>}
+      {shown.map((group, groupIndex) => (
+        <Text key={groupIndex} color="yellow">
+          {groupIndex > 0 ? ' · ' : ''}
+          {group.map((part, partIndex) => (
+            <Text key={partIndex} color="yellow">
+              {partIndex > 0 ? ' ' : ''}
+              {typeof part === 'string' ? part : <><Text color={part.mark}>•</Text>{` ${part.text}`}</>}
             </Text>
           ))}
         </Text>

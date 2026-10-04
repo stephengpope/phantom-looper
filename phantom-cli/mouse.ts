@@ -36,21 +36,21 @@ export function isMouseInput(input: string): boolean {
 }
 
 export function parseMouse(input: string): MouseEvent | null {
-  const m = SGR.exec(input);
-  if (!m) return null;
-  const code = Number(m[1]);
-  const x = Number(m[2]) - 1;
-  const y = Number(m[3]) - 1;
-  const release = m[4] === 'm';
+  const match = SGR.exec(input);
+  if (!match) return null;
+  const code = Number(match[1]);
+  const column = Number(match[2]) - 1;
+  const row = Number(match[3]) - 1;
+  const release = match[4] === 'm';
   const shift = (code & 4) !== 0, meta = (code & 8) !== 0, ctrl = (code & 16) !== 0;
   const low = code & 3;
   if (code >= 64 && code < 96) {
     // 64 up, 65 down (66/67 are horizontal — reported as a wheel with dir 0, ignored by callers)
     const dir = low === 0 ? -1 : low === 1 ? 1 : 0;
-    return { kind: 'wheel', button: dir, x, y, shift, meta, ctrl };
+    return { kind: 'wheel', button: dir, x: column, y: row, shift, meta, ctrl };
   }
-  if (code & 32) return { kind: 'drag', button: low, x, y, shift, meta, ctrl };
-  return { kind: release ? 'release' : 'press', button: low, x, y, shift, meta, ctrl };
+  if (code & 32) return { kind: 'drag', button: low, x: column, y: row, shift, meta, ctrl };
+  return { kind: release ? 'release' : 'press', button: low, x: column, y: row, shift, meta, ctrl };
 }
 
 // --- selection ------------------------------------------------------------------
@@ -84,13 +84,13 @@ export function selectionRanges(sel: Selection, scroll: number, screenRows: numb
   let a = { x: sel.anchor.x, y: sel.anchor.contentY + scroll };
   let b = { x: sel.head.x, y: sel.head.contentY + scroll };
   if (b.y < a.y || (b.y === a.y && b.x < a.x)) [a, b] = [b, a];
-  const clamp = (x: number) => Math.min(region.right, Math.max(region.left, x));
+  const clamp = (column: number) => Math.min(region.right, Math.max(region.left, column));
   const out: Range[] = [];
-  for (let y = a.y; y <= b.y; y++) {
-    if (y < 0 || y >= screenRows) continue;   // off-screen — skip
-    const x0 = y === a.y ? clamp(a.x) : region.left;
-    const x1 = y === b.y ? clamp(b.x) : region.right;
-    if (x1 >= x0) out.push({ y, x0, x1 });
+  for (let row = a.y; row <= b.y; row++) {
+    if (row < 0 || row >= screenRows) continue;   // off-screen — skip
+    const firstColumn = row === a.y ? clamp(a.x) : region.left;
+    const lastColumn = row === b.y ? clamp(b.x) : region.right;
+    if (lastColumn >= firstColumn) out.push({ y: row, x0: firstColumn, x1: lastColumn });
   }
   return out;
 }
@@ -101,7 +101,7 @@ export function selectionRanges(sel: Selection, scroll: number, screenRows: numb
  *  macOS; wl-copy / xclip / xsel on Linux); failing all of those, OSC 52 to
  *  the terminal, which iTerm2, kitty, WezTerm, Windows Terminal and tmux
  *  (with `set -g set-clipboard on`) honour. Resolves with what was used. */
-export function copyToClipboard(text: string, stdout: { write(s: string): unknown } = process.stdout): Promise<string> {
+export function copyToClipboard(text: string, stdout: { write(text: string): unknown } = process.stdout): Promise<string> {
   const tools: Array<[string, string[]]> = process.platform === 'darwin'
     ? [['pbcopy', []]]
     : [['wl-copy', []], ['xclip', ['-selection', 'clipboard']], ['xsel', ['--clipboard', '--input']]];

@@ -127,7 +127,7 @@ export function App({
   /** Fired whenever the live session changes — /new, /resume, /project and
    *  tab all switch it, so the id the caller started with is not the one you
    *  are in when you quit. */
-  onSession?: (s: { id: string; branch: string; projectId: string }) => void;
+  onSession?: (session: { id: string; branch: string; projectId: string }) => void;
   /** Hands the caller the window store once it exists — index.tsx's version
    *  watch uses it to light up the update-ready label. */
   onWindow?: (store: WindowStore) => void;
@@ -175,11 +175,11 @@ export function App({
   const voice = windowStore.voice;
   // The window is mutable and lives outside React; this is the re-render
   // signal. One subscription: the window forwards what its parts say.
-  const [, bump] = useReducer((n: number) => n + 1, 0);
+  const [, bump] = useReducer((tick: number) => tick + 1, 0);
   useEffect(() => windowStore.subscribe(bump), [windowStore]);
   useEffect(() => () => windowStore.close(), [windowStore]);
   useEffect(() => { onWindow?.(windowStore); }, [windowStore, onWindow]);
-  const vs = voice.snapshot();
+  const voiceSnapshot = voice.snapshot();
   // The voice pane, on the right. Shown when voice is on; ctrl+g overrides
   // that either way. Its share of the width is a setting (percent).
   const showSidebar = windowStore.showSidebar;
@@ -283,9 +283,9 @@ export function App({
   // — and it is what notices the hold lapsing on this window's clock.
   useEffect(() => {
     if (!heldNow) return;
-    const t = setInterval(bump, 1000);
-    t.unref?.();
-    return () => clearInterval(t);
+    const timer = setInterval(bump, 1000);
+    timer.unref?.();
+    return () => clearInterval(timer);
   }, [heldNow !== null]);
 
   // The Assistant's read tools follow the session on screen.
@@ -357,13 +357,13 @@ export function App({
    *  already in memory — nothing is stored a second time for this. */
   const said = useMemo(() => {
     const out: string[] = [];
-    for (const m of session?.history ?? []) {
-      if (m.role !== 'user') continue;
-      const text = typeof m.content === 'string'
-        ? m.content
-        : Array.isArray(m.content)
-          ? m.content.filter((c) => (c as { type?: string }).type === 'text')
-              .map((c) => (c as { text?: string }).text ?? '').join('')
+    for (const message of session?.history ?? []) {
+      if (message.role !== 'user') continue;
+      const text = typeof message.content === 'string'
+        ? message.content
+        : Array.isArray(message.content)
+          ? message.content.filter((part) => (part as { type?: string }).type === 'text')
+              .map((part) => (part as { text?: string }).text ?? '').join('')
           : '';
       if (text.trim()) out.push(text.trim());
     }
@@ -442,38 +442,38 @@ export function App({
     if (sel) highlightSel(sel);
   }, [scroll, voiceScroll]);
 
-  useInput((ch) => {
-    if (!isMouseInput(ch)) return;
-    const ev = parseMouse(ch);
+  useInput((char) => {
+    if (!isMouseInput(char)) return;
+    const mouse = parseMouse(char);
     // With a full overlay up the left pane's mouse belongs to it (on the
     // board a drag moves a card, a click opens one) — running text selection
     // there too would copy on every drop. The voice pane keeps its wheel and
     // selection.
-    if (windowStore.overlay?.size === 'full' && ev && !(showSidebar && ev.x >= mainCols)) return;
-    if (!ev) return;
-    const inVoice = showSidebar && ev.x >= mainCols;
-    if (ev.kind === 'wheel') {
-      if (ev.button === 0) return;
-      const step = 3 * ev.button;   // +down scrolls toward the tail (offset shrinks)
+    if (windowStore.overlay?.size === 'full' && mouse && !(showSidebar && mouse.x >= mainCols)) return;
+    if (!mouse) return;
+    const inVoice = showSidebar && mouse.x >= mainCols;
+    if (mouse.kind === 'wheel') {
+      if (mouse.button === 0) return;
+      const step = 3 * mouse.button;   // +down scrolls toward the tail (offset shrinks)
       scrollBy(inVoice ? 'voice' : 'chat', -step);
       // During a drag-select, re-highlight: the anchor is in content space so
       // it tracks the text automatically — just re-render with the new scroll.
       const sel = selection.current;
       if (sel) {
-        sel.head = { x: ev.x, contentY: ev.y - selScroll(sel.pane) };
+        sel.head = { x: mouse.x, contentY: mouse.y - selScroll(sel.pane) };
         highlightSel(sel);
       }
       return;
     }
-    if (ev.button !== 0) return;   // left button only
-    if (ev.kind === 'press') {
+    if (mouse.button !== 0) return;   // left button only
+    if (mouse.kind === 'press') {
       stopDragScroll();
       const pane: 'chat' | 'voice' = inVoice ? 'voice' : 'chat';
       const curScroll = selScroll(pane);
       const region = inVoice ? { left: mainCols + 1, right: screenCols - 1 } : { left: 0, right: mainCols - 1 };
       selection.current = {
-        anchor: { x: ev.x, contentY: ev.y - curScroll },
-        head:   { x: ev.x, contentY: ev.y - curScroll },
+        anchor: { x: mouse.x, contentY: mouse.y - curScroll },
+        head:   { x: mouse.x, contentY: mouse.y - curScroll },
         region, pane,
       };
       screen?.highlight(null);
@@ -486,13 +486,13 @@ export function App({
         const step = 3;   // rows per tick, matching the wheel step
         scrollBy(sel.pane, dir * step);
         // Extend the head to the viewport edge in content space.
-        const sc = selScroll(sel.pane);
+        const scroll = selScroll(sel.pane);
         if (dir > 0) {
           // Scrolling up (into history): head → top of viewport
-          sel.head = { x: sel.region.left, contentY: 0 - sc };
+          sel.head = { x: sel.region.left, contentY: 0 - scroll };
         } else {
           // Scrolling down (toward tail): head → bottom of viewport
-          sel.head = { x: sel.region.right, contentY: (screenRows - 1) - sc };
+          sel.head = { x: sel.region.right, contentY: (screenRows - 1) - scroll };
         }
         highlightSel(sel);
       }, 50);
@@ -500,11 +500,11 @@ export function App({
     }
     const sel = selection.current;
     if (!sel) return;
-    if (ev.kind === 'drag') {
-      sel.head = { x: ev.x, contentY: ev.y - selScroll(sel.pane) };
+    if (mouse.kind === 'drag') {
+      sel.head = { x: mouse.x, contentY: mouse.y - selScroll(sel.pane) };
       // Detect edge: set the auto-scroll direction.
-      if (ev.y <= 0) dragScrollDir.current = 1;        // at top → scroll up (into history, offset grows)
-      else if (ev.y >= screenRows - 1) dragScrollDir.current = -1;  // at bottom → scroll down
+      if (mouse.y <= 0) dragScrollDir.current = 1;        // at top → scroll up (into history, offset grows)
+      else if (mouse.y >= screenRows - 1) dragScrollDir.current = -1;  // at bottom → scroll down
       else dragScrollDir.current = 0;
       highlightSel(sel);
       return;
@@ -512,7 +512,7 @@ export function App({
     // release
     stopDragScroll();
     const curScroll = selScroll(sel.pane);
-    sel.head = { x: ev.x, contentY: ev.y - curScroll };
+    sel.head = { x: mouse.x, contentY: mouse.y - curScroll };
     const moved = sel.anchor.x !== sel.head.x || sel.anchor.contentY !== sel.head.contentY;
     selection.current = null;
     if (!moved || !screen) { screen?.highlight(null); return; }
@@ -526,13 +526,13 @@ export function App({
   // Mic and speaker toggles, always on — like ctrl+c they must work from the
   // board, a menu, anywhere. ctrl+r (record) and ctrl+l (loudspeaker): both in
   // the set this terminal actually delivers (`npm run keys`).
-  useInput((ch, key) => {
-    if (!key.ctrl || (ch !== 'r' && ch !== 'l')) return;
-    windowStore.toggleDevice(ch === 'r' ? 'mic' : 'speaker');
+  useInput((char, key) => {
+    if (!key.ctrl || (char !== 'r' && char !== 'l')) return;
+    windowStore.toggleDevice(char === 'r' ? 'mic' : 'speaker');
   });
 
-  useInput((ch, key) => {
-    if (!(key.ctrl && ch === 'c')) return;
+  useInput((char, key) => {
+    if (!(key.ctrl && char === 'c')) return;
     if (!windowStore.hasOverlay && input) { clearInput(); return; }
     if (ctrlC) { windowStore.quit(); return; }
     if (session?.busy) store.abortTurn(session.id);
@@ -552,14 +552,14 @@ export function App({
   const [interruptArmed, setInterruptArmed] = useState(false);
   useEffect(() => {
     if (!interruptArmed) return;
-    const t = setTimeout(() => setInterruptArmed(false), 3000);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setInterruptArmed(false), 3000);
+    return () => clearTimeout(timer);
   }, [interruptArmed]);
   // Clear the armed state when the hold drops (the turn ended on its own).
   useEffect(() => { if (!heldNow) setInterruptArmed(false); }, [heldNow]);
 
   // Off while an overlay owns the keyboard — see the note at the top of the file.
-  useInput((ch, key) => {
+  useInput((char, key) => {
     // esc while a turn runs: abort it. If something is queued, the front
     // message starts immediately (the finally block in send pops it) —
     // esc means "skip to next", not "forget what I said".
@@ -576,8 +576,8 @@ export function App({
       } else setInterruptArmed(true);
       return;
     }
-    if (key.ctrl && ch === 'o') { setExpanded((e) => !e); return; }
-    if (key.ctrl && ch === 'g') { windowStore.setSidebar(!showSidebar); return; }
+    if (key.ctrl && char === 'o') { setExpanded((error) => !error); return; }
+    if (key.ctrl && char === 'g') { windowStore.setSidebar(!showSidebar); return; }
     // Scroll the conversation, through the same rule the wheel uses. A page is
     // most of the pane.
     const page = Math.max(1, screenRows - liveRows - 4);
@@ -590,7 +590,7 @@ export function App({
     // second door for the terminals that send it, and it is gone: a shortcut
     // that works on some machines and silently does history on the rest is a
     // key nobody can learn.
-    if (key.ctrl && ch === 'n') { windowStore.openSwitcher(); return; }
+    if (key.ctrl && char === 'n') { windowStore.openSwitcher(); return; }
 
     // A slash line is being typed, so tab completes it and the arrows walk the
     // suggestions — that is what they mean while that list is up, and only
@@ -601,9 +601,9 @@ export function App({
     // names tab fills the highlighted row once, as it always has.
     const choices = windowStore.argChoices;
     const menu = matches(input, choices);
-    const m = menu.rows;
+    const rows = menu.rows;
     const ring = key.tab && !key.shift && tabRing?.produced === input ? tabRing : null;
-    if (ring || m.length > 0) {
+    if (ring || rows.length > 0) {
       if (key.tab && !key.shift) {
         const base = ring ? ring.from : input;
         const from = ring ? matches(base, choices) : menu;
@@ -614,8 +614,8 @@ export function App({
         setInput(text);
         setSuggestAt(0);
         setTabRing(from.command && rows.length > 1 ? { from: base, produced: text, at } : null);
-      } else if (key.downArrow && !key.shift) setSuggestAt((i) => (i + 1) % m.length);
-      else if (key.upArrow && !key.shift) setSuggestAt((i) => (i - 1 + m.length) % m.length);
+      } else if (key.downArrow && !key.shift) setSuggestAt((i) => (i + 1) % rows.length);
+      else if (key.upArrow && !key.shift) setSuggestAt((i) => (i - 1 + rows.length) % rows.length);
       return;
     }
 
@@ -639,7 +639,7 @@ export function App({
   // The name column is as wide as the WHOLE list's longest name, so it holds
   // still while typing narrows the rows.
   const menuSlash = menu.command ? '' : '/';
-  const menuPad = Math.max(10, ...(menu.command ? windowStore.argChoices(menu.command) : COMMANDS).map((r) => r.name.length));
+  const menuPad = Math.max(10, ...(menu.command ? windowStore.argChoices(menu.command) : COMMANDS).map((row) => row.name.length));
   // The menu shows a window of MENU_ROWS rows and slides it so the highlighted
   // row is always one of them — the list will only grow, and an arrow key must
   // never land on a row that is not on screen.
@@ -705,8 +705,8 @@ export function App({
   // facts separated by ` · `, not a flat list of fields.
   const withMode = (rest?: string): ToolbarGroup[] =>
     [[modeMark], [cardMark, nameMark, workMark], [modelMark, tokensMark], [taskMark], [rest]]
-      .map((g) => g.filter((p): p is ToolbarPart => Boolean(p)))
-      .filter((g) => g.length);
+      .map((group) => group.filter((part): part is ToolbarPart => Boolean(part)))
+      .filter((group) => group.length);
 
   // THE ONE LAYOUT RULE (see the header): what owns the main column. A full
   // overlay takes it whole; anything else is the chat, with a third overlay
@@ -720,7 +720,7 @@ export function App({
   const dialogRows = dialog?.rows ?? 0;
   const thirdRows = Math.max(6, Math.floor(screenRows / 3));
   const dialogBox = dialog && (
-    <Boundary name="dialog" resetKey={dialog} onError={(m) => { windowStore.note(`${m} — the question closed; the stack is in ~/.phantom-cli/cli.log`); windowStore.dismissDialog(); }}>
+    <Boundary name="dialog" resetKey={dialog} onError={(reason) => { windowStore.note(`${reason} — the question closed; the stack is in ~/.phantom-cli/cli.log`); windowStore.dismissDialog(); }}>
       <Box flexShrink={0} height={dialogRows}>{dialog.render()}</Box>
     </Boundary>
   );
@@ -740,7 +740,7 @@ export function App({
         <InputGate.Provider value={!dialog}>
         <SizeContext.Provider value={{ rows: screenRows - dialogRows, cols: screenCols }}>
         <Box flexDirection="column" height={screenRows - dialogRows} overflow="hidden">
-        <Boundary name={fullOverlay.name} resetKey={fullOverlay.name} onError={(m) => { windowStore.note(`${m} — ${fullOverlay.name} closed; the stack is in ~/.phantom-cli/cli.log`); windowStore.dismissOverlay(); }}>
+        <Boundary name={fullOverlay.name} resetKey={fullOverlay.name} onError={(reason) => { windowStore.note(`${reason} — ${fullOverlay.name} closed; the stack is in ~/.phantom-cli/cli.log`); windowStore.dismissOverlay(); }}>
           {fullOverlay.render({ width: mainCols, height: screenRows - dialogRows })}
         </Boundary>
         </Box>
@@ -751,13 +751,13 @@ export function App({
       {/* keyFor: a part's own id, so the height the pane measured for it
           survives the list being rebuilt (a refresh reseats the whole
           conversation) and switching between sessions. */}
-      <Boundary name="conversation" resetKey={session?.id} onError={(m) => windowStore.note(`${m} — the conversation stopped drawing; /resume it to redraw; the stack is in ~/.phantom-cli/cli.log`)}>
+      <Boundary name="conversation" resetKey={session?.id} onError={(reason) => windowStore.note(`${reason} — the conversation stopped drawing; /resume it to redraw; the stack is in ~/.phantom-cli/cli.log`)}>
       {/* While a new session is being built (window.opening) the pane is
           cleared and the splash alone is drawn, so the ghost gets the whole
           pane instead of the space left under the old conversation. */}
       <Pane items={windowStore.opening ? [] : session ? session.done : windowStore.notes} offset={scroll} width={mainCols} onMeasure={setScrollMax} topGap
-        keyFor={(p) => p.id}
-        render={(p) => <PartView key={p.id} part={p} width={width} expanded={expanded} />}
+        keyFor={(part) => part.id}
+        render={(part) => <PartView key={part.id} part={part} width={width} expanded={expanded} />}
         // The splash rides the pane's empty space so the header stays put:
         // clearing it blanks only the banner's own rows — the pane-swap
         // version replaced 21 rows of the screen in one frame (traced).
@@ -769,8 +769,8 @@ export function App({
             session output to show. One guard for the whole region, so a new
             element added here is inside it by default. */}
         {!windowStore.opening && (<>
-        {session?.live.map((p) => (
-          <PartView key={p.id} part={p} width={width} expanded={expanded} maxRows={liveRows} />
+        {session?.live.map((part) => (
+          <PartView key={part.id} part={part} width={width} expanded={expanded} maxRows={liveRows} />
         ))}
         {/* The working line, for OUR turn and for one we are watching. A tool
             row does not animate on its own, so without this a two-minute
@@ -792,7 +792,7 @@ export function App({
         )}
         </>)}
 
-        <Boundary name="prompt" resetKey={windowStore.overlay} onError={(m) => { windowStore.note(`${m} — the prompt stopped drawing; the stack is in ~/.phantom-cli/cli.log`); windowStore.dismissOverlay(); }}>
+        <Boundary name="prompt" resetKey={windowStore.overlay} onError={(reason) => { windowStore.note(`${reason} — the prompt stopped drawing; the stack is in ~/.phantom-cli/cli.log`); windowStore.dismissOverlay(); }}>
           <>
             {thirdOverlay ? (
               // A third overlay stands in for the slash menu and the prompt:
@@ -803,7 +803,7 @@ export function App({
               <SizeContext.Provider value={{ rows: thirdRows, cols: screenCols }}>
               <Box flexDirection="column" height={thirdRows} flexShrink={0} overflow="hidden">
               <Boundary name={thirdOverlay.name} resetKey={thirdOverlay.name}
-                onError={(m) => { windowStore.note(`${m} — ${thirdOverlay.name} closed; the stack is in ~/.phantom-cli/cli.log`); windowStore.dismissOverlay(); }}>
+                onError={(reason) => { windowStore.note(`${reason} — ${thirdOverlay.name} closed; the stack is in ~/.phantom-cli/cli.log`); windowStore.dismissOverlay(); }}>
                 {thirdOverlay.render({ width: mainCols, height: thirdRows })}
               </Boundary>
               </Box>
@@ -821,17 +821,17 @@ export function App({
               <Box flexDirection="column" marginTop={1} marginBottom={1}>
                 <Text dimColor>{menuAbove > 0 ? `    ↑ ${menuAbove} more` : ' '}</Text>
                 {Array.from({ length: MENU_ROWS }, (_, j) => {
-                  const c = menuRows[j];
-                  if (!c) return <Text key={`pad${j}`}> </Text>;
+                  const choice = menuRows[j];
+                  if (!choice) return <Text key={`pad${j}`}> </Text>;
                   const i = menuFrom + j;
                   // The highlighted row is the row selector's one look: bold
                   // white on a dark-grey bar (SelectList's rule).
                   return (
                     // truncate-end keeps a row ONE line on a narrow terminal —
                     // a wrapped summary would break this menu's fixed height.
-                    <Box key={c.name} {...(i === at ? { backgroundColor: HIGHLIGHT_BG } : {})}>
+                    <Box key={choice.name} {...(i === at ? { backgroundColor: HIGHLIGHT_BG } : {})}>
                       <Text color={i === at ? HIGHLIGHT_FG : undefined} bold={i === at} dimColor={i !== at} wrap="truncate-end">
-                        {`${i === at ? '❯ ' : '  '}${menuSlash}${c.name.padEnd(menuPad)} ${c.summary}`}
+                        {`${i === at ? '❯ ' : '  '}${menuSlash}${choice.name.padEnd(menuPad)} ${choice.summary}`}
                       </Text>
                     </Box>
                   );
@@ -843,7 +843,7 @@ export function App({
               </Box>
             ) : null}
             {dialogBox}
-            {!windowStore.hasOverlay && <Prompt value={input} onChange={(v) => { setInput(v); setSuggestAt(0); }}
+            {!windowStore.hasOverlay && <Prompt value={input} onChange={(value) => { setInput(value); setSuggestAt(0); }}
               onSubmit={(text) => { void windowStore.submit(text, suggestAt, () => { clearInput(); setScroll(0); }); }} onMeasure={setPromptTop}
               pastes={windowStore.pastes} onFileDrop={(paths) => windowStore.dropFiles(paths)} updateReady={windowStore.updateReady}
               columns={promptCols} onBoundary={onBoundary}
@@ -872,8 +872,8 @@ export function App({
       </>)}
     </Box>
     {showSidebar && <Divider rows={screenRows} junctions={junctions} />}
-    {showSidebar && <Boundary name="voice pane" resetKey={showSidebar} onError={(m) => windowStore.note(`${m} — the voice pane stopped drawing; /voice off and on redraws it; the stack is in ~/.phantom-cli/cli.log`)}>
-      <VoicePanel width={sideCols - 1} voice={vs} expanded={expanded}
+    {showSidebar && <Boundary name="voice pane" resetKey={showSidebar} onError={(reason) => windowStore.note(`${reason} — the voice pane stopped drawing; /voice off and on redraws it; the stack is in ~/.phantom-cli/cli.log`)}>
+      <VoicePanel width={sideCols - 1} voice={voiceSnapshot} expanded={expanded}
       offset={voiceScroll} onMeasure={setVoiceScrollMax} onDevice={windowStore.toggleDevice}
       approval={windowStore.approval} onApproval={(ok) => windowStore.approval?.resolve(ok)} />
     </Boundary>}

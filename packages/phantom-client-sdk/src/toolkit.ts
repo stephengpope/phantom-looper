@@ -50,11 +50,11 @@ function guardReadonly(built: BuiltTools, ctx: ToolKitContext): Record<string, T
   const { tools } = built;
   const mutating = new Set(built.mutating);
   const out: Record<string, Tool> = {};
-  for (const [name, t] of Object.entries(tools)) {
-    if (!mutating.has(name) || !t.execute) { out[name] = t; continue; }
-    const inner = t.execute;
-    out[name] = { ...t, execute: (args: unknown, opts: unknown) =>
-      ctx.readonly() ? readonlyRefusal(name) : (inner as (a: unknown, o: unknown) => unknown)(args, opts) };
+  for (const [name, tool] of Object.entries(tools)) {
+    if (!mutating.has(name) || !tool.execute) { out[name] = tool; continue; }
+    const inner = tool.execute;
+    out[name] = { ...tool, execute: (args: unknown, opts: unknown) =>
+      ctx.readonly() ? readonlyRefusal(name) : (inner as (a: unknown, callOptions: unknown) => unknown)(args, opts) };
   }
   return out;
 }
@@ -108,7 +108,7 @@ export function serverToolKit(listing: readonly PublishedTool[]): ToolKit {
             ctx.backend.callRaw('POST', `/tools/${def.name}`, args ?? {}, { sessionId: ctx.sessionId, signal: opts?.abortSignal }),
         });
       }
-      return Promise.resolve({ tools: out, mutating: listing.filter((t) => t.mutates).map((t) => t.name) });
+      return Promise.resolve({ tools: out, mutating: listing.filter((tool) => tool.mutates).map((tool) => tool.name) });
     },
   };
 }

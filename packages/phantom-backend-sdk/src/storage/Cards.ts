@@ -36,7 +36,7 @@ export interface ItemOp { op: 'add' | 'edit' | 'remove' | 'tick'; key?: string; 
 type Requirement = CardRow['requirements'][number];
 
 export class Cards {
-  constructor(private readonly db: Drizzle, private readonly projects: Projects, private readonly events?: BoardEvents) {}
+  constructor(private readonly database: Drizzle, private readonly projects: Projects, private readonly events?: BoardEvents) {}
 
   private publish(project: ProjectRow, card: CardRow, extra: { from?: string; client?: string; archivedBefore?: boolean } = {}): void {
     this.events?.publish(project.id, { event: 'card', card: card as unknown as Record<string, unknown>, ...extra });
@@ -46,14 +46,14 @@ export class Cards {
 
   /** The card with this number, archived or not. */
   async byNumber(project: ProjectRow, number: number): Promise<CardRow | undefined> {
-    const rows = await this.db.select().from(cards).where(and(eq(cards.project_id, project.id), eq(cards.number, number)));
+    const rows = await this.database.select().from(cards).where(and(eq(cards.project_id, project.id), eq(cards.number, number)));
     return rows[0];
   }
 
   /** The card a session works on — either seat, a coder or its supervisor —
    *  archived or not. Undefined when the session is on no card. */
   async ofSession(sessionId: string): Promise<CardRow | undefined> {
-    const rows = await this.db.select({ card: cards }).from(sessions)
+    const rows = await this.database.select({ card: cards }).from(sessions)
       .innerJoin(cards, eq(cards.id, sessions.cardId))
       .where(eq(sessions.id, sessionId));
     return rows[0]?.card;
@@ -61,14 +61,14 @@ export class Cards {
 
   /** The card with this number, only while it is on the board. */
   async activeByNumber(project: ProjectRow, number: number): Promise<CardRow | undefined> {
-    const rows = await this.db.select().from(cards)
+    const rows = await this.database.select().from(cards)
       .where(and(eq(cards.project_id, project.id), eq(cards.number, number), eq(cards.archived, false)));
     return rows[0];
   }
 
   /** The board: cards in column order — status, pinned first, then pos. */
   async list(project: ProjectRow, opts: { includeArchived?: boolean } = {}): Promise<CardRow[]> {
-    return this.db.select().from(cards)
+    return this.database.select().from(cards)
       .where(and(eq(cards.project_id, project.id), opts.includeArchived ? undefined : eq(cards.archived, false)))
       .orderBy(cards.status, desc(cards.pinned), cards.pos, cards.id);
   }
@@ -82,17 +82,17 @@ export class Cards {
     const archived = and(eq(cards.project_id, project.id), eq(cards.archived, true));
     const older = page.before !== undefined && page.beforeId !== undefined
       ? sql`(${cards.updated_at}, ${cards.id}) < (${page.before}::timestamptz, ${page.beforeId}::bigint)` : undefined;
-    let q = this.db.select().from(cards).where(and(archived, older)).orderBy(desc(cards.updated_at), desc(cards.id)).$dynamic();
-    if (page.limit !== undefined) q = q.limit(page.limit);
+    let query = this.database.select().from(cards).where(and(archived, older)).orderBy(desc(cards.updated_at), desc(cards.id)).$dynamic();
+    if (page.limit !== undefined) query = query.limit(page.limit);
     const [rows, totals] = await Promise.all([
-      q, this.db.select({ total: sql<number>`count(*)::int` }).from(cards).where(archived)]);
+      query, this.database.select({ total: sql<number>`count(*)::int` }).from(cards).where(archived)]);
     const total = totals[0]!.total;
     return { cards: rows, total };
   }
 
   /** Every card on the board in these columns — the looper's sweep for cards to start. */
   async listInColumns(project: ProjectRow, statuses: readonly string[]): Promise<CardRow[]> {
-    return this.db.select().from(cards)
+    return this.database.select().from(cards)
       .where(and(eq(cards.project_id, project.id), inArray(cards.status, [...statuses]), eq(cards.archived, false)));
   }
 
@@ -100,7 +100,7 @@ export class Cards {
    *  so edits made over SQL are recorded too. Empty for a card that does not
    *  exist: history goes with its card. */
   async revisions(project: ProjectRow, number: number, limit: number): Promise<Array<{ changed_from: unknown; changed_at: Date }>> {
-    return this.db.select({ changed_from: cardRevisions.changed_from, changed_at: cardRevisions.changed_at })
+    return this.database.select({ changed_from: cardRevisions.changed_from, changed_at: cardRevisions.changed_at })
       .from(cardRevisions)
       .innerJoin(cards, eq(cards.id, cardRevisions.card_id))
       .where(and(eq(cards.project_id, project.id), eq(cards.number, number)))
@@ -111,7 +111,7 @@ export class Cards {
    *  the newest status write. null = never moved. The looper's transition
    *  clock: entering plan is a NEW run, always. */
   async lastMovedAt(project: ProjectRow, number: number): Promise<Date | null> {
-    const rows = await this.db.select({ at: cardRevisions.changed_at }).from(cardRevisions)
+    const rows = await this.database.select({ at: cardRevisions.changed_at }).from(cardRevisions)
       .innerJoin(cards, eq(cards.id, cardRevisions.card_id))
       .where(and(eq(cards.project_id, project.id), eq(cards.number, number), sql`${cardRevisions.changed_from} ? 'status'`))
       .orderBy(desc(cardRevisions.id)).limit(1);
@@ -130,15 +130,15 @@ export class Cards {
     if (!cols.includes(status)) throw new CardError('invalid_args', `status must be one of: ${cols.join(', ')}`);
     const title = String(fields.title);
     const values: Partial<typeof cards.$inferInsert> = {};
-    for (const f of CARD_FIELDS)
-      if (f !== 'status' && f !== 'pos' && f !== 'title' && f in fields) values[f] = fields[f] as never;
+    for (const field of CARD_FIELDS)
+      if (field !== 'status' && field !== 'pos' && field !== 'title' && field in fields) values[field] = fields[field] as never;
     if ('requirements' in fields) values.requirements = keyedItems(fields.requirements as ChecklistItem[]);
-    const card = await this.db.transaction(async (tx) => {
-      const number = await this.projects.claimCardNumber(project.id, tx);
+    const card = await this.database.transaction(async (transaction) => {
+      const number = await this.projects.claimCardNumber(project.id, transaction);
       const pos = 'pos' in fields
         ? Number(fields.pos)
         : sql`(select coalesce(max(${cards.pos}), 0) + 1 from ${cards} where ${cards.project_id} = ${project.id} and ${cards.status} = ${status})`;
-      const [row] = await tx.insert(cards).values({ ...values, project_id: project.id, number, status, title, pos: pos as never }).returning();
+      const [row] = await transaction.insert(cards).values({ ...values, project_id: project.id, number, status, title, pos: pos as never }).returning();
       return row!;
     });
     this.publish(project, card, { client: by });
@@ -156,15 +156,15 @@ export class Cards {
     const cols = columnsOf(project);
     if ('status' in fields && !cols.includes(String(fields.status)))
       throw new CardError('invalid_args', `status must be one of: ${cols.join(', ')}`);
-    for (const o of items ?? []) {
-      const bad = o.op === 'add' ? (o.text === undefined ? 'add needs text' : null)
-        : o.key === undefined ? `${o.op} needs key`
-        : o.op === 'tick' && o.done === undefined ? 'tick needs done'
-        : o.op === 'edit' && o.text === undefined && o.done === undefined ? 'edit needs text or done' : null;
+    for (const operation of items ?? []) {
+      const bad = operation.op === 'add' ? (operation.text === undefined ? 'add needs text' : null)
+        : operation.key === undefined ? `${operation.op} needs key`
+        : operation.op === 'tick' && operation.done === undefined ? 'tick needs done'
+        : operation.op === 'edit' && operation.text === undefined && operation.done === undefined ? 'edit needs text or done' : null;
       if (bad) throw new CardError('invalid_args', bad);
     }
     const set: Partial<typeof cards.$inferInsert> = {};
-    for (const f of CARD_FIELDS) if (f in fields) set[f] = fields[f] as never;
+    for (const field of CARD_FIELDS) if (field in fields) set[field] = fields[field] as never;
     if ('requirements' in fields) {
       if (items) throw new CardError('invalid_args', 'item ops or replace requirements, not both');
       set.requirements = keyedItems(fields.requirements as ChecklistItem[]);
@@ -179,12 +179,12 @@ export class Cards {
     // card event carries the status BEFORE the write so a listener can tell
     // a move from an edit. Item ops change named items of that same row —
     // all-or-nothing, one bad key refuses every op.
-    const { card, from, wasArchived } = await this.db.transaction(async (tx) => {
-      const [prior] = await tx.select({ archived: cards.archived, status: cards.status, requirements: cards.requirements })
+    const { card, from, wasArchived } = await this.database.transaction(async (transaction) => {
+      const [prior] = await transaction.select({ archived: cards.archived, status: cards.status, requirements: cards.requirements })
         .from(cards).where(mine).for('update');
       if (!prior) throw new CardError('not_found', `no card ${number} in project ${project.id}`);
       if (items) set.requirements = applyItemOps(prior.requirements, items);
-      const [row] = await tx.update(cards).set({ ...set, updated_at: new Date() }).where(mine).returning();
+      const [row] = await transaction.update(cards).set({ ...set, updated_at: new Date() }).where(mine).returning();
       return { card: row!, from: prior.status, wasArchived: prior.archived };
     });
     this.publish(project, card, { from, client: by, archivedBefore: wasArchived });
@@ -194,7 +194,7 @@ export class Cards {
   /** An archived card comes back onto the board, blocked, with the reason —
    *  what a failed auto-push on archive does. */
   async unarchiveAsBlocked(project: ProjectRow, number: number, reason: string): Promise<CardRow | undefined> {
-    const [card] = await this.db.update(cards)
+    const [card] = await this.database.update(cards)
       .set({ archived: false, status: 'blocked', blocked_reason: reason, updated_at: new Date() })
       .where(and(eq(cards.project_id, project.id), eq(cards.number, number))).returning();
     if (card) this.publish(project, card);
@@ -204,7 +204,7 @@ export class Cards {
   /** Hard delete — the card, its number and its history. Archive is the
    *  normal path; it keeps all three. */
   async remove(project: ProjectRow, number: number): Promise<boolean> {
-    const [gone] = await this.db.delete(cards).where(and(eq(cards.project_id, project.id), eq(cards.number, number))).returning({ id: cards.id });
+    const [gone] = await this.database.delete(cards).where(and(eq(cards.project_id, project.id), eq(cards.number, number))).returning({ id: cards.id });
     if (!gone) return false;
     this.events?.publish(project.id, { event: 'deleted', id: gone.id });
     return true;
@@ -215,23 +215,23 @@ export class Cards {
  *  echoes a key cased — that must land, not retry. A key that is not there
  *  refuses the whole batch. */
 function applyItemOps(list: Requirement[], items: ItemOp[]): Requirement[] {
-  const at = (o: ItemOp) => list.findIndex((e) => normalizeKey(e.key) === normalizeKey(o.key!));
-  const missing = items.filter((o) => o.op !== 'add' && at(o) < 0);
+  const at = (operation: ItemOp) => list.findIndex((item) => normalizeKey(item.key) === normalizeKey(operation.key!));
+  const missing = items.filter((operation) => operation.op !== 'add' && at(operation) < 0);
   if (missing.length) {
     throw new CardError('invalid_args',
-      missing.map((o) => `no "${o.key}" in requirements — the keys: ${list.map((e) => e.key).join(', ') || '(empty)'}`).join('; '));
+      missing.map((operation) => `no "${operation.key}" in requirements — the keys: ${list.map((item) => item.key).join(', ') || '(empty)'}`).join('; '));
   }
-  for (const o of items) {
-    if (o.op === 'add') {
+  for (const operation of items) {
+    if (operation.op === 'add') {
       let key = newKey();
-      while (list.some((e) => e.key === key)) key = newKey();
-      list = [...list, { key, text: o.text!, done: o.done ?? false }];
-    } else if (o.op === 'remove') {
-      list = list.filter((_, i) => i !== at(o));
+      while (list.some((item) => item.key === key)) key = newKey();
+      list = [...list, { key, text: operation.text!, done: operation.done ?? false }];
+    } else if (operation.op === 'remove') {
+      list = list.filter((_, i) => i !== at(operation));
     } else {
-      const i = at(o);
-      list = list.map((e, j) => j !== i ? e
-        : { ...e, ...(o.text !== undefined ? { text: o.text } : {}), ...(o.done !== undefined ? { done: o.done } : {}) });
+      const i = at(operation);
+      list = list.map((item, j) => j !== i ? item
+        : { ...item, ...(operation.text !== undefined ? { text: operation.text } : {}), ...(operation.done !== undefined ? { done: operation.done } : {}) });
     }
   }
   return list;

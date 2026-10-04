@@ -32,8 +32,8 @@ const STAMP_KEY = 'last_update_check';
 
 /** Is it time to check again? No stamp — or an unreadable one — means due. */
 export function dueForCheck(now: number, path = CONFIG_PATH): boolean {
-  const t = Number(readOverrides(path).overrides[STAMP_KEY]);
-  return !Number.isFinite(t) || t <= 0 || now - t >= CHECK_INTERVAL_MS;
+  const stampedAt = Number(readOverrides(path).overrides[STAMP_KEY]);
+  return !Number.isFinite(stampedAt) || stampedAt <= 0 || now - stampedAt >= CHECK_INTERVAL_MS;
 }
 
 /** Record the check BEFORE it runs: a failed attempt retries tomorrow, not
@@ -66,17 +66,17 @@ export interface CycleResult {
 /** One cycle: check, and install when behind and allowed. Never throws — a
  *  failed install is logged to cli.log and retried next cycle, never shown:
  *  the person did not ask for this, so its errors are not their news. */
-export async function autoUpdateCycle(d: AutoUpdateDeps): Promise<CycleResult> {
-  const latest = await d.latest();
-  if (!latest || d.appVersion === 'dev' || !isBehind(d.appVersion, latest)) {
+export async function autoUpdateCycle(deps: AutoUpdateDeps): Promise<CycleResult> {
+  const latest = await deps.latest();
+  if (!latest || deps.appVersion === 'dev' || !isBehind(deps.appVersion, latest)) {
     return { latest, installed: null };
   }
-  if (!d.autoUpdate) return { latest, installed: null };
+  if (!deps.autoUpdate) return { latest, installed: null };
   try {
-    await d.install(latest);
+    await deps.install(latest);
     return { latest, installed: bare(latest) };
-  } catch (e) {
-    logLine(`auto-update to ${latest} failed: ${e instanceof Error ? e.message : String(e)}`);
+  } catch (error) {
+    logLine(`auto-update to ${latest} failed: ${error instanceof Error ? error.message : String(error)}`);
     return { latest, installed: null };
   }
 }
@@ -113,29 +113,29 @@ export interface ReconcileDeps extends UpdateDeps {
   settingsPath?: string;
 }
 
-export async function prelaunchReconcile(d: ReconcileDeps): Promise<void> {
-  if (d.appVersion === 'dev' || !d.server) return;
-  const h = await Promise.race([
-    readHealth(d.server),
-    d.sleep(HEALTH_TIMEOUT_MS).then(() => null),
+export async function prelaunchReconcile(deps: ReconcileDeps): Promise<void> {
+  if (deps.appVersion === 'dev' || !deps.server) return;
+  const health = await Promise.race([
+    readHealth(deps.server),
+    deps.sleep(HEALTH_TIMEOUT_MS).then(() => null),
   ]);
-  if (!h?.version) return;   // unreachable is its own, louder failure in the app
-  const server = bare(String(h.version));
-  const me = bare(d.appVersion);
+  if (!health?.version) return;   // unreachable is its own, louder failure in the app
+  const server = bare(String(health.version));
+  const mine = bare(deps.appVersion);
 
   // In line and checked recently: open without touching the network. A
   // mismatch is itself the news that something released, stamp or no stamp.
-  if (me === server && !dueForCheck(d.now(), d.settingsPath)) return;
-  const latest = await d.latest();
-  stampChecked(d.now(), d.settingsPath);
+  if (mine === server && !dueForCheck(deps.now(), deps.settingsPath)) return;
+  const latest = await deps.latest();
+  stampChecked(deps.now(), deps.settingsPath);
   if (!latest) {
-    if (me !== server) {
-      d.out(`The server is on v${server}, this machine is on v${me}, and GitHub cannot be reached to find the latest release — opening as-is.`);
+    if (mine !== server) {
+      deps.out(`The server is on v${server}, this machine is on v${mine}, and GitHub cannot be reached to find the latest release — opening as-is.`);
     }
     return;
   }
   const target = bare(latest);
-  const clientBehind = isBehind(me, target);
+  const clientBehind = isBehind(mine, target);
   if (!clientBehind && !isBehind(server, target)) return;
 
   // The ONE update flow. Two wraps: latest() replays the tag just fetched
@@ -143,9 +143,9 @@ export async function prelaunchReconcile(d: ReconcileDeps): Promise<void> {
   // gate knows whether there is a new build to re-exec into.
   let installed: string | null = null;
   await runUpdate('both', {
-    ...d,
+    ...deps,
     latest: async () => latest,
-    installClient: async (tag) => { await d.installClient(tag); installed = bare(tag); },
+    installClient: async (tag) => { await deps.installClient(tag); installed = bare(tag); },
   });
-  if (installed) d.reexec(installed);
+  if (installed) deps.reexec(installed);
 }

@@ -17,28 +17,28 @@ type ContentPart = {
  *  own messages, written as each lands. */
 export function assistantMessageFrom(parts: ReadonlyArray<ContentPart>): AssistantModelMessage | null {
   const content: AssistantContent = [];
-  for (const p of parts) {
-    switch (p.type) {
+  for (const part of parts) {
+    switch (part.type) {
       case 'text':
-        if (p.text!.length) content.push({ type: 'text', text: p.text!, providerOptions: p.providerMetadata as never });
+        if (part.text!.length) content.push({ type: 'text', text: part.text!, providerOptions: part.providerMetadata as never });
         break;
       case 'reasoning':
-        content.push({ type: 'reasoning', text: p.text!, providerOptions: p.providerMetadata as never });
+        content.push({ type: 'reasoning', text: part.text!, providerOptions: part.providerMetadata as never });
         break;
       case 'custom':
-        content.push({ type: 'custom', kind: p.kind as `${string}.${string}`, providerOptions: p.providerMetadata as never } as never);
+        content.push({ type: 'custom', kind: part.kind as `${string}.${string}`, providerOptions: part.providerMetadata as never } as never);
         break;
       case 'file':
-        content.push({ type: 'file', data: p.file!.base64, mediaType: p.file!.mediaType, providerOptions: p.providerMetadata as never });
+        content.push({ type: 'file', data: part.file!.base64, mediaType: part.file!.mediaType, providerOptions: part.providerMetadata as never });
         break;
       case 'reasoning-file':
-        content.push({ type: 'reasoning-file', data: p.file!.base64, mediaType: p.file!.mediaType, providerOptions: p.providerMetadata as never } as never);
+        content.push({ type: 'reasoning-file', data: part.file!.base64, mediaType: part.file!.mediaType, providerOptions: part.providerMetadata as never } as never);
         break;
       case 'tool-call':
         content.push({
-          type: 'tool-call', toolCallId: p.toolCallId!, toolName: p.toolName!,
-          input: p.invalid && typeof p.input !== 'object' ? {} : p.input,
-          providerExecuted: p.providerExecuted, providerOptions: p.providerMetadata as never,
+          type: 'tool-call', toolCallId: part.toolCallId!, toolName: part.toolName!,
+          input: part.invalid && typeof part.input !== 'object' ? {} : part.input,
+          providerExecuted: part.providerExecuted, providerOptions: part.providerMetadata as never,
         });
         break;
       default: break; // sources and provider-executed results are response-only
@@ -76,12 +76,12 @@ export function interruptedResultMessage(call: { toolCallId: string; toolName: s
     output: { type: 'error-text', value: INTERRUPTED_RESULT } }] };
 }
 
-function errorText(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  if (typeof e === 'string') return e;
-  try { return JSON.stringify(e); } catch { return String(e); }
+function errorText(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  try { return JSON.stringify(error); } catch { return String(error); }
 }
 
-function stripUndefined<T extends object>(o: T): T {
-  return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;
+function stripUndefined<T extends object>(object: T): T {
+  return Object.fromEntries(Object.entries(object).filter(([, value]) => value !== undefined)) as T;
 }

@@ -53,8 +53,8 @@ export function startWaitingBubble(client: TelegramApi, chatId: number): Waiting
 
   chain = chain.then(async () => {
     try {
-      const m = await client.sendMessage(chatId, DOTS[0]);
-      messageId = m?.message_id ?? null;
+      const sent = await client.sendMessage(chatId, DOTS[0]);
+      messageId = sent?.message_id ?? null;
     } catch { /* no bubble; the caller posts its own message instead */ }
   });
 

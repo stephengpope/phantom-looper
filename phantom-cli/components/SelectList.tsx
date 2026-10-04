@@ -122,7 +122,7 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
   initial?: T;
   onCancel?: () => void;
   /** Plain-letter shortcuts (e.g. `d` to reset), given the highlighted value. */
-  onKey?: (ch: string, value: T | undefined) => void;
+  onKey?: (char: string, value: T | undefined) => void;
   /** The cursor moved into the last NEAR_END rows — a lazily loaded list
    *  (/resume) fetches its next page here, early enough that rows usually
    *  arrive before the bottom is reached. Fires per step; the caller guards
@@ -137,9 +137,9 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
    *  Headings are not rows. Omitted = the loaded choices are the list. */
   total?: number;
 }) {
-  const pickable = choices.map((c, i) => (c.heading ? -1 : i)).filter((i) => i >= 0);
+  const pickable = choices.map((choice, i) => (choice.heading ? -1 : i)).filter((i) => i >= 0);
   const [cursorRaw, setCursor] = useState(() => {
-    const at = initial === undefined ? -1 : choices.findIndex((c) => !c.heading && c.value === initial);
+    const at = initial === undefined ? -1 : choices.findIndex((choice) => !choice.heading && choice.value === initial);
     return at >= 0 ? at : pickable[0] ?? 0;
   });
 
@@ -160,7 +160,7 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
   // teleport it).
   const normalize = (i: number) => {
     if (choices[i] && !choices[i].heading) return i;
-    return pickable.find((p) => p > i) ?? pickable.filter((p) => p < i).pop() ?? 0;
+    return pickable.find((index) => index > i) ?? pickable.filter((index) => index < i).pop() ?? 0;
   };
   // A NAMED row is followed, not its index: when the list changes under the
   // cursor (/resume re-reads, a filter narrows it, ←→ swap the project)
@@ -174,8 +174,8 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
   // row to its new place. Armed by the keypress, spent by the first change
   // of the list's shape after it, disarmed by an arrow (a move says the
   // highlight is the row again).
-  const keyOf = (c: Choice<T> | undefined) =>
-    c && !c.heading ? c.id ?? (typeof c.value === 'string' ? c.value : undefined) : undefined;
+  const keyOf = (choice: Choice<T> | undefined) =>
+    choice && !choice.heading ? choice.id ?? (typeof choice.value === 'string' ? choice.value : undefined) : undefined;
   const held = useRef<string | undefined>(keyOf(choices[cursorRaw]));
   const holdPosition = useRef(false);
   const shape = choices.map(keyOf).join('\n');
@@ -186,7 +186,7 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
   if (changed && holdPosition.current) {
     holdPosition.current = false;
   } else if (held.current !== undefined && keyOf(choices[cursor]) !== held.current) {
-    const at = choices.findIndex((c) => keyOf(c) === held.current);
+    const at = choices.findIndex((choice) => keyOf(choice) === held.current);
     if (at >= 0) cursor = at;
   }
   if (cursor !== cursorRaw) setCursor(cursor);
@@ -223,14 +223,14 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
 
   /** The highlighted row, or undefined when it is a heading. */
   const current = () => {
-    const c = choices[normalize(cursorRef.current)];
-    return c && !c.heading ? c : undefined;
+    const choice = choices[normalize(cursorRef.current)];
+    return choice && !choice.heading ? choice : undefined;
   };
 
-  useInput((ch, key) => {
+  useInput((char, key) => {
     if (key.downArrow) step(1);
     else if (key.upArrow) step(-1);
-    else if (key.return) { const c = current(); if (c) onSelect(c.value); }
+    else if (key.return) { const choice = current(); if (choice) onSelect(choice.value); }
     else if (key.escape) onCancel?.();
     // Same ref read as enter: the shortcut must act on the row that is
     // highlighted right now, not the one a stale closure remembers.
@@ -238,7 +238,7 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
     // A chord is not a shortcut. Ink reports ctrl+c as the letter `c` with
     // key.ctrl set, so without this ctrl+c would fire the `c` shortcut on the
     // way past — and ctrl+e on the project list would open the editor.
-    else if (onKey && ch && !key.ctrl && !key.meta) { holdPosition.current = true; onKey(ch, current()?.value); }
+    else if (onKey && char && !key.ctrl && !key.meta) { holdPosition.current = true; onKey(char, current()?.value); }
   });
 
   // The label column sizes itself to its longest label. A fixed width silently
@@ -248,15 +248,15 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
   // rather than wrapped so a row is always exactly one line.
   // Structured headings (table headers) count too: the label column must at
   // least fit its own title, or an empty table truncates its header away.
-  const widest = choices.reduce((widest, c) =>
-    c.heading && !c.columns ? widest : Math.max(widest, c.label.length), 0);
+  const widest = choices.reduce((widest, choice) =>
+    choice.heading && !choice.columns ? widest : Math.max(widest, choice.label.length), 0);
   const labelWidth = labelWidthFor(widest);
 
   // Keep the cursor inside the window without ever showing more than `visible`.
   const start = Math.max(0, Math.min(cursor - Math.floor(visible / 2), choices.length - visible));
   const window = choices.slice(Math.max(0, start), Math.max(0, start) + visible);
   const above = Math.max(0, start);
-  const rowsIn = (cs: Choice<T>[]) => cs.filter((c) => !c.heading).length;
+  const rowsIn = (list: Choice<T>[]) => list.filter((choice) => !choice.heading).length;
   const below = total === undefined
     ? choices.length - window.length - above
     : Math.max(0, total - rowsIn(choices.slice(0, above)) - rowsIn(window));
@@ -265,7 +265,7 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
   // Any marker in the list means EVERY row carries the two-cell marker slot
   // (blank when unmarked), so details line up in one column. A list that
   // never marks (settings, projects) keeps its flush layout.
-  const hasMarkers = choices.some((c) => c.busy || c.dot || c.lock);
+  const hasMarkers = choices.some((choice) => choice.busy || choice.dot || choice.lock);
 
   // The hint, wrapped HERE to a fixed measure rather than left to Ink — Ink
   // wraps at the terminal's full width, which reads as a broken line rather
@@ -275,11 +275,11 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
   const hintLines = (hint ? wrapHint(hint, Math.min(76, cols - 6)) : []).slice(0, HINT_ROWS);
   return (
     <Box flexDirection="column">
-      {window.map((c, i) => {
+      {window.map((choice, i) => {
         const idx = above + i;
         const on = idx === cursor;
-        if (c.heading && !c.columns) return <Text key={idx} dimColor wrap="truncate-end">{` ${c.label}`}</Text>;
-        if (c.heading && c.columns) {
+        if (choice.heading && !choice.columns) return <Text key={idx} dimColor wrap="truncate-end">{` ${choice.label}`}</Text>;
+        if (choice.heading && choice.columns) {
           // The table header, through the SAME boxes as the rows below it —
           // never a hand-padded string that can drift from them.
           return (
@@ -287,15 +287,15 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
               <Box width={2} flexShrink={0} />
               {hasMarkers ? <Box width={2} flexShrink={0} /> : null}
               <Box width={labelWidth} flexShrink={0} paddingRight={2}>
-                <Text dimColor wrap="truncate-end">{c.label}</Text>
+                <Text dimColor wrap="truncate-end">{choice.label}</Text>
               </Box>
-              {c.columns.map((col, j) => col.width
+              {choice.columns.map((col, j) => col.width
                 ? <Box key={j} width={col.width} flexShrink={0} paddingRight={2}><Text dimColor wrap="truncate-end">{col.text}</Text></Box>
                 : <Text key={j} dimColor wrap="truncate-end">{col.text}</Text>)}
             </Box>
           );
         }
-        const cols_ = c.columns ?? (c.detail !== undefined ? [{ text: c.detail }] : []);
+        const cols_ = choice.columns ?? (choice.detail !== undefined ? [{ text: choice.detail }] : []);
         return (
           // The selection bar (the header): the row Box carries the
           // background, so it runs the full width whatever the content's.
@@ -319,9 +319,9 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
                 {/* U+2022 BULLET: unambiguous single-cell width — U+25CF ●
                     measures wide in Ink but renders narrow in Terminal.app,
                     which skewed every marked row by one cell. */}
-                {c.busy ? <Text color={turnAgeColor(c.busySince)}><Spinner type="dots" /></Text>
-                  : c.dot ? <Text color="magenta">•</Text>
-                    : c.lock ? <Text color="yellow">•</Text> : null}
+                {choice.busy ? <Text color={turnAgeColor(choice.busySince)}><Spinner type="dots" /></Text>
+                  : choice.dot ? <Text color="magenta">•</Text>
+                    : choice.lock ? <Text color="yellow">•</Text> : null}
               </Box>
             ) : null}
             {/* paddingRight makes the label's gutter REAL: a label at (or
@@ -329,7 +329,7 @@ export function SelectList<T>({ choices, onSelect, onCancel, onKey, onNearEnd, i
                 gap still renders — spare space would be the first thing an
                 overflowing row loses. */}
             <Box width={labelWidth} flexShrink={0} paddingRight={2}>
-              <Text color={on ? HIGHLIGHT_FG : undefined} bold={on} wrap="truncate-end">{c.label}</Text>
+              <Text color={on ? HIGHLIGHT_FG : undefined} bold={on} wrap="truncate-end">{choice.label}</Text>
             </Box>
             {/* One row is ONE line: a long column truncates, never wraps.
                 paddingRight keeps a two-cell gutter INSIDE the width — a full

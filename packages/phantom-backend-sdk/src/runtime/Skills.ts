@@ -43,12 +43,12 @@ async function skillExists(ctx: PhantomBackend, sessionId: string, name: string)
 /** Every file under the skill folder except SKILL.md, relative paths. */
 async function bundledFiles(dir: string): Promise<string[]> {
   const out: string[] = [];
-  const walk = async (d: string, rel: string) => {
-    const entries = await fsp.readdir(d, { withFileTypes: true }).catch(() => []);
-    for (const e of entries) {
-      const r = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isDirectory()) await walk(path.join(d, e.name), r);
-      else if (r !== 'SKILL.md') out.push(r);
+  const walk = async (dir: string, rel: string) => {
+    const entries = await fsp.readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      const relativePath = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) await walk(path.join(dir, entry.name), relativePath);
+      else if (relativePath !== 'SKILL.md') out.push(relativePath);
     }
   };
   await walk(dir, '');
@@ -60,8 +60,8 @@ async function bundledFiles(dir: string): Promise<string[]> {
 async function writeViaContainer(sandbox: Sandbox, name: string, rel: string, content: string): Promise<void> {
   const abs = `${skillDirContainer(name)}/${rel}`;
   const dir = abs.slice(0, abs.lastIndexOf('/'));
-  const mk = await sandbox.run(['mkdir', '-p', dir]);
-  if (mk.exitCode !== 0) throw new ToolError('invalid_args', `mkdir failed: ${mk.stderr.toString('utf8').slice(0, 200)}`);
+  const made = await sandbox.run(['mkdir', '-p', dir]);
+  if (made.exitCode !== 0) throw new ToolError('invalid_args', `mkdir failed: ${made.stderr.toString('utf8').slice(0, 200)}`);
   await sandbox.writeFile(abs, Buffer.from(content, 'utf8'));
 }
 
@@ -119,8 +119,8 @@ export async function manageSkill(ctx: PhantomBackend, deps: FsDeps, session: Se
   let container;
   try {
     container = await deps.sessionContainers.ensure(workspaceId, project);
-  } catch (e) {
-    throw new ToolError('container_start_failed', (e as Error).message, true);
+  } catch (error) {
+    throw new ToolError('container_start_failed', (error as Error).message, true);
   }
   const sandbox = new Sandbox(deps.docker, container);
   // Writes reach the REPO tier only. When the name exists solely in the
@@ -171,22 +171,22 @@ async function manage(ctx: PhantomBackend, sandbox: Sandbox, workspaceId: string
       }
       const current = await fsp.readFile(path.join(hostDir, rel), 'utf8')
         .catch(() => { throw new ToolError('skill_not_found', `no file '${rel}' in skill '${name}'`); });
-      const r = fuzzyFindAndReplace(current, body.old_string, body.new_string, body.replace_all ?? false);
-      if (r.error) {
-        throw new ToolError('invalid_args', r.error + formatNoMatchHint(r.error, r.count, body.old_string, current));
+      const replaced = fuzzyFindAndReplace(current, body.old_string, body.new_string, body.replace_all ?? false);
+      if (replaced.error) {
+        throw new ToolError('invalid_args', replaced.error + formatNoMatchHint(replaced.error, replaced.count, body.old_string, current));
       }
       if (rel === 'SKILL.md') {
-        const vErr = validateSkillMd(name, r.content);
+        const vErr = validateSkillMd(name, replaced.content);
         if (vErr) throw new ToolError('invalid_args', `Patch would break SKILL.md: ${vErr}`);
       }
-      await writeViaContainer(sandbox, name, rel, r.content);
-      return { message: `Patched ${rel} in '${name}' (${r.count} replacement${r.count === 1 ? '' : 's'}, ${r.strategy}).` };
+      await writeViaContainer(sandbox, name, rel, replaced.content);
+      return { message: `Patched ${rel} in '${name}' (${replaced.count} replacement${replaced.count === 1 ? '' : 's'}, ${replaced.strategy}).` };
     }
 
     case 'delete': {
       if (!exists) throw notFound();
-      const r = await sandbox.run(['rm', '-rf', skillDirContainer(name)]);
-      if (r.exitCode !== 0) throw new ToolError('invalid_args', `delete failed: ${r.stderr.toString('utf8').slice(0, 200)}`);
+      const removed = await sandbox.run(['rm', '-rf', skillDirContainer(name)]);
+      if (removed.exitCode !== 0) throw new ToolError('invalid_args', `delete failed: ${removed.stderr.toString('utf8').slice(0, 200)}`);
       return { message: `Skill '${name}' deleted.` };
     }
 
@@ -208,8 +208,8 @@ async function manage(ctx: PhantomBackend, sandbox: Sandbox, workspaceId: string
       if (fErr) throw new ToolError('invalid_args', fErr);
       const present = await fsp.access(path.join(hostDir, body.file_path!)).then(() => true, () => false);
       if (!present) throw new ToolError('skill_not_found', `no file '${body.file_path}' in skill '${name}'`);
-      const r = await sandbox.run(['rm', '-f', `${skillDirContainer(name)}/${body.file_path}`]);
-      if (r.exitCode !== 0) throw new ToolError('invalid_args', `remove failed: ${r.stderr.toString('utf8').slice(0, 200)}`);
+      const removed = await sandbox.run(['rm', '-f', `${skillDirContainer(name)}/${body.file_path}`]);
+      if (removed.exitCode !== 0) throw new ToolError('invalid_args', `remove failed: ${removed.stderr.toString('utf8').slice(0, 200)}`);
       return { message: `Removed ${body.file_path} from skill '${name}'.` };
     }
 

@@ -13,7 +13,7 @@ export class PresetError extends Error {
 }
 
 export class Presets {
-  constructor(private readonly db: Drizzle, private readonly settings: Settings) {}
+  constructor(private readonly database: Drizzle, private readonly settings: Settings) {}
 
   /** The setting keys a preset may hold: every agent type's `model`
    *  subgroup — read off the registry, the ONE declaration of which
@@ -25,7 +25,7 @@ export class Presets {
 
   /** Every preset, by name. */
   async list(): Promise<PresetRow[]> {
-    return this.db.select().from(presets).orderBy(presets.name);
+    return this.database.select().from(presets).orderBy(presets.name);
   }
 
   /** Create or overwrite. Three states per key: present with a value = "set";
@@ -47,7 +47,7 @@ export class Presets {
     }
     const now = new Date();
     try {
-      await this.db.insert(presets)
+      await this.database.insert(presets)
         .values({ id, name, values: clean, createdAt: now, updatedAt: now })
         .onConflictDoUpdate({ target: [presets.id], set: { name, values: clean, updatedAt: now } });
     } catch (error) {
@@ -60,7 +60,7 @@ export class Presets {
 
   /** Returns whether a preset was there to remove. */
   async remove(id: string): Promise<boolean> {
-    const gone = await this.db.delete(presets).where(eq(presets.id, id)).returning({ id: presets.id });
+    const gone = await this.database.delete(presets).where(eq(presets.id, id)).returning({ id: presets.id });
     return gone.length > 0;
   }
 }

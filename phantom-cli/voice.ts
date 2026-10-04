@@ -107,9 +107,9 @@ export function findUv(): string | null {
     join(homedir(), '.local', 'bin', 'uv'),
     '/opt/homebrew/bin/uv', '/usr/local/bin/uv',
   ];
-  for (const c of candidates) if (existsSync(c)) return c;
-  const r = spawnSync('uv', ['--version'], { stdio: 'ignore' });
-  return r.status === 0 ? 'uv' : null;
+  for (const candidate of candidates) if (existsSync(candidate)) return candidate;
+  const spawned = spawnSync('uv', ['--version'], { stdio: 'ignore' });
+  return spawned.status === 0 ? 'uv' : null;
 }
 
 function uvTarget(): string {
@@ -122,13 +122,13 @@ function uvTarget(): string {
 
 /** Download the pinned uv into ~/.phantom-cli/bin, checking its published
  *  sha256. One-time, ~30 MB; nothing system-wide is touched. */
-export async function installUv(onProgress: (t: string) => void): Promise<string> {
+export async function installUv(onProgress: (text: string) => void): Promise<string> {
   const target = uvTarget();
   const base = `https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${target}.tar.gz`;
   onProgress('downloading uv…');
   const [tgz, sha] = await Promise.all([
-    fetch(base).then(async (r) => { if (!r.ok) throw new Error(`uv download: HTTP ${r.status}`); return Buffer.from(await r.arrayBuffer()); }),
-    fetch(`${base}.sha256`).then(async (r) => { if (!r.ok) throw new Error(`uv checksum: HTTP ${r.status}`); return (await r.text()).trim().split(/\s+/)[0]; }),
+    fetch(base).then(async (response) => { if (!response.ok) throw new Error(`uv download: HTTP ${response.status}`); return Buffer.from(await response.arrayBuffer()); }),
+    fetch(`${base}.sha256`).then(async (response) => { if (!response.ok) throw new Error(`uv checksum: HTTP ${response.status}`); return (await response.text()).trim().split(/\s+/)[0]; }),
   ]);
   const got = createHash('sha256').update(tgz).digest('hex');
   if (got !== sha) throw new Error('uv download did not match its checksum — not installed');
@@ -136,48 +136,48 @@ export async function installUv(onProgress: (t: string) => void): Promise<string
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const tmp = join(dir, `uv-${target}.tar.gz`);
   writeFileSync(tmp, tgz);
-  const r = spawnSync('tar', ['-xzf', tmp, '-C', dir, '--strip-components=1', `uv-${target}/uv`], { stdio: 'pipe' });
-  if (r.status !== 0) throw new Error(`uv unpack failed: ${r.stderr?.toString() ?? r.status}`);
-  const uv = join(dir, 'uv');
-  chmodSync(uv, 0o755);
+  const spawned = spawnSync('tar', ['-xzf', tmp, '-C', dir, '--strip-components=1', `uv-${target}/uv`], { stdio: 'pipe' });
+  if (spawned.status !== 0) throw new Error(`uv unpack failed: ${spawned.stderr?.toString() ?? spawned.status}`);
+  const uvPath = join(dir, 'uv');
+  chmodSync(uvPath, 0o755);
   onProgress('uv installed');
-  return uv;
+  return uvPath;
 }
 
 /** `uv sync --frozen`, async: it runs a minute or two the first time, and a
  *  spawnSync here froze Ink for the whole of it — the pane's spinner stood
  *  still exactly when it had something to say. Output to the log; the exit
  *  code back. */
-function uvSync(uv: string): Promise<number | null> {
+function uvSync(uvPath: string): Promise<number | null> {
   return new Promise((resolve) => {
-    const child = spawn(uv, ['sync', '--frozen'], { cwd: SIDECAR_DIR, env: uvEnv, stdio: ['ignore', 'pipe', 'pipe'] });
-    createInterface({ input: child.stdout! }).on('line', (l) => log(l));
-    createInterface({ input: child.stderr! }).on('line', (l) => log(l));
-    child.on('error', (e) => { log(`--- uv sync error ${e.message}`); resolve(null); });
+    const child = spawn(uvPath, ['sync', '--frozen'], { cwd: SIDECAR_DIR, env: uvEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+    createInterface({ input: child.stdout! }).on('line', (line) => log(line));
+    createInterface({ input: child.stderr! }).on('line', (line) => log(line));
+    child.on('error', (error) => { log(`--- uv sync error ${error.message}`); resolve(null); });
     child.on('exit', (code) => resolve(code));
   });
 }
 
 /** The real spawner: uv → venv → `uv run bot.py`, process group of its own. */
 export const spawnSidecar: Spawner = async (env, onLine, onExit, onProgress) => {
-  let uv = findUv();
-  if (!uv) uv = await installUv(onProgress);
+  let uvPath = findUv();
+  if (!uvPath) uvPath = await installUv(onProgress);
   // `uv sync --frozen` every start: the first time it builds the venv (slow,
   // says so); after that it is a ~100ms check that the venv still matches
   // uv.lock, so an updated lock is picked up without anyone knowing to re-sync.
   // Progress strings are short on purpose: the pane is ~20 columns.
   if (!existsSync(VOICE_VENV)) onProgress('installing engine (first run)…');
-  const code = await uvSync(uv);
+  const code = await uvSync(uvPath);
   if (code !== 0) throw new Error(`install failed — see ${join(VOICE_DIR, 'sidecar.log')}`);
   log(`--- sidecar start ${new Date().toISOString()}`);
-  const child: ChildProcess = spawn(uv, ['run', '--no-sync', 'bot.py'], {
+  const child: ChildProcess = spawn(uvPath, ['run', '--no-sync', 'bot.py'], {
     cwd: SIDECAR_DIR, env: { ...uvEnv, ...env }, stdio: ['pipe', 'pipe', 'pipe'], detached: true,
   });
   createInterface({ input: child.stdout! }).on('line', onLine);
-  createInterface({ input: child.stderr! }).on('line', (l) => log(l));
+  createInterface({ input: child.stderr! }).on('line', (line) => log(line));
   let exited = false;
   child.on('exit', (code, signal) => { exited = true; log(`--- sidecar exited ${code ?? signal}`); onExit(code, signal ?? undefined); });
-  child.on('error', (e) => { exited = true; log(`--- sidecar error ${e.message}`); onExit(null, e.message); });
+  child.on('error', (error) => { exited = true; log(`--- sidecar error ${error.message}`); onExit(null, error.message); });
   return {
     send: (line) => { if (!exited) child.stdin?.write(line); },
     kill: () => {
@@ -196,20 +196,20 @@ export const spawnSidecar: Spawner = async (env, onLine, onExit, onProgress) => 
  *  with `ready` once the sidecar runs. */
 export async function listDevices(): Promise<{ mics: string[]; speakers: string[] }> {
   const none = { mics: [], speakers: [] };
-  const uv = findUv();
-  if (!uv || !existsSync(VOICE_VENV)) return none;
+  const uvPath = findUv();
+  if (!uvPath || !existsSync(VOICE_VENV)) return none;
   return new Promise((resolve) => {
-    const child = spawn(uv, ['run', '--no-sync', 'devices.py'], { cwd: SIDECAR_DIR, env: uvEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(uvPath, ['run', '--no-sync', 'devices.py'], { cwd: SIDECAR_DIR, env: uvEnv, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     child.stdout.on('data', (b: Buffer) => { out += b.toString(); });
     child.stderr.on('data', (b: Buffer) => log(b.toString()));
-    child.on('error', (e) => { log(`could not list audio devices: ${e.message}`); resolve(none); });
+    child.on('error', (error) => { log(`could not list audio devices: ${error.message}`); resolve(none); });
     child.on('exit', () => {
       try {
-        const line = out.split('\n').find((l) => l.trim().startsWith('{'));
-        const d = line ? JSON.parse(line) as { mics?: unknown; speakers?: unknown } : {};
-        resolve({ mics: Array.isArray(d.mics) ? d.mics.map(String) : [], speakers: Array.isArray(d.speakers) ? d.speakers.map(String) : [] });
-      } catch (e) { log(`could not read the audio device list: ${(e as Error).message}`); resolve(none); }
+        const line = out.split('\n').find((line) => line.trim().startsWith('{'));
+        const devices = line ? JSON.parse(line) as { mics?: unknown; speakers?: unknown } : {};
+        resolve({ mics: Array.isArray(devices.mics) ? devices.mics.map(String) : [], speakers: Array.isArray(devices.speakers) ? devices.speakers.map(String) : [] });
+      } catch (error) { log(`could not read the audio device list: ${(error as Error).message}`); resolve(none); }
     });
   });
 }
@@ -220,19 +220,19 @@ export async function listDevices(): Promise<{ mics: string[]; speakers: string[
  *  rides here and nowhere else; the model and its key never leave this
  *  process (the brain runs here). */
 export function sidecarEnv(cfg: Record<string, ConfigValue>): Record<string, string> {
-  const s = (v: ConfigValue) => (v === null || v === undefined ? '' : String(v));
+  const asText = (value: ConfigValue) => (value === null || value === undefined ? '' : String(value));
   return {
-    DEEPGRAM_API_KEY: s(cfg.deepgram_api_key),
-    PHANTOM_CLI_VOICE_VOICE: s(cfg.voice_spoken_voice),
-    PHANTOM_CLI_VOICE_MIC: s(cfg.voice_mic_device),
-    PHANTOM_CLI_VOICE_SPEAKER: s(cfg.voice_speaker_device),
-    PHANTOM_CLI_VOICE_STT_MODEL: s(cfg.voice_stt_model),
+    DEEPGRAM_API_KEY: asText(cfg.deepgram_api_key),
+    PHANTOM_CLI_VOICE_VOICE: asText(cfg.voice_spoken_voice),
+    PHANTOM_CLI_VOICE_MIC: asText(cfg.voice_mic_device),
+    PHANTOM_CLI_VOICE_SPEAKER: asText(cfg.voice_speaker_device),
+    PHANTOM_CLI_VOICE_STT_MODEL: asText(cfg.voice_stt_model),
     PHANTOM_CLI_VOICE_MIC_MUTED: cfg.voice_mic_muted ? '1' : '0',
     PHANTOM_CLI_VOICE_SPEAKER_MUTED: cfg.voice_speaker_muted ? '1' : '0',
     PHANTOM_CLI_VOICE_HEADPHONES: cfg.voice_headphones ? '1' : '0',
     PHANTOM_CLI_VOICE_WAKE: cfg.voice_wake_word ? '1' : '0',
-    PHANTOM_CLI_VOICE_WAKE_WORDS: s(cfg.voice_wake_words),
-    PHANTOM_CLI_VOICE_WAKE_TIMEOUT: s(cfg.voice_wake_timeout),
+    PHANTOM_CLI_VOICE_WAKE_WORDS: asText(cfg.voice_wake_words),
+    PHANTOM_CLI_VOICE_WAKE_TIMEOUT: asText(cfg.voice_wake_timeout),
   };
 }
 
@@ -280,10 +280,10 @@ interface Turn {
 /** Index of the n-th (1-based) assistant message at or after `from`; -1 if
  *  there is no such message yet. One assistant message per step is what the
  *  agent produces, so step n of a turn is its n-th assistant message. */
-export function nthAssistantIndex(history: ModelMessage[], from: number, n: number): number {
+export function nthAssistantIndex(history: ModelMessage[], from: number, nth: number): number {
   let seen = 0;
   for (let i = from; i < history.length; i++) {
-    if (history[i].role === 'assistant' && ++seen === n) return i;
+    if (history[i].role === 'assistant' && ++seen === nth) return i;
   }
   return -1;
 }
@@ -291,14 +291,14 @@ export function nthAssistantIndex(history: ModelMessage[], from: number, n: numb
 /** The assistant message with its text replaced by what was actually spoken
  *  (tool calls and anything else kept): the model must remember what you
  *  heard, not what it was going to say. */
-export function truncateAssistant(m: ModelMessage, spoken: string): ModelMessage {
-  if (m.role !== 'assistant') return m;
-  if (typeof m.content === 'string') return { ...m, content: spoken };
-  const rest = m.content.filter((c) => c.type !== 'text');
-  const at = m.content.findIndex((c) => c.type === 'text');
+export function truncateAssistant(message: ModelMessage, spoken: string): ModelMessage {
+  if (message.role !== 'assistant') return message;
+  if (typeof message.content === 'string') return { ...message, content: spoken };
+  const rest = message.content.filter((part) => part.type !== 'text');
+  const at = message.content.findIndex((part) => part.type === 'text');
   const text = { type: 'text' as const, text: spoken };
   const content = at < 0 ? [text, ...rest] : [...rest.slice(0, at), text, ...rest.slice(at)];
-  return { ...m, content } as ModelMessage;
+  return { ...message, content } as ModelMessage;
 }
 
 /** Confirmed speech + the next piece, one space between, either side empty. */
@@ -312,12 +312,12 @@ export function joinSpeech(a: string, b: string): string {
  *  text, so the boundary in the conversation reads for what it is. */
 export function partsFromHistory(messages: ModelMessage[]): Part[] {
   const out: Part[] = [];
-  for (const m of messages) {
-    if (m.role === 'user' && typeof m.content === 'string') {
-      out.push({ kind: 'user', id: nextId('vuser'), text: m.content });
-    } else if (m.role === 'assistant') {
-      const text = typeof m.content === 'string' ? m.content
-        : m.content.filter((c) => c.type === 'text').map((c) => (c as { type: 'text'; text: string }).text).join('');
+  for (const message of messages) {
+    if (message.role === 'user' && typeof message.content === 'string') {
+      out.push({ kind: 'user', id: nextId('vuser'), text: message.content });
+    } else if (message.role === 'assistant') {
+      const text = typeof message.content === 'string' ? message.content
+        : message.content.filter((part) => part.type === 'text').map((part) => (part as { type: 'text'; text: string }).text).join('');
       if (text.trim()) out.push({ kind: 'text', id: nextId('vtext'), text: text.trim(), done: true });
     }
   }
@@ -368,14 +368,14 @@ export class VoiceClient {
   intercept: ((text: string) => boolean) | null = null;
   constructor(private spawner: Spawner = spawnSidecar) {}
 
-  subscribe(fn: () => void): () => void { this.subs.add(fn); return () => { this.subs.delete(fn); }; }
+  subscribe(listener: () => void): () => void { this.subs.add(listener); return () => { this.subs.delete(listener); }; }
   snapshot(): VoiceSnapshot { return this.snap; }
   get running(): boolean { return this.proc !== null; }
   get busy(): boolean { return this.cur !== null; }
 
   private set(patch: Partial<VoiceSnapshot>): void {
     this.snap = { ...this.snap, ...patch };
-    for (const fn of this.subs) fn();
+    for (const listener of this.subs) listener();
   }
 
   /** The brain: the Assistant's agent, set by the window once its session
@@ -386,30 +386,30 @@ export class VoiceClient {
     this.unwire();
     this.agent = agent;
     const a = agent;
-    let t0 = 0;
+    let startedAt = 0;
     let first = true;
     const offs = [
       a.on('turn-start', () => {
-        const t: Turn = { id: `vt${++this.turnSeq}`, step: 0 };
-        this.cur = t;
-        this.turns.set(t.id, t);
-        for (const k of [...this.turns.keys()].slice(0, -8)) this.turns.delete(k);   // keep the recent few
+        const turn: Turn = { id: `vt${++this.turnSeq}`, step: 0 };
+        this.cur = turn;
+        this.turns.set(turn.id, turn);
+        for (const key of [...this.turns.keys()].slice(0, -8)) this.turns.delete(key);   // keep the recent few
         this.reply = [];
-        t0 = Date.now(); first = true;
+        startedAt = Date.now(); first = true;
         this.set({ status: this.snap.status === 'speaking' ? 'speaking' : 'thinking', live: this.live() });
       }),
       a.on('part', (part) => {
-        const t = this.cur;
-        if (!t) return;
+        const turn = this.cur;
+        if (!turn) return;
         // Time to the first token (text, thinking or a tool call) — not to
         // the stream's own `start` markers, which arrive at once.
         if (first && (part.type === 'text-delta' || part.type === 'reasoning-delta' || part.type === 'tool-call' || part.type === 'tool-input-start')) {
-          first = false; this.set({ ttfb: { ...this.snap.ttfb, llm: Date.now() - t0 } });
+          first = false; this.set({ ttfb: { ...this.snap.ttfb, llm: Date.now() - startedAt } });
         }
         // A failure is drawn ONCE, from onError; the stream's error part is
         // the same words.
         if (part.type === 'error') return;
-        this.onPart(t, part as StreamPart);
+        this.onPart(turn, part as StreamPart);
       }),
       a.on('turn-end', () => this.turnSettled()),
     ];
@@ -418,14 +418,14 @@ export class VoiceClient {
   }
 
   /** The agent's handlers, for the window to hand `AssistantAgent`. */
-  handlers(): { onError(e: PhantomError): void; onNotice(n: { type: string; text: string }): void } {
+  handlers(): { onError(error: PhantomError): void; onNotice(notice: { type: string; text: string }): void } {
     return {
-      onError: (e) => {
-        this.reply = [...this.reply, { kind: 'error', id: nextId('verr'), message: e.message }];
+      onError: (error) => {
+        this.reply = [...this.reply, { kind: 'error', id: nextId('verr'), message: error.message }];
         this.paintLive();
         setTimeout(() => { if (this.cur && !this.agent?.busy) this.turnSettled(); }, 0);
       },
-      onNotice: (n) => { if (n.type !== 'retry') this.note({ kind: 'note', id: nextId('vnote'), text: n.text }); },
+      onNotice: (notice) => { if (notice.type !== 'retry') this.note({ kind: 'note', id: nextId('vnote'), text: notice.text }); },
     };
   }
 
@@ -461,8 +461,8 @@ export class VoiceClient {
       );
       if (gen !== this.gen) { proc.kill(); return; }
       this.proc = proc;
-    } catch (e) {
-      if (gen === this.gen) this.set({ status: 'error', detail: (e as Error).message });
+    } catch (error) {
+      if (gen === this.gen) this.set({ status: 'error', detail: (error as Error).message });
     }
   }
 
@@ -511,7 +511,7 @@ export class VoiceClient {
   cancel(): void { this.agent?.interrupt(); this.send({ type: 'cancel' }); }
   update(opts: { voice?: string; wake?: boolean; wake_words?: string; wake_timeout?: number }): void { this.send({ type: 'set', ...opts }); }
 
-  private note(p: Part): void { this.set({ done: [...this.snap.done, p] }); }
+  private note(partial: Part): void { this.set({ done: [...this.snap.done, partial] }); }
 
 
   // --- the brain ---------------------------------------------------------------
@@ -535,10 +535,10 @@ export class VoiceClient {
 
   /** A stream part → the sidecar (speech) and the pane. Every delta the
    *  moment it arrives: speech wants it now, not batched for the screen. */
-  private onPart(t: Turn, part: StreamPart): void {
-    if (part.type === 'start-step') { t.step++; this.send({ type: 'speak_start', turn: t.id, step: t.step }); }
-    else if (part.type === 'text-delta') this.send({ type: 'speak_delta', turn: t.id, text: part.text });
-    else if (part.type === 'finish-step') this.send({ type: 'speak_end', turn: t.id });
+  private onPart(turn: Turn, part: StreamPart): void {
+    if (part.type === 'start-step') { turn.step++; this.send({ type: 'speak_start', turn: turn.id, step: turn.step }); }
+    else if (part.type === 'text-delta') this.send({ type: 'speak_delta', turn: turn.id, text: part.text });
+    else if (part.type === 'finish-step') this.send({ type: 'speak_end', turn: turn.id });
     this.reply = applyPart(this.reply, part);
     this.paintLive();
   }
@@ -559,17 +559,17 @@ export class VoiceClient {
    *  nothing to do; cut short, the person heard the spoken part and no
    *  more — the agent records that, so the model remembers what was heard,
    *  not what it was going to say. */
-  private onSpoken(m: Extract<VoiceIn, { type: 'spoken' }>): void {
-    if (!m.interrupted) return;
-    const t = this.turns.get(m.turn);
-    if (!t) return;
-    this.agent?.partialMessage(m.text);
+  private onSpoken(spoken: Extract<VoiceIn, { type: 'spoken' }>): void {
+    if (!spoken.interrupted) return;
+    const turn = this.turns.get(spoken.turn);
+    if (!turn) return;
+    this.agent?.partialMessage(spoken.text);
     // The pane: trim what is on screen to what was heard.
-    const trim = (ps: Part[]) => {
-      const last = [...ps].reverse().find((p) => p.kind === 'text');
-      return ps.map((p) => (p === last ? { ...p, text: m.text } : p));
+    const trim = (parts: Part[]) => {
+      const last = [...parts].reverse().find((partial) => partial.kind === 'text');
+      return parts.map((partial) => (partial === last ? { ...partial, text: spoken.text } : partial));
     };
-    if (this.cur === t) this.reply = trim(this.reply);
+    if (this.cur === turn) this.reply = trim(this.reply);
     else this.set({ done: trim(this.snap.done) });
     this.set({ live: this.live() });
   }
@@ -610,10 +610,10 @@ export class VoiceClient {
       case 'user': {
         // The transcript forming, for the eye only; `turn` is what counts.
         // A confirmed segment folds into `heard`; a guess replaces `interim`.
-        const p = this.partial ?? { id: nextId('vpart'), heard: '', interim: '' };
-        if (msg.final) { p.heard = joinSpeech(p.heard, msg.text); p.interim = ''; }
-        else p.interim = msg.text;
-        this.partial = p;
+        const partial = this.partial ?? { id: nextId('vpart'), heard: '', interim: '' };
+        if (msg.final) { partial.heard = joinSpeech(partial.heard, msg.text); partial.interim = ''; }
+        else partial.interim = msg.text;
+        this.partial = partial;
         this.set({ live: this.live() });
         return;
       }

@@ -39,8 +39,8 @@ export interface Target { user: string; host: string; port?: number }
 /** `root@1.2.3.4`, `user@host:2222`, or a bare host (user defaults to root —
  *  a blank VPS is what this flow is for). Returns an error string instead of
  *  throwing so the form can show it. */
-export function parseTarget(s: string): Target | { error: string } {
-  const clean = s.trim();
+export function parseTarget(text: string): Target | { error: string } {
+  const clean = text.trim();
   if (!clean) return { error: 'where should the server go? user@host, e.g. root@203.0.113.7' };
   const at = clean.lastIndexOf('@');
   const user = at > 0 ? clean.slice(0, at) : 'root';
@@ -49,9 +49,9 @@ export function parseTarget(s: string): Target | { error: string } {
   // host:port — but leave IPv6 literals ([::1]:22 unsupported, name it) alone.
   const colon = host.lastIndexOf(':');
   if (colon >= 0 && host.indexOf(':') === colon) {
-    const p = Number(host.slice(colon + 1));
-    if (!Number.isInteger(p) || p < 1 || p > 65535) return { error: `not a port: ${host.slice(colon + 1)}` };
-    port = p;
+    const parsedPort = Number(host.slice(colon + 1));
+    if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) return { error: `not a port: ${host.slice(colon + 1)}` };
+    port = parsedPort;
     host = host.slice(0, colon);
   } else if (colon >= 0) {
     return { error: 'IPv6 targets are not supported yet — use a name or IPv4 address' };
@@ -78,16 +78,16 @@ export const sshRun: SshRun = (args, { stdin, onData, tty }) =>
     mkdirSync(SSH_CONTROL_DIR, { recursive: true, mode: 0o700 });
     if (tty) {
       const child = spawn('ssh', args, { stdio: 'inherit' });
-      child.on('error', (e) => reject(new Error(`could not run ssh: ${e.message}`)));
+      child.on('error', (error) => reject(new Error(`could not run ssh: ${error.message}`)));
       child.on('close', (code) => resolvePromise({ code: code ?? 1, out: '' }));
       return;
     }
     const child = spawn('ssh', args, { stdio: [stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
     let out = '';
-    const take = (chunk: Buffer) => { const s = chunk.toString('utf8'); out += s; onData?.(s); };
+    const take = (chunk: Buffer) => { const text = chunk.toString('utf8'); out += text; onData?.(text); };
     child.stdout!.on('data', take);
     child.stderr!.on('data', take);
-    child.on('error', (e) => reject(new Error(`could not run ssh: ${e.message}`)));
+    child.on('error', (error) => reject(new Error(`could not run ssh: ${error.message}`)));
     child.on('close', (code) => resolvePromise({ code: code ?? 1, out }));
     if (stdin !== undefined) child.stdin!.end(stdin);
   });
@@ -108,25 +108,25 @@ export const SSH_CONTROL_PATH = join(SSH_CONTROL_DIR, '%C');
  *  accept-new — first contact records the key, a CHANGED key still refuses.
  *  `identity` (rigs) is a keyfile; without it ssh's own config/agent decide.
  *  `tty` asks for a remote pty so ctrl-c reaches the installer. */
-export function sshArgs(t: Target, command: string, opts: SshOpts & { tty?: boolean } = {}): string[] {
+export function sshArgs(target: Target, command: string, opts: SshOpts & { tty?: boolean } = {}): string[] {
   return [
     '-o', 'ConnectTimeout=15',
     '-o', 'ControlMaster=auto', '-o', `ControlPath=${SSH_CONTROL_PATH}`, '-o', 'ControlPersist=300',
     ...(opts.acceptNew ? ['-o', 'StrictHostKeyChecking=accept-new'] : []),
     ...(opts.identity ? ['-i', opts.identity] : []),
-    ...(t.port ? ['-p', String(t.port)] : []),
+    ...(target.port ? ['-p', String(target.port)] : []),
     ...(opts.tty ? ['-t'] : []),
-    `${t.user}@${t.host}`,
+    `${target.user}@${target.host}`,
     '--',
     command,
   ];
 }
 
 /** Tear the lingering master down once the wizard is done. Best effort. */
-export async function closeSshMaster(t: Target, opts: SshOpts = {}): Promise<void> {
+export async function closeSshMaster(target: Target, opts: SshOpts = {}): Promise<void> {
   const run = opts.run ?? sshRun;
   const args = ['-O', 'exit', '-o', `ControlPath=${SSH_CONTROL_PATH}`,
-    ...(t.port ? ['-p', String(t.port)] : []), `${t.user}@${t.host}`];
+    ...(target.port ? ['-p', String(target.port)] : []), `${target.user}@${target.host}`];
   try { await run(args, {}); } catch { /* no master, nothing to close */ }
 }
 
@@ -141,9 +141,9 @@ export function installScriptUrl(version = APP_VERSION, repo = REPO): string {
 // an image name, a directory or a tag — this refuses anything shell-active
 // rather than trying to quote it.
 const SAFE = /^[A-Za-z0-9._\/:@=,-]+$/;
-function safe(kind: string, v: string): string {
-  if (!SAFE.test(v)) throw new Error(`${kind} contains characters that cannot ride a shell line: ${v}`);
-  return v;
+function safe(kind: string, value: string): string {
+  if (!SAFE.test(value)) throw new Error(`${kind} contains characters that cannot ride a shell line: ${value}`);
+  return value;
 }
 
 export interface InstallOptions extends SshOpts {
@@ -170,17 +170,17 @@ export const INSTALL_SCRIPT_PATH = resolve(import.meta.dirname, '../scripts/inst
  *  against a box that already has one. The script never rides ssh's stdin —
  *  that has to stay free for the password prompt — the box fetches it
  *  (curl, else wget), or it arrives base64 on the command line. */
-export async function runInstall(t: Target, opts: InstallOptions = {}): Promise<void> {
+export async function runInstall(target: Target, opts: InstallOptions = {}): Promise<void> {
   const run = opts.run ?? sshRun;
   const envPrefix = Object.entries(opts.env ?? {})
-    .map(([k, v]) => `${safe('env name', k)}=${safe(k, v)}`).join(' ');
-  const flags = (opts.flags ?? []).map((f) => safe('flag', f)).join(' ');
+    .map(([name, value]) => `${safe('env name', name)}=${safe(name, value)}`).join(' ');
+  const flags = (opts.flags ?? []).map((flag) => safe('flag', flag)).join(' ');
   const fetch = opts.script !== undefined
     ? `echo ${Buffer.from(opts.script, 'utf8').toString('base64')} | base64 -d`
-    : (() => { const u = safe('url', opts.scriptUrl ?? installScriptUrl());
-      return `sh -c 'if command -v curl >/dev/null 2>&1; then curl -fsSL ${u}; else wget -qO- ${u}; fi'`; })();
+    : (() => { const url = safe('url', opts.scriptUrl ?? installScriptUrl());
+      return `sh -c 'if command -v curl >/dev/null 2>&1; then curl -fsSL ${url}; else wget -qO- ${url}; fi'`; })();
   const command = `${fetch} | ${envPrefix ? `${envPrefix} ` : ''}sh -s -- --yes${flags ? ` ${flags}` : ''}`;
-  const { code } = await run(sshArgs(t, command, { ...opts, tty: opts.tty }), { onData: opts.onData, tty: opts.tty });
+  const { code } = await run(sshArgs(target, command, { ...opts, tty: opts.tty }), { onData: opts.onData, tty: opts.tty });
   if (code !== 0) throw new Error(`the installer exited with code ${code} — its output above says where it stopped`);
 }
 
@@ -199,14 +199,14 @@ const FACTS_CMD = [
  *  for (the URL must be that exact string), the TLS mode, and the API key.
  *  The key crosses only the encrypted ssh channel — never an argv, never a
  *  shell history line. */
-export async function readServerFacts(t: Target, opts: SshOpts = {}): Promise<ServerFacts> {
+export async function readServerFacts(target: Target, opts: SshOpts = {}): Promise<ServerFacts> {
   const run = opts.run ?? sshRun;
-  const { code, out } = await run(sshArgs(t, FACTS_CMD, opts), {});
+  const { code, out } = await run(sshArgs(target, FACTS_CMD, opts), {});
   if (code !== 0) throw new Error(`could not read the server's configuration (ssh exited ${code})`);
   const facts: Record<string, string> = {};
   for (const line of out.split('\n')) {
-    const m = /^PHANTOM_FACT ([A-Z_]+)=(.*)$/.exec(line.trim());
-    if (m) facts[m[1]] = m[2];
+    const match = /^PHANTOM_FACT ([A-Z_]+)=(.*)$/.exec(line.trim());
+    if (match) facts[match[1]] = match[2];
   }
   const address = facts.PHANTOM_BACKEND_ADDRESS ?? '';
   const key = facts.API_KEY ?? '';
@@ -216,10 +216,10 @@ export async function readServerFacts(t: Target, opts: SshOpts = {}): Promise<Se
 
 /** In internal-TLS mode, the one root certificate clients must trust —
  *  `phantom-backend ca` on the box prints it. */
-export async function readServerCa(t: Target, opts: SshOpts = {}): Promise<string> {
+export async function readServerCa(target: Target, opts: SshOpts = {}): Promise<string> {
   const run = opts.run ?? sshRun;
   const cmd = 'S=""; [ "$(id -u)" -ne 0 ] && S=sudo; $S phantom-backend ca';
-  const { code, out } = await run(sshArgs(t, cmd, opts), {});
+  const { code, out } = await run(sshArgs(target, cmd, opts), {});
   const pem = out.slice(out.indexOf('-----BEGIN'));
   if (code !== 0 || !pem.includes('-----BEGIN CERTIFICATE-----')) {
     throw new Error('could not read the server\'s root certificate (phantom-backend ca)');
@@ -231,21 +231,21 @@ export async function readServerCa(t: Target, opts: SshOpts = {}): Promise<strin
  *  cannot serve: a CA to pin before the app's dispatcher is wired (setup), a
  *  route to call before the app renders (update --server). Generic
  *  method+path — the /settings route names live in settings.ts. */
-export function apiFor(base: string, key: string, ca?: string) {
+export function apiFor(base: string, key: string, certificateAuthority?: string) {
   return (method: string, path: string, body?: unknown) =>
     new Promise<unknown>((resolvePromise, reject) => {
-      const u = new URL(`/api${path}`, base);
-      const req = (u.protocol === 'https:' ? httpsRequest : httpRequest)(u, {
+      const url = new URL(`/api${path}`, base);
+      const req = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, {
         method,
         headers: {
           authorization: `Bearer ${key}`,
           ...(body === undefined ? {} : { 'content-type': 'application/json' }),
         },
         timeout: 15_000,
-        ...(ca ? { ca } : {}),
+        ...(certificateAuthority ? { certificateAuthority } : {}),
       }, (res) => {
         let text = '';
-        res.on('data', (c) => { text += c; });
+        res.on('data', (chunk) => { text += chunk; });
         res.on('end', () => {
           try {
             const j = JSON.parse(text) as { ok: boolean; data?: unknown; error?: { message?: string; code?: string } };
@@ -266,21 +266,21 @@ export function apiFor(base: string, key: string, ca?: string) {
 /** A streaming POST client — reads ND-JSON lines and calls `onEvent` for each.
  *  Resolves when the stream closes. No timeout — the stream lives as long as
  *  the server keeps it open (heartbeats keep it alive). */
-export function streamFor(base: string, key: string, ca?: string) {
+export function streamFor(base: string, key: string, certificateAuthority?: string) {
   return (path: string, body: unknown, onEvent: (event: unknown) => void) =>
     new Promise<void>((resolve, reject) => {
-      const u = new URL(`/api${path}`, base);
-      const req = (u.protocol === 'https:' ? httpsRequest : httpRequest)(u, {
+      const url = new URL(`/api${path}`, base);
+      const req = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, {
         method: 'POST',
         headers: {
           authorization: `Bearer ${key}`,
           'content-type': 'application/json',
         },
-        ...(ca ? { ca } : {}),
+        ...(certificateAuthority ? { certificateAuthority } : {}),
       }, (res) => {
         if (res.statusCode && res.statusCode >= 400) {
           let text = '';
-          res.on('data', (c) => { text += c; });
+          res.on('data', (chunk) => { text += chunk; });
           res.on('end', () => {
             try {
               const j = JSON.parse(text) as { error?: { message?: string; code?: string } };
@@ -292,10 +292,10 @@ export function streamFor(base: string, key: string, ca?: string) {
         let buf = '';
         res.on('data', (chunk: string | Buffer) => {
           buf += String(chunk);
-          let nl: number;
-          while ((nl = buf.indexOf('\n')) !== -1) {
-            const line = buf.slice(0, nl).trim();
-            buf = buf.slice(nl + 1);
+          let newlineAt: number;
+          while ((newlineAt = buf.indexOf('\n')) !== -1) {
+            const line = buf.slice(0, newlineAt).trim();
+            buf = buf.slice(newlineAt + 1);
             if (!line) continue;
             try { onEvent(JSON.parse(line)); } catch {}
           }
@@ -314,19 +314,19 @@ export function streamFor(base: string, key: string, ca?: string) {
  *  from here (cloud firewalls, NAT). Plain node http(s) rather than fetch so
  *  an internal-mode CA can be pinned for this one probe without touching the
  *  process's trust store. */
-export function verifyFromHere(url: string, key: string, ca?: string, timeoutMs = 10_000):
+export function verifyFromHere(url: string, key: string, certificateAuthority?: string, timeoutMs = 10_000):
   Promise<{ ok: true; version: string } | { ok: false; reason: string }> {
   return new Promise((resolvePromise) => {
-    let u: URL;
-    try { u = new URL(url); } catch { return resolvePromise({ ok: false, reason: `not a URL: ${url}` }); }
-    const req = (u.protocol === 'https:' ? httpsRequest : httpRequest)(
-      new URL('/api/health', u),
-      { headers: { authorization: `Bearer ${key}` }, timeout: timeoutMs, ...(ca ? { ca } : {}) },
+    let base: URL;
+    try { base = new URL(url); } catch { return resolvePromise({ ok: false, reason: `not a URL: ${url}` }); }
+    const req = (base.protocol === 'https:' ? httpsRequest : httpRequest)(
+      new URL('/api/health', base),
+      { headers: { authorization: `Bearer ${key}` }, timeout: timeoutMs, ...(certificateAuthority ? { certificateAuthority } : {}) },
       (res) => {
         let body = '';
-        res.on('data', (c) => { body += c; });
+        res.on('data', (chunk) => { body += chunk; });
         res.on('end', () => {
-          if (res.statusCode !== 200) return resolvePromise({ ok: false, reason: `GET ${u.origin}/health answered ${res.statusCode}` });
+          if (res.statusCode !== 200) return resolvePromise({ ok: false, reason: `GET ${base.origin}/health answered ${res.statusCode}` });
           try {
             // /health answers flat ({ok, version}), unlike the enveloped routes.
             const j = JSON.parse(body) as { version?: string; data?: { version?: string } };
@@ -336,7 +336,7 @@ export function verifyFromHere(url: string, key: string, ca?: string, timeoutMs 
       },
     );
     req.on('timeout', () => { req.destroy(new Error('timeout')); });
-    req.on('error', (e) => resolvePromise({ ok: false, reason: e.message }));
+    req.on('error', (error) => resolvePromise({ ok: false, reason: error.message }));
     req.end();
   });
 }

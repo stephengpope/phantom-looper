@@ -18,10 +18,10 @@ import type { Card } from '../board.js';
  *  card is rarely edited after). */
 export function archivedChoices(cards: Card[], now = Date.now()): Choice<Card | null>[] {
   if (!cards.length) return [{ value: null, heading: true, label: 'nothing archived — [a] on the board archives a card' }];
-  const rows = cards.map((t): TableRow<Card> => ({
-    value: t,
-    cells: [`${t.number}-${t.title}`, t.status.replace(/_/g, ' '), ago(t.updated_at, now)],
-    hint: t.details || undefined,
+  const rows = cards.map((card): TableRow<Card> => ({
+    value: card,
+    cells: [`${card.number}-${card.title}`, card.status.replace(/_/g, ' '), ago(card.updated_at, now)],
+    hint: card.details || undefined,
   }));
   return tableChoices('card', [{ title: 'was in' }, { title: 'when' }], rows);
 }
@@ -47,9 +47,9 @@ export function Archived({ cards, total, notice, onOpen, onRestore, onCancel, on
         { key: 'esc', does: 'close' }]}>
       <SelectList
         choices={archivedChoices(cards)}
-        onSelect={(t) => { if (t) onOpen(t); }}
+        onSelect={(card) => { if (card) onOpen(card); }}
         onCancel={onCancel}
-        onKey={(ch, t) => { if (ch === 'r' && t) onRestore(t); }}
+        onKey={(char, card) => { if (char === 'r' && card) onRestore(card); }}
         onNearEnd={onNearEnd}
         // Counts against the real total (/resume's shape) — the "↓ N more"
         // line says what is really below.

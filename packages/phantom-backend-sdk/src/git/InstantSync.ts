@@ -68,7 +68,7 @@ export interface InstantSyncDeps {
   autoPush: (session: SessionRow, project: ProjectRow) => Promise<AutoPushResult>;
   autoPull: (session: SessionRow, project: ProjectRow) => Promise<AutoPullResult>;
   /** A sync that did not complete, in the sync's own words. */
-  failed: (session: SessionRow, op: 'push' | 'pull', reason: string) => void;
+  failed: (session: SessionRow, operation: 'push' | 'pull', reason: string) => void;
 }
 
 interface Watched {
@@ -98,8 +98,8 @@ export class InstantSync {
    *  switch on; a no-op if already attached. */
   async watchWorkspace(workspaceId: string, project: ProjectRow | undefined): Promise<void> {
     if (!project || this.watched.has(workspaceId)) return;
-    const c = await this.configOf(project);
-    if (c.on) await this.attach(workspaceId, project, c);
+    const config = await this.configOf(project);
+    if (config.on) await this.attach(workspaceId, project, config);
   }
 
   /** The workspace's container is gone. */
@@ -116,24 +116,24 @@ export class InstantSync {
     const rows = await this.deps.workspaces.listForWorkRefresh(activeWorkspaceIds);
     const projects = new Map((await this.deps.projects.list()).map((project) => [project.id, project]));
     const configs = new Map<string, Config>();
-    for (const id of new Set(rows.map((r) => r.projectId))) {
+    for (const id of new Set(rows.map((row) => row.projectId))) {
       const project = projects.get(id);
       if (project) configs.set(id, await this.configOf(project));
     }
     const wanted = new Set<string>();
     for (const row of rows) {
       const project = projects.get(row.projectId);
-      const c = configs.get(row.projectId);
-      if (!project || !c?.on) continue;
+      const config = configs.get(row.projectId);
+      if (!project || !config?.on) continue;
       wanted.add(row.id);
       const current = this.watched.get(row.id);
       if (current) {
         current.project = project;
-        current.debounceMs = c.debounceMs;
-        current.pullMs = c.pullMs;
+        current.debounceMs = config.debounceMs;
+        current.pullMs = config.pullMs;
       } else {
-        await this.attach(row.id, project, c)
-          .catch((e) => log.warn({ workspace: row.id, err: errStr(e) }, 'could not start watching'));
+        await this.attach(row.id, project, config)
+          .catch((error) => log.warn({ workspace: row.id, err: errStr(error) }, 'could not start watching'));
       }
     }
     for (const [id, project] of this.watched) {
@@ -147,19 +147,19 @@ export class InstantSync {
   }
 
   private async configOf(project: ProjectRow): Promise<Config> {
-    const c = await this.deps.settings.resolveMany(
+    const values = await this.deps.settings.resolveMany(
       ['instant_sync', 'instant_sync_push_debounce_ms', 'instant_sync_pull_interval_ms'], { projectId: project.id }) as { instant_sync: boolean; instant_sync_push_debounce_ms: number; instant_sync_pull_interval_ms: number };
-    return { on: c.instant_sync, debounceMs: c.instant_sync_push_debounce_ms, pullMs: c.instant_sync_pull_interval_ms };
+    return { on: values.instant_sync, debounceMs: values.instant_sync_push_debounce_ms, pullMs: values.instant_sync_pull_interval_ms };
   }
 
-  private async attach(workspaceId: string, project: ProjectRow, c: Config): Promise<void> {
+  private async attach(workspaceId: string, project: ProjectRow, config: Config): Promise<void> {
     // `changedAt` far in the past: the first beat runs a push check, so work
     // left unpushed before this watcher existed (a server restart) goes now.
-    const watched: Watched = { workspaceId, project, debounceMs: c.debounceMs, pullMs: c.pullMs,
+    const watched: Watched = { workspaceId, project, debounceMs: config.debounceMs, pullMs: config.pullMs,
       changedAt: 0, lastFailure: { push: null, pull: null }, stopped: false };
     this.deps.watcher.watch(workspaceId, repoDir(this.deps.paths, workspaceId), () => { watched.changedAt = Date.now(); });
     this.watched.set(workspaceId, watched);
-    log.info({ workspace: workspaceId, project: project.id, debounceMs: c.debounceMs, pullMs: c.pullMs }, 'instant sync on');
+    log.info({ workspace: workspaceId, project: project.id, debounceMs: config.debounceMs, pullMs: config.pullMs }, 'instant sync on');
     void this.beat(watched);
   }
 
@@ -194,29 +194,29 @@ export class InstantSync {
         // moved `changedAt`, and is left to settle on its own.
         if ((pushed.result === 'pushed' || pushed.result === 'nothing') && watched.changedAt === since) watched.changedAt = null;
       }
-    } catch (e) {
-      log.warn({ workspace: watched.workspaceId, err: errStr(e) }, 'instant sync beat threw');
+    } catch (error) {
+      log.warn({ workspace: watched.workspaceId, err: errStr(error) }, 'instant sync beat threw');
     } finally {
       if (!watched.stopped) watched.timer = setTimeout(() => void this.beat(watched), watched.pullMs);
     }
   }
 
   /** One sync's result: logged whatever it is; a failure reported once. */
-  private settle(watched: Watched, session: SessionRow, op: 'push' | 'pull',
-    r: AutoPushResult | AutoPullResult): void {
-    const at = { workspace: watched.workspaceId, op, result: r.result };
-    if (r.result === 'error' || r.result === 'blocked') {
-      const reason = r.reason ?? r.result;
+  private settle(watched: Watched, session: SessionRow, operation: 'push' | 'pull',
+    result: AutoPushResult | AutoPullResult): void {
+    const at = { workspace: watched.workspaceId, operation, result: result.result };
+    if (result.result === 'error' || result.result === 'blocked') {
+      const reason = result.reason ?? result.result;
       // Every failure is logged; only a NEW one is reported to a person.
-      if (watched.lastFailure[op] === reason) { log.debug({ ...at, reason }, 'instant sync still failing'); return; }
-      watched.lastFailure[op] = reason;
+      if (watched.lastFailure[operation] === reason) { log.debug({ ...at, reason }, 'instant sync still failing'); return; }
+      watched.lastFailure[operation] = reason;
       log.warn({ ...at, reason }, 'instant sync failed');
-      this.deps.failed(session, op, reason);
+      this.deps.failed(session, operation, reason);
       return;
     }
-    if (r.result === 'busy') { log.debug(at, 'instant sync: checkout held, next beat'); return; }
-    watched.lastFailure[op] = null;
-    if (r.result === 'pushed' || r.result === 'merged') log.info(at, 'instant sync done');
+    if (result.result === 'busy') { log.debug(at, 'instant sync: checkout held, next beat'); return; }
+    watched.lastFailure[operation] = null;
+    if (result.result === 'pushed' || result.result === 'merged') log.info(at, 'instant sync done');
     else log.debug(at, 'instant sync: nothing to do');
   }
 }

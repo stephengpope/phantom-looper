@@ -64,8 +64,8 @@ export interface DiskState { usedPct: number; freeGB: number }
 
 /** THE disk space rule — the one check for starting, stopping and the final
  *  log. `pct` <= 0 turns the percent part off; the floor always applies. */
-export function tooFull(d: DiskState, pct: number): boolean {
-  return (pct > 0 && d.usedPct >= pct) || d.freeGB < MIN_FREE_GB;
+export function tooFull(disk: DiskState, pct: number): boolean {
+  return (pct > 0 && disk.usedPct >= pct) || disk.freeGB < MIN_FREE_GB;
 }
 
 /** The project filesystem, read once. The named volume and docker's own
@@ -73,32 +73,32 @@ export function tooFull(d: DiskState, pct: number): boolean {
  *  for both. `bavail` (what an unprivileged user may still use) is the
  *  honest measure of "full". */
 async function measureDisk(root: string): Promise<DiskState> {
-  const st = await fs.statfs(root);
-  if (st.blocks === 0) return { usedPct: 0, freeGB: Infinity };
+  const stat = await fs.statfs(root);
+  if (stat.blocks === 0) return { usedPct: 0, freeGB: Infinity };
   return {
-    usedPct: ((st.blocks - st.bavail) / st.blocks) * 100,
-    freeGB: (st.bavail * st.bsize) / (1024 ** 3),
+    usedPct: ((stat.blocks - stat.bavail) / stat.blocks) * 100,
+    freeGB: (stat.bavail * stat.bsize) / (1024 ** 3),
   };
 }
 
-const rounded = (d: DiskState) => ({ usedPct: Math.round(d.usedPct), freeGB: Math.round(d.freeGB) });
+const rounded = (disk: DiskState) => ({ usedPct: Math.round(disk.usedPct), freeGB: Math.round(disk.freeGB) });
 
 /** The sessions whose files are on disk (only owners hold disk), each with
  *  its project row. Fails CLOSED like every sweep: an unreadable list
  *  aborts the run — not knowing what is protected never licenses deletion. */
-async function workspaceOwners(projects: Projects, sessions: Sessions): Promise<Array<{ s: SessionRow; project: ProjectRow }>> {
+async function workspaceOwners(projects: Projects, sessions: Sessions): Promise<Array<{ session: SessionRow; project: ProjectRow }>> {
   const rows = await sessions.listOwnersOnDisk();
   const byId = new Map((await projects.list()).map((project) => [project.id, project]));
   return rows
-    .flatMap((s) => {
-      const project = byId.get(s.projectId);
-      return project ? [{ s, project }] : [];
+    .flatMap((session) => {
+      const project = byId.get(session.projectId);
+      return project ? [{ session, project }] : [];
     });
 }
 
-const backupOf = async (gitSync: GitSync, s: SessionRow, project: ProjectRow): Promise<PushResult | 'busy'> =>
-  gitSync.backup(s, project).catch((e) => {
-    log.warn({ session: s.id, err: errStr(e) }, 'backup failed');
+const backupOf = async (gitSync: GitSync, session: SessionRow, project: ProjectRow): Promise<PushResult | 'busy'> =>
+  gitSync.backup(session, project).catch((error) => {
+    log.warn({ session: session.id, err: errStr(error) }, 'backup failed');
     return 'error';
   });
 
@@ -107,18 +107,18 @@ const backupOf = async (gitSync: GitSync, s: SessionRow, project: ProjectRow): P
  *  `lastPushAt < lastUsedAt` means a session with nothing new since its last
  *  push is never touched — the common case costs no lock, no git, no push. */
 export async function idleBackupSweep(projects: Projects, sessions: Sessions, gitSync: GitSync): Promise<void> {
-  let owners: Array<{ s: SessionRow; project: ProjectRow }>;
-  try { owners = await workspaceOwners(projects, sessions); } catch (e) {
-    log.warn({ err: errStr(e) }, 'skipping idle backup — could not read state');
+  let owners: Array<{ session: SessionRow; project: ProjectRow }>;
+  try { owners = await workspaceOwners(projects, sessions); } catch (error) {
+    log.warn({ err: errStr(error) }, 'skipping idle backup — could not read state');
     return;
   }
   const now = Date.now();
-  for (const { s, project } of owners) {
-    if (s.turnCount < BACKUP_MIN_TURNS) continue;
-    if (now - s.lastUsedAt.getTime() < BACKUP_IDLE_MS) continue;
-    if (s.lastPushAt && s.lastPushAt.getTime() >= s.lastUsedAt.getTime()) continue;
-    const r = await backupOf(gitSync, s, project);
-    if (r === 'pushed') log.info({ session: s.id }, 'idle session backed up');
+  for (const { session, project } of owners) {
+    if (session.turnCount < BACKUP_MIN_TURNS) continue;
+    if (now - session.lastUsedAt.getTime() < BACKUP_IDLE_MS) continue;
+    if (session.lastPushAt && session.lastPushAt.getTime() >= session.lastUsedAt.getTime()) continue;
+    const pushed = await backupOf(gitSync, session, project);
+    if (pushed === 'pushed') log.info({ session: session.id }, 'idle session backed up');
   }
 }
 
@@ -129,8 +129,8 @@ export async function idleBackupSweep(projects: Projects, sessions: Sessions, gi
  *  uses is never removed. */
 const API_IMAGE_CURRENT = (() => {
   const repo = API_IMAGE;
-  const v = APP_VERSION;
-  return `${repo}:${/^v\d+\.\d+\.\d+/.test(v) ? v : 'latest'}`;
+  const version = APP_VERSION;
+  return `${repo}:${/^v\d+\.\d+\.\d+/.test(version) ? version : 'latest'}`;
 })();
 
 /** Everything disk cleanup does to the world, handed in — so the loop below
@@ -140,73 +140,73 @@ export interface CleanupDeps {
   pct: number;
   measure: () => Promise<DiskState>;
   /** The sessions with files on disk, with their projects. */
-  owners: () => Promise<Array<{ s: SessionRow; project: ProjectRow }>>;
+  owners: () => Promise<Array<{ session: SessionRow; project: ProjectRow }>>;
   /** Of these workspace ids, the busy ones: a turn holds a lock there, or a
    *  background task runs there. */
   busy: (workspaceIds: string[]) => Promise<Set<string>>;
   /** Has this session's work landed on base? Unknown counts as no — the
    *  sweep never deletes on a guess. */
-  landed: (s: SessionRow, project: ProjectRow) => Promise<boolean>;
+  landed: (session: SessionRow, project: ProjectRow) => Promise<boolean>;
   /** Delete release images older than the running one that no container uses. */
   removeOldImages: () => Promise<void>;
   /** gitSync.backup: push, then run `whenSafe` under the same lock only if
    *  everything is on origin. */
-  backup: (s: SessionRow, project: ProjectRow, whenSafe: () => Promise<void>) => Promise<PushResult | 'busy'>;
+  backup: (session: SessionRow, project: ProjectRow, whenSafe: () => Promise<void>) => Promise<PushResult | 'busy'>;
   /** The container, then the files (which refuses anything not on origin). */
-  deleteSession: (s: SessionRow) => Promise<void>;
+  deleteSession: (session: SessionRow) => Promise<void>;
 }
 
 /** DISK CLEANUP — the loop. See the file header for the rules. */
-export async function diskCleanup(d: CleanupDeps): Promise<void> {
-  const start = await d.measure();
-  if (!tooFull(start, d.pct)) return;
-  log.warn({ ...rounded(start), limitPct: d.pct, minFreeGB: MIN_FREE_GB }, 'disk too full — cleanup started');
+export async function diskCleanup(deps: CleanupDeps): Promise<void> {
+  const start = await deps.measure();
+  if (!tooFull(start, deps.pct)) return;
+  log.warn({ ...rounded(start), limitPct: deps.pct, minFreeGB: MIN_FREE_GB }, 'disk too full — cleanup started');
 
-  let owners: Array<{ s: SessionRow; project: ProjectRow }>;
+  let owners: Array<{ session: SessionRow; project: ProjectRow }>;
   let busy: Set<string>;
   try {
-    owners = await d.owners();
-    busy = await d.busy(owners.map(({ s }) => s.id));
-  } catch (e) {
-    log.warn({ err: errStr(e) }, 'disk cleanup stopped — could not read sessions');
+    owners = await deps.owners();
+    busy = await deps.busy(owners.map(({ session }) => session.id));
+  } catch (error) {
+    log.warn({ err: errStr(error) }, 'disk cleanup stopped — could not read sessions');
     return;
   }
-  owners.sort((a, b) => a.s.lastUsedAt.getTime() - b.s.lastUsedAt.getTime());
+  owners.sort((a, b) => a.session.lastUsedAt.getTime() - b.session.lastUsedAt.getTime());
 
   const left = { unmerged: [] as string[], busy: [] as string[], failed: [] as string[] };
-  for (const { s, project } of owners) {
-    await d.removeOldImages();
-    if (!tooFull(await d.measure(), d.pct)) break;
+  for (const { session, project } of owners) {
+    await deps.removeOldImages();
+    if (!tooFull(await deps.measure(), deps.pct)) break;
 
-    if (busy.has(s.id)) { left.busy.push(s.id); continue; }
-    if (!(await d.landed(s, project))) { left.unmerged.push(s.id); continue; }
+    if (busy.has(session.id)) { left.busy.push(session.id); continue; }
+    if (!(await deps.landed(session, project))) { left.unmerged.push(session.id); continue; }
 
     let deleted = false;
-    const r = await d.backup(s, project, async () => {
+    const pushed = await deps.backup(session, project, async () => {
       try {
-        await d.deleteSession(s);
+        await deps.deleteSession(session);
         deleted = true;
-      } catch (e) {
-        log.warn({ session: s.id, err: errStr(e) }, 'disk cleanup: backed up but could not delete');
+      } catch (error) {
+        log.warn({ session: session.id, err: errStr(error) }, 'disk cleanup: backed up but could not delete');
       }
-    }).catch((e) => {
-      log.warn({ session: s.id, err: errStr(e) }, 'disk cleanup: backup failed');
+    }).catch((error) => {
+      log.warn({ session: session.id, err: errStr(error) }, 'disk cleanup: backup failed');
       return 'error' as const;
     });
 
     if (deleted) {
-      log.info({ session: s.id, result: r }, 'disk cleanup deleted session (work is on its branch)');
-    } else if (r === 'busy') {
-      left.busy.push(s.id);
+      log.info({ session: session.id, result: pushed }, 'disk cleanup deleted session (work is on its branch)');
+    } else if (pushed === 'busy') {
+      left.busy.push(session.id);
     } else {
-      left.failed.push(s.id);
-      log.warn({ session: s.id, result: r }, 'disk cleanup skipped session — not backed up');
+      left.failed.push(session.id);
+      log.warn({ session: session.id, result: pushed }, 'disk cleanup skipped session — not backed up');
     }
   }
-  await d.removeOldImages();
+  await deps.removeOldImages();
 
-  const end = await d.measure();
-  if (tooFull(end, d.pct)) {
+  const end = await deps.measure();
+  if (tooFull(end, deps.pct)) {
     log.warn({ ...rounded(end), unmerged: left.unmerged, busy: left.busy, failed: left.failed },
       'disk still too full — what is left is unmerged, busy or could not be backed up');
   } else {
@@ -216,25 +216,25 @@ export async function diskCleanup(d: CleanupDeps): Promise<void> {
 
 /** Disk cleanup against the real system. */
 export async function pressureSweep(
-  settings: Settings, projects: Projects, sessions: Sessions, p: Paths, images: Images,
+  settings: Settings, projects: Projects, sessions: Sessions, paths: Paths, images: Images,
   sessionContainers: SessionContainers, gitSync: GitSync, busy: (workspaceIds: string[]) => Promise<Set<string>>,
 ): Promise<void> {
   const currents = [String(await settings.resolve('container_image')), API_IMAGE_CURRENT];
   await diskCleanup({
     pct: Number(await settings.resolve('disk_cleanup_percent')),
-    measure: () => measureDisk(p.root),
+    measure: () => measureDisk(paths.root),
     owners: () => workspaceOwners(projects, sessions),
     busy,
     // Measured live from the checkout: the stored `work` column is cleared
     // once the container is gone, which is exactly the idle session here.
-    landed: async (s, project) => !!s.branch && (await workState(repoDir(p, s.id), s.branch, project.baseBranch)) === 'merged',
+    landed: async (session, project) => !!session.branch && (await workState(repoDir(paths, session.id), session.branch, project.baseBranch)) === 'merged',
     // Images owns the rule and refuses while a pull is in flight (images.ts).
     removeOldImages: () => images.removeOlderThan(currents)
-      .catch((e) => log.warn({ err: errStr(e) }, 'image cleanup failed')),
-    backup: (s, project, whenSafe) => gitSync.backup(s, project, whenSafe),
-    deleteSession: async (s) => {
-      await sessionContainers.remove(s.id);
-      await sessions.destroy(s, { force: false });
+      .catch((error) => log.warn({ err: errStr(error) }, 'image cleanup failed')),
+    backup: (session, project, whenSafe) => gitSync.backup(session, project, whenSafe),
+    deleteSession: async (session) => {
+      await sessionContainers.remove(session.id);
+      await sessions.destroy(session, { force: false });
     },
   });
 }

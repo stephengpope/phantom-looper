@@ -13,11 +13,11 @@ import { telegramSentMessages } from '../storage/schema.js';
 export interface TelegramSentMessage { content: string; sessionId: string | null }
 
 export class TelegramSentMessages {
-  constructor(private readonly db: Drizzle) {}
+  constructor(private readonly database: Drizzle) {}
 
   /** A message the bot sent, remembered so a reply to it can be traced. */
   async record(chatId: number, messageId: number, content: string, sessionId: string | null): Promise<void> {
-    await this.db.insert(telegramSentMessages)
+    await this.database.insert(telegramSentMessages)
       .values({ chatId, messageId, content, sessionId })
       .onConflictDoUpdate({
         target: [telegramSentMessages.chatId, telegramSentMessages.messageId],
@@ -26,12 +26,12 @@ export class TelegramSentMessages {
   }
 
   async delete(chatId: number, messageId: number): Promise<void> {
-    await this.db.delete(telegramSentMessages)
+    await this.database.delete(telegramSentMessages)
       .where(and(eq(telegramSentMessages.chatId, chatId), eq(telegramSentMessages.messageId, messageId)));
   }
 
   async get(chatId: number, messageId: number): Promise<TelegramSentMessage | null> {
-    const rows = await this.db.select({ content: telegramSentMessages.content, sessionId: telegramSentMessages.sessionId })
+    const rows = await this.database.select({ content: telegramSentMessages.content, sessionId: telegramSentMessages.sessionId })
       .from(telegramSentMessages)
       .where(and(eq(telegramSentMessages.chatId, chatId), eq(telegramSentMessages.messageId, messageId)));
     return rows[0] ?? null;
@@ -40,7 +40,7 @@ export class TelegramSentMessages {
   /** The newest thing the bot said for a session — shown when switching into
    *  code mode so the user sees where the agent left off. */
   async lastForSession(chatId: number, sessionId: string): Promise<string | null> {
-    const rows = await this.db.select({ content: telegramSentMessages.content })
+    const rows = await this.database.select({ content: telegramSentMessages.content })
       .from(telegramSentMessages)
       .where(and(eq(telegramSentMessages.chatId, chatId), eq(telegramSentMessages.sessionId, sessionId)))
       .orderBy(sql`${telegramSentMessages.sentAt} desc`)

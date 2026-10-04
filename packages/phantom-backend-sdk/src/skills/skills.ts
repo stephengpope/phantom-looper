@@ -20,45 +20,45 @@ export interface SkillMeta {
 /** Frontmatter split: `---\n…\n---` at the top, BOM tolerated (a user-edited
  *  file often carries one — it cost hermes a sweep to learn that). Returns
  *  null when there is no frontmatter fence. */
-export function splitFrontmatter(md: string): { fm: string; body: string } | null {
-  const clean = md.replace(/^﻿/, '');
-  const m = clean.match(/^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
-  if (!m) return null;
-  return { fm: m[1], body: clean.slice(m[0].length) };
+export function splitFrontmatter(markdown: string): { fm: string; body: string } | null {
+  const clean = markdown.replace(/^﻿/, '');
+  const match = clean.match(/^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
+  if (!match) return null;
+  return { fm: match[1], body: clean.slice(match[0].length) };
 }
 
 /** The frontmatter `description`, single-line or YAML block scalar
  *  (`description: |` / `>` — vendor skills use these). Multi-line values are
  *  flattened to one line. Null when absent or empty. */
-export function parseDescription(md: string): string | null {
-  const parts = splitFrontmatter(md);
+export function parseDescription(markdown: string): string | null {
+  const parts = splitFrontmatter(markdown);
   if (!parts) return null;
   const lines = parts.fm.split(/\r?\n/);
-  const i = lines.findIndex((l) => /^description:/.test(l));
+  const i = lines.findIndex((line) => /^description:/.test(line));
   if (i < 0) return null;
   const head = lines[i].replace(/^description:\s*/, '').trim();
   if (/^[|>][+-]?\d*$/.test(head)) {
     const out: string[] = [];
     for (let j = i + 1; j < lines.length; j++) {
-      const l = lines[j];
-      if (l.trim() === '') continue;
-      if (/^\s/.test(l)) out.push(l.trim());
+      const line = lines[j];
+      if (line.trim() === '') continue;
+      if (/^\s/.test(line)) out.push(line.trim());
       else break;
     }
-    const v = out.join(' ').replace(/\s+/g, ' ').trim();
-    return v || null;
+    const value = out.join(' ').replace(/\s+/g, ' ').trim();
+    return value || null;
   }
-  const v = head.replace(/^["']|["']$/g, '').trim();
-  return v || null;
+  const value = head.replace(/^["']|["']$/g, '').trim();
+  return value || null;
 }
 
 /** The frontmatter `name` (single-line). Null when absent. */
-export function parseName(md: string): string | null {
-  const parts = splitFrontmatter(md);
+export function parseName(markdown: string): string | null {
+  const parts = splitFrontmatter(markdown);
   if (!parts) return null;
-  const m = parts.fm.match(/^name:\s*(.+)$/m);
-  const v = m ? m[1].trim().replace(/^["']|["']$/g, '').trim() : '';
-  return v || null;
+  const match = parts.fm.match(/^name:\s*(.+)$/m);
+  const value = match ? match[1].trim().replace(/^["']|["']$/g, '').trim() : '';
+  return value || null;
 }
 
 /** Scan one skills root (`<root>/.agents/skills`): every direct child folder
@@ -70,18 +70,18 @@ export async function scanSkills(root: string): Promise<SkillMeta[]> {
   let entries: string[];
   try {
     entries = (await fsp.readdir(dir, { withFileTypes: true }))
-      .filter((e) => e.isDirectory() || e.isSymbolicLink()).map((e) => e.name);
-  } catch (e) {
+      .filter((entry) => entry.isDirectory() || entry.isSymbolicLink()).map((entry) => entry.name);
+  } catch (error) {
     // No directory is the normal case (a repo without skills); anything else
     // is a real read failure and must not read as "no skills".
-    if ((e as { code?: string }).code === 'ENOENT') return [];
-    throw new Error(`could not read the skills directory ${dir}: ${(e as Error).message}`);
+    if ((error as { code?: string }).code === 'ENOENT') return [];
+    throw new Error(`could not read the skills directory ${dir}: ${(error as Error).message}`);
   }
   const out: SkillMeta[] = [];
   for (const name of entries) {
-    const md = await fsp.readFile(path.join(dir, name, 'SKILL.md'), 'utf8').catch(() => null);
-    if (md === null) continue;
-    const description = parseDescription(md);
+    const markdown = await fsp.readFile(path.join(dir, name, 'SKILL.md'), 'utf8').catch(() => null);
+    if (markdown === null) continue;
+    const description = parseDescription(markdown);
     if (!description) continue;
     out.push({ name, description });
   }
@@ -94,10 +94,10 @@ export async function scanSkills(root: string): Promise<SkillMeta[]> {
 export function mergeSkills(...lists: SkillMeta[][]): SkillMeta[] {
   const seen = new Set<string>();
   const out: SkillMeta[] = [];
-  for (const list of lists) for (const s of list) {
-    if (seen.has(s.name)) continue;
-    seen.add(s.name);
-    out.push(s);
+  for (const list of lists) for (const skill of list) {
+    if (seen.has(skill.name)) continue;
+    seen.add(skill.name);
+    out.push(skill);
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }

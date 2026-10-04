@@ -1,7 +1,7 @@
 # auto-pull
 
 Auto-pull is auto-push without the last step. Both, and the manual
-`/git/pull`, run one function: `syncBranch` in `phantom-backend/git/sync.ts`.
+`/git/pull`, run one function: `syncBranch` in the backend SDK (`git/sync.ts`).
 
 ## Why they were folded together
 
@@ -51,7 +51,7 @@ push.
 - `RESOLVE_MERGE_CONFLICT` and the `ConflictMode` split — one conflict message,
   because there is one operation
 - ~190 lines of duplicated flow in `autoPull.ts`, now a result mapping
-- the merge path in `GitEngine.pull`, now a result mapping
+- the merge path in `GitSync.pull`, now a result mapping
 
 ## One consequence worth knowing
 
@@ -71,7 +71,7 @@ are what agree after a rewrite.
 - **A git-driven turn is attributed to the git sync.** The conflict turn runs
   under `GIT_CLIENT_ID` with no actor header, so `last_turn_by` reads
   `person` after it. Cosmetic; the git client could declare an actor.
-- **`commitAll`** is now only used by `GitEngine.push`. Worth collapsing if
+- **`commitAll`** is now only used by `GitSync.push`. Worth collapsing if
   that is ever reworked.
 - **`PullResult`'s `dirty_tree` and `diverged`** are no longer reachable — the
   sync commits everything, and a rebase either starts or errors. The union is

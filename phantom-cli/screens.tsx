@@ -71,7 +71,7 @@ export const boardScreen = (store: WindowStore, projectId: string,
   full(card?.back === 'chat' ? 'card' : 'board', ({ width, height }) => (
     <Board store={store.boardFor(projectId)} width={width} height={height} isActive
       card={card?.number}
-      confirm={(t, m) => store.confirm(t, m)}
+      confirm={(title, message) => store.confirm(title, message)}
       onOpenCard={(number) => store.openCard(number, 'board')}
       onCloseCard={() => { if (card?.back === 'board') store.openBoard(); else store.dismissOverlay(); }}
       onClose={store.dismissOverlay}
@@ -98,12 +98,12 @@ export const switcherScreen = (store: WindowStore): Overlay => full('sessions', 
  *  /assistant opens it at the Assistant's group. Device rows offer what the voice
  *  sidecar found; saving a boot-time key restarts it. */
 export const settingsScreen = (store: WindowStore, startAt?: 'assistant'): Overlay => full('settings', () => {
-  const vs = store.voice.snapshot();
+  const voiceSnapshot = store.voice.snapshot();
   return (
     <Settings key={`settings-${store.settingsVersion}`} api={store.api} configPath={store.configPath} title="settings"
       rows={{ server: true, local: 'voice' }} startAt={startAt}
-      suggestions={{ voice_mic_device: vs.devices.mics, voice_speaker_device: vs.devices.speakers }}
-      onOpenRow={(k) => { if (k === 'voice_mic_device' || k === 'voice_speaker_device') void store.voice.refreshDevices(); }}
+      suggestions={{ voice_mic_device: voiceSnapshot.devices.mics, voice_speaker_device: voiceSnapshot.devices.speakers }}
+      onOpenRow={(key) => { if (key === 'voice_mic_device' || key === 'voice_speaker_device') void store.voice.refreshDevices(); }}
       onChange={store.settingChanged} onClose={store.dismissOverlay} />
   );
 });
@@ -134,7 +134,7 @@ export const serverScreen = (store: WindowStore): Overlay => full('server', () =
  *  agents both land in the CLI the user is back at. */
 export const presetsScreen = (store: WindowStore): Overlay => full('presets', () => (
   <Presets key={`presets-${store.settingsVersion}`} api={store.api}
-    confirm={(t, m) => store.confirm(t, m)}
+    confirm={(title, message) => store.confirm(title, message)}
     onApplied={(name) => {
       store.note(`preset applied: ${name}`);
       store.settingChanged('provider');
@@ -170,8 +170,8 @@ export const archivedScreen = (store: WindowStore, projectId: string): Overlay =
     total={store.archivedTotal}
     // The solo editor renders from the board store, which never holds
     // archived cards on its own — seat this one first.
-    onOpen={(t) => store.openArchivedCard(projectId, t)}
-    onRestore={(t) => { void store.restoreCard(projectId, t); }}
+    onOpen={(card) => store.openArchivedCard(projectId, card)}
+    onRestore={(card) => { void store.restoreCard(projectId, card); }}
     onCancel={store.dismissOverlay} />
 ));
 
@@ -195,7 +195,7 @@ export const pickerScreen = (store: WindowStore, which: 'project' | 'resume'): O
     showBackground={store.showBackground}
     onToggleBackground={() => store.toggleBackground()}
     query={store.pickerQuery} rowsQuery={store.picker.query}
-    onQuery={which === 'resume' ? (q) => store.setPickerQuery(q) : undefined}
+    onQuery={which === 'resume' ? (query) => store.setPickerQuery(query) : undefined}
     projectId={store.pickerProject}
     onCycleProject={which === 'resume' ? (dir) => store.cyclePickerProject(dir) : undefined}
     busy={(id) => store.sessions.get(id)?.busy ?? false}
@@ -210,11 +210,11 @@ export const pickerScreen = (store: WindowStore, which: 'project' | 'resume'): O
     onClose={store.closeFromPicker}
     onTrash={(id) => { void store.trashSession(id); }}
     onCancel={store.dismissOverlay}
-    onPick={(l) => {
-      if (l.kind === 'add') { store.startAddProject(); return; }
+    onPick={(launch) => {
+      if (launch.kind === 'add') { store.startAddProject(); return; }
       store.dismissOverlay();
-      void store.openSession(l.kind === 'new'
-        ? { kind: 'new', projectId: l.projectId }
-        : { kind: 'open', id: l.sessionId });
+      void store.openSession(launch.kind === 'new'
+        ? { kind: 'new', projectId: launch.projectId }
+        : { kind: 'open', id: launch.sessionId });
     }} /> : null
 ), which === 'resume' ? { watch: store.watchPicker } : {});

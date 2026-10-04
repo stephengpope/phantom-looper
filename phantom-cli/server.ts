@@ -27,8 +27,8 @@ export class Server {
 
   /** The address and key as the file has them now. */
   static connection(): { base: string; key: string } {
-    const l = localValues();
-    return { base: String(l.server_url ?? ''), key: String(l.server_key ?? '') };
+    const local = localValues();
+    return { base: String(local.server_url ?? ''), key: String(local.server_key ?? '') };
   }
 
   /** The backend for the address in the file right now — rebuilt when the
@@ -41,7 +41,7 @@ export class Server {
     if (this.#backend && this.#base === base) return this.#backend;
     this.#connection?.close();
     const savedCa = savedCaFor(base);
-    this.#connection = new BackendConnection({ origin, ...(savedCa ? { ca: [...rootCertificates, savedCa] } : {}) });
+    this.#connection = new BackendConnection({ origin, ...(savedCa ? { certificateAuthority: [...rootCertificates, savedCa] } : {}) });
     this.#backend = new BackendClient({ url: `${base}/api`, apiKey: key, clientId: this.clientId, label: this.label, fetch: this.#connection.fetch });
     this.#base = base;
     return this.#backend;
@@ -52,20 +52,20 @@ export class Server {
   api: Api = async (method, path, body) => {
     const { base } = Server.connection();
     try { return await this.backend().call(method, path, body); }
-    catch (e) { throw isPhantomError(e) ? requestError(method, path, base, e) : e; }
+    catch (error) { throw isPhantomError(error) ? requestError(method, path, base, error) : error; }
   };
 
   /** A server stream (ND-JSON) as records — the board's live feed. Open
    *  until the signal aborts or the server hangs up. */
   async stream(path: string, signal: AbortSignal): Promise<AsyncIterable<Record<string, unknown>>> {
     const { base } = Server.connection();
-    const it = this.backend().stream('GET', path, undefined, { signal });
+    const records = this.backend().stream('GET', path, undefined, { signal });
     // The refusal, if any, comes with the first read: surface it as the
     // cli's sentence before anyone iterates.
-    const first = await it.next().catch((e: unknown) => { throw isPhantomError(e) ? requestError('GET', path, base, e) : e; });
+    const first = await records.next().catch((error: unknown) => { throw isPhantomError(error) ? requestError('GET', path, base, error) : error; });
     return (async function* () {
       if (!first.done) yield first.value;
-      yield* it;
+      yield* records;
     })();
   }
 
@@ -84,11 +84,11 @@ export class Server {
           const detail = typeof rec.detail === 'string' && rec.detail ? ` — ${rec.detail}` : '';
           onStep?.(`${steps[rec.step] ?? rec.step}${detail}`);
         } else if (rec.event === 'result') {
-          const { event: _e, ...rest } = rec;
+          const { event: _event, ...rest } = rec;
           result = { result: 'error', ...rest } as unknown as T;
         }
       }
-    } catch (e) { throw isPhantomError(e) ? requestError('POST', `/git/${route}`, base, e) : e; }
+    } catch (error) { throw isPhantomError(error) ? requestError('POST', `/git/${route}`, base, error) : error; }
     if (!result) throw new Error(`phantom-backend ended the ${route} stream without a result — the server log has the reason`);
     return result;
   }

@@ -26,11 +26,11 @@ async function target(ctx: ToolCtx, a: Record<string, unknown>) {
 }
 
 /** The result, or the operation's own failure as a result the model reads. */
-async function run<T extends { result: string }>(fn: () => Promise<T>): Promise<T | { result: string; reason: string }> {
-  try { return await fn(); }
-  catch (e) {
-    if (e instanceof ToolError && e.code === 'busy') return { result: 'busy', reason: e.message };
-    return { result: 'error', reason: e instanceof Error ? e.message : String(e) };
+async function run<T extends { result: string }>(body: () => Promise<T>): Promise<T | { result: string; reason: string }> {
+  try { return await body(); }
+  catch (error) {
+    if (error instanceof ToolError && error.code === 'busy') return { result: 'busy', reason: error.message };
+    return { result: 'error', reason: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -44,8 +44,8 @@ export const GIT_TOOLS: ToolDef[] = [
     input: obj({ id: idField }),
     mutates: true, group: 'git',
     async execute(ctx, a) {
-      const t = await target(ctx, a);
-      return { session: t.session.id, ...await run(() => ctx.app.git.autoPush(t.session, t.project, undefined, ctx.client)) };
+      const on = await target(ctx, a);
+      return { session: on.session.id, ...await run(() => ctx.app.git.autoPush(on.session, on.project, undefined, ctx.client)) };
     },
   },
   {
@@ -57,8 +57,8 @@ export const GIT_TOOLS: ToolDef[] = [
     input: obj({ id: idField }),
     mutates: true, group: 'git',
     async execute(ctx, a) {
-      const t = await target(ctx, a);
-      return { session: t.session.id, ...await run(() => ctx.app.git.autoPull(t.session, t.project, undefined, ctx.client)) };
+      const on = await target(ctx, a);
+      return { session: on.session.id, ...await run(() => ctx.app.git.autoPull(on.session, on.project, undefined, ctx.client)) };
     },
   },
 ];

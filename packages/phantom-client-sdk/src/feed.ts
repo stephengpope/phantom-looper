@@ -30,8 +30,8 @@ class Relay {
   constructor(private readonly backend: BackendClient, private readonly sessionId: string,
     private readonly onFailed: (reason: string) => void) {}
 
-  turnStart(e: { agent: string; message: string; provider: string; model: string }): void {
-    this.send([{ event: 'turn-start', ...e }]);
+  turnStart(opening: { agent: string; message: string; provider: string; model: string }): void {
+    this.send([{ event: 'turn-start', ...opening }]);
   }
   part(part: StreamPart): void {
     if (!this.alive) return;
@@ -57,9 +57,9 @@ class Relay {
       if (!this.alive) return;
       try {
         await this.backend.call('POST', `/sessions/${this.sessionId}/events`, { events }, { retry: false });
-      } catch (e) {
+      } catch (error) {
         this.alive = false;
-        this.onFailed((e as Error).message);
+        this.onFailed((error as Error).message);
       }
     });
   }
@@ -79,11 +79,11 @@ export class TurnFeed {
   readonly #relay: Relay;
   readonly #stop: () => void;
 
-  constructor(backend: BackendClient, sessionId: string, opening: { agent: string; message: string; provider: string; model: string }, l: FeedListener) {
+  constructor(backend: BackendClient, sessionId: string, opening: { agent: string; message: string; provider: string; model: string }, listener: FeedListener) {
     this.#relay = new Relay(backend, sessionId,
-      (reason) => l.onNotice(`live relay stopped for this turn (${reason}) — watchers see the record when it lands`));
-    this.#stop = watchSession(backend, sessionId, l,
-      (reason) => l.onNotice(`not listening to the session feed this turn (${reason})`));
+      (reason) => listener.onNotice(`live relay stopped for this turn (${reason}) — watchers see the record when it lands`));
+    this.#stop = watchSession(backend, sessionId, listener,
+      (reason) => listener.onNotice(`not listening to the session feed this turn (${reason})`));
     this.#relay.turnStart(opening);
   }
 
@@ -92,18 +92,18 @@ export class TurnFeed {
   end(): Promise<void> { this.#stop(); return this.#relay.turnEnd(); }
 }
 
-function watchSession(backend: BackendClient, sessionId: string, l: FeedListener, onFailed: (reason: string) => void): () => void {
-  const ac = new AbortController();
+function watchSession(backend: BackendClient, sessionId: string, listener: FeedListener, onFailed: (reason: string) => void): () => void {
+  const abort = new AbortController();
   const run = async () => {
     try {
-      for await (const rec of backend.stream('GET', `/sessions/${sessionId}/events`, undefined, { signal: ac.signal })) {
-        if (rec.event === 'interrupt') l.onInterrupt();
-        else if (rec.event === 'session' && typeof rec.planMode === 'boolean') l.onPlanMode(rec.planMode);
+      for await (const rec of backend.stream('GET', `/sessions/${sessionId}/events`, undefined, { signal: abort.signal })) {
+        if (rec.event === 'interrupt') listener.onInterrupt();
+        else if (rec.event === 'session' && typeof rec.planMode === 'boolean') listener.onPlanMode(rec.planMode);
       }
-    } catch (e) {
-      if (!ac.signal.aborted) onFailed((e as Error).message);
+    } catch (error) {
+      if (!abort.signal.aborted) onFailed((error as Error).message);
     }
   };
-  run().catch((e: unknown) => onFailed(e instanceof Error ? e.message : 'session feed failed'));
-  return () => ac.abort();
+  run().catch((error: unknown) => onFailed(error instanceof Error ? error.message : 'session feed failed'));
+  return () => abort.abort();
 }

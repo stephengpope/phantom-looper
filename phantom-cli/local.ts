@@ -27,15 +27,15 @@ export function readOverrides(path = CONFIG_PATH): { overrides: Record<string, C
   try { parsed = JSON.parse(readFileSync(path, 'utf8')); }
   // The verdict first: a narrow screen truncates the tail, and the path is
   // the part that can go.
-  catch (e) { return { overrides: {}, error: `settings file is not valid JSON — using defaults; it has not been touched (${path}: ${(e as Error).message})` }; }
+  catch (fromEnv) { return { overrides: {}, error: `settings file is not valid JSON — using defaults; it has not been touched (${path}: ${(fromEnv as Error).message})` }; }
   if (!parsed || typeof parsed !== 'object') return { overrides: {}, error: `settings file is not an object — using defaults (${path})` };
   return { overrides: parsed as Record<string, ConfigValue>, error: undefined };
 }
 
 function envValue(key: LocalKey, env: NodeJS.ProcessEnv): { value: string; envVar: string } | undefined {
   for (const name of META[key].env ?? []) {
-    const v = env[name];
-    if (v) return { value: v, envVar: name };
+    const value = env[name];
+    if (value) return { value, envVar: name };
   }
   return undefined;
 }
@@ -49,16 +49,16 @@ export function resolveLocal(
   const { overrides, error } = readOverrides(path);
   const out = {} as Record<LocalKey, Resolved>;
   for (const key of LOCAL_KEYS) {
-    let r: Resolved = { value: DEFAULTS[key] as ConfigValue, source: 'default' };
-    if (overrides[key] !== undefined) r = { value: overrides[key] as ConfigValue, source: 'file' };
-    const e = envValue(key, env);
-    if (e) {
-      const v: ConfigValue = META[key].type === 'number' ? Number(e.value)
-        : META[key].type === 'boolean' ? e.value !== 'false' && e.value !== '0'
-          : e.value;
-      r = { value: v, source: 'env', envVar: e.envVar };
+    let resolved: Resolved = { value: DEFAULTS[key] as ConfigValue, source: 'default' };
+    if (overrides[key] !== undefined) resolved = { value: overrides[key] as ConfigValue, source: 'file' };
+    const fromEnv = envValue(key, env);
+    if (fromEnv) {
+      const value: ConfigValue = META[key].type === 'number' ? Number(fromEnv.value)
+        : META[key].type === 'boolean' ? fromEnv.value !== 'false' && fromEnv.value !== '0'
+          : fromEnv.value;
+      resolved = { value, source: 'env', envVar: fromEnv.envVar };
     }
-    out[key] = r;
+    out[key] = resolved;
   }
   return { config: out, error };
 }
@@ -67,7 +67,7 @@ export function resolveLocal(
 export function localValues(path = CONFIG_PATH, env: NodeJS.ProcessEnv = process.env): Record<LocalKey, ConfigValue> {
   const { config } = resolveLocal(path, env);
   return Object.fromEntries(
-    LOCAL_KEYS.map((k) => [k, config[k].value]),
+    LOCAL_KEYS.map((key) => [key, config[key].value]),
   ) as Record<LocalKey, ConfigValue>;
 }
 

@@ -19,14 +19,14 @@ export type WhoamiResult =
 /** The token's own account — the owner a bare repo name creates under. */
 export async function whoami(pat: string): Promise<WhoamiResult> {
   try {
-    const me = await fetch(`${apiBase()}/user`, { headers: headers(pat) });
-    if (me.status === 401) return { ok: false, code: 'credential_invalid', message: 'GitHub rejected the token' };
-    if (!me.ok) return { ok: false, code: 'error', message: `GitHub returned ${me.status} for the token's account` };
-    const login = String(((await me.json()) as { login?: string }).login ?? '');
+    const whoami = await fetch(`${apiBase()}/user`, { headers: headers(pat) });
+    if (whoami.status === 401) return { ok: false, code: 'credential_invalid', message: 'GitHub rejected the token' };
+    if (!whoami.ok) return { ok: false, code: 'error', message: `GitHub returned ${whoami.status} for the token's account` };
+    const login = String(((await whoami.json()) as { login?: string }).login ?? '');
     if (!login) return { ok: false, code: 'error', message: 'GitHub returned no login for the token' };
     return { ok: true, login };
-  } catch (e) {
-    return { ok: false, code: 'upstream_unreachable', message: `could not reach GitHub: ${(e as Error).message}` };
+  } catch (error) {
+    return { ok: false, code: 'upstream_unreachable', message: `could not reach GitHub: ${(error as Error).message}` };
   }
 }
 
@@ -42,9 +42,9 @@ export async function createRepo(
   pat: string, owner: string, name: string, opts: { private?: boolean; description?: string } = {},
 ): Promise<CreateRepoResult> {
   try {
-    const me = await fetch(`${apiBase()}/user`, { headers: headers(pat) });
-    if (me.status === 401) return { ok: false, code: 'credential_invalid', message: 'GitHub rejected the token' };
-    const login = me.ok ? String(((await me.json()) as { login?: string }).login ?? '') : '';
+    const whoami = await fetch(`${apiBase()}/user`, { headers: headers(pat) });
+    if (whoami.status === 401) return { ok: false, code: 'credential_invalid', message: 'GitHub rejected the token' };
+    const login = whoami.ok ? String(((await whoami.json()) as { login?: string }).login ?? '') : '';
     const path = login && login.toLowerCase() === owner.toLowerCase() ? '/user/repos' : `/orgs/${owner}/repos`;
     const res = await fetch(`${apiBase()}${path}`, {
       method: 'POST', headers: headers(pat),
@@ -70,8 +70,8 @@ export async function createRepo(
     if (res.status === 401) return { ok: false, code: 'credential_invalid', message: 'GitHub rejected the token' };
     if (res.status === 404) return { ok: false, code: 'error', message: `owner "${owner}" not found or token cannot see it` };
     return { ok: false, code: 'error', message: `GitHub returned ${res.status}` };
-  } catch (e) {
-    return { ok: false, code: 'upstream_unreachable', message: `could not reach GitHub: ${(e as Error).message}` };
+  } catch (error) {
+    return { ok: false, code: 'upstream_unreachable', message: `could not reach GitHub: ${(error as Error).message}` };
   }
 }
 
@@ -100,14 +100,14 @@ export async function listRepos(pat: string, maxPages = 10): Promise<ListReposRe
         name: string; owner?: { login?: string }; private?: boolean; default_branch?: string; pushed_at?: string | null;
       }[];
       if (!Array.isArray(batch) || !batch.length) break;
-      for (const r of batch) {
-        repos.push({ owner: String(r.owner?.login ?? ''), name: r.name, private: !!r.private,
-          defaultBranch: r.default_branch ?? 'main', pushedAt: r.pushed_at ?? null });
+      for (const repo of batch) {
+        repos.push({ owner: String(repo.owner?.login ?? ''), name: repo.name, private: !!repo.private,
+          defaultBranch: repo.default_branch ?? 'main', pushedAt: repo.pushed_at ?? null });
       }
       if (batch.length < perPage) break;
     }
     return { ok: true, repos };
-  } catch (e) {
-    return { ok: false, code: 'upstream_unreachable', message: `could not reach GitHub: ${(e as Error).message}` };
+  } catch (error) {
+    return { ok: false, code: 'upstream_unreachable', message: `could not reach GitHub: ${(error as Error).message}` };
   }
 }

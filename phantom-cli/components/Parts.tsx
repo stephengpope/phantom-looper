@@ -32,10 +32,10 @@ const EXPANDED_BYTES = 20_000;
 // and counting '\n' (as this file used to) does not bound height at all — one
 // long paragraph is a single line but many rows.
 const WIDE = /[\u1100-\u115F\u2E80-\uA4CF\uA960-\uA97F\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6]|[\u{1F300}-\u{1FAFF}]/u;
-function cells(s: string): number {
-  let n = 0;
-  for (const ch of s) n += WIDE.test(ch) ? 2 : 1;
-  return n;
+function cells(text: string): number {
+  let width = 0;
+  for (const char of text) width += WIDE.test(char) ? 2 : 1;
+  return width;
 }
 const rowsFor = (line: string, width: number) => Math.max(1, Math.ceil(cells(line) / width));
 
@@ -50,19 +50,19 @@ export function clipRows(text: string, width: number, maxRows: number, keep: 'he
   const out: string[] = [];
   let used = 0;
   const step = keep === 'head' ? 1 : -1;
-  for (let n = 0; n < all.length; n++) {
-    const i = keep === 'head' ? n : all.length - 1 - n;
-    const r = rowsFor(all[i], out.length === 0 && keep === 'head' ? Math.max(1, firstWidth) : width);
+  for (let index = 0; index < all.length; index++) {
+    const i = keep === 'head' ? index : all.length - 1 - index;
+    const rows = rowsFor(all[i], out.length === 0 && keep === 'head' ? Math.max(1, firstWidth) : width);
     // A single line taller than the whole budget: keep the end it belongs to,
     // and say so in place — there is no line count to report.
-    if (out.length === 0 && r > maxRows) {
+    if (out.length === 0 && rows > maxRows) {
       const room = maxRows * width - 2;
       const one = keep === 'head' ? `${all[i].slice(0, room)}…` : `…${all[i].slice(-room)}`;
       return { lines: [one], omitted: all.length - 1 };
     }
-    if (used + r > maxRows) return { lines: out, omitted: all.length - out.length };
+    if (used + rows > maxRows) return { lines: out, omitted: all.length - out.length };
     if (step === 1) out.push(all[i]); else out.unshift(all[i]);
-    used += r;
+    used += rows;
   }
   return { lines: out, omitted: 0 };
 }
@@ -140,7 +140,7 @@ function AssistantText({ part, width, maxRows }: {
   const { lines, omitted } = clipRows(part.text, Math.max(1, width - 2), maxRows);
   // Apply inline markdown (bold, italic, code, links) while streaming —
   // balanced markers render immediately, unbalanced ones pass through as-is.
-  const formatted = lines.map(l => formatInline(l)).join('\n');
+  const formatted = lines.map(line => formatInline(line)).join('\n');
   return (
     <Gutter width={width} marker={marker}>
       {omitted > 0 && <Text dimColor>…</Text>}
@@ -230,9 +230,9 @@ function ToolRow({ part, width, expanded, maxRows, compact = false }: {
 
 /** The path the server spilled a too-big command's full output to, if any. */
 function spillPath(output: unknown): string | null {
-  const d = (output as { data?: { truncated?: { full_output?: unknown } } } | undefined)?.data;
-  const p = d?.truncated?.full_output;
-  return typeof p === 'string' ? p : null;
+  const data = (output as { data?: { truncated?: { full_output?: unknown } } } | undefined)?.data;
+  const fullOutputPath = data?.truncated?.full_output;
+  return typeof fullOutputPath === 'string' ? fullOutputPath : null;
 }
 
 // --- summaries ---------------------------------------------------------------
@@ -263,16 +263,16 @@ function summarizeInput(name: string, input: unknown, inputText: string): string
       case 'kanban_card_move': return `${card} → ${a.status ?? ''}`;
       case 'kanban_card_items': {
         const ops = Array.isArray(a.ops) ? a.ops as { op?: string }[] : [];
-        return `${card} ${ops.map((o) => o.op ?? '?').join(', ')}`.slice(0, 80);
+        return `${card} ${ops.map((operation) => operation.op ?? '?').join(', ')}`.slice(0, 80);
       }
       case 'kanban_card_update': {
-        const c: string[] = [];
-        if (a.status !== undefined) c.push(`→ ${a.status}`);
-        if (a.title !== undefined) c.push(`= "${a.title}"`);
-        if (a.blocked_reason !== undefined) c.push(a.blocked_reason === null ? 'unblocked' : 'blocked');
-        if (a.archived !== undefined) c.push(a.archived ? 'archived' : 'restored');
-        if (a.details !== undefined) c.push('details');
-        return `${card} ${c.join(', ') || 'edit'}`.slice(0, 80);
+        const chunks: string[] = [];
+        if (a.status !== undefined) chunks.push(`→ ${a.status}`);
+        if (a.title !== undefined) chunks.push(`= "${a.title}"`);
+        if (a.blocked_reason !== undefined) chunks.push(a.blocked_reason === null ? 'unblocked' : 'blocked');
+        if (a.archived !== undefined) chunks.push(a.archived ? 'archived' : 'restored');
+        if (a.details !== undefined) chunks.push('details');
+        return `${card} ${chunks.join(', ') || 'edit'}`.slice(0, 80);
       }
       default: return card;
     }
@@ -283,63 +283,63 @@ function summarizeInput(name: string, input: unknown, inputText: string): string
 export function summarizeOutput(output: unknown, name?: string, expanded = false): string | null {
   const preview = (text: string) => guard(text, expanded);
   const env = output as { ok?: boolean; data?: unknown } | undefined;
-  const d = env && typeof env === 'object' && 'data' in env ? env.data : output;
+  const data = env && typeof env === 'object' && 'data' in env ? env.data : output;
   // A kanban tool's input line already names the card and the change — a
   // result row repeating it is noise in the narrow pane. Show only what adds
   // information: counts, and errors the handler returned as data.
-  if (name?.startsWith('kanban_') && d && typeof d === 'object') {
-    const o = d as Record<string, unknown>;
-    if (typeof o.error === 'string') return o.error;
-    if (Array.isArray(o.cards)) return `${o.cards.length} card${o.cards.length === 1 ? '' : 's'}`;
+  if (name?.startsWith('kanban_') && data && typeof data === 'object') {
+    const fields = data as Record<string, unknown>;
+    if (typeof fields.error === 'string') return fields.error;
+    if (Array.isArray(fields.cards)) return `${fields.cards.length} card${fields.cards.length === 1 ? '' : 's'}`;
     return null;
   }
-  if (d == null) return 'done';
-  if (typeof d === 'string') return preview(d);
-  if (Array.isArray(d)) {
+  if (data == null) return 'done';
+  if (typeof data === 'string') return preview(data);
+  if (Array.isArray(data)) {
     const noun = name === 'web_search' ? 'result' : name === 'web_fetch' ? 'page' : 'item';
-    return `${d.length} ${noun}${d.length === 1 ? '' : 's'}`;
+    return `${data.length} ${noun}${data.length === 1 ? '' : 's'}`;
   }
-  if (typeof d === 'object') {
-    const o = d as Record<string, unknown>;
+  if (typeof data === 'object') {
+    const fields = data as Record<string, unknown>;
     // An edit answers with the diff; the row says what changed, not the diff.
-    if (typeof o.diff === 'string') return summarizeEdit(o);
+    if (typeof fields.diff === 'string') return summarizeEdit(fields);
     // A write answers with the path (already on the input line) and a size.
-    if (typeof o.bytes === 'number' && typeof o.path === 'string') return `${formatBytes(o.bytes)} written`;
-    if (typeof o.stdout === 'string' || typeof o.stderr === 'string') {
-      const text = [o.stdout, o.stderr].filter((s) => typeof s === 'string' && s.trim()).join('\n');
-      const code = o.exit_code ?? o.exitCode;
+    if (typeof fields.bytes === 'number' && typeof fields.path === 'string') return `${formatBytes(fields.bytes)} written`;
+    if (typeof fields.stdout === 'string' || typeof fields.stderr === 'string') {
+      const text = [fields.stdout, fields.stderr].filter((text) => typeof text === 'string' && text.trim()).join('\n');
+      const code = fields.exit_code ?? fields.exitCode;
       return `${preview(text) || '(no output)'}${code !== undefined && code !== 0 ? `  [exit ${code}]` : ''}`;
     }
-    if (typeof o.content === 'string') return `${o.content.split('\n').length} lines`;
-    if (o.image && typeof o.image === 'object') {
-      const img = o.image as { media_type?: unknown; bytes?: unknown };
+    if (typeof fields.content === 'string') return `${fields.content.split('\n').length} lines`;
+    if (fields.image && typeof fields.image === 'object') {
+      const img = fields.image as { media_type?: unknown; bytes?: unknown };
       const size = typeof img.bytes === 'number' ? ` · ${formatBytes(img.bytes)}` : '';
       return `${typeof img.media_type === 'string' ? img.media_type : 'image'}${size}`;
     }
-    if (Array.isArray(o.entries)) return `${o.entries.length} entries`;
-    if (Array.isArray(o.matches)) return `${o.matches.length} matches`;
-    if (Array.isArray(o.files)) return `${o.files.length} files`;
-    if (Array.isArray(o.sessions)) return `${o.sessions.length} session${o.sessions.length === 1 ? '' : 's'}`;
-    if (Array.isArray(o.cards)) return `${o.cards.length} card${o.cards.length === 1 ? '' : 's'}`;
-    if (typeof o.card === 'number') return `card ${o.card}${o.title ? ` "${o.title}"` : ''}${o.status ? ` · ${o.status}` : ''}`;
-    return preview(JSON.stringify(o));
+    if (Array.isArray(fields.entries)) return `${fields.entries.length} entries`;
+    if (Array.isArray(fields.matches)) return `${fields.matches.length} matches`;
+    if (Array.isArray(fields.files)) return `${fields.files.length} files`;
+    if (Array.isArray(fields.sessions)) return `${fields.sessions.length} session${fields.sessions.length === 1 ? '' : 's'}`;
+    if (Array.isArray(fields.cards)) return `${fields.cards.length} card${fields.cards.length === 1 ? '' : 's'}`;
+    if (typeof fields.card === 'number') return `card ${fields.card}${fields.title ? ` "${fields.title}"` : ''}${fields.status ? ` · ${fields.status}` : ''}`;
+    return preview(JSON.stringify(fields));
   }
-  return String(d);
+  return String(data);
 }
 
 /** `1 replacement, exact · +1 −1` — the edit tool's result, counted from the
  *  unified diff it returns (headers and hunk lines excluded). */
-function summarizeEdit(o: Record<string, unknown>): string {
+function summarizeEdit(fields: Record<string, unknown>): string {
   let plus = 0, minus = 0;
-  for (const line of String(o.diff).split('\n')) {
+  for (const line of String(fields.diff).split('\n')) {
     if (line.startsWith('+') && !line.startsWith('+++')) plus++;
     else if (line.startsWith('-') && !line.startsWith('---')) minus++;
   }
-  const edits = Array.isArray(o.edits) ? o.edits as { replacements?: unknown; strategy?: unknown }[]
-    : [{ replacements: o.replacements, strategy: o.strategy }];
-  const n = edits.reduce((sum, e) => sum + (typeof e.replacements === 'number' ? e.replacements : 0), 0);
-  const strategies = [...new Set(edits.map((e) => e.strategy).filter((x): x is string => typeof x === 'string'))];
-  const what = `${n} replacement${n === 1 ? '' : 's'}${strategies.length ? `, ${strategies.join('/')}` : ''}`;
+  const edits = Array.isArray(fields.edits) ? fields.edits as { replacements?: unknown; strategy?: unknown }[]
+    : [{ replacements: fields.replacements, strategy: fields.strategy }];
+  const replacements = edits.reduce((sum, edit) => sum + (typeof edit.replacements === 'number' ? edit.replacements : 0), 0);
+  const strategies = [...new Set(edits.map((edit) => edit.strategy).filter((strategy): strategy is string => typeof strategy === 'string'))];
+  const what = `${replacements} replacement${replacements === 1 ? '' : 's'}${strategies.length ? `, ${strategies.join('/')}` : ''}`;
   return `${what} · +${plus} −${minus}`;
 }
 
@@ -351,12 +351,12 @@ function guard(text: string, expanded: boolean): string {
   return text.length > cap ? `… (${formatBytes(text.length)})\n${text.slice(-cap)}` : text;
 }
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n}B`;
-  if (n < 1024 * 1024) return `${Math.round(n / 1024)}KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)}MB`;
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
-function safeJson(s: string): unknown {
-  try { return JSON.parse(s); } catch { return undefined; }
+function safeJson(text: string): unknown {
+  try { return JSON.parse(text); } catch { return undefined; }
 }

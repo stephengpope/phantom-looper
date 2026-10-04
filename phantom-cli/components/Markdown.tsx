@@ -20,12 +20,12 @@ import { createLowlight, common } from 'lowlight';
 
 /** Strip ANSI SGR sequences to measure visible character width. */
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
-const visibleLength = (s: string) => s.replace(ANSI_RE, '').length;
+const visibleLength = (text: string) => text.replace(ANSI_RE, '').length;
 
 /** Pad `s` with trailing spaces until its visible width reaches `width`. */
-const padRight = (s: string, width: number) => {
-  const gap = Math.max(0, width - visibleLength(s));
-  return gap > 0 ? s + ' '.repeat(gap) : s;
+const padRight = (text: string, width: number) => {
+  const gap = Math.max(0, width - visibleLength(text));
+  return gap > 0 ? text + ' '.repeat(gap) : text;
 };
 
 // ─── inline formatting ─────────────────────────────────────────────────────
@@ -54,8 +54,8 @@ export function formatInline(text: string): string {
     (full, _whole, boldItalic, bold, italic, under, strike, linkText, linkUrl) => {
       // Code spans — strip matched backticks, show as cyan.
       if (full.startsWith('`')) {
-        const m = full.match(/^(`+)([\s\S]+)\1$/);
-        return m ? chalk.cyan(m[2]) : full;
+        const match = full.match(/^(`+)([\s\S]+)\1$/);
+        return match ? chalk.cyan(match[2]) : full;
       }
       if (boldItalic !== undefined) return chalk.bold.italic(formatInline(boldItalic));
       if (bold !== undefined) return chalk.bold(formatInline(bold));
@@ -72,7 +72,7 @@ export function formatInline(text: string): string {
 
 const FENCE_OPEN = /^(\s{0,3})(```+|~~~+)\s*(\S*)\s*$/;
 const HEADER     = /^(#{1,4})\s+(.*)/;
-const HR         = /^\s*([-*_]\s*){3,}\s*$/;
+const HORIZONTAL_RULE         = /^\s*([-*_]\s*){3,}\s*$/;
 const BLOCKQUOTE = /^\s*>\s?/;
 const UL_ITEM    = /^(\s*)([-*+])\s+(.*)/;
 const OL_ITEM    = /^(\s*)(\d+)[.)]\s+(.*)/;
@@ -117,15 +117,15 @@ function renderBlocks(text: string, width: number): string {
     }
 
     // ── table ─────────────────────────────────────────────────────────
-    const th = TABLE_ROW.exec(line);
-    if (th && i + 1 < lines.length && TABLE_SEP.test(lines[i + 1])) {
-      const headers = th[1].split('|').map(s => s.trim());
+    const tableHead = TABLE_ROW.exec(line);
+    if (tableHead && i + 1 < lines.length && TABLE_SEP.test(lines[i + 1])) {
+      const headers = tableHead[1].split('|').map(text => text.trim());
       i += 2; // header + separator
       const rows: string[][] = [];
       while (i < lines.length) {
-        const r = TABLE_ROW.exec(lines[i]);
-        if (!r) break;
-        rows.push(r[1].split('|').map(s => s.trim()));
+        const row = TABLE_ROW.exec(lines[i]);
+        if (!row) break;
+        rows.push(row[1].split('|').map(text => text.trim()));
         i++;
       }
       out.push(renderTable(headers, rows, width));
@@ -143,7 +143,7 @@ function renderBlocks(text: string, width: number): string {
     }
 
     // ── horizontal rule ───────────────────────────────────────────────
-    if (HR.test(line)) {
+    if (HORIZONTAL_RULE.test(line)) {
       out.push(chalk.dim('─'.repeat(Math.min(width, 40))));
       i++;
       continue;
@@ -156,24 +156,24 @@ function renderBlocks(text: string, width: number): string {
         qLines.push(lines[i].replace(BLOCKQUOTE, ''));
         i++;
       }
-      out.push(qLines.map(l => chalk.dim('│ ') + formatInline(l)).join('\n'));
+      out.push(qLines.map(line => chalk.dim('│ ') + formatInline(line)).join('\n'));
       continue;
     }
 
     // ── unordered list ────────────────────────────────────────────────
-    const ul = UL_ITEM.exec(line);
-    if (ul) {
-      const depth = Math.floor(ul[1].length / 2);
-      out.push(`${'  '.repeat(depth)}• ${formatInline(ul[3])}`);
+    const unordered = UL_ITEM.exec(line);
+    if (unordered) {
+      const depth = Math.floor(unordered[1].length / 2);
+      out.push(`${'  '.repeat(depth)}• ${formatInline(unordered[3])}`);
       i++;
       continue;
     }
 
     // ── ordered list ──────────────────────────────────────────────────
-    const ol = OL_ITEM.exec(line);
-    if (ol) {
-      const depth = Math.floor(ol[1].length / 2);
-      out.push(`${'  '.repeat(depth)}${ol[2]}. ${formatInline(ol[3])}`);
+    const ordered = OL_ITEM.exec(line);
+    if (ordered) {
+      const depth = Math.floor(ordered[1].length / 2);
+      out.push(`${'  '.repeat(depth)}${ordered[2]}. ${formatInline(ordered[3])}`);
       i++;
       continue;
     }
@@ -258,7 +258,7 @@ function renderCodeBlock(lines: string[], lang: string): string {
   const parts: string[] = [];
   if (lang) parts.push(chalk.dim(`  ${lang}`));
   const border = chalk.dim('│');
-  for (const l of highlighted.split('\n')) parts.push(`${border} ${l}`);
+  for (const line of highlighted.split('\n')) parts.push(`${border} ${line}`);
   return parts.join('\n');
 }
 
@@ -268,38 +268,38 @@ function renderTable(headers: string[], rows: string[][], width: number): string
   const numCols = headers.length;
 
   // Normalise every row to the header's column count.
-  const norm = rows.map(r => {
-    const n = [...r];
-    while (n.length < numCols) n.push('');
-    return n.slice(0, numCols);
+  const norm = rows.map(row => {
+    const cells = [...row];
+    while (cells.length < numCols) cells.push('');
+    return cells.slice(0, numCols);
   });
   const allCells = [headers, ...norm];
 
   // ── column widths from raw content lengths ──
-  const colW = Array.from({ length: numCols }, (_, c) =>
-    Math.max(3, ...allCells.map(r => (r[c] ?? '').length)),
+  const colW = Array.from({ length: numCols }, (_, column) =>
+    Math.max(3, ...allCells.map(row => (row[column] ?? '').length)),
   );
 
   // Shrink proportionally when the table exceeds the available width.
   const PAD = 2;           // 1 space each side of cell content
   const overhead = numCols + 1 + numCols * PAD;   // borders + padding
   const budget = Math.max(numCols * 3, width - overhead);
-  const total = colW.reduce((s, columnWidth) => s + columnWidth, 0);
+  const total = colW.reduce((sum, columnWidth) => sum + columnWidth, 0);
   if (total > budget) {
     const scale = budget / total;
-    for (let c = 0; c < numCols; c++) colW[c] = Math.max(3, Math.floor(colW[c] * scale));
+    for (let column = 0; column < numCols; column++) colW[column] = Math.max(3, Math.floor(colW[column] * scale));
   }
 
   // ── drawing helpers ──
   const dim = chalk.dim;
-  const hline = (l: string, m: string, r: string) =>
-    dim(l + colW.map(columnWidth => '─'.repeat(columnWidth + PAD)).join(m) + r);
+  const hline = (left: string, middle: string, right: string) =>
+    dim(left + colW.map(columnWidth => '─'.repeat(columnWidth + PAD)).join(middle) + right);
 
   const fmtRow = (cells: string[], isHeader: boolean) => {
-    const parts = cells.map((cell, c) => {
-      const truncated = cell.length > colW[c] ? cell.slice(0, colW[c] - 1) + '…' : cell;
+    const parts = cells.map((cell, column) => {
+      const truncated = cell.length > colW[column] ? cell.slice(0, colW[column] - 1) + '…' : cell;
       const styled = isHeader ? chalk.bold(formatInline(truncated)) : formatInline(truncated);
-      return ' ' + padRight(styled, colW[c]) + ' ';
+      return ' ' + padRight(styled, colW[column]) + ' ';
     });
     return dim('│') + parts.join(dim('│')) + dim('│');
   };
@@ -308,7 +308,7 @@ function renderTable(headers: string[], rows: string[][], width: number): string
   out.push(hline('┌', '┬', '┐'));
   out.push(fmtRow(headers, true));
   out.push(hline('├', '┼', '┤'));
-  for (const r of norm) out.push(fmtRow(r, false));
+  for (const row of norm) out.push(fmtRow(row, false));
   out.push(hline('└', '┴', '┘'));
   return out.join('\n');
 }

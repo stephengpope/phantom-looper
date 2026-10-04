@@ -27,11 +27,11 @@ export function secretsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   /** The scopes a request reads, most specific LAST — and the one it writes.
    *  A project id is verified to exist, or a typo becomes a row nothing
    *  will ever read. */
-  async function scopesOf(q: { project?: string }):
+  async function scopesOf(query: { project?: string }):
   Promise<{ error: string } | { chain: string[]; write: string; label: 'global' | 'project' }> {
-    if (!q.project) return { chain: [GLOBAL], write: GLOBAL, label: 'global' };
-    if (!await ctx.projects.get(q.project)) return { error: `no project ${q.project}` };
-    return { chain: [GLOBAL, projectScope(q.project)], write: projectScope(q.project), label: 'project' };
+    if (!query.project) return { chain: [GLOBAL], write: GLOBAL, label: 'global' };
+    if (!await ctx.projects.get(query.project)) return { error: `no project ${query.project}` };
+    return { chain: [GLOBAL, projectScope(query.project)], write: projectScope(query.project), label: 'project' };
   }
 
   app.get<{ Querystring: { project?: string } }>(
@@ -40,15 +40,15 @@ export function secretsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       description: 'With ?project=: global + that project\'s layer, merged — the agent\'s view. Bare: EVERY layer on the server (the cli\'s list, which saves to any project), each project row carrying its `project` id. Either way `scope` says the layer, and the same name at two layers lists twice — the more specific one wins when a value is read.',
       querystring: scopeQuery } },
     async (req, reply) => {
-      const sc = await scopesOf(req.query);
-      if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
+      const scopes = await scopesOf(req.query);
+      if ('error' in scopes) return reply.code(404).send(err('not_found', scopes.error));
       const raw = req.query.project
-        ? await ctx.settings.listSecrets(sc.chain)
+        ? await ctx.settings.listSecrets(scopes.chain)
         : await ctx.settings.listAllSecrets();
-      const secrets = raw.map((s) => ({
-        name: s.name, description: s.description,
-        scope: s.scope === GLOBAL ? 'global' : 'project',
-        ...(s.scope === GLOBAL ? {} : { project: s.scope.replace(/^project:/, '') }),
+      const secrets = raw.map((secret) => ({
+        name: secret.name, description: secret.description,
+        scope: secret.scope === GLOBAL ? 'global' : 'project',
+        ...(secret.scope === GLOBAL ? {} : { project: secret.scope.replace(/^project:/, '') }),
       }));
       return ok({ secrets });
     });
@@ -73,15 +73,15 @@ export function secretsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       if (value !== undefined && (typeof value !== 'string' || value.length === 0)) {
         return reply.code(400).send(err('invalid_args', 'body.value (the secret itself) must not be empty'));
       }
-      const sc = await scopesOf(req.query);
-      if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
-      const stored = await ctx.settings.writeSecret(sc.write, name,
+      const scopes = await scopesOf(req.query);
+      if ('error' in scopes) return reply.code(404).send(err('not_found', scopes.error));
+      const stored = await ctx.settings.writeSecret(scopes.write, name,
         String(req.body?.description ?? ''), value);
       if (!stored) {
         return reply.code(400).send(err('invalid_args',
-          `body.value (the secret itself) is required — nothing named "${name}" is stored at the ${sc.label} layer to keep`));
+          `body.value (the secret itself) is required — nothing named "${name}" is stored at the ${scopes.label} layer to keep`));
       }
-      return ok({ name, scope: sc.label });
+      return ok({ name, scope: scopes.label });
     });
 
   app.get<{ Params: { name: string }; Querystring: { project?: string } }>(
@@ -90,12 +90,12 @@ export function secretsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       description: 'Decrypted. Resolution cascades: the project layer (when ?project= is passed) wins over global. Name is case-insensitive. An unknown name answers with the names that do exist.',
       params: nameParam, querystring: scopeQuery } },
     async (req, reply) => {
-      const sc = await scopesOf(req.query);
-      if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
+      const scopes = await scopesOf(req.query);
+      if ('error' in scopes) return reply.code(404).send(err('not_found', scopes.error));
       const name = secretName(req.params.name);
-      const value = name ? await ctx.settings.readSecret(name, sc.chain) : undefined;
+      const value = name ? await ctx.settings.readSecret(name, scopes.chain) : undefined;
       if (value === undefined) {
-        const names = (await ctx.settings.listSecrets(sc.chain)).map((s) => s.name);
+        const names = (await ctx.settings.listSecrets(scopes.chain)).map((secret) => secret.name);
         return reply.code(404).send(err('not_found',
           `no secret named "${req.params.name}" — stored: ${names.length ? names.join(', ') : '(none)'}`));
       }
@@ -108,14 +108,14 @@ export function secretsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       description: 'Removes the row at the addressed layer only — a global secret shadowed by a project one survives the project delete, and the other way round.',
       params: nameParam, querystring: scopeQuery } },
     async (req, reply) => {
-      const sc = await scopesOf(req.query);
-      if ('error' in sc) return reply.code(404).send(err('not_found', sc.error));
+      const scopes = await scopesOf(req.query);
+      if ('error' in scopes) return reply.code(404).send(err('not_found', scopes.error));
       const name = secretName(req.params.name);
-      const gone = name ? await ctx.settings.deleteSecret(sc.write, name) : false;
+      const gone = name ? await ctx.settings.deleteSecret(scopes.write, name) : false;
       if (!gone) {
         return reply.code(404).send(err('not_found',
-          `no secret named "${req.params.name}" at the ${sc.label} layer`));
+          `no secret named "${req.params.name}" at the ${scopes.label} layer`));
       }
-      return ok({ deleted: req.params.name, scope: sc.label });
+      return ok({ deleted: req.params.name, scope: scopes.label });
     });
 }

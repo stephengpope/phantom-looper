@@ -26,20 +26,20 @@ type Message = { op: 'watch'; id: string; dir: string } | { op: 'unwatch'; id: s
 
 const subscriptions = new Map<string, AsyncSubscription>();
 
-process.on('message', async (m: Message) => {
-  if (m.op === 'watch') {
-    if (subscriptions.has(m.id)) return;
-    const sub = await watcher.subscribe(m.dir, (err, events) => {
+process.on('message', async (message: Message) => {
+  if (message.op === 'watch') {
+    if (subscriptions.has(message.id)) return;
+    const sub = await watcher.subscribe(message.dir, (err, events) => {
       if (err) {
-        process.stderr.write(`watcher error on ${m.id}: ${err.message}\n`);
+        process.stderr.write(`watcher error on ${message.id}: ${err.message}\n`);
         process.exit(1);
       }
-      if (events.length) process.send?.({ op: 'changed', id: m.id });
+      if (events.length) process.send?.({ op: 'changed', id: message.id });
     }, { ignore: IGNORE });
-    subscriptions.set(m.id, sub);
-  } else if (m.op === 'unwatch') {
-    const sub = subscriptions.get(m.id);
-    subscriptions.delete(m.id);
+    subscriptions.set(message.id, sub);
+  } else if (message.op === 'unwatch') {
+    const sub = subscriptions.get(message.id);
+    subscriptions.delete(message.id);
     await sub?.unsubscribe();
   }
 });

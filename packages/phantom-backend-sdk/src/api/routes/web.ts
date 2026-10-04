@@ -14,9 +14,9 @@ const STATUS: Record<string, number> = {
 const TAG = { tags: ['web'] };
 
 export function webRoutes(app: FastifyInstance, ctx: PhantomBackend) {
-  const handle = (reply: FastifyReply, e: unknown) => {
-    if (e instanceof ToolError) return reply.code(STATUS[e.code] ?? 502).send(err(e.code, e.message, e.retryable));
-    throw e;
+  const handle = (reply: FastifyReply, error: unknown) => {
+    if (error instanceof ToolError) return reply.code(STATUS[error.code] ?? 502).send(err(error.code, error.message, error.retryable));
+    throw error;
   };
 
   app.post<{ Body: SearchBody }>('/web/search', {
@@ -38,7 +38,7 @@ export function webRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     },
   }, async (req, reply) => {
     try { return ok(await webSearch(ctx, req.body)); }
-    catch (e) { return handle(reply, e); }
+    catch (error) { return handle(reply, error); }
   });
 
   app.post<{ Body: { urls: string[] } }>('/web/fetch', {
@@ -62,6 +62,6 @@ export function webRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       // disk, THE workspace its tools open — and the checkout touched.
       const { workspaceId } = await toolSession(ctx.sessions, req.headers);
       return ok(await webFetch(ctx, workspaceId, req.body.urls));
-    } catch (e) { return handle(reply, e); }
+    } catch (error) { return handle(reply, error); }
   });
 }

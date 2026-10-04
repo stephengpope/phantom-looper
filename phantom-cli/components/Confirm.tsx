@@ -41,10 +41,10 @@ export function Confirm({ title, message, who, onResult }: {
   return (
     <Box flexDirection="column" marginTop={1} marginBottom={1} paddingLeft={1}>
       <Box>{bar}<Text> </Text></Box>
-      {lines.map((l, i) => (
+      {lines.map((line, i) => (
         <Box key={i}>
           {bar}
-          {l}
+          {line}
         </Box>
       ))}
       <Box>{bar}<Text> </Text></Box>

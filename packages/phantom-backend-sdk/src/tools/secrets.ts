@@ -18,7 +18,7 @@ export const SECRET_TOOLS: ToolDef[] = [
     mutates: false, group: 'secrets',
     async execute(ctx) {
       const raw = await ctx.app.settings.listSecrets(chain(ctx));
-      return { secrets: raw.map((s) => ({ name: s.name, description: s.description, scope: s.scope === GLOBAL ? 'global' : 'project' })) };
+      return { secrets: raw.map((secret) => ({ name: secret.name, description: secret.description, scope: secret.scope === GLOBAL ? 'global' : 'project' })) };
     },
   },
   {
@@ -34,7 +34,7 @@ export const SECRET_TOOLS: ToolDef[] = [
       const name = secretName(String(a.name));
       const value = name ? await ctx.app.settings.readSecret(name, chain(ctx)) : undefined;
       if (value === undefined) {
-        const names = (await ctx.app.settings.listSecrets(chain(ctx))).map((s) => s.name);
+        const names = (await ctx.app.settings.listSecrets(chain(ctx))).map((secret) => secret.name);
         throw refusal('not_found', `no secret named "${String(a.name)}" — stored: ${names.length ? names.join(', ') : '(none)'}`);
       }
       return { name, value };

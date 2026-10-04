@@ -61,7 +61,7 @@ export class Session implements SessionInfo {
   #row: SessionRow;
   #messages: ModelMessage[];
 
-  private constructor(private readonly backend: BackendClient, private readonly handlers: { onError(e: PhantomError): void },
+  private constructor(private readonly backend: BackendClient, private readonly handlers: { onError(error: PhantomError): void },
     row: SessionRow, private readonly record: SessionRecord) {
     this.#row = row;
     this.#messages = conversationFrom(record.lines);
@@ -69,7 +69,7 @@ export class Session implements SessionInfo {
 
   /** The row as it stands, then the record. Loading only reads. `handlers`
    *  hears the one failure that must not throw over another: a lock release. */
-  static async load(backend: BackendClient, handlers: { onError(e: PhantomError): void }, sessionId: string): Promise<Session> {
+  static async load(backend: BackendClient, handlers: { onError(error: PhantomError): void }, sessionId: string): Promise<Session> {
     const row = await backend.call<SessionRow>('GET', `/sessions/${sessionId}`);
     return new Session(backend, handlers, row, await SessionRecord.load(backend, sessionId));
   }
@@ -92,14 +92,14 @@ export class Session implements SessionInfo {
    *  always, so a turn that threw still lets go). The server renews the hold
    *  on the turn's own writes. An end that fails is reported, never thrown
    *  over the turn's own outcome. */
-  async turn<T>(type: string, signal: AbortSignal, fn: (start: TurnStart & { recordMoved: boolean }) => Promise<T>): Promise<T> {
+  async turn<T>(type: string, signal: AbortSignal, body: (start: TurnStart & { recordMoved: boolean }) => Promise<T>): Promise<T> {
     const start = await this.backend.call<TurnStart>('POST', `/sessions/${this.id}/turn-start`,
       { type, label: this.backend.label }, { signal });
     try {
-      return await fn({ ...start, recordMoved: start.transcript_updated_at !== this.record.stamp });
+      return await body({ ...start, recordMoved: start.transcript_updated_at !== this.record.stamp });
     } finally {
       try { await this.backend.call('POST', `/sessions/${this.id}/turn-ended`); }
-      catch (e) { this.handlers.onError(asPhantomError(e, 'internal', 'ending the turn')); }
+      catch (error) { this.handlers.onError(asPhantomError(error, 'internal', 'ending the turn')); }
     }
   }
 
@@ -111,7 +111,7 @@ export class Session implements SessionInfo {
       this.#messages = conversationFrom(this.record.lines);
     }
     const cut = danglingCalls(this.#messages);
-    if (cut.length) await this.append(cut.map((c) => messageLine(interruptedResultMessage(c))));
+    if (cut.length) await this.append(cut.map((call) => messageLine(interruptedResultMessage(call))));
     return recordMoved;
   }
 
@@ -120,9 +120,9 @@ export class Session implements SessionInfo {
   async append(lines: TranscriptLine[]): Promise<ModelMessage[]> {
     await this.record.append(lines);
     const added: ModelMessage[] = [];
-    for (const l of lines) {
-      if (l.type === 'message') { this.#messages.push(l.message); added.push(l.message); }
-      else if (l.type === 'partial_message') cutLastAssistantMessage(this.#messages, l.text);
+    for (const line of lines) {
+      if (line.type === 'message') { this.#messages.push(line.message); added.push(line.message); }
+      else if (line.type === 'partial_message') cutLastAssistantMessage(this.#messages, line.text);
     }
     return added;
   }
@@ -139,13 +139,13 @@ export class Session implements SessionInfo {
 function danglingCalls(messages: readonly ModelMessage[]): ToolCallPart[] {
   const answered = new Set<string>();
   for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i]!;
-    if (m.role === 'tool') {
-      for (const p of m.content) if (p.type === 'tool-result') answered.add(p.toolCallId);
+    const message = messages[i]!;
+    if (message.role === 'tool') {
+      for (const part of message.content) if (part.type === 'tool-result') answered.add(part.toolCallId);
       continue;
     }
-    if (m.role !== 'assistant' || typeof m.content === 'string') return [];
-    return m.content.filter((p): p is ToolCallPart => p.type === 'tool-call' && !answered.has(p.toolCallId));
+    if (message.role !== 'assistant' || typeof message.content === 'string') return [];
+    return message.content.filter((part): part is ToolCallPart => part.type === 'tool-call' && !answered.has(part.toolCallId));
   }
   return [];
 }

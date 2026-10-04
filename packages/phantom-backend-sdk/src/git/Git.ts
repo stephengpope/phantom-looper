@@ -66,12 +66,12 @@ export function gitEnv(pat?: string): NodeJS.ProcessEnv {
  *  what error handlers up the stack end up showing people. Re-throw with
  *  git's OWN words (stderr) as the message; stdout/stderr/code ride along
  *  unchanged, so every caller that inspects `.stderr` still can. */
-function cleanThrow(e: unknown): never {
-  const x = e as Error & { stderr?: string; stdout?: string; code?: unknown };
-  const said = typeof x?.stderr === 'string' ? x.stderr.trim() : '';
-  if (!said) throw e;
+function cleanThrow(error: unknown): never {
+  const failure = error as Error & { stderr?: string; stdout?: string; code?: unknown };
+  const said = typeof failure?.stderr === 'string' ? failure.stderr.trim() : '';
+  if (!said) throw error;
   const err = new Error(`git: ${said}`) as Error & { stderr?: string; stdout?: string; code?: unknown };
-  err.stderr = x.stderr; err.stdout = x.stdout; err.code = x.code;
+  err.stderr = failure.stderr; err.stdout = failure.stdout; err.code = failure.code;
   throw err;
 }
 
@@ -95,9 +95,9 @@ export async function git(
 export type GitFailureCode =
   'credential_invalid' | 'credential_insufficient' | 'repo_not_found' | 'upstream_unreachable';
 
-export function classifyGitFailure(e: unknown, opts: { hadToken?: boolean } = {}):
+export function classifyGitFailure(error: unknown, opts: { hadToken?: boolean } = {}):
   { code: GitFailureCode; message: string; retryable: boolean } | null {
-  const said = String((e as { stderr?: string })?.stderr ?? (e as Error)?.message ?? e);
+  const said = String((error as { stderr?: string })?.stderr ?? (error as Error)?.message ?? error);
   if (/invalid username or token|authentication failed|401/i.test(said)) {
     return { code: 'credential_invalid', retryable: false,
       message: opts.hadToken === false
@@ -139,7 +139,7 @@ export async function cloneFresh(
   }).catch(cleanThrow);
   if (historyDepth !== 'full') {
     await git(dir, ['fetch', `--shallow-since=${historyDepth}`, 'origin', branch], auth)
-      .catch((e) => log.debug({ dir, err: errStr(e) }, 'no history in window — staying at depth 1'));
+      .catch((error) => log.debug({ dir, err: errStr(error) }, 'no history in window — staying at depth 1'));
   }
   await git(dir, ['config', 'user.name', 'phantom-looper']);
   await git(dir, ['config', 'user.email', 'agent@phantom-looper.local']);
@@ -169,9 +169,9 @@ export async function checkoutBranch(
 ): Promise<'existing' | 'new'> {
   try {
     await git(dir, ['fetch', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`], auth);
-  } catch (e) {
-    const msg = String((e as { stderr?: string }).stderr ?? e);
-    if (!/couldn't find remote ref|not found in upstream|no such ref/i.test(msg)) throw e;
+  } catch (error) {
+    const msg = String((error as { stderr?: string }).stderr ?? error);
+    if (!/couldn't find remote ref|not found in upstream|no such ref/i.test(msg)) throw error;
     await git(dir, ['checkout', '-B', branch]);
     return 'new';
   }
@@ -191,8 +191,8 @@ export async function localState(dir: string, branch: string): Promise<LocalStat
   try {
     const { stdout: dirty } = await git(dir, ['status', '--porcelain']);
     if (dirty.trim()) return 'dirty';
-  } catch (e) {
-    log.warn({ dir, err: errStr(e) }, 'git status failed — state is unknown, nothing will be wiped');
+  } catch (error) {
+    log.warn({ dir, err: errStr(error) }, 'git status failed — state is unknown, nothing will be wiped');
     return 'unknown'; // could not tell -> never license a wipe
   }
   try {
@@ -205,8 +205,8 @@ export async function localState(dir: string, branch: string): Promise<LocalStat
     try {
       const { stdout } = await git(dir, ['rev-list', '--count', 'HEAD', '--not', '--remotes=origin']);
       return Number(stdout.trim()) === 0 ? 'clean' : 'no_upstream';
-    } catch (e) {
-      log.warn({ dir, branch, err: errStr(e) }, 'rev-list failed — counted as unpushed work');
+    } catch (error) {
+      log.warn({ dir, branch, err: errStr(error) }, 'rev-list failed — counted as unpushed work');
       return 'no_upstream';
     }
   }
@@ -239,17 +239,17 @@ export async function workState(
     if (dirty.trim()) return 'not_pushed';
     const { stdout: local } = await git(dir, ['rev-list', '--count', 'HEAD', '--not', '--remotes=origin']);
     if (Number(local.trim()) > 0) return 'not_pushed';
-  } catch (e) {
-    log.warn({ dir, branch, err: errStr(e) }, 'git status/rev-list failed — no work state for this session');
+  } catch (error) {
+    log.warn({ dir, branch, err: errStr(error) }, 'git status/rev-list failed — no work state for this session');
     return null;
   }
   try {
     await git(dir, ['merge-base', '--is-ancestor', 'HEAD', `origin/${baseBranch}`]);
     return 'merged';
-  } catch (e) {
+  } catch (error) {
     // Exit 1 is git's real "no"; anything else (missing base ref, not a
     // repo) is not knowing, which must never render as a state.
-    return (e as { code?: unknown }).code === 1 ? 'not_merged' : null;
+    return (error as { code?: unknown }).code === 1 ? 'not_merged' : null;
   }
 }
 
@@ -285,9 +285,9 @@ export async function pushSession(dir: string, branch: string, auth: GitAuth): P
   try {
     await git(dir, ['push', '--no-verify', 'origin', `HEAD:${branch}`], auth);
     return 'pushed';
-  } catch (e) {
-    if (!/non-fast-forward|fetch first|rejected/i.test(String((e as { stderr?: string }).stderr ?? e))) {
-      log.error({ dir, branch, err: errStr(e) }, 'push failed');
+  } catch (error) {
+    if (!/non-fast-forward|fetch first|rejected/i.test(String((error as { stderr?: string }).stderr ?? error))) {
+      log.error({ dir, branch, err: errStr(error) }, 'push failed');
       return 'error';
     }
     log.warn({ dir, branch }, 'push rejected — origin holds an older rewrite of this branch; forcing with the lease');
@@ -307,10 +307,10 @@ export async function pushToBase(dir: string, baseBranch: string, auth: GitAuth)
   try {
     await git(dir, ['push', '--no-verify', 'origin', `HEAD:${baseBranch}`], auth);
     return 'pushed';
-  } catch (e) {
-    const s = String((e as { stderr?: string }).stderr ?? e);
-    if (/non-fast-forward|fetch first|rejected/i.test(s)) return 'rejected';
-    log.error({ dir, baseBranch, err: errStr(e) }, 'push to base failed');
+  } catch (error) {
+    const said = String((error as { stderr?: string }).stderr ?? error);
+    if (/non-fast-forward|fetch first|rejected/i.test(said)) return 'rejected';
+    log.error({ dir, baseBranch, err: errStr(error) }, 'push to base failed');
     return 'error';
   }
 }
@@ -336,8 +336,8 @@ export async function fetchBase(
 export async function hasWorkToLand(dir: string, baseBranch: string): Promise<boolean> {
   const { stdout: dirty } = await git(dir, ['status', '--porcelain']);
   if (dirty.trim()) return true;
-  const { stdout: mb } = await git(dir, ['merge-base', 'HEAD', `origin/${baseBranch}`]);
-  const { stdout: ahead } = await git(dir, ['rev-list', '--count', `${mb.trim()}..HEAD`]);
+  const { stdout: mergeBase } = await git(dir, ['merge-base', 'HEAD', `origin/${baseBranch}`]);
+  const { stdout: ahead } = await git(dir, ['rev-list', '--count', `${mergeBase.trim()}..HEAD`]);
   return Number(ahead.trim()) > 0;
 }
 
@@ -368,10 +368,10 @@ export async function rebaseOntoBase(dir: string, baseBranch: string): Promise<R
   try {
     await git(dir, ['rebase', `origin/${baseBranch}`]);
     return 'clean';
-  } catch (e) {
+  } catch (error) {
     const { stdout: unmerged } = await git(dir, ['diff', '--name-only', '--diff-filter=U']);
     if (unmerged.trim()) return 'conflict';
-    log.error({ dir, baseBranch, err: errStr(e) }, 'rebase could not start');
+    log.error({ dir, baseBranch, err: errStr(error) }, 'rebase could not start');
     return 'error';
   }
 }
@@ -381,8 +381,8 @@ export async function rebaseOntoBase(dir: string, baseBranch: string): Promise<R
  *  A tree can be clean with a rebase still stopped, so this is not implied by
  *  the other checks. */
 export async function rebaseInProgress(dir: string): Promise<boolean> {
-  for (const d of ['rebase-merge', 'rebase-apply']) {
-    try { await fs.access(path.join(dir, '.git', d)); return true; } catch { /* absent */ }
+  for (const rebaseDir of ['rebase-merge', 'rebase-apply']) {
+    try { await fs.access(path.join(dir, '.git', rebaseDir)); return true; } catch { /* absent */ }
   }
   return false;
 }
@@ -419,8 +419,8 @@ export async function pushSessionForced(
     const lease = expected ? `--force-with-lease=refs/heads/${branch}:${expected}` : '--force';
     await git(dir, ['push', '--no-verify', lease, 'origin', `HEAD:${branch}`], auth);
     return 'pushed';
-  } catch (e) {
-    log.error({ dir, branch, err: errStr(e) }, 'forced branch push failed');
+  } catch (error) {
+    log.error({ dir, branch, err: errStr(error) }, 'forced branch push failed');
     return 'error';
   }
 }
@@ -448,20 +448,20 @@ export async function landingProblems(dir: string, baseBranch?: string): Promise
     if (baseBranch) {
       try {
         await git(dir, ['merge-base', '--is-ancestor', `origin/${baseBranch}`, 'HEAD']);
-      } catch (e) {
+      } catch (error) {
         // Exit 1 is git's real "not an ancestor" — the verdict. Anything else
         // (no repo, no origin ref) is the check itself failing.
-        if ((e as { code?: unknown }).code === 1) {
+        if ((error as { code?: unknown }).code === 1) {
           problems.push(`origin/${baseBranch} is not contained in the result — the replay is not in`);
         } else {
-          log.warn({ dir, err: (e as Error).message }, 'verification could not run — counted as not landed');
-          problems.push(`verification itself failed: ${(e as Error).message}`);
+          log.warn({ dir, err: (error as Error).message }, 'verification could not run — counted as not landed');
+          problems.push(`verification itself failed: ${(error as Error).message}`);
         }
       }
     }
-  } catch (e) {
-    log.warn({ dir, err: (e as Error).message }, 'verification could not run — counted as not landed');
-    problems.push(`verification itself failed: ${(e as Error).message}`);
+  } catch (error) {
+    log.warn({ dir, err: (error as Error).message }, 'verification could not run — counted as not landed');
+    problems.push(`verification itself failed: ${(error as Error).message}`);
   }
   return problems;
 }

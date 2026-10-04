@@ -64,7 +64,7 @@ export function NewProject({ api, onSubmit, onCancel, error, now }: {
   const [repos, setRepos] = useState<GitHubRepo[] | null>(null);
   const [notice, setNotice] = useState<string | undefined>();
 
-  useInput((_c, key) => { if (key.escape) onCancel(); },
+  useInput((_char, key) => { if (key.escape) onCancel(); },
     { isActive: step.at === 'url' });
 
   // A rejected submit must hand the form back. The window does not remount
@@ -74,9 +74,9 @@ export function NewProject({ api, onSubmit, onCancel, error, now }: {
   // this, every rejection left the form dead on the spinner.
   useEffect(() => {
     if (error) {
-      setStep((s) => s.at === 'working'
-        ? (s.back === 'pick' ? { at: 'pick' } : { at: 'url', create: false })
-        : s);
+      setStep((step) => step.at === 'working'
+        ? (step.back === 'pick' ? { at: 'pick' } : { at: 'url', create: false })
+        : step);
     }
   }, [error]);
 
@@ -86,12 +86,12 @@ export function NewProject({ api, onSubmit, onCancel, error, now }: {
     if (step.at !== 'pick' || repos !== null) return;
     let live = true;
     api('GET', '/github/repos')
-      .then((r) => { if (live) setRepos(r as unknown as GitHubRepo[]); })
-      .catch((e: Error & { code?: string }) => {
+      .then((repos) => { if (live) setRepos(repos as unknown as GitHubRepo[]); })
+      .catch((error: Error & { code?: string }) => {
         if (!live) return;
-        setNotice(e.code === 'not_set'
+        setNotice(error.code === 'not_set'
           ? 'no GitHub token in /keys — type the repo instead'
-          : `could not list your repos (${e.message}) — type it instead`);
+          : `could not list your repos (${error.message}) — type it instead`);
         setStep({ at: 'url', create: false });
       });
     return () => { live = false; };
@@ -114,7 +114,7 @@ export function NewProject({ api, onSubmit, onCancel, error, now }: {
             { value: 'create', label: 'a new repo', detail: 'create it on GitHub now',
               hint: 'Created with an initial commit. Fails if the name is taken.' },
           ]}
-          onSelect={(v) => setStep(v === 'create' ? { at: 'url', create: true } : { at: 'pick' })}
+          onSelect={(pick) => setStep(pick === 'create' ? { at: 'url', create: true } : { at: 'pick' })}
           onCancel={onCancel}
         />
       </Screen>
@@ -124,21 +124,21 @@ export function NewProject({ api, onSubmit, onCancel, error, now }: {
   if (step.at === 'pick') {
     if (repos === null) return <Screen title="add a project" busy error={error} />;
 
-    const q = query.trim().toLowerCase();
-    const shown = q ? repos.filter((r) => `${r.owner}/${r.name}`.toLowerCase().includes(q)) : repos;
-    const choices: Choice<Pick>[] = shown.map((r) => ({
-      value: { repo: r },
-      label: `${r.owner}/${r.name}`,
+    const needle = query.trim().toLowerCase();
+    const shown = needle ? repos.filter((repo) => `${repo.owner}/${repo.name}`.toLowerCase().includes(needle)) : repos;
+    const choices: Choice<Pick>[] = shown.map((repo) => ({
+      value: { repo },
+      label: `${repo.owner}/${repo.name}`,
       columns: [
-        { text: r.private ? 'private' : 'public', width: 9 },
-        { text: r.added ? 'already a project' : r.pushedAt ? `pushed ${ago(r.pushedAt, now)}` : '' },
+        { text: repo.private ? 'private' : 'public', width: 9 },
+        { text: repo.added ? 'already a project' : repo.pushedAt ? `pushed ${ago(repo.pushedAt, now)}` : '' },
       ],
-      hint: r.added ? 'This repo is a project here already.' : `Clones ${r.owner}/${r.name}; work starts from ${r.defaultBranch}.`,
+      hint: repo.added ? 'This repo is a project here already.' : `Clones ${repo.owner}/${repo.name}; work starts from ${repo.defaultBranch}.`,
     }));
     // Whatever was typed, unless it names a listed repo exactly — the way in
     // for a repo the token cannot see.
     const typed = query.trim();
-    if (typed && !repos.some((r) => `${r.owner}/${r.name}`.toLowerCase() === typed.toLowerCase())) {
+    if (typed && !repos.some((repo) => `${repo.owner}/${repo.name}`.toLowerCase() === typed.toLowerCase())) {
       choices.push({ value: { typed }, label: `add “${typed}”`,
         hint: 'A URL or owner/name the token may not list — the server checks it.' });
     }
@@ -157,10 +157,10 @@ export function NewProject({ api, onSubmit, onCancel, error, now }: {
           key={query}
           choices={choices}
           reserve={2}
-          onSelect={(p) => {
-            if ('typed' in p) { submitExisting(p.typed, 'pick'); return; }
-            if (p.repo.added) { setNotice(`${p.repo.owner}/${p.repo.name} is already a project here`); return; }
-            submitExisting(`${p.repo.owner}/${p.repo.name}`, 'pick');
+          onSelect={(pick) => {
+            if ('typed' in pick) { submitExisting(pick.typed, 'pick'); return; }
+            if (pick.repo.added) { setNotice(`${pick.repo.owner}/${pick.repo.name} is already a project here`); return; }
+            submitExisting(`${pick.repo.owner}/${pick.repo.name}`, 'pick');
           }}
           onCancel={() => { setNotice(undefined); setStep({ at: 'kind' }); }}
         />
@@ -183,8 +183,8 @@ export function NewProject({ api, onSubmit, onCancel, error, now }: {
           <TextInput
             value={url} onChange={setUrl}
             placeholder={step.create ? 'my-project' : 'https://github.com/owner/name'}
-            onSubmit={(v) => {
-              const clean = v.trim();
+            onSubmit={(value) => {
+              const clean = value.trim();
               if (!clean) return;
               if (step.create) setStep({ at: 'visibility', url: clean });
               else submitExisting(clean, 'url');

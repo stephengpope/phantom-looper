@@ -7,7 +7,7 @@ export function logger(component: string) {
 }
 
 /** One-line error rendering for log fields — stack traces go to debug, not info. */
-export function errStr(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  return String(e);
+export function errStr(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
 }

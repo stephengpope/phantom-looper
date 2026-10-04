@@ -99,8 +99,8 @@ export abstract class Agent {
   /** What the user has sent that no model call has taken yet. */
   get userMessages(): UserMessages { return this.#queue; }
 
-  on<E extends keyof AgentEvents>(event: E, fn: (payload: AgentEvents[E]) => void): () => void {
-    return this.#events.on(event, fn);
+  on<E extends keyof AgentEvents>(event: E, listener: (payload: AgentEvents[E]) => void): () => void {
+    return this.#events.on(event, listener);
   }
 
   /** Tools only this app can serve, alongside the server's. */
@@ -119,9 +119,9 @@ export abstract class Agent {
   sendMessage(text: string): Promise<TurnResult | null> {
     if (this.busy) { this.#queue.add(text); return Promise.resolve(null); }
     if (this.#closed) return Promise.reject(new PhantomError('busy', 'the agent is closed'));
-    const p = this.#guard(() => this.#turnBody([...this.#queue.drain(), text]));
-    this.#turn = p;
-    return p.finally(() => { if (this.#turn === p) this.#turn = null; });
+    const turn = this.#guard(() => this.#turnBody([...this.#queue.drain(), text]));
+    this.#turn = turn;
+    return turn.finally(() => { if (this.#turn === turn) this.#turn = null; });
   }
 
   /** Stop the running model loop. Finished tool calls keep their results;
@@ -178,9 +178,9 @@ export abstract class Agent {
           { agent: this.type, message: opening.join('\n\n'), provider: ready.model.spec.provider, model: ready.model.spec.model },
           { onInterrupt: () => this.interrupt(), onPlanMode: (on) => this.#session.setPlanMode(on),
             onNotice: (text) => this.#handlers.onNotice({ type: 'info', text }) });
-        let r: TurnResult;
+        let result: TurnResult;
         try {
-          r = await runTurn({
+          result = await runTurn({
             model: ready.model.model, spec: ready.model.spec, reasoning: ready.model.reasoning,
             system: ready.system, tools: ready.tools, terminal: ready.terminal, history: this.session.messages, maxSteps: ready.model.maxSteps,
             opening,
@@ -195,21 +195,21 @@ export abstract class Agent {
             onPart: (part) => { feed.part(part); this.#emit('part', part); },
             onToolError: (name, error) => this.#emit('tool-error', { name, error }),
           });
-        } catch (e) {
-          feed.error((e as Error).message);
+        } catch (error) {
+          feed.error((error as Error).message);
           await feed.end();
-          throw e;
+          throw error;
         }
         await feed.end();
         await this.#flushPartials();
-        this.#emit('turn-end', r);
-        return r;
+        this.#emit('turn-end', result);
+        return result;
       });
-    } catch (e) {
+    } catch (error) {
       // A stop before the session was even taken: nothing was sent, nothing
       // recorded, the message dropped — the user said stop.
       if (signal.aborted) return nothing;
-      throw e;
+      throw error;
     } finally {
       this.#abort = null;
     }
@@ -247,9 +247,9 @@ export abstract class Agent {
       const { tools, terminal } = await this.#kits.resolve({ backend: this.backend, sessionId: this.session.id, projectId: this.session.projectId,
         workspaceId: this.session.workspaceId, readonly: () => this.session.planMode });
       return { model, system, tools, terminal };
-    } catch (e) {
+    } catch (error) {
       if (signal.aborted) return null;
-      throw e;
+      throw error;
     }
   }
 
@@ -261,23 +261,23 @@ export abstract class Agent {
     this.#modelResolver = new ModelResolver(this.backend, this.type, this.session.id, {
       retry: { ...MODEL_RETRY, ...this.#handlers.retry?.model },
       notice: (text) => this.#handlers.onNotice({ type: 'retry', text }),
-      onBillingError: (e) => this.#handlers.onError(e),
+      onBillingError: (error) => this.#handlers.onError(error),
     });
     return this;
   }
 
   /** Every awaited public call: the error reaches onError first, then the caller. */
-  async #guard<T>(fn: () => Promise<T>): Promise<T> {
-    try { return await fn(); }
-    catch (e) {
-      const pe = asPhantomError(e, 'internal', 'agent');
-      this.#handlers.onError(pe);
-      throw pe;
+  async #guard<T>(body: () => Promise<T>): Promise<T> {
+    try { return await body(); }
+    catch (error) {
+      const phantomError = asPhantomError(error, 'internal', 'agent');
+      this.#handlers.onError(phantomError);
+      throw phantomError;
     }
   }
 
   #emit<E extends keyof AgentEvents>(event: E, payload: AgentEvents[E]): void {
-    this.#events.emit(event, payload, (e) => this.#handlers.onError(asPhantomError(e, 'listener_threw', `a listener for "${event}" threw`)));
+    this.#events.emit(event, payload, (error) => this.#handlers.onError(asPhantomError(error, 'listener_threw', `a listener for "${event}" threw`)));
   }
 
   /** The one way an agent comes to be: the session id (made or given), the
@@ -288,10 +288,10 @@ export abstract class Agent {
     try {
       const b = backend.withRetry({ ...BACKEND_RETRY, ...handlers.retry?.backend }, (text) => handlers.onNotice({ type: 'retry', text }));
       return new ctor({ backend: b, handlers, session: await Session.load(b, handlers, await sessionId(b)) }).#wire();
-    } catch (e) {
-      const pe = asPhantomError(e, 'internal', what);
-      handlers.onError(pe);
-      throw pe;
+    } catch (error) {
+      const phantomError = asPhantomError(error, 'internal', what);
+      handlers.onError(phantomError);
+      throw phantomError;
     }
   }
 }

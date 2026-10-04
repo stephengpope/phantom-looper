@@ -136,8 +136,8 @@ export function makeTelegramSink(
       // Animated dots like the waiting bubble (600ms per frame).
       try {
         thinkingFrame = 0;
-        const m = await client.sendMessage(chatId, THINKING_DOTS[0]);
-        messageId = m?.message_id ?? null;
+        const sent = await client.sendMessage(chatId, THINKING_DOTS[0]);
+        messageId = sent?.message_id ?? null;
         unwritten = messageId != null;
         if (messageId != null) {
           const mid = messageId;
@@ -196,7 +196,7 @@ export function makeTelegramSink(
     const body = fmt.text || PLACEHOLDER;
     const entities = fmt.text ? fmt.entities : [];
     try {
-      if (messageId == null) { const m = await client.sendMessage(chatId, body, { entities }); messageId = m?.message_id ?? null; }
+      if (messageId == null) { const sent = await client.sendMessage(chatId, body, { entities }); messageId = sent?.message_id ?? null; }
       else await client.editMessageText(chatId, messageId, body, entities);
       unwritten = body === PLACEHOLDER;
     } catch { /* rate limit / transient — the final flush corrects it */ }
@@ -215,7 +215,7 @@ export function makeTelegramSink(
       try {
         let mid: number | null = null;
         if (slot != null) { await client.editMessageText(chatId, slot, line); mid = slot; }
-        else { const m = await client.sendMessage(chatId, line); mid = m?.message_id ?? null; }
+        else { const sent = await client.sendMessage(chatId, line); mid = sent?.message_id ?? null; }
         if (mid != null) startToolTimer(mid, emoji, name);
       } catch { /* best-effort */ }
     }).catch(() => { /* best-effort */ });
@@ -225,15 +225,15 @@ export function makeTelegramSink(
   // stream (its id is `id`), tool-call once they are complete (`toolCallId`; a provider that does not
   // stream input sends only the second). One marker per call id.
   const marked = new Set<string>();
-  function part(p: Record<string, unknown>) {
-    const type = p.type;
-    if (type === 'text-delta' && typeof p.text === 'string') {
+  function part(streamPart: Record<string, unknown>) {
+    const type = streamPart.type;
+    if (type === 'text-delta' && typeof streamPart.text === 'string') {
       stopToolTimer(); markThinkingDone();  // model is talking — thinking done
-      text += p.text; dirty = true;
+      text += streamPart.text; dirty = true;
     } else if (type === 'tool-input-start' || type === 'tool-call') {
-      const id = typeof p.toolCallId === 'string' ? p.toolCallId : typeof p.id === 'string' ? p.id : null;
+      const id = typeof streamPart.toolCallId === 'string' ? streamPart.toolCallId : typeof streamPart.id === 'string' ? streamPart.id : null;
       if (id != null) { if (marked.has(id)) return; marked.add(id); }
-      const name = typeof p.toolName === 'string' ? p.toolName : 'tool';
+      const name = typeof streamPart.toolName === 'string' ? streamPart.toolName : 'tool';
       toolLine(name);
     } else if (type === 'tool-result') {
       markToolDone();                   // ✓ with elapsed — "done, thinking now"
@@ -281,8 +281,8 @@ export function makeTelegramSink(
       try {
         const chunks = splitFormatted(toTelegram(final));
         if (messageId != null) await client.editMessageText(chatId, messageId, chunks[0].text, chunks[0].entities);
-        else { const m = await client.sendMessage(chatId, chunks[0].text, { entities: chunks[0].entities }); messageId = m?.message_id ?? null; }
-        for (const c of chunks.slice(1)) await client.sendMessage(chatId, c.text, { entities: c.entities });
+        else { const sent = await client.sendMessage(chatId, chunks[0].text, { entities: chunks[0].entities }); messageId = sent?.message_id ?? null; }
+        for (const chunk of chunks.slice(1)) await client.sendMessage(chatId, chunk.text, { entities: chunk.entities });
       } catch { /* best-effort — the record is the transcript */ }
     } else if (!files.length) {
       await dropPlaceholder();          // nothing to say and nothing to send
@@ -293,11 +293,11 @@ export function makeTelegramSink(
     // Files after the words, so the message explaining them arrives first. A
     // failure is reported, not swallowed — "here's your report" with no report
     // is the worst outcome.
-    for (const f of files) {
+    for (const file of files) {
       try {
-        await client.sendFile(f.kind, chatId, f.path);
-      } catch (e) {
-        await client.sendMessage(chatId, `⚠️ Couldn't send that file — ${(e as Error).message}`).catch(() => {});
+        await client.sendFile(file.kind, chatId, file.path);
+      } catch (error) {
+        await client.sendMessage(chatId, `⚠️ Couldn't send that file — ${(error as Error).message}`).catch(() => {});
       }
     }
     return final;

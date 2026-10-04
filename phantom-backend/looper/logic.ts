@@ -50,14 +50,14 @@ export function canTurn(card: CardRow, defaults: { plan: boolean; build: boolean
 }
 
 const userTexts = (messages: readonly ModelMessage[]): string[] =>
-  messages.filter((m) => m.role === 'user')
-    .map((m) => typeof m.content === 'string' ? m.content
-      : m.content.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join(''));
+  messages.filter((message) => message.role === 'user')
+    .map((message) => typeof message.content === 'string' ? message.content
+      : message.content.filter((part) => part.type === 'text').map((part) => (part as { text: string }).text).join(''));
 
 /** Was a fixed message already sent? Read off the conversation itself — the
  *  templates' first lines are frozen, so the session IS the state. */
 export function wasSent(messages: readonly ModelMessage[], firstLine: string): boolean {
-  return userTexts(messages).some((t) => t.startsWith(firstLine));
+  return userTexts(messages).some((text) => text.startsWith(firstLine));
 }
 
 /** Which fixed kickoff is still owed to the coding agent, if any.
@@ -109,18 +109,18 @@ const NO_REPLY = '(no reply)';
 function assistantTurns(messages: readonly ModelMessage[]): Turn[] {
   const turns: Turn[] = [];
   let current: Turn | null = null;
-  for (const m of messages) {
-    if (m.role === 'user') { current = null; continue; }
+  for (const message of messages) {
+    if (message.role === 'user') { current = null; continue; }
     if (!current) { current = { text: '', terminal: false }; turns.push(current); }
-    if (m.role !== 'assistant') continue;
-    if (typeof m.content === 'string') {
-      current.text = [current.text, m.content].filter(Boolean).join('\n\n');
+    if (message.role !== 'assistant') continue;
+    if (typeof message.content === 'string') {
+      current.text = [current.text, message.content].filter(Boolean).join('\n\n');
       continue;
     }
-    for (const p of m.content) {
-      if (p.type === 'text' && p.text.trim()) {
-        current.text = [current.text, p.text.trim()].filter(Boolean).join('\n\n');
-      } else if (p.type === 'tool-call' && (ENDING_TOOLS as readonly string[]).includes(p.toolName)) {
+    for (const part of message.content) {
+      if (part.type === 'text' && part.text.trim()) {
+        current.text = [current.text, part.text.trim()].filter(Boolean).join('\n\n');
+      } else if (part.type === 'tool-call' && (ENDING_TOOLS as readonly string[]).includes(part.toolName)) {
         current.terminal = true;
       }
     }
@@ -134,8 +134,8 @@ function assistantTurns(messages: readonly ModelMessage[]): Turn[] {
  *  two sides never drift out of step. */
 export function replies(messages: readonly ModelMessage[]): string[] {
   return assistantTurns(messages)
-    .filter((t) => !t.terminal)
-    .map((t) => t.text || NO_REPLY);
+    .filter((turn) => !turn.terminal)
+    .map((turn) => turn.text || NO_REPLY);
 }
 
 /** How many of these replies, walked in order, the other agent already
@@ -143,7 +143,7 @@ export function replies(messages: readonly ModelMessage[]): string[] {
  *  this is exact; the ordered walk keeps identical texts honest. */
 function repliesReceived(sent: string[], received: string[]): number {
   let i = 0;
-  for (const r of received) if (i < sent.length && r === sent[i]) i++;
+  for (const receivedLine of received) if (i < sent.length && receivedLine === sent[i]) i++;
   return i;
 }
 
@@ -154,7 +154,7 @@ function repliesReceived(sent: string[], received: string[]): number {
  *  conversation. */
 function unsentBriefings(card: CardShape, coder: readonly ModelMessage[], supervisor: readonly ModelMessage[]): string[] {
   const supTexts = userTexts(supervisor);
-  const has = (line: string) => supTexts.some((t) => t.startsWith(line));
+  const has = (line: string) => supTexts.some((text) => text.startsWith(line));
   const seeds: string[] = [];
   const planned = wasSent(coder, firstLine.planCard(card.number));
   if (planned && !has(firstLine.reviewingPlan(card.number)))

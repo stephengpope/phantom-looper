@@ -70,26 +70,26 @@ export class TelegramAssistantBot {
         // informed yes the update guard asks for.
         try {
           let last: string | undefined;
-          await deployment.update(tag, { restartAnyway: true }, (e) => { last = e.event; onEvent?.(e); }).done;
+          await deployment.update(tag, { restartAnyway: true }, (event) => { last = event.event; onEvent?.(event); }).done;
           return last === 'error' ? { ok: false, error: 'update failed' } : { ok: true };
-        } catch (e) { return { ok: false, error: (e as Error).message }; }
+        } catch (error) { return { ok: false, error: (error as Error).message }; }
       },
       setting: (key) => backend.settings.resolve(key),
       token: () => this.backend.telegramBot.token(),
       authorizedUser: () => this.backend.telegramBot.authorizedUser(),
-      makeClient: (token, dm) => this.backend.telegramBot.clientForChat(token, dm, () => null),
+      makeClient: (token, chatId) => this.backend.telegramBot.clientForChat(token, chatId, () => null),
     });
     // Every card write in the system, all projects; alerts.ts decides which
     // are the supervisor's moves. Fire-and-forget: an alert that fails is logged,
     // never retried, and never touches the card.
-    backend.boardEvents.subscribeAll((projectId, e) => {
-      this.alert(projectId, e).catch((err) => log.warn({ err: errStr(err) }, 'auto build alert failed'));
+    backend.boardEvents.subscribeAll((projectId, event) => {
+      this.alert(projectId, event).catch((err) => log.warn({ err: errStr(err) }, 'auto build alert failed'));
     });
     // What the bot hands over: a verified message (an album as one), a tap
     // that is not an approval's (the upgrade's).
-    backend.telegramBot.onMessageReceived((dm, msgs) => this.handleMessage(dm, msgs));
-    backend.telegramBot.onButtonTapped(async (dm, query, api) => {
-      if (UpgradeChecker.isUpgradeCallback(query.data)) await this.upgradeChecker.handleCallback(api, dm, query);
+    backend.telegramBot.onMessageReceived((chatId, msgs) => this.handleMessage(chatId, msgs));
+    backend.telegramBot.onButtonTapped(async (chatId, query, api) => {
+      if (UpgradeChecker.isUpgradeCallback(query.data)) await this.upgradeChecker.handleCallback(api, chatId, query);
     });
   }
 
@@ -107,63 +107,63 @@ export class TelegramAssistantBot {
    *  the bot is enabled for an authorized user. The bubble is recorded with
    *  the card's coding session as its origin, so a reply to it enters that
    *  session in code mode like a reply to any coder bubble. */
-  private async alert(projectId: string, e: BoardEvent): Promise<void> {
-    if (e.event !== 'card' || !e.from || e.from === e.card.status) return;   // the cheap test first — no I/O
+  private async alert(projectId: string, event: BoardEvent): Promise<void> {
+    if (event.event !== 'card' || !event.from || event.from === event.card.status) return;   // the cheap test first — no I/O
     const project = await this.backend.projects.get(projectId);
     if (!project) return;
-    const alertMsg = autoBuildAlert(e, await this.backend.projects.prefixOf(project));
+    const alertMsg = autoBuildAlert(event, await this.backend.projects.prefixOf(project));
     if (!alertMsg) return;
     // The switch resolved at this project's layer.
-    const s = await this.backend.settings.resolveMany(
+    const values = await this.backend.settings.resolveMany(
       ['telegram_auto_build_notifications', 'telegram_enabled', 'telegram_authorized_user'], { projectId: project.id });
-    if (s.telegram_auto_build_notifications !== true || s.telegram_enabled !== true) return;
-    const dm = Number(s.telegram_authorized_user ?? '');
-    if (!dm || !Number.isFinite(dm)) return;
+    if (values.telegram_auto_build_notifications !== true || values.telegram_enabled !== true) return;
+    const chatId = Number(values.telegram_authorized_user ?? '');
+    if (!chatId || !Number.isFinite(chatId)) return;
     const token = await this.backend.telegramBot.token();
     if (!token) return;
     const coder = await this.backend.sessions.coderOf(projectId, alertMsg.number);
-    const client = this.backend.telegramBot.clientForChat(token, dm, () => coder?.id ?? null);
-    await client.sendMessage(dm, alertMsg.text);
+    const client = this.backend.telegramBot.clientForChat(token, chatId, () => coder?.id ?? null);
+    await client.sendMessage(chatId, alertMsg.text);
     log.info({ project: projectId, card: alertMsg.number, status: alertMsg.status }, 'auto build alert sent');
   }
 
   // ── the turn ───────────────────────────────────────────────────────────────────────
 
-  private async handleMessage(dm: number, msgs: any[]): Promise<void> {
+  private async handleMessage(chatId: number, msgs: any[]): Promise<void> {
     const msg = msgs[0];
     const token = await this.backend.telegramBot.token();
     // Which conversation a sent bubble belongs to. A function so the tracked
     // client always records the CURRENT value — it moves from the assistant
     // (null) to a session once the bot state is read, and the closure follows.
     let sessionId: string | null = null;
-    const client = this.backend.telegramBot.clientForChat(token, dm, () => sessionId);
+    const client = this.backend.telegramBot.clientForChat(token, chatId, () => sessionId);
 
     try {
       // Show life immediately — before resolveInput (voice download +
       // transcription can take 1-3s) so the user never stares at nothing.
-      client.sendChatAction(dm, 'typing').catch(() => {});
+      client.sendChatAction(chatId, 'typing').catch(() => {});
 
       // A reply to one of my bubbles switches conversation BEFORE anything
       // reads which mode this is — commands included. Telegram puts the reply
       // on whichever album item carried it, so check all of them.
-      for (const m of msgs) await this.switchForReply(client, dm, m);
+      for (const message of msgs) await this.switchForReply(client, chatId, message);
 
       // Typed text: Telegram puts the caption on only one album item.
-      const typed = msgs.map((m) => String(m.text ?? m.caption ?? '').trim()).find(Boolean) ?? '';
+      const typed = msgs.map((message) => String(message.text ?? message.caption ?? '').trim()).find(Boolean) ?? '';
       if (typed.startsWith('/')) {
-        await handleCommand(this, client, dm, typed);
+        await handleCommand(this, client, chatId, typed);
         return;
       }
 
       const bot = await this.backend.telegramBotState.read();
       sessionId = bot.mode === 'code' ? bot.activeSessionId : null;
 
-      const input = await this.resolveInput(client, dm, msgs, bot);
+      const input = await this.resolveInput(client, chatId, msgs, bot);
       if (input === null) return;
 
       // A question standing: the exact word answers it and is nothing else;
       // any other message declines it and goes on to queue as the follow-up.
-      if (this.backend.telegramBot.answerApprovalByText(dm, input)) return;
+      if (this.backend.telegramBot.answerApprovalByText(chatId, input)) return;
 
       // Busy: queue the message into the SAME key's running turn. Code-mode
       // turns key by sessionId, so switching sessions starts independently;
@@ -173,18 +173,18 @@ export class TelegramAssistantBot {
       const running = this.inFlight.get(busyKey);
       if (running) {
         running.queue.push(input);
-        await client.sendMessage(dm, '⌛ Got it — after this turn.', { replyToMessageId: msg.message_id });
+        await client.sendMessage(chatId, '⌛ Got it — after this turn.', { replyToMessageId: msg.message_id });
         return;
       }
 
       if (bot.mode === 'code' && bot.activeSessionId) {
-        await this.codeTurn(client, dm, bot.activeSessionId, input);
+        await this.codeTurn(client, chatId, bot.activeSessionId, input);
       } else {
-        await this.assistantTurn(client, dm, input);
+        await this.assistantTurn(client, chatId, input);
       }
-    } catch (e) {
-      await client.sendMarkdown(dm, titled('⚠️ Something went wrong', (e as Error).message)).catch(() => {});
-      throw e;
+    } catch (error) {
+      await client.sendMarkdown(chatId, titled('⚠️ Something went wrong', (error as Error).message)).catch(() => {});
+      throw error;
     }
   }
 
@@ -192,13 +192,13 @@ export class TelegramAssistantBot {
    *  conversation), on the client SDK, streamed to the bubble. session_switch
    *  moves the active-session POINTER only — the assistant keeps the
    *  conversation; /code is how the user hands it over. */
-  private async assistantTurn(client: TelegramApi, dm: number, message: string): Promise<void> {
-    const typing = startTyping(client, dm);
+  private async assistantTurn(client: TelegramApi, chatId: number, message: string): Promise<void> {
+    const typing = startTyping(client, chatId);
     const busyKey = 'assistant';
     const bot = await this.backend.telegramBotState.read();
     // The assistant can deliver a file it names from the active session's work
     // dir (its file tools are read-only, but it can point at one the coder made).
-    const sink = await this.backend.telegramBot.startReplyBubble(client, dm, bot.activeSessionId ?? null);
+    const sink = await this.backend.telegramBot.startReplyBubble(client, chatId, bot.activeSessionId ?? null);
     // The pointer as this turn sees it — live across a switch within the turn.
     let active = bot.activeSessionId ?? null;
     let agent: AssistantAgent | undefined;
@@ -209,13 +209,13 @@ export class TelegramAssistantBot {
       agent = await AssistantAgent.resumeSession(this.client, this.agentHandlers('assistant'), own.id);
       this.inFlight.set(busyKey, { queue: [], agent });
       const onSwitch = async (id: string) => {
-        const r = await this.switchSession(client, dm, id);
-        if ('error' in r) return r;
-        active = r.id;
+        const switched = await this.switchSession(client, chatId, id);
+        if ('error' in switched) return switched;
+        active = switched.id;
         // The assistant's workspace follows the switch mid-turn: its read tools
         // open the row's workspace, so the very next call sees the new files.
-        await agent!.follow(bot.activeProjectId!, r.id);
-        return { active: r.id, title: r.title,
+        await agent!.follow(bot.activeProjectId!, switched.id);
+        return { active: switched.id, title: switched.title,
           note: "You are still the assistant — this session's files are now what your read tools see. " +
             'The user sends /code to talk to its coding agent; you never enter it.' };
       };
@@ -225,16 +225,16 @@ export class TelegramAssistantBot {
         await this.backend.telegramBotState.setActiveProject(projectId);
         let started;
         try { started = await this.backend.sessions.start(projectId, CodingAgent.systemPromptLayout, { type: 'coding', startedBy: TELEGRAM_STARTER }); }
-        catch (e) { return { error: (e as Error).message }; }
+        catch (error) { return { error: (error as Error).message }; }
         await this.backend.telegramBotState.setActiveSession(started.id);
-        await this.enterMode(client, dm, 'code');
-        await client.sendMessage(dm, '🆕 New session in the new project. Send your first message to begin.');
+        await this.enterMode(client, chatId, 'code');
+        await client.sendMessage(chatId, '🆕 New session in the new project. Send your first message to begin.');
         return { session: started.id };
       };
       agent.addToolKit(telegramAssistantKit(
         { cards: this.backend.cards, projects: this.backend.projects, loopback: this.backend.loopback },
         { projectId: () => bot.activeProjectId ?? null, activeSession: () => active, onSwitch,
-          approve: (ask, signal) => this.backend.telegramBot.askForApproval(client, dm, ask, signal), onProjectCreated }));
+          approve: (ask, signal) => this.backend.telegramBot.askForApproval(client, chatId, ask, signal), onProjectCreated }));
       const off = agent.on('part', (part) => sink.appendPart(part as Record<string, unknown>));
       let result;
       try { result = await agent.sendMessage(message); } finally { off(); }
@@ -243,18 +243,18 @@ export class TelegramAssistantBot {
       const queued = this.inFlight.get(busyKey)?.queue ?? [];
       this.inFlight.delete(busyKey);
       await agent.close();
-      await this.backend.telegramBot.speakText(client, dm, said, typing);
+      await this.backend.telegramBot.speakText(client, chatId, said, typing);
       typing.stop();
-      if (queued.length) await this.assistantTurn(client, dm, queued.join('\n\n'));
-    } catch (e) {
+      if (queued.length) await this.assistantTurn(client, chatId, queued.join('\n\n'));
+    } catch (error) {
       this.inFlight.delete(busyKey);
       await agent?.close().catch(() => {});
       sink.discard();
       typing.stop();
-      const msg = (e as Error).message;
+      const msg = (error as Error).message;
       const isPromptTooLong = /prompt is too long|request too large|context_too_long/i.test(msg);
-      log.error({ err: errStr(e) }, 'assistant turn failed');
-      await client.sendMessage(dm, isPromptTooLong
+      log.error({ err: errStr(error) }, 'assistant turn failed');
+      await client.sendMessage(chatId, isPromptTooLong
         ? '⚠️ Chat history exceeds the model\'s limit.'
         : `⚠️ ${msg}`).catch(() => {});
     }
@@ -281,9 +281,9 @@ export class TelegramAssistantBot {
    *  streamed into the bubble. A session held elsewhere is refused with a
    *  note; an interrupt from anywhere (esc-esc in a cli window, the
    *  interrupt route, /stop) ends the turn cleanly. */
-  private async codeTurn(client: TelegramApi, dm: number, sessionId: string, message: string): Promise<void> {
-    const typing = startTyping(client, dm);
-    const sink = await this.backend.telegramBot.startReplyBubble(client, dm, sessionId);
+  private async codeTurn(client: TelegramApi, chatId: number, sessionId: string, message: string): Promise<void> {
+    const typing = startTyping(client, chatId);
+    const sink = await this.backend.telegramBot.startReplyBubble(client, chatId, sessionId);
     let agent: CodingAgent | undefined;
     try {
       agent = await CodingAgent.resumeSession(this.client, this.agentHandlers('coding'), sessionId);
@@ -291,29 +291,29 @@ export class TelegramAssistantBot {
       const off = agent.on('part', (part) => sink.appendPart(part as Record<string, unknown>));
       let result;
       try { result = await agent.sendMessage(message); }
-      catch (e) {
-        if ((e as { code?: string }).code === 'session_locked') {
+      catch (error) {
+        if ((error as { code?: string }).code === 'session_locked') {
           off(); sink.discard(); this.inFlight.delete(sessionId); await agent.close(); typing.stop();
-          const s = await this.backend.sessions.get(sessionId);
-          await client.sendMessage(dm, `🔒 That session is busy${s?.lockedLabel ? ` (${s.lockedLabel})` : ''} — try again in a moment.`);
+          const session = await this.backend.sessions.get(sessionId);
+          await client.sendMessage(chatId, `🔒 That session is busy${session?.lockedLabel ? ` (${session.lockedLabel})` : ''} — try again in a moment.`);
           return;
         }
-        throw e;
+        throw error;
       } finally { off(); }
       const said = await sink.finish(result?.text ?? '');
       const queued = this.inFlight.get(sessionId)?.queue ?? [];
       this.inFlight.delete(sessionId);
       await agent.close();
-      await this.backend.telegramBot.speakText(client, dm, said, typing);
+      await this.backend.telegramBot.speakText(client, chatId, said, typing);
       typing.stop();
-      if (queued.length) await this.codeTurn(client, dm, sessionId, queued.join('\n\n'));
-    } catch (e) {
+      if (queued.length) await this.codeTurn(client, chatId, sessionId, queued.join('\n\n'));
+    } catch (error) {
       sink.discard();
       this.inFlight.delete(sessionId);
       await agent?.close().catch(() => {});
       typing.stop();
-      log.error({ err: errStr(e) }, 'code turn failed');
-      await client.sendMessage(dm, `⚠️ ${(e as Error).message}`).catch(() => {});
+      log.error({ err: errStr(error) }, 'code turn failed');
+      await client.sendMessage(chatId, `⚠️ ${(error as Error).message}`).catch(() => {});
     }
   }
 
@@ -327,18 +327,18 @@ export class TelegramAssistantBot {
 
   // ── input: voice, video notes, attachments, text ────────────────────────
 
-  private async resolveInput(client: TelegramApi, dm: number, msgs: any[],
+  private async resolveInput(client: TelegramApi, chatId: number, msgs: any[],
     bot: TelegramBotStateRow): Promise<string | null> {
     const msg = msgs[0];
     // Telegram puts the caption on only one album item.
-    const typed = msgs.map((m) => String(m.text ?? m.caption ?? '').trim()).find(Boolean) ?? '';
+    const typed = msgs.map((message) => String(message.text ?? message.caption ?? '').trim()).find(Boolean) ?? '';
 
     // A voice note is the message itself (never `audio` — an mp3 is a file).
-    if (msg.voice && !typed) return this.backend.telegramBot.transcribeVoiceNote(client, dm, msg, msg.voice);
+    if (msg.voice && !typed) return this.backend.telegramBot.transcribeVoiceNote(client, chatId, msg, msg.voice);
 
     // A round video message (video_note) is treated like a voice note:
     // download, extract audio, transcribe.
-    if (msg.video_note && !typed) return this.backend.telegramBot.transcribeVoiceNote(client, dm, msg, msg.video_note);
+    if (msg.video_note && !typed) return this.backend.telegramBot.transcribeVoiceNote(client, chatId, msg, msg.video_note);
 
     // Everything else file-bearing: save to the session's scratch, describe it.
     // Attachments only land in code mode (there is a session's scratch to use).
@@ -346,22 +346,22 @@ export class TelegramAssistantBot {
     const files = msgs.flatMap(collectFiles);
     if (files.length) {
       if (bot.mode !== 'code' || !bot.activeSessionId) {
-        await client.sendMessage(dm, "⚠️ Files go into the session you're coding in — /code to enter one first.");
+        await client.sendMessage(chatId, "⚠️ Files go into the session you're coding in — /code to enter one first.");
         return typed || null;
       }
-      const described = await this.backend.telegramBot.saveAttachmentsToSession(client, dm, msgs, bot.activeSessionId, typed);
+      const described = await this.backend.telegramBot.saveAttachmentsToSession(client, chatId, msgs, bot.activeSessionId, typed);
       return described ?? (typed || null);
     }
 
     if (typed) return typed;
-    await client.sendMessage(dm, "ℹ️ Send me a message, a voice note, or a file and I'll get to work.");
+    await client.sendMessage(chatId, "ℹ️ Send me a message, a voice note, or a file and I'll get to work.");
     return null;
   }
 
   // ── sent messages: reply-switch and reaction-speak ───────────────────────
 
-  private async switchForReply(client: TelegramApi, dm: number, msg: any): Promise<void> {
-    const repliedSession = await this.backend.telegramBot.sessionOfRepliedMessage(dm, msg);
+  private async switchForReply(client: TelegramApi, chatId: number, msg: any): Promise<void> {
+    const repliedSession = await this.backend.telegramBot.sessionOfRepliedMessage(chatId, msg);
     if (repliedSession === undefined) return;
     const bot = await this.backend.telegramBotState.read();
     if (repliedSession) {
@@ -369,14 +369,14 @@ export class TelegramAssistantBot {
       if (bot.activeSessionId !== repliedSession) {
         // The bubble goes with its session (cascade), so this only fails on a
         // delete racing the reply. A destroyed session keeps its row.
-        const r = await this.switchSession(client, dm, repliedSession, { silent: true });
-        if ('error' in r) { await client.sendMessage(dm, '⚠️ That session no longer exists.'); return; }
+        const switched = await this.switchSession(client, chatId, repliedSession, { silent: true });
+        if ('error' in switched) { await client.sendMessage(chatId, '⚠️ That session no longer exists.'); return; }
       }
-      await this.enterMode(client, dm, 'code');
+      await this.enterMode(client, chatId, 'code');
     } else {
       if (bot.mode === 'assistant') return;
       // The switch line is the whole message here.
-      await this.enterMode(client, dm, 'assistant');
+      await this.enterMode(client, chatId, 'assistant');
     }
   }
 
@@ -387,25 +387,25 @@ export class TelegramAssistantBot {
    *  accident. Announces the switch unless `silent` — callers that immediately
    *  follow with enterMode('code') pass silent because the code-mode label
    *  already carries the session name. */
-  async switchSession(client: TelegramApi, dm: number, id: string, opts?: { silent?: boolean }):
+  async switchSession(client: TelegramApi, chatId: number, id: string, opts?: { silent?: boolean }):
   Promise<{ id: string; title: string | null } | { error: string }> {
-    const s = await this.backend.sessions.get(id);
-    if (!s) return { error: `no session ${id}` };
+    const session = await this.backend.sessions.get(id);
+    if (!session) return { error: `no session ${id}` };
     await this.backend.telegramBotState.setActiveSession(id);
-    if (!opts?.silent) await client.sendMessage(dm, `🔀 Active session: ${s.name ?? 'untitled'}`);
-    return { id, title: s.name ?? null };
+    if (!opts?.silent) await client.sendMessage(chatId, `🔀 Active session: ${session.name ?? 'untitled'}`);
+    return { id, title: session.name ?? null };
   }
 
   /** Change who answers a plain message. Announces the transition iff the mode
    *  changed and swaps the chat's command menu to the mode's list. Returns
    *  whether the mode changed. Code mode presumes an active session — the
    *  caller checks (/code) or has just switched (a reply to a coder's bubble). */
-  async enterMode(client: TelegramApi, dm: number, mode: TelegramMode): Promise<boolean> {
+  async enterMode(client: TelegramApi, chatId: number, mode: TelegramMode): Promise<boolean> {
     const msg = mode === 'code'
-      ? await this.codeModeLabel(dm)
+      ? await this.codeModeLabel(chatId)
       : undefined;
-    const changed = await this.backend.telegramBotState.setMode(mode, (t) => client.sendMessage(dm, t), msg);
-    await client.setMyCommands(menuFor(mode), dm).catch(() => {});
+    const changed = await this.backend.telegramBotState.setMode(mode, (text) => client.sendMessage(chatId, text), msg);
+    await client.setMyCommands(menuFor(mode), chatId).catch(() => {});
     return changed;
   }
 
@@ -413,22 +413,22 @@ export class TelegramAssistantBot {
    *  session name, and (when switching) the last thing the agent said. One
    *  function, used by enterMode and the /code echo. Pass `dm` to include the
    *  last agent message (the switch announcement); omit it for a bare label. */
-  async codeModeLabel(dm?: number): Promise<string> {
+  async codeModeLabel(chatId?: number): Promise<string> {
     const bot = await this.backend.telegramBotState.read();
     if (!bot.activeSessionId) return '🤖 Coding agent';
-    const s = await this.backend.sessions.get(bot.activeSessionId);
-    if (!s) return '🤖 Coding agent';
+    const session = await this.backend.sessions.get(bot.activeSessionId);
+    if (!session) return '🤖 Coding agent';
     const card = (await this.backend.cards.ofSession(bot.activeSessionId))?.number;
-    const project = await this.backend.projects.get(s.projectId);
+    const project = await this.backend.projects.get(session.projectId);
     const prefix = project ? await this.backend.projects.prefixOf(project) : undefined;
     const parts: string[] = ['🤖 Coding agent'];
     if (prefix) parts.push(prefix);
     if (prefix && card != null) parts.push(`${prefix}-${card}`);
     else if (card != null) parts.push(`#${card}`);
-    parts.push(s.name ?? 'untitled');
+    parts.push(session.name ?? 'untitled');
     const title = parts.join(' · ');
-    if (dm != null) {
-      const last = await this.backend.telegramBot.lastMessageForSession(dm, bot.activeSessionId);
+    if (chatId != null) {
+      const last = await this.backend.telegramBot.lastMessageForSession(chatId, bot.activeSessionId);
       if (last) return titled(title, last);
     }
     return title;
@@ -457,8 +457,8 @@ export class TelegramAssistantBot {
 
   /** The approval gate, for slash commands that need a confirm (today:
    *  /restart). Same gate gated tools use — one question per chat. */
-  askApproval(client: TelegramApi, dm: number, ask: Ask): Promise<boolean> {
-    return this.backend.telegramBot.askForApproval(client, dm, ask);
+  askApproval(client: TelegramApi, chatId: number, ask: Ask): Promise<boolean> {
+    return this.backend.telegramBot.askForApproval(client, chatId, ask);
   }
 
   /** `/auto_push` and `/auto_pull` — the backend's git called directly (not
@@ -474,21 +474,21 @@ export class TelegramAssistantBot {
     label: string,
     sessionId: string,
     steps: Record<string, string>,
-    fn: ((s: SessionRow, project: ProjectRow, onEvent?: (e: { step: string; detail?: string }) => void | Promise<void>, by?: string) => Promise<T>) | undefined,
+    sync: ((session: SessionRow, project: ProjectRow, onEvent?: (step: { step: string; detail?: string }) => void | Promise<void>, by?: string) => Promise<T>) | undefined,
     onStep?: (label: string) => void,
   ): Promise<T> {
-    if (!fn) return { result: 'error', reason: `auto-${label} is not available on this server` } as T;
+    if (!sync) return { result: 'error', reason: `auto-${label} is not available on this server` } as T;
     try {
       const session = await this.backend.sessions.get(sessionId);
       if (!session) return { result: 'error', reason: 'session not found' } as T;
       const project = await this.backend.projects.get(session.projectId);
       if (!project) return { result: 'error', reason: 'project not found' } as T;
-      return await fn(session, project, (e) => {
-        const text = steps[e.step] ?? e.step;
-        const detail = e.detail ? ` — ${e.detail}` : '';
+      return await sync(session, project, (step) => {
+        const text = steps[step.step] ?? step.step;
+        const detail = step.detail ? ` — ${step.detail}` : '';
         onStep?.(`${text}${detail}`);
       }, CLIENT_ID);
-    } catch (e) { return { result: 'error', reason: (e as Error).message } as T; }
+    } catch (error) { return { result: 'error', reason: (error as Error).message } as T; }
   }
 
 
@@ -501,9 +501,9 @@ const TYPING_MS = 4000;
  *  one. Telegram expires an action after ~5s, so it has to be re-sent on a
  *  timer — a one-off `record_voice` from elsewhere would be overwritten by the
  *  next `typing` tick. The switch belongs to the loop. */
-function startTyping(client: TelegramApi, dm: number, initial = 'typing') {
+function startTyping(client: TelegramApi, chatId: number, initial = 'typing') {
   let action = initial;
-  const ping = () => { client.sendChatAction(dm, action).catch(() => {}); };
+  const ping = () => { client.sendChatAction(chatId, action).catch(() => {}); };
   ping();
   const timer = setInterval(ping, TYPING_MS);
   return {

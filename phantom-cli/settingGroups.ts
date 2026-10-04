@@ -23,9 +23,9 @@ export function groupBlocks<T>(items: readonly T[], filed: (item: T) => Filed | 
   const find = (group: string, subgroup: string) =>
     out.find((b) => b.group === group && b.subgroup === subgroup);
   for (const item of items) {
-    const f = filed(item);
-    const group = f?.group ?? '';
-    const subgroup = f?.subgroup ?? '';
+    const where = filed(item);
+    const group = where?.group ?? '';
+    const subgroup = where?.subgroup ?? '';
     let block = find(group, subgroup);
     if (!block) {
       // A new subgroup joins its group's blocks, not the end of the list, so
@@ -45,7 +45,7 @@ export function groupBlocks<T>(items: readonly T[], filed: (item: T) => Filed | 
  *  (it would repeat the title), one subgroup in a group no sub-heading. */
 export function headedChoices<T>(blocks: readonly Block<T>[], row: (item: T) => Choice<string>): Choice<string>[] {
   const groups = new Set(blocks.map((b) => b.group));
-  const subsIn = (g: string) => blocks.filter((b) => b.group === g).length;
+  const subsIn = (group: string) => blocks.filter((b) => b.group === group).length;
   const out: Choice<string>[] = [];
   let lastGroup: string | undefined;
   for (const b of blocks) {

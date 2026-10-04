@@ -38,7 +38,7 @@ export interface EditSpec {
 
 export function ValueInput({ spec, onSubmit, onCancel }: {
   spec: EditSpec;
-  onSubmit: (v: string | number | boolean | null) => void;
+  onSubmit: (value: string | number | boolean | null) => void;
   onCancel: () => void;
 }) {
   // A normal edit: the current value sits IN the field, cursor at the end,
@@ -61,7 +61,7 @@ export function ValueInput({ spec, onSubmit, onCancel }: {
 
   // The text path owns its own keys; the picker and combobox paths own theirs.
   // Called unconditionally (Rules of Hooks) and gated to the text path alone.
-  useInput((_c, key) => { if (key.escape) onCancel(); }, { isActive: !choices && !hasSuggestions });
+  useInput((_char, key) => { if (key.escape) onCancel(); }, { isActive: !choices && !hasSuggestions });
 
   if (hasSuggestions) {
     return <SuggestField spec={spec} onSubmit={onSubmit} onCancel={onCancel} />;
@@ -72,12 +72,12 @@ export function ValueInput({ spec, onSubmit, onCancel }: {
       <Screen title={spec.title} sub={spec.note}
         footer={[{ key: 'enter', does: 'save' }, { key: 'esc', does: 'back' }]}>
         <SelectList
-          choices={choices.map((c) => ({
-            value: c,
-            label: choiceLabels?.[c] ?? c,
-            detail: String(spec.current) === c ? 'current value' : undefined,
+          choices={choices.map((choice) => ({
+            value: choice,
+            label: choiceLabels?.[choice] ?? choice,
+            detail: String(spec.current) === choice ? 'current value' : undefined,
           }))}
-          onSelect={(v) => onSubmit(spec.type === 'boolean' ? v === 'true' : v)}
+          onSelect={(value) => onSubmit(spec.type === 'boolean' ? value === 'true' : value)}
           onCancel={onCancel}
         />
       </Screen>
@@ -85,21 +85,21 @@ export function ValueInput({ spec, onSubmit, onCancel }: {
   }
 
   const submit = (raw: string) => {
-    const v = raw.trim();
+    const value = raw.trim();
     // Empty clears the setting rather than storing "" — "no endpoint" and
     // "an endpoint that is the empty string" are not the same thing.
-    if (!v) return onSubmit(null);
+    if (!value) return onSubmit(null);
     if (spec.type === 'number') {
       if (spec.unit === 'ms') {
-        const n = parseMs(v);
-        if (n === null) { setError('try a number like 30m, 2h, 3d, or raw milliseconds'); return; }
-        return onSubmit(n);
+        const number = parseMs(value);
+        if (number === null) { setError('try a number like 30m, 2h, 3d, or raw milliseconds'); return; }
+        return onSubmit(number);
       }
-      const n = Number(v);
-      if (!Number.isFinite(n)) { setError('must be a number'); return; }
-      return onSubmit(n);
+      const number = Number(value);
+      if (!Number.isFinite(number)) { setError('must be a number'); return; }
+      return onSubmit(number);
     }
-    onSubmit(v);
+    onSubmit(value);
   };
 
   return (
@@ -109,7 +109,7 @@ export function ValueInput({ spec, onSubmit, onCancel }: {
         <FixedText color="cyan">{'  > '}</FixedText>
         <TextInput
           value={text}
-          onChange={(v) => { setText(v); setError(undefined); }}
+          onChange={(value) => { setText(value); setError(undefined); }}
           onSubmit={submit}
           mask={spec.secret ? '•' : undefined}
         />
@@ -131,24 +131,24 @@ export function ValueInput({ spec, onSubmit, onCancel }: {
 // back on the best match after every keystroke.
 function SuggestField({ spec, onSubmit, onCancel }: {
   spec: EditSpec;
-  onSubmit: (v: string) => void;
+  onSubmit: (value: string) => void;
   onCancel: () => void;
 }) {
   const [query, setQuery] = useState('');
 
   const cur = spec.current === null || spec.current === undefined ? '' : String(spec.current);
   const all = spec.suggestions ?? [];
-  const labelOf = (s: string) => spec.suggestionLabels?.[s] ?? s;
-  const q = query.trim().toLowerCase();
+  const labelOf = (suggestion: string) => spec.suggestionLabels?.[suggestion] ?? suggestion;
+  const needle = query.trim().toLowerCase();
 
-  const filtered = q
-    ? all.filter((s) => s.toLowerCase().includes(q) || labelOf(s).toLowerCase().includes(q))
+  const filtered = query
+    ? all.filter((suggestion) => suggestion.toLowerCase().includes(query) || labelOf(suggestion).toLowerCase().includes(query))
     : all;
 
-  const choices: Choice<string>[] = filtered.map((s) => {
-    const label = labelOf(s);
-    const detail = [label !== s ? s : null, s === cur ? 'current' : null].filter(Boolean).join(' · ');
-    return { value: s, label, detail: detail || undefined };
+  const choices: Choice<string>[] = filtered.map((suggestion) => {
+    const label = labelOf(suggestion);
+    const detail = [label !== suggestion ? suggestion : null, suggestion === cur ? 'current' : null].filter(Boolean).join(' · ');
+    return { value: suggestion, label, detail: detail || undefined };
   });
   // The raw typed value, unless it already IS one of the suggestions.
   const typed = query.trim();

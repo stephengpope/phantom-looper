@@ -43,14 +43,14 @@ export class PhantomError extends Error {
   }
 }
 
-export function isPhantomError(e: unknown): e is PhantomError {
-  return e instanceof PhantomError;
+export function isPhantomError(error: unknown): error is PhantomError {
+  return error instanceof PhantomError;
 }
 
 /** Anything thrown becomes a PhantomError, once. A PhantomError passes
  *  through untouched; anything else is wrapped with `code` and kept as cause. */
-export function asPhantomError(e: unknown, code: ErrorCode, context: string): PhantomError {
-  if (isPhantomError(e)) return e;
-  const msg = e instanceof Error ? e.message : String(e);
-  return new PhantomError(code, `${context}: ${msg}`, { cause: e });
+export function asPhantomError(error: unknown, code: ErrorCode, context: string): PhantomError {
+  if (isPhantomError(error)) return error;
+  const msg = error instanceof Error ? error.message : String(error);
+  return new PhantomError(code, `${context}: ${msg}`, { cause: error });
 }

@@ -38,7 +38,7 @@ import stringWidth from 'string-width';
 
 /** Reverse video for one character. Written out rather than pulled from chalk,
  *  which is only in the tree as one of Ink's own dependencies. */
-const invert = (s: string) => `\x1b[7m${s}\x1b[27m`;
+const invert = (text: string) => `\x1b[7m${text}\x1b[27m`;
 
 // ── visual row mapping ────────────────────────────────────────────────────
 // Ink wraps text using wrap-ansi with display-width (string-width) columns.
@@ -61,13 +61,13 @@ function visualRows(text: string, width: number): VRow[] {
   let start = 0;
   let col = 0;
   for (const { segment, index } of segmenter.segment(text)) {
-    const gw = stringWidth(segment);
-    if (col + gw > width && index > start) {
+    const graphemeWidth = stringWidth(segment);
+    if (col + graphemeWidth > width && index > start) {
       rows.push({ start, end: index });
       start = index;
       col = 0;
     }
-    col += gw;
+    col += graphemeWidth;
   }
   rows.push({ start, end: text.length });
   return rows;
@@ -83,9 +83,9 @@ function charAtVisualCol(text: string, rowStart: number, rowEnd: number, targetC
   let col = 0;
   const slice = text.slice(rowStart, rowEnd);
   for (const { segment, index } of segmenter.segment(slice)) {
-    const gw = stringWidth(segment);
-    if (col + gw > targetCol) return rowStart + index;
-    col += gw;
+    const graphemeWidth = stringWidth(segment);
+    if (col + graphemeWidth > targetCol) return rowStart + index;
+    col += graphemeWidth;
   }
   return rowEnd;
 }
@@ -133,7 +133,7 @@ function Editor({ value, onChange, onSubmit, focus = true, placeholder = '', mas
   // the second ← would land where the first one started. Same rule, same fix,
   // as SelectList's cursor.
   const cursorRef = useRef(cursorState);
-  const setCursor = (n: number) => { cursorRef.current = n; setCursorState(n); };
+  const setCursor = (position: number) => { cursorRef.current = position; setCursorState(position); };
   const cursor = cursorRef.current;
   // The last value this component produced. Anything else arriving in `value`
   // came from the caller, and the cursor belongs at the end of it.
@@ -159,8 +159,8 @@ function Editor({ value, onChange, onSubmit, focus = true, placeholder = '', mas
       const value = valueRef.current;
       const cursor = cursorRef.current;
       const rows = visualRows(value, columns!);
-      const rowIdx = rows.findIndex((r) => cursor >= r.start && cursor <= r.end
-        && (cursor < r.end || r === rows[rows.length - 1]));
+      const rowIdx = rows.findIndex((row) => cursor >= row.start && cursor <= row.end
+        && (cursor < row.end || row === rows[rows.length - 1]));
       if (key.upArrow) {
         if (rowIdx <= 0) { onBoundary?.('up'); return; }
         const col = visualCol(value, rows[rowIdx]!.start, cursor);
@@ -229,10 +229,10 @@ function Editor({ value, onChange, onSubmit, focus = true, placeholder = '', mas
       if (dropped) {
         void onFileDrop(dropped).then((chip) => {
           if (!chip) return;
-          const v = valueRef.current;
-          const c = cursorRef.current;
-          const next = v.slice(0, c) + chip + v.slice(c);
-          setCursor(c + chip.length);
+          const value = valueRef.current;
+          const cursor = cursorRef.current;
+          const next = value.slice(0, cursor) + chip + value.slice(cursor);
+          setCursor(cursor + chip.length);
           ours.current = next; valueRef.current = next; onChange(next);
         });
         return;

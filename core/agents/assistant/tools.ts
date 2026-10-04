@@ -154,12 +154,12 @@ export function renderRead(
   }
   const header = `session ${sessionId} — showing ${start + 1}-${end} of ${total} · oldest first`;
   const lines: string[] = [header, ''];
-  for (const m of messages.slice(start, end)) lines.push(...renderMessage(m, opts.tools === true));
+  for (const message of messages.slice(start, end)) lines.push(...renderMessage(message, opts.tools === true));
   return lines.join('\n');
 }
 
-const oneLine = (s: string, max = 150): string => {
-  const flat = s.replace(/\s+/g, ' ').trim();
+const oneLine = (text: string, max = 150): string => {
+  const flat = text.replace(/\s+/g, ' ').trim();
   return flat.length > max ? `${flat.slice(0, max)}…` : flat;
 };
 
@@ -168,12 +168,12 @@ const oneLine = (s: string, max = 150): string => {
 function mainArg(input: unknown): string {
   if (typeof input === 'string') return oneLine(input);
   if (input && typeof input === 'object') {
-    const o = input as Record<string, unknown>;
+    const fields = input as Record<string, unknown>;
     for (const key of ['command', 'file_path', 'path', 'query', 'pattern']) {
-      if (typeof o[key] === 'string') return oneLine(o[key] as string);
+      if (typeof fields[key] === 'string') return oneLine(fields[key] as string);
     }
-    for (const v of Object.values(o)) if (typeof v === 'string') return oneLine(v);
-    return oneLine(JSON.stringify(o));
+    for (const value of Object.values(fields)) if (typeof value === 'string') return oneLine(value);
+    return oneLine(JSON.stringify(fields));
   }
   return '';
 }
@@ -181,25 +181,25 @@ function mainArg(input: unknown): string {
 const asText = (value: unknown): string =>
   typeof value === 'string' ? value : JSON.stringify(value) ?? '';
 
-function renderMessage(m: ModelMessage, fullTools: boolean): string[] {
-  if (m.role === 'user') {
-    if (typeof m.content === 'string') return [`user: ${m.content}`];
-    return m.content.map((p) => p.type === 'text' ? `user: ${p.text}` : `user: [${p.type}]`);
+function renderMessage(message: ModelMessage, fullTools: boolean): string[] {
+  if (message.role === 'user') {
+    if (typeof message.content === 'string') return [`user: ${message.content}`];
+    return message.content.map((part) => part.type === 'text' ? `user: ${part.text}` : `user: [${part.type}]`);
   }
-  if (m.role === 'assistant') {
-    if (typeof m.content === 'string') return [`assistant: ${m.content}`];
+  if (message.role === 'assistant') {
+    if (typeof message.content === 'string') return [`assistant: ${message.content}`];
     const out: string[] = [];
-    for (const p of m.content) {
-      if (p.type === 'text' && p.text.trim()) out.push(`assistant: ${p.text}`);
-      else if (p.type === 'tool-call') out.push(`ran ${p.toolName}: ${mainArg(p.input)}`);
+    for (const part of message.content) {
+      if (part.type === 'text' && part.text.trim()) out.push(`assistant: ${part.text}`);
+      else if (part.type === 'tool-call') out.push(`ran ${part.toolName}: ${mainArg(part.input)}`);
       // thinking is dropped: read answers what happened, not what was thought
     }
     return out;
   }
-  if (m.role === 'tool') {
-    return m.content.map((p) => {
-      if (p.type !== 'tool-result') return `result: [${p.type}]`;
-      const text = asText((p.output as { value?: unknown } | undefined)?.value ?? p.output);
+  if (message.role === 'tool') {
+    return message.content.map((part) => {
+      if (part.type !== 'tool-result') return `result: [${part.type}]`;
+      const text = asText((part.output as { value?: unknown } | undefined)?.value ?? part.output);
       if (fullTools) return `result: ${text}`;
       const size = text.length > 300 ? ` (${(text.length / 1000).toFixed(1)}kb)` : '';
       return `result${size}: ${oneLine(text)}`;
@@ -431,8 +431,8 @@ export function assistantModeTool(handler: ScreenModeHandler): Record<string, To
  *  that is not a letter or digit becomes one hyphen ("Phantom Viewer" →
  *  phantom-viewer). Deterministic here, never the model's guess — the
  *  approval prompt shows exactly what this returns. */
-export const kebabName = (s: string): string =>
-  s.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+export const kebabName = (text: string): string =>
+  text.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
 export interface ProjectCreateArgs { name: string; description?: string }
 

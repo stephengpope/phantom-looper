@@ -12,21 +12,21 @@ import type { PhantomError } from 'phantom-client-sdk';
  *    - the server refused: the server's own sentence.
  *  The server's code and status ride as `.code` / `.status` for the few
  *  callers that branch on one. */
-export function requestError(method: string, path: string, base: string, e: PhantomError): Error & { code?: string; status?: number } {
+export function requestError(method: string, path: string, base: string, error: PhantomError): Error & { code?: string; status?: number } {
   let text: string;
-  if (e.code === 'unreachable') {
-    const why = (e.cause as { cause?: { code?: string; message?: string } } | undefined)?.cause?.code ?? e.message;
+  if (error.code === 'unreachable') {
+    const why = (error.cause as { cause?: { code?: string; message?: string } } | undefined)?.cause?.code ?? error.message;
     text = `phantom-backend at ${base} is not reachable${why ? ` (${why})` : ''}`;
-  } else if (e.status === 401 || e.code === 'unauthorized') {
+  } else if (error.status === 401 || error.code === 'unauthorized') {
     text = `phantom-backend at ${base} rejected the key — /server to fix it`;
-  } else if (e.code === 'bad_response') {
-    text = `phantom-backend at ${base} answered ${method} ${path} with HTTP ${e.status ?? '?'} and no envelope`;
+  } else if (error.code === 'bad_response') {
+    text = `phantom-backend at ${base} answered ${method} ${path} with HTTP ${error.status ?? '?'} and no envelope`;
   } else {
-    text = e.message || `phantom-backend at ${base} answered ${method} ${path} with HTTP ${e.status ?? '?'} and no message`;
+    text = error.message || `phantom-backend at ${base} answered ${method} ${path} with HTTP ${error.status ?? '?'} and no message`;
   }
-  const failed = new Error(text, { cause: e }) as Error & { code?: string; status?: number };
-  failed.code = e.code;
-  if (e.status !== undefined) failed.status = e.status;
+  const failed = new Error(text, { cause: error }) as Error & { code?: string; status?: number };
+  failed.code = error.code;
+  if (error.status !== undefined) failed.status = error.status;
   return failed;
 }
 
@@ -55,19 +55,19 @@ export function watchConnection(api: Api, onRecover: () => Promise<void> | void)
     recovering = true;
     try {
       do { again = false; await onRecover(); } while (again);
-    } catch (e) {
-      console.warn(`background: recovery after an outage failed: ${(e as Error).message ?? String(e)}`);
+    } catch (error) {
+      console.warn(`background: recovery after an outage failed: ${(error as Error).message ?? String(error)}`);
     } finally { recovering = false; }
   };
   return async (method, path, body) => {
     try {
-      const r = await api(method, path, body);
+      const reply = await api(method, path, body);
       if (down) { down = false; void fire(); }
-      return r;
-    } catch (e) {
-      const err = e as { code?: string; status?: number };
+      return reply;
+    } catch (error) {
+      const err = error as { code?: string; status?: number };
       if (err.code === 'unreachable' || (err.status ?? 0) >= 500) down = true;
-      throw e;
+      throw error;
     }
   };
 }
@@ -82,6 +82,6 @@ export type Api = (method: string, path: string, body?: unknown) => Promise<unkn
  *  its own (a list refresh, a lock release at quit) goes to cli.log with what
  *  it was doing — never to the pane, never nowhere. Everything a person asked
  *  for fails out loud with `could not <do what>: <why>`. */
-export const quiet = (doing: string) => (e: unknown): void => {
-  console.warn(`background: could not ${doing}: ${(e as Error).message ?? String(e)}`);
+export const quiet = (doing: string) => (error: unknown): void => {
+  console.warn(`background: could not ${doing}: ${(error as Error).message ?? String(error)}`);
 };

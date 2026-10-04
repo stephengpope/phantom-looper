@@ -11,13 +11,13 @@ import type { PhantomBackend } from '../../PhantomBackend.js';
 
 /** What leaves the API. The credential is no longer a column — it is
  *  `github_token` at this project's scope, so hasCredential is a lookup. */
-function publicProject(r: ProjectRow, hasCredential = false) {
+function publicProject(project: ProjectRow, hasCredential = false) {
   // nextCardNumber is the server's card-number counter, not a fact about the
   // project anyone edits or displays.
-  const { displayName, nextCardNumber: _counter, ...rest } = r;
+  const { displayName, nextCardNumber: _counter, ...rest } = project;
   // displayName: what humans call it; falls back to the GitHub name. url is
   // derived from owner + name, not stored.
-  return { ...rest, url: remoteUrl(r.owner, r.name), displayName: displayName ?? r.name, hasCredential };
+  return { ...rest, url: remoteUrl(project.owner, project.name), displayName: displayName ?? project.name, hasCredential };
 }
 
 const TAG = { tags: ['projects'] };
@@ -67,16 +67,16 @@ export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         .send(err(listed.code, listed.message, listed.code === 'upstream_unreachable'));
     }
     const have = new Set((await ctx.projects.list()).map((project) => `${project.owner}/${project.name}`.toLowerCase()));
-    return ok(listed.repos.map((r) => ({ ...r, added: have.has(`${r.owner}/${r.name}`.toLowerCase()) })));
+    return ok(listed.repos.map((repo) => ({ ...repo, added: have.has(`${repo.owner}/${repo.name}`.toLowerCase()) })));
   });
 
   app.get('/projects', { schema: { ...TAG, summary: 'List projects',
     description: 'All registered projects with hasCredential flags and `cardPrefix` (the resolved card ' +
       'number prefix, e.g. "PHA"). Credentials are never returned by any route.' } }, async () => {
     const rows = await ctx.projects.list();
-    return ok(await Promise.all(rows.map(async (r) => ({
-      ...publicProject(r, await ctx.settings.hasCredentialAt('github_token', projectScope(r.id))),
-      cardPrefix: await ctx.projects.prefixOf(r),
+    return ok(await Promise.all(rows.map(async (project) => ({
+      ...publicProject(project, await ctx.settings.hasCredentialAt('github_token', projectScope(project.id))),
+      cardPrefix: await ctx.projects.prefixOf(project),
     }))));
   });
 
@@ -111,7 +111,7 @@ export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         const ref = parseRepoRef(req.body?.url ?? '');
         name = ref.name;
         owner = ref.owner ?? '';
-      } catch (e) { return reply.code(400).send(err('invalid_url', (e as Error).message)); }
+      } catch (error) { return reply.code(400).send(err('invalid_url', (error as Error).message)); }
       if (!owner && !req.body.create) {
         return reply.code(400).send(err('invalid_url',
           'an existing repo needs owner/name or its URL — a bare name only works with create'));
@@ -140,11 +140,11 @@ export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         try {
           await initializeRemote(created.cloneUrl, baseBranch, { url: created.cloneUrl, pat },
             `# ${name}\n\nCreated by phantom-looper.\n`);
-        } catch (e) {
+        } catch (error) {
           // The project exists now but is empty. Say exactly what stopped the seed
           // so the operator can fix the token and re-run with create=false.
-          const why = classifyGitFailure(e, { hadToken: true });
-          const msg = why?.message ?? String((e as { stderr?: string }).stderr ?? (e as Error).message).trim().slice(0, 200);
+          const why = classifyGitFailure(error, { hadToken: true });
+          const msg = why?.message ?? String((error as { stderr?: string }).stderr ?? (error as Error).message).trim().slice(0, 200);
           return reply.code(why?.code === 'upstream_unreachable' ? 502 : 400).send(
             err(why?.code ?? 'error', `repository created on GitHub but the initial push to ${baseBranch} failed (${msg}). ` +
               `Fix the token's contents:write permission and register it again without create.`, why?.retryable ?? false));
@@ -162,9 +162,9 @@ export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       let created;
       try {
         created = await ctx.projects.create(row, writerOf(req));
-      } catch (e) {
-        if (e instanceof ProjectError) return reply.code(409).send(err(e.code, e.message));
-        throw e;
+      } catch (error) {
+        if (error instanceof ProjectError) return reply.code(409).send(err(error.code, error.message));
+        throw error;
       }
       // A token handed to create= belongs to this project: `github_token` at
       // its own scope, the same key the global one uses one layer down.

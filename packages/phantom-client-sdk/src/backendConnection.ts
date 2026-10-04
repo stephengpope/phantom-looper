@@ -14,28 +14,28 @@ export interface BackendConnectionOptions {
   /** The server's origin, e.g. `https://phantom.example.com`. */
   origin: string;
   /** Extra root certificates to trust (a server on its own CA). */
-  ca?: string | Buffer | Array<string | Buffer>;
+  certificateAuthority?: string | Buffer | Array<string | Buffer>;
 }
 
 export class BackendConnection {
   readonly origin: string;
-  readonly #ca: BackendConnectionOptions['ca'];
+  readonly #certificateAuthority: BackendConnectionOptions['certificateAuthority'];
   #session: ClientHttp2Session | null = null;
 
-  constructor(o: BackendConnectionOptions) {
-    this.origin = o.origin;
-    this.#ca = o.ca;
+  constructor(options: BackendConnectionOptions) {
+    this.origin = options.origin;
+    this.#certificateAuthority = options.certificateAuthority;
     this.fetch = this.fetch.bind(this);
   }
 
   /** The open session, or a new one when the last one closed. */
   #connect(): ClientHttp2Session {
     if (this.#session && !this.#session.closed && !this.#session.destroyed) return this.#session;
-    const s = http2.connect(this.origin, this.#ca ? { ca: this.#ca } : {});
-    s.on('error', () => undefined);   // surfaces on the streams that were open
-    s.on('close', () => { if (this.#session === s) this.#session = null; });
-    this.#session = s;
-    return s;
+    const session = http2.connect(this.origin, this.#certificateAuthority ? { ca: this.#certificateAuthority } : {});
+    session.on('error', () => undefined);   // surfaces on the streams that were open
+    session.on('close', () => { if (this.#session === session) this.#session = null; });
+    this.#session = session;
+    return session;
   }
 
   /** Hang up. The next request reconnects. */
@@ -48,7 +48,7 @@ export class BackendConnection {
     if (url.origin !== this.origin) return globalThis.fetch(input, init);
 
     const headers: OutgoingHttpHeaders = { ':method': init?.method ?? 'GET', ':path': url.pathname + url.search };
-    new Headers(init?.headers).forEach((v, k) => { headers[k] = v; });
+    new Headers(init?.headers).forEach((value, name) => { headers[name] = value; });
     const body = init?.body;
     // A request with no body says so: without the length the proxy in front
     // of the server forwards an empty chunked body, which the server reads
@@ -61,15 +61,15 @@ export class BackendConnection {
     else signal?.addEventListener('abort', onAbort, { once: true });
 
     return new Promise<Response>((resolve, reject) => {
-      req.on('error', (e: Error) => {
+      req.on('error', (error: Error) => {
         signal?.removeEventListener('abort', onAbort);
         const reason: unknown = signal?.aborted ? signal.reason : undefined;
-        reject(reason instanceof Error ? reason : e);
+        reject(reason instanceof Error ? reason : error);
       });
-      req.on('response', (h) => {
-        const status = Number(h[':status'] ?? 0);
+      req.on('response', (responseHeaders) => {
+        const status = Number(responseHeaders[':status'] ?? 0);
         const out = new Headers();
-        for (const [k, v] of Object.entries(h)) if (!k.startsWith(':') && v !== undefined) out.set(k, Array.isArray(v) ? v.join(', ') : String(v));
+        for (const [name, value] of Object.entries(responseHeaders)) if (!name.startsWith(':') && value !== undefined) out.set(name, Array.isArray(value) ? value.join(', ') : String(value));
         const stream = Readable.toWeb(req) as ReadableStream<Uint8Array>;
         req.on('close', () => signal?.removeEventListener('abort', onAbort));
         resolve(new Response(status === 204 ? null : stream, { status, headers: out }));

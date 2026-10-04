@@ -39,10 +39,10 @@ export type StreamPart = TextStreamPart<ToolSet>;
 let seq = 0;
 export const nextId = (prefix: string) => `${prefix}-${++seq}`;
 
-function isDone(p: Part): boolean {
-  switch (p.kind) {
-    case 'text': case 'reasoning': return p.done;
-    case 'tool': return p.status === 'ok' || p.status === 'error';
+function isDone(part: Part): boolean {
+  switch (part.kind) {
+    case 'text': case 'reasoning': return part.done;
+    case 'tool': return part.status === 'ok' || part.status === 'error';
     default: return true;
   }
 }
@@ -58,10 +58,10 @@ export function applyPart(turn: Part[], part: StreamPart, now = Date.now()): Par
   // keep the toolCallId as `id`: it is globally unique and the result must
   // find its call.
   const bySid = (kind: Part['kind'], sid: string) =>
-    turn.findIndex((p) => p.kind === kind && (p as { sid?: string }).sid === sid && !isDone(p));
+    turn.findIndex((part) => part.kind === kind && (part as { sid?: string }).sid === sid && !isDone(part));
   const byId = (kind: Part['kind'], id: string) =>
-    turn.findIndex((p) => p.kind === kind && p.id === id && !isDone(p));
-  const replace = (i: number, p: Part) => [...turn.slice(0, i), p, ...turn.slice(i + 1)];
+    turn.findIndex((part) => part.kind === kind && part.id === id && !isDone(part));
+  const replace = (i: number, part: Part) => [...turn.slice(0, i), part, ...turn.slice(i + 1)];
 
   switch (part.type) {
     case 'text-start':
@@ -69,15 +69,15 @@ export function applyPart(turn: Part[], part: StreamPart, now = Date.now()): Par
     case 'text-delta': {
       const i = bySid('text', part.id);
       if (i < 0) return [...turn, { kind: 'text', id: nextId('text'), sid: part.id, text: part.text, done: false, first: true }];
-      const p = turn[i] as Extract<Part, { kind: 'text' }>;
-      return replace(i, { ...p, text: p.text + part.text });
+      const existing = turn[i] as Extract<Part, { kind: 'text' }>;
+      return replace(i, { ...existing, text: existing.text + part.text });
     }
     case 'text-end': {
       const i = bySid('text', part.id);
       if (i < 0) return turn;
-      const p = turn[i] as Extract<Part, { kind: 'text' }>;
+      const existing = turn[i] as Extract<Part, { kind: 'text' }>;
       // Drop empty text blocks (models emit them around tool calls).
-      return p.text.trim() ? replace(i, { ...p, done: true }) : turn.filter((_, j) => j !== i);
+      return existing.text.trim() ? replace(i, { ...existing, done: true }) : turn.filter((_, j) => j !== i);
     }
 
     case 'reasoning-start':
@@ -85,14 +85,14 @@ export function applyPart(turn: Part[], part: StreamPart, now = Date.now()): Par
     case 'reasoning-delta': {
       const i = bySid('reasoning', part.id);
       if (i < 0) return [...turn, { kind: 'reasoning', id: nextId('reasoning'), sid: part.id, text: part.text, done: false, startedAt: now }];
-      const p = turn[i] as Extract<Part, { kind: 'reasoning' }>;
-      return replace(i, { ...p, text: p.text + part.text });
+      const existing = turn[i] as Extract<Part, { kind: 'reasoning' }>;
+      return replace(i, { ...existing, text: existing.text + part.text });
     }
     case 'reasoning-end': {
       const i = bySid('reasoning', part.id);
       if (i < 0) return turn;
-      const p = turn[i] as Extract<Part, { kind: 'reasoning' }>;
-      return replace(i, { ...p, done: true, endedAt: now });
+      const existing = turn[i] as Extract<Part, { kind: 'reasoning' }>;
+      return replace(i, { ...existing, done: true, endedAt: now });
     }
 
     case 'tool-input-start':
@@ -102,8 +102,8 @@ export function applyPart(turn: Part[], part: StreamPart, now = Date.now()): Par
     case 'tool-input-delta': {
       const i = byId('tool', part.id);
       if (i < 0) return turn;
-      const p = turn[i] as Extract<Part, { kind: 'tool' }>;
-      return replace(i, { ...p, inputText: p.inputText + part.delta });
+      const existing = turn[i] as Extract<Part, { kind: 'tool' }>;
+      return replace(i, { ...existing, inputText: existing.inputText + part.delta });
     }
     case 'tool-call': {
       const i = byId('tool', part.toolCallId);
@@ -116,13 +116,13 @@ export function applyPart(turn: Part[], part: StreamPart, now = Date.now()): Par
     case 'tool-result': {
       const i = byId('tool', part.toolCallId);
       if (i < 0) return turn;
-      const p = turn[i] as Extract<Part, { kind: 'tool' }>;
+      const existing = turn[i] as Extract<Part, { kind: 'tool' }>;
       // The envelope is the tool output; ok:false is a tool-level
       // failure the model will see and self-correct — show it as such.
       const env = part.output as { ok?: boolean; error?: { code?: string; message?: string } } | undefined;
       const failed = env?.ok === false;
       return replace(i, {
-        ...p, input: part.input, output: part.output, endedAt: now,
+        ...existing, input: part.input, output: part.output, endedAt: now,
         status: failed ? 'error' : 'ok',
         error: failed ? `${env?.error?.code ?? 'error'}: ${env?.error?.message ?? ''}` : undefined,
       });
@@ -130,8 +130,8 @@ export function applyPart(turn: Part[], part: StreamPart, now = Date.now()): Par
     case 'tool-error': {
       const i = byId('tool', part.toolCallId);
       if (i < 0) return turn;
-      const p = turn[i] as Extract<Part, { kind: 'tool' }>;
-      return replace(i, { ...p, status: 'error', endedAt: now, error: String((part.error as Error)?.message ?? part.error) });
+      const existing = turn[i] as Extract<Part, { kind: 'tool' }>;
+      return replace(i, { ...existing, status: 'error', endedAt: now, error: String((part.error as Error)?.message ?? part.error) });
     }
 
     case 'error':
@@ -149,10 +149,10 @@ export function applyPart(turn: Part[], part: StreamPart, now = Date.now()): Par
  * the trailing partial line always stays open.
  */
 export function splitBlocks(text: string): { closed: string[]; open: string } {
-  const nl = text.lastIndexOf('\n');
-  if (nl < 0) return { closed: [], open: text };
-  const lines = text.slice(0, nl).split('\n');
-  const partial = text.slice(nl + 1);
+  const newlineAt = text.lastIndexOf('\n');
+  if (newlineAt < 0) return { closed: [], open: text };
+  const lines = text.slice(0, newlineAt).split('\n');
+  const partial = text.slice(newlineAt + 1);
 
   const closed: string[] = [];
   let cur: string[] = [];
@@ -167,13 +167,13 @@ export function splitBlocks(text: string): { closed: string[]; open: string } {
   const inList = () => cur.length > 0 && LIST_ITEM.test(cur[0]);
 
   for (const line of lines) {
-    const f = /^\s{0,3}(```+|~~~+)/.exec(line);
+    const opened = /^\s{0,3}(```+|~~~+)/.exec(line);
     if (fence) {
       cur.push(line);
-      if (f && line.trim().startsWith(fence)) { flush(); fence = null; }
+      if (opened && line.trim().startsWith(fence)) { flush(); fence = null; }
       continue;
     }
-    if (f) { flush(); fence = f[1]; cur.push(line); continue; }
+    if (opened) { flush(); fence = opened[1]; cur.push(line); continue; }
     // A blank line ends whatever paragraph or heading came before it.
     if (line.trim() === '') {
       if (inList()) held++; else flush();
@@ -225,24 +225,24 @@ export function takeCompleted(turn: Part[]): { done: Part[]; live: Part[] } {
 
 /** Everything in the turn, marked done — used when a turn ends or aborts. */
 export function finalize(turn: Part[], now = Date.now()): Part[] {
-  return turn.map((p) => {
-    if (p.kind === 'text') return { ...p, done: true };
-    if (p.kind === 'reasoning') return p.done ? p : { ...p, done: true, endedAt: now };
-    if (p.kind === 'tool' && (p.status === 'pending' || p.status === 'running')) {
-      return { ...p, status: 'error' as const, error: 'interrupted', endedAt: now };
+  return turn.map((part) => {
+    if (part.kind === 'text') return { ...part, done: true };
+    if (part.kind === 'reasoning') return part.done ? part : { ...part, done: true, endedAt: now };
+    if (part.kind === 'tool' && (part.status === 'pending' || part.status === 'running')) {
+      return { ...part, status: 'error' as const, error: 'interrupted', endedAt: now };
     }
-    return p;
-  }).filter((p) => !(p.kind === 'text' && !p.text.trim()));
+    return part;
+  }).filter((part) => !(part.kind === 'text' && !part.text.trim()));
 }
 
 /** The phase word for the status line — `thinking`, `writing`, the tool's
  *  name while it runs, or '' between parts. */
 export function phaseLabel(live: Part[]): string {
   for (let i = live.length - 1; i >= 0; i--) {
-    const p = live[i];
-    if (p.kind === 'tool' && (p.status === 'pending' || p.status === 'running')) return p.name;
-    if (p.kind === 'reasoning' && !p.done) return 'thinking';
-    if (p.kind === 'text' && !p.done) return 'writing';
+    const existing = live[i];
+    if (existing.kind === 'tool' && (existing.status === 'pending' || existing.status === 'running')) return existing.name;
+    if (existing.kind === 'reasoning' && !existing.done) return 'thinking';
+    if (existing.kind === 'text' && !existing.done) return 'writing';
   }
   return '';
 }
@@ -266,44 +266,44 @@ export interface TurnTokens {
 export const NO_TOKENS: TurnTokens = { settled: 0, pendingChars: 0 };
 const CHARS_PER_TOKEN = 4;
 
-export function applyTokens(t: TurnTokens, part: StreamPart): TurnTokens {
+export function applyTokens(tokens: TurnTokens, part: StreamPart): TurnTokens {
   switch (part.type) {
     case 'text-delta': case 'reasoning-delta':
-      return { ...t, pendingChars: t.pendingChars + part.text.length };
+      return { ...tokens, pendingChars: tokens.pendingChars + part.text.length };
     case 'tool-input-delta':
-      return { ...t, pendingChars: t.pendingChars + part.delta.length };
+      return { ...tokens, pendingChars: tokens.pendingChars + part.delta.length };
     case 'finish-step': {
       const real = part.usage?.outputTokens;
-      return { settled: t.settled + (real ?? Math.ceil(t.pendingChars / CHARS_PER_TOKEN)), pendingChars: 0 };
+      return { settled: tokens.settled + (real ?? Math.ceil(tokens.pendingChars / CHARS_PER_TOKEN)), pendingChars: 0 };
     }
     case 'finish': {
       // The turn's own total, when the provider gives one, beats any sum.
       const real = part.totalUsage?.outputTokens;
-      return real != null ? { settled: real, pendingChars: 0 } : t;
+      return real != null ? { settled: real, pendingChars: 0 } : tokens;
     }
-    default: return t;
+    default: return tokens;
   }
 }
 
 /** The number to show: settled plus the estimate for what is in flight. */
-export const tokenCount = (t: TurnTokens): number => t.settled + Math.ceil(t.pendingChars / CHARS_PER_TOKEN);
+export const tokenCount = (tokens: TurnTokens): number => tokens.settled + Math.ceil(tokens.pendingChars / CHARS_PER_TOKEN);
 
 /** 950 → "950", 1700 → "1.7k", 12400 → "12k", 1700000 → "1.7M". */
-export function formatTokens(n: number): string {
-  if (n < 1000) return String(n);
-  const k = n / 1000;
-  if (k < 1000) return k < 10 ? `${k.toFixed(1).replace(/\.0$/, '')}k` : `${Math.round(k)}k`;
-  const m = k / 1000;
-  return m < 10 ? `${m.toFixed(1).replace(/\.0$/, '')}M` : `${Math.round(m)}M`;
+export function formatTokens(count: number): string {
+  if (count < 1000) return String(count);
+  const thousands = count / 1000;
+  if (thousands < 1000) return thousands < 10 ? `${thousands.toFixed(1).replace(/\.0$/, '')}k` : `${Math.round(thousands)}k`;
+  const millions = thousands / 1000;
+  return millions < 10 ? `${millions.toFixed(1).replace(/\.0$/, '')}M` : `${Math.round(millions)}M`;
 }
 
 /** The output-token meter shown everywhere (toolbar, launcher, status line):
  *  950 → "↓ 950", 1700 → "↓ 1.7k". ONE shape, so the same fact reads the
  *  same way wherever it shows. */
-export const formatTokensOut = (n: number): string => `↓ ${formatTokens(n)}`;
+export const formatTokensOut = (count: number): string => `↓ ${formatTokens(count)}`;
 
 /** The input-token meter, the output meter's mirror: 1700 → "↑ 1.7k". */
-export const formatTokensIn = (n: number): string => `↑ ${formatTokens(n)}`;
+export const formatTokensIn = (count: number): string => `↑ ${formatTokens(count)}`;
 
 /** THE cache hit rate: the share of a session's lifetime PROMPT tokens the
  *  provider served from its prompt cache (cache reads / total input tokens).
@@ -319,18 +319,18 @@ export function cachePct(input: number, cacheRead: number, _cacheWrite: number):
 }
 
 /** 44 → "44s", 124 → "2m 4s". */
-export function formatElapsed(ms: number): string {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+export function formatElapsed(milliseconds: number): string {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
 /** Epoch ms → "3:42 pm", local time. By hand, not toLocaleTimeString — the
  * locale must not turn one row's clock into 24h on one machine and 12h with
  * NBSP before "PM" on another. */
 export function formatClock(at: number): string {
-  const d = new Date(at);
-  const h = d.getHours() % 12 || 12;
-  return `${h}:${String(d.getMinutes()).padStart(2, '0')} ${d.getHours() < 12 ? 'am' : 'pm'}`;
+  const date = new Date(at);
+  const hour = date.getHours() % 12 || 12;
+  return `${hour}:${String(date.getMinutes()).padStart(2, '0')} ${date.getHours() < 12 ? 'am' : 'pm'}`;
 }
 
 // --- resume ------------------------------------------------------------------
@@ -350,46 +350,46 @@ export function messagesToParts(messages: ModelMessage[]): Part[] {
     typeof content === 'string'
       ? content
       : (content as { type: string; text?: string }[] ?? [])
-          .filter((c) => c.type === 'text').map((c) => c.text ?? '').join('');
+          .filter((part) => part.type === 'text').map((part) => part.text ?? '').join('');
 
-  for (const m of messages) {
-    if (m.role === 'user') {
-      const text = textOf(m.content).trim();
+  for (const message of messages) {
+    if (message.role === 'user') {
+      const text = textOf(message.content).trim();
       if (text) parts.push({ kind: 'user', id: nextId('user'), text });
       continue;
     }
-    if (m.role === 'assistant') {
-      const content = typeof m.content === 'string'
-        ? [{ type: 'text', text: m.content }] : m.content;
-      for (const c of content as { type: string; [k: string]: unknown }[]) {
-        if (c.type === 'text' && String(c.text).trim()) {
-          parts.push({ kind: 'text', id: nextId('text'), text: String(c.text), done: true, first: true });
-        } else if (c.type === 'tool-call') {
-          toolAt.set(String(c.toolCallId), parts.length);
+    if (message.role === 'assistant') {
+      const content = typeof message.content === 'string'
+        ? [{ type: 'text', text: message.content }] : message.content;
+      for (const part of content as { type: string; [key: string]: unknown }[]) {
+        if (part.type === 'text' && String(part.text).trim()) {
+          parts.push({ kind: 'text', id: nextId('text'), text: String(part.text), done: true, first: true });
+        } else if (part.type === 'tool-call') {
+          toolAt.set(String(part.toolCallId), parts.length);
           parts.push({
-            kind: 'tool', id: nextId('tool'), name: String(c.toolName),
-            inputText: '', input: c.input, status: 'running', startedAt: 0,
+            kind: 'tool', id: nextId('tool'), name: String(part.toolName),
+            inputText: '', input: part.input, status: 'running', startedAt: 0,
           });
         }
       }
       continue;
     }
-    if (m.role === 'tool') {
-      for (const c of m.content) {
-        if (c.type !== 'tool-result') continue;   // approval responses render nothing
-        const i = toolAt.get(c.toolCallId);
+    if (message.role === 'tool') {
+      for (const part of message.content) {
+        if (part.type !== 'tool-result') continue;   // approval responses render nothing
+        const i = toolAt.get(part.toolCallId);
         if (i === undefined) continue;
-        const p = parts[i] as Extract<Part, { kind: 'tool' }>;
-        parts[i] = { ...p, ...resultOf(c.output), endedAt: 0 };
+        const existing = parts[i] as Extract<Part, { kind: 'tool' }>;
+        parts[i] = { ...existing, ...resultOf(part.output), endedAt: 0 };
       }
     }
   }
 
   // A tool call whose result never landed (the process died inside the step).
-  return parts.map((p) =>
-    p.kind === 'tool' && p.status === 'running'
-      ? { ...p, status: 'error' as const, error: 'interrupted' }
-      : p);
+  return parts.map((part) =>
+    part.kind === 'tool' && part.status === 'running'
+      ? { ...part, status: 'error' as const, error: 'interrupted' }
+      : part);
 }
 
 /** Unwrap a stored tool output into the fields a tool Part renders. The
@@ -397,8 +397,8 @@ export function messagesToParts(messages: ModelMessage[]): Part[] {
  *  the same reading applyPart gives the live `tool-result` part. */
 function resultOf(output: ToolResultPart['output']): Partial<Extract<Part, { kind: 'tool' }>> {
   if (output.type === 'error-text' || output.type === 'error-json') {
-    const v = output.value as { message?: string } | string;
-    return { status: 'error', error: typeof v === 'string' ? v : v?.message ?? 'error' };
+    const value = output.value as { message?: string } | string;
+    return { status: 'error', error: typeof value === 'string' ? value : value?.message ?? 'error' };
   }
   if (output.type === 'execution-denied') return { status: 'error', error: output.reason ?? 'denied' };
   if (output.type !== 'json' && output.type !== 'text') return { status: 'ok', output: undefined };

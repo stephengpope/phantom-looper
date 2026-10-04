@@ -82,6 +82,6 @@ export class PasteStore {
 /** The length of the chip `text` ends with, or 0 — TextInput's backspace
  *  removes a chip whole rather than eating into it a character at a time. */
 export function chipAtEnd(text: string): number {
-  const m = text.match(CHIP_AT_END);
-  return m ? m[0].length : 0;
+  const match = text.match(CHIP_AT_END);
+  return match ? match[0].length : 0;
 }
