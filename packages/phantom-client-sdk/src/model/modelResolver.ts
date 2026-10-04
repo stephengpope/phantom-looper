@@ -1,5 +1,5 @@
-// The handle for the model a turn runs on. The config comes from the
-// server with every turn start and is never kept; the handle is rebuilt
+// Resolves the model a turn runs on. The config comes from the
+// server with every turn start and is never kept; the model is rebuilt
 // only when the config moved. Every call through it is billed to the
 // session.
 import type { LanguageModel } from 'ai';
@@ -16,7 +16,7 @@ export interface ResolvedModel {
   reasoning: Reasoning | undefined;
 }
 
-export class ModelHandle {
+export class ModelResolver {
   #cached: { key: string; model: LanguageModel } | null = null;
 
   constructor(private readonly backend: BackendClient, private readonly type: string, private readonly sessionId: string,

@@ -1,9 +1,9 @@
 // Rendering a setting's VALUE — 30d rather than 2592000000, yes rather than
 // true. Presentation only.
 //
-// What a setting is called and what it does are NOT here. They live in
-// phantom-backend/settings.ts (`META[key].label`, `META[key].choiceLabels`,
-// `DESCRIPTIONS`, `CREDENTIALS`) and reach this client over the wire, in `meta`
+// What a setting is called and what it does are NOT here. They live in the
+// backend's settings registry (each definition's label, choiceLabels,
+// description, credential flag) and reach this client over the wire, in `meta`
 // and `description` on every entry of GET /settings and GET /projects/:id
 // `settings`. A copy of it in this package made two places to write down what
 // a setting means, and the two drifted. If a description reads badly, fix it

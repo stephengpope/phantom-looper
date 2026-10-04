@@ -127,7 +127,7 @@ export function sessionsHandler(host: AssistantHost) {
           status: s.status === 'active' ? 'active' : 'ended',
           running: isRunning(s, { busy: host.busy, clientId: host.clientId }),
           on_screen: s.id === on_screen,
-          git_status: s.work ?? null,
+          git_status: s.workState ?? null,
           model: s.model ?? null,
           tokens: s.tokensOutput ?? null,
           last_message: oneLine(s.lastUserMessage),

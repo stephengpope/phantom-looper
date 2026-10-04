@@ -14,8 +14,8 @@
 // row as new and register it twice.
 //
 // A fire opens a NEW coding session in the project (its own checkout,
-// named after the cron, its seat stamped 'cron'), runs the prompt as one
-// coding turn — the same runner the card runs and the /turn route use — and
+// named after the cron, opened by the cron actor), runs the prompt as one
+// coding turn on the client SDK — the same agent a cli window runs — and
 // closes it. A cron that names its model stamps it on that session's row
 // first (Sessions.stampModel), so the run reads the row like every runner
 // and the record shows what ran; its reasoning rides the pin. A SCRIPT cron
@@ -31,9 +31,9 @@
 // passed — the server slept through it — can never fire: its row is deleted
 // at reconcile rather than listed as if it were still coming.
 //
-// Like a card run, this is a headless client of the server's own HTTP
-// surface (injectFetch); the database is reached only through the row
-// owners it is handed.
+// Like a card run, this is a headless client of the backend's own HTTP
+// surface over loopback; the database is reached only through the
+// backend's objects.
 import { Cron } from 'croner';
 import { BackendClient, type AgentHandlers } from 'phantom-client-sdk';
 import { messageLine, userMessage, assistantMessage } from 'phantom-client-sdk/transcript';
@@ -58,7 +58,7 @@ const SCRIPT_TIMEOUT_MS = 60 * 60 * 1000;
  *  must re-register. */
 interface Registration { cron: Cron; projectId: string; schedule: string; timezone: string }
 
-export class CronEngine {
+export class CronScheduler {
   private registered = new Map<number, Registration>();   // cron row id → croner job
   private queue: Promise<void> = Promise.resolve();       // reconciles run one after another
   private unsubscribe: Array<() => void> = [];

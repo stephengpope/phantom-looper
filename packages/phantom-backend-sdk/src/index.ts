@@ -99,6 +99,6 @@ export type { GitHooks, AutoPushFn, AutoPullFn } from './git/GitService.js';
 export type { Arrival } from './git/GitSync.js';
 
 // upgrade
-export { System, SystemError, LOG_MAX_BYTES, LOG_MAX_TAIL, LOG_SERVICES, type LogsQuery } from './upgrade/System.js';
+export { Deployment, DeploymentError, LOG_MAX_BYTES, LOG_MAX_TAIL, LOG_SERVICES, type LogsQuery } from './upgrade/Deployment.js';
 export { UpgradeChecker, type UpgradeCheckerDeps } from './upgrade/UpgradeChecker.js';
 export { subscribe as subscribeUpdate, isRunning as updateRunning, shutdown as updateShutdown, startUpdate, HELPER_NAME, type UpdateDeps, type UpdateListener } from './upgrade/updateTask.js';

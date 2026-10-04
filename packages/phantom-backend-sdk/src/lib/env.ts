@@ -1,5 +1,5 @@
 // Boot-and-connect configuration ONLY. Every behavioral knob lives in the
-// database (server/settings.ts) so it can change without a restart — env is what
+// database (storage/Settings.ts) so it can change without a restart — env is what
 // you need before you can reach the database at all.
 
 export interface Env {

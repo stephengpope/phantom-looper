@@ -16,7 +16,7 @@ import { BackendClient, type Agent, type AgentHandlers } from 'phantom-client-sd
 import { telegramAssistantKit, CLIENT_ID, TELEGRAM_STARTER } from './assistant.js';
 import type { FastifyInstance } from 'fastify';
 import { APP_VERSION } from 'phantom-backend-sdk';
-import type { System, PhantomBackend } from 'phantom-backend-sdk';
+import type { Deployment, PhantomBackend } from 'phantom-backend-sdk';
 import type { BoardEvent } from 'phantom-backend-sdk';
 import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
 import { autoBuildAlert } from './alerts.js';
@@ -57,9 +57,9 @@ export class TelegramAssistantBot {
 
   /** On the backend's objects — its Telegram plumbing (the link, verified
    *  inbound, delivery), the bot-state row, the sessions, the board, the
-   *  settings, its git — plus this app's `system` (update, logs, restart)
+   *  settings, its git — plus this app's `deployment` (update, logs, restart)
    *  and the looper's count of card runs in flight (the upgrade's health line). */
-  constructor(readonly backend: PhantomBackend, readonly system: System, private readonly loopsRunning: () => number) {
+  constructor(readonly backend: PhantomBackend, readonly deployment: Deployment, private readonly loopsRunning: () => number) {
     this.client = new BackendClient({ url: backend.loopback.url, apiKey: backend.loopback.apiKey, clientId: CLIENT_ID, label: 'telegram', actor: TELEGRAM_STARTER });
     this.upgradeChecker = new UpgradeChecker({
       version: APP_VERSION,
@@ -70,7 +70,7 @@ export class TelegramAssistantBot {
         // informed yes the update guard asks for.
         try {
           let last: string | undefined;
-          await system.update(tag, { restartAnyway: true }, (e) => { last = e.event; onEvent?.(e); }).done;
+          await deployment.update(tag, { restartAnyway: true }, (e) => { last = e.event; onEvent?.(e); }).done;
           return last === 'error' ? { ok: false, error: 'update failed' } : { ok: true };
         } catch (e) { return { ok: false, error: (e as Error).message }; }
       },
@@ -448,7 +448,7 @@ export class TelegramAssistantBot {
     return true;
   }
 
-  /** Stop a turn on a session, from this bot: the engine's own turn (inFlight)
+  /** Stop a turn on a session, from this bot: the bot's own turn (inFlight)
    *  and, through Sessions.interrupt, any other runner's. */
   interrupt(sessionId: string): void {
     this.stop(sessionId);
@@ -461,9 +461,8 @@ export class TelegramAssistantBot {
     return this.backend.telegramBot.askForApproval(client, dm, ask);
   }
 
-  /** `/auto_push` and `/auto_pull` — called directly (not through the HTTP
-   *  route) so onStep fires live as each step completes. injectFetch buffers
-   *  the full response before returning, which killed the progressive UI. */
+  /** `/auto_push` and `/auto_pull` — the backend's git called directly (not
+   *  through the HTTP route) so onStep fires live as each step completes. */
   async autoPush(sessionId: string, onStep?: (label: string) => void): Promise<AutoPushOutcome> {
     return this.runSync('push', sessionId, AUTO_PUSH_STEPS, this.backend.git.autoPush, onStep);
   }

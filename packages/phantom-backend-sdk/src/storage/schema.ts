@@ -114,7 +114,7 @@ export const workspaces = phantomLooper.table('workspaces', {
   lastPushAt: timestamp('last_push_at', { withTimezone: true }),
   // Its git state: not_pushed, not_merged, merged. Written by the periodic
   // refresh for workspaces with a running container; null = never measured.
-  work: text('work'),
+  workState: text('work_state'),
   // The checkout lock (038): the one git sync writing this checkout right
   // now, and when its hold lapses. Fresh id per run, never re-entered.
   syncLockedBy: text('sync_locked_by'),
@@ -348,7 +348,7 @@ export interface CheckoutFacts {
   status: 'active' | 'destroyed';
   lastUsedAt: Date;
   lastPushAt: Date | null;
-  work: string | null;
+  workState: string | null;
 }
 /** A session as reads return it — sessionColumns' shape, blobs excluded,
  *  its workspace's facts joined in (Sessions.view). */

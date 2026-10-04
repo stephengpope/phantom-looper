@@ -25,7 +25,7 @@ export interface SessionRow {
   cardStatus?: string | null;
   /** Where the checkout's work stands: not_pushed / not_merged / merged;
    *  null = never measured. */
-  work?: 'not_pushed' | 'not_merged' | 'merged' | null;
+  workState?: 'not_pushed' | 'not_merged' | 'merged' | null;
   /** The model that drives this session — the row's pin. */
   model?: string | null;
   /** The provider that model belongs to, pinned on the row alongside it. */

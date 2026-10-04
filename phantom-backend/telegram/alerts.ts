@@ -6,7 +6,7 @@
 // `from` is the status before the write, so an edit inside a column (a tick, a
 // retitle) is not a move, and nothing is remembered across a restart.
 import type { BoardEvent } from 'phantom-backend-sdk';
-import { LOOP_CLIENT_ID } from '../looper/engine.js';
+import { LOOP_CLIENT_ID } from '../looper/Looper.js';
 
 /** The statuses worth a message, and their glyphs. plan is the looper's
  *  waiting room, not news; archived is the human's own gesture. */

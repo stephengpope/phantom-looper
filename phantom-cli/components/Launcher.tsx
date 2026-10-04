@@ -134,7 +134,7 @@ export function sessionChoices(
   // free-running last column ("coder 2h") — one question ("whose is this
   // and how fresh"), one column.
 
-  const COLS = { card: 8, work: 14, name: 42, model: 20, tokens: 24 };
+  const COLS = { card: 8, workState: 14, name: 42, model: 20, tokens: 24 };
   const rows = sessions.map((s): TableRow<Launch | null> => {
     // A supervisor session names itself: the supervisor's conversation for its
     // card — read-only. A cron's run is a normal coding session that a
@@ -167,7 +167,7 @@ export function sessionChoices(
     // A blank work fact is the dot, UNMARKED — a color would claim a state
     // the server did not give: the list may not have been fetched with
     // git=true yet (the instant first paint), or there is nothing to measure.
-    const workCol = s.work ? WORK[s.work] : s.lastUserMessage ? { text: 'unknown', mark: 'gray' } : '·';
+    const workCol = s.workState ? WORK[s.workState] : s.lastUserMessage ? { text: 'unknown', mark: 'gray' } : '·';
     // The token meters are the status bar's own shapes (`↑ 12.4k`,
     // `↓ 1.7k`) and its own rule: zero or unknown is no news, the blank-fact
     // dot. The cache hit rate rides the INPUT meter — caching is a property
@@ -198,7 +198,7 @@ export function sessionChoices(
   });
   const table = tableChoices('ws', [
     { title: 'card', width: COLS.card },
-    { title: 'git', width: COLS.work },
+    { title: 'git', width: COLS.workState },
     { title: 'session', width: COLS.name },
     { title: 'model', width: COLS.model }, { title: 'tokens', width: COLS.tokens },
     { title: 'when' },

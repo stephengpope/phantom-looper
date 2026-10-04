@@ -223,7 +223,7 @@ export async function handleCommand(
       ];
 
       // Server stats condensed to one line.
-      const sys = await telegram.system.status().catch(() => null);
+      const sys = await telegram.deployment.status().catch(() => null);
       if (sys) {
         const raw = sys.text;
         const cpu = raw.match(/(\d+)% busy/)?.[1];
@@ -424,7 +424,7 @@ export async function handleCommand(
     case 'cpu': {
       // Legacy alias — folded into /status but still answered if typed.
       let text: string;
-      try { text = (await telegram.system.status()).text; }
+      try { text = (await telegram.deployment.status()).text; }
       catch (e) { await reply(`⚠️ Couldn't read the server status: ${(e as Error).message}`); return; }
       await client.sendMarkdown(dm, titled('🖥 Server status', text + '\n\nℹ️ /cpu is now part of /status'));
       return;
@@ -432,7 +432,7 @@ export async function handleCommand(
 
     case 'tokens': {
       let text: string;
-      try { text = (await telegram.system.tokenUsage(await telegram.backend.settings.clockFor())).text; }
+      try { text = (await telegram.deployment.tokenUsage(await telegram.backend.settings.clockFor())).text; }
       catch (e) { await reply(`⚠️ Couldn't read token usage: ${(e as Error).message}`); return; }
       // A code block: the report is a fixed-column table, monospace only.
       await client.sendMarkdown(dm, titled('📊 Token usage', text ? '```\n' + text + '\n```' : '(no usage data)'));
@@ -450,7 +450,7 @@ export async function handleCommand(
           : 'the api — the whole server is offline for a few seconds (in-flight replies are cut)',
       });
       if (!accepted) return;
-      try { await telegram.system.restart(service || undefined); }
+      try { await telegram.deployment.restart(service || undefined); }
       catch (e) { await reply(`⚠️ Couldn't restart: ${(e as Error).message}`); return; }
       await reply(service
         ? `🔄 Restarting ${service}.`

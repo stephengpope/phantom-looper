@@ -623,9 +623,9 @@ export class WindowStore {
     try {
       const r = await this.api('GET', `/sessions/${id}`) as {
         planMode?: boolean; transcript_updated_at?: string | null;
-        work?: 'not_pushed' | 'not_merged' | 'merged' | null };
+        workState?: 'not_pushed' | 'not_merged' | 'merged' | null };
       if (typeof r.planMode === 'boolean') await this.applyPlanMode(id, r.planMode);
-      this.sessions.setWork(id, r.work ?? null);
+      this.sessions.setWorkState(id, r.workState ?? null);
       await this.refreshIfMoved(id, r.transcript_updated_at ?? null);
     } catch (e) { quiet(`re-read session ${id}`)(e); }
   };
@@ -1861,8 +1861,8 @@ export class WindowStore {
         return;
       }
       case 'compact':
-        // Compaction is the server's, on the record — not built
-        // (sdk-conversion.md item 6).
+        // Compaction is the backend's, on the record — not built yet
+        // (docs/phantom-agent-sdk-plan.md §8).
         if (args.trim().toLowerCase() === 'assistant') {
             this.note('compaction is not available for the Assistant yet');
           return;

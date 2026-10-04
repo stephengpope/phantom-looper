@@ -249,7 +249,7 @@ export class Sessions {
   private static readonly lastUsedAt = sqlRaw<Date>`coalesce(${workspaces.lastUsedAt}, ${sessions.createdAt})`.mapWith((v) => new Date(v));
   private static readonly view = {
     ...sessionColumns, branch: workspaces.branch, status: Sessions.status, lastUsedAt: Sessions.lastUsedAt,
-    lastPushAt: workspaces.lastPushAt, work: workspaces.work,
+    lastPushAt: workspaces.lastPushAt, workState: workspaces.workState,
   };
   /** `select view from sessions left join workspaces` — every read starts here. */
   private from() {

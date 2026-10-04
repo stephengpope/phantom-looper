@@ -1,5 +1,6 @@
-// The server's own health and housekeeping as ONE object: the compose
-// stack's logs and restarts, the machine's load, the token report. The
+// The deployment — the compose stack this backend runs in — as ONE object:
+// its update, its services' logs and restarts, the machine's load, the
+// token report. The
 // /system routes are thin over it, and the Telegram bot's /status, /tokens,
 // /restart and the Assistant's docker_logs call it directly — no client of
 // this server, inside this server, asks over HTTP for what it can ask here.
@@ -17,7 +18,7 @@ import type { UpdateEvent } from 'phantom-client-sdk';
 import { API_IMAGE } from '../lib/env.js';
 import { logger, errStr } from '../lib/log.js';
 
-const log = logger('system');
+const log = logger('deployment');
 
 /** A log answer is a page, not a dump: lines asked for, bytes returned. */
 export const LOG_MAX_BYTES = 64 * 1024;
@@ -28,14 +29,14 @@ export const LOG_MAX_TAIL = 1000;
 export const LOG_SERVICES = ['api', 'postgres', 'caddy', 'updater', 'autoheal', 'cloudbeaver'] as const;
 
 /** A refusal with a name — the routes map the code to a status. */
-export class SystemError extends Error {
+export class DeploymentError extends Error {
   constructor(public code: 'logs_unavailable' | 'restart_unavailable' | 'no_such_service' | 'loops_running' | 'updater_unavailable',
     message: string, public retryable = false) { super(message); }
 }
 
 export interface LogsQuery { service?: string; tail?: number; since?: string; grep?: string }
 
-export class System {
+export class Deployment {
   constructor(
     private readonly paths: Paths,
     private readonly tokenLog: TokenLog,
@@ -61,11 +62,11 @@ export class System {
   update(tag: string, o: { restartAnyway?: boolean }, onEvent: (e: UpdateEvent) => void): { done: Promise<void>; stop(): void } {
     const loops = this.loopsRunning();
     if (loops > 0 && !o.restartAnyway) {
-      throw new SystemError('loops_running',
+      throw new DeploymentError('loops_running',
         `${loops === 1 ? '1 card has' : `${loops} cards have`} a round in flight — updating now would interrupt ${loops === 1 ? 'it' : 'them'} (${loops === 1 ? 'it resumes' : 'they resume'} after the restart); send restart_anyway: true to update anyway`, true);
     }
-    if (!this.updateTriggerDir) throw new SystemError('updater_unavailable', 'this server has no updater sidecar (UPDATE_TRIGGER_DIR unset) — re-run install.sh once');
-    if (!this.images || !this.docker) throw new SystemError('updater_unavailable', 'this server has no docker access');
+    if (!this.updateTriggerDir) throw new DeploymentError('updater_unavailable', 'this server has no updater sidecar (UPDATE_TRIGGER_DIR unset) — re-run install.sh once');
+    if (!this.images || !this.docker) throw new DeploymentError('updater_unavailable', 'this server has no docker access');
     if (!isRunning()) {
       startUpdate({ images: this.images, docker: this.docker, triggerDir: this.updateTriggerDir,
         apiImage: API_IMAGE, sessionImage: 'ghcr.io/stephengpope/phantom-backend-session' }, tag);
@@ -114,15 +115,15 @@ export class System {
    *  the answer, so an over-cap page is cut from the FRONT. */
   async logs(q: LogsQuery = {}): Promise<{ service: string; text: string; truncated?: boolean }> {
     const docker = this.docker;
-    if (!docker) throw new SystemError('logs_unavailable', 'this server has no docker access');
+    if (!docker) throw new DeploymentError('logs_unavailable', 'this server has no docker access');
     const { service = 'api', tail = 100, since, grep } = q;
     const container = await this.serviceContainer(docker, service).catch(() => null);
-    if (!container) throw new SystemError('no_such_service', `no running container for service "${service}"`);
+    if (!container) throw new DeploymentError('no_such_service', `no running container for service "${service}"`);
     let text: string;
     try { text = await this.readLogs(docker, container, { tail, since }); }
     catch (e) {
       log.error({ err: errStr(e), service }, 'log read failed');
-      throw new SystemError('logs_unavailable', `could not read ${service} logs: ${errStr(e)}`);
+      throw new DeploymentError('logs_unavailable', `could not read ${service} logs: ${errStr(e)}`);
     }
     if (grep) {
       let keep: (line: string) => boolean;
@@ -167,13 +168,13 @@ export class System {
    *  the answer is out the door before docker is asked. */
   async restart(service = 'api'): Promise<{ restarting: string; note?: string }> {
     const docker = this.docker;
-    if (!docker) throw new SystemError('restart_unavailable', 'this server has no docker access');
+    if (!docker) throw new DeploymentError('restart_unavailable', 'this server has no docker access');
     const all = await docker.listContainers().catch((e) => { log.error({ err: errStr(e) }, 'container list failed'); return null; });
-    if (!all) throw new SystemError('restart_unavailable', 'docker did not answer');
+    if (!all) throw new DeploymentError('restart_unavailable', 'docker did not answer');
     const target = all.find((c) => (c.Labels?.['com.docker.compose.service'] ?? '') === service);
     if (!target) {
       const services = [...new Set(all.map((c) => c.Labels?.['com.docker.compose.service']).filter(Boolean))].sort();
-      throw new SystemError('no_such_service',
+      throw new DeploymentError('no_such_service',
         `no running container for service "${service}" — running services: ${services.join(', ') || '(none)'}`);
     }
     const container = docker.getContainer(target.Id);
@@ -185,7 +186,7 @@ export class System {
     try { await container.restart(); }
     catch (e) {
       log.error({ err: errStr(e), service }, 'restart failed');
-      throw new SystemError('restart_unavailable', `could not restart ${service}: ${errStr(e)}`);
+      throw new DeploymentError('restart_unavailable', `could not restart ${service}: ${errStr(e)}`);
     }
     log.info({ service }, 'service restarted');
     return { restarting: service };

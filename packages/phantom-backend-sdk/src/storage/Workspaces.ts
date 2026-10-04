@@ -19,7 +19,7 @@
 //
 // Events: the workspace's id IS its owning session's id, so a write here
 // publishes on that session's feed — a bare `session` record ("this row
-// moved") for the list, `work` with its value for the watcher's dot.
+// moved") for the list, `workState` with its value for the watcher's dot.
 import fs from 'node:fs/promises';
 import { and, eq, inArray, isNotNull, isNull, lt, not, or, count } from 'drizzle-orm';
 import type { Drizzle } from './Database.js';
@@ -43,7 +43,7 @@ export class WorkspaceError extends Error {
 /** A workspace as the work-state refresh walks it: what the git read needs,
  *  plus the card number its board event is named by. */
 export interface WorkRefreshWorkspace {
-  id: string; projectId: string; branch: string; work: string | null; card: number | null;
+  id: string; projectId: string; branch: string; workState: string | null; card: number | null;
 }
 
 export class Workspaces {
@@ -244,9 +244,9 @@ export class Workspaces {
 
   /** Where the checkout's work stands, as the git refresh measured it. A
    *  watcher's work-state dot follows the event. */
-  async setWork(id: string, work: WorkState | null): Promise<void> {
-    await this.db.update(workspaces).set({ work }).where(eq(workspaces.id, id));
-    this.events?.publish(id, '', { event: 'session', work });
+  async setWorkState(id: string, workState: WorkState | null): Promise<void> {
+    await this.db.update(workspaces).set({ workState }).where(eq(workspaces.id, id));
+    this.events?.publish(id, '', { event: 'session', workState });
   }
 
   /** The workspaces the work-state refresh walks: the ones named (running
@@ -255,7 +255,7 @@ export class Workspaces {
   async listForWorkRefresh(ids: string[]): Promise<WorkRefreshWorkspace[]> {
     if (!ids.length) return [];
     return this.db.select({
-      id: workspaces.id, projectId: workspaces.projectId, branch: workspaces.branch, work: workspaces.work,
+      id: workspaces.id, projectId: workspaces.projectId, branch: workspaces.branch, workState: workspaces.workState,
       card: cards.number,
     }).from(workspaces)
       .leftJoin(sessions, eq(sessions.id, workspaces.id))
@@ -267,10 +267,10 @@ export class Workspaces {
    *  now. The refresh clears these to null. */
   async listStaleWork(activeIds: string[]): Promise<WorkRefreshWorkspace[]> {
     const where = activeIds.length
-      ? and(isNotNull(workspaces.work), not(inArray(workspaces.id, activeIds)))
-      : isNotNull(workspaces.work);
+      ? and(isNotNull(workspaces.workState), not(inArray(workspaces.id, activeIds)))
+      : isNotNull(workspaces.workState);
     return this.db.select({
-      id: workspaces.id, projectId: workspaces.projectId, branch: workspaces.branch, work: workspaces.work,
+      id: workspaces.id, projectId: workspaces.projectId, branch: workspaces.branch, workState: workspaces.workState,
       card: cards.number,
     }).from(workspaces)
       .leftJoin(sessions, eq(sessions.id, workspaces.id))

@@ -41,4 +41,4 @@ export * as TelegramVoice from './telegram/TelegramVoice.js';
 export { Approvals } from './telegram/TelegramApprovals.js';
 export { HttpApi } from './api/HttpApi.js';
 export { Notifications } from './Notifications.js';
-export { System } from './upgrade/System.js';
+export { Deployment } from './upgrade/Deployment.js';

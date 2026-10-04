@@ -28,8 +28,8 @@ export async function refreshWorkState({ workspaces, projects, paths, sessionCon
   const stale = await workspaces.listStaleWork(active);
   if (stale.length) {
     await Promise.all(stale.map(async (f) => {
-      await workspaces.setWork(f.id, null);
-      boardEvents.publish(f.projectId, { event: 'session_work', card: f.card ?? 0, id: f.id, work: null });
+      await workspaces.setWorkState(f.id, null);
+      boardEvents.publish(f.projectId, { event: 'session_work_state', card: f.card ?? 0, id: f.id, workState: null });
     }));
   }
 
@@ -55,11 +55,11 @@ export async function refreshWorkState({ workspaces, projects, paths, sessionCon
     }
 
     // Only write and publish when the value actually changed.
-    if (work === f.work) return;
+    if (work === f.workState) return;
     // The row write publishes on the session stream too, so a window
     // watching this session sees the work-state dot update without polling.
-    await workspaces.setWork(f.id, work);
+    await workspaces.setWorkState(f.id, work);
     // Publish on the board stream so the kanban board picks it up.
-    boardEvents.publish(f.projectId, { event: 'session_work', card: f.card ?? 0, id: f.id, work });
+    boardEvents.publish(f.projectId, { event: 'session_work_state', card: f.card ?? 0, id: f.id, workState: work });
   }));
 }

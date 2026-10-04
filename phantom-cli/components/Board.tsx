@@ -227,7 +227,7 @@ export function Board({ store, width, height, isActive, onClose, card, confirm, 
                 const lockedSince = store.state.cardLocked?.[t.number];
                 const locked = lockedSince != null;
                 const spinColor = turnAgeColor(lockedSince);
-                const work = store.state.cardWork?.[t.number];
+                const work = store.state.cardWorkState?.[t.number];
                 const WORK_COLOR: Record<string, string> = { not_pushed: 'red', not_merged: 'yellow', merged: 'green' };
                 const dotColor = work ? WORK_COLOR[work] : undefined;
                 const selected = ci === focus.col && ri === focus.row && !dragging;

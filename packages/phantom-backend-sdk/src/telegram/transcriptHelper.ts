@@ -1,5 +1,5 @@
 // The last assistant message in a transcript — the same reading as
-// lastUserFromJsonl in core/llm/transcript.ts, for the other role.
+// lastUserFromJsonl (phantom-client-sdk/transcript), for the other role.
 import { parseLines } from 'phantom-client-sdk/transcript';
 
 /** The last thing the assistant said. Text only; tool calls are skipped. */

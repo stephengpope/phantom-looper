@@ -84,14 +84,14 @@ export function kanbanRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // Each card's coding session — the newest per card (Sessions.codersByCard).
   // Rides the board GET so the card editor can name the session and open it.
   // `locked` is computed here (same rule as GET /sessions) so the board can
-  // show a spinner on cards whose session is actively running; `work` is
-  // the stored column the 10s refresh job maintains.
+  // show a spinner on cards whose session is actively running; `workState`
+  // is the stored column the 10s refresh job maintains.
   const cardSessions = async (project: ProjectRow) => {
     const now = Date.now();
     return (await ctx.sessions.codersByCard(project.id)).map((s) => ({
       card: s.card, id: s.id, name: s.name,
       locked: isHeld(s, now),
-      work: s.work }));
+      workState: s.workState }));
   };
 
   app.get<{ Params: { id: string };
@@ -123,13 +123,13 @@ export function kanbanRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       }
       const rows = await ctx.cards.list(project, { includeArchived: req.query.archived === 'true' });
       const cs = await cardSessions(project);
-      // card_work: the git work state per card; card_locked: whether the
-      // card's coding session is held right now.
-      const cardWork: Record<number, string | null> = {};
+      // card_work_state: where each card's work stands against base; card_locked:
+      // whether the card's coding session is held right now.
+      const cardWorkState: Record<number, string | null> = {};
       const cardLocked: Record<number, boolean> = {};
-      for (const c of cs) { if (c.work) cardWork[c.card] = c.work; if (c.locked) cardLocked[c.card] = true; }
-      return ok({ ...await board(project), cards: rows, card_sessions: cs.map(({ work: _w, ...c }) => c),
-        card_work: cardWork, card_locked: cardLocked });
+      for (const c of cs) { if (c.workState) cardWorkState[c.card] = c.workState; if (c.locked) cardLocked[c.card] = true; }
+      return ok({ ...await board(project), cards: rows, card_sessions: cs.map(({ workState: _w, ...c }) => c),
+        card_work_state: cardWorkState, card_locked: cardLocked });
     });
 
   app.post<{ Params: { id: string }; Body: Record<string, unknown> }>(

@@ -666,8 +666,8 @@ export const inertVoice = (): VoiceClient =>
 
 // --- the one tool, for now ----------------------------------------------------
 
-// The session_* and kanban_* families are declared whole in the TUI kit
-// (core/llm/tools/tui.ts); the App
+// The session_* and kanban_* families are declared whole in the Assistant's
+// kit (core/agents/assistant/tools.ts); the App
 // supplies the handler body (it reads the session store directly). Re-exported
 // here because this file is the Assistant's client-side home.
 export { sessionsTool, assistantKanbanTool, codingKanbanTool, projectCreateTool, gitAutoPushTool, gitAutoPullTool, screenModeTools, assistantModeTool, kebabName, renderRead, renderRaw, dockerLogsTool, type SessionsArgs, type KanbanArgs, type ProjectCreateArgs, type GitAutoPushArgs, type GitAutoPullArgs, type ScreenModeHandler, type DockerLogsArgs } from '../core/agents/assistant/tools.js';

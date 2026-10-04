@@ -199,8 +199,8 @@ export class SessionFeed {
         if (typeof rec.provider === 'string' && typeof rec.model === 'string') {
           await this.hooks.onModelChanged?.();
         }
-        if (rec.work !== undefined) {
-          this.store.setWork(this.sessionId, rec.work as LoadedSession['work']);
+        if (rec.workState !== undefined) {
+          this.store.setWorkState(this.sessionId, rec.workState as LoadedSession['workState']);
         }
         if (typeof rec.transcript_updated_at === 'string') {
           await this.hooks.onRecordLanded(rec.transcript_updated_at, false);

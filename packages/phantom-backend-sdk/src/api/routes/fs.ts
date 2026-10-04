@@ -161,8 +161,8 @@ export async function reconcileRunning(
  *  command runs under setsid as its own process-group leader, pgid in a
  *  pidfile, and abort or timeout kills the GROUP — children included. The
  *  pidfile is also registered in ctx.foregroundCommands, so the interrupt route's
- *  kill reaches turns that have no socket to close (server-side turns ride
- *  injectFetch) — one kill, two doors. */
+ *  kill reaches a command whose turn has no socket of its own to close — one
+ *  kill, two doors. */
 async function runBash(
   ctx: PhantomBackend, deps: FsDeps, sandbox: Sandbox, session: SessionRow,
   args: { cmd: string; cwd?: string; detached?: boolean; timeout?: number },

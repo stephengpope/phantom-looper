@@ -2,7 +2,7 @@
 // LAYOUT (systemPrompt.ts) — nothing else. The layout goes with the create
 // request; the server assembles the prompt once and writes it with the row;
 // every turn sends it as stored. The base wires the session (session.ts),
-// the model (model/modelHandle.ts), the tools (toolkit.ts) and the turn
+// the model (model/modelResolver.ts), the tools (toolkit.ts) and the turn
 // (turn.ts), and owns the user's queue, interrupts and events.
 //
 //   class CodingAgent extends Agent {
@@ -17,7 +17,7 @@ import { PhantomError, asPhantomError } from './errors.js';
 import { Emitter, type AgentEvents } from './events.js';
 import { TurnFeed } from './feed.js';
 import { systemMessages, CACHED_BLOCKS } from './model/cache.js';
-import { ModelHandle, type ResolvedModel } from './model/modelHandle.js';
+import { ModelResolver, type ResolvedModel } from './model/modelResolver.js';
 import type { SystemModelMessage, Tool } from 'ai';
 import { BACKEND_RETRY, MODEL_RETRY, type RetryPolicy } from './model/retry.js';
 import { Session, type SessionInfo, type TurnStart } from './session.js';
@@ -62,7 +62,7 @@ export abstract class Agent {
   readonly #kits = new ToolKitSet();
   readonly #queue = new UserMessageQueue();
   readonly #events = new Emitter();
-  #model!: ModelHandle;
+  #modelResolver!: ModelResolver;
   #turn: Promise<TurnResult> | null = null;
   #abort: AbortController | null = null;
   #keepQueue = false;
@@ -238,7 +238,7 @@ export abstract class Agent {
       if (await this.#session.makeCurrent(start.recordMoved, signal)) this.#emit('reloaded', { messages: this.session.messages });
       await this.#flushPartials();
       this.#session.setPlanMode(start.planMode);
-      const model = this.#model.resolve(start.config);
+      const model = this.#modelResolver.resolve(start.config);
       const stored = this.session.row.system_prompt;
       if (!stored) throw new PhantomError('config_invalid', `session ${this.session.id} has no system prompt`);
       const { messages: system, uncached } = systemMessages(systemPromptBlocks(stored), model.spec.provider);
@@ -258,7 +258,7 @@ export abstract class Agent {
   /** After construction, once `type` exists (a subclass field lands after
    *  the base constructor ran). */
   #wire(): this {
-    this.#model = new ModelHandle(this.backend, this.type, this.session.id, {
+    this.#modelResolver = new ModelResolver(this.backend, this.type, this.session.id, {
       retry: { ...MODEL_RETRY, ...this.#handlers.retry?.model },
       notice: (text) => this.#handlers.onNotice({ type: 'retry', text }),
       onBillingError: (e) => this.#handlers.onError(e),

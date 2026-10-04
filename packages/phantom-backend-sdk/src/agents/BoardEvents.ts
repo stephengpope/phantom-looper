@@ -27,7 +27,7 @@ export type BoardEvent =
   // sessionEvents.ts).
   | { event: 'session'; card: number; id: string; name: string | null } // a loop paired the card with its coding session — the ONE speaker for the card→session pairing and its name
   | { event: 'session_lock'; card: number; id: string; locked: boolean } // the card's coding session hold changed
-  | { event: 'session_work'; card: number; id: string; work: string | null }; // the card's git state changed
+  | { event: 'session_work_state'; card: number; id: string; workState: string | null }; // the card's git state changed
 
 export class BoardEvents {
   private emitter = new EventEmitter();

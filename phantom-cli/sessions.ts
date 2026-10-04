@@ -102,7 +102,7 @@ export interface LoadedSession {
   /** Insertion counter — the tie-break while nothing has been said yet. */
   addedAt: number;
   /** Where this session's code stands. Null before the first poll lands. */
-  work: 'not_pushed' | 'not_merged' | 'merged' | null;
+  workState: 'not_pushed' | 'not_merged' | 'merged' | null;
   /** The unsent text in the prompt when the user switched away from this
    *  session. Restored into the input box when returning. */
   draft: string;
@@ -192,7 +192,7 @@ export class SessionStore {
       remoteBusy: false, held: null, startedAt: 0, tokens: NO_TOKENS,
       usage: { ...s.agent.session.usage }, caption: null, sending: null,
       unseen: false, ask: null, lastMessageAt: s.agent.session.messages.length ? Date.now() : 0, addedAt: ++this.seq,
-      work: null, draft: s.draft ?? '',
+      workState: null, draft: s.draft ?? '',
       unwire: () => undefined,
     };
     entry.unwire = this.wire(entry);
@@ -397,9 +397,9 @@ export class SessionStore {
     if (e) e.syncStamp = stamp;
   }
 
-  setWork(id: string, work: LoadedSession['work']): void {
+  setWorkState(id: string, workState: LoadedSession['workState']): void {
     const e = this.get(id);
-    if (e && e.work !== work) { e.work = work; this.notify(); }
+    if (e && e.workState !== workState) { e.workState = workState; this.notify(); }
   }
 
   /** Another writer's record landed: the SCREEN takes the conversation as it

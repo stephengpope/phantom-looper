@@ -78,7 +78,7 @@ export type SessionEvent =
    *  writes (the titler's) is published with an empty `by`: the server is
    *  the author, and the window running the turn — whose own events the
    *  feed drops — is exactly the one watching for the title. */
-  | { event: 'session'; agent?: string | null; planMode?: boolean; work?: string | null;
+  | { event: 'session'; agent?: string | null; planMode?: boolean; workState?: string | null;
     name?: string | null; transcript_updated_at?: string | null;
     /** The row's model — the one the session runs on. Moves only while
      *  nothing has been said (a settings change reaches a newborn). */

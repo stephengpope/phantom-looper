@@ -1,7 +1,7 @@
 // The supervisor's wiring — the code that fills ./supervisor.ts (the
 // document). No prompt text lives here. The loop is a dialogue: these are
 // the loop-authored fixed messages; everything else the agents say crosses
-// verbatim, and a status TOOL call ends the run (core/llm/tools/kanban.ts).
+// verbatim, and a status TOOL call ends the run (phantom-backend/looper/cardRunTools.ts).
 import { fill, firstLineOf } from 'phantom-backend-sdk';
 import { STAKEHOLDERS } from '../stakeholders.js';
 import { VALUES } from '../values.js';

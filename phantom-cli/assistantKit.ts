@@ -1,7 +1,7 @@
 // What the Assistant can do to this window. The tool DEFINITIONS live in
-// tui.ts (re-exported by voice.ts); the HANDLERS are core's one set
-// (core/llm/tools/assistantHandlers.ts — the same code the Telegram bot
-// answers with). This file supplies what only the window knows — which
+// core/agents/assistant/tools.ts (re-exported by voice.ts); the HANDLERS are
+// core's one set (core/agents/assistant/handlers.ts — the same code the
+// Telegram bot answers with). This file supplies what only the window knows — which
 // session is on screen, how to open one, the approval pane, the local turns
 // — and the two handlers that ARE the window's: the board (its live
 // BoardStore, and moving the screen) and screen mode.

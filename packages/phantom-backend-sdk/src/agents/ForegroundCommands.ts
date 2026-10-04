@@ -4,12 +4,12 @@
 // route registers on spawn and removes on exit; POST /sessions/:id/interrupt
 // kills everything listed.
 //
-// Why a registry and not the request's abort: over real HTTP a cli's esc
-// aborts the tool fetch and the socket close fires the kill in the route —
-// but a SERVER-side turn (a card-run turn, the turn route, telegram) rides
-// injectFetch, which has no socket and no mid-flight abort. The interrupt
-// route is the one place every stop path crosses, so the kill hangs off it:
-// abort the stream AND kill what it was running, whoever ran the turn.
+// Why a registry and not the request's abort: a cli's esc aborts the tool
+// fetch and the socket close fires the kill in the route — but a stop from
+// another client (/stop on Telegram, the interrupt route) has no socket of
+// the turn's to close. The interrupt route is the one place every stop path
+// crosses, so the kill hangs off it: tell the turn to stop AND kill what it
+// was running, whoever ran the turn.
 // Detached commands are not here by design — detached means "keep running".
 import { logger, errStr } from '../lib/log.js';
 import type { Sandbox } from '../runtime/Sandbox.js';

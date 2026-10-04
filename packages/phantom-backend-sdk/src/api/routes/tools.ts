@@ -9,7 +9,7 @@
 //                                        model sees
 //   GET  /tools                          the file tools' definitions, for the
 //                                        clients that predate the agent
-//                                        listing (core/llm/tools/project.ts)
+//                                        listing
 //
 // Tools take no lock — an agent fans out parallel calls in one turn and they
 // all just run; the session/turn lock is the only lock.

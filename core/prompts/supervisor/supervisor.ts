@@ -5,7 +5,7 @@
 // the loop copies each one's reply into the other's conversation verbatim.
 // Every fixed message here is loop-authored; a status TOOL call ends the run
 // (the tool descriptions carry that contract — they live with the tools,
-// core/llm/tools/kanban.ts, because a description reaches every turn).
+// phantom-backend/looper/cardRunTools.ts, because a description reaches every turn).
 //
 // Each fixed message's FIRST LINE (its first non-blank line — blank lines
 // around any text are fill()'s to strip) is frozen: the loop matches it

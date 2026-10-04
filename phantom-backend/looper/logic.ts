@@ -1,5 +1,5 @@
 // The looper's pure decisions — canTurn, which kickoff is owed, and the
-// STEP RULE that drives the dialogue — factored out of the engine so every
+// STEP RULE that drives the dialogue — factored out of the looper so every
 // rule reads without a server, a model, or a clock.
 //
 // The transcripts ARE the state: whose turn it is derives from comparing the

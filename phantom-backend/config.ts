@@ -7,8 +7,8 @@ import type { PhantomBackendConfig } from 'phantom-backend-sdk';
 import { appSettings } from './appSettings.js';
 import { appAgentTypes } from './appAgentTypes.js';
 import { menuFor } from './telegram/commands.js';
-import { LOOPER_STARTER } from './looper/engine.js';
-import { CRON_STARTER } from './crons/engine.js';
+import { LOOPER_STARTER } from './looper/Looper.js';
+import { CRON_STARTER } from './crons/CronScheduler.js';
 
 export const config: PhantomBackendConfig = {
   settings: appSettings,

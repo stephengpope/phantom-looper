@@ -68,10 +68,9 @@ are what agree after a rewrite.
   adds a commit to the branch and never merges or rewrites, which is why it is
   smaller than the pull hole was. It does take the checkout lock (038), so it
   never interleaves with a sync — see instant-sync.md.
-- **A git-driven turn is attributed to nobody.** `agentAfterSave` maps the
-  writer's client id to `coding` only for `LOOP_CLIENT_ID`; a conflict turn
-  writes under `GIT_CLIENT_ID`, so the session's `agent` column comes back
-  null, which reads as "a person's". Cosmetic, wrong, cheap to fix.
+- **A git-driven turn is attributed to the git sync.** The conflict turn runs
+  under `GIT_CLIENT_ID` with no actor header, so `last_turn_by` reads
+  `person` after it. Cosmetic; the git client could declare an actor.
 - **`commitAll`** is now only used by `GitEngine.push`. Worth collapsing if
   that is ever reworked.
 - **`PullResult`'s `dirty_tree` and `diverged`** are no longer reachable — the

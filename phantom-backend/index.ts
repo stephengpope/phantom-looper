@@ -3,7 +3,7 @@
 // service, the loops, then this app's engines (config.onStart): the looper,
 // the cron scheduler, the Telegram bot, the digest, the upgrade check. The
 // app reaches the backend through the config and its public objects only.
-import { PhantomBackend, System, telegramChannel, updateShutdown, logger, errStr, type PhantomBackendConfig } from 'phantom-backend-sdk';
+import { PhantomBackend, Deployment, telegramChannel, updateShutdown, logger, errStr, type PhantomBackendConfig } from 'phantom-backend-sdk';
 import { BackendClient } from 'phantom-client-sdk';
 import { GIT_CLIENT_ID } from 'phantom-backend-sdk/git';
 import { config as registrations } from './config.js';
@@ -12,8 +12,8 @@ import { writeTitle } from './sessionTitle.js';
 import { writeCommitMessage } from './git/commitMessage.js';
 import { toCodingAgent } from '../core/prompts/autoPush/wiring.js';
 import { appRoutes } from './api/appRoutes.js';
-import { LooperEngine } from './looper/engine.js';
-import { CronEngine } from './crons/engine.js';
+import { Looper } from './looper/Looper.js';
+import { CronScheduler } from './crons/CronScheduler.js';
 import { TelegramAssistantBot } from './telegram/TelegramAssistantBot.js';
 import { SessionDigest } from './notifications/digest.js';
 
@@ -22,15 +22,15 @@ const log = logger('boot');
 async function main() {
   // What this app's engines hold while the backend runs; set in onStart,
   // read by the routes and stopped in onStop.
-  let looper: LooperEngine;
-  let cronEngine: CronEngine;
+  let looper: Looper;
+  let cronScheduler: CronScheduler;
   let telegram: TelegramAssistantBot;
   let digest: SessionDigest;
-  let system: System;
+  let deployment: Deployment;
 
   const config: PhantomBackendConfig = {
     ...registrations,
-    routes: (api) => appRoutes(api, backend, { system, updateTriggerDir: process.env.UPDATE_TRIGGER_DIR || undefined }),
+    routes: (api) => appRoutes(api, backend, { deployment, updateTriggerDir: process.env.UPDATE_TRIGGER_DIR || undefined }),
     health: () => ({ loops_running: looper?.runningCount() ?? 0 }),
 
     // The backend's git, with this app's parts: the conflict fixer is the
@@ -78,17 +78,17 @@ async function main() {
       // client runs), so it starts once the routes answer. Event-driven: every
       // card write reaches it over the board bus; start() is ONE recovery
       // sweep, not a poll.
-      looper = new LooperEngine(backend);
+      looper = new Looper(backend);
       looper.start();
 
       // The cron scheduler — the same shape. One croner job per cron row fires
       // at its time; registrations follow the table's writes and the settings'.
-      cronEngine = new CronEngine(backend);
-      cronEngine.start();
+      cronScheduler = new CronScheduler(backend);
+      cronScheduler.start();
 
       // The Telegram bot's behaviour — a client of this app like the looper.
       // Reconcile at boot re-registers a stale webhook and pushes the command menu.
-      telegram = new TelegramAssistantBot(backend, system, () => looper.runningCount());
+      telegram = new TelegramAssistantBot(backend, deployment, () => looper.runningCount());
       // The agents' send_message and the digest go out through the bot.
       backend.notifications.addChannel({
         name: 'telegram',
@@ -122,15 +122,15 @@ async function main() {
       // the update) before the API force-closes every connection.
       updateShutdown();
       looper?.stop();
-      cronEngine?.stop();
+      cronScheduler?.stop();
       digest?.stop();
     },
   };
 
   const backend = await PhantomBackend.create(config);
-  // This backend's own housekeeping — logs, status, restart, the update, the
-  // token report — read by the system routes and the Telegram bot.
-  system = new System(backend.paths, backend.tokenLog, backend.docker ?? undefined, backend.images,
+  // The deployment this backend runs in — its update, logs, status, restart,
+  // token report — read by the /system routes and the Telegram bot.
+  deployment = new Deployment(backend.paths, backend.tokenLog, backend.docker ?? undefined, backend.images,
     process.env.UPDATE_TRIGGER_DIR || undefined, () => looper?.runningCount() ?? 0);
   // ONE client for this app's own model calls (the conflict fixer, the commit
   // message, the title, the digest): the git sync's identity, so a conflict

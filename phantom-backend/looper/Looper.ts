@@ -7,7 +7,7 @@
 // There is NO loop object and NO polling. Loop state = card status plus the
 // two transcripts (logic.ts reads the next owed step off them). Every card
 // write lands on the board bus; that is what runs the loop. A session's hold
-// released by anyone but this engine re-runs its card's loop.
+// released by anyone but this looper re-runs its card's loop.
 import { BackendClient, type AgentHandlers, type Agent } from 'phantom-client-sdk';
 import { CodingAgent } from '../../core/agents/coding.js';
 import { SupervisorAgent } from '../../core/agents/supervisor.js';
@@ -38,13 +38,13 @@ export type TurnOutcome = 'turn' | 'moved' | 'idle' | 'skipped' | 'interrupted';
  *  itself is a setting and is read again before every turn. */
 interface Budget { seeded: boolean; spent: number }
 
-export class LooperEngine {
+export class Looper {
   private stopped = false;
   private running = new Set<string>();          // projectId:cardNumber — one live loop per card
   private pending = new Set<string>();          // called while running — go again after
   /** The agents with a turn in flight, by session id — stop() interrupts them. */
   private agents = new Map<string, Agent>();
-  /** One client, this engine's lock identity, for every agent it opens. */
+  /** One client, this looper's lock identity, for every agent it opens. */
   private readonly client: BackendClient;
 
   /** On the backend's objects: the board, the sessions, the settings, the
@@ -55,7 +55,7 @@ export class LooperEngine {
     this.client = new BackendClient({ url: backend.loopback.url, apiKey: backend.loopback.apiKey, clientId: CLIENT_ID, label: 'card run', actor: LOOPER_STARTER });
   }
 
-  /** What an agent this engine runs tells it: errors and notices go to the log. */
+  /** What an agent this looper runs tells it: errors and notices go to the log. */
   private handlers(card: number, seat: 'coding' | 'supervisor'): AgentHandlers {
     return {
       onError: (error) => log.warn({ card, agent: seat, code: error.code, err: error.message }, 'agent error'),
@@ -66,8 +66,8 @@ export class LooperEngine {
   /** Boot: ONE recovery pass — cards that were mid-loop when the process
    *  died. After this, turns run on events only. */
   start(): void {
-    // Every card write, from any door (a route, the Assistant, this engine
-    // itself), lands on the board bus: that is what runs the loop. The engine
+    // Every card write, from any door (a route, the Assistant, this looper
+    // itself), lands on the board bus: that is what runs the loop. The looper
     // re-reads the row and checks canTurn, so an irrelevant edit is a no-op.
     this.backend.boardEvents.subscribeAll((projectId, e) => {
       if (e.event === 'card') void this.runLoop(projectId, Number((e.card as { number: number }).number));
@@ -80,7 +80,7 @@ export class LooperEngine {
       const projectId = e.scope === GLOBAL ? undefined : e.scope.replace(/^project:/, '');
       void this.runAllLoops(projectId).catch((err) => log.warn({ err: errStr(err) }, 'looper settings pass failed'));
     });
-    // A session let go of (its hold released, by anyone but this engine):
+    // A session let go of (its hold released, by anyone but this looper):
     // its card, if any, may be runnable again. The release is a `lock`
     // event on the session feed, published under the releasing client.
     this.backend.sessionEvents.subscribeAll((sessionId, e, by) => {
@@ -118,7 +118,7 @@ export class LooperEngine {
 
   /** A released session lock is the one event a skipped turn waits on: if
    *  the session is on a card (either seat), that card's loop runs. The
-   *  engine's OWN releases — every turn ends in one — are ignored, or each
+   *  looper's OWN releases — every turn ends in one — are ignored, or each
    *  turn's cleanup would refire the turn it just finished. */
   async runLoopOfSession(sessionId: string, releasedBy: string): Promise<void> {
     if (releasedBy === CLIENT_ID) return;
@@ -337,7 +337,7 @@ export class LooperEngine {
   }
 
   /** A card write by the loop, at the object — the board bus carries it to
-   *  every listener (this engine's own runLoop included, which then reads
+   *  every listener (this looper's own runLoop included, which then reads
    *  the new status and stops). */
   private patchCard(project: ProjectRow, cardNumber: number, fields: CardFields): Promise<unknown> {
     return this.backend.cards.update(project, cardNumber, fields, undefined, CLIENT_ID);

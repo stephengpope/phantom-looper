@@ -180,7 +180,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       'share a timestamp). A page shorter than `limit` is the end. The cursor is the values the ' +
       'client SAW, so a session used since simply moves to the top of a later refresh — pages ' +
       'never repeat a row.\n\n' +
-      '`work` rides every row — where the checkout\'s work stands: not_pushed (only on this ' +
+      '`workState` rides every row — where the checkout\'s work stands: not_pushed (only on this ' +
       'server\'s disk), not_merged (on origin\'s branch, not in base), merged (in base), or null ' +
       '(never measured). The server\'s periodic git refresh keeps it current for sessions with a running ' +
       'container. `status`, `lastUsedAt`, `lastPushAt` and `branch` are the checkout\'s too, shared by ' +
@@ -273,9 +273,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     async (req) => { ctx.sessions.interrupt(req.params.id, clientOf(req), { foreground: ctx.foregroundCommands }); return ok({}); });
 
   // ---- notify ---------------------------------------------------------------
-  // The `send_message` tool's door (core/llm/tools/notify.ts): the session's
-  // agent DMs the user on Telegram, delivered exactly like a reply in a
-  // Telegram chat (telegram/engine.ts notify). Any client running the
+  // The `send_message` tool's door (tools/notify.ts): the session's agent
+  // DMs the user on Telegram, delivered exactly like a reply in a Telegram
+  // chat (the app's notification channel). Any client running the
   // session — a cli window, a card run, a cron — reaches Telegram here.
   app.post<{ Params: { id: string }; Body: { text: string } }>(
     '/sessions/:id/notify', { schema: { ...TAG,
@@ -349,7 +349,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (s.lockedBy !== client) {
         return reply.code(409).send(s.lockedBy ? lockedErr(s)
-          : err('session_not_held', 'hold the session (POST /sessions/:id/lock) before writing to it'));
+          : err('session_not_held', 'hold the session (POST /sessions/:id/turn-start) before writing to it'));
       }
       let r: { lines: number; applied: boolean; stamp: Date };
       try {
@@ -433,7 +433,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         // Opening state always arrives, including when this reader owns the
         // lock: clear any previous remote holder rather than suppressing it.
         write(lockEvent(s, s.lockedBy === client ? { locked: false } : {}));
-        write({ event: 'session', agent: s.agent ?? null, planMode: s.planMode, work: s.work ?? null,
+        write({ event: 'session', agent: s.agent ?? null, planMode: s.planMode, workState: s.workState ?? null,
           name: s.name ?? null, transcript_updated_at: s.transcriptUpdatedAt?.toISOString() ?? null,
           provider: s.provider ?? null, model: s.model ?? null, base_url: s.baseUrl ?? null });
         for (const e of pending) write(e);
