@@ -91,6 +91,8 @@ export function sdkSettings(options: { sessionImageTag: string }): SettingDefini
       description: "Puts the repo's root AGENTS.md into the coding agent's system prompt, read from the checkout when a session starts and frozen with it — so an edit reaches new sessions only. A repo without the file adds nothing. Appears after SOUL.md.", projectOverridable: true },
     { key: "initial_history_depth", type: "string", default: "7.days", label: "git history", group: "git",
       description: "How much git history a new clone gets — a span like '7.days', or 'full' for all of it. Less means a faster clone and less disk, but the agent cannot see past it. Fixed when the clone is made.", pattern: /^(full|\d+\.(second|minute|hour|day|week|month|year)s?)$/, projectOverridable: true },
+    { key: "auto_push_on_archive", type: "boolean", default: true, label: "auto-push on archive", group: "git",
+      description: "Archiving a done card auto-pushes its session's work to the base branch; a failed push un-archives the card into blocked. Archiving from any other column never pushes.", projectOverridable: true },
     { key: "agent_git_credentials", type: "boolean", default: false, label: "agent github access", group: "git",
       description: "Puts the GitHub token inside the container so the agent can run git and gh itself — the agent can then read it. Applies when the container restarts; off does not reclaim it from a running one.", projectOverridable: true },
     { key: "instant_sync", type: "boolean", default: false, label: "instant sync", group: "git",

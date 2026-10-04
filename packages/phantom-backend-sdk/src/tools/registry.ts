@@ -15,11 +15,12 @@ import { WEB_TOOLS } from './web.js';
 import { SECRET_TOOLS } from './secrets.js';
 import { DATABASE_TOOLS } from './database.js';
 import { NOTIFY_TOOLS } from './notify.js';
+import { GIT_TOOLS } from './git.js';
 
 /** The SDK's own tools. User space's join them through `registerTools`. */
 export const TOOLS: ToolDef[] = [
   ...FILE_TOOLS, ...SKILL_TOOLS, ...WEB_TOOLS, ...SECRET_TOOLS, ...CRON_TOOLS,
-  ...DATABASE_TOOLS, ...BOARD_TOOLS, ...NOTIFY_TOOLS,
+  ...DATABASE_TOOLS, ...BOARD_TOOLS, ...NOTIFY_TOOLS, ...GIT_TOOLS,
 ];
 
 export const toolByName = new Map(TOOLS.map((t) => [t.name, t]));

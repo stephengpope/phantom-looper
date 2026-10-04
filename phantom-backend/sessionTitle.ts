@@ -1,4 +1,4 @@
-// The session title's model call (PhantomBackendConfig.transitional.writeTitle):
+// The session title's model call (PhantomBackendConfig.writeTitle):
 // the ASSISTANT's model names the session from the selected user messages.
 // The cadence, the selection and the write-back are the SDK's (SessionTitler).
 import { titleRequest } from '../core/prompts/helpers/wiring.js';

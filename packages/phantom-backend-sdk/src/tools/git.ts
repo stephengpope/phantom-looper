@@ -8,9 +8,8 @@
 // assistant's on their behalf. The coding agent does not carry these. The
 // target is the session named by `id`, else the one this assistant is
 // following (its workspace is that session's).
-import { ToolError, obj, refusal, str, type ToolCtx, type ToolDef } from 'phantom-backend-sdk';
-import type { AppExtras } from '../api/appRoutes.js';
-
+import { ToolError } from './envelope.js';
+import { obj, refusal, str, type ToolCtx, type ToolDef } from './def.js';
 
 const idField = str('a session id; omit for the session this assistant is following');
 
@@ -35,7 +34,7 @@ async function run<T extends { result: string }>(fn: () => Promise<T>): Promise<
   }
 }
 
-export const gitTools = (extras: AppExtras): ToolDef[] => [
+export const GIT_TOOLS: ToolDef[] = [
   {
     name: 'git_auto_push',
     summary: "Land a session's work on the base branch.",
@@ -46,7 +45,7 @@ export const gitTools = (extras: AppExtras): ToolDef[] => [
     mutates: true, group: 'git',
     async execute(ctx, a) {
       const t = await target(ctx, a);
-      return { session: t.session.id, ...await run(() => extras.autoPush(t.session, t.project, undefined, ctx.client)) };
+      return { session: t.session.id, ...await run(() => ctx.app.git.autoPush(t.session, t.project, undefined, ctx.client)) };
     },
   },
   {
@@ -59,7 +58,7 @@ export const gitTools = (extras: AppExtras): ToolDef[] => [
     mutates: true, group: 'git',
     async execute(ctx, a) {
       const t = await target(ctx, a);
-      return { session: t.session.id, ...await run(() => extras.autoPull(t.session, t.project, undefined, ctx.client)) };
+      return { session: t.session.id, ...await run(() => ctx.app.git.autoPull(t.session, t.project, undefined, ctx.client)) };
     },
   },
 ];

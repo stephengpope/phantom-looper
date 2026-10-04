@@ -14,11 +14,10 @@ export class AssistantAgent extends Agent {
   };
 
   static newSession(backend: BackendClient, handlers: AgentHandlers,
-    opts: { projectId: string; activeSessionId?: string | null; startedBy?: string }): Promise<AssistantAgent> {
+    opts: { projectId: string; activeSessionId?: string | null }): Promise<AssistantAgent> {
     return AssistantAgent.create(backend, handlers, (b) => b.call('POST', '/sessions',
       { project_id: opts.projectId, type: 'assistant', workspace_session_id: opts.activeSessionId ?? null,
-        system_prompt_layout: AssistantAgent.systemPromptLayout,
-        ...(opts.startedBy ? { started_by: opts.startedBy } : {}) }));
+        system_prompt_layout: AssistantAgent.systemPromptLayout }));
   }
 
   /** Point the assistant's file tools at another session's workspace. */

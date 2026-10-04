@@ -16,7 +16,7 @@ import type { Cards, Projects, CardFields, ItemOp } from 'phantom-backend-sdk';
 import type { CardRow } from 'phantom-backend-sdk/schema';
 
 export const CLIENT_ID = 'telegram';
-/** What a session opened from Telegram says opened it (`started_by`). */
+/** Telegram as an actor — what its sessions record as started_by and last_turn_by. */
 export const TELEGRAM_STARTER = 'telegram';
 
 export interface AssistantDeps {

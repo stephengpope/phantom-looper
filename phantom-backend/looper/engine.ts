@@ -24,8 +24,8 @@ const log = logger('looper');
  *  release hook ignores it, and the auto-build alerts read the mover off it. */
 export const LOOP_CLIENT_ID = 'supervisor';
 const CLIENT_ID = LOOP_CLIENT_ID;
-/** What a card run's sessions say opened them (`started_by`): a default
- *  session list leaves them out (config.backgroundStarters). */
+/** The looper as an actor — what its sessions record as started_by and
+ *  last_turn_by; a default session list leaves those out (config.backgroundStarters). */
 export const LOOPER_STARTER = 'looper';
 
 export interface LooperDeps {
@@ -69,7 +69,7 @@ export class LooperEngine {
   private readonly client: BackendClient;
 
   constructor(private deps: LooperDeps) {
-    this.client = new BackendClient({ url: deps.loopback.url, apiKey: deps.loopback.apiKey, clientId: CLIENT_ID, label: 'card run' });
+    this.client = new BackendClient({ url: deps.loopback.url, apiKey: deps.loopback.apiKey, clientId: CLIENT_ID, label: 'card run', actor: LOOPER_STARTER });
   }
 
   /** What an agent this engine runs tells it: errors and notices go to the log. */
@@ -251,7 +251,7 @@ export class LooperEngine {
         : await this.newSupervisor(project, card, coder.id);
     } else {
       // A new run: the coder (with its workspace), put on the card the moment it exists.
-      codingAgent = await CodingAgent.newSession(this.client, this.handlers(card.number, 'coding'), project.id, { startedBy: LOOPER_STARTER });
+      codingAgent = await CodingAgent.newSession(this.client, this.handlers(card.number, 'coding'), project.id);
       const sessionId = codingAgent.session.id;
       await this.deps.sessions.setCard(sessionId, card.id);
       // The coder's session is named after its card from birth — /resume

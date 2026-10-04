@@ -2,14 +2,12 @@
 // unary. Detached logs are ND-JSON on the volume at work/<id>/logs/ — NEVER
 // under project/, where the next push's add -A would commit them.
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
-import { ToolError } from 'phantom-backend-sdk';
-import { ok, err, type PhantomBackend } from 'phantom-backend-sdk';
-import type { AppExtras } from '../appRoutes.js';
-import { SESSION_HEADER, toolSession } from 'phantom-backend-sdk';
-import { fsDeps } from 'phantom-backend-sdk';
-import type { GitSync } from 'phantom-backend-sdk';
-import { logger, errStr } from 'phantom-backend-sdk';
+import type { SessionRow, ProjectRow } from '../../storage/schema.js';
+import { ToolError } from '../../tools/envelope.js';
+import { ok, err } from '../HttpApi.js';
+import type { PhantomBackend } from '../../PhantomBackend.js';
+import { SESSION_HEADER, toolSession } from '../../agents/sessionHeader.js';
+import { logger, errStr } from '../../lib/log.js';
 
 const log = logger('exec');
 
@@ -18,9 +16,8 @@ const sessionHeader = {
   properties: { [SESSION_HEADER]: { type: 'string', description: 'Session id (ULID)' } },
 };
 
-export function gitRoutes(app: FastifyInstance, ctx: PhantomBackend, extras: AppExtras) {
-  const deps = fsDeps(ctx);
-  const engine = extras.engine;
+export function gitRoutes(app: FastifyInstance, ctx: PhantomBackend) {
+  const engine = ctx.git.sync;
   // The caller's lock identity ('' when absent — publishSync falls back to
   // the git client). Handed to auto-push/auto-pull as `by`, so the session
   // feed's echo rule skips the window that is already drawing this stream.
@@ -119,9 +116,7 @@ export function gitRoutes(app: FastifyInstance, ctx: PhantomBackend, extras: App
     let session: SessionRow; let project: ProjectRow;
     try { ({ session, project } = await resolveSession(req)); }
     catch (e) { return send(reply, e); }
-    const autoPush = extras.autoPush;
-    if (!autoPush) return reply.code(503).send(err('unavailable', 'auto-push is not wired on this server', true));
-    return streamRun(reply, 'auto-push', session.id, (onStep) => autoPush(session, project, onStep, clientOf(req)));
+    return streamRun(reply, 'auto-push', session.id, (onStep) => ctx.git.autoPush(session, project, onStep, clientOf(req)));
   });
 
   // AUTO-PULL: base INTO the session branch in one call, streamed the same way.
@@ -137,8 +132,6 @@ export function gitRoutes(app: FastifyInstance, ctx: PhantomBackend, extras: App
     let session: SessionRow; let project: ProjectRow;
     try { ({ session, project } = await resolveSession(req)); }
     catch (e) { return send(reply, e); }
-    const autoPull = extras.autoPull;
-    if (!autoPull) return reply.code(503).send(err('unavailable', 'auto-pull is not wired on this server', true));
-    return streamRun(reply, 'auto-pull', session.id, (onStep) => autoPull(session, project, onStep, clientOf(req)));
+    return streamRun(reply, 'auto-pull', session.id, (onStep) => ctx.git.autoPull(session, project, onStep, clientOf(req)));
   });
 }

@@ -24,6 +24,10 @@ export interface BackendOptions {
   /** What other clients see as the session's holder (a hostname, an app
    *  name). Defaults to clientId. */
   label?: string;
+  /** WHO this client acts for — the automation's name (a cron, a card run,
+   *  a bot); unsaid = a person. Sent as x-phantom-looper-actor: the backend
+   *  records it as a session's `started_by` and `last_turn_by`. */
+  actor?: string;
   fetch?: typeof fetch;
   /** How a failed request is retried. Absent = never. */
   retry?: { policy: RetryPolicy; notice: (text: string) => void };
@@ -31,6 +35,7 @@ export interface BackendOptions {
 
 const SESSION_HEADER = 'x-phantom-looper-session';
 const CLIENT_HEADER = 'x-phantom-looper-client';
+const ACTOR_HEADER = 'x-phantom-looper-actor';
 
 /** What every route answers. */
 export type Envelope<T> =
@@ -75,6 +80,7 @@ export class BackendClient {
   readonly url: string;
   readonly clientId: string;
   readonly label: string;
+  readonly actor: string | undefined;
   readonly #apiKey: string;
   readonly #fetch: typeof fetch;
   readonly #retrying: typeof fetch;
@@ -83,6 +89,7 @@ export class BackendClient {
     this.url = o.url;
     this.clientId = o.clientId;
     this.label = o.label ?? o.clientId;
+    this.actor = o.actor;
     this.#apiKey = o.apiKey;
     this.#fetch = o.fetch ?? fetch;
     this.#retrying = o.retry ? retryingFetch(this.#fetch, o.retry.notice, 'server', o.retry.policy) : this.#fetch;
@@ -90,7 +97,7 @@ export class BackendClient {
 
   /** The same connection with a retry rule — the Agent's, from its handlers. */
   withRetry(policy: RetryPolicy, notice: (text: string) => void): BackendClient {
-    return new BackendClient({ url: this.url, apiKey: this.#apiKey, clientId: this.clientId, label: this.label,
+    return new BackendClient({ url: this.url, apiKey: this.#apiKey, clientId: this.clientId, label: this.label, actor: this.actor,
       fetch: this.#fetch, retry: { policy, notice } });
   }
 
@@ -102,6 +109,7 @@ export class BackendClient {
     return {
       authorization: `Bearer ${this.#apiKey}`,
       [CLIENT_HEADER]: this.clientId,
+      ...(this.actor ? { [ACTOR_HEADER]: this.actor } : {}),
       ...(opts.sessionId ? { [SESSION_HEADER]: opts.sessionId } : {}),
       ...(opts.body ? { 'content-type': 'application/json' } : {}),
     };

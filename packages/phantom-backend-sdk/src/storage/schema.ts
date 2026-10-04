@@ -129,9 +129,12 @@ export const sessions = phantomLooper.table('sessions', {
   projectId: text('project_id').notNull(),
   // The agent TYPE this session runs — a registered type's name (050).
   agent: text('agent').notNull(),
-  // Who opened the session: person, looper, cron, telegram. A fact, set
-  // once; typing into a looper's session does not change it (050).
+  // Who opened the session — the opener's declared actor, `person` when
+  // unsaid. A fact, set once (050).
   startedBy: text('started_by').notNull(),
+  // Who drove the last turn — the turn's declared actor (052). Null until a
+  // turn ends. The list's background rule reads this before started_by.
+  lastTurnBy: text('last_turn_by'),
   // The model-written title — what the session is building, best-effort,
   // written AFTER a transcript save (sessionTitle.ts), never in it. turnCount
   // is the clock that paces it: +1 per transcript save; naming fires at turn

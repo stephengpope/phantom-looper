@@ -90,7 +90,7 @@ export class TelegramAssistantBot {
   upgradeChecker: UpgradeChecker;
 
   constructor(private deps: TelegramAssistantBotDeps) {
-    this.client = new BackendClient({ url: deps.loopback.url, apiKey: deps.loopback.apiKey, clientId: CLIENT_ID, label: 'telegram' });
+    this.client = new BackendClient({ url: deps.loopback.url, apiKey: deps.loopback.apiKey, clientId: CLIENT_ID, label: 'telegram', actor: TELEGRAM_STARTER });
     this.upgradeChecker = new UpgradeChecker({
       version: APP_VERSION,
       health: async () => ({ version: APP_VERSION, loops_running: deps.loopsRunning?.() ?? 0 }),

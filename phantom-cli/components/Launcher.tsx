@@ -49,15 +49,15 @@ export type Launch =
 export const label = (project: ProjectInfo) => project.displayName || project.name;
 
 /** The project of the newest session the USER drove — boot_last_project's
- *  pick. Sessions a card run drives (`agent` stamped by the run) work at all
- *  hours and would teleport the boot, so they do not count; nor does a
- *  session whose project is gone. A destroyed session still counts — its
- *  files are swept, but it is still where you were. Undefined = nothing
- *  eligible, show the picker. */
+ *  pick. Sessions a card run or a cron drives (whoDrives) work at all hours
+ *  and would teleport the boot, so they do not count; nor does a session
+ *  whose project is gone. A destroyed session still counts — its files are
+ *  swept, but it is still where you were. Undefined = nothing eligible,
+ *  show the picker. */
 export function lastProjectId(projects: ProjectInfo[], sessions: SessionInfo[]): string | undefined {
   const known = new Set(projects.map((project) => project.id));
   return sessions
-    .filter((s) => s.startedBy !== 'looper' && s.startedBy !== 'cron' && known.has(s.projectId))
+    .filter((s) => whoDrives(s) === 'manual' && known.has(s.projectId))
     .sort((a, b) => Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt))[0]?.projectId;
 }
 
@@ -138,9 +138,9 @@ export function sessionChoices(
   const rows = sessions.map((s): TableRow<Launch | null> => {
     // A supervisor session names itself: the supervisor's conversation for its
     // card — read-only. A cron's run is a normal coding session that a
-    // schedule opened; typing into it takes it over.
+    // schedule opened; typing into it takes it over (whoDrives).
     const sup = s.agent === 'supervisor';
-    const cron = s.startedBy === 'cron';
+    const cron = whoDrives(s) === 'cron';
     const dead = s.status !== 'active';
     // Loaded in THIS window's memory (running wins the marker slot).
     const open = !dead && loaded(s.id);

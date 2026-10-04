@@ -18,6 +18,8 @@ export interface SessionRow {
   agent?: string | null;
   /** Who opened it: person, looper, cron, telegram. */
   startedBy?: string | null;
+  /** Who drove the last turn (the same words); null until a turn ends. */
+  lastTurnBy?: string | null;
   card?: number | null;
   /** The card's board column, from the project's cards table. */
   cardStatus?: string | null;
@@ -35,14 +37,16 @@ export interface SessionRow {
 }
 
 /** WHOSE SESSION IT IS, for a list: the supervisor's and the assistant's by
- *  type; a coding session by who opened it — the looper's ('coding'), a
- *  cron's, or a person's ('manual'). */
+ *  type; a coding session by who drove it last — or, before any turn, who
+ *  opened it: the looper's ('coding'), a cron's, or a person's ('manual').
+ *  A person typing into a cron's session makes it theirs. */
 export type Driver = 'supervisor' | 'coding' | 'cron' | 'assistant' | 'manual';
-export function whoDrives(s: Pick<SessionRow, 'agent' | 'startedBy'>): Driver {
+export function whoDrives(s: Pick<SessionRow, 'agent' | 'startedBy' | 'lastTurnBy'>): Driver {
+  const by = s.lastTurnBy ?? s.startedBy;
   return s.agent === 'supervisor' ? 'supervisor'
     : s.agent === 'assistant' ? 'assistant'
-    : s.startedBy === 'looper' ? 'coding'
-    : s.startedBy === 'cron' ? 'cron'
+    : by === 'looper' ? 'coding'
+    : by === 'cron' ? 'cron'
     : 'manual';
 }
 

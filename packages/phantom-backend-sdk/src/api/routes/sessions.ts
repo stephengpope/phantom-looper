@@ -3,7 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import type { SessionRow } from '../../storage/schema.js';
 import type { TokenRecord } from '../../storage/TokenLog.js';
-import { SessionError, heldByOther, isHeld, expiredHold, assertDuplicable, ownsWorkspace, workspaceOf } from '../../storage/Sessions.js';
+import { SessionError, PERSON, heldByOther, isHeld, expiredHold, assertDuplicable, ownsWorkspace, workspaceOf } from '../../storage/Sessions.js';
 import { WorkspaceError } from '../../storage/Workspaces.js';
 import { GIT_CLIENT_ID } from '../../git/Git.js';
 import { sessionDir } from '../../lib/paths.js';
@@ -64,6 +64,13 @@ export const clientOf = (req: FastifyRequest): string => {
   const h = req.headers['x-phantom-looper-client'];
   return typeof h === 'string' ? h : '';
 };
+/** WHO the client acts for (x-phantom-looper-actor): an automation's own
+ *  name, or a person when unsaid. What a session records as started_by and
+ *  last_turn_by. */
+export const actorOf = (req: FastifyRequest): string => {
+  const h = req.headers['x-phantom-looper-actor'];
+  return typeof h === 'string' && h ? h : PERSON;
+};
 
 export const lockedErr = (s: SessionRow) =>
   err('session_locked', `session is in use${s.lockedLabel ? ` on ${s.lockedLabel}` : ''} — release it there, or wait for the hold to expire`, true);
@@ -110,7 +117,7 @@ const unknownBlock = (reply: FastifyReply, e: unknown) =>
   e instanceof SystemPromptError ? reply.code(400).send(err(e.code, e.message)) : undefined;
 
 export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
-  app.post<{ Body: { project_id: string; type: string; id?: string; started_by?: string; workspace_session_id?: string | null;
+  app.post<{ Body: { project_id: string; type: string; id?: string; workspace_session_id?: string | null;
     system_prompt_layout: SystemPromptLayout } }>('/sessions', { schema: { ...TAG,
     summary: 'Create — or restart — a session',
     description: 'Creates a session of `type`, a registered agent type. What the type gets is the type\'s registration: ' +
@@ -118,8 +125,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       'its own {prefix}/{id}, cut from the base branch, worked in and pushed back to, nothing pushed anywhere else; ' +
       'one that BORROWS reads another session\'s workspace (`workspace_session_id`, or none yet); one with no ' +
       'workspace is a conversation alone. The returned id goes in the x-phantom-looper-session header on every tool call.\n\n' +
-      '`started_by` names the automation opening the session (a cron, a card run); unsaid = a person. The app\'s ' +
-      'background automations are left out of a default GET /sessions.\n\n' +
+      'The session records who opened it (`started_by`) from x-phantom-looper-actor — an automation\'s own name; ' +
+      'unsaid = a person. The app\'s background automations are left out of a default GET /sessions.\n\n' +
       'Pass `id` to RESTART an owning session that was destroyed. Destroying a session deletes its files and ' +
       'nothing else — the row keeps its id and its branch — so a restart re-clones, finds that branch on ' +
       'origin, and carries on exactly where it stopped. Restarting a session that is still active is refused.\n\n' +
@@ -133,14 +140,13 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         project_id: { type: 'string' },
         type: { type: 'string', enum: ctx.agentTypes.names(), description: 'The agent type the session runs — a registered type.' },
         id: { type: 'string', description: 'Restart this session id instead of starting a new one (owning types only).' },
-        started_by: { type: 'string', maxLength: 40, description: 'The automation opening this session, by name. Unsaid = person.' },
         workspace_session_id: { type: ['string', 'null'], description: 'For a borrowing type: the session whose workspace this one reads. Null or absent = nothing to read yet.' },
         system_prompt_layout: SYSTEM_PROMPT_LAYOUT,
       } } } }, async (req, reply) => {
     if (!req.body?.project_id) return reply.code(400).send(err('missing_project', 'body.project_id required'));
     try {
       return reply.code(201).send(ok(await ctx.sessions.start(req.body.project_id, req.body.system_prompt_layout,
-        { id: req.body.id, type: req.body.type, startedBy: req.body.started_by, workspaceSessionId: req.body.workspace_session_id })));
+        { id: req.body.id, type: req.body.type, startedBy: actorOf(req), workspaceSessionId: req.body.workspace_session_id })));
     } catch (e) {
       if (unknownBlock(reply, e)) return;
       // The session's own refusals, and the checkout's (a dead token, a repo
@@ -567,9 +573,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         // from what origin has AFTER this, so nothing the source did is lost.
         // A destroyed session has no checkout — its branch on origin is the
         // record, and the cut below fails clearly if even that is gone.
-        if (src.status === 'active' && ctx.hooks.gitSync && src.branch) {
+        if (src.status === 'active' && src.branch) {
           const project = await ctx.projects.get(src.projectId);
-          const r = await ctx.hooks.gitSync.push(src, project!);
+          const r = await ctx.git.sync.push(src, project!);
           if (r !== 'pushed' && r !== 'nothing') {
             return reply.code(502).send(err('flush_failed',
               `could not push the session's work to origin first (push ${r}) — the copy was not made`, true));
@@ -679,10 +685,10 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       if (purge && heldByOther(s, clientOf(req))) return reply.code(409).send(lockedErr(s));
       const hasFiles = ownsWorkspace(s) && s.status === 'active';
       if (!purge && !hasFiles) return ok({ already: ownsWorkspace(s) ? s.status : 'no files' });
-      if (hasFiles && ctx.hooks.gitSync) {
+      if (hasFiles) {
         const project = await ctx.projects.get(s.projectId);
         if (project) {
-          await ctx.hooks.gitSync.push(s, project).catch((e: Error) => {
+          await ctx.git.sync.push(s, project).catch((e: Error) => {
             log.warn({ session: s.id, err: e.message }, 'push before delete failed — deleting anyway');
           });
         }
@@ -690,7 +696,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       try {
         if (hasFiles) {
           await ctx.sessions.destroy(s, { force: req.query.force === 'true' });
-          await ctx.hooks.gitSync?.detach(s.id);
+          await ctx.git.sync.detach(s.id);
           await ctx.sessionContainers.remove(s.id).catch((e: Error) => {
             log.warn({ session: s.id, err: e.message }, 'files deleted but the container could not be removed');
           });
@@ -779,8 +785,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   app.post<{ Params: { id: string } }>(
     '/sessions/:id/turn-ended', { schema: { ...TAG,
       summary: 'A turn ended on a session',
-      description: 'Bumps the turn count (leaving 0 freezes the row\'s model), seats the agent after the caller ' +
-        '(a person\'s turn into a loop or cron session takes it over), touches last_used_at, and names the session ' +
+      description: 'Records who drove the turn (`last_turn_by`, from x-phantom-looper-actor — a person when unsaid), ' +
+        'bumps the turn count (leaving 0 freezes the row\'s model), touches last_used_at, names the session ' +
         'on the titler\'s cadence, and releases the hold turn-start took. 409 while another client holds the session.',
       params: idParam } },
     async (req, reply) => {
@@ -788,7 +794,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       const s = await ctx.sessions.get(req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (heldByOther(s, client)) return reply.code(409).send(lockedErr(s));
-      const ended = await ctx.sessions.turnEnded(s, client);
+      const ended = await ctx.sessions.turnEnded(s, actorOf(req));
       if (!ended.nameManual && ctx.sessionTitler.isDue(ended.name, ended.turnCount)) void ctx.sessionTitler.name(s.id);
       // The hold a turn-start took ends here: one request opens a turn, one
       // closes it. A caller that never held it (a whole-file writer of old)

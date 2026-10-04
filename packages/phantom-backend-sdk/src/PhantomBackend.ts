@@ -4,10 +4,11 @@
 // a config carrying its registrations (settings, agent types, tools,
 // routes, hooks) and gets a backend back.
 //
-// `create` builds everything, connected but not running; `start` listens
-// and begins the loops; `stop` winds down in reverse. The members are the
-// objects every route, tool and engine reads — what used to be the `AppCtx`
-// bag, now the backend itself.
+// `create` builds everything, connected but not running; `start` builds the
+// routes, runs `config.onStart`, begins the loops and listens; `stop` winds
+// down in reverse. There is no other way in: the API, the loops and the
+// registries are the backend's own, reached through the config and nothing
+// else. The members are the objects every route, tool and engine reads.
 import { readEnv, APP_VERSION, type Env } from './lib/env.js';
 import { logger, errStr } from './lib/log.js';
 import { makePaths, type Paths } from './lib/paths.js';
@@ -36,6 +37,8 @@ import { Images } from './runtime/Images.js';
 import { SessionContainers } from './runtime/SessionContainers.js';
 import * as checkoutPool from './runtime/CheckoutPool.js';
 import { WorkspaceWatcher } from './git/WorkspaceWatcher.js';
+import { GitService, type GitHooks } from './git/GitService.js';
+import { idleBackupSweep, pressureSweep } from './runtime/Disk.js';
 import { refreshWorkState } from './git/workRefresh.js';
 import { TelegramBotState } from './telegram/botState.js';
 import { TelegramSentMessages } from './telegram/sentMessages.js';
@@ -47,7 +50,6 @@ import { SessionTitler, type TitleWriter } from './agents/SessionTitler.js';
 import { HttpApi } from './api/HttpApi.js';
 import { registerTools } from './tools/registry.js';
 import { reconcileDbUi } from './api/routes/dbUi.js';
-import type { SessionRow, ProjectRow } from './storage/schema.js';
 import type Docker from 'dockerode';
 
 const log = logger('backend');
@@ -75,29 +77,25 @@ export interface PhantomBackendConfig {
   tools?: ToolDefinition[];
   /** Routes user space adds to the API, under the same auth. */
   routes?: RouteRegistrar;
+  /** What the app brings to the backend's git: its conflict fixer, its
+   *  commit-message writer, its words after a sync (GitService). */
+  git?: GitHooks;
+  /** Extra facts GET /health reports beside `ok` and `version` — what the
+   *  app's engines have in flight. */
+  health?: () => Record<string, unknown>;
   /** Run after every service is up and before the API listens. User space
    *  starts its engines here (the looper, its bot) with the backend in hand. */
   onStart?: (backend: PhantomBackend) => Promise<void>;
   /** Run first on stop, before the API closes. */
   onStop?: (backend: PhantomBackend) => Promise<void>;
-  /** Transitional — what the backend still asks user space to do, until it
-   *  does it itself on the client SDK (docs/phantom-agent-sdk-plan.md). */
-  transitional?: {
-    /** Write a session's title from the selected user messages (a model call). → SessionTitler on billedModel. */
-    writeTitle?: TitleWriter;
-  };
+  /** Write a session's title from the selected user messages — a model
+   *  call, the app's until the backend makes it on the client SDK's billed
+   *  model (docs/phantom-agent-sdk-plan.md). The cadence, the selection and
+   *  the write-back are the SDK's (SessionTitler). */
+  writeTitle?: TitleWriter;
   /** The Telegram command menu the bot registers: the global default and
    *  the authorized chat's (its mode's). The commands are the app's. */
   telegramCommandMenu?: (state: import('./telegram/botState.js').TelegramBotStateRow) => Promise<{ global: TelegramCommand[]; forChat?: TelegramCommand[] }>;
-}
-
-/** What the backend still reaches user space through at run time. Each
- *  entry leaves with the plan step named on it. */
-export interface Hooks {
-  /** The git sync the session routes push and detach through. → GitSync (§4). */
-  gitSync?: { push(session: SessionRow, project: ProjectRow): Promise<unknown>; detach(sessionId: string): Promise<void> };
-  /** The card runs in flight — /health's `loops_running`. → the looper reads its own count (§5). */
-  runningLoops?: () => number;
 }
 
 export class PhantomBackend {
@@ -130,8 +128,9 @@ export class PhantomBackend {
   readonly foregroundCommands: ForegroundCommands;
   readonly notifications = new Notifications();
   readonly sessionTitler: SessionTitler;
-  readonly httpApi: HttpApi;
-  readonly hooks: Hooks = {};
+  /** The backend's git: manual ops, auto-push/pull, instant sync, the archive policy. */
+  readonly git: GitService;
+  readonly #httpApi: HttpApi;
   /** Turns the backend itself runs, by session id — the interrupt route
    *  aborts one. Goes when every turn runs on the client SDK. */
   readonly activeTurns = new Map<string, AbortController>();
@@ -166,13 +165,20 @@ export class PhantomBackend {
     this.docker = built.docker; this.images = built.images; this.sessionContainers = built.sessionContainers;
     this.workspaceWatcher = built.workspaceWatcher; this.telegramBotState = built.telegramBotState;
     this.telegramSentMessages = built.telegramSentMessages; this.telegramHandledUpdates = built.telegramHandledUpdates;
-    this.sessionTitler = new SessionTitler(this.sessions, config.transitional?.writeTitle);
+    this.sessionTitler = new SessionTitler(this.sessions, config.writeTitle);
     this.telegramBot = new TelegramBot({ settings: this.settings, settingsEvents: this.settingsEvents, botState: this.telegramBotState,
       sentMessages: this.telegramSentMessages, handledUpdates: this.telegramHandledUpdates, paths: this.paths,
       publicAddress: process.env.PHANTOM_BACKEND_ADDRESS, commandMenu: config.telegramCommandMenu });
-    this.httpApi = new HttpApi(this, this.env.apiKey);
-    if (config.routes) this.httpApi.addRoutes(config.routes);
+    this.git = new GitService({
+      sessions: this.sessions, workspaces: this.workspaces, cards: this.cards, projects: this.projects, settings: this.settings, paths: this.paths,
+      sessionEvents: this.sessionEvents, boardEvents: this.boardEvents, settingsEvents: this.settingsEvents,
+      userMessageQueue: this.userMessageQueue, containers: this.sessionContainers, watcher: this.workspaceWatcher,
+    }, config.git ?? {});
+    this.#httpApi = new HttpApi(this, this.env.apiKey, config.routes);
   }
+
+  /** What GET /health says beyond `ok` and `version`. */
+  healthExtras(): Record<string, unknown> { return this.config.health?.() ?? {}; }
 
   /** Build every service, connected but not running. Boot order:
    *   1. env → Database → migrations: the SDK's, then user space's
@@ -181,8 +187,9 @@ export class PhantomBackend {
    *   4. AgentConfig, AgentDatabases, Projects, Workspaces, Cards
    *   5. Docker, Images, Sessions (following the model settings), the rest of the table owners
    *   6. the Telegram tables, the queue, foreground commands, SessionContainers, the watcher
+   *   7. the git service (instant sync follows the containers), the API
    *  Nothing listens or ticks until `start`. */
-  static async create(config: PhantomBackendConfig, options: { sessionImageTag?: string; onContainerStarted?: (workspaceId: string, project: import('./storage/schema.js').ProjectRow | undefined) => Promise<void>; onContainerRemoved?: (workspaceId: string) => Promise<void> } = {}): Promise<PhantomBackend> {
+  static async create(config: PhantomBackendConfig, options: { sessionImageTag?: string } = {}): Promise<PhantomBackend> {
     const env = readEnv(config.env ?? process.env);
     const database = Database.connect(env.databaseUrl);
     await database.migrate(SDK_MIGRATIONS);
@@ -228,16 +235,22 @@ export class PhantomBackend {
     const userMessageQueue = new UserMessageQueue();
     const foregroundCommands = new ForegroundCommands();
     const workspaceWatcher = new WorkspaceWatcher();
+    // Instant sync follows the containers: a container up is a workspace to
+    // watch, a container gone is one to drop. The hooks are closures over the
+    // backend, which exists long before any container starts.
+    let backend: PhantomBackend;
     const sessionContainers = new SessionContainers(docker, images, paths, {
       volume: process.env.WORKSPACE_VOLUME, network: process.env.WORKSPACE_NETWORK, settings, databases: agentDatabases,
-      onStarted: options.onContainerStarted, onRemoved: options.onContainerRemoved,
+      onStarted: (workspaceId, project) => backend.git.instantSync.watchWorkspace(workspaceId, project),
+      onRemoved: (workspaceId) => backend.git.instantSync.unwatchWorkspace(workspaceId),
     });
 
-    return new PhantomBackend(config, {
+    backend = new PhantomBackend(config, {
       env, paths, database, settings, projects, workspaces, sessions, cards, crons, presets, backgroundTasks, tokenLog, agentDatabases,
       agentTypes, agentConfig, modelCatalog, userMessageQueue, sessionEvents, boardEvents, settingsEvents, foregroundCommands,
       docker, images, sessionContainers, workspaceWatcher, telegramBotState, telegramSentMessages, telegramHandledUpdates,
     });
+    return backend;
   }
 
   /** THE busy rule, for the idle timeout and disk cleanup alike: a
@@ -256,17 +269,17 @@ export class PhantomBackend {
     return idle.filter((id) => !busy.has(id));
   }
 
-  /** Begin the backend's own loops: the maintenance loop (pool stock, idle
-   *  reaping, the sweeps the caller supplies) and the work-state refresh.
-   *  `sweeps` is transitional — the disk sweeps need the git engine, which
-   *  is user-wired until GitSync lands. */
-  startLoops(sweeps: { idleBackup(): Promise<void>; pressure(): Promise<void> }): void {
+  /** Begin the backend's own loops: the maintenance loop (pool stock, the
+   *  idle backup sweep, idle reaping, the disk-pressure sweep) and the
+   *  work-state refresh. */
+  #startLoops(): void {
     this.#loops.push(this.#loop(async () => {
       await checkoutPool.tick(this.projects, this.settings, this.paths).catch((error) => log.error({ err: errStr(error) }, 'pool tick threw'));
-      await sweeps.idleBackup().catch((error) => log.error({ err: errStr(error) }, 'idle backup sweep threw'));
+      await idleBackupSweep(this.projects, this.sessions, this.git.sync).catch((error) => log.error({ err: errStr(error) }, 'idle backup sweep threw'));
       const idleMs = await this.settings.resolve<number>('container_idle_ms').catch(() => 30 * 60_000);
       await this.sessionContainers.reap(Number(idleMs), (ms) => this.idleContainerWorkspaces(ms)).catch((error) => log.error({ err: errStr(error) }, 'container reap threw'));
-      await sweeps.pressure().catch((error) => log.error({ err: errStr(error) }, 'pressure sweep threw'));
+      await pressureSweep(this.settings, this.projects, this.sessions, this.paths, this.images, this.sessionContainers, this.git.sync, (ids) => this.busyWorkspaces(ids))
+        .catch((error) => log.error({ err: errStr(error) }, 'pressure sweep threw'));
       return Number(await this.settings.resolve<number>('maintenance_interval_ms').catch(() => 60_000));
     }));
     // Database console lifecycle: stop CloudBeaver if the setting is off,
@@ -294,21 +307,25 @@ export class PhantomBackend {
 
   get stopped(): boolean { return this.#stopped; }
 
-  /** Run: the routes are built, `config.onStart` runs (user space's engines
-   *  may call the API in-process from here), then the API listens. */
+  /** Run: the routes are built and the API listens — the backend's own
+   *  engines and user space's are clients of this API, so it answers before
+   *  they start — then the git service and the loops begin, then
+   *  `config.onStart` (user space's engines). */
   async start(): Promise<void> {
-    await this.httpApi.build();
+    await this.#httpApi.listen(this.env.port);
+    this.git.start();
+    this.#startLoops();
     await this.config.onStart?.(this);
-    await this.httpApi.listen(this.env.port);
     log.info({ port: this.env.port, version: this.version }, 'backend up');
   }
 
-  /** Stop in reverse: `config.onStop`, the API closes, the loops halt, the
-   *  watcher ends, the database closes. */
+  /** Stop in reverse: `config.onStop`, the git service, the API closes, the
+   *  loops halt, the watcher ends, the database closes. */
   async stop(): Promise<void> {
     this.#stopped = true;
     await this.config.onStop?.(this);
-    await this.httpApi.close();
+    await this.git.stop();
+    await this.#httpApi.close();
     this.workspaceWatcher.stop();
     await this.database.close();
   }

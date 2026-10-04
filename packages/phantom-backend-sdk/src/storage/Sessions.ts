@@ -66,9 +66,10 @@ export interface StartOptions { type: string; startedBy?: string; workspaceSessi
  *  characters on screen, so this many stored — never the record. */
 export const LAST_MESSAGE_CHARS = 200;
 
-/** Who opened a session when the opener said nothing: a person. Every
- *  automation says its own name (`started_by` on POST /sessions), and the
- *  app lists which of those a default listing leaves out (backgroundStarters). */
+/** Who acts when a client says nothing (x-phantom-looper-actor): a person.
+ *  Every automation names itself, and the app lists which of those a default
+ *  listing leaves out (backgroundStarters). Recorded as a session's
+ *  `started_by` (who opened it) and `last_turn_by` (who drove it last). */
 export const PERSON = 'person';
 
 /** What GET /sessions accepts — the object owns what the list IS: the
@@ -78,8 +79,10 @@ export interface ListQuery {
   /** Only sessions something was typed into (a last message exists). */
   typed?: boolean;
   /** false = leave out the background sessions: the types listed
-   *  `background`, and the sessions the app's automations opened for
-   *  themselves (backgroundStarters). Types listed `never` are never rows. */
+   *  `background`, and the sessions a background actor (backgroundStarters)
+   *  drove last — opened and never touched, or last worked by the
+   *  automation. A person's turn into one brings it back into view. Types
+   *  listed `never` are never rows. */
   background?: boolean;
   /** One substring, case-insensitive, anywhere in the name, the last user
    *  message or the branch. */
@@ -349,7 +352,9 @@ export class Sessions {
     if (!listedTypes.length) return { sessions: [], total: 0 }; // inArray refuses an empty list
     const filters: Array<SQL | undefined> = [inArray(sessions.agent, listedTypes)];
     if (q.typed === true) filters.push(isNotNull(sessions.lastUserMessage));
-    if (!background && this.deps.backgroundStarters.length) filters.push(not(inArray(sessions.startedBy, [...this.deps.backgroundStarters])));
+    if (!background && this.deps.backgroundStarters.length) {
+      filters.push(not(inArray(sqlRaw`coalesce(${sessions.lastTurnBy}, ${sessions.startedBy})`, [...this.deps.backgroundStarters])));
+    }
     // ONE substring, wherever it appears — no word splitting, no ranking; the
     // list keeps its order and just gets shorter. `%` and `_` are LIKE's own
     // wildcards, so typed ones are escaped.
@@ -680,7 +685,7 @@ export class Sessions {
       .returning({ name: sessions.name, turnCount: sessions.turnCount, startedBy: sessions.startedBy });
     const r = rows[0];
     this.changed(id);
-    return { firstMessage: !!r && r.name === null && r.turnCount === 0 && r.startedBy === 'person' };
+    return { firstMessage: !!r && r.name === null && r.turnCount === 0 && r.startedBy === PERSON };
   }
 
   /** The record's line count when a turn started, per session — so the
@@ -694,20 +699,21 @@ export class Sessions {
    *  the record stands now. */
   rememberLinesAtTurnStart(id: string, lines: number): void { this.#linesAtTurnStart.set(id, lines); }
 
-  /** A turn ended on a session, whoever ran it: bump the turn count — only
-   *  when the turn wrote to the record, because leaving 0 is what freezes
-   *  the row's model and a turn that said nothing (stopped before the first
-   *  word, failed to start) must not freeze it — touch its checkout. Tokens are not here — every model
-   *  call records its own row in log_tokens. Returns what the naming
+  /** A turn ended on a session, whoever ran it: record who drove it
+   *  (`actor`), bump the turn count — only when the turn wrote to the
+   *  record, because leaving 0 is what freezes the row's model and a turn
+   *  that said nothing (stopped before the first word, failed to start) must
+   *  not freeze it — and touch its checkout. Tokens are not here — every
+   *  model call records its own row in log_tokens. Returns what the naming
    *  decision needs. */
-  async turnEnded(s: SessionRow, _client: string): Promise<{
+  async turnEnded(s: SessionRow, actor: string): Promise<{
     name: string | null; turnCount: number; nameManual: boolean;
   }> {
     const linesAtStart = this.#linesAtTurnStart.get(s.id);
     this.#linesAtTurnStart.delete(s.id);
     const wrote = linesAtStart === undefined || s.transcriptLines !== linesAtStart;
     const [saved] = await this.db.update(sessions)
-      .set(wrote ? { turnCount: sqlRaw`${sessions.turnCount} + 1` } : {})
+      .set({ lastTurnBy: actor, ...(wrote ? { turnCount: sqlRaw`${sessions.turnCount} + 1` } : {}) })
       .where(eq(sessions.id, s.id))
       .returning({ name: sessions.name, turnCount: sessions.turnCount, nameManual: sessions.nameManual });
     if (s.workspaceId) await this.workspaces.touch(s.workspaceId);

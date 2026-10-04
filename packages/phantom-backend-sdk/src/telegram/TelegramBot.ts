@@ -9,6 +9,7 @@
 //
 // The bot talks to ONE person: `telegram_authorized_user`. The webhook URL
 // is never a setting — always https + the public address.
+import { TELEGRAM_WEBHOOK_PATH } from '../api/routes/telegram.js';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { TelegramApi, ALLOWED_UPDATES } from './TelegramApi.js';
@@ -111,7 +112,7 @@ export class TelegramBot {
     const addr = this.deps.publicAddress?.trim();
     if (!addr) return null;
     const host = addr.replace(/^https?:\/\//, '').replace(/\/$/, '');
-    return `https://${host}/api/telegram/webhook`;
+    return `https://${host}/api${TELEGRAM_WEBHOOK_PATH}`;
   }
 
   async token(): Promise<string> {

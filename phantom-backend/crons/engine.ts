@@ -43,8 +43,8 @@ import { logger, errStr } from 'phantom-backend-sdk';
 
 /** The cron scheduler's client id — its lock identity on the sessions it runs. */
 export const CRON_CLIENT_ID = 'cron';
-/** What a cron's sessions say opened them (`started_by`): a default session
- *  list leaves them out (config.backgroundStarters). */
+/** The cron scheduler as an actor — what its sessions record as started_by
+ *  and last_turn_by; a default session list leaves those out (config.backgroundStarters). */
 export const CRON_STARTER = 'cron';
 const log = logger('cron');
 const BASE = 'http://cron/api';
@@ -79,7 +79,7 @@ export class CronEngine {
   private agents = new Map<string, CodingAgent>();
 
   constructor(private deps: CronEngineDeps) {
-    this.client = new BackendClient({ url: deps.loopback.url, apiKey: deps.loopback.apiKey, clientId: CRON_CLIENT_ID, label: 'cron' });
+    this.client = new BackendClient({ url: deps.loopback.url, apiKey: deps.loopback.apiKey, clientId: CRON_CLIENT_ID, label: 'cron', actor: CRON_STARTER });
   }
 
   /** Boot: register everything once, then follow the writes. */
@@ -200,7 +200,7 @@ export class CronEngine {
       // A fresh session, with its checkout, named after the cron, pinned to
       // the cron's model when it names one. The agent is resumed AFTER the
       // pin lands so its first turn-start reads it.
-      const born = await CodingAgent.newSession(this.client, handlers, project.id, { startedBy: CRON_STARTER });
+      const born = await CodingAgent.newSession(this.client, handlers, project.id);
       const sessionId = born.session.id;
       await born.close();
       await sessions.nameIfUnnamed(sessionId, row.name);

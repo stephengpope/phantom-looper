@@ -87,18 +87,16 @@ export { readEnv, APP_VERSION, API_IMAGE, type Env } from './lib/env.js';
 export { ok, err } from './api/HttpApi.js';
 export { clientOf, lockedErr } from './api/routes/sessions.js';
 export { fsDeps, fileTools, type FsDeps } from './api/routes/fs.js';
-export { TOOLS, toolByName, toolsFor, grantedTools, registerTools } from './tools/registry.js';
+export { TOOLS, toolByName, toolsFor, grantedTools } from './tools/registry.js';
 export { str, int, bool, nullable, oneOf, obj, s, refusal, type ToolDef, type ToolCtx, type OfferCtx, type FileTools, type PublishedTool } from './tools/def.js';
 export { userMessagesContext, titleContext, cleanTitle, type TitleContext, type TitleWriter } from './agents/SessionTitler.js';
-export type { Hooks } from './PhantomBackend.js';
 
-// git sync and the disk sweeps
-export { syncBranch, syncStepLabel, type SyncDeps, type SyncEvent, type SyncResult, type SyncOptions, type SyncStep, type ConflictContext } from './git/sync.js';
-export { autoPush, type AutoPushEvent, type AutoPushResult, type AutoPushDeps } from './git/autoPush.js';
-export { autoPull, type AutoPullEvent, type AutoPullResult, type AutoPullDeps } from './git/autoPull.js';
+// git — what the app reads off a sync and brings to it (config.git)
+export { syncStepLabel, type SyncEvent, type SyncResult, type SyncOptions, type SyncStep, type ConflictContext } from './git/sync.js';
+export type { AutoPushEvent, AutoPushResult } from './git/autoPush.js';
+export type { AutoPullEvent, AutoPullResult } from './git/autoPull.js';
+export type { GitHooks, AutoPushFn, AutoPullFn } from './git/GitService.js';
 export type { Arrival } from './git/GitSync.js';
-export type { InstantSyncDeps } from './git/InstantSync.js';
-export { idleBackupSweep, pressureSweep, diskCleanup, tooFull, type DiskState, type CleanupDeps } from './runtime/Disk.js';
 
 // upgrade
 export { System, SystemError, LOG_MAX_BYTES, LOG_MAX_TAIL, LOG_SERVICES, type LogsQuery } from './upgrade/System.js';

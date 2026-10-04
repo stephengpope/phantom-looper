@@ -15,12 +15,11 @@ export class SupervisorAgent extends Agent {
     volatile: ['time_date'],
   };
 
-  /** A new supervisor session reading the coder's workspace, opened by `startedBy`. */
+  /** A new supervisor session reading the coder's workspace. */
   static newSession(backend: BackendClient, handlers: AgentHandlers,
-    opts: { projectId: string; coderSessionId: string; startedBy?: string }): Promise<SupervisorAgent> {
+    opts: { projectId: string; coderSessionId: string }): Promise<SupervisorAgent> {
     return SupervisorAgent.create(backend, handlers, (b) => b.call('POST', '/sessions',
       { project_id: opts.projectId, type: 'supervisor', workspace_session_id: opts.coderSessionId,
-        system_prompt_layout: SupervisorAgent.systemPromptLayout,
-        ...(opts.startedBy ? { started_by: opts.startedBy } : {}) }));
+        system_prompt_layout: SupervisorAgent.systemPromptLayout }));
   }
 }

@@ -12,8 +12,6 @@ export const appSettings: SettingDefinition[] = [
     description: "Cards in progress are driven by the supervisor: it prompts the coding agent, verifies the work against the repo, and moves the card. Each card's own Auto build switch overrides this default.", projectOverridable: true, before: "card_prefix" },
   { key: "loop_budget_tokens", type: "number", default: null, label: "loop token budget", group: "board",
     description: "Maximum tokens one card run may spend — input + output summed across both agents' sessions; cache reads and writes not counted. Checked between turns; exceeding it blocks the card. Empty = no limit.", unit: "count", min: 1, projectOverridable: true, before: "card_prefix" },
-  { key: "auto_push_on_archive", type: "boolean", default: true, label: "auto-push on archive", group: "git",
-    description: "Archiving a done card auto-pushes its session's work to the base branch; a failed push un-archives the card into blocked. Archiving from any other column never pushes.", projectOverridable: true, before: "agent_git_credentials" },
   { key: "telegram_reply_mode", type: "string", default: "text", label: "reply mode", group: "telegram",
     description: "How the bot answers: text, voice (a spoken note, on the Assistant's Deepgram voice), or both. Read at the start of each turn.", choices: ["text", "voice", "both"], before: "session_digest_interval" },
   { key: "telegram_transcript_echo", type: "boolean", default: false, label: "transcript echo", group: "telegram",

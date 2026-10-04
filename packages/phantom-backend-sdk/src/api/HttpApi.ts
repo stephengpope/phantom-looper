@@ -28,6 +28,8 @@ import { kanbanRoutes } from './routes/kanban.js';
 import { presetRoutes } from './routes/presets.js';
 import { cronRoutes } from './routes/crons.js';
 import { dbUiRoutes } from './routes/dbUi.js';
+import { gitRoutes } from './routes/git.js';
+import { telegramRoutes, TELEGRAM_WEBHOOK_PATH } from './routes/telegram.js';
 
 export function err(code: string, message: string, retryable = false, detail?: unknown) {
   return { ok: false as const, error: { code, message, retryable, ...(detail === undefined ? {} : { detail }) } };
@@ -36,33 +38,25 @@ export function ok<T>(data: T) {
   return { ok: true as const, data };
 }
 
-/** Paths the bearer check skips: a webhook whose sender cannot carry our
- *  key and brings its own secret instead. User space adds its own. */
-export class HttpApi {
-  readonly app: FastifyInstance;
-  readonly #public = new Set<string>();
-  #registrars: RouteRegistrar[] = [];
+/** The one path the bearer check skips: the Telegram webhook, whose sender
+ *  cannot carry our key and brings its own secret instead. */
+const PUBLIC_PATHS = new Set([`/api${TELEGRAM_WEBHOOK_PATH}`]);
 
-  constructor(private readonly backend: PhantomBackend, private readonly apiKey: string) {
+export class HttpApi {
+  readonly #app: FastifyInstance;
+
+  constructor(private readonly backend: PhantomBackend, private readonly apiKey: string,
+    /** User space's routes, registered after the SDK's under the same auth. */
+    private readonly routes?: RouteRegistrar) {
     // forceCloseConnections: a shutdown must not wait on the live feeds (held
     // open for as long as a window watches); the clients reconnect on their own.
-    this.app = Fastify({ logger: false, forceCloseConnections: true });
+    this.#app = Fastify({ logger: false, forceCloseConnections: true });
   }
 
-  /** Register user space's routes, after the SDK's, under the same auth.
-   *  Before `listen`. */
-  addRoutes(registrar: RouteRegistrar): void { this.#registrars.push(registrar); }
-  /** A route under /api the bearer check skips (the Telegram webhook). */
-  addPublicPath(path: string): void { this.#public.add(path); }
-
-  #built = false;
-
-  /** Register every route — the SDK's, then user space's. Once; before
-   *  `listen`, and before anything calls the API in-process. */
-  async build(): Promise<void> {
-    if (this.#built) return;
-    this.#built = true;
-    const { app, backend } = this;
+  /** Register every route — the SDK's, then user space's. */
+  async #build(): Promise<void> {
+    const { backend } = this;
+    const app = this.#app;
     app.setNotFoundHandler((_req, reply) => { reply.code(401).send(); });
     app.setErrorHandler((_e, _req, reply) => { reply.code(401).send(); });
 
@@ -72,11 +66,11 @@ export class HttpApi {
 
     await app.register(async (api) => {
       api.get('/health', { schema: { tags: ['meta'], summary: 'Liveness',
-        description: 'Requires the bearer token. Returns the running version and `loops_running`, the card runs in flight.' } },
-      async () => ({ ok: true, version: backend.version, loops_running: backend.hooks.runningLoops?.() ?? 0 }));
+        description: 'Requires the bearer token. Returns the running version, plus what the app reports (config.health).' } },
+      async () => ({ ok: true, version: backend.version, ...backend.healthExtras() }));
 
       api.addHook('onRequest', async (req, reply) => {
-        if (this.#public.has(req.url)) return;
+        if (PUBLIC_PATHS.has(req.url)) return;
         const auth = String(req.headers.authorization ?? '');
         if (!timingSafeEqualStr(auth, `Bearer ${this.apiKey}`)) return reply.code(401).send();
       });
@@ -100,14 +94,17 @@ export class HttpApi {
       kanbanRoutes(api, backend);
       presetRoutes(api, backend);
       cronRoutes(api, backend);
-      for (const registrar of this.#registrars) await registrar(api);
+      gitRoutes(api, backend);
+      telegramRoutes(api, backend);
+      await this.routes?.(api);
     }, { prefix: '/api' });
   }
 
+  /** Build every route and listen. Once. */
   async listen(port: number, host = '0.0.0.0'): Promise<void> {
-    await this.build();
-    await this.app.listen({ port, host });
+    await this.#build();
+    await this.#app.listen({ port, host });
   }
 
-  async close(): Promise<void> { await this.app.close(); }
+  async close(): Promise<void> { await this.#app.close(); }
 }
