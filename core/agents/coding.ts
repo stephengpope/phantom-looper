@@ -15,8 +15,11 @@ export class CodingAgent extends Agent {
     volatile: ['skills_list', 'time_date', 'secrets_list'],
   };
 
-  static newSession(backend: BackendClient, handlers: AgentHandlers, projectId: string): Promise<CodingAgent> {
+  /** A new coding session with its own checkout. `startedBy` names the
+   *  automation opening it (the looper, a cron); unsaid = a person. */
+  static newSession(backend: BackendClient, handlers: AgentHandlers, projectId: string, opts: { startedBy?: string } = {}): Promise<CodingAgent> {
     return CodingAgent.create(backend, handlers, (b) => b.call('POST', '/sessions',
-      { project_id: projectId, type: 'coding', system_prompt_layout: CodingAgent.systemPromptLayout }));
+      { project_id: projectId, type: 'coding', system_prompt_layout: CodingAgent.systemPromptLayout,
+        ...(opts.startedBy ? { started_by: opts.startedBy } : {}) }));
   }
 }

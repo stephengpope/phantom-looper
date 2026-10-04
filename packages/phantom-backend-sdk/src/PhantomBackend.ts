@@ -66,6 +66,11 @@ export interface PhantomBackendConfig {
   settings?: SettingDefinition[];
   /** The agent types this backend runs. The SDK ships none. */
   agentTypes: AgentTypeDefinition[];
+  /** The app's automations that open sessions for themselves (`started_by`
+   *  values): a default list leaves their sessions out. A person's session
+   *  is `started_by: person`, the SDK's one word; every other opener says
+   *  its own name on POST /sessions. */
+  backgroundStarters?: string[];
   /** Tools user space serves from the backend, alongside the SDK's. */
   tools?: ToolDefinition[];
   /** Routes user space adds to the API, under the same auth. */
@@ -207,7 +212,8 @@ export class PhantomBackend {
     const docker = makeDocker();
     // THE image puller/remover — every pull and removal in this process goes through it so they never overlap.
     const images = new Images(docker);
-    const sessions = new Sessions(database.drizzle, settings, agentConfig, projects, workspaces, sessionEvents, { paths, docker });
+    const sessions = new Sessions(database.drizzle, settings, agentConfig, agentTypes, projects, workspaces,
+      { backgroundStarters: config.backgroundStarters ?? [], events: sessionEvents, prompt: { paths, docker } });
     // A settings write reaches every session nothing has been said to yet: its row takes the settings' model.
     settingsEvents.subscribe(() => {
       sessions.followModelSettings().catch((error) => log.warn({ err: errStr(error) }, 'newborn sessions could not follow the model settings'));

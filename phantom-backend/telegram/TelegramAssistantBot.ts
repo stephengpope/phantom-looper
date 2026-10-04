@@ -13,7 +13,7 @@
 import { CodingAgent } from '../../core/agents/coding.js';
 import { AssistantAgent } from '../../core/agents/assistant.js';
 import { BackendClient, type Agent, type AgentHandlers } from 'phantom-client-sdk';
-import { telegramAssistantKit, CLIENT_ID } from './assistant.js';
+import { telegramAssistantKit, CLIENT_ID, TELEGRAM_STARTER } from './assistant.js';
 import type { Settings, ModelCatalog } from 'phantom-backend-sdk';
 import type { FastifyInstance } from 'fastify';
 import { APP_VERSION } from 'phantom-backend-sdk';
@@ -254,7 +254,7 @@ export class TelegramAssistantBot {
       const onProjectCreated = async (projectId: string) => {
         await this.deps.botState.setActiveProject(projectId);
         let started;
-        try { started = await this.deps.sessions.start(projectId, CodingAgent.systemPromptLayout, { type: 'coding', startedBy: 'telegram' }); }
+        try { started = await this.deps.sessions.start(projectId, CodingAgent.systemPromptLayout, { type: 'coding', startedBy: TELEGRAM_STARTER }); }
         catch (e) { return { error: (e as Error).message }; }
         await this.deps.botState.setActiveSession(started.id);
         await this.enterMode(client, dm, 'code');
@@ -291,17 +291,18 @@ export class TelegramAssistantBot {
   }
 
   /** The assistant's session row, pointed at what the user is looking at:
-   *  made on first use, re-pointed on every turn (Sessions.follow). */
+   *  made on first use, re-pointed on every turn (Sessions.repoint). */
   private assistantSessionId: string | null = null;
   private async ensureAssistantSession(projectId: string | null, activeSessionId?: string | null): Promise<{ id: string }> {
     if (!projectId) throw new Error('no active project — /projects to pick one');
     if (this.assistantSessionId) {
-      await this.deps.sessions.follow(this.assistantSessionId, projectId, activeSessionId);
+      await this.deps.sessions.repoint(this.assistantSessionId, projectId, activeSessionId);
       const row = await this.deps.sessions.get(this.assistantSessionId);
       if (row) return row;
       this.assistantSessionId = null; // purged underneath us — make a new one
     }
-    const row = await this.deps.sessions.createAssistant(projectId, activeSessionId, AssistantAgent.systemPromptLayout, 'telegram');
+    const row = await this.deps.sessions.start(projectId, AssistantAgent.systemPromptLayout,
+      { type: 'assistant', startedBy: TELEGRAM_STARTER, workspaceSessionId: activeSessionId });
     this.assistantSessionId = row.id;
     return row;
   }

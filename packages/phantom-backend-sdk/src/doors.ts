@@ -101,8 +101,11 @@ export interface AgentTypeDefinition {
   /** Does a session of this type own a checkout, borrow another
    *  session's, or run with no files? Decides what POST /sessions makes. */
   workspace: 'own' | 'borrow' | 'none';
-  /** Shown in session lists by default? (A supervisor's record is not.) */
-  listed?: boolean;
+  /** When a session of this type appears in GET /sessions: `always` (the
+   *  default), `background` (only when the caller asks for background
+   *  sessions — a judge's record), `never` (tracked for tokens, never a row
+   *  in a list — a helper the user talks to, not a work session). */
+  listed?: 'always' | 'background' | 'never';
   /** The type whose model this one falls back to when its own provider /
    *  model / endpoint / reasoning / compaction are unset (the cascade,
    *  AgentConfig). Absent = a root: unset means empty, and the first model

@@ -3,7 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import type { SessionRow } from '../../storage/schema.js';
 import type { TokenRecord } from '../../storage/TokenLog.js';
-import { SessionError, startedByClient, heldByOther, isHeld, expiredHold, assertDuplicable, ownsWorkspace, workspaceOf } from '../../storage/Sessions.js';
+import { SessionError, heldByOther, isHeld, expiredHold, assertDuplicable, ownsWorkspace, workspaceOf } from '../../storage/Sessions.js';
 import { WorkspaceError } from '../../storage/Workspaces.js';
 import { GIT_CLIENT_ID } from '../../git/Git.js';
 import { sessionDir } from '../../lib/paths.js';
@@ -110,30 +110,37 @@ const unknownBlock = (reply: FastifyReply, e: unknown) =>
   e instanceof SystemPromptError ? reply.code(400).send(err(e.code, e.message)) : undefined;
 
 export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
-  app.post<{ Body: { project_id: string; type: string; id?: string; system_prompt_layout: SystemPromptLayout } }>('/sessions', { schema: { ...TAG,
+  app.post<{ Body: { project_id: string; type: string; id?: string; started_by?: string; workspace_session_id?: string | null;
+    system_prompt_layout: SystemPromptLayout } }>('/sessions', { schema: { ...TAG,
     summary: 'Create — or restart — a session',
-    description: 'Claims a pre-cloned pool directory (or clones) and checks out the session\'s branch: ' +
-      'its own {prefix}/{id}, cut from the base branch. That one branch ' +
-      'is worked in and pushed back to; nothing is pushed anywhere else. The returned id goes in the ' +
-      'x-phantom-looper-session header on every tool call.\n\n' +
-      'Pass `id` to RESTART a session that was destroyed. Destroying a session deletes its files and ' +
+    description: 'Creates a session of `type`, a registered agent type. What the type gets is the type\'s registration: ' +
+      'one that OWNS a workspace claims a pre-cloned pool directory (or clones) and checks out the session\'s branch — ' +
+      'its own {prefix}/{id}, cut from the base branch, worked in and pushed back to, nothing pushed anywhere else; ' +
+      'one that BORROWS reads another session\'s workspace (`workspace_session_id`, or none yet); one with no ' +
+      'workspace is a conversation alone. The returned id goes in the x-phantom-looper-session header on every tool call.\n\n' +
+      '`started_by` names the automation opening the session (a cron, a card run); unsaid = a person. The app\'s ' +
+      'background automations are left out of a default GET /sessions.\n\n' +
+      'Pass `id` to RESTART an owning session that was destroyed. Destroying a session deletes its files and ' +
       'nothing else — the row keeps its id and its branch — so a restart re-clones, finds that branch on ' +
       'origin, and carries on exactly where it stopped. Restarting a session that is still active is refused.\n\n' +
       '`system_prompt_layout` is the agent\'s prompt layout; the server fills its blocks from that moment\'s ' +
       'skills, secrets, SOUL.md and date, writes the three sections with the row, and answers them as ' +
       '`system_prompt` — sent as stored on every turn. A restart keeps the prompt the session was born with.',
     body: { type: 'object', required: ['project_id', 'type', 'system_prompt_layout'], additionalProperties: false,
-      examples: [{ project_id: 'paste the id from POST /projects', type: 'coding',
+      examples: [{ project_id: 'paste the id from POST /projects', type: 'a registered agent type',
         system_prompt_layout: { stable: [{ text: 'You are…' }], context: ['agents_md'], volatile: ['time_date'] } }],
       properties: {
         project_id: { type: 'string' },
         type: { type: 'string', enum: ctx.agentTypes.names(), description: 'The agent type the session runs — a registered type.' },
-        id: { type: 'string', description: 'Restart this session id instead of starting a new one.' },
+        id: { type: 'string', description: 'Restart this session id instead of starting a new one (owning types only).' },
+        started_by: { type: 'string', maxLength: 40, description: 'The automation opening this session, by name. Unsaid = person.' },
+        workspace_session_id: { type: ['string', 'null'], description: 'For a borrowing type: the session whose workspace this one reads. Null or absent = nothing to read yet.' },
         system_prompt_layout: SYSTEM_PROMPT_LAYOUT,
       } } } }, async (req, reply) => {
     if (!req.body?.project_id) return reply.code(400).send(err('missing_project', 'body.project_id required'));
     try {
-      return reply.code(201).send(ok(await ctx.sessions.start(req.body.project_id, req.body.system_prompt_layout, { id: req.body.id, type: req.body.type, startedBy: startedByClient(clientOf(req)) })));
+      return reply.code(201).send(ok(await ctx.sessions.start(req.body.project_id, req.body.system_prompt_layout,
+        { id: req.body.id, type: req.body.type, startedBy: req.body.started_by, workspaceSessionId: req.body.workspace_session_id })));
     } catch (e) {
       if (unknownBlock(reply, e)) return;
       // The session's own refusals, and the checkout's (a dead token, a repo
@@ -180,7 +187,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       q: { type: 'string', maxLength: 200, description: 'Substring to match (case-insensitive) in name, last user message or branch.' },
       project: { type: 'string', description: 'Only this project\'s sessions (a project id).' },
       typed: { type: 'boolean', description: 'true = only sessions something was typed into (a last message exists).' },
-      background: { type: 'boolean', description: 'false = leave out the background seats: supervisor sessions and cron runs.' },
+      background: { type: 'boolean', description: 'false = leave out the background sessions: types listed `background` and sessions the app\'s automations opened.' },
       before: { type: 'string', description: 'A row\'s last_used_at (ISO) — return only older activity.' },
       before_id: { type: 'string', description: 'That row\'s id, breaking last_used_at ties.' },
       before_pinned: { type: 'boolean', description: 'That row\'s pinned flag — pinned sorts ahead of activity, so the cursor carries it or a pinned page boundary leaks unpinned rows into the pinned block (and vice versa).' } } } } },
@@ -240,16 +247,13 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
 
   // ---- interrupt a running turn ---------------------------------------------
   // THE stop signal, one route for every client (esc-esc in the cli, /stop on
-  // telegram). Three doors, one effect — the turn stops and so does what it
-  // was running: a SERVER-side turn (a card-run coding or supervisor turn, or the /turn route) is
-  // aborted through `activeTurns`; a turn any OTHER client runs (a cli window,
-  // the telegram engine) hears the `interrupt` event on the session feed and
-  // aborts its own; and the session's in-flight FOREGROUND commands are
-  // killed here directly, because a server-side turn's tool calls ride
-  // injectFetch — there is no socket to close, so the disconnect kill in the
-  // fs route never fires for them. The turn saves what it recorded and ends
-  // cleanly — a card run treats it as an interruption, not a failure: the
-  // card is NOT blocked.
+  // telegram). One effect — the turn stops and so does what it was running:
+  // the client running the turn (a cli window, the backend's own engines)
+  // hears the `interrupt` event on the session feed and aborts its own; and
+  // the session's in-flight FOREGROUND commands are killed here directly, so
+  // a tool call that outlives its turn's socket does not run on. The turn
+  // saves what it recorded and ends cleanly — a card run treats it as an
+  // interruption, not a failure: the card is NOT blocked.
   app.post<{ Params: { id: string } }>(
     '/sessions/:id/interrupt', { schema: { ...TAG,
       summary: 'Interrupt a running turn',
@@ -461,7 +465,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (s.lockedBy !== client) {
         return reply.code(409).send(s.lockedBy ? lockedErr(s)
-          : err('session_not_held', 'hold the session (POST /sessions/:id/lock) before publishing on it'));
+          : err('session_not_held', 'hold the session (POST /sessions/:id/turn-start) before publishing on it'));
       }
       const feed = ctx.sessionEvents!;
       for (const e of req.body.events) {
@@ -472,13 +476,13 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     });
 
   // Every turn's start, whoever runs it, crosses the session bus — the one
-  // place both the server's own turns and a window's relayed turn meet. Two
-  // things happen there and nowhere else: the list's preview moves to what
-  // was just typed (the save at turn end was the first chance before), and a
-  // session's first message names it right away — the record is not needed
-  // to say what is being built. Best effort, off the request path.
+  // place every client's relayed turn meets. Two things happen there and
+  // nowhere else, for the types a default list shows: the list's preview
+  // moves to what was just typed (the save at turn end was the first chance
+  // before), and a session's first message names it right away — the record
+  // is not needed to say what is being built. Best effort, off the request path.
   ctx.sessionEvents.subscribeAll((sessionId, e) => {
-    if (e.event !== 'turn-start' || e.agent !== 'coding') return;
+    if (e.event !== 'turn-start' || !ctx.agentTypes.listedNames({ background: false }).includes(e.agent)) return;
     void ctx.sessions.turnStarted(sessionId, e.message).then(async ({ firstMessage }) => {
       if (!firstMessage) return;
       // The row publishes the name under no client id, so the window running
@@ -617,16 +621,20 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       transcript_updated_at: s.transcriptUpdatedAt?.toISOString() ?? null });
   });
 
-  app.patch<{ Params: { id: string }; Body: { name?: string | null; plan_mode?: boolean; pinned?: boolean } }>(
+  app.patch<{ Params: { id: string }; Body: { name?: string | null; plan_mode?: boolean; pinned?: boolean;
+    project_id?: string; workspace_session_id?: string | null } }>(
     '/sessions/:id', { schema: { ...TAG, summary: 'Per-session overrides',
       description: '`name` renames the session by hand — the auto-titler never writes over a manual name; null clears it and ' +
         'hands the session back to the titler. `plan_mode` is the cli\'s /plan switch: while true, clients build ' +
         'the coding agent\'s mutating kits with the readonly preset; every session starts false (code mode). ' +
-        '`pinned` is the /pin switch: while true, the session pins to the top of every session list.',
+        '`pinned` is the /pin switch: while true, the session pins to the top of every session list. ' +
+        '`project_id` + `workspace_session_id` re-point a BORROWING session at another session\'s files (and project): ' +
+        'its tools read that workspace from then on; null = nothing to read. Refused for a type that owns its workspace.',
       params: idParam,
       body: { type: 'object', additionalProperties: false,
         properties: { name: { type: ['string', 'null'], maxLength: 80 },
-          plan_mode: { type: 'boolean' }, pinned: { type: 'boolean' } } } } }, async (req, reply) => {
+          plan_mode: { type: 'boolean' }, pinned: { type: 'boolean' },
+          project_id: { type: 'string' }, workspace_session_id: { type: ['string', 'null'] } } } } }, async (req, reply) => {
       const s = await ctx.sessions.get(req.params.id);
       if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (req.body?.name !== undefined) {
@@ -640,6 +648,13 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       if (req.body?.pinned !== undefined) {
         await ctx.sessions.setPinned(s.id, req.body.pinned);
       }
+      if (req.body?.project_id !== undefined || req.body?.workspace_session_id !== undefined) {
+        try { await ctx.sessions.repoint(s.id, req.body.project_id ?? s.projectId, req.body.workspace_session_id); }
+        catch (e) {
+          if (e instanceof SessionError) return reply.code(e.code === 'not_found' ? 404 : 400).send(err(e.code, e.message));
+          throw e;
+        }
+      }
       return ok(await ctx.sessions.get(s.id));
     });
 
@@ -647,8 +662,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // skips the safety only, never the flush attempt. purge=true goes further:
   // the row and the transcript go too — the session stops existing, only its
   // pushed branch on origin survives. Only a session that OWNS its workspace
-  // has files to push and remove; a supervisor's or the assistant's has
-  // nothing to tear down, so without purge there is nothing to do.
+  // has files to push and remove; a borrowing one has nothing to tear down,
+  // so without purge there is nothing to do.
   app.delete<{ Params: { id: string }; Querystring: { force?: string; purge?: string } }>(
     '/sessions/:id', { schema: { ...TAG,
       summary: 'Delete a session',
@@ -689,60 +704,6 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         if (e instanceof SessionError || e instanceof WorkspaceError) return reply.code(409).send(err(e.code, e.message));
         throw e;
       }
-    });
-
-  // ---- the assistant's session -----------------------------------------------
-  // The voice assistant (TUI) opens its session through this route; the
-  // Telegram assistant calls createAssistant directly (it lives in the
-  // server process).
-
-  const target = { type: 'object', required: ['project_id'], properties: {
-    project_id: { type: 'string' },
-    session_id: { type: ['string', 'null'], description: 'the session on screen — the assistant reads its files' },
-  } } as const;
-
-  app.post<{ Body: { project_id: string; session_id?: string | null; system_prompt_layout: SystemPromptLayout } }>(
-    '/sessions/assistant', { schema: { ...TAG,
-      summary: 'Create an assistant session',
-      description: 'Creates a conversation-only session for the assistant: no checkout of its own, its ' +
-        'workspace is the on-screen session\'s (its file tools run as this session and open that workspace). ' +
-        'It runs on the row\'s model like every session, and its model calls are billed to it. ' +
-        '`system_prompt_layout` as on POST /sessions. Returns the row.',
-      body: { ...target, required: [...target.required, 'system_prompt_layout'],
-        properties: { ...target.properties, system_prompt_layout: SYSTEM_PROMPT_LAYOUT } } } },
-    async (req, reply) => {
-      try { return ok(await ctx.sessions.createAssistant(req.body.project_id, req.body.session_id, req.body.system_prompt_layout)); }
-      catch (e) { if (unknownBlock(reply, e)) return; throw e; }
-    });
-
-  app.post<{ Params: { id: string }; Body: { project_id: string; session_id?: string | null } }>(
-    '/sessions/:id/follow', { schema: { ...TAG,
-      summary: 'Point an assistant session at the session on screen',
-      description: 'Re-points the assistant row\'s project and workspace at what the user is looking at, ' +
-        'so its tools read that session\'s files. Assistant sessions only. Returns the row.',
-      params: idParam, body: target } },
-    async (req, reply) => {
-      const s = await ctx.sessions.get(req.params.id);
-      if (!s) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
-      if (s.agent !== 'assistant') return reply.code(400).send(err('not_assistant', 'this route is for assistant sessions only'));
-      await ctx.sessions.follow(s.id, req.body.project_id, req.body.session_id);
-      return ok(await ctx.sessions.get(s.id));
-    });
-
-  // The supervisor's session: conversation-only, on the coder's workspace, on
-  // the card. The looper creates one per run.
-  app.post<{ Body: { project_id: string; workspace_id: string; card_id: number; system_prompt_layout: SystemPromptLayout } }>(
-    '/sessions/supervisor', { schema: { ...TAG,
-      summary: 'Create a supervisor session',
-      description: 'Creates a conversation-only session for a card run\'s supervisor: no checkout of its own, its ' +
-        'workspace is the coder\'s (`workspace_id`), so its file tools read the coder\'s work. ' +
-        '`system_prompt_layout` as on POST /sessions. Returns the row.',
-      body: { type: 'object', required: ['project_id', 'workspace_id', 'card_id', 'system_prompt_layout'], additionalProperties: false, properties: {
-        project_id: { type: 'string' }, workspace_id: { type: 'string' }, card_id: { type: 'integer' },
-        system_prompt_layout: SYSTEM_PROMPT_LAYOUT } } } },
-    async (req, reply) => {
-      try { return ok(await ctx.sessions.createSupervisor(req.body.project_id, req.body.workspace_id, req.body.card_id, req.body.system_prompt_layout)); }
-      catch (e) { if (unknownBlock(reply, e)) return; throw e; }
     });
 
   // The start of a turn, in one request: hold the session, write the

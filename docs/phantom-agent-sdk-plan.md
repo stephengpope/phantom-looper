@@ -16,8 +16,11 @@ what is left to make that true, in order. It replaces `sdk-conversion.md`.
   container; `/workspace/repo` inside the container is this.
 - **Session** — a conversation on a workspace.
 - **Type** — which agent a session runs (`coding`, `supervisor`,
-  `assistant`). User space declares types; the SDK knows a type only as a
-  name it publishes tools and model config for.
+  `assistant`). User space declares types; the SDK knows a type only by its
+  registration: its tools, its model config, whether its sessions own a
+  workspace or borrow one, and when they are listed. Who OPENED a session
+  (`started_by`) is the opener's word; the app names which openers are
+  background.
 - **The record** — the session's transcript on the server, typed lines.
 - **The server's user message queue** — one-liners the server holds for a
   session's next turn, written into the record at turn-start.
@@ -144,6 +147,12 @@ helpers → whichever SDK owns them. Whole-file transcript routes (`PUT
 README and setup for each package, migrations in the server package, the
 lockstep release script, `phantom-agent-sdk/` lifted out as its own repo,
 the npm org, phantom-looper on published versions.
+
+The lockstep rule, enforced by the SDK itself (an app's update gate is the
+app's): `/health` reports the backend SDK's version; `BackendClient`
+compares it to its own at connect and refuses with a clear error on a
+mismatch. The API surface is then protected for every app, not only one
+with its own updater.
 
 ## Where the work stands
 

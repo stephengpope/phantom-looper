@@ -6,10 +6,14 @@ import type { PhantomBackendConfig } from 'phantom-backend-sdk';
 import { appSettings } from './appSettings.js';
 import { appAgentTypes } from './appAgentTypes.js';
 import { menuFor } from './telegram/commands.js';
+import { LOOPER_STARTER } from './looper/engine.js';
+import { CRON_STARTER } from './crons/engine.js';
 
 export const config: PhantomBackendConfig = {
   settings: appSettings,
   agentTypes: appAgentTypes,
+  // The engines that open sessions for themselves; a default list leaves those out.
+  backgroundStarters: [LOOPER_STARTER, CRON_STARTER],
   // tools and routes: registered in index.ts, where their wiring still lives (plan §5, §7).
   // The bot's command menu — the global default, and the authorized chat's for its mode.
   telegramCommandMenu: async (state) => ({ global: menuFor('assistant'), forChat: menuFor(state.mode) }),

@@ -1,7 +1,7 @@
 // AgentTypes — the registry of agent types this backend runs. The SDK ships
 // none; user space registers its own (config.agentTypes). A type is a
 // name, the tool grants its sessions get, how its sessions relate to a
-// workspace, and whether its sessions are listed. Every other object asks
+// workspace, and when its sessions are listed. Every other object asks
 // here instead of knowing a type by name. A type's model settings fall back
 // to the type it names (`modelFallsBackTo`); a root falls back to nothing.
 import type { AgentTypeDefinition, ToolGrant } from '../doors.js';
@@ -42,6 +42,13 @@ export class AgentTypes {
   /** The type `name` falls back to, or null for a root. */
   fallbackOf(name: string): string | null { return this.require(name).modelFallsBackTo ?? null; }
   toolGrantsOf(name: string): ToolGrant[] { return this.require(name).tools; }
-  /** Only the sessions of these types appear in a default listing. */
-  listedNames(): string[] { return this.list().filter((definition) => definition.listed !== false).map((definition) => definition.name); }
+  /** The types whose sessions a list shows: the `always` ones, plus the
+   *  `background` ones when the caller asks for background sessions. */
+  listedNames(opts: { background: boolean }): string[] {
+    return this.list()
+      .filter((definition) => (definition.listed ?? 'always') === 'always' || (opts.background && definition.listed === 'background'))
+      .map((definition) => definition.name);
+  }
+  /** Does a session of `name` own its checkout, borrow one, or run with none? */
+  workspaceOf(name: string): AgentTypeDefinition['workspace'] { return this.require(name).workspace; }
 }

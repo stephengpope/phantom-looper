@@ -38,9 +38,14 @@ import { Cron } from 'croner';
 import { BackendClient, type AgentHandlers } from 'phantom-client-sdk';
 import { messageLine, userMessage, assistantMessage } from 'phantom-client-sdk/transcript';
 import { CodingAgent } from '../../core/agents/coding.js';
-import { CRON_CLIENT_ID, type Sessions, type Crons, type CronRow, type Projects, type Settings, type SettingsEvents } from 'phantom-backend-sdk';
+import type { Sessions, Crons, CronRow, Projects, Settings, SettingsEvents } from 'phantom-backend-sdk';
 import { logger, errStr } from 'phantom-backend-sdk';
 
+/** The cron scheduler's client id — its lock identity on the sessions it runs. */
+export const CRON_CLIENT_ID = 'cron';
+/** What a cron's sessions say opened them (`started_by`): a default session
+ *  list leaves them out (config.backgroundStarters). */
+export const CRON_STARTER = 'cron';
 const log = logger('cron');
 const BASE = 'http://cron/api';
 /** A script's own timeout. The bash tool's default (`bash_timeout_ms`, two
@@ -195,7 +200,7 @@ export class CronEngine {
       // A fresh session, with its checkout, named after the cron, pinned to
       // the cron's model when it names one. The agent is resumed AFTER the
       // pin lands so its first turn-start reads it.
-      const born = await CodingAgent.newSession(this.client, handlers, project.id);
+      const born = await CodingAgent.newSession(this.client, handlers, project.id, { startedBy: CRON_STARTER });
       const sessionId = born.session.id;
       await born.close();
       await sessions.nameIfUnnamed(sessionId, row.name);

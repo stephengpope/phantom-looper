@@ -6,8 +6,9 @@
 // conditional UPDATE) and what gives a future list feed one place to hang.
 //
 // A session is a CONVERSATION. It uses one WORKSPACE (workspace_id) — the
-// checkout: files, branch, container. A coder's workspace is its own (same id),
-// a supervisor's is its coder's, the assistant's is the on-screen session's.
+// checkout: files, branch, container. Its agent type says which (AgentTypes):
+// an `own` type's workspace is its own (same id); a `borrow` type's is
+// another session's; a `none` type has none. No type is known here by name.
 // The checkout's facts — files present, last touched, last pushed, git state
 // — are the workspace's (Workspaces); every read here joins them in (`view`), so
 // the row a caller gets carries `status`, `lastUsedAt`, `lastPushAt`,
@@ -22,7 +23,7 @@
 // publish the same way under the workspace's id (Workspaces). Lock events proper
 // stay with their callers: a hold means different things to a window (its
 // spinner) and to a git sync (nothing to show), so the caller says.
-import { and, desc, eq, gt, ilike, inArray, isNull, isNotNull, lt, ne, not, or, count, sql as sqlRaw } from 'drizzle-orm';
+import { and, desc, eq, gt, ilike, inArray, isNull, isNotNull, lt, not, or, count, sql as sqlRaw, type SQL } from 'drizzle-orm';
 import type { Drizzle } from './Database.js';
 import type { PgColumn } from 'drizzle-orm/pg-core';
 // `workspaces` and `cards` appear here for JOINs only: every session read
@@ -32,6 +33,7 @@ import type { PgColumn } from 'drizzle-orm/pg-core';
 import { sessions, sessionColumns, workspaces, cards, logTokens, type SessionRow } from './schema.js';
 import type { Settings } from './Settings.js';
 import type { AgentConfig } from '../agents/AgentConfig.js';
+import type { AgentTypes } from '../agents/AgentTypes.js';
 import type { Projects } from './Projects.js';
 import type { Workspaces } from './Workspaces.js';
 import { newId } from 'phantom-client-sdk';
@@ -50,26 +52,24 @@ export class SessionError extends Error {
   constructor(public code: string, message: string, public retryable = false) { super(message); }
 }
 
-/** A freshly created session: its workspace's branch is known and the commit
- *  it was cut from rides along for the response. */
-export type SessionFull = SessionRow & { branch: string; cutFromSha: string };
+/** A freshly created session: the commit its own checkout was cut from rides
+ *  along for the response (null for a session with no checkout of its own;
+ *  `branch` is then the borrowed workspace's, or null). */
+export type SessionFull = SessionRow & { cutFromSha: string | null };
+
+/** What opens a session: its type, who opened it (`person` when unsaid),
+ *  the session whose workspace a `borrow` type reads, and — for an `own`
+ *  type — the id to restart. */
+export interface StartOptions { type: string; startedBy?: string; workspaceSessionId?: string | null; id?: string }
 
 /** The list's preview of the last thing the user typed: a few dozen
  *  characters on screen, so this many stored — never the record. */
 export const LAST_MESSAGE_CHARS = 200;
 
-/** The card run's lock identity — the holder under which its coding and
- *  supervisor turns save. The looper locks with it when it starts a run, the
- *  release hook ignores it, and the transcript save reads who drove the turn
- *  off it. */
-export const LOOP_CLIENT_ID = 'supervisor';
-/** The cron scheduler's client id — a session it opens is `started_by: cron`. */
-export const CRON_CLIENT_ID = 'cron';
-
-/** Who may open a session. */
-export type StartedBy = 'person' | 'looper' | 'cron' | 'telegram';
-/** Sessions a default list leaves out: a supervisor's record, and the runs the looper and cron open for themselves. */
-export const BACKGROUND_STARTERS: readonly StartedBy[] = ['looper', 'cron'];
+/** Who opened a session when the opener said nothing: a person. Every
+ *  automation says its own name (`started_by` on POST /sessions), and the
+ *  app lists which of those a default listing leaves out (backgroundStarters). */
+export const PERSON = 'person';
 
 /** What GET /sessions accepts — the object owns what the list IS: the
  *  filters and the count share one WHERE, so `total` is exactly the rows the
@@ -77,8 +77,9 @@ export const BACKGROUND_STARTERS: readonly StartedBy[] = ['looper', 'cron'];
 export interface ListQuery {
   /** Only sessions something was typed into (a last message exists). */
   typed?: boolean;
-  /** false = leave out the background sessions: a supervisor's record, and
-   *  the runs the looper and cron opened for themselves (BACKGROUND_STARTERS). */
+  /** false = leave out the background sessions: the types listed
+   *  `background`, and the sessions the app's automations opened for
+   *  themselves (backgroundStarters). Types listed `never` are never rows. */
   background?: boolean;
   /** One substring, case-insensitive, anywhere in the name, the last user
    *  message or the branch. */
@@ -99,7 +100,7 @@ export type ListedSession = SessionRow & { card: number | null; cardStatus: stri
 
 /** A session that holds only its conversation — no checkout of its own, no
  *  container, nothing on disk: it borrows another session's workspace or
- *  has none. The supervisor and the assistant are this shape. */
+ *  has none (a `borrow` or `none` type). */
 export const conversationOnly = (s: SessionRow): boolean => !ownsWorkspace(s);
 
 /** The rows that own their checkout — the SQL twin of `ownsWorkspace`. */
@@ -110,7 +111,7 @@ const ownsItsWorkspace = eq(sessions.workspaceId, sessions.id);
 export function assertDuplicable(s: SessionRow): void {
   if (conversationOnly(s)) {
     throw new SessionError('invalid_args',
-      "a supervisor session is its card's verdict record — duplicate the card's coding session instead");
+      'a session without a checkout of its own has nothing to duplicate — duplicate the session whose workspace it reads');
   }
 }
 
@@ -124,8 +125,8 @@ export function copyName(name: string | null): string | null {
   return name.startsWith(DUP_PREFIX) ? name : `${DUP_PREFIX}${name}`;
 }
 
-/** THE workspace this session's tools open. Null only on an assistant with no
- *  session on screen yet — then there are no files, and a caller that needs
+/** THE workspace this session's tools open. Null only on a borrowing session
+ *  pointed at nothing yet — then there are no files, and a caller that needs
  *  them is refused; nothing ever falls back to the session's own id. */
 export function workspaceOf(s: Pick<SessionRow, 'id' | 'workspaceId'>): string {
   if (!s.workspaceId) throw new SessionError('no_workspace', `session ${s.id} has no workspace — nothing to read`);
@@ -138,9 +139,8 @@ export function workspaceOf(s: Pick<SessionRow, 'id' | 'workspaceId'>): string {
  *  reads from it. */
 export const lineCount = (jsonl: string): number => jsonl.split('\n').filter((l) => l.trim()).length;
 
-/** Does the session own its files — is the workspace its own? A coder does; a
- *  supervisor and the assistant borrow another's. Only an owner has files to
- *  destroy, restart, back up or sweep. */
+/** Does the session own its files — is the workspace its own? Only an owner
+ *  has files to destroy, restart, back up or sweep. */
 export const ownsWorkspace = (s: Pick<SessionRow, 'id' | 'workspaceId'>): boolean => s.workspaceId === s.id;
 
 /** Is the hold live right now — someone holds it and the clock has not run
@@ -162,16 +162,6 @@ export function expiredHold(s: Pick<SessionRow, 'lockedBy' | 'lockedLabel' | 'lo
   return { by: s.lockedBy, label: s.lockedLabel, at: s.lockExpiresAt };
 }
 
-/** Who a session is opened for, read off the opener's client id: the
- *  looper's and the cron scheduler's ids name themselves; anyone else is a
- *  person unless the caller says otherwise. */
-export function startedByClient(client: string | undefined, said?: StartedBy): StartedBy {
-  if (said) return said;
-  if (client === LOOP_CLIENT_ID) return 'looper';
-  if (client === CRON_CLIENT_ID) return 'cron';
-  return 'person';
-}
-
 // ── The object ───────────────────────────────────────────────────────────────
 
 export class Sessions {
@@ -179,14 +169,20 @@ export class Sessions {
     private readonly db: Drizzle,
     private readonly settings: Settings,
     private readonly agentConfig: AgentConfig,
+    private readonly agentTypes: AgentTypes,
     private readonly projects: Projects,
     private readonly workspaces: Workspaces,
-    /** The per-session feed; absent in tests that have no watchers. */
-    private readonly events?: SessionEvents,
-    /** What freezing a session's prompt reads: the checkout's skills and the
-     *  image's system skills. Absent in tests: `start` then freezes no skills. */
-    private readonly promptDeps?: { paths: Paths; docker?: Docker },
+    private readonly deps: {
+      /** The `started_by` values a default list leaves out (the app's automations). */
+      backgroundStarters: readonly string[];
+      /** The per-session feed; absent in tests that have no watchers. */
+      events?: SessionEvents;
+      /** What freezing a session's prompt reads: the checkout's skills and the
+       *  image's system skills. Absent in tests: `start` then freezes no skills. */
+      prompt?: { paths: Paths; docker?: Docker };
+    },
   ) {}
+  private get events(): SessionEvents | undefined { return this.deps.events; }
 
   // ── start, interrupt ─────────────────────────────────────────────────────
   // The two session acts every client performs, at the object — the routes
@@ -197,8 +193,13 @@ export class Sessions {
    *  agent's layout filled with THIS moment's facts (skills, secrets,
    *  SOUL.md, the date), sent as stored on every turn after. A restart keeps
    *  the prompt the session was born with. The row and the prompt come back
-   *  together — what POST /sessions answers with. */
-  async start(projectId: string, layout: SystemPromptLayout, opts: { id?: string; type: string; startedBy?: StartedBy }): Promise<SessionFull & { system_prompt: StoredSystemPrompt }> {
+   *  together — what POST /sessions answers with.
+   *
+   *  What is made is the TYPE's business (AgentTypes.workspaceOf): an `own`
+   *  type gets a checkout of its own; a `borrow` type gets a conversation
+   *  row pointed at `workspaceSessionId`'s workspace (none = nothing to read
+   *  yet); a `none` type gets a conversation row and no workspace. */
+  async start(projectId: string, layout: SystemPromptLayout, opts: StartOptions): Promise<SessionFull & { system_prompt: StoredSystemPrompt }> {
     SystemPrompt.check(layout);
     const s = await this.create(projectId, opts);
     return { ...s, system_prompt: await this.writeSystemPrompt(s, layout) };
@@ -206,14 +207,13 @@ export class Sessions {
 
   /** Assemble the agent's layout from the session's facts and freeze it on
    *  the row. The checkout the blocks read is the session's own workspace, or
-   *  the one it borrows (a supervisor's coder, the assistant's on-screen
-   *  session); none when there is nothing to read. */
+   *  the one it borrows; none when there is nothing to read. */
   private async writeSystemPrompt(s: SessionRow, layout: SystemPromptLayout): Promise<StoredSystemPrompt> {
     const project = (await this.projects.get(s.projectId))!;
     const prompt = await SystemPrompt.assemble(layout, {
       projectId: s.projectId, project, settings: this.settings,
-      checkout: this.promptDeps && s.workspaceId ? repoDir(this.promptDeps.paths, s.workspaceId) : null,
-      docker: this.promptDeps?.docker,
+      checkout: this.deps.prompt && s.workspaceId ? repoDir(this.deps.prompt.paths, s.workspaceId) : null,
+      docker: this.deps.prompt?.docker,
     });
     return this.freezeSystemPrompt(s.id, prompt.sections());
   }
@@ -340,12 +340,16 @@ export class Sessions {
   }
 
   /** GET /sessions: pinned first, then newest activity first, destroyed rows
-   *  included (status says which). Assistant sessions are tracked for tokens,
-   *  not for the list — always left out. `total` counts the same WHERE. */
+   *  included (status says which). Which TYPES are rows is the registry's
+   *  word (`listed`); which OPENERS are background is the app's
+   *  (backgroundStarters). `total` counts the same WHERE. */
   async list(q: ListQuery): Promise<{ sessions: ListedSession[]; total: number }> {
-    const filters = [];
+    const background = q.background !== false;
+    const listedTypes = this.agentTypes.listedNames({ background });
+    if (!listedTypes.length) return { sessions: [], total: 0 }; // inArray refuses an empty list
+    const filters: Array<SQL | undefined> = [inArray(sessions.agent, listedTypes)];
     if (q.typed === true) filters.push(isNotNull(sessions.lastUserMessage));
-    if (q.background === false) filters.push(and(ne(sessions.agent, 'supervisor'), not(inArray(sessions.startedBy, [...BACKGROUND_STARTERS]))));
+    if (!background && this.deps.backgroundStarters.length) filters.push(not(inArray(sessions.startedBy, [...this.deps.backgroundStarters])));
     // ONE substring, wherever it appears — no word splitting, no ranking; the
     // list keeps its order and just gets shorter. `%` and `_` are LIKE's own
     // wildcards, so typed ones are escaped.
@@ -355,7 +359,6 @@ export class Sessions {
       filters.push(or(ilike(sessions.name, needle), ilike(sessions.lastUserMessage, needle), ilike(workspaces.branch, needle)));
     }
     if (q.project) filters.push(eq(sessions.projectId, q.project));
-    filters.push(ne(sessions.agent, 'assistant'));
     // The cursor is the whole sort key of the last row the client saw:
     // pinned first (a pinned tail means only unpinned rows follow), then
     // the (last_used_at, id) pair. id descends too: a page boundary between
@@ -402,7 +405,7 @@ export class Sessions {
   }
 
   /** Of `workspaceIds`, those where a turn is running: any session on the
-   *  workspace — the coder, its supervisor, the assistant — holds a live lock. */
+   *  workspace — its owner or any session borrowing it — holds a live lock. */
   async workspacesHeld(workspaceIds: string[]): Promise<Set<string>> {
     if (!workspaceIds.length) return new Set();
     const rows = await this.db.select({ workspaceId: sessions.workspaceId }).from(sessions)
@@ -418,32 +421,29 @@ export class Sessions {
   }
 
   // ── the card ───────────────────────────────────────────────────────────────────────
-  // THE RULE: a session's card is its row's card_id. A card's coder is its
-  // newest coding session; its supervisor is its newest supervisor session.
-  // Nothing stores the pairing — it is read off the two newest rows. The
+  // THE RULE: a session's card is its row's card_id. A card's coder is the
+  // session that owns the card's checkout; its other sessions are read by
+  // type. Nothing stores the pairing — it is read off the newest rows. The
   // card is addressed by its number here, the handle the whole app uses;
   // the row holds the key.
 
-  /** The newest session of `agent` kind on the card, any status — a
-   *  destroyed coder is still the card's coder (the looper restarts it). */
-  private async newestOnCard(projectId: string, cardNumber: number, kind: 'coding' | 'supervisor'):
-  Promise<SessionRow | undefined> {
+  /** The newest session of `type` on the card, any status. */
+  async newestOnCard(projectId: string, cardNumber: number, type: string): Promise<SessionRow | undefined> {
+    return this.newestOnCardWhere(projectId, cardNumber, eq(sessions.agent, type));
+  }
+
+  private async newestOnCardWhere(projectId: string, cardNumber: number, which: SQL): Promise<SessionRow | undefined> {
     const rows = await this.from()
       .innerJoin(cards, eq(cards.id, sessions.cardId))
-      .where(and(eq(cards.project_id, projectId), eq(cards.number, cardNumber),
-        kind === 'coding' ? ownsItsWorkspace : eq(sessions.agent, 'supervisor')))
+      .where(and(eq(cards.project_id, projectId), eq(cards.number, cardNumber), which))
       .orderBy(desc(sessions.createdAt)).limit(1);
     return rows[0];
   }
 
-  /** The card's coding session — the one building it. */
+  /** The card's coding session — the one that owns the card's checkout, any
+   *  status: a destroyed coder is still the card's coder (the looper restarts it). */
   coderOf(projectId: string, cardNumber: number): Promise<SessionRow | undefined> {
-    return this.newestOnCard(projectId, cardNumber, 'coding');
-  }
-
-  /** The card's supervisor session. */
-  supervisorOf(projectId: string, cardNumber: number): Promise<SessionRow | undefined> {
-    return this.newestOnCard(projectId, cardNumber, 'supervisor');
+    return this.newestOnCardWhere(projectId, cardNumber, ownsItsWorkspace);
   }
 
   /** Every card's coding session in a project — the newest per card, the
@@ -483,16 +483,33 @@ export class Sessions {
 
   // ── lifecycle ──────────────────────────────────────────────────────────────
 
-  /** Create a session: a conversation born with its own checkout
-   *  (Workspaces.checkout), sharing the id. Passing `id` RESTARTS a session
-   *  whose files were removed: the workspace remembers the branch, so the same
-   *  id comes back exactly where it stopped (Workspaces.restore). `fromBranch`
+  /** Create a session of `type`. An `own` type is born with its own checkout
+   *  (Workspaces.checkout), sharing the id; passing `id` RESTARTS one whose
+   *  files were removed: the workspace remembers the branch, so the same id
+   *  comes back exactly where it stopped (Workspaces.restore). `fromBranch`
    *  cuts a NEW session's branch from a source branch on origin instead of
-   *  base (the duplicate route). */
-  async create(projectId: string, opts: { id?: string; fromBranch?: string; type: string; startedBy?: StartedBy }): Promise<SessionFull> {
+   *  base (the duplicate route). A `borrow` type is a conversation row
+   *  pointed at `workspaceSessionId`'s workspace; a `none` type, a
+   *  conversation row with no workspace. */
+  async create(projectId: string, opts: StartOptions & { fromBranch?: string }): Promise<SessionFull> {
     const type = opts.type;
+    const shape = this.agentTypes.workspaceOf(type);
     const project = await this.projects.get(projectId);
     if (!project) throw new SessionError('not_found', `no project ${projectId}`);
+
+    if (shape !== 'own') {
+      if (opts.id || opts.fromBranch) {
+        throw new SessionError('invalid_args', `a ${type} session has no checkout of its own — nothing to restart or cut a branch for`);
+      }
+      if (shape === 'none' && opts.workspaceSessionId) {
+        throw new SessionError('invalid_args', `a ${type} session runs with no files — it cannot read another session's workspace`);
+      }
+      return this.createConversation(projectId, opts.type, opts.startedBy ?? PERSON,
+        shape === 'borrow' ? await this.borrowedWorkspace(opts.workspaceSessionId) : null);
+    }
+    if (opts.workspaceSessionId) {
+      throw new SessionError('invalid_args', `a ${type} session owns its checkout — it does not read another session's workspace`);
+    }
 
     const prior = opts.id ? await this.get(opts.id) : undefined;
     if (prior && prior.projectId !== projectId) {
@@ -501,8 +518,7 @@ export class Sessions {
     // A session that does not own its workspace has no files of its own — there
     // is nothing to restart.
     if (prior && !ownsWorkspace(prior)) {
-      throw new SessionError('invalid_args',
-        'a supervisor session holds only its conversation — there are no files to restart; the looper creates these');
+      throw new SessionError('invalid_args', `session ${prior.id} has no checkout of its own — there are no files to restart`);
     }
     // Files still on disk: rebuilding them underneath would delete work that
     // has not been pushed yet.
@@ -527,69 +543,50 @@ export class Sessions {
     // together, sharing the id.
     const id = opts.id ?? newId();
     const workspace = await this.workspaces.checkout(project, id, { fromBranch: opts.fromBranch });
-    await this.db.insert(sessions).values({ id, projectId, workspaceId: id, agent: type, startedBy: opts.startedBy ?? 'person', ...await this.birthModel(projectId, type) });
+    await this.db.insert(sessions).values({ id, projectId, workspaceId: id, agent: type, startedBy: opts.startedBy ?? PERSON, ...await this.birthModel(projectId, type) });
     const row = (await this.get(id))!;
     log.info({ session: id, branch: workspace.branch }, 'session created');
     this.changed(id);
     return { ...row, branch: workspace.branch, cutFromSha: workspace.cutFromSha };
   }
 
-  /** A conversation-only session: no checkout of its own — `workspaceId` points at
-   *  another session's workspace (the files it can read), or is null when there is
-   *  nothing to read. The shared base for supervisor and assistant sessions. */
-  private async createConversation(
-    projectId: string, opts: { agent: string; startedBy: StartedBy; workspaceId?: string | null; cardId?: number },
-  ): Promise<SessionRow> {
+  /** A conversation-only session: no checkout of its own — `workspaceId` is
+   *  another session's workspace (the files it can read), or null when there
+   *  is nothing to read. Answered in the shape `create` answers; there is no
+   *  cut point, there being no checkout. */
+  private async createConversation(projectId: string, type: string, startedBy: string, workspaceId: string | null): Promise<SessionFull> {
     const id = newId();
     await this.db.insert(sessions).values({
-      id, projectId, agent: opts.agent, startedBy: opts.startedBy,
-      ...(opts.workspaceId ? { workspaceId: opts.workspaceId } : {}),
-      ...(opts.cardId ? { cardId: opts.cardId } : {}),
-      ...await this.birthModel(projectId, opts.agent),
+      id, projectId, agent: type, startedBy,
+      ...(workspaceId ? { workspaceId } : {}),
+      ...await this.birthModel(projectId, type),
     });
     this.changed(id);
-    return (await this.get(id))!;
+    return { ...(await this.get(id))!, cutFromSha: null };
   }
 
-  /** The supervisor's conversation-only session, on its coder's card: no
-   *  workspace of its own — its workspace_id points at the coder's, which is where
-   *  the files are. */
-  async createSupervisor(projectId: string, workspaceId: string, cardId: number, layout: SystemPromptLayout): Promise<SessionRow> {
-    SystemPrompt.check(layout);
-    const s = await this.createConversation(projectId, { agent: 'supervisor', startedBy: 'looper', workspaceId, cardId });
-    await this.writeSystemPrompt(s, layout);
-    return s;
+  /** The workspace a borrowing session reads: the named session's own
+   *  workspaceId — an owner's is its own, a borrower's is the one it reads —
+   *  or null when no session is named. */
+  private async borrowedWorkspace(workspaceSessionId: string | null | undefined): Promise<string | null> {
+    if (!workspaceSessionId) return null;
+    const target = await this.get(workspaceSessionId);
+    if (!target) throw new SessionError('not_found', `no session ${workspaceSessionId} to read the workspace of`);
+    return target.workspaceId ?? null;
   }
 
-  /** Where the assistant's row points: the project, and the workspace of the
-   *  session on screen (that session's own workspaceId — a coder owns its
-   *  workspace, a supervisor borrows the coder's). No session on screen = the
-   *  project alone, no workspace. The same resolution for creating the row
-   *  and re-pointing it. */
-  private async assistantTarget(projectId: string, activeSessionId?: string | null) {
-    const active = activeSessionId ? await this.get(activeSessionId) : undefined;
-    return { projectId, workspaceId: active?.workspaceId ?? null };
-  }
-
-  /** The assistant's conversation-only session, pointed at what the user is
-   *  looking at. */
-  async createAssistant(projectId: string, activeSessionId: string | null | undefined, layout: SystemPromptLayout, startedBy: StartedBy = 'person'): Promise<SessionRow> {
-    SystemPrompt.check(layout);
-    const t = await this.assistantTarget(projectId, activeSessionId);
-    const s = await this.createConversation(t.projectId, { agent: 'assistant', startedBy, workspaceId: t.workspaceId });
-    await this.writeSystemPrompt(s, layout);
-    return s;
-  }
-
-  /** The assistant's row follows the session on screen: its tools read that
-   *  session's files, so its project and workspace are re-pointed at it on
-   *  every switch. Assistant rows only; a no-op when nothing moved. */
-  async follow(id: string, projectId: string, activeSessionId?: string | null): Promise<void> {
+  /** Re-point a borrowing session at another session's files (and project):
+   *  its tools read that workspace from now on. Only a `borrow` type may
+   *  move; a no-op when nothing changed. */
+  async repoint(id: string, projectId: string, workspaceSessionId?: string | null): Promise<void> {
     const s = await this.get(id);
-    if (!s || s.agent !== 'assistant') return;
-    const t = await this.assistantTarget(projectId, activeSessionId);
-    if (s.projectId === t.projectId && s.workspaceId === t.workspaceId) return;
-    await this.db.update(sessions).set(t).where(eq(sessions.id, id));
+    if (!s) throw new SessionError('not_found', `no session ${id}`);
+    if (this.agentTypes.workspaceOf(s.agent) !== 'borrow') {
+      throw new SessionError('invalid_args', `a ${s.agent} session does not borrow a workspace — nothing to re-point`);
+    }
+    const target = { projectId, workspaceId: await this.borrowedWorkspace(workspaceSessionId) };
+    if (s.projectId === target.projectId && s.workspaceId === target.workspaceId) return;
+    await this.db.update(sessions).set(target).where(eq(sessions.id, id));
     this.changed(id);
   }
 
@@ -770,8 +767,8 @@ export class Sessions {
   }
 
   /** A tool call on the session: its CHECKOUT was used, whoever's session
-   *  it is — a supervisor's read keeps the coder's container warm the same
-   *  as the coder's own. Background jobs never touch, or nothing goes cold. */
+   *  it is — a borrower's read keeps the owner's container warm the same as
+   *  the owner's own. Background jobs never touch, or nothing goes cold. */
   async touch(s: SessionRow): Promise<void> {
     if (s.workspaceId) await this.workspaces.touch(s.workspaceId);
   }

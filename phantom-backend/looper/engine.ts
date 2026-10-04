@@ -12,14 +12,21 @@ import { BackendClient, type AgentHandlers, type Agent } from 'phantom-client-sd
 import { CodingAgent } from '../../core/agents/coding.js';
 import { SupervisorAgent } from '../../core/agents/supervisor.js';
 import type { ProjectRow } from 'phantom-backend-sdk/schema';
-import { workspaceOf, LOOP_CLIENT_ID, GLOBAL, type CardFields } from 'phantom-backend-sdk';
+import { GLOBAL, type CardFields } from 'phantom-backend-sdk';
 import type { Sessions, Projects, Cards, Settings, TokenLog, SettingsEvents, BoardEvents, SessionEvents } from 'phantom-backend-sdk';
 import { logger, errStr } from 'phantom-backend-sdk';
 import { canTurn, unsentKickoff, nextStep, needsFreshSession, LOOP_COLUMNS, type CardRow } from './logic.js';
 import { codingAgentCardKit, supervisorCardKit, type LoopColumn } from './cardRunTools.js';
 
 const log = logger('looper');
+/** The card run's lock identity — the holder under which its coding and
+ *  supervisor turns save. The looper locks with it when it starts a run, the
+ *  release hook ignores it, and the auto-build alerts read the mover off it. */
+export const LOOP_CLIENT_ID = 'supervisor';
 const CLIENT_ID = LOOP_CLIENT_ID;
+/** What a card run's sessions say opened them (`started_by`): a default
+ *  session list leaves them out (config.backgroundStarters). */
+export const LOOPER_STARTER = 'looper';
 
 export interface LooperDeps {
   sessions: Sessions;
@@ -207,6 +214,15 @@ export class LooperEngine {
     });
   }
 
+  /** A new supervisor session for the card: a conversation on the coder's
+   *  workspace (the type borrows), opened by the looper, put on the card. */
+  private async newSupervisor(project: ProjectRow, card: CardRow, coderSessionId: string): Promise<string> {
+    const sup = await this.deps.sessions.start(project.id, SupervisorAgent.systemPromptLayout,
+      { type: 'supervisor', startedBy: LOOPER_STARTER, workspaceSessionId: coderSessionId });
+    await this.deps.sessions.setCard(sup.id, card.id);
+    return sup.id;
+  }
+
   /** One turn for one card: open the CODING agent on its session, then do
    *  the ONE owed step — a kickoff, a supervisor turn (the coder's reply
    *  copied in), a delivery (the supervisor's reply out), or the return
@@ -229,13 +245,13 @@ export class LooperEngine {
       codingAgent = await CodingAgent.resumeSession(this.client, this.handlers(card.number, 'coding'), coder.id);
       // The supervisor: born for THIS coder. One older than the coder
       // belonged to an earlier run — a fresh one is made.
-      const sup = await this.deps.sessions.supervisorOf(project.id, card.number);
+      const sup = await this.deps.sessions.newestOnCard(project.id, card.number, 'supervisor');
       supervisorSessionId = sup && sup.createdAt.getTime() >= coder.createdAt.getTime()
         ? sup.id
-        : (await this.deps.sessions.createSupervisor(project.id, workspaceOf(coder), card.id, SupervisorAgent.systemPromptLayout)).id;
+        : await this.newSupervisor(project, card, coder.id);
     } else {
       // A new run: the coder (with its workspace), put on the card the moment it exists.
-      codingAgent = await CodingAgent.newSession(this.client, this.handlers(card.number, 'coding'), project.id);
+      codingAgent = await CodingAgent.newSession(this.client, this.handlers(card.number, 'coding'), project.id, { startedBy: LOOPER_STARTER });
       const sessionId = codingAgent.session.id;
       await this.deps.sessions.setCard(sessionId, card.id);
       // The coder's session is named after its card from birth — /resume
@@ -243,8 +259,7 @@ export class LooperEngine {
       await this.deps.sessions.nameIfUnnamed(sessionId, card.title);
       this.deps.events?.publish(project.id, { event: 'session', card: card.number, id: sessionId, name: card.title });
       // A new coder gets a new supervisor: a conversation on the coder's workspace, on the same card.
-      supervisorSessionId = (await this.deps.sessions.createSupervisor(project.id,
-        workspaceOf(codingAgent.session.row as never), card.id, SupervisorAgent.systemPromptLayout)).id;
+      supervisorSessionId = await this.newSupervisor(project, card, sessionId);
     }
 
     // ── the token budget — seeded once per loop, checked before every turn,

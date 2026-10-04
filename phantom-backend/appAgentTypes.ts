@@ -13,7 +13,7 @@ export const appAgentTypes: AgentTypeDefinition[] = [
     name: 'coding',
     workspace: 'own',
     tools: ['bash', 'task_list', 'task_wait', 'task_kill', 'read', 'write', 'edit', 'ls', 'find', 'grep', 'skill_list', 'skill_load', 'skill_manage', 'web_search', 'web_fetch', 'secret_list', 'secret_get', 'cron_list', 'cron_create', 'cron_update', 'cron_remove', 'database_query', 'kanban_card_read', 'send_message'],
-    listed: true,
+    listed: 'always',
     settings: {
       provider: { description: "The coding agent's LLM provider. Its key is set on /keys. Nothing runs until one is chosen. Per project: override on the project — set its provider first, then its model.", projectOverridable: true },
       model: { description: "Model id for the chosen provider. Empty = the newest model the catalog lists for it, so it follows releases. A project with its own provider picks its own model.", projectOverridable: true },
@@ -34,7 +34,7 @@ export const appAgentTypes: AgentTypeDefinition[] = [
     modelFallsBackTo: 'coding',
     workspace: 'borrow',
     tools: ['task_list', 'task_wait', 'read', 'ls', 'find', 'grep', 'web_search', 'web_fetch', 'cron_list', 'cron_create', 'cron_update', 'cron_remove', 'kanban_card_read', 'kanban_card_list', 'kanban_card_create', 'kanban_card_update', 'kanban_card_items', 'kanban_card_auto_plan', 'kanban_card_auto_build', 'kanban_card_pin', 'kanban_card_move', 'kanban_card_history', 'git_auto_push', 'git_auto_pull'],
-    listed: false,
+    listed: 'never',
     settings: {
       provider: { description: "The AI provider the Assistant answers on, on its key from /keys. Empty = the coding agent's provider." },
       model: { description: "Model the Assistant answers with. Empty = the coding agent's model; required when the provider differs from the coding agent's. A small fast model keeps replies quick." },
@@ -55,7 +55,7 @@ export const appAgentTypes: AgentTypeDefinition[] = [
     modelFallsBackTo: 'coding',
     workspace: 'borrow',
     tools: ['task_list', 'task_wait', 'read', 'ls', 'find', 'grep', 'web_search', 'web_fetch', 'kanban_card_read'],
-    listed: false,
+    listed: 'background',
     settings: {
       provider: { description: "The AI provider the supervisor judges on, on its key from /keys. Empty = the coding agent's provider." },
       model: { description: "Model the supervisor judges with. Empty = the coding agent's model; required when the provider differs from the coding agent's." },

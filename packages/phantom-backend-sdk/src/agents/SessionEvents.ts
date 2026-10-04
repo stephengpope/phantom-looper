@@ -4,14 +4,12 @@
 // — but keyed by SESSION, so a watcher of one conversation is never handed
 // another's tokens.
 //
-// Publishers: runCodingTurn (every part of a coding turn), the supervisor's
-// supervisor turn, POST /sessions/:id/events (a cli window relaying the turn
-// IT runs — the same records, over HTTP), PUT /sessions/:id/transcript
-// (the one place that knows the record landed), POST
-// /sessions/:id/interrupt (the one stop signal), and index.ts's sync wiring
+// Publishers: POST /sessions/:id/events (every client running a turn —
+// a cli window, the backend's own engines — relays the turn's parts here),
+// the record append (the one place that knows the record landed), POST
+// /sessions/:id/interrupt (the one stop signal), and the app's sync wiring
 // (every git push/pull step on the session, whoever kicked it off).
-// Subscribers: GET /sessions/:id/events, and the POST /sessions/:id/turn
-// route, which maps the same parts into its own ND-JSON reply.
+// Subscribers: GET /sessions/:id/events.
 //
 // Every event carries WHO published it (`by`, the client id holding the
 // session), and the feed never hands a client its own events back: a window
@@ -30,7 +28,7 @@ import { EventEmitter } from 'node:events';
 export type SessionEvent =
   /** A server-side turn began: the text it is answering, so a watcher sees
    *  the question and not just a reply out of nowhere. */
-  | { event: 'turn-start'; agent: 'coding' | 'supervisor'; message: string;
+  | { event: 'turn-start'; agent: string; message: string;
       provider?: string; model?: string }
   /** One AI SDK stream part, verbatim (tool results capped — see CAP_BYTES). */
   | { event: 'part'; part: Record<string, unknown> }
