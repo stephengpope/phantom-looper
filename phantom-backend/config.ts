@@ -22,7 +22,7 @@ export const config: PhantomBackendConfig = {
   // The engines that open sessions for themselves; a default list leaves those out.
   backgroundStarters: [LOOPER_STARTER, CRON_STARTER],
   // Sign-in (people, organizations, invitations, API keys — docs/multi-user.md)
-  // is on when the operator sets AUTH_SECRET; nothing in this app uses it yet.
+  // is on when the phantom admin sets AUTH_SECRET; nothing in this app uses it yet.
   // Off by default: no route, nothing written.
   // Password sign-in with AUTH_PASSWORD=1; GitHub with AUTH_GITHUB_CLIENT_ID +
   // AUTH_GITHUB_CLIENT_SECRET. The mails' wording is the SDK's default here.

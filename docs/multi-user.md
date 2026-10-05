@@ -11,7 +11,7 @@ The SDK is **auth as a service** (the Supabase shape): it ships the user
 and organization tables, the sign-in routes and `backend.identity.require`.
 Who may see which project, session or row is **user space's** rule, written
 in user space's routes against user space's tables — which join the SDK's
-tables in the same database. The SDK's own routes, the operator's
+tables in the same database. The SDK's own routes, the phantom admin's
 `API_KEY`, the looper, cron, Telegram and the cli do not change.
 
 ## Where things live
@@ -66,18 +66,18 @@ the console, nothing else in the name).
 
 | Prefix | Owned by | Auth | Audience |
 |---|---|---|---|
-| `/api/*` | SDK | `API_KEY` (unchanged) | the operator: cli, looper, cron, updater, scripts; user space's own code |
+| `/api/*` | SDK | `API_KEY` (unchanged) | the phantom admin: cli, looper, cron, updater, scripts; user space's own code |
 | `/api/auth/*` | SDK (Better Auth) | public / the user's own token | an app's end users: sign in, organizations, invitations, keys |
-| `/api/identity/*` | SDK | `me`: any caller · the rest: the key | who am I; the operator's bootstrap |
+| `/api/identity/*` | SDK | `me`: any caller · the rest: the key | who am I; the phantom admin's bootstrap |
 | `/app/*` | user space | the app's choice per route: `backend.identity.require` | the app's end users |
-| `/db` | SDK (console) | Basic: `console_admin` + the API key | the operator, in a browser |
+| `/db` | SDK (console) | Basic: `console_admin` + the API key | the phantom admin, in a browser |
 
 The SDK never serves under `/app`; user space never under `/api`. The
 prefix says who owns a route and who may call it. `config.routes` registers
 under `/app` with no key check — the app applies its own. A browser app on
 another origin (`identity.trustedOrigins`) gets CORS with credentials on
 `/api/auth` and `/app`. phantom-looper's routes (`/models`, `/update`,
-`/system/*`) moved to `/app` and admit the operator alone, as before; the
+`/system/*`) moved to `/app` and admit the phantom admin alone, as before; the
 client SDK sends a path under `/app/` to the origin, any other under
 `/api`.
 
@@ -85,7 +85,7 @@ client SDK sends a path under `/app/` to the origin, any other under
 
 | Caller | Sees |
 |---|---|
-| Operator (`API_KEY`) | everything |
+| Phantom admin (`API_KEY`) | everything |
 | User space code (in-process) | every row; applies its own rules per end user |
 | End user (Better Auth token) | what the app's `/app` routes hand them |
 | Agent | its session's project; its own play-space database |
@@ -142,7 +142,7 @@ identity: {
 phantom-looper turns it on when `AUTH_SECRET` is set (`AUTH_TRUSTED_ORIGINS`
 comma-separated); nothing in it uses it yet.
 
-**Bootstrap:** the operator makes the first user with
+**Bootstrap:** the phantom admin makes the first user with
 `POST /api/identity/users {email, name}` and gets their link with
 `POST /api/identity/magic-link {email}` — handed back, not mailed, so
 SMTP is not needed for the first sign-in. From there users invite others
@@ -170,7 +170,7 @@ class Identity {
   createUser({ email, name? }): Promise<UserRow>               // bootstrap; 'email_taken' → 409
   magicLink(email): Promise<string>                            // bootstrap: the link, not mailed
 }
-type Caller = { kind: 'operator' } | { kind: 'user'; user: UserRow; organization: OrganizationRow; role: OrganizationRole }
+type Caller = { kind: 'phantom_admin' } | { kind: 'user'; user: UserRow; organization: OrganizationRow; role: OrganizationRole }
 class IdentityError extends Error { code: 'disabled' | 'unauthorized' | 'email_taken' }
 
 // src/storage/Database.ts
@@ -194,7 +194,7 @@ Exported: `Mailer`, `MailerError`, `Identity`,
   as `console_admin` and connects.
 - Mail: `mail_not_configured`; the six settings over the API; the test
   mail in the inbox.
-- Sign-in: the operator creates Ann (409 the second time); her link
+- Sign-in: the phantom admin creates Ann (409 the second time); her link
   handed back signs her in (bearer, `me` → her personal organization,
   owner); her link by mail does the same; a stranger's request gets 200
   and no mail; Ann makes Acme and invites Bob — the mail arrives, Bob's
@@ -203,7 +203,7 @@ Exported: `Mailer`, `MailerError`, `Identity`,
   on `/api/projects` is 401; sign-out ends her session. CORS: a trusted
   origin's preflight is allowed with credentials, an unknown origin's is
   not. Off (`AUTH_SECRET` empty): `/api/auth` is a bare 401, `me` still
-  answers the operator, the bootstrap route answers `disabled`, `/app`
+  answers the phantom admin, the bootstrap route answers `disabled`, `/app`
   answers the key.
 
 ## Part 2 — built 2026-10-05
@@ -233,7 +233,7 @@ it: `scopeOf(project)` — one helper beside `SettingScope` — gives
 `{ projectId, organizationId }` from the row's new column (step 4 adds
 it; this step adds the column first, with no owner yet). `userId` is
 never the SDK's to fill: the looper, cron, Telegram and the `/api` routes
-run as the operator; user space passes `{ userId }` in its own calls.
+run as the phantom admin; user space passes `{ userId }` in its own calls.
 
 **Changes.**
 
@@ -245,7 +245,7 @@ run as the operator; user space passes `{ userId }` in its own calls.
   replaces `projectOverridable` (37 declarations: the SDK's, the app's,
   every agent type's ten; `projectOnly` stays). The rule applied to the
   SDK's own: whatever a project may override, an organization and a user
-  may too — a bigger project; operator-only settings (console, telegram,
+  may too — a bigger project; phantom admin-only settings (console, telegram,
   smtp, limits, upgrade) stay global.
 - `Settings.writeAtScope(layer, scopeName, patch)`: `layer` is the chain's
   word; `not_overridable` says which layer refused. The provider-first
@@ -272,24 +272,24 @@ the cli's settings screen is unchanged; deleting O deletes its rows.
 *Built:* the column and constraint came with 056 in step 3;
 `Projects.list(caller?)` / `get(id, caller?)` and `NewProject.organizationId`.
 
-**What.** `projects.organization_id` (nullable → the operator's, which is
+**What.** `projects.organization_id` (nullable → the phantom admin's, which is
 every project today; FK to `identity.organization`, `on delete set null`
-— a deleted organization's projects become the operator's, never
+— a deleted organization's projects become the phantom admin's, never
 vanish). `unique nulls not distinct (organization_id, owner, name)`
 replaces `unique (owner, name)`: two organizations may register one repo.
 
 **Trace.** User space's `/app` route: `caller = identity.require(req,
 { users: true })` → `projects.list(caller)` / `projects.get(id, caller)`
-→ `visibleTo(caller)`: the operator matches every row; a user matches
+→ `visibleTo(caller)`: the phantom admin matches every row; a user matches
 `organization_id = caller.organization.id`. Everything under a project —
 workspaces, sessions, cards, crons, the play-space database, secrets,
 project settings — is reached through a `ProjectRow` (Cards, Crons,
 Sessions.create, the tools' `ToolCtx.project`) or a `projectId` taken
 from one, so a project the guard refused takes all of it with it: one
 check, inherited. `projects.create({ …, organizationId })` from user
-space; the SDK's `POST /api/projects` (operator) writes null.
+space; the SDK's `POST /api/projects` (phantom admin) writes null.
 `Sessions.list({ project })` is already per project. The SDK's own `/api`
-routes stay operator-only and unfiltered — the operator sees everything.
+routes stay phantom admin-only and unfiltered — the phantom admin sees everything.
 
 **Changes.** Migration 056 (the column, the FK, the constraint);
 `ProjectRow.organizationId`; `Projects.list(caller?)`, `get(id, caller?)`,
@@ -297,7 +297,7 @@ routes stay operator-only and unfiltered — the operator sees everything.
 `scopeOf(project)` (step 3) now carries the organization.
 
 **Proof.** User A's project is 404 to user B through an `/app` route and
-listed to the operator; a tool in A's session cannot name B's project;
+listed to the phantom admin; a tool in A's session cannot name B's project;
 the same repo registered by both organizations; deleting A's organization
 leaves the project, owner null.
 
@@ -344,7 +344,7 @@ how it wants (a tool it registers, an `/app` route).
 **Proof.** As organization A, `select * from phantom_agent_sdk.projects`
 returns A's rows only, `update … where id = <B's>` touches 0 rows,
 `select * from phantom_agent_sdk.settings` returns nothing, `create
-table` is refused; as the operator (`backend` role) everything is as
+table` is refused; as the phantom admin (`backend` role) everything is as
 before.
 
 ### 6. Password and OAuth sign-in
@@ -353,7 +353,7 @@ before.
 phantom-looper passes `AUTH_PASSWORD=1`, `AUTH_GITHUB_CLIENT_ID/SECRET`.
 
 **What.** Beside magic links: email + password, and GitHub / Google.
-Invite-only stays: nothing creates a user but the operator and an
+Invite-only stays: nothing creates a user but the phantom admin and an
 invitation.
 
 **Trace.** `identity.signIn: { password?: true; github?: { clientId,
@@ -372,7 +372,7 @@ change anyway. The client SDK (step 8) carries the three.
 **Changes.** `IdentityOptions.signIn`; four `Mailer` sends (step 7's door
 names them); `account` rows start being written.
 
-**Proof.** The operator creates a user; they request a reset (mail), set a
+**Proof.** The phantom admin creates a user; they request a reset (mail), set a
 password, sign in with it, `me` answers; a stranger's `sign-up/email` is
 refused; a GitHub login for an invited email links and signs in (a test
 OAuth app); one for a stranger is refused; unverified + password → refused
@@ -408,7 +408,7 @@ other three are the defaults.
 
 ### 8. Client SDK
 
-*Built:* `BackendOptions.credential` (`{ operatorKey } | { sessionToken } |
+*Built:* `BackendOptions.credential` (`{ phantomAdminKey } | { sessionToken } |
 { apiKey }`) replaces `apiKey`; `backend.identity.auth` (Better Auth's
 client), `identity.me()`, `identity.verify(token)`.
 
@@ -421,7 +421,7 @@ wrapper is thin — the client SDK's `BackendClient` holds the credential
 and the origin; Better Auth's client rides it.
 
 ```ts
-const backend = new BackendClient({ url, credential: { operatorKey } | { sessionToken } | { apiKey } });
+const backend = new BackendClient({ url, credential: { phantomAdminKey } | { sessionToken } | { apiKey } });
 backend.identity.me()                               // GET /api/identity/me → Caller
 backend.identity.auth                               // Better Auth's client: signIn.magicLink, magicLink.verify, signOut,
                                                     //   organization.*, apiKey.*, admin.*, signIn.email, signIn.social
@@ -429,14 +429,14 @@ backend.identity.verify(token)                      // the link's token → sess
 ```
 
 `apiKey` on `BackendClient` becomes `credential`: three kinds, one header
-each (`Authorization: Bearer` for the operator's key and a session token,
+each (`Authorization: Bearer` for the phantom admin's key and a session token,
 `x-api-key` for a Better Auth key). Paths under `/app/` go to the origin
 (already); `/api/auth/*` is the Better Auth client's own base.
 
 **Proof.** A script on the client SDK: `verify(link)` → `me()` → a user;
 `auth.organization.create` → `me()` names it; `auth.apiKey.create` → a
 second `BackendClient` on it → `me()`; the cli still connects with the
-operator's key.
+phantom admin's key.
 
 ### Order and size
 
@@ -452,7 +452,7 @@ construction: cli, looper, Telegram).
 
 - Media (database-backed files): its own plan, after part 2.
 - The SDK's own `/api` routes filtered per organization: they are the
-  operator's; user space's `/app` routes are where a user's view is built
+  phantom admin's; user space's `/app` routes are where a user's view is built
   (step 4's guard).
 - 2FA, passkeys: Better Auth plugins, added when asked.
 - Per-project membership inside an organization; sharing a session with a

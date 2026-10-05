@@ -13,14 +13,14 @@ export const IDENTITY_PATH = '/api/auth';
 
 /** Who is calling, as GET /api/identity/me answers it. */
 export type Caller =
-  | { kind: 'operator' }
+  | { kind: 'phantom_admin' }
   | { kind: 'user'; user: { id: string; email: string; name: string; role: string | null }
       organization: { id: string; name: string; slug: string }; role: 'owner' | 'admin' | 'member' };
 
-/** The headers a credential rides in: the operator's key and a session
+/** The headers a credential rides in: the phantom admin's key and a session
  *  token as a bearer, a Better Auth API key as x-api-key. */
 export function credentialHeaders(credential: Credential): Record<string, string> {
-  if ('operatorKey' in credential) return { authorization: `Bearer ${credential.operatorKey}` };
+  if ('phantomAdminKey' in credential) return { authorization: `Bearer ${credential.phantomAdminKey}` };
   if ('sessionToken' in credential) return { authorization: `Bearer ${credential.sessionToken}` };
   return { 'x-api-key': credential.apiKey };
 }
@@ -62,7 +62,7 @@ export class Identity {
 
   constructor(private readonly deps: IdentityDeps) { this.auth = makeAuthClient(deps); }
 
-  /** Who this client is to the backend: the operator, or a user in their
+  /** Who this client is to the backend: the phantom admin, or a user in their
    *  organization. Throws the backend's `unauthorized` for nobody. */
   me(): Promise<Caller> { return this.deps.me(); }
 

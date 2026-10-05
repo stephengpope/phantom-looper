@@ -2,7 +2,7 @@
 // {ok:false, error:{code, message, retryable}}), and three prefixes that say
 // who owns a route and who may call it (docs/multi-user.md):
 //
-//   /api/*       the SDK's routes; the operator's bearer key on every one
+//   /api/*       the SDK's routes; the phantom admin's bearer key on every one
 //   /api/auth/*  Identity (Better Auth): sign-in, organizations, invitations,
 //                keys — public, or the user's own token
 //   /app/*       user space's routes (config.routes); no key here — the app

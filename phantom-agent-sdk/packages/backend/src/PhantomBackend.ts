@@ -139,7 +139,7 @@ export class PhantomBackend {
   readonly notifications = new Notifications();
   /** Outbound mail (SMTP, the smtp_* settings). */
   readonly mailer: Mailer;
-  /** Who a caller is: the operator's key, or a signed-in user (config.identity). */
+  /** Who a caller is: the phantom admin's key, or a signed-in user (config.identity). */
   readonly identity: Identity;
   readonly sessionTitler: SessionTitler;
   /** The backend's git: manual ops, auto-push/pull, instant sync, the archive policy. */

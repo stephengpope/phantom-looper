@@ -63,7 +63,7 @@ export class TelegramAssistantBot {
    *  and the looper's count of card runs in flight (the upgrade's health line). */
   constructor(readonly backend: PhantomBackend, readonly deployment: Deployment, private readonly loopsRunning: () => number) {
     this.state = new TelegramAssistantState(backend.database.drizzle);
-    this.client = new BackendClient({ url: backend.loopback.url, credential: { operatorKey: backend.loopback.apiKey }, clientId: CLIENT_ID, label: 'telegram', actor: TELEGRAM_STARTER });
+    this.client = new BackendClient({ url: backend.loopback.url, credential: { phantomAdminKey: backend.loopback.apiKey }, clientId: CLIENT_ID, label: 'telegram', actor: TELEGRAM_STARTER });
     this.upgradeChecker = new UpgradeChecker({
       version: APP_VERSION,
       health: async () => ({ version: APP_VERSION, loops_running: loopsRunning() }),

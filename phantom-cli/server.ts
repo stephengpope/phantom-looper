@@ -42,7 +42,7 @@ export class Server {
     this.#connection?.close();
     const savedCa = savedCaFor(base);
     this.#connection = new BackendConnection({ origin, ...(savedCa ? { certificateAuthority: [...rootCertificates, savedCa] } : {}) });
-    this.#backend = new BackendClient({ url: `${base}/api`, credential: { operatorKey: key }, clientId: this.clientId, label: this.label, fetch: this.#connection.fetch });
+    this.#backend = new BackendClient({ url: `${base}/api`, credential: { phantomAdminKey: key }, clientId: this.clientId, label: this.label, fetch: this.#connection.fetch });
     this.#base = base;
     return this.#backend;
   }

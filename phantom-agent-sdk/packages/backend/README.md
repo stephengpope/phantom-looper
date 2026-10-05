@@ -29,7 +29,7 @@ migrations) and `backend` (the process: rows only, no DDL; makes agent
 play-space databases) exist with passwords derived from `ENCRYPTION_KEY`,
 then hangs up. Nothing running can alter a table.
 
-**Routes.** `/api/*` the SDK's, the operator's bearer key on every one;
+**Routes.** `/api/*` the SDK's, the phantom admin's bearer key on every one;
 `/api/auth/*` sign-in (Better Auth, with `config.identity`); `/app/*` user
 space's (`config.routes`), no key check — the app gates each with
 `backend.identity.require(request)`. `/db` the database console.
@@ -39,7 +39,7 @@ settings; `POST /api/mail/test` proves them). `config.identity` turns sign-in
 on: magic links, invite-only; every user has a personal organization and an
 invitation adds membership in another; a cli carries the session token as a
 bearer, a program an API key. `backend.identity.callerOf(request)` says who
-is calling — the operator or a user in their organization. The operator
+is calling — the phantom admin or a user in their organization. The phantom admin
 bootstraps the first user with `POST /api/identity/users` and
 `POST /api/identity/magic-link`. docs/multi-user.md has the whole of it.
 

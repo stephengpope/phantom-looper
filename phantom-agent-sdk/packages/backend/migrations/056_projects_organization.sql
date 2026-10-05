@@ -1,10 +1,10 @@
 -- A project's organization (docs/multi-user.md part 2, steps 3 and 4). Null
--- is the operator's — every project today, so no row changes. The
+-- is the phantom admin's — every project today, so no row changes. The
 -- organization's settings layer rides in a project's chain through this
 -- column (lib/scopes.ts scopeOf). A deleted organization's projects become
--- the operator's, never vanish. Two organizations may register one repo:
+-- the phantom admin's, never vanish. Two organizations may register one repo:
 -- the unique moves to (organization_id, owner, name), nulls not distinct
--- so the operator's own stay unique among themselves.
+-- so the phantom admin's own stay unique among themselves.
 
 alter table phantom_agent_sdk.projects
   add column organization_id text references identity.organization(id) on delete set null;

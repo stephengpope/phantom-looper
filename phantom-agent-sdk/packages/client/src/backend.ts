@@ -17,9 +17,9 @@ import { withRetry as retryingFetch, type RetryPolicy } from './model/retry.js';
 import { SDK_VERSION } from './sdkVersion.js';
 import { Identity, credentialHeaders, type Caller } from './identity.js';
 
-/** What a client carries: the operator's key (every SDK route), a user's
+/** What a client carries: the phantom admin's key (every SDK route), a user's
  *  session token (a sign-in's `set-auth-token`), or a Better Auth API key. */
-export type Credential = { operatorKey: string } | { sessionToken: string } | { apiKey: string };
+export type Credential = { phantomAdminKey: string } | { sessionToken: string } | { apiKey: string };
 
 export interface BackendOptions {
   /** The API root, e.g. `http://localhost:4000/api`. */

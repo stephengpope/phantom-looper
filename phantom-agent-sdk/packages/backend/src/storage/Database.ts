@@ -125,11 +125,11 @@ export class Database {
   /** A caller's own SQL on this database, fenced by Postgres: one
    *  connection as `authenticated`, one transaction that names the
    *  caller's organization and user for the row-level policies (057), the
-   *  statements, commit — an error undoes the whole call. The operator
+   *  statements, commit — an error undoes the whole call. The phantom admin
    *  runs as `backend` (no policies, as every SDK read). Only a user has
    *  rows to see; a user with no organization sees none. */
   async queryAs(caller: Caller, sql: string, options: QueryOptions): Promise<StatementResult[]> {
-    const client = new pg.Client({ connectionString: caller.kind === 'operator' ? this.url : this.authenticatedUrl,
+    const client = new pg.Client({ connectionString: caller.kind === 'phantom_admin' ? this.url : this.authenticatedUrl,
       connectionTimeoutMillis: 5000, types: AGENT_TYPES });
     await client.connect();
     try {

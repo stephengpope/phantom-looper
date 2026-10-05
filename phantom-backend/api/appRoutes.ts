@@ -1,7 +1,7 @@
 // This app's own routes, registered through the backend's route door
 // (config.routes) under /app and the SDK's envelope: the system routes —
 // this app's upgrade, logs, status, restart and token report. The SDK puts
-// no key check on /app; this app admits the operator alone, as before.
+// no key check on /app; this app admits the phantom admin alone, as before.
 import type { FastifyInstance } from 'fastify';
 import type { PhantomBackend, Deployment } from '@phantom-agent-sdk/backend';
 import { systemRoutes } from './routes/system.js';
