@@ -40,6 +40,7 @@ import { messageLine, userMessage, assistantMessage } from '@phantom-agent-sdk/c
 import { CodingAgent } from '../../phantom-looper/agents/coding.js';
 import type { CronRow, PhantomBackend } from '@phantom-agent-sdk/backend';
 import { logger, errStr } from '@phantom-agent-sdk/backend';
+import { scopeOf } from '@phantom-agent-sdk/backend';
 
 /** The cron scheduler's client id — its lock identity on the sessions it runs. */
 export const CRON_CLIENT_ID = 'cron';
@@ -114,7 +115,7 @@ export class CronScheduler {
         const project = await this.backend.projects.get(row.project_id);
         if (!project) continue;
         try {
-          const values = await this.backend.settings.resolveMany(['cron_enabled', 'timezone'], { projectId: project.id });
+          const values = await this.backend.settings.resolveMany(['cron_enabled', 'timezone'], scopeOf(project));
           zone = { enabled: values.cron_enabled === true, timezone: String(values.timezone) };
         } catch (error) {
           log.error({ project: project.name, err: errStr(error) }, 'could not read the project\'s cron settings — its crons are not scheduled');

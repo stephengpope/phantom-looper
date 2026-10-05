@@ -15,6 +15,7 @@ import { CronError, CRON_FIELDS, type CronFields } from '../../storage/Crons.js'
 import { REASONINGS } from '@phantom-agent-sdk/client';
 import { ok, err } from '../HttpApi.js';
 import type { PhantomBackend } from '../../PhantomBackend.js';
+import { scopeOf } from '../../lib/scopes.js';
 
 const TAG = { tags: ['crons'] };
 const idParam = { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] };
@@ -38,7 +39,7 @@ for (const field of CRON_FIELDS) {
 
 export function cronRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   const projectOf = (id: string) => ctx.projects.get(id);
-  const clockOf = (project: ProjectRow) => ctx.settings.clockFor({ projectId: project.id });
+  const clockOf = (project: ProjectRow) => ctx.settings.clockFor(scopeOf(project));
   /** Every answer carries the zone and the time there — what a caller
    *  writing a datetime needs and never otherwise has. */
   const stamp = (clock: Clock) => ({ timezone: clock.timezone, now: clock.now().toISOString() });

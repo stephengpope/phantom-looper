@@ -28,6 +28,7 @@ import { UpgradeChecker } from '@phantom-agent-sdk/backend';
 import { TelegramAssistantState, type TelegramAssistantStateRow, type TelegramMode } from './TelegramAssistantState.js';
 import { menuFor, handleCommand } from './commands.js';
 import { AUTO_PUSH_STEPS, AUTO_PULL_STEPS, type AutoPushOutcome, type AutoPullOutcome } from '../../phantom-looper/agents/assistant/gitSteps.js';
+import { scopeOf } from '@phantom-agent-sdk/backend';
 
 
 const log = logger('telegram');
@@ -117,7 +118,7 @@ export class TelegramAssistantBot {
     if (!alertMsg) return;
     // The switch resolved at this project's layer.
     const values = await this.backend.settings.resolveMany(
-      ['telegram_auto_build_notifications', 'telegram_enabled', 'telegram_authorized_user'], { projectId: project.id });
+      ['telegram_auto_build_notifications', 'telegram_enabled', 'telegram_authorized_user'], scopeOf(project));
     if (values.telegram_auto_build_notifications !== true || values.telegram_enabled !== true) return;
     const chatId = Number(values.telegram_authorized_user ?? '');
     if (!chatId || !Number.isFinite(chatId)) return;

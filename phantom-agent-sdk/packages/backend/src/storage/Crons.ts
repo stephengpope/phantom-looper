@@ -29,6 +29,7 @@ import { crons, type CronRow, type ProjectRow } from '../storage/schema.js';
 import type { Clock } from '../lib/clock.js';
 import { keyedProviders, REASONINGS } from '@phantom-agent-sdk/client';
 import type { Settings } from './Settings.js';
+import { scopeOf } from '../lib/scopes.js';
 
 export type { CronRow };
 
@@ -191,7 +192,7 @@ export class Crons {
       throw new CronError('invalid_args', 'provider and model go together — give both to run this cron on another ' +
         'model, or neither (null) to run on the project\'s. A model id means nothing without its provider.');
     }
-    const keyed = keyedProviders(await this.settings.layersForScope({ projectId: project.id }));
+    const keyed = keyedProviders(await this.settings.layersForScope(scopeOf(project)));
     if (!keyed.includes(provider as never)) {
       throw new CronError('invalid_args', `"${provider}" is not a provider this project can call — one with a key on /keys: ` +
         `${keyed.join(', ')}. Save a key there first.`);

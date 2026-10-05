@@ -5,7 +5,9 @@
 // person — is said here and nowhere else. Registration order is the
 // settings screen's order. The coding agent is the root: the assistant's
 // and the supervisor's models fall back to it.
-import type { AgentTypeDefinition } from '@phantom-agent-sdk/backend';
+import type { AgentTypeDefinition, OverridableLayer } from '@phantom-agent-sdk/backend';
+/** Whatever a project may override, an organization and a user may too — a bigger project. */
+const SHARED: readonly OverridableLayer[] = ['organization', 'user', 'project'];
 
 export const appAgentTypes: AgentTypeDefinition[] = [
   {
@@ -15,16 +17,16 @@ export const appAgentTypes: AgentTypeDefinition[] = [
     tools: ['bash', 'task_list', 'task_wait', 'task_kill', 'read', 'write', 'edit', 'ls', 'find', 'grep', 'skill_list', 'skill_load', 'skill_manage', 'web_search', 'web_fetch', 'secret_list', 'secret_get', 'cron_list', 'cron_create', 'cron_update', 'cron_remove', 'database_query', 'kanban_card_read', 'send_message'],
     listed: 'always',
     settings: {
-      provider: { description: "The coding agent's LLM provider. Its key is set on /keys. Nothing runs until one is chosen. Per project: override on the project — set its provider first, then its model.", projectOverridable: true },
-      model: { description: "Model id for the chosen provider. Empty = the newest model the catalog lists for it, so it follows releases. A project with its own provider picks its own model.", projectOverridable: true },
-      base_url: { description: "Endpoint for openai / openai-compatible. Required by openai-compatible.", projectOverridable: true },
-      reasoning: { description: "How much the model thinks before answering. Providers map this to their own setting.", default: "medium", projectOverridable: true },
-      max_steps: { description: "Tool calls allowed per turn before the agent must stop and answer. Empty = unlimited.", projectOverridable: true },
-      context_window: { description: "Context window size in tokens — fallback for when the model catalog doesn't know your model. Empty = use the catalog (the normal path).", projectOverridable: true },
-      compact_threshold_pct: { description: "Percentage of the model's context window that triggers auto-compaction. 0 = off. Checked after every turn.", default: 0, projectOverridable: true },
-      compact_strategy: { description: "The compaction strategy. fast = user/assistant text only.", default: "fast", projectOverridable: true },
-      compact_summarize_pct: { description: "Percentage of user+assistant messages to summarize when compaction fires. The rest stay as-is.", default: 75, projectOverridable: true },
-      compact_max_tokens: { description: "Output token cap for the compaction summary. Empty = the model decides how long the summary is.", projectOverridable: true },
+      provider: { description: "The coding agent's LLM provider. Its key is set on /keys. Nothing runs until one is chosen. Per project: override on the project — set its provider first, then its model.", overridableAt: SHARED },
+      model: { description: "Model id for the chosen provider. Empty = the newest model the catalog lists for it, so it follows releases. A project with its own provider picks its own model.", overridableAt: SHARED },
+      base_url: { description: "Endpoint for openai / openai-compatible. Required by openai-compatible.", overridableAt: SHARED },
+      reasoning: { description: "How much the model thinks before answering. Providers map this to their own setting.", default: "medium", overridableAt: SHARED },
+      max_steps: { description: "Tool calls allowed per turn before the agent must stop and answer. Empty = unlimited.", overridableAt: SHARED },
+      context_window: { description: "Context window size in tokens — fallback for when the model catalog doesn't know your model. Empty = use the catalog (the normal path).", overridableAt: SHARED },
+      compact_threshold_pct: { description: "Percentage of the model's context window that triggers auto-compaction. 0 = off. Checked after every turn.", default: 0, overridableAt: SHARED },
+      compact_strategy: { description: "The compaction strategy. fast = user/assistant text only.", default: "fast", overridableAt: SHARED },
+      compact_summarize_pct: { description: "Percentage of user+assistant messages to summarize when compaction fires. The rest stay as-is.", default: 75, overridableAt: SHARED },
+      compact_max_tokens: { description: "Output token cap for the compaction summary. Empty = the model decides how long the summary is.", overridableAt: SHARED },
     },
   },
   {

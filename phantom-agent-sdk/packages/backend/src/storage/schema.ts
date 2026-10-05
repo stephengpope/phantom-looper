@@ -53,6 +53,9 @@ export const projects = phantomAgentSdk.table('projects', {
   // The next card number this project hands out. Numbers are never reused:
   // a deleted card's stays taken. (024; Projects.claimCardNumber moves it.)
   nextCardNumber: integer('next_card_number').notNull().default(1),
+  // The organization this project belongs to (056); null = the operator's.
+  // Its settings layer rides in the project's chain (scopes.ts scopeOf).
+  organizationId: text('organization_id'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

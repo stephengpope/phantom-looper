@@ -15,9 +15,8 @@
 // in code (CREDENTIALS), never decided by a write.
 import type { FastifyInstance } from 'fastify';
 import type { FastifyRequest } from 'fastify';
-import type { ProjectRow } from '../../storage/schema.js';
 import { SettingsWriteError } from '../../storage/Settings.js';
-import { GLOBAL, projectScope } from '../../lib/scopes.js';
+import { GLOBAL, LAYERS, type Layer, type SettingScope, scopeNames, scopeOf } from '../../lib/scopes.js';
 import { ok, err } from '../HttpApi.js';
 import type { PhantomBackend } from '../../PhantomBackend.js';
 
@@ -26,59 +25,72 @@ const writerOf = (req: FastifyRequest): string | undefined =>
 
 const TAG = { tags: ['settings'] };
 const scopeQuery = { type: 'object', properties: {
-  project: { type: 'string', description: 'Read/write at this project\'s layer.' },
+  organization: { type: 'string', description: 'The organization\'s layer: read it; write it when it is the deepest named.' },
+  user: { type: 'string', description: 'The user\'s layer.' },
+  project: { type: 'string', description: 'The project\'s layer (its organization\'s rides along).' },
 } };
+type ScopeQuery = { organization?: string; user?: string; project?: string };
 
 export function settingsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
-  /** The scope one request addresses. Verifying the project exists is what
-   *  stops a typo becoming an override nothing will ever read — the row would
-   *  be perfectly valid and perfectly dead. */
-  type Scope = { error: string } | { write: string; kind: 'global' | 'project'; project?: ProjectRow };
-  async function scopeOf(query: { project?: string }): Promise<Scope> {
+  /** The scope one request addresses: every layer named is read; the
+   *  deepest named is written. Verifying each id exists is what stops a
+   *  typo becoming an override nothing will ever read — the row would be
+   *  perfectly valid and perfectly dead. A project brings its organization. */
+  type Scope = { error: string } | { scope: SettingScope; write: string; kind: Layer };
+  async function scopeFor(query: ScopeQuery): Promise<Scope> {
+    let scope: SettingScope = {};
+    if (query.organization) {
+      if (!await ctx.identity.organization(query.organization)) return { error: `no organization ${query.organization}` };
+      scope.organizationId = query.organization;
+    }
+    if (query.user) {
+      if (!await ctx.identity.user(query.user)) return { error: `no user ${query.user}` };
+      scope.userId = query.user;
+    }
     if (query.project) {
       const project = await ctx.projects.get(query.project);
       if (!project) return { error: `no project ${query.project}` };
-      return { write: projectScope(query.project), kind: 'project' as const, project };
+      scope = { ...scope, ...scopeOf(project) };
     }
-    return { write: GLOBAL, kind: 'global' as const };
+    const kind: Layer = query.project ? 'project' : query.user ? 'user' : query.organization ? 'organization' : 'global';
+    return { scope, write: scopeNames(scope)[kind] ?? GLOBAL, kind };
   }
 
-  app.get<{ Querystring: { project?: string } }>(
+  app.get<{ Querystring: ScopeQuery }>(
     '/settings', { schema: { ...TAG,
       summary: 'Every setting, resolved',
-      description: 'Every setting with its LAYERS — `default` (code), `global`, `project` — plus the computed `value` and `source` (the layer it came from), and `description`/`meta`/`overridable` so a client renders an editor from this one call. Pass ?project= to fill in that layer. Credentials come back decrypted, flagged `secret`.',
+      description: 'Every setting with its LAYERS — `default` (code), `global`, `organization`, `user`, `project` — plus the computed `value` and `source` (the layer it came from), and `description`/`meta`/`overridable`/`overridableAt` so a client renders an editor from this one call. Pass ?organization=, ?user=, ?project= to fill in those layers (a project brings its organization). Credentials come back decrypted, flagged `secret`.',
       querystring: scopeQuery } },
     async (req, reply) => {
-      const where = await scopeOf(req.query);
+      const where = await scopeFor(req.query);
       if ('error' in where) return reply.code(404).send(err('not_found', where.error));
-      const scope = where.project ? { projectId: where.project.id } : {};
-      const entries = await ctx.settings.layersForScope(scope);
-      const credentials = await ctx.settings.credentialLayers(scope);
+      const entries = await ctx.settings.layersForScope(where.scope);
+      const credentials = await ctx.settings.credentialLayers(where.scope);
       const out: Record<string, unknown> = {};
       for (const [key, entry] of Object.entries(entries)) {
         // A project-only key has no global meaning — the global list omits it.
         if (where.kind === 'global' && !ctx.settings.isGlobalSettable(key)) continue;
         if (!entry.secret) { out[key] = { ...entry, secret: false }; continue; }
         // Credentials are keys of the same store — same table, same chain —
-        // and this route answers them decrypted.
-        const globalValue = credentials[key]?.global ?? null;
-        const projectValue = where.kind !== 'global' ? credentials[key]?.project ?? null : null;
-        out[key] = { ...entry, global: globalValue, project: projectValue, value: projectValue ?? globalValue,
-          source: projectValue != null ? 'project' : globalValue != null ? 'global' : 'default' };
+        // and this route answers them decrypted: every layer, the deepest set winning.
+        const layers = credentials[key]!;
+        let value: string | null = null; let source: string = 'default';
+        for (const layer of LAYERS) if (layers[layer] != null) { value = layers[layer]; source = layer; }
+        out[key] = { ...entry, ...layers, value, source };
       }
       return ok(out);
     });
 
-  app.patch<{ Querystring: { project?: string }; Body: Record<string, unknown> }>(
+  app.patch<{ Querystring: ScopeQuery; Body: Record<string, unknown> }>(
     '/settings', { schema: { ...TAG,
       summary: 'Write settings',
       description: 'Body is {key: value}. null CLEARS a key — the same rule at every layer, and null is never a stored value. An empty string is a real empty string. ' +
         'Which keys are credentials is declared in code, so they are stored encrypted without any flag. Unknown keys are refused. ' +
-        'Pass ?project= to write that project\'s layer; a key the project may not override is refused.',
+        'Pass ?organization=, ?user= or ?project= to write that layer (the deepest named); a key that layer may not override is refused.',
       querystring: scopeQuery,
       body: { type: 'object', additionalProperties: true } } },
     async (req, reply) => {
-      const scope = await scopeOf(req.query);
+      const scope = await scopeFor(req.query);
       if ('error' in scope) return reply.code(404).send(err('not_found', scope.error));
       let updated: string[];
       try {
@@ -92,14 +104,14 @@ export function settingsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       return ok({ updated });
     });
 
-  app.delete<{ Params: { key: string }; Querystring: { project?: string } }>(
+  app.delete<{ Params: { key: string }; Querystring: ScopeQuery }>(
     '/settings/:key', { schema: { ...TAG,
       summary: 'Clear one key',
       description: 'Identical to PATCH with null. The setting reverts to the code default and follows it if the default changes later — a different state from being set to the same value.',
       params: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] },
       querystring: scopeQuery } },
     async (req, reply) => {
-      const scope = await scopeOf(req.query);
+      const scope = await scopeFor(req.query);
       if ('error' in scope) return reply.code(404).send(err('not_found', scope.error));
       try {
         await ctx.settings.writeAtScope(scope.kind, scope.write, { [req.params.key]: null }, writerOf(req));

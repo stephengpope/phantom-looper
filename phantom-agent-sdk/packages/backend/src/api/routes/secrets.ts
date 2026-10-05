@@ -11,49 +11,66 @@
 //   GET    /secrets/:name      the decrypted value, project → global
 //   DELETE /secrets/:name      remove at one layer
 import type { FastifyInstance } from 'fastify';
-import { GLOBAL, projectScope } from '../../lib/scopes.js';
+import { GLOBAL, type Layer, type SettingScope, layerOf, scopeNames, scopeOf } from '../../lib/scopes.js';
 import { ok, err } from '../HttpApi.js';
 import type { PhantomBackend } from '../../PhantomBackend.js';
 import { secretName, SECRET_NAME_RULE } from '@phantom-agent-sdk/client';
 
 const TAG = { tags: ['secrets'] };
 const scopeQuery = { type: 'object', properties: {
-  project: { type: 'string', description: 'Address this project\'s layer (list merges it; write/delete target it; the value GET has it win over global).' },
+  organization: { type: 'string', description: 'The organization\'s layer (list merges it; write/delete target the deepest named; the value GET walks the chain).' },
+  user: { type: 'string', description: 'The user\'s layer.' },
+  project: { type: 'string', description: 'The project\'s layer (its organization\'s rides along).' },
 } };
+type ScopeQuery = { organization?: string; user?: string; project?: string };
 const nameParam = { type: 'object', required: ['name'],
   properties: { name: { type: 'string' } } };
 
 export function secretsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
-  /** The scopes a request reads, most specific LAST — and the one it writes.
-   *  A project id is verified to exist, or a typo becomes a row nothing
-   *  will ever read. */
-  async function scopesOf(query: { project?: string }):
-  Promise<{ error: string } | { chain: string[]; write: string; label: 'global' | 'project' }> {
-    if (!query.project) return { chain: [GLOBAL], write: GLOBAL, label: 'global' };
-    if (!await ctx.projects.get(query.project)) return { error: `no project ${query.project}` };
-    return { chain: [GLOBAL, projectScope(query.project)], write: projectScope(query.project), label: 'project' };
+  /** The scopes a request reads, in chain order (most specific LAST) — and
+   *  the one it writes: the deepest named. Each id is verified to exist, or
+   *  a typo becomes a row nothing will ever read. */
+  async function scopesOf(query: ScopeQuery):
+  Promise<{ error: string } | { chain: string[]; write: string; label: Layer }> {
+    let scope: SettingScope = {};
+    if (query.organization) {
+      if (!await ctx.identity.organization(query.organization)) return { error: `no organization ${query.organization}` };
+      scope.organizationId = query.organization;
+    }
+    if (query.user) {
+      if (!await ctx.identity.user(query.user)) return { error: `no user ${query.user}` };
+      scope.userId = query.user;
+    }
+    if (query.project) {
+      const project = await ctx.projects.get(query.project);
+      if (!project) return { error: `no project ${query.project}` };
+      scope = { ...scope, ...scopeOf(project) };
+    }
+    const label: Layer = query.project ? 'project' : query.user ? 'user' : query.organization ? 'organization' : 'global';
+    const names = scopeNames(scope);
+    return { chain: Object.values(names), write: names[label] ?? GLOBAL, label };
   }
 
-  app.get<{ Querystring: { project?: string } }>(
+  app.get<{ Querystring: ScopeQuery }>(
     '/secrets', { schema: { ...TAG,
       summary: 'Every secret — names and descriptions, never values',
-      description: 'With ?project=: global + that project\'s layer, merged — the agent\'s view. Bare: EVERY layer on the server (the cli\'s list, which saves to any project), each project row carrying its `project` id. Either way `scope` says the layer, and the same name at two layers lists twice — the more specific one wins when a value is read.',
+      description: 'With a layer named (?project=, ?organization=, ?user=): that chain, merged — the agent\'s view. Bare: EVERY layer on the server (the cli\'s list, which saves to any project), each row carrying the id of its layer (`project`, `organization` or `user`). Either way `scope` says the layer, and the same name at two layers lists twice — the more specific one wins when a value is read.',
       querystring: scopeQuery } },
     async (req, reply) => {
       const scopes = await scopesOf(req.query);
       if ('error' in scopes) return reply.code(404).send(err('not_found', scopes.error));
-      const raw = req.query.project
+      const raw = scopes.label !== 'global'
         ? await ctx.settings.listSecrets(scopes.chain)
         : await ctx.settings.listAllSecrets();
-      const secrets = raw.map((secret) => ({
-        name: secret.name, description: secret.description,
-        scope: secret.scope === GLOBAL ? 'global' : 'project',
-        ...(secret.scope === GLOBAL ? {} : { project: secret.scope.replace(/^project:/, '') }),
-      }));
+      const secrets = raw.map((secret) => {
+        const layer = layerOf(secret.scope);
+        return { name: secret.name, description: secret.description, scope: layer,
+          ...(layer === 'global' ? {} : { [layer]: secret.scope.slice(layer.length + 1) }) };
+      });
       return ok({ secrets });
     });
 
-  app.put<{ Params: { name: string }; Querystring: { project?: string };
+  app.put<{ Params: { name: string }; Querystring: ScopeQuery;
     Body: { description?: string; value?: string } }>(
     '/secrets/:name', { schema: { ...TAG,
       summary: 'Create or overwrite one secret at one layer',
@@ -84,10 +101,10 @@ export function secretsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       return ok({ name, scope: scopes.label });
     });
 
-  app.get<{ Params: { name: string }; Querystring: { project?: string } }>(
+  app.get<{ Params: { name: string }; Querystring: ScopeQuery }>(
     '/secrets/:name', { schema: { ...TAG,
       summary: 'One secret\'s value',
-      description: 'Decrypted. Resolution cascades: the project layer (when ?project= is passed) wins over global. Name is case-insensitive. An unknown name answers with the names that do exist.',
+      description: 'Decrypted. Resolution walks the chain: global, then the organization, the user, the project — the deepest layer named wins. Name is case-insensitive. An unknown name answers with the names that do exist.',
       params: nameParam, querystring: scopeQuery } },
     async (req, reply) => {
       const scopes = await scopesOf(req.query);
@@ -102,7 +119,7 @@ export function secretsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       return ok({ name, value });
     });
 
-  app.delete<{ Params: { name: string }; Querystring: { project?: string } }>(
+  app.delete<{ Params: { name: string }; Querystring: ScopeQuery }>(
     '/secrets/:name', { schema: { ...TAG,
       summary: 'Delete one secret at one layer',
       description: 'Removes the row at the addressed layer only — a global secret shadowed by a project one survives the project delete, and the other way round.',

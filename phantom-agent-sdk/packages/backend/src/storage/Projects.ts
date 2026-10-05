@@ -14,6 +14,7 @@ import type { Settings } from './Settings.js';
 import { projectScope } from '../lib/scopes.js';
 import type { SettingsEvents } from '../agents/SettingsEvents.js';
 import type { AgentDatabases } from './AgentDatabases.js';
+import { scopeOf } from '../lib/scopes.js';
 
 export { DEFAULT_COLUMNS };
 
@@ -66,7 +67,7 @@ export class Projects {
   /** The card number prefix ("PHA"): the `card_prefix` setting at this
    *  project's layer, else the repo name's first three letters. */
   async prefixOf(project: ProjectRow): Promise<string> {
-    return (await this.settings.resolve('card_prefix', { projectId: project.id })) ?? defaultPrefix(project.name);
+    return (await this.settings.resolve('card_prefix', scopeOf(project))) ?? defaultPrefix(project.name);
   }
 
   /** Refuses a repo that is already a project (`owner, name` is unique). */

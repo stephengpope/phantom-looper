@@ -6,6 +6,7 @@
 import { CronError, type CronFields } from '../storage/Crons.js';
 import { REASONINGS } from '@phantom-agent-sdk/client';
 import { nullable, obj, refusal, str, type OfferCtx, type ToolCtx, type ToolDef } from './def.js';
+import { scopeOf } from '../lib/scopes.js';
 
 const WHAT_A_RUN_IS = 'A RUN HAS NO USER IN IT: it opens a fresh coding session in this project (its own checkout, ' +
   'cut from the base branch) and runs the prompt as one turn. It cannot see this conversation and cannot ask a ' +
@@ -33,12 +34,12 @@ const MODEL_FIELDS = {
     description: 'ONLY when the user asks: how hard the run thinks. Omit = the project\'s level; null clears.' },
 };
 
-const enabled = async ({ app, project }: OfferCtx) => Boolean(await app.settings.resolve('cron_enabled', { projectId: project.id }));
+const enabled = async ({ app, project }: OfferCtx) => Boolean(await app.settings.resolve('cron_enabled', scopeOf(project)));
 
 /** Every answer carries the zone and the time there — what a caller
  *  writing a datetime needs and never otherwise has. */
 async function stamped<T>(ctx: ToolCtx, body: (clock: Awaited<ReturnType<ToolCtx['app']['settings']['clockFor']>>) => Promise<T>) {
-  const clock = await ctx.app.settings.clockFor({ projectId: ctx.project.id });
+  const clock = await ctx.app.settings.clockFor(scopeOf(ctx.project));
   try {
     return { timezone: clock.timezone, now: clock.now().toISOString(), ...(await body(clock)) };
   } catch (error) {

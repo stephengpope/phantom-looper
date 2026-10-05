@@ -22,7 +22,7 @@ import { Clock } from '../lib/clock.js';
 import { systemSkills } from '../runtime/SystemSkills.js';
 import type { Settings } from '../storage/Settings.js';
 import type { ProjectRow } from '../storage/schema.js';
-import { GLOBAL, projectScope } from '../lib/scopes.js';
+import { scopeNames, scopeOf } from '../lib/scopes.js';
 
 /** What the blocks read: the session's checkout (null for a session with
  *  no files of its own), its project, the settings, and docker for the
@@ -84,8 +84,8 @@ export const SERVER_PROMPT_BLOCKS = {
 
   secrets_list: async (src: BlockSource): Promise<string> => {
     const byName = new Map<string, { name: string; description: string }>();
-    for (const sec of await src.settings.listSecrets([GLOBAL, projectScope(src.projectId)])) {
-      if (sec.scope === GLOBAL && byName.has(sec.name)) continue;
+    // Chain order: a deeper layer's row replaces a shallower one's.
+    for (const sec of await src.settings.listSecrets(Object.values(scopeNames(scopeOf(src.project))))) {
       byName.set(sec.name, { name: sec.name, description: sec.description });
     }
     const secrets = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -126,7 +126,7 @@ export class SystemPrompt {
   /** Fill the agent's layout from the session. */
   static async assemble(layout: SystemPromptLayout, source: SystemPromptSource): Promise<SystemPrompt> {
     SystemPrompt.check(layout);
-    const resolved = await source.settings.resolveMany(SETTINGS_READ, { projectId: source.project.id }) as Resolved;
+    const resolved = await source.settings.resolveMany(SETTINGS_READ, scopeOf(source.project)) as Resolved;
     const src: BlockSource = { ...source, resolved };
     const text = async (entry: SystemPromptEntry): Promise<string> =>
       typeof entry === 'string' ? SERVER_PROMPT_BLOCKS[entry as ServerPromptBlockName](src) : entry.text;

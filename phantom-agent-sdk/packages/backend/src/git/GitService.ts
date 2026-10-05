@@ -36,6 +36,7 @@ import { autoPull, type AutoPullEvent, type AutoPullResult } from './autoPull.js
 import { GIT_CLIENT_ID } from './Git.js';
 import type { SyncDeps, SyncEvent, SyncResult, SyncOptions } from './sync.js';
 import { logger, errStr } from '../lib/log.js';
+import { scopeOf } from '../lib/scopes.js';
 
 const log = logger('git');
 
@@ -197,7 +198,7 @@ export class GitService {
         const project = await this.deps.projects.get(projectId);
         const session = project && await this.deps.sessions.ownerOnCard(project.id, card.number);
         if (!project || !session || session.status !== 'active') return;
-        if (await this.deps.settings.resolve('auto_push_on_archive', { projectId: project.id }) !== true) return;
+        if (await this.deps.settings.resolve('auto_push_on_archive', scopeOf(project)) !== true) return;
         let result: AutoPushResult | { result: 'error'; reason: string } | undefined;
         for (let i = 0; i < 30; i++) {
           try { result = await this.autoPush(session, project); break; }

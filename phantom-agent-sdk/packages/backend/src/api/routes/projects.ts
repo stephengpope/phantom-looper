@@ -8,6 +8,7 @@ import { projectScope } from '../../lib/scopes.js';
 import { newId } from '@phantom-agent-sdk/client';
 import { ok, err } from '../HttpApi.js';
 import type { PhantomBackend } from '../../PhantomBackend.js';
+import { scopeOf } from '../../lib/scopes.js';
 
 /** What leaves the API. The credential is no longer a column — it is
  *  `github_token` at this project's scope, so hasCredential is a lookup. */
@@ -190,7 +191,7 @@ export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       // project (the cli, opening a session) must not have to list them all
       // to learn how this project names its cards.
       cardPrefix: await ctx.projects.prefixOf(project),
-      settings: await ctx.settings.layersForScope({ projectId: project.id }) });
+      settings: await ctx.settings.layersForScope(scopeOf(project)) });
   });
 
   // The project's OWN three fields — no global to fall back to, so they

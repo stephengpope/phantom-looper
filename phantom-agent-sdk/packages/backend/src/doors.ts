@@ -1,5 +1,6 @@
 // The extension doors: what user space registers through PhantomBackendConfig.
 // Each is a plain description; the backend builds the real thing from it.
+import type { OverridableLayer } from './lib/scopes.js';
 import type { Transaction } from './storage/Database.js';
 import type { ProjectRow } from './storage/schema.js';
 
@@ -41,9 +42,12 @@ export interface SettingDefinition {
   pattern?: RegExp;
   /** A check no grammar can express (the value must name something that exists). Why it is refused, or null. */
   check?: (value: string) => string | null;
-  /** May a project override it? Default false: a project differs only where that earns its keep. */
-  projectOverridable?: boolean;
-  /** A fact about ONE project (a card prefix names one board): never settable globally. Implies projectOverridable. */
+  /** The layers below global this may be set at (lib/scopes.ts LAYERS: an
+   *  organization's row is shared by its members, a user's is their own, a
+   *  project's wins). Default none: a layer differs only where that earns
+   *  its keep. */
+  overridableAt?: readonly OverridableLayer[];
+  /** A fact about ONE project (a card prefix names one board): never settable globally. Implies overridableAt: ['project']. */
   projectOnly?: boolean;
   /** Where it files on screen: right before this key's row, when that key is
    *  registered; otherwise at the end. Registration order is screen order,
@@ -88,7 +92,7 @@ export interface AgentTypeSetting {
   description: string;
   /** Unset = null (clearable; for a type other than the first, "the first type's"). */
   default?: unknown;
-  projectOverridable?: boolean;
+  overridableAt?: readonly OverridableLayer[];
 }
 
 /** An agent type this backend runs. The name is what sessions carry in

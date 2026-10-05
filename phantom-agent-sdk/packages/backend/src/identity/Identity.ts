@@ -21,6 +21,8 @@ import type { FastifyRequest, FastifyReply } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import type { Database } from '../storage/Database.js';
 import type { Mailer } from '../mail/Mailer.js';
+import type { Settings } from '../storage/Settings.js';
+import { organizationScope, userScope } from '../lib/scopes.js';
 import { user, session, account, verification, organization as organizationTable, member, invitation, apikey,
   type UserRow, type OrganizationRow } from '../storage/schema.js';
 import { timingSafeEqualStr } from '../lib/crypto.js';
@@ -62,6 +64,8 @@ const MAGIC_LINK_EXPIRES_IN = 15 * 60;
 interface AuthDeps {
   database: Database;
   mailer: Mailer;
+  /** A deleted organization or user takes its settings layer with it. */
+  settings: Settings;
   options: IdentityOptions;
   baseUrl: string;
   /** Magic links asked for by the operator (bootstrap, no mail): the
@@ -73,7 +77,7 @@ interface AuthDeps {
  *  (a personal organization at creation, an active one at sign-in), the
  *  plugins. A function, so the instance's type — which carries every
  *  plugin's endpoints — can be named (`BetterAuth`). */
-function buildAuth({ database, mailer, options, baseUrl, captures }: AuthDeps) {
+function buildAuth({ database, mailer, settings, options, baseUrl, captures }: AuthDeps) {
   // The hooks and the invitation mail need the instance's own context, and
   // the instance does not exist while they are declared: a promise the
   // instance fills once built. (A hook called from an endpoint has `ctx`;
@@ -102,7 +106,7 @@ function buildAuth({ database, mailer, options, baseUrl, captures }: AuthDeps) {
         const personal = await db.create<{ id: string }>({ model: 'organization',
           data: { name: created.name || created.email, slug: `personal-${created.id.toLowerCase()}`, createdAt: new Date() } });
         await db.create({ model: 'member', data: { organizationId: personal.id, userId: created.id, role: 'owner', createdAt: new Date() } });
-      } } },
+      } }, delete: { after: async (gone) => { await settings.deleteScope(userScope(gone.id)); } } },
       // A sign-in opens in an organization: the first membership when the
       // session says none.
       session: { create: { before: async (opening) => {
@@ -126,6 +130,7 @@ function buildAuth({ database, mailer, options, baseUrl, captures }: AuthDeps) {
         },
       }),
       organization({
+        organizationHooks: { afterDeleteOrganization: async ({ organization: gone }) => { await settings.deleteScope(organizationScope(gone.id)); } },
         sendInvitationEmail: async (data) => {
           // An invitee without an account gets one — invite-only sign-in needs
           // the user to exist before the link works.
@@ -160,6 +165,7 @@ export class Identity {
   constructor(
     private readonly database: Database,
     mailer: Mailer,
+    settings: Settings,
     options: IdentityOptions | undefined,
     /** The backend's public address (`https://host`): where the links point. */
     readonly baseUrl: string,
@@ -169,7 +175,7 @@ export class Identity {
     this.trustedOrigins = options?.trustedOrigins ?? [];
     if (!options) return;
     if (options.secret.length < 32) throw new Error('identity.secret must be at least 32 characters (openssl rand -hex 24)');
-    this.#auth = buildAuth({ database, mailer, options, baseUrl, captures: this.#captures });
+    this.#auth = buildAuth({ database, mailer, settings, options, baseUrl, captures: this.#captures });
   }
 
   get #on(): BetterAuth {
@@ -213,6 +219,19 @@ export class Identity {
     const caller = await this.callerOf(request);
     if (!caller || (options.users && caller.kind !== 'user')) throw new IdentityError('unauthorized', 'sign in first');
     return caller;
+  }
+
+  /** An organization by id — what a settings route checks before writing
+   *  its layer. Undefined when there is none, or identity is off. */
+  async organization(id: string): Promise<OrganizationRow | undefined> {
+    if (!this.#auth) return undefined;
+    return (await this.database.drizzle.select().from(organizationTable).where(eq(organizationTable.id, id)))[0];
+  }
+
+  /** A user by id. Undefined when there is none, or identity is off. */
+  async user(id: string): Promise<UserRow | undefined> {
+    if (!this.#auth) return undefined;
+    return (await this.database.drizzle.select().from(user).where(eq(user.id, id)))[0];
   }
 
   /** Bootstrap, the operator's: a user with no mail involved. `email_taken`

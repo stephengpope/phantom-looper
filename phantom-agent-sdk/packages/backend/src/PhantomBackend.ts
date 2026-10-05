@@ -178,7 +178,7 @@ export class PhantomBackend {
     this.telegramSentMessages = built.telegramSentMessages; this.telegramHandledUpdates = built.telegramHandledUpdates;
     this.sessionTitler = new SessionTitler(this.sessions, config.writeTitle);
     this.mailer = new Mailer(this.settings);
-    this.identity = new Identity(this.database, this.mailer, config.identity, this.env.publicUrl, this.env.apiKey);
+    this.identity = new Identity(this.database, this.mailer, this.settings, config.identity, this.env.publicUrl, this.env.apiKey);
     this.telegramBot = new TelegramBot({ settings: this.settings, settingsEvents: this.settingsEvents, botState: this.telegramBotState,
       sentMessages: this.telegramSentMessages, handledUpdates: this.telegramHandledUpdates, paths: this.paths,
       publicAddress: process.env.PHANTOM_BACKEND_ADDRESS, commandMenu: config.telegramCommandMenu });

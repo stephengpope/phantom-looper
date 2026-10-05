@@ -4,9 +4,10 @@
 // tool, never a failing one.
 import { SqlError } from '../storage/AgentDatabases.js';
 import { obj, refusal, type OfferCtx, type ToolDef } from './def.js';
+import { scopeOf } from '../lib/scopes.js';
 
 const enabled = async ({ app, project }: OfferCtx) =>
-  !!app.agentDatabases && Boolean(await app.settings.resolve('agent_database', { projectId: project.id }));
+  !!app.agentDatabases && Boolean(await app.settings.resolve('agent_database', scopeOf(project)));
 
 export const DATABASE_TOOLS: ToolDef[] = [
   {
@@ -29,7 +30,7 @@ export const DATABASE_TOOLS: ToolDef[] = [
     mutates: true, group: 'database', offered: enabled,
     async execute(ctx, a) {
       if (!ctx.app.agentDatabases) throw refusal('database_unavailable', 'this server has no agent database wiring');
-      if (!(await ctx.app.settings.resolve('agent_database', { projectId: ctx.project.id }))) {
+      if (!(await ctx.app.settings.resolve('agent_database', scopeOf(ctx.project)))) {
         throw refusal('database_off', 'agent_database is off for this project');
       }
       try {
