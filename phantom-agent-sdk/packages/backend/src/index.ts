@@ -12,7 +12,7 @@ export { sdkSettings, agentTypeSettings } from './storage/sdkSettings.js';
 export type { TokenRecord, ReportRow, Windows, WindowTotals } from './storage/TokenLog.js';
 export type { BackgroundTaskRow, BackgroundTaskEnd } from './storage/BackgroundTasks.js';
 export { MailerError, type Mail } from './mail/Mailer.js';
-export { IdentityError, IDENTITY_PATH, type Caller, type IdentityOptions, type OrganizationRole } from './identity/Identity.js';
+export { IdentityError, IDENTITY_PATH, type Caller, type IdentityOptions, type OrganizationRole, type OAuthApp, type MailTemplates, type MailBody } from './identity/Identity.js';
 export { SqlError, locate, type QueryOptions, type StatementResult } from './storage/AgentDatabases.js';
 
 // agents

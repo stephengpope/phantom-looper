@@ -20,7 +20,7 @@ import { and, eq } from 'drizzle-orm';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import type { Database } from '../storage/Database.js';
-import type { Mailer } from '../mail/Mailer.js';
+import type { Mail, Mailer } from '../mail/Mailer.js';
 import type { Settings } from '../storage/Settings.js';
 import { organizationScope, userScope } from '../lib/scopes.js';
 import { user, session, account, verification, organization as organizationTable, member, invitation, apikey,
@@ -39,11 +39,53 @@ export interface IdentityOptions {
   /** Browser apps on another origin that may call /api/auth and /app with
    *  credentials (CORS). The backend's own address is always trusted. */
   trustedOrigins?: string[];
-  /** The page an invitation mail links to, given the invitation id — the
-   *  app's own, where the invitee signs in and accepts. Unset: the mail
-   *  carries the id and says to sign in. */
-  invitationUrl?: (invitationId: string) => string;
+  /** Ways in beside the magic link. Invite-only holds for each: nothing
+   *  creates a user but the operator and an invitation. */
+  signIn?: {
+    /** Email + password. An invited user sets theirs through the reset
+     *  flow (`request-password-reset` → mail → `reset-password`); an
+     *  unverified email cannot sign in until its link is clicked. */
+    password?: boolean;
+    /** OAuth apps, the app's own. A sign-in links to the user with that
+     *  verified email; a stranger's is refused. */
+    github?: OAuthApp;
+    google?: OAuthApp;
+  };
+  /** The four mails' wording — user space's. Each a pure function of what
+   *  the mail is about, answering what `Mailer.send` takes; one left out
+   *  gets the SDK's plain default. The app builds its own links from the
+   *  ids and urls given (the invitation has no url of its own: the page
+   *  where the invitee signs in and accepts is the app's). */
+  mail?: Partial<MailTemplates>;
 }
+
+export interface OAuthApp { clientId: string; clientSecret: string }
+
+/** A template's answer: the mail without its recipient (the SDK adds that). */
+export type MailBody = Omit<Mail, 'to'>;
+
+/** What each mail is about. `url` is Better Auth's own link where one
+ *  exists; the invitation's page is the app's to name. */
+export interface MailTemplates {
+  magicLink: (data: { email: string; url: string }) => MailBody;
+  invitation: (data: { email: string; invitationId: string; organization: { id: string; name: string; slug: string };
+    inviter: { name: string; email: string }; role: string }) => MailBody;
+  passwordReset: (data: { user: { email: string; name: string }; url: string }) => MailBody;
+  verification: (data: { user: { email: string; name: string }; url: string }) => MailBody;
+}
+
+/** How long a magic link may be clicked, seconds. */
+const MAGIC_LINK_EXPIRES_IN = 15 * 60;
+
+/** The SDK's wording, used where the app gave none. */
+const DEFAULT_MAIL: MailTemplates = {
+  magicLink: ({ url }) => ({ subject: 'Your sign-in link',
+    text: `Sign in with this link (valid ${MAGIC_LINK_EXPIRES_IN / 60} minutes):\n\n${url}\n\nIf you did not ask for it, ignore this mail.` }),
+  invitation: ({ organization, inviter, role, invitationId }) => ({ subject: `You're invited to ${organization.name}`,
+    text: `${inviter.name} (${inviter.email}) invited you to ${organization.name} as ${role}.\n\nSign in with this address and accept invitation ${invitationId}.` }),
+  passwordReset: ({ url }) => ({ subject: 'Set your password', text: `Set or reset your password here:\n\n${url}\n\nIf you did not ask for it, ignore this mail.` }),
+  verification: ({ url }) => ({ subject: 'Verify your email', text: `Confirm this address:\n\n${url}` }),
+};
 
 export type OrganizationRole = 'owner' | 'admin' | 'member';
 
@@ -56,9 +98,6 @@ export type Caller =
 export class IdentityError extends Error {
   constructor(readonly code: 'disabled' | 'unauthorized' | 'email_taken', message: string) { super(message); this.name = 'IdentityError'; }
 }
-
-/** How long a magic link may be clicked, seconds. */
-const MAGIC_LINK_EXPIRES_IN = 15 * 60;
 
 /** What the Better Auth instance is built from. */
 interface AuthDeps {
@@ -78,6 +117,9 @@ interface AuthDeps {
  *  plugins. A function, so the instance's type — which carries every
  *  plugin's endpoints — can be named (`BetterAuth`). */
 function buildAuth({ database, mailer, settings, options, baseUrl, captures }: AuthDeps) {
+  const mail: MailTemplates = { ...DEFAULT_MAIL, ...options.mail };
+  const send = (to: string, body: MailBody) => mailer.send({ to, ...body });
+  const signIn = options.signIn ?? {};
   // The hooks and the invitation mail need the instance's own context, and
   // the instance does not exist while they are declared: a promise the
   // instance fills once built. (A hook called from an endpoint has `ctx`;
@@ -98,7 +140,19 @@ function buildAuth({ database, mailer, settings, options, baseUrl, captures }: A
     baseURL: baseUrl,
     basePath: IDENTITY_PATH,
     trustedOrigins: options.trustedOrigins,
-    emailAndPassword: { enabled: false },
+    emailAndPassword: {
+      enabled: signIn.password === true,
+      disableSignUp: true,
+      requireEmailVerification: true,
+      sendResetPassword: async ({ user: who, url }) => { await send(who.email, mail.passwordReset({ user: who, url })); },
+    },
+    emailVerification: {
+      sendVerificationEmail: async ({ user: who, url }) => { await send(who.email, mail.verification({ user: who, url })); },
+    },
+    socialProviders: {
+      ...(signIn.github ? { github: { ...signIn.github, disableSignUp: true } } : {}),
+      ...(signIn.google ? { google: { ...signIn.google, disableSignUp: true } } : {}),
+    },
     databaseHooks: {
       // A personal organization, owned, from the first moment there is a user.
       user: { create: { after: async (created) => {
@@ -125,8 +179,7 @@ function buildAuth({ database, mailer, settings, options, baseUrl, captures }: A
           // Invite-only: a stranger's email gets nothing (the endpoint still
           // answers 200, so nothing is learned from it).
           if (!ctx || !(await ctx.context.internalAdapter.findUserByEmail(email))) return;
-          await mailer.send({ to: email, subject: 'Your sign-in link',
-            text: `Sign in with this link (valid ${MAGIC_LINK_EXPIRES_IN / 60} minutes):\n\n${url}\n\nIf you did not ask for it, ignore this mail.` });
+          await send(email, mail.magicLink({ email, url }));
         },
       }),
       organization({
@@ -139,9 +192,9 @@ function buildAuth({ database, mailer, settings, options, baseUrl, captures }: A
             await internalAdapter.createUser({ email: data.email, name: data.email }, { method: 'magic-link' });
             log.info({ email: data.email }, 'user created by invitation');
           }
-          const where = options.invitationUrl ? `Accept it here: ${options.invitationUrl(data.id)}` : `Sign in with this address at ${baseUrl} and accept invitation ${data.id}.`;
-          await mailer.send({ to: data.email, subject: `You're invited to ${data.organization.name}`,
-            text: `${data.inviter.user.name} (${data.inviter.user.email}) invited you to ${data.organization.name} as ${data.role}.\n\n${where}` });
+          await send(data.email, mail.invitation({ email: data.email, invitationId: data.id, role: data.role,
+            organization: { id: data.organization.id, name: data.organization.name, slug: data.organization.slug },
+            inviter: { name: data.inviter.user.name, email: data.inviter.user.email } }));
         },
       }),
       bearer(),

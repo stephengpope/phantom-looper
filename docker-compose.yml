@@ -54,6 +54,11 @@ services:
       AUTH_SECRET: ${AUTH_SECRET:-}
       # Browser apps on another origin that may sign in here, comma-separated.
       AUTH_TRUSTED_ORIGINS: ${AUTH_TRUSTED_ORIGINS:-}
+      # Beside the magic link: AUTH_PASSWORD=1 for email + password; a GitHub
+      # OAuth app's id and secret for GitHub sign-in.
+      AUTH_PASSWORD: ${AUTH_PASSWORD:-}
+      AUTH_GITHUB_CLIENT_ID: ${AUTH_GITHUB_CLIENT_ID:-}
+      AUTH_GITHUB_CLIENT_SECRET: ${AUTH_GITHUB_CLIENT_SECRET:-}
       # Workspace containers are created through the socket proxy below — the
       # API never holds the socket and runs non-root.
       DOCKER_HOST: tcp://docker-proxy:2375
