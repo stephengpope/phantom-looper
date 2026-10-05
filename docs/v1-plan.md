@@ -8,9 +8,9 @@ gives a server the services, tables, API and the doors to extend them. The SDK
 supports; user space (`phantom-looper/`, `phantom-backend/`, `phantom-cli/`)
 is one implementation of that support.
 
-This is the only plan. Done work is not listed; `git log` is the record (the
-2026-10-04 run: `4f603e4`..`1873157` and the two after). The rules below
-stand for every step that remains.
+This is the only plan. Done work is not listed; `git log` is the record. The
+rules below stand for every step that remains; `docs/multi-user.md` holds the
+next piece of work, designed and not started.
 
 ## Words
 
@@ -76,52 +76,45 @@ moves or redesigns it in passing.
 runner now (`npm run backend-sdk:test`, node's) for what is cheap to prove
 without the stack; nothing heavier runs on the dev box.
 
-## 1. Decisions waiting on the builder
+## What is left
 
-The schema split is complete. The cards' switches moved (`card_automation`,
-through the `CardFieldsExtension` door — the pattern for any app fact the SDK
-must carry on its own output); `sessions.card_id` stays in the SDK by the
-builder's decision — it is how a card is tied to the agents working it.
+Engineering of the conversion is complete; `git log` is the record. These
+remain, in the order they unblock each other.
 
-- **The Telegram Assistant forgets on every backend restart** — the same bug
-  the cli had, left: `TelegramAssistantBot.ensureAssistantSession` keeps the
-  session id in process memory. Not fixed because Telegram has no door to a
-  fresh conversation and no compaction, so a conversation that only ever
-  resumes would eventually hit the model's limit with no way out. Fix with
-  compaction, or give the bot a `/new assistant` first.
-- **The backend SDK's lint.** Pre-existing errors remain (the last report
-  counted 41 needless assertions and 19 `no-base-to-string` before it died);
-  the pass needs a machine with memory. Clean to zero before the package
-  ships.
-
-## 2. Compaction, put back
-
-Parked by the builder's word this run. When it comes: backend-side, on the
-record, under the hold; the existing settings drive it; `/compact` works
-again. The record already has a line type for the prompt moving
-(`system_prompt_rebuilt`); compaction's mark is the same kind of line.
-
-## 3. Ship
-
-- A real-Telegram proof of the bot (needs a bot token stored as a secret).
-- `phantom-agent-sdk/` lifted out as its own repo; the npm org; the first
-  `scripts/release.sh X.Y.Z` and `npm publish` of both packages;
-  phantom-looper on the published versions with its own version line.
-- The server's GitHub token gets `workflow` scope so a release edit pushes.
-- The SDK's own migrations, for a fresh install of another app: 012/031
-  still create the three Telegram pointer columns this app's migration 001
-  takes away; an SDK migration should drop them once every install has run
-  the app's.
+1. **A hands-on pass of the cli** (the builder): launch, relaunch — the
+   Assistant comes back with its conversation; `/new assistant`; a model
+   failure shows the words back in the queue. The paths behind these ran
+   with a real model; the screens have not been looked at.
+2. **Compaction, put back** — parked by the builder's word. Backend-side, on
+   the record, under the hold; the existing settings drive it; `/compact`
+   works again. The record already has a line type for the prompt moving
+   (`system_prompt_rebuilt`); compaction's mark is the same shape of line.
+3. **The Telegram Assistant forgets on every backend restart** — waits on 2.
+   `TelegramAssistantBot.ensureAssistantSession` keeps the session id in
+   process memory. A conversation that only ever resumes needs compaction
+   (or a `/new assistant` door) before it may resume for ever.
+4. **The backend SDK's lint to zero** — on a machine with memory, or CI; the
+   type-checked pass is killed on the dev box. The last report before it
+   died counted 41 needless assertions and 19 `no-base-to-string`.
+5. **Ship** (the builder's accounts): a real-Telegram proof (a bot token
+   stored as a secret); `phantom-agent-sdk/` lifted out as its own repo; the
+   npm org; `scripts/release.sh X.Y.Z` then `npm publish` of both packages;
+   phantom-looper on the published versions with its own version line; the
+   server's GitHub token with `workflow` scope so a release edit pushes; an
+   SDK migration dropping the columns the app's migrations 001 and 002 took
+   over (another app's fresh install still creates them).
+6. **Multi-user** — mail, sign-in, ownership, invites: designed in
+   `docs/multi-user.md`, not started.
 
 ## Names — keep
 
 `Agent`, `CodingAgent` / `AssistantAgent` / `SupervisorAgent`,
 `BackendClient`, `ToolKit`, `SystemPrompt`, `StoredSystemPrompt`,
 `PhantomBackend`, `GitService`, `Deployment`, `Looper`, `CronScheduler`,
-`TelegramBot` (SDK) / `TelegramAssistantBot` + `TelegramAssistantState` (app).
-`resumeSession` / `newSession` / `open` (the Assistant's) / `addToolKit` /
-`sendMessage` / `interrupt` / `partialMessage` / `connect`. Server blocks:
-`soul_md`, `agents_md`, `skills_list`, `secrets_list`, `time_date`,
-`github_token`, `agent_database`. Errors: the backend's code as sent; the
-SDK's own in `SDK_ERROR_CODES` (`sdk_version_mismatch`, `tool_loop` among
-them).
+`TelegramBot` (SDK) / `TelegramAssistantBot` + `TelegramAssistantState` +
+`CardAutomation` (app). `resumeSession` / `newSession` / `open` (the
+Assistant's) / `addToolKit` / `sendMessage` / `interrupt` / `partialMessage`
+/ `connect`. `ownerOnCard` / `ownersByCard`. Server blocks: `soul_md`,
+`agents_md`, `skills_list`, `secrets_list`, `time_date`, `github_token`,
+`agent_database`. Errors: the backend's code as sent; the SDK's own in
+`SDK_ERROR_CODES` (`sdk_version_mismatch`, `tool_loop` among them).

@@ -170,4 +170,5 @@ phantom-backend/               this app's backend: the looper, the cron schedule
 phantom-cli/                   this app's terminal client
 phantom-looper/                this app's agents and prompts, shared by the cli and the backend
 docs/v1-plan.md                what is left to v1
+docs/multi-user.md             mail, sign-in, ownership, invites — designed, not started
 ```
