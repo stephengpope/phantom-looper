@@ -6,9 +6,9 @@
 // answers that are empty or oversized; a refusal or a transport failure the
 // retry budget already gave up on is thrown as is — one retry loop, never
 // stacked.
-import { commitMessagePrompt } from '../../core/prompts/autoPush/wiring.js';
+import { commitMessagePrompt } from '../../phantom-looper/prompts/autoPush/wiring.js';
 import { oneShot, type OneShotDeps } from '../oneShot.js';
-import { logger } from 'phantom-backend-sdk';
+import { logger } from '@phantom-agent-sdk/backend';
 
 const log = logger('auto-push');
 const TRIES = 3;

@@ -13,10 +13,10 @@ import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { Tool } from 'ai';
 import { SessionStore, activeHold, type LoadedSession, type ModelLine } from './sessions.js';
-import type { AgentHandlers, BackendClient, ToolKit } from 'phantom-client-sdk';
-import { parseLines, conversationFrom, usageTotals } from 'phantom-client-sdk/transcript';
-import { CodingAgent } from '../core/agents/coding.js';
-import { AssistantAgent } from '../core/agents/assistant.js';
+import type { AgentHandlers, BackendClient, ToolKit } from '@phantom-agent-sdk/client';
+import { parseLines, conversationFrom, usageTotals } from '@phantom-agent-sdk/client/transcript';
+import { CodingAgent } from '../phantom-looper/agents/coding.js';
+import { AssistantAgent } from '../phantom-looper/agents/assistant.js';
 import { SessionFeed } from './sessionFeed.js';
 import { SettingsFeed } from './settingsFeed.js';
 import { SessionsFeed } from './sessionsFeed.js';
@@ -44,7 +44,7 @@ import { confirmDialog, boardScreen, switcherScreen, settingsScreen, keysScreen,
  *  lookup fell back to the id, so a bare id never passes for a name. */
 export interface WsFacts { label: string; cardPrefix?: string; error?: string }
 
-/** What opening resolves to. core's openSession turns each into the same
+/** What opening resolves to. phantom-looper's openSession turns each into the same
  *  create / restart / attach path. */
 export type OpenTarget = { kind: 'new'; projectId: string } | { kind: 'open'; id: string }
   | { kind: 'duplicate'; id: string };
@@ -794,7 +794,7 @@ export class WindowStore {
   // ── opening and closing ───────────────────────────────────────────────────
 
   /** Opening JOINS the window rather than replacing what is here. One already
-   *  loaded is switched to, never opened twice. core's openSession is the ONE
+   *  loaded is switched to, never opened twice. phantom-looper's openSession is the ONE
    *  path that resolves the target (create / restart / attach), pulls the
    *  server transcript and the frozen prompt. Opening never locks. */
   openSession = async (target: OpenTarget): Promise<boolean> => {
@@ -1300,14 +1300,17 @@ export class WindowStore {
    *  two repos can share one. The one you are in leads and says so; the
    *  rest in the server's order, the same order /project lists them. Read
    *  on every keystroke and render, so it only READS: projectRows is
-   *  filled by boot, the pickers and the settings feed, never from here. */
-  argChoices: Choices = () => {
+   *  filled by boot, the pickers and the settings feed, never from here.
+   *  `/new` offers one more row: `assistant`, a fresh conversation with the
+   *  Assistant. */
+  argChoices: Choices = (command) => {
     const here = this.sessions.active()?.projectId;
     const row = (project: ProjectInfo) => ({
       name: project.cardPrefix ?? label(project), fill: project.name,
       summary: `${project.owner}/${project.name}${project.id === here ? ' · here' : ''}`,
     });
-    return [...this.projectRows.filter((project) => project.id === here), ...this.projectRows.filter((project) => project.id !== here)].map(row);
+    const projects = [...this.projectRows.filter((project) => project.id === here), ...this.projectRows.filter((project) => project.id !== here)].map(row);
+    return command.name === 'new' ? [...projects, { name: 'assistant', summary: 'a fresh conversation with the Assistant' }] : projects;
   };
 
   /** The project a typed argument names — the repo name tab fills, or
@@ -1607,14 +1610,15 @@ export class WindowStore {
     })();
   }
 
-  /** The Assistant's agent. Made ONCE per window, the first time a session
+  /** The Assistant's agent. Opened ONCE per window, the first time a session
    *  is on screen (null before — the engine can start before any session
-   *  opens): a conversation-only session on the on-screen session's workspace,
-   *  with this window's kit. Re-pointed (`follow`) on every switch after,
-   *  which App fires. */
+   *  opens): the conversation this person last had with it, resumed
+   *  (AssistantAgent.open), on the on-screen session's workspace, with this
+   *  window's kit. Re-pointed (`follow`) on every switch after, which App
+   *  fires. `/new assistant` replaces it with a fresh conversation. */
   private assistant: AssistantAgent | null = null;
 
-  /** The Assistant follows the session on screen: made if it does not
+  /** The Assistant follows the session on screen: opened if it does not
    *  exist yet, re-pointed if it does. `starting` = the engine is about to
    *  start, so "not running" is no reason to skip, and a failure is the
    *  caller's to report. */
@@ -1627,15 +1631,34 @@ export class WindowStore {
         await this.assistant.follow(active.projectId, active.id);
         return;
       }
-      const agent = await AssistantAgent.newSession(this.opts.backend(), this.voice.handlers(),
-        { projectId: active.projectId, activeSessionId: active.id });
-      agent.addToolKit(assistantToolKit(this, this.assistantDeps));
-      this.assistant = agent;
-      this.voice.setAgent(agent);
+      this.setAssistant(await AssistantAgent.open(this.opts.backend(), this.voice.handlers(),
+        { projectId: active.projectId, activeSessionId: active.id }));
     } catch (entry) {
       if (starting) throw entry;
       this.note(`assistant not pointed at this session: ${(entry as Error).message}`);
     }
+  }
+
+  /** `/new assistant`: a fresh conversation with the Assistant, on the
+   *  session on screen. The old one stays on the server; the next launch
+   *  resumes this one (it is the newest). */
+  private async newAssistant(): Promise<void> {
+    const active = this.sessions.active();
+    if (!active) { this.note('no session is open — the Assistant needs one to point at'); return; }
+    if (!this.voice.running) { this.note('voice is off — /assistant to turn it on'); return; }
+    try {
+      await this.assistant?.close();
+      this.setAssistant(await AssistantAgent.newSession(this.opts.backend(), this.voice.handlers(),
+        { projectId: active.projectId, activeSessionId: active.id }));
+      this.note('new Assistant conversation');
+    } catch (entry) { this.note(`could not start a new Assistant conversation: ${(entry as Error).message}`); }
+  }
+
+  /** The agent the window and the voice engine talk to, with this window's kit. */
+  private setAssistant(agent: AssistantAgent): void {
+    agent.addToolKit(assistantToolKit(this, this.assistantDeps));
+    this.assistant = agent;
+    this.voice.setAgent(agent);
   }
 
   /** Launch: the chrome's two values and the voice decision, from one read. */
@@ -1760,6 +1783,7 @@ export class WindowStore {
         // Not named and no session yet = no project to mean "here": the
         // picker chooses. openSession clears the pane and puts the splash up before
         // the network calls run.
+        if (args.trim().toLowerCase() === 'assistant') { await this.newAssistant(); return; }
         if (args) {
           const project = this.findProject(args);
           if ('error' in project) { this.note(project.error); return; }

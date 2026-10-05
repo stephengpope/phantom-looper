@@ -16,8 +16,8 @@
 // must not reorder the thing you are tabbing through, or the ring moves under
 // your fingers; only saying something to a session makes it recent.
 import type { ModelMessage } from 'ai';
-import type { PhantomError, StreamPart as AgentStreamPart, TokenTotals } from 'phantom-client-sdk';
-import type { CodingAgent } from '../core/agents/coding.js';
+import type { PhantomError, StreamPart as AgentStreamPart, TokenTotals } from '@phantom-agent-sdk/client';
+import type { CodingAgent } from '../phantom-looper/agents/coding.js';
 import type { Dialog } from './window.js';
 import { applyPart, applyTokens, finalize, nextId, takeCompleted, tokenCount, NO_TOKENS, messagesToParts,
   type Part, type StreamPart, type TurnTokens } from './state.js';

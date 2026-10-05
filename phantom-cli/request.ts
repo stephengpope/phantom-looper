@@ -4,7 +4,7 @@
 // "could not <do what> in <where>:" — nothing else in the app inspects a raw
 // error, and "server down" reads the same way everywhere. Lives apart from
 // index.tsx (the entrypoint has side effects) so it can be tested.
-import type { PhantomError } from 'phantom-client-sdk';
+import type { PhantomError } from '@phantom-agent-sdk/client';
 
 /** Three shapes:
  *    - the network failed: "phantom-backend at <url> is not reachable"

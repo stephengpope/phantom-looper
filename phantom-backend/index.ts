@@ -3,19 +3,20 @@
 // service, the loops, then this app's engines (config.onStart): the looper,
 // the cron scheduler, the Telegram bot, the digest, the upgrade check. The
 // app reaches the backend through the config and its public objects only.
-import { PhantomBackend, Deployment, telegramChannel, updateShutdown, logger, errStr, type PhantomBackendConfig } from 'phantom-backend-sdk';
-import { BackendClient } from 'phantom-client-sdk';
-import { GIT_CLIENT_ID } from 'phantom-backend-sdk/git';
+import { PhantomBackend, Deployment, telegramChannel, updateShutdown, logger, errStr, type PhantomBackendConfig } from '@phantom-agent-sdk/backend';
+import { BackendClient } from '@phantom-agent-sdk/client';
+import { GIT_CLIENT_ID } from '@phantom-agent-sdk/backend/git';
 import { config as registrations } from './config.js';
-import { CodingAgent } from '../core/agents/coding.js';
+import { CodingAgent } from '../phantom-looper/agents/coding.js';
 import { writeTitle } from './sessionTitle.js';
 import { writeCommitMessage } from './git/commitMessage.js';
-import { toCodingAgent } from '../core/prompts/autoPush/wiring.js';
+import { toCodingAgent } from '../phantom-looper/prompts/autoPush/wiring.js';
 import { appRoutes } from './api/appRoutes.js';
 import { Looper } from './looper/Looper.js';
 import { CronScheduler } from './crons/CronScheduler.js';
 import { TelegramAssistantBot } from './telegram/TelegramAssistantBot.js';
 import { SessionDigest } from './notifications/digest.js';
+import { menuFor } from './telegram/commands.js';
 
 const log = logger('boot');
 
@@ -32,6 +33,10 @@ async function main() {
     ...registrations,
     routes: (api) => appRoutes(api, backend, { deployment, updateTriggerDir: process.env.UPDATE_TRIGGER_DIR || undefined }),
     health: () => ({ loops_running: looper?.runningCount() ?? 0 }),
+    // The bot's command menu — the global default, and the authorized chat's
+    // for its mode (the bot's own state; the bot exists before the SDK
+    // registers the webhook, which onStart's reconcile is what asks for).
+    telegramCommandMenu: async () => ({ global: menuFor('assistant'), forChat: menuFor((await telegram.state.read()).mode) }),
 
     // The backend's git, with this app's parts: the conflict fixer is the
     // session's own coding agent; the commit message rides the ASSISTANT's

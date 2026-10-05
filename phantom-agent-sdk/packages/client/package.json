@@ -1,0 +1,59 @@
+{
+  "name": "@phantom-agent-sdk/client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The agent runtime for a phantom-backend: an Agent base class with the turn, the shared append-only transcript, the session lock, model resolution, billing, and the server’s tools over the API.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./transcript": {
+      "types": "./dist/transcript.d.ts",
+      "import": "./dist/transcript.js"
+    },
+    "./systemPrompt": {
+      "types": "./dist/systemPrompt.d.ts",
+      "import": "./dist/systemPrompt.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node ../../scripts/assert-sdk-version.mjs && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src"
+  },
+  "peerDependencies": {
+    "ai": ">=7.0.0"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "4.0.40",
+    "@ai-sdk/deepseek": "3.0.39",
+    "@ai-sdk/google": "4.0.49",
+    "@ai-sdk/groq": "4.0.37",
+    "@ai-sdk/mistral": "4.0.39",
+    "@ai-sdk/moonshotai": "3.0.45",
+    "@ai-sdk/openai": "4.0.45",
+    "@ai-sdk/openai-compatible": "3.0.34",
+    "@ai-sdk/provider": "4.0.7",
+    "@ai-sdk/xai": "4.0.54",
+    "@openai-oauth/core": "2.0.0",
+    "ulid": "2.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "ai": "7.0.73",
+    "eslint": "10.11.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.70.1"
+  }
+}

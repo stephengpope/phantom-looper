@@ -34,7 +34,7 @@ import { human, labelFor } from '../settingLabels.js';
 import { groupBlocks, headedChoices, type Block } from '../settingGroups.js';
 import { ValueInput, type EditSpec } from './ValueInput.js';
 import { Screen } from './Screen.js';
-import { PROVIDERS, keyedProviders } from 'phantom-client-sdk';
+import { PROVIDERS, keyedProviders } from '@phantom-agent-sdk/client';
 
 export type { Api } from '../request.js';
 import type { Api } from '../request.js';
@@ -306,7 +306,7 @@ export function providerChoices(key: string, choices: readonly string[] | undefi
   entries: Record<string, Entry>): Pick<EditSpec, 'choices' | 'note'> | null {
   if (!PROVIDER_ROWS.has(key)) return null;
   const all = choices ?? PROVIDERS;
-  // THE rule (core keyedProviders): a key from any layer counts — the
+  // THE rule (@phantom-agent-sdk/client keyedProviders): a key from any layer counts — the
   // project read carries a credential's source only, never its value.
   const keyed = keyedProviders(entries).filter((provider) => all.includes(provider));
   return keyed.length

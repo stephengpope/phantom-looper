@@ -2,7 +2,7 @@
 // (config.routes) under the SDK's auth and envelope: the system routes —
 // this app's upgrade, logs, status, restart and token report.
 import type { FastifyInstance } from 'fastify';
-import type { PhantomBackend, Deployment } from 'phantom-backend-sdk';
+import type { PhantomBackend, Deployment } from '@phantom-agent-sdk/backend';
 import { systemRoutes } from './routes/system.js';
 
 /** What the system routes read, set when the engines start (config.onStart). */

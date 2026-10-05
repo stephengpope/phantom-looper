@@ -23,7 +23,7 @@ export const fillOf = (choice: Choice) => choice.fill ?? choice.name;
 export type Choices = (command: Command) => Choice[];
 
 export const COMMANDS: Command[] = [
-  { name: 'new', summary: 'new session in this project, or /new <project>', args: 'project', picks: true },
+  { name: 'new', summary: 'new session in this project, /new <project>, or /new assistant', args: 'project', picks: true },
   { name: 'resume', summary: 'reopen an earlier session' },
   { name: 'project', summary: 'pick a project, or /project <project> edits its settings', args: 'project', picks: true },
   { name: 'kanban', summary: "this project's task board" },

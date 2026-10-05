@@ -5,7 +5,7 @@
 // Writes go through the API like every other client's, under the run's
 // lock identity, so the server knows a card run moved the card.
 import { jsonSchema, tool, type Tool } from 'ai';
-import type { ToolKit, ToolKitContext } from 'phantom-client-sdk';
+import type { ToolKit, ToolKitContext } from '@phantom-agent-sdk/client';
 
 /** The run-ending tools. A turn that calls one is terminal: the loop breaks
  *  on the card's status change, and nothing from that turn crosses to the

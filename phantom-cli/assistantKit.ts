@@ -1,16 +1,16 @@
 // What the Assistant can do to this window. The tool DEFINITIONS live in
-// core/agents/assistant/tools.ts (re-exported by voice.ts); the HANDLERS are
-// core's one set (core/agents/assistant/handlers.ts — the same code the
+// phantom-looper/agents/assistant/tools.ts (re-exported by voice.ts); the HANDLERS are
+// phantom-looper's one set (phantom-looper/agents/assistant/handlers.ts — the same code the
 // Telegram bot answers with). This file supplies what only the window knows — which
 // session is on screen, how to open one, the approval pane, the local turns
 // — and the two handlers that ARE the window's: the board (its live
 // BoardStore, and moving the screen) and screen mode.
 import type { Tool } from 'ai';
-import type { ToolKit } from 'phantom-client-sdk';
+import type { ToolKit } from '@phantom-agent-sdk/client';
 import { sessionsTool, assistantKanbanTool, projectCreateTool, gitAutoPushTool,
   gitAutoPullTool, assistantModeTool, dockerLogsTool, type KanbanArgs } from './voice.js';
 import { sessionsHandler, projectCreateHandler, gitHandlers, dockerLogsHandler,
-  type AssistantHost } from '../core/agents/assistant/handlers.js';
+  type AssistantHost } from '../phantom-looper/agents/assistant/handlers.js';
 import type { ProjectInfo } from './components/Launcher.js';
 import { kanbanOps, resolveColumn } from './kanban.js';
 import type { WindowStore } from './window.js';
@@ -122,7 +122,7 @@ export function kanbanHandler(win: WindowStore) {
   };
 }
 
-/** The Assistant's tools only this window can serve: core's handlers over
+/** The Assistant's tools only this window can serve: phantom-looper's handlers over
  *  this window as host, the window's own two (board, screen mode). The
  *  server's tools for the assistant (the read-only project tools, web,
  *  crons…) come with every turn start and ride beside these. Every fact is

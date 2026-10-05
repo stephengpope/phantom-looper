@@ -35,11 +35,11 @@
 // surface over loopback; the database is reached only through the
 // backend's objects.
 import { Cron } from 'croner';
-import { BackendClient, type AgentHandlers } from 'phantom-client-sdk';
-import { messageLine, userMessage, assistantMessage } from 'phantom-client-sdk/transcript';
-import { CodingAgent } from '../../core/agents/coding.js';
-import type { CronRow, PhantomBackend } from 'phantom-backend-sdk';
-import { logger, errStr } from 'phantom-backend-sdk';
+import { BackendClient, type AgentHandlers } from '@phantom-agent-sdk/client';
+import { messageLine, userMessage, assistantMessage } from '@phantom-agent-sdk/client/transcript';
+import { CodingAgent } from '../../phantom-looper/agents/coding.js';
+import type { CronRow, PhantomBackend } from '@phantom-agent-sdk/backend';
+import { logger, errStr } from '@phantom-agent-sdk/backend';
 
 /** The cron scheduler's client id — its lock identity on the sessions it runs. */
 export const CRON_CLIENT_ID = 'cron';

@@ -4,9 +4,9 @@
 // the work's type (commit_message, title, session_digest). No agent, no
 // session turn: one prompt in, text out.
 import { generateText } from 'ai';
-import { billedModel, BackendClient, type ModelSpec } from 'phantom-client-sdk';
-import type { AgentConfig, SettingScope, ModelPin } from 'phantom-backend-sdk';
-import { logger } from 'phantom-backend-sdk';
+import { billedModel, BackendClient, type ModelSpec } from '@phantom-agent-sdk/client';
+import type { AgentConfig, SettingScope, ModelPin } from '@phantom-agent-sdk/backend';
+import { logger } from '@phantom-agent-sdk/backend';
 
 const log = logger('one-shot');
 

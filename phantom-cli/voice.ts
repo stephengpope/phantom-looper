@@ -26,8 +26,8 @@ import { createInterface } from 'node:readline';
 import type { ModelMessage } from 'ai';
 import { CONFIG_DIR, type ConfigValue } from './config.js';
 import { applyPart, finalize, nextId, type Part, type StreamPart } from './state.js';
-import type { PhantomError } from 'phantom-client-sdk';
-import type { AssistantAgent } from '../core/agents/assistant.js';
+import type { PhantomError } from '@phantom-agent-sdk/client';
+import type { AssistantAgent } from '../phantom-looper/agents/assistant.js';
 import { FLUSH_MS } from './sessions.js';
 
 export const SIDECAR_DIR = fileURLToPath(new URL('./sidecar/', import.meta.url));
@@ -379,11 +379,14 @@ export class VoiceClient {
   }
 
   /** The brain: the Assistant's agent, set by the window once its session
-   *  exists. What it says is drawn here and spoken through the sidecar. The
-   *  agent's conversation is the record on the server; a window opens on an
-   *  empty one. */
+   *  exists, and again when `/new assistant` replaces it. What it says is
+   *  drawn here and spoken through the sidecar. The agent's conversation is
+   *  the record on the server: the pane shows it on arrival — after the
+   *  notes already up the first time, in place of the old conversation
+   *  when the agent is replaced. */
   setAgent(agent: AssistantAgent): void {
     this.unwire();
+    const replacing = this.agent !== null;
     this.agent = agent;
     const a = agent;
     let startedAt = 0;
@@ -414,7 +417,8 @@ export class VoiceClient {
       a.on('turn-end', () => this.turnSettled()),
     ];
     this.unwire = () => { for (const off of offs) off(); };
-    if (this.history.length) this.set({ done: [...this.snap.done, ...partsFromHistory([...this.history])] });
+    const shown = partsFromHistory([...this.history]);
+    if (replacing || shown.length) this.set({ done: [...(replacing ? [] : this.snap.done), ...shown] });
   }
 
   /** The agent's handlers, for the window to hand `AssistantAgent`. */
@@ -667,9 +671,9 @@ export const inertVoice = (): VoiceClient =>
 // --- the one tool, for now ----------------------------------------------------
 
 // The session_* and kanban_* families are declared whole in the Assistant's
-// kit (core/agents/assistant/tools.ts); the App
+// kit (phantom-looper/agents/assistant/tools.ts); the App
 // supplies the handler body (it reads the session store directly). Re-exported
 // here because this file is the Assistant's client-side home.
-export { sessionsTool, assistantKanbanTool, codingKanbanTool, projectCreateTool, gitAutoPushTool, gitAutoPullTool, screenModeTools, assistantModeTool, kebabName, renderRead, renderRaw, dockerLogsTool, type SessionsArgs, type KanbanArgs, type ProjectCreateArgs, type GitAutoPushArgs, type GitAutoPullArgs, type ScreenModeHandler, type DockerLogsArgs } from '../core/agents/assistant/tools.js';
+export { sessionsTool, assistantKanbanTool, codingKanbanTool, projectCreateTool, gitAutoPushTool, gitAutoPullTool, screenModeTools, assistantModeTool, kebabName, renderRead, renderRaw, dockerLogsTool, type SessionsArgs, type KanbanArgs, type ProjectCreateArgs, type GitAutoPushArgs, type GitAutoPullArgs, type ScreenModeHandler, type DockerLogsArgs } from '../phantom-looper/agents/assistant/tools.js';
 
 export function sidecarDirExists(): boolean { return existsSync(dirname(join(SIDECAR_DIR, 'bot.py'))); }

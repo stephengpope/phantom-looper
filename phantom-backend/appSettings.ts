@@ -3,7 +3,7 @@
 // Each belongs to a user-space feature: the looper's switches, the bot's
 // behaviour, the cli's voice pane and launch. `before` files one among the
 // SDK's rows where it belongs on screen.
-import type { SettingDefinition } from 'phantom-backend-sdk';
+import type { SettingDefinition } from '@phantom-agent-sdk/backend';
 
 export const appSettings: SettingDefinition[] = [
   { key: "auto_plan", type: "boolean", default: false, label: "auto plan", group: "board",

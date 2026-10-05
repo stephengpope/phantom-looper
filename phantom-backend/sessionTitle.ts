@@ -1,10 +1,10 @@
 // The session title's model call (PhantomBackendConfig.writeTitle):
 // the ASSISTANT's model names the session from the selected user messages.
 // The cadence, the selection and the write-back are the SDK's (SessionTitler).
-import { titleRequest } from '../core/prompts/helpers/wiring.js';
-import type { TitleContext } from 'phantom-backend-sdk';
+import { titleRequest } from '../phantom-looper/prompts/helpers/wiring.js';
+import type { TitleContext } from '@phantom-agent-sdk/backend';
 import { oneShot, type OneShotDeps } from './oneShot.js';
-import { logger, errStr } from 'phantom-backend-sdk';
+import { logger, errStr } from '@phantom-agent-sdk/backend';
 
 const log = logger('titler');
 const TRIES = 2;

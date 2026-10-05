@@ -1,13 +1,16 @@
 # phantom-looper v1 on phantom-agent-sdk — what is left
 
 phantom-looper is a user-space app on **phantom-agent-sdk**: a client SDK
-(`packages/phantom-client-sdk`) that gives an app an agent and a session, and
-a backend SDK (`packages/phantom-backend-sdk`) that gives a server the
-services, tables, API and the doors to extend them. The SDK supports; user
-space is one implementation of that support.
+(`phantom-agent-sdk/packages/client`, `@phantom-agent-sdk/client`) that gives
+an app an agent and a session, and a backend SDK
+(`phantom-agent-sdk/packages/backend`, `@phantom-agent-sdk/backend`) that
+gives a server the services, tables, API and the doors to extend them. The SDK
+supports; user space (`phantom-looper/`, `phantom-backend/`, `phantom-cli/`)
+is one implementation of that support.
 
-This is the only plan. It replaces `phantom-agent-sdk-plan.md` and
-`recovery.md`. Done work is not listed; `git log` is the record.
+This is the only plan. Done work is not listed; `git log` is the record (the
+2026-10-04 run: `4f603e4`..`1873157` and the two after). The rules below
+stand for every step that remains.
 
 ## Words
 
@@ -15,191 +18,131 @@ This is the only plan. It replaces `phantom-agent-sdk-plan.md` and
 - **Workspace** — a checkout: files, branch, container. Owned by one session;
   other sessions may borrow it.
 - **Session** — a conversation on a workspace, of one agent **type**. The
-  SDK knows a type only by its registration (tools, model settings, whether
-  it owns or borrows a workspace, when it is listed). The three types —
-  `coding`, `supervisor`, `assistant` — are this app's.
+  SDK knows a type only by its registration. The three types — `coding`,
+  `supervisor`, `assistant` — are this app's.
 - **Actor** — who a client acts for (`x-phantom-looper-actor`): a person when
-  unsaid, else an automation's name (`looper`, `cron`, `telegram`). Recorded
-  as a session's `started_by` and `last_turn_by`.
+  unsaid (`person`, the client SDK's one word), else an automation's name.
+  Recorded as a session's `started_by` and `last_turn_by`.
 - **The record** — the session's transcript on the backend, typed lines.
 - **Looper** — the card-run policy over the board. User space.
 
 ## Where it stands
 
-Both renames done. The SDKs own boot, storage, the API, git, Telegram
-plumbing, the runtime and the tool surface; `PhantomBackend.create(config)`
-→ `start()` is the only way in. Every backend turn runs on the client SDK
-over loopback. Every object, function and variable has a word for a name.
-Proven live with a fake model and a fake Telegram API; a real Telegram
-proof needs a bot token.
+The SDK's tables live in `phantom_agent_sdk` with their own ledger; the app's
+in `phantom_looper` with theirs (`config.migrations`). Client and backend are
+one version, enforced at build and at connect. The Assistant resumes its
+conversation; a resumed session rebuilds its volatile prompt section; a
+failed model call hands the user's words back; a stuck tool trips a breaker.
+Proven live with the dev stack and a database carried through the split.
 
 ## The rules that stand
 
-Every step below is held to these. A step that cannot be done inside them
-stops and asks; it does not bend them quietly.
+**Functionality does not change** except where a step names the change, each
+as its own commit with the change in the message. Anything that would alter
+behaviour as a side effect is raised before it is written.
 
-**Functionality does not change.** This is a conversion, not a rewrite.
-What the customer sees and what the system does — every command, every
-screen, every list, every reply, every default — is the same before and
-after each step. Bodies are lifted verbatim. The only functionality changes
-are the ones a step names outright (step 4's four fixes, each a change the
-builder asked for), and each lands as its own commit with the change in the
-message. Anything that would alter behaviour as a side effect — a default
-that moves, a route that answers differently, a filter that hides a row it
-used to show — is raised before it is written, not discovered after. The
-record of the conversion so far has two such changes that were found in
-review, not announced (`started_by` ownership, auto-compaction); that does
-not happen again.
-
-**Proof, not belief.** No step is done until it has run on the real stack —
-the harness in scratch, a fake model and a fake Telegram API where a real
-one is not available — and the proof is named in the commit. "It
-typechecks" is not proof.
+**Proof, not belief.** No step is done until it has run on the real stack
+and the proof is named in the commit. "It typechecks" is not proof. The
+machine the work runs on has limits: the type-checked eslint pass over the
+backend SDK is killed for memory there and takes the session down with it —
+run it on a machine with room, or in CI, never casually.
 
 **The simplest right thing.** One source of truth, one rule, one function,
 one object per concept. Complexity earns its place only with a reason
-written down and a payoff the customer feels; a lock, a migration, a second
-copy of a fact, a shape bolted onto one that no longer fits — each is named
-as a cost before it is taken, and discussed with the builder when the cost
-is not obviously worth it.
+written down and a payoff the customer feels.
 
 **Objects own their facts.** A table has one owner; a service has one
-object; nothing reaches around an object to its storage or its wiring.
-Private stays private (`#field`, `private readonly`); what is public is
-public because something outside needs it. An app enters the SDK through
-`PhantomBackend.create(config)` → `start()` and the backend's public
-objects — never a second door. The SDK knows no app by name: not a type,
-not an actor, not a tool, not a column.
+object; nothing reaches around an object to its storage or its wiring. An
+app enters the SDK through `PhantomBackend.create(config)` → `start()` and
+the backend's public objects — never a second door. The SDK knows no app by
+name: not a type, not an actor, not a tool, not a column.
 
-**A name says what the thing is.** Objects, functions, variables, columns,
-routes, settings. One name per object, the owner's — no aliases, no second
-word for a thing that has one. No one- or two-letter names except a loop
-index (`i`, `j`) and a comparator's pair (`a`, `b`). A thing that has a
-standard name keeps it (`sid`, `pid`, `dm` is NOT one — it is `chatId`).
-A rename is a rename: the old word is gone everywhere, comments and docs
-included, in the same commit.
+**A name says what the thing is.** No one- or two-letter names except a loop
+index (`i`, `j`) and a comparator's pair (`a`, `b`); a thing with a standard
+name keeps it (unified diff's `a`/`b`). A rename is a rename: the old word is
+gone everywhere, in the same commit.
 
-**Nothing is hidden.** What a step did, what it did not do, what it found
-along the way and did not touch — all of it is in the commit message and in
-the report to the builder, the important thing first. A guess is called a
-guess. A mistake found later is reported as a mistake, with the fix.
+**Nothing is hidden.** What a step did, did not do, found and did not touch —
+in the commit message and the report, the important thing first.
 
 **The builder decides the deviations.** Scope, a behaviour change, a new
-dependency, a schema change beyond the one a step names, a name for a
-concept that has none yet, deleting anything, pushing anything — asked
-first, with the choices laid out as what each one feels like to the
-customer and what each costs the code. Everything else — a mechanism
-proven by reading the code, a convention the values already settle — is
-decided and reported.
+dependency, a schema change beyond the one a step names, deleting anything,
+pushing anything — asked first.
 
-**Compaction is parked** until step 4 puts it back: its settings stay,
-nothing triggers it, nothing moves or redesigns it in passing.
+**Compaction is parked.** Its settings stay; nothing triggers it; nothing
+moves or redesigns it in passing.
 
-**No tests for this work**: proof is the live stack; the harness stays in
-scratch, uncommitted.
+**No tests for this work**: proof is the live stack. The backend SDK has a
+runner now (`npm run backend-sdk:test`, node's) for what is cheap to prove
+without the stack; nothing heavier runs on the dev box.
 
-## 1. The schema split — SDK tables and app tables
+## 1. Decisions waiting on the builder
 
-The SDK's tables move to schema `phantom_agent_sdk` with their own
-migrations folder and ledger, shipped in the backend SDK package; this
-app's tables stay in `phantom_looper` with theirs (`config.migrations`).
-No user-space column on an SDK table. Today three app facts sit on SDK
-tables:
+Two of the schema split's moves were not made, because each changes what the
+API answers or makes the SDK ask the app for its own joins. Each needs a yes,
+a no, or another shape.
 
-| today | after |
-|---|---|
-| `cards.auto_plan`, `cards.auto_build`, `projects.auto_plan`, `projects.auto_build` | `phantom_looper.card_automation` (card_id / project_id, auto_plan, auto_build) |
-| `sessions.card_id` | `phantom_looper.card_runs` (session_id, card_id) — `coderOf`, `newestOnCard`, `codersByCard` read it |
-| `telegram_bot_state.mode`, `active_session_id`, `active_project_id` | the SDK keeps the link row (webhook, secret, bot username); `phantom_looper.telegram_assistant_state` holds the bot's behaviour |
+- **`cards.auto_plan` / `cards.auto_build`** (and the tools
+  `kanban_card_auto_plan` / `kanban_card_auto_build`, the board route's
+  `auto_plan_default` / `auto_build_default`). The card row IS the API's
+  card, sent as stored to the cli and the agents' tools, and the revision
+  trigger records these flips in the card's history. Moving them to a
+  `phantom_looper.card_automation` table needs a per-card app-field door in
+  the SDK — a read splice on every card read (board GET, card GET, tools,
+  board events), a write on create/PATCH, the two tools moved to the app —
+  and the revision history stops recording the switches. Options: (a) take
+  that cost; (b) a generic SDK notion of app-declared card fields (like
+  settings are declared), stored by the SDK — the SDK stays word-free, the
+  JSON stays the same, the history keeps recording; (c) leave them. The
+  customer feels nothing either way; the payoff is the SDK's purity for the
+  next app.
+- **`sessions.card_id`.** Read by the SDK's own services: GitService (an
+  archived card's push goes through the card's session), the board route
+  (card → session), the session list's card column, SessionTitler (a session
+  on a card keeps the card's title), the work-state refresh's board events.
+  The board is the SDK's; "the session on this card" is a board fact.
+  Recommendation: it stays. `coderOf` / `codersByCard` should then lose the
+  app word (`ownerOnCard` / `ownersByCard` — the session owning the card's
+  checkout).
+- **The Telegram Assistant forgets on every backend restart** — the same bug
+  the cli had, left: `TelegramAssistantBot.ensureAssistantSession` keeps the
+  session id in process memory. Not fixed because Telegram has no door to a
+  fresh conversation and no compaction, so a conversation that only ever
+  resumes would eventually hit the model's limit with no way out. Fix with
+  compaction, or give the bot a `/new assistant` first.
+- **The backend SDK's lint.** Pre-existing errors remain (the last report
+  counted 41 needless assertions and 19 `no-base-to-string` before it died);
+  the pass needs a machine with memory. Clean to zero before the package
+  ships.
 
-With them go the last app words in the SDK: `kanban_card_auto_plan` /
-`kanban_card_auto_build` tools, the board route's `auto_plan_default` /
-`auto_build_default`, `telegram_bot_state.mode`. The board itself (cards,
-items, revisions, columns) is the SDK's. One migration moves live data;
-proven on a copy of a real database before it lands. A pure move: every
-route answers the same JSON, every tool has the same contract, every
-screen reads the same — the app's facts simply live in the app's tables.
-Where the move would force an API shape to change, that is raised first.
+## 2. Compaction, put back
 
-## 2. The SDK folder takes its final shape
+Parked by the builder's word this run. When it comes: backend-side, on the
+record, under the hold; the existing settings drive it; `/compact` works
+again. The record already has a line type for the prompt moving
+(`system_prompt_rebuilt`); compaction's mark is the same kind of line.
 
-`packages/phantom-client-sdk` → `phantom-agent-sdk/packages/client`
-(`@phantom-agent-sdk/client`); `packages/phantom-backend-sdk` →
-`phantom-agent-sdk/packages/backend` (`@phantom-agent-sdk/backend`).
-Dependency ranges pinned (today's `*` is monorepo-only). The app imports by
-the new names. A pure move: `git mv` and import paths, no body changes. `core/` — the three agents, their prompts, `sessionRows` —
-is the app's shared code (cli and backend both run it) and moves to
-`phantom-looper/` beside `phantom-backend/` and `phantom-cli/` so the
-repo's top level reads as: the SDK, the app.
-
-## 3. The lockstep rule, enforced
-
-Client and backend SDK are one version. `/health` reports the backend
-SDK's version; `BackendClient` compares it to its own at connect and
-refuses with a clear error on a mismatch. Apps need no guard of their own
-for the API surface (phantom-looper's update gate stays for its own two
-halves).
-
-## 4. The broken features, fixed inside the SDK's structure
-
-The four functionality changes of this plan — each asked for, each its own
-commit, each proven live, each with its customer-visible effect stated in
-the message. The design of each is proposed to the builder before it is
-built.
-
-- **The Assistant forgets everything each launch.** The cli opens a new
-  assistant row every time. Resume the newest assistant row for the
-  project; `/new` is the way to start fresh. Smallest change, most customer
-  pain — first.
-- **The prompt's volatile section is frozen at create** (date, skills,
-  secrets). A rebuild rule: `sendMessage(text, { rebuildSystemPrompt: true })`
-  carries the layout in turn-start; the backend reassembles under the hold,
-  answers the new sections, a record line marks it. Who triggers it (resume?
-  a day boundary?) is decided then.
-- **A model call that fails after retries drops the user's words.** Put them
-  back to the host.
-- **Compaction, put back.** It ran before the conversion (the Telegram
-  assistant compacted automatically); nothing triggers it now. Backend-side,
-  on the record, under the hold; the existing settings drive it; `/compact`
-  works again.
-
-## 5. Loose ends from the review
-
-- No default cap on tool calls: `max_steps` empty = unlimited, so a model
-  stuck retrying a failing tool runs until a person sets one. Decide a
-  default or a circuit breaker.
-- Auto-push's error hides git's words ("could not back the branch up"
-  when GitHub refused the token's scope). Surface the reason.
-- `Disk.test.ts` rides in the backend SDK with no runner. Delete, or give
-  the SDK a runner and make it the first test.
-- Backend SDK lint: 84 pre-existing errors (casts, unused imports). Clean
-  to zero before the package ships.
-- The fuzzy-edit and diff helpers (`tools/fuzzy.ts`, `tools/diff.ts`) are
-  lifted third-party-shaped code; name their locals or mark the files as
-  vendored.
-
-## 6. Ship
+## 3. Ship
 
 - A real-Telegram proof of the bot (needs a bot token stored as a secret).
-- README and setup for each package; migrations in the backend package;
-  the lockstep release script.
-- `phantom-agent-sdk/` lifted out as its own repo; the npm org;
-  phantom-looper on published versions with its own version line.
+- `phantom-agent-sdk/` lifted out as its own repo; the npm org; the first
+  `scripts/release.sh X.Y.Z` and `npm publish` of both packages;
+  phantom-looper on the published versions with its own version line.
 - The server's GitHub token gets `workflow` scope so a release edit pushes.
-
-## Order
-
-1 (schema split) before 2 (folder shape) — the split lands in the package
-that moves. 4's first item (assistant resumes) can go any time and should
-go first. 3 and 5 are small and independent. 6 last.
+- The SDK's own migrations, for a fresh install of another app: 012/031
+  still create the three Telegram pointer columns this app's migration 001
+  takes away; an SDK migration should drop them once every install has run
+  the app's.
 
 ## Names — keep
 
 `Agent`, `CodingAgent` / `AssistantAgent` / `SupervisorAgent`,
 `BackendClient`, `ToolKit`, `SystemPrompt`, `StoredSystemPrompt`,
 `PhantomBackend`, `GitService`, `Deployment`, `Looper`, `CronScheduler`,
-`TelegramBot` (SDK) / `TelegramAssistantBot` (app). `resumeSession` /
-`newSession` / `addToolKit` / `sendMessage` / `interrupt` /
-`partialMessage`. Server blocks: `soul_md`, `agents_md`, `skills_list`,
-`secrets_list`, `time_date`, `github_token`, `agent_database`. Errors: the
-backend's code as sent; the SDK's own in `SDK_ERROR_CODES`.
+`TelegramBot` (SDK) / `TelegramAssistantBot` + `TelegramAssistantState` (app).
+`resumeSession` / `newSession` / `open` (the Assistant's) / `addToolKit` /
+`sendMessage` / `interrupt` / `partialMessage` / `connect`. Server blocks:
+`soul_md`, `agents_md`, `skills_list`, `secrets_list`, `time_date`,
+`github_token`, `agent_database`. Errors: the backend's code as sent; the
+SDK's own in `SDK_ERROR_CODES` (`sdk_version_mismatch`, `tool_loop` among
+them).

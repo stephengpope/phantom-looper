@@ -10,7 +10,7 @@
 // (quitNotice), in either direction.
 //
 // The server half streams: POST /update returns ND-JSON progress events
-// (core/update.ts) as the server pulls the images and the installer copies
+// (@phantom-agent-sdk/client update.ts) as the server pulls the images and the installer copies
 // the release files and restarts the stack — the installer's own lines are
 // relayed as they print, so a failure arrives with its reason the moment it
 // happens. The restart cuts the stream; the CLI then health-polls until the
@@ -19,7 +19,7 @@
 // Everything reaches this module through `deps`, so a caller can script a
 // release, a server and a clock without a network or a terminal.
 import { isBehind } from './selfUpdate.js';
-import { pullLine, type PullProgress, type UpdateEvent } from 'phantom-client-sdk';
+import { pullLine, type PullProgress, type UpdateEvent } from '@phantom-agent-sdk/client';
 
 export type Target = 'both' | 'client' | 'server';
 

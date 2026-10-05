@@ -1,19 +1,19 @@
 // The Assistant, server-side, for Telegram — assistant MODE, the home the bot
 // answers in by default. It is the SAME agent as the cli's side pane
-// (core/agents/assistant: same prompt, same tools, same handlers) run on the
+// (phantom-looper/agents/assistant: same prompt, same tools, same handlers) run on the
 // client SDK over loopback: its session row is its record, its tools are the
 // server's for its type plus this kit — the board, the sessions, the gated
 // project_create_repo, git auto-push/pull, docker logs — bound to what only
 // the bot knows: the active project, the pointer, the switch, the yes/no.
 import type { Tool } from 'ai';
-import type { ToolKit, ToolKitContext } from 'phantom-client-sdk';
+import type { ToolKit, ToolKitContext } from '@phantom-agent-sdk/client';
 import { sessionsTool, assistantKanbanTool, projectCreateTool, gitAutoPushTool, gitAutoPullTool, dockerLogsTool,
-  type KanbanArgs } from '../../core/agents/assistant/tools.js';
+  type KanbanArgs } from '../../phantom-looper/agents/assistant/tools.js';
 import { sessionsHandler, projectCreateHandler, gitHandlers, dockerLogsHandler,
-  type AssistantHost } from '../../core/agents/assistant/handlers.js';
-import { autoPushSession, autoPullSession } from '../../core/agents/assistant/gitSteps.js';
-import type { Cards, Projects, CardFields, ItemOp } from 'phantom-backend-sdk';
-import type { CardRow } from 'phantom-backend-sdk/schema';
+  type AssistantHost } from '../../phantom-looper/agents/assistant/handlers.js';
+import { autoPushSession, autoPullSession } from '../../phantom-looper/agents/assistant/gitSteps.js';
+import type { Cards, Projects, CardFields, ItemOp } from '@phantom-agent-sdk/backend';
+import type { CardRow } from '@phantom-agent-sdk/backend/schema';
 
 export const CLIENT_ID = 'telegram';
 /** Telegram as an actor — what its sessions record as started_by and last_turn_by. */
@@ -89,7 +89,7 @@ export interface AssistantCtx {
   onProjectCreated: (projectId: string) => Promise<{ session?: string; error?: string }>;
 }
 
-/** This bot as an AssistantHost (core/agents/assistant/handlers — the same
+/** This bot as an AssistantHost (phantom-looper/agents/assistant/handlers — the same
  *  handlers the cli's pane answers with). The API is reached through the
  *  agent's own client; the pointer, the switch and the yes/no are the bot's.
  *  No local turns (`busy`) and no held history: the bot holds no session in

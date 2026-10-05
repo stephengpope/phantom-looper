@@ -7,7 +7,7 @@
   },
   "include": [
     "../phantom-cli",
-    "../core",
+    "../phantom-looper",
     "../phantom-backend"
   ]
 }

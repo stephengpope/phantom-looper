@@ -48,9 +48,9 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { CONFIG_DIR } from './config.js';
 
-// Version primitives live in core/ so the server can share them.
-import { REPO, isBehind } from 'phantom-client-sdk';
-export { REPO, parseVersion, isBehind, checkLatest } from 'phantom-client-sdk';
+// Version primitives live in @phantom-agent-sdk/client (update.ts) so the server can share them.
+import { REPO, isBehind } from '@phantom-agent-sdk/client';
+export { REPO, parseVersion, isBehind, checkLatest } from '@phantom-agent-sdk/client';
 
 // esbuild --define replaces this whole expression with the release string; a
 // checkout (tsx) reads nothing and stays 'dev'.

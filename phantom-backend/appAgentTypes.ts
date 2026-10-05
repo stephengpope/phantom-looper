@@ -5,7 +5,7 @@
 // person — is said here and nowhere else. Registration order is the
 // settings screen's order. The coding agent is the root: the assistant's
 // and the supervisor's models fall back to it.
-import type { AgentTypeDefinition } from 'phantom-backend-sdk';
+import type { AgentTypeDefinition } from '@phantom-agent-sdk/backend';
 
 export const appAgentTypes: AgentTypeDefinition[] = [
   {

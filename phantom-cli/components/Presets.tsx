@@ -34,7 +34,7 @@ import {
   type CatalogModel,
 } from './Settings.js';
 import type { Api } from '../request.js';
-import { newId } from 'phantom-client-sdk';
+import { newId } from '@phantom-agent-sdk/client';
 
 /** The model keys a preset may hold, grouped per agent — read off GET
  *  /settings: every entry whose `meta.subgroup` is `model`, under its

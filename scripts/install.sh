@@ -275,7 +275,7 @@ say "Waiting for the api to come up..."
 KEY=$(env_get API_KEY)
 i=0
 until printf 'header = "authorization: Bearer %s"\n' "$KEY" \
-      | curl -fsS -K - "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; do
+      | curl -fsS -K - "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; do
   i=$((i + 1))
   [ "$i" -ge 45 ] && fail "api not healthy after 90s — check: phantom-backend logs api"
   sleep 2

@@ -13,7 +13,7 @@
 // The server is always https behind Caddy — dev included — so this is the one
 // transport; any other URL is a setup error, said in the error.
 import { rootCertificates } from 'node:tls';
-import { BackendClient, BackendConnection, isPhantomError } from 'phantom-client-sdk';
+import { BackendClient, BackendConnection, isPhantomError } from '@phantom-agent-sdk/client';
 import { localValues } from './local.js';
 import { savedCaFor } from './provision.js';
 import { requestError, type Api } from './request.js';

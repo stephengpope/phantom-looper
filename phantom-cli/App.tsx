@@ -39,7 +39,7 @@ import { Box, useApp, useBoxMetrics, useInput, useWindowSize } from 'ink';
 import { Text } from './components/Text.js';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { Tool } from 'ai';
-import type { BackendClient } from 'phantom-client-sdk';
+import type { BackendClient } from '@phantom-agent-sdk/client';
 import { phaseLabel, tokenCount, formatTokensIn, formatTokensOut, cachePct } from './state.js';
 import { activeHold } from './sessions.js';
 import { COMMANDS, complete, matches } from './commands.js';
@@ -91,7 +91,7 @@ export function App({
   autoPush?: (sessionId: string, onStep?: (label: string) => void) =>
     Promise<{ result: string; reason?: string; sha?: string }>;
   /** POST /git/auto-pull for one session, the same shape — the Assistant's
-   *  `git_auto_pull`. index.tsx wires core's client; absent in tests. */
+   *  `git_auto_pull`. index.tsx wires phantom-looper's client; absent in tests. */
   autoPull?: (sessionId: string, onStep?: (label: string) => void) =>
     Promise<{ result: string; reason?: string; arrived?: string[]; files?: string[]; sha?: string; pushed?: boolean }>;
   /** This window's session-lock id (index.tsx mints one per process and sends

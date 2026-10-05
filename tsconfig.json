@@ -12,7 +12,7 @@
     "forceConsistentCasingInFileNames": true
   },
   "include": [
-    "core",
+    "phantom-looper",
     "phantom-backend"
   ]
 }

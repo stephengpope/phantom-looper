@@ -4,18 +4,18 @@ FROM node:22-bookworm-slim AS build
 WORKDIR /app
 COPY package*.json ./
 # The SDK workspaces: their manifests before npm ci (the lockfile names
-# them), their sources after — built first, core/ and the server import them.
-COPY packages/ packages/
+# them), their sources after — built first, phantom-looper/ and the server import them.
+COPY phantom-agent-sdk/ phantom-agent-sdk/
 # npm ci, not install: exactly the committed lockfile or a failed build — never
 # a silent drift to newer in-range versions.
 RUN npm ci --no-audit --no-fund && npm run sdk:build && npm run backend-sdk:build
 COPY tsconfig.json ./
-COPY core/ core/
+COPY phantom-looper/ phantom-looper/
 COPY phantom-backend/ phantom-backend/
 COPY scripts/models-snapshot.ts scripts/
 # A fresh model catalog for THIS release, fetched at build (models.ts reads it
 # beside itself in dist/). Dies if models.dev is down: never ship a stale list.
-RUN npm run build && npx tsx scripts/models-snapshot.ts packages/phantom-backend-sdk/dist/agents/models-snapshot.json && npm prune --omit=dev
+RUN npm run build && npx tsx scripts/models-snapshot.ts phantom-agent-sdk/packages/backend/dist/agents/models-snapshot.json && npm prune --omit=dev
 
 FROM node:22-bookworm-slim
 ARG VERSION=dev
@@ -31,9 +31,9 @@ RUN git --version && openssl version
 WORKDIR /app
 COPY --from=build /app/node_modules node_modules
 COPY --from=build /app/dist dist
-# The SDK workspaces: node_modules holds them as symlinks into packages/, so
+# The SDK workspaces: node_modules holds them as symlinks into phantom-agent-sdk/, so
 # without this directory every import of them dangles and the server dies at boot.
-COPY --from=build /app/packages packages
+COPY --from=build /app/phantom-agent-sdk phantom-agent-sdk
 # The workspace volume mounts at /workspaces root-owned on first use unless the
 # image owns the path — same mechanism Shockwave uses for /data/agent. /trigger
 # is where POST /update drops a release tag for the updater sidecar (a shared

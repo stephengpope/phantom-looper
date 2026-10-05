@@ -1,4 +1,4 @@
-import { normalizeKey } from 'phantom-client-sdk';
+import { normalizeKey } from '@phantom-agent-sdk/client';
 import { followStream, type Stream } from './follow.js';
 
 // The kanban board's one store. Everything that changes the board — keyboard,

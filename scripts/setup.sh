@@ -49,11 +49,11 @@ docker compose up -d --build
 
 echo -n "waiting for api"
 for _ in $(seq 1 60); do
-  if curl -sf -H "authorization: Bearer $API_KEY" "http://127.0.0.1:${PHANTOM_BACKEND_PORT:-8080}/health" >/dev/null 2>&1; then echo; break; fi
+  if curl -sf -H "authorization: Bearer $API_KEY" "http://127.0.0.1:${PHANTOM_BACKEND_PORT:-8080}/api/health" >/dev/null 2>&1; then echo; break; fi
   echo -n "."; sleep 1
 done
 
-curl -sf -H "authorization: Bearer $API_KEY" "http://127.0.0.1:${PHANTOM_BACKEND_PORT:-8080}/health" >/dev/null \
+curl -sf -H "authorization: Bearer $API_KEY" "http://127.0.0.1:${PHANTOM_BACKEND_PORT:-8080}/api/health" >/dev/null \
   || { echo "api did not come up — docker compose logs api"; exit 1; }
 
 # Caddy's root certificate: minted on its first start, the one file the cli
@@ -72,7 +72,7 @@ done
 [ -s "$CA" ] || { echo "could not read caddy's root certificate — docker compose logs caddy"; exit 1; }
 
 # The path the cli takes, proven here: TLS on that root, HTTP/2, through Caddy.
-curl -sf --http2 --cacert "$CA" -H "authorization: Bearer $API_KEY" "$BASE/health" >/dev/null \
+curl -sf --http2 --cacert "$CA" -H "authorization: Bearer $API_KEY" "$BASE/api/health" >/dev/null \
   || { echo "$BASE/health failed through caddy — docker compose logs caddy"; exit 1; }
 
 # Merge the connection into the cli's settings.json; other local keys survive.

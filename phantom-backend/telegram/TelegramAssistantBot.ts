@@ -10,24 +10,24 @@
 // is Deepgram-only. Mechanisms (the streaming bubble, entities, telegram_sent_messages,
 // attachments, the escape-spelled reactions) are ported from ../shockwave.
 
-import { CodingAgent } from '../../core/agents/coding.js';
-import { AssistantAgent } from '../../core/agents/assistant.js';
-import { BackendClient, type Agent, type AgentHandlers } from 'phantom-client-sdk';
+import { CodingAgent } from '../../phantom-looper/agents/coding.js';
+import { AssistantAgent } from '../../phantom-looper/agents/assistant.js';
+import { BackendClient, type Agent, type AgentHandlers } from '@phantom-agent-sdk/client';
 import { telegramAssistantKit, CLIENT_ID, TELEGRAM_STARTER } from './assistant.js';
 import type { FastifyInstance } from 'fastify';
-import { APP_VERSION } from 'phantom-backend-sdk';
-import type { Deployment, PhantomBackend } from 'phantom-backend-sdk';
-import type { BoardEvent } from 'phantom-backend-sdk';
-import type { SessionRow, ProjectRow } from 'phantom-backend-sdk/schema';
+import { APP_VERSION } from '@phantom-agent-sdk/backend';
+import type { Deployment, PhantomBackend } from '@phantom-agent-sdk/backend';
+import type { BoardEvent } from '@phantom-agent-sdk/backend';
+import type { SessionRow, ProjectRow } from '@phantom-agent-sdk/backend/schema';
 import { autoBuildAlert } from './alerts.js';
-import { logger, errStr } from 'phantom-backend-sdk';
-import { TelegramApi, titled } from 'phantom-backend-sdk';
-import { collectFiles } from 'phantom-backend-sdk';
-import type { Ask } from 'phantom-backend-sdk';
-import { UpgradeChecker } from 'phantom-backend-sdk';
-import type { TelegramBotStateRow, TelegramMode } from 'phantom-backend-sdk';
+import { logger, errStr } from '@phantom-agent-sdk/backend';
+import { TelegramApi, titled } from '@phantom-agent-sdk/backend';
+import { collectFiles } from '@phantom-agent-sdk/backend';
+import type { Ask } from '@phantom-agent-sdk/backend';
+import { UpgradeChecker } from '@phantom-agent-sdk/backend';
+import { TelegramAssistantState, type TelegramAssistantStateRow, type TelegramMode } from './TelegramAssistantState.js';
 import { menuFor, handleCommand } from './commands.js';
-import { AUTO_PUSH_STEPS, AUTO_PULL_STEPS, type AutoPushOutcome, type AutoPullOutcome } from '../../core/agents/assistant/gitSteps.js';
+import { AUTO_PUSH_STEPS, AUTO_PULL_STEPS, type AutoPushOutcome, type AutoPullOutcome } from '../../phantom-looper/agents/assistant/gitSteps.js';
 
 
 const log = logger('telegram');
@@ -50,16 +50,18 @@ export class TelegramAssistantBot {
   private inFlight = new Map<string, InFlightTurn>();
   /** One client, this bot's lock identity, for every agent it opens. */
   private readonly client: BackendClient;
-
+  /** The bot's behaviour row: who answers, which session and project it points at. */
+  readonly state: TelegramAssistantState;
 
   /** The upgrade checker — periodic GitHub release check + Telegram notification. */
   readonly upgradeChecker: UpgradeChecker;
 
   /** On the backend's objects — its Telegram plumbing (the link, verified
-   *  inbound, delivery), the bot-state row, the sessions, the board, the
-   *  settings, its git — plus this app's `deployment` (update, logs, restart)
+   *  inbound, delivery), the sessions, the board, the settings, its git —
+   *  plus this app's own bot state, its `deployment` (update, logs, restart)
    *  and the looper's count of card runs in flight (the upgrade's health line). */
   constructor(readonly backend: PhantomBackend, readonly deployment: Deployment, private readonly loopsRunning: () => number) {
+    this.state = new TelegramAssistantState(backend.database.drizzle);
     this.client = new BackendClient({ url: backend.loopback.url, apiKey: backend.loopback.apiKey, clientId: CLIENT_ID, label: 'telegram', actor: TELEGRAM_STARTER });
     this.upgradeChecker = new UpgradeChecker({
       version: APP_VERSION,
@@ -155,7 +157,7 @@ export class TelegramAssistantBot {
         return;
       }
 
-      const bot = await this.backend.telegramBotState.read();
+      const bot = await this.state.read();
       sessionId = bot.mode === 'code' ? bot.activeSessionId : null;
 
       const input = await this.resolveInput(client, chatId, msgs, bot);
@@ -195,7 +197,7 @@ export class TelegramAssistantBot {
   private async assistantTurn(client: TelegramApi, chatId: number, message: string): Promise<void> {
     const typing = startTyping(client, chatId);
     const busyKey = 'assistant';
-    const bot = await this.backend.telegramBotState.read();
+    const bot = await this.state.read();
     // The assistant can deliver a file it names from the active session's work
     // dir (its file tools are read-only, but it can point at one the coder made).
     const sink = await this.backend.telegramBot.startReplyBubble(client, chatId, bot.activeSessionId ?? null);
@@ -222,11 +224,11 @@ export class TelegramAssistantBot {
       // A new project: make it active and open a session in it — what /new
       // does, so the user lands talking to the coder like the cli's "on screen".
       const onProjectCreated = async (projectId: string) => {
-        await this.backend.telegramBotState.setActiveProject(projectId);
+        await this.state.setActiveProject(projectId);
         let started;
         try { started = await this.backend.sessions.start(projectId, CodingAgent.systemPromptLayout, { type: 'coding', startedBy: TELEGRAM_STARTER }); }
         catch (error) { return { error: (error as Error).message }; }
-        await this.backend.telegramBotState.setActiveSession(started.id);
+        await this.state.setActiveSession(started.id);
         await this.enterMode(client, chatId, 'code');
         await client.sendMessage(chatId, '🆕 New session in the new project. Send your first message to begin.');
         return { session: started.id };
@@ -328,7 +330,7 @@ export class TelegramAssistantBot {
   // ── input: voice, video notes, attachments, text ────────────────────────
 
   private async resolveInput(client: TelegramApi, chatId: number, msgs: any[],
-    bot: TelegramBotStateRow): Promise<string | null> {
+    bot: TelegramAssistantStateRow): Promise<string | null> {
     const msg = msgs[0];
     // Telegram puts the caption on only one album item.
     const typed = msgs.map((message) => String(message.text ?? message.caption ?? '').trim()).find(Boolean) ?? '';
@@ -363,7 +365,7 @@ export class TelegramAssistantBot {
   private async switchForReply(client: TelegramApi, chatId: number, msg: any): Promise<void> {
     const repliedSession = await this.backend.telegramBot.sessionOfRepliedMessage(chatId, msg);
     if (repliedSession === undefined) return;
-    const bot = await this.backend.telegramBotState.read();
+    const bot = await this.state.read();
     if (repliedSession) {
       if (bot.activeSessionId === repliedSession && bot.mode === 'code') return;
       if (bot.activeSessionId !== repliedSession) {
@@ -391,7 +393,7 @@ export class TelegramAssistantBot {
   Promise<{ id: string; title: string | null } | { error: string }> {
     const session = await this.backend.sessions.get(id);
     if (!session) return { error: `no session ${id}` };
-    await this.backend.telegramBotState.setActiveSession(id);
+    await this.state.setActiveSession(id);
     if (!opts?.silent) await client.sendMessage(chatId, `🔀 Active session: ${session.name ?? 'untitled'}`);
     return { id, title: session.name ?? null };
   }
@@ -404,7 +406,7 @@ export class TelegramAssistantBot {
     const msg = mode === 'code'
       ? await this.codeModeLabel(chatId)
       : undefined;
-    const changed = await this.backend.telegramBotState.setMode(mode, (text) => client.sendMessage(chatId, text), msg);
+    const changed = await this.state.setMode(mode, (text) => client.sendMessage(chatId, text), msg);
     await client.setMyCommands(menuFor(mode), chatId).catch(() => {});
     return changed;
   }
@@ -414,7 +416,7 @@ export class TelegramAssistantBot {
    *  function, used by enterMode and the /code echo. Pass `dm` to include the
    *  last agent message (the switch announcement); omit it for a bare label. */
   async codeModeLabel(chatId?: number): Promise<string> {
-    const bot = await this.backend.telegramBotState.read();
+    const bot = await this.state.read();
     if (!bot.activeSessionId) return '🤖 Coding agent';
     const session = await this.backend.sessions.get(bot.activeSessionId);
     if (!session) return '🤖 Coding agent';

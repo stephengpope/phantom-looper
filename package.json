@@ -8,17 +8,18 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp -r phantom-backend/migrations dist/phantom-backend/",
     "start": "node dist/phantom-backend/index.js",
     "keys": "tsx --tsconfig phantom-cli/tsconfig.json phantom-cli/keys.tsx",
     "typecheck": "tsc --noEmit && tsc -p phantom-cli",
     "models:snapshot": "tsx scripts/models-snapshot.ts",
     "phantom-cli": "NODE_ENV=production tsx --tsconfig phantom-cli/tsconfig.json phantom-cli/index.tsx",
     "phantom-backend": "tsx phantom-backend/index.ts",
-    "sdk:build": "npm run build -w phantom-client-sdk",
-    "sdk:lint": "npm run lint -w phantom-client-sdk",
-    "backend-sdk:build": "npm run build -w phantom-backend-sdk",
-    "backend-sdk:lint": "npm run lint -w phantom-backend-sdk"
+    "sdk:build": "npm run build -w @phantom-agent-sdk/client",
+    "sdk:lint": "npm run lint -w @phantom-agent-sdk/client",
+    "backend-sdk:build": "npm run build -w @phantom-agent-sdk/backend",
+    "backend-sdk:lint": "npm run lint -w @phantom-agent-sdk/backend",
+    "backend-sdk:test": "npm test -w @phantom-agent-sdk/backend"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.40",
@@ -70,6 +71,6 @@
     "typescript": "5.9.3"
   },
   "workspaces": [
-    "packages/*"
+    "phantom-agent-sdk/packages/*"
   ]
 }

@@ -10,12 +10,12 @@
 import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { PhantomBackend } from 'phantom-backend-sdk';
+import type { PhantomBackend } from '@phantom-agent-sdk/backend';
 import type { AppExtras } from '../appRoutes.js';
-import { err, ok } from 'phantom-backend-sdk';
-import { logger, errStr } from 'phantom-backend-sdk';
-import { PROVIDERS, isProvider } from 'phantom-client-sdk';
-import { DeploymentError, LOG_MAX_TAIL, LOG_SERVICES } from 'phantom-backend-sdk';
+import { err, ok } from '@phantom-agent-sdk/backend';
+import { logger, errStr } from '@phantom-agent-sdk/backend';
+import { PROVIDERS, isProvider } from '@phantom-agent-sdk/client';
+import { DeploymentError, LOG_MAX_TAIL, LOG_SERVICES } from '@phantom-agent-sdk/backend';
 
 const log = logger('system');
 

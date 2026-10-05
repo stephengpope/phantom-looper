@@ -12,12 +12,12 @@
 // so it's never reported twice for the same activity. If it runs again and
 // finishes again, it'll be reported again.
 
-import { expiredHold, type PhantomBackend } from 'phantom-backend-sdk';
+import { expiredHold, type PhantomBackend } from '@phantom-agent-sdk/backend';
 import { oneShot, type OneShotDeps } from '../oneShot.js';
-import { lastAssistantFromJsonl } from 'phantom-backend-sdk';
-import { titled } from 'phantom-backend-sdk';
-import { STATUS_ICON } from 'phantom-backend-sdk';
-import { logger } from 'phantom-backend-sdk';
+import { lastAssistantFromJsonl } from '@phantom-agent-sdk/backend';
+import { titled } from '@phantom-agent-sdk/backend';
+import { STATUS_ICON } from '@phantom-agent-sdk/backend';
+import { logger } from '@phantom-agent-sdk/backend';
 
 const log = logger('digest');
 

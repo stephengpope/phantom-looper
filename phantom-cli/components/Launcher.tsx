@@ -21,9 +21,9 @@ export interface ProjectInfo {
   /** The resolved card number prefix ("PHA") — the server's, never derived here. */
   cardPrefix?: string;
 }
-/** A session row as the server lists it — core's one shape. */
-export type { SessionRow as SessionInfo } from '../../core/sessionRows.js';
-import type { SessionRow as SessionInfo } from '../../core/sessionRows.js';
+/** A session row as the server lists it — phantom-looper's one shape. */
+export type { SessionRow as SessionInfo } from '../../phantom-looper/sessionRows.js';
+import type { SessionRow as SessionInfo } from '../../phantom-looper/sessionRows.js';
 
 /** The `work` column: the git facts in the operator's terms, each with its
  *  severity mark — the colored • the table draws ahead of the words. Red is
@@ -36,10 +36,10 @@ export const WORK = {
   merged: { text: 'merged', mark: 'green' },
 } as const;
 
-/** The icon per card status — core's one map (core/kanban.ts), for /resume's
+/** The icon per card status — phantom-looper's one map (core/kanban.ts), for /resume's
  *  card column and the board's column headers. The icon replaces the word. */
-export { STATUS_ICON } from 'phantom-client-sdk';
-import { STATUS_ICON } from 'phantom-client-sdk';
+export { STATUS_ICON } from '@phantom-agent-sdk/client';
+import { STATUS_ICON } from '@phantom-agent-sdk/client';
 
 export type Launch =
   | { kind: 'resume'; sessionId: string }
@@ -61,10 +61,10 @@ export function lastProjectId(projects: ProjectInfo[], sessions: SessionInfo[]):
     .sort((a, b) => Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt))[0]?.projectId;
 }
 
-/** Who drives, is a turn live, how long ago — core's one definition of
- *  each (core/sessionRows.ts), shared with the Assistant's session_list. */
-export { whoDrives, isRunning, ago, type Driver } from '../../core/sessionRows.js';
-import { whoDrives, isRunning, ago } from '../../core/sessionRows.js';
+/** Who drives, is a turn live, how long ago — phantom-looper's one definition of
+ *  each (phantom-looper/sessionRows.ts), shared with the Assistant's session_list. */
+export { whoDrives, isRunning, ago, type Driver } from '../../phantom-looper/sessionRows.js';
+import { whoDrives, isRunning, ago } from '../../phantom-looper/sessionRows.js';
 
 /** Session rows — /resume. A session is
  *  what you actually reopen: it carries the branch and the conversation. */

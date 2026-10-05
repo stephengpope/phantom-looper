@@ -9,7 +9,7 @@
 import type { ModelMessage } from 'ai';
 import {
   firstLine, toCodingAgent, toSupervisor, type CardShape,
-} from '../../core/prompts/supervisor/wiring.js';
+} from '../../phantom-looper/prompts/supervisor/wiring.js';
 import { ENDING_TOOLS } from './cardRunTools.js';
 
 export const LOOP_COLUMNS = ['plan', 'in_progress'] as const;

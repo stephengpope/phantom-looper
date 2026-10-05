@@ -19,16 +19,16 @@
 // act on the coding session the bot points at. Each runs as ONE bubble
 // edited in place — a line per step as it happens, the result on the last line.
 
-import { CodingAgent } from '../../core/agents/coding.js';
-import type { TelegramApi } from 'phantom-backend-sdk';
-import { titled } from 'phantom-backend-sdk';
-import { toTelegram } from 'phantom-backend-sdk';
+import { CodingAgent } from '../../phantom-looper/agents/coding.js';
+import type { TelegramApi } from '@phantom-agent-sdk/backend';
+import { titled } from '@phantom-agent-sdk/backend';
+import { toTelegram } from '@phantom-agent-sdk/backend';
 import type { TelegramAssistantBot } from './TelegramAssistantBot.js';
-import { MODE_MESSAGE, type TelegramMode } from 'phantom-backend-sdk';
-import { PROVIDERS } from 'phantom-client-sdk';
-import { hasCatalog } from 'phantom-backend-sdk';
-import { isHeld } from 'phantom-backend-sdk';
-import { GLOBAL } from 'phantom-backend-sdk';
+import { MODE_MESSAGE, type TelegramMode } from './TelegramAssistantState.js';
+import { PROVIDERS } from '@phantom-agent-sdk/client';
+import { hasCatalog } from '@phantom-agent-sdk/backend';
+import { isHeld } from '@phantom-agent-sdk/backend';
+import { GLOBAL } from '@phantom-agent-sdk/backend';
 import { CLIENT_ID, TELEGRAM_STARTER } from './assistant.js';
 
 interface Cmd { command: string; description: string }
@@ -89,7 +89,7 @@ export async function handleCommand(
   const cmd = raw.toLowerCase().split('@')[0];
   const arg = rest[0];
   const reply = (text: string) => client.sendMessage(chatId, text);
-  const bot = await telegram.backend.telegramBotState.read();
+  const bot = await telegram.state.read();
 
   switch (cmd) {
     case 'start':
@@ -163,7 +163,7 @@ export async function handleCommand(
           return;
         }
         const project = list.find((project) => project.id === ids[pick - 1]);
-        await telegram.backend.telegramBotState.setActiveProject(ids[pick - 1]);
+        await telegram.state.setActiveProject(ids[pick - 1]);
         await reply(`📁 Active project: ${project?.name ?? ids[pick - 1]}`);
         return;
       }
@@ -181,7 +181,7 @@ export async function handleCommand(
       catch (error) { await reply(`⚠️ Couldn't start a session: ${(error as Error).message}`); return; }
       // Create + point at it. The mode is untouched: from home the assistant
       // keeps the conversation; in code mode the next message starts the coder.
-      await telegram.backend.telegramBotState.setActiveSession(started.id);
+      await telegram.state.setActiveSession(started.id);
       await reply(bot.mode === 'code'
         ? '🆕 New session. Send your first message to begin.'
         : '🆕 New session is active — /code to start coding in it.');
