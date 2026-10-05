@@ -36,8 +36,6 @@ const cardBodyProps = {
   pos: { type: 'number', description: 'Sort position within the column (fractional inserts).' },
   blocked_reason: { type: ['string', 'null'], description: 'Set to mark the card blocked; null clears it.' },
   resolution: { type: ['string', 'null'], description: 'The human\'s reply to a block — written before moving the card back; the loop clears it once the card moves on.' },
-  auto_plan: { type: ['boolean', 'null'], description: 'The looper\'s per-card switch for the plan column: true/false overrides the project\'s auto_plan setting; null inherits it.' },
-  auto_build: { type: ['boolean', 'null'], description: 'The looper\'s per-card switch for the in_progress column: true/false overrides the project\'s auto_build setting; null inherits it.' },
   pinned: { type: 'boolean', description: 'Pins the card to the top of its column: pinned cards sit as a group above the rest, pos still sorting inside the group.' },
   archived: { type: 'boolean' },
   requirements: { type: 'array', items: itemSchema,
@@ -62,33 +60,32 @@ for (const field of [...CARD_FIELDS, ...CARD_JSON_FIELDS]) {
 export function kanbanRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   const log = logger('kanban');
   const projectOf = (id: string) => ctx.projects.get(id);
+  // The card body: the columns, the checklist, and the app's fields about a
+  // card under the names it declared (Cards.fieldSchema) — accepted as if
+  // they were the card's.
+  const cardBody = { ...cardBodyProps, ...ctx.cards.fieldSchema };
   /** A card's own refusal, as the API's answer. */
   const cardErr = (reply: { code: (status: number) => { send: (b: unknown) => unknown } }, error: unknown) => {
     if (!(error instanceof CardError)) throw error;
     return reply.code(error.code === 'not_found' ? 404 : 400).send(err(error.code, error.message));
   };
 
-  // The resolved looper defaults ride every board payload so the card editor
-  // can always show the REAL value a card inherits — and say which layer it
-  // came from. One pair per switch: auto_plan gates the plan column,
-  // auto_build gates in_progress.
-  const board = async (project: ProjectRow) => {
-    const plan = await ctx.settings.resolveWithSource('auto_plan', { projectId: project.id });
-    const build = await ctx.settings.resolveWithSource('auto_build', { projectId: project.id });
-    return { prefix: await ctx.projects.prefixOf(project), columns: columnsOf(project),
-      project: project.displayName ?? project.name,
-      auto_plan_default: Boolean(plan.value), auto_plan_source: plan.source,
-      auto_build_default: Boolean(build.value), auto_build_source: build.source };
-  };
+  // Every board payload: the project's board facts, and whatever the app
+  // puts beside the cards (Cards.boardExtras — its fields' defaults, say).
+  const board = async (project: ProjectRow) => ({
+    prefix: await ctx.projects.prefixOf(project), columns: columnsOf(project),
+    project: project.displayName ?? project.name,
+    ...await ctx.cards.boardExtras(project),
+  });
 
-  // Each card's coding session — the newest per card (Sessions.codersByCard).
+  // Each card's owning session — the newest per card (Sessions.ownersByCard).
   // Rides the board GET so the card editor can name the session and open it.
   // `locked` is computed here (same rule as GET /sessions) so the board can
   // show a spinner on cards whose session is actively running; `workState`
   // is the stored column the 10s refresh job maintains.
   const cardSessions = async (project: ProjectRow) => {
     const now = Date.now();
-    return (await ctx.sessions.codersByCard(project.id)).map((session) => ({
+    return (await ctx.sessions.ownersByCard(project.id)).map((session) => ({
       card: session.card, id: session.id, name: session.name,
       locked: isHeld(session, now),
       workState: session.workState }));
@@ -137,7 +134,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       description: 'New card. status defaults to the first column; pos defaults to the end of that column. ' +
         'The card number is the project\'s next and is never reused.',
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
-      body: { type: 'object', additionalProperties: false, required: ['title'], properties: cardBodyProps } } },
+      body: { type: 'object', additionalProperties: false, required: ['title'], properties: cardBody } } },
     async (req, reply) => {
       const project = await projectOf(req.params.id);
       if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
@@ -156,7 +153,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         '(add/edit/remove/tick), touching nothing else — the way agents edit checklists; replacing a whole ' +
         'list is the form editor\'s path.',
       params: { type: 'object', properties: { id: { type: 'string' }, number: cardNumberParam }, required: ['id', 'number'] },
-      body: { type: 'object', additionalProperties: false, properties: { ...cardBodyProps, items: itemsSchema } } } },
+      body: { type: 'object', additionalProperties: false, properties: { ...cardBody, items: itemsSchema } } } },
     async (req, reply) => {
       const project = await projectOf(req.params.id);
       if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));

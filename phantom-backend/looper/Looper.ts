@@ -10,6 +10,7 @@
 // released by anyone but this looper re-runs its card's loop.
 import { BackendClient, type AgentHandlers, type Agent } from '@phantom-agent-sdk/client';
 import { CodingAgent } from '../../phantom-looper/agents/coding.js';
+import type { CardAutomation } from './CardAutomation.js';
 import { SupervisorAgent } from '../../phantom-looper/agents/supervisor.js';
 import type { ProjectRow } from '@phantom-agent-sdk/backend/schema';
 import { GLOBAL, type CardFields, type PhantomBackend } from '@phantom-agent-sdk/backend';
@@ -51,7 +52,7 @@ export class Looper {
    *  token log (the budget's coin), and its three feeds — the board bus runs
    *  the loop, the settings feed re-examines a project when a loop switch
    *  moves, the session feed re-runs a card when a hold is released. */
-  constructor(private readonly backend: PhantomBackend) {
+  constructor(private readonly backend: PhantomBackend, private readonly automation: CardAutomation) {
     this.client = new BackendClient({ url: backend.loopback.url, apiKey: backend.loopback.apiKey, clientId: CLIENT_ID, label: 'card run', actor: LOOPER_STARTER });
   }
 
@@ -163,7 +164,7 @@ export class Looper {
           const auto = await this.backend.settings.resolveMany(['auto_plan', 'auto_build'], { projectId: project.id })
             .catch(() => ({ auto_plan: false, auto_build: false }));
           card = await this.backend.cards.activeByNumber(project, cardNumber);
-          if (!card || !canTurn(card, { plan: Boolean(auto.auto_plan), build: Boolean(auto.auto_build) })) continue;
+          if (!card || !canTurn(card, this.automation.of(card), { plan: Boolean(auto.auto_plan), build: Boolean(auto.auto_build) })) continue;
         } catch (error) {
           log.warn({ card: cardNumber, err: errStr(error) }, 'looper could not read the card');
           continue;
@@ -215,8 +216,8 @@ export class Looper {
    *  powers are bound to THE card. Throws on failure — runLoop turns that
    *  into a blocked card. */
   async runTurn(project: ProjectRow, card: CardRow, budget: Budget): Promise<TurnOutcome> {
-    // The card's coder — its newest coding session (Sessions.coderOf).
-    const coder = await this.backend.sessions.coderOf(project.id, card.number);
+    // The card's coder — the session that owns its checkout (Sessions.ownerOnCard).
+    const coder = await this.backend.sessions.ownerOnCard(project.id, card.number);
     // Entering plan is a NEW run, always — the revision history is the
     // transition clock (logic.ts).
     const fresh = needsFreshSession(card.status, coder?.createdAt ?? null,

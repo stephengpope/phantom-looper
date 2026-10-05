@@ -129,8 +129,8 @@ row instead of the session. Linked by card number, not the card's key.
 **What we did.** `sessions.card_id` (027) — the card a session works on,
 keyed to `cards.id`, `on delete set null`. A coder and its supervisor both
 carry it. The pairing is derived, not stored: a card's coder is its newest
-coding session (`Sessions.coderOf`), its supervisor its newest supervisor
-session (`supervisorOf`); the board reads `codersByCard`. The looper puts
+coding session (`Sessions.ownerOnCard`), its supervisor its newest supervisor
+session (`supervisorOf`); the board reads `ownersByCard`. The looper puts
 the coder on the card at birth (`setCard`) and gives it a supervisor born
 for it — a supervisor older than the coder is replaced. `loops`, `Loops`
 and `loops.ts` are gone. The session API still says `card: 7` (the number),

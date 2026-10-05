@@ -58,10 +58,10 @@ export const projects = phantomAgentSdk.table('projects', {
 
 // The board (024: one table, every project). Status is a plain string
 // matched against the project's column list (projects.kanban_columns,
-// default in code) — columns are data, not DDL. `auto_plan`/`auto_build` are
-// the per-card looper switches: null inherits the project setting of the
-// same name. `requirements` is the ONE checklist — {key, text, done}, done
-// meaning VERIFIED. Column keys are snake_case on purpose: a card row IS the
+// default in code) — columns are data, not DDL. What an app knows about a
+// card beyond these columns is the app's table, keyed by `id`
+// (CardFieldsExtension). `requirements` is the ONE checklist — {key, text,
+// done}, done meaning VERIFIED. Column keys are snake_case on purpose: a card row IS the
 // API's card, sent as stored to the cli and the agents' kanban tools.
 export const cards = phantomAgentSdk.table('cards', {
   id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
@@ -74,8 +74,6 @@ export const cards = phantomAgentSdk.table('cards', {
   requirements: jsonb('requirements').$type<{ key: string; text: string; done: boolean }[]>().notNull().default([]),
   blocked_reason: text('blocked_reason'),
   resolution: text('resolution'),
-  auto_plan: boolean('auto_plan'),
-  auto_build: boolean('auto_build'),
   pinned: boolean('pinned').notNull().default(false),
   archived: boolean('archived').notNull().default(false),
   created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -162,11 +160,12 @@ export const sessions = phantomAgentSdk.table('sessions', {
   // in ONE place (Sessions.workspaceOf) — nothing falls back to the session id.
   workspaceId: text('workspace_id'),
   // THE CARD THIS SESSION WORKS ON — the card's key (cards.id), null when it
-  // is on no card. A coder and its supervisor both carry it. The pairing is
-  // derived: a card's coder is its newest coding session, its supervisor its
-  // newest supervisor session (Sessions.coderOf / supervisorOf). Written by
-  // the looper when it opens a round's sessions (Sessions.setCard). A
-  // deleted card leaves its sessions unlinked (on delete set null). (027)
+  // is on no card: how a card is tied to the agents working it. Every
+  // session on the card carries it; which one OWNS the card is derived — its
+  // newest session with a workspace of its own (Sessions.ownerOnCard), the
+  // newest of a type by newestOnCard. Written by an app when it opens a
+  // card's sessions (Sessions.setCard). A deleted card leaves its sessions
+  // unlinked (on delete set null). (027)
   cardId: bigint('card_id', { mode: 'number' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   // The session lock: who holds the conversation, until when. A hold ends by

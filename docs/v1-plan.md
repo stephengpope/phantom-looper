@@ -78,32 +78,11 @@ without the stack; nothing heavier runs on the dev box.
 
 ## 1. Decisions waiting on the builder
 
-Two of the schema split's moves were not made, because each changes what the
-API answers or makes the SDK ask the app for its own joins. Each needs a yes,
-a no, or another shape.
+The schema split is complete. The cards' switches moved (`card_automation`,
+through the `CardFieldsExtension` door — the pattern for any app fact the SDK
+must carry on its own output); `sessions.card_id` stays in the SDK by the
+builder's decision — it is how a card is tied to the agents working it.
 
-- **`cards.auto_plan` / `cards.auto_build`** (and the tools
-  `kanban_card_auto_plan` / `kanban_card_auto_build`, the board route's
-  `auto_plan_default` / `auto_build_default`). The card row IS the API's
-  card, sent as stored to the cli and the agents' tools, and the revision
-  trigger records these flips in the card's history. Moving them to a
-  `phantom_looper.card_automation` table needs a per-card app-field door in
-  the SDK — a read splice on every card read (board GET, card GET, tools,
-  board events), a write on create/PATCH, the two tools moved to the app —
-  and the revision history stops recording the switches. Options: (a) take
-  that cost; (b) a generic SDK notion of app-declared card fields (like
-  settings are declared), stored by the SDK — the SDK stays word-free, the
-  JSON stays the same, the history keeps recording; (c) leave them. The
-  customer feels nothing either way; the payoff is the SDK's purity for the
-  next app.
-- **`sessions.card_id`.** Read by the SDK's own services: GitService (an
-  archived card's push goes through the card's session), the board route
-  (card → session), the session list's card column, SessionTitler (a session
-  on a card keeps the card's title), the work-state refresh's board events.
-  The board is the SDK's; "the session on this card" is a board fact.
-  Recommendation: it stays. `coderOf` / `codersByCard` should then lose the
-  app word (`ownerOnCard` / `ownersByCard` — the session owning the card's
-  checkout).
 - **The Telegram Assistant forgets on every backend restart** — the same bug
   the cli had, left: `TelegramAssistantBot.ensureAssistantSession` keeps the
   session id in process memory. Not fixed because Telegram has no door to a

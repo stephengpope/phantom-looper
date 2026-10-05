@@ -32,20 +32,19 @@ export function heldBy(seat: 'coding' | 'supervisor', cardStatus: string): strin
 
 export interface CardRow extends CardShape {
   id: number;
-  auto_plan: boolean | null;
-  auto_build: boolean | null;
   archived: boolean;
 }
 
 /** A card runs when the switch for ITS loop column says so: `plan` is gated
- *  by auto_plan, `in_progress` by auto_build — the card's own tri-state, or,
- *  unset, the project's setting of the same name. The break is this same
- *  predicate no longer matching (the card left the columns, or its column's
- *  switch is off). */
-export function canTurn(card: CardRow, defaults: { plan: boolean; build: boolean }): boolean {
+ *  by auto_plan, `in_progress` by auto_build — the card's own tri-state
+ *  (`switches`, CardAutomation.of), or, unset, the project's setting of the
+ *  same name. The break is this same predicate no longer matching (the card
+ *  left the columns, or its column's switch is off). */
+export function canTurn(card: CardRow, switches: { auto_plan: boolean | null; auto_build: boolean | null },
+  defaults: { plan: boolean; build: boolean }): boolean {
   if (card.archived) return false;
-  if (card.status === 'plan') return card.auto_plan ?? defaults.plan;
-  if (card.status === 'in_progress') return card.auto_build ?? defaults.build;
+  if (card.status === 'plan') return switches.auto_plan ?? defaults.plan;
+  if (card.status === 'in_progress') return switches.auto_build ?? defaults.build;
   return false;
 }
 

@@ -1,5 +1,7 @@
 // The extension doors: what user space registers through PhantomBackendConfig.
 // Each is a plain description; the backend builds the real thing from it.
+import type { Transaction } from './storage/Database.js';
+import type { ProjectRow } from './storage/schema.js';
 
 /** One setting, completely: its default, its type, how a screen shows it,
  *  where it may be set, how a value is validated. The SDK registers its own
@@ -121,3 +123,25 @@ export type { ToolDef as ToolDefinition, ToolCtx as ToolRunContext } from './too
 /** User space's routes: called with the Fastify instance after the SDK's
  *  routes and auth are in place. */
 export type RouteRegistrar = (api: unknown /* FastifyInstance */) => void | Promise<void>;
+
+/** Fields an app keeps ABOUT a card in a table of its own, keyed by the
+ *  card's id, and wants carried on every card the SDK answers — the board,
+ *  a card, the tools, the board events — and accepted on create and PATCH
+ *  under the same names, as if they were the card's. The SDK stores nothing
+ *  of them and knows them only by the names declared here; it calls `read`
+ *  on every card read and `write` inside its own write transaction, and
+ *  records what `write` says the values were before as the card's history
+ *  (card_revisions), so an app field's change is in the card's past like a
+ *  column's. A card the app has no row for reads every field as null. */
+export interface CardFieldsExtension {
+  /** JSON Schema per field: what create and PATCH accept under the name. */
+  schema: Record<string, Record<string, unknown>>;
+  /** The fields of these cards, by card id; a card absent from the map has none set. */
+  read(cardIds: number[]): Promise<Map<number, Record<string, unknown>>>;
+  /** Write a card's fields inside the SDK's transaction; answers the values
+   *  as they were before, for the fields that changed (empty = nothing changed). */
+  write(cardId: number, fields: Record<string, unknown>, transaction: Transaction): Promise<Record<string, unknown>>;
+  /** What rides the board payload beside the cards — a project's defaults
+   *  for these fields, say. Absent = nothing. */
+  board?(project: ProjectRow): Promise<Record<string, unknown>>;
+}

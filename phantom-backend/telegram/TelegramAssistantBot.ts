@@ -123,7 +123,7 @@ export class TelegramAssistantBot {
     if (!chatId || !Number.isFinite(chatId)) return;
     const token = await this.backend.telegramBot.token();
     if (!token) return;
-    const coder = await this.backend.sessions.coderOf(projectId, alertMsg.number);
+    const coder = await this.backend.sessions.ownerOnCard(projectId, alertMsg.number);
     const client = this.backend.telegramBot.clientForChat(token, chatId, () => coder?.id ?? null);
     await client.sendMessage(chatId, alertMsg.text);
     log.info({ project: projectId, card: alertMsg.number, status: alertMsg.status }, 'auto build alert sent');

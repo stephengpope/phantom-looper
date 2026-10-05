@@ -47,17 +47,6 @@ const ITEMS_DESCRIPTION = 'add, edit (reword), remove, tick — each op touches 
  *  itself stays static. */
 const statusField = (description: string) => str(`${description} — one of the project's columns (kanban_card_list names them)`);
 
-const autoSwitch = (field: 'auto_plan' | 'auto_build', column: string, job: string): ToolDef => ({
-  name: `kanban_card_${field}`,
-  summary: `The card's Auto ${field === 'auto_plan' ? 'plan' : 'build'} switch.`,
-  description: `The card's Auto ${field === 'auto_plan' ? 'plan' : 'build'} switch — whether the supervisor ${job} while the card sits in ${column}. ` +
-    'on/off overrides the project setting for this card; inherit clears the override so the project setting decides. ' +
-    `Turning it on while the card is in ${column} starts the looper on it at once; kanban_card_move puts it there. ` +
-    'The result states the switch as it now stands — report that.',
-  input: obj({ card: cardNo, state: oneOf(['on', 'off', 'inherit'], 'inherit = follow the project setting') }, ['card', 'state']),
-  mutates: true, group: 'board',
-  execute: (ctx, a) => patch(ctx, Number(a.card), { [field]: a.state === 'inherit' ? null : a.state === 'on' }),
-});
 
 export const BOARD_TOOLS: ToolDef[] = [
   {
@@ -126,8 +115,6 @@ export const BOARD_TOOLS: ToolDef[] = [
     mutates: true, group: 'board',
     execute: (ctx, a) => patch(ctx, Number(a.card), {}, a.ops as ItemOp[]),
   },
-  autoSwitch('auto_plan', 'plan', 'plans it — has the coding agent write a plan, verifies it, and moves the card on'),
-  autoSwitch('auto_build', 'in_progress', 'builds it — drives the coding agent and verifies the work against the repo'),
   {
     name: 'kanban_card_pin',
     summary: 'Pin or unpin a card.',

@@ -470,15 +470,16 @@ export class Sessions {
     return rows[0];
   }
 
-  /** The card's coding session — the one that owns the card's checkout, any
-   *  status: a destroyed coder is still the card's coder (the looper restarts it). */
-  coderOf(projectId: string, cardNumber: number): Promise<SessionRow | undefined> {
+  /** The session that owns the card's checkout — the newest of its own-workspace
+   *  sessions, any status: one whose files are gone still owns the card (an
+   *  app may restart it). */
+  ownerOnCard(projectId: string, cardNumber: number): Promise<SessionRow | undefined> {
     return this.newestOnCardWhere(projectId, cardNumber, ownsItsWorkspace);
   }
 
-  /** Every card's coding session in a project — the newest per card, the
-   *  same rule `coderOf` uses. One query for the whole board. */
-  async codersByCard(projectId: string): Promise<Array<SessionRow & { card: number }>> {
+  /** Every card's owning session in a project — the newest per card, the
+   *  same rule `ownerOnCard` uses. One query for the whole board. */
+  async ownersByCard(projectId: string): Promise<Array<SessionRow & { card: number }>> {
     return this.database.selectDistinctOn([sessions.cardId], { ...Sessions.view, card: cards.number })
       .from(sessions)
       .leftJoin(workspaces, eq(workspaces.id, sessions.workspaceId))

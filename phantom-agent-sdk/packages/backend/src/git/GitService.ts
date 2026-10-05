@@ -195,7 +195,7 @@ export class GitService {
       if (card.archived !== true || card.status !== 'done') return;
       void (async () => {
         const project = await this.deps.projects.get(projectId);
-        const session = project && await this.deps.sessions.coderOf(project.id, card.number);
+        const session = project && await this.deps.sessions.ownerOnCard(project.id, card.number);
         if (!project || !session || session.status !== 'active') return;
         if (await this.deps.settings.resolve('auto_push_on_archive', { projectId: project.id }) !== true) return;
         let result: AutoPushResult | { result: 'error'; reason: string } | undefined;

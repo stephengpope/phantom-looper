@@ -2,7 +2,7 @@
 // PhantomBackend.create a config and gets the backend back.
 export { PhantomBackend, type PhantomBackendConfig } from './PhantomBackend.js';
 export * from './members.js';
-export type { SettingDefinition, AgentTypeDefinition, ToolDefinition, ToolRunContext, ToolGroup, ToolGrant, RouteRegistrar } from './doors.js';
+export type { SettingDefinition, AgentTypeDefinition, ToolDefinition, ToolRunContext, ToolGroup, ToolGrant, RouteRegistrar, CardFieldsExtension } from './doors.js';
 
 // storage
 export { SDK_MIGRATIONS, type Drizzle, type Transaction, type MigrationSet } from './storage/Database.js';
@@ -32,7 +32,7 @@ export { PresetError, type PresetRow } from './storage/Presets.js';
 // table owners' companions
 export { ProjectError, defaultPrefix, columnsOf, type NewProject } from './storage/Projects.js';
 export { WorkspaceError, type WorkRefreshWorkspace } from './storage/Workspaces.js';
-export { CardError, CARD_FIELDS, CARD_JSON_FIELDS, type CardFields, type ItemOp } from './storage/Cards.js';
+export { CardError, CARD_FIELDS, CARD_JSON_FIELDS, type Card, type CardFields, type ItemOp } from './storage/Cards.js';
 export { CronError, CRON_FIELDS, isOnce, nextFire, type CronFields } from './storage/Crons.js';
 export { CAP_BYTES, capPart, type SessionEvent } from './agents/SessionEvents.js';
 export type { BoardEvent } from './agents/BoardEvents.js';

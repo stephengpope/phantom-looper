@@ -44,7 +44,7 @@ import { TelegramBotState } from './telegram/botState.js';
 import { TelegramSentMessages } from './telegram/sentMessages.js';
 import { TelegramHandledUpdates } from './telegram/handledUpdates.js';
 import { TelegramBot, type TelegramCommand } from './telegram/TelegramBot.js';
-import type { SettingDefinition, AgentTypeDefinition, ToolDefinition, RouteRegistrar } from './doors.js';
+import type { SettingDefinition, AgentTypeDefinition, ToolDefinition, RouteRegistrar, CardFieldsExtension } from './doors.js';
 import { Notifications } from './Notifications.js';
 import { SessionTitler, type TitleWriter } from './agents/SessionTitler.js';
 import { HttpApi } from './api/HttpApi.js';
@@ -75,6 +75,9 @@ export interface PhantomBackendConfig {
   backgroundStarters?: string[];
   /** Tools user space serves from the backend, alongside the SDK's. */
   tools?: ToolDefinition[];
+  /** Fields the app keeps about a card in its own table, carried on every
+   *  card the SDK answers and taken by every card write (Cards). */
+  cardFields?: CardFieldsExtension;
   /** Routes user space adds to the API, under the same auth. */
   routes?: RouteRegistrar;
   /** What the app brings to the backend's git: its conflict fixer, its
@@ -213,7 +216,7 @@ export class PhantomBackend {
     const agentDatabases = new AgentDatabases(database.pool, env.databaseUrl, env.encryptionKey);
     const projects = new Projects(database.drizzle, settings, settingsEvents, agentDatabases);
     const workspaces = new Workspaces(database.drizzle, paths, settings, sessionEvents);
-    const cards = new Cards(database.drizzle, projects, boardEvents);
+    const cards = new Cards(database.drizzle, projects, boardEvents, config.cardFields);
     const docker = makeDocker();
     // THE image puller/remover — every pull and removal in this process goes through it so they never overlap.
     const images = new Images(docker);

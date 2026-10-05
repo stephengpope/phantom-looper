@@ -13,6 +13,8 @@ import { writeCommitMessage } from './git/commitMessage.js';
 import { toCodingAgent } from '../phantom-looper/prompts/autoPush/wiring.js';
 import { appRoutes } from './api/appRoutes.js';
 import { Looper } from './looper/Looper.js';
+import { CardAutomation } from './looper/CardAutomation.js';
+import { boardTools } from './looper/boardTools.js';
 import { CronScheduler } from './crons/CronScheduler.js';
 import { TelegramAssistantBot } from './telegram/TelegramAssistantBot.js';
 import { SessionDigest } from './notifications/digest.js';
@@ -33,6 +35,15 @@ async function main() {
     ...registrations,
     routes: (api) => appRoutes(api, backend, { deployment, updateTriggerDir: process.env.UPDATE_TRIGGER_DIR || undefined }),
     health: () => ({ loops_running: looper?.runningCount() ?? 0 }),
+    // The looper's two switches on a card: the app's table, carried on every
+    // card the SDK answers (the door), and the two tools that flip them.
+    cardFields: {
+      schema: CardAutomation.schema,
+      read: (cardIds) => cardAutomation().read(cardIds),
+      write: (cardId, fields, transaction) => cardAutomation().write(cardId, fields, transaction),
+      board: (project) => cardAutomation().defaults(project),
+    },
+    tools: boardTools,
     // The bot's command menu — the global default, and the authorized chat's
     // for its mode (the bot's own state; the bot exists before the SDK
     // registers the webhook, which onStart's reconcile is what asks for).
@@ -83,7 +94,7 @@ async function main() {
       // client runs), so it starts once the routes answer. Event-driven: every
       // card write reaches it over the board bus; start() is ONE recovery
       // sweep, not a poll.
-      looper = new Looper(backend);
+      looper = new Looper(backend, cardAutomation());
       looper.start();
 
       // The cron scheduler — the same shape. One croner job per cron row fires
@@ -133,6 +144,10 @@ async function main() {
   };
 
   const backend = await PhantomBackend.create(config);
+  // The looper's card table, on the backend's connection — made once the
+  // backend exists; the SDK asks for card fields only after start.
+  let automation: CardAutomation | undefined;
+  const cardAutomation = () => (automation ??= new CardAutomation(backend.database.drizzle, backend.settings));
   // The deployment this backend runs in — its update, logs, status, restart,
   // token report — read by the /system routes and the Telegram bot.
   deployment = new Deployment(backend.paths, backend.tokenLog, backend.docker ?? undefined, backend.images,

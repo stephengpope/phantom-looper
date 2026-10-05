@@ -7,16 +7,25 @@
 // The rules that used to live in the route live here: the column a card may
 // sit in, THE field list (create, update and the API schema all derive from
 // it), how checklist items are edited by key, and what a move publishes.
+//
+// An app's fields ABOUT a card (CardFieldsExtension) ride every card this
+// object answers and are taken by every write it makes — read in one place
+// (#withFields), written in one place (#writeFields), their history recorded
+// here. Nothing outside this file knows they are not columns.
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
-import type { Drizzle } from './Database.js';
+import type { Drizzle, Transaction } from './Database.js';
 // `sessions` is here for ONE read: the card a session works on is a join on
 // sessions.card_id. Read through the join only; the row is Sessions' to write.
 import { cards, cardRevisions, sessions, type CardRow, type ProjectRow } from '../storage/schema.js';
 import { columnsOf, type Projects } from './Projects.js';
 import { keyedItems, newKey, normalizeKey, type ChecklistItem } from '@phantom-agent-sdk/client';
 import type { BoardEvents } from '../agents/BoardEvents.js';
+import type { CardFieldsExtension } from '../doors.js';
 
 export type { CardRow };
+/** A card as this object answers it: the row, plus the app's fields about
+ *  it under the names the app declared (null where the app has none set). */
+export type Card = CardRow & Record<string, unknown>;
 
 export class CardError extends Error {
   constructor(readonly code: 'not_found' | 'invalid_args', message: string) { super(message); }
@@ -25,9 +34,10 @@ export class CardError extends Error {
 /** THE card field list — create, update, and the API schema all derive from
  *  it. It was three hand-kept lists once; create's copy silently lacked
  *  `supervised`, so a card born armed landed unarmed. Never again: one list. */
-export const CARD_FIELDS = ['title', 'details', 'status', 'pos', 'blocked_reason', 'resolution', 'auto_plan', 'auto_build', 'pinned', 'archived'] as const;
+export const CARD_FIELDS = ['title', 'details', 'status', 'pos', 'blocked_reason', 'resolution', 'pinned', 'archived'] as const;
 export const CARD_JSON_FIELDS = ['requirements'] as const;
-export type CardFields = Partial<Record<(typeof CARD_FIELDS)[number], unknown>> & { requirements?: ChecklistItem[] };
+/** What a write may carry: the columns, the checklist, and the app's fields by their names. */
+export type CardFields = Partial<Record<(typeof CARD_FIELDS)[number], unknown>> & { requirements?: ChecklistItem[] } & Record<string, unknown>;
 
 /** One checklist edit BY KEY — the way agents edit checklists: touching one
  *  item, the rest untouched. Applied in order, all-or-nothing. */
@@ -36,41 +46,88 @@ export interface ItemOp { op: 'add' | 'edit' | 'remove' | 'tick'; key?: string; 
 type Requirement = CardRow['requirements'][number];
 
 export class Cards {
-  constructor(private readonly database: Drizzle, private readonly projects: Projects, private readonly events?: BoardEvents) {}
+  constructor(private readonly database: Drizzle, private readonly projects: Projects, private readonly events?: BoardEvents,
+    private readonly extension?: CardFieldsExtension) {}
 
-  private publish(project: ProjectRow, card: CardRow, extra: { from?: string; client?: string; archivedBefore?: boolean } = {}): void {
+  /** The app's field names — what a write may carry beside the columns. */
+  private get fieldNames(): string[] { return Object.keys(this.extension?.schema ?? {}); }
+
+  /** The JSON Schema of the app's fields, for the API's card body. */
+  get fieldSchema(): Record<string, Record<string, unknown>> { return { ...this.extension?.schema }; }
+
+  /** What the app puts on the board payload beside the cards. */
+  async boardExtras(project: ProjectRow): Promise<Record<string, unknown>> {
+    return this.extension?.board ? this.extension.board(project) : {};
+  }
+
+  /** Rows as cards: the app's fields glued on, one read for the lot; a
+   *  declared field the app has nothing for is null. */
+  async #withFields(rows: CardRow[]): Promise<Card[]> {
+    const names = this.fieldNames;
+    if (!names.length || !rows.length) return rows;
+    const fields = await this.extension!.read(rows.map((row) => row.id));
+    return rows.map((row) => ({ ...Object.fromEntries(names.map((name) => [name, null])), ...fields.get(row.id), ...row }));
+  }
+  async #oneWithFields(row: CardRow | undefined): Promise<Card | undefined> {
+    return row && (await this.#withFields([row]))[0];
+  }
+
+  /** Split a write into the columns' part and the app's. A name that is
+   *  neither is refused — the API schema already does, the tools' and the
+   *  app's own callers come through here too. */
+  private split(fields: CardFields): { columns: Partial<typeof cards.$inferInsert>; app: Record<string, unknown> } {
+    const columns: Partial<typeof cards.$inferInsert> = {};
+    const app: Record<string, unknown> = {};
+    const names = this.fieldNames;
+    for (const [key, value] of Object.entries(fields)) {
+      if ((CARD_FIELDS as readonly string[]).includes(key)) columns[key as (typeof CARD_FIELDS)[number]] = value as never;
+      else if (key === 'requirements') continue;
+      else if (names.includes(key)) app[key] = value;
+      else throw new CardError('invalid_args', `no card field "${key}"`);
+    }
+    return { columns, app };
+  }
+
+  /** The app's part of a write, inside the SDK's transaction; the values
+   *  before come back for the history. */
+  async #writeFields(cardId: number, app: Record<string, unknown>, transaction: Transaction): Promise<Record<string, unknown>> {
+    if (!Object.keys(app).length) return {};
+    return this.extension!.write(cardId, app, transaction);
+  }
+
+  private publish(project: ProjectRow, card: Card, extra: { from?: string; client?: string; archivedBefore?: boolean } = {}): void {
     this.events?.publish(project.id, { event: 'card', card: card as unknown as Record<string, unknown>, ...extra });
   }
 
   // ── reads ──────────────────────────────────────────────────────────────────
 
   /** The card with this number, archived or not. */
-  async byNumber(project: ProjectRow, number: number): Promise<CardRow | undefined> {
+  async byNumber(project: ProjectRow, number: number): Promise<Card | undefined> {
     const rows = await this.database.select().from(cards).where(and(eq(cards.project_id, project.id), eq(cards.number, number)));
-    return rows[0];
+    return this.#oneWithFields(rows[0]);
   }
 
   /** The card a session works on — either seat, a coder or its supervisor —
    *  archived or not. Undefined when the session is on no card. */
-  async ofSession(sessionId: string): Promise<CardRow | undefined> {
+  async ofSession(sessionId: string): Promise<Card | undefined> {
     const rows = await this.database.select({ card: cards }).from(sessions)
       .innerJoin(cards, eq(cards.id, sessions.cardId))
       .where(eq(sessions.id, sessionId));
-    return rows[0]?.card;
+    return this.#oneWithFields(rows[0]?.card);
   }
 
   /** The card with this number, only while it is on the board. */
-  async activeByNumber(project: ProjectRow, number: number): Promise<CardRow | undefined> {
+  async activeByNumber(project: ProjectRow, number: number): Promise<Card | undefined> {
     const rows = await this.database.select().from(cards)
       .where(and(eq(cards.project_id, project.id), eq(cards.number, number), eq(cards.archived, false)));
-    return rows[0];
+    return this.#oneWithFields(rows[0]);
   }
 
   /** The board: cards in column order — status, pinned first, then pos. */
-  async list(project: ProjectRow, opts: { includeArchived?: boolean } = {}): Promise<CardRow[]> {
-    return this.database.select().from(cards)
+  async list(project: ProjectRow, opts: { includeArchived?: boolean } = {}): Promise<Card[]> {
+    return this.#withFields(await this.database.select().from(cards)
       .where(and(eq(cards.project_id, project.id), opts.includeArchived ? undefined : eq(cards.archived, false)))
-      .orderBy(cards.status, desc(cards.pinned), cards.pos, cards.id);
+      .orderBy(cards.status, desc(cards.pinned), cards.pos, cards.id));
   }
 
   /** The archive, newest change first, keyset-paged like the session list.
@@ -78,7 +135,7 @@ export class Cards {
    *  touches it, and an archived card is rarely edited after. `total` counts
    *  the whole archive so a page knows how long the list is. */
   async listArchived(project: ProjectRow, page: { limit?: number; before?: string; beforeId?: number } = {}):
-    Promise<{ cards: CardRow[]; total: number }> {
+    Promise<{ cards: Card[]; total: number }> {
     const archived = and(eq(cards.project_id, project.id), eq(cards.archived, true));
     const older = page.before !== undefined && page.beforeId !== undefined
       ? sql`(${cards.updated_at}, ${cards.id}) < (${page.before}::timestamptz, ${page.beforeId}::bigint)` : undefined;
@@ -87,13 +144,13 @@ export class Cards {
     const [rows, totals] = await Promise.all([
       query, this.database.select({ total: sql<number>`count(*)::int` }).from(cards).where(archived)]);
     const total = totals[0]!.total;
-    return { cards: rows, total };
+    return { cards: await this.#withFields(rows), total };
   }
 
   /** Every card on the board in these columns — the looper's sweep for cards to start. */
-  async listInColumns(project: ProjectRow, statuses: readonly string[]): Promise<CardRow[]> {
-    return this.database.select().from(cards)
-      .where(and(eq(cards.project_id, project.id), inArray(cards.status, [...statuses]), eq(cards.archived, false)));
+  async listInColumns(project: ProjectRow, statuses: readonly string[]): Promise<Card[]> {
+    return this.#withFields(await this.database.select().from(cards)
+      .where(and(eq(cards.project_id, project.id), inArray(cards.status, [...statuses]), eq(cards.archived, false))));
   }
 
   /** What changed on a card and when, newest first — written by a trigger,
@@ -124,23 +181,24 @@ export class Cards {
    *  column. The number is the project's next — taken under the project
    *  row's lock, never reused. `by` is the writer's client id, on
    *  the event. */
-  async create(project: ProjectRow, fields: CardFields & { title: string }, by?: string): Promise<CardRow> {
+  async create(project: ProjectRow, fields: CardFields & { title: string }, by?: string): Promise<Card> {
     const cols = columnsOf(project);
     const status = String(fields.status ?? cols[0]);
     if (!cols.includes(status)) throw new CardError('invalid_args', `status must be one of: ${cols.join(', ')}`);
     const title = String(fields.title);
-    const values: Partial<typeof cards.$inferInsert> = {};
-    for (const field of CARD_FIELDS)
-      if (field !== 'status' && field !== 'pos' && field !== 'title' && field in fields) values[field] = fields[field] as never;
+    const { columns, app } = this.split(fields);
+    const { status: _status, pos: _pos, title: _title, ...values } = columns;
     if ('requirements' in fields) values.requirements = keyedItems(fields.requirements as ChecklistItem[]);
-    const card = await this.database.transaction(async (transaction) => {
+    const row = await this.database.transaction(async (transaction) => {
       const number = await this.projects.claimCardNumber(project.id, transaction);
       const pos = 'pos' in fields
         ? Number(fields.pos)
         : sql`(select coalesce(max(${cards.pos}), 0) + 1 from ${cards} where ${cards.project_id} = ${project.id} and ${cards.status} = ${status})`;
-      const [row] = await transaction.insert(cards).values({ ...values, project_id: project.id, number, status, title, pos: pos as never }).returning();
-      return row!;
+      const [inserted] = await transaction.insert(cards).values({ ...values, project_id: project.id, number, status, title, pos: pos as never }).returning();
+      await this.#writeFields(inserted!.id, app, transaction);
+      return inserted!;
     });
+    const card = (await this.#oneWithFields(row))!;
     this.publish(project, card, { client: by });
     return card;
   }
@@ -152,7 +210,7 @@ export class Cards {
    *  from an edit) and whether it was archived before (auto-push fires only
    *  on the false → true transition). */
   async update(project: ProjectRow, number: number, fields: CardFields, items?: ItemOp[], by?: string):
-    Promise<{ card: CardRow; from: string; wasArchived: boolean }> {
+    Promise<{ card: Card; from: string; wasArchived: boolean }> {
     const cols = columnsOf(project);
     if ('status' in fields && !cols.includes(String(fields.status)))
       throw new CardError('invalid_args', `status must be one of: ${cols.join(', ')}`);
@@ -163,13 +221,12 @@ export class Cards {
         : operation.op === 'edit' && operation.text === undefined && operation.done === undefined ? 'edit needs text or done' : null;
       if (bad) throw new CardError('invalid_args', bad);
     }
-    const set: Partial<typeof cards.$inferInsert> = {};
-    for (const field of CARD_FIELDS) if (field in fields) set[field] = fields[field] as never;
+    const { columns: set, app } = this.split(fields);
     if ('requirements' in fields) {
       if (items) throw new CardError('invalid_args', 'item ops or replace requirements, not both');
       set.requirements = keyedItems(fields.requirements as ChecklistItem[]);
     }
-    if (!Object.keys(set).length && !items) throw new CardError('invalid_args', 'no fields to update');
+    if (!Object.keys(set).length && !Object.keys(app).length && !items) throw new CardError('invalid_args', 'no fields to update');
 
     const mine = and(eq(cards.project_id, project.id), eq(cards.number, number));
 
@@ -179,24 +236,31 @@ export class Cards {
     // card event carries the status BEFORE the write so a listener can tell
     // a move from an edit. Item ops change named items of that same row —
     // all-or-nothing, one bad key refuses every op.
-    const { card, from, wasArchived } = await this.database.transaction(async (transaction) => {
+    // The app's fields change in the same transaction; what they were
+    // before is the card's history too, written here — the trigger that
+    // records the columns never sees the app's table.
+    const { row, from, wasArchived } = await this.database.transaction(async (transaction) => {
       const [prior] = await transaction.select({ archived: cards.archived, status: cards.status, requirements: cards.requirements })
         .from(cards).where(mine).for('update');
       if (!prior) throw new CardError('not_found', `no card ${number} in project ${project.id}`);
       if (items) set.requirements = applyItemOps(prior.requirements, items);
-      const [row] = await transaction.update(cards).set({ ...set, updated_at: new Date() }).where(mine).returning();
-      return { card: row!, from: prior.status, wasArchived: prior.archived };
+      const [updated] = await transaction.update(cards).set({ ...set, updated_at: new Date() }).where(mine).returning();
+      const before = await this.#writeFields(updated!.id, app, transaction);
+      if (Object.keys(before).length) await transaction.insert(cardRevisions).values({ card_id: updated!.id, changed_from: before });
+      return { row: updated!, from: prior.status, wasArchived: prior.archived };
     });
+    const card = (await this.#oneWithFields(row))!;
     this.publish(project, card, { from, client: by, archivedBefore: wasArchived });
     return { card, from, wasArchived };
   }
 
   /** An archived card comes back onto the board, blocked, with the reason —
    *  what a failed auto-push on archive does. */
-  async unarchiveAsBlocked(project: ProjectRow, number: number, reason: string): Promise<CardRow | undefined> {
-    const [card] = await this.database.update(cards)
+  async unarchiveAsBlocked(project: ProjectRow, number: number, reason: string): Promise<Card | undefined> {
+    const [row] = await this.database.update(cards)
       .set({ archived: false, status: 'blocked', blocked_reason: reason, updated_at: new Date() })
       .where(and(eq(cards.project_id, project.id), eq(cards.number, number))).returning();
+    const card = await this.#oneWithFields(row);
     if (card) this.publish(project, card);
     return card;
   }
