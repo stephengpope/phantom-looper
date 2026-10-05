@@ -4,7 +4,7 @@
 // here: a row leaves 'running' exactly once. The kill from /tasks and the
 // reconciler's 'exited' are final; a late stream teardown must not overwrite
 // them, so every terminal write is conditioned on the row still running.
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import type { Drizzle } from './Database.js';
 import { backgroundTasks } from './schema.js';
 
@@ -56,15 +56,6 @@ export class BackgroundTasks {
    *  stream's own exit (conditioned on running) cannot overwrite it. */
   async markKilled(id: string): Promise<void> {
     await this.finish(id, 'killed', null);
-  }
-
-  /** Session IDs (among `candidates`) that have at least one running task.
-   *  Used by the idle reaper — a session with a live task is not idle. */
-  async sessionsWithRunning(candidates: string[]): Promise<Set<string>> {
-    if (!candidates.length) return new Set();
-    const rows = await this.database.select({ sessionId: backgroundTasks.sessionId }).from(backgroundTasks)
-      .where(and(inArray(backgroundTasks.sessionId, candidates), eq(backgroundTasks.status, 'running')));
-    return new Set(rows.map((row) => row.sessionId));
   }
 
   /** Killed by sid — the /tasks screen. Returns the row marked, if one was

@@ -10,22 +10,23 @@
 //     too full = over disk_cleanup_percent used (0 turns this part off)
 //                OR under MIN_FREE_GB free.
 //
-//   While the disk is too full, sessions are shut down and their files
-//   deleted, oldest lastUsedAt first, until it is not. The disk space rules
-//   OVERRIDE the container idle timeout (container_idle_ms): a full disk
-//   takes a session before its timeout is up. Each session is backed up
+//   While the disk is too full, IDLE sessions are shut down and their files
+//   deleted, oldest lastUsedAt first, until it is not. Idle means not used
+//   for container_idle_ms — the same timeout that stops a container. A
+//   session used inside it is NEVER deleted, whatever the disk says: the
+//   disk space rules do not override the timeout. Each session is backed up
 //   first, and its container and files are deleted under the same session
 //   lock as the backup — no turn can start in between. After each delete,
 //   release images older than the running one that no container uses any
 //   more are deleted too (a container pins its image).
 //
-//   A session is SKIPPED, never forced, when its work has not landed on
-//   base (an unmerged session is someone's live work — its files stay,
-//   whatever the disk says), when it is busy (a turn holds a lock on its
-//   workspace, or a background task runs there), or when its backup fails
-//   (tried again on the next run). So the disk can only stay full when
-//   what is left is unmerged, busy, cannot be backed up, or one session
-//   alone fills it — and the final log names those sessions.
+//   A session is SKIPPED, never forced, when it was used inside the idle
+//   timeout, when its work has not landed on base (an unmerged session is
+//   someone's live work — its files stay, whatever the disk says), when it
+//   is busy (a turn holds a lock on its workspace), or when its backup
+//   fails (tried again on the next run). So the disk can only stay full
+//   when what is left is in use, unmerged, busy, cannot be backed up, or
+//   one session alone fills it — and the final log names those sessions.
 //
 //   Never touched: a spare clone (the pool refills it — nothing is freed)
 //   and an image newer than the running release (an update in flight pulled
@@ -138,6 +139,9 @@ const API_IMAGE_CURRENT = (() => {
 export interface CleanupDeps {
   /** disk_cleanup_percent, read per run. */
   pct: number;
+  /** container_idle_ms, read per run: a session used inside it is never deleted. */
+  idleMs: number;
+  now: () => number;
   measure: () => Promise<DiskState>;
   /** The sessions with files on disk, with their projects. */
   owners: () => Promise<Array<{ session: SessionRow; project: ProjectRow }>>;
@@ -152,6 +156,8 @@ export interface CleanupDeps {
   /** gitSync.backup: push, then run `whenSafe` under the same lock only if
    *  everything is on origin. */
   backup: (session: SessionRow, project: ProjectRow, whenSafe: () => Promise<void>) => Promise<PushResult | 'busy'>;
+  /** The session as it is NOW — read again under the lock, before the delete. */
+  fresh: (session: SessionRow) => Promise<SessionRow>;
   /** The container, then the files (which refuses anything not on origin). */
   deleteSession: (session: SessionRow) => Promise<void>;
 }
@@ -173,16 +179,24 @@ export async function diskCleanup(deps: CleanupDeps): Promise<void> {
   }
   owners.sort((a, b) => a.session.lastUsedAt.getTime() - b.session.lastUsedAt.getTime());
 
-  const left = { unmerged: [] as string[], busy: [] as string[], failed: [] as string[] };
+  /** Used inside the idle timeout: in use, never deleted. */
+  const inUse = (session: SessionRow) => deps.now() - session.lastUsedAt.getTime() < deps.idleMs;
+
+  const left = { inUse: [] as string[], unmerged: [] as string[], busy: [] as string[], failed: [] as string[] };
   for (const { session, project } of owners) {
     await deps.removeOldImages();
     if (!tooFull(await deps.measure(), deps.pct)) break;
 
+    if (inUse(session)) { left.inUse.push(session.id); continue; }
     if (busy.has(session.id)) { left.busy.push(session.id); continue; }
     if (!(await deps.landed(session, project))) { left.unmerged.push(session.id); continue; }
 
     let deleted = false;
+    let usedMeanwhile = false;
     const pushed = await deps.backup(session, project, async () => {
+      // Under the session lock now. Asked again: a turn that ran between
+      // the listing and this lock made the session in use.
+      if (inUse(await deps.fresh(session))) { usedMeanwhile = true; return; }
       try {
         await deps.deleteSession(session);
         deleted = true;
@@ -196,6 +210,8 @@ export async function diskCleanup(deps: CleanupDeps): Promise<void> {
 
     if (deleted) {
       log.info({ session: session.id, result: pushed }, 'disk cleanup deleted session (work is on its branch)');
+    } else if (usedMeanwhile) {
+      left.inUse.push(session.id);
     } else if (pushed === 'busy') {
       left.busy.push(session.id);
     } else {
@@ -207,8 +223,8 @@ export async function diskCleanup(deps: CleanupDeps): Promise<void> {
 
   const end = await deps.measure();
   if (tooFull(end, deps.pct)) {
-    log.warn({ ...rounded(end), unmerged: left.unmerged, busy: left.busy, failed: left.failed },
-      'disk still too full — what is left is unmerged, busy or could not be backed up');
+    log.warn({ ...rounded(end), inUse: left.inUse, unmerged: left.unmerged, busy: left.busy, failed: left.failed },
+      'disk still too full — what is left is in use, unmerged, busy or could not be backed up');
   } else {
     log.info(rounded(end), 'disk cleanup done — disk healthy');
   }
@@ -222,6 +238,9 @@ export async function pressureSweep(
   const currents = [String(await settings.resolve('container_image')), API_IMAGE_CURRENT];
   await diskCleanup({
     pct: Number(await settings.resolve('disk_cleanup_percent')),
+    idleMs: Number(await settings.resolve('container_idle_ms')),
+    now: () => Date.now(),
+    fresh: async (session) => (await sessions.get(session.id)) ?? session,
     measure: () => measureDisk(paths.root),
     owners: () => workspaceOwners(projects, sessions),
     busy,

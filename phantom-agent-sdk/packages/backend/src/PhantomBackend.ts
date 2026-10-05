@@ -255,11 +255,12 @@ export class PhantomBackend {
   }
 
   /** THE busy rule, for the idle timeout and disk cleanup alike: a
-   *  workspace is busy while a background task runs there or any session
-   *  on it holds a live lock — a turn is running. */
+   *  workspace is busy while a session on it holds a live lock — a turn is
+   *  running. Nothing else counts. A background task does NOT: a dev server
+   *  left running never exits, and it kept its session's container and
+   *  files past every timeout, for ever. Only a person's turn is activity. */
   async busyWorkspaces(ids: string[]): Promise<Set<string>> {
-    const [tasks, held] = await Promise.all([this.backgroundTasks.sessionsWithRunning(ids), this.sessions.workspacesHeld(ids)]);
-    return new Set([...tasks, ...held]);
+    return this.sessions.workspacesHeld(ids);
   }
 
   /** Workspaces with a running container not touched for `idleMs` and not busy — what the idle reaper takes. */
