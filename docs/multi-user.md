@@ -206,11 +206,13 @@ Exported: `Mailer`, `MailerError`, `Identity`,
   answers the operator, the bootstrap route answers `disabled`, `/app`
   answers the key.
 
-## Part 2 — what a Supabase-shaped SDK still lacks
+## Part 2 — built 2026-10-05
 
-Planned 2026-10-05 after part 1 shipped. Five steps, in the order they
-unblock each other; each its own commits, proven on the live stack. The
-rules of `docs/v1-plan.md` stand.
+Six steps, each its own commit. Step 3 was proven on the live stack
+(the chain, the refusals, the 404, the cli's view); 4–8 typecheck across
+the SDK, the app and the cli and were not run live — the proofs listed
+under each are what to run. What was built differs from the plan where
+noted.
 
 ### 3. Settings per organization and per user
 
@@ -267,6 +269,9 @@ the cli's settings screen is unchanged; deleting O deletes its rows.
 
 ### 4. Ownership in the SDK's data
 
+*Built:* the column and constraint came with 056 in step 3;
+`Projects.list(caller?)` / `get(id, caller?)` and `NewProject.organizationId`.
+
 **What.** `projects.organization_id` (nullable → the operator's, which is
 every project today; FK to `identity.organization`, `on delete set null`
 — a deleted organization's projects become the operator's, never
@@ -297,6 +302,13 @@ the same repo registered by both organizations; deleting A's organization
 leaves the project, owner null.
 
 ### 5. Row-level security
+
+*Built:* `Database.queryAs(caller, sql, options)`, the `authenticated` role
+(`backend` carries BYPASSRLS — policies bind every role but the owner and
+BYPASSRLS roles, so the SDK's own reads and writes are untouched),
+`storage/sqlRunner.ts` shared with AgentDatabases, migration 057. The
+settings are `phantom.organization_id` / `phantom.user_id`
+(`ORGANIZATION_SETTING`, `USER_SETTING`).
 
 **What.** The same fence enforced by Postgres, for the day SQL on the SDK's
 tables is handed to something that is not the backend's own code: an
@@ -337,6 +349,9 @@ before.
 
 ### 6. Password and OAuth sign-in
 
+*Built:* `IdentityOptions.signIn: { password?, github?, google? }`;
+phantom-looper passes `AUTH_PASSWORD=1`, `AUTH_GITHUB_CLIENT_ID/SECRET`.
+
 **What.** Beside magic links: email + password, and GitHub / Google.
 Invite-only stays: nothing creates a user but the operator and an
 invitation.
@@ -365,6 +380,10 @@ until the verification link is clicked.
 
 ### 7. Mail wording is user space's
 
+*Built:* `IdentityOptions.mail: Partial<MailTemplates>` — a template answers
+`MailBody` (the mail without its recipient); `invitationUrl` is gone, the
+invitation template builds the app's link from `invitationId`.
+
 **What.** The SDK sends four mails (sign-in link, invitation, password
 reset, verification) with plain default wording. The app supplies its own
 through one door; the SDK never knows the app's pages or voice.
@@ -388,6 +407,10 @@ shape, so a template is a pure function the app can test alone.
 other three are the defaults.
 
 ### 8. Client SDK
+
+*Built:* `BackendOptions.credential` (`{ operatorKey } | { sessionToken } |
+{ apiKey }`) replaces `apiKey`; `backend.identity.auth` (Better Auth's
+client), `identity.me()`, `identity.verify(token)`.
 
 **What.** An app on `@phantom-agent-sdk/client` signs in, reads who it is,
 manages organizations and keys without hand-rolling calls. Better Auth
