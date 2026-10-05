@@ -14,7 +14,7 @@
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { fromNodeHeaders } from 'better-auth/node';
-import { magicLink, organization, bearer, admin, openAPI } from 'better-auth/plugins';
+import { magicLink, organization, bearer, admin } from 'better-auth/plugins';
 import { apiKey } from '@better-auth/api-key';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyRequest, FastifyReply } from 'fastify';
@@ -199,8 +199,8 @@ function buildAuth({ database, mailer, settings, options, baseUrl, captures }: A
       }),
       bearer(),
       admin(),
-      apiKey({ enableSessionForAPIKeys: true }),
-      openAPI(),
+      // A key remembers the organization it was made for (metadata.organizationId): callerOf reads it.
+      apiKey({ enableSessionForAPIKeys: true, enableMetadata: true }),
     ],
   });
   void auth.$context.then(ready);
@@ -256,7 +256,11 @@ export class Identity {
       log.warn({ err: errStr(error) }, 'session lookup failed'); return null;
     });
     if (!signedIn) return null;
-    const activeId = (signedIn.session as { activeOrganizationId?: string | null }).activeOrganizationId ?? null;
+    // A sign-in carries the organization it is active in. An API key's
+    // session does not — the key's own metadata.organizationId says, when
+    // it was made for one. Neither: the user's first.
+    const session = signedIn.session as { activeOrganizationId?: string | null; id: string };
+    const activeId = session.activeOrganizationId ?? (request.headers['x-api-key'] ? await this.#organizationOfKey(session.id) : null);
     const memberships = await this.database.drizzle.select({ organization: organizationTable, role: member.role, user })
       .from(member).innerJoin(organizationTable, eq(member.organizationId, organizationTable.id)).innerJoin(user, eq(user.id, member.userId))
       .where(activeId ? and(eq(member.userId, signedIn.user.id), eq(member.organizationId, activeId)) : eq(member.userId, signedIn.user.id))
@@ -264,6 +268,19 @@ export class Identity {
     const membership = memberships[0];
     if (!membership) return null;
     return { type: 'user', user: membership.user, organization: membership.organization, role: membership.role as OrganizationRole };
+  }
+
+  /** The organization an API key was made for: the key's
+   *  metadata.organizationId. The session an API key stands up carries the
+   *  key's id as its own (the plugin's doing), so one read — not a second
+   *  verify, which would count against the key's rate limit twice. */
+  async #organizationOfKey(keyId: string): Promise<string | null> {
+    const [row] = await this.database.drizzle.select({ metadata: apikey.metadata }).from(apikey).where(eq(apikey.id, keyId));
+    if (!row?.metadata) return null;
+    try {
+      const metadata = JSON.parse(row.metadata) as { organizationId?: unknown };
+      return typeof metadata.organizationId === 'string' ? metadata.organizationId : null;
+    } catch { return null; }
   }
 
   /** The caller, or `unauthorized` (a 401 once HttpApi's error handler sees
