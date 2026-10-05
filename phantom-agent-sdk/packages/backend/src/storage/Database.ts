@@ -129,13 +129,13 @@ export class Database {
    *  runs as `backend` (no policies, as every SDK read). Only a user has
    *  rows to see; a user with no organization sees none. */
   async queryAs(caller: Caller, sql: string, options: QueryOptions): Promise<StatementResult[]> {
-    const client = new pg.Client({ connectionString: caller.kind === 'phantom_admin' ? this.url : this.authenticatedUrl,
+    const client = new pg.Client({ connectionString: caller.type === 'phantom_admin' ? this.url : this.authenticatedUrl,
       connectionTimeoutMillis: 5000, types: AGENT_TYPES });
     await client.connect();
     try {
       await client.query('begin');
       await client.query(`set local statement_timeout = ${quoteLiteral(QUERY_AS_STATEMENT_TIMEOUT)}`);
-      if (caller.kind === 'user') {
+      if (caller.type === 'user') {
         await client.query('select set_config($1, $2, true), set_config($3, $4, true)',
           [ORGANIZATION_SETTING, caller.organization.id, USER_SETTING, caller.user.id]);
       }

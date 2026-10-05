@@ -12,7 +12,7 @@ const TAG = { tags: ['identity'] };
 
 export function identityRoutes(app: FastifyInstance, backend: PhantomBackend) {
   app.get('/identity/me', { config: { caller: true }, schema: { ...TAG, summary: 'Who am I',
-    description: 'The caller: `{kind: "phantom admin"}` for the API key; `{kind: "user", user, organization, role}` for a Better Auth session, bearer token or API key. 401 for nobody.' } },
+    description: 'The caller: `{type: "phantom_admin"}` for the API key; `{type: "user", user, organization, role}` for a Better Auth session, bearer token or API key. 401 for nobody.' } },
   async (req) => ok(await backend.identity.require(req)));
 
   app.post<{ Body: { email: string; name?: string } }>('/identity/users', { schema: { ...TAG, summary: 'Create a user (bootstrap)',

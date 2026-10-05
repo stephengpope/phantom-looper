@@ -92,8 +92,8 @@ export type OrganizationRole = 'owner' | 'admin' | 'member';
 /** Who is calling: the phantom admin (the API key) or a signed-in user, in the
  *  organization their session is active in (their first, when none is). */
 export type Caller =
-  | { kind: 'phantom_admin' }
-  | { kind: 'user'; user: UserRow; organization: OrganizationRow; role: OrganizationRole };
+  | { type: 'phantom_admin' }
+  | { type: 'user'; user: UserRow; organization: OrganizationRow; role: OrganizationRole };
 
 export class IdentityError extends Error {
   constructor(readonly code: 'disabled' | 'unauthorized' | 'email_taken', message: string) { super(message); this.name = 'IdentityError'; }
@@ -250,7 +250,7 @@ export class Identity {
    *  bearer or API key) and the organization it is active in. Null: nobody. */
   async callerOf(request: FastifyRequest): Promise<Caller | null> {
     const authorization = String(request.headers.authorization ?? '');
-    if (timingSafeEqualStr(authorization, `Bearer ${this.apiKey}`)) return { kind: 'phantom_admin' };
+    if (timingSafeEqualStr(authorization, `Bearer ${this.apiKey}`)) return { type: 'phantom_admin' };
     if (!this.#auth) return null;
     const signedIn = await this.#auth.api.getSession({ headers: fromNodeHeaders(request.headers) }).catch((error: unknown) => {
       log.warn({ err: errStr(error) }, 'session lookup failed'); return null;
@@ -263,14 +263,14 @@ export class Identity {
       .limit(1);
     const membership = memberships[0];
     if (!membership) return null;
-    return { kind: 'user', user: membership.user, organization: membership.organization, role: membership.role as OrganizationRole };
+    return { type: 'user', user: membership.user, organization: membership.organization, role: membership.role as OrganizationRole };
   }
 
   /** The caller, or `unauthorized` (a 401 once HttpApi's error handler sees
    *  it). `users: true` refuses the phantom admin's key too. */
   async require(request: FastifyRequest, options: { users?: boolean } = {}): Promise<Caller> {
     const caller = await this.callerOf(request);
-    if (!caller || (options.users && caller.kind !== 'user')) throw new IdentityError('unauthorized', 'sign in first');
+    if (!caller || (options.users && caller.type !== 'user')) throw new IdentityError('unauthorized', 'sign in first');
     return caller;
   }
 

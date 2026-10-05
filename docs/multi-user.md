@@ -170,7 +170,7 @@ class Identity {
   createUser({ email, name? }): Promise<UserRow>               // bootstrap; 'email_taken' → 409
   magicLink(email): Promise<string>                            // bootstrap: the link, not mailed
 }
-type Caller = { kind: 'phantom_admin' } | { kind: 'user'; user: UserRow; organization: OrganizationRow; role: OrganizationRole }
+type Caller = { type: 'phantom_admin' } | { type: 'user'; user: UserRow; organization: OrganizationRow; role: OrganizationRole }
 class IdentityError extends Error { code: 'disabled' | 'unauthorized' | 'email_taken' }
 
 // src/storage/Database.ts

@@ -58,7 +58,7 @@ export class Projects {
    *  cards, crons, secrets, the play-space database — is reached through
    *  its row, so what this refuses takes all of it with it. */
   private visibleTo(caller?: Caller) {
-    return caller?.kind === 'user' ? eq(projects.organizationId, caller.organization.id) : undefined;
+    return caller?.type === 'user' ? eq(projects.organizationId, caller.organization.id) : undefined;
   }
 
   async get(id: string, caller?: Caller): Promise<ProjectRow | undefined> {

@@ -13,8 +13,8 @@ export const IDENTITY_PATH = '/api/auth';
 
 /** Who is calling, as GET /api/identity/me answers it. */
 export type Caller =
-  | { kind: 'phantom_admin' }
-  | { kind: 'user'; user: { id: string; email: string; name: string; role: string | null }
+  | { type: 'phantom_admin' }
+  | { type: 'user'; user: { id: string; email: string; name: string; role: string | null }
       organization: { id: string; name: string; slug: string }; role: 'owner' | 'admin' | 'member' };
 
 /** The headers a credential rides in: the phantom admin's key and a session
