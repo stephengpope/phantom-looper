@@ -6,7 +6,8 @@
 // client a project changing IS a settings-shaped fact (the list, the
 // prefixes, the scopes), and the settings feed is what they already follow to
 // re-read /projects. One bus, not a second one saying the same thing.
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
+import type { Caller } from '../identity/Identity.js';
 import { Database, type Drizzle, type Transaction } from './Database.js';
 import { projects, type ProjectRow } from '../storage/schema.js';
 import { DEFAULT_COLUMNS } from '@phantom-agent-sdk/client';
@@ -33,6 +34,8 @@ export const columnsOf = (project: ProjectRow): string[] =>
 export interface NewProject {
   id: string; owner: string; name: string;
   displayName: string | null; baseBranch: string; branchPrefix: string;
+  /** The organization it belongs to; absent = the operator's. */
+  organizationId?: string | null;
 }
 
 /** A write the table refuses, with the API's error code already chosen. */
@@ -49,8 +52,17 @@ export class Projects {
     private readonly databases?: AgentDatabases,
   ) {}
 
-  async get(id: string): Promise<ProjectRow | undefined> {
-    const rows = await this.database.select().from(projects).where(eq(projects.id, id));
+  /** THE ownership guard: the rows a caller may see. The operator (and no
+   *  caller — the SDK's own engines) sees every project; a user sees their
+   *  organization's. Everything under a project — workspaces, sessions,
+   *  cards, crons, secrets, the play-space database — is reached through
+   *  its row, so what this refuses takes all of it with it. */
+  private visibleTo(caller?: Caller) {
+    return caller?.kind === 'user' ? eq(projects.organizationId, caller.organization.id) : undefined;
+  }
+
+  async get(id: string, caller?: Caller): Promise<ProjectRow | undefined> {
+    const rows = await this.database.select().from(projects).where(and(eq(projects.id, id), this.visibleTo(caller)));
     return rows[0];
   }
 
@@ -59,8 +71,8 @@ export class Projects {
    *  the Assistant all read this list, so the order lives here and nowhere
    *  else; without it the rows came back in table order, which is stable
    *  only by luck. */
-  async list(): Promise<ProjectRow[]> {
-    return this.database.select().from(projects)
+  async list(caller?: Caller): Promise<ProjectRow[]> {
+    return this.database.select().from(projects).where(this.visibleTo(caller))
       .orderBy(sql`lower(coalesce(${projects.displayName}, ${projects.name}))`, projects.id);
   }
 
@@ -75,7 +87,7 @@ export class Projects {
     try {
       await this.database.insert(projects).values(row);
     } catch (error) {
-      if (Database.isUniqueViolation(error)) throw new ProjectError('already_registered', `${row.owner}/${row.name} is already a project`);
+      if (Database.isUniqueViolation(error)) throw new ProjectError('already_registered', `${row.owner}/${row.name} is already a project${row.organizationId ? ' of this organization' : ''}`);
       throw error;
     }
     this.events?.publish(projectScope(row.id), [], by);
