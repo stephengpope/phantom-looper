@@ -72,7 +72,7 @@ export class CronScheduler {
    *  the sessions a run opens, and the settings feed (a project's cron
    *  switch or timezone moved). */
   constructor(private readonly backend: PhantomBackend) {
-    this.client = new BackendClient({ url: backend.loopback.url, apiKey: backend.loopback.apiKey, clientId: CRON_CLIENT_ID, label: 'cron', actor: CRON_STARTER });
+    this.client = new BackendClient({ url: backend.loopback.url, credential: { operatorKey: backend.loopback.apiKey }, clientId: CRON_CLIENT_ID, label: 'cron', actor: CRON_STARTER });
   }
 
   /** Boot: register everything once, then follow the writes. */

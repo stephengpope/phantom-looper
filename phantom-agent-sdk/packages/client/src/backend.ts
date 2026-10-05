@@ -15,11 +15,16 @@
 import { PhantomError } from './errors.js';
 import { withRetry as retryingFetch, type RetryPolicy } from './model/retry.js';
 import { SDK_VERSION } from './sdkVersion.js';
+import { Identity, credentialHeaders, type Caller } from './identity.js';
+
+/** What a client carries: the operator's key (every SDK route), a user's
+ *  session token (a sign-in's `set-auth-token`), or a Better Auth API key. */
+export type Credential = { operatorKey: string } | { sessionToken: string } | { apiKey: string };
 
 export interface BackendOptions {
   /** The API root, e.g. `http://localhost:4000/api`. */
   url: string;
-  apiKey: string;
+  credential: Credential;
   /** This client's lock identity — sent as x-phantom-looper-client. */
   clientId: string;
   /** What other clients see as the session's holder (a hostname, an app
@@ -88,7 +93,9 @@ export class BackendClient {
   readonly actor: string | undefined;
   /** Who this client acts for, as the backend records it: the actor, or a person. */
   get actorName(): string { return this.actor ?? PERSON; }
-  readonly #apiKey: string;
+  #credential: Credential;
+  /** Sign-in: who am I, and Better Auth's client. */
+  readonly identity: Identity;
   readonly #fetch: typeof fetch;
   readonly #retrying: typeof fetch;
   /** The lockstep check, made once per connection on the first request;
@@ -100,14 +107,20 @@ export class BackendClient {
     this.clientId = options.clientId;
     this.label = options.label ?? options.clientId;
     this.actor = options.actor;
-    this.#apiKey = options.apiKey;
+    this.#credential = options.credential;
     this.#fetch = options.fetch ?? fetch;
     this.#retrying = options.retry ? retryingFetch(this.#fetch, options.retry.notice, 'server', options.retry.policy) : this.#fetch;
+    this.identity = new Identity({
+      origin: new URL(this.url).origin, fetch: this.#fetch,
+      credential: () => this.#credential,
+      onSessionToken: (sessionToken) => { this.#credential = { sessionToken }; },
+      me: () => this.call<Caller>('GET', '/identity/me'),
+    });
   }
 
   /** The same connection with a retry rule — the Agent's, from its handlers. */
   withRetry(policy: RetryPolicy, notice: (text: string) => void): BackendClient {
-    const clone = new BackendClient({ url: this.url, apiKey: this.#apiKey, clientId: this.clientId, label: this.label, actor: this.actor,
+    const clone = new BackendClient({ url: this.url, credential: this.#credential, clientId: this.clientId, label: this.label, actor: this.actor,
       fetch: this.#fetch, retry: { policy, notice } });
     clone.#versionChecked = this.#versionChecked;
     return clone;
@@ -141,7 +154,7 @@ export class BackendClient {
    *  claims application/json). */
   #headers(opts: { sessionId?: string; body?: boolean }): Record<string, string> {
     return {
-      authorization: `Bearer ${this.#apiKey}`,
+      ...credentialHeaders(this.#credential),
       [CLIENT_HEADER]: this.clientId,
       ...(this.actor ? { [ACTOR_HEADER]: this.actor } : {}),
       ...(opts.sessionId ? { [SESSION_HEADER]: opts.sessionId } : {}),
