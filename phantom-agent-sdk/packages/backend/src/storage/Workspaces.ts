@@ -87,15 +87,14 @@ export class Workspaces {
         // Pool slots are pristine by construction, so the unguarded catch-up is
         // safe — and mandatory: a slot stocked days ago is days behind.
         await git(dir, ['fetch', 'origin', project.baseBranch], auth);
-        await git(dir, ['reset', '--hard', `origin/${project.baseBranch}`]);
+        await git(dir, ['reset', '--hard', `origin/${project.baseBranch}`], auth);
       } else {
-        const depth = await this.settings.resolve<string>('initial_history_depth', { projectId: project.id });
-        await cloneFresh(dir, auth, project.baseBranch, depth);
+        await cloneFresh(dir, auth, project.baseBranch);
         await fs.mkdir(`${dest}/scratch`, { recursive: true });
       }
       await fs.mkdir(`${dest}/logs`, { recursive: true }); // detached exec logs — outside repo/, or add -A commits them
 
-      // --depth implies --single-branch: the clone's fetch refspec covers ONLY the
+      // The clone is --single-branch: its fetch refspec covers ONLY the
       // base branch, so without this a push to the session branch would update no
       // tracking ref and every origin/<branch> ancestry check would read as
       // no_upstream forever. One added refspec scopes tracking to exactly this
@@ -119,7 +118,7 @@ export class Workspaces {
           }
           throw error;
         }
-        await git(dir, ['checkout', '-B', branch, `refs/remotes/origin/${fromBranch}`]);
+        await git(dir, ['checkout', '-B', branch, `refs/remotes/origin/${fromBranch}`], auth);
         found = 'new';
       } else {
         found = await checkoutBranch(dir, branch, auth);

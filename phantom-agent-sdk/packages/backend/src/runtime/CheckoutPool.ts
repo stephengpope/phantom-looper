@@ -1,6 +1,6 @@
 // The warm-checkout pool, ported from Shockwave's checkoutPool.ts with the
 // target list widened from "whatever Telegram points at" to every project in the
-// database, and eviction added (evict and re-stock, never re-deepen).
+// database, and eviction added (evict and re-stock).
 //
 // A workspace's LOCATION is its state:
 //   pool/setup/<owner>__<name>__<branch>__<ulid>   being cloned — never read
@@ -103,21 +103,22 @@ export async function tick(projects: Projects, settings: Settings, paths: Paths)
     // would take projects × target ticks to fill from cold.
     await Promise.all([...wanted.entries()].map(async ([prefix, project]) => {
       const cfg = await settings.resolveMany(
-        ['spare_clones', 'spare_clone_refresh_ms', 'spare_clone_max_age_ms', 'initial_history_depth'],
-        { projectId: project.id }) as { spare_clones: number; spare_clone_refresh_ms: number; spare_clone_max_age_ms: number; initial_history_depth: string };
-      const { spare_clones: target, spare_clone_refresh_ms: refreshMs,
-        spare_clone_max_age_ms: maxAgeMs, initial_history_depth: depth } = cfg;
+        ['spare_clones', 'spare_clone_refresh_ms', 'spare_clone_max_age_ms'],
+        { projectId: project.id }) as { spare_clones: number; spare_clone_refresh_ms: number; spare_clone_max_age_ms: number };
+      const { spare_clones: target, spare_clone_refresh_ms: refreshMs, spare_clone_max_age_ms: maxAgeMs } = cfg;
       const auth = await resolveAuth(settings, project);
 
       let mine = ready.filter((slot) => slot.startsWith(prefix));
 
-      // Evict past spare_clone_max_age — a re-clone is always correct, and the shallow
-      // boundary (cut at stock time, never moved) stays honest without graft
-      // arithmetic. Stock time rides in the slot's ULID.
+      // Evict past spare_clone_max_age — a re-clone is always correct. Stock
+      // time rides in the slot's ULID. A shallow slot goes too: it was stocked
+      // before every clone carried the whole commit history (cloneFresh), and
+      // a checkout made from it could not find where an older branch left base.
       for (const slot of [...mine]) {
         let stocked = 0;
         try { stocked = idTime(slotUlid(slot)); } catch { /* not a ulid -> evict */ }
-        if (now - stocked > maxAgeMs) {
+        const shallow = await fs.stat(path.join(paths.poolReady, slot, 'repo', '.git', 'shallow')).then(() => true, () => false);
+        if (shallow || now - stocked > maxAgeMs) {
           await remove(path.join(paths.poolReady, slot));
           mine = mine.filter((slot) => slot !== slot);
         }
@@ -147,7 +148,7 @@ export async function tick(projects: Projects, settings: Settings, paths: Paths)
         const staging = path.join(paths.poolSetup, slot);
         try {
           await fs.mkdir(path.join(staging), { recursive: true });
-          await cloneFresh(path.join(staging, 'repo'), auth, project.baseBranch, depth);
+          await cloneFresh(path.join(staging, 'repo'), auth, project.baseBranch);
           await fs.mkdir(path.join(staging, 'scratch'), { recursive: true });
           await fs.mkdir(paths.poolReady, { recursive: true });
           // Only NOW is it usable, and the rename is what says so.

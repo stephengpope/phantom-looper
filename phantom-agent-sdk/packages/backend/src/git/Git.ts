@@ -119,28 +119,26 @@ export function classifyGitFailure(error: unknown, opts: { hadToken?: boolean } 
   return null;
 }
 
-/** A brand-new shallow checkout at `dir`, on `branch`, ready to be worked in.
+/** A brand-new checkout at `dir`, on `branch`, ready to be worked in.
  *
- *  --depth=1 belongs on the initial clone and ONLY there. Deepening to
- *  `historyDepth` is a separate, best-effort fetch: folded into the clone as
- *  --shallow-since it fails outright on a repo with no commits in the window
- *  and no directory is created (verified); as a second step the
- *  identical failure is harmless. And never --depth on a later fetch — it
- *  re-grafts the branch as a disconnected root and silently inverts every
- *  ancestry check downstream (verified). */
-export async function cloneFresh(
-  dir: string, auth: GitAuth, branch: string, historyDepth: string,
-): Promise<void> {
+ *  ONE kind of clone, for a new session, a restarted one and a spare alike:
+ *  the whole commit history, none of the past file contents
+ *  (--filter=blob:none). Every ancestry question the system asks
+ *  (merge-base, is-ancestor, behind/ahead) is answered from commits alone,
+ *  so it is always answerable — however long ago a branch left base. A
+ *  --depth clone cut the history itself, and a branch older than the cut had
+ *  no split point to find. The files of the checked-out commit are fetched
+ *  here; a past version is fetched by git at the moment a command reads it,
+ *  which is why every checkout/reset below carries `auth`.
+ *
+ *  --single-branch keeps the fetch refspec to this one branch; a session's
+ *  own branch is added to it when the session is checked out. */
+export async function cloneFresh(dir: string, auth: GitAuth, branch: string): Promise<void> {
   await fs.rm(dir, { recursive: true, force: true });
   await fs.mkdir(path.dirname(dir), { recursive: true });
-  const depthArgs = historyDepth === 'full' ? [] : ['--depth=1'];
-  await exec('git', [...guards(auth), 'clone', ...depthArgs, '--branch', branch, auth.url, dir], {
+  await exec('git', [...guards(auth), 'clone', '--filter=blob:none', '--single-branch', '--branch', branch, auth.url, dir], {
     maxBuffer: 32 * 1024 * 1024, env: gitEnv(auth.pat),
   }).catch(cleanThrow);
-  if (historyDepth !== 'full') {
-    await git(dir, ['fetch', `--shallow-since=${historyDepth}`, 'origin', branch], auth)
-      .catch((error) => log.debug({ dir, err: errStr(error) }, 'no history in window — staying at depth 1'));
-  }
   await git(dir, ['config', 'user.name', 'phantom-looper']);
   await git(dir, ['config', 'user.email', 'agent@phantom-looper.local']);
 }
@@ -150,7 +148,7 @@ export async function cloneFresh(
  *  nothing to weigh. Anything a session touched goes through the guarded path. */
 export async function refreshPristine(dir: string, auth: GitAuth, branch: string): Promise<void> {
   await git(dir, ['fetch', 'origin', branch], auth);
-  await git(dir, ['reset', '--hard', `origin/${branch}`]);
+  await git(dir, ['reset', '--hard', `origin/${branch}`], auth);
 }
 
 /** Put `dir` on `branch`, starting from the remote's copy when there is one.
@@ -175,7 +173,7 @@ export async function checkoutBranch(
     await git(dir, ['checkout', '-B', branch]);
     return 'new';
   }
-  await git(dir, ['checkout', '-B', branch, `refs/remotes/origin/${branch}`]);
+  await git(dir, ['checkout', '-B', branch, `refs/remotes/origin/${branch}`], auth);
   return 'existing';
 }
 
@@ -401,7 +399,7 @@ export async function rebaseAbort(dir: string): Promise<void> {
 /** Push the rebased branch. A rebase rewrites the branch, so this must force —
  *  and the lease names the expected value EXPLICITLY, read off the remote a
  *  moment before the push. The bare `--force-with-lease` form is wrong here:
- *  session clones are single-branch (cloneFresh's --depth implies it), so the
+ *  session clones are single-branch (cloneFresh), so the
  *  fetch refspec never maps the session branch, no remote-tracking ref exists
  *  for it, and a bare lease then demands the remote branch NOT exist — it
  *  always does (the backup pushed it), so every push is rejected "stale
