@@ -23,6 +23,26 @@ Boot-and-connect values come from the environment (`DATABASE_URL`,
 `WORKSPACE_ROOT_PATH`, `PORT`, `API_KEY`, `ENCRYPTION_KEY`, `DOCKER_HOST`);
 every behavioural knob is a setting, read over the API.
 
+**Database roles.** `DATABASE_URL` is the bootstrap superuser's; boot uses it
+once to make sure `migrator` (owns every schema and table; runs the
+migrations) and `backend` (the process: rows only, no DDL; makes agent
+play-space databases) exist with passwords derived from `ENCRYPTION_KEY`,
+then hangs up. Nothing running can alter a table.
+
+**Routes.** `/api/*` the SDK's, the operator's bearer key on every one;
+`/api/auth/*` sign-in (Better Auth, with `config.identity`); `/app/*` user
+space's (`config.routes`), no key check — the app gates each with
+`backend.identity.require(request)`. `/db` the database console.
+
+**Mail and sign-in.** `backend.mailer` sends over SMTP (the `smtp_*`
+settings; `POST /api/mail/test` proves them). `config.identity` turns sign-in
+on: magic links, invite-only; every user has a personal organization and an
+invitation adds membership in another; a cli carries the session token as a
+bearer, a program an API key. `backend.identity.callerOf(request)` says who
+is calling — the operator or a user in their organization. The operator
+bootstraps the first user with `POST /api/identity/users` and
+`POST /api/identity/magic-link`. docs/multi-user.md has the whole of it.
+
 **Storage.** The SDK's tables live in the Postgres schema `phantom_agent_sdk`
 with their own migration ledger (`migrations/`, shipped in this package, run
 by `Database.migrate` at boot). An app's tables live in the app's schema with
@@ -37,7 +57,9 @@ version refuses the backend. `src/sdkVersion.ts` carries the number beside
 src/PhantomBackend.ts    the root: members, boot order, start/stop
 src/doors.ts             what an app registers: settings, agent types, tools, routes
 src/members.ts           the members, one file each
-src/storage/             Database, Settings, the table owners, AgentDatabases, schema, migrations/
+src/storage/             Database (roles, pool, migrations), Settings, the table owners, AgentDatabases, schema, migrations/
+src/mail/                Mailer (SMTP)
+src/identity/            Identity: Better Auth, who a caller is
 src/agents/              AgentTypes, AgentConfig, SystemPrompt, ModelCatalog, SessionTitler, UserMessageQueue, the feeds
 src/runtime/             Docker, Images, SessionContainers, Sandbox, CheckoutPool, Disk, Skills, SystemSkills, Web
 src/git/                 Git, GitService, GitSync, InstantSync, WorkspaceWatcher, GitHub

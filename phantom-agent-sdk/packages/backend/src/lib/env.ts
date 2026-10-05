@@ -3,11 +3,16 @@
 // you need before you can reach the database at all.
 
 export interface Env {
+  /** The bootstrap superuser's. Boot uses it once (the roles), the console
+   *  connects as it; the running backend is on its own role (Database). */
   databaseUrl: string;
   workspaceRoot: string;
   port: number;
   apiKey: string;
   encryptionKey: Buffer; // 32 bytes, AES-256-GCM
+  /** Where this backend is reached from outside (`https://<PHANTOM_BACKEND_ADDRESS>`):
+   *  what links in mail and sign-in point at. Loopback when no address is set. */
+  publicUrl: string;
 }
 
 // The two facts about THIS build that several files read: its version and
@@ -38,11 +43,14 @@ export function readEnv(source: NodeJS.ProcessEnv = process.env): Env {
   // placeholder like .env.example's `change-me` must not boot a server.
   const apiKey = need('API_KEY');
   if (apiKey.length < 32) throw new Error('API_KEY must be at least 32 characters (openssl rand -hex 24)');
+  const port = Number(source.PORT ?? 8080);
+  const address = source.PHANTOM_BACKEND_ADDRESS?.trim();
   return {
     databaseUrl: need('DATABASE_URL'),
     workspaceRoot: need('WORKSPACE_ROOT_PATH'),
-    port: Number(source.PORT ?? 8080),
+    port,
     apiKey,
     encryptionKey,
+    publicUrl: address ? `https://${address}` : `http://127.0.0.1:${port}`,
   };
 }

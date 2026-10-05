@@ -15,10 +15,10 @@
 //
 // The setting `agent_database` says whether a project HAS this; the route
 // reads it. Off keeps the data; only the project going drops it.
-import { createHmac } from 'node:crypto';
 import pg from 'pg';
 import { parse as parseArray } from 'postgres-array';
 import { logger } from '../lib/log.js';
+import { derivedPassword } from '../lib/crypto.js';
 
 const log = logger('database');
 
@@ -123,9 +123,10 @@ export class AgentDatabases {
   private ensuring = new Map<string, Promise<void>>();
   private readonly server: URL;
 
-  /** `pool` is the API's own (superuser) connection — the one that creates
-   *  databases and roles. `databaseUrl` names the server; a project's
-   *  connection is the same host and port with its own role and database. */
+  /** `pool` is the backend's own connection (the `backend` role: createdb,
+   *  createrole — Database.open) — the one that creates databases and
+   *  roles. `databaseUrl` is that role's; a project's connection is the
+   *  same host and port with its own role and database. */
   constructor(private readonly pool: pg.Pool, databaseUrl: string, private readonly encryptionKey: Buffer) {
     this.server = new URL(databaseUrl);
   }
@@ -134,9 +135,7 @@ export class AgentDatabases {
    *  project id is a lowercase ULID, so the name is a plain identifier. */
   nameOf(projectId: string): string { return `project_${projectId}`; }
 
-  private passwordOf(projectId: string): string {
-    return createHmac('sha256', this.encryptionKey).update(`database:${projectId}`).digest('base64url');
-  }
+  private passwordOf(projectId: string): string { return derivedPassword(this.encryptionKey, `database:${projectId}`); }
 
   /** The connection string the project's code gets as AGENT_DATABASE_URL
    *  when `agent_database_shared` is on — the same role and database the
@@ -185,13 +184,14 @@ export class AgentDatabases {
 
     const { rows: dbs } = await this.pool.query('select from pg_database where datname = $1', [name]);
     if (!dbs.length) {
-      // Owned by our user (the agent cannot drop it); private (nobody but
-      // its role may connect); the role may build anything inside it.
+      // Owned by the backend role (the agent cannot drop it); private
+      // (nobody but its role may connect); the role may build anything
+      // inside it.
       await this.pool.query(`create database ${role}`);
       await this.pool.query(`revoke connect on database ${role} from public`);
       await this.pool.query(`grant connect, create, temporary on database ${role} to ${role}`);
-      // Schema grants live inside the database: one superuser connection to
-      // it, at creation only.
+      // Schema grants live inside the database: one connection to it as
+      // its owner, at creation only.
       const admin = new URL(this.server.toString());
       admin.pathname = `/${name}`;
       const client = new pg.Client({ connectionString: admin.toString() });

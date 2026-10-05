@@ -11,6 +11,8 @@ export { SettingsWriteError, type SettingScope, type SettingSource, type Setting
 export { sdkSettings, agentTypeSettings } from './storage/sdkSettings.js';
 export type { TokenRecord, ReportRow, Windows, WindowTotals } from './storage/TokenLog.js';
 export type { BackgroundTaskRow, BackgroundTaskEnd } from './storage/BackgroundTasks.js';
+export { MailerError, type Mail } from './mail/Mailer.js';
+export { IdentityError, IDENTITY_PATH, type Caller, type IdentityOptions, type OrganizationRole } from './identity/Identity.js';
 export { SqlError, locate, type QueryOptions, type StatementResult } from './storage/AgentDatabases.js';
 
 // agents
@@ -39,7 +41,7 @@ export type { BoardEvent } from './agents/BoardEvents.js';
 export type { SettingsChanged } from './agents/SettingsEvents.js';
 
 export { hasEmbeddedCredentials, parseGitHubUrl, parseRepoRef, remoteUrl } from './git/remote.js';
-export type { CardRow, CronRow, ProjectRow, WorkspaceRow, SessionRow } from './storage/schema.js';
+export type { CardRow, CronRow, ProjectRow, WorkspaceRow, SessionRow, UserRow, OrganizationRow, MemberRow, InvitationRow, ApiKeyRow } from './storage/schema.js';
 export * as checkoutPool from './runtime/CheckoutPool.js';
 
 // runtime, git, prompt, skills, tools — the moved modules' companions

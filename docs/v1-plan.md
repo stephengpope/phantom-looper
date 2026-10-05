@@ -103,8 +103,9 @@ remain, in the order they unblock each other.
    server's GitHub token with `workflow` scope so a release edit pushes; an
    SDK migration dropping the columns the app's migrations 001 and 002 took
    over (another app's fresh install still creates them).
-6. **Multi-user** — mail, sign-in, ownership, invites: designed in
-   `docs/multi-user.md`, not started.
+6. **Multi-user** — database roles, mail, Better Auth sign-in with
+   organizations: built, `docs/multi-user.md`. Media (database-backed
+   files) is its own plan after it.
 
 ## Names — keep
 

@@ -10,13 +10,16 @@ services:
     image: postgres:16
     restart: unless-stopped
     environment:
-      POSTGRES_USER: phantom
+      # The bootstrap superuser. Fresh installs name it `superuser` (.env);
+      # the default is the name every install from before carries in its
+      # volume — the image honours this only at first init.
+      POSTGRES_USER: ${POSTGRES_USER:-phantom}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
       POSTGRES_DB: phantom
     volumes:
       - pg-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U phantom -d phantom"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-phantom} -d phantom"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -39,11 +42,18 @@ services:
       docker-proxy:
         condition: service_started
     environment:
-      DATABASE_URL: postgres://phantom:${POSTGRES_PASSWORD:?}@postgres:5432/phantom
+      # The superuser's: boot creates the `migrator` and `backend` roles with
+      # it and hangs up; the process runs as `backend` (storage/Database.ts).
+      DATABASE_URL: postgres://${POSTGRES_USER:-phantom}:${POSTGRES_PASSWORD:?}@postgres:5432/phantom
       WORKSPACE_ROOT_PATH: /workspaces
       PORT: 8080
       API_KEY: ${API_KEY:?set in .env}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set in .env — openssl rand -base64 32}
+      # Set, sign-in is on (people, organizations, invitations, API keys at
+      # /api/auth). Empty: off, nothing changes.
+      AUTH_SECRET: ${AUTH_SECRET:-}
+      # Browser apps on another origin that may sign in here, comma-separated.
+      AUTH_TRUSTED_ORIGINS: ${AUTH_TRUSTED_ORIGINS:-}
       # Workspace containers are created through the socket proxy below — the
       # API never holds the socket and runs non-root.
       DOCKER_HOST: tcp://docker-proxy:2375
@@ -59,7 +69,7 @@ services:
       # The database console (CloudBeaver). The API proxies /db to it and
       # manages its container lifecycle based on the db_ui_enabled setting.
       DB_UI_URL: http://cloudbeaver:8978
-      DB_UI_DSN: postgres://phantom:${POSTGRES_PASSWORD:?}@postgres:5432/phantom
+      DB_UI_DSN: postgres://${POSTGRES_USER:-phantom}:${POSTGRES_PASSWORD:?}@postgres:5432/phantom
       # Where POST /update drops the requested release tag for the updater
       # sidecar (shared volume; the sidecar polls it).
       UPDATE_TRIGGER_DIR: /trigger

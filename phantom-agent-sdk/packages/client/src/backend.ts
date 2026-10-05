@@ -155,7 +155,8 @@ export class BackendClient {
     if (!connecting) await this.connect();
     const fetchWith = opts.retry === false ? this.#fetch : this.#retrying;
     try {
-      return await fetchWith(`${this.url}${path}`, {
+      // A path under /app is user space's, at the API's origin; any other is the SDK's, under the API root.
+      return await fetchWith(path.startsWith('/app/') ? new URL(path, this.url).toString() : `${this.url}${path}`, {
         method, headers: this.#headers({ sessionId: opts.sessionId, body: body !== undefined }),
         body: body === undefined ? undefined : JSON.stringify(body), signal: opts.signal,
       });

@@ -238,6 +238,7 @@ else
   rand_hex() { head -c "$1" /dev/urandom | od -An -tx1 | tr -d ' \n'; }
   API_KEY_SHOWN=$(rand_hex 24)
   $SUDO sh -c "umask 077; cat > '$ENV_FILE'" <<EOF
+POSTGRES_USER=superuser
 POSTGRES_PASSWORD=$(rand_hex 16)
 API_KEY=$API_KEY_SHOWN
 ENCRYPTION_KEY=$(head -c 32 /dev/urandom | base64)

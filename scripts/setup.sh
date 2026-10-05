@@ -22,6 +22,7 @@ if [ ! -f .env ]; then
   HTTPS_PORT=$(free_port 443)
   HTTP_PORT=$(free_port 80)
   cat > .env <<ENV
+POSTGRES_USER=superuser
 POSTGRES_PASSWORD=$(openssl rand -hex 16)
 API_KEY=$(openssl rand -hex 24)
 ENCRYPTION_KEY=$(openssl rand -base64 32)

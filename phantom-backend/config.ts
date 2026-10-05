@@ -21,4 +21,9 @@ export const config: PhantomBackendConfig = {
   agentTypes: appAgentTypes,
   // The engines that open sessions for themselves; a default list leaves those out.
   backgroundStarters: [LOOPER_STARTER, CRON_STARTER],
+  // Sign-in (people, organizations, invitations, API keys — docs/multi-user.md)
+  // is on when the operator sets AUTH_SECRET; nothing in this app uses it yet.
+  // Off by default: no route, nothing written.
+  ...(process.env.AUTH_SECRET ? { identity: { secret: process.env.AUTH_SECRET,
+    trustedOrigins: (process.env.AUTH_TRUSTED_ORIGINS ?? '').split(',').map((origin) => origin.trim()).filter(Boolean) } } : {}),
 };

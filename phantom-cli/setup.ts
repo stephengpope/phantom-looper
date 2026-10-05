@@ -83,7 +83,7 @@ interface Paired { url: string; key: string; ca?: string }
 async function catalogFor(settings: ReturnType<typeof makeSettings>, provider: string):
 Promise<{ id: string; name: string }[]> {
   try {
-    const reply = await settings.api('GET', `/models?provider=${encodeURIComponent(provider)}`) as
+    const reply = await settings.api('GET', `/app/models?provider=${encodeURIComponent(provider)}`) as
       { models?: { id: string; name: string }[] };
     return Array.isArray(reply?.models) ? reply.models : [];
   } catch (entry) {

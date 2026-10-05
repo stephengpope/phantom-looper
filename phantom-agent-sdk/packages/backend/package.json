@@ -34,20 +34,24 @@
     "test": "tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
+    "@better-auth/api-key": "1.7.7",
+    "@fastify/cors": "11.3.0",
+    "@parcel/watcher": "2.6.0",
     "@phantom-agent-sdk/client": "0.1.0",
-    "drizzle-orm": "0.38.4",
+    "ai": "7.0.73",
+    "better-auth": "1.7.7",
+    "croner": "10.0.1",
+    "dockerode": "5.0.1",
+    "drizzle-orm": "0.45.3",
+    "fastify": "5.12.1",
+    "mdast-util-from-markdown": "2.0.3",
+    "nodemailer": "10.0.15",
     "pg": "8.23.0",
     "pino": "9.14.0",
-    "ulid": "2.4.0",
-    "fastify": "5.12.1",
-    "dockerode": "5.0.1",
-    "tar-stream": "2.2.0",
-    "@parcel/watcher": "2.6.0",
-    "croner": "10.0.1",
     "postgres-array": "2.0.0",
-    "mdast-util-from-markdown": "2.0.3",
+    "tar-stream": "2.2.0",
+    "ulid": "2.4.0",
     "undici": "8.10.0",
-    "ai": "7.0.73",
     "zod": "4.4.3",
     "@fastify/http-proxy": "11.6.1",
     "@types/pg": "8.23.1",
@@ -55,10 +59,10 @@
   },
   "devDependencies": {
     "@types/node": "22.20.1",
-    "eslint": "10.11.0",
-    "typescript": "5.9.3",
-    "typescript-eslint": "8.70.1",
     "@types/tar-stream": "2.2.3",
-    "tsx": "4.23.12"
+    "eslint": "10.11.0",
+    "tsx": "4.23.12",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.70.1"
   }
 }

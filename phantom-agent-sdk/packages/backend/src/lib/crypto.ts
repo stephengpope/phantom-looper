@@ -1,6 +1,14 @@
 // Credential encryption at rest. AES-256-GCM; the key comes from env and never
 // touches the database. Layout: [iv 12][tag 16][ciphertext] in one bytea.
-import { createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+
+/** A Postgres role's password, derived from the encryption key and the
+ *  role's label — stored nowhere, re-set on every boot (so a rotated key
+ *  heals itself), never leaves this process. The backend's own roles and
+ *  every agent play-space role get theirs this way. */
+export function derivedPassword(key: Buffer, label: string): string {
+  return createHmac('sha256', key).update(label).digest('base64url');
+}
 
 /** Secret comparison that takes the same time whether or not the strings
  *  match — the API bearer and the Telegram webhook secret both check with
