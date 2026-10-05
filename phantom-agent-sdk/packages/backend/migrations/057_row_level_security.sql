@@ -22,6 +22,13 @@ create or replace function phantom_agent_sdk.visible_project(project_id text) re
 language sql stable security definer set search_path = phantom_agent_sdk as $$
   select exists (select from projects where id = project_id and organization_id = caller_organization())
 $$;
+-- Is the caller a member of this organization? Definer: a policy on
+-- identity.member that read identity.member itself would recurse
+-- ("infinite recursion detected in policy"); the owner's read is not fenced.
+create or replace function phantom_agent_sdk.member_of(organization_id text) returns boolean
+language sql stable security definer set search_path = phantom_agent_sdk as $$
+  select exists (select from identity.member m where m.organization_id = member_of.organization_id and m.user_id = caller_user())
+$$;
 
 -- The root: a project is the caller's organization's.
 alter table phantom_agent_sdk.projects enable row level security;
@@ -58,11 +65,9 @@ alter table phantom_agent_sdk.schema_migrations enable row level security;
 
 -- Identity: the caller's own organizations, their members, themselves.
 alter table identity.organization enable row level security;
-create policy own on identity.organization
-  using (exists (select from identity.member m where m.organization_id = id and m.user_id = phantom_agent_sdk.caller_user()));
+create policy own on identity.organization using (phantom_agent_sdk.member_of(id));
 alter table identity.member enable row level security;
-create policy own_organizations on identity.member
-  using (exists (select from identity.member mine where mine.organization_id = member.organization_id and mine.user_id = phantom_agent_sdk.caller_user()));
+create policy own_organizations on identity.member using (phantom_agent_sdk.member_of(organization_id));
 alter table identity."user" enable row level security;
 create policy self on identity."user" using (id = phantom_agent_sdk.caller_user());
 alter table identity.session enable row level security;
