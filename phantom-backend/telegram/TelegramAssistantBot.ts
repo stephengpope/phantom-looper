@@ -251,7 +251,7 @@ export class TelegramAssistantBot {
     } catch (error) {
       this.inFlight.delete(busyKey);
       await agent?.close().catch(() => {});
-      sink.discard();
+      await sink.discard();
       typing.stop();
       const msg = (error as Error).message;
       const isPromptTooLong = /prompt is too long|request too large|context_too_long/i.test(msg);
@@ -295,7 +295,7 @@ export class TelegramAssistantBot {
       try { result = await agent.sendMessage(message); }
       catch (error) {
         if ((error as { code?: string }).code === 'session_locked') {
-          off(); sink.discard(); this.inFlight.delete(sessionId); await agent.close(); typing.stop();
+          off(); await sink.discard(); this.inFlight.delete(sessionId); await agent.close(); typing.stop();
           const session = await this.backend.sessions.get(sessionId);
           await client.sendMessage(chatId, `🔒 That session is busy${session?.lockedLabel ? ` (${session.lockedLabel})` : ''} — try again in a moment.`);
           return;
@@ -310,7 +310,7 @@ export class TelegramAssistantBot {
       typing.stop();
       if (queued.length) await this.codeTurn(client, chatId, sessionId, queued.join('\n\n'));
     } catch (error) {
-      sink.discard();
+      await sink.discard();
       this.inFlight.delete(sessionId);
       await agent?.close().catch(() => {});
       typing.stop();

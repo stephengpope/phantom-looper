@@ -2,6 +2,7 @@
 // its reply. Offered only when Telegram is wired and `telegram_enabled` is
 // on: Telegram off means no tool.
 import { obj, refusal, str, type OfferCtx, type ToolDef } from './def.js';
+import { textOf } from '../lib/text.js';
 
 const enabled = async ({ app }: OfferCtx) => app.notifications.available && Boolean(await app.settings.resolve('telegram_enabled'));
 
@@ -17,7 +18,7 @@ export const NOTIFY_TOOLS: ToolDef[] = [
     mutates: false, group: 'notify', offered: enabled,
     async execute(ctx, a) {
       try {
-        await ctx.app.notifications.send(String(a.text ?? ''), { sessionId: ctx.session.id });
+        await ctx.app.notifications.send(textOf(a.text), { sessionId: ctx.session.id });
         return { sent: true };
       } catch (error) {
         throw refusal('telegram_unavailable', `could not send the message: ${(error as Error).message}`);

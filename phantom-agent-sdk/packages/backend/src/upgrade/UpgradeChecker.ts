@@ -12,7 +12,7 @@ import type { TelegramApi } from '../telegram/TelegramApi.js';
 import { titled } from '../telegram/TelegramApi.js';
 import { checkLatest, isBehind, bare } from '@phantom-agent-sdk/client';
 import { pullLine, type PullProgress, type UpdateEvent } from '@phantom-agent-sdk/client';
-import { logger, errStr } from '../lib/log.js';
+import { logger } from '../lib/log.js';
 
 const log = logger('upgrade');
 

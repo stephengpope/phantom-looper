@@ -105,7 +105,7 @@ export const BOARD_TOOLS: ToolDef[] = [
       archived: { type: 'boolean', description: 'true takes the card off the board' },
     }, ['card']),
     mutates: true, group: 'board',
-    execute: (ctx, { card, ...rest }) => patch(ctx, Number(card), rest as CardFields),
+    execute: (ctx, { card, ...rest }) => patch(ctx, Number(card), rest),
   },
   {
     name: 'kanban_card_items',

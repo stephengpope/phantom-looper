@@ -92,7 +92,7 @@ const OVERRIDES: Record<number, [(value: string) => unknown, number]> = {
   [TYPES.TIMESTAMP]: [asIs, 1115],  // no zone, so no Z: "2026-09-19 20:11:51.051"
   [TYPES.INTERVAL]: [asIs, 1187],   // "1 day 02:00:00"
 };
-const ARRAY_OF = Object.fromEntries(Object.entries(OVERRIDES).map(([oid, [parse, arr]]) => [arr, parse])) as
+const ARRAY_OF = Object.fromEntries(Object.entries(OVERRIDES).map(([_oid, [parse, arr]]) => [arr, parse])) as
   Record<number, (value: string) => unknown>;
 const AGENT_TYPES: pg.CustomTypesConfig = {
   getTypeParser: (oid, format) => {

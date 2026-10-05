@@ -239,14 +239,13 @@ export class PhantomBackend {
     // Instant sync follows the containers: a container up is a workspace to
     // watch, a container gone is one to drop. The hooks are closures over the
     // backend, which exists long before any container starts.
-    let backend: PhantomBackend;
     const sessionContainers = new SessionContainers(docker, images, paths, {
       volume: process.env.WORKSPACE_VOLUME, network: process.env.WORKSPACE_NETWORK, settings, databases: agentDatabases,
       onStarted: (workspaceId, project) => backend.git.instantSync.watchWorkspace(workspaceId, project),
       onRemoved: (workspaceId) => backend.git.instantSync.unwatchWorkspace(workspaceId),
     });
 
-    backend = new PhantomBackend(config, {
+    const backend: PhantomBackend = new PhantomBackend(config, {
       env, paths, database, settings, projects, workspaces, sessions, cards, crons, presets, backgroundTasks, tokenLog, agentDatabases,
       agentTypes, agentConfig, modelCatalog, userMessageQueue, sessionEvents, boardEvents, settingsEvents, foregroundCommands,
       docker, images, sessionContainers, workspaceWatcher, telegramBotState, telegramSentMessages, telegramHandledUpdates,

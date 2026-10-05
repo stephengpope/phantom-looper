@@ -8,7 +8,10 @@ export default tseslint.config(
   {
     languageOptions: { parserOptions: { project: './tsconfig.eslint.json', tsconfigRootDir: import.meta.dirname } },
     rules: {
-      '@typescript-eslint/no-floating-promises': 'error',
+      '@typescript-eslint/no-floating-promises': ['error', {
+        // node:test's runner awaits every test() itself; a test file is not a dropped promise.
+        allowForKnownSafeCalls: [{ from: 'package', name: ['test', 'describe', 'it'], package: 'node:test' }],
+      }],
       '@typescript-eslint/no-unused-vars': ['error', { varsIgnorePattern: '^_', argsIgnorePattern: '^_', destructuredArrayIgnorePattern: '^_', ignoreRestSiblings: true }],
       '@typescript-eslint/require-await': 'off',
       'no-empty': ['error', { allowEmptyCatch: false }],

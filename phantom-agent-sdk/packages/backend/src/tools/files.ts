@@ -48,7 +48,7 @@ function readRange(
   const total = lines.length;
   const from = Math.max(1, offset);
   let last = Math.min(total, from + limit - 1);
-  let slice = lines.slice(from - 1, last);
+  const slice = lines.slice(from - 1, last);
   let text = numbered(slice, from);
   let reason: Truncation['reason'] | null = last < total || from > 1 ? 'limit' : null;
   if (Buffer.byteLength(text) > maxBytes) {

@@ -10,6 +10,7 @@
 import { parseLines, conversationFrom } from '@phantom-agent-sdk/client/transcript';
 import type { Sessions } from '../storage/Sessions.js';
 import { logger, errStr } from '../lib/log.js';
+import { textOf } from '../lib/text.js';
 
 const log = logger('titler');
 
@@ -27,7 +28,7 @@ export type TitleWriter = (sessionId: string, context: TitleContext) => Promise<
 const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max)}…` : text);
 const partText = (part: unknown): string => {
   if (typeof part === 'string') return part;
-  if (part && typeof part === 'object' && 'text' in part) return String((part as { text: unknown }).text ?? '');
+  if (part && typeof part === 'object' && 'text' in part) return textOf(part.text);
   return '';
 };
 const messageText = (content: unknown): string => {
@@ -61,7 +62,7 @@ export function titleContext(jsonl: string): TitleContext {
 export function cleanTitle(raw: string): string | null {
   let title = raw.trim().replace(/\s+/g, ' ');
   const quoted = title.match(/^["'“”](.*)["'“”]$/);
-  if (quoted) title = quoted[1]!.trim();
+  if (quoted) title = quoted[1].trim();
   if (!title) return null;
   return title.length > MAX_TITLE ? `${title.slice(0, MAX_TITLE).trimEnd()}…` : title;
 }

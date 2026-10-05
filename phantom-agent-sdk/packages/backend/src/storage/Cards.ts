@@ -14,6 +14,7 @@
 // here. Nothing outside this file knows they are not columns.
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { Drizzle, Transaction } from './Database.js';
+import { textOf } from '../lib/text.js';
 // `sessions` is here for ONE read: the card a session works on is a join on
 // sessions.card_id. Read through the join only; the row is Sessions' to write.
 import { cards, cardRevisions, sessions, type CardRow, type ProjectRow } from '../storage/schema.js';
@@ -143,7 +144,7 @@ export class Cards {
     if (page.limit !== undefined) query = query.limit(page.limit);
     const [rows, totals] = await Promise.all([
       query, this.database.select({ total: sql<number>`count(*)::int` }).from(cards).where(archived)]);
-    const total = totals[0]!.total;
+    const total = totals[0].total;
     return { cards: await this.#withFields(rows), total };
   }
 
@@ -183,7 +184,7 @@ export class Cards {
    *  the event. */
   async create(project: ProjectRow, fields: CardFields & { title: string }, by?: string): Promise<Card> {
     const cols = columnsOf(project);
-    const status = String(fields.status ?? cols[0]);
+    const status = textOf(fields.status ?? cols[0]);
     if (!cols.includes(status)) throw new CardError('invalid_args', `status must be one of: ${cols.join(', ')}`);
     const title = String(fields.title);
     const { columns, app } = this.split(fields);
@@ -195,8 +196,8 @@ export class Cards {
         ? Number(fields.pos)
         : sql`(select coalesce(max(${cards.pos}), 0) + 1 from ${cards} where ${cards.project_id} = ${project.id} and ${cards.status} = ${status})`;
       const [inserted] = await transaction.insert(cards).values({ ...values, project_id: project.id, number, status, title, pos: pos as never }).returning();
-      await this.#writeFields(inserted!.id, app, transaction);
-      return inserted!;
+      await this.#writeFields(inserted.id, app, transaction);
+      return inserted;
     });
     const card = (await this.#oneWithFields(row))!;
     this.publish(project, card, { client: by });
@@ -245,9 +246,9 @@ export class Cards {
       if (!prior) throw new CardError('not_found', `no card ${number} in project ${project.id}`);
       if (items) set.requirements = applyItemOps(prior.requirements, items);
       const [updated] = await transaction.update(cards).set({ ...set, updated_at: new Date() }).where(mine).returning();
-      const before = await this.#writeFields(updated!.id, app, transaction);
-      if (Object.keys(before).length) await transaction.insert(cardRevisions).values({ card_id: updated!.id, changed_from: before });
-      return { row: updated!, from: prior.status, wasArchived: prior.archived };
+      const before = await this.#writeFields(updated.id, app, transaction);
+      if (Object.keys(before).length) await transaction.insert(cardRevisions).values({ card_id: updated.id, changed_from: before });
+      return { row: updated, from: prior.status, wasArchived: prior.archived };
     });
     const card = (await this.#oneWithFields(row))!;
     this.publish(project, card, { from, client: by, archivedBefore: wasArchived });

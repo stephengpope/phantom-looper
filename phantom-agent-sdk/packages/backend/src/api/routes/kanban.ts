@@ -6,7 +6,6 @@ import type { ProjectRow } from '../../storage/schema.js';
 import { columnsOf } from '../../storage/Projects.js';
 import { isHeld } from '../../storage/Sessions.js';
 import { CardError, CARD_FIELDS, CARD_JSON_FIELDS, type CardFields, type ItemOp } from '../../storage/Cards.js';
-import { logger, errStr } from '../../lib/log.js';
 import { ok, err } from '../HttpApi.js';
 import type { PhantomBackend } from '../../PhantomBackend.js';
 
@@ -58,7 +57,6 @@ for (const field of [...CARD_FIELDS, ...CARD_JSON_FIELDS]) {
 }
 
 export function kanbanRoutes(app: FastifyInstance, ctx: PhantomBackend) {
-  const log = logger('kanban');
   const projectOf = (id: string) => ctx.projects.get(id);
   // The card body: the columns, the checklist, and the app's fields about a
   // card under the names it declared (Cards.fieldSchema) — accepted as if
@@ -207,7 +205,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
       const write = (record: unknown) => { reply.raw.write(`${JSON.stringify(record)}\n`); };
       const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
-      const unsubscribe = ctx.boardEvents!.subscribe(project.id, write);
+      const unsubscribe = ctx.boardEvents.subscribe(project.id, write);
       write({ event: 'heartbeat' });
       await new Promise<void>((resolve) => reply.raw.on('close', resolve));
       clearInterval(heartbeat);

@@ -140,8 +140,9 @@ export class Images {
 
   private stream(image: string, onProgress?: (progress: PullProgress) => void): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      this.docker.pull(image, (error: Error | null, stream: NodeJS.ReadableStream) => {
+      this.docker.pull(image, {}, (error?: Error | null, stream?: NodeJS.ReadableStream) => {
         if (error) return reject(error);
+        if (!stream) return reject(new Error(`docker pull of ${image} answered with no stream`));
         const tracker = new PullTracker();
         this.docker.modem.followProgress(
           stream,

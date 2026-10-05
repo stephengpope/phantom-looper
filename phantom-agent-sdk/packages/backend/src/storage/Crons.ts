@@ -29,6 +29,7 @@ import { crons, type CronRow, type ProjectRow } from '../storage/schema.js';
 import type { Clock } from '../lib/clock.js';
 import { keyedProviders, REASONINGS } from '@phantom-agent-sdk/client';
 import type { Settings } from './Settings.js';
+import { textOf } from '../lib/text.js';
 
 export type { CronRow };
 
@@ -137,7 +138,7 @@ export class Crons {
           enabled: fields.enabled ?? true, created_at: now, updated_at: now })
         .returning();
       this.changed(project.id);
-      return row!;
+      return row;
     } catch (error) {
       if (Database.isUniqueViolation(error)) throw new CronError('duplicate_name', `a cron named "${name}" already exists — update it, or pick another name`);
       throw error;
@@ -164,7 +165,7 @@ export class Crons {
     try {
       const [row] = await this.database.update(crons).set({ ...set, updated_at: now }).where(eq(crons.id, prior.id)).returning();
       this.changed(project.id);
-      return row!;
+      return row;
     } catch (error) {
       if (Database.isUniqueViolation(error)) throw new CronError('duplicate_name', `a cron named "${set.name}" already exists`);
       throw error;
@@ -184,8 +185,8 @@ export class Crons {
    *  a provider with no model is nothing to run on, a model with no
    *  provider could be anyone's. */
   private async cleanModel(project: ProjectRow, rawProvider: unknown, rawModel: unknown): Promise<{ provider: string | null; model: string | null }> {
-    const provider = String(rawProvider ?? '').trim();
-    const model = String(rawModel ?? '').trim();
+    const provider = textOf(rawProvider).trim();
+    const model = textOf(rawModel).trim();
     if (!provider && !model) return { provider: null, model: null };
     if (!provider || !model) {
       throw new CronError('invalid_args', 'provider and model go together — give both to run this cron on another ' +
@@ -216,7 +217,7 @@ export class Crons {
 }
 
 function cleanName(value: unknown): string {
-  const name = String(value ?? '').trim();
+  const name = textOf(value).trim();
   if (!name) throw new CronError('invalid_args', 'a cron needs a name — it is how the cron is addressed');
   if (name.length > NAME_MAX) throw new CronError('invalid_args', `a cron name is at most ${NAME_MAX} characters`);
   return name;
@@ -224,8 +225,8 @@ function cleanName(value: unknown): string {
 /** The body: a prompt or a script, never both, never neither. Both columns
  *  come back so a write of one clears the other. */
 function cleanBody(rawPrompt: unknown, rawScript: unknown): { prompt: string | null; script: string | null } {
-  const prompt = String(rawPrompt ?? '').trim();
-  const script = String(rawScript ?? '').trim();
+  const prompt = textOf(rawPrompt).trim();
+  const script = textOf(rawScript).trim();
   if (prompt && script) throw new CronError('invalid_args', 'a cron runs a prompt OR a script — give one, not both');
   if (!prompt && !script) {
     throw new CronError('invalid_args', 'a cron needs a prompt or a script. A prompt is what an agent run is asked to do — ' +
@@ -235,7 +236,7 @@ function cleanBody(rawPrompt: unknown, rawScript: unknown): { prompt: string | n
   return { prompt: prompt || null, script: script || null };
 }
 function cleanReasoning(value: unknown): string | null {
-  const reasoning = String(value ?? '').trim();
+  const reasoning = textOf(value).trim();
   if (!reasoning) return null;
   if (!(REASONINGS as readonly string[]).includes(reasoning)) {
     throw new CronError('invalid_args', `"${reasoning}" is not a reasoning level — one of: ${REASONINGS.join(', ')}`);
@@ -243,7 +244,7 @@ function cleanReasoning(value: unknown): string | null {
   return reasoning;
 }
 function cleanSchedule(value: unknown): string {
-  const schedule = String(value ?? '').trim();
+  const schedule = textOf(value).trim();
   if (!schedule) {
     throw new CronError('invalid_args', 'a cron needs a schedule — a cron expression like "0 9 * * *", ' +
       'or an ISO datetime like "2026-03-14T18:50:00" for a one-time run');

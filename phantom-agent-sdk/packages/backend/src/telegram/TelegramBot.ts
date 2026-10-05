@@ -89,7 +89,8 @@ export interface ReplyBubble {
   appendPart(part: Record<string, unknown>): void;
   /** The reply is complete; answers what was said (in voice mode the text was withheld, so it comes back here to be spoken). */
   finish(finalText: string): Promise<string>;
-  discard(): void;
+  /** Tear the reply down after a turn that threw; resolves when the bubble is cleaned up. */
+  discard(): Promise<void>;
 }
 
 export class TelegramBot {

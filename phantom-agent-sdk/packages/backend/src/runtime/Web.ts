@@ -15,6 +15,7 @@ import path from 'node:path';
 import { sessionDir } from '../lib/paths.js';
 import type { Settings } from '../storage/Settings.js';
 import type { Paths } from '../lib/paths.js';
+import { textOf } from '../lib/text.js';
 
 /** What the web calls need of the backend: the Firecrawl key and where a fetched page lands. */
 export interface WebDeps { settings: Settings; paths: Paths }
@@ -122,10 +123,10 @@ export async function webSearch(ctx: WebDeps, b: SearchBody): Promise<Array<Reco
   // Snippets are usually ~150 chars but Firecrawl sometimes inlines a page
   // of markdown there — clipped, ten results stay a snippet list.
   return web.map((hit) => ({
-    title: String(hit.title ?? ''), url: String(hit.url ?? ''),
-    snippet: String(hit.description ?? '').slice(0, 300),
+    title: textOf(hit.title), url: textOf(hit.url),
+    snippet: textOf(hit.description).slice(0, 300),
     // Present when the search was category-filtered — which bucket this hit.
-    ...(hit.category !== undefined ? { category: String(hit.category) } : {}),
+    ...(hit.category !== undefined ? { category: textOf(hit.category) } : {}),
   }));
 }
 

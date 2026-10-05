@@ -43,7 +43,6 @@ import type { SystemPromptLayout, StoredSystemPrompt } from '@phantom-agent-sdk/
 import { SystemPrompt } from '../agents/SystemPrompt.js';
 import { repoDir, type Paths } from '../lib/paths.js';
 import type Docker from 'dockerode';
-import { GLOBAL, projectScope } from '../lib/scopes.js';
 import type { SessionEvents } from '../agents/SessionEvents.js';
 
 const log = logger('sessions');

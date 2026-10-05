@@ -480,7 +480,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         return reply.code(409).send(session.lockedBy ? lockedErr(session)
           : err('session_not_held', 'hold the session (POST /sessions/:id/turn-start) before publishing on it'));
       }
-      const feed = ctx.sessionEvents!;
+      const feed = ctx.sessionEvents;
       for (const event of req.body.events) {
         if (event.event === 'part') feed.publishPart(session.id, client, event.part);
         else feed.publish(session.id, client, event as SessionEvent);
