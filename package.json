@@ -19,7 +19,8 @@
     "sdk:lint": "npm run lint -w @phantom-agent-sdk/client",
     "backend-sdk:build": "npm run build -w @phantom-agent-sdk/backend",
     "backend-sdk:lint": "npm run lint -w @phantom-agent-sdk/backend",
-    "backend-sdk:test": "npm test -w @phantom-agent-sdk/backend"
+    "backend-sdk:test": "npm test -w @phantom-agent-sdk/backend",
+    "prepare": "npm run sdk:build && npm run backend-sdk:build"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.40",

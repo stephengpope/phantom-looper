@@ -48,15 +48,16 @@
     "mdast-util-from-markdown": "2.0.3",
     "undici": "8.10.0",
     "ai": "7.0.73",
-    "zod": "4.4.3"
+    "zod": "4.4.3",
+    "@fastify/http-proxy": "11.6.1",
+    "@types/pg": "8.23.1",
+    "@types/dockerode": "4.0.1"
   },
   "devDependencies": {
     "@types/node": "22.20.1",
     "eslint": "10.11.0",
     "typescript": "5.9.3",
     "typescript-eslint": "8.70.1",
-    "@types/pg": "8.23.1",
-    "@types/dockerode": "4.0.1",
     "@types/tar-stream": "2.2.3",
     "tsx": "4.23.12"
   }
