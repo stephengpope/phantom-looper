@@ -5,7 +5,7 @@ export * from './members.js';
 export type { SettingDefinition, AgentTypeDefinition, ToolDefinition, ToolRunContext, ToolGroup, ToolGrant, RouteRegistrar, CardFieldsExtension } from './doors.js';
 
 // storage
-export { SDK_MIGRATIONS, type Drizzle, type Transaction, type MigrationSet } from './storage/Database.js';
+export { SDK_MIGRATIONS, ORGANIZATION_SETTING, USER_SETTING, type Drizzle, type Transaction, type MigrationSet } from './storage/Database.js';
 export * as schema from './storage/schema.js';
 export { SettingsWriteError, type SettingScope, type SettingSource, type SettingLayers, type SettingEntry, type SettingMeta, type SecretMeta } from './storage/Settings.js';
 export { sdkSettings, agentTypeSettings } from './storage/sdkSettings.js';
