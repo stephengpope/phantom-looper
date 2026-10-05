@@ -82,20 +82,41 @@ create trigger cards_revision
 alter table phantom_looper.workspaces add column next_card_number int not null default 1;
 
 -- The move. Every workspace's private schema, if it exists: copy cards and
--- revisions in (explicit columns — a schema at an older version fails loudly
+-- revisions in (explicit columns — a schema of an unknown shape fails loudly
 -- here and the whole migration rolls back rather than dropping data), seed
 -- the number counter from its sequence, drop the schema.
 do $$
 declare
   w record;
   s record;
+  v int;
 begin
   for w in select id, schema_name from phantom_looper.workspaces loop
     if not exists (select 1 from pg_namespace where nspname = w.schema_name) then
       continue;
     end if;
-    if coalesce((select version from phantom_looper.workspace_schema_state where workspace_id = w.id), 0) <> 5 then
-      raise exception 'workspace % schema % is not at version 5 — cannot move its cards', w.id, w.schema_name;
+    -- The per-schema migrations ran from code that is gone (workspaceSchema.ts),
+    -- so an install upgrading from before version 5 arrives here behind. Its
+    -- missing steps are replayed, verbatim, before the copy. A schema outside
+    -- 1..5 is one this file knows nothing about and still fails loudly.
+    v := coalesce((select version from phantom_looper.workspace_schema_state where workspace_id = w.id), 0);
+    if v < 1 or v > 5 then
+      raise exception 'workspace % schema % is at version %, not 1..5 — cannot move its cards', w.id, w.schema_name, v;
+    end if;
+    if v < 2 then
+      execute format('alter table %I.cards add column if not exists resolution text', w.schema_name);
+    end if;
+    if v < 3 then
+      execute format('alter table %I.cards add column if not exists auto_plan boolean', w.schema_name);
+      execute format('alter table %I.cards add column if not exists auto_build boolean', w.schema_name);
+      execute format('update %I.cards set auto_plan = supervised, auto_build = supervised where supervised is not null', w.schema_name);
+      execute format('alter table %I.cards drop column if exists supervised', w.schema_name);
+    end if;
+    if v < 4 then
+      execute format('alter table %I.cards add column if not exists pinned boolean not null default false', w.schema_name);
+    end if;
+    if v < 5 then
+      execute format('alter table %I.cards drop column if exists user_story', w.schema_name);
     end if;
 
     execute format($q$
