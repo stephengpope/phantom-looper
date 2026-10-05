@@ -1,4 +1,4 @@
-# Multi-user: database roles, mail, sign-in
+# Multi-user: database roles, mail, sign-in — and what is left
 
 Designed and built 2026-10-05 (three commits: roles, mail, sign-in — each
 proven on the live compose stack). All of it is the SDK's; an app turns
@@ -206,14 +206,231 @@ Exported: `Mailer`, `MailerError`, `Identity`,
   answers the operator, the bootstrap route answers `disabled`, `/app`
   answers the key.
 
+## Part 2 — what a Supabase-shaped SDK still lacks
+
+Planned 2026-10-05 after part 1 shipped. Five steps, in the order they
+unblock each other; each its own commits, proven on the live stack. The
+rules of `docs/v1-plan.md` stand.
+
+### 3. Settings per organization and per user
+
+**What.** The chain `global → organization → user → project`. A shared
+provider key lives at the organization; a member's own at their user row;
+the project's fact wins last. Today's chain is `global → project`,
+hardcoded in six places of `storage/Settings.ts` (`scopesFor`,
+`rawLayers`, `computeLayers`, `layersOf`, `writeAtScope`, the two
+credential readers).
+
+**Trace.** A session in project P of organization O: `AgentConfig.resolve`
+→ `settings.credential('anthropic_api_key', scope)` → `scopesFor(scope)`
+→ `[global, organization:O, user:U?, project:P]` → the most specific row
+wins. Every read site passes `{ projectId: project.id }` with the project
+row in hand (27 sites) or a scope handed down from one (AgentConfig,
+SystemPrompt, oneShot); none has the organization. So the scope carries
+it: `scopeOf(project)` — one helper beside `SettingScope` — gives
+`{ projectId, organizationId }` from the row's new column (step 4 adds
+it; this step adds the column first, with no owner yet). `userId` is
+never the SDK's to fill: the looper, cron, Telegram and the `/api` routes
+run as the operator; user space passes `{ userId }` in its own calls.
+
+**Changes.**
+
+- `lib/scopes.ts`: `organizationScope(id)`, `userScope(id)`.
+- `SettingScope { projectId?, organizationId?, userId? }`;
+  `SettingSource` and `SettingLayers` gain `organization` and `user`;
+  `scopeOf(project: ProjectRow)`.
+- `SettingDefinition.overridableAt?: ('organization' | 'user' | 'project')[]`
+  replaces `projectOverridable` (37 declarations: the SDK's, the app's,
+  every agent type's ten; `projectOnly` stays). The rule applied to the
+  SDK's own: whatever a project may override, an organization and a user
+  may too — a bigger project; operator-only settings (console, telegram,
+  smtp, limits, upgrade) stay global.
+- `Settings.writeAtScope(layer, scopeName, patch)`: `layer` is the chain's
+  word; `not_overridable` says which layer refused. The provider-first
+  rule applies at every layer below global.
+- `GET /settings?organization=&user=&project=` answers the layers
+  `organization` and `user` beside `global` and `project`; `PATCH` and
+  `DELETE` take the same query. `?organization=` names a row in
+  `identity.organization`, `?user=` in `identity.user` — 404 otherwise,
+  the same rule as `?project=`. The cli reads `global`/`project` and
+  nothing changes on its screens.
+- Secrets (`listSecrets`, `readSecret`, the `/secrets` routes'
+  `scopes.chain`): the same chain.
+- A deleted organization or user takes its layer with it:
+  `organizationHooks.afterDeleteOrganization` and
+  `databaseHooks.user.delete.after` → `settings.deleteScope`.
+
+**Proof.** The key set at `?organization=O` resolves in O's project and not
+in a project with no organization; `?user=U` + `{ userId: U }` wins over
+O's; the project's own wins over both; `not_overridable` names the layer;
+the cli's settings screen is unchanged; deleting O deletes its rows.
+
+### 4. Ownership in the SDK's data
+
+**What.** `projects.organization_id` (nullable → the operator's, which is
+every project today; FK to `identity.organization`, `on delete set null`
+— a deleted organization's projects become the operator's, never
+vanish). `unique nulls not distinct (organization_id, owner, name)`
+replaces `unique (owner, name)`: two organizations may register one repo.
+
+**Trace.** User space's `/app` route: `caller = identity.require(req,
+{ users: true })` → `projects.list(caller)` / `projects.get(id, caller)`
+→ `visibleTo(caller)`: the operator matches every row; a user matches
+`organization_id = caller.organization.id`. Everything under a project —
+workspaces, sessions, cards, crons, the play-space database, secrets,
+project settings — is reached through a `ProjectRow` (Cards, Crons,
+Sessions.create, the tools' `ToolCtx.project`) or a `projectId` taken
+from one, so a project the guard refused takes all of it with it: one
+check, inherited. `projects.create({ …, organizationId })` from user
+space; the SDK's `POST /api/projects` (operator) writes null.
+`Sessions.list({ project })` is already per project. The SDK's own `/api`
+routes stay operator-only and unfiltered — the operator sees everything.
+
+**Changes.** Migration 056 (the column, the FK, the constraint);
+`ProjectRow.organizationId`; `Projects.list(caller?)`, `get(id, caller?)`,
+`create(row & { organizationId? })`; `Caller` accepted by the two.
+`scopeOf(project)` (step 3) now carries the organization.
+
+**Proof.** User A's project is 404 to user B through an `/app` route and
+listed to the operator; a tool in A's session cannot name B's project;
+the same repo registered by both organizations; deleting A's organization
+leaves the project, owner null.
+
+### 5. Row-level security
+
+**What.** The same fence enforced by Postgres, for the day SQL on the SDK's
+tables is handed to something that is not the backend's own code: an
+agent's tool, a user-space route that lets a user query. Without a
+consumer it is dead code, so this step ships the consumer with it:
+`backend.database.queryAs(caller, sql, options)`.
+
+**Trace.** A fifth role, `authenticated`: login, no ownership, `select /
+insert / update / delete` on the SDK's and the app's tables through
+policies only (`ensureRoles` creates it; default privileges from
+`migrator` grant it the same row access as `backend`). `queryAs` opens one
+connection as it, `begin; select set_config('phantom.organization_id', $1,
+true); set_config('phantom.user_id', $2, true)`, runs the caller's
+statements with the runner `AgentDatabases.query` already has (lifted
+into `storage/sqlRunner.ts`, used by both), commits. Policies (migration
+057), one per table, keyed on the organization:
+
+| Table | Policy |
+|---|---|
+| `projects` | `organization_id = current_setting('phantom.organization_id')` |
+| `workspaces`, `cards`, `card_revisions`, `crons`, `sessions` | its project is visible (a `security definer` helper `phantom_agent_sdk.visible_project(id)` so the chain is one indexed lookup, not a nested policy) |
+| `identity.organization`, `identity.member` | the caller's own |
+| `identity.user` | self |
+| `settings`, `presets`, `log_tokens`, `background_tasks`, `telegram_*`, `identity.session / account / verification / apikey / invitation` | no policy = no rows: credentials and tokens never cross |
+
+The app's tables: the app's migrations write their policies (migrator
+owns them); the SDK documents the setting names.
+
+**Changes.** `ensureRoles` (+1 role); `Database.queryAs`;
+`storage/sqlRunner.ts`; migration 057; no route — user space exposes it
+how it wants (a tool it registers, an `/app` route).
+
+**Proof.** As organization A, `select * from phantom_agent_sdk.projects`
+returns A's rows only, `update … where id = <B's>` touches 0 rows,
+`select * from phantom_agent_sdk.settings` returns nothing, `create
+table` is refused; as the operator (`backend` role) everything is as
+before.
+
+### 6. Password and OAuth sign-in
+
+**What.** Beside magic links: email + password, and GitHub / Google.
+Invite-only stays: nothing creates a user but the operator and an
+invitation.
+
+**Trace.** `identity.signIn: { password?: true; github?: { clientId,
+clientSecret }; google?: { clientId, clientSecret } }`. Better Auth:
+`emailAndPassword: { enabled, disableSignUp: true, requireEmailVerification:
+true, sendResetPassword }`, `emailVerification: { sendVerificationEmail }`,
+`socialProviders: { github: { …, disableSignUp: true } }`. An invited user
+has no password: "set a password" IS the reset flow (`POST
+/api/auth/request-password-reset` → mail → `/reset-password`). A social
+sign-in links to the existing user by verified email (Better Auth's
+`account` row); a stranger's GitHub login is refused. Secrets at
+construction, from the app's config — not the settings table: Better
+Auth takes them when built, and a setting read at boot is a restart to
+change anyway. The client SDK (step 8) carries the three.
+
+**Changes.** `IdentityOptions.signIn`; four `Mailer` sends (step 7's door
+names them); `account` rows start being written.
+
+**Proof.** The operator creates a user; they request a reset (mail), set a
+password, sign in with it, `me` answers; a stranger's `sign-up/email` is
+refused; a GitHub login for an invited email links and signs in (a test
+OAuth app); one for a stranger is refused; unverified + password → refused
+until the verification link is clicked.
+
+### 7. Mail wording is user space's
+
+**What.** The SDK sends four mails (sign-in link, invitation, password
+reset, verification) with plain default wording. The app supplies its own
+through one door; the SDK never knows the app's pages or voice.
+
+```ts
+identity: {
+  mail?: {
+    magicLink?:     (data: { email: string; url: string }) => Mail;
+    invitation?:    (data: { email: string; organization: OrganizationRow; inviter: UserRow; role: string; invitationId: string; url?: string }) => Mail;
+    passwordReset?: (data: { user: UserRow; url: string }) => Mail;
+    verification?:  (data: { user: UserRow; url: string }) => Mail;
+  };
+}
+```
+
+`invitationUrl` folds into `invitation` (the app builds the link in its
+own template). Absent, the SDK's default text; `Mail` is `Mailer.send`'s
+shape, so a template is a pure function the app can test alone.
+
+**Proof.** phantom-looper supplies one template; the mail carries it; the
+other three are the defaults.
+
+### 8. Client SDK
+
+**What.** An app on `@phantom-agent-sdk/client` signs in, reads who it is,
+manages organizations and keys without hand-rolling calls. Better Auth
+ships its client (`better-auth/client`, `createAuthClient` with
+`magicLinkClient`, `organizationClient`, `adminClient`,
+`apiKeyClient`): typed, every route, maintained with the server. The
+wrapper is thin — the client SDK's `BackendClient` holds the credential
+and the origin; Better Auth's client rides it.
+
+```ts
+const backend = new BackendClient({ url, credential: { operatorKey } | { sessionToken } | { apiKey } });
+backend.identity.me()                               // GET /api/identity/me → Caller
+backend.identity.auth                               // Better Auth's client: signIn.magicLink, magicLink.verify, signOut,
+                                                    //   organization.*, apiKey.*, admin.*, signIn.email, signIn.social
+backend.identity.verify(token)                      // the link's token → session token, stored on this client
+```
+
+`apiKey` on `BackendClient` becomes `credential`: three kinds, one header
+each (`Authorization: Bearer` for the operator's key and a session token,
+`x-api-key` for a Better Auth key). Paths under `/app/` go to the origin
+(already); `/api/auth/*` is the Better Auth client's own base.
+
+**Proof.** A script on the client SDK: `verify(link)` → `me()` → a user;
+`auth.organization.create` → `me()` names it; `auth.apiKey.create` → a
+second `BackendClient` on it → `me()`; the cli still connects with the
+operator's key.
+
+### Order and size
+
+3 → 4 → 5 → 6 → 7 → 8. 4 needs 3's column and scope; 5 needs 4's
+ownership to key on; 6 and 7 are independent of 3–5 but 7 names 6's two
+mails; 8 last, over everything. Sizes: 3 is the big one (a core object
+and 37 declarations); 4 small; 5 medium (roles, runner lift, policies, a
+proof per table); 6 small-medium (Better Auth options, two flows); 7
+small; 8 small-medium (the credential shape touches every BackendClient
+construction: cli, looper, Telegram).
+
 ## Not in this plan
 
-- Media (database-backed files): its own plan, after this.
-- The SDK's own routes fenced per user or organization; per-organization
-  settings: user space's rules today; an SDK addition if an app needs
-  them in the SDK.
-- Row-level security: the addition the day an agent gets SQL on the SDK's
-  tables.
-- Password, OAuth, 2FA: Better Auth plugins, added when asked.
-- The invitation and sign-in mails' wording as the app's own (a door for
-  the app's templates).
+- Media (database-backed files): its own plan, after part 2.
+- The SDK's own `/api` routes filtered per organization: they are the
+  operator's; user space's `/app` routes are where a user's view is built
+  (step 4's guard).
+- 2FA, passkeys: Better Auth plugins, added when asked.
+- Per-project membership inside an organization; sharing a session with a
+  teammate: additions to step 4's guard, not changes to it.
