@@ -16,9 +16,13 @@ export interface AgentEvents {
   'user-message': { texts: string[] };
   'tool-error': { name: string; error: unknown };
   'turn-end': TurnResult;
-  /** Someone else added to the transcript since this agent last looked; it
-   *  was read again before the turn ran. `messages` is the conversation now. */
-  'reloaded': { messages: readonly ModelMessage[] };
+  /** Someone else added to the conversation since this agent last looked
+   *  (another client's turn, the server's queued user messages); it was
+   *  read again before the turn ran. `messages` is the conversation now;
+   *  `from` → `now` the record stamps before and after; `added` the
+   *  messages gained, in order, when the gain is plain appends — a host
+   *  whose screen matched `from` draws just those; null = redraw whole. */
+  'reloaded': { messages: readonly ModelMessage[]; from: string | null; now: string | null; added: readonly ModelMessage[] | null };
 }
 
 type Listener<T> = (payload: T) => void;

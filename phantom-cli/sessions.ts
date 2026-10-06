@@ -86,7 +86,8 @@ export interface LoadedSession {
    *  launcher's meters, the cache %): the record's usage lines, as the agent
    *  sums them — refreshed on every step. */
   usage: TokenTotals;
-  /** The caption under the spinner while the model is being retried. */
+  /** What the working line says in place of the phase: a retry in progress,
+   *  a stop on its way. Null = the phase (thinking, writing, the tool). */
   caption: string | null;
   /** The words a send is carrying until turn-start lands — put back in the
    *  box if the session turns out to be held elsewhere. */
@@ -106,6 +107,8 @@ export interface LoadedSession {
   /** The unsent text in the prompt when the user switched away from this
    *  session. Restored into the input box when returning. */
   draft: string;
+  /** Parts buffered for the next paint, painted now. */
+  flushParts: () => void;
   /** Stop listening to the agent — on close. */
   unwire: () => void;
 }
@@ -193,7 +196,7 @@ export class SessionStore {
       usage: { ...fresh.agent.session.usage }, caption: null, sending: null,
       unseen: false, ask: null, lastMessageAt: fresh.agent.session.messages.length ? Date.now() : 0, addedAt: ++this.seq,
       workState: null, draft: fresh.draft ?? '',
-      unwire: () => undefined,
+      flushParts: () => undefined, unwire: () => undefined,
     };
     entry.unwire = this.wire(entry);
     this.entries.push(entry);
@@ -214,13 +217,14 @@ export class SessionStore {
       if (buf.length) { const b = buf; buf = []; this.fold(entry, b); }
     };
     const offs = [
-      a.on('turn-start', ({ texts, model }) => {
+      a.on('turn-start', ({ model }) => {
+        // The words were drawn when enter landed (say); only the clocks and
+        // the model line are the turn-start's.
         entry.sending = null;
         entry.startedAt = Date.now();
         entry.tokens = NO_TOKENS;
         entry.caption = null;
         entry.lastMessageAt = Date.now();
-        this.userParts(entry, texts);
         const line: ModelLine = { provider: model.provider, model: model.model, reasoning: model.reasoning ?? '' };
         if (line.provider !== entry.summary.provider || line.model !== entry.summary.model) {
           entry.summary = line;
@@ -232,24 +236,41 @@ export class SessionStore {
         // A failure is reported ONCE, through onError below; the stream's
         // own error part would be the same words twice.
         if (part.type === 'error') return;
+        // A part arriving is the model answering: a retry caption is over.
+        entry.caption = null;
         buf.push(part as StreamPart);
         const isDelta = part.type === 'text-delta' || part.type === 'reasoning-delta' || part.type === 'tool-input-delta';
         if (isDelta) { if (!timer) timer = setTimeout(flush, FLUSH_MS); }
         else flush();
       }),
-      a.on('user-message', ({ texts }) => { flush(); this.userParts(entry, texts); this.notify(); }),
-      a.on('step', ({ usage }) => { entry.usage = { ...usage }; }),
-      a.on('reloaded', ({ messages }) => {
-        // Another writer moved the record; the agent re-read it. The pane
-        // shows the conversation as it stands now.
+      a.on('user-message', ({ texts }) => { flush(); entry.caption = null; this.userParts(entry, texts); this.notify(); }),
+      // Every step lands lines on the record: the totals and the stamp move
+      // with it, so the screen is known to match what the server holds.
+      a.on('step', ({ usage }) => { entry.usage = { ...usage }; entry.syncStamp = a.session.transcriptUpdatedAt; }),
+      a.on('reloaded', ({ messages, from, now, added }) => {
+        // The conversation gained messages this window had not drawn (the
+        // server's queued user messages — a dropped file, a detached command
+        // — or another writer's turn). A screen that already shows `now`
+        // (the feed's record-landed repainted it) needs nothing; one that
+        // matched `from` gains just the new messages; anything else is
+        // redrawn whole.
         flush();
+        if (entry.syncStamp === now) return;
+        if (added && entry.syncStamp === from) {
+          entry.done = [...entry.done, ...messagesToParts([...added])];
+          entry.syncStamp = now;
+          this.notify();
+          return;
+        }
+        entry.syncStamp = now;
         this.repaint(entry, messages);
       }),
-      a.on('turn-end', () => {
-        flush();
-        this.turnSettled(entry);
-      }),
+      // The turn's last parts. Settling waits for the agent to let go (say's
+      // promise): turn-end fires while the agent still holds the turn, and a
+      // screen settled here would show the residue under a spinner.
+      a.on('turn-end', () => flush()),
     ];
+    entry.flushParts = flush;
     return () => { flush(); for (const off of offs) off(); };
   }
 
@@ -262,21 +283,21 @@ export class SessionStore {
         if (!entry) return;
         if (err.code === 'session_locked') {
           // Refused before anything ran: the session goes idle again, the
-          // words go back into the box, and the note says why.
+          // words go back into the box, and the note says why. No residue:
+          // turnOpen goes down here, so the settle behind say's promise
+          // draws nothing and only repaints.
           const text = entry.sending;
           entry.sending = null;
           entry.turnOpen = false;
           entry.startedAt = 0;
           this.note(id, 'not sent — session in use elsewhere');
           if (text) this.onRefused?.(id, text);
-          setTimeout(() => this.notify(), 0);   // the agent lets go a tick after it told us
           return;
         }
         entry.turn = [...entry.turn, { kind: 'error', id: nextId('err'), message: err.message }];
         if (entry.id === this.activeId) this.notify();
-        // A turn that failed sends no turn-end: settle it once the agent has
-        // let go (it tells us before its own promise settles).
-        setTimeout(() => { if (entry.turnOpen && !entry.agent.busy) this.turnSettled(entry); }, 0);
+        // A turn that failed sends no turn-end; it settles when the agent
+        // lets go, behind say's promise, like every other ending.
       },
       onNotice: (notice) => {
         const entry = this.get(id);
@@ -292,25 +313,33 @@ export class SessionStore {
     for (const text of texts) if (text.trim()) entry.done = [...entry.done, { kind: 'user', id: nextId('user'), text }];
   }
 
-  /** The turn is over, however it ended: the live tail closes, the elapsed
-   *  total stays as a line, the totals take the record's sums. */
+  /** The agent let go of the turn (say's promise settled — answered, failed
+   *  or interrupted): `busy` is false NOW, so this is the one repaint that
+   *  takes the spinner down and frees the prompt. A turn that ran draws its
+   *  residue too: the live tail closes, the elapsed total stays as a line,
+   *  the totals and the stamp take the record's. */
   private turnSettled(entry: LoadedSession): void {
-    if (!entry.turnOpen) return;
+    const ran = entry.turnOpen;
     entry.turnOpen = false;
-    const rest = finalize(entry.turn);
-    entry.turn = [];
-    if (entry.startedAt) {
-      const endedAt = Date.now();
-      rest.push({ kind: 'worked', id: nextId('worked'), ms: endedAt - entry.startedAt, at: endedAt });
-    }
-    entry.done = [...entry.done, ...rest];
-    entry.live = [];
     entry.caption = null;
     entry.sending = null;
-    entry.usage = { ...entry.agent.session.usage };
-    // An error counts as something to come back to, same as an answer.
-    if (entry.id !== this.activeId) entry.unseen = true;
+    if (ran) {
+      entry.flushParts();
+      const rest = finalize(entry.turn);
+      entry.turn = [];
+      if (entry.startedAt) {
+        const endedAt = Date.now();
+        rest.push({ kind: 'worked', id: nextId('worked'), ms: endedAt - entry.startedAt, at: endedAt });
+      }
+      entry.done = [...entry.done, ...rest];
+      entry.live = [];
+      entry.usage = { ...entry.agent.session.usage };
+      entry.syncStamp = entry.agent.session.transcriptUpdatedAt;
+      // An error counts as something to come back to, same as an answer.
+      if (entry.id !== this.activeId) entry.unseen = true;
+    }
     this.notify();
+    if (!ran) return;
     try { this.onTurnEnd?.(entry); }
     catch (err) { this.note(entry.id, `after the turn: ${(err as Error).message}`); }
   }
@@ -484,23 +513,40 @@ export class SessionStore {
   }
 
   /** Stop the running turn. What was typed meanwhile goes on with the same
-   *  turn (the agent's rule); with nothing queued, esc just stops. */
-  abortTurn(id: string): void { this.get(id)?.agent.interrupt(); }
+   *  turn (the agent's rule); with nothing queued, esc just stops. The stop
+   *  takes a few round trips to land (the cut step is recorded, the feed
+   *  closed, the hold released), so the line says so at once. */
+  abortTurn(id: string): void {
+    const entry = this.get(id);
+    if (!entry?.agent.busy) return;
+    entry.agent.interrupt();
+    entry.caption = entry.agent.userMessages.length ? 'sending what is queued' : 'stopping';
+    if (entry.id === this.activeId) this.notify();
+  }
 
   /** Say it: a turn starts if the session is free, otherwise it is queued
    *  behind the running turn and rides its next model call. The spinner
-   *  starts the moment enter lands. */
+   *  starts the moment enter lands and stops when the agent lets go — the
+   *  promise is the one signal for that: `busy` flips without an event, and
+   *  turn-end fires before it flips. */
   say(id: string, text: string): void {
     const entry = this.get(id);
     if (!entry || !text.trim()) return;
-    if (!entry.agent.busy) {
+    const starts = !entry.agent.busy;
+    if (starts) {
+      // Drawn NOW, as said — not when turn-start lands a round trip later.
+      // What was queued goes with it (the agent drains the queue into the
+      // turn it opens), so it leaves the queued list for the conversation.
+      this.userParts(entry, [...entry.agent.userMessages.pending().map((queued) => queued.text), text]);
       entry.sending = text;
       entry.turnOpen = true;
       entry.startedAt = Date.now();
       entry.tokens = NO_TOKENS;
     }
-    // Never awaited: every failure reaches the pane through onError, once.
-    void entry.agent.sendMessage(text).catch(() => undefined);
+    // Every failure reaches the pane through onError, once; the promise is
+    // only awaited for its end.
+    const sent = entry.agent.sendMessage(text).catch(() => undefined);
+    if (starts) void sent.then(() => this.turnSettled(entry));
     this.notify();
   }
 
@@ -522,8 +568,9 @@ export class SessionStore {
     return taken?.text;
   }
 
-  /** Every turn, everywhere — what quitting does first. */
-  abortAll(): void { for (const entry of this.entries) entry.agent.interrupt(); }
+  /** Every turn, everywhere — what quitting does first. The queue stays:
+   *  nothing queued may start another model loop on the way out. */
+  abortAll(): void { for (const entry of this.entries) entry.agent.interrupt({ keepQueue: true }); }
 
   /** Every agent closed: each turn interrupted and waited out, so every
    *  turn-ended reaches the server before the process goes. */

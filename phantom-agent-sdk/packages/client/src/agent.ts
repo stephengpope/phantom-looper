@@ -270,7 +270,8 @@ export abstract class Agent {
    *  untouched. */
   async #prepare(start: TurnStart & { recordMoved: boolean }, signal: AbortSignal): Promise<{ model: ResolvedModel; system: SystemModelMessage[]; tools: Record<string, Tool>; terminal: string[] } | null> {
     try {
-      if (await this.#session.makeCurrent(start.recordMoved, signal)) this.#emit('reloaded', { messages: this.session.messages });
+      const gained = await this.#session.makeCurrent(start.recordMoved, signal);
+      if (gained) this.#emit('reloaded', { messages: this.session.messages, from: gained.from, added: gained.added, now: this.session.transcriptUpdatedAt });
       await this.#flushPartials();
       this.#session.setPlanMode(start.planMode);
       const model = this.#modelResolver.resolve(start.config);

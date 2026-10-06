@@ -777,7 +777,7 @@ export function App({
             remote `bash` looks like a frozen screen. Watching it carries no
             esc hint: esc cannot stop someone else's turn, and offering it
             would be a lie. */}
-        {(session?.busy || session?.remoteBusy) && <StatusLine phase={phaseLabel(session.live)}
+        {(session?.busy || session?.remoteBusy) && <StatusLine phase={(session.busy && session.caption) || phaseLabel(session.live)}
           startedAt={session.startedAt} tokens={tokenCount(session.tokens)}
           escHint={session.busy
             ? (session.agent.userMessages.length ? '[esc] to send queued now' : '[esc] to interrupt')

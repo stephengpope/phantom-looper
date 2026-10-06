@@ -836,7 +836,7 @@ export class WindowStore {
       agent.addToolKit(this.cliToolKit(agent.session.id, agent.session.projectId));
       const row = await this.api('GET', `/sessions/${agent.session.id}`) as { id: string; branch: string; projectId: string;
         name?: string | null; agent?: string | null; card?: number | null; planMode?: boolean; pinned?: boolean;
-        provider?: string | null; model?: string | null; transcript_updated_at?: string | null };
+        provider?: string | null; model?: string | null };
       const summary = await this.modelLineFor(row, row.projectId);
       const planMode = row.planMode === true;
       // The card this session builds, named the way the board names it
@@ -857,7 +857,10 @@ export class WindowStore {
         id: row.id, branch: row.branch, projectId: row.projectId,
         name: row.name ?? null,
         agent, summary,
-        syncStamp: row.transcript_updated_at ?? null,
+        // The record the screen was drawn from is the agent's copy: its stamp
+        // is the one the screen matches, not the row's (a write could land
+        // between the agent's read and the row GET above).
+        syncStamp: agent.session.transcriptUpdatedAt,
         planMode,
         pinned: row.pinned === true,
         ...(card ? { card } : {}),

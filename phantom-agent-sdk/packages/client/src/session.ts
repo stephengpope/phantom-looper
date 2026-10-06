@@ -44,6 +44,10 @@ export interface SessionInfo {
   readonly messages: readonly ModelMessage[];
   /** The tokens the record accounts for, whoever wrote them. */
   readonly usage: Readonly<TokenTotals>;
+  /** The server's last-changed mark for the record copy held here — what
+   *  `GET /sessions/:id` answers as transcript_updated_at when the copy is
+   *  current. Moves with every line this agent writes and every catch-up. */
+  readonly transcriptUpdatedAt: string | null;
 }
 
 /** What starting a turn answers: the hold, the record's last-changed mark
@@ -83,6 +87,7 @@ export class Session implements SessionInfo {
   get row(): Readonly<SessionRow> { return this.#row; }
   get messages(): readonly ModelMessage[] { return this.#messages; }
   get usage(): Readonly<TokenTotals> { return this.record.usage; }
+  get transcriptUpdatedAt(): string | null { return this.record.stamp; }
 
   /** Plan mode as the server says it: turn-start's answer, or the session
    *  feed mid-turn. */
@@ -110,15 +115,28 @@ export class Session implements SessionInfo {
   }
 
   /** Under the lock: make this copy the server's — read what others added,
-   *  answer a step a crash left cut. Resolves true when the copy changed. */
-  async makeCurrent(recordMoved: boolean, signal: AbortSignal): Promise<boolean> {
+   *  answer a step a crash left cut. Answers what the CONVERSATION gained,
+   *  or null when it gained nothing — a record that moved by bookkeeping
+   *  alone (the server's system_prompt_rebuilt mark, a usage line) is not a
+   *  conversation that moved forward elsewhere, and a host must not repaint
+   *  over it. `from` is the stamp this copy stood at before; `added` the
+   *  messages appended since, or null when the gain is not plain appends
+   *  (a partial_message cut the tail) and the host must redraw whole. */
+  async makeCurrent(recordMoved: boolean, signal: AbortSignal): Promise<{ from: string | null; added: ModelMessage[] | null } | null> {
+    let gained: { from: string | null; added: ModelMessage[] | null } | null = null;
     if (recordMoved) {
-      await this.record.catchUp(signal);
+      const from = this.record.stamp;
+      const more = await this.record.catchUp(signal);
       this.#messages = conversationFrom(this.record.lines);
+      if (more.some((line) => line.type === 'partial_message')) gained = { from, added: null };
+      else {
+        const added = more.flatMap((line) => (line.type === 'message' ? [line.message] : []));
+        if (added.length) gained = { from, added };
+      }
     }
     const cut = danglingCalls(this.#messages);
     if (cut.length) await this.append(cut.map((call) => messageLine(interruptedResultMessage(call))));
-    return recordMoved;
+    return gained;
   }
 
   /** Append to the record; the conversation grows with it. Answers the
