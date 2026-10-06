@@ -1,5 +1,5 @@
 // Auto-push's wiring — fills ./autoPush.ts (the document).
-import { fill } from '@phantom-agent-sdk/backend';
+import { fill } from '@phantom-agent-sdk/client';
 import { RESOLVE_CONFLICT, COMMIT_MESSAGE } from './autoPush.js';
 
 /** A bullet, not an indent: fill trims a value's edges once, so leading spaces

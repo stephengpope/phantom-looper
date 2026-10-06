@@ -15,7 +15,7 @@ import path from 'node:path';
 import type Docker from 'dockerode';
 import type { SystemPromptLayout, SystemPromptEntry, StoredSystemPrompt } from '@phantom-agent-sdk/client/systemPrompt';
 import { SYSTEM_PROMPT_SECTIONS } from '@phantom-agent-sdk/client/systemPrompt';
-import { fill } from '../prompt/template.js';
+import { fill } from '@phantom-agent-sdk/client';
 import { SKILLS_LIST, SECRETS_LIST, GITHUB_TOKEN, AGENT_DATABASE, AGENT_DATABASE_SHARED, TIME_DATE } from '../prompt/serverBlocks.js';
 import { scanSkills, mergeSkills, type SkillMeta } from '../skills/skills.js';
 import { Clock } from '../lib/clock.js';

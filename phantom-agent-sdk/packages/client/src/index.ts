@@ -35,4 +35,5 @@ export { pullLine, type PullProgress, type UpdateEvent } from './update.js';
 export { secretName, SECRET_NAME_RULE } from './secretName.js';
 export { REPO, parseVersion, isBehind, bare, checkLatest } from './version.js';
 export { ndjson } from './ndjson.js';
+export { fill, firstLineOf } from './template.js';
 export { SDK_VERSION } from './sdkVersion.js';

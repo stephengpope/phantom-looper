@@ -1,6 +1,6 @@
 // The session title's wiring — fills ./sessionTitle.ts (the document). No
 // prompt text lives here.
-import { fill } from '@phantom-agent-sdk/backend';
+import { fill } from '@phantom-agent-sdk/client';
 import { SYSTEM, NAME_THE_SESSION } from './sessionTitle.js';
 
 /** The user-message selection the titler names. */

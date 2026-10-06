@@ -1,54 +1,7 @@
-// How every prompt is built: a prompt file is TEMPLATES — flat text with
-// blanks written as {{name}} right where they land — plus a few wiring lines
-// that fill them. fill() is the whole mechanism.
-//
-// A prompt is assembled ONCE, when its agent's chat begins, and the result is
-// frozen with that chat (a coding session stores it on its row; a voice run
-// keeps it for the sidecar's life; a Git Fixer run is one conversation).
-// Editing a prompt file changes NEW chats only — that is the point, not a
-// limitation. Anything a model must always see current belongs in a tool's
-// description, which reaches every chat, never in here.
+// The server's half of prompt building. fill() and firstLineOf() live in the
+// client SDK (pure text, bundled by agents and the cli alike); this is the
+// one piece that needs the server's clock.
 import type { Clock } from '../lib/clock.js';
-
-const token = () => /\{\{([a-zA-Z]\w*)\}\}/g;
-
-/** Substitute every {{name}} in the template with its value. A blank with no
- *  value throws (loud — a template and its wiring must agree). A line whose
- *  blanks all resolve EMPTY vanishes whole — an optional line is written in
- *  the template where it appears, label and all, and simply isn't there when
- *  its value is. Values are inserted verbatim, never re-scanned — braces
- *  inside a value (JSON, diffs) are safe.
- *
- *  WHITESPACE AT THE EDGES NEVER MATTERS — of the template or of any value.
- *  Blank lines around a document's text, a shared block, a card's JSON, are
- *  stripped here, once, so no prompt file has to be written carefully and no
- *  emitted prompt carries a run of blank lines. Spacing INSIDE a value is
- *  the author's and stays verbatim. */
-export function fill(template: string, vars: Record<string, string | number>): string {
-  const val = (name: string): string => {
-    const value = vars[name];
-    if (value === undefined) throw new Error(`template blank {${name}} has no value`);
-    return String(value).trim();
-  };
-  const lines = template.split('\n').filter((line) => {
-    const names = [...line.matchAll(token())].map((match) => match[1]);
-    return !names.length || names.some((name) => val(name) !== '');
-  });
-  return lines.join('\n')
-    .replace(/\n{3,}/g, '\n\n')                    // the gap a dropped line leaves
-    .replace(token(), (_, name: string) => val(name))    // values go in last, verbatim
-    .trim();
-}
-
-/** The first line of what fill() would SEND — the template's first non-blank
- *  line, filled. The card run's frozen first-message discriminators derive
- *  from the templates themselves, so the matched line and the sent line can
- *  never drift apart, and a template that opens on a blank line is no
- *  different from one that doesn't (fill() trims the same way). */
-export function firstLineOf(template: string, vars: Record<string, string | number>): string {
-  const line = template.split('\n').find((line) => line.trim() !== '') ?? '';
-  return fill(line, vars);
-}
 
 /** A frozen prompt piece plus today's date in the builder's zone —
  *  recomputed at every agent build (launch, resume, model change), so the

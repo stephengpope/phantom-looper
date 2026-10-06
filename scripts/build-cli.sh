@@ -42,12 +42,31 @@ mkdir -p "$OUT" "$CACHE"
 npm run sdk:build
 npx esbuild phantom-cli/index.tsx --bundle --platform=node --format=esm --target=node22 \
   --outfile="$OUT/stage/lib/phantom-cli.mjs" \
+  --metafile="$OUT/meta.json" \
   --loader:.wasm=copy --loader:.node=copy --jsx=automatic \
   --alias:react-devtools-core=./scripts/shims/react-devtools-core.js \
   --define:process.env.PHANTOM_CLI_VERSION="\"$VERSION\"" \
   --define:process.env.NODE_ENV="\"production\"" \
   --banner:js="import { createRequire as __phantomCreateRequire } from 'node:module'; const require = __phantomCreateRequire(import.meta.url);" \
   --log-level=warning
+
+# The boundary: the cli bundles the client SDK and the agents, never the
+# server. One import from the backend SDK's barrel drags its whole graph in
+# (dockerode, ssh2, pg, fastify — CJS esbuild cannot shake), and ssh2 dies
+# on `__dirname` the moment the bundle loads (v0.1.83). Caught here, not at
+# the user's terminal: name the first-party file that reached the server.
+node - "$OUT/meta.json" <<'GUARD'
+const meta = require(require('node:path').resolve(process.argv[2]));
+const server = (f) => f.startsWith('phantom-agent-sdk/packages/backend/') || f.startsWith('phantom-backend/');
+const leaks = Object.entries(meta.inputs)
+  .filter(([f]) => !f.includes('node_modules') && !server(f))
+  .flatMap(([f, v]) => v.imports.filter((i) => server(i.path)).map((i) => `${f} -> ${i.path}`));
+if (leaks.length) {
+  console.error('✗ server code reached the cli bundle:\n  ' + leaks.join('\n  '));
+  process.exit(1);
+}
+GUARD
+rm -f "$OUT/meta.json"
 
 # The sidecar rides as FILES beside the bundle (uv needs pyproject/uv.lock on
 # disk; voice.ts resolves ./sidecar/ beside the module). The engine itself
