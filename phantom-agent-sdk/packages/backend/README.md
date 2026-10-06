@@ -38,7 +38,7 @@ src/PhantomBackend.ts    the root: members, boot order, start/stop
 src/doors.ts             what an app registers: settings, agent types, tools, routes
 src/members.ts           the members, one file each
 src/storage/             Database, Settings, the table owners, AgentDatabases, schema, migrations/
-src/agents/              AgentTypes, AgentConfig, SystemPrompt, ModelCatalog, SessionTitler, UserMessageQueue, the feeds
+src/agents/              AgentTypes, AgentConfig, SystemPrompt, ModelCatalog, SessionTitler, SessionNotes, the feeds
 src/runtime/             Docker, Images, SessionContainers, Sandbox, CheckoutPool, Disk, Skills, SystemSkills, Web
 src/git/                 Git, GitService, GitSync, InstantSync, WorkspaceWatcher, GitHub
 src/telegram/            TelegramBot, TelegramApi, attachments, voice, approvals, the tables

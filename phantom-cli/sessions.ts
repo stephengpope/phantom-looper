@@ -89,9 +89,6 @@ export interface LoadedSession {
   /** What the working line says in place of the phase: a retry in progress,
    *  a stop on its way. Null = the phase (thinking, writing, the tool). */
   caption: string | null;
-  /** The words a send is carrying until turn-start lands — put back in the
-   *  box if the session turns out to be held elsewhere. */
-  sending: string | null;
   /** Finished (or failed) while you were looking somewhere else. */
   unseen: boolean;
   /** An agent's question about THIS session (the coding agent's "enter code
@@ -142,9 +139,10 @@ export class SessionStore {
   private seq = 0;
   activeId = '';
 
-  /** The send was refused before anything ran (session held elsewhere, the
-   *  server unreachable): the words go back where they were typed. */
-  onRefused?: (id: string, text: string) => void;
+  /** Words the agent handed back (its `returned` event): they drove a run
+   *  that failed or was stopped before the model answered them, so they were
+   *  never written. They go back where they were typed. */
+  onReturned?: (id: string, text: string) => void;
   /** Fires after every turn settles (answered, failed or interrupted). The
    *  window's task-count refresh hangs off it. Best effort: never throws
    *  into a turn. */
@@ -193,7 +191,7 @@ export class SessionStore {
       syncStamp: fresh.syncStamp ?? null,
       live: [], turn: [],
       remoteBusy: false, held: null, startedAt: 0, tokens: NO_TOKENS,
-      usage: { ...fresh.agent.session.usage }, caption: null, sending: null,
+      usage: { ...fresh.agent.session.usage }, caption: null,
       unseen: false, ask: null, lastMessageAt: fresh.agent.session.messages.length ? Date.now() : 0, addedAt: ++this.seq,
       workState: null, draft: fresh.draft ?? '',
       flushParts: () => undefined, unwire: () => undefined,
@@ -220,7 +218,6 @@ export class SessionStore {
       a.on('turn-start', ({ model }) => {
         // The words were drawn when enter landed (say); only the clocks and
         // the model line are the turn-start's.
-        entry.sending = null;
         entry.startedAt = Date.now();
         entry.tokens = NO_TOKENS;
         entry.caption = null;
@@ -244,6 +241,17 @@ export class SessionStore {
         else flush();
       }),
       a.on('user-message', ({ texts }) => { flush(); entry.caption = null; this.userParts(entry, texts); this.notify(); }),
+      // Words that never reached the record: off the conversation, back into
+      // the box. A run that drew nothing leaves nothing to settle (no
+      // elapsed line for a turn that never ran); the error, if any, was
+      // already said once through onError.
+      a.on('returned', ({ texts }) => {
+        flush();
+        this.unsay(entry, texts);
+        if (!entry.turn.length) { entry.turnOpen = false; entry.startedAt = 0; }
+        this.onReturned?.(entry.id, texts.join('\n\n'));
+        this.notify();
+      }),
       // Every step lands lines on the record: the totals and the stamp move
       // with it, so the screen is known to match what the server holds.
       a.on('step', ({ usage }) => { entry.usage = { ...usage }; entry.syncStamp = a.session.transcriptUpdatedAt; }),
@@ -282,16 +290,9 @@ export class SessionStore {
         const entry = this.get(id);
         if (!entry) return;
         if (err.code === 'session_locked') {
-          // Refused before anything ran: the session goes idle again, the
-          // words go back into the box, and the note says why. No residue:
-          // turnOpen goes down here, so the settle behind say's promise
-          // draws nothing and only repaints.
-          const text = entry.sending;
-          entry.sending = null;
-          entry.turnOpen = false;
-          entry.startedAt = 0;
+          // Refused before anything ran: the words come back on `returned`;
+          // this is only the why.
           this.note(id, 'not sent — session in use elsewhere');
-          if (text) this.onRefused?.(id, text);
           return;
         }
         entry.turn = [...entry.turn, { kind: 'error', id: nextId('err'), message: err.message }];
@@ -308,6 +309,19 @@ export class SessionStore {
     };
   }
 
+  /** Words handed back, taken off the conversation: the last drawn user
+   *  line for each, newest first — they were drawn when they were sent. */
+  private unsay(entry: LoadedSession, texts: string[]): void {
+    const done = [...entry.done];
+    for (const text of [...texts].reverse()) {
+      for (let i = done.length - 1; i >= 0; i--) {
+        const part = done[i]!;
+        if (part.kind === 'user' && part.text === text) { done.splice(i, 1); break; }
+      }
+    }
+    entry.done = done;
+  }
+
   /** The user's words, drawn where they were sent. */
   private userParts(entry: LoadedSession, texts: string[]): void {
     for (const text of texts) if (text.trim()) entry.done = [...entry.done, { kind: 'user', id: nextId('user'), text }];
@@ -322,7 +336,6 @@ export class SessionStore {
     const ran = entry.turnOpen;
     entry.turnOpen = false;
     entry.caption = null;
-    entry.sending = null;
     if (ran) {
       entry.flushParts();
       const rest = finalize(entry.turn);
@@ -538,7 +551,6 @@ export class SessionStore {
       // What was queued goes with it (the agent drains the queue into the
       // turn it opens), so it leaves the queued list for the conversation.
       this.userParts(entry, [...entry.agent.userMessages.pending().map((queued) => queued.text), text]);
-      entry.sending = text;
       entry.turnOpen = true;
       entry.startedAt = Date.now();
       entry.tokens = NO_TOKENS;

@@ -278,12 +278,12 @@ async function runBash(
       // reconciler's 'exited' are final — a late stream teardown must not
       // overwrite them.
       await ctx.backgroundTasks.finish(taskId, status, exitCode).catch(() => {});
-      // The exit message rides the session's NEXT turn through the user
-      // message queue (UserMessageQueue) — no turn is started for it. Read the
+      // The exit message rides the session's NEXT turn as a session note
+      // (SessionNotes) — no turn is started for it. Read the
       // row's final word rather than the local `status`: a kill from /tasks
       // or task_kill marks the row first, and the row is the truth.
       const final = await ctx.backgroundTasks.get(taskId).catch(() => undefined);
-      if (final) ctx.userMessageQueue.push(session.id, noticeOf(final));
+      if (final) ctx.sessionNotes.add(session.id, noticeOf(final));
     }
   })();
   // Sid capture, fire-and-forget beside the stream: retry-read the pidfile

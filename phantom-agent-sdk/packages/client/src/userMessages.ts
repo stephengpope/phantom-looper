@@ -1,11 +1,11 @@
-// The user message queue: what the user sent WHILE a turn ran, waiting to
-// reach the model, in order. Text only. What a drain TRIGGERS is the Agent's
-// rule, not the queue's; the Agent is the only one who adds and drains. An
-// app sees the queue through `UserMessages`: what is waiting, and the two
-// ways to take something back before it is sent.
-//
-// The server holds its own user message queue for a session's next turn;
-// turn-start writes it into the record ahead of what this queue holds.
+// The user message queue: what a PERSON sent while a turn ran, waiting to
+// reach the model, in order. Text only, and only a person's words — the
+// system's facts are the server's session notes, never queued here
+// (docs/message-queues.md). What a drain triggers (riding or driving) is
+// the Agent's rule, not the queue's; the Agent is the only one who adds and
+// drains. Nothing is ever put back: words a failed run hands back go to the
+// app (the Agent's `returned` event). An app sees the queue through
+// `UserMessages`: what is waiting, and the two ways to take it back.
 export interface QueueEntry {
   readonly id: number;
   readonly text: string;
@@ -39,13 +39,6 @@ export class UserMessageQueue implements UserMessages {
   /** Everything waiting, taken, in order. */
   drain(): string[] {
     return this.entries.splice(0).map((entry) => entry.text);
-  }
-
-  /** Words a turn took and could not deliver (the model call failed before
-   *  it answered): back at the FRONT, in order — they were said first;
-   *  whatever arrived since stays behind them. */
-  putBack(texts: string[]): void {
-    this.entries.unshift(...texts.map((text): QueueEntry => ({ id: nextId++, text })));
   }
 
   take(id: number): QueueEntry | undefined {

@@ -16,7 +16,7 @@ export { AgentConfig } from './agents/AgentConfig.js';
 export { SystemPrompt } from './agents/SystemPrompt.js';
 export { ModelCatalog } from './agents/ModelCatalog.js';
 export { SessionTitler } from './agents/SessionTitler.js';
-export { UserMessageQueue } from './agents/UserMessageQueue.js';
+export { SessionNotes } from './agents/SessionNotes.js';
 export { SessionEvents } from './agents/SessionEvents.js';
 export { BoardEvents } from './agents/BoardEvents.js';
 export { SettingsEvents } from './agents/SettingsEvents.js';

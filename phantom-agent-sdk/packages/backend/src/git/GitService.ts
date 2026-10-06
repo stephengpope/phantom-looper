@@ -26,7 +26,7 @@ import type { Paths } from '../lib/paths.js';
 import type { SessionEvents } from '../agents/SessionEvents.js';
 import type { BoardEvents } from '../agents/BoardEvents.js';
 import type { SettingsEvents } from '../agents/SettingsEvents.js';
-import type { UserMessageQueue } from '../agents/UserMessageQueue.js';
+import type { SessionNotes } from '../agents/SessionNotes.js';
 import type { SessionContainers } from '../runtime/SessionContainers.js';
 import type { WorkspaceWatcher } from './WorkspaceWatcher.js';
 import { GitSync } from './GitSync.js';
@@ -53,14 +53,14 @@ export interface GitHooks {
   writeCommitMessage?: SyncDeps['writeCommitMessage'];
   /** What the session's agent reads on its next turn after a sync: what
    *  landed (`ok`), or what conflicted (`blocked`, with files). Null = say
-   *  nothing. Queued as a user message the backend holds for the session. */
+   *  nothing. Left as a session note (SessionNotes) for the session's next turn. */
   syncNote?: (project: ProjectRow, result: SyncResult, opts: SyncOptions) => string | null;
 }
 
 export interface GitServiceDeps {
   sessions: Sessions; workspaces: Workspaces; cards: Cards; projects: Projects; settings: Settings; paths: Paths;
   sessionEvents: SessionEvents; boardEvents: BoardEvents; settingsEvents: SettingsEvents;
-  userMessageQueue: UserMessageQueue; sessionContainers: SessionContainers; workspaceWatcher: WorkspaceWatcher;
+  sessionNotes: SessionNotes; sessionContainers: SessionContainers; workspaceWatcher: WorkspaceWatcher;
 }
 
 export type AutoPushFn = (session: SessionRow, project: ProjectRow,
@@ -90,7 +90,7 @@ export class GitService {
     // Instant sync runs the same sync, turn or no turn: it never takes the
     // session (`hold: false`) and never runs the fixer (no `resolve`) — a
     // conflict is left stopped and reported. Its notes cannot go through
-    // recordSummary (that needs the session); they ride the user message
+    // recordSummary (that needs the session); they ride the session notes
     // queue, in front of the agent's next turn wherever that turn runs. A
     // note already waiting is not queued again.
     //
@@ -114,12 +114,12 @@ export class GitService {
   }
 
   /** After a successful held sync, the agent hears what happened on its
-   *  next turn: a user message the backend holds for the session, written
+   *  next turn: a session note (SessionNotes), written
    *  into the record at turn-start — the same door instant sync's notes take. */
   private readonly recordSummary: SyncDeps['recordSummary'] = async (session, project, result, opts) => {
     if (result.outcome !== 'ok') return;
     const note = this.hooks.syncNote?.(project, result, opts);
-    if (note) this.deps.userMessageQueue.push(session.id, note);
+    if (note) this.deps.sessionNotes.add(session.id, note);
   };
 
   /** Instant sync's note: what landed, or what conflicted — unless the same
@@ -127,7 +127,7 @@ export class GitService {
   private readonly noteForNextTurn: SyncDeps['recordSummary'] = async (session, project, result, opts) => {
     if (result.outcome !== 'ok' && !(result.outcome === 'blocked' && result.files?.length)) return;
     const note = this.hooks.syncNote?.(project, result, opts);
-    if (note && !this.deps.userMessageQueue.has(session.id, note)) this.deps.userMessageQueue.push(session.id, note);
+    if (note && !this.deps.sessionNotes.has(session.id, note)) this.deps.sessionNotes.add(session.id, note);
   };
 
   /** When a sync comes back blocked and the session is running a card, the

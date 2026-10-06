@@ -23,6 +23,7 @@ export const SDK_ERROR_CODES = [
   'tool_loop',              // the same tool call failed TOOL_FAILURE_LIMIT times in a row (turn.ts)
   'readonly',
   'busy',
+  'interrupted',            // stopped before the model was asked (Agent: the `returned` event's reason)
   'config_invalid',
   'listener_threw',         // an app's event listener threw
   'internal',               // the SDK's own code threw where it should not

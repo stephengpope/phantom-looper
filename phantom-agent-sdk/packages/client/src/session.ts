@@ -66,6 +66,10 @@ export interface PublishedTool { name: string; summary: string; description?: st
 export class Session implements SessionInfo {
   #row: SessionRow;
   #messages: ModelMessage[];
+  /** The last turn's end on its way to the server (its feed closing, then
+   *  turn-ended, which lets go of the hold). The next turn starts after it,
+   *  so a release can never land on a hold a later turn took. */
+  #ending: Promise<void> = Promise.resolve();
 
   private constructor(private readonly backend: BackendClient, private readonly handlers: { onError(error: PhantomError): void },
     row: SessionRow, private readonly record: SessionRecord) {
@@ -93,26 +97,36 @@ export class Session implements SessionInfo {
    *  feed mid-turn. */
   setPlanMode(on: boolean): void { this.#row = { ...this.#row, planMode: on }; }
 
-  /** One turn on this session: start it (the hold, the server's queued
-   *  messages written, the model and tools answered — one request), run
-   *  `fn`, end it (the server's bookkeeping and the release — one request,
-   *  always, so a turn that threw still lets go). The server renews the hold
-   *  on the turn's own writes. An end that fails is reported, never thrown
-   *  over the turn's own outcome. */
-  async turn<T>(type: string, signal: AbortSignal, body: (start: TurnStart & { recordMoved: boolean }) => Promise<T>,
+  /** One turn on this session: start it (the hold, the session's notes
+   *  written, the model and tools answered — one request), run `body`, end
+   *  it (the server's bookkeeping and the release — one request, always, so
+   *  a turn that threw still lets go). The turn's result is the caller's the
+   *  moment `body` returns; the end goes on in the background, after
+   *  whatever `body` handed to `endAfter` (the feed closing), and the next
+   *  turn waits for it (`ended`). The server renews the hold on the turn's
+   *  own writes. An end that fails is reported, never thrown over the
+   *  turn's own outcome. */
+  async turn<T>(type: string, signal: AbortSignal, body: (start: TurnStart & { recordMoved: boolean; endAfter: (work: Promise<unknown>) => void }) => Promise<T>,
     opts: { rebuildSystemPrompt?: SystemPromptLayout } = {}): Promise<T> {
+    await this.#ending;
     const start = await this.backend.call<TurnStart>('POST', `/sessions/${this.id}/turn-start`,
       { type, label: this.backend.label, ...(opts.rebuildSystemPrompt ? { system_prompt_layout: opts.rebuildSystemPrompt } : {}) }, { signal });
     // A rebuilt prompt is the row's now; the record line that marks it is
     // among what makeCurrent reads (the stamp moved).
     if (start.system_prompt) this.#row = { ...this.#row, system_prompt: start.system_prompt };
+    let before: Promise<unknown> = Promise.resolve();
     try {
-      return await body({ ...start, recordMoved: start.transcript_updated_at !== this.record.stamp });
+      return await body({ ...start, recordMoved: start.transcript_updated_at !== this.record.stamp,
+        endAfter: (work) => { before = work; } });
     } finally {
-      try { await this.backend.call('POST', `/sessions/${this.id}/turn-ended`); }
-      catch (error) { this.handlers.onError(asPhantomError(error, 'internal', 'ending the turn')); }
+      this.#ending = before.then(() => undefined, () => undefined)
+        .then(() => this.backend.call('POST', `/sessions/${this.id}/turn-ended`))
+        .then(() => undefined, (error: unknown) => this.handlers.onError(asPhantomError(error, 'internal', 'ending the turn')));
     }
   }
+
+  /** The last turn's end has reached the server (or failed, reported). */
+  ended(): Promise<void> { return this.#ending; }
 
   /** Under the lock: make this copy the server's — read what others added,
    *  answer a step a crash left cut. Answers what the CONVERSATION gained,
