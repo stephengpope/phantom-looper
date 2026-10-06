@@ -15,11 +15,11 @@ export interface AgentEvents {
   'step': { messages: readonly ModelMessage[]; usage: Readonly<TokenTotals> };
   /** Queued text was taken: it rode into a model call, or drives the next run. */
   'user-message': { texts: string[] };
-  /** Words handed back: they drove a run that failed or was stopped before
-   *  the model answered them, so they were never written. The app decides
-   *  what to do with them — back into the box, a "not sent" reply, a log
-   *  line. Words that RODE a call are written when taken and never come
-   *  back; neither do the server's notes. */
+  /** Words not sent: they drove a run that failed or was stopped before the
+   *  model answered them, so they were never written. They are back at the
+   *  front of the queue, waiting for the next message — this says which
+   *  and why, for the app to show. Words that RODE a call are written when
+   *  taken and never come back; neither do the server's notes. */
   'returned': { texts: string[]; error: PhantomError };
   'tool-error': { name: string; error: unknown };
   'turn-end': TurnResult;

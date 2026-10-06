@@ -598,15 +598,6 @@ export class WindowStore {
       // start and stop. Background: a failure goes to cli.log, not the pane.
       void this.onTurnEnded?.().catch(quiet('refresh tasks'));
     });
-    // Words the agent handed back (never written — docs/message-queues.md)
-    // go back where they were typed: into the box when that session is on
-    // screen, into its draft otherwise — the next switch to it shows them.
-    store.onReturned = (id, text) => {
-      // Ahead of anything typed since: these were said first.
-      const join = (now: string) => (now.trim() ? `${text}\n\n${now}` : text);
-      if (id === this.sessions.activeId) this.setPrompt(join(this.draftOnScreen()));
-      else { const entry = this.sessions.get(id); if (entry) entry.draft = join(entry.draft); }
-    };
     return store;
   }
 

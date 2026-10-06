@@ -3,8 +3,9 @@
 // system's facts are the server's session notes, never queued here
 // (docs/message-queues.md). What a drain triggers (riding or driving) is
 // the Agent's rule, not the queue's; the Agent is the only one who adds and
-// drains. Nothing is ever put back: words a failed run hands back go to the
-// app (the Agent's `returned` event). An app sees the queue through
+// drains. Words a run took and the model never answered go back to the
+// FRONT (they were said first) and wait — the next message takes them
+// along; nothing retries on its own. An app sees the queue through
 // `UserMessages`: what is waiting, and the two ways to take it back.
 export interface QueueEntry {
   readonly id: number;
@@ -39,6 +40,12 @@ export class UserMessageQueue implements UserMessages {
   /** Everything waiting, taken, in order. */
   drain(): string[] {
     return this.entries.splice(0).map((entry) => entry.text);
+  }
+
+  /** Words a run took and the model never answered: back at the FRONT, in
+   *  order, ahead of whatever arrived since. */
+  unsent(texts: string[]): void {
+    this.entries.unshift(...texts.map((text): QueueEntry => ({ id: nextId++, text })));
   }
 
   take(id: number): QueueEntry | undefined {

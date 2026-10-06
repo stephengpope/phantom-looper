@@ -138,7 +138,9 @@ export abstract class Agent {
   // model has stopped: the turn goes on with it, same lock. The agent keeps
   // turning while words are queued, so nothing sent is ever left waiting.
   // A driver whose run failed before the model answered it was never
-  // written: it comes back on the `returned` event, with the reason.
+  // written: it goes back to the front of the queue and waits — the next
+  // message takes it along; nothing retries on its own. The `returned`
+  // event says which words and why.
   // A stop cuts the model loop; what is queued goes on with the turn unless
   // the stop says `keepQueue` — then it stays queued, for the app to show.
 
@@ -167,7 +169,7 @@ export abstract class Agent {
 
   /** Stop the running model loop — the standard abort, as a fetch is
    *  stopped. Finished tool calls keep their results. Words that had not
-   *  been sent yet come back on `returned`. Then, unless `keepQueue`,
+   *  been sent yet go back to the queue (`returned`). Then, unless `keepQueue`,
    *  whatever was queued meanwhile goes on with the turn. */
   interrupt(opts: { keepQueue?: boolean } = {}): void {
     if (!this.#abort) return;
@@ -276,9 +278,12 @@ export abstract class Agent {
     }
   }
 
-  /** Words handed back to the app: never written, so nothing is lost. */
+  /** Words the model never answered: back to the front of the queue, and
+   *  the app is told. Never written, so nothing is lost or doubled. */
   #return(texts: string[], error: PhantomError): void {
-    if (texts.length) this.#emit('returned', { texts, error });
+    if (!texts.length) return;
+    this.#queue.unsent(texts);
+    this.#emit('returned', { texts, error });
   }
 
   #stopped(): PhantomError { return new PhantomError('interrupted', 'stopped before the model was asked', { retryable: false }); }

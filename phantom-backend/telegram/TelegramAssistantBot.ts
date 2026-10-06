@@ -320,9 +320,9 @@ export class TelegramAssistantBot {
     }
   }
 
-  /** Words the agent handed back (never written — a run failed or was
-   *  stopped before the model answered them): the chat is told which, so
-   *  they can be sent again. */
+  /** Words the model never answered (a run failed or was stopped first):
+   *  the chat is told which. The agent this bot runs is closed after the
+   *  turn, so its queue goes with it — they must be sent again. */
   private sayReturned(agent: Agent, client: TelegramApi, chatId: number): void {
     agent.on('returned', ({ texts }) => {
       const quoted = texts.map((text) => `“${text.length > 200 ? `${text.slice(0, 200)}…` : text}”`).join('\n');

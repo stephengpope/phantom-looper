@@ -139,10 +139,6 @@ export class SessionStore {
   private seq = 0;
   activeId = '';
 
-  /** Words the agent handed back (its `returned` event): they drove a run
-   *  that failed or was stopped before the model answered them, so they were
-   *  never written. They go back where they were typed. */
-  onReturned?: (id: string, text: string) => void;
   /** Fires after every turn settles (answered, failed or interrupted). The
    *  window's task-count refresh hangs off it. Best effort: never throws
    *  into a turn. */
@@ -241,16 +237,16 @@ export class SessionStore {
         else flush();
       }),
       a.on('user-message', ({ texts }) => { flush(); entry.caption = null; this.userParts(entry, texts); this.notify(); }),
-      // Words that never reached the record: off the conversation, back into
-      // the box. A run that drew nothing leaves nothing to settle (no
+      // Words that never reached the record are back in the agent's queue:
+      // off the conversation, shown as queued again, sent with whatever is
+      // said next. A run that drew nothing leaves nothing to settle (no
       // elapsed line for a turn that never ran); the error, if any, was
       // already said once through onError.
       a.on('returned', ({ texts }) => {
         flush();
         this.unsay(entry, texts);
         if (!entry.turn.length) { entry.turnOpen = false; entry.startedAt = 0; }
-        this.onReturned?.(entry.id, texts.join('\n\n'));
-        this.notify();
+        this.note(entry.id, `not sent — ${texts.length === 1 ? 'it is' : `${texts.length} are`} still queued; your next message sends ${texts.length === 1 ? 'it' : 'them'} too`);
       }),
       // Every step lands lines on the record: the totals and the stamp move
       // with it, so the screen is known to match what the server holds.
