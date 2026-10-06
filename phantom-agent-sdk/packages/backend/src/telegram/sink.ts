@@ -253,7 +253,7 @@ export function makeTelegramSink(
     stopToolTimer(); stopThinking(); thinkingPending = false;
     bubble.stop();
     await chain.catch(() => { /* best-effort */ });
-    await dropPlaceholder();
+    await dropPlaceholder().catch(() => { /* best-effort: a teardown for a turn that threw never throws itself */ });
   }
 
   async function done(finalText: string) {

@@ -35,7 +35,7 @@
   },
   "dependencies": {
     "@phantom-agent-sdk/client": "0.1.0",
-    "drizzle-orm": "0.38.4",
+    "drizzle-orm": "0.45.3",
     "pg": "8.23.0",
     "pino": "9.14.0",
     "ulid": "2.4.0",
