@@ -21,6 +21,7 @@ import { logger } from '../lib/log.js';
 import type { SettingDefinition } from '../doors.js';
 import type { ModelCatalog } from '../agents/ModelCatalog.js';
 import type { SettingsEvents } from '../agents/SettingsEvents.js';
+import { textOf } from '../lib/text.js';
 
 const log = logger('settings');
 
@@ -88,7 +89,7 @@ const EMPTY_LAYERS = { global: null, organization: null, user: null, project: nu
 
 const secretMeta = (row: { key: string; scope: string; value: unknown }): SecretMeta => ({
   name: row.key, scope: row.scope,
-  description: String((row.value as { description?: unknown } | null)?.description ?? ''),
+  description: textOf((row.value as { description?: unknown } | null)?.description),
 });
 const sortSecrets = (secrets: SecretMeta[]) => secrets.sort((a, b) =>
   (a.scope === b.scope ? a.name.localeCompare(b.name) : a.scope === GLOBAL ? -1 : a.scope.localeCompare(b.scope)));
@@ -486,7 +487,7 @@ export class Settings {
   async writeSecret(scopeName: string, name: string, description: string, value?: string): Promise<boolean> {
     const where = and(eq(settings.scope, scopeName), eq(settings.namespace, SECRET_NS), eq(settings.key, name));
     if (value === undefined) {
-      const kept = await this.database.update(settings).set({ value: { description } as never, updatedAt: new Date() }).where(where).returning({ key: settings.key });
+      const kept = await this.database.update(settings).set({ value: { description }, updatedAt: new Date() }).where(where).returning({ key: settings.key });
       return kept.length > 0;
     }
     const row = { value: { description } as never, valueEnc: encrypt(this.encryptionKey, value) };

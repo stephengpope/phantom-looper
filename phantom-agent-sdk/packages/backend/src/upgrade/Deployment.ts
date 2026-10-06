@@ -77,7 +77,7 @@ export class Deployment {
         onEvent(event);
         if (event.event === 'restarting' || event.event === 'error') { unsub?.(); resolve(); }
       });
-      if (!unsub) { onEvent({ event: 'error', message: 'no update in progress' } as UpdateEvent); resolve(); }
+      if (!unsub) { onEvent({ event: 'error', message: 'no update in progress' }); resolve(); }
     });
     return { done, stop: () => unsub?.() };
   }

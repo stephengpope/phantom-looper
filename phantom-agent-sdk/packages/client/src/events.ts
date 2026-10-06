@@ -4,6 +4,7 @@
 import type { ModelMessage } from 'ai';
 import type { StreamPart, TurnResult } from './turn.js';
 import type { TokenTotals } from './transcript.js';
+import type { PhantomError } from './errors.js';
 import type { Provider, Reasoning } from './model/llmConfig.js';
 
 export interface AgentEvents {
@@ -12,13 +13,23 @@ export interface AgentEvents {
   'part': StreamPart;
   /** Lines were appended and acknowledged. */
   'step': { messages: readonly ModelMessage[]; usage: Readonly<TokenTotals> };
-  /** Queued text rode into a model call. */
+  /** Queued text was taken: it rode into a model call, or drives the next run. */
   'user-message': { texts: string[] };
+  /** Words not sent: they drove a run that failed or was stopped before the
+   *  model answered them, so they were never written. They are back at the
+   *  front of the queue, waiting for the next message — this says which
+   *  and why, for the app to show. Words that RODE a call are written when
+   *  taken and never come back; neither do the server's notes. */
+  'returned': { texts: string[]; error: PhantomError };
   'tool-error': { name: string; error: unknown };
   'turn-end': TurnResult;
-  /** Someone else added to the transcript since this agent last looked; it
-   *  was read again before the turn ran. `messages` is the conversation now. */
-  'reloaded': { messages: readonly ModelMessage[] };
+  /** Someone else added to the conversation since this agent last looked
+   *  (another client's turn, the server's queued user messages); it was
+   *  read again before the turn ran. `messages` is the conversation now;
+   *  `from` → `now` the record stamps before and after; `added` the
+   *  messages gained, in order, when the gain is plain appends — a host
+   *  whose screen matched `from` draws just those; null = redraw whole. */
+  'reloaded': { messages: readonly ModelMessage[]; from: string | null; now: string | null; added: readonly ModelMessage[] | null };
 }
 
 type Listener<T> = (payload: T) => void;

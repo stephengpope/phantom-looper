@@ -61,7 +61,7 @@ function emit(event: UpdateEvent) {
   }
   current.events.push(event);
   for (const listener of current.listeners) {
-    try { listener(event); } catch {}
+    try { listener(event); } catch (error) { log.warn({ err: errStr(error) }, 'update listener threw'); }
   }
 }
 
@@ -71,7 +71,7 @@ function emit(event: UpdateEvent) {
 export function subscribe(listener: UpdateListener): (() => void) | null {
   if (!current) return null;
   for (const event of current.events) {
-    try { listener(event); } catch {}
+    try { listener(event); } catch (error) { log.warn({ err: errStr(error) }, 'update listener threw'); }
   }
   current.listeners.add(listener);
   return () => { current?.listeners.delete(listener); };

@@ -30,7 +30,7 @@ export class Notifications {
     const results = await Promise.allSettled(this.channels().map((channel) => channel.send(text, context)));
     const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
     if (failures.length === results.length) {
-      throw new NotificationsError('send_failed', (failures[0]!.reason as Error)?.message ?? String(failures[0]!.reason));
+      throw new NotificationsError('send_failed', (failures[0].reason as Error)?.message ?? String(failures[0].reason));
     }
   }
 }

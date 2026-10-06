@@ -481,7 +481,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         return reply.code(409).send(session.lockedBy ? lockedErr(session)
           : err('session_not_held', 'hold the session (POST /sessions/:id/turn-start) before publishing on it'));
       }
-      const feed = ctx.sessionEvents!;
+      const feed = ctx.sessionEvents;
       for (const event of req.body.events) {
         if (event.event === 'part') feed.publishPart(session.id, client, event.part);
         else feed.publish(session.id, client, event as SessionEvent);
@@ -726,7 +726,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     '/sessions/:id/turn-start', { schema: { ...TAG,
       summary: 'Start a turn: hold the session and answer what it runs on',
       description: 'Holds the session for x-phantom-looper-client (409 session_locked while someone else does), ' +
-        'writes the user messages the server queued for this session into the record, and answers the model ' +
+        'writes the session\'s waiting notes (a command exited, a sync landed) into the record, and answers the model ' +
         'config (provider, model, key, reasoning, maxSteps) and the tools an agent of `type` has on this ' +
         'session right now, plus the record\'s transcript_updated_at. With `system_prompt_layout`, the prompt\'s ' +
         'volatile section is reassembled from the session\'s facts now (the date, the skills, the secrets), written ' +
@@ -765,15 +765,17 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       if (callerGone) { await releaseHold(ctx, session, client); return; }
       ctx.sessionEvents.publish(session.id, client, lockEvent(session, { locked: true, by: client, label: req.body.label ?? session.lockedLabel ?? null, expires }));
       if (session.lockedBy !== client) void publishBoardLock(ctx, session.id, true);
-      // The server's queued messages land now, under the hold, ahead of
-      // whatever the caller sends: the caller reads the record after this.
-      const queued = ctx.userMessageQueue.drain(session.id) ?? [];
-      // The row as the turn starts: after the hold, after the queued writes.
+      // The session's notes land now, under the hold, ahead of whatever the
+      // caller sends: the caller reads the record after this. Written, they
+      // are part of the conversation — never handed back, whatever the turn
+      // does next (docs/message-queues.md).
+      const notes = ctx.sessionNotes.drain(session.id);
+      // The row as the turn starts: after the hold, after the notes.
       let atStart = session;
-      if (queued.length) {
+      if (notes.length) {
         atStart = (await ctx.sessions.get(session.id))!;
         await ctx.sessions.appendTranscript(atStart, client, { after: atStart.transcriptLines, deliveryId: `turn-start-${Date.now()}`,
-          lines: queued.map((text) => messageLine(userMessage(text))) });
+          lines: notes.map((text) => messageLine(userMessage(text))) });
         atStart = (await ctx.sessions.get(session.id))!;
       }
       // The prompt's volatile section, reassembled under the hold when the

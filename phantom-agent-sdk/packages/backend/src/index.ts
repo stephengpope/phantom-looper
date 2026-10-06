@@ -63,7 +63,8 @@ export { ToolError, looksBinary, type Truncation } from './tools/envelope.js';
 export { fuzzyFindAndReplace, formatNoMatchHint, findClosestLines, ratio, type FuzzyResult } from './tools/fuzzy.js';
 export { SKILLS_DIR, scanSkills, mergeSkills, parseDescription, splitFrontmatter, type SkillMeta } from './skills/skills.js';
 export { lintSkillMd, validateSkillMd, validateSkillName, validateFilePath, MAX_DESCRIPTION, MAX_FILE_BYTES, MAX_NAME, MAX_SKILL_CONTENT, FILE_SUBDIRS } from './skills/validate.js';
-export { fill, withCurrentDate, firstLineOf } from './prompt/template.js';
+export { withCurrentDate } from './prompt/template.js';
+export { fill, firstLineOf } from '@phantom-agent-sdk/client';
 export { SKILLS_LIST, SECRETS_LIST, GITHUB_TOKEN, AGENT_DATABASE, AGENT_DATABASE_SHARED, TIME_DATE } from './prompt/serverBlocks.js';
 
 // telegram plumbing, notifications, the queue

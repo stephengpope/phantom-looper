@@ -6,6 +6,7 @@ import { listSkills, loadSkill, manageSkill, type ManageBody } from '../runtime/
 import { ToolError } from './envelope.js';
 import { fsDeps } from '../api/routes/fs.js';
 import { obj, oneOf, str, type OfferCtx, type ToolCtx, type ToolDef } from './def.js';
+import { textOf } from '../lib/text.js';
 
 const hasRepo = ({ session }: OfferCtx) => Promise.resolve(!!session.workspaceId);
 
@@ -44,7 +45,7 @@ export const SKILL_TOOLS: ToolDef[] = [
     mutates: false, group: 'skills', offered: hasRepo,
     execute(ctx, a) {
       const skillDeps = deps(ctx);
-      return loadSkill(ctx.app, skillDeps.fs, ctx.session, skillDeps.workspaceId, String(a.name), a.file === undefined ? undefined : String(a.file));
+      return loadSkill(ctx.app, skillDeps.fs, ctx.session, skillDeps.workspaceId, textOf(a.name), a.file === undefined ? undefined : textOf(a.file));
     },
   },
   {

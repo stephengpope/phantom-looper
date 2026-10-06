@@ -44,6 +44,10 @@ export interface SessionInfo {
   readonly messages: readonly ModelMessage[];
   /** The tokens the record accounts for, whoever wrote them. */
   readonly usage: Readonly<TokenTotals>;
+  /** The server's last-changed mark for the record copy held here — what
+   *  `GET /sessions/:id` answers as transcript_updated_at when the copy is
+   *  current. Moves with every line this agent writes and every catch-up. */
+  readonly transcriptUpdatedAt: string | null;
 }
 
 /** What starting a turn answers: the hold, the record's last-changed mark
@@ -62,6 +66,10 @@ export interface PublishedTool { name: string; summary: string; description?: st
 export class Session implements SessionInfo {
   #row: SessionRow;
   #messages: ModelMessage[];
+  /** The last turn's end on its way to the server (its feed closing, then
+   *  turn-ended, which lets go of the hold). The next turn starts after it,
+   *  so a release can never land on a hold a later turn took. */
+  #ending: Promise<void> = Promise.resolve();
 
   private constructor(private readonly backend: BackendClient, private readonly handlers: { onError(error: PhantomError): void },
     row: SessionRow, private readonly record: SessionRecord) {
@@ -83,42 +91,66 @@ export class Session implements SessionInfo {
   get row(): Readonly<SessionRow> { return this.#row; }
   get messages(): readonly ModelMessage[] { return this.#messages; }
   get usage(): Readonly<TokenTotals> { return this.record.usage; }
+  get transcriptUpdatedAt(): string | null { return this.record.stamp; }
 
   /** Plan mode as the server says it: turn-start's answer, or the session
    *  feed mid-turn. */
   setPlanMode(on: boolean): void { this.#row = { ...this.#row, planMode: on }; }
 
-  /** One turn on this session: start it (the hold, the server's queued
-   *  messages written, the model and tools answered — one request), run
-   *  `fn`, end it (the server's bookkeeping and the release — one request,
-   *  always, so a turn that threw still lets go). The server renews the hold
-   *  on the turn's own writes. An end that fails is reported, never thrown
-   *  over the turn's own outcome. */
-  async turn<T>(type: string, signal: AbortSignal, body: (start: TurnStart & { recordMoved: boolean }) => Promise<T>,
+  /** One turn on this session: start it (the hold, the session's notes
+   *  written, the model and tools answered — one request), run `body`, end
+   *  it (the server's bookkeeping and the release — one request, always, so
+   *  a turn that threw still lets go). The turn's result is the caller's the
+   *  moment `body` returns; the end goes on in the background, after
+   *  whatever `body` handed to `endAfter` (the feed closing), and the next
+   *  turn waits for it (`ended`). The server renews the hold on the turn's
+   *  own writes. An end that fails is reported, never thrown over the
+   *  turn's own outcome. */
+  async turn<T>(type: string, signal: AbortSignal, body: (start: TurnStart & { recordMoved: boolean; endAfter: (work: Promise<unknown>) => void }) => Promise<T>,
     opts: { rebuildSystemPrompt?: SystemPromptLayout } = {}): Promise<T> {
+    await this.#ending;
     const start = await this.backend.call<TurnStart>('POST', `/sessions/${this.id}/turn-start`,
       { type, label: this.backend.label, ...(opts.rebuildSystemPrompt ? { system_prompt_layout: opts.rebuildSystemPrompt } : {}) }, { signal });
     // A rebuilt prompt is the row's now; the record line that marks it is
     // among what makeCurrent reads (the stamp moved).
     if (start.system_prompt) this.#row = { ...this.#row, system_prompt: start.system_prompt };
+    let before: Promise<unknown> = Promise.resolve();
     try {
-      return await body({ ...start, recordMoved: start.transcript_updated_at !== this.record.stamp });
+      return await body({ ...start, recordMoved: start.transcript_updated_at !== this.record.stamp,
+        endAfter: (work) => { before = work; } });
     } finally {
-      try { await this.backend.call('POST', `/sessions/${this.id}/turn-ended`); }
-      catch (error) { this.handlers.onError(asPhantomError(error, 'internal', 'ending the turn')); }
+      this.#ending = before.then(() => undefined, () => undefined)
+        .then(() => this.backend.call('POST', `/sessions/${this.id}/turn-ended`))
+        .then(() => undefined, (error: unknown) => this.handlers.onError(asPhantomError(error, 'internal', 'ending the turn')));
     }
   }
 
+  /** The last turn's end has reached the server (or failed, reported). */
+  ended(): Promise<void> { return this.#ending; }
+
   /** Under the lock: make this copy the server's — read what others added,
-   *  answer a step a crash left cut. Resolves true when the copy changed. */
-  async makeCurrent(recordMoved: boolean, signal: AbortSignal): Promise<boolean> {
+   *  answer a step a crash left cut. Answers what the CONVERSATION gained,
+   *  or null when it gained nothing — a record that moved by bookkeeping
+   *  alone (the server's system_prompt_rebuilt mark, a usage line) is not a
+   *  conversation that moved forward elsewhere, and a host must not repaint
+   *  over it. `from` is the stamp this copy stood at before; `added` the
+   *  messages appended since, or null when the gain is not plain appends
+   *  (a partial_message cut the tail) and the host must redraw whole. */
+  async makeCurrent(recordMoved: boolean, signal: AbortSignal): Promise<{ from: string | null; added: ModelMessage[] | null } | null> {
+    let gained: { from: string | null; added: ModelMessage[] | null } | null = null;
     if (recordMoved) {
-      await this.record.catchUp(signal);
+      const from = this.record.stamp;
+      const more = await this.record.catchUp(signal);
       this.#messages = conversationFrom(this.record.lines);
+      if (more.some((line) => line.type === 'partial_message')) gained = { from, added: null };
+      else {
+        const added = more.flatMap((line) => (line.type === 'message' ? [line.message] : []));
+        if (added.length) gained = { from, added };
+      }
     }
     const cut = danglingCalls(this.#messages);
     if (cut.length) await this.append(cut.map((call) => messageLine(interruptedResultMessage(call))));
-    return recordMoved;
+    return gained;
   }
 
   /** Append to the record; the conversation grows with it. Answers the

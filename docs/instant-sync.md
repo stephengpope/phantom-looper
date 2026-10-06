@@ -46,11 +46,11 @@ a manual sync, both in `index.ts`:
 
 ## What the agent is told
 
-A manual sync writes its note into the transcript under the session lock.
-An instant sync has no lock, so its notes ride the user message queue
-(the SDK's `UserMessageQueue`) — the same queue detached commands use — and land in
-front of the agent's next turn wherever that turn runs (server, cli,
-Telegram). A note already waiting is not queued again.
+Every sync's note — manual or instant — waits as a session note (the
+backend SDK's `SessionNotes`, docs/message-queues.md), the same door
+detached commands use, and lands in front of the agent's next turn wherever
+that turn runs (server, cli, Telegram). An instant sync's note already
+waiting is not added again.
 
 - pushed / pulled: the existing note.
 - conflict: what came in, then the conflicting files, then

@@ -6,6 +6,7 @@
 import type { SessionRow } from '../storage/schema.js';
 import { workspaceOf, type Sessions } from '../storage/Sessions.js';
 import { ToolError } from '../tools/envelope.js';
+import { textOf } from '../lib/text.js';
 
 export const SESSION_HEADER = 'x-phantom-looper-session';
 
@@ -15,7 +16,7 @@ export const SESSION_HEADER = 'x-phantom-looper-session';
  *  map codes to HTTP); returns the row and THE workspace its tools open. */
 export async function toolSession(sessions: Sessions, headers: Record<string, unknown>):
 Promise<{ session: SessionRow; workspaceId: string }> {
-  const id = String(headers[SESSION_HEADER] ?? '');
+  const id = textOf(headers[SESSION_HEADER]);
   if (!id) throw new ToolError('session_not_found', `missing ${SESSION_HEADER} header`);
   const session = await sessions.get(id);
   if (!session) throw new ToolError('session_not_found', `no session ${id}`);

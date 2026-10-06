@@ -79,6 +79,11 @@ export abstract class Agent {
   #abort: AbortController | null = null;
   #keepQueue = false;
   #closed = false;
+  /** The model was asked: from here, a run's own words are the loop's to
+   *  hand back (`unsent`), not the turn's. */
+  #started = false;
+  /** A failed run's drivers, waiting for the turn to report them. */
+  #unsent: string[] = [];
   /** The next turn reassembles the volatile section: set by a resume and by
    *  sendMessage's option; taken by the turn that starts. */
   #rebuildSystemPrompt = false;
@@ -126,33 +131,50 @@ export abstract class Agent {
   addToolKit(kit: ToolKit): this { this.#kits.add(kit); return this; }
 
   // ── the user's words ───────────────────────────────────────────────────
-  // A user message starts a turn. Text sent WHILE a turn runs is queued: it
-  // rides the turn's next model call, or continues the turn when the model
-  // has stopped. A stop cuts the model loop; what is queued then goes on
-  // with the SAME turn — same lock, same feed — unless the stop says
-  // `keepQueue`: then the turn ends, and the queue goes ahead of the next
-  // message the user sends. The queue never takes the session on its own.
+  // docs/message-queues.md. A user message starts a turn. Text sent WHILE a
+  // turn runs is queued — this queue holds a person's words and nothing
+  // else. Queued text RIDES the model's next call while it is mid-run
+  // (written then, never handed back), or DRIVES the next run when the
+  // model has stopped: the turn goes on with it, same lock. The agent keeps
+  // turning while words are queued, so nothing sent is ever left waiting.
+  // A driver whose run failed before the model answered it was never
+  // written: it goes back to the front of the queue and waits — the next
+  // message takes it along; nothing retries on its own. The `returned`
+  // event says which words and why.
+  // A stop cuts the model loop; what is queued goes on with the turn unless
+  // the stop says `keepQueue` — then it stays queued, for the app to show.
 
   /** The user's message. No turn running → a turn starts with it and this
-   *  resolves with the result. A turn running → queued; resolves null (an
-   *  option asked of it holds for the next turn that starts). */
+   *  resolves with the result (the last run's, when queued words kept it
+   *  going). A turn running → queued; resolves null (an option asked of it
+   *  holds for the next turn that starts). */
   sendMessage(text: string, opts: SendOptions = {}): Promise<TurnResult | null> {
     if (opts.rebuildSystemPrompt) this.#rebuildSystemPrompt = true;
     if (this.busy) { this.#queue.add(text); return Promise.resolve(null); }
     if (this.#closed) return Promise.reject(new PhantomError('busy', 'the agent is closed'));
-    const turn = this.#guard(() => this.#turnBody([...this.#queue.drain(), text]));
+    const turn = this.#guard(() => this.#turns([...this.#queue.drain(), text]));
     this.#turn = turn;
     return turn.finally(() => { if (this.#turn === turn) this.#turn = null; });
   }
 
-  /** Stop the running model loop. Finished tool calls keep their results;
-   *  a turn that had not sent anything yet ends with nothing recorded and
-   *  its message dropped — the user said stop. Then, unless `keepQueue`,
-   *  whatever was sent meanwhile goes on with the turn. */
+  /** Turns, for as long as the user has words queued: words that arrived
+   *  after the model's last look (while the turn was closing) drive one more
+   *  turn instead of waiting for the next message. A stop or a failure ends
+   *  it — what is still queued stays queued. */
+  async #turns(texts: string[]): Promise<TurnResult> {
+    let result = await this.#turnBody(texts);
+    while (result.outcome === 'done' && !this.#closed && this.#queue.length) result = await this.#turnBody(this.#sent());
+    return result;
+  }
+
+  /** Stop the running model loop — the standard abort, as a fetch is
+   *  stopped. Finished tool calls keep their results. Words that had not
+   *  been sent yet go back to the queue (`returned`). Then, unless `keepQueue`,
+   *  whatever was queued meanwhile goes on with the turn. */
   interrupt(opts: { keepQueue?: boolean } = {}): void {
     if (!this.#abort) return;
     this.#keepQueue = opts.keepQueue === true;
-    this.#abort.abort(new Error('interrupted'));
+    this.#abort.abort();
   }
 
   /** The person received the last reply only up to `text` — a reply cut off
@@ -167,23 +189,28 @@ export abstract class Agent {
     this.#partials.push(text);
   }
 
-  /** Write what partialMessage holds, in order, before anything else lands. */
-  async #flushPartials(): Promise<void> {
-    if (!this.#partials.length) return;
+  /** Write what partialMessage holds, in order, before anything else lands.
+   *  Queued on the record at once (the record keeps the order); the promise
+   *  is for the caller that must know it landed. */
+  #flushPartials(): Promise<unknown> {
+    if (!this.#partials.length) return Promise.resolve();
     const lines = this.#partials.splice(0).map(partialMessageLine);
-    await this.#session.append(lines);
+    return this.#session.append(lines);
   }
 
+  /** Stop, and wait until the last turn's end reached the server — its
+   *  hold let go — so nothing of this agent is still in flight. */
   async close(): Promise<void> {
     this.#closed = true;
     this.interrupt({ keepQueue: true });
     if (this.#turn) await this.#turn.then(() => undefined, () => undefined);
+    await this.#session.ended();
   }
 
   // ── the turn ───────────────────────────────────────────────────────────
   // One turn = one lock = one result.
 
-  /** `texts`: the user's words this turn opens with. */
+  /** `texts`: the user's words this turn opens with — its drivers. */
   async #turnBody(texts: string[]): Promise<TurnResult> {
     this.#keepQueue = false;
     const signal = this.#nextSignal();
@@ -193,8 +220,10 @@ export abstract class Agent {
       return await this.#session.turn(this.type, signal, async (start) => {
         this.#rebuildSystemPrompt = false;
         const ready = await this.#prepare(start, signal);
-        if (!ready) return nothing;
+        // Stopped before the model was asked: nothing was sent.
+        if (!ready || signal.aborted) { this.#return(texts, this.#stopped()); return nothing; }
         const opening = texts;
+        this.#started = true;
         this.#emit('turn-start', { texts: opening,
           model: { provider: ready.model.spec.provider, model: ready.model.spec.model, reasoning: ready.model.spec.reasoning } });
         const feed = new TurnFeed(this.backend, this.session.id,
@@ -210,37 +239,54 @@ export abstract class Agent {
             loopSignal: () => this.#nextSignal(),
             pending: () => this.#sent(),
             afterStop: () => (this.#keepQueue || this.#closed ? [] : this.#sent()),
+            // Both appends are queued before the first await: the record
+            // keeps the order the turn made them in.
             record: async (lines) => {
-              await this.#flushPartials();
+              const partials = this.#flushPartials();
               const added = await this.#session.append(lines);
+              await partials;
               if (added.length) this.#emit('step', { messages: added, usage: this.session.usage });
             },
             onPart: (part) => { feed.part(part); this.#emit('part', part); },
             onToolError: (name, error) => this.#emit('tool-error', { name, error }),
-            unsent: (texts) => {
-              this.#queue.putBack(texts);
-              this.#handlers.onNotice({ type: 'info', text: `not delivered — ${texts.length === 1 ? 'your message is' : `${texts.length} messages are`} back in the queue for the next turn` });
-            },
+            unsent: (unsent) => { this.#unsent = unsent; },
           });
         } catch (error) {
           feed.error((error as Error).message);
-          await feed.end();
+          start.endAfter(feed.end());
+          const unsent = this.#unsent.splice(0);
+          if (unsent.length) this.#return(unsent, asPhantomError(error, 'internal', 'the turn'));
           throw error;
         }
-        await feed.end();
-        await this.#flushPartials();
+        // The model has stopped and the record holds the turn: the result is
+        // the caller's now. The feed closes and the hold is let go in the
+        // background (Session.turn) — the next turn waits for both.
+        start.endAfter(Promise.all([feed.end(), this.#flushPartials()]));
         this.#emit('turn-end', result);
         return result;
       }, { rebuildSystemPrompt });
     } catch (error) {
-      // A stop before the session was even taken: nothing was sent, nothing
-      // recorded, the message dropped — the user said stop.
+      // Before the model was asked (the hold refused, the server unreachable,
+      // a stop while the turn was starting): nothing was written, so the
+      // words come back with the reason.
+      if (!this.#started) this.#return(texts, signal.aborted ? this.#stopped() : asPhantomError(error, 'internal', 'starting the turn'));
       if (signal.aborted) return nothing;
       throw error;
     } finally {
       this.#abort = null;
+      this.#started = false;
     }
   }
+
+  /** Words the model never answered: back to the front of the queue, and
+   *  the app is told. Never written, so nothing is lost or doubled. */
+  #return(texts: string[], error: PhantomError): void {
+    if (!texts.length) return;
+    this.#queue.unsent(texts);
+    this.#emit('returned', { texts, error });
+  }
+
+  #stopped(): PhantomError { return new PhantomError('interrupted', 'stopped before the model was asked', { retryable: false }); }
 
   /** The subclass's layout — what a rebuild sends. A subclass without one
    *  cannot rebuild: config_invalid, the same word a session with no prompt gets. */
@@ -270,7 +316,8 @@ export abstract class Agent {
    *  untouched. */
   async #prepare(start: TurnStart & { recordMoved: boolean }, signal: AbortSignal): Promise<{ model: ResolvedModel; system: SystemModelMessage[]; tools: Record<string, Tool>; terminal: string[] } | null> {
     try {
-      if (await this.#session.makeCurrent(start.recordMoved, signal)) this.#emit('reloaded', { messages: this.session.messages });
+      const gained = await this.#session.makeCurrent(start.recordMoved, signal);
+      if (gained) this.#emit('reloaded', { messages: this.session.messages, from: gained.from, added: gained.added, now: this.session.transcriptUpdatedAt });
       await this.#flushPartials();
       this.#session.setPlanMode(start.planMode);
       const model = this.#modelResolver.resolve(start.config);

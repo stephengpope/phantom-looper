@@ -45,7 +45,10 @@ const BASE = 'http://looper/api';
  *  starts its own turn — so multiple sessions can run concurrently. /stop
  *  interrupts the agent; a remote interrupt reaches it over the session feed
  *  the agent itself listens to. */
-interface InFlightTurn { queue: string[]; agent: Agent }
+/** The agent running a turn for one key. A message that arrives meanwhile
+ *  goes to ITS queue (the client SDK's — docs/message-queues.md): it rides
+ *  the model's next call, or drives the next run when the model stopped. */
+interface InFlightTurn { agent: Agent }
 
 export class TelegramAssistantBot {
   private inFlight = new Map<string, InFlightTurn>();
@@ -168,15 +171,16 @@ export class TelegramAssistantBot {
       // any other message declines it and goes on to queue as the follow-up.
       if (this.backend.telegramBot.answerApprovalByText(chatId, input)) return;
 
-      // Busy: queue the message into the SAME key's running turn. Code-mode
-      // turns key by sessionId, so switching sessions starts independently;
-      // the assistant is one conversation, so it stays one key.
+      // Busy: the message goes to the SAME key's running agent, whose queue
+      // carries it into this turn. Code-mode turns key by sessionId, so
+      // switching sessions starts independently; the assistant is one
+      // conversation, so it stays one key.
       const busyKey = bot.mode === 'code' && bot.activeSessionId
         ? bot.activeSessionId : 'assistant';
       const running = this.inFlight.get(busyKey);
       if (running) {
-        running.queue.push(input);
-        await client.sendMessage(chatId, '⌛ Got it — after this turn.', { replyToMessageId: msg.message_id });
+        void running.agent.sendMessage(input).catch(() => undefined);
+        await client.sendMessage(chatId, '⌛ Got it — adding it to this turn.', { replyToMessageId: msg.message_id });
         return;
       }
 
@@ -210,7 +214,8 @@ export class TelegramAssistantBot {
       // runs on the row's model, its tools open the row's workspace, every call is billed to it.
       const own = await this.ensureAssistantSession(bot.activeProjectId, bot.activeSessionId);
       agent = await AssistantAgent.resumeSession(this.client, this.agentHandlers('assistant'), own.id);
-      this.inFlight.set(busyKey, { queue: [], agent });
+      this.inFlight.set(busyKey, { agent });
+      this.sayReturned(agent, client, chatId);
       const onSwitch = async (id: string) => {
         const switched = await this.switchSession(client, chatId, id);
         if ('error' in switched) return switched;
@@ -242,17 +247,14 @@ export class TelegramAssistantBot {
       let result;
       try { result = await agent.sendMessage(message); } finally { off(); }
       const said = await sink.finish(result?.text ?? '');
-      // Any messages queued while we ran go out as one follow-up turn.
-      const queued = this.inFlight.get(busyKey)?.queue ?? [];
       this.inFlight.delete(busyKey);
       await agent.close();
       await this.backend.telegramBot.speakText(client, chatId, said, typing);
       typing.stop();
-      if (queued.length) await this.assistantTurn(client, chatId, queued.join('\n\n'));
     } catch (error) {
       this.inFlight.delete(busyKey);
       await agent?.close().catch(() => {});
-      sink.discard();
+      await sink.discard();
       typing.stop();
       const msg = (error as Error).message;
       const isPromptTooLong = /prompt is too long|request too large|context_too_long/i.test(msg);
@@ -290,13 +292,14 @@ export class TelegramAssistantBot {
     let agent: CodingAgent | undefined;
     try {
       agent = await CodingAgent.resumeSession(this.client, this.agentHandlers('coding'), sessionId);
-      this.inFlight.set(sessionId, { queue: [], agent });
+      this.inFlight.set(sessionId, { agent });
+      this.sayReturned(agent, client, chatId);
       const off = agent.on('part', (part) => sink.appendPart(part as Record<string, unknown>));
       let result;
       try { result = await agent.sendMessage(message); }
       catch (error) {
         if ((error as { code?: string }).code === 'session_locked') {
-          off(); sink.discard(); this.inFlight.delete(sessionId); await agent.close(); typing.stop();
+          off(); await sink.discard(); this.inFlight.delete(sessionId); await agent.close(); typing.stop();
           const session = await this.backend.sessions.get(sessionId);
           await client.sendMessage(chatId, `🔒 That session is busy${session?.lockedLabel ? ` (${session.lockedLabel})` : ''} — try again in a moment.`);
           return;
@@ -304,20 +307,28 @@ export class TelegramAssistantBot {
         throw error;
       } finally { off(); }
       const said = await sink.finish(result?.text ?? '');
-      const queued = this.inFlight.get(sessionId)?.queue ?? [];
       this.inFlight.delete(sessionId);
       await agent.close();
       await this.backend.telegramBot.speakText(client, chatId, said, typing);
       typing.stop();
-      if (queued.length) await this.codeTurn(client, chatId, sessionId, queued.join('\n\n'));
     } catch (error) {
-      sink.discard();
+      await sink.discard();
       this.inFlight.delete(sessionId);
       await agent?.close().catch(() => {});
       typing.stop();
       log.error({ err: errStr(error) }, 'code turn failed');
       await client.sendMessage(chatId, `⚠️ ${(error as Error).message}`).catch(() => {});
     }
+  }
+
+  /** Words the model never answered (a run failed or was stopped first):
+   *  the chat is told which. The agent this bot runs is closed after the
+   *  turn, so its queue goes with it — they must be sent again. */
+  private sayReturned(agent: Agent, client: TelegramApi, chatId: number): void {
+    agent.on('returned', ({ texts }) => {
+      const quoted = texts.map((text) => `“${text.length > 200 ? `${text.slice(0, 200)}…` : text}”`).join('\n');
+      void client.sendMessage(chatId, `↩️ Not sent — send it again:\n${quoted}`).catch(() => {});
+    });
   }
 
   /** What an agent this bot runs tells it: errors and notices go to the log. */
@@ -446,7 +457,7 @@ export class TelegramAssistantBot {
   stop(key: string): boolean {
     const b = this.inFlight.get(key);
     if (!b) return false;
-    b.queue.length = 0;
+    b.agent.userMessages.clear();
     b.agent.interrupt({ keepQueue: true });
     return true;
   }

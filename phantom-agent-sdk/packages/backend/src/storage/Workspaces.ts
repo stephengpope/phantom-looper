@@ -145,7 +145,7 @@ export class Workspaces {
       .values({ id, projectId: project.id, branch, cutFromSha: head, createdAt: new Date() }).returning();
     log.info({ workspace: id, project: `${project.owner}/${project.name}`, branch, found, claimed, cutFromSha: head },
       'checkout made');
-    return row!;
+    return row;
   }
 
   /** The files back for a workspace whose files were removed: the same
@@ -181,7 +181,7 @@ export class Workspaces {
   async countOnDisk(projectId: string): Promise<number> {
     const [counted] = await this.database.select({ n: count() }).from(workspaces)
       .where(and(eq(workspaces.projectId, projectId), eq(workspaces.onDisk, true)));
-    return counted!.n;
+    return counted.n;
   }
 
   // ── activity ───────────────────────────────────────────────────────────────

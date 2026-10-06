@@ -7,6 +7,7 @@
 import { createTransport } from 'nodemailer';
 import type { Settings } from '../storage/Settings.js';
 import { logger, errStr } from '../lib/log.js';
+import { textOf } from '../lib/text.js';
 
 const log = logger('mail');
 
@@ -36,11 +37,11 @@ export class Mailer {
       throw new MailerError('not_configured', 'mail is not configured: set smtp_host, smtp_port, smtp_user, smtp_password and smtp_from');
     }
     const transport = createTransport({
-      host: String(smtp.smtp_host), port: Number(smtp.smtp_port), secure: smtp.smtp_secure === true,
-      auth: { user: String(smtp.smtp_user), pass: password },
+      host: textOf(smtp.smtp_host), port: Number(smtp.smtp_port), secure: smtp.smtp_secure === true,
+      auth: { user: textOf(smtp.smtp_user), pass: password },
     });
     try {
-      await transport.sendMail({ from: String(smtp.smtp_from), to: mail.to, subject: mail.subject, text: mail.text, html: mail.html });
+      await transport.sendMail({ from: textOf(smtp.smtp_from), to: mail.to, subject: mail.subject, text: mail.text, html: mail.html });
       log.info({ to: mail.to, subject: mail.subject }, 'mail sent');
     } catch (error) {
       log.warn({ to: mail.to, err: errStr(error) }, 'mail failed');

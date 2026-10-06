@@ -598,13 +598,6 @@ export class WindowStore {
       // start and stop. Background: a failure goes to cli.log, not the pane.
       void this.onTurnEnded?.().catch(quiet('refresh tasks'));
     });
-    // A refused send puts the words back: into the box when that session is
-    // on screen, into its draft otherwise — either way the next switch to it
-    // shows them.
-    store.onRefused = (id, text) => {
-      if (id === this.sessions.activeId) this.setPrompt(text);
-      else { const entry = this.sessions.get(id); if (entry) entry.draft = text; }
-    };
     return store;
   }
 
@@ -836,7 +829,7 @@ export class WindowStore {
       agent.addToolKit(this.cliToolKit(agent.session.id, agent.session.projectId));
       const row = await this.api('GET', `/sessions/${agent.session.id}`) as { id: string; branch: string; projectId: string;
         name?: string | null; agent?: string | null; card?: number | null; planMode?: boolean; pinned?: boolean;
-        provider?: string | null; model?: string | null; transcript_updated_at?: string | null };
+        provider?: string | null; model?: string | null };
       const summary = await this.modelLineFor(row, row.projectId);
       const planMode = row.planMode === true;
       // The card this session builds, named the way the board names it
@@ -857,7 +850,10 @@ export class WindowStore {
         id: row.id, branch: row.branch, projectId: row.projectId,
         name: row.name ?? null,
         agent, summary,
-        syncStamp: row.transcript_updated_at ?? null,
+        // The record the screen was drawn from is the agent's copy: its stamp
+        // is the one the screen matches, not the row's (a write could land
+        // between the agent's read and the row GET above).
+        syncStamp: agent.session.transcriptUpdatedAt,
         planMode,
         pinned: row.pinned === true,
         ...(card ? { card } : {}),

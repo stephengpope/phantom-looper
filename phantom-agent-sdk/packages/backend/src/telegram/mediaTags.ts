@@ -60,12 +60,12 @@ function blank(chars: string[], start: number, end: number): void {
 export function maskProtectedSpans(content: string): string {
   const chars = units(content);
   const spans: Array<[number, number]> = [];
-  for (const match of content.matchAll(/```[^\n]*\n[\s\S]*?```/g)) spans.push([match.index!, match.index! + match[0].length]);
+  for (const match of content.matchAll(/```[^\n]*\n[\s\S]*?```/g)) spans.push([match.index, match.index + match[0].length]);
   for (const match of content.matchAll(/`[^`\n]+`/g)) {
-    if (/MEDIA:\s*$/.test(content.slice(Math.max(0, match.index! - 20), match.index!))) continue;
-    spans.push([match.index!, match.index! + match[0].length]);
+    if (/MEDIA:\s*$/.test(content.slice(Math.max(0, match.index - 20), match.index))) continue;
+    spans.push([match.index, match.index + match[0].length]);
   }
-  for (const match of content.matchAll(/^>.*$/gm)) spans.push([match.index!, match.index! + match[0].length]);
+  for (const match of content.matchAll(/^>.*$/gm)) spans.push([match.index, match.index + match[0].length]);
   for (const [start, end] of spans) blank(chars, start, end);
   return chars.join('');
 }
@@ -77,7 +77,7 @@ export function maskJsonStringMedia(content: string): string {
   const chars = units(content);
   for (const match of content.matchAll(/(?<=[:,{[])\s*"((?:[^"\\\n]|\\.)*)"/g)) {
     if (!/MEDIA:\s*(?:~\/|\/|[A-Za-z]:[/\\])/.test(match[1])) continue;
-    const bodyStart = match.index! + match[0].indexOf('"') + 1;
+    const bodyStart = match.index + match[0].indexOf('"') + 1;
     blank(chars, bodyStart, bodyStart + match[1].length);
   }
   return chars.join('');
@@ -108,7 +108,7 @@ export function extractMedia(content: string): { media: Media[]; cleaned: string
   if (media.length) {
     const maskedCleaned = maskJsonStringMedia(maskProtectedSpans(cleaned));
     const spans: Array<[number, number]> = [];
-    for (const match of maskedCleaned.matchAll(mediaTagRe())) spans.push([match.index!, match.index! + match[0].length]);
+    for (const match of maskedCleaned.matchAll(mediaTagRe())) spans.push([match.index, match.index + match[0].length]);
     if (spans.length) {
       const chars = units(cleaned);
       for (const [start, end] of spans.sort((a, b) => b[0] - a[0])) chars.splice(start, end - start);
@@ -124,13 +124,13 @@ export function extractMedia(content: string): { media: Media[]; cleaned: string
 export function extractBarePaths(content: string): { paths: string[]; cleaned: string } {
   const src = String(content ?? '');
   const codeSpans: Array<[number, number]> = [];
-  for (const match of src.matchAll(/```[^\n]*\n[\s\S]*?```/g)) codeSpans.push([match.index!, match.index! + match[0].length]);
-  for (const match of src.matchAll(/`[^`\n]+`/g)) codeSpans.push([match.index!, match.index! + match[0].length]);
+  for (const match of src.matchAll(/```[^\n]*\n[\s\S]*?```/g)) codeSpans.push([match.index, match.index + match[0].length]);
+  for (const match of src.matchAll(/`[^`\n]+`/g)) codeSpans.push([match.index, match.index + match[0].length]);
   const inCode = (pos: number) => codeSpans.some(([start, end]) => pos >= start && pos < end);
 
   const raws: string[] = [];
   for (const match of src.matchAll(barePathRe())) {
-    if (inCode(match.index!)) continue;
+    if (inCode(match.index)) continue;
     if (!raws.includes(match[0])) raws.push(match[0]);
   }
   let cleaned = src;

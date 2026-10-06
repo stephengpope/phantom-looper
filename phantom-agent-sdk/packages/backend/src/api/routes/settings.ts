@@ -73,7 +73,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         if (!entry.secret) { out[key] = { ...entry, secret: false }; continue; }
         // Credentials are keys of the same store — same table, same chain —
         // and this route answers them decrypted: every layer, the deepest set winning.
-        const layers = credentials[key]!;
+        const layers = credentials[key];
         let value: string | null = null; let source: string = 'default';
         for (const layer of LAYERS) if (layers[layer] != null) { value = layers[layer]; source = layer; }
         out[key] = { ...entry, ...layers, value, source };

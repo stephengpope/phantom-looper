@@ -311,7 +311,7 @@ export class Identity {
     if (await context.internalAdapter.findUserByEmail(fields.email)) throw new IdentityError('email_taken', `a user with email ${fields.email} exists`);
     const created = await context.internalAdapter.createUser({ email: fields.email, name: fields.name ?? fields.email }, { method: 'admin' });
     log.info({ email: fields.email }, 'user created by the phantom admin');
-    return (await this.database.drizzle.select().from(user).where(eq(user.id, created.id)))[0]!;
+    return (await this.database.drizzle.select().from(user).where(eq(user.id, created.id)))[0];
   }
 
   /** Bootstrap, the phantom admin's: the magic link for `email`, handed back

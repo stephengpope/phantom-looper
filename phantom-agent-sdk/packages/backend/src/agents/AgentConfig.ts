@@ -92,7 +92,7 @@ export class AgentConfig {
   private async ownAndFallback(type: string, scope: SettingScope): Promise<{ own: TypeRows; fallback: TypeRows; fallbackName: string | null }> {
     const fallbackName = this.agentTypes.fallbackOf(type);
     const [own, fallback] = await this.rowsOf(fallbackName ? [type, fallbackName] : [type], scope);
-    return { own: own!, fallback: fallback ?? EMPTY_ROWS, fallbackName };
+    return { own: own, fallback: fallback ?? EMPTY_ROWS, fallbackName };
   }
 
   /** The compaction numbers for a type, for the model it runs (pinned or resolved). */
@@ -121,8 +121,8 @@ export class AgentConfig {
       `${type}_compact_summarize_pct`, `${type}_compact_max_tokens`,
     ]);
     const values = await this.settings.resolveMany(keys, scope);
-    const str = (key: string) => (typeof values[key] === 'string' ? values[key] as string : null);
-    const num = (key: string) => (typeof values[key] === 'number' ? values[key] as number : null);
+    const str = (key: string) => (typeof values[key] === 'string' ? values[key] : null);
+    const num = (key: string) => (typeof values[key] === 'number' ? values[key] : null);
     return types.map((type) => ({
       provider: str(`${type}_provider`), model: str(`${type}_model`), baseUrl: str(`${type}_base_url`),
       reasoning: str(`${type}_reasoning`), maxSteps: num(`${type}_max_steps`),

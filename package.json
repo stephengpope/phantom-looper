@@ -1,6 +1,6 @@
 {
   "name": "phantom-looper",
-  "version": "0.1.82",
+  "version": "0.1.88",
   "description": "phantom-looper — a terminal coding agent with a kanban-driven supervisor loop",
   "type": "module",
   "license": "MIT",
@@ -43,7 +43,7 @@
     "croner": "10.0.1",
     "dockerode": "5.0.1",
     "drizzle-orm": "0.45.3",
-    "fastify": "5.12.1",
+    "fastify": "5.12.5",
     "jose": "6.2.9",
     "mdast-util-from-markdown": "2.0.3",
     "pg": "8.23.0",
@@ -52,7 +52,7 @@
     "string-width": "7.2.0",
     "tar-stream": "2.2.0",
     "ulid": "2.4.0",
-    "undici": "8.10.0",
+    "undici": "8.10.2",
     "zod": "4.4.3"
   },
   "devDependencies": {

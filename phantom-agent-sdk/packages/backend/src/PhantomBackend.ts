@@ -27,7 +27,7 @@ import { AgentDatabases } from './storage/AgentDatabases.js';
 import { AgentTypes } from './agents/AgentTypes.js';
 import { AgentConfig } from './agents/AgentConfig.js';
 import { ModelCatalog } from './agents/ModelCatalog.js';
-import { UserMessageQueue } from './agents/UserMessageQueue.js';
+import { SessionNotes } from './agents/SessionNotes.js';
 import { SessionEvents } from './agents/SessionEvents.js';
 import { BoardEvents } from './agents/BoardEvents.js';
 import { SettingsEvents } from './agents/SettingsEvents.js';
@@ -131,7 +131,7 @@ export class PhantomBackend {
   readonly agentTypes: AgentTypes;
   readonly agentConfig: AgentConfig;
   readonly modelCatalog: ModelCatalog;
-  readonly userMessageQueue: UserMessageQueue;
+  readonly sessionNotes: SessionNotes;
   readonly sessionEvents: SessionEvents;
   readonly boardEvents: BoardEvents;
   readonly settingsEvents: SettingsEvents;
@@ -171,7 +171,7 @@ export class PhantomBackend {
     this.projects = built.projects; this.workspaces = built.workspaces; this.sessions = built.sessions; this.cards = built.cards;
     this.crons = built.crons; this.presets = built.presets; this.backgroundTasks = built.backgroundTasks; this.tokenLog = built.tokenLog;
     this.agentDatabases = built.agentDatabases; this.agentTypes = built.agentTypes; this.agentConfig = built.agentConfig;
-    this.modelCatalog = built.modelCatalog; this.userMessageQueue = built.userMessageQueue; this.sessionEvents = built.sessionEvents;
+    this.modelCatalog = built.modelCatalog; this.sessionNotes = built.sessionNotes; this.sessionEvents = built.sessionEvents;
     this.boardEvents = built.boardEvents; this.settingsEvents = built.settingsEvents; this.foregroundCommands = built.foregroundCommands;
     this.docker = built.docker; this.images = built.images; this.sessionContainers = built.sessionContainers;
     this.workspaceWatcher = built.workspaceWatcher; this.telegramBotState = built.telegramBotState;
@@ -185,7 +185,7 @@ export class PhantomBackend {
     this.git = new GitService({
       sessions: this.sessions, workspaces: this.workspaces, cards: this.cards, projects: this.projects, settings: this.settings, paths: this.paths,
       sessionEvents: this.sessionEvents, boardEvents: this.boardEvents, settingsEvents: this.settingsEvents,
-      userMessageQueue: this.userMessageQueue, sessionContainers: this.sessionContainers, workspaceWatcher: this.workspaceWatcher,
+      sessionNotes: this.sessionNotes, sessionContainers: this.sessionContainers, workspaceWatcher: this.workspaceWatcher,
     }, config.git ?? {});
     this.#httpApi = new HttpApi(this, this.env.apiKey, config.routes);
   }
@@ -245,22 +245,21 @@ export class PhantomBackend {
     const telegramBotState = new TelegramBotState(database.drizzle, env.encryptionKey);
     const telegramSentMessages = new TelegramSentMessages(database.drizzle);
     const telegramHandledUpdates = new TelegramHandledUpdates(database.drizzle);
-    const userMessageQueue = new UserMessageQueue();
+    const sessionNotes = new SessionNotes();
     const foregroundCommands = new ForegroundCommands();
     const workspaceWatcher = new WorkspaceWatcher();
     // Instant sync follows the containers: a container up is a workspace to
     // watch, a container gone is one to drop. The hooks are closures over the
     // backend, which exists long before any container starts.
-    let backend: PhantomBackend;
     const sessionContainers = new SessionContainers(docker, images, paths, {
       volume: process.env.WORKSPACE_VOLUME, network: process.env.WORKSPACE_NETWORK, settings, databases: agentDatabases,
       onStarted: (workspaceId, project) => backend.git.instantSync.watchWorkspace(workspaceId, project),
       onRemoved: (workspaceId) => backend.git.instantSync.unwatchWorkspace(workspaceId),
     });
 
-    backend = new PhantomBackend(config, {
+    const backend: PhantomBackend = new PhantomBackend(config, {
       env, paths, database, settings, projects, workspaces, sessions, cards, crons, presets, backgroundTasks, tokenLog, agentDatabases,
-      agentTypes, agentConfig, modelCatalog, userMessageQueue, sessionEvents, boardEvents, settingsEvents, foregroundCommands,
+      agentTypes, agentConfig, modelCatalog, sessionNotes, sessionEvents, boardEvents, settingsEvents, foregroundCommands,
       docker, images, sessionContainers, workspaceWatcher, telegramBotState, telegramSentMessages, telegramHandledUpdates,
     });
     return backend;
@@ -348,7 +347,7 @@ export class PhantomBackend {
 interface Built {
   env: Env; paths: Paths; database: Database; settings: Settings; projects: Projects; workspaces: Workspaces; sessions: Sessions;
   cards: Cards; crons: Crons; presets: Presets; backgroundTasks: BackgroundTasks; tokenLog: TokenLog; agentDatabases: AgentDatabases;
-  agentTypes: AgentTypes; agentConfig: AgentConfig; modelCatalog: ModelCatalog; userMessageQueue: UserMessageQueue;
+  agentTypes: AgentTypes; agentConfig: AgentConfig; modelCatalog: ModelCatalog; sessionNotes: SessionNotes;
   sessionEvents: SessionEvents; boardEvents: BoardEvents; settingsEvents: SettingsEvents; foregroundCommands: ForegroundCommands;
   docker: Docker; images: Images; sessionContainers: SessionContainers; workspaceWatcher: WorkspaceWatcher;
   telegramBotState: TelegramBotState; telegramSentMessages: TelegramSentMessages; telegramHandledUpdates: TelegramHandledUpdates;

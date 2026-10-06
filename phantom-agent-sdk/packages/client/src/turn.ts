@@ -6,23 +6,25 @@
 // loops. ONE runner for every agent and every host. What differs by host is
 // only where the parts go (`onPart`).
 //
-// What is recorded, and when (the record is the server's transcript):
-//   model call succeeded  → the user messages that rode into it, the
-//                            assistant message, the usage line — NOW, before
-//                            any tool result (onLanguageModelCallEnd; the
-//                            AI SDK awaits it and carries reasoning with its
-//                            provider signature).
-//   each tool finished    → its result, as it lands.
-//   model call failed     → nothing from that step. The user messages that
-//                            rode into it are handed back (`unsent`): the
-//                            Agent puts them at the front of its queue, so
-//                            they ride the next turn — or the host takes
-//                            them back into its box.
-//   interrupted           → partial text and every tool call seen, results
-//                            for finished tools, INTERRUPTED_RESULT for the
-//                            rest, then an `interrupted` line.
-// A record that fails after retries STOPS the turn (transcript_write_failed).
-// Nothing runs unrecorded.
+// What is recorded, and when (the record is the server's transcript). Every
+// write goes out in order on the record's one queue, and the turn does NOT
+// wait for it — the stream and the tools run on. The turn waits for its
+// writes once, before it returns. A write that fails after retries STOPS
+// the turn (transcript_write_failed). Nothing runs unrecorded.
+//
+// The user's words reach a model run one of two ways (docs/message-queues.md):
+//   driving → the words a run OPENS with: the turn's message, or what was
+//             queued when the model had stopped. Written with the model's
+//             first answer. If the run fails before that answer they were
+//             never written, and they are handed back (`unsent`).
+//   riding  → words queued while the model is mid-run, joining its next
+//             call. Written the moment they are taken; never handed back.
+//
+//   model call answered → the drivers, the assistant message, the usage line.
+//   each tool finished  → its result, as it lands.
+//   interrupted         → the drivers if still unanswered, partial text and
+//                         every tool call seen, results for finished tools,
+//                         INTERRUPTED_RESULT for the rest, an `interrupted` line.
 import { streamText, stepCountIs, hasToolCall, type AssistantContent, type LanguageModel, type ModelMessage, type SystemModelMessage,
   type TextStreamPart, type Tool, type ToolCallPart } from 'ai';
 import { PhantomError, asPhantomError } from './errors.js';
@@ -65,21 +67,24 @@ export interface TurnInput {
   /** A fresh signal for each model loop: a stop aborts the loop it was
    *  given to, and only that loop. */
   loopSignal(): AbortSignal;
-  /** After a stopped loop: the words the turn goes on with, or none to end
-   *  it as interrupted. */
+  /** After a stopped loop: the words the turn goes on with (they drive the
+   *  next run), or none to end it as interrupted. */
   afterStop(): string[];
   /** What the turn opens with. */
   opening: string[];
-  /** Called before every model call after the first, and once more when the
-   *  model stops: the user messages that arrived since, taken. */
+  /** The user messages that arrived since, taken: before every model call
+   *  (they ride it, or drive it when it opens a run) and once more when the
+   *  model stops (they drive the next run). */
   pending(): string[];
-  /** Append to the record. Rejects → the turn fails. */
+  /** Append to the record. Called in order; each call must enqueue its
+   *  write before it returns, so the writes land in the order made.
+   *  Rejects → the turn fails. */
   record(lines: TranscriptLine[]): Promise<void>;
   onPart(part: StreamPart): void;
   /** A tool answered with an error (the model still gets it). */
   onToolError(name: string, error: unknown): void;
-  /** The loop failed with these user messages sent to the model and never
-   *  recorded — the words are the caller's again. */
+  /** A run failed before its drivers were written: those words are the
+   *  caller's again. Riders are never handed back — they were written. */
   unsent(texts: string[]): void;
 }
 
@@ -145,7 +150,7 @@ export async function runTurn(input: TurnInput): Promise<TurnResult> {
 }
 
 /** One model ↔ tools loop over `history + tally.added`, opening with
- *  `carry`. Resolves true when it was stopped. */
+ *  `carry` (its drivers). Resolves true when it was stopped. */
 async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], carry: string[], tally: Tally): Promise<boolean> {
   const outer = input.loopSignal();
   const abort = new AbortController();
@@ -156,14 +161,18 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
   const step = new StepInFlight();
   // Set from the AI SDK's callbacks, read after the stream — a holder, so
   // the reads are not narrowed to their initial values.
-  const state: { pendingMessages: ModelMessage[]; recordFailure: PhantomError | null } =
-    { pendingMessages: carry.map(userMessage), recordFailure: null };
+  //   drivers   — this run's opening words, not yet sent with a written answer
+  //   unwritten — drivers whose answer's write is still on its way
+  //   writes    — the record queue's tail: awaited once, before returning
+  const state: { drivers: ModelMessage[]; unwritten: ModelMessage[]; writes: Promise<void>; recordFailure: PhantomError | null } =
+    { drivers: carry.map(userMessage), unwritten: [], writes: Promise.resolve(), recordFailure: null };
   try {
     return await streamModelLoop();
   } catch (error) {
-    // The loop failed with the user's words unrecorded: they are the
-    // caller's again. (A stop records them before it returns — see below.)
-    if (state.pendingMessages.length) input.unsent(state.pendingMessages.map(userText));
+    // The run failed with its drivers never written: they are the caller's
+    // again. (A stop writes them before it returns — see below.)
+    const back = [...state.unwritten, ...state.drivers];
+    if (back.length) input.unsent(back.map(userText));
     throw error;
   }
 
@@ -174,32 +183,31 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
     let tripped: PhantomError | undefined;
     const failures = new RepeatedFailures();
 
-    // Every record goes through here: a failure ends the turn and is kept to
+    // Every record goes through here, in order, without waiting: the write
+    // is queued and the turn runs on. A failure ends the turn and is kept to
     // be thrown once the stream has closed (the AI SDK swallows what a
-    // callback throws — verified: util/notify.ts `catch {}`).
-    const record = async (lines: TranscriptLine[]): Promise<void> => {
-      if (state.recordFailure) return;
-      try {
-        await input.record(lines);
-        for (const line of lines) if (line.type === 'message') tally.added.push(line.message);
-      } catch (error) {
-        state.recordFailure = asPhantomError(error, 'transcript_write_failed', 'recording the turn');
-        abort.abort(state.recordFailure);
-      }
+    // callback throws — verified: util/notify.ts `catch {}`). Answers whether
+    // the write landed.
+    const record = (lines: TranscriptLine[]): Promise<boolean> => {
+      if (state.recordFailure) return Promise.resolve(false);
+      for (const line of lines) if (line.type === 'message') tally.added.push(line.message);
+      const write = input.record(lines).then(() => true, (error: unknown) => {
+        if (!state.recordFailure) {
+          state.recordFailure = asPhantomError(error, 'transcript_write_failed', 'recording the turn');
+          abort.abort(state.recordFailure);
+        }
+        return false;
+      });
+      state.writes = state.writes.then(() => write.then(() => undefined));
+      return write;
     };
-
-    // What is waiting rides the FIRST call as part of the initial messages
-    // (the AI SDK refuses an empty list); prepareStep adds anything that
-    // arrived since, and does the same before every later call.
-    const drain = () => {
-      const more = input.pending();
-      if (more.length) state.pendingMessages = [...state.pendingMessages, ...more.map(userMessage)];
-    };
+    /** Every write made so far has landed (or failed). */
+    const settled = async () => { await state.writes; throwIfFailed(state); };
 
     const result = streamText({
       model: input.model,
       instructions: input.system,
-      messages: [...history, ...tally.added, ...state.pendingMessages],
+      messages: [...history, ...tally.added, ...state.drivers],
       tools: input.tools,
       stopWhen: [
         ...(input.maxSteps == null ? [] : [stepCountIs(input.maxSteps)]),
@@ -215,14 +223,20 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
 
       prepareStep: ({ messages, stepNumber }) => {
         step.reset();
-        // The first call's pending messages are already in `messages`.
-        const before = stepNumber === 0 ? state.pendingMessages.length : 0;
-        drain();
-        return { messages: withRollingCacheMark([...messages, ...state.pendingMessages.slice(before)]) };
+        const more = input.pending().map(userMessage);
+        if (more.length && stepNumber === 0) {
+          // The run has not been answered yet: these open it with the rest.
+          state.drivers.push(...more);
+        } else if (more.length) {
+          // The model is mid-run: these ride its next call, written now.
+          void record(more.map(messageLine));
+        }
+        return { messages: withRollingCacheMark([...messages, ...more]) };
       },
 
-      onLanguageModelCallEnd: async (callEnd) => {
-        // The model answered: the messages that rode in, the answer, its usage.
+      onLanguageModelCallEnd: (callEnd) => {
+        // The model answered: the drivers (first call of the run), the
+        // answer, its usage — queued for the record, not waited on.
         const assistant = assistantMessageFrom(callEnd.content);
         const callUsage = {
           provider: input.spec.provider, model: input.spec.model, responseId: callEnd.responseId,
@@ -232,16 +246,20 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
         };
         tally.usage.input += callUsage.input; tally.usage.output += callUsage.output;
         tally.usage.cacheRead += callUsage.cacheRead; tally.usage.cacheWrite += callUsage.cacheWrite;
+        const drivers = state.drivers;
+        state.drivers = [];
+        state.unwritten.push(...drivers);
         const lines: TranscriptLine[] = [
-          ...state.pendingMessages.map(messageLine),
+          ...drivers.map(messageLine),
           ...(assistant ? [messageLine(assistant)] : []),
           usageLine(callUsage),
           ...step.held,
         ];
         step.held = [];
         step.assistantRecorded = true;
-        state.pendingMessages = [];
-        await record(lines);
+        void record(lines).then((written) => {
+          if (written) state.unwritten = state.unwritten.filter((message) => !drivers.includes(message));
+        });
       },
     });
 
@@ -262,7 +280,7 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
             if (isError) input.onToolError(toolResult.toolName, toolResult.error);
             step.answered.add(toolResult.toolCallId);
             const line = messageLine(await toolResultMessage(toolResult, input.tools[toolResult.toolName], isError));
-            if (step.assistantRecorded) await record([line]);
+            if (step.assistantRecorded) void record([line]);
             else step.held.push(line);
             if (!isError) failures.succeeded();
             else if (failures.failed(toolResult.toolName, toolResult.input) >= TOOL_FAILURE_LIMIT && !tripped) {
@@ -279,9 +297,9 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
         input.onPart(raw);
       }
     } catch (error) {
-      // A stop closes the stream by throwing its reason out of the iteration
-      // (verified against the AI SDK: no `abort` part follows). The cut step
-      // is recorded below; anything else is the stream's own failure.
+      // A stop closes the stream by throwing its reason out of the iteration,
+      // or with an `abort` part. The cut step is recorded below; anything
+      // else is the stream's own failure.
       if (!abort.signal.aborted) throw error;
     } finally {
       outer.removeEventListener('abort', onOuterAbort);
@@ -289,24 +307,24 @@ async function runModelLoop(input: TurnInput, history: readonly ModelMessage[], 
     // The stream's own promises resolve with the same outcome; settle them so
     // nothing is left dangling.
     await result.response.then(() => undefined, () => undefined);
-
-    throwIfFailed(state);
+    await settled();
 
     if (abort.signal.aborted) {
-      // The cut step. Nothing streamed = nothing to record beyond the user
-      // messages that were sent and the mark.
+      // The cut step. Nothing streamed = nothing to record beyond the
+      // drivers that were sent and the mark.
       const lines: TranscriptLine[] = [];
       if (!step.assistantRecorded) {
-        lines.push(...state.pendingMessages.map(messageLine));
+        lines.push(...state.drivers.map(messageLine));
         const content: AssistantContent = [...(step.text ? [{ type: 'text' as const, text: step.text }] : []), ...step.calls];
         if (content.length) lines.push(messageLine({ role: 'assistant', content }));
         lines.push(...step.held);
       }
       for (const call of step.calls) if (!step.answered.has(call.toolCallId)) lines.push(messageLine(interruptedResultMessage(call)));
       lines.push(interruptedLine());
-      await record(lines);
-      throwIfFailed(state);
-      state.pendingMessages = [];   // recorded: no longer the caller's to take back
+      state.unwritten.push(...state.drivers);
+      state.drivers = [];
+      if (await record(lines)) state.unwritten = [];
+      await settled();
       if (tripped) throw tripped;
       if (step.text) tally.text = step.text;
       return true;

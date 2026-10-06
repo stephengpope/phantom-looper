@@ -7,6 +7,7 @@ import { CronError, type CronFields } from '../storage/Crons.js';
 import { REASONINGS } from '@phantom-agent-sdk/client';
 import { nullable, obj, refusal, str, type OfferCtx, type ToolCtx, type ToolDef } from './def.js';
 import { scopeOf } from '../lib/scopes.js';
+import { textOf } from '../lib/text.js';
 
 const WHAT_A_RUN_IS = 'A RUN HAS NO USER IN IT: it opens a fresh coding session in this project (its own checkout, ' +
   'cut from the base branch) and runs the prompt as one turn. It cannot see this conversation and cannot ask a ' +
@@ -96,8 +97,8 @@ export const CRON_TOOLS: ToolDef[] = [
     }, ['name']),
     mutates: true, group: 'crons', offered: enabled,
     execute: (ctx, { name, new_name, ...rest }) => stamped(ctx, async (clock) => ({
-      cron: await ctx.app.crons.update(ctx.project, String(name),
-        { ...(rest as CronFields), ...(new_name !== undefined ? { name: String(new_name) } : {}) }, clock) })),
+      cron: await ctx.app.crons.update(ctx.project, textOf(name),
+        { ...(rest as CronFields), ...(new_name !== undefined ? { name: textOf(new_name) } : {}) }, clock) })),
   },
   {
     name: 'cron_remove',

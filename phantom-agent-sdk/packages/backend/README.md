@@ -60,7 +60,7 @@ src/members.ts           the members, one file each
 src/storage/             Database (roles, pool, migrations), Settings, the table owners, AgentDatabases, schema, migrations/
 src/mail/                Mailer (SMTP)
 src/identity/            Identity: Better Auth, who a caller is
-src/agents/              AgentTypes, AgentConfig, SystemPrompt, ModelCatalog, SessionTitler, UserMessageQueue, the feeds
+src/agents/              AgentTypes, AgentConfig, SystemPrompt, ModelCatalog, SessionTitler, SessionNotes, the feeds
 src/runtime/             Docker, Images, SessionContainers, Sandbox, CheckoutPool, Disk, Skills, SystemSkills, Web
 src/git/                 Git, GitService, GitSync, InstantSync, WorkspaceWatcher, GitHub
 src/telegram/            TelegramBot, TelegramApi, attachments, voice, approvals, the tables

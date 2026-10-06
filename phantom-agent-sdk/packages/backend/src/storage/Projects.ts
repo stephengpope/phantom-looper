@@ -110,7 +110,7 @@ export class Projects {
     const [claimed] = await transaction.update(projects)
       .set({ nextCardNumber: sql`${projects.nextCardNumber} + 1` })
       .where(eq(projects.id, id)).returning({ number: sql<number>`${projects.nextCardNumber} - 1` });
-    return claimed!.number;
+    return claimed.number;
   }
 
   /** The row goes; the agent's database and its settings layer (overrides,
