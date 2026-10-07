@@ -376,6 +376,9 @@ restoreConsole();
 // Every agent closed: each turn interrupted and waited out, so every
 // turn-ended reaches the server and no hold outlives this window.
 await (windowStore as WindowStore | null)?.closeAgents().catch(() => undefined);
+// Then the connection they spoke over — the one handle left keeping the
+// process alive, which read as a dead black screen until ctrl+c again.
+server.close();
 
 // Quitting is not the end of the session: its branch and its transcript are
 // both still there. One line of prose and the command on its own line, so it

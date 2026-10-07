@@ -47,6 +47,15 @@ export class Server {
     return this.#backend;
   }
 
+  /** Quitting: the connection to the server is the last thing holding the
+   *  process open once the screen is down — closed here, and the process
+   *  ends on its own. */
+  close(): void {
+    this.#connection?.close();
+    this.#connection = null;
+    this.#backend = null;
+  }
+
   /** One call, the envelope unwrapped; a failure is the cli's sentence
    *  (request.ts) with the server's code and status on it. */
   api: Api = async (method, path, body) => {
