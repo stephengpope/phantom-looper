@@ -94,6 +94,10 @@ services:
       # The bot's public address — the Telegram webhook registers at
       # https://<this>/telegram/webhook. Empty = telegram stays off.
       PHANTOM_BACKEND_ADDRESS: ${PHANTOM_BACKEND_ADDRESS:-}
+      # Where Telegram reaches the webhook, when that is not the address above
+      # — a dev box serves Caddy on localhost and Telegram through a tunnel
+      # (ngrok). Empty: the address above.
+      TELEGRAM_WEBHOOK_ADDRESS: ${TELEGRAM_WEBHOOK_ADDRESS:-}
     volumes:
       # Named volume, not a host bind: one filesystem under one kernel, so the
       # pool's atomic rename holds and inotify propagates between containers.

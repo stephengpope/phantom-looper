@@ -202,7 +202,7 @@ export class PhantomBackend {
     this.telegramBot = new TelegramBot({ settings: this.settings, settingsEvents: this.settingsEvents, botState: this.telegramBotState,
       chats: this.telegramChats, sessions: this.sessions, projects: this.projects,
       sentMessages: this.telegramSentMessages, handledUpdates: this.telegramHandledUpdates, paths: this.paths,
-      publicAddress: process.env.PHANTOM_BACKEND_ADDRESS, commandMenu: config.telegramCommandMenu });
+      publicAddress: process.env.TELEGRAM_WEBHOOK_ADDRESS || process.env.PHANTOM_BACKEND_ADDRESS, commandMenu: config.telegramCommandMenu });
     this.git = new GitService({
       sessions: this.sessions, workspaces: this.workspaces, cards: this.cards, projects: this.projects, settings: this.settings, paths: this.paths,
       sessionEvents: this.sessionEvents, boardEvents: this.boardEvents, settingsEvents: this.settingsEvents,
