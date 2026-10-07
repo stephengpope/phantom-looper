@@ -175,12 +175,9 @@ export class SessionContainers {
     const container = this.docker.getContainer(this.name(key));
     try {
       const info = await container.inspect();
-      // One made before the agents' network (or outside it) is made again on
-      // it — stateless, so that is a restart, and it takes today's settings.
-      const placed = !this.opts.network || Object.keys(info.NetworkSettings?.Networks ?? {}).includes(this.opts.network);
-      if (info.State.Running && placed) return container;
-      // Stopped, exited or misplaced: it holds nothing, so recreate rather
-      // than reason about resume states.
+      if (info.State.Running) return container;
+      // Stopped or exited: it holds nothing, so recreate rather than reason
+      // about resume states.
       await container.remove({ force: true, v: true }).catch(() => {});
     } catch { /* no such container */ }
 
@@ -273,16 +270,19 @@ export class SessionContainers {
     return { env: [`AGENT_DATABASE_URL=${url}`], host: new URL(url).hostname };
   }
 
-  /** The agents' network, made once when missing (see ContainerOpts.network). */
-  #agentNetwork: Promise<void> | undefined;
-  private agentNetwork(): Promise<void> {
+  /** The agents' network, made when missing (see ContainerOpts.network).
+   *  Checked at every container creation, never remembered: a `docker
+   *  network prune` while no agent runs removes it, and the next container
+   *  must still find it. Creations are already one per workspace at a time;
+   *  a second creator racing this one gets 409 and finds it made. */
+  private async agentNetwork(): Promise<void> {
     const name = this.opts.network!;
-    this.#agentNetwork ??= this.docker.getNetwork(name).inspect().then(() => undefined, async () => {
-      await this.docker.createNetwork({ Name: name, Driver: 'bridge',
-        Options: { 'com.docker.network.bridge.enable_icc': 'false', 'com.docker.network.bridge.name': name.slice(0, 15) } });
-      log.info({ network: name }, 'agents network created');
-    }).catch((error: unknown) => { this.#agentNetwork = undefined; throw error; });
-    return this.#agentNetwork;
+    if (await this.docker.getNetwork(name).inspect().then(() => true, () => false)) return;
+    await this.docker.createNetwork({ Name: name, Driver: 'bridge',
+      Options: { 'com.docker.network.bridge.enable_icc': 'false', 'com.docker.network.bridge.name': name.slice(0, 15) } })
+      .then(() => log.info({ network: name }, 'agents network created'), (error: unknown) => {
+        if ((error as { statusCode?: number }).statusCode !== 409) throw error;
+      });
   }
 
   /** A workspace's private database network: internal (no way out), holding
@@ -300,11 +300,17 @@ export class SessionContainers {
     await network.connect({ Container: this.opts.databaseContainer!, EndpointConfig: { Aliases: [host] } }).catch(already);
     await network.connect({ Container: containerId }).catch(already);
   }
+  /** Gone if there: whoever is still on it is disconnected first (Docker
+   *  will not remove a network in use), then the network. */
   private async dropDatabaseNetwork(key: string): Promise<void> {
     const network = this.docker.getNetwork(this.databaseNetwork(key));
-    const gone = (error: unknown) => { if ((error as { statusCode?: number }).statusCode !== 404) throw error; };
-    if (this.opts.databaseContainer) await network.disconnect({ Container: this.opts.databaseContainer, Force: true }).catch(gone);
-    await network.remove().catch(gone);
+    const info = await network.inspect().catch((error: unknown) => {
+      if ((error as { statusCode?: number }).statusCode === 404) return null;
+      throw error;
+    }) as { Containers?: Record<string, unknown> } | null;
+    if (!info) return;
+    for (const container of Object.keys(info.Containers ?? {})) await network.disconnect({ Container: container, Force: true });
+    await network.remove();
   }
 
   /** Remove the workspace's container. None there (404) is fine — that is the
