@@ -20,6 +20,7 @@ import { textOf } from '../lib/text.js';
 /** What the web calls need of the backend: the Firecrawl key and where a fetched page lands. */
 export interface WebDeps { settings: Settings; paths: Paths }
 import { ToolError } from '../tools/envelope.js';
+import { actingScope, type SettingScope } from '../lib/scopes.js';
 
 export interface SearchBody {
   query: string; limit?: number; tbs?: string;
@@ -95,8 +96,8 @@ async function fetchOne(
   };
 }
 
-async function keyOf(ctx: WebDeps): Promise<string> {
-  const key = await ctx.settings.credential('firecrawl_api_key');
+async function keyOf(ctx: WebDeps, scope: SettingScope): Promise<string> {
+  const key = await ctx.settings.credential('firecrawl_api_key', scope);
   if (!key) throw new ToolError('credential_required', NO_KEY);
   return key;
 }
@@ -104,8 +105,8 @@ async function keyOf(ctx: WebDeps): Promise<string> {
 /** Keyword search: title, url and snippet per result — no page content. A
  *  filter left out is left out upstream — Firecrawl's defaults, not ours.
  *  Throws ToolError: credential_required, search_failed (retryable). */
-export async function webSearch(ctx: WebDeps, b: SearchBody): Promise<Array<Record<string, unknown>>> {
-  const key = await keyOf(ctx);
+export async function webSearch(ctx: WebDeps, b: SearchBody, scope: SettingScope = actingScope()): Promise<Array<Record<string, unknown>>> {
+  const key = await keyOf(ctx, scope);
   let body: Record<string, any>;
   try {
     body = await firecrawl(key, '/v2/search', {
@@ -133,8 +134,8 @@ export async function webSearch(ctx: WebDeps, b: SearchBody): Promise<Array<Reco
 /** Scrape each URL (in parallel), write the markdown under the session's
  *  work directory and answer the /workspace/web/ path per URL. A failed URL
  *  is an error entry; the call itself succeeds. */
-export async function webFetch(ctx: WebDeps, workspaceId: string, urls: string[]): Promise<FetchEntry[]> {
-  const key = await keyOf(ctx);
+export async function webFetch(ctx: WebDeps, workspaceId: string, urls: string[], scope: SettingScope = actingScope()): Promise<FetchEntry[]> {
+  const key = await keyOf(ctx, scope);
   const hostDir = path.join(sessionDir(ctx.paths, workspaceId), 'web');
   await fsp.mkdir(hostDir, { recursive: true });
   const taken = new Set<string>();

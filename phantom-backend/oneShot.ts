@@ -1,6 +1,6 @@
 // One-shot model calls this app makes for itself — a commit message, a
 // session title, the digest — on the client SDK's billed model: the type's
-// resolved config from the backend, every call logged to log_tokens under
+// resolved config from the backend, every call logged to token_usage under
 // the work's type (commit_message, title, session_digest). No agent, no
 // session turn: one prompt in, text out.
 import { generateText } from 'ai';

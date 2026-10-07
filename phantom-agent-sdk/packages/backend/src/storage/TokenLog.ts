@@ -1,4 +1,4 @@
-// The log_tokens table's one owner. Every LLM call in the system lands here
+// The token_usage table's one owner. Every LLM call in the system lands here
 // as one entry — phantom-looper's languageModel() records each call it makes (see
 // createAgent.ts) and this is the sink: the server hands it LogTokens.record
 // directly; the CLI posts to /log-tokens, which calls the same method.
@@ -6,7 +6,7 @@
 import { gte, eq, sql } from 'drizzle-orm';
 import type { PgColumn } from 'drizzle-orm/pg-core';
 import type { Drizzle } from './Database.js';
-import { logTokens } from './schema.js';
+import { tokenUsage } from './schema.js';
 import { newId } from '@phantom-agent-sdk/client';
 
 /** One model call, billed: the type of work (an agent type, or a helper: title, commit_message, compaction, session_digest), the session, the model, the tokens. */
@@ -21,7 +21,7 @@ export class TokenLog {
 
   /** Record one LLM call. */
   async record(record: TokenRecord): Promise<void> {
-    await this.database.insert(logTokens).values({
+    await this.database.insert(tokenUsage).values({
       id: newId(),
       sessionId: record.sessionId ?? null,
       type: record.type,
@@ -41,13 +41,13 @@ export class TokenLog {
   }> {
     const [row] = await this.database
       .select({
-        input: sum(logTokens.tokensInput),
-        output: sum(logTokens.tokensOutput),
-        cacheRead: sum(logTokens.tokensCacheRead),
-        cacheWrite: sum(logTokens.tokensCacheWrite),
+        input: sum(tokenUsage.tokensInput),
+        output: sum(tokenUsage.tokensOutput),
+        cacheRead: sum(tokenUsage.tokensCacheRead),
+        cacheWrite: sum(tokenUsage.tokensCacheWrite),
       })
-      .from(logTokens)
-      .where(eq(logTokens.sessionId, sessionId));
+      .from(tokenUsage)
+      .where(eq(tokenUsage.sessionId, sessionId));
     return row ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   }
 
@@ -58,21 +58,21 @@ export class TokenLog {
   async report(since: Windows<Date>): Promise<ReportRow[]> {
     const windowed = (col: PgColumn | null, from: Date) => sql<number>`coalesce(${
       col ? sql`sum(${col})` : sql`count(*)`
-    } filter (where ${logTokens.createdAt} >= ${from}), 0)`.mapWith(Number);
+    } filter (where ${tokenUsage.createdAt} >= ${from}), 0)`.mapWith(Number);
     const window = (from: Date) => ({
-      input: windowed(logTokens.tokensInput, from),
-      output: windowed(logTokens.tokensOutput, from),
-      cacheRead: windowed(logTokens.tokensCacheRead, from),
+      input: windowed(tokenUsage.tokensInput, from),
+      output: windowed(tokenUsage.tokensOutput, from),
+      cacheRead: windowed(tokenUsage.tokensCacheRead, from),
       calls: windowed(null, from),
     });
     const rows = await this.database
       .select({
-        type: logTokens.type, provider: logTokens.provider, model: logTokens.model,
+        type: tokenUsage.type, provider: tokenUsage.provider, model: tokenUsage.model,
         today: window(since.today), week: window(since.week), month: window(since.month),
       })
-      .from(logTokens)
-      .where(gte(logTokens.createdAt, since.month))
-      .groupBy(logTokens.type, logTokens.provider, logTokens.model);
+      .from(tokenUsage)
+      .where(gte(tokenUsage.createdAt, since.month))
+      .groupBy(tokenUsage.type, tokenUsage.provider, tokenUsage.model);
     return rows;
   }
 }

@@ -2,7 +2,7 @@
 // (applied by Database.migrate); this file exists for typed queries. Every
 // table here is the SDK's, in the SDK's schema (phantom_agent_sdk, 054); an
 // app's tables live in the app's schema with the app's migrations.
-import { getTableColumns } from 'drizzle-orm';
+import { getTableColumns, sql } from 'drizzle-orm';
 import type { StoredSystemPrompt } from '@phantom-agent-sdk/client/systemPrompt';
 import { pgSchema, text, jsonb, timestamp, integer, bigint, boolean, real, customType, primaryKey, unique } from 'drizzle-orm/pg-core';
 
@@ -32,7 +32,7 @@ export const phantomAgentSdk = pgSchema('phantom_agent_sdk');
 // here) make a general row hold exactly one of the two columns and a secret
 // row both (migrations 010, 034).
 export const settings = phantomAgentSdk.table('settings', {
-  scope: text('scope').notNull().default('global'),  // global | project:<id>
+  scope: text('scope').notNull().default('global'),  // global | organization:<id> | user:<id> | project:<id>
   namespace: text('namespace').notNull().default('general'),  // general | secret
   key: text('key').notNull(),
   value: json('value'),
@@ -53,9 +53,13 @@ export const projects = phantomAgentSdk.table('projects', {
   // The next card number this project hands out. Numbers are never reused:
   // a deleted card's stays taken. (024; Projects.claimCardNumber moves it.)
   nextCardNumber: integer('next_card_number').notNull().default(1),
-  // The organization this project belongs to (056); null = the phantom admin's.
-  // Its settings layer rides in the project's chain (scopes.ts scopeOf).
-  organizationId: text('organization_id'),
+  // The organization this project belongs to (056, 059): the caller's, or
+  // 'operator' — the server key's own. Everything under the project takes
+  // it (059's triggers). Its settings layer rides in the project's chain
+  // (scopes.ts scopeOf).
+  organizationId: text('organization_id').notNull().default(sql`coalesce(phantom_agent_sdk.caller_organization(), phantom_agent_sdk.operator_organization())`),
+  // Who made it (059); null = the operator, or a user since deleted.
+  userId: text('user_id'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -286,12 +290,12 @@ export const presets = phantomAgentSdk.table('presets', {
 export type PresetRow = typeof presets.$inferSelect;
 
 // Media (058): tracked files on S3-compatible storage. The row is the file;
-// the bucket holds its bytes at `key`. Owner is the organization (null =
-// the phantom admin's); `userId` is user space's to mean. media/Media.ts
-// is the one owner.
+// the bucket holds its bytes at `key`. Owner is the organization
+// ('operator' = the server key's own); `userId` is who uploaded it.
+// media/Media.ts is the one owner.
 export const media = phantomAgentSdk.table('media', {
   id: text('id').primaryKey(),
-  organizationId: text('organization_id'),
+  organizationId: text('organization_id').notNull().default(sql`coalesce(phantom_agent_sdk.caller_organization(), phantom_agent_sdk.operator_organization())`),
   userId: text('user_id'),
   projectId: text('project_id'),
   sessionId: text('session_id'),
@@ -309,14 +313,19 @@ export const media = phantomAgentSdk.table('media', {
 
 export type MediaRow = typeof media.$inferSelect;
 
-// Token log (migrations 022, 023, 030): one entry per model call — agent
-// steps and one-shot helper calls alike. The one store for all spend;
-// LogTokens (logTokens.ts) is its one writer. `session_id` is deliberately
+// Token usage (migrations 022, 023, 030, 059 — was log_tokens): one entry
+// per model call — agent steps and one-shot helper calls alike. The one
+// store for all spend; TokenLog (TokenLog.ts) is its one writer. `session_id` is deliberately
 // not a foreign key: the spend report is by date and outlives the session.
 // Null for a helper call that serves no one session (the digest).
-export const logTokens = phantomAgentSdk.table('log_tokens', {
+export const tokenUsage = phantomAgentSdk.table('token_usage', {
   id: text('id').primaryKey(),
   sessionId: text('session_id'),
+  // Whose spend (059): the session's organization and project when it names
+  // one (a trigger fills them), else the caller's; the user whose turn it was.
+  organizationId: text('organization_id').notNull().default(sql`coalesce(phantom_agent_sdk.caller_organization(), phantom_agent_sdk.operator_organization())`),
+  projectId: text('project_id'),
+  userId: text('user_id'),
   type: text('type').notNull(),
   provider: text('provider'),
   model: text('model'),

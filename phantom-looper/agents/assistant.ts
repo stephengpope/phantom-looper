@@ -13,7 +13,7 @@ export class AssistantAgent extends Agent {
 
   static readonly systemPromptLayout: SystemPromptLayout = {
     stable: [agentText(assistantInstructions())],
-    context: [],
+    context: ['media'],
     volatile: ['time_date'],
   };
 

@@ -66,7 +66,7 @@ export { SKILLS_DIR, scanSkills, mergeSkills, parseDescription, splitFrontmatter
 export { lintSkillMd, validateSkillMd, validateSkillName, validateFilePath, MAX_DESCRIPTION, MAX_FILE_BYTES, MAX_NAME, MAX_SKILL_CONTENT, FILE_SUBDIRS } from './skills/validate.js';
 export { withCurrentDate } from './prompt/template.js';
 export { fill, firstLineOf } from '@phantom-agent-sdk/client';
-export { SKILLS_LIST, SECRETS_LIST, GITHUB_TOKEN, AGENT_DATABASE, AGENT_DATABASE_SHARED, TIME_DATE } from './prompt/serverBlocks.js';
+export { SKILLS_LIST, SECRETS_LIST, GITHUB_TOKEN, AGENT_DATABASE, AGENT_DATABASE_SHARED, MEDIA, TIME_DATE } from './prompt/serverBlocks.js';
 
 // telegram plumbing, notifications, the queue
 export { TelegramApi, titled, ALLOWED_UPDATES, MAX_OUTBOUND_BYTES, type SendKind } from './telegram/TelegramApi.js';

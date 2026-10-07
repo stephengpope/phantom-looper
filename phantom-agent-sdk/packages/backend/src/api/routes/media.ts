@@ -118,7 +118,7 @@ export function mediaRoutes(app: FastifyInstance, backend: PhantomBackend) {
     try { await backend.media.delete(req.params.id); return ok({}); } catch (error) { return refuse(reply, error); }
   });
 
-  app.post<{ Body: { origins: string[]; organization?: string } }>('/media/setup', { schema: { ...TAG, summary: 'Let browsers reach the bucket',
+  app.post<{ Body: { origins: string[]; organization?: string } }>('/media/setup', { config: { operator: true }, schema: { ...TAG, summary: 'Let browsers reach the bucket',
     description: 'Sets the bucket\'s CORS rule so web apps on `origins` can upload straight to it and play from it. A provider that only takes this in its own ' +
       'dashboard answers `cors: "unsupported"` with the rule to enter there.',
     body: { type: 'object', required: ['origins'], additionalProperties: false, properties: {

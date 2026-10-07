@@ -26,7 +26,10 @@ import { textOf } from '../lib/text.js';
 const log = logger('settings');
 
 /** Where a value came from — the layer's own name. */
-export type SettingSource = 'default' | Layer;
+/** Where a value came from: the code default, a layer's row, or `fixed` —
+ *  set by the app in its constructor (PhantomBackendConfig.fixedSettings),
+ *  winning over every layer and refusing every write. */
+export type SettingSource = 'default' | Layer | 'fixed';
 export type { SettingScope } from '../lib/scopes.js';
 
 /** One setting with its LAYERS exposed, not just the winner — what a client
@@ -104,7 +107,15 @@ export class Settings {
     private readonly modelCatalog: ModelCatalog,
     /** The settings feed; absent in tests with no listeners. */
     private readonly events?: SettingsEvents,
-  ) {}
+    /** What every READ goes through: the backend's own handle (Database.system).
+     *  The cascade reads the global layer, which is no organization's row, so
+     *  it cannot be read as a user. Writes go through `database`, as the
+     *  acting user, so the policies decide which layers a user may write.
+     *  Absent: reads use `database` too (tests). */
+    system?: Drizzle,
+  ) { this.reader = system ?? database; }
+
+  private readonly reader: Drizzle;
 
   // ── the registry ──────────────────────────────────────────────────────
 
@@ -112,6 +123,20 @@ export class Settings {
    *  a nullable setting with a non-null default is an error (null always
    *  means "clear", never a stored value). Registration order is screen
    *  order. */
+  /** The app's fixed values (PhantomBackendConfig.fixedSettings): each
+   *  wins over every layer, for every caller, and no write may change it.
+   *  Checked like a write — an unknown key or a bad value fails the boot. */
+  readonly #fixed = new Map<string, unknown>();
+  fix(values: Record<string, unknown>): void {
+    for (const [key, value] of Object.entries(values)) {
+      if (!this.isRegistered(key)) throw new Error(`fixed setting '${key}' is not a registered setting`);
+      const problem = this.isCredential(key) ? (typeof value === 'string' ? null : `${key} must be a string`) : this.validate(key, value);
+      if (problem) throw new Error(`fixed setting: ${problem}`);
+      this.#fixed.set(key, value);
+    }
+  }
+  isFixed(key: string): boolean { return this.#fixed.has(key); }
+
   register(definitions: readonly SettingDefinition[]): void {
     for (const definition of definitions) {
       if (this.#definitions.has(definition.key)) throw new Error(`setting '${definition.key}' is registered twice`);
@@ -210,7 +235,7 @@ export class Settings {
   private async readStore(scopes: string[], credentials: boolean, onlyKey?: string): Promise<ByScope> {
     const out: ByScope = new Map();
     for (const scope of scopes) out.set(scope, new Map());
-    const rows = await this.database.select().from(settings).where(and(
+    const rows = await this.reader.select().from(settings).where(and(
       inArray(settings.scope, scopes), eq(settings.namespace, GENERAL),
       ...(onlyKey ? [eq(settings.key, onlyKey)] : [])));
     for (const row of rows) {
@@ -251,6 +276,9 @@ export class Settings {
   private rawLayers(byScope: ByScope, scope: SettingScope, key: string): RawLayers {
     const raw: RawLayers = {};
     for (const [layer, scopeName] of Object.entries(scopeNames(scope)) as [Layer, string][]) {
+      // A value counts only at a layer the key allows: a row left from
+      // before a key was narrowed (container_image was overridable) is inert.
+      if (layer !== 'global' && !this.isOverridableAt(key, layer)) continue;
       const value = byScope.get(scopeName)?.get(key);
       if (value !== undefined) raw[layer] = value;
     }
@@ -266,6 +294,7 @@ export class Settings {
     let value: unknown = definition.default;
     let source: SettingSource = 'default';
     for (const layer of LAYERS) if (raw[layer] !== undefined) { value = raw[layer]; source = layer; }
+    if (this.#fixed.has(key)) { value = this.#fixed.get(key); source = 'fixed'; }
     return { default: definition.default, ...EMPTY_LAYERS, ...Object.fromEntries(LAYERS.map((layer) => [layer, raw[layer] ?? null])), value, source };
   }
 
@@ -290,6 +319,7 @@ export class Settings {
       if (raw[layer] !== undefined) { value = raw[layer]; source = layer; }
     }
     own.value = value; own.source = source;
+    if (this.#fixed.has(key)) { own.value = this.#fixed.get(key); own.source = 'fixed'; }
     if (!definition.defaultsToLatestModel || own.value != null) return own;
     const latest = this.modelCatalog.latestFor(typeof providerAbove === 'string' ? providerAbove : null);
     return { ...own, default: latest, value: latest };
@@ -374,7 +404,7 @@ export class Settings {
   /** Which credentials have a row at which scope — presence only, nothing
    *  decrypted. ONE query for every credential on a settings screen. */
   private async credentialPresence(scopes: string[]): Promise<Map<string, Set<string>>> {
-    const rows = await this.database.select({ scope: settings.scope, key: settings.key }).from(settings).where(and(
+    const rows = await this.reader.select({ scope: settings.scope, key: settings.key }).from(settings).where(and(
       inArray(settings.scope, scopes), eq(settings.namespace, GENERAL), isNotNull(settings.valueEnc)));
     const out = new Map<string, Set<string>>();
     for (const row of rows) { if (!out.has(row.scope)) out.set(row.scope, new Set()); out.get(row.scope)!.add(row.key); }
@@ -398,6 +428,7 @@ export class Settings {
     const values = { ...patch };
     const unknown = Object.keys(values).filter((key) => !this.isRegistered(key));
     if (unknown.length) throw new SettingsWriteError('unknown_setting', `unknown settings: ${unknown.join(', ')}`);
+    if (Object.keys(values).some((key) => this.#fixed.has(key))) throw new SettingsWriteError('fixed', 'access denied');
     const invalid = Object.entries(values)
       .filter(([key, value]) => value !== null && !this.isCredential(key))
       .map(([key, value]) => this.validate(key, value))
@@ -455,13 +486,13 @@ export class Settings {
 
   /** Every secret at the scopes asked for — names and descriptions, NEVER values. Global-first, then by name. */
   async listSecrets(scopeNames: string[] = [GLOBAL]): Promise<SecretMeta[]> {
-    const rows = await this.database.select().from(settings).where(and(inArray(settings.scope, scopeNames), eq(settings.namespace, SECRET_NS)));
+    const rows = await this.reader.select().from(settings).where(and(inArray(settings.scope, scopeNames), eq(settings.namespace, SECRET_NS)));
     return sortSecrets(rows.map(secretMeta));
   }
 
   /** EVERY secret, every layer — a list that offers every project as a save target. */
   async listAllSecrets(): Promise<SecretMeta[]> {
-    const rows = await this.database.select().from(settings).where(eq(settings.namespace, SECRET_NS));
+    const rows = await this.reader.select().from(settings).where(eq(settings.namespace, SECRET_NS));
     return sortSecrets(rows.map(secretMeta));
   }
 
@@ -469,7 +500,7 @@ export class Settings {
    *  chain order, as `scopeNames` lists them — the last wins). undefined =
    *  no such secret, or it would not decrypt. */
   async readSecret(name: string, scopeNames: string[] = [GLOBAL]): Promise<string | undefined> {
-    const rows = await this.database.select().from(settings).where(and(
+    const rows = await this.reader.select().from(settings).where(and(
       inArray(settings.scope, scopeNames), eq(settings.namespace, SECRET_NS), eq(settings.key, name)));
     const byScope = new Map(rows.map((row) => [row.scope, row]));
     for (const scopeName of [...scopeNames].reverse()) {

@@ -10,9 +10,10 @@
 //                             (no value = keep the stored one, description only)
 //   GET    /secrets/:name      the decrypted value, project → global
 //   DELETE /secrets/:name      remove at one layer
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { GLOBAL, type Layer, type SettingScope, layerOf, scopeNames, scopeOf } from '../../lib/scopes.js';
 import { ok, err } from '../HttpApi.js';
+import { ownLayers } from '../ownLayers.js';
 import type { PhantomBackend } from '../../PhantomBackend.js';
 import { secretName, SECRET_NAME_RULE } from '@phantom-agent-sdk/client';
 
@@ -30,9 +31,12 @@ export function secretsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   /** The scopes a request reads, in chain order (most specific LAST) — and
    *  the one it writes: the deepest named. Each id is verified to exist, or
    *  a typo becomes a row nothing will ever read. */
-  async function scopesOf(query: ScopeQuery):
+  async function scopesOf(req: FastifyRequest<{ Querystring: ScopeQuery }>):
   Promise<{ error: string } | { chain: string[]; write: string; label: Layer }> {
-    let scope: SettingScope = {};
+    const query = req.query;
+    const own = ownLayers(req.caller, query);
+    if (own === 'denied') return { error: 'access denied' };
+    let scope: SettingScope = { ...own };
     if (query.organization) {
       if (!await ctx.identity.organization(query.organization)) return { error: `no organization ${query.organization}` };
       scope.organizationId = query.organization;
@@ -57,9 +61,10 @@ export function secretsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       description: 'With a layer named (?project=, ?organization=, ?user=): that chain, merged — the agent\'s view. Bare: EVERY layer on the server (the cli\'s list, which saves to any project), each row carrying the id of its layer (`project`, `organization` or `user`). Either way `scope` says the layer, and the same name at two layers lists twice — the more specific one wins when a value is read.',
       querystring: scopeQuery } },
     async (req, reply) => {
-      const scopes = await scopesOf(req.query);
+      const scopes = await scopesOf(req);
       if ('error' in scopes) return reply.code(404).send(err('not_found', scopes.error));
-      const raw = scopes.label !== 'global'
+      // Bare, the server key lists every layer on the server; a user, their own chain.
+      const raw = scopes.label !== 'global' || req.caller?.type === 'user'
         ? await ctx.settings.listSecrets(scopes.chain)
         : await ctx.settings.listAllSecrets();
       const secrets = raw.map((secret) => {
@@ -90,7 +95,7 @@ export function secretsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       if (value !== undefined && (typeof value !== 'string' || value.length === 0)) {
         return reply.code(400).send(err('invalid_args', 'body.value (the secret itself) must not be empty'));
       }
-      const scopes = await scopesOf(req.query);
+      const scopes = await scopesOf(req);
       if ('error' in scopes) return reply.code(404).send(err('not_found', scopes.error));
       const stored = await ctx.settings.writeSecret(scopes.write, name,
         String(req.body?.description ?? ''), value);
@@ -107,7 +112,7 @@ export function secretsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       description: 'Decrypted. Resolution walks the chain: global, then the organization, the user, the project — the deepest layer named wins. Name is case-insensitive. An unknown name answers with the names that do exist.',
       params: nameParam, querystring: scopeQuery } },
     async (req, reply) => {
-      const scopes = await scopesOf(req.query);
+      const scopes = await scopesOf(req);
       if ('error' in scopes) return reply.code(404).send(err('not_found', scopes.error));
       const name = secretName(req.params.name);
       const value = name ? await ctx.settings.readSecret(name, scopes.chain) : undefined;
@@ -125,7 +130,7 @@ export function secretsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       description: 'Removes the row at the addressed layer only — a global secret shadowed by a project one survives the project delete, and the other way round.',
       params: nameParam, querystring: scopeQuery } },
     async (req, reply) => {
-      const scopes = await scopesOf(req.query);
+      const scopes = await scopesOf(req);
       if ('error' in scopes) return reply.code(404).send(err('not_found', scopes.error));
       const name = secretName(req.params.name);
       const gone = name ? await ctx.settings.deleteSecret(scopes.write, name) : false;

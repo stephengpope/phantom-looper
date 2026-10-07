@@ -30,7 +30,7 @@ import type { PgColumn } from 'drizzle-orm/pg-core';
 // carries its workspace's checkout facts, the list carries the card number and
 // column, the card reads take a number. Their rows are Workspaces' and Cards'
 // to write.
-import { sessions, sessionColumns, workspaces, cards, logTokens, type SessionRow } from './schema.js';
+import { sessions, sessionColumns, workspaces, cards, tokenUsage, type SessionRow } from './schema.js';
 import type { Settings } from './Settings.js';
 import type { AgentConfig } from '../agents/AgentConfig.js';
 import type { AgentTypes } from '../agents/AgentTypes.js';
@@ -40,7 +40,7 @@ import { newId, PERSON } from '@phantom-agent-sdk/client';
 import { logger } from '../lib/log.js';
 import { withoutUsageLines, systemPromptRebuiltLine } from '@phantom-agent-sdk/client/transcript';
 import type { SystemPromptLayout, StoredSystemPrompt } from '@phantom-agent-sdk/client/systemPrompt';
-import { SystemPrompt } from '../agents/SystemPrompt.js';
+import { SystemPrompt, type SystemPromptSource } from '../agents/SystemPrompt.js';
 import { repoDir, type Paths } from '../lib/paths.js';
 import type Docker from 'dockerode';
 import type { SessionEvents } from '../agents/SessionEvents.js';
@@ -187,7 +187,7 @@ export class Sessions {
       events?: SessionEvents;
       /** What freezing a session's prompt reads: the checkout's skills and the
        *  image's system skills. Absent in tests: `start` then freezes no skills. */
-      prompt?: { paths: Paths; docker?: Docker };
+      prompt?: { paths: Paths; docker?: Docker; media?: SystemPromptSource['media'] };
     },
   ) {}
   private get events(): SessionEvents | undefined { return this.deps.events; }
@@ -226,7 +226,7 @@ export class Sessions {
     return SystemPrompt.assemble(layout, {
       projectId: session.projectId, project, settings: this.settings,
       checkout: this.deps.prompt && session.workspaceId ? repoDir(this.deps.prompt.paths, session.workspaceId) : null,
-      docker: this.deps.prompt?.docker,
+      docker: this.deps.prompt?.docker, media: this.deps.prompt?.media,
     });
   }
 
@@ -401,22 +401,22 @@ export class Sessions {
             ? or(lt(Sessions.lastUsedAt, cut), and(eq(Sessions.lastUsedAt, cut), lt(sessions.id, query.beforeId)))
             : lt(Sessions.lastUsedAt, cut)))
       : undefined;
-    // Token totals: LEFT JOIN log_tokens and SUM — the one store for spend.
+    // Token totals: LEFT JOIN token_usage and SUM — the one store for spend.
     // A bigint SUM comes back from pg as text; mapWith(Number) makes it the
     // number the type says it is.
     const sum = (col: PgColumn) => sqlRaw<number>`coalesce(sum(${col}), 0)`.mapWith(Number);
     let page = this.database
       .select({
         ...Sessions.view, card: cards.number, cardStatus: cards.status,
-        tokensInput: sum(logTokens.tokensInput).as('tokens_input'),
-        tokensOutput: sum(logTokens.tokensOutput).as('tokens_output'),
-        tokensCacheRead: sum(logTokens.tokensCacheRead).as('tokens_cache_read'),
-        tokensCacheWrite: sum(logTokens.tokensCacheWrite).as('tokens_cache_write'),
+        tokensInput: sum(tokenUsage.tokensInput).as('tokens_input'),
+        tokensOutput: sum(tokenUsage.tokensOutput).as('tokens_output'),
+        tokensCacheRead: sum(tokenUsage.tokensCacheRead).as('tokens_cache_read'),
+        tokensCacheWrite: sum(tokenUsage.tokensCacheWrite).as('tokens_cache_write'),
       })
       .from(sessions)
       .leftJoin(workspaces, eq(workspaces.id, sessions.workspaceId))
       .leftJoin(cards, eq(cards.id, sessions.cardId))
-      .leftJoin(logTokens, eq(logTokens.sessionId, sessions.id))
+      .leftJoin(tokenUsage, eq(tokenUsage.sessionId, sessions.id))
       .where(and(...filters, ...(cursor ? [cursor] : [])))
       .groupBy(sessions.id, workspaces.id, cards.number, cards.status)
       .orderBy(...(query.order === 'created'
@@ -730,7 +730,7 @@ export class Sessions {
    *  record, because leaving 0 is what freezes the row's model and a turn
    *  that said nothing (stopped before the first word, failed to start) must
    *  not freeze it — and touch its checkout. Tokens are not here — every
-   *  model call records its own row in log_tokens. Returns what the naming
+   *  model call records its own row in token_usage. Returns what the naming
    *  decision needs. `actor` null = a service turn (the git sync's conflict
    *  fix): the session keeps whoever drives it. */
   async turnEnded(session: SessionRow, actor: string | null): Promise<{

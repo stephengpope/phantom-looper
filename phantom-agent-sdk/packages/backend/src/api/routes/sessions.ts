@@ -39,6 +39,7 @@ function lockEvent(session: SessionRow, over: Partial<{ locked: boolean; by: str
     ...(died ? { died_on: died.label ?? died.by, died_at: died.at.toISOString() } : {}) };
 }
 import { logger, errStr } from '../../lib/log.js';
+import { acting, actAs } from '../../lib/acting.js';
 import { scopeOf } from '../../lib/scopes.js';
 
 const TAG = { tags: ['sessions'] };
@@ -286,7 +287,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // chat (the app's notification channel). Any client running the
   // session — a cli window, a card run, a cron — reaches Telegram here.
   app.post<{ Params: { id: string }; Body: { text: string } }>(
-    '/sessions/:id/notify', { schema: { ...TAG,
+    '/sessions/:id/notify', { config: { operator: true }, schema: { ...TAG,
       summary: 'DM the user on Telegram from a session',
       description: 'Sends `text` to the authorized Telegram user as the session\'s agent: markdown formatted, ' +
         'MEDIA:/workspace/... tags and bare /workspace paths delivered as files, spoken when the reply mode says so. ' +
@@ -379,8 +380,20 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
       const write = (record: unknown) => { if (!reply.raw.destroyed) reply.raw.write(`${JSON.stringify(record)}\n`); };
       const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
+      // The feed is the whole server's; a user hears only of sessions they
+      // can read — the policies decide, through a read as them (lib/acting).
+      // A listener runs in the PUBLISHER's context, so the reader's is kept.
+      const who = acting();
+      const readable = new Map<string, Promise<boolean>>();
+      const canRead = (id: string) => {
+        if (!who) return Promise.resolve(true);
+        let known = readable.get(id);
+        if (!known) { known = actAs(who, () => ctx.sessions.get(id)).then(Boolean, () => false); readable.set(id, known); }
+        return known;
+      };
       const unsubscribe = ctx.sessionEvents.subscribeAll((id, event) => {
-        if (event.event !== 'part') write({ event: 'changed', id });
+        if (event.event === 'part') return;
+        void canRead(id).then((yes) => { if (yes) write({ event: 'changed', id }); });
       });
       write({ event: 'heartbeat' });
       await new Promise<void>((resolve) => reply.raw.on('close', resolve));
@@ -833,13 +846,13 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       return ok({});
     });
 
-  // The CLI's door to log_tokens: phantom-looper's languageModel records every call
+  // The CLI's door to token_usage: phantom-looper's languageModel records every call
   // the CLI process makes, and the CLI's recorder posts it here — the same
   // TokenLog.record the server's own calls land in.
   app.post<{ Body: TokenRecord }>(
     '/log-tokens', { schema: { ...TAG,
       summary: 'Record one model call',
-      description: 'Appends one log_tokens entry. For model calls made in the CLI process.',
+      description: 'Appends one token_usage entry. For model calls made in the CLI process.',
       body: { type: 'object', required: ['type', 'provider', 'model', 'input', 'output', 'cacheRead', 'cacheWrite'],
         properties: {
           sessionId: { type: ['string', 'null'] }, type: { type: 'string' },

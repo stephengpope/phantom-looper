@@ -1,18 +1,21 @@
 // The MEDIA tools — media_list, media_link, media_download, media_upload:
 // the project's organization's tracked files (media/Media.ts). Offered when
-// media is configured for that organization. The agent never holds a
+// agent_media is on for the project and media is configured for its
+// organization. The agent never holds a
 // storage key: a link is short-lived, and downloads and uploads run here,
 // between the bucket and the session's /workspace.
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { sessionDir } from '../lib/paths.js';
+import { scopeOf } from '../lib/scopes.js';
 import { workspaceOf } from '../storage/Sessions.js';
 import { MediaError, type MediaRow } from '../media/Media.js';
 import { int, obj, refusal, str, type OfferCtx, type ToolCtx, type ToolDef } from './def.js';
 
 const CONTAINER_ROOT = '/workspace';
 
-const configured = (ctx: OfferCtx) => ctx.app.media.configured(ctx.project.organizationId);
+const configured = async (ctx: OfferCtx) =>
+  Boolean(await ctx.app.settings.resolve('agent_media', scopeOf(ctx.project))) && await ctx.app.media.configured(ctx.project.organizationId);
 const withFiles = async (ctx: OfferCtx) => Boolean(ctx.session.workspaceId) && await configured(ctx);
 const hostRoot = (ctx: ToolCtx) => sessionDir(ctx.app.paths, workspaceOf(ctx.session));
 

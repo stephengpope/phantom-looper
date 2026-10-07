@@ -1,5 +1,11 @@
 # Multi-user: database roles, mail, sign-in
 
+> **Superseded in part by [permissions.md](permissions.md) (2026-10-07):** the
+> SDK's own `/api` routes now take users; every owned table carries its
+> organization and user; the row-level policies are the one rule and are
+> live on every request made for someone; app migrations run as their own
+> role. Where the two disagree, permissions.md is current.
+
 Built 2026-10-05–06, shipped in v0.1.89. All of it is the SDK's; an app
 turns sign-in on. phantom-looper does not use it yet — that, and what is
 not built, is in `docs/v1-plan.md` → What is left.

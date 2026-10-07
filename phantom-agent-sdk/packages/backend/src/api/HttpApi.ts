@@ -2,11 +2,21 @@
 // {ok:false, error:{code, message, retryable}}), and three prefixes that say
 // who owns a route and who may call it (docs/multi-user.md):
 //
-//   /api/*       the SDK's routes; the phantom admin's bearer key on every one
+//   /api/*       the SDK's routes: the server key, or a user (sign-in token
+//                or user API key)
 //   /api/auth/*  Identity (Better Auth): sign-in, organizations, invitations,
 //                keys — public, or the user's own token
-//   /app/*       user space's routes (config.routes); no key here — the app
-//                gates each with backend.identity.require
+//   /app/*       user space's routes (config.routes); anyone reaches them —
+//                the app gates each with backend.identity.require
+//
+// THE front step (docs/permissions.md), on /api and /app alike: who is
+// calling, and who the work is for. A user's request — or the server key's
+// naming one with x-phantom-organization / x-phantom-user — runs as that
+// organization and user (lib/acting.ts): every query it makes is fenced by
+// the row-level policies, and nothing else decides. The server key alone
+// runs as itself and sees everything. A user gets one refusal for anything
+// they may not reach — `403 access denied`, the same whether the thing is
+// missing or not theirs — shaped here and nowhere else.
 //
 // The database console rides beside them at /db. Any request that lands
 // outside these gets a bare 401 with no body — no envelope, no framework
@@ -16,10 +26,13 @@
 // in-source documentation; Fastify ignores them for validation.
 declare module 'fastify' {
   interface FastifySchema { tags?: readonly string[]; summary?: string; description?: string }
+  /** Set by the front step: who is calling (null = nobody). */
+  interface FastifyRequest { caller: Caller | null }
+  /** `operator: true` — the server key's alone; a user gets access denied. */
+  interface FastifyContextConfig { operator?: boolean }
 }
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
-import { timingSafeEqualStr } from '../lib/crypto.js';
 import type { PhantomBackend } from '../PhantomBackend.js';
 import type { RouteRegistrar } from '../doors.js';
 import { settingsRoutes } from './routes/settings.js';
@@ -40,7 +53,9 @@ import { telegramRoutes, TELEGRAM_WEBHOOK_PATH } from './routes/telegram.js';
 import { mailRoutes } from './routes/mail.js';
 import { mediaRoutes } from './routes/media.js';
 import { identityRoutes } from './routes/identity.js';
-import { IDENTITY_PATH, IdentityError } from '../identity/Identity.js';
+import { IDENTITY_PATH, IdentityError, type Caller } from '../identity/Identity.js';
+import { actAs, type Acting } from '../lib/acting.js';
+import { logger, errStr } from '../lib/log.js';
 import { SDK_VERSION } from '../sdkVersion.js';
 
 export function err(code: string, message: string, retryable = false, detail?: unknown) {
@@ -50,7 +65,22 @@ export function ok<T>(data: T) {
   return { ok: true as const, data };
 }
 
-/** The one path the bearer check skips: the Telegram webhook, whose sender
+const log = logger('http');
+
+/** The headers the server key names who it acts for with. */
+export const ACTING_ORGANIZATION_HEADER = 'x-phantom-organization';
+export const ACTING_USER_HEADER = 'x-phantom-user';
+
+/** The one refusal a user ever gets. */
+const ACCESS_DENIED = err('access_denied', 'access denied');
+
+/** Postgres refusing a write the policies do not allow (insufficient_privilege). */
+const isPolicyRefusal = (error: unknown) => {
+  const failed = error as { code?: string; cause?: { code?: string } } | null;
+  return (failed?.code ?? failed?.cause?.code) === '42501';
+};
+
+/** The one path the front step skips: the Telegram webhook, whose sender
  *  cannot carry our key and brings its own secret instead. */
 const PUBLIC_PATHS = new Set([`/api${TELEGRAM_WEBHOOK_PATH}`]);
 
@@ -60,11 +90,21 @@ const IDENTITY_STATUS: Record<IdentityError['code'], number> = { unauthorized: 4
  *  there, a body that fails its schema, a caller Identity refuses. */
 function envelopeHandlers(api: FastifyInstance): void {
   api.setNotFoundHandler((req, reply) => { reply.code(404).send(err('not_found', `no route ${req.method} ${req.url}`)); });
-  api.setErrorHandler((error: unknown, _req, reply) => {
+  api.setErrorHandler((error: unknown, req, reply) => {
     const fastifyError = error as { validation?: unknown; message?: string };
     if (fastifyError.validation) return reply.code(400).send(err('invalid_args', fastifyError.message ?? 'invalid arguments'));
     if (error instanceof IdentityError) return reply.code(IDENTITY_STATUS[error.code]).send(err(error.code, error.message));
-    reply.code(500).send(err('internal', error instanceof Error ? error.message : String(error)));
+    if (isPolicyRefusal(error)) return reply.code(403).send(ACCESS_DENIED);
+    const message = error instanceof Error ? error.message : String(error);
+    // The detail is the operator's: a user's 500 says nothing of the inside.
+    if (req.caller?.type === 'user') { log.error({ url: req.url, err: errStr(error) }, 'request failed'); return reply.code(500).send(err('internal', 'internal error')); }
+    reply.code(500).send(err('internal', message));
+  });
+  // A user's not-found and forbidden are one answer: access denied.
+  api.addHook('onSend', async (req, reply, payload) => {
+    if (req.caller?.type !== 'user' || (reply.statusCode !== 404 && reply.statusCode !== 403)) return payload;
+    reply.code(403).header('content-type', 'application/json; charset=utf-8');
+    return JSON.stringify(ACCESS_DENIED);
   });
 }
 
@@ -83,6 +123,7 @@ export class HttpApi {
   async #build(): Promise<void> {
     const { backend } = this;
     const app = this.#app;
+    app.decorateRequest('caller', null);
     app.setNotFoundHandler((_req, reply) => { reply.code(401).send(); });
     app.setErrorHandler((_error, _req, reply) => { reply.code(401).send(); });
 
@@ -93,20 +134,14 @@ export class HttpApi {
     await app.register(async (api) => {
       // Any caller: every client SDK checks the version here before its first
       // call — a signed-in user's and an API key's as much as the phantom admin's.
-      api.get('/health', { config: { caller: true }, schema: { tags: ['meta'], summary: 'Liveness',
+      api.get('/health', { schema: { tags: ['meta'], summary: 'Liveness',
         description: 'Any caller (the API key, a user\'s token or API key). Returns the running version, the backend SDK\'s version (`sdk_version` — the client SDK refuses a backend on another), plus what the app reports (config.health).' } },
       async (req) => {
         await backend.identity.require(req);
         return { ok: true, version: backend.version, sdk_version: SDK_VERSION, ...backend.healthExtras() };
       });
 
-      api.addHook('onRequest', async (req, reply) => {
-        // A route marked `caller: true` takes any caller Identity knows and
-        // decides for itself (GET /identity/me).
-        if (PUBLIC_PATHS.has(req.url) || (req.routeOptions.config as { caller?: boolean }).caller) return;
-        const auth = String(req.headers.authorization ?? '');
-        if (!timingSafeEqualStr(auth, `Bearer ${this.apiKey}`)) return reply.code(401).send();
-      });
+      api.addHook('onRequest', this.#frontStep(true));
       // Unknown routes inside /api speak the envelope — the model may probe a tool name that does not exist.
       envelopeHandlers(api);
 
@@ -150,10 +185,49 @@ export class HttpApi {
     if (this.routes) {
       await app.register(async (appScope) => {
         await browserOrigins(appScope);
+        appScope.addHook('onRequest', this.#frontStep(false));
         envelopeHandlers(appScope);
         await this.routes!(appScope);
       }, { prefix: '/app' });
     }
+  }
+
+  /** Who is calling, and who the work is for: a user acts for themselves in
+   *  their organization; the server key acts for whoever its headers name,
+   *  or for no one. 'invalid': the headers name an organization that is not
+   *  there, or a user who is not its member. */
+  async #who(req: FastifyRequest): Promise<{ caller: Caller; acting?: Acting } | null | 'invalid'> {
+    const caller = await this.backend.identity.callerOf(req);
+    if (!caller) return null;
+    if (caller.type === 'user') return { caller, acting: { organizationId: caller.organization.id, userId: caller.user.id } };
+    const header = (name: string) => { const value = req.headers[name]; return typeof value === 'string' && value ? value : undefined; };
+    const organizationId = header(ACTING_ORGANIZATION_HEADER);
+    const userId = header(ACTING_USER_HEADER);
+    if (!organizationId && !userId) return { caller };
+    if (!organizationId) return 'invalid';
+    const acting = await this.backend.identity.actingFor(organizationId, userId);
+    return acting ? { caller, acting } : 'invalid';
+  }
+
+  /** THE front step. `required`: nobody gets a bare 401 (/api); else the
+   *  request goes on with no caller and the route decides (/app). The rest
+   *  of the request — every hook, the handler, everything it awaits — runs
+   *  inside `actAs` when the work is for someone. Callback style: the
+   *  request's remaining lifecycle continues from inside `actAs`. */
+  #frontStep(required: boolean) {
+    return (req: FastifyRequest, reply: FastifyReply, done: (error?: Error) => void) => {
+      if (PUBLIC_PATHS.has(req.url)) { done(); return; }
+      this.#who(req).then((who) => {
+        if (who === 'invalid') {
+          reply.code(400).send(err('invalid_acting', `${ACTING_ORGANIZATION_HEADER} must name an organization, and ${ACTING_USER_HEADER} a member of it`));
+          return;
+        }
+        req.caller = who?.caller ?? null;
+        if (!who) { if (required) reply.code(401).send(); else done(); return; }
+        if (who.caller.type === 'user' && req.routeOptions.config?.operator) { reply.code(403).send(ACCESS_DENIED); return; }
+        if (who.acting) actAs(who.acting, () => done()); else done();
+      }, (error: unknown) => done(error instanceof Error ? error : new Error(String(error))));
+    };
   }
 
   /** Build every route and listen. Once. */

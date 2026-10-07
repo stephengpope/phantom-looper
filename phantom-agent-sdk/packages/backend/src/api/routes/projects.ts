@@ -8,7 +8,7 @@ import { projectScope } from '../../lib/scopes.js';
 import { newId } from '@phantom-agent-sdk/client';
 import { ok, err } from '../HttpApi.js';
 import type { PhantomBackend } from '../../PhantomBackend.js';
-import { scopeOf } from '../../lib/scopes.js';
+import { actingScope, scopeOf } from '../../lib/scopes.js';
 
 /** What leaves the API. The credential is no longer a column — it is
  *  `github_token` at this project's scope, so hasCredential is a lookup. */
@@ -36,10 +36,10 @@ export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // project's operations.
   app.get('/github/whoami', { schema: { tags: ['system'],
     summary: 'Verify the stored github_token against GitHub',
-    description: 'Resolves the global github_token and asks GitHub whose it is. ' +
+    description: 'Resolves the caller\'s github_token (theirs, else their organization\'s, else the server\'s) and asks GitHub whose it is. ' +
       '404 when none is stored; the classified error when GitHub rejects it.' } },
   async (_req, reply) => {
-    const pat = await ctx.settings.credential('github_token');
+    const pat = await ctx.settings.credential('github_token', actingScope());
     if (!pat) return reply.code(404).send(err('not_set', 'no github_token stored'));
     const who = await whoami(pat);
     if (!who.ok) {
@@ -56,11 +56,11 @@ export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   app.get('/github/repos', { schema: { tags: ['system'],
     summary: 'Repositories the stored github_token can see',
     description: 'Pages GitHub\'s /user/repos (owner, collaborator, organization member; sorted by last push) ' +
-      'with the GLOBAL github_token. Each row: owner, name, private, defaultBranch, pushedAt, and `added` — ' +
+      'with the caller\'s github_token (theirs, else their organization\'s, else the server\'s). Each row: owner, name, private, defaultBranch, pushedAt, and `added` — ' +
       'whether a project is already registered for it. 404 when no token is stored; the classified error ' +
       'when GitHub rejects it.' } },
   async (_req, reply) => {
-    const pat = await ctx.settings.credential('github_token');
+    const pat = await ctx.settings.credential('github_token', actingScope());
     if (!pat) return reply.code(404).send(err('not_set', 'no github_token stored'));
     const listed = await listRepos(pat);
     if (!listed.ok) {
@@ -121,7 +121,7 @@ export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
 
       let ownToken: string | undefined;
       if (req.body.create) {
-        const pat = req.body.token ?? await ctx.settings.credential('github_token');
+        const pat = req.body.token ?? await ctx.settings.credential('github_token', actingScope());
         if (!pat) return reply.code(400).send(err('credential_required', 'create needs `token` or the github_token credential'));
         if (!owner) {
           const who = await whoami(pat);

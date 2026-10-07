@@ -150,13 +150,13 @@ export function systemRoutes(app: FastifyInstance, ctx: PhantomBackend, extras: 
   });
 
   // ---- token usage report ---------------------------------------------------
-  // One query over log_tokens for today / last 7 days / last 30 days, per
+  // One query over token_usage for today / last 7 days / last 30 days, per
   // kind × model; tokenReport.ts lays it out.
   app.get('/system/token-usage', {
     schema: {
       tags: ['meta'],
       summary: 'Token usage report — today, last 7 days, last 30 days; agents and helpers by model',
-      description: 'Sums the log_tokens entries. Answers as preformatted `text`.',
+      description: 'Sums the token_usage entries. Answers as preformatted `text`.',
     },
   }, async () => ok(await extras.deployment.tokenUsage(await ctx.settings.clockFor())));
 }

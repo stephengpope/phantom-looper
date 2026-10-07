@@ -82,7 +82,7 @@ export class Workspaces {
     const dir = repoDir(this.paths, id);
     const auth = await resolveAuth(this.settings, project);
     try {
-      const claimed = await claimSlot(this.paths, project.owner, project.name, project.baseBranch, dest);
+      const claimed = await claimSlot(this.paths, project.id, project.baseBranch, dest);
       if (claimed) {
         // Pool slots are pristine by construction, so the unguarded catch-up is
         // safe — and mandatory: a slot stocked days ago is days behind.

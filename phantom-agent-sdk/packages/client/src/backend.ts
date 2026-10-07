@@ -35,6 +35,12 @@ export interface BackendOptions {
    *  a bot); unsaid = a person. Sent as x-phantom-looper-actor: the backend
    *  records it as a session's `started_by` and `last_turn_by`. */
   actor?: string;
+  /** With the server key: the organization (and optionally the user, a
+   *  member of it) every call is for. The backend runs each call as them —
+   *  their organization's rows only, their keys first — and records them
+   *  as who made what. Sent as x-phantom-organization / x-phantom-user.
+   *  Ignored with a user's own credential, which already says who. */
+  actingFor?: { organizationId: string; userId?: string };
   fetch?: typeof fetch;
   /** How a failed request is retried. Absent = never. */
   retry?: { policy: RetryPolicy; notice: (text: string) => void };
@@ -43,6 +49,8 @@ export interface BackendOptions {
 const SESSION_HEADER = 'x-phantom-looper-session';
 const CLIENT_HEADER = 'x-phantom-looper-client';
 const ACTOR_HEADER = 'x-phantom-looper-actor';
+const ACTING_ORGANIZATION_HEADER = 'x-phantom-organization';
+const ACTING_USER_HEADER = 'x-phantom-user';
 /** Who acts when a client says nothing (no actor): a person. Every
  *  automation names itself. The backend records it as a session's
  *  `started_by` (who opened it) and `last_turn_by` (who drove it last). */
@@ -92,6 +100,8 @@ export class BackendClient {
   readonly clientId: string;
   readonly label: string;
   readonly actor: string | undefined;
+  /** With the server key: the organization and user every call is for (BackendOptions.actingFor). */
+  readonly actingFor: BackendOptions['actingFor'];
   /** Who this client acts for, as the backend records it: the actor, or a person. */
   get actorName(): string { return this.actor ?? PERSON; }
   #credential: Credential;
@@ -110,6 +120,7 @@ export class BackendClient {
     this.clientId = options.clientId;
     this.label = options.label ?? options.clientId;
     this.actor = options.actor;
+    this.actingFor = options.actingFor;
     this.#credential = options.credential;
     this.#fetch = options.fetch ?? fetch;
     this.#retrying = options.retry ? retryingFetch(this.#fetch, options.retry.notice, 'server', options.retry.policy) : this.#fetch;
@@ -124,7 +135,7 @@ export class BackendClient {
 
   /** The same connection with a retry rule — the Agent's, from its handlers. */
   withRetry(policy: RetryPolicy, notice: (text: string) => void): BackendClient {
-    const clone = new BackendClient({ url: this.url, credential: this.#credential, clientId: this.clientId, label: this.label, actor: this.actor,
+    const clone = new BackendClient({ url: this.url, credential: this.#credential, clientId: this.clientId, label: this.label, actor: this.actor, actingFor: this.actingFor,
       fetch: this.#fetch, retry: { policy, notice } });
     clone.#versionChecked = this.#versionChecked;
     return clone;
@@ -161,6 +172,8 @@ export class BackendClient {
       ...credentialHeaders(this.#credential),
       [CLIENT_HEADER]: this.clientId,
       ...(this.actor ? { [ACTOR_HEADER]: this.actor } : {}),
+      ...(this.actingFor ? { [ACTING_ORGANIZATION_HEADER]: this.actingFor.organizationId,
+        ...(this.actingFor.userId ? { [ACTING_USER_HEADER]: this.actingFor.userId } : {}) } : {}),
       ...(opts.sessionId ? { [SESSION_HEADER]: opts.sessionId } : {}),
       ...(opts.contentType ? { 'content-type': opts.contentType } : {}),
     };

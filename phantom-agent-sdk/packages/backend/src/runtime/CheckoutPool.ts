@@ -47,9 +47,9 @@ export async function resolveAuth(settings: Settings, project: ProjectRow): Prom
  *  one wins, the other gets ENOENT and takes the next or falls through to a
  *  clone at the call site. */
 export async function claimSlot(
-  paths: Paths, owner: string, name: string, branch: string, dest: string,
+  paths: Paths, projectId: string, branch: string, dest: string,
 ): Promise<boolean> {
-  const prefix = slotPrefix(owner, name, branch);
+  const prefix = slotPrefix(projectId, branch);
   for (const slot of await listDir(paths.poolReady)) {
     if (!slot.startsWith(prefix)) continue;
     try {
@@ -91,7 +91,7 @@ export async function tick(projects: Projects, settings: Settings, paths: Paths)
       if (!stat || now - stat.mtimeMs > SETUP_STALE_MS) await remove(path.join(paths.poolSetup, slot));
     }
 
-    const wanted = new Map(projectRows.map((project) => [slotPrefix(project.owner, project.name, project.baseBranch), project]));
+    const wanted = new Map(projectRows.map((project) => [slotPrefix(project.id, project.baseBranch), project]));
     const ready = await listDir(paths.poolReady);
 
     // Slots for projects we no longer serve.
