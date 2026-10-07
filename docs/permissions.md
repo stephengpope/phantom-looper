@@ -143,6 +143,47 @@ client SDK's `BackendOptions.actingFor` sends the two headers.
   those columns, and the leftover empty `phantom_looper` schema that a
   fresh install made.
 
+## Agent containers
+
+Each agent reaches the internet and its own files, and nothing on the
+server.
+
+- **The agents' network** (`AGENT_NETWORK=phantom-agents`, made by the
+  server SDK when missing). Inter-container traffic is off, so an agent
+  cannot reach another agent, the API, Postgres or the Docker proxy.
+  Containers made before it existed are recreated on it on next use. They
+  are stateless, so that costs a restart.
+- **Shared-database mode** (`agent_database_shared`) gives each workspace
+  a private `internal` network holding only that container and Postgres
+  (`AGENT_DATABASE_CONTAINER`), reached by the URL's host name. It is
+  removed with the container, or when the mode is turned off.
+- **The Docker proxy** sits on its own internal network with the API
+  alone. `NETWORKS` is now allowed, for the two networks above. This keeps
+  CVE-2026-78122 (the proxy's read endpoints, no fixed release yet) out of
+  any agent's reach.
+- **Cloud metadata** (`169.254.169.254`): `scripts/install.sh` installs a
+  boot-time unit that drops agent traffic to it in `DOCKER-USER`.
+- **Settings (server only):**
+  - `container_pids_limit` defaults to 4096.
+  - `container_docker` (privileged) defaults off.
+  - `container_sudo` (default on). Off adds `no-new-privileges`, so the
+    agent cannot become root.
+  - `container_runtime` (unset = Docker's default; `runsc` = gVisor, once
+    installed on the server).
+- **Proven live on the local stack, with real agent containers:**
+  - An agent reaches the internet. Another agent, the Docker proxy (by
+    name and by IP), the API, Postgres, and the agents network's gateway
+    on 8080, 5432, 2375 and 22 are all unreachable.
+  - Shared mode reaches its own database and logs in as its own role,
+    still nothing else. Turning it off removes the private network.
+  - Sudo off is refused by the kernel.
+  - The `DOCKER-USER` rule drops agent traffic only, tested on Docker's
+    Linux VM with a stand-in address.
+- **On a Mac, under Docker Desktop**, an agent can reach the Mac itself
+  through `host.docker.internal`. That is Docker Desktop's own, for
+  development. What answers there (the API) needs its key. A Linux server
+  has no such path, and its gateway is closed as above.
+
 ## Proven
 
 - Throwaway Postgres, with the real migrations and a copy of the real
@@ -161,3 +202,5 @@ client SDK's `BackendOptions.actingFor` sends the two headers.
 - Telegram: one bot per server. Per user (user id ↔ chat id) is next.
 - Docker for agents on a shared server needs a safe runtime (Sysbox,
   rootless) before `container_docker` can be offered to organizations.
+- gVisor is a setting away (`container_runtime: runsc`), but it is not
+  installed or proven on a server yet.
