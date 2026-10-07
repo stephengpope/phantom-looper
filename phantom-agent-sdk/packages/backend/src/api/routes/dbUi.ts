@@ -22,7 +22,7 @@ const log = logger('db-ui');
 export const DB_UI_PREFIX = '/db';
 
 /** The user CloudBeaver knows you as. Auto-created on first request. */
-const DB_UI_USER = 'console_admin';
+export const DB_UI_USER = 'console_admin';
 
 /** CloudBeaver's built-in admin team. Sent as X-Team so the auto-created
  *  user lands with full rights rather than as a viewer. */
@@ -31,7 +31,7 @@ const DB_UI_TEAM = 'admin';
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 /** `Authorization: Basic` → {user, pass}, or null. */
-function parseBasic(header: string | undefined): { user: string; pass: string } | null {
+export function parseBasic(header: string | undefined): { user: string; pass: string } | null {
   if (!header?.startsWith('Basic ')) return null;
   const raw = Buffer.from(header.slice(6), 'base64').toString('utf8');
   const i = raw.indexOf(':');

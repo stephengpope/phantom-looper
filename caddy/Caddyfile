@@ -36,15 +36,5 @@
 
 https://{$PHANTOM_BACKEND_ADDRESS} {
 	import {$PHANTOM_BACKEND_TLS:public}
-
-	# /docs is the one route the API answers without a key, so it never goes
-	# out to the public address. The API's own port is already bound to
-	# 127.0.0.1, so refusing to proxy it here is the whole of "localhost only":
-	# on the box, or over an SSH tunnel, /docs works exactly as before.
-	# Two paths rather than /docs*, matching the server's own check, so a
-	# future /docs-admin is not caught by accident.
-	@docs path /docs /docs/*
-	respond @docs 404
-
 	reverse_proxy api:8080
 }

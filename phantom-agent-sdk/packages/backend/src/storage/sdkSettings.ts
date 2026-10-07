@@ -120,6 +120,8 @@ export function sdkSettings(options: { sessionImageTag: string }): SettingDefini
       description: "Cap on hits returned per search; the true total is still reported.", unit: "count", min: 1 },
     { key: "max_bash_output_bytes", type: "number", default: 1048576, label: "command output limit", group: "limits",
       description: "Cap on output kept per command; anything past it is dropped.", unit: "bytes", min: 1 },
+    { key: "api_docs_enabled", type: "boolean", default: false, label: "API docs", group: "console",
+      description: "The API's own documentation at /docs — every route, its parameters and answers, generated from the code, and tried from the page. Behind the same login as the database console: user console_admin, password this server's API key. Off: nothing is there." },
     { key: "db_ui_enabled", type: "boolean", default: false, label: "database console", group: "database",
       description: "Serve a browser-based database console at /db on this server's address. Sign in as console_admin with this server's API key. The console connects as the database superuser — full access to everything, this server's own tables included. Turning it off stops the console's container." },
     { key: "telegram_enabled", type: "boolean", default: false, label: "telegram", group: "telegram",

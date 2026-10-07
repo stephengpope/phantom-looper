@@ -58,6 +58,7 @@ import { IDENTITY_PATH, IdentityError, type Caller } from '../identity/Identity.
 import { actAs, type Acting } from '../lib/acting.js';
 import { logger, errStr } from '../lib/log.js';
 import { SDK_VERSION } from '../sdkVersion.js';
+import { collectDocs, serveDocs } from './docs.js';
 
 export function err(code: string, message: string, retryable = false, detail?: unknown) {
   return { ok: false as const, error: { code, message, retryable, ...(detail === undefined ? {} : { detail }) } };
@@ -128,6 +129,9 @@ export class HttpApi {
     app.setNotFoundHandler((_req, reply) => { reply.code(401).send(); });
     app.setErrorHandler((_error, _req, reply) => { reply.code(401).send(); });
 
+    // The docs collect every route registered after this; the page itself is served below.
+    await collectDocs(app, backend.version);
+
     // /db: CloudBeaver, proxied. Basic auth (console_admin + the API key),
     // not bearer — a browser cannot send bearer by typing a URL.
     dbUiRoutes(app, backend.settings, this.apiKey);
@@ -191,6 +195,9 @@ export class HttpApi {
         await this.routes!(appScope);
       }, { prefix: '/app' });
     }
+
+    // The API's docs (/docs): off unless api_docs_enabled, then behind the console's login.
+    await serveDocs(app, backend.settings, this.apiKey);
   }
 
   /** Who is calling, and who the work is for: a user acts for themselves in

@@ -40,6 +40,8 @@
     "@better-auth/api-key": "1.7.7",
     "@fastify/cors": "11.3.0",
     "@fastify/http-proxy": "11.6.1",
+    "@fastify/swagger": "9.9.1",
+    "@fastify/swagger-ui": "6.1.1",
     "@parcel/watcher": "2.6.0",
     "@phantom-agent-sdk/client": "0.1.0",
     "@smithy/node-http-handler": "4.12.1",
