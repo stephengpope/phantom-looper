@@ -158,7 +158,9 @@ export class Database {
   /** Postgres raised a unique constraint (23505): the row's owner turns it
    *  into its own refusal instead of letting it 500. */
   static isUniqueViolation(error: unknown): boolean {
-    return (error as { code?: string } | null)?.code === '23505';
+    // Drizzle (0.39+) wraps the driver's error: Postgres's code is on its cause.
+    const failed = error as { code?: string; cause?: { code?: string } } | null;
+    return (failed?.code ?? failed?.cause?.code) === '23505';
   }
 
   async close(): Promise<void> { await this.pool.end(); }
