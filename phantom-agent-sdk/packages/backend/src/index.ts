@@ -5,12 +5,14 @@ export * from './members.js';
 export type { SettingDefinition, AgentTypeDefinition, ToolDefinition, ToolRunContext, ToolGroup, ToolGrant, RouteRegistrar, CardFieldsExtension } from './doors.js';
 
 // storage
-export { SDK_MIGRATIONS, type Drizzle, type Transaction, type MigrationSet } from './storage/Database.js';
+export { SDK_MIGRATIONS, ORGANIZATION_SETTING, USER_SETTING, type Drizzle, type Transaction, type MigrationSet } from './storage/Database.js';
 export * as schema from './storage/schema.js';
 export { SettingsWriteError, type SettingScope, type SettingSource, type SettingLayers, type SettingEntry, type SettingMeta, type SecretMeta } from './storage/Settings.js';
 export { sdkSettings, agentTypeSettings } from './storage/sdkSettings.js';
 export type { TokenRecord, ReportRow, Windows, WindowTotals } from './storage/TokenLog.js';
 export type { BackgroundTaskRow, BackgroundTaskEnd } from './storage/BackgroundTasks.js';
+export { MailerError, type Mail } from './mail/Mailer.js';
+export { IdentityError, IDENTITY_PATH, type Caller, type IdentityOptions, type OrganizationRole, type OAuthApp, type MailTemplates, type MailBody } from './identity/Identity.js';
 export { SqlError, locate, type QueryOptions, type StatementResult } from './storage/AgentDatabases.js';
 
 // agents
@@ -21,7 +23,7 @@ export { CATALOG_PROVIDERS, hasCatalog, fromModelsDev, fetchCatalog, writeSnapsh
 // lib
 export { logger, errStr } from './lib/log.js';
 export { Clock, TIMEZONES } from './lib/clock.js';
-export { GLOBAL, projectScope } from './lib/scopes.js';
+export { GLOBAL, LAYERS, projectScope, organizationScope, userScope, scopeOf, scopeNames, layerOf, type Layer, type OverridableLayer } from './lib/scopes.js';
 export { makePaths, sessionDir, repoDir, slotPrefix, slotUlid, type Paths } from './lib/paths.js';
 export { encrypt, decrypt, timingSafeEqualStr } from './lib/crypto.js';
 
@@ -39,7 +41,7 @@ export type { BoardEvent } from './agents/BoardEvents.js';
 export type { SettingsChanged } from './agents/SettingsEvents.js';
 
 export { hasEmbeddedCredentials, parseGitHubUrl, parseRepoRef, remoteUrl } from './git/remote.js';
-export type { CardRow, CronRow, ProjectRow, WorkspaceRow, SessionRow } from './storage/schema.js';
+export type { CardRow, CronRow, ProjectRow, WorkspaceRow, SessionRow, UserRow, OrganizationRow, MemberRow, InvitationRow, ApiKeyRow } from './storage/schema.js';
 export * as checkoutPool from './runtime/CheckoutPool.js';
 
 // runtime, git, prompt, skills, tools — the moved modules' companions

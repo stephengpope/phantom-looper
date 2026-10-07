@@ -44,6 +44,7 @@ import { SystemPrompt } from '../agents/SystemPrompt.js';
 import { repoDir, type Paths } from '../lib/paths.js';
 import type Docker from 'dockerode';
 import type { SessionEvents } from '../agents/SessionEvents.js';
+import { scopeOf } from '../lib/scopes.js';
 
 const log = logger('sessions');
 
@@ -294,7 +295,7 @@ export class Sessions {
   Promise<{ provider: string | null; model: string | null; baseUrl: string | null }> {
     const project = await this.projects.get(projectId);
     try {
-      const model = await this.agentConfig.modelFor(type, project ? { projectId: project.id } : {});
+      const model = await this.agentConfig.modelFor(type, project ? scopeOf(project) : {});
       // A whole pin or none: a provider with no model is nothing to run on.
       return model.provider && model.model ? model : { provider: null, model: null, baseUrl: null };
     } catch { return { provider: null, model: null, baseUrl: null }; } // a half-set pair — the row stays empty

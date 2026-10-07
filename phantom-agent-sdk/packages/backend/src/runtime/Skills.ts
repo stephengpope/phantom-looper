@@ -16,6 +16,7 @@ import type { PhantomBackend } from '../PhantomBackend.js';
 import type { FsDeps } from '../api/routes/fs.js';
 import { SKILLS_DIR, mergeSkills, parseDescription, scanSkills } from '../skills/skills.js';
 import { systemSkills, systemSkillTree } from './SystemSkills.js';
+import { scopeOf } from '../lib/scopes.js';
 import {
   MAX_FILE_BYTES, lintSkillMd, validateFilePath, validateSkillMd, validateSkillName,
 } from '../skills/validate.js';
@@ -68,7 +69,7 @@ async function writeViaContainer(sandbox: Sandbox, name: string, rel: string, co
 /** The session's workspace image — the system skill tier lives inside it. */
 async function imageFor(ctx: PhantomBackend, session: SessionRow): Promise<string> {
   const project = await ctx.projects.get(session.projectId);
-  return String(await ctx.settings.resolve('container_image', project ? { projectId: project.id } : {}));
+  return String(await ctx.settings.resolve('container_image', project ? scopeOf(project) : {}));
 }
 
 /** Every skill the session sees: a live scan of its working tree merged with

@@ -7,6 +7,7 @@
 import { eq, inArray } from 'drizzle-orm';
 import type { Drizzle, Transaction, Settings, ProjectRow, Card, CardFieldsExtension } from '@phantom-agent-sdk/backend';
 import { cardAutomation } from '../storage/schema.js';
+import { scopeOf } from '@phantom-agent-sdk/backend';
 
 /** The switches as the looper reads them off a card. */
 export interface AutomationSwitches { auto_plan: boolean | null; auto_build: boolean | null }
@@ -60,8 +61,8 @@ export class CardAutomation {
   /** The project's defaults — what a null switch inherits — and the layer
    *  each came from, for the card editor. Rides every board payload. */
   async defaults(project: ProjectRow): Promise<Record<string, unknown>> {
-    const plan = await this.settings.resolveWithSource('auto_plan', { projectId: project.id });
-    const build = await this.settings.resolveWithSource('auto_build', { projectId: project.id });
+    const plan = await this.settings.resolveWithSource('auto_plan', scopeOf(project));
+    const build = await this.settings.resolveWithSource('auto_build', scopeOf(project));
     return { auto_plan_default: Boolean(plan.value), auto_plan_source: plan.source,
       auto_build_default: Boolean(build.value), auto_build_source: build.source };
   }

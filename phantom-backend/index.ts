@@ -156,7 +156,7 @@ async function main() {
   // message, the title, the digest): the git sync's identity, so a conflict
   // turn re-takes the sync's own hold.
   let client: BackendClient | undefined;
-  const gitClient = () => (client ??= new BackendClient({ url: backend.loopback.url, apiKey: backend.env.apiKey, clientId: GIT_CLIENT_ID, label: 'git sync' }));
+  const gitClient = () => (client ??= new BackendClient({ url: backend.loopback.url, credential: { phantomAdminKey: backend.env.apiKey }, clientId: GIT_CLIENT_ID, label: 'git sync' }));
   const oneShotDeps = () => ({ agentConfig: backend.agentConfig, client: gitClient() });
 
   const shutdown = async () => { await backend.stop(); process.exit(0); };

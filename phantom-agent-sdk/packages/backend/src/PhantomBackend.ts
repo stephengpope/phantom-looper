@@ -46,6 +46,8 @@ import { TelegramHandledUpdates } from './telegram/handledUpdates.js';
 import { TelegramBot, type TelegramCommand } from './telegram/TelegramBot.js';
 import type { SettingDefinition, AgentTypeDefinition, ToolDefinition, RouteRegistrar, CardFieldsExtension } from './doors.js';
 import { Notifications } from './Notifications.js';
+import { Mailer } from './mail/Mailer.js';
+import { Identity, type IdentityOptions } from './identity/Identity.js';
 import { SessionTitler, type TitleWriter } from './agents/SessionTitler.js';
 import { HttpApi } from './api/HttpApi.js';
 import { registerTools } from './tools/registry.js';
@@ -78,8 +80,12 @@ export interface PhantomBackendConfig {
   /** Fields the app keeps about a card in its own table, carried on every
    *  card the SDK answers and taken by every card write (Cards). */
   cardFields?: CardFieldsExtension;
-  /** Routes user space adds to the API, under the same auth. */
+  /** Routes user space adds, under /app — no key check: the app gates each
+   *  with backend.identity.require. */
   routes?: RouteRegistrar;
+  /** Turns sign-in on: people, organizations, invitations, API keys
+   *  (Identity). Absent = off: no route, nothing written. */
+  identity?: IdentityOptions;
   /** What the app brings to the backend's git: its conflict fixer, its
    *  commit-message writer, its words after a sync (GitService). */
   git?: GitHooks;
@@ -131,6 +137,10 @@ export class PhantomBackend {
   readonly settingsEvents: SettingsEvents;
   readonly foregroundCommands: ForegroundCommands;
   readonly notifications = new Notifications();
+  /** Outbound mail (SMTP, the smtp_* settings). */
+  readonly mailer: Mailer;
+  /** Who a caller is: the phantom admin's key, or a signed-in user (config.identity). */
+  readonly identity: Identity;
   readonly sessionTitler: SessionTitler;
   /** The backend's git: manual ops, auto-push/pull, instant sync, the archive policy. */
   readonly git: GitService;
@@ -167,6 +177,8 @@ export class PhantomBackend {
     this.workspaceWatcher = built.workspaceWatcher; this.telegramBotState = built.telegramBotState;
     this.telegramSentMessages = built.telegramSentMessages; this.telegramHandledUpdates = built.telegramHandledUpdates;
     this.sessionTitler = new SessionTitler(this.sessions, config.writeTitle);
+    this.mailer = new Mailer(this.settings);
+    this.identity = new Identity(this.database, this.mailer, this.settings, this.projects, config.identity, this.env.publicUrl, this.env.apiKey);
     this.telegramBot = new TelegramBot({ settings: this.settings, settingsEvents: this.settingsEvents, botState: this.telegramBotState,
       sentMessages: this.telegramSentMessages, handledUpdates: this.telegramHandledUpdates, paths: this.paths,
       publicAddress: process.env.PHANTOM_BACKEND_ADDRESS, commandMenu: config.telegramCommandMenu });
@@ -182,7 +194,7 @@ export class PhantomBackend {
   healthExtras(): Record<string, unknown> { return this.config.health?.() ?? {}; }
 
   /** Build every service, connected but not running. Boot order:
-   *   1. env → Database → migrations: the SDK's, then user space's
+   *   1. env → Database (the roles, as the superuser; the pool, as backend) → migrations as migrator: the SDK's, then user space's
    *   2. the three event feeds; ModelCatalog; AgentTypes (config.agentTypes)
    *   3. Settings — registered in screen order: each type's ten, the SDK's, user space's
    *   4. AgentConfig, AgentDatabases, Projects, Workspaces, Cards
@@ -192,7 +204,7 @@ export class PhantomBackend {
    *  Nothing listens or ticks until `start`. */
   static async create(config: PhantomBackendConfig, options: { sessionImageTag?: string } = {}): Promise<PhantomBackend> {
     const env = readEnv(config.env ?? process.env);
-    const database = Database.connect(env.databaseUrl);
+    const database = await Database.open(env.databaseUrl, env.encryptionKey);
     await database.migrate(SDK_MIGRATIONS);
     if (config.migrations) await database.migrate(config.migrations);
     const paths = makePaths(env.workspaceRoot);
@@ -213,7 +225,7 @@ export class PhantomBackend {
     settings.register(config.settings ?? []);
     const agentConfig = new AgentConfig(settings, agentTypes, modelCatalog);
 
-    const agentDatabases = new AgentDatabases(database.pool, env.databaseUrl, env.encryptionKey);
+    const agentDatabases = new AgentDatabases(database.pool, database.url, env.encryptionKey);
     const projects = new Projects(database.drizzle, settings, settingsEvents, agentDatabases);
     const workspaces = new Workspaces(database.drizzle, paths, settings, sessionEvents);
     const cards = new Cards(database.drizzle, projects, boardEvents, config.cardFields);

@@ -1,11 +1,11 @@
 // The SECRET tools — secret_list, secret_get: the stored secrets, over
 // Settings' secret layer. Read-only by design. Bound to the session's
 // project: its secrets shadow global ones by name.
-import { GLOBAL, projectScope } from '../lib/scopes.js';
+import { layerOf, scopeNames, scopeOf } from '../lib/scopes.js';
 import { secretName } from '@phantom-agent-sdk/client';
 import { obj, refusal, str, type ToolCtx, type ToolDef } from './def.js';
 
-const chain = (ctx: ToolCtx) => [GLOBAL, projectScope(ctx.project.id)];
+const chain = (ctx: ToolCtx) => Object.values(scopeNames(scopeOf(ctx.project)));
 
 export const SECRET_TOOLS: ToolDef[] = [
   {
@@ -18,7 +18,7 @@ export const SECRET_TOOLS: ToolDef[] = [
     mutates: false, group: 'secrets',
     async execute(ctx) {
       const raw = await ctx.app.settings.listSecrets(chain(ctx));
-      return { secrets: raw.map((secret) => ({ name: secret.name, description: secret.description, scope: secret.scope === GLOBAL ? 'global' : 'project' })) };
+      return { secrets: raw.map((secret) => ({ name: secret.name, description: secret.description, scope: layerOf(secret.scope) })) };
     },
   },
   {

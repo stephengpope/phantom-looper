@@ -39,6 +39,7 @@ function lockEvent(session: SessionRow, over: Partial<{ locked: boolean; by: str
     ...(died ? { died_on: died.label ?? died.by, died_at: died.at.toISOString() } : {}) };
 }
 import { logger, errStr } from '../../lib/log.js';
+import { scopeOf } from '../../lib/scopes.js';
 
 const TAG = { tags: ['sessions'] };
 const idParam = { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] };
@@ -757,7 +758,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         callerGone = true;
         if (held) void releaseHold(ctx, session, client);
       });
-      const settings = await ctx.settings.resolveMany(['session_lock_ttl_ms'], { projectId: project.id });
+      const settings = await ctx.settings.resolveMany(['session_lock_ttl_ms'], scopeOf(project));
       const expires = await ctx.sessions.acquireLock(session, client, Number(settings.session_lock_ttl_ms), req.body.label);
       if (!expires) return reply.code(409).send(lockedErr(session));
       held = true;
@@ -792,7 +793,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       }
       ctx.sessions.rememberLinesAtTurnStart(session.id, atStart.transcriptLines);
       let config;
-      try { config = await ctx.agentConfig.resolve(req.body.type, { projectId: project.id }, sessionPin(session)); }
+      try { config = await ctx.agentConfig.resolve(req.body.type, scopeOf(project), sessionPin(session)); }
       catch (error) {
         // A refused start is no turn: the hold goes with the refusal, not with the clock.
         await releaseHold(ctx, session, client);

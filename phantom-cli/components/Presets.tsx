@@ -162,7 +162,7 @@ export function Presets({ api, confirm, onApplied, onClose }: {
   // Model catalog loader — same pattern as Settings.tsx.
   const loadModels = useCallback(async (provider: string): Promise<CatalogModel[]> => {
     try {
-      const reply = await api('GET', `/models?provider=${encodeURIComponent(provider)}`) as { models?: CatalogModel[] };
+      const reply = await api('GET', `/app/models?provider=${encodeURIComponent(provider)}`) as { models?: CatalogModel[] };
       return Array.isArray(reply?.models) ? reply.models : [];
     } catch (entry) {
       setNotice(`could not load the model list: ${(entry as Error).message}`);

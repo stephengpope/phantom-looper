@@ -1,6 +1,7 @@
 // Settings — every behavioural knob, resolved default → global row →
-// project row. Defaults live in the REGISTRY, in code; the table holds only
-// overrides. Read at the point of use, never cached at boot: a change must
+// organization row → user row → project row (lib/scopes.ts LAYERS: the
+// last row found wins). Defaults live in the REGISTRY, in code; the table
+// holds only overrides. Read at the point of use, never cached at boot: a change must
 // take effect without a restart or the API lies.
 //
 // ONE store for settings and secrets — a row is (scope, namespace, key).
@@ -10,10 +11,10 @@
 // value_enc, description in plain value). This is the only file that
 // touches the table; every reader resolves through it, every writer writes
 // through it, and a write announces its scope on the settings feed.
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull } from 'drizzle-orm';
 import type { Drizzle } from './Database.js';
 import { settings } from './schema.js';
-import { GLOBAL, projectScope } from '../lib/scopes.js';
+import { GLOBAL, LAYERS, scopeNames, type Layer, type OverridableLayer, type SettingScope } from '../lib/scopes.js';
 import { encrypt, decrypt } from '../lib/crypto.js';
 import { Clock } from '../lib/clock.js';
 import { logger } from '../lib/log.js';
@@ -25,22 +26,25 @@ import { textOf } from '../lib/text.js';
 const log = logger('settings');
 
 /** Where a value came from — the layer's own name. */
-export type SettingSource = 'default' | 'global' | 'project';
-/** What resolution is relative to: nothing (global only) or a project. */
-export interface SettingScope { projectId?: string }
+export type SettingSource = 'default' | Layer;
+export type { SettingScope } from '../lib/scopes.js';
 
 /** One setting with its LAYERS exposed, not just the winner — what a client
- *  needs to render an editor (VS Code's inspect(), git's --show-origin). */
+ *  needs to render an editor (VS Code's inspect(), git's --show-origin).
+ *  A layer the scope did not name is null. */
 export interface SettingLayers {
   default: unknown;
   global: unknown;
+  organization: unknown;
+  user: unknown;
   project: unknown;
   value: unknown;
   source: SettingSource;
 }
 
 /** The layers plus what a screen needs: the description, the rendering
- *  meta, whether a project may override, whether it is a credential. One
+ *  meta, where it may be overridden (`overridableAt`; `overridable` is the
+ *  project's answer, what the cli reads), whether it is a credential. One
  *  shape for settings and credentials, so a client files both with the
  *  same code. A credential's values are always null — a token is never
  *  shown back; its `source` says where one is stored. */
@@ -48,6 +52,7 @@ export type SettingEntry = SettingLayers & {
   description: string;
   meta: SettingMeta;
   overridable: boolean;
+  overridableAt: OverridableLayer[];
   secret?: boolean;
 };
 export interface SettingMeta {
@@ -78,7 +83,9 @@ const GENERAL = 'general';
 const SECRET_NS = 'secret';
 /** scope -> key -> stored value (decrypted where it was encrypted). */
 type ByScope = Map<string, Map<string, unknown>>;
-interface RawLayers { global?: unknown; project?: unknown }
+/** The stored value at each layer the scope names; absent = no row. */
+type RawLayers = Partial<Record<Layer, unknown>>;
+const EMPTY_LAYERS = { global: null, organization: null, user: null, project: null };
 
 const secretMeta = (row: { key: string; scope: string; value: unknown }): SecretMeta => ({
   name: row.key, scope: row.scope,
@@ -136,10 +143,14 @@ export class Settings {
     for (const definition of this.#definitions.values()) if (definition.secret && definition.provider === provider) return definition.key;
     return undefined;
   }
-  isProjectOverridable(key: string): boolean {
+  /** The layers below global this key may be set at. A project-only key: the project's. */
+  overridableAt(key: string): OverridableLayer[] {
     const definition = this.#definitions.get(key);
-    return !!definition && (definition.projectOverridable === true || definition.projectOnly === true);
+    if (!definition) return [];
+    return definition.projectOnly ? ['project'] : [...(definition.overridableAt ?? [])];
   }
+  isOverridableAt(key: string, layer: OverridableLayer): boolean { return this.overridableAt(key).includes(layer); }
+  isProjectOverridable(key: string): boolean { return this.isOverridableAt(key, 'project'); }
   isGlobalSettable(key: string): boolean { return this.#definitions.get(key)?.projectOnly !== true; }
 
   /** Validate one value against its definition. null when fine, else why.
@@ -232,43 +243,55 @@ export class Settings {
 
   // ── resolution ────────────────────────────────────────────────────────
 
-  /** The scopes to read for a context, in order. Every read goes through here. */
+  /** The scopes to read for a context, in chain order. Every read goes through here. */
   private scopesFor(scope: SettingScope): string[] {
-    return scope.projectId ? [GLOBAL, projectScope(scope.projectId)] : [GLOBAL];
+    return Object.values(scopeNames(scope));
   }
 
   private rawLayers(byScope: ByScope, scope: SettingScope, key: string): RawLayers {
-    const at = (scopeName: string) => byScope.get(scopeName)?.get(key);
-    return { global: at(GLOBAL), project: scope.projectId ? at(projectScope(scope.projectId)) : undefined };
+    const raw: RawLayers = {};
+    for (const [layer, scopeName] of Object.entries(scopeNames(scope)) as [Layer, string][]) {
+      const value = byScope.get(scopeName)?.get(key);
+      if (value !== undefined) raw[layer] = value;
+    }
+    return raw;
   }
 
-  /** THE precedence rule, written once: default → global row → project
-   *  row. Row PRESENCE decides at every level — null is never stored, so
-   *  "there is a row" and "there is an override" are the same statement. */
+  /** THE precedence rule, written once: the default, then every layer in
+   *  chain order; the last row wins. Row PRESENCE decides at every level —
+   *  null is never stored, so "there is a row" and "there is an override"
+   *  are the same statement. */
   private computeLayers(key: string, raw: RawLayers): SettingLayers {
     const definition = this.requireDefinition(key);
     let value: unknown = definition.default;
     let source: SettingSource = 'default';
-    if (raw.global !== undefined) { value = raw.global; source = 'global'; }
-    if (raw.project !== undefined) { value = raw.project; source = 'project'; }
-    return { default: definition.default, global: raw.global ?? null, project: raw.project ?? null, value, source };
+    for (const layer of LAYERS) if (raw[layer] !== undefined) { value = raw[layer]; source = layer; }
+    return { default: definition.default, ...EMPTY_LAYERS, ...Object.fromEntries(LAYERS.map((layer) => [layer, raw[layer] ?? null])), value, source };
   }
 
   /** The layers with the provider rules applied (doors.ts:
-   *  `boundToProvider`, `defaultsToLatestModel`). */
+   *  `boundToProvider`, `defaultsToLatestModel`). A layer's own provider
+   *  row, when it names a different provider than the layers above it,
+   *  cuts those layers' model/endpoint out of the chain — a project on
+   *  openai must not inherit the organization's claude id. */
   private layersOf(key: string, byScope: ByScope, scope: SettingScope): SettingLayers {
     const definition = this.requireDefinition(key);
-    const layers = this.computeLayers(key, this.rawLayers(byScope, scope, key));
+    const raw = this.rawLayers(byScope, scope, key);
+    const layers = this.computeLayers(key, raw);
     if (!definition.boundToProvider) return layers;
     const providerRaw = this.rawLayers(byScope, scope, definition.boundToProvider);
-    const globalProvider = this.computeLayers(definition.boundToProvider, { global: providerRaw.global }).value;
-    const provider = this.computeLayers(definition.boundToProvider, providerRaw).value;
     const own = { ...layers };
-    if (providerRaw.project !== undefined && provider !== globalProvider && layers.source === 'global') {
-      own.value = definition.default; own.source = 'default';
+    let value: unknown = definition.default;
+    let source: SettingSource = 'default';
+    let providerAbove: unknown = this.requireDefinition(definition.boundToProvider).default;
+    for (const layer of LAYERS) {
+      if (providerRaw[layer] !== undefined && providerRaw[layer] !== providerAbove) { value = definition.default; source = 'default'; }
+      if (providerRaw[layer] !== undefined) providerAbove = providerRaw[layer];
+      if (raw[layer] !== undefined) { value = raw[layer]; source = layer; }
     }
+    own.value = value; own.source = source;
     if (!definition.defaultsToLatestModel || own.value != null) return own;
-    const latest = this.modelCatalog.latestFor(typeof provider === 'string' ? provider : null);
+    const latest = this.modelCatalog.latestFor(typeof providerAbove === 'string' ? providerAbove : null);
     return { ...own, default: latest, value: latest };
   }
 
@@ -294,19 +317,25 @@ export class Settings {
   /** Every registered setting with its layers, plus every credential with
    *  its SOURCE only — what a settings editor renders from one call. */
   async layersForScope(scope: SettingScope = {}): Promise<Record<string, SettingEntry>> {
-    const byScope = await this.readStore(this.scopesFor(scope), false);
+    const names = scopeNames(scope);
+    const byScope = await this.readStore(Object.values(names), false);
+    const present = await this.credentialPresence(Object.values(names));
     const out: Record<string, SettingEntry> = {};
     for (const [key, definition] of this.#definitions) {
+      const screen = { description: definition.description, meta: this.metaOf(key),
+        overridable: this.isProjectOverridable(key), overridableAt: this.overridableAt(key) };
       if (definition.secret) {
-        const here = scope.projectId && this.isProjectOverridable(key) ? await this.hasCredentialAt(key, projectScope(scope.projectId)) : false;
-        const shared = await this.hasCredentialAt(key, GLOBAL);
-        out[key] = { default: null, global: null, project: null, value: null,
-          source: here ? 'project' : shared ? 'global' : 'default',
-          description: definition.description, meta: this.metaOf(key), overridable: this.isProjectOverridable(key), secret: true };
+        // Where a token is stored: the deepest layer with a row among those
+        // the scope names and the key may be set at.
+        let source: SettingSource = 'default';
+        for (const [layer, scopeName] of Object.entries(names) as [Layer, string][]) {
+          if (layer !== 'global' && !this.isOverridableAt(key, layer)) continue;
+          if (present.get(scopeName)?.has(key)) source = layer;
+        }
+        out[key] = { default: null, ...EMPTY_LAYERS, value: null, source, ...screen, secret: true };
         continue;
       }
-      out[key] = { ...this.layersOf(key, byScope, scope), description: definition.description, meta: this.metaOf(key),
-        overridable: this.isProjectOverridable(key) };
+      out[key] = { ...this.layersOf(key, byScope, scope), ...screen };
     }
     return out;
   }
@@ -325,40 +354,47 @@ export class Settings {
   async credential(key: string, scope: SettingScope = {}): Promise<string | undefined> {
     if (!this.isCredential(key)) throw new Error(`${key} is not a credential`);
     const byScope = await this.readStore(this.scopesFor(scope), true, key);
-    const raw = this.rawLayers(byScope, scope, key);
-    const value = raw.project ?? raw.global;
+    const { value } = this.computeLayers(key, this.rawLayers(byScope, scope, key));
     return typeof value === 'string' && value.length ? value : undefined;
   }
 
-  /** Every credential's stored value at both layers, decrypted — the
-   *  settings editor's view (flagged secret there). */
-  async credentialLayers(scope: SettingScope = {}): Promise<Record<string, { global: string | null; project: string | null }>> {
+  /** Every credential's stored value at every layer the scope names,
+   *  decrypted — the settings editor's view (flagged secret there). */
+  async credentialLayers(scope: SettingScope = {}): Promise<Record<string, Record<Layer, string | null>>> {
     const byScope = await this.readStore(this.scopesFor(scope), true);
-    const out: Record<string, { global: string | null; project: string | null }> = {};
+    const out: Record<string, Record<Layer, string | null>> = {};
     for (const [key, definition] of this.#definitions) {
       if (!definition.secret) continue;
       const raw = this.rawLayers(byScope, scope, key);
-      out[key] = { global: typeof raw.global === 'string' ? raw.global : null, project: typeof raw.project === 'string' ? raw.project : null };
+      out[key] = Object.fromEntries(LAYERS.map((layer) => [layer, typeof raw[layer] === 'string' ? raw[layer] : null])) as Record<Layer, string | null>;
     }
+    return out;
+  }
+
+  /** Which credentials have a row at which scope — presence only, nothing
+   *  decrypted. ONE query for every credential on a settings screen. */
+  private async credentialPresence(scopes: string[]): Promise<Map<string, Set<string>>> {
+    const rows = await this.database.select({ scope: settings.scope, key: settings.key }).from(settings).where(and(
+      inArray(settings.scope, scopes), eq(settings.namespace, GENERAL), isNotNull(settings.valueEnc)));
+    const out = new Map<string, Set<string>>();
+    for (const row of rows) { if (!out.has(row.scope)) out.set(row.scope, new Set()); out.get(row.scope)!.add(row.key); }
     return out;
   }
 
   /** Is a credential set at exactly this scope (not inherited)? */
   async hasCredentialAt(key: string, scopeName: string): Promise<boolean> {
-    const rows = await this.database.select({ key: settings.key }).from(settings).where(and(
-      eq(settings.scope, scopeName), eq(settings.namespace, GENERAL), eq(settings.key, key)));
-    return rows.length > 0;
+    return (await this.credentialPresence([scopeName])).get(scopeName)?.has(key) ?? false;
   }
 
   // ── writing ───────────────────────────────────────────────────────────
 
-  /** THE settings writer. Every route that changes a setting — global or
-   *  project — goes through this one validation + store path, so a second
+  /** THE settings writer. Every route that changes a setting — at any
+   *  layer — goes through this one validation + store path, so a second
    *  door cannot accept a value the first refused. null clears; it is
    *  never stored. Announces the scope when anything was written. Returns
    *  the keys written. `by` is the writer's client id, so its own window
    *  ignores the echo. */
-  async writeAtScope(layer: 'global' | 'project', scopeName: string, patch: Record<string, unknown>, by?: string): Promise<string[]> {
+  async writeAtScope(layer: Layer, scopeName: string, patch: Record<string, unknown>, by?: string): Promise<string[]> {
     const values = { ...patch };
     const unknown = Object.keys(values).filter((key) => !this.isRegistered(key));
     if (unknown.length) throw new SettingsWriteError('unknown_setting', `unknown settings: ${unknown.join(', ')}`);
@@ -375,9 +411,9 @@ export class Settings {
         if (!this.isGlobalSettable(key)) throw new SettingsWriteError('not_overridable', `${key} is a fact about one project — set it there`);
         continue;
       }
-      if (!this.isProjectOverridable(key)) throw new SettingsWriteError('not_overridable', `${key} cannot be set per project`);
+      if (!this.isOverridableAt(key, layer)) throw new SettingsWriteError('not_overridable', `${key} cannot be set per ${layer}`);
     }
-    if (layer === 'project') await this.providerFirst(scopeName, values);
+    if (layer !== 'global') await this.providerFirst(scopeName, values);
     const entries = Object.entries(values);
     for (const [key, value] of entries) {
       if (value === null) await this.deleteRow(scopeName, key);
@@ -387,8 +423,8 @@ export class Settings {
     return entries.map(([key]) => key);
   }
 
-  /** The PROVIDER-FIRST rule on one project patch: a setting bound to a
-   *  provider needs the project's own provider row — already stored, or in
+  /** The PROVIDER-FIRST rule on one patch below global: a setting bound to
+   *  a provider needs that layer's own provider row — already stored, or in
    *  this patch — and clearing the provider clears what is bound to it,
    *  added to the patch so they go out on the same write. */
   private async providerFirst(scopeName: string, values: Record<string, unknown>): Promise<void> {
@@ -399,7 +435,7 @@ export class Settings {
       if (sets(providerKey)) continue;
       const stored = await this.readStore([scopeName], false, providerKey);
       if (stored.get(scopeName)?.get(providerKey) === undefined) {
-        throw new SettingsWriteError('provider_first', `set this project's ${this.requireDefinition(providerKey).label} before its ${this.requireDefinition(key).label}`);
+        throw new SettingsWriteError('provider_first', `set this layer's ${this.requireDefinition(providerKey).label} before its ${this.requireDefinition(key).label}`);
       }
     }
     for (const [providerKey, value] of Object.entries(values)) {
@@ -408,7 +444,7 @@ export class Settings {
     }
   }
 
-  /** A whole scope goes — a project that no longer exists. Both namespaces: its overrides and its secrets. */
+  /** A whole scope goes — a project, organization or user that no longer exists. Both namespaces: its overrides and its secrets. */
   async deleteScope(scopeName: string): Promise<void> {
     await this.database.delete(settings).where(eq(settings.scope, scopeName));
   }
@@ -429,9 +465,9 @@ export class Settings {
     return sortSecrets(rows.map(secretMeta));
   }
 
-  /** One secret's value, most-specific-first over the scopes given (pass
-   *  [GLOBAL, projectScope(id)] — project wins). undefined = no such
-   *  secret, or it would not decrypt. */
+  /** One secret's value, most-specific-first over the scopes given (in
+   *  chain order, as `scopeNames` lists them — the last wins). undefined =
+   *  no such secret, or it would not decrypt. */
   async readSecret(name: string, scopeNames: string[] = [GLOBAL]): Promise<string | undefined> {
     const rows = await this.database.select().from(settings).where(and(
       inArray(settings.scope, scopeNames), eq(settings.namespace, SECRET_NS), eq(settings.key, name)));

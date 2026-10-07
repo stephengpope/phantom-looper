@@ -223,7 +223,7 @@ export function gitHandlers(host: AssistantHost) {
 export function dockerLogsHandler(host: AssistantHost) {
   return async (args: DockerLogsArgs): Promise<unknown> => {
     let logs: { service: string; text: string; truncated?: boolean };
-    try { logs = await host.call('POST', '/system/logs', args) as typeof logs; }
+    try { logs = await host.call('POST', '/app/system/logs', args) as typeof logs; }
     catch (error) { return { error: (error as Error).message }; }
     return {
       service: logs.service,

@@ -5,6 +5,9 @@
 import { PROVIDERS, REASONINGS } from '@phantom-agent-sdk/client';
 import { TIMEZONES } from '../lib/clock.js';
 import type { SettingDefinition, AgentTypeDefinition, AgentTypeSettingSuffix } from '../doors.js';
+import type { OverridableLayer } from '../lib/scopes.js';
+/** Whatever a project may override, an organization and a user may too — a bigger project. */
+const SHARED: readonly OverridableLayer[] = ['organization', 'user', 'project'];
 
 const checkTimezone = (value: string): string | null =>
   TIMEZONES.includes(value) ? null
@@ -38,7 +41,7 @@ export function agentTypeSettings(type: AgentTypeDefinition): SettingDefinition[
   return (Object.keys(shape) as AgentTypeSettingSuffix[]).map((suffix) => {
     const declared = type.settings[suffix];
     return { key: `${type.name}_${suffix}`, group, default: declared.default ?? null, description: declared.description,
-      ...(declared.projectOverridable ? { projectOverridable: true } : {}), ...shape[suffix] };
+      ...(declared.overridableAt ? { overridableAt: declared.overridableAt } : {}), ...shape[suffix] };
   });
 }
 
@@ -52,13 +55,13 @@ export function sdkSettings(options: { sessionImageTag: string }): SettingDefini
     { key: "voice_stt_model", type: "string", default: "nova-3", label: "hearing model", group: "assistant",
       description: "Deepgram model that hears you — the voice pane and Telegram voice notes alike. nova-3 is the current general model; nova-2 for languages it lacks.", subgroup: "voice" },
     { key: "timezone", type: "string", default: "UTC", label: "time zone", group: "general",
-      description: "Your time zone — an IANA name like America/New_York or Europe/London. Every date the system shows or reads is in it: a cron's \"0 9 * * *\" is 9am here, the token report's \"today\" starts at midnight here, and the agents are told today's date here.", suggestions: TIMEZONES, check: checkTimezone, projectOverridable: true },
+      description: "Your time zone — an IANA name like America/New_York or Europe/London. Every date the system shows or reads is in it: a cron's \"0 9 * * *\" is 9am here, the token report's \"today\" starts at midnight here, and the agents are told today's date here.", suggestions: TIMEZONES, check: checkTimezone, overridableAt: SHARED },
     { key: "card_prefix", type: "string", default: null, label: "card number prefix", group: "board",
       description: "The letters in front of every card number on this board — \"PHA\" gives PHA-7. Unset means the first three letters of the repo name.", projectOnly: true },
     { key: "cron_enabled", type: "boolean", default: true, label: "crons", group: "crons",
-      description: "Scheduled prompts (crons) for this project. Off: none fire, and the agents lose their cron tools; the crons themselves are kept. A slot missed while off is not made up.", projectOverridable: true },
+      description: "Scheduled prompts (crons) for this project. Off: none fire, and the agents lose their cron tools; the crons themselves are kept. A slot missed while off is not made up.", overridableAt: SHARED },
     { key: "spare_clones", type: "number", default: 2, label: "spare clones", group: "sessions",
-      description: "Clones of the repo kept ready and waiting. A new session takes one instead of waiting for a clone. Each one costs disk.", unit: "count", min: 0, projectOverridable: true },
+      description: "Clones of the repo kept ready and waiting. A new session takes one instead of waiting for a clone. Each one costs disk.", unit: "count", min: 0, overridableAt: SHARED },
     { key: "maintenance_interval_ms", type: "number", default: 60000, label: "maintenance interval", group: "sessions",
       description: "How often the maintenance loop runs — restocking spare clones, backing up idle sessions, stopping idle containers, disk cleanup. Every other \"after this long\" setting is only checked this often.", unit: "ms", min: 1000 },
     { key: "spare_clone_refresh_ms", type: "number", default: 3600000, label: "spare clone refresh", group: "sessions",
@@ -78,27 +81,27 @@ export function sdkSettings(options: { sessionImageTag: string }): SettingDefini
     { key: "container_pids_limit", type: "number", default: null, label: "container process limit", group: "containers",
       description: "Unset (the default) means no cap. Set it only as fork-bomb protection on a shared host; too low and a normal parallel build hits it.", unit: "count", min: 16 },
     { key: "container_image", type: "string", default: `ghcr.io/stephengpope/phantom-backend-session:${options.sessionImageTag}`, label: "container image", group: "containers",
-      description: "Must contain ripgrep. Pulled the first time a session needs it; a change applies when the container next restarts.", projectOverridable: true },
+      description: "Must contain ripgrep. Pulled the first time a session needs it; a change applies when the container next restarts.", overridableAt: SHARED },
     { key: "container_docker", type: "boolean", default: true, label: "docker in the project", group: "containers",
-      description: "Lets the agent run Docker inside its own container. The container gets privileged mode and a native-overlay graph-storage volume, but the daemon is NOT started for you — the agent runs `start-docker` when it wants it, so idle sessions pay nothing. Privileged is a weaker boundary: turn this off for a hardened project. Applies when the container next restarts.", projectOverridable: true },
+      description: "Lets the agent run Docker inside its own container. The container gets privileged mode and a native-overlay graph-storage volume, but the daemon is NOT started for you — the agent runs `start-docker` when it wants it, so idle sessions pay nothing. Privileged is a weaker boundary: turn this off for a hardened project. Applies when the container next restarts.", overridableAt: SHARED },
     { key: "agent_database", type: "boolean", default: false, label: "agent database", group: "containers",
-      description: "Gives the agent its own PostgreSQL database for this project — private to it, kept across sessions, reached only through its database_query tool (never by the project's code). The agent is its admin but cannot drop it. Off keeps the data; deleting the project deletes it.", projectOverridable: true },
+      description: "Gives the agent its own PostgreSQL database for this project — private to it, kept across sessions, reached only through its database_query tool (never by the project's code). The agent is its admin but cannot drop it. Off keeps the data; deleting the project deletes it.", overridableAt: SHARED },
     { key: "agent_database_shared", type: "boolean", default: false, label: "agent database shared", group: "containers",
-      description: "Lets the project's code use the agent database too: the session container gets AGENT_DATABASE_URL (its connection string) and can reach the database server. Every session in the project shares the one database. Applies when the container is next created; does nothing while agent database is off.", projectOverridable: true },
+      description: "Lets the project's code use the agent database too: the session container gets AGENT_DATABASE_URL (its connection string) and can reach the database server. Every session in the project shares the one database. Applies when the container is next created; does nothing while agent database is off.", overridableAt: SHARED },
     { key: "agent_soul", type: "boolean", default: false, label: "SOUL.md in the prompt", group: "coding",
-      description: "Puts the repo's root SOUL.md into the coding agent's system prompt, read from the checkout when a session starts and frozen with it — so an edit reaches new sessions only. A repo without the file adds nothing.", projectOverridable: true },
+      description: "Puts the repo's root SOUL.md into the coding agent's system prompt, read from the checkout when a session starts and frozen with it — so an edit reaches new sessions only. A repo without the file adds nothing.", overridableAt: SHARED },
     { key: "agent_agents_md", type: "boolean", default: false, label: "AGENTS.md in the prompt", group: "coding",
-      description: "Puts the repo's root AGENTS.md into the coding agent's system prompt, read from the checkout when a session starts and frozen with it — so an edit reaches new sessions only. A repo without the file adds nothing. Appears after SOUL.md.", projectOverridable: true },
+      description: "Puts the repo's root AGENTS.md into the coding agent's system prompt, read from the checkout when a session starts and frozen with it — so an edit reaches new sessions only. A repo without the file adds nothing. Appears after SOUL.md.", overridableAt: SHARED },
     { key: "auto_push_on_archive", type: "boolean", default: true, label: "auto-push on archive", group: "git",
-      description: "Archiving a done card auto-pushes its session's work to the base branch; a failed push un-archives the card into blocked. Archiving from any other column never pushes.", projectOverridable: true },
+      description: "Archiving a done card auto-pushes its session's work to the base branch; a failed push un-archives the card into blocked. Archiving from any other column never pushes.", overridableAt: SHARED },
     { key: "agent_git_credentials", type: "boolean", default: false, label: "agent github access", group: "git",
-      description: "Puts the GitHub token inside the container so the agent can run git and gh itself — the agent can then read it. Applies when the container restarts; off does not reclaim it from a running one.", projectOverridable: true },
+      description: "Puts the GitHub token inside the container so the agent can run git and gh itself — the agent can then read it. Applies when the container restarts; off does not reclaim it from a running one.", overridableAt: SHARED },
     { key: "instant_sync", type: "boolean", default: false, label: "instant sync", group: "git",
       description: "Keeps every running session in this project in step with the base branch on its own: a file change auto-pushes after the debounce, and base is checked with a plain git fetch on the pull interval and auto-pulled when it moved. Runs whether or not a turn is running and never fixes a conflict itself — the agent is told and resolves it. Best for a notes or second-brain repo. Takes effect at once.", projectOnly: true },
     { key: "instant_sync_push_debounce_ms", type: "number", default: 10000, label: "instant sync push debounce", group: "git",
-      description: "How long the files must stay quiet after a change before instant sync pushes.", unit: "ms", min: 0, projectOverridable: true },
+      description: "How long the files must stay quiet after a change before instant sync pushes.", unit: "ms", min: 0, overridableAt: SHARED },
     { key: "instant_sync_pull_interval_ms", type: "number", default: 5000, label: "instant sync pull interval", group: "git",
-      description: "How often instant sync fetches the base branch to see whether it moved. A plain git fetch — it never touches the GitHub API rate limit. Shorter means other sessions' work arrives sooner.", unit: "ms", min: 0, projectOverridable: true },
+      description: "How often instant sync fetches the base branch to see whether it moved. A plain git fetch — it never touches the GitHub API rate limit. Shorter means other sessions' work arrives sooner.", unit: "ms", min: 0, overridableAt: SHARED },
     { key: "bash_timeout_ms", type: "number", default: 120000, label: "command timeout", group: "limits",
       description: "Kills a command that set no timeout of its own; the agent can ask for a longer one per command.", unit: "ms", min: 1 },
     { key: "bash_timeout_max_ms", type: "number", default: null, label: "command timeout cap", group: "limits",
@@ -110,7 +113,7 @@ export function sdkSettings(options: { sessionImageTag: string }): SettingDefini
     { key: "max_bash_output_bytes", type: "number", default: 1048576, label: "command output limit", group: "limits",
       description: "Cap on output kept per command; anything past it is dropped.", unit: "bytes", min: 1 },
     { key: "db_ui_enabled", type: "boolean", default: false, label: "database console", group: "database",
-      description: "Serve a browser-based database console at /db on this server's address. Sign in as phantom_admin with this server's API key. The console connects as the database owner — full access to everything, this server's own tables included. Turning it off stops the console's container." },
+      description: "Serve a browser-based database console at /db on this server's address. Sign in as console_admin with this server's API key. The console connects as the database superuser — full access to everything, this server's own tables included. Turning it off stops the console's container." },
     { key: "telegram_enabled", type: "boolean", default: false, label: "telegram", group: "telegram",
       description: "Answer Telegram DMs. Needs the telegram_bot_token key, telegram_authorized_user, and a public address (PHANTOM_BACKEND_ADDRESS) — the webhook registers itself when all three are set." },
     { key: "telegram_authorized_user", type: "string", default: null, label: "authorized user id", group: "telegram",
@@ -119,7 +122,17 @@ export function sdkSettings(options: { sessionImageTag: string }): SettingDefini
       description: "How often (minutes) to send a digest of sessions that finished their turn. 0 disables it. Sessions idle longer than this interval are included." },
     { key: "update_check_interval_ms", type: "number", default: 86400000, label: "upgrade check interval", group: "telegram",
       description: "How often the server checks GitHub for a new release and sends a Telegram notification. 0 disables the check. The check runs only when Telegram is enabled and an authorized user is set.", unit: "ms", min: 0 },
-    credential("github_token", "github token", "git", "Lets phantom-looper manage GitHub repos: clone, push, and land work on the base branch. A project can hold its own token; otherwise this one is used.", undefined, { projectOverridable: true }),
+    { key: "smtp_host", type: "string", default: null, label: "smtp host", group: "mail",
+      description: "The SMTP server mail goes out through — any provider with an SMTP door (smtp.gmail.com, smtp.fastmail.com, email-smtp.<region>.amazonaws.com). Mail is off until host, port, user, password and from are all set." },
+    { key: "smtp_port", type: "number", default: 587, label: "smtp port", group: "mail",
+      description: "587 is STARTTLS (the usual); 465 is TLS from the first byte — set smtp secure with it.", unit: "count", min: 1, max: 65535 },
+    { key: "smtp_secure", type: "boolean", default: false, label: "smtp secure", group: "mail",
+      description: "On: TLS from the first byte (port 465). Off: plain connection upgraded with STARTTLS (port 587)." },
+    { key: "smtp_user", type: "string", default: null, label: "smtp user", group: "mail",
+      description: "The login at the SMTP server — usually the full address." },
+    { key: "smtp_from", type: "string", default: null, label: "from address", group: "mail",
+      description: "What mail from this server is sent as: an address, or \"Name <address>\". Most providers insist it is one the login owns." },
+    credential("github_token", "github token", "git", "Lets phantom-looper manage GitHub repos: clone, push, and land work on the base branch. A project can hold its own token; otherwise this one is used.", undefined, { overridableAt: SHARED }),
     credential("anthropic_api_key", "anthropic key", "llm", "Used by every agent set to the anthropic provider.", "anthropic"),
     credential("openai_api_key", "openai key", "llm", "Used by every agent set to the openai provider.", "openai"),
     credential("google_api_key", "google key", "llm", "Used by every agent set to the google provider (Gemini).", "google"),
@@ -131,6 +144,7 @@ export function sdkSettings(options: { sessionImageTag: string }): SettingDefini
     credential("openai_compatible_api_key", "openai-compatible key", "llm", "For OpenAI-compatible endpoints — Ollama, vLLM, OpenRouter. Not the same key as OpenAI.", "openai-compatible"),
     credential("deepgram_api_key", "deepgram key", "voice", "Speech to text and text to speech for the Assistant. Without it the Assistant has no voice."),
     credential("firecrawl_api_key", "firecrawl key", "search", "Powers the web_search and web_fetch tools; without it web calls fail. Keys at firecrawl.dev."),
+    credential("smtp_password", "smtp password", "mail", "The SMTP login's password or app password. With the other smtp settings set, POST /api/mail/test proves it."),
     credential("telegram_bot_token", "telegram bot token", "chat", "The Telegram bot's token from @BotFather. With telegram enabled and an authorized user set (/settings), saving it registers the webhook."),
   ];
 }

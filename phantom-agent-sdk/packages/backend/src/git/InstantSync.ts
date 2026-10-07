@@ -53,6 +53,7 @@ import type { AutoPushResult } from './autoPush.js';
 import type { AutoPullResult } from './autoPull.js';
 import type { WorkspaceWatcher } from './WorkspaceWatcher.js';
 import { logger, errStr } from '../lib/log.js';
+import { scopeOf } from '../lib/scopes.js';
 
 const log = logger('instant-sync');
 
@@ -148,7 +149,7 @@ export class InstantSync {
 
   private async configOf(project: ProjectRow): Promise<Config> {
     const values = await this.deps.settings.resolveMany(
-      ['instant_sync', 'instant_sync_push_debounce_ms', 'instant_sync_pull_interval_ms'], { projectId: project.id }) as { instant_sync: boolean; instant_sync_push_debounce_ms: number; instant_sync_pull_interval_ms: number };
+      ['instant_sync', 'instant_sync_push_debounce_ms', 'instant_sync_pull_interval_ms'], scopeOf(project)) as { instant_sync: boolean; instant_sync_push_debounce_ms: number; instant_sync_pull_interval_ms: number };
     return { on: values.instant_sync, debounceMs: values.instant_sync_push_debounce_ms, pullMs: values.instant_sync_pull_interval_ms };
   }
 

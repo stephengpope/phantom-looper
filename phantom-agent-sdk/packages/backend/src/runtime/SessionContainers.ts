@@ -19,6 +19,7 @@ import type { Paths } from '../lib/paths.js';
 import type { Images } from './Images.js';
 import { sessionDir } from '../lib/paths.js';
 import { logger, errStr } from '../lib/log.js';
+import { scopeOf } from '../lib/scopes.js';
 
 const log = logger('container');
 
@@ -171,7 +172,7 @@ export class SessionContainers {
     if (!this.opts.settings) throw new Error('SessionContainers needs settings to create a container');
     const limits = await this.opts.settings.resolveMany(
       ['container_image', 'container_memory_mb', 'container_cpus', 'container_pids_limit', 'container_docker'],
-      project ? { projectId: project.id } : {}) as { container_image: string; container_memory_mb: number | null; container_cpus: number | null; container_pids_limit: number | null; container_docker: boolean };
+      project ? scopeOf(project) : {}) as { container_image: string; container_memory_mb: number | null; container_cpus: number | null; container_pids_limit: number | null; container_docker: boolean };
     const image = limits.container_image;
     const database = await this.databaseEnv(project);
     const Env = [...(await this.credentialEnv(project)), ...database];
@@ -221,7 +222,7 @@ export class SessionContainers {
    *  is next recreated (container_idle_ms, or an explicit remove). */
   private async credentialEnv(project: ProjectRow | undefined): Promise<string[]> {
     if (!project || !this.opts.settings) return [];
-    if (!(await this.opts.settings.resolve('agent_git_credentials', { projectId: project.id }))) return [];
+    if (!(await this.opts.settings.resolve('agent_git_credentials', scopeOf(project)))) return [];
     const { pat } = await checkoutPool.resolveAuth(this.opts.settings, project);
     if (!pat) {
       log.warn({ project: project.name }, 'agent_git_credentials is on but no PAT resolved — container gets none');
@@ -238,7 +239,7 @@ export class SessionContainers {
    *  joins the stack network, or the host name in the URL resolves nowhere. */
   private async databaseEnv(project: ProjectRow | undefined): Promise<string[]> {
     if (!project || !this.opts.settings || !this.opts.databases) return [];
-    const on = await this.opts.settings.resolveMany(['agent_database', 'agent_database_shared'], { projectId: project.id });
+    const on = await this.opts.settings.resolveMany(['agent_database', 'agent_database_shared'], scopeOf(project));
     if (!on.agent_database || !on.agent_database_shared) return [];
     if (!this.opts.network) {
       log.warn({ project: project.name }, 'agent_database_shared is on but WORKSPACE_NETWORK is unset — the URL\'s host may not resolve from the container');

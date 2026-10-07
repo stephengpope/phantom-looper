@@ -4,20 +4,23 @@
 // behaviour, the cli's voice pane and launch. `before` files one among the
 // SDK's rows where it belongs on screen.
 import type { SettingDefinition } from '@phantom-agent-sdk/backend';
+import type { OverridableLayer } from '@phantom-agent-sdk/backend';
+/** Whatever a project may override, an organization and a user may too — a bigger project. */
+const SHARED: readonly OverridableLayer[] = ['organization', 'user', 'project'];
 
 export const appSettings: SettingDefinition[] = [
   { key: "auto_plan", type: "boolean", default: false, label: "auto plan", group: "board",
-    description: "Cards in plan are driven by the supervisor: it has the coding agent write a plan, verifies it, and moves the card to in progress. Each card's own Auto plan switch overrides this default.", projectOverridable: true, before: "card_prefix" },
+    description: "Cards in plan are driven by the supervisor: it has the coding agent write a plan, verifies it, and moves the card to in progress. Each card's own Auto plan switch overrides this default.", overridableAt: SHARED, before: "card_prefix" },
   { key: "auto_build", type: "boolean", default: false, label: "auto build", group: "board",
-    description: "Cards in progress are driven by the supervisor: it prompts the coding agent, verifies the work against the repo, and moves the card. Each card's own Auto build switch overrides this default.", projectOverridable: true, before: "card_prefix" },
+    description: "Cards in progress are driven by the supervisor: it prompts the coding agent, verifies the work against the repo, and moves the card. Each card's own Auto build switch overrides this default.", overridableAt: SHARED, before: "card_prefix" },
   { key: "loop_budget_tokens", type: "number", default: null, label: "loop token budget", group: "board",
-    description: "Maximum tokens one card run may spend — input + output summed across both agents' sessions; cache reads and writes not counted. Checked between turns; exceeding it blocks the card. Empty = no limit.", unit: "count", min: 1, projectOverridable: true, before: "card_prefix" },
+    description: "Maximum tokens one card run may spend — input + output summed across both agents' sessions; cache reads and writes not counted. Checked between turns; exceeding it blocks the card. Empty = no limit.", unit: "count", min: 1, overridableAt: SHARED, before: "card_prefix" },
   { key: "telegram_reply_mode", type: "string", default: "text", label: "reply mode", group: "telegram",
     description: "How the bot answers: text, voice (a spoken note, on the Assistant's Deepgram voice), or both. Read at the start of each turn.", choices: ["text", "voice", "both"], before: "session_digest_interval" },
   { key: "telegram_transcript_echo", type: "boolean", default: false, label: "transcript echo", group: "telegram",
     description: "On, a voice note's transcript is posted back as 🎤 \"…\" before the turn runs, so a misheard word is distinguishable from a misunderstood instruction.", before: "session_digest_interval" },
   { key: "telegram_auto_build_notifications", type: "boolean", default: true, label: "auto build alerts", group: "telegram",
-    description: "A message when the loop moves a card to in progress, blocked, or done. Moves made by people are never announced. Reply to one to enter the card's coding session. Per project: override on the project.", projectOverridable: true, before: "session_digest_interval" },
+    description: "A message when the loop moves a card to in progress, blocked, or done. Moves made by people are never announced. Reply to one to enter the card's coding session. Per project: override on the project.", overridableAt: SHARED, before: "session_digest_interval" },
   { key: "voice_enabled", type: "boolean", default: false, label: "enabled", group: "assistant",
     description: "Start the Assistant with the cli. It listens on the mic, answers out loud and in the voice pane (ctrl+g), and can act on the cli through its tools.", subgroup: "voice", before: "voice_spoken_voice" },
   { key: "sidebar_width", type: "number", default: 20, label: "voice pane width", group: "assistant",

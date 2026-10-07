@@ -227,6 +227,10 @@ export async function readServerCa(target: Target, opts: SshOpts = {}): Promise<
   return pem;
 }
 
+/** Where a path lives: under /app it is the app's own route at the origin;
+ *  anything else is the SDK's under /api. The same rule as BackendClient's. */
+const routeUrl = (base: string, path: string) => new URL(path.startsWith('/app/') ? path : `/api${path}`, base);
+
 /** A minimal envelope client on node http(s), for the moments global fetch
  *  cannot serve: a CA to pin before the app's dispatcher is wired (setup), a
  *  route to call before the app renders (update --server). Generic
@@ -234,7 +238,7 @@ export async function readServerCa(target: Target, opts: SshOpts = {}): Promise<
 export function apiFor(base: string, key: string, certificateAuthority?: string) {
   return (method: string, path: string, body?: unknown) =>
     new Promise<unknown>((resolvePromise, reject) => {
-      const url = new URL(`/api${path}`, base);
+      const url = routeUrl(base, path);
       const req = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, {
         method,
         headers: {
@@ -269,7 +273,7 @@ export function apiFor(base: string, key: string, certificateAuthority?: string)
 export function streamFor(base: string, key: string, certificateAuthority?: string) {
   return (path: string, body: unknown, onEvent: (event: unknown) => void) =>
     new Promise<void>((resolve, reject) => {
-      const url = new URL(`/api${path}`, base);
+      const url = routeUrl(base, path);
       const req = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, {
         method: 'POST',
         headers: {

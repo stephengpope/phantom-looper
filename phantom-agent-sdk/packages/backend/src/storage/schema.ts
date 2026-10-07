@@ -53,6 +53,9 @@ export const projects = phantomAgentSdk.table('projects', {
   // The next card number this project hands out. Numbers are never reused:
   // a deleted card's stays taken. (024; Projects.claimCardNumber moves it.)
   nextCardNumber: integer('next_card_number').notNull().default(1),
+  // The organization this project belongs to (056); null = the phantom admin's.
+  // Its settings layer rides in the project's chain (scopes.ts scopeOf).
+  organizationId: text('organization_id'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -349,3 +352,122 @@ export interface CheckoutFacts {
 /** A session as reads return it — sessionColumns' shape, blobs excluded,
  *  its workspace's facts joined in (Sessions.view). */
 export type SessionRow = Omit<typeof sessions.$inferSelect, 'transcript' | 'systemPrompt'> & CheckoutFacts;
+
+// ── identity (055) ──────────────────────────────────────────────────────
+// Better Auth's tables, in their own schema; its Drizzle adapter takes
+// these objects (Identity). Property names are Better Auth's field names
+// (its adapter finds a column by them); the column names are ours. Every
+// table is read and written by Better Auth alone, except the reads Identity
+// makes to answer who a caller is.
+export const identity = pgSchema('identity');
+
+export const user = identity.table('user', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  email: text('email').notNull().unique(),
+  emailVerified: boolean('email_verified').notNull().default(false),
+  image: text('image'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  role: text('role'),                     // admin plugin: 'admin' | 'user'
+  banned: boolean('banned').default(false),
+  banReason: text('ban_reason'),
+  banExpires: timestamp('ban_expires', { withTimezone: true }),
+});
+
+export const session = identity.table('session', {
+  id: text('id').primaryKey(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  token: text('token').notNull().unique(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+  ipAddress: text('ip_address'),
+  userAgent: text('user_agent'),
+  userId: text('user_id').notNull().references(() => user.id, { onDelete: 'cascade' }),
+  activeOrganizationId: text('active_organization_id'),
+  impersonatedBy: text('impersonated_by'),
+});
+
+export const account = identity.table('account', {
+  id: text('id').primaryKey(),
+  accountId: text('account_id').notNull(),
+  providerId: text('provider_id').notNull(),
+  userId: text('user_id').notNull().references(() => user.id, { onDelete: 'cascade' }),
+  accessToken: text('access_token'),
+  refreshToken: text('refresh_token'),
+  idToken: text('id_token'),
+  accessTokenExpiresAt: timestamp('access_token_expires_at', { withTimezone: true }),
+  refreshTokenExpiresAt: timestamp('refresh_token_expires_at', { withTimezone: true }),
+  scope: text('scope'),
+  password: text('password'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+});
+
+export const verification = identity.table('verification', {
+  id: text('id').primaryKey(),
+  identifier: text('identifier').notNull(),
+  value: text('value').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const organization = identity.table('organization', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  slug: text('slug').notNull().unique(),
+  logo: text('logo'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  metadata: text('metadata'),
+});
+
+export const member = identity.table('member', {
+  id: text('id').primaryKey(),
+  organizationId: text('organization_id').notNull().references(() => organization.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => user.id, { onDelete: 'cascade' }),
+  role: text('role').notNull().default('member'),   // owner | admin | member
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+});
+
+export const invitation = identity.table('invitation', {
+  id: text('id').primaryKey(),
+  organizationId: text('organization_id').notNull().references(() => organization.id, { onDelete: 'cascade' }),
+  email: text('email').notNull(),
+  role: text('role'),
+  status: text('status').notNull().default('pending'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  inviterId: text('inviter_id').notNull().references(() => user.id, { onDelete: 'cascade' }),
+});
+
+export const apikey = identity.table('apikey', {
+  id: text('id').primaryKey(),
+  configId: text('config_id').notNull().default('default'),
+  name: text('name'),
+  start: text('start'),
+  referenceId: text('reference_id').notNull(),
+  prefix: text('prefix'),
+  key: text('key').notNull(),
+  refillInterval: integer('refill_interval'),
+  refillAmount: integer('refill_amount'),
+  lastRefillAt: timestamp('last_refill_at', { withTimezone: true }),
+  enabled: boolean('enabled').default(true),
+  rateLimitEnabled: boolean('rate_limit_enabled').default(true),
+  rateLimitTimeWindow: integer('rate_limit_time_window').default(86400000),
+  rateLimitMax: integer('rate_limit_max').default(10),
+  requestCount: integer('request_count').default(0),
+  remaining: integer('remaining'),
+  lastRequest: timestamp('last_request', { withTimezone: true }),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+  permissions: text('permissions'),
+  metadata: text('metadata'),
+});
+
+export type UserRow = typeof user.$inferSelect;
+export type OrganizationRow = typeof organization.$inferSelect;
+export type MemberRow = typeof member.$inferSelect;
+export type InvitationRow = typeof invitation.$inferSelect;
+export type ApiKeyRow = typeof apikey.$inferSelect;

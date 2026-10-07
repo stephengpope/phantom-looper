@@ -113,7 +113,7 @@ async function streamUpdateProgress(deps: UpdateDeps, server: ServerLink, tag: s
   let result: 'restarting' | 'error' | null = null;
 
   try {
-    await server.stream('/update', { tag, restart_anyway: true }, (raw) => {
+    await server.stream('/app/update', { tag, restart_anyway: true }, (raw) => {
       const event = raw as UpdateEvent;
       if (event.event === 'pulling') {
         images[event.image] = { download: event.download, unpack: event.unpack };

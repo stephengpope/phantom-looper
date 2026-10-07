@@ -1,6 +1,7 @@
 // This app's own routes, registered through the backend's route door
-// (config.routes) under the SDK's auth and envelope: the system routes —
-// this app's upgrade, logs, status, restart and token report.
+// (config.routes) under /app and the SDK's envelope: the system routes —
+// this app's upgrade, logs, status, restart and token report. The SDK puts
+// no key check on /app; this app admits the phantom admin alone, as before.
 import type { FastifyInstance } from 'fastify';
 import type { PhantomBackend, Deployment } from '@phantom-agent-sdk/backend';
 import { systemRoutes } from './routes/system.js';
@@ -14,5 +15,7 @@ export interface AppExtras {
 }
 
 export const appRoutes = (api: unknown, backend: PhantomBackend, extras: AppExtras): void => {
-  systemRoutes(api as FastifyInstance, backend, extras);
+  const app = api as FastifyInstance;
+  app.addHook('onRequest', async (request) => { await backend.identity.require(request); });
+  systemRoutes(app, backend, extras);
 };

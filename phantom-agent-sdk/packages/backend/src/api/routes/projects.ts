@@ -8,6 +8,7 @@ import { projectScope } from '../../lib/scopes.js';
 import { newId } from '@phantom-agent-sdk/client';
 import { ok, err } from '../HttpApi.js';
 import type { PhantomBackend } from '../../PhantomBackend.js';
+import { scopeOf } from '../../lib/scopes.js';
 
 /** What leaves the API. The credential is no longer a column — it is
  *  `github_token` at this project's scope, so hasCredential is a lookup. */
@@ -142,7 +143,7 @@ export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
             `# ${name}\n\nCreated by phantom-looper.\n`);
         } catch (error) {
           // The project exists now but is empty. Say exactly what stopped the seed
-          // so the operator can fix the token and re-run with create=false.
+          // so the phantom admin can fix the token and re-run with create=false.
           const why = classifyGitFailure(error, { hadToken: true });
           const msg = why?.message ?? String((error as { stderr?: string }).stderr ?? (error as Error).message).trim().slice(0, 200);
           return reply.code(why?.code === 'upstream_unreachable' ? 502 : 400).send(
@@ -190,7 +191,7 @@ export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       // project (the cli, opening a session) must not have to list them all
       // to learn how this project names its cards.
       cardPrefix: await ctx.projects.prefixOf(project),
-      settings: await ctx.settings.layersForScope({ projectId: project.id }) });
+      settings: await ctx.settings.layersForScope(scopeOf(project)) });
   });
 
   // The project's OWN three fields — no global to fall back to, so they

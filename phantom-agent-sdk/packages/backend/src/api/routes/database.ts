@@ -8,6 +8,7 @@ import type { FastifyInstance } from 'fastify';
 import { SqlError } from '../../storage/AgentDatabases.js';
 import { ok, err } from '../HttpApi.js';
 import type { PhantomBackend } from '../../PhantomBackend.js';
+import { scopeOf } from '../../lib/scopes.js';
 
 const TAG = { tags: ['database'] };
 const idParam = { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] };
@@ -21,7 +22,7 @@ export function databaseRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     async (req, reply) => {
       const project = await ctx.projects.get(req.params.id);
       if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
-      const enabled = Boolean(await ctx.settings.resolve('agent_database', { projectId: project.id }));
+      const enabled = Boolean(await ctx.settings.resolve('agent_database', scopeOf(project)));
       return ok({ enabled });
     });
 
@@ -46,7 +47,7 @@ export function databaseRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       if (!ctx.agentDatabases) return reply.code(503).send(err('database_unavailable', 'this server has no agent database wiring'));
       const project = await ctx.projects.get(req.params.id);
       if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
-      if (!(await ctx.settings.resolve('agent_database', { projectId: project.id }))) {
+      if (!(await ctx.settings.resolve('agent_database', scopeOf(project)))) {
         return reply.code(409).send(err('database_off', 'agent_database is off for this project'));
       }
       try {

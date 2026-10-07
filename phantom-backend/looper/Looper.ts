@@ -17,6 +17,7 @@ import { GLOBAL, type CardFields, type PhantomBackend } from '@phantom-agent-sdk
 import { logger, errStr } from '@phantom-agent-sdk/backend';
 import { canTurn, unsentKickoff, nextStep, needsFreshSession, LOOP_COLUMNS, type CardRow } from './logic.js';
 import { codingAgentCardKit, supervisorCardKit, type LoopColumn } from './cardRunTools.js';
+import { scopeOf } from '@phantom-agent-sdk/backend';
 
 const log = logger('looper');
 /** The card run's lock identity — the holder under which its coding and
@@ -53,7 +54,7 @@ export class Looper {
    *  the loop, the settings feed re-examines a project when a loop switch
    *  moves, the session feed re-runs a card when a hold is released. */
   constructor(private readonly backend: PhantomBackend, private readonly automation: CardAutomation) {
-    this.client = new BackendClient({ url: backend.loopback.url, apiKey: backend.loopback.apiKey, clientId: CLIENT_ID, label: 'card run', actor: LOOPER_STARTER });
+    this.client = new BackendClient({ url: backend.loopback.url, credential: { phantomAdminKey: backend.loopback.apiKey }, clientId: CLIENT_ID, label: 'card run', actor: LOOPER_STARTER });
   }
 
   /** What an agent this looper runs tells it: errors and notices go to the log. */
@@ -161,7 +162,7 @@ export class Looper {
         try {
           project = await this.backend.projects.get(projectId);
           if (!project) continue;
-          const auto = await this.backend.settings.resolveMany(['auto_plan', 'auto_build'], { projectId: project.id })
+          const auto = await this.backend.settings.resolveMany(['auto_plan', 'auto_build'], scopeOf(project))
             .catch(() => ({ auto_plan: false, auto_build: false }));
           card = await this.backend.cards.activeByNumber(project, cardNumber);
           if (!card || !canTurn(card, this.automation.of(card), { plan: Boolean(auto.auto_plan), build: Boolean(auto.auto_build) })) continue;
@@ -249,7 +250,7 @@ export class Looper {
     // ── the token budget — seeded once per loop, checked before every turn,
     // each turn's own numbers added as they land. Breach is a card state a
     // human can see, like every other loop exit. ──────────────────────────
-    const b = await this.backend.settings.resolveMany(['loop_budget_tokens'], { projectId: project.id })
+    const b = await this.backend.settings.resolveMany(['loop_budget_tokens'], scopeOf(project))
       .catch(() => ({ loop_budget_tokens: null }));
     const limit = b.loop_budget_tokens == null ? null : Number(b.loop_budget_tokens);
     if (!budget.seeded) {
