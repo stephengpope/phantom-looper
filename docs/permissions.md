@@ -184,6 +184,56 @@ server.
   development. What answers there (the API) needs its key. A Linux server
   has no such path, and its gateway is closed as above.
 
+## Agent disk limit
+
+`container_disk_gb` (server only, unset = no cap) holds each agent to N GB
+on two fronts. A write past it fails with "Disk quota exceeded"; the agent
+is told its limit in its system prompt (`disk_limit`), frees space and
+carries on.
+
+- **Its container's own files:** Docker's `StorageOpt size`, applied at
+  container creation.
+- **Its checkout:** an XFS project quota on `work/<id>`, set by the
+  `disk-quota` helper (`runtime/diskQuotaHelper.ts`, compose profile
+  `disk-quota`) before the container starts. A limit that cannot be
+  applied stops the container; it never runs unlimited.
+
+The setting is refused unless the server can enforce both. The check runs
+a 1 GB-capped probe container, which must see 1 GB, and the helper must
+report project quotas enforced. A value already set that stops being
+enforceable stops the server at boot, with the reason.
+
+**Server setup (manual for now).** On DigitalOcean:
+
+1. Attach a Volume and choose Manually Format & Mount.
+2. As root:
+   ```sh
+   DEV=/dev/disk/by-id/scsi-0DO_Volume_<name>
+   mkfs.xfs "$DEV" && mkdir -p /var/lib/docker
+   echo "$DEV /var/lib/docker xfs defaults,nofail,discard,pquota 0 2" >> /etc/fstab
+   mount -a
+   ```
+3. Use Docker's overlay2 driver, not the containerd image store. The
+   containerd store accepts a size cap and silently ignores it, which was
+   proven on Docker Desktop. In `/etc/docker/daemon.json`:
+   ```json
+   { "storage-driver": "overlay2", "features": { "containerd-snapshotter": false } }
+   ```
+4. Install. Then add `disk-quota` to `COMPOSE_PROFILES` in `.env` and run
+   `docker compose up -d`.
+5. Check that `docker info` shows `Storage Driver: overlay2` and `Backing
+   Filesystem: xfs`. Then set `container_disk_gb`: a server that cannot
+   enforce it answers why.
+
+Proven on a Linux runner (overlay2 on XFS with pquota):
+- a 100M-capped container saw 100M and stopped a 200M write at 99M
+- the helper capped a checkout at 1G and stopped a 1.2G write at exactly
+  1.0G
+- a path outside `work/` was refused
+
+On Docker Desktop the setting is refused, because its 1 GB probe saw 1007
+GB. Docker Desktop's kernel has no XFS quotas at all.
+
 ## Proven
 
 - Throwaway Postgres, with the real migrations and a copy of the real

@@ -11,7 +11,7 @@ export class CodingAgent extends Agent {
 
   static readonly systemPromptLayout: SystemPromptLayout = {
     stable: ['soul_md', agentText(codingAgentText())],
-    context: ['agents_md', agentText(codingGitText()), 'github_token', agentText(codingEnvironmentText()), 'agent_database', 'media', agentText(codingSendingText())],
+    context: ['agents_md', agentText(codingGitText()), 'github_token', agentText(codingEnvironmentText()), 'agent_database', 'media', 'disk_limit', agentText(codingSendingText())],
     volatile: ['skills_list', 'time_date', 'secrets_list'],
   };
 

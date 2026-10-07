@@ -270,10 +270,13 @@ export class PhantomBackend {
     // watch, a container gone is one to drop. The hooks are closures over the
     // backend, which exists long before any container starts.
     const sessionContainers = new SessionContainers(docker, images, paths, {
-      volume: process.env.WORKSPACE_VOLUME, network: process.env.AGENT_NETWORK, databaseContainer: process.env.AGENT_DATABASE_CONTAINER, settings, databases: agentDatabases,
+      volume: process.env.WORKSPACE_VOLUME, network: process.env.AGENT_NETWORK, databaseContainer: process.env.AGENT_DATABASE_CONTAINER, diskQuota: process.env.DISK_QUOTA_URL || undefined, settings, databases: agentDatabases,
       onStarted: (workspaceId, project) => backend.git.instantSync.watchWorkspace(workspaceId, project),
       onRemoved: (workspaceId) => backend.git.instantSync.unwatchWorkspace(workspaceId),
     });
+
+    // A disk limit is only accepted where this server can enforce it.
+    settings.requireSupport('container_disk_gb', () => sessionContainers.diskSupport());
 
     const backend: PhantomBackend = new PhantomBackend(config, {
       media, env, paths, database, settings, projects, workspaces, sessions, cards, crons, presets, backgroundTasks, tokenLog, agentDatabases,
@@ -344,6 +347,12 @@ export class PhantomBackend {
    *  they start — then the git service and the loops begin, then
    *  `config.onStart` (user space's engines). */
   async start(): Promise<void> {
+    // A disk limit already set (or fixed) that this server cannot enforce:
+    // stop here, by name — every agent would otherwise fail to start.
+    if (await this.settings.resolve('container_disk_gb')) {
+      const reason = await this.settings.unsupported('container_disk_gb');
+      if (reason) throw new Error(`container_disk_gb is set but cannot be enforced on this server: ${reason}`);
+    }
     await this.#httpApi.listen(this.env.port);
     this.git.start();
     this.#startLoops();

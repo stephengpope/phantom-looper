@@ -137,6 +137,15 @@ export class Settings {
   }
   isFixed(key: string): boolean { return this.#fixed.has(key); }
 
+  /** A key whose value only works where the server can enforce it (a disk
+   *  limit needs XFS quotas): `check` answers null when it can, else why
+   *  not. A write setting the key is refused with that reason — never saved
+   *  to be silently ignored, never left to stop things at run time. */
+  readonly #checks = new Map<string, () => Promise<string | null>>();
+  requireSupport(key: string, check: () => Promise<string | null>): void { this.#checks.set(key, check); }
+  /** The reason a key's value cannot be enforced here, or null. */
+  async unsupported(key: string): Promise<string | null> { return (await this.#checks.get(key)?.()) ?? null; }
+
   register(definitions: readonly SettingDefinition[]): void {
     for (const definition of definitions) {
       if (this.#definitions.has(definition.key)) throw new Error(`setting '${definition.key}' is registered twice`);
@@ -429,6 +438,10 @@ export class Settings {
     const unknown = Object.keys(values).filter((key) => !this.isRegistered(key));
     if (unknown.length) throw new SettingsWriteError('unknown_setting', `unknown settings: ${unknown.join(', ')}`);
     if (Object.keys(values).some((key) => this.#fixed.has(key))) throw new SettingsWriteError('fixed', 'access denied');
+    for (const [key, value] of Object.entries(values)) {
+      const reason = value === null ? null : await this.unsupported(key);
+      if (reason) throw new SettingsWriteError('unsupported', `${key}: ${reason}`);
+    }
     const invalid = Object.entries(values)
       .filter(([key, value]) => value !== null && !this.isCredential(key))
       .map(([key, value]) => this.validate(key, value))

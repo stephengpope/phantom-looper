@@ -54,6 +54,8 @@ interface SpecInput {
   sudo: boolean;
   /** The container runtime (gVisor's `runsc`, say); null = Docker's default. */
   runtime: string | null;
+  /** The container's own disk, in GB (Docker's StorageOpt size); null = no cap. */
+  diskGb: number | null;
   /** The agents' network (AGENT_NETWORK): internet out, no container on it
    *  able to reach another. Absent = Docker's default bridge (dev). */
   network?: string;
@@ -90,6 +92,7 @@ export function buildContainerSpec(i: SpecInput): Record<string, unknown> {
   }
   if (!i.sudo) HostConfig.SecurityOpt = ['no-new-privileges:true'];
   if (i.runtime) HostConfig.Runtime = i.runtime;
+  if (i.diskGb) HostConfig.StorageOpt = { size: `${i.diskGb}G` };
   if (mounts.length) HostConfig.Mounts = mounts;
   if (i.network) HostConfig.NetworkMode = i.network;
   return {
@@ -126,6 +129,10 @@ export interface ContainerOpts {
    *  and this container are on — internal, no way out — so the project's
    *  code reaches its database and nothing else of the stack. */
   databaseContainer?: string;
+  /** The disk-quota helper (DISK_QUOTA_URL, runtime/diskQuotaHelper.ts):
+   *  what holds a checkout to `container_disk_gb`. Absent = no disk limit
+   *  can be set. */
+  diskQuota?: string;
   /** A container came up for this workspace — awaited before `ensure` returns,
    *  so whatever the caller does next (a file write) happens after the
    *  listener is in place. Instant sync attaches its watcher here. */
@@ -183,9 +190,9 @@ export class SessionContainers {
 
     if (!this.opts.settings) throw new Error('SessionContainers needs settings to create a container');
     const limits = await this.opts.settings.resolveMany(
-      ['container_image', 'container_memory_mb', 'container_cpus', 'container_pids_limit', 'container_docker', 'container_sudo', 'container_runtime'],
+      ['container_image', 'container_memory_mb', 'container_cpus', 'container_pids_limit', 'container_docker', 'container_sudo', 'container_runtime', 'container_disk_gb'],
       project ? scopeOf(project) : {}) as { container_image: string; container_memory_mb: number | null; container_cpus: number | null;
-        container_pids_limit: number | null; container_docker: boolean; container_sudo: boolean; container_runtime: string | null };
+        container_pids_limit: number | null; container_docker: boolean; container_sudo: boolean; container_runtime: string | null; container_disk_gb: number | null };
     const image = limits.container_image;
     const database = await this.databaseEnv(project);
     const Env = [...(await this.credentialEnv(project)), ...database.env];
@@ -204,6 +211,7 @@ export class SessionContainers {
       docker: !!limits.container_docker,
       sudo: limits.container_sudo !== false,
       runtime: limits.container_runtime || null,
+      diskGb: limits.container_disk_gb || null,
     }) as never;
     let created: Docker.Container;
     try {
@@ -218,6 +226,8 @@ export class SessionContainers {
       await this.images.pull(String(image));
       created = await this.docker.createContainer(spec);
     }
+    // The checkout held to the same disk limit, before the first process runs.
+    if (limits.container_disk_gb) await this.limitCheckout(key, limits.container_disk_gb);
     // Shared database: its private network joined before the first process
     // runs. Not shared (any more): none may linger from before.
     if (database.host) await this.joinDatabaseNetwork(key, created.id, database.host);
@@ -268,6 +278,51 @@ export class SessionContainers {
     const url = await this.opts.databases.urlFor(project.id);
     log.info({ project: project.name }, 'workspace container gets AGENT_DATABASE_URL (agent_database_shared)');
     return { env: [`AGENT_DATABASE_URL=${url}`], host: new URL(url).hostname };
+  }
+
+  /** Null when this server can hold an agent to `container_disk_gb`, else
+   *  why not — both halves, each proven rather than assumed: Docker creates
+   *  (and this removes) a container with a size cap, and the helper reports
+   *  project quotas enforced. Settings refuses the value without both. */
+  async diskSupport(): Promise<string | null> {
+    // Proven by running it: a container capped at 1 GB must SEE 1 GB. Docker's
+    // containerd image store (Docker Desktop, and fresh installs' default)
+    // accepts the cap and silently ignores it — accepted is not applied.
+    const tags = (await this.docker.listImages()).flatMap((one) => one.RepoTags ?? []).filter((tag) => tag !== '<none>:<none>');
+    const image = tags.find((tag) => process.env.API_IMAGE && tag.startsWith(process.env.API_IMAGE)) ?? tags[0];
+    if (!image) return 'no local image to test Docker with';
+    const needs = 'Docker\'s storage must be the overlay2 driver on XFS mounted with pquota';
+    let seenKb: number;
+    try {
+      const probe = await this.docker.createContainer({ Image: image, Entrypoint: ['df', '-Pk', '/'], User: '0', HostConfig: { StorageOpt: { size: '1G' } } });
+      try {
+        await probe.start();
+        await probe.wait();
+        const output = String(await probe.logs({ stdout: true, stderr: true }));
+        seenKb = Number(/\n\S+\s+(\d+)/.exec(output)?.[1]);
+      } finally {
+        await probe.remove({ force: true }).catch(() => {});
+      }
+    } catch (error) {
+      return `Docker cannot cap a container's disk here — ${needs} (${(error as Error).message})`;
+    }
+    if (!(seenKb > 0 && seenKb <= 1.1 * 1024 * 1024)) {
+      return `Docker accepted a disk cap but did not apply it (a 1 GB container saw ${Math.round(seenKb / 1024 / 1024)} GB) — ${needs}`;
+    }
+    if (!this.opts.diskQuota) return 'the disk-quota helper is not configured (DISK_QUOTA_URL)';
+    const health = await fetch(`${this.opts.diskQuota}/health`).then((response) => response.json() as Promise<{ ok: boolean; reason?: string }>)
+      .catch((error: unknown) => ({ ok: false, reason: `the disk-quota helper is not reachable at ${this.opts.diskQuota} (${(error as Error).message})` }));
+    return health.ok ? null : `disk-quota helper: ${health.reason ?? 'not ready'}`;
+  }
+
+  /** The checkout held to `gb` (the helper's project quota). Throws: a limit
+   *  that cannot be applied stops the container, never runs it unlimited. */
+  private async limitCheckout(key: string, gb: number): Promise<void> {
+    if (!this.opts.diskQuota) throw new Error('container_disk_gb is set but the disk-quota helper is not configured (DISK_QUOTA_URL)');
+    const response = await fetch(`${this.opts.diskQuota}/limit`, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: `work/${key}`, gb }) });
+    const body = await response.json().catch(() => ({})) as { ok?: boolean; reason?: string };
+    if (!body.ok) throw new Error(`could not hold the checkout to ${gb} GB: ${body.reason ?? `HTTP ${response.status}`}`);
   }
 
   /** The agents' network, made when missing (see ContainerOpts.network).

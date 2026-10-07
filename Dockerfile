@@ -21,11 +21,12 @@ FROM node:22-bookworm-slim
 ARG VERSION=dev
 ENV NODE_ENV=production APP_VERSION=$VERSION
 # git + CA certs: all credential-bearing git runs in THIS container.
-# ripgrep rides along for the grep tool. openssl named explicitly even
+# ripgrep rides along for the grep tool. xfsprogs (xfs_quota) is the
+# disk-quota helper's, which runs from this same image. openssl named explicitly even
 # though ca-certificates drags it in — relying on a transitive install turns a
 # base-image change into "the server won't start".
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git ca-certificates openssl ripgrep \
+      git ca-certificates openssl ripgrep xfsprogs \
   && rm -rf /var/lib/apt/lists/*
 RUN git --version && openssl version
 WORKDIR /app

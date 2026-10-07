@@ -44,6 +44,11 @@ export const AGENT_DATABASE_SHARED = `You have your own PostgreSQL database for 
 
 export const MEDIA = `This project's organization keeps tracked media files (videos, images, audio, documents) in storage. The media_list tool lists them. The media_link tool gives a short-lived link to one file. The media_download tool copies one into /workspace/scratch. The media_upload tool keeps a file from /workspace as a new media file.`;
 
+// ═══ disk_limit ════════════════════════════════════════════════════════════════
+// Present only when container_disk_gb is set. {{gb}} is the limit.
+
+export const DISK_LIMIT = `Your workspace is limited to {{gb}} GB of disk. A write past it fails with "Disk quota exceeded": free space (build output, caches, dependencies you can reinstall) and carry on.`;
+
 // ═══ time_date ═══════════════════════════════════════════════════════════════
 // {{date}} is today, in the builder's time zone (the `timezone` setting),
 // written once when the session starts.

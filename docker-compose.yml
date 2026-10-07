@@ -76,6 +76,10 @@ services:
       # internal network holding only it and this container, so its code
       # reaches its database and nothing else of the stack.
       AGENT_DATABASE_CONTAINER: phantom-backend-postgres-1
+      # The disk-quota helper (below, the `disk-quota` profile): what holds an
+      # agent's checkout to `container_disk_gb`. Off by default; without it
+      # running, the setting is refused rather than ignored.
+      DISK_QUOTA_URL: http://disk-quota:7000
       # The database console (CloudBeaver). The API proxies /db to it and
       # manages its container lifecycle based on the db_ui_enabled setting.
       DB_UI_URL: http://cloudbeaver:8978
@@ -136,6 +140,32 @@ services:
       SYSTEM: 0
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [docker]
+
+  # The disk-quota helper: caps each agent checkout with an XFS project quota
+  # (phantom-agent-sdk/.../runtime/diskQuotaHelper.ts). Needs Docker's data
+  # (/var/lib/docker) on XFS mounted with pquota — a manual server setup, see
+  # docs/permissions.md. On with COMPOSE_PROFILES including disk-quota.
+  # Privileged with Docker's data mounted: host-level, so it answers two
+  # calls only and sits on the API's own internal network, out of every
+  # agent's reach.
+  disk-quota:
+    image: ${PHANTOM_BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend-api}:${PHANTOM_BACKEND_TAG:-latest}
+    pull_policy: missing
+    profiles: ["disk-quota"]
+    restart: unless-stopped
+    user: root
+    privileged: true
+    command: ["node", "phantom-agent-sdk/packages/backend/dist/runtime/diskQuotaHelper.js"]
+    environment:
+      QUOTA_MOUNT: /var/lib/docker
+      QUOTA_ROOT: /var/lib/docker/volumes/phantom-looper-workspaces/_data
+    volumes:
+      - /var/lib/docker:/var/lib/docker
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 60s
+      timeout: 10s
     networks: [docker]
 
   # The database console at /db — CloudBeaver, proxied by the API. No published
