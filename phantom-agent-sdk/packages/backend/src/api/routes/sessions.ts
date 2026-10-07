@@ -812,7 +812,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   app.post<{ Params: { id: string } }>(
     '/sessions/:id/turn-ended', { schema: { ...TAG,
       summary: 'A turn ended on a session',
-      description: 'Records who drove the turn (`last_turn_by`, from x-phantom-looper-actor — a person when unsaid), ' +
+      description: 'Records who drove the turn (`last_turn_by`, from x-phantom-looper-actor — a person when unsaid; ' +
+        'the git sync\'s conflict turn records nothing), ' +
         'bumps the turn count (leaving 0 freezes the row\'s model), touches last_used_at, names the session ' +
         'on the titler\'s cadence, and releases the hold turn-start took. 409 while another client holds the session.',
       params: idParam } },
@@ -821,7 +822,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       const session = await ctx.sessions.get(req.params.id);
       if (!session) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (heldByOther(session, client)) return reply.code(409).send(lockedErr(session));
-      const ended = await ctx.sessions.turnEnded(session, actorOf(req));
+      // The git sync's conflict turn runs in someone else's session: it does
+      // not take the session over (a card run's session stays the card run's).
+      const ended = await ctx.sessions.turnEnded(session, client === GIT_CLIENT_ID ? null : actorOf(req));
       if (!ended.nameManual && ctx.sessionTitler.isDue(ended.name, ended.turnCount)) void ctx.sessionTitler.name(session.id);
       // The hold a turn-start took ends here: one request opens a turn, one
       // closes it. A caller that never held it (a whole-file writer of old)

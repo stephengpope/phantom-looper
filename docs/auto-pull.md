@@ -61,21 +61,23 @@ leaves the same content under a rewritten commit. The pre-squash commit is on
 origin — the backup push runs before anything is rewritten; trees, not shas,
 are what agree after a rewrite.
 
-## Still open
+## Push and backup
 
-- **`engine.push` takes no session lock.** It runs `commitAll` and pushes the
-  branch, so under a running turn it commits a half-written tree. It only ever
-  adds a commit to the branch and never merges or rewrites, which is why it is
-  smaller than the pull hole was. It does take the checkout lock (038), so it
-  never interleaves with a sync — see instant-sync.md.
-- **A git-driven turn is attributed to the git sync.** The conflict turn runs
-  under `GIT_CLIENT_ID` with no actor header, so `last_turn_by` reads
-  `person` after it. Cosmetic; the git client could declare an actor.
-- **`commitAll`** is now only used by `GitSync.push`. Worth collapsing if
-  that is ever reworked.
-- **`PullResult`'s `dirty_tree` and `diverged`** are no longer reachable — the
-  sync commits everything, and a rebase either starts or errors. The union is
-  still what the app reads.
+`GitSync.push` and `backup` commit and push the branch, nothing more. Both
+take the checkout lock (038), so neither interleaves with a sync.
+
+`push` takes no session lock on purpose: its callers own it. Duplicate
+already holds the session under `GIT_CLIENT_ID` when it flushes (a hold
+taken inside push would be released under it, mid-copy). Delete flushes
+before it destroys, and must flush even while a window holds the session —
+a `busy` there loses the work. `backup` is the one caller with no hold of
+its own (the disk sweeps), so it takes the session itself.
+
+## The conflict turn keeps the session's driver
+
+The conflict turn runs under `GIT_CLIENT_ID`. Its turn-end records no
+`last_turn_by`: a card run's or a cron's session stays theirs, not a
+person's.
 
 ## What NOT to do
 

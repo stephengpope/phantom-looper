@@ -731,15 +731,16 @@ export class Sessions {
    *  that said nothing (stopped before the first word, failed to start) must
    *  not freeze it — and touch its checkout. Tokens are not here — every
    *  model call records its own row in log_tokens. Returns what the naming
-   *  decision needs. */
-  async turnEnded(session: SessionRow, actor: string): Promise<{
+   *  decision needs. `actor` null = a service turn (the git sync's conflict
+   *  fix): the session keeps whoever drives it. */
+  async turnEnded(session: SessionRow, actor: string | null): Promise<{
     name: string | null; turnCount: number; nameManual: boolean;
   }> {
     const linesAtStart = this.#linesAtTurnStart.get(session.id);
     this.#linesAtTurnStart.delete(session.id);
     const wrote = linesAtStart === undefined || session.transcriptLines !== linesAtStart;
     const [saved] = await this.database.update(sessions)
-      .set({ lastTurnBy: actor, ...(wrote ? { turnCount: sqlRaw`${sessions.turnCount} + 1` } : {}) })
+      .set({ lastTurnBy: actor ?? sqlRaw`${sessions.lastTurnBy}`, ...(wrote ? { turnCount: sqlRaw`${sessions.turnCount} + 1` } : {}) })
       .where(eq(sessions.id, session.id))
       .returning({ name: sessions.name, turnCount: sessions.turnCount, nameManual: sessions.nameManual });
     if (session.workspaceId) await this.workspaces.touch(session.workspaceId);
