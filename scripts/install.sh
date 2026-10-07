@@ -21,7 +21,8 @@
 #
 # What it does:
 #   1. Installs docker (via get.docker.com) if missing.
-#   2. Sets up ufw: deny inbound, allow SSH + 80/443 (skippable, see above).
+#   2. Sets up ufw: deny inbound, allow SSH + 80/443 (skippable, see above),
+#      and blocks agent containers from the cloud metadata service (always).
 #   3. Pulls the api image and copies the host files out of it (compose file,
 #      Caddyfile, updater scripts, the `phantom-backend` command) into /opt/phantom-looper.
 #      They ship in the image, so they always match the server they configure
@@ -142,6 +143,38 @@ if [ "$NO_FIREWALL" -ne 1 ]; then
       ok "Firewall on (inbound allowed: SSH [$SSH_PORTS], 80, 443)"
     fi
   fi
+fi
+
+# ── Agents never reach the cloud's metadata service ─────────────────────────
+# Every cloud server answers 169.254.169.254 with facts about itself (and, on
+# some, its startup data and credentials). Agent containers sit on their own
+# bridge, named phantom-agents (AGENT_NETWORK in the compose file); traffic
+# from it to that address is dropped in DOCKER-USER, the chain Docker leaves
+# to the operator. A boot-time unit puts the rule back after every reboot and
+# every docker restart. Not optional, unlike ufw: it never blocks anything
+# the server itself needs.
+if command -v systemctl >/dev/null 2>&1 && command -v iptables >/dev/null 2>&1; then
+  $SUDO tee /etc/systemd/system/phantom-agents-metadata-block.service >/dev/null <<'UNIT'
+[Unit]
+Description=phantom-looper: agent containers may not reach the cloud metadata service
+After=docker.service
+PartOf=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'iptables -C DOCKER-USER -i phantom-agents -d 169.254.169.254/32 -j DROP 2>/dev/null || iptables -I DOCKER-USER -i phantom-agents -d 169.254.169.254/32 -j DROP'
+
+[Install]
+WantedBy=multi-user.target docker.service
+UNIT
+  $SUDO systemctl daemon-reload
+  $SUDO systemctl enable --now phantom-agents-metadata-block.service >/dev/null 2>&1 \
+    && ok "Agent containers blocked from the cloud metadata service" \
+    || say "Could not install the metadata block — add it by hand: iptables -I DOCKER-USER -i phantom-agents -d 169.254.169.254/32 -j DROP"
+else
+  say "No systemd or iptables — add by hand: iptables -I DOCKER-USER -i phantom-agents -d 169.254.169.254/32 -j DROP"
 fi
 
 # ── Runtime files ───────────────────────────────────────────────────────────

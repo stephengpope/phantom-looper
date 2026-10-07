@@ -49,9 +49,13 @@ interface SpecInput {
   /** Privileged + the graph volume so the agent can run its own dockerd. The
    *  daemon is NOT started here — the image's `start-docker` does that on demand. */
   docker: boolean;
-  /** A Docker network to join instead of the default bridge — the stack's
-   *  own, when the agent database is shared with the project (its host name
-   *  resolves only there). Absent = Docker's default. */
+  /** False: the kernel refuses any gain of privilege (no-new-privileges) —
+   *  the image's passwordless sudo stops working, the agent stays itself. */
+  sudo: boolean;
+  /** The container runtime (gVisor's `runsc`, say); null = Docker's default. */
+  runtime: string | null;
+  /** The agents' network (AGENT_NETWORK): internet out, no container on it
+   *  able to reach another. Absent = Docker's default bridge (dev). */
   network?: string;
 }
 
@@ -84,6 +88,8 @@ export function buildContainerSpec(i: SpecInput): Record<string, unknown> {
     HostConfig.Privileged = true;
     mounts.push({ ...DOCKER_GRAPH_MOUNT });
   }
+  if (!i.sudo) HostConfig.SecurityOpt = ['no-new-privileges:true'];
+  if (i.runtime) HostConfig.Runtime = i.runtime;
   if (mounts.length) HostConfig.Mounts = mounts;
   if (i.network) HostConfig.NetworkMode = i.network;
   return {
@@ -109,11 +115,17 @@ export interface ContainerOpts {
    *  the project's connection string as AGENT_DATABASE_URL. Absent (tests)
    *  means never. */
   databases?: AgentDatabases;
-  /** The stack's Docker network (compose's `<project>_default`), which a
-   *  container joins when it carries AGENT_DATABASE_URL — the URL's host
-   *  resolves only there. Unset (dev, no compose) = the URL is handed out
-   *  but the container stays on the default bridge. */
+  /** The agents' network (AGENT_NETWORK), made here when missing: a bridge
+   *  with inter-container traffic off, so an agent reaches the internet and
+   *  nothing on the server — not another agent, not the stack. Its interface
+   *  is named after it, for the host's firewall (the metadata block,
+   *  scripts/install.sh). Unset (dev) = Docker's default bridge. */
   network?: string;
+  /** The database server's container (AGENT_DATABASE_CONTAINER). A container
+   *  with AGENT_DATABASE_URL gets a private network of its own that only it
+   *  and this container are on — internal, no way out — so the project's
+   *  code reaches its database and nothing else of the stack. */
+  databaseContainer?: string;
   /** A container came up for this workspace — awaited before `ensure` returns,
    *  so whatever the caller does next (a file write) happens after the
    *  listener is in place. Instant sync attaches its watcher here. */
@@ -163,24 +175,29 @@ export class SessionContainers {
     const container = this.docker.getContainer(this.name(key));
     try {
       const info = await container.inspect();
-      if (info.State.Running) return container;
-      // Stopped or exited: it holds nothing, so recreate rather than reason
-      // about resume states.
+      // One made before the agents' network (or outside it) is made again on
+      // it — stateless, so that is a restart, and it takes today's settings.
+      const placed = !this.opts.network || Object.keys(info.NetworkSettings?.Networks ?? {}).includes(this.opts.network);
+      if (info.State.Running && placed) return container;
+      // Stopped, exited or misplaced: it holds nothing, so recreate rather
+      // than reason about resume states.
       await container.remove({ force: true, v: true }).catch(() => {});
     } catch { /* no such container */ }
 
     if (!this.opts.settings) throw new Error('SessionContainers needs settings to create a container');
     const limits = await this.opts.settings.resolveMany(
-      ['container_image', 'container_memory_mb', 'container_cpus', 'container_pids_limit', 'container_docker'],
-      project ? scopeOf(project) : {}) as { container_image: string; container_memory_mb: number | null; container_cpus: number | null; container_pids_limit: number | null; container_docker: boolean };
+      ['container_image', 'container_memory_mb', 'container_cpus', 'container_pids_limit', 'container_docker', 'container_sudo', 'container_runtime'],
+      project ? scopeOf(project) : {}) as { container_image: string; container_memory_mb: number | null; container_cpus: number | null;
+        container_pids_limit: number | null; container_docker: boolean; container_sudo: boolean; container_runtime: string | null };
     const image = limits.container_image;
     const database = await this.databaseEnv(project);
-    const Env = [...(await this.credentialEnv(project)), ...database];
+    const Env = [...(await this.credentialEnv(project)), ...database.env];
+    if (this.opts.network) await this.agentNetwork();
     const spec = buildContainerSpec({
       name: this.name(key),
       image: String(image),
       env: Env,
-      network: database.length ? this.opts.network : undefined,
+      network: this.opts.network,
       memMb: limits.container_memory_mb,
       cpus: limits.container_cpus,
       pids: limits.container_pids_limit,
@@ -188,6 +205,8 @@ export class SessionContainers {
         ? { volume: this.opts.volume, subpath: `work/${key}` }
         : { bind: sessionDir(this.paths, key) },
       docker: !!limits.container_docker,
+      sudo: limits.container_sudo !== false,
+      runtime: limits.container_runtime || null,
     }) as never;
     let created: Docker.Container;
     try {
@@ -202,6 +221,10 @@ export class SessionContainers {
       await this.images.pull(String(image));
       created = await this.docker.createContainer(spec);
     }
+    // Shared database: its private network joined before the first process
+    // runs. Not shared (any more): none may linger from before.
+    if (database.host) await this.joinDatabaseNetwork(key, created.id, database.host);
+    else await this.dropDatabaseNetwork(key);
     await created.start();
     log.info({ workspace: key, image }, 'workspace container started');
     await this.opts.onStarted?.(key, project)
@@ -237,15 +260,51 @@ export class SessionContainers {
    *  project's code cannot reach it": the role's password enters the
    *  container's env, and — like the PAT — dies with it. The caller also
    *  joins the stack network, or the host name in the URL resolves nowhere. */
-  private async databaseEnv(project: ProjectRow | undefined): Promise<string[]> {
-    if (!project || !this.opts.settings || !this.opts.databases) return [];
+  private async databaseEnv(project: ProjectRow | undefined): Promise<{ env: string[]; host?: string }> {
+    if (!project || !this.opts.settings || !this.opts.databases) return { env: [] };
     const on = await this.opts.settings.resolveMany(['agent_database', 'agent_database_shared'], scopeOf(project));
-    if (!on.agent_database || !on.agent_database_shared) return [];
-    if (!this.opts.network) {
-      log.warn({ project: project.name }, 'agent_database_shared is on but WORKSPACE_NETWORK is unset — the URL\'s host may not resolve from the container');
+    if (!on.agent_database || !on.agent_database_shared) return { env: [] };
+    if (!this.opts.databaseContainer) {
+      log.warn({ project: project.name }, 'agent_database_shared is on but AGENT_DATABASE_CONTAINER is unset — the container cannot reach the database');
+      return { env: [] };
     }
+    const url = await this.opts.databases.urlFor(project.id);
     log.info({ project: project.name }, 'workspace container gets AGENT_DATABASE_URL (agent_database_shared)');
-    return [`AGENT_DATABASE_URL=${await this.opts.databases.urlFor(project.id)}`];
+    return { env: [`AGENT_DATABASE_URL=${url}`], host: new URL(url).hostname };
+  }
+
+  /** The agents' network, made once when missing (see ContainerOpts.network). */
+  #agentNetwork: Promise<void> | undefined;
+  private agentNetwork(): Promise<void> {
+    const name = this.opts.network!;
+    this.#agentNetwork ??= this.docker.getNetwork(name).inspect().then(() => undefined, async () => {
+      await this.docker.createNetwork({ Name: name, Driver: 'bridge',
+        Options: { 'com.docker.network.bridge.enable_icc': 'false', 'com.docker.network.bridge.name': name.slice(0, 15) } });
+      log.info({ network: name }, 'agents network created');
+    }).catch((error: unknown) => { this.#agentNetwork = undefined; throw error; });
+    return this.#agentNetwork;
+  }
+
+  /** A workspace's private database network: internal (no way out), holding
+   *  this container and the database server — reached by the URL's host
+   *  name, an alias on this network alone. */
+  private databaseNetwork(key: string): string { return `phantom-agentdb-${key}`; }
+  private async joinDatabaseNetwork(key: string, containerId: string, host: string): Promise<void> {
+    const name = this.databaseNetwork(key);
+    const network = this.docker.getNetwork(name);
+    await network.inspect().catch(() => this.docker.createNetwork({ Name: name, Driver: 'bridge', Internal: true, Labels: { 'phantom.workspace': key } }));
+    const already = (error: unknown) => {
+      const status = (error as { statusCode?: number }).statusCode;
+      if (status !== 403 && status !== 409) throw error;   // already connected
+    };
+    await network.connect({ Container: this.opts.databaseContainer!, EndpointConfig: { Aliases: [host] } }).catch(already);
+    await network.connect({ Container: containerId }).catch(already);
+  }
+  private async dropDatabaseNetwork(key: string): Promise<void> {
+    const network = this.docker.getNetwork(this.databaseNetwork(key));
+    const gone = (error: unknown) => { if ((error as { statusCode?: number }).statusCode !== 404) throw error; };
+    if (this.opts.databaseContainer) await network.disconnect({ Container: this.opts.databaseContainer, Force: true }).catch(gone);
+    await network.remove().catch(gone);
   }
 
   /** Remove the workspace's container. None there (404) is fine — that is the
@@ -255,6 +314,8 @@ export class SessionContainers {
     await this.docker.getContainer(this.name(workspaceId)).remove({ force: true, v: true }).catch((error) => {
       if ((error as { statusCode?: number }).statusCode !== 404) throw error;
     });
+    await this.dropDatabaseNetwork(workspaceId).catch((error) =>
+      log.warn({ workspace: workspaceId, err: errStr(error) }, 'the workspace\'s database network could not be removed'));
     await this.opts.onRemoved?.(workspaceId)
       .catch((error) => log.warn({ workspace: workspaceId, err: errStr(error) }, 'onRemoved listener failed'));
   }

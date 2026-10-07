@@ -66,11 +66,16 @@ services:
       # subpaths of it. dockerd resolves mounts host-side, so an API-internal
       # path would come up empty.
       WORKSPACE_VOLUME: phantom-looper-workspaces
-      # This stack's network (compose names it <project>_default). A project
-      # container joins it when `agent_database_shared` is on, so the
-      # `postgres` host in AGENT_DATABASE_URL resolves; otherwise containers
-      # stay on Docker's default bridge with no path to the stack.
-      WORKSPACE_NETWORK: phantom-backend_default
+      # The agents' network, made by the API when missing: internet out,
+      # inter-container traffic off — an agent reaches nothing on this server,
+      # not another agent, not the stack. The interface carries the same name,
+      # for the host firewall's metadata block (scripts/install.sh).
+      AGENT_NETWORK: phantom-agents
+      # The database server's container (compose: <project>-<service>-1). With
+      # `agent_database_shared` on, a workspace container gets a private
+      # internal network holding only it and this container, so its code
+      # reaches its database and nothing else of the stack.
+      AGENT_DATABASE_CONTAINER: phantom-backend-postgres-1
       # The database console (CloudBeaver). The API proxies /db to it and
       # manages its container lifecycle based on the db_ui_enabled setting.
       DB_UI_URL: http://cloudbeaver:8978
@@ -100,12 +105,17 @@ services:
     # covers a crashed process, not a wedged one.
     labels:
       - autoheal=true
+    # The stack's network, and the proxy's — which nothing else is on.
+    networks: [default, docker]
 
   # Docker socket proxy: the only thing the API can reach. Exposes just the
-  # endpoints the API needs (containers, exec, images) on the internal network;
-  # everything else (volumes, networks, swarm, system) is refused. This is the
+  # endpoints the API needs (containers, exec, images, and networks — the
+  # agents' network and each shared database's private one) on the internal
+  # network; everything else (volumes, swarm, system) is refused. This is the
   # blast-radius boundary for an API compromise — the socket itself is
-  # host-root-equivalent, and the API never touches it.
+  # host-root-equivalent, and the API never touches it. It sits on its own
+  # internal network that only the API joins: no agent, no other service can
+  # reach it, whatever the proxy itself lets through.
   docker-proxy:
     image: tecnativa/docker-socket-proxy:0.3.0
     restart: unless-stopped
@@ -120,12 +130,13 @@ services:
       # write surface is unchanged.
       LOGS: 1
       VOLUMES: 0
-      NETWORKS: 0
+      NETWORKS: 1
       SERVICES: 0
       SWARM: 0
       SYSTEM: 0
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [docker]
 
   # The database console at /db — CloudBeaver, proxied by the API. No published
   # ports: the only way in is through the API, which checks db_ui_enabled and
@@ -220,6 +231,11 @@ services:
       AUTOHEAL_CONTAINER_LABEL: autoheal
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+
+networks:
+  # The docker proxy's: the API and the proxy, nothing else, no way out.
+  docker:
+    internal: true
 
 volumes:
   pg-data:
