@@ -2,7 +2,7 @@
 // The supervisor's moves ONLY: a card it moved to in_progress or done,
 // a card the coder or a failed round blocked. A person's move (the cli, the
 // pane Assistant, Telegram's own Assistant) is never announced — the writer's
-// x-phantom-looper-client rides the event, and the loop's is LOOP_CLIENT_ID.
+// x-phantom-client rides the event, and the loop's is LOOP_CLIENT_ID.
 // `from` is the status before the write, so an edit inside a column (a tick, a
 // retitle) is not a move, and nothing is remembered across a restart.
 import type { BoardEvent } from '@phantom-agent-sdk/backend';

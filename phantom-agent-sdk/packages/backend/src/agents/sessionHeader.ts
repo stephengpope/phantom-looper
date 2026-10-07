@@ -8,7 +8,7 @@ import { workspaceOf, type Sessions } from '../storage/Sessions.js';
 import { ToolError } from '../tools/envelope.js';
 import { textOf } from '../lib/text.js';
 
-export const SESSION_HEADER = 'x-phantom-looper-session';
+export const SESSION_HEADER = 'x-phantom-session';
 
 /** The session a tool call names, checked the one way every tool route
  *  checks it: named, known, its files still on disk, a workspace to open. A

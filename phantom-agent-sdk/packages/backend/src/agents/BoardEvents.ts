@@ -14,7 +14,7 @@ const ALL = Symbol('all');
 export type BoardEvent =
   // written (created or updated) — the full row. `from` is the status BEFORE
   // the write (absent on create, and on the auto-push-failure un-archive),
-  // `client` the writer's x-phantom-looper-client — together they let a
+  // `client` the writer's x-phantom-client — together they let a
   // listener tell a MOVE by the loop from an edit by a person without
   // remembering anything. The cli's BoardStore reads `card` only.
   | { event: 'card'; card: Record<string, unknown>; from?: string; client?: string;

@@ -21,7 +21,7 @@
  */
 import { ndjson } from '@phantom-agent-sdk/client';
 
-const SESSION_HEADER = 'x-phantom-looper-session';
+const SESSION_HEADER = 'x-phantom-session';
 
 export interface GitToolsConfig {
   baseUrl: string;
@@ -102,7 +102,7 @@ async function runGitStream<T extends { result: string }>(
     headers: {
       authorization: `Bearer ${cfg.apiKey}`, 'content-type': 'application/json',
       [SESSION_HEADER]: cfg.sessionId,
-      ...(cfg.clientId ? { 'x-phantom-looper-client': cfg.clientId } : {}),
+      ...(cfg.clientId ? { 'x-phantom-client': cfg.clientId } : {}),
     },
     body: '{}',
   });

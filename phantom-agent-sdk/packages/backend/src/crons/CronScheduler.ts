@@ -33,14 +33,27 @@
 //
 // Like a card run, this is a headless client of the backend's own HTTP
 // surface over loopback; the database is reached only through the
-// backend's objects.
+// backend's objects. Each run is the cron's OWNER's: its client names the
+// project's organization and the user who made the cron (x-phantom-*), so
+// the run sees only that organization's rows and resolves that user's keys
+// first — a scheduled run is theirs exactly as a turn they typed would be.
+//
+// The SDK's: the app hands it the agent a prompt cron runs
+// (PhantomBackendConfig.crons.agent) and nothing else.
 import { Cron } from 'croner';
-import { BackendClient, type AgentHandlers } from '@phantom-agent-sdk/client';
+import { BackendClient, type Agent, type AgentHandlers } from '@phantom-agent-sdk/client';
 import { messageLine, userMessage, assistantMessage } from '@phantom-agent-sdk/client/transcript';
-import { CodingAgent } from '../../phantom-looper/agents/coding.js';
-import type { CronRow, PhantomBackend } from '@phantom-agent-sdk/backend';
-import { logger, errStr } from '@phantom-agent-sdk/backend';
-import { scopeOf } from '@phantom-agent-sdk/backend';
+import type { PhantomBackend } from '../PhantomBackend.js';
+import type { CronRow } from '../storage/schema.js';
+import { logger, errStr } from '../lib/log.js';
+import { scopeOf } from '../lib/scopes.js';
+
+/** The agent a prompt cron runs: its sessions are opened and resumed with
+ *  these (an Agent subclass — the app's coding agent, say). */
+export interface CronAgent {
+  newSession(backend: BackendClient, handlers: AgentHandlers, projectId: string): Promise<Agent>;
+  resumeSession(backend: BackendClient, handlers: AgentHandlers, sessionId: string): Promise<Agent>;
+}
 
 /** The cron scheduler's client id — its lock identity on the sessions it runs. */
 export const CRON_CLIENT_ID = 'cron';
@@ -48,7 +61,6 @@ export const CRON_CLIENT_ID = 'cron';
  *  and last_turn_by; a default session list leaves those out (config.backgroundStarters). */
 export const CRON_STARTER = 'cron';
 const log = logger('cron');
-const BASE = 'http://cron/api';
 /** A script's own timeout. The bash tool's default (`bash_timeout_ms`, two
  *  minutes) is sized for an agent waiting on a command; a nightly job is
  *  not. `bash_timeout_max_ms`, when set, still caps this. */
@@ -63,16 +75,19 @@ export class CronScheduler {
   private registered = new Map<number, Registration>();   // cron row id → croner job
   private queue: Promise<void> = Promise.resolve();       // reconciles run one after another
   private unsubscribe: Array<() => void> = [];
-  /** One client, the scheduler's lock identity, for every run it opens. */
-  private readonly client: BackendClient;
-  /** The agents with a run in flight, by session id — stop() interrupts them. */
-  private agents = new Map<string, CodingAgent>();
+  /** The agents with a run in flight, by session id. */
+  private agents = new Map<string, Agent>();
 
   /** On the backend's objects: the cron rows, the projects (zone, switch),
    *  the sessions a run opens, and the settings feed (a project's cron
-   *  switch or timezone moved). */
-  constructor(private readonly backend: PhantomBackend) {
-    this.client = new BackendClient({ url: backend.loopback.url, credential: { phantomAdminKey: backend.loopback.apiKey }, clientId: CRON_CLIENT_ID, label: 'cron', actor: CRON_STARTER });
+   *  switch or timezone moved). `agent`: what a prompt cron runs. */
+  constructor(private readonly backend: PhantomBackend, private readonly agent: CronAgent) {}
+
+  /** The client a run is made through: the scheduler's lock identity,
+   *  acting for the cron's owner. */
+  #clientFor(organizationId: string, userId: string | null): BackendClient {
+    return new BackendClient({ url: this.backend.loopback.url, credential: { phantomAdminKey: this.backend.loopback.apiKey },
+      clientId: CRON_CLIENT_ID, label: 'cron', actor: CRON_STARTER, actingFor: { organizationId, ...(userId ? { userId } : {}) } });
   }
 
   /** Boot: register everything once, then follow the writes. */
@@ -179,10 +194,11 @@ export class CronScheduler {
 
   private async run(row: CronRow): Promise<void> {
     const { sessions } = this.backend;
-    let agent: CodingAgent | undefined;
+    let agent: Agent | undefined;
     try {
       const project = await this.backend.projects.get(row.project_id);
       if (!project) throw new Error(`project ${row.project_id} is gone`);
+      const client = this.#clientFor(project.organizationId, row.user_id);
       log.info({ project: project.name, cron: row.name }, 'cron run started');
       const handlers: AgentHandlers = {
         onError: (error) => log.warn({ cron: row.name, code: error.code, err: error.message }, 'cron agent error'),
@@ -191,15 +207,15 @@ export class CronScheduler {
       // A fresh session, with its checkout, named after the cron, pinned to
       // the cron's model when it names one. The agent is resumed AFTER the
       // pin lands so its first turn-start reads it.
-      const born = await CodingAgent.newSession(this.client, handlers, project.id);
+      const born = await this.agent.newSession(client, handlers, project.id);
       const sessionId = born.session.id;
       await born.close();
       await sessions.nameIfUnnamed(sessionId, row.name);
       if (row.provider && row.model) await sessions.stampModel(sessionId, { provider: row.provider, model: row.model, reasoning: row.reasoning });
-      agent = await CodingAgent.resumeSession(this.client, handlers, sessionId);
+      agent = await this.agent.resumeSession(client, handlers, sessionId);
       this.agents.set(sessionId, agent);
       if (row.script) {
-        const exit = await this.runScript(agent, row.script);
+        const exit = await this.runScript(client, agent, row.script);
         log.info({ project: project.name, cron: row.name, session: sessionId, script: row.script, exit }, 'cron script finished');
       } else {
         const result = await agent.sendMessage(row.prompt ?? '');
@@ -222,24 +238,24 @@ export class CronScheduler {
    *  Whatever comes back — exit code, output, or the route's refusal (no
    *  such file, timeout) — is the record: appended to the session's record,
    *  never thrown. Returns the exit code, null when the command never ran. */
-  private async runScript(agent: CodingAgent, script: string): Promise<number | null> {
+  private async runScript(client: BackendClient, agent: Agent, script: string): Promise<number | null> {
     const cmd = `sh ${shellQuote(script)}`;
     const sessionId = agent.session.id;
     // The run is a turn like any other: held for its duration (the record is
     // written under the hold), the hold let go at the end, always.
-    await this.client.call('POST', `/sessions/${sessionId}/turn-start`, { type: 'coding', label: 'cron script' });
+    await client.call('POST', `/sessions/${sessionId}/turn-start`, { type: agent.type, label: 'cron script' });
     try {
-      const envelope = await this.client.callRaw<{ exitCode: number; stdout: string; stderr: string }>('POST', '/tools/bash',
+      const envelope = await client.callRaw<{ exitCode: number; stdout: string; stderr: string }>('POST', '/tools/bash',
         { cmd, timeout: SCRIPT_TIMEOUT_MS }, { sessionId });
       const exit = envelope.ok ? envelope.data.exitCode : null;
       const report = envelope.ok
         ? `exit ${envelope.data.exitCode}\n\n${envelope.data.stdout}${envelope.data.stderr ? `\n--- stderr ---\n${envelope.data.stderr}` : ''}`
         : `did not finish: ${envelope.error.message}${envelope.error.detail ? `\n\n${JSON.stringify(envelope.error.detail)}` : ''}`;
-      await this.client.call('POST', `/sessions/${sessionId}/transcript/append`,
+      await client.call('POST', `/sessions/${sessionId}/transcript/append`,
         { after: 0, deliveryId: `cron-${Date.now()}`, lines: [messageLine(userMessage(cmd)), messageLine(assistantMessage(report))] });
       return exit;
     } finally {
-      await this.client.call('POST', `/sessions/${sessionId}/turn-ended`).catch(() => {});
+      await client.call('POST', `/sessions/${sessionId}/turn-ended`).catch(() => {});
     }
   }
 }

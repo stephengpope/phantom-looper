@@ -17,7 +17,7 @@ import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { fromNodeHeaders } from 'better-auth/node';
 import { magicLink, organization, bearer, admin } from 'better-auth/plugins';
 import { apiKey } from '@better-auth/api-key';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, ne, sql } from 'drizzle-orm';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import type { Database } from '../storage/Database.js';
@@ -140,6 +140,10 @@ function buildAuth({ database, mailer, settings, projects, media, options, baseU
     internalAdapter: { findUserByEmail: (email: string) => Promise<unknown>;
       createUser: (fields: { email: string; name: string }, source: { method: string }) => Promise<unknown>;
       updateUser: (id: string, fields: { emailVerified: boolean }) => Promise<unknown> } };
+  // A user's personal organization: made with them, named by their id.
+  const personalSlug = (userId: string) => `personal-${userId.toLowerCase()}`;
+  const personalOrganization = async (userId: string) =>
+    (await database.system.select({ id: organizationTable.id }).from(organizationTable).where(eq(organizationTable.slug, personalSlug(userId))))[0];
   let ready!: (context: Context) => void;
   const context = new Promise<Context>((resolve) => { ready = resolve; });
   const adapter = async () => (await context).adapter;
@@ -176,9 +180,38 @@ function buildAuth({ database, mailer, settings, projects, media, options, baseU
       user: { create: { after: async (created) => {
         const db = await adapter();
         const personal = await db.create<{ id: string }>({ model: 'organization',
-          data: { name: created.name || created.email, slug: `personal-${created.id.toLowerCase()}`, createdAt: new Date() } });
+          data: { name: created.name || created.email, slug: personalSlug(created.id), createdAt: new Date() } });
         await db.create({ model: 'member', data: { organizationId: personal.id, userId: created.id, role: 'owner', createdAt: new Date() } });
-      } }, delete: { after: async (gone) => { await settings.deleteScope(userScope(gone.id)); } } },
+      } }, delete: {
+        // GitHub's rule: a user goes only once nothing would be left
+        // ownerless — their personal organization's projects and files
+        // deleted or moved, no shared organization left without an owner.
+        before: async (going) => {
+          const personal = await personalOrganization(going.id);
+          if (personal) {
+            const owned = await projects.ofOrganization(personal.id);
+            if (owned.length) throw APIError.from('CONFLICT', { code: 'USER_HAS_PROJECTS',
+              message: `${going.email} still owns ${owned.map((project) => `${project.owner}/${project.name}`).join(', ')}: delete or move them first` });
+            if (await media.ofOrganization(personal.id)) throw APIError.from('CONFLICT', { code: 'USER_HAS_MEDIA',
+              message: `${going.email} still has media files: delete them first` });
+          }
+          const soleOwnerOf = await database.system.select({ name: organizationTable.name }).from(member)
+            .innerJoin(organizationTable, eq(organizationTable.id, member.organizationId))
+            .where(and(eq(member.userId, going.id), eq(member.role, 'owner'), ne(organizationTable.slug, personalSlug(going.id)),
+              sql`not exists (select from identity.member o where o.organization_id = ${member.organizationId} and o.role = 'owner' and o.user_id <> ${going.id})`));
+          if (soleOwnerOf.length) throw APIError.from('CONFLICT', { code: 'USER_IS_SOLE_OWNER',
+            message: `${going.email} is the only owner of ${soleOwnerOf.map((row) => row.name).join(', ')}: make someone else an owner first` });
+        },
+        // Their personal organization goes with them, and both settings layers.
+        after: async (gone) => {
+          const personal = await personalOrganization(gone.id);
+          if (personal) {
+            await database.system.delete(organizationTable).where(eq(organizationTable.id, personal.id));
+            await settings.deleteScope(organizationScope(personal.id));
+          }
+          await settings.deleteScope(userScope(gone.id));
+        },
+      } },
       // A sign-in opens in an organization: the first membership when the
       // session says none.
       session: { create: { before: async (opening) => {

@@ -26,13 +26,13 @@ export interface BackendOptions {
   /** The API root, e.g. `http://localhost:4000/api`. */
   url: string;
   credential: Credential;
-  /** This client's lock identity — sent as x-phantom-looper-client. */
+  /** This client's lock identity — sent as x-phantom-client. */
   clientId: string;
   /** What other clients see as the session's holder (a hostname, an app
    *  name). Defaults to clientId. */
   label?: string;
   /** WHO this client acts for — the automation's name (a cron, a card run,
-   *  a bot); unsaid = a person. Sent as x-phantom-looper-actor: the backend
+   *  a bot); unsaid = a person. Sent as x-phantom-actor: the backend
    *  records it as a session's `started_by` and `last_turn_by`. */
   actor?: string;
   /** With the server key: the organization (and optionally the user, a
@@ -46,9 +46,9 @@ export interface BackendOptions {
   retry?: { policy: RetryPolicy; notice: (text: string) => void };
 }
 
-const SESSION_HEADER = 'x-phantom-looper-session';
-const CLIENT_HEADER = 'x-phantom-looper-client';
-const ACTOR_HEADER = 'x-phantom-looper-actor';
+const SESSION_HEADER = 'x-phantom-session';
+const CLIENT_HEADER = 'x-phantom-client';
+const ACTOR_HEADER = 'x-phantom-actor';
 const ACTING_ORGANIZATION_HEADER = 'x-phantom-organization';
 const ACTING_USER_HEADER = 'x-phantom-user';
 /** Who acts when a client says nothing (no actor): a person. Every
@@ -195,7 +195,7 @@ export class BackendClient {
         body: raw ? raw.body : body === undefined ? undefined : JSON.stringify(body), signal: opts.signal,
         // fetch sends a stream body only when told it is one-way.
         ...(raw && raw.body instanceof ReadableStream ? { duplex: 'half' } : {}),
-      } as RequestInit);
+      });
     } catch (error) {
       throw new PhantomError('unreachable', `${method} ${path}: ${(error as Error).message}`, { cause: error, retryable: true });
     }
