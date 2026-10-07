@@ -8,6 +8,8 @@ import type { SettingDefinition, AgentTypeDefinition, AgentTypeSettingSuffix } f
 import type { OverridableLayer } from '../lib/scopes.js';
 /** Whatever a project may override, an organization and a user may too — a bigger project. */
 const SHARED: readonly OverridableLayer[] = ['organization', 'user', 'project'];
+/** What an organization may decide for itself and a project or a user may not: where its media lives. */
+const ORGANIZATION: readonly OverridableLayer[] = ['organization'];
 
 const checkTimezone = (value: string): string | null =>
   TIMEZONES.includes(value) ? null
@@ -132,6 +134,20 @@ export function sdkSettings(options: { sessionImageTag: string }): SettingDefini
       description: "The login at the SMTP server — usually the full address." },
     { key: "smtp_from", type: "string", default: null, label: "from address", group: "mail",
       description: "What mail from this server is sent as: an address, or \"Name <address>\". Most providers insist it is one the login owns." },
+    { key: "media_endpoint", type: "string", default: null, label: "storage endpoint", group: "media", overridableAt: ORGANIZATION,
+      description: "The S3-compatible storage media files go to: the provider's S3 API address (https://<account>.r2.cloudflarestorage.com, https://s3.us-east-1.amazonaws.com, https://s3.us-west-004.backblazeb2.com). Media is off until endpoint, bucket and both keys are set. An organization that sets all four at its own layer stores its files in its own bucket." },
+    { key: "media_region", type: "string", default: "auto", label: "storage region", group: "media", overridableAt: ORGANIZATION,
+      description: "The bucket's region as the provider names it (us-east-1, eu-central-1). R2 takes auto." },
+    { key: "media_bucket", type: "string", default: null, label: "storage bucket", group: "media", overridableAt: ORGANIZATION,
+      description: "The bucket media files are kept in. Keep it private: files are reached through short-lived links." },
+    { key: "media_max_bytes", type: "number", default: 5 * 1024 ** 3, label: "max file size", group: "media", overridableAt: ORGANIZATION,
+      description: "The largest media file accepted. Checked before an upload starts and against what actually arrived.", unit: "bytes", min: 1 },
+    { key: "media_allowed_types", type: "string", default: "image/*, video/*, audio/*, application/pdf", label: "allowed file types", group: "media", overridableAt: ORGANIZATION,
+      description: "The file types media accepts, comma-separated: exact (application/pdf) or a whole family (image/*). The type is read from the file's own bytes, not taken from the uploader." },
+    { key: "media_link_seconds", type: "number", default: 900, label: "link lifetime", group: "media", overridableAt: ORGANIZATION,
+      description: "How long a download link works when the caller does not ask for a length, in seconds.", unit: "count", min: 60, max: 604800 },
+    { key: "media_link_max_seconds", type: "number", default: 3600, label: "longest link", group: "media", overridableAt: ORGANIZATION,
+      description: "The longest a caller may ask a link to work, in seconds. Providers allow at most 604800 (7 days).", unit: "count", min: 60, max: 604800 },
     credential("github_token", "github token", "git", "Lets phantom-looper manage GitHub repos: clone, push, and land work on the base branch. A project can hold its own token; otherwise this one is used.", undefined, { overridableAt: SHARED }),
     credential("anthropic_api_key", "anthropic key", "llm", "Used by every agent set to the anthropic provider.", "anthropic"),
     credential("openai_api_key", "openai key", "llm", "Used by every agent set to the openai provider.", "openai"),
@@ -145,6 +161,8 @@ export function sdkSettings(options: { sessionImageTag: string }): SettingDefini
     credential("deepgram_api_key", "deepgram key", "voice", "Speech to text and text to speech for the Assistant. Without it the Assistant has no voice."),
     credential("firecrawl_api_key", "firecrawl key", "search", "Powers the web_search and web_fetch tools; without it web calls fail. Keys at firecrawl.dev."),
     credential("smtp_password", "smtp password", "mail", "The SMTP login's password or app password. With the other smtp settings set, POST /api/mail/test proves it."),
+    credential("media_access_key_id", "storage access key", "media", "The access key id of a key the storage provider issued for the media bucket.", undefined, { overridableAt: ORGANIZATION }),
+    credential("media_secret_access_key", "storage secret key", "media", "The secret that goes with the storage access key.", undefined, { overridableAt: ORGANIZATION }),
     credential("telegram_bot_token", "telegram bot token", "chat", "The Telegram bot's token from @BotFather. With telegram enabled and an authorized user set (/settings), saving it registers the webhook."),
   ];
 }

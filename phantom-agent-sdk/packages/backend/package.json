@@ -34,16 +34,24 @@
     "test": "tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "3.1147.0",
+    "@aws-sdk/lib-storage": "3.1147.0",
+    "@aws-sdk/s3-request-presigner": "3.1147.0",
     "@better-auth/api-key": "1.7.7",
     "@fastify/cors": "11.3.0",
+    "@fastify/http-proxy": "11.6.1",
     "@parcel/watcher": "2.6.0",
     "@phantom-agent-sdk/client": "0.1.0",
+    "@smithy/node-http-handler": "4.12.1",
+    "@types/dockerode": "4.0.1",
+    "@types/pg": "8.23.1",
     "ai": "7.0.73",
     "better-auth": "1.7.7",
     "croner": "10.0.1",
     "dockerode": "5.0.1",
     "drizzle-orm": "0.45.3",
     "fastify": "5.12.5",
+    "file-type": "22.1.1",
     "mdast-util-from-markdown": "2.0.3",
     "nodemailer": "10.0.15",
     "pg": "8.23.0",
@@ -52,10 +60,7 @@
     "tar-stream": "2.2.0",
     "ulid": "2.4.0",
     "undici": "8.10.2",
-    "zod": "4.4.3",
-    "@fastify/http-proxy": "11.6.1",
-    "@types/pg": "8.23.1",
-    "@types/dockerode": "4.0.1"
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "22.20.1",

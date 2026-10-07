@@ -285,6 +285,30 @@ export const presets = phantomAgentSdk.table('presets', {
 
 export type PresetRow = typeof presets.$inferSelect;
 
+// Media (058): tracked files on S3-compatible storage. The row is the file;
+// the bucket holds its bytes at `key`. Owner is the organization (null =
+// the phantom admin's); `userId` is user space's to mean. media/Media.ts
+// is the one owner.
+export const media = phantomAgentSdk.table('media', {
+  id: text('id').primaryKey(),
+  organizationId: text('organization_id'),
+  userId: text('user_id'),
+  projectId: text('project_id'),
+  sessionId: text('session_id'),
+  name: text('name').notNull(),
+  mimeType: text('mime_type').notNull(),
+  size: bigint('size', { mode: 'number' }).notNull(),
+  status: text('status').notNull().default('uploading').$type<'uploading' | 'ready'>(),
+  endpoint: text('endpoint').notNull(),
+  bucket: text('bucket').notNull(),
+  key: text('key').notNull(),
+  uploadId: text('upload_id'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type MediaRow = typeof media.$inferSelect;
+
 // Token log (migrations 022, 023, 030): one entry per model call — agent
 // steps and one-shot helper calls alike. The one store for all spend;
 // LogTokens (logTokens.ts) is its one writer. `session_id` is deliberately

@@ -74,7 +74,7 @@ export interface SettingDefinition {
 /** The area a tool belongs to — a label a type may grant whole (`files`)
  *  or read-only (`files:read` = its non-mutating tools) instead of naming
  *  every tool. The SDK's tools never name an agent type. */
-export type ToolGroup = 'files' | 'tasks' | 'skills' | 'web' | 'secrets' | 'crons' | 'database' | 'board' | 'git' | 'notify';
+export type ToolGroup = 'files' | 'tasks' | 'skills' | 'web' | 'secrets' | 'crons' | 'database' | 'board' | 'git' | 'notify' | 'media';
 /** What a type is granted: a tool by name (`kanban_card_read`), a whole
  *  group (`files`), or a group's read-only tools (`files:read`). Each agent
  *  is custom; name exactly what it gets. */

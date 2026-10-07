@@ -1,5 +1,5 @@
 // The tool surface: every tool an agent can call, defined ONCE (one file per
-// area: files, board, crons, skills, web, secrets, database, git, notify) and
+// area: files, board, crons, skills, web, secrets, database, git, notify, media) and
 // served two ways from the same objects — GET /agents/:agent/tools?session=
 // publishes what an agent of that kind has on that session right now, and
 // POST /tools/:name runs one. A client builds its tools from the listing and
@@ -16,11 +16,12 @@ import { SECRET_TOOLS } from './secrets.js';
 import { DATABASE_TOOLS } from './database.js';
 import { NOTIFY_TOOLS } from './notify.js';
 import { GIT_TOOLS } from './git.js';
+import { MEDIA_TOOLS } from './media.js';
 
 /** The SDK's own tools. User space's join them through `registerTools`. */
 export const TOOLS: ToolDef[] = [
   ...FILE_TOOLS, ...SKILL_TOOLS, ...WEB_TOOLS, ...SECRET_TOOLS, ...CRON_TOOLS,
-  ...DATABASE_TOOLS, ...BOARD_TOOLS, ...NOTIFY_TOOLS, ...GIT_TOOLS,
+  ...DATABASE_TOOLS, ...BOARD_TOOLS, ...NOTIFY_TOOLS, ...GIT_TOOLS, ...MEDIA_TOOLS,
 ];
 
 export const toolByName = new Map(TOOLS.map((tool) => [tool.name, tool]));

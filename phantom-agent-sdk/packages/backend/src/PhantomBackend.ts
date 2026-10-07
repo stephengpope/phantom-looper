@@ -47,6 +47,7 @@ import { TelegramBot, type TelegramCommand } from './telegram/TelegramBot.js';
 import type { SettingDefinition, AgentTypeDefinition, ToolDefinition, RouteRegistrar, CardFieldsExtension } from './doors.js';
 import { Notifications } from './Notifications.js';
 import { Mailer } from './mail/Mailer.js';
+import { Media } from './media/Media.js';
 import { Identity, type IdentityOptions } from './identity/Identity.js';
 import { SessionTitler, type TitleWriter } from './agents/SessionTitler.js';
 import { HttpApi } from './api/HttpApi.js';
@@ -139,6 +140,8 @@ export class PhantomBackend {
   readonly notifications = new Notifications();
   /** Outbound mail (SMTP, the smtp_* settings). */
   readonly mailer: Mailer;
+  /** Tracked files on S3-compatible storage (the media_* settings). */
+  readonly media: Media;
   /** Who a caller is: the phantom admin's key, or a signed-in user (config.identity). */
   readonly identity: Identity;
   readonly sessionTitler: SessionTitler;
@@ -178,7 +181,8 @@ export class PhantomBackend {
     this.telegramSentMessages = built.telegramSentMessages; this.telegramHandledUpdates = built.telegramHandledUpdates;
     this.sessionTitler = new SessionTitler(this.sessions, config.writeTitle);
     this.mailer = new Mailer(this.settings);
-    this.identity = new Identity(this.database, this.mailer, this.settings, this.projects, config.identity, this.env.publicUrl, this.env.apiKey);
+    this.media = new Media(this.database.drizzle, this.settings);
+    this.identity = new Identity(this.database, this.mailer, this.settings, this.projects, this.media, config.identity, this.env.publicUrl, this.env.apiKey);
     this.telegramBot = new TelegramBot({ settings: this.settings, settingsEvents: this.settingsEvents, botState: this.telegramBotState,
       sentMessages: this.telegramSentMessages, handledUpdates: this.telegramHandledUpdates, paths: this.paths,
       publicAddress: process.env.PHANTOM_BACKEND_ADDRESS, commandMenu: config.telegramCommandMenu });
@@ -291,6 +295,7 @@ export class PhantomBackend {
       await idleBackupSweep(this.projects, this.sessions, this.git.sync).catch((error) => log.error({ err: errStr(error) }, 'idle backup sweep threw'));
       const idleMs = await this.settings.resolve<number>('container_idle_ms').catch(() => 30 * 60_000);
       await this.sessionContainers.reap(Number(idleMs), (idleMs) => this.idleContainerWorkspaces(idleMs)).catch((error) => log.error({ err: errStr(error) }, 'container reap threw'));
+      await this.media.sweep().catch((error) => log.error({ err: errStr(error) }, 'media sweep threw'));
       await pressureSweep(this.settings, this.projects, this.sessions, this.paths, this.images, this.sessionContainers, this.git.sync, (ids) => this.busyWorkspaces(ids))
         .catch((error) => log.error({ err: errStr(error) }, 'pressure sweep threw'));
       return Number(await this.settings.resolve<number>('maintenance_interval_ms').catch(() => 60_000));

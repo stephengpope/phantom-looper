@@ -14,7 +14,7 @@ export const appAgentTypes: AgentTypeDefinition[] = [
     // Writes code in its own checkout. Everything.
     name: 'coding',
     workspace: 'own',
-    tools: ['bash', 'task_list', 'task_wait', 'task_kill', 'read', 'write', 'edit', 'ls', 'find', 'grep', 'skill_list', 'skill_load', 'skill_manage', 'web_search', 'web_fetch', 'secret_list', 'secret_get', 'cron_list', 'cron_create', 'cron_update', 'cron_remove', 'database_query', 'kanban_card_read', 'send_message'],
+    tools: ['bash', 'task_list', 'task_wait', 'task_kill', 'read', 'write', 'edit', 'ls', 'find', 'grep', 'skill_list', 'skill_load', 'skill_manage', 'web_search', 'web_fetch', 'secret_list', 'secret_get', 'cron_list', 'cron_create', 'cron_update', 'cron_remove', 'database_query', 'kanban_card_read', 'send_message', 'media'],
     listed: 'always',
     settings: {
       provider: { description: "The coding agent's LLM provider. Its key is set on /keys. Nothing runs until one is chosen. Per project: override on the project — set its provider first, then its model.", overridableAt: SHARED },
@@ -35,7 +35,7 @@ export const appAgentTypes: AgentTypeDefinition[] = [
     name: 'assistant',
     modelFallsBackTo: 'coding',
     workspace: 'borrow',
-    tools: ['task_list', 'task_wait', 'read', 'ls', 'find', 'grep', 'web_search', 'web_fetch', 'cron_list', 'cron_create', 'cron_update', 'cron_remove', 'kanban_card_read', 'kanban_card_list', 'kanban_card_create', 'kanban_card_update', 'kanban_card_items', 'kanban_card_auto_plan', 'kanban_card_auto_build', 'kanban_card_pin', 'kanban_card_move', 'kanban_card_history', 'git_auto_push', 'git_auto_pull'],
+    tools: ['task_list', 'task_wait', 'read', 'ls', 'find', 'grep', 'web_search', 'web_fetch', 'cron_list', 'cron_create', 'cron_update', 'cron_remove', 'kanban_card_read', 'kanban_card_list', 'kanban_card_create', 'kanban_card_update', 'kanban_card_items', 'kanban_card_auto_plan', 'kanban_card_auto_build', 'kanban_card_pin', 'kanban_card_move', 'kanban_card_history', 'git_auto_push', 'git_auto_pull', 'media'],
     listed: 'never',
     settings: {
       provider: { description: "The AI provider the Assistant answers on, on its key from /keys. Empty = the coding agent's provider." },

@@ -1,9 +1,8 @@
-# Multi-user: database roles, mail, sign-in — and what is left
+# Multi-user: database roles, mail, sign-in
 
-Designed and built 2026-10-05 (three commits: roles, mail, sign-in — each
-proven on the live compose stack). All of it is the SDK's; an app turns
-sign-in on. Media (database-backed files) is a later plan and is not in
-this one.
+Built 2026-10-05–06, shipped in v0.1.89. All of it is the SDK's; an app
+turns sign-in on. phantom-looper does not use it yet — that, and what is
+not built, is in `docs/v1-plan.md` → What is left.
 
 ## The model
 
@@ -143,6 +142,8 @@ identity: {
 phantom-looper turns it on when `AUTH_SECRET` is set (`AUTH_TRUSTED_ORIGINS`
 comma-separated); nothing in it uses it yet.
 
+`invitationUrl` was replaced by the invitation mail template (step 7).
+
 **Bootstrap:** the phantom admin makes the first user with
 `POST /api/identity/users {email, name}` and gets their link with
 `POST /api/identity/magic-link {email}` — handed back, not mailed, so
@@ -211,7 +212,7 @@ Exported: `Mailer`, `MailerError`, `Identity`,
 
 Six steps, each its own commit. Step 3 was proven on the live stack
 (the chain, the refusals, the 404, the cli's view). Steps 4–8 were proven
-2026-10-07 on the branch's backend (tsx, a fresh Postgres 16, Mailpit;
+2026-10-06 on the branch's backend (tsx, a fresh Postgres 16, Mailpit;
 password sign-in on): every proof listed under each passed — 40 checks —
 except GitHub/Google sign-in, which needs a real OAuth app. The proof
 found six faults, fixed and noted under their steps. What was built differs
@@ -429,8 +430,9 @@ identity: {
 own template). Absent, the SDK's default text; `Mail` is `Mailer.send`'s
 shape, so a template is a pure function the app can test alone.
 
-**Proof.** phantom-looper supplies one template; the mail carries it; the
-other three are the defaults.
+**Proof.** A test config supplied one template; the mail carried it; the
+other three were the defaults. phantom-looper itself supplies none
+(`phantom-backend/config.ts`).
 
 ### 8. Client SDK
 

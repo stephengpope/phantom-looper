@@ -16,6 +16,7 @@ import { PhantomError } from './errors.js';
 import { withRetry as retryingFetch, type RetryPolicy } from './model/retry.js';
 import { SDK_VERSION } from './sdkVersion.js';
 import { Identity, credentialHeaders, type Caller } from './identity.js';
+import { Media } from './media.js';
 
 /** What a client carries: the phantom admin's key (every SDK route), a user's
  *  session token (a sign-in's `set-auth-token`), or a Better Auth API key. */
@@ -96,6 +97,8 @@ export class BackendClient {
   #credential: Credential;
   /** Sign-in: who am I, and Better Auth's client. */
   readonly identity: Identity;
+  /** Tracked files on the backend's S3-compatible storage. */
+  readonly media: Media;
   readonly #fetch: typeof fetch;
   readonly #retrying: typeof fetch;
   /** The lockstep check, made once per connection on the first request;
@@ -116,6 +119,7 @@ export class BackendClient {
       onSessionToken: (sessionToken) => { this.#credential = { sessionToken }; },
       me: () => this.call<Caller>('GET', '/identity/me'),
     });
+    this.media = new Media(this);
   }
 
   /** The same connection with a retry rule — the Agent's, from its handlers. */
@@ -152,30 +156,44 @@ export class BackendClient {
    *  identity, the session when the call is on behalf of one, and
    *  content-type ONLY with a body (Fastify 400s a bodyless request that
    *  claims application/json). */
-  #headers(opts: { sessionId?: string; body?: boolean }): Record<string, string> {
+  #headers(opts: { sessionId?: string; contentType?: string }): Record<string, string> {
     return {
       ...credentialHeaders(this.#credential),
       [CLIENT_HEADER]: this.clientId,
       ...(this.actor ? { [ACTOR_HEADER]: this.actor } : {}),
       ...(opts.sessionId ? { [SESSION_HEADER]: opts.sessionId } : {}),
-      ...(opts.body ? { 'content-type': 'application/json' } : {}),
+      ...(opts.contentType ? { 'content-type': opts.contentType } : {}),
     };
   }
 
   /** One request, after the lockstep check (`connecting` IS the check's
-   *  own request). Only transport failures throw. */
-  async #request(method: string, path: string, body: unknown, opts: CallOptions, connecting = false): Promise<Response> {
+   *  own request). A body is JSON unless it comes as `raw` bytes with
+   *  their own content type. Only transport failures throw. */
+  async #request(method: string, path: string, body: unknown, opts: CallOptions, connecting = false,
+    raw?: { body: BodyInit; contentType: string }): Promise<Response> {
     if (!connecting) await this.connect();
-    const fetchWith = opts.retry === false ? this.#fetch : this.#retrying;
+    // A streamed body is sent once: never retried.
+    const fetchWith = opts.retry === false || raw ? this.#fetch : this.#retrying;
+    const contentType = raw ? raw.contentType : body !== undefined ? 'application/json' : undefined;
     try {
       // A path under /app is user space's, at the API's origin; any other is the SDK's, under the API root.
       return await fetchWith(path.startsWith('/app/') ? new URL(path, this.url).toString() : `${this.url}${path}`, {
-        method, headers: this.#headers({ sessionId: opts.sessionId, body: body !== undefined }),
-        body: body === undefined ? undefined : JSON.stringify(body), signal: opts.signal,
-      });
+        method, headers: this.#headers({ sessionId: opts.sessionId, contentType }),
+        body: raw ? raw.body : body === undefined ? undefined : JSON.stringify(body), signal: opts.signal,
+        // fetch sends a stream body only when told it is one-way.
+        ...(raw && raw.body instanceof ReadableStream ? { duplex: 'half' } : {}),
+      } as RequestInit);
     } catch (error) {
       throw new PhantomError('unreachable', `${method} ${path}: ${(error as Error).message}`, { cause: error, retryable: true });
     }
+  }
+
+  /** One API call whose body is bytes (a file), unwrapped like `call`. */
+  async callBytes<T = unknown>(method: string, path: string, body: BodyInit, contentType: string, opts: CallOptions = {}): Promise<T> {
+    const response = await this.#request(method, path, undefined, opts, false, { body, contentType });
+    const j = await this.#envelope<T>(response, method, path);
+    if (!j.ok) throw refused(j.error, response.status, `${method} ${path}`);
+    return j.data;
   }
 
   /** One API call, unwrapped. Resolves with `data`; throws a PhantomError —

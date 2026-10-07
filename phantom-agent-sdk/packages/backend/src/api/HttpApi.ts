@@ -38,6 +38,7 @@ import { dbUiRoutes } from './routes/dbUi.js';
 import { gitRoutes } from './routes/git.js';
 import { telegramRoutes, TELEGRAM_WEBHOOK_PATH } from './routes/telegram.js';
 import { mailRoutes } from './routes/mail.js';
+import { mediaRoutes } from './routes/media.js';
 import { identityRoutes } from './routes/identity.js';
 import { IDENTITY_PATH, IdentityError } from '../identity/Identity.js';
 import { SDK_VERSION } from '../sdkVersion.js';
@@ -124,6 +125,7 @@ export class HttpApi {
       gitRoutes(api, backend);
       telegramRoutes(api, backend);
       mailRoutes(api, backend);
+      mediaRoutes(api, backend);
       identityRoutes(api, backend);
     }, { prefix: '/api' });
 

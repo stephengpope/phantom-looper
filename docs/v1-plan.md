@@ -8,9 +8,10 @@ gives a server the services, tables, API and the doors to extend them. The SDK
 supports; user space (`phantom-looper/`, `phantom-backend/`, `phantom-cli/`)
 is one implementation of that support.
 
-This is the only plan. Done work is not listed; `git log` is the record. The
-rules below stand for every step that remains; `docs/multi-user.md` holds
-multi-user, built and proven.
+This is the only plan and the only list of what is left. Done work is not
+listed; `git log` is the record. The rules below stand for every step that
+remains. The other docs describe what is built: `multi-user.md`,
+`message-queues.md`, `instant-sync.md`, `auto-pull.md`.
 
 ## Words
 
@@ -78,8 +79,12 @@ without the stack; nothing heavier runs on the dev box.
 
 ## What is left
 
-Engineering of the conversion is complete; `git log` is the record. These
-remain, in the order they unblock each other.
+Engineering of the conversion is complete; `git log` is the record. Multi-user
+shipped in v0.1.89 (the SDK's part — `docs/multi-user.md`; migrations 055–057
+proven on a copy of the live database 2026-10-06). Everything still open, in
+every doc, is here.
+
+### Next, in the order they unblock each other
 
 1. **A hands-on pass of the cli** (the builder): launch, relaunch — the
    Assistant comes back with its conversation; `/new assistant`; a model
@@ -87,7 +92,8 @@ remain, in the order they unblock each other.
    with a real model; the screens have not been looked at.
 2. **Compaction, put back** — parked by the builder's word. Backend-side, on
    the record, under the hold; the existing settings drive it; `/compact`
-   works again. The record already has a line type for the prompt moving
+   works again (today it answers "not built yet", `phantom-cli/window.ts`).
+   The record already has a line type for the prompt moving
    (`system_prompt_rebuilt`); compaction's mark is the same shape of line.
 3. **The Telegram Assistant forgets on every backend restart** — waits on 2.
    `TelegramAssistantBot.ensureAssistantSession` keeps the session id in
@@ -100,11 +106,32 @@ remain, in the order they unblock each other.
    server's GitHub token with `workflow` scope so a release edit pushes; an
    SDK migration dropping the columns the app's migrations 001 and 002 took
    over (another app's fresh install still creates them).
-5. **Multi-user's last two proofs** — built and proven (`docs/multi-user.md`).
-   Before the release that carries it: boot it once on a copy of the
-   production database (the role split and migrations 055–057 run there
-   on that boot), and a GitHub sign-in with a test OAuth app. Media
-   (database-backed files) is its own plan after it.
+
+### Not planned yet — each needs its plan written first
+
+5. **Multi-user in phantom-looper.** The SDK has users, organizations,
+   ownership and row-level security; this app uses none of it. Its only
+   identity call is `appRoutes`' `identity.require` (phantom admin only).
+   No `/app` route serves an end user, the cli cannot sign in, every
+   project has no organization, no mail template is supplied.
+6. **Media** — built 2026-10-06 (`media/Media.ts`, migration 058, the
+   `media_*` settings, `/api/media`, the `media` tools, the client's
+   `backend.media`); proven on SeaweedFS (`phantom-agent-sdk/scripts/media-check.mjs`).
+   Not yet: a real provider (R2, B2), the agent tools in a live session,
+   phantom-looper's own `/app` routes for its users.
+
+### Open, not scheduled
+
+- **GitHub / Google sign-in never run.** Built, off unless
+  `AUTH_GITHUB_CLIENT_ID/SECRET` are set; proving it needs a test OAuth app.
+  Google is in the SDK; the app does not turn it on.
+- **Multi-user, not built:** 2FA and passkeys (Better Auth plugins, when
+  asked); per-project membership inside an organization; sharing a session
+  with a teammate; the SDK's own `/api` routes stay unfiltered (phantom
+  admin only).
+- **Instant sync** (`docs/instant-sync.md` → Known): a waiting note is in
+  memory, lost on a server restart; a container that dies on its own keeps
+  its watcher until a tool call recreates it.
 
 ## Names — keep
 
