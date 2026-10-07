@@ -184,7 +184,11 @@ export function VoicePanel({ width, voice, expanded, offset = 0, onMeasure, onDe
       <Text>
         <Text bold>voice</Text>
         <Text dimColor>{' · '}</Text>
-        <Text color={COLOR[voice.status]}>{LABEL[voice.status]}</Text>
+        {/* The mic off means nothing is heard: not "listening", whatever the
+            pipeline's own state — that read as on when it was not. */}
+        {voice.micMuted && (voice.status === 'listening' || voice.status === 'hearing')
+          ? <Text color="gray">not listening</Text>
+          : <Text color={COLOR[voice.status]}>{LABEL[voice.status]}</Text>}
       </Text>
       {voice.detail
         ? <Box>
