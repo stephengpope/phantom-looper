@@ -12,10 +12,9 @@ import { Database, type Drizzle, type Transaction } from './Database.js';
 import { projects, type ProjectRow } from '../storage/schema.js';
 import { DEFAULT_COLUMNS } from '@phantom-agent-sdk/client';
 import type { Settings } from './Settings.js';
-import { projectScope } from '../lib/scopes.js';
+import { projectScope, scopeOf } from '../lib/scopes.js';
 import type { SettingsEvents } from '../agents/SettingsEvents.js';
 import type { AgentDatabases } from './AgentDatabases.js';
-import { scopeOf } from '../lib/scopes.js';
 
 export { DEFAULT_COLUMNS };
 
@@ -74,6 +73,11 @@ export class Projects {
   async list(caller?: Caller): Promise<ProjectRow[]> {
     return this.database.select().from(projects).where(this.visibleTo(caller))
       .orderBy(sql`lower(coalesce(${projects.displayName}, ${projects.name}))`, projects.id);
+  }
+
+  /** An organization's projects — what stands in the way of deleting it. */
+  async ofOrganization(organizationId: string): Promise<ProjectRow[]> {
+    return this.database.select().from(projects).where(eq(projects.organizationId, organizationId));
   }
 
   /** The card number prefix ("PHA"): the `card_prefix` setting at this

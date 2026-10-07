@@ -12,6 +12,7 @@
 // Who may see which project, session or row is NOT decided here — user space
 // gates its /app routes with `require` and writes its own rules.
 import { betterAuth } from 'better-auth';
+import { APIError } from 'better-auth/api';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { fromNodeHeaders } from 'better-auth/node';
 import { magicLink, organization, bearer, admin } from 'better-auth/plugins';
@@ -22,6 +23,7 @@ import { randomUUID } from 'node:crypto';
 import type { Database } from '../storage/Database.js';
 import type { Mail, Mailer } from '../mail/Mailer.js';
 import type { Settings } from '../storage/Settings.js';
+import type { Projects } from '../storage/Projects.js';
 import { organizationScope, userScope } from '../lib/scopes.js';
 import { user, session, account, verification, organization as organizationTable, member, invitation, apikey,
   type UserRow, type OrganizationRow } from '../storage/schema.js';
@@ -105,6 +107,8 @@ interface AuthDeps {
   mailer: Mailer;
   /** A deleted organization or user takes its settings layer with it. */
   settings: Settings;
+  /** An organization that owns projects is not deleted. */
+  projects: Projects;
   options: IdentityOptions;
   baseUrl: string;
   /** Magic links asked for by the phantom admin (bootstrap, no mail): the
@@ -116,7 +120,7 @@ interface AuthDeps {
  *  (a personal organization at creation, an active one at sign-in), the
  *  plugins. A function, so the instance's type — which carries every
  *  plugin's endpoints — can be named (`BetterAuth`). */
-function buildAuth({ database, mailer, settings, options, baseUrl, captures }: AuthDeps) {
+function buildAuth({ database, mailer, settings, projects, options, baseUrl, captures }: AuthDeps) {
   const mail: MailTemplates = { ...DEFAULT_MAIL, ...options.mail };
   const send = (to: string, body: MailBody) => mailer.send({ to, ...body });
   const signIn = options.signIn ?? {};
@@ -192,7 +196,16 @@ function buildAuth({ database, mailer, settings, options, baseUrl, captures }: A
         },
       }),
       organization({
-        organizationHooks: { afterDeleteOrganization: async ({ organization: gone }) => { await settings.deleteScope(organizationScope(gone.id)); } },
+        organizationHooks: {
+          // Its projects are not the organization's to take with it: they are
+          // deleted or moved first (056 restricts it too).
+          beforeDeleteOrganization: async ({ organization: going }) => {
+            const owned = await projects.ofOrganization(going.id);
+            if (owned.length) throw APIError.from('CONFLICT', { code: 'ORGANIZATION_HAS_PROJECTS',
+              message: `${going.name} still owns ${owned.map((project) => `${project.owner}/${project.name}`).join(', ')}: delete or move them first` });
+          },
+          afterDeleteOrganization: async ({ organization: gone }) => { await settings.deleteScope(organizationScope(gone.id)); },
+        },
         sendInvitationEmail: async (data) => {
           // An invitee without an account gets one — invite-only sign-in needs
           // the user to exist before the link works.
@@ -228,6 +241,7 @@ export class Identity {
     private readonly database: Database,
     mailer: Mailer,
     settings: Settings,
+    projects: Projects,
     options: IdentityOptions | undefined,
     /** The backend's public address (`https://host`): where the links point. */
     readonly baseUrl: string,
@@ -237,7 +251,7 @@ export class Identity {
     this.trustedOrigins = options?.trustedOrigins ?? [];
     if (!options) return;
     if (options.secret.length < 32) throw new Error('identity.secret must be at least 32 characters (openssl rand -hex 24)');
-    this.#auth = buildAuth({ database, mailer, settings, options, baseUrl, captures: this.#captures });
+    this.#auth = buildAuth({ database, mailer, settings, projects, options, baseUrl, captures: this.#captures });
   }
 
   get #on(): BetterAuth {
