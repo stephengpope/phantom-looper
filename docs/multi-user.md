@@ -126,7 +126,8 @@ other SDK table.
 - `bearer`: the session token as `Authorization: Bearer` for a cli or a
   script (`set-auth-token` on sign-in). `admin`: `role`, `banned`; list /
   ban / set role. `apiKey`: `x-api-key`, a long-lived key resolving to its
-  user. `openAPI`: `/api/auth/reference`.
+  user; made with `metadata: { organizationId }` it acts in that
+  organization (else the user's first).
 
 **Config door** (`PhantomBackendConfig.identity`; absent = off: no
 `/api/auth` route, nothing written):
@@ -209,10 +210,12 @@ Exported: `Mailer`, `MailerError`, `Identity`,
 ## Part 2 — built 2026-10-05
 
 Six steps, each its own commit. Step 3 was proven on the live stack
-(the chain, the refusals, the 404, the cli's view); 4–8 typecheck across
-the SDK, the app and the cli and were not run live — the proofs listed
-under each are what to run. What was built differs from the plan where
-noted.
+(the chain, the refusals, the 404, the cli's view). Steps 4–8 were proven
+2026-10-07 on the branch's backend (tsx, a fresh Postgres 16, Mailpit;
+password sign-in on): every proof listed under each passed — 40 checks —
+except GitHub/Google sign-in, which needs a real OAuth app. The proof
+found six faults, fixed and noted under their steps. What was built differs
+from the plan where noted.
 
 ### 3. Settings per organization and per user
 
@@ -273,10 +276,21 @@ the cli's settings screen is unchanged; deleting O deletes its rows.
 `Projects.list(caller?)` / `get(id, caller?)` and `NewProject.organizationId`.
 
 **What.** `projects.organization_id` (nullable → the phantom admin's, which is
-every project today; FK to `identity.organization`, `on delete set null`
-— a deleted organization's projects become the phantom admin's, never
-vanish). `unique nulls not distinct (organization_id, owner, name)`
-replaces `unique (owner, name)`: two organizations may register one repo.
+every project today; FK to `identity.organization`, `on delete restrict`).
+`unique nulls not distinct (organization_id, owner, name)` replaces
+`unique (owner, name)`: two organizations may register one repo.
+
+*Fixed in the proof:* the FK was `on delete set null` — a deleted
+organization's projects became the phantom admin's. Where the phantom admin
+(or another deleted organization) already had that repo, the unique refused
+it and the delete was a 500: the organization could never go. Now an
+organization that owns projects is not deleted — Identity's
+`beforeDeleteOrganization` refuses it by name (409
+`ORGANIZATION_HAS_PROJECTS`, via `Projects.ofOrganization`), the FK
+restricts it beneath. A project never vanishes and never changes hands
+unasked. Also: drizzle 0.39+ wraps the driver's error, so
+`Database.isUniqueViolation` read no code and "already a project" (and a
+duplicate cron or preset name) was a 500 — it reads the cause now.
 
 **Trace.** User space's `/app` route: `caller = identity.require(req,
 { users: true })` → `projects.list(caller)` / `projects.get(id, caller)`
@@ -296,10 +310,14 @@ routes stay phantom admin-only and unfiltered — the phantom admin sees everyth
 `create(row & { organizationId? })`; `Caller` accepted by the two.
 `scopeOf(project)` (step 3) now carries the organization.
 
-**Proof.** User A's project is 404 to user B through an `/app` route and
-listed to the phantom admin; a tool in A's session cannot name B's project;
-the same repo registered by both organizations; deleting A's organization
-leaves the project, owner null.
+**Proof.** User A's project is invisible to user B (`get`, `list`) and
+listed to the phantom admin; the same repo registered by both
+organizations, twice in one refused, the phantom admin's own still unique;
+deleting an organization that owns a project is refused by name and the
+project untouched; once the project is gone the delete goes through and
+takes the organization's settings layer with it. A tool cannot name another
+organization's project by construction: every tool's project is its
+session's (`ToolCtx.project`).
 
 ### 5. Row-level security
 
@@ -372,11 +390,19 @@ change anyway. The client SDK (step 8) carries the three.
 **Changes.** `IdentityOptions.signIn`; four `Mailer` sends (step 7's door
 names them); `account` rows start being written.
 
+*Fixed in the proof:* a user the phantom admin or an invitation made is
+unverified, and `requireEmailVerification` refused their password sign-in
+for ever — the reset did not verify them and nothing sent the verification
+mail. Now completing a reset verifies the address (`onPasswordReset`: the
+link went there and was followed, as a magic link proves it), and an
+unverified password sign-in sends the verification link
+(`emailVerification.sendOnSignIn`).
+
 **Proof.** The phantom admin creates a user; they request a reset (mail), set a
-password, sign in with it, `me` answers; a stranger's `sign-up/email` is
-refused; a GitHub login for an invited email links and signs in (a test
-OAuth app); one for a stranger is refused; unverified + password → refused
-until the verification link is clicked.
+password, sign in with it, `me` answers; a wrong password is refused; a
+stranger's `sign-up/email` is refused; a stranger's magic link answers 200
+and sends nothing. Not run: GitHub/Google (a test OAuth app is needed —
+the flow is Better Auth's own, configured with `disableSignUp`).
 
 ### 7. Mail wording is user space's
 
@@ -432,6 +458,16 @@ backend.identity.verify(token)                      // the link's token → sess
 each (`Authorization: Bearer` for the phantom admin's key and a session token,
 `x-api-key` for a Better Auth key). Paths under `/app/` go to the origin
 (already); `/api/auth/*` is the Better Auth client's own base.
+
+*Fixed in the proof:* three faults kept a client on a user's credential
+from working at all. `GET /health` — the version check every client makes
+first — admitted only the phantom admin's key: it now takes any caller
+Identity knows. The Better Auth client got its headers as a function,
+which better-fetch ignores: no credential rode its calls (`onRequest` sets
+them now). And Node's fetch marks every request `sec-fetch-mode: cors`
+with no Origin, which Better Auth refuses on a sign-in
+(`MISSING_OR_NULL_ORIGIN`): the client sends the backend's own origin,
+always trusted (a browser ignores it and sends its real one).
 
 **Proof.** A script on the client SDK: `verify(link)` → `me()` → a user;
 `auth.organization.create` → `me()` names it; `auth.apiKey.create` → a

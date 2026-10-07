@@ -9,8 +9,8 @@ supports; user space (`phantom-looper/`, `phantom-backend/`, `phantom-cli/`)
 is one implementation of that support.
 
 This is the only plan. Done work is not listed; `git log` is the record. The
-rules below stand for every step that remains; `docs/multi-user.md` holds the
-next piece of work, designed and not started.
+rules below stand for every step that remains; `docs/multi-user.md` holds
+multi-user, built and proven.
 
 ## Words
 
@@ -93,19 +93,18 @@ remain, in the order they unblock each other.
    `TelegramAssistantBot.ensureAssistantSession` keeps the session id in
    process memory. A conversation that only ever resumes needs compaction
    (or a `/new assistant` door) before it may resume for ever.
-4. **The backend SDK's lint to zero** — on a machine with memory, or CI; the
-   type-checked pass is killed on the dev box. The last report before it
-   died counted 41 needless assertions and 19 `no-base-to-string`.
-5. **Ship** (the builder's accounts): a real-Telegram proof (a bot token
+4. **Ship** (the builder's accounts): a real-Telegram proof (a bot token
    stored as a secret); `phantom-agent-sdk/` lifted out as its own repo; the
    npm org; `scripts/release.sh X.Y.Z` then `npm publish` of both packages;
    phantom-looper on the published versions with its own version line; the
    server's GitHub token with `workflow` scope so a release edit pushes; an
    SDK migration dropping the columns the app's migrations 001 and 002 took
    over (another app's fresh install still creates them).
-6. **Multi-user** — database roles, mail, Better Auth sign-in with
-   organizations: built, `docs/multi-user.md`. Media (database-backed
-   files) is its own plan after it.
+5. **Multi-user's last two proofs** — built and proven (`docs/multi-user.md`).
+   Before the release that carries it: boot it once on a copy of the
+   production database (the role split and migrations 055–057 run there
+   on that boot), and a GitHub sign-in with a test OAuth app. Media
+   (database-backed files) is its own plan after it.
 
 ## Names — keep
 
