@@ -95,7 +95,7 @@ export function App({
   autoPull?: (sessionId: string, onStep?: (label: string) => void) =>
     Promise<{ result: string; reason?: string; arrived?: string[]; files?: string[]; sha?: string; pushed?: boolean }>;
   /** This window's session-lock id (index.tsx mints one per process and sends
-   *  it as x-phantom-looper-client). The launcher uses it so this window's own held
+   *  it as x-phantom-client). The launcher uses it so this window's own held
    *  sessions do not read "in use". Empty in tests. */
   clientId?: string;
   /** How often the open /resume and /tasks lists refresh. Session state on

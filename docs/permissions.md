@@ -115,36 +115,49 @@ client SDK's `BackendOptions.actingFor` sends the two headers.
 - **`agent_media`** (off by default): the media tools and the media
   system-prompt block, where storage is configured.
 
-## Also fixed
+## Also
 
-- Pre-cloned checkouts are keyed by project, never shared across
+- **Crons belong to the server SDK:** the table, the tools and the
+  scheduler. The app hands it the agent a prompt cron runs
+  (`PhantomBackendConfig.crons.agent`). Each run acts for the cron's owner
+  (its project's organization and the user who made it), so the owner's
+  keys come first.
+- **Who did what is a user id the database stamps.** That covers
+  `user_id` everywhere, plus `sessions.last_turn_user_id` (060).
+  `started_by` / `last_turn_by` say only what kind of driver it was (a
+  person, or an automation's name). A user's own request is always a
+  person; only the server key names an automation.
+- **Deleting a user** follows GitHub's rule. It is refused while their
+  personal organization owns projects or files, or while they are the
+  only owner of a shared organization. Once they go, their personal
+  organization and both settings layers go with them.
+- **Headers:** `x-phantom-client`, `x-phantom-session`, `x-phantom-actor`
+  (were `x-phantom-looper-*`).
+- **`container_docker` is off by default.** A privileged container can
+  reach the host. Turn it on only on a server whose agents are all yours.
+- **Pre-cloned checkouts** are keyed by project, never shared across
   organizations by repo name.
-- The git auto-push and auto-pull tools stay inside the session's
+- **The git auto-push and auto-pull tools** stay inside the session's
   organization.
-- phantom-looper's 001/002 no longer alter SDK tables. SDK 059 drops those
-  columns, and the leftover empty `phantom_looper` schema that a fresh
-  install made.
+- **phantom-looper's 001/002** no longer alter SDK tables. SDK 059 drops
+  those columns, and the leftover empty `phantom_looper` schema that a
+  fresh install made.
 
 ## Proven
 
 - Throwaway Postgres, with the real migrations and a copy of the real
   local data. Fresh install, upgrade, and a second boot.
-- The real backend over HTTP: 42 scenario checks. Covered:
+- The real backend over HTTP: 50 scenario checks. Covered:
   - isolation, the one refusal, and the BYOK cascade
   - acting-for, user API keys, and operator-only routes
   - token usage stamping and the live feed
   - removed members
+  - cron ownership and the person-only actor rule
+  - the three user-deletion cases
 - Fixed settings, against the real Settings code.
 
 ## Not yet
 
-- Crons' scheduler lives in the app; it moves into the SDK.
 - Telegram: one bot per server. Per user (user id ↔ chat id) is next.
-- Deleting a user leaves their personal organization (and its projects)
-  behind.
-- `container_docker` still defaults on (privileged). An operator running
-  other people's agents should fix it off. Docker for agents needs a safe
-  runtime (Sysbox, rootless).
-- The SDK's headers are still named `x-phantom-looper-*`.
-- `started_by` / `last_turn_by` / `locked_by` are free-text labels beside
-  `user_id`.
+- Docker for agents on a shared server needs a safe runtime (Sysbox,
+  rootless) before `container_docker` can be offered to organizations.

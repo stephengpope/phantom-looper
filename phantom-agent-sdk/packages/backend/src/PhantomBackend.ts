@@ -48,6 +48,7 @@ import type { SettingDefinition, AgentTypeDefinition, ToolDefinition, RouteRegis
 import { Notifications } from './Notifications.js';
 import { Mailer } from './mail/Mailer.js';
 import { Media } from './media/Media.js';
+import { CronScheduler, CRON_STARTER, type CronAgent } from './crons/CronScheduler.js';
 import { Identity, type IdentityOptions } from './identity/Identity.js';
 import { SessionTitler, type TitleWriter } from './agents/SessionTitler.js';
 import { HttpApi } from './api/HttpApi.js';
@@ -69,6 +70,11 @@ export interface PhantomBackendConfig {
   migrations?: { dir: string; ledgerSchema: string };
   /** Settings user space adds: resolved and served alongside the SDK's own. */
   settings?: SettingDefinition[];
+  /** Crons: give the agent a prompt cron runs (an Agent subclass, e.g. the
+   *  app's coding agent) and the SDK schedules and runs every project's
+   *  crons, each as its owner. Absent: the cron rows and tools exist, and
+   *  nothing fires. */
+  crons?: { agent: CronAgent };
   /** Values the app fixes, by key (the SDK's settings or its own): each wins
    *  over every layer for every caller, and any write to it is refused with
    *  403 access denied. Read them from a file or the environment — the SDK
@@ -172,6 +178,7 @@ export class PhantomBackend {
   readonly telegramBot: TelegramBot;
 
   #stopped = false;
+  #cronScheduler: CronScheduler | undefined;
   #loops: Promise<void>[] = [];
 
   private constructor(readonly config: PhantomBackendConfig, built: Built) {
@@ -244,7 +251,7 @@ export class PhantomBackend {
     const images = new Images(docker);
     const media = new Media(database.drizzle, settings);
     const sessions = new Sessions(database.drizzle, settings, agentConfig, agentTypes, projects, workspaces,
-      { backgroundStarters: config.backgroundStarters ?? [], events: sessionEvents, prompt: { paths, docker, media } });
+      { backgroundStarters: [...(config.backgroundStarters ?? []), ...(config.crons ? [CRON_STARTER] : [])], events: sessionEvents, prompt: { paths, docker, media } });
     // A settings write reaches every session nothing has been said to yet: its row takes the settings' model.
     settingsEvents.subscribe(() => {
       sessions.followModelSettings().catch((error) => log.warn({ err: errStr(error) }, 'newborn sessions could not follow the model settings'));
@@ -340,6 +347,7 @@ export class PhantomBackend {
     await this.#httpApi.listen(this.env.port);
     this.git.start();
     this.#startLoops();
+    if (this.config.crons) { this.#cronScheduler = new CronScheduler(this, this.config.crons.agent); this.#cronScheduler.start(); }
     await this.config.onStart?.(this);
     log.info({ port: this.env.port, version: this.version }, 'backend up');
   }
@@ -348,6 +356,7 @@ export class PhantomBackend {
    *  loops halt, the watcher ends, the database closes. */
   async stop(): Promise<void> {
     this.#stopped = true;
+    this.#cronScheduler?.stop();
     await this.config.onStop?.(this);
     await this.git.stop();
     await this.#httpApi.close();

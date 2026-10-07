@@ -15,7 +15,6 @@ import { appRoutes } from './api/appRoutes.js';
 import { Looper } from './looper/Looper.js';
 import { CardAutomation } from './looper/CardAutomation.js';
 import { boardTools } from './looper/boardTools.js';
-import { CronScheduler } from './crons/CronScheduler.js';
 import { TelegramAssistantBot } from './telegram/TelegramAssistantBot.js';
 import { SessionDigest } from './notifications/digest.js';
 import { menuFor } from './telegram/commands.js';
@@ -26,7 +25,6 @@ async function main() {
   // What this app's engines hold while the backend runs; set in onStart,
   // read by the routes and stopped in onStop.
   let looper: Looper;
-  let cronScheduler: CronScheduler;
   let telegram: TelegramAssistantBot;
   let digest: SessionDigest;
   let deployment: Deployment;
@@ -44,6 +42,9 @@ async function main() {
       board: (project) => cardAutomation().defaults(project),
     },
     tools: boardTools,
+    // Crons: the SDK schedules and runs them, each as its owner; a prompt
+    // cron runs the coding agent, as a cli window would.
+    crons: { agent: CodingAgent },
     // The bot's command menu — the global default, and the authorized chat's
     // for its mode (the bot's own state; the bot exists before the SDK
     // registers the webhook, which onStart's reconcile is what asks for).
@@ -97,11 +98,6 @@ async function main() {
       looper = new Looper(backend, cardAutomation());
       looper.start();
 
-      // The cron scheduler — the same shape. One croner job per cron row fires
-      // at its time; registrations follow the table's writes and the settings'.
-      cronScheduler = new CronScheduler(backend);
-      cronScheduler.start();
-
       // The Telegram bot's behaviour — a client of this app like the looper.
       // Reconcile at boot re-registers a stale webhook and pushes the command menu.
       telegram = new TelegramAssistantBot(backend, deployment, () => looper.runningCount());
@@ -138,7 +134,6 @@ async function main() {
       // the update) before the API force-closes every connection.
       updateShutdown();
       looper?.stop();
-      cronScheduler?.stop();
       digest?.stop();
     },
   };

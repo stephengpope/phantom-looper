@@ -31,7 +31,7 @@ const STATUS: Record<string, number> = {
 };
 
 const clientOf = (req: { headers: Record<string, unknown> }): string => {
-  const header = req.headers['x-phantom-looper-client'];
+  const header = req.headers['x-phantom-client'];
   return typeof header === 'string' ? header : '';
 };
 

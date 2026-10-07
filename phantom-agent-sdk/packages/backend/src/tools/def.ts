@@ -14,7 +14,7 @@ export interface ToolCtx {
   app: PhantomBackend;
   session: SessionRow;
   project: ProjectRow;
-  /** The caller's x-phantom-looper-client — rides card writes as the writer. */
+  /** The caller's x-phantom-client — rides card writes as the writer. */
   client: string;
   signal: AbortSignal;
   files(): Promise<FileTools>;

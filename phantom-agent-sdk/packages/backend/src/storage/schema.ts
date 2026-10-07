@@ -142,6 +142,10 @@ export const sessions = phantomAgentSdk.table('sessions', {
   // Who drove the last turn — the turn's declared actor (052). Null until a
   // turn ends. The list's background rule reads this before started_by.
   lastTurnBy: text('last_turn_by'),
+  // WHICH user: who started it (059, the database stamps it) and who drove
+  // the last turn (060). started_by / last_turn_by say what KIND of driver.
+  userId: text('user_id'),
+  lastTurnUserId: text('last_turn_user_id'),
   // The model-written title — what the session is building, best-effort,
   // written AFTER a transcript save (sessionTitle.ts), never in it. turnCount
   // is the clock that paces it: +1 per transcript save; naming fires at turn
@@ -351,6 +355,9 @@ export const tokenUsage = phantomAgentSdk.table('token_usage', {
 export const crons = phantomAgentSdk.table('crons', {
   id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
   project_id: text('project_id').notNull(),
+  // Who made it (059): a run is theirs — the scheduler acts for them, so
+  // their keys come first. Null = the operator, or a user since deleted.
+  user_id: text('user_id'),
   name: text('name').notNull(),   // the handle — unique per project, case-insensitively
   schedule: text('schedule').notNull(),
   once: boolean('once').notNull(),

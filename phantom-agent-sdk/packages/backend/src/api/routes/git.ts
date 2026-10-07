@@ -22,7 +22,7 @@ export function gitRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // the git client). Handed to auto-push/auto-pull as `by`, so the session
   // feed's echo rule skips the window that is already drawing this stream.
   const clientOf = (req: { headers: Record<string, unknown> }): string => {
-    const header = req.headers['x-phantom-looper-client'];
+    const header = req.headers['x-phantom-client'];
     return typeof header === 'string' ? header : '';
   };
 

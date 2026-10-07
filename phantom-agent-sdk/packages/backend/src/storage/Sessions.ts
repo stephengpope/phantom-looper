@@ -45,6 +45,7 @@ import { repoDir, type Paths } from '../lib/paths.js';
 import type Docker from 'dockerode';
 import type { SessionEvents } from '../agents/SessionEvents.js';
 import { scopeOf } from '../lib/scopes.js';
+import { acting } from '../lib/acting.js';
 
 const log = logger('sessions');
 
@@ -740,7 +741,8 @@ export class Sessions {
     this.#linesAtTurnStart.delete(session.id);
     const wrote = linesAtStart === undefined || session.transcriptLines !== linesAtStart;
     const [saved] = await this.database.update(sessions)
-      .set({ lastTurnBy: actor ?? sqlRaw`${sessions.lastTurnBy}`, ...(wrote ? { turnCount: sqlRaw`${sessions.turnCount} + 1` } : {}) })
+      .set({ ...(actor ? { lastTurnBy: actor, lastTurnUserId: acting()?.userId ?? null } : {}),
+        ...(wrote ? { turnCount: sqlRaw`${sessions.turnCount} + 1` } : {}) })
       .where(eq(sessions.id, session.id))
       .returning({ name: sessions.name, turnCount: sessions.turnCount, nameManual: sessions.nameManual });
     if (session.workspaceId) await this.workspaces.touch(session.workspaceId);

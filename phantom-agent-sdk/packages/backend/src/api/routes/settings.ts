@@ -23,7 +23,7 @@ import { ownLayers } from '../ownLayers.js';
 import type { PhantomBackend } from '../../PhantomBackend.js';
 
 const writerOf = (req: FastifyRequest): string | undefined =>
-  String(req.headers['x-phantom-looper-client'] ?? '') || undefined;
+  String(req.headers['x-phantom-client'] ?? '') || undefined;
 
 const TAG = { tags: ['settings'] };
 const scopeQuery = { type: 'object', properties: {

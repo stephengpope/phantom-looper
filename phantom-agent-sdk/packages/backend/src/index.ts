@@ -107,3 +107,4 @@ export { Deployment, DeploymentError, LOG_MAX_BYTES, LOG_MAX_TAIL, LOG_SERVICES,
 export { UpgradeChecker, type UpgradeCheckerDeps } from './upgrade/UpgradeChecker.js';
 export { subscribe as subscribeUpdate, isRunning as updateRunning, shutdown as updateShutdown, startUpdate, HELPER_NAME, type UpdateDeps, type UpdateListener } from './upgrade/updateTask.js';
 export { SDK_VERSION } from './sdkVersion.js';
+export { CronScheduler, CRON_STARTER, CRON_CLIENT_ID, type CronAgent } from './crons/CronScheduler.js';

@@ -13,11 +13,11 @@ const TAG = { tags: ['kanban'] };
 // Cards are addressed by number everywhere a person or an agent names one
 // (PHA-7 is card 7); the row id is storage's handle.
 const cardNumberParam = { type: 'integer', description: 'card number — PHA-7 is card 7' };
-// Who wrote: the x-phantom-looper-client header every client sends (the
+// Who wrote: the x-phantom-client header every client sends (the
 // session routes' lock reads the same one). Rides each card event so a
 // listener can tell the supervisor's moves from a person's.
 const writerOf = (req: FastifyRequest): string | undefined => {
-  const header = req.headers['x-phantom-looper-client'];
+  const header = req.headers['x-phantom-client'];
   return typeof header === 'string' && header ? header : undefined;
 };
 
@@ -195,7 +195,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   app.get<{ Params: { id: string } }>(
     '/projects/:id/events', { schema: { ...TAG, summary: 'Board events stream',
       description: 'ND-JSON, open until the client hangs up: {event: card, card, from?, client?} on every create/update ' +
-        '(the full row; from = the status before an update, client = the writer\'s x-phantom-looper-client), ' +
+        '(the full row; from = the status before an update, client = the writer\'s x-phantom-client), ' +
         '{event: deleted, id} on a hard delete, {event: session, card, id, name} when a loop pairs a card with its ' +
         'coding session, {event: heartbeat} every 15 s. No replay — load the board on connect.',
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } } },

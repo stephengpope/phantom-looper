@@ -10,7 +10,6 @@ import type { PhantomBackendConfig } from '@phantom-agent-sdk/backend';
 import { appSettings } from './appSettings.js';
 import { appAgentTypes } from './appAgentTypes.js';
 import { LOOPER_STARTER } from './looper/Looper.js';
-import { CRON_STARTER } from './crons/CronScheduler.js';
 
 export const config: PhantomBackendConfig = {
   // This app's tables, in its schema, with their own ledger — run after the
@@ -20,7 +19,7 @@ export const config: PhantomBackendConfig = {
   settings: appSettings,
   agentTypes: appAgentTypes,
   // The engines that open sessions for themselves; a default list leaves those out.
-  backgroundStarters: [LOOPER_STARTER, CRON_STARTER],
+  backgroundStarters: [LOOPER_STARTER],
   // Sign-in (people, organizations, invitations, API keys — docs/multi-user.md)
   // is on when the phantom admin sets AUTH_SECRET; nothing in this app uses it yet.
   // Off by default: no route, nothing written.

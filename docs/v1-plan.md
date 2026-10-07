@@ -21,7 +21,7 @@ remains. The other docs describe what is built: `multi-user.md`,
 - **Session** — a conversation on a workspace, of one agent **type**. The
   SDK knows a type only by its registration. The three types — `coding`,
   `supervisor`, `assistant` — are this app's.
-- **Actor** — who a client acts for (`x-phantom-looper-actor`): a person when
+- **Actor** — who a client acts for (`x-phantom-actor`): a person when
   unsaid (`person`, the client SDK's one word), else an automation's name.
   Recorded as a session's `started_by` and `last_turn_by`.
 - **The record** — the session's transcript on the backend, typed lines.

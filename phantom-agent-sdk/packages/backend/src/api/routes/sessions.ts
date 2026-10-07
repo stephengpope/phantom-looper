@@ -60,18 +60,21 @@ const MAX_ATTACHMENT_BYTES = 64 * 1024 * 1024;
 
 
 
-// The session lock rides the x-phantom-looper-client header: an opaque id the client
+// The session lock rides the x-phantom-client header: an opaque id the client
 // invents for itself (the TUI mints one per window). Never in a body — the
 // same rule as the session header.
 export const clientOf = (req: FastifyRequest): string => {
-  const header = req.headers['x-phantom-looper-client'];
+  const header = req.headers['x-phantom-client'];
   return typeof header === 'string' ? header : '';
 };
-/** WHO the client acts for (x-phantom-looper-actor): an automation's own
- *  name, or a person when unsaid. What a session records as started_by and
- *  last_turn_by. */
+/** WHAT KIND of driver the client is (x-phantom-actor): an automation's
+ *  own name, or a person when unsaid. What a session records as started_by
+ *  and last_turn_by; WHICH user is the row's user_id / last_turn_user_id,
+ *  stamped from the request. Only the server key names an automation: a
+ *  user's own request is always a person, whatever its header says. */
 export const actorOf = (req: FastifyRequest): string => {
-  const header = req.headers['x-phantom-looper-actor'];
+  if (req.caller?.type === 'user') return PERSON;
+  const header = req.headers['x-phantom-actor'];
   return typeof header === 'string' && header ? header : PERSON;
 };
 
@@ -127,8 +130,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       'one that OWNS a workspace claims a pre-cloned pool directory (or clones) and checks out the session\'s branch — ' +
       'its own {prefix}/{id}, cut from the base branch, worked in and pushed back to, nothing pushed anywhere else; ' +
       'one that BORROWS reads another session\'s workspace (`workspace_session_id`, or none yet); one with no ' +
-      'workspace is a conversation alone. The returned id goes in the x-phantom-looper-session header on every tool call.\n\n' +
-      'The session records who opened it (`started_by`) from x-phantom-looper-actor — an automation\'s own name; ' +
+      'workspace is a conversation alone. The returned id goes in the x-phantom-session header on every tool call.\n\n' +
+      'The session records who opened it (`started_by`) from x-phantom-actor — an automation\'s own name; ' +
       'unsaid = a person. The app\'s background automations are left out of a default GET /sessions.\n\n' +
       'Pass `id` to RESTART an owning session that was destroyed. Destroying a session deletes its files and ' +
       'nothing else — the row keeps its id and its branch — so a restart re-clones, finds that branch on ' +
@@ -342,7 +345,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       bodyLimit: 64 * 1024 * 1024,
       schema: { ...TAG,
         summary: 'Append lines to a session\'s transcript',
-        description: 'Appends typed JSON lines to the record. The caller (x-phantom-looper-client) must hold the session. ' +
+        description: 'Appends typed JSON lines to the record. The caller (x-phantom-client) must hold the session. ' +
           '`after` is how many lines the caller believes the record holds: the append lands only if the server ' +
           'agrees — 409 transcript_conflict otherwise (someone else wrote; read the transcript again). `deliveryId` ' +
           'names this append: resending one that already landed answers {applied:false} and writes nothing.',
@@ -353,7 +356,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
             properties: { type: { type: 'string', enum: ['message', 'usage', 'interrupted', 'partial_message', 'system_prompt_rebuilt', 'compaction'] } } } } } } } },
     async (req, reply) => {
       const client = clientOf(req);
-      if (!client) return reply.code(400).send(err('missing_client', 'x-phantom-looper-client header required'));
+      if (!client) return reply.code(400).send(err('missing_client', 'x-phantom-client header required'));
       const session = await ctx.sessions.get(req.params.id);
       if (!session) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (session.lockedBy !== client) {
@@ -425,7 +428,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         'renew / release, {event:"session",agent?,planMode?,work?,name?,transcript_updated_at?} on state changes ' +
         'and as a snapshot on every connect, {event:"heartbeat"} every 15 s. Every turn streams here whoever runs it — the server ' +
         'publishes its own, a cli window relays the one it runs through POST /sessions/:id/events. ' +
-        'Events published under the reader\'s own x-phantom-looper-client are not sent back to it.',
+        'Events published under the reader\'s own x-phantom-client are not sent back to it.',
       params: idParam } },
     async (req, reply) => {
       const client = clientOf(req);
@@ -479,7 +482,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       schema: { ...TAG, summary: 'Publish turn events on a session',
         description: 'Relays events of a turn the caller runs onto GET /sessions/:id/events, in order: ' +
           '{event:"turn-start",agent,message}, {event:"part",part} per AI SDK stream part, {event:"turn-end"}, ' +
-          '{event:"error",message}. The caller (x-phantom-looper-client) must hold the session lock — 409 ' +
+          '{event:"error",message}. The caller (x-phantom-client) must hold the session lock — 409 ' +
           'otherwise. Tool results are capped like every other publisher\'s. Nothing is stored.',
         params: idParam,
         body: { type: 'object', required: ['events'], additionalProperties: false, properties: {
@@ -487,7 +490,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
             properties: { event: { type: 'string', enum: ['turn-start', 'part', 'turn-end', 'error'] } } } } } } } },
     async (req, reply) => {
       const client = clientOf(req);
-      if (!client) return reply.code(400).send(err('missing_client', 'x-phantom-looper-client header required'));
+      if (!client) return reply.code(400).send(err('missing_client', 'x-phantom-client header required'));
       const session = await ctx.sessions.get(req.params.id);
       if (!session) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (session.lockedBy !== client) {
@@ -738,7 +741,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   app.post<{ Params: { id: string }; Body: { type: string; label?: string; system_prompt_layout?: SystemPromptLayout } }>(
     '/sessions/:id/turn-start', { schema: { ...TAG,
       summary: 'Start a turn: hold the session and answer what it runs on',
-      description: 'Holds the session for x-phantom-looper-client (409 session_locked while someone else does), ' +
+      description: 'Holds the session for x-phantom-client (409 session_locked while someone else does), ' +
         'writes the session\'s waiting notes (a command exited, a sync landed) into the record, and answers the model ' +
         'config (provider, model, key, reasoning, maxSteps) and the tools an agent of `type` has on this ' +
         'session right now, plus the record\'s transcript_updated_at. With `system_prompt_layout`, the prompt\'s ' +
@@ -752,7 +755,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         system_prompt_layout: { ...SYSTEM_PROMPT_LAYOUT, description: 'The agent\'s layout: reassemble the volatile section from it before this turn.' } } } } },
     async (req, reply) => {
       const client = clientOf(req);
-      if (!client) return reply.code(400).send(err('missing_client', 'x-phantom-looper-client header required'));
+      if (!client) return reply.code(400).send(err('missing_client', 'x-phantom-client header required'));
       const session = await ctx.sessions.get(req.params.id);
       if (!session) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
       if (session.status !== 'active') return reply.code(410).send(err('session_destroyed', `session is ${session.status}`));
@@ -825,7 +828,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   app.post<{ Params: { id: string } }>(
     '/sessions/:id/turn-ended', { schema: { ...TAG,
       summary: 'A turn ended on a session',
-      description: 'Records who drove the turn (`last_turn_by`, from x-phantom-looper-actor — a person when unsaid; ' +
+      description: 'Records who drove the turn (`last_turn_by`, from x-phantom-actor — a person when unsaid; ' +
         'the git sync\'s conflict turn records nothing), ' +
         'bumps the turn count (leaving 0 freezes the row\'s model), touches last_used_at, names the session ' +
         'on the titler\'s cadence, and releases the hold turn-start took. 409 while another client holds the session.',

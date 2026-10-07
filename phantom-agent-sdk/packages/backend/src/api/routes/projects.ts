@@ -23,10 +23,10 @@ function publicProject(project: ProjectRow, hasCredential = false) {
 
 const TAG = { tags: ['projects'] };
 const idParam = { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] };
-// Who wrote: the x-phantom-looper-client header every client sends, so the
+// Who wrote: the x-phantom-client header every client sends, so the
 // writer's own window ignores the change echo.
 const writerOf = (req: FastifyRequest): string | undefined =>
-  String(req.headers['x-phantom-looper-client'] ?? '') || undefined;
+  String(req.headers['x-phantom-client'] ?? '') || undefined;
 
 export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // The stored github_token, checked against GitHub itself — what the /keys
