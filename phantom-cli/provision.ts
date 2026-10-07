@@ -246,7 +246,7 @@ export function apiFor(base: string, key: string, certificateAuthority?: string)
           ...(body === undefined ? {} : { 'content-type': 'application/json' }),
         },
         timeout: 15_000,
-        ...(certificateAuthority ? { certificateAuthority } : {}),
+        ...(certificateAuthority ? { ca: certificateAuthority } : {}),
       }, (res) => {
         let text = '';
         res.on('data', (chunk) => { text += chunk; });
@@ -280,7 +280,7 @@ export function streamFor(base: string, key: string, certificateAuthority?: stri
           authorization: `Bearer ${key}`,
           'content-type': 'application/json',
         },
-        ...(certificateAuthority ? { certificateAuthority } : {}),
+        ...(certificateAuthority ? { ca: certificateAuthority } : {}),
       }, (res) => {
         if (res.statusCode && res.statusCode >= 400) {
           let text = '';
@@ -325,7 +325,7 @@ export function verifyFromHere(url: string, key: string, certificateAuthority?: 
     try { base = new URL(url); } catch { return resolvePromise({ ok: false, reason: `not a URL: ${url}` }); }
     const req = (base.protocol === 'https:' ? httpsRequest : httpRequest)(
       new URL('/api/health', base),
-      { headers: { authorization: `Bearer ${key}` }, timeout: timeoutMs, ...(certificateAuthority ? { certificateAuthority } : {}) },
+      { headers: { authorization: `Bearer ${key}` }, timeout: timeoutMs, ...(certificateAuthority ? { ca: certificateAuthority } : {}) },
       (res) => {
         let body = '';
         res.on('data', (chunk) => { body += chunk; });
