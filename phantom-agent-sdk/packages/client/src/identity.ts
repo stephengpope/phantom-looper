@@ -45,7 +45,15 @@ export function makeAuthClient(deps: IdentityDeps) {
     plugins: [magicLinkClient(), organizationClient(), adminClient(), apiKeyClient()],
     fetchOptions: {
       customFetchImpl: deps.fetch,
-      headers: () => credentialHeaders(deps.credential()),
+      // Per request, so a session token kept by a sign-in rides the next call.
+      // The origin is the backend's own, always trusted: Node's fetch marks
+      // every request `sec-fetch-mode: cors` and sends no Origin, which Better
+      // Auth refuses on a sign-in (MISSING_OR_NULL_ORIGIN). A browser ignores
+      // this header and sends its real one.
+      onRequest: (context) => {
+        for (const [name, value] of Object.entries({ origin: deps.origin, ...credentialHeaders(deps.credential()) })) context.headers.set(name, value);
+        return context;
+      },
       onSuccess: (context) => {
         const token = context.response.headers.get('set-auth-token');
         if (token) deps.onSessionToken(token);

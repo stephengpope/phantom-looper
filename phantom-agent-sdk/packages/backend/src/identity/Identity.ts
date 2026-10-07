@@ -124,12 +124,13 @@ function buildAuth({ database, mailer, settings, options, baseUrl, captures }: A
   // the instance does not exist while they are declared: a promise the
   // instance fills once built. (A hook called from an endpoint has `ctx`;
   // one called from `internalAdapter` does not.)
-  // Only the two members the hooks use are typed: the instance's own context
+  // Only the members the hooks use are typed: the instance's own context
   // type is generic over its options and cannot be named before it exists.
   type Context = { adapter: { create: <T>(args: { model: string; data: Record<string, unknown> }) => Promise<T>;
     findOne: <T>(args: { model: string; where: { field: string; value: string }[] }) => Promise<T | null> };
     internalAdapter: { findUserByEmail: (email: string) => Promise<unknown>;
-      createUser: (fields: { email: string; name: string }, source: { method: string }) => Promise<unknown> } };
+      createUser: (fields: { email: string; name: string }, source: { method: string }) => Promise<unknown>;
+      updateUser: (id: string, fields: { emailVerified: boolean }) => Promise<unknown> } };
   let ready!: (context: Context) => void;
   const context = new Promise<Context>((resolve) => { ready = resolve; });
   const adapter = async () => (await context).adapter;
@@ -145,8 +146,16 @@ function buildAuth({ database, mailer, settings, options, baseUrl, captures }: A
       disableSignUp: true,
       requireEmailVerification: true,
       sendResetPassword: async ({ user: who, url }) => { await send(who.email, mail.passwordReset({ user: who, url })); },
+      // The reset link went to this address and was followed: the address is
+      // proven, as a clicked magic link proves it. An invited user's first
+      // password comes this way, so without it they could never sign in.
+      onPasswordReset: async ({ user: who }) => {
+        if (!who.emailVerified) await (await context).internalAdapter.updateUser(who.id, { emailVerified: true });
+      },
     },
     emailVerification: {
+      // An unverified address signing in with a password gets the link again.
+      sendOnSignIn: true,
       sendVerificationEmail: async ({ user: who, url }) => { await send(who.email, mail.verification({ user: who, url })); },
     },
     socialProviders: {
