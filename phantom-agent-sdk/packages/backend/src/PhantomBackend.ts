@@ -69,6 +69,11 @@ export interface PhantomBackendConfig {
   migrations?: { dir: string; ledgerSchema: string };
   /** Settings user space adds: resolved and served alongside the SDK's own. */
   settings?: SettingDefinition[];
+  /** Values the app fixes, by key (the SDK's settings or its own): each wins
+   *  over every layer for every caller, and any write to it is refused with
+   *  403 access denied. Read them from a file or the environment — the SDK
+   *  takes values, not a format. */
+  fixedSettings?: Record<string, unknown>;
   /** The agent types this backend runs. The SDK ships none. */
   agentTypes: AgentTypeDefinition[];
   /** The app's automations that open sessions for themselves (`started_by`
@@ -181,7 +186,7 @@ export class PhantomBackend {
     this.telegramSentMessages = built.telegramSentMessages; this.telegramHandledUpdates = built.telegramHandledUpdates;
     this.sessionTitler = new SessionTitler(this.sessions, config.writeTitle);
     this.mailer = new Mailer(this.settings);
-    this.media = new Media(this.database.drizzle, this.settings);
+    this.media = built.media;
     this.identity = new Identity(this.database, this.mailer, this.settings, this.projects, this.media, config.identity, this.env.publicUrl, this.env.apiKey);
     this.telegramBot = new TelegramBot({ settings: this.settings, settingsEvents: this.settingsEvents, botState: this.telegramBotState,
       sentMessages: this.telegramSentMessages, handledUpdates: this.telegramHandledUpdates, paths: this.paths,
@@ -223,10 +228,11 @@ export class PhantomBackend {
     agentTypes.register(config.agentTypes);
     registerTools(config.tools ?? []);
 
-    const settings = new Settings(database.drizzle, env.encryptionKey, modelCatalog, settingsEvents);
+    const settings = new Settings(database.drizzle, env.encryptionKey, modelCatalog, settingsEvents, database.system);
     for (const type of agentTypes.list()) settings.register(agentTypeSettings(type));
     settings.register(sdkSettings({ sessionImageTag: options.sessionImageTag ?? (/^v\d+\.\d+\.\d+/.test(APP_VERSION) ? APP_VERSION : 'latest') }));
     settings.register(config.settings ?? []);
+    settings.fix(config.fixedSettings ?? {});
     const agentConfig = new AgentConfig(settings, agentTypes, modelCatalog);
 
     const agentDatabases = new AgentDatabases(database.pool, database.url, env.encryptionKey);
@@ -236,8 +242,9 @@ export class PhantomBackend {
     const docker = makeDocker();
     // THE image puller/remover — every pull and removal in this process goes through it so they never overlap.
     const images = new Images(docker);
+    const media = new Media(database.drizzle, settings);
     const sessions = new Sessions(database.drizzle, settings, agentConfig, agentTypes, projects, workspaces,
-      { backgroundStarters: config.backgroundStarters ?? [], events: sessionEvents, prompt: { paths, docker } });
+      { backgroundStarters: config.backgroundStarters ?? [], events: sessionEvents, prompt: { paths, docker, media } });
     // A settings write reaches every session nothing has been said to yet: its row takes the settings' model.
     settingsEvents.subscribe(() => {
       sessions.followModelSettings().catch((error) => log.warn({ err: errStr(error) }, 'newborn sessions could not follow the model settings'));
@@ -262,7 +269,7 @@ export class PhantomBackend {
     });
 
     const backend: PhantomBackend = new PhantomBackend(config, {
-      env, paths, database, settings, projects, workspaces, sessions, cards, crons, presets, backgroundTasks, tokenLog, agentDatabases,
+      media, env, paths, database, settings, projects, workspaces, sessions, cards, crons, presets, backgroundTasks, tokenLog, agentDatabases,
       agentTypes, agentConfig, modelCatalog, sessionNotes, sessionEvents, boardEvents, settingsEvents, foregroundCommands,
       docker, images, sessionContainers, workspaceWatcher, telegramBotState, telegramSentMessages, telegramHandledUpdates,
     });
@@ -350,6 +357,7 @@ export class PhantomBackend {
 }
 
 interface Built {
+  media: Media;
   env: Env; paths: Paths; database: Database; settings: Settings; projects: Projects; workspaces: Workspaces; sessions: Sessions;
   cards: Cards; crons: Crons; presets: Presets; backgroundTasks: BackgroundTasks; tokenLog: TokenLog; agentDatabases: AgentDatabases;
   agentTypes: AgentTypes; agentConfig: AgentConfig; modelCatalog: ModelCatalog; sessionNotes: SessionNotes;

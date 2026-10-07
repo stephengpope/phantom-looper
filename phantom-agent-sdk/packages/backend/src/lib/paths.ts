@@ -27,10 +27,12 @@ export function repoDir(paths: Paths, sessionId: string): string {
   return path.join(sessionDir(paths, sessionId), 'repo');
 }
 
-/** Slot names carry their own metadata: which repo they serve, and — via the
+/** Slot names carry their own metadata: which PROJECT they serve (never just
+ *  the repo — two organizations' projects on one repo each clone with their
+ *  own token and never share a checkout), and — via the
  *  ULID — when they were stocked, so eviction needs no marker file. */
-export function slotPrefix(owner: string, name: string, branch: string): string {
-  return `${owner}__${name}__${branch}__`;
+export function slotPrefix(projectId: string, branch: string): string {
+  return `${projectId}__${branch}__`;
 }
 export function slotUlid(slotName: string): string {
   const i = slotName.lastIndexOf('__');

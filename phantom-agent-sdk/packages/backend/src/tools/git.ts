@@ -21,7 +21,8 @@ async function target(ctx: ToolCtx, a: Record<string, unknown>) {
   if (!session) throw refusal('session_not_found', `no session ${id}`);
   if (session.status !== 'active') throw refusal('session_destroyed', `session ${id} is ${session.status}`);
   const project = await ctx.app.projects.get(session.projectId);
-  if (!project) throw refusal('not_found', 'project vanished');
+  // Another organization's session is not there, whoever runs this agent.
+  if (!project || project.organizationId !== ctx.project.organizationId) throw refusal('session_not_found', `no session ${id}`);
   return { session, project };
 }
 

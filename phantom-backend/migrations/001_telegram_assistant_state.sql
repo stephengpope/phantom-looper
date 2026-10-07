@@ -5,12 +5,11 @@
 -- and the bot's name) for a table of the app's own. The pointers stay foreign
 -- keys, cleared on delete, as they were (SDK migration 031).
 --
--- The three columns are taken OUT of the SDK's table here, by the app: the
--- SDK's migrations run first at every boot, so a drop on the SDK's side
--- would run before this copy and lose the row. The app owns the fact; the
--- app's migration moves it. (An install of another app on the SDK keeps
--- three unused nullable columns from 012/031 until the SDK's own migrations
--- drop them.)
+-- Installs from before SDK migration 059 also copied the three columns out
+-- of the SDK's table here and dropped them. An app's migrations may no
+-- longer alter an SDK table (they run as app_migrator), so SDK 059 drops
+-- them itself; a fresh install has no row to copy (the app makes it on
+-- first read).
 
 create table phantom_looper.telegram_assistant_state (
   id                 integer primary key default 1 check (id = 1),
@@ -18,12 +17,3 @@ create table phantom_looper.telegram_assistant_state (
   active_session_id  text    references phantom_agent_sdk.sessions(id) on delete set null,
   active_project_id  text    references phantom_agent_sdk.projects(id) on delete set null
 );
-
-insert into phantom_looper.telegram_assistant_state (id, mode, active_session_id, active_project_id)
-  select id, mode, active_session_id, active_project_id
-    from phantom_agent_sdk.telegram_bot_state where id = 1;
-
-alter table phantom_agent_sdk.telegram_bot_state
-  drop column mode,
-  drop column active_session_id,
-  drop column active_project_id;

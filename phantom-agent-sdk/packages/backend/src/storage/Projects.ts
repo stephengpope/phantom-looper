@@ -33,8 +33,9 @@ export const columnsOf = (project: ProjectRow): string[] =>
 export interface NewProject {
   id: string; owner: string; name: string;
   displayName: string | null; baseBranch: string; branchPrefix: string;
-  /** The organization it belongs to; absent = the phantom admin's. */
-  organizationId?: string | null;
+  /** The organization it belongs to; absent = the acting caller's, or the
+   *  operator's (the column's default, 059). */
+  organizationId?: string;
 }
 
 /** A write the table refuses, with the API's error code already chosen. */
@@ -91,7 +92,7 @@ export class Projects {
     try {
       await this.database.insert(projects).values(row);
     } catch (error) {
-      if (Database.isUniqueViolation(error)) throw new ProjectError('already_registered', `${row.owner}/${row.name} is already a project${row.organizationId ? ' of this organization' : ''}`);
+      if (Database.isUniqueViolation(error)) throw new ProjectError('already_registered', `${row.owner}/${row.name} is already a project of this organization`);
       throw error;
     }
     this.events?.publish(projectScope(row.id), [], by);

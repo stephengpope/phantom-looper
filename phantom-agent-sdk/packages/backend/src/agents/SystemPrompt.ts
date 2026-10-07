@@ -16,7 +16,7 @@ import type Docker from 'dockerode';
 import type { SystemPromptLayout, SystemPromptEntry, StoredSystemPrompt } from '@phantom-agent-sdk/client/systemPrompt';
 import { SYSTEM_PROMPT_SECTIONS } from '@phantom-agent-sdk/client/systemPrompt';
 import { fill } from '@phantom-agent-sdk/client';
-import { SKILLS_LIST, SECRETS_LIST, GITHUB_TOKEN, AGENT_DATABASE, AGENT_DATABASE_SHARED, TIME_DATE } from '../prompt/serverBlocks.js';
+import { SKILLS_LIST, SECRETS_LIST, GITHUB_TOKEN, AGENT_DATABASE, AGENT_DATABASE_SHARED, MEDIA, TIME_DATE } from '../prompt/serverBlocks.js';
 import { scanSkills, mergeSkills, type SkillMeta } from '../skills/skills.js';
 import { Clock } from '../lib/clock.js';
 import { systemSkills } from '../runtime/SystemSkills.js';
@@ -33,6 +33,8 @@ export interface SystemPromptSource {
   checkout: string | null;
   settings: Settings;
   docker?: Docker;
+  /** Whether media storage is configured for an organization (Media.configured; absent in tests). */
+  media?: { configured(organizationId: string | null): Promise<boolean> };
 }
 
 export class SystemPromptError extends Error {
@@ -40,7 +42,7 @@ export class SystemPromptError extends Error {
 }
 
 /** The settings every block may read — resolved once per assembly. */
-const SETTINGS_READ = ['container_image', 'agent_git_credentials', 'agent_database', 'agent_database_shared',
+const SETTINGS_READ = ['container_image', 'agent_git_credentials', 'agent_database', 'agent_database_shared', 'agent_media',
   'agent_soul', 'agent_agents_md', 'timezone'] as const;
 type Resolved = Awaited<ReturnType<Settings['resolveMany']>> & Record<(typeof SETTINGS_READ)[number], unknown>;
 
@@ -102,6 +104,9 @@ export const SERVER_PROMPT_BLOCKS = {
   agent_database: (src: BlockSource): Promise<string> =>
     Promise.resolve(src.resolved.agent_database
       ? (src.resolved.agent_database_shared ? AGENT_DATABASE_SHARED : AGENT_DATABASE) : ''),
+
+  media: async (src: BlockSource): Promise<string> =>
+    src.resolved.agent_media && src.media && await src.media.configured(src.project.organizationId) ? MEDIA : '',
 } as const;
 
 export type ServerPromptBlockName = keyof typeof SERVER_PROMPT_BLOCKS;

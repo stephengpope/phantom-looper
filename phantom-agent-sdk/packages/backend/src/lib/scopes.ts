@@ -13,7 +13,12 @@ export type Layer = (typeof LAYERS)[number];
 /** The layers below global — where a definition may allow an override. */
 export type OverridableLayer = Exclude<Layer, 'global'>;
 
+import { acting } from './acting.js';
+
 export const GLOBAL = 'global';
+/** The server key's own organization (migration 059): what it owns when it
+ *  makes something without naming anyone. A real row, never null. */
+export const OPERATOR_ORGANIZATION = 'operator';
 export const organizationScope = (id: string) => `organization:${id}`;
 export const userScope = (id: string) => `user:${id}`;
 export const projectScope = (id: string) => `project:${id}`;
@@ -24,9 +29,20 @@ export const projectScope = (id: string) => `project:${id}`;
  *  organization, and a scope without it skips the organization's layer. */
 export interface SettingScope { organizationId?: string; userId?: string; projectId?: string }
 
-/** The scope for work in a project: its id and its organization's. */
-export const scopeOf = (project: { id: string; organizationId: string | null }): SettingScope =>
-  ({ projectId: project.id, ...(project.organizationId ? { organizationId: project.organizationId } : {}) });
+/** The scope for work in a project: its id, its organization's, and the
+ *  user the work is for when there is one (lib/acting.ts) — so a user's own
+ *  keys win over their organization's in everything they run. */
+export const scopeOf = (project: { id: string; organizationId: string }): SettingScope => {
+  const userId = acting()?.userId;
+  return { projectId: project.id, organizationId: project.organizationId, ...(userId ? { userId } : {}) };
+};
+
+/** The scope for work in no particular project: the acting organization
+ *  and user (lib/acting.ts); global only for the server key's own. */
+export const actingScope = (): SettingScope => {
+  const who = acting();
+  return who ? { organizationId: who.organizationId, ...(who.userId ? { userId: who.userId } : {}) } : {};
+};
 
 /** The scope names a SettingScope reads, by layer, in chain order. */
 export function scopeNames(scope: SettingScope): Partial<Record<Layer, string>> {

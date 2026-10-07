@@ -26,6 +26,7 @@ import type { Settings } from '../storage/Settings.js';
 import type { Projects } from '../storage/Projects.js';
 import type { Media } from '../media/Media.js';
 import { organizationScope, userScope } from '../lib/scopes.js';
+import type { Acting } from '../lib/acting.js';
 import { user, session, account, verification, organization as organizationTable, member, invitation, apikey,
   type UserRow, type OrganizationRow } from '../storage/schema.js';
 import { timingSafeEqualStr } from '../lib/crypto.js';
@@ -93,7 +94,9 @@ const DEFAULT_MAIL: MailTemplates = {
 export type OrganizationRole = 'owner' | 'admin' | 'member';
 
 /** Who is calling: the phantom admin (the API key) or a signed-in user, in the
- *  organization their session is active in (their first, when none is). */
+ *  organization their session is active in (an API key: the one it was made
+ *  for). Sign-in opens a session in the user's first organization; they
+ *  switch it explicitly. */
 export type Caller =
   | { type: 'phantom_admin' }
   | { type: 'user'; user: UserRow; organization: OrganizationRow; role: OrganizationRole };
@@ -141,7 +144,7 @@ function buildAuth({ database, mailer, settings, projects, media, options, baseU
   const context = new Promise<Context>((resolve) => { ready = resolve; });
   const adapter = async () => (await context).adapter;
   const auth = betterAuth({
-    database: drizzleAdapter(database.drizzle, { provider: 'pg',
+    database: drizzleAdapter(database.system, { provider: 'pg',
       schema: { user, session, account, verification, organization: organizationTable, member, invitation, apikey } }),
     secret: options.secret,
     baseURL: baseUrl,
@@ -290,14 +293,31 @@ export class Identity {
     // session does not — the key's own metadata.organizationId says, when
     // it was made for one. Neither: the user's first.
     const session = signedIn.session as { activeOrganizationId?: string | null; id: string };
-    const activeId = session.activeOrganizationId ?? (request.headers['x-api-key'] ? await this.#organizationOfKey(session.id) : null);
-    const memberships = await this.database.drizzle.select({ organization: organizationTable, role: member.role, user })
+    const activeId = request.headers['x-api-key'] ? await this.#organizationOfKey(session.id) : session.activeOrganizationId;
+    // No organization named, or one they are no longer a member of: nobody.
+    // Checked on every request, so a removed member loses access at once.
+    if (!activeId) return null;
+    return this.#member(signedIn.user.id, activeId);
+  }
+
+  /** The user as a member of this organization, or null when they are not one. */
+  async #member(userId: string, organizationId: string): Promise<Caller | null> {
+    const [membership] = await this.database.system.select({ organization: organizationTable, role: member.role, user })
       .from(member).innerJoin(organizationTable, eq(member.organizationId, organizationTable.id)).innerJoin(user, eq(user.id, member.userId))
-      .where(activeId ? and(eq(member.userId, signedIn.user.id), eq(member.organizationId, activeId)) : eq(member.userId, signedIn.user.id))
-      .limit(1);
-    const membership = memberships[0];
+      .where(and(eq(member.userId, userId), eq(member.organizationId, organizationId)));
     if (!membership) return null;
     return { type: 'user', user: membership.user, organization: membership.organization, role: membership.role as OrganizationRole };
+  }
+
+  /** The server key acting for someone: an organization, and optionally a
+   *  user who must be its member. Null when either does not hold. */
+  async actingFor(organizationId: string, userId?: string): Promise<Acting | null> {
+    if (userId) {
+      const caller = await this.#member(userId, organizationId);
+      return caller?.type === 'user' ? { organizationId, userId } : null;
+    }
+    const [row] = await this.database.system.select({ id: organizationTable.id }).from(organizationTable).where(eq(organizationTable.id, organizationId));
+    return row ? { organizationId, userId: null } : null;
   }
 
   /** The organization an API key was made for: the key's
@@ -305,7 +325,7 @@ export class Identity {
    *  key's id as its own (the plugin's doing), so one read — not a second
    *  verify, which would count against the key's rate limit twice. */
   async #organizationOfKey(keyId: string): Promise<string | null> {
-    const [row] = await this.database.drizzle.select({ metadata: apikey.metadata }).from(apikey).where(eq(apikey.id, keyId));
+    const [row] = await this.database.system.select({ metadata: apikey.metadata }).from(apikey).where(eq(apikey.id, keyId));
     if (!row?.metadata) return null;
     try {
       const metadata = JSON.parse(row.metadata) as { organizationId?: unknown };
@@ -325,13 +345,13 @@ export class Identity {
    *  its layer. Undefined when there is none, or identity is off. */
   async organization(id: string): Promise<OrganizationRow | undefined> {
     if (!this.#auth) return undefined;
-    return (await this.database.drizzle.select().from(organizationTable).where(eq(organizationTable.id, id)))[0];
+    return (await this.database.system.select().from(organizationTable).where(eq(organizationTable.id, id)))[0];
   }
 
   /** A user by id. Undefined when there is none, or identity is off. */
   async user(id: string): Promise<UserRow | undefined> {
     if (!this.#auth) return undefined;
-    return (await this.database.drizzle.select().from(user).where(eq(user.id, id)))[0];
+    return (await this.database.system.select().from(user).where(eq(user.id, id)))[0];
   }
 
   /** Bootstrap, the phantom admin's: a user with no mail involved. `email_taken`
@@ -341,7 +361,7 @@ export class Identity {
     if (await context.internalAdapter.findUserByEmail(fields.email)) throw new IdentityError('email_taken', `a user with email ${fields.email} exists`);
     const created = await context.internalAdapter.createUser({ email: fields.email, name: fields.name ?? fields.email }, { method: 'admin' });
     log.info({ email: fields.email }, 'user created by the phantom admin');
-    return (await this.database.drizzle.select().from(user).where(eq(user.id, created.id)))[0];
+    return (await this.database.system.select().from(user).where(eq(user.id, created.id)))[0];
   }
 
   /** Bootstrap, the phantom admin's: the magic link for `email`, handed back

@@ -5,31 +5,35 @@
 // boot's own, closed before anything serves):
 //
 //   superuser   Docker's bootstrap user (DATABASE_URL). Boot only: makes
-//               sure the two roles below exist with current passwords and
+//               sure the roles below exist with current passwords and
 //               grants, then hangs up. The database console connects as it.
-//   migrator    owns every schema and table; the only role that may create,
-//               alter or drop one. Each migration set runs on its own
-//               short-lived connection as it.
+//   migrator    owns the SDK's schemas (phantom_agent_sdk, identity) and
+//               everything in them; the only role that may create, alter
+//               or drop an SDK table or policy. The SDK's migrations run as it.
+//   app_migrator owns user space's schemas; the app's migrations run as it.
+//               It may read and reference the SDK's tables (joins, foreign
+//               keys, policies that join them) and never alter them.
 //   backend     the running process — SDK code and user space code, one
-//               pool. Reads and writes rows; creates and drops agent
-//               play-space databases and roles; cannot alter a table.
-//   authenticated  SQL handed to something that is not the backend's own
-//               code — a user's query, an agent's tool — run by `queryAs`
-//               inside a transaction that names the caller's organization
-//               and user; Postgres's row-level policies (migration 057) do
-//               the fencing. Rows only, through policies; no table owned.
+//               pool. Reads and writes rows past every policy (BYPASSRLS);
+//               creates and drops agent play-space databases and roles;
+//               cannot alter a table.
+//   authenticated  a user. Work done for one (lib/acting.ts) runs on the
+//               backend's pool switched to this role for each statement,
+//               naming the user's organization and user; the row-level
+//               policies decide every row. It reaches only the tables a
+//               migration grants it.
 //   project_<id> an agent's play space, everything inside its own database
 //               (AgentDatabases).
 //
-// The two passwords are derived from ENCRYPTION_KEY (lib/crypto
+// The passwords are derived from ENCRYPTION_KEY (lib/crypto
 // derivedPassword), the same way every play-space role's is: stored
 // nowhere, re-set on every boot.
 //
 // Migrations are plain SQL files applied in name order, each in its own
 // transaction, recorded in a ledger table. Two sets run at boot: the SDK's
-// (shipped in this package under migrations/) and the app's
-// (config.migrations), each with its own ledger, so the two never
-// interleave and the SDK's can ship on its own.
+// (shipped in this package under migrations/, as migrator) and the app's
+// (config.migrations, as app_migrator), each with its own ledger, so the
+// two never interleave and the SDK's can ship on its own.
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +44,7 @@ import { derivedPassword } from '../lib/crypto.js';
 import { logger } from '../lib/log.js';
 import { AGENT_TYPES, runStatements, type QueryOptions, type StatementResult } from './sqlRunner.js';
 import type { Caller } from '../identity/Identity.js';
+import { acting } from '../lib/acting.js';
 
 const log = logger('database');
 
@@ -54,7 +59,8 @@ export type Transaction = Parameters<Parameters<Drizzle['transaction']>[0]>[0];
  *  so the files already applied stay applied. */
 export interface MigrationSet { dir: string; ledgerSchema: string; ledgerMovedFrom?: string }
 
-/** The SDK's own migrations, shipped beside this package's src/dist. */
+/** The SDK's own migrations, shipped beside this package's src/dist. The
+ *  one set that runs as `migrator`; every other set runs as `app_migrator`. */
 export const SDK_MIGRATIONS: MigrationSet = {
   dir: path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'migrations'),
   ledgerSchema: 'phantom_agent_sdk',
@@ -64,8 +70,13 @@ export const SDK_MIGRATIONS: MigrationSet = {
 };
 
 export const MIGRATOR_ROLE = 'migrator';
+export const APP_MIGRATOR_ROLE = 'app_migrator';
 export const BACKEND_ROLE = 'backend';
 export const AUTHENTICATED_ROLE = 'authenticated';
+
+/** The SDK's schemas — the migrator's. Every other schema of ours is user
+ *  space's, the app_migrator's. */
+const SDK_SCHEMAS = ['phantom_agent_sdk', 'identity'];
 
 /** The transaction settings the policies read (migration 057). */
 export const ORGANIZATION_SETTING = 'phantom.organization_id';
@@ -80,10 +91,18 @@ const SYSTEM_SCHEMAS = ['pg_catalog', 'information_schema', 'pg_toast'];
 export class Database {
   private constructor(
     readonly pool: pg.Pool,
+    /** THE handle every table owner reads and writes through. Inside
+     *  `actAs` (lib/acting.ts) each statement runs as `authenticated` for
+     *  that organization and user; outside it, as `backend`. */
     readonly drizzle: Drizzle,
+    /** Always `backend`, whoever the work is for: Better Auth (it manages
+     *  identity itself and enforces its own rules) and the settings
+     *  cascade's reads (the global layer is no organization's row). */
+    readonly system: Drizzle,
     /** The `backend` role's connection string — what the pool is on. */
     readonly url: string,
     private readonly migratorUrl: string,
+    private readonly appMigratorUrl: string,
     private readonly authenticatedUrl: string,
   ) {}
 
@@ -94,26 +113,29 @@ export class Database {
    *  is migrated yet. */
   static async open(superuserUrl: string, encryptionKey: Buffer): Promise<Database> {
     const migratorUrl = withRole(superuserUrl, MIGRATOR_ROLE, derivedPassword(encryptionKey, `role:${MIGRATOR_ROLE}`));
+    const appMigratorUrl = withRole(superuserUrl, APP_MIGRATOR_ROLE, derivedPassword(encryptionKey, `role:${APP_MIGRATOR_ROLE}`));
     const backendUrl = withRole(superuserUrl, BACKEND_ROLE, derivedPassword(encryptionKey, `role:${BACKEND_ROLE}`));
     const authenticatedUrl = withRole(superuserUrl, AUTHENTICATED_ROLE, derivedPassword(encryptionKey, `role:${AUTHENTICATED_ROLE}`));
     const superuser = new pg.Client({ connectionString: superuserUrl });
     await superuser.connect();
     try {
-      await ensureRoles(superuser, { migrator: new URL(migratorUrl).password, backend: new URL(backendUrl).password,
-        authenticated: new URL(authenticatedUrl).password });
+      await ensureRoles(superuser, { migrator: new URL(migratorUrl).password, appMigrator: new URL(appMigratorUrl).password,
+        backend: new URL(backendUrl).password, authenticated: new URL(authenticatedUrl).password });
     } finally {
       await superuser.end();
     }
     const pool = new pg.Pool({ connectionString: backendUrl });
-    return new Database(pool, drizzle(pool, { schema }), backendUrl, migratorUrl, authenticatedUrl);
+    return new Database(pool, drizzle(actingPool(pool), { schema }), drizzle(pool, { schema }),
+      backendUrl, migratorUrl, appMigratorUrl, authenticatedUrl);
   }
 
   /** Apply every unapplied file of the set, in name order, each in its own
-   *  transaction, on one connection as `migrator` that closes after.
+   *  transaction, on one connection that closes after — as `migrator` for
+   *  the SDK's set, `app_migrator` for any other.
    *  `upTo` stops after the named file (inclusive) so a migration can be
    *  tried against the state that preceded it. */
   async migrate(set: MigrationSet, options: { upTo?: string } = {}): Promise<string[]> {
-    const client = new pg.Client({ connectionString: this.migratorUrl });
+    const client = new pg.Client({ connectionString: set === SDK_MIGRATIONS ? this.migratorUrl : this.appMigratorUrl });
     await client.connect();
     try {
       return await runMigrations(client, set, options);
@@ -166,6 +188,64 @@ export class Database {
   async close(): Promise<void> { await this.pool.end(); }
 }
 
+/** What switches a transaction to the user it works for: the role and the
+ *  two settings the policies read, all transaction-local (gone at commit or
+ *  rollback, so a pooled connection never carries them into the next use). */
+const ACT_AS = `select set_config('role', '${AUTHENTICATED_ROLE}', true), set_config('${ORGANIZATION_SETTING}', $1, true), set_config('${USER_SETTING}', $2, true)`;
+
+/** The backend's pool, made to run as the acting user (lib/acting.ts) when
+ *  there is one. A lone statement runs in its own short transaction; a
+ *  drizzle transaction is switched right after its BEGIN. No connection is
+ *  held between statements, so long work between them (a clone, a model
+ *  call) holds nothing. Outside `actAs`, the pool as it always was. */
+function actingPool(pool: pg.Pool): pg.Pool {
+  const switchTo = (client: pg.PoolClient, who: { organizationId: string; userId: string | null }) =>
+    client.query(ACT_AS, [who.organizationId, who.userId ?? '']);
+  return new Proxy(pool, {
+    get(target, property) {
+      if (property === 'query') {
+        return async (...args: Parameters<pg.Pool['query']>) => {
+          const who = acting();
+          if (!who) return (target.query as (...a: unknown[]) => unknown)(...args);
+          const client = await target.connect();
+          try {
+            await client.query('begin');
+            await switchTo(client, who);
+            const result = await (client.query as (...a: unknown[]) => unknown)(...args);
+            await client.query('commit');
+            return result;
+          } catch (error) {
+            await client.query('rollback').catch(() => {});
+            throw error;
+          } finally {
+            client.release();
+          }
+        };
+      }
+      if (property === 'connect') {
+        return async () => {
+          const client = await target.connect();
+          const who = acting();
+          if (!who) return client;
+          return new Proxy(client, {
+            get(inner, key) {
+              if (key !== 'query') { const value = Reflect.get(inner, key); return typeof value === 'function' ? value.bind(inner) : value; }
+              return async (...args: unknown[]) => {
+                const result = await (inner.query as (...a: unknown[]) => unknown)(...args);
+                const text = typeof args[0] === 'string' ? args[0] : (args[0] as { text?: string } | undefined)?.text;
+                if (/^\s*begin\b/i.test(text ?? '')) await switchTo(inner, who);
+                return result;
+              };
+            },
+          });
+        };
+      }
+      const value = Reflect.get(target, property);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
 /** The same server and database, another role. */
 function withRole(url: string, role: string, password: string): string {
   const parsed = new URL(url);
@@ -174,58 +254,96 @@ function withRole(url: string, role: string, password: string): string {
   return parsed.toString();
 }
 
-/** The two roles, their passwords, and what each may do — in the database
- *  the superuser connection is on. Everything here is a no-op the second
- *  time, except the password set (a rotated key). */
-async function ensureRoles(superuser: pg.Client, passwords: { migrator: string; backend: string; authenticated: string }): Promise<void> {
+/** The roles, their passwords, and what each may do — in the database the
+ *  superuser connection is on. Everything here is a no-op the second time,
+ *  except the password set (a rotated key). */
+async function ensureRoles(superuser: pg.Client, passwords: { migrator: string; appMigrator: string; backend: string; authenticated: string }): Promise<void> {
   const { rows: [{ datname }] } = await superuser.query<{ datname: string }>('select current_database() as datname');
   const database = quoteIdent(datname);
   const migrator = quoteIdent(MIGRATOR_ROLE);
+  const appMigrator = quoteIdent(APP_MIGRATOR_ROLE);
   const backend = quoteIdent(BACKEND_ROLE);
   const authenticated = quoteIdent(AUTHENTICATED_ROLE);
 
   const existing = new Set((await superuser.query<{ rolname: string }>(
-    'select rolname from pg_roles where rolname = any($1)', [[MIGRATOR_ROLE, BACKEND_ROLE, AUTHENTICATED_ROLE]])).rows.map((row) => row.rolname));
+    'select rolname from pg_roles where rolname = any($1)', [[MIGRATOR_ROLE, APP_MIGRATOR_ROLE, BACKEND_ROLE, AUTHENTICATED_ROLE]])).rows.map((row) => row.rolname));
   const upsertRole = async (name: string, quoted: string, password: string, attributes: string) => {
     if (existing.has(name)) await superuser.query(`alter role ${quoted} with ${attributes} password ${quoteLiteral(password)}`);
     else { await superuser.query(`create role ${quoted} login ${attributes} password ${quoteLiteral(password)}`); log.info({ role: name }, 'role created'); }
   };
   await upsertRole(MIGRATOR_ROLE, migrator, passwords.migrator, 'nosuperuser nocreatedb nocreaterole noinherit');
-  // bypassrls: the row-level policies (057) fence `authenticated`, never the backend's own reads and writes.
+  await upsertRole(APP_MIGRATOR_ROLE, appMigrator, passwords.appMigrator, 'nosuperuser nocreatedb nocreaterole noinherit');
+  // bypassrls: the row-level policies fence `authenticated`, never the backend's own reads and writes.
   await upsertRole(BACKEND_ROLE, backend, passwords.backend, 'nosuperuser createdb createrole noinherit bypassrls');
   await upsertRole(AUTHENTICATED_ROLE, authenticated, passwords.authenticated, 'nosuperuser nocreatedb nocreaterole noinherit nobypassrls');
+  // Work done for a user switches the backend's connection to `authenticated`
+  // for each statement (set_config('role', …, true)): the backend may become it.
+  await superuser.query(`grant ${authenticated} to ${backend}`);
 
-  // migrator: owns this database's schemas and everything in them, may
-  // make new ones. An install from before the split has them owned by the
-  // superuser — hand them over, table by table (sequences follow).
-  await superuser.query(`grant connect, create, temporary on database ${database} to ${migrator}`);
+  // Ownership: the SDK's schemas are the migrator's, every other schema of
+  // ours user space's (the app_migrator's) — and everything in each. An
+  // install from before has them owned by the superuser or the migrator:
+  // hand them over, table by table (sequences follow).
+  await superuser.query(`grant connect, create, temporary on database ${database} to ${migrator}, ${appMigrator}`);
   const { rows: schemas } = await superuser.query<{ nspname: string }>(
     `select nspname from pg_namespace where nspname <> all($1) and nspname not like 'pg_%'`, [SYSTEM_SCHEMAS]);
   for (const { nspname } of schemas) {
     const schemaName = quoteIdent(nspname);
-    if (nspname !== 'public') await superuser.query(`alter schema ${schemaName} owner to ${migrator}`);
+    // public holds no table of user space's: what is there (the ledger
+    // before 054) is the SDK's.
+    const ownerRole = SDK_SCHEMAS.includes(nspname) || nspname === 'public' ? MIGRATOR_ROLE : APP_MIGRATOR_ROLE;
+    const owner = quoteIdent(ownerRole);
+    if (nspname !== 'public') await superuser.query(`alter schema ${schemaName} owner to ${owner}`);
     const { rows: tables } = await superuser.query<{ relname: string }>(
       `select c.relname from pg_class c join pg_namespace n on n.oid = c.relnamespace
         where n.nspname = $1 and c.relkind in ('r', 'p', 'v', 'm') and c.relowner <> (select oid from pg_roles where rolname = $2)`,
-      [nspname, MIGRATOR_ROLE]);
-    for (const { relname } of tables) await superuser.query(`alter table ${schemaName}.${quoteIdent(relname)} owner to ${migrator}`);
+      [nspname, ownerRole]);
+    for (const { relname } of tables) await superuser.query(`alter table ${schemaName}.${quoteIdent(relname)} owner to ${owner}`);
     const { rows: functions } = await superuser.query<{ signature: string }>(
       `select p.oid::regprocedure::text as signature from pg_proc p join pg_namespace n on n.oid = p.pronamespace
         where n.nspname = $1 and p.proowner <> (select oid from pg_roles where rolname = $2)`,
-      [nspname, MIGRATOR_ROLE]);
-    for (const { signature } of functions) await superuser.query(`alter function ${signature} owner to ${migrator}`);
-    // backend and authenticated: the rows in every table that exists now …
-    // (authenticated's grants are the door; the policies decide which rows,
-    // and a table with none shows it nothing.)
+      [nspname, ownerRole]);
+    for (const { signature } of functions) await superuser.query(`alter function ${signature} owner to ${owner}`);
+    // backend: every row in every table that exists now. authenticated: the
+    // schema only — a table is reachable by a user when a migration grants it.
     await superuser.query(`grant usage on schema ${schemaName} to ${backend}, ${authenticated}`);
-    await superuser.query(`grant select, insert, update, delete on all tables in schema ${schemaName} to ${backend}, ${authenticated}`);
-    await superuser.query(`grant usage, select, update on all sequences in schema ${schemaName} to ${backend}, ${authenticated}`);
+    await superuser.query(`grant select, insert, update, delete on all tables in schema ${schemaName} to ${backend}`);
+    await superuser.query(`grant usage, select, update on all sequences in schema ${schemaName} to ${backend}`);
+    // app_migrator: the SDK's tables to read and reference, never to alter.
+    if (SDK_SCHEMAS.includes(nspname)) {
+      await superuser.query(`grant usage on schema ${schemaName} to ${appMigrator}`);
+      await superuser.query(`grant select, references on all tables in schema ${schemaName} to ${appMigrator}`);
+    }
   }
-  // … and in every table the migrator makes from now on, in any schema.
+  // Before SDK migration 059 every table in every schema was granted to
+  // authenticated. 059 revokes the SDK's; user space's schemas are not the
+  // migrator's to touch, so their one-time revoke is here, while 059 is
+  // still to run. (After it, an app's own grants are its migrations' and
+  // are left alone.)
+  const { rows: [{ found }] } = await superuser.query<{ found: boolean }>(
+    `select to_regclass('phantom_agent_sdk.schema_migrations') is not null as found`);
+  const pending = found && !(await superuser.query(
+    `select from phantom_agent_sdk.schema_migrations where name = '059_organization_and_owner_everywhere.sql'`)).rowCount;
+  if (pending) {
+    for (const { nspname } of schemas.filter(({ nspname }) => !SDK_SCHEMAS.includes(nspname) && nspname !== 'public')) {
+      await superuser.query(`revoke all on all tables in schema ${quoteIdent(nspname)} from ${authenticated}`);
+      await superuser.query(`revoke all on all sequences in schema ${quoteIdent(nspname)} from ${authenticated}`);
+    }
+  }
+  // … and every table either migrator makes from now on.
   await superuser.query(`grant connect on database ${database} to ${backend}, ${authenticated}`);
-  await superuser.query(`alter default privileges for role ${migrator} grant usage on schemas to ${backend}, ${authenticated}`);
-  await superuser.query(`alter default privileges for role ${migrator} grant select, insert, update, delete on tables to ${backend}, ${authenticated}`);
-  await superuser.query(`alter default privileges for role ${migrator} grant usage, select, update on sequences to ${backend}, ${authenticated}`);
+  for (const role of [migrator, appMigrator]) {
+    await superuser.query(`alter default privileges for role ${role} grant usage on schemas to ${backend}, ${authenticated}`);
+    await superuser.query(`alter default privileges for role ${role} grant select, insert, update, delete on tables to ${backend}`);
+    await superuser.query(`alter default privileges for role ${role} grant usage, select, update on sequences to ${backend}`);
+    // Before 059 every new table went to authenticated too.
+    await superuser.query(`alter default privileges for role ${role} revoke select, insert, update, delete on tables from ${authenticated}`);
+    await superuser.query(`alter default privileges for role ${role} revoke usage, select, update on sequences from ${authenticated}`);
+  }
+  // A fresh database has no SDK schema yet when this runs: the SDK's
+  // migrations make them after, so app_migrator's reach is a default too.
+  await superuser.query(`alter default privileges for role ${migrator} grant usage on schemas to ${appMigrator}`);
+  await superuser.query(`alter default privileges for role ${migrator} grant select, references on tables to ${appMigrator}`);
 
   // backend drops a play-space database `with (force)`: ending its open
   // connections takes pg_signal_backend. Play spaces made before the split

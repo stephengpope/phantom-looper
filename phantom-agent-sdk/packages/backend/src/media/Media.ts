@@ -29,7 +29,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { and, desc, eq, isNull, lt, type SQL } from 'drizzle-orm';
+import { and, desc, eq, lt, type SQL } from 'drizzle-orm';
 import {
   S3Client, HeadBucketCommand, HeadObjectCommand, GetObjectCommand, PutObjectCommand, DeleteObjectCommand,
   CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand, AbortMultipartUploadCommand,
@@ -44,6 +44,7 @@ import type { Drizzle } from '../storage/Database.js';
 import type { Settings } from '../storage/Settings.js';
 import { media, type MediaRow } from '../storage/schema.js';
 import { logger, errStr } from '../lib/log.js';
+import { OPERATOR_ORGANIZATION } from '../lib/scopes.js';
 
 export type { MediaRow };
 
@@ -54,7 +55,7 @@ export class MediaError extends Error {
     | 'not_uploading' | 'storage_changed' | 'storage_failed', message: string) { super(message); this.name = 'MediaError'; }
 }
 
-/** Who a file belongs to. `organizationId` null = the phantom admin's. */
+/** Who a file belongs to. `organizationId` null = the operator's (OPERATOR_ORGANIZATION). */
 export interface MediaOwner {
   organizationId: string | null;
   userId?: string | null;
@@ -120,8 +121,10 @@ export class Media {
       const bucketAt = (await this.settings.resolveWithSource('media_bucket', scope)).source;
       if (endpointAt !== 'organization' || bucketAt !== 'organization') return null;
     }
-    if (!values.media_endpoint || !values.media_bucket || !accessKeyId || !secretAccessKey) return null;
-    return { endpoint: String(values.media_endpoint), region: String(values.media_region || 'auto'), bucket: String(values.media_bucket), accessKeyId, secretAccessKey };
+    const text = (value: unknown) => (typeof value === 'string' ? value : '');
+    const endpoint = text(values.media_endpoint); const bucket = text(values.media_bucket);
+    if (!endpoint || !bucket || !accessKeyId || !secretAccessKey) return null;
+    return { endpoint, region: text(values.media_region) || 'auto', bucket, accessKeyId, secretAccessKey };
   }
 
   /** The storage a file already written lives in — the organization's or
@@ -186,18 +189,18 @@ export class Media {
 
   // ── reading rows ─────────────────────────────────────────────────────
 
-  /** One file. With `organizationId` given (null = the phantom admin's),
+  /** One file. With `organizationId` given (null = the operator's),
    *  another organization's file is not found. */
   async get(id: string, organizationId?: string | null): Promise<MediaRow> {
     const [row] = await this.database.select().from(media).where(eq(media.id, id));
-    if (!row || (organizationId !== undefined && row.organizationId !== organizationId)) throw new MediaError('not_found', `no media file ${id}`);
+    if (!row || (organizationId !== undefined && row.organizationId !== (organizationId ?? OPERATOR_ORGANIZATION))) throw new MediaError('not_found', `no media file ${id}`);
     return row;
   }
 
-  /** Ready files, newest first. Each filter given narrows; `organizationId` null = the phantom admin's. */
+  /** Ready files, newest first. Each filter given narrows; `organizationId` null = the operator's. */
   async list(filter: { organizationId?: string | null; projectId?: string; userId?: string; limit?: number } = {}): Promise<MediaRow[]> {
     const where: SQL[] = [eq(media.status, 'ready')];
-    if (filter.organizationId !== undefined) where.push(filter.organizationId === null ? isNull(media.organizationId) : eq(media.organizationId, filter.organizationId));
+    if (filter.organizationId !== undefined) where.push(eq(media.organizationId, filter.organizationId ?? OPERATOR_ORGANIZATION));
     if (filter.projectId) where.push(eq(media.projectId, filter.projectId));
     if (filter.userId) where.push(eq(media.userId, filter.userId));
     return this.database.select().from(media).where(and(...where)).orderBy(desc(media.createdAt)).limit(Math.min(filter.limit ?? 100, 1000));
@@ -354,9 +357,10 @@ export class Media {
     const id = newId();
     // The organization's namespace; the file's own id. The user's name for
     // it is in the row, never in the key.
-    const key = owner.organizationId ? `org/${owner.organizationId}/${id}` : `admin/${id}`;
+    const organizationId = owner.organizationId ?? OPERATOR_ORGANIZATION;
+    const key = `org/${organizationId}/${id}`;
     const [row] = await this.database.insert(media).values({
-      id, organizationId: owner.organizationId, userId: owner.userId ?? null, projectId: owner.projectId ?? null, sessionId: owner.sessionId ?? null,
+      id, organizationId, userId: owner.userId ?? null, projectId: owner.projectId ?? null, sessionId: owner.sessionId ?? null,
       name: trimmed, mimeType, size, endpoint: storage.endpoint, bucket: storage.bucket, key,
     }).returning();
     return row;
@@ -379,7 +383,7 @@ export class Media {
   async #limits(organizationId: string | null): Promise<{ maxBytes: number; allowed: string[] }> {
     const scope = organizationId ? { organizationId } : {};
     const values = await this.settings.resolveMany(['media_max_bytes', 'media_allowed_types'], scope);
-    return { maxBytes: Number(values.media_max_bytes), allowed: String(values.media_allowed_types ?? '').split(',').map((type) => type.trim().toLowerCase()).filter(Boolean) };
+    return { maxBytes: Number(values.media_max_bytes), allowed: (typeof values.media_allowed_types === 'string' ? values.media_allowed_types : '').split(',').map((type) => type.trim().toLowerCase()).filter(Boolean) };
   }
 
   // ── out ──────────────────────────────────────────────────────────────
@@ -395,7 +399,7 @@ export class Media {
       const scope = row.organizationId ? { organizationId: row.organizationId } : {};
       const { media_link_seconds: fallback, media_link_max_seconds: max } = await this.settings.resolveMany(['media_link_seconds', 'media_link_max_seconds'], scope);
       const seconds = options.seconds ?? Number(fallback);
-      if (!Number.isInteger(seconds) || seconds < 60 || seconds > Number(max)) throw new MediaError('invalid_args', `a link may last 60 to ${max} seconds`);
+      if (!Number.isInteger(seconds) || seconds < 60 || seconds > Number(max)) throw new MediaError('invalid_args', `a link may last 60 to ${Number(max)} seconds`);
       const cacheKey = `${row.id}\n${seconds}\n${row.updatedAt.getTime()}`;
       const cached = this.#links.get(cacheKey);
       if (cached && cached.expiresAt - Date.now() >= (seconds * 1000) / 2) {

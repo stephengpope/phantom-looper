@@ -37,6 +37,13 @@ export const AGENT_DATABASE = `You have your own PostgreSQL database for this pr
 
 export const AGENT_DATABASE_SHARED = `You have your own PostgreSQL database for this project. It persists across sessions and container restarts. You are its admin. The database_query tool runs SQL in it and should be your primary way of accessing it. The project's code can reach the same database should you need to write code that needs access: \`AGENT_DATABASE_URL\` in your environment is the connection string.`;
 
+// ═══ media ═══════════════════════════════════════════════════════════════════
+// Present only when agent_media is on for the project AND media storage is
+// configured for its organization — the same rule that offers the media
+// tools. Facts only.
+
+export const MEDIA = `This project's organization keeps tracked media files (videos, images, audio, documents) in storage. The media_list tool lists them. The media_link tool gives a short-lived link to one file. The media_download tool copies one into /workspace/scratch. The media_upload tool keeps a file from /workspace as a new media file.`;
+
 // ═══ time_date ═══════════════════════════════════════════════════════════════
 // {{date}} is today, in the builder's time zone (the `timezone` setting),
 // written once when the session starts.
