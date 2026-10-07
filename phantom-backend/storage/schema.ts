@@ -3,7 +3,7 @@
 // SDK's Database.migrate under config.migrations, after the SDK's own); this
 // file exists for typed queries. The SDK's tables are the SDK's
 // (phantom_agent_sdk, phantom-agent-sdk/packages/backend/src/storage/schema.ts).
-import { pgSchema, text, integer, bigint, boolean } from 'drizzle-orm/pg-core';
+import { pgSchema, text, bigint, boolean } from 'drizzle-orm/pg-core';
 
 export const phantomLooper = pgSchema('phantom_looper');
 
@@ -13,9 +13,8 @@ export const phantomLooper = pgSchema('phantom_looper');
 // pointers are foreign keys into the SDK's tables: a deleted session or
 // project clears them, so no reader guards against a phantom.
 // TelegramAssistantState (telegram/TelegramAssistantState.ts) is its one owner.
-export const telegramAssistantState = phantomLooper.table('telegram_assistant_state', {
-  id: integer('id').primaryKey().default(1),
-  // 'assistant' (home) | 'code' (messages run coding turns on activeSessionId).
+export const telegramChatState = phantomLooper.table('telegram_chat_state', {
+  chatId: bigint('chat_id', { mode: 'number' }).primaryKey(),
   mode: text('mode').notNull().default('assistant'),
   activeSessionId: text('active_session_id'),
   activeProjectId: text('active_project_id'),

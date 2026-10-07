@@ -13,6 +13,10 @@ import { connectFetch } from './connect.js';
 
 /** Telegram's ceiling for anything a bot uploads. Checked before the read, so
  *  an oversize send is reported as itself, not as a generic API failure. */
+
+/** Telegram's Bot API, or a self-hosted Bot API server (TELEGRAM_API_BASE). */
+const TELEGRAM_API_BASE = (process.env.TELEGRAM_API_BASE ?? 'https://api.telegram.org').replace(/\/$/, '');
+
 export const MAX_OUTBOUND_BYTES = 50 * 1024 * 1024;
 
 /** A header + message bubble: the header line, a blank line, the content.
@@ -72,7 +76,7 @@ export class TelegramApi {
   ) {}
 
   async call(method: string, body: Record<string, unknown> = {}): Promise<any> {
-    const url = `https://api.telegram.org/bot${this.token}/${method}`;
+    const url = `${TELEGRAM_API_BASE}/bot${this.token}/${method}`;
     for (let attempt = 0; attempt < 2; attempt++) {
       const res = await fetch(url, {
         method: 'POST',
@@ -197,7 +201,7 @@ export class TelegramApi {
   async downloadFile(fileId: string): Promise<Buffer> {
     const file = await this.call('getFile', { file_id: fileId });
     if (!file?.file_path) throw new Error('Telegram did not return a file path.');
-    const res = await connectFetch(`https://api.telegram.org/file/bot${this.token}/${file.file_path}`);
+    const res = await connectFetch(`${TELEGRAM_API_BASE}/file/bot${this.token}/${file.file_path}`);
     if (!res.ok) throw new Error(`downloading the file failed (HTTP ${res.status}).`);
     return Buffer.from(await res.arrayBuffer());
   }
@@ -217,7 +221,7 @@ export class TelegramApi {
       form.set('reply_parameters',
         JSON.stringify({ message_id: opts.replyToMessageId, allow_sending_without_reply: true }));
     }
-    const res = await fetch(`https://api.telegram.org/bot${this.token}/${method}`, { method: 'POST', body: form });
+    const res = await fetch(`${TELEGRAM_API_BASE}/bot${this.token}/${method}`, { method: 'POST', body: form });
     const json = await readEnvelope(res);
     if (!(res.ok && json.ok)) throw new Error(`telegram ${method} failed: ${json.description || res.status}`);
     return json.result;

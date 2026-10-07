@@ -272,7 +272,9 @@ async function ensureRoles(superuser: pg.Client, passwords: { migrator: string; 
     else { await superuser.query(`create role ${quoted} login ${attributes} password ${quoteLiteral(password)}`); log.info({ role: name }, 'role created'); }
   };
   await upsertRole(MIGRATOR_ROLE, migrator, passwords.migrator, 'nosuperuser nocreatedb nocreaterole noinherit');
-  await upsertRole(APP_MIGRATOR_ROLE, appMigrator, passwords.appMigrator, 'nosuperuser nocreatedb nocreaterole noinherit');
+  // bypassrls: an app's migrations are the operator's own code, and a data
+  // migration reads rows to move them — the policies fence users, not them.
+  await upsertRole(APP_MIGRATOR_ROLE, appMigrator, passwords.appMigrator, 'nosuperuser nocreatedb nocreaterole noinherit bypassrls');
   // bypassrls: the row-level policies fence `authenticated`, never the backend's own reads and writes.
   await upsertRole(BACKEND_ROLE, backend, passwords.backend, 'nosuperuser createdb createrole noinherit bypassrls');
   await upsertRole(AUTHENTICATED_ROLE, authenticated, passwords.authenticated, 'nosuperuser nocreatedb nocreaterole noinherit nobypassrls');

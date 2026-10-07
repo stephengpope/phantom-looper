@@ -45,10 +45,14 @@ async function main() {
     // Crons: the SDK schedules and runs them, each as its owner; a prompt
     // cron runs the coding agent, as a cli window would.
     crons: { agent: CodingAgent },
-    // The bot's command menu — the global default, and the authorized chat's
-    // for its mode (the bot's own state; the bot exists before the SDK
-    // registers the webhook, which onStart's reconcile is what asks for).
-    telegramCommandMenu: async () => ({ global: menuFor('assistant'), forChat: menuFor((await telegram.state.read()).mode) }),
+    // The bot's command menu — the global default, and the operator's chat's
+    // for its mode (each chat's own is set when its mode changes; the bot
+    // exists before the SDK registers the webhook, which onStart's reconcile
+    // is what asks for).
+    telegramCommandMenu: async () => {
+      const operator = await backend.telegramBot.authorizedUser();
+      return { global: menuFor('assistant'), ...(operator ? { forChat: menuFor((await telegram.state.read(operator)).mode) } : {}) };
+    },
 
     // The backend's git, with this app's parts: the conflict fixer is the
     // session's own coding agent; the commit message rides the ASSISTANT's

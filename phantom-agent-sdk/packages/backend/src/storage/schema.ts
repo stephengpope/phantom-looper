@@ -245,6 +245,29 @@ export const telegramBotState = phantomAgentSdk.table('telegram_bot_state', {
   botUsername: text('bot_username'),
 });
 
+// Linked Telegram chats (061): a user's private chat with the bot, or a
+// group linked to one project. Everything said there runs as its user.
+// telegram/chats.ts is the one owner.
+export const telegramChats = phantomAgentSdk.table('telegram_chats', {
+  id: text('id').primaryKey(),
+  chatId: bigint('chat_id', { mode: 'number' }).notNull(),
+  telegramUserId: bigint('telegram_user_id', { mode: 'number' }).notNull(),
+  organizationId: text('organization_id').notNull().default(sql`coalesce(phantom_agent_sdk.caller_organization(), phantom_agent_sdk.operator_organization())`),
+  userId: text('user_id'),
+  projectId: text('project_id'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+export type TelegramChatRow = typeof telegramChats.$inferSelect;
+
+// A link in waiting (061): a one-time code, ten minutes.
+export const telegramLinkCodes = phantomAgentSdk.table('telegram_link_codes', {
+  code: text('code').primaryKey(),
+  organizationId: text('organization_id').notNull().default(sql`coalesce(phantom_agent_sdk.caller_organization(), phantom_agent_sdk.operator_organization())`),
+  userId: text('user_id'),
+  projectId: text('project_id'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+});
+
 // One row per message the bot sent — a reply or reaction to it carries only
 // (chat, message id), and this says which conversation it belongs to.
 export const telegramSentMessages = phantomAgentSdk.table('telegram_sent_messages', {

@@ -7,8 +7,10 @@
 // registers the same path with Telegram (TelegramBot.webhookUrl).
 import type { FastifyInstance } from 'fastify';
 import type { PhantomBackend } from '../../PhantomBackend.js';
+import { ok, err } from '../HttpApi.js';
 
-export const TELEGRAM_WEBHOOK_PATH = '/telegram/webhook';
+import { TELEGRAM_WEBHOOK_PATH } from '../../telegram/webhookPath.js';
+export { TELEGRAM_WEBHOOK_PATH };
 
 export function telegramRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   app.post(TELEGRAM_WEBHOOK_PATH, {
@@ -21,4 +23,26 @@ export function telegramRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     const status = await ctx.telegramBot.receiveUpdate(secret, req.body ?? {});
     return reply.code(status).send('ok');
   });
+
+  // Linking a chat — the caller's own (a user's, or the server key's for the
+  // operator). The policies keep each user to their own links.
+  const TAG = { tags: ['telegram'] };
+  app.post<{ Body: { project?: string } }>('/telegram/links', { schema: { ...TAG, summary: 'Link a Telegram chat',
+    description: 'A one-time link, ten minutes: `url` opens a private chat with the bot, `group_url` adds the bot to a group. ' +
+      'With `project`, the chat is that project\'s; without, it covers all of the caller\'s projects.',
+    body: { type: 'object', additionalProperties: false, properties: { project: { type: 'string' } } } } },
+  async (req, reply) => {
+    const projectId = req.body?.project ?? null;
+    if (projectId && !await ctx.projects.get(projectId)) return reply.code(404).send(err('not_found', `no project ${projectId}`));
+    const username = (await ctx.telegramBot.webhookStatus()).botUsername;
+    if (!username) return reply.code(409).send(err('telegram_off', 'the Telegram bot is not connected on this server'));
+    const { code, expiresAt } = await ctx.telegramChats.newCode(projectId);
+    return ok({ url: `https://t.me/${username}?start=${code}`, group_url: `https://t.me/${username}?startgroup=${code}`,
+      expires_at: expiresAt.toISOString() });
+  });
+  app.get('/telegram/links', { schema: { ...TAG, summary: 'Your linked Telegram chats' } },
+    async () => ok({ chats: await ctx.telegramChats.list() }));
+  app.delete<{ Params: { id: string } }>('/telegram/links/:id', { schema: { ...TAG, summary: 'Unlink a Telegram chat' } },
+    async (req, reply) => (await ctx.telegramChats.remove(req.params.id)) ? ok({ unlinked: req.params.id })
+      : reply.code(404).send(err('not_found', `no linked chat ${req.params.id}`)));
 }

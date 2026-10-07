@@ -42,6 +42,7 @@ import { idleBackupSweep, pressureSweep } from './runtime/Disk.js';
 import { refreshWorkState } from './git/workRefresh.js';
 import { TelegramBotState } from './telegram/botState.js';
 import { TelegramSentMessages } from './telegram/sentMessages.js';
+import { TelegramChats } from './telegram/chats.js';
 import { TelegramHandledUpdates } from './telegram/handledUpdates.js';
 import { TelegramBot, type TelegramCommand } from './telegram/TelegramBot.js';
 import type { SettingDefinition, AgentTypeDefinition, ToolDefinition, RouteRegistrar, CardFieldsExtension } from './doors.js';
@@ -176,6 +177,8 @@ export class PhantomBackend {
   readonly telegramSentMessages: TelegramSentMessages;
   readonly telegramHandledUpdates: TelegramHandledUpdates;
   readonly telegramBot: TelegramBot;
+  /** Which Telegram chat is whose (telegram/chats.ts). */
+  readonly telegramChats: TelegramChats;
 
   #stopped = false;
   #cronScheduler: CronScheduler | undefined;
@@ -195,7 +198,9 @@ export class PhantomBackend {
     this.mailer = new Mailer(this.settings);
     this.media = built.media;
     this.identity = new Identity(this.database, this.mailer, this.settings, this.projects, this.media, config.identity, this.env.publicUrl, this.env.apiKey);
+    this.telegramChats = new TelegramChats(this.database.drizzle, this.database.system);
     this.telegramBot = new TelegramBot({ settings: this.settings, settingsEvents: this.settingsEvents, botState: this.telegramBotState,
+      chats: this.telegramChats, sessions: this.sessions, projects: this.projects,
       sentMessages: this.telegramSentMessages, handledUpdates: this.telegramHandledUpdates, paths: this.paths,
       publicAddress: process.env.PHANTOM_BACKEND_ADDRESS, commandMenu: config.telegramCommandMenu });
     this.git = new GitService({
@@ -260,9 +265,10 @@ export class PhantomBackend {
     const presets = new Presets(database.drizzle, settings);
     const crons = new Crons(database.drizzle, settings);
     const tokenLog = new TokenLog(database.drizzle);
-    const telegramBotState = new TelegramBotState(database.drizzle, env.encryptionKey);
-    const telegramSentMessages = new TelegramSentMessages(database.drizzle);
-    const telegramHandledUpdates = new TelegramHandledUpdates(database.drizzle);
+    // The bot's own bookkeeping is the server's, whoever it is working for.
+    const telegramBotState = new TelegramBotState(database.system, env.encryptionKey);
+    const telegramSentMessages = new TelegramSentMessages(database.system);
+    const telegramHandledUpdates = new TelegramHandledUpdates(database.system);
     const sessionNotes = new SessionNotes();
     const foregroundCommands = new ForegroundCommands();
     const workspaceWatcher = new WorkspaceWatcher();

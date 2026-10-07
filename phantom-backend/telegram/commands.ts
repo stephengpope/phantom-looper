@@ -23,7 +23,7 @@ import { CodingAgent } from '../../phantom-looper/agents/coding.js';
 import type { TelegramApi } from '@phantom-agent-sdk/backend';
 import { titled } from '@phantom-agent-sdk/backend';
 import { toTelegram } from '@phantom-agent-sdk/backend';
-import type { TelegramAssistantBot } from './TelegramAssistantBot.js';
+import { assistantKey, type TelegramAssistantBot } from './TelegramAssistantBot.js';
 import { MODE_MESSAGE, type TelegramMode } from './TelegramAssistantState.js';
 import { PROVIDERS } from '@phantom-agent-sdk/client';
 import { hasCatalog } from '@phantom-agent-sdk/backend';
@@ -82,6 +82,9 @@ const modelList = new Map<number, string[]>();
 const presetList = new Map<number, string[]>();
 
 /** Handle a slash command. `text` starts with '/'. */
+/** Commands that act on the whole server, not one user's work. */
+const OPERATOR_ONLY = new Set(['status', 'providers', 'models', 'presets', 'update', 'cpu', 'tokens', 'restart']);
+
 export async function handleCommand(
   telegram: TelegramAssistantBot, client: TelegramApi, chatId: number, text: string,
 ): Promise<void> {
@@ -89,7 +92,11 @@ export async function handleCommand(
   const cmd = raw.toLowerCase().split('@')[0];
   const arg = rest[0];
   const reply = (text: string) => client.sendMessage(chatId, text);
-  const bot = await telegram.state.read();
+  const bot = await telegram.state.read(chatId);
+  const link = await telegram.backend.telegramBot.linkFor(chatId);
+  // The server's own commands — its model, presets, upgrade, restart, status
+  // and spend — are the operator's chat's alone.
+  if (OPERATOR_ONLY.has(cmd) && !link?.operator) { await reply('⛔ access denied'); return; }
 
   switch (cmd) {
     case 'start':
@@ -162,8 +169,9 @@ export async function handleCommand(
           await reply('⚠️ Send /projects first to see the list, then /projects <number>.');
           return;
         }
+        if (link?.projectId) { await reply('📁 This chat is linked to one project.'); return; }
         const project = list.find((project) => project.id === ids[pick - 1]);
-        await telegram.state.setActiveProject(ids[pick - 1]);
+        await telegram.state.setActiveProject(chatId, ids[pick - 1]);
         await reply(`📁 Active project: ${project?.name ?? ids[pick - 1]}`);
         return;
       }
@@ -181,7 +189,7 @@ export async function handleCommand(
       catch (error) { await reply(`⚠️ Couldn't start a session: ${(error as Error).message}`); return; }
       // Create + point at it. The mode is untouched: from home the assistant
       // keeps the conversation; in code mode the next message starts the coder.
-      await telegram.state.setActiveSession(started.id);
+      await telegram.state.setActiveSession(chatId, started.id);
       await reply(bot.mode === 'code'
         ? '🆕 New session. Send your first message to begin.'
         : '🆕 New session is active — /code to start coding in it.');
@@ -398,7 +406,7 @@ export async function handleCommand(
       // Bare /stop — assistant mode stops the assistant; code mode stops
       // the active coding session.
       if (bot.mode === 'assistant') {
-        const stopped = telegram.stop('assistant');
+        const stopped = telegram.stop(assistantKey(chatId));
         if (!stopped) { await reply('ℹ️ The assistant isn\'t running.'); return; }
         await reply('🛑 Stopping the assistant.');
         return;

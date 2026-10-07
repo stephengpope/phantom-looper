@@ -1,7 +1,10 @@
 // The Telegram bot's BEHAVIOUR: modes, commands, which turn to run, alerts —
 // on the SDK's TelegramBot (the link, verified inbound, delivery) and the
-// client SDK's agents over loopback. One authorized user, DM-only, webhook. Two modes on one sticky
-// bot state row: ASSISTANT (home — the Assistant answers, board/cards/sessions)
+// client SDK's agents over loopback. Every linked chat (the operator's, each
+// user's private chat, a project's group) is its own: its own state row, its
+// own assistant conversation, and everything in it runs as the chat's user —
+// their organization's rows, their keys (actAs, the agents' actingFor). Two
+// modes per chat: ASSISTANT (home — the Assistant answers, board/cards/sessions)
 // and CODE (inside a session — a plain message runs a coding turn on it).
 //
 // Design is phantom-looper's, not shockwave's: sessions are explicit and
@@ -28,7 +31,7 @@ import { UpgradeChecker } from '@phantom-agent-sdk/backend';
 import { TelegramAssistantState, type TelegramAssistantStateRow, type TelegramMode } from './TelegramAssistantState.js';
 import { menuFor, handleCommand } from './commands.js';
 import { AUTO_PUSH_STEPS, AUTO_PULL_STEPS, type AutoPushOutcome, type AutoPullOutcome } from '../../phantom-looper/agents/assistant/gitSteps.js';
-import { scopeOf } from '@phantom-agent-sdk/backend';
+import { scopeOf, actAs, OPERATOR_ORGANIZATION, type ChatLink } from '@phantom-agent-sdk/backend';
 
 
 const log = logger('telegram');
@@ -52,8 +55,9 @@ interface InFlightTurn { agent: Agent }
 
 export class TelegramAssistantBot {
   private inFlight = new Map<string, InFlightTurn>();
-  /** One client, this bot's lock identity, for every agent it opens. */
-  private readonly client: BackendClient;
+  /** One client per chat's user — this bot's lock identity, acting for them
+   *  (the operator's chat: the server key's own). */
+  private readonly clients = new Map<string, BackendClient>();
   /** The bot's behaviour row: who answers, which session and project it points at. */
   readonly state: TelegramAssistantState;
 
@@ -65,8 +69,8 @@ export class TelegramAssistantBot {
    *  plus this app's own bot state, its `deployment` (update, logs, restart)
    *  and the looper's count of card runs in flight (the upgrade's health line). */
   constructor(readonly backend: PhantomBackend, readonly deployment: Deployment, private readonly loopsRunning: () => number) {
-    this.state = new TelegramAssistantState(backend.database.drizzle);
-    this.client = new BackendClient({ url: backend.loopback.url, credential: { phantomAdminKey: backend.loopback.apiKey }, clientId: CLIENT_ID, label: 'telegram', actor: TELEGRAM_STARTER });
+    // The bot's bookkeeping, the server's whoever a chat speaks for.
+    this.state = new TelegramAssistantState(backend.database.system);
     this.upgradeChecker = new UpgradeChecker({
       version: APP_VERSION,
       health: async () => ({ version: APP_VERSION, loops_running: loopsRunning() }),
@@ -106,6 +110,30 @@ export class TelegramAssistantBot {
   /** The send_message tool's delivery (the notification channel's). */
   notify(sessionId: string, text: string): Promise<void> { return this.backend.telegramBot.sendMessageForSession(sessionId, text); }
 
+  /** The client a chat's agents run through. */
+  private clientFor(link: ChatLink): BackendClient {
+    let client = this.clients.get(link.id);
+    if (!client) {
+      client = new BackendClient({ url: this.backend.loopback.url, credential: { phantomAdminKey: this.backend.loopback.apiKey },
+        clientId: CLIENT_ID, label: 'telegram', actor: TELEGRAM_STARTER,
+        ...(link.operator ? {} : { actingFor: { organizationId: link.organizationId, ...(link.userId ? { userId: link.userId } : {}) } }) });
+      this.clients.set(link.id, client);
+    }
+    return client;
+  }
+
+  /** Run `work` as the chat's user: the backend's own reads and writes are
+   *  then theirs alone. The operator's chat is the server's own. */
+  private asChat<T>(link: ChatLink, work: () => Promise<T>): Promise<T> {
+    return link.operator ? work() : actAs({ organizationId: link.organizationId, userId: link.userId }, work);
+  }
+
+  /** A chat linked to one project always points at it. */
+  private async pinProject(link: ChatLink, chatId: number): Promise<void> {
+    if (!link.projectId) return;
+    if ((await this.state.read(chatId)).activeProjectId !== link.projectId) await this.state.setActiveProject(chatId, link.projectId);
+  }
+
   // ── auto build alerts ────────────────────────────────────────────────────
 
   /** One DM per loop move into in_progress / blocked / done, when
@@ -120,14 +148,15 @@ export class TelegramAssistantBot {
     const alertMsg = autoBuildAlert(event, await this.backend.projects.prefixOf(project));
     if (!alertMsg) return;
     // The switch resolved at this project's layer.
-    const values = await this.backend.settings.resolveMany(
-      ['telegram_auto_build_notifications', 'telegram_enabled', 'telegram_authorized_user'], scopeOf(project));
+    const values = await this.backend.settings.resolveMany(['telegram_auto_build_notifications', 'telegram_enabled'], scopeOf(project));
     if (values.telegram_auto_build_notifications !== true || values.telegram_enabled !== true) return;
-    const chatId = Number(values.telegram_authorized_user ?? '');
-    if (!chatId || !Number.isFinite(chatId)) return;
     const token = await this.backend.telegramBot.token();
     if (!token) return;
     const coder = await this.backend.sessions.ownerOnCard(projectId, alertMsg.number);
+    // The card's chat: its coding session's owner's; the operator's for the operator's own projects.
+    const chatId = coder ? await this.backend.telegramBot.chatForSession(coder.id)
+      : project.organizationId === OPERATOR_ORGANIZATION ? await this.backend.telegramBot.authorizedUser() : null;
+    if (!chatId) return;
     const client = this.backend.telegramBot.clientForChat(token, chatId, () => coder?.id ?? null);
     await client.sendMessage(chatId, alertMsg.text);
     log.info({ project: projectId, card: alertMsg.number, status: alertMsg.status }, 'auto build alert sent');
@@ -135,7 +164,14 @@ export class TelegramAssistantBot {
 
   // ── the turn ───────────────────────────────────────────────────────────────────────
 
+  /** A message from a linked chat: everything after this runs as its user. */
   private async handleMessage(chatId: number, msgs: any[]): Promise<void> {
+    const link = await this.backend.telegramBot.linkFor(chatId);
+    if (!link) return;
+    await this.asChat(link, () => this.handleMessageAs(link, chatId, msgs));
+  }
+
+  private async handleMessageAs(link: ChatLink, chatId: number, msgs: any[]): Promise<void> {
     const msg = msgs[0];
     const token = await this.backend.telegramBot.token();
     // Which conversation a sent bubble belongs to. A function so the tracked
@@ -148,6 +184,7 @@ export class TelegramAssistantBot {
       // Show life immediately — before resolveInput (voice download +
       // transcription can take 1-3s) so the user never stares at nothing.
       client.sendChatAction(chatId, 'typing').catch(() => {});
+      await this.pinProject(link, chatId);
 
       // A reply to one of my bubbles switches conversation BEFORE anything
       // reads which mode this is — commands included. Telegram puts the reply
@@ -161,7 +198,7 @@ export class TelegramAssistantBot {
         return;
       }
 
-      const bot = await this.state.read();
+      const bot = await this.state.read(chatId);
       sessionId = bot.mode === 'code' ? bot.activeSessionId : null;
 
       const input = await this.resolveInput(client, chatId, msgs, bot);
@@ -176,7 +213,7 @@ export class TelegramAssistantBot {
       // switching sessions starts independently; the assistant is one
       // conversation, so it stays one key.
       const busyKey = bot.mode === 'code' && bot.activeSessionId
-        ? bot.activeSessionId : 'assistant';
+        ? bot.activeSessionId : assistantKey(chatId);
       const running = this.inFlight.get(busyKey);
       if (running) {
         void running.agent.sendMessage(input).catch(() => undefined);
@@ -185,9 +222,9 @@ export class TelegramAssistantBot {
       }
 
       if (bot.mode === 'code' && bot.activeSessionId) {
-        await this.codeTurn(client, chatId, bot.activeSessionId, input);
+        await this.codeTurn(link, client, chatId, bot.activeSessionId, input);
       } else {
-        await this.assistantTurn(client, chatId, input);
+        await this.assistantTurn(link, client, chatId, input);
       }
     } catch (error) {
       await client.sendMarkdown(chatId, titled('⚠️ Something went wrong', (error as Error).message)).catch(() => {});
@@ -199,10 +236,10 @@ export class TelegramAssistantBot {
    *  conversation), on the client SDK, streamed to the bubble. session_switch
    *  moves the active-session POINTER only — the assistant keeps the
    *  conversation; /code is how the user hands it over. */
-  private async assistantTurn(client: TelegramApi, chatId: number, message: string): Promise<void> {
+  private async assistantTurn(link: ChatLink, client: TelegramApi, chatId: number, message: string): Promise<void> {
     const typing = startTyping(client, chatId);
-    const busyKey = 'assistant';
-    const bot = await this.state.read();
+    const busyKey = assistantKey(chatId);
+    const bot = await this.state.read(chatId);
     // The assistant can deliver a file it names from the active session's work
     // dir (its file tools are read-only, but it can point at one the coder made).
     const sink = await this.backend.telegramBot.startReplyBubble(client, chatId, bot.activeSessionId ?? null);
@@ -212,8 +249,8 @@ export class TelegramAssistantBot {
     try {
       // The assistant's session row exists BEFORE its agent is built: the turn
       // runs on the row's model, its tools open the row's workspace, every call is billed to it.
-      const own = await this.ensureAssistantSession(bot.activeProjectId, bot.activeSessionId);
-      agent = await AssistantAgent.resumeSession(this.client, this.agentHandlers('assistant'), own.id);
+      const own = await this.ensureAssistantSession(chatId, bot.activeProjectId, bot.activeSessionId);
+      agent = await AssistantAgent.resumeSession(this.clientFor(link), this.agentHandlers('assistant'), own.id);
       this.inFlight.set(busyKey, { agent });
       this.sayReturned(agent, client, chatId);
       const onSwitch = async (id: string) => {
@@ -230,11 +267,11 @@ export class TelegramAssistantBot {
       // A new project: make it active and open a session in it — what /new
       // does, so the user lands talking to the coder like the cli's "on screen".
       const onProjectCreated = async (projectId: string) => {
-        await this.state.setActiveProject(projectId);
+        await this.state.setActiveProject(chatId, projectId);
         let started;
         try { started = await this.backend.sessions.start(projectId, CodingAgent.systemPromptLayout, { type: 'coding', startedBy: TELEGRAM_STARTER }); }
         catch (error) { return { error: (error as Error).message }; }
-        await this.state.setActiveSession(started.id);
+        await this.state.setActiveSession(chatId, started.id);
         await this.enterMode(client, chatId, 'code');
         await client.sendMessage(chatId, '🆕 New session in the new project. Send your first message to begin.');
         return { session: started.id };
@@ -267,18 +304,19 @@ export class TelegramAssistantBot {
 
   /** The assistant's session row, pointed at what the user is looking at:
    *  made on first use, re-pointed on every turn (Sessions.repoint). */
-  private assistantSessionId: string | null = null;
-  private async ensureAssistantSession(projectId: string | null, activeSessionId?: string | null): Promise<{ id: string }> {
+  private assistantSessions = new Map<number, string>();
+  private async ensureAssistantSession(chatId: number, projectId: string | null, activeSessionId?: string | null): Promise<{ id: string }> {
     if (!projectId) throw new Error('no active project — /projects to pick one');
-    if (this.assistantSessionId) {
-      await this.backend.sessions.repoint(this.assistantSessionId, projectId, activeSessionId);
-      const row = await this.backend.sessions.get(this.assistantSessionId);
+    const known = this.assistantSessions.get(chatId);
+    if (known) {
+      await this.backend.sessions.repoint(known, projectId, activeSessionId);
+      const row = await this.backend.sessions.get(known);
       if (row) return row;
-      this.assistantSessionId = null; // purged underneath us — make a new one
+      this.assistantSessions.delete(chatId); // purged underneath us — make a new one
     }
     const row = await this.backend.sessions.start(projectId, AssistantAgent.systemPromptLayout,
       { type: 'assistant', startedBy: TELEGRAM_STARTER, workspaceSessionId: activeSessionId });
-    this.assistantSessionId = row.id;
+    this.assistantSessions.set(chatId, row.id);
     return row;
   }
 
@@ -286,12 +324,12 @@ export class TelegramAssistantBot {
    *  streamed into the bubble. A session held elsewhere is refused with a
    *  note; an interrupt from anywhere (esc-esc in a cli window, the
    *  interrupt route, /stop) ends the turn cleanly. */
-  private async codeTurn(client: TelegramApi, chatId: number, sessionId: string, message: string): Promise<void> {
+  private async codeTurn(link: ChatLink, client: TelegramApi, chatId: number, sessionId: string, message: string): Promise<void> {
     const typing = startTyping(client, chatId);
     const sink = await this.backend.telegramBot.startReplyBubble(client, chatId, sessionId);
     let agent: CodingAgent | undefined;
     try {
-      agent = await CodingAgent.resumeSession(this.client, this.agentHandlers('coding'), sessionId);
+      agent = await CodingAgent.resumeSession(this.clientFor(link), this.agentHandlers('coding'), sessionId);
       this.inFlight.set(sessionId, { agent });
       this.sayReturned(agent, client, chatId);
       const off = agent.on('part', (part) => sink.appendPart(part as Record<string, unknown>));
@@ -377,7 +415,7 @@ export class TelegramAssistantBot {
   private async switchForReply(client: TelegramApi, chatId: number, msg: any): Promise<void> {
     const repliedSession = await this.backend.telegramBot.sessionOfRepliedMessage(chatId, msg);
     if (repliedSession === undefined) return;
-    const bot = await this.state.read();
+    const bot = await this.state.read(chatId);
     if (repliedSession) {
       if (bot.activeSessionId === repliedSession && bot.mode === 'code') return;
       if (bot.activeSessionId !== repliedSession) {
@@ -405,7 +443,7 @@ export class TelegramAssistantBot {
   Promise<{ id: string; title: string | null } | { error: string }> {
     const session = await this.backend.sessions.get(id);
     if (!session) return { error: `no session ${id}` };
-    await this.state.setActiveSession(id);
+    await this.state.setActiveSession(chatId, id);
     if (!opts?.silent) await client.sendMessage(chatId, `🔀 Active session: ${session.name ?? 'untitled'}`);
     return { id, title: session.name ?? null };
   }
@@ -418,7 +456,7 @@ export class TelegramAssistantBot {
     const msg = mode === 'code'
       ? await this.codeModeLabel(chatId)
       : undefined;
-    const changed = await this.state.setMode(mode, (text) => client.sendMessage(chatId, text), msg);
+    const changed = await this.state.setMode(chatId, mode, (text) => client.sendMessage(chatId, text), msg);
     await client.setMyCommands(menuFor(mode), chatId).catch(() => {});
     return changed;
   }
@@ -427,8 +465,8 @@ export class TelegramAssistantBot {
    *  session name, and (when switching) the last thing the agent said. One
    *  function, used by enterMode and the /code echo. Pass `dm` to include the
    *  last agent message (the switch announcement); omit it for a bare label. */
-  async codeModeLabel(chatId?: number): Promise<string> {
-    const bot = await this.state.read();
+  async codeModeLabel(chatId: number): Promise<string> {
+    const bot = await this.state.read(chatId);
     if (!bot.activeSessionId) return '🤖 Coding agent';
     const session = await this.backend.sessions.get(bot.activeSessionId);
     if (!session) return '🤖 Coding agent';
@@ -441,11 +479,8 @@ export class TelegramAssistantBot {
     else if (card != null) parts.push(`#${card}`);
     parts.push(session.name ?? 'untitled');
     const title = parts.join(' · ');
-    if (chatId != null) {
-      const last = await this.backend.telegramBot.lastMessageForSession(chatId, bot.activeSessionId);
-      if (last) return titled(title, last);
-    }
-    return title;
+    const last = await this.backend.telegramBot.lastMessageForSession(chatId, bot.activeSessionId);
+    return last ? titled(title, last) : title;
   }
 
   // ── /stop and command support (used by commands.ts) ──────────────────────
@@ -507,6 +542,9 @@ export class TelegramAssistantBot {
 
 
 }
+
+/** The in-flight key of a chat's assistant turn (a coding turn keys by its session). */
+export const assistantKey = (chatId: number) => `assistant:${chatId}`;
 
 // ── helpers ────────────────────────────────────────────────────────────────
 

@@ -7,9 +7,13 @@
 // DO with a message — modes, commands, which turn to run — is the app's: it
 // hangs off onMessageReceived / onReactionReceived / onButtonTapped.
 //
-// The bot talks to ONE person: `telegram_authorized_user`. The webhook URL
-// is never a setting — always https + the public address.
-import { TELEGRAM_WEBHOOK_PATH } from '../api/routes/telegram.js';
+// One bot per server, any number of linked chats (telegram/chats.ts): the
+// operator's own (`telegram_authorized_user`, the cli's), and each user's —
+// their private chat, or a group for one project — linked by a one-time
+// code (/start <code>). A chat speaks for its user, and only the Telegram
+// account that linked it may speak in it. The webhook URL is never a
+// setting — always https + the public address.
+import { TELEGRAM_WEBHOOK_PATH } from './webhookPath.js';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { TelegramApi, ALLOWED_UPDATES } from './TelegramApi.js';
@@ -21,6 +25,10 @@ import { Approvals, type Ask } from './TelegramApprovals.js';
 import type { TelegramBotState } from './botState.js';
 import type { TelegramSentMessages } from './sentMessages.js';
 import type { TelegramHandledUpdates } from './handledUpdates.js';
+import { operatorLink, type ChatLink, type TelegramChats } from './chats.js';
+import type { Sessions } from '../storage/Sessions.js';
+import type { Projects } from '../storage/Projects.js';
+import { OPERATOR_ORGANIZATION } from '../lib/scopes.js';
 import type { Settings } from '../storage/Settings.js';
 import type { SettingsEvents } from '../agents/SettingsEvents.js';
 import { timingSafeEqualStr } from '../lib/crypto.js';
@@ -65,11 +73,15 @@ export interface TelegramBotDeps {
   botState: TelegramBotState;
   sentMessages: TelegramSentMessages;
   handledUpdates: TelegramHandledUpdates;
+  /** The linked chats, and what a session's message needs to find its chat. */
+  chats: TelegramChats;
+  sessions: Sessions;
+  projects: Projects;
   paths: Paths;
   /** https://PHANTOM_BACKEND_ADDRESS — the only source of the webhook URL. */
   publicAddress?: string;
   /** The command menu to register with Telegram (the app's commands): the
-   *  global default, and the authorized chat's for its current mode. */
+   *  global default, and the operator's chat's for its current mode. */
   commandMenu?: () => Promise<{ global: TelegramCommand[]; forChat?: TelegramCommand[] }>;
 }
 export interface TelegramCommand { command: string; description: string }
@@ -77,7 +89,7 @@ export interface TelegramCommand { command: string; description: string }
 /** What the webhook registration looks like right now. */
 export interface WebhookStatus { registered: boolean; url: string | null; botUsername: string | null }
 
-/** A message from the authorized user, verified and de-duplicated; an album
+/** A message from a linked chat's own sender, verified and de-duplicated; an album
  *  arrives as one call with every photo in `messages`. */
 export type MessageHandler = (chatId: number, messages: any[]) => Promise<void>;
 export type ReactionHandler = (chatId: number, reaction: any) => Promise<void>;
@@ -120,7 +132,26 @@ export class TelegramBot {
     return (await this.deps.settings.credential('telegram_bot_token')) ?? '';
   }
 
-  /** The one chat the bot talks to, or null when none is set. */
+  /** Who a chat speaks for: the operator's (the setting), a user's linked
+   *  chat, or null — not linked, so the bot does not answer it. */
+  async linkFor(chatId: number): Promise<ChatLink | null> {
+    const operator = await this.authorizedUser();
+    if (operator !== null && chatId === operator) return operatorLink(operator);
+    return this.deps.chats.byChat(chatId);
+  }
+
+  /** The chat a session's messages go to: the operator's for the operator's
+   *  own work; otherwise the owner's chat for the session's project, else
+   *  the owner's private chat. Null: nowhere linked. */
+  async chatForSession(sessionId: string): Promise<number | null> {
+    const session = await this.deps.sessions.get(sessionId);
+    const project = session ? await this.deps.projects.get(session.projectId) : undefined;
+    if (!session || !project) return null;
+    if (project.organizationId === OPERATOR_ORGANIZATION) return this.authorizedUser();
+    return (await this.deps.chats.forOwner(project.organizationId, session.userId, project.id))?.chatId ?? null;
+  }
+
+  /** The operator's own chat (the setting), or null when none is set. */
   async authorizedUser(): Promise<number | null> {
     const chatId = Number(await this.deps.settings.resolve('telegram_authorized_user') ?? '');
     return Number.isFinite(chatId) && chatId ? chatId : null;
@@ -229,40 +260,54 @@ export class TelegramBot {
     const bot = await this.deps.botState.read();
     if (await this.deps.settings.resolve('telegram_enabled') !== true) return 200;
     if (!bot.webhookSecret || !timingSafeEqualStr(secretHeader, bot.webhookSecret)) return 403;
-    const chatId = await this.authorizedUser();
-    if (!chatId) return 200;
-    const authorized = String(chatId);
+    /** The chat's link, when the sender is the account that linked it. */
+    const speaker = async (chatId: unknown, from: unknown): Promise<ChatLink | null> => {
+      const link = Number.isFinite(Number(chatId)) ? await this.linkFor(Number(chatId)) : null;
+      return link && String(from) === String(link.telegramUserId) ? link : null;
+    };
 
     const reaction = update.message_reaction;
     if (reaction) {
-      if (String(reaction.user?.id) !== authorized) return 200;
+      const link = await speaker(reaction.chat?.id, reaction.user?.id);
+      if (!link) return 200;
       if (!(await this.deps.handledUpdates.markHandled(update.update_id))) return 200;
       // 🤬 on a bubble: read it back aloud. The bot's own gesture; the app hears the rest.
       if (hasEmoji(reaction.new_reaction, REACT_SPEAK) && !hasEmoji(reaction.old_reaction, REACT_SPEAK)) {
-        this.speakRepliedMessage(reaction, chatId).catch((error) => log.warn({ err: errStr(error) }, 'speak-reacted failed'));
+        this.speakRepliedMessage(reaction, link.chatId).catch((error) => log.warn({ err: errStr(error) }, 'speak-reacted failed'));
       } else {
-        this.#onReaction?.(chatId, reaction).catch((error) => log.warn({ err: errStr(error) }, 'reaction handler failed'));
+        this.#onReaction?.(link.chatId, reaction).catch((error) => log.warn({ err: errStr(error) }, 'reaction handler failed'));
       }
       return 200;
     }
 
     const tap = update.callback_query;
     if (tap) {
-      if (String(tap.from?.id) !== authorized) return 200;
+      const link = await speaker(tap.message?.chat?.id, tap.from?.id);
+      if (!link) return 200;
       if (!(await this.deps.handledUpdates.markHandled(update.update_id))) return 200;
       const api = new TelegramApi(await this.token());
       const query = { id: String(tap.id), data: tap.data as string | undefined };
       if (Approvals.isApprovalCallback(query.data)) {
-        this.#approvals.handleCallback(api, chatId, query).catch((error) => log.warn({ err: errStr(error) }, 'approval tap failed'));
+        this.#approvals.handleCallback(api, link.chatId, query).catch((error) => log.warn({ err: errStr(error) }, 'approval tap failed'));
       } else {
-        this.#onButton?.(chatId, query, api).catch((error) => log.warn({ err: errStr(error) }, 'button handler failed'));
+        this.#onButton?.(link.chatId, query, api).catch((error) => log.warn({ err: errStr(error) }, 'button handler failed'));
       }
       return 200;
     }
 
     const msg = update.message;
-    if (!msg || String(msg.from?.id) !== authorized) return 200;
+    if (!msg?.chat?.id) return 200;
+    // A link being made: /start <code> (a private chat), /start@bot <code> (a group).
+    const linking = /^\/start(?:@\w+)?\s+([A-Za-z0-9_-]{8,64})\s*$/.exec(String(msg.text ?? ''));
+    if (linking) {
+      if (!(await this.deps.handledUpdates.markHandled(update.update_id))) return 200;
+      await this.link(Number(msg.chat.id), Number(msg.from?.id), linking[1]).catch((error) => log.warn({ err: errStr(error) }, 'telegram link failed'));
+      return 200;
+    }
+    const link = await speaker(msg.chat.id, msg.from?.id);
+    if (!link) return 200;
     if (!(await this.deps.handledUpdates.markHandled(update.update_id))) return 200;
+    const chatId = link.chatId;
 
     // An album (several photos sent at once) arrives as SEPARATE updates
     // sharing a media_group_id. Collect them briefly and hand over once, so
@@ -279,6 +324,18 @@ export class TelegramBot {
     }
     void deliver([msg]);
     return 200;
+  }
+
+  /** Redeem a link code from a chat; the chat is told how it went. */
+  private async link(chatId: number, telegramUserId: number, code: string): Promise<void> {
+    const api = new TelegramApi(await this.token());
+    const linked = await this.deps.chats.redeem(code, chatId, telegramUserId);
+    if (!linked) { await api.sendMessage(chatId, '⚠️ That link has expired or was already used — make a new one in the app.'); return; }
+    const project = linked.projectId ? await this.deps.projects.get(linked.projectId) : undefined;
+    await api.sendMessage(chatId, project
+      ? `✅ Linked to ${project.displayName ?? project.name}. Send a message to begin.`
+      : '✅ Linked. Send a message to begin.');
+    log.info({ chat: chatId, project: linked.projectId }, 'telegram chat linked');
   }
 
   /** The session a replied-to bubble belongs to: a session's id, null for a
@@ -381,8 +438,8 @@ export class TelegramBot {
   async sendMessageForSession(sessionId: string, text: string): Promise<void> {
     if (!text.trim()) throw new Error('empty message');
     if (await this.deps.settings.resolve('telegram_enabled') !== true) throw new Error('telegram is off (/settings)');
-    const chatId = await this.authorizedUser();
-    if (!chatId) throw new Error('no telegram_authorized_user set (/settings)');
+    const chatId = await this.chatForSession(sessionId);
+    if (!chatId) throw new Error('no Telegram chat is linked for this session\'s owner');
     const token = await this.token();
     if (!token) throw new Error('no telegram_bot_token stored (/keys)');
     const api = this.clientForChat(token, chatId, () => sessionId);
@@ -391,7 +448,7 @@ export class TelegramBot {
     await this.speakText(api, chatId, said);
   }
 
-  /** A plain message to the authorized user, not a session's (the digest, an alert). */
+  /** A plain message to one chat, not a session's (the digest, an alert). */
   async sendText(chatId: number, text: string, options?: { replyToMessageId?: number }): Promise<void> {
     const api = new TelegramApi(await this.token());
     await api.sendMessage(chatId, text, options);

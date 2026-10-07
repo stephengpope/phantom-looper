@@ -247,9 +247,47 @@ GB. Docker Desktop's kernel has no XFS quotas at all.
   - the three user-deletion cases
 - Fixed settings, against the real Settings code.
 
+## Telegram, per user
+
+One bot per server, and any number of linked chats. Each chat is its own
+user's, in their organization, and everything said there runs as them, the
+same way an API call does.
+
+- **The operator's chat** is the `telegram_authorized_user` setting, the
+  one the CLI sets. It sees the whole server, as before.
+- **A user links a chat:**
+  1. `POST /api/telegram/links` returns a one-time link valid for ten
+     minutes. With `project`, the chat is that project's.
+  2. The chat that sends it to the bot (`/start <code>`, or
+     `/start@bot <code>` in a group) becomes theirs.
+  3. The links are listed with `GET` and removed with `DELETE`, and a user
+     reaches only their own.
+- **Only the Telegram account that linked a chat** speaks in it. In a group,
+  other members are ignored, and an unlinked chat gets no answer.
+- **A private chat covers all of a user's projects** (switch with
+  `/projects`). A project's group always points at its project.
+- **Where messages go:** a session's message, alert or `send_message` goes
+  to its owner's chat for that project, else to their private chat. The
+  operator's own work goes to the operator's chat.
+- **Server commands** (status, providers, models, presets, update, restart,
+  tokens, cpu) answer "access denied" outside the operator's chat.
+- **Tables:** `telegram_chats` and `telegram_link_codes` (061) carry the
+  owner rule. The app's chat state is per chat
+  (`phantom_looper.telegram_chat_state`, 003); the old single row moved to
+  the operator's chat.
+- **Self-hosted Bot API:** `TELEGRAM_API_BASE` points the bot at Telegram's
+  own self-hosted Bot API server, or at a stand-in for tests.
+- **Proven** on the real backend with Telegram faked: 23 checks covering
+  linking, one-time codes, each chat seeing only its user's work, the
+  operator's chat seeing all, server commands refused, a project group
+  pinned to its project, other group members ignored, messages routed to
+  their owner, managing links, and per-chat state. Migrations were checked
+  on a copy of the real local data, which moved the state row to the
+  operator's chat with its session and project, and on a fresh install.
+
 ## Not yet
 
-- Telegram: one bot per server. Per user (user id ↔ chat id) is next.
+- Telegram topics (one group, a topic per project): groups work today.
 - Docker for agents on a shared server needs a safe runtime (Sysbox,
   rootless) before `container_docker` can be offered to organizations.
 - gVisor is a setting away (`container_runtime: runsc`), but it is not
