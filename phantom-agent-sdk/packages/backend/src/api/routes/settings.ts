@@ -2,7 +2,6 @@
 //
 //   GET    /settings           every setting, resolved with its layers
 //   PATCH  /settings           write; null clears a key
-//   DELETE /settings/:key      clear one
 //   GET    /settings/events    change notices (no values — listeners re-read)
 //
 // Every key is declared in code (settings.ts) — defaults, types, descriptions,
@@ -110,24 +109,6 @@ export function settingsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       // Every write lands on the settings feed (Settings.write): the looper
       // and the Telegram engine listen there, whichever door wrote.
       return ok({ updated });
-    });
-
-  app.delete<{ Params: { key: string }; Querystring: ScopeQuery }>(
-    '/settings/:key', { schema: { ...TAG,
-      summary: 'Clear one key',
-      description: 'Identical to PATCH with null. The setting reverts to the code default and follows it if the default changes later — a different state from being set to the same value.',
-      params: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] },
-      querystring: scopeQuery } },
-    async (req, reply) => {
-      const scope = await scopeFor(req);
-      if ('error' in scope) return reply.code(404).send(err('not_found', scope.error));
-      try {
-        await ctx.settings.writeAtScope(scope.kind, scope.write, { [req.params.key]: null }, writerOf(req));
-      } catch (error) {
-        if (error instanceof SettingsWriteError) return error.code === 'fixed' ? reply.code(403).send(err('access_denied', 'access denied')) : reply.code(400).send(err(error.code, error.message));
-        throw error;
-      }
-      return ok({ cleared: req.params.key });
     });
 
   // Change notices, never values: every listener re-reads GET /settings. No

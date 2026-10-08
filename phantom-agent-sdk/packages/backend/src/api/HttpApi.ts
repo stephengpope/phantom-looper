@@ -42,8 +42,6 @@ import { databaseRoutes } from './routes/database.js';
 import { sessionRoutes } from './routes/sessions.js';
 import { toolRoutes } from './routes/tools.js';
 import { tasksRoutes } from './routes/tasks.js';
-import { skillsRoutes } from './routes/skills.js';
-import { webRoutes } from './routes/web.js';
 import { kanbanRoutes } from './routes/kanban.js';
 import { presetRoutes } from './routes/presets.js';
 import { cronRoutes } from './routes/crons.js';
@@ -157,8 +155,6 @@ export class HttpApi {
       sessionRoutes(api, backend);
       toolRoutes(api, backend);
       tasksRoutes(api, backend);
-      skillsRoutes(api, backend);
-      webRoutes(api, backend);
       kanbanRoutes(api, backend);
       presetRoutes(api, backend);
       cronRoutes(api, backend);

@@ -82,11 +82,8 @@ export class GitService {
     // the caller's own client id (`by`) when the call came from a route: the
     // feed's echo rule then skips the one window that already draws the
     // stream it asked for.
-    // The manual /git/pull has no stream of its own — the feed is how anyone
-    // sees it run, so its steps publish under the git client (no caller to echo).
     this.sync = new GitSync({ sessions, workspaces, cards, settings, paths,
-      resolve: hooks.resolveConflict, writeCommitMessage: hooks.writeCommitMessage },
-    (sessionId, event) => this.publishSync(sessionId, 'pull')(event));
+      resolve: hooks.resolveConflict, writeCommitMessage: hooks.writeCommitMessage });
 
     // Instant sync runs the same sync, turn or no turn: it never takes the
     // session (`hold: false`) and never runs the fixer (no `resolve`) — a

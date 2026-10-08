@@ -1,7 +1,6 @@
 # auto-pull
 
-Auto-pull is auto-push without the last step. Both, and the manual
-`/git/pull`, run one function: `syncBranch` in the backend SDK (`git/sync.ts`).
+Auto-pull is auto-push without the last step. Both run one function: `syncBranch` in the backend SDK (`git/sync.ts`).
 
 ## Why they were folded together
 

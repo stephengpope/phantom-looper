@@ -101,7 +101,6 @@ export { syncStepLabel, type SyncEvent, type SyncResult, type SyncOptions, type 
 export type { AutoPushEvent, AutoPushResult } from './git/autoPush.js';
 export type { AutoPullEvent, AutoPullResult } from './git/autoPull.js';
 export type { GitHooks, AutoPushFn, AutoPullFn } from './git/GitService.js';
-export type { Arrival } from './git/GitSync.js';
 
 // upgrade
 export { Deployment, DeploymentError, LOG_MAX_BYTES, LOG_MAX_TAIL, LOG_SERVICES, type LogsQuery } from './upgrade/Deployment.js';

@@ -269,8 +269,6 @@ export async function commitAll(dir: string, message: string): Promise<boolean> 
 /** A failure carries git's own words — what the person reads. */
 export type PushResult = 'pushed' | 'nothing' | 'conflict' | { error: string };
 export const pushFailed = (result: unknown): result is { error: string } => typeof result === 'object' && result !== null && 'error' in result;
-/** GitSync.pull's vocabulary. */
-export type PullResult = 'clean' | 'merged' | 'conflict' | 'error';
 
 /** Push the session branch. One writer, so origin's copy is never NEWER than
  *  HEAD — a rejection means origin holds an OLDER REWRITE of this branch: a

@@ -12,12 +12,12 @@ import { tableChoices, type TableRow } from './table.js';
 // The wire shapes, declared here like Launcher's SessionInfo — the cli talks
 // HTTP only and never imports server code.
 export interface TaskInfo {
-  sid: string; command: string; background_task_id: string | null; logs: string | null;
+  sid: string; command: string; background_task_id: string | null;
   log_file: string | null; started_at: string | null; elapsed: string; pids: number;
 }
 export interface RecentInfo {
   background_task_id: string; command: string; status: string; exit_code: number | null;
-  started_at: string; ended_at: string | null; logs: string; log_file: string;
+  started_at: string; ended_at: string | null; log_file: string;
 }
 export interface TasksView {
   container: 'running' | 'stopped' | 'absent';

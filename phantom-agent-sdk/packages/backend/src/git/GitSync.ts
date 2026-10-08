@@ -1,48 +1,32 @@
-// The git engine — the MANUAL operations (/git/push, /git/pull, /git/status).
-// No background git of its own: no tick, no commit timers, no periodic base
-// merge. Work reaches base through auto-push (autoPush.ts) — on demand, or
-// fired by instant sync (instantSync.ts) when a project opts in; push and
-// pull remain as explicit calls. `backup` is the ONE locked caller:
-// the disk sweeps fire it unattended, so it holds the session lock while a
-// person-driven push/pull relies on git's own index.lock to error a true
-// simultaneous op.
+// The git engine — a session branch's push, and the backup the disk sweeps
+// run. No background git of its own: no tick, no commit timers, no periodic
+// base merge. Work reaches base through auto-push (autoPush.ts) — on demand,
+// or fired by instant sync (instantSync.ts) when a project opts in. `backup`
+// is the ONE locked caller: the disk sweeps fire it unattended, so it holds
+// the session lock, while a push relies on git's own index.lock to error a
+// true simultaneous op.
 import type { ProjectRow, SessionRow } from '../storage/schema.js';
-import { git, commitAll, pushSession, GIT_CLIENT_ID, type PushResult, type PullResult, type GitAuth } from './Git.js';
+import { git, commitAll, pushSession, GIT_CLIENT_ID, type PushResult, type GitAuth } from './Git.js';
 import type { Sessions } from '../storage/Sessions.js';
 import type { WorkspaceRow } from '../storage/schema.js';
 import * as checkoutPool from '../runtime/CheckoutPool.js';
 import { repoDir, type Paths } from '../lib/paths.js';
-import { syncBranch, LOCK_TTL_MS, RENEW_MS, type SyncDeps, type SyncEvent } from './sync.js';
+import { LOCK_TTL_MS, RENEW_MS, type SyncDeps } from './sync.js';
 import { newId } from '@phantom-agent-sdk/client';
 import { logger, errStr } from '../lib/log.js';
 
 const log = logger('git');
 
-/** What arrived from base at each pull — the buffer the status view serves
- *  alongside its live diff. In-memory: it is a convenience view over
- *  git history, not a record. */
-export interface Arrival { at: number; commits: string[] }
-
 export class GitSync {
-  private arrivals = new Map<string, Arrival[]>();
-
   constructor(
     /** The SAME deps auto-push and auto-pull sync with — the row owners, the
      *  conflict resolver (the session's own coding agent) and the commit
      *  message model — so the system has one answer to every git question. */
     private deps: Omit<SyncDeps, 'onEvent' | 'recordSummary'>,
-    /** Every sync step of a manual pull, for the session's live feed — the
-     *  pull's route is unary, so this is the only way a watcher sees it run
-     *  (a commit-message retry included). Absent -> the pull runs quiet. */
-    private onSyncEvent?: (sessionId: string, event: SyncEvent) => void,
   ) {}
 
   private get sessions(): Sessions { return this.deps.sessions; }
   private get paths(): Paths { return this.deps.paths; }
-
-  async detach(sessionId: string): Promise<void> {
-    this.arrivals.delete(sessionId);
-  }
 
   private auth(project: ProjectRow): Promise<GitAuth> { return checkoutPool.resolveAuth(this.deps.settings, project); }
 
@@ -105,56 +89,5 @@ export class GitSync {
     } finally {
       await this.deps.workspaces.releaseSyncLock(workspace.id, holder);
     }
-  }
-
-  /** Bring origin/<base> under this session's work and push the branch, so the
-   *  remote copy is always complete. This is `syncBranch` without the landing —
-   *  the SAME flow auto-push and auto-pull run, so the system has one answer to
-   *  "get base's new commits under my work", not three. Nothing reaches base.
-   *
-   *  It takes the session (sync does), which is why `busy` is a result here. */
-  async pull(session: SessionRow, project: ProjectRow): Promise<PullResult | 'busy'> {
-    const synced = await syncBranch(
-      { ...this.deps, onEvent: (event) => this.onSyncEvent?.(session.id, event) },
-      session, project, { landOnBase: false, label: 'pull' });
-    if (synced.outcome === 'ok') {
-      const list = this.arrivals.get(session.id) ?? [];
-      list.push({ at: Date.now(), commits: synced.arrived ?? [] });
-      this.arrivals.set(session.id, list.slice(-20));
-      log.info({ session: session.id, commits: synced.arrived?.length }, 'pulled base');
-      return 'merged';
-    }
-    if (synced.outcome === 'nothing') return 'clean';
-    if (synced.outcome === 'busy') return 'busy';
-    if (synced.outcome === 'blocked') {
-      log.warn({ session: session.id, reason: synced.reason }, 'pull conflict unresolved — the branch is as it was');
-      return 'conflict';
-    }
-    return 'error';
-  }
-
-  /** What moved on base — read-only, changes nothing in the tree. */
-  async status(session: SessionRow, project: ProjectRow): Promise<{
-    pending: { commits: string[]; files: string[] };
-    /** Commits base has gained since this checkout was cut. */
-    sinceCut: number;
-    pulled: Arrival[];
-  }> {
-    const workspace = await this.workspaceOf(session);
-    const dir = repoDir(this.paths, workspace.id);
-    await git(dir, ['fetch', 'origin', project.baseBranch], await this.auth(project)).catch((error: Error) => {
-      log.warn({ dir, base: project.baseBranch, err: error.message }, 'fetch of base failed — arrivals are measured against the last copy');
-    });
-    const { stdout: commits } = await git(dir, ['log', '--format=%h %s', `HEAD..origin/${project.baseBranch}`]).catch(() => ({ stdout: '' }));
-    const { stdout: files } = await git(dir, ['diff', '--name-only', `HEAD...origin/${project.baseBranch}`]).catch(() => ({ stdout: '' }));
-    const { stdout: since } = await git(dir, ['rev-list', '--count', `${workspace.cutFromSha}..origin/${project.baseBranch}`]).catch(() => ({ stdout: '0' }));
-    return {
-      pending: {
-        commits: commits.trim().split('\n').filter(Boolean),
-        files: files.trim().split('\n').filter(Boolean),
-      },
-      sinceCut: Number(since.trim()),
-      pulled: this.arrivals.get(session.id) ?? [],
-    };
   }
 }

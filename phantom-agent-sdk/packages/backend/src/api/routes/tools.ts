@@ -16,7 +16,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { SessionRow, ProjectRow } from '../../storage/schema.js';
 import { TOOLS, type FileTools, type ToolCtx } from '../../tools/registry.js';
-import { FILE_TOOLS } from '../../tools/files.js';
 import { ToolError } from '../../tools/envelope.js';
 import { ok, err } from '../HttpApi.js';
 import type { PhantomBackend } from '../../PhantomBackend.js';
@@ -55,16 +54,6 @@ export function toolRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     if (error instanceof ToolError) return reply.code(STATUS[error.code] ?? 400).send(err(error.code, error.message, error.retryable, error.detail));
     throw error;
   };
-
-  // The file tools alone — the listing the earlier clients build from.
-  app.get('/tools', { schema: { tags: ['tools'], summary: 'The file tool definitions',
-    description: 'The file and task tools: name, summary, description, JSON Schema input, mutates, and the session ' +
-      'header name. POST /sessions/:id/turn-start answers the whole picture for one agent.' } },
-  async () => ok({
-    version: '1',
-    sessionHeader: SESSION_HEADER,
-    tools: FILE_TOOLS.map(({ name, summary, description, input, mutates }) => ({ name, summary, description, input, mutates })),
-  }));
 
   // One route per tool, registered from the same objects the listing
   // publishes — validation and documentation cannot drift from the contract.

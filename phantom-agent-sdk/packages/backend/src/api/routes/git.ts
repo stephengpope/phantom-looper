@@ -4,7 +4,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { SessionRow, ProjectRow } from '../../storage/schema.js';
 import { ToolError } from '../../tools/envelope.js';
-import { ok, err } from '../HttpApi.js';
+import { err } from '../HttpApi.js';
 import type { PhantomBackend } from '../../PhantomBackend.js';
 import { SESSION_HEADER, toolSession } from '../../agents/sessionHeader.js';
 import { logger, errStr } from '../../lib/log.js';
@@ -17,7 +17,6 @@ const sessionHeader = {
 };
 
 export function gitRoutes(app: FastifyInstance, ctx: PhantomBackend) {
-  const engine = ctx.git.sync;
   // The caller's lock identity ('' when absent — publishSync falls back to
   // the git client). Handed to auto-push/auto-pull as `by`, so the session
   // feed's echo rule skips the window that is already drawing this stream.
@@ -42,38 +41,6 @@ export function gitRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     }
     throw error;
   };
-
-  app.post('/git/push', { schema: { tags: ['git'], headers: sessionHeader,
-    summary: 'Push now',
-    description: 'Commit and push the session branch immediately; the quiet cycle also does this automatically. A push never pulls — only pull does.',
-    body: { type: 'object', additionalProperties: false } } }, async (req, reply) => {
-    try {
-      const { session, project } = await resolveSession(req);
-      const result = await engine.push(session, project);
-      return ok({ result });
-    } catch (error) { return send(reply, error); }
-  });
-
-  app.post('/git/pull', { schema: { tags: ['git'], headers: sessionHeader,
-    summary: 'Pull base now',
-    description: 'Bring origin/<base> under this session\'s work and push the branch: the same flow as auto-push, stopping before the landing. A conflict goes to the session\'s own coding agent. Nothing reaches base.',
-    body: { type: 'object', additionalProperties: false } } }, async (req, reply) => {
-    try {
-      const { session, project } = await resolveSession(req);
-      const result = await engine.pull(session, project);
-      return ok({ result });
-    } catch (error) { return send(reply, error); }
-  });
-
-  app.get('/git/status', { schema: { tags: ['git'], headers: sessionHeader,
-    summary: 'What moved on base',
-    description: 'Read-only: commits and files on base not yet merged into this session, how many commits base has gained since this checkout was cut, and what previous pulls brought in.' } },
-  async (req, reply) => {
-    try {
-      const { session, project } = await resolveSession(req);
-      return ok(await engine.status(session, project));
-    } catch (error) { return send(reply, error); }
-  });
 
   // The streamed git operations (auto-push, auto-pull) share ONE wire: ND-JSON
   // because neither has a time limit — headers go out at once and every step

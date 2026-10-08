@@ -7,7 +7,6 @@
 // /containers/:id/top reports HOST pids (verified live) and is deliberately
 // not used — its numbers can never meet a `pkill` in the container.
 import type { FastifyInstance } from 'fastify';
-import fsp from 'node:fs/promises';
 import { Sandbox } from '../../runtime/Sandbox.js';
 import { ok, err } from '../HttpApi.js';
 import type { PhantomBackend } from '../../PhantomBackend.js';
@@ -74,7 +73,6 @@ export function tasksRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         sid: group.sid,
         command: row ? commandTextFromArgv(row.argv) : group.command,
         background_task_id: row?.id ?? null,
-        logs: row ? `/background-tasks/${row.id}/logs` : null,
         log_file: row ? `/workspace/logs/${row.id}.ndjson` : null,
         started_at: row?.startedAt ?? (secs == null ? null : new Date(Date.now() - secs * 1000)),
         elapsed: group.elapsed,
@@ -97,7 +95,6 @@ export function tasksRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         exit_code: row.exitCode,
         started_at: row.startedAt,
         ended_at: row.endedAt,
-        logs: `/background-tasks/${row.id}/logs`,
         log_file: `/workspace/logs/${row.id}.ndjson`,
       }));
 
@@ -131,29 +128,4 @@ export function tasksRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     return ok({ sid: req.params.sid, background_task_id: marked });
   });
 
-  // ND-JSON stream: replays the log, then follows until the task ends. For
-  // API clients — the agent reads its log_file straight off disk.
-  app.get<{ Params: { id: string } }>('/background-tasks/:id/logs', { schema: { ...TAG,
-    summary: 'Background task log stream',
-    description: 'ND-JSON: replays what the task has written, then follows until it ends. Records are {seq, stream: stdout|stderr, data} with exactly one terminal {event: exit|error} record.',
-    params: idParam } },
-  async (req, reply) => {
-    const task = await ctx.backgroundTasks.get(req.params.id);
-    if (!task) return reply.code(404).send(err('not_found', `no background task ${req.params.id}`));
-    reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
-    let offset = 0;
-    for (;;) {
-      const buf = await fsp.readFile(task.logPath).catch(() => Buffer.alloc(0));
-      if (buf.length > offset) { reply.raw.write(buf.subarray(offset)); offset = buf.length; }
-      const row = await ctx.backgroundTasks.get(task.id);
-      if (row?.status !== 'running') {
-        const rest = await fsp.readFile(task.logPath).catch(() => Buffer.alloc(0));
-        if (rest.length > offset) reply.raw.write(rest.subarray(offset));
-        break;
-      }
-      await new Promise((wake) => setTimeout(wake, 250));
-    }
-    reply.raw.end();
-    return reply;
-  });
 }

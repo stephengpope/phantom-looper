@@ -284,33 +284,6 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       params: idParam } },
     async (req) => { ctx.sessions.interrupt(req.params.id, clientOf(req), { foreground: ctx.foregroundCommands }); return ok({}); });
 
-  // ---- notify ---------------------------------------------------------------
-  // The `send_message` tool's door (tools/notify.ts): the session's agent
-  // DMs the user on Telegram, delivered exactly like a reply in a Telegram
-  // chat (the app's notification channel). Any client running the
-  // session — a cli window, a card run, a cron — reaches Telegram here.
-  app.post<{ Params: { id: string }; Body: { text: string } }>(
-    '/sessions/:id/notify', { config: { operator: true }, schema: { ...TAG,
-      summary: 'DM the user on Telegram from a session',
-      description: 'Sends `text` to the authorized Telegram user as the session\'s agent: markdown formatted, ' +
-        'MEDIA:/workspace/... tags and bare /workspace paths delivered as files, spoken when the reply mode says so. ' +
-        'The bubble is recorded against the session, so a reply to it enters the session. ' +
-        '503 when Telegram is not wired or not enabled — the message says which setting is missing.',
-      params: idParam,
-      body: { type: 'object', required: ['text'], additionalProperties: false,
-        properties: { text: { type: 'string' } } } } },
-    async (req, reply) => {
-      const session = await ctx.sessions.get(req.params.id);
-      if (!session) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
-      if (!ctx.notifications.available) return reply.code(503).send(err('telegram_unavailable', 'no notification channel is wired on this backend'));
-      try {
-        await ctx.notifications.send(req.body.text, { sessionId: session.id });
-        return ok({ sent: true });
-      } catch (error) {
-        return reply.code(503).send(err('telegram_unavailable', (error as Error).message));
-      }
-    });
-
   // ---- the transcript ------------------------------------------------------
   // The conversation, whole — the same JSONL the client keeps locally. SQL is
   // the record: the client uploads the file when a turn ends and rewrites its
@@ -716,7 +689,6 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       try {
         if (hasFiles) {
           await ctx.sessions.destroy(session, { force: req.query.force === 'true' });
-          await ctx.git.sync.detach(session.id);
           await ctx.sessionContainers.remove(session.id).catch((error: Error) => {
             log.warn({ session: session.id, err: error.message }, 'files deleted but the container could not be removed');
           });
