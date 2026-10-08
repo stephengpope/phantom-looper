@@ -1,0 +1,3 @@
+[submodule "phantom-agent-sdk"]
+	path = phantom-agent-sdk
+	url = https://github.com/stephengpope/phantom-agent-sdk.git
