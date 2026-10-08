@@ -15,6 +15,7 @@ import { makePaths, type Paths } from './lib/paths.js';
 import { Database, SDK_MIGRATIONS } from './storage/Database.js';
 import { Settings } from './storage/Settings.js';
 import { sdkSettings, agentTypeSettings } from './storage/sdkSettings.js';
+import { settingsFromEnv } from './storage/envSettings.js';
 import { Projects } from './storage/Projects.js';
 import { Workspaces } from './storage/Workspaces.js';
 import { Sessions } from './storage/Sessions.js';
@@ -78,8 +79,8 @@ export interface PhantomBackendConfig {
   crons?: { agent: CronAgent };
   /** Values the app fixes, by key (the SDK's settings or its own): each wins
    *  over every layer for every caller, and any write to it is refused with
-   *  403 access denied. Read them from a file or the environment — the SDK
-   *  takes values, not a format. */
+   *  403 access denied. A deployment fixes them too, with SETTING_<KEY> in
+   *  the environment (storage/envSettings.ts). */
   fixedSettings?: Record<string, unknown>;
   /** The agent types this backend runs. The SDK ships none. */
   agentTypes: AgentTypeDefinition[];
@@ -244,7 +245,15 @@ export class PhantomBackend {
     for (const type of agentTypes.list()) settings.register(agentTypeSettings(type));
     settings.register(sdkSettings({ sessionImageTag: options.sessionImageTag ?? (/^v\d+\.\d+\.\d+/.test(APP_VERSION) ? APP_VERSION : 'latest') }));
     settings.register(config.settings ?? []);
-    settings.fix(config.fixedSettings ?? {});
+    // Fixed by the app (its constructor) and by the deployment (SETTING_* in
+    // the environment) — the same thing, so one value may not be both.
+    const fromEnv = settingsFromEnv(settings, config.env ?? process.env);
+    for (const [key, value] of Object.entries(config.fixedSettings ?? {})) {
+      if (key in fromEnv && fromEnv[key] !== value) {
+        throw new Error(`${key} is fixed twice: ${JSON.stringify(value)} by the app, ${JSON.stringify(fromEnv[key])} by SETTING_${key.toUpperCase()}`);
+      }
+    }
+    settings.fix({ ...config.fixedSettings, ...fromEnv });
     const agentConfig = new AgentConfig(settings, agentTypes, modelCatalog);
 
     const agentDatabases = new AgentDatabases(database.pool, database.url, env.encryptionKey);

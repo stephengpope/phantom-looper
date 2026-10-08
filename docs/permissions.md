@@ -103,6 +103,12 @@ client SDK's `BackendOptions.actingFor` sends the two headers.
   everywhere, report `source: 'fixed'`, and any write is a 403. An unknown
   key or a bad value fails the boot. The app reads them from a file or the
   environment; the SDK takes values, not a format.
+- **Fixed by the deployment:** `SETTING_<KEY>` in `.env` (for example
+  `SETTING_SMTP_HOST=…`) fixes that setting, exactly like a constructor
+  value. It is optional; with none set, nothing changes. It is read at
+  boot, so a change means a restart. A variable naming no setting, a bad
+  value, or a conflict with the constructor stops the boot with the reason.
+  The API container reads `.env` (`env_file`, not required).
 - **BYOK:** every provider key, plus Deepgram, Firecrawl and GitHub, can be
   set at the organization, user and project layers. Agents resolve keys for
   the user they run for (`scopeOf` adds the acting user).

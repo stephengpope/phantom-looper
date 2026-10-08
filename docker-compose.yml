@@ -41,6 +41,12 @@ services:
         condition: service_healthy
       docker-proxy:
         condition: service_started
+    # .env reaches the api whole, for SETTING_<KEY> lines: a setting fixed for
+    # this deployment (storage/envSettings.ts). Optional — with none, nothing
+    # changes. The `environment:` entries below still win where both name one.
+    env_file:
+      - path: .env
+        required: false
     environment:
       # The superuser's: boot creates the `migrator` and `backend` roles with
       # it and hangs up; the process runs as `backend` (storage/Database.ts).

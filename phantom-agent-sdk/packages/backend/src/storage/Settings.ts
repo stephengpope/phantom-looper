@@ -167,6 +167,8 @@ export class Settings {
   }
 
   definitionOf(key: string): SettingDefinition | undefined { return this.#definitions.get(key); }
+  /** Every registered key, in screen order. */
+  registeredKeys(): string[] { return [...this.#definitions.keys()]; }
   isRegistered(key: string): boolean { return this.#definitions.has(key); }
   /** Every registered key, in registration order. */
   keys(): string[] { return [...this.#definitions.keys()]; }
