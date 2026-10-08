@@ -40,10 +40,8 @@ export function tasksRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   };
 
   app.get<{ Params: { id: string } }>('/sessions/:id/tasks', { schema: { ...TAG,
-    summary: 'What is running in the session container right now',
-    description: 'Live process trees grouped one-per-started-command, matched to ' +
-      'background_tasks rows (background_task_id + logs when tracked), plus recent finished tasks with exit codes. ' +
-      'Reads the container fresh on every call; never starts one.',
+    summary: 'List running tasks',
+    description: 'The commands running in the session\'s container right now, including background ones the agent started.',
     params: idParam } },
   async (req, reply) => {
     const session = await ctx.sessions.get(req.params.id);
@@ -102,9 +100,8 @@ export function tasksRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   });
 
   app.delete<{ Params: { id: string; sid: string } }>('/sessions/:id/tasks/:sid', { schema: { ...TAG,
-    summary: 'Kill one task by its process-session id',
-    description: 'TERM, one second, then KILL — the whole process tree. The sid must name a live, ' +
-      'non-baseline group in the container (listed by GET); a tracked background_tasks row is marked killed.',
+    summary: 'Stop a task',
+    description: 'Stops one running command in the session\'s container, along with everything it started.',
     params: { type: 'object', properties: { id: { type: 'string' }, sid: { type: 'string' } },
       required: ['id', 'sid'] } } },
   async (req, reply) => {

@@ -35,9 +35,8 @@ export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // (the one /keys writes); a project's own token is exercised by its
   // project's operations.
   app.get('/github/whoami', { schema: { tags: ['system'],
-    summary: 'Verify the stored github_token against GitHub',
-    description: 'Resolves the caller\'s github_token (theirs, else their organization\'s, else the server\'s) and asks GitHub whose it is. ' +
-      '404 when none is stored; the classified error when GitHub rejects it.' } },
+    summary: 'Check the GitHub token',
+    description: 'Asks GitHub who the caller\'s GitHub token belongs to, to confirm the token works.' } },
   async (_req, reply) => {
     const pat = await ctx.settings.credential('github_token', actingScope());
     if (!pat) return reply.code(404).send(err('not_set', 'no github_token stored'));
@@ -54,11 +53,8 @@ export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // marked `added` when a project already points at it — POST /projects
   // has no uniqueness rule, so the list is where a duplicate is prevented.
   app.get('/github/repos', { schema: { tags: ['system'],
-    summary: 'Repositories the stored github_token can see',
-    description: 'Pages GitHub\'s /user/repos (owner, collaborator, organization member; sorted by last push) ' +
-      'with the caller\'s github_token (theirs, else their organization\'s, else the server\'s). Each row: owner, name, private, defaultBranch, pushedAt, and `added` — ' +
-      'whether a project is already registered for it. 404 when no token is stored; the classified error ' +
-      'when GitHub rejects it.' } },
+    summary: 'List GitHub repositories',
+    description: 'The repositories the caller\'s GitHub token can see, most recently pushed first, each marked if it is already a project.' } },
   async (_req, reply) => {
     const pat = await ctx.settings.credential('github_token', actingScope());
     if (!pat) return reply.code(404).send(err('not_set', 'no github_token stored'));
@@ -72,8 +68,7 @@ export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   });
 
   app.get('/projects', { schema: { ...TAG, summary: 'List projects',
-    description: 'All registered projects with hasCredential flags and `cardPrefix` (the resolved card ' +
-      'number prefix, e.g. "PHA"). Credentials are never returned by any route.' } }, async () => {
+    description: 'Every project the caller can see.' } }, async () => {
     const rows = await ctx.projects.list();
     return ok(await Promise.all(rows.map(async (project) => ({
       ...publicProject(project, await ctx.settings.hasCredentialAt('github_token', projectScope(project.id))),
@@ -83,12 +78,8 @@ export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
 
   app.post<{ Body: { url: string; base_branch?: string; branch_prefix?: string;
     display_name?: string; create?: boolean; private?: boolean; description?: string; token?: string } }>(
-    '/projects', { schema: { ...TAG, summary: 'Register a project (optionally creating it on GitHub)',
-      description: 'Creates the project row and makes it a pool target. ' +
-        '`url` takes a plain GitHub URL or owner/name — embedded credentials are rejected. With create=true the repository is ' +
-        'CREATED on GitHub first and seeded with an initial commit on base_branch; if it already exists the call ' +
-        'fails (already_exists) — this is create, not create-if-missing. Creation uses `token` (stored as the ' +
-        'project credential) or else the global github_token, and needs a token that can create repositories.',
+    '/projects', { schema: { ...TAG, summary: 'Add a project',
+      description: 'Adds a GitHub repository as a project, given as a URL or `owner/name`. With `create`, the repository is created on GitHub first. The project belongs to the caller\'s organization.',
       body: { type: 'object', required: ['url'], additionalProperties: false,
         examples: [
           { url: 'https://github.com/you/your-project', base_branch: 'main' },
@@ -174,14 +165,8 @@ export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     });
 
   app.get<{ Params: { id: string } }>('/projects/:id', { schema: { ...TAG,
-    summary: 'One project, settings resolved',
-    description: 'The project row (hasCredential; the credential itself is never returned), `cardPrefix` ' +
-      '(the resolved card number prefix, e.g. "PHA" — the same value the list route returns) plus `settings`: ' +
-      'every setting with its LAYERS — `default` (code), `global` (the settings row, null when unset), ' +
-      '`project` (this project\'s override, null when unset), and the computed `value` + `source` — ' +
-      'with `description`, `meta` and `overridable` per key, so a client renders a per-project editor ' +
-      'from this one call. `overridable: false` means global-only: PATCH will not accept it. ' +
-      'The first question to ask when the pool misbehaves.',
+    summary: 'Get a project',
+    description: 'One project, with its settings as they apply to it.',
     params: idParam } }, async (req, reply) => {
     const project = await ctx.projects.get(req.params.id);
     if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
@@ -201,10 +186,8 @@ export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // route used to accept settings too, with its own list of which — a list
   // that drifted from the real one and refused five of them.
   app.patch<{ Params: { id: string }; Body: { display_name?: string; base_branch?: string; branch_prefix?: string } }>(
-    '/projects/:id', { schema: { ...TAG, summary: 'Update the project\'s own fields',
-      description: 'display_name, base_branch, branch_prefix — the project\'s own, not overrides. ' +
-        'base_branch and branch_prefix cannot be cleared; an empty display_name reverts to the repo name. ' +
-        'Settings a project overrides are written with PATCH /settings?project=<id>.', params: idParam,
+    '/projects/:id', { schema: { ...TAG, summary: 'Update a project',
+      description: 'Changes the project\'s own details: its display name, base branch and branch prefix.', params: idParam,
       body: { type: 'object', additionalProperties: false, properties: {
         display_name: { type: 'string', description: 'Human label; empty string reverts to the project name.' },
         base_branch: { type: 'string' }, branch_prefix: { type: 'string' } } } } },
@@ -237,7 +220,7 @@ export function projectRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   app.delete<{ Params: { id: string }; Querystring: { confirm?: string } }>(
     '/projects/:id', { schema: { ...TAG,
       summary: 'Delete a project',
-      description: 'Refuses while sessions are active. Requires ?confirm=true.',
+      description: 'Deletes the project with its sessions, board and crons. Refused while any of its sessions still has files on disk, and it needs `confirm=true`.',
       params: idParam, querystring: { type: 'object', properties: { confirm: { type: 'string', enum: ['true'] } } } } },
     async (req, reply) => {
       if (!await ctx.projects.get(req.params.id)) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));

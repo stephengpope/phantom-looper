@@ -16,8 +16,8 @@ const idParam = { type: 'object', properties: { id: { type: 'string' } }, requir
 export function databaseRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   app.get<{ Params: { id: string } }>(
     '/projects/:id/database', { schema: { ...TAG,
-      summary: 'Whether the agent has its own database in this project',
-      description: 'The `agent_database` setting resolved at this project\'s layer. The coding agent\'s tool kit reads it: on, the database_query tool is offered; off, it is not.',
+      summary: 'Check the agent database',
+      description: 'Whether the project\'s agent has its own PostgreSQL database turned on.',
       params: idParam } },
     async (req, reply) => {
       const project = await ctx.projects.get(req.params.id);
@@ -28,13 +28,8 @@ export function databaseRoutes(app: FastifyInstance, ctx: PhantomBackend) {
 
   app.post<{ Params: { id: string }; Body: { sql: string; limit?: number; maxCellChars?: number; params?: unknown[] } }>(
     '/projects/:id/database/query', { schema: { ...TAG,
-      summary: 'Run SQL in the agent\'s own database',
-      description: 'Run connected as the project\'s own role in its own database — the agent is the admin there and nothing else. ' +
-        'Several statements run as ONE transaction: an error undoes the whole call. No session state survives between calls. ' +
-        '30 s statement timeout. `params` fills $1…$n and needs a single statement. One result per statement: Postgres\'s command tag, ' +
-        'the TRUE row count, and the first `limit` rows; cells past `maxCellChars` end in `…[truncated, N chars]`. Duplicate column ' +
-        'names are refused. The database and role are created on first use. 409 `database_off` when the setting is off; 400 `sql_error` ' +
-        'with Postgres\'s own message, code, the object it names, and (for parse errors) line/column; 503 when this server has no database wiring.',
+      summary: 'Query the agent database',
+      description: 'Runs SQL in the project\'s agent database and returns the result of each statement.',
       params: idParam,
       body: { type: 'object', required: ['sql'], additionalProperties: false,
         properties: {

@@ -57,8 +57,8 @@ export function secretsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
 
   app.get<{ Querystring: ScopeQuery }>(
     '/secrets', { schema: { ...TAG,
-      summary: 'Every secret — names and descriptions, never values',
-      description: 'With a layer named (?project=, ?organization=, ?user=): that chain, merged — the agent\'s view. Bare: EVERY layer on the server (the cli\'s list, which saves to any project), each row carrying the id of its layer (`project`, `organization` or `user`). Either way `scope` says the layer, and the same name at two layers lists twice — the more specific one wins when a value is read.',
+      summary: 'List secrets',
+      description: 'The names and descriptions of stored secrets, never their values. Add `project`, `organization` or `user` to see the secrets that apply there.',
       querystring: scopeQuery } },
     async (req, reply) => {
       const scopes = await scopesOf(req);
@@ -78,8 +78,8 @@ export function secretsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   app.put<{ Params: { name: string }; Querystring: ScopeQuery;
     Body: { description?: string; value?: string } }>(
     '/secrets/:name', { schema: { ...TAG,
-      summary: 'Create or overwrite one secret at one layer',
-      description: 'Body is {description?, value?}. Writing an existing name at the same layer overwrites it — that is the update path; there is no separate one. Omit `value` to change only the description of a secret already stored at that layer (400 when nothing is there to keep). Names are stored UPPER_CASE (letters, digits, underscores, starting with a letter); whatever case is sent is uppercased.',
+      summary: 'Save a secret',
+      description: 'Creates or replaces one secret at one scope. The body holds the secret\'s `value` and an optional `description`; leave out `value` to change only the description. Names are stored in capitals.',
       params: nameParam, querystring: scopeQuery,
       body: { type: 'object', properties: {
         description: { type: 'string' }, value: { type: 'string' } } } } },
@@ -108,8 +108,8 @@ export function secretsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
 
   app.get<{ Params: { name: string }; Querystring: ScopeQuery }>(
     '/secrets/:name', { schema: { ...TAG,
-      summary: 'One secret\'s value',
-      description: 'Decrypted. Resolution walks the chain: global, then the organization, the user, the project — the deepest layer named wins. Name is case-insensitive. An unknown name answers with the names that do exist.',
+      summary: 'Read a secret',
+      description: 'Returns one secret\'s value. When the same name is stored at several scopes, the most specific one wins: the project\'s, then the user\'s, then the organization\'s, then the server\'s.',
       params: nameParam, querystring: scopeQuery } },
     async (req, reply) => {
       const scopes = await scopesOf(req);
@@ -126,8 +126,8 @@ export function secretsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
 
   app.delete<{ Params: { name: string }; Querystring: ScopeQuery }>(
     '/secrets/:name', { schema: { ...TAG,
-      summary: 'Delete one secret at one layer',
-      description: 'Removes the row at the addressed layer only — a global secret shadowed by a project one survives the project delete, and the other way round.',
+      summary: 'Delete a secret',
+      description: 'Removes one secret from one scope. The same name at other scopes is untouched.',
       params: nameParam, querystring: scopeQuery } },
     async (req, reply) => {
       const scopes = await scopesOf(req);

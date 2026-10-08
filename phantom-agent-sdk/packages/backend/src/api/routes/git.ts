@@ -73,11 +73,8 @@ export function gitRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // AUTO-PUSH: the whole path to base in one call, streamed as it runs.
   // Result: pushed | nothing | blocked | error | busy (+ reason?, rounds?, sha?).
   app.post('/git/auto-push', { schema: { tags: ['git'], headers: sessionHeader,
-    summary: 'Auto-push the session to base',
-    description: 'Take the session (busy if a turn holds it), back the branch up, collapse the work into one commit, ' +
-      'replay it on origin/<base> (a conflict goes to the session\'s own coding agent), verify against the repo, ' +
-      'force-push the branch with a lease, then fast-forward base to it. Base moved meanwhile: replay again, up to 3 rounds. ' +
-      'ND-JSON stream: step records, then one result record (pushed | nothing | blocked | error | busy).',
+    summary: 'Land work on the base branch',
+    description: 'Puts the session\'s work onto the project\'s base branch as one commit, bringing in the base branch\'s newer changes first. Progress streams as one JSON object per line, ending with the result.',
     body: { type: 'object', additionalProperties: false } } },
   async (req, reply) => {
     let session: SessionRow; let project: ProjectRow;
@@ -89,11 +86,8 @@ export function gitRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // AUTO-PULL: base INTO the session branch in one call, streamed the same way.
   // Result: merged | clean | blocked | error | busy (+ reason?, arrived?, files?, sha?, pushed?).
   app.post('/git/auto-pull', { schema: { tags: ['git'], headers: sessionHeader,
-    summary: 'Auto-pull base into the session',
-    description: 'Auto-push without the landing. Fetch origin/<base>; nothing behind -> clean. Otherwise back the branch up, ' +
-      'collapse the work into one commit, replay it on origin/<base> (a conflict goes to the session\'s own coding agent), ' +
-      'verify against the repo, force-push the branch with a lease. Nothing reaches base. ' +
-      'ND-JSON stream: step records, then one result record (merged | clean | blocked | error | busy).',
+    summary: 'Bring in the base branch',
+    description: 'Brings the base branch\'s newer changes into the session\'s branch, without landing anything on the base branch. Progress streams as one JSON object per line, ending with the result.',
     body: { type: 'object', additionalProperties: false } } },
   async (req, reply) => {
     let session: SessionRow; let project: ProjectRow;

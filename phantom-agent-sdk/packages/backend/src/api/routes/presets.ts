@@ -15,8 +15,8 @@ import { PresetError } from '../../storage/Presets.js';
 const TAG = { tags: ['presets'] };
 
 export function presetRoutes(app: FastifyInstance, ctx: PhantomBackend) {
-  app.get('/presets', { config: { operator: true }, schema: { ...TAG, summary: 'List presets',
-    description: 'Every saved provider preset, ordered by name.' } },
+  app.get('/presets', { config: { operator: true }, schema: { ...TAG, summary: 'List model presets',
+    description: 'The saved sets of model settings, by name.' } },
   async () => {
     const rows = await ctx.presets.list();
     return ok(rows.map((row) => ({
@@ -26,9 +26,8 @@ export function presetRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   });
 
   app.put<{ Params: { id: string }; Body: { name: string; values?: Record<string, unknown> } }>(
-    '/presets/:id', { config: { operator: true }, schema: { ...TAG, summary: 'Create or update a preset',
-      description: 'Body: {name, values}. values holds only the model keys; unknown keys are refused. ' +
-        'Each value is validated against the same rules PATCH /settings uses.',
+    '/presets/:id', { config: { operator: true }, schema: { ...TAG, summary: 'Save a model preset',
+      description: 'Creates or replaces a named set of model settings.',
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       body: { type: 'object', properties: {
         name: { type: 'string', minLength: 1 },
@@ -46,7 +45,8 @@ export function presetRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     });
 
   app.delete<{ Params: { id: string } }>(
-    '/presets/:id', { config: { operator: true }, schema: { ...TAG, summary: 'Delete a preset',
+    '/presets/:id', { config: { operator: true }, schema: { ...TAG, summary: 'Delete a model preset',
+      description: 'Deletes one saved set of model settings.',
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } } },
     async (req, reply) => {
       if (!await ctx.presets.remove(req.params.id)) return reply.code(404).send(err('not_found', 'no such preset'));

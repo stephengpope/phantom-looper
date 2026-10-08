@@ -12,17 +12,17 @@ const TAG = { tags: ['identity'] };
 
 export function identityRoutes(app: FastifyInstance, backend: PhantomBackend) {
   app.get('/identity/me', { schema: { ...TAG, summary: 'Who am I',
-    description: 'The caller: `{type: "phantom_admin"}` for the API key; `{type: "user", user, organization, role}` for a Better Auth session, bearer token or API key. 401 for nobody.' } },
+    description: 'The caller: the server key, or a user with their organization and role.' } },
   async (req) => ok(await backend.identity.require(req)));
 
-  app.post<{ Body: { email: string; name?: string } }>('/identity/users', { config: { operator: true }, schema: { ...TAG, summary: 'Create a user (bootstrap)',
-    description: 'The phantom admin makes the first user with no mail involved: a user row and their personal organization. 409 `email_taken`. 503 `disabled` when identity is off.',
+  app.post<{ Body: { email: string; name?: string } }>('/identity/users', { config: { operator: true }, schema: { ...TAG, summary: 'Create a user',
+    description: 'Creates a user and their personal organization, without sending any email. For setting up the first user.',
     body: { type: 'object', required: ['email'], additionalProperties: false,
       properties: { email: { type: 'string', minLength: 3 }, name: { type: 'string', minLength: 1 } } } } },
   async (req) => ok(await backend.identity.createUser(req.body)));
 
-  app.post<{ Body: { email: string } }>('/identity/magic-link', { config: { operator: true }, schema: { ...TAG, summary: 'A sign-in link (bootstrap)',
-    description: 'The magic link for `email`, handed back instead of mailed — for the first sign-in before SMTP is set, or a link to paste. Opening it signs the user in; `GET` without a callbackURL answers the session and a bearer token (`set-auth-token`).',
+  app.post<{ Body: { email: string } }>('/identity/magic-link', { config: { operator: true }, schema: { ...TAG, summary: 'Get a sign-in link',
+    description: 'Returns a sign-in link for a user instead of emailing it. For the first sign-in, before mail is set up.',
     body: { type: 'object', required: ['email'], additionalProperties: false, properties: { email: { type: 'string', minLength: 3 } } } } },
   async (req) => ok({ url: await backend.identity.magicLink(req.body.email) }));
 }

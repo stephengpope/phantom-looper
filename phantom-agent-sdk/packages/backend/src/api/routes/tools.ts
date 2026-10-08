@@ -62,10 +62,12 @@ export function toolRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       schema: {
         tags: ['tools'],
         summary: def.summary,
-        description: def.description + (def.mutates ? ' Mutating.' : ' Read-only.'),
+        // The tool's own description — the very text the agent reads — so the
+        // docs show exactly what agents are told.
+        description: def.description + (def.mutates ? '\n\nThis tool can change files or state.' : '\n\nThis tool only reads.'),
         headers: {
           type: 'object',
-          properties: { [SESSION_HEADER]: { type: 'string', description: 'Session id (ULID). Required — enforced by the handler so the error speaks the envelope.' } },
+          properties: { [SESSION_HEADER]: { type: 'string', description: 'The session the tool runs in.' } },
         },
         body: def.input,
       },

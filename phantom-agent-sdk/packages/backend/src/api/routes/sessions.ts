@@ -125,20 +125,8 @@ const unknownBlock = (reply: FastifyReply, error: unknown) =>
 export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   app.post<{ Body: { project_id: string; type: string; id?: string; workspace_session_id?: string | null;
     system_prompt_layout: SystemPromptLayout } }>('/sessions', { schema: { ...TAG,
-    summary: 'Create — or restart — a session',
-    description: 'Creates a session of `type`, a registered agent type. What the type gets is the type\'s registration: ' +
-      'one that OWNS a workspace claims a pre-cloned pool directory (or clones) and checks out the session\'s branch — ' +
-      'its own {prefix}/{id}, cut from the base branch, worked in and pushed back to, nothing pushed anywhere else; ' +
-      'one that BORROWS reads another session\'s workspace (`workspace_session_id`, or none yet); one with no ' +
-      'workspace is a conversation alone. The returned id goes in the x-phantom-session header on every tool call.\n\n' +
-      'The session records who opened it (`started_by`) from x-phantom-actor — an automation\'s own name; ' +
-      'unsaid = a person. The app\'s background automations are left out of a default GET /sessions.\n\n' +
-      'Pass `id` to RESTART an owning session that was destroyed. Destroying a session deletes its files and ' +
-      'nothing else — the row keeps its id and its branch — so a restart re-clones, finds that branch on ' +
-      'origin, and carries on exactly where it stopped. Restarting a session that is still active is refused.\n\n' +
-      '`system_prompt_layout` is the agent\'s prompt layout; the server fills its blocks from that moment\'s ' +
-      'skills, secrets, SOUL.md and date, writes the three sections with the row, and answers them as ' +
-      '`system_prompt` — sent as stored on every turn. A restart keeps the prompt the session was born with.',
+    summary: 'Start a session',
+    description: 'Creates a session of the given agent `type` in a project, with its own copy of the repository. It can also restart an existing session, or open one on another session\'s files.',
     body: { type: 'object', required: ['project_id', 'type', 'system_prompt_layout'], additionalProperties: false,
       examples: [{ project_id: 'paste the id from POST /projects', type: 'a registered agent type',
         system_prompt_layout: { stable: [{ text: 'You are…' }], context: ['agents_md'], volatile: ['time_date'] } }],
@@ -176,26 +164,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     typed?: boolean; background?: boolean; q?: string; project?: string; type?: string; started_by?: string; order?: 'activity' | 'created' } }>(
     '/sessions', { schema: { ...TAG,
     summary: 'List sessions',
-    description: 'Every session, pinned first then newest activity first, including destroyed ones (status says which). ' +
-      'Each row carries `locked` (someone holds it right now, label in locked_label/locked_by), ' +
-      '`lastUserMessage` (the last thing the user typed, from the server-side transcript) and ' +
-      '`name` (a model-written title of what the session is building, best-effort). ' +
-      'Join against GET /projects for names.\n\n' +
-      'No parameters = the whole list. `limit` returns one page; the next page passes the last ' +
-      'row\'s last_used_at as `before` and its id as `before_id` (the tie-break — several rows can ' +
-      'share a timestamp). A page shorter than `limit` is the end. The cursor is the values the ' +
-      'client SAW, so a session used since simply moves to the top of a later refresh — pages ' +
-      'never repeat a row.\n\n' +
-      '`workState` rides every row — where the checkout\'s work stands: not_pushed (only on this ' +
-      'server\'s disk), not_merged (on origin\'s branch, not in base), merged (in base), or null ' +
-      '(never measured). The server\'s periodic git refresh keeps it current for sessions with a running ' +
-      'container. `status`, `lastUsedAt`, `lastPushAt` and `branch` are the checkout\'s too, shared by ' +
-      'every session on the same workspace.\n\n' +
-      '`q` filters: the text as ONE substring, case-insensitive, anywhere in the name, the last ' +
-      'user message or the branch. It is part of the list\'s WHERE, so paging and `total` follow it; ' +
-      'so is `project` (one project id), `type` (one registered agent type, named outright — a type the ' +
-      'registry never lists is reachable this way) and `started_by` (the actor that opened the session: ' +
-      '`person`, or an automation\'s name).',
+    description: 'The sessions the caller can see, pinned first and then most recently active. Filter by project, by agent type, or by who started them.',
     querystring: { type: 'object', additionalProperties: false, properties: {
       limit: { type: 'integer', minimum: 1, maximum: 500, description: 'Page size; omitted = everything.' },
       q: { type: 'string', maxLength: 200, description: 'Substring to match (case-insensitive) in name, last user message or branch.' },
@@ -241,12 +210,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // that stamp, so it never learned the container was wanted.
   app.post<{ Params: { id: string } }>(
     '/sessions/:id/ping', { schema: { ...TAG,
-      summary: 'Ping the session container',
-      description: 'Brings the session back up: clones its branch back if the files are gone, starts ' +
-        'the container if it is not already running, and marks the checkout as used so the idle ' +
-        'reaper leaves it up for another container_idle_ms. ' +
-        'The periodic git-status refresh picks it up within ~10 seconds and ' +
-        'publishes the result on the board event stream. 503 when Docker is not wired.',
+      summary: 'Wake a session',
+      description: 'Brings the session\'s container back up, restoring its files from its branch if they were removed.',
       params: idParam,
       body: { type: 'object', additionalProperties: false } } },
     async (req, reply) => {
@@ -274,13 +239,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // interruption, not a failure: the card is NOT blocked.
   app.post<{ Params: { id: string } }>(
     '/sessions/:id/interrupt', { schema: { ...TAG,
-      summary: 'Interrupt a running turn',
-      description: 'Stops the turn running on this session, whoever runs it: an {event:"interrupt"} record on ' +
-        'GET /sessions/:id/events tells the client running a turn here (a cli window, the backend\'s own engines) ' +
-        'to stop its own, and any ' +
-        'foreground bash commands the session has in flight are killed in their container (detached ' +
-        'commands are left running by design). The turn saves what it recorded and ends cleanly — the ' +
-        'card is not blocked. 200 whether or not a turn was running (idempotent).',
+      summary: 'Stop the running turn',
+      description: 'Stops the turn running on the session, wherever it is running.',
       params: idParam } },
     async (req) => { ctx.sessions.interrupt(req.params.id, clientOf(req), { foreground: ctx.foregroundCommands }); return ok({}); });
 
@@ -291,11 +251,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // calls these simply has no server transcript, and nothing else cares.
   app.get<{ Params: { id: string }; Querystring: { after?: number } }>(
     '/sessions/:id/transcript', { schema: { ...TAG,
-      summary: 'Read a session\'s transcript',
-      description: 'The stored conversation (JSONL, one line per entry), or data: null when none was ever saved. ' +
-        '`lines` is how many lines the record holds. `?after=N` answers only the lines after the first N — what a ' +
-        'client that already holds N lines needs to catch up. One session, one transcript. Reads are allowed ' +
-        'while another client holds the session — watching a running session is safe; only writes need the lock.',
+      summary: 'Get the transcript',
+      description: 'The session\'s saved conversation, one JSON line per entry.',
       params: idParam,
       querystring: { type: 'object', properties: { after: { type: 'integer', minimum: 0 } } } } },
     async (req, reply) => {
@@ -317,11 +274,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     '/sessions/:id/transcript/append', {
       bodyLimit: 64 * 1024 * 1024,
       schema: { ...TAG,
-        summary: 'Append lines to a session\'s transcript',
-        description: 'Appends typed JSON lines to the record. The caller (x-phantom-client) must hold the session. ' +
-          '`after` is how many lines the caller believes the record holds: the append lands only if the server ' +
-          'agrees — 409 transcript_conflict otherwise (someone else wrote; read the transcript again). `deliveryId` ' +
-          'names this append: resending one that already landed answers {applied:false} and writes nothing.',
+        summary: 'Add to the transcript',
+        description: 'Appends entries to the session\'s conversation. Only the client holding the session can write.',
         params: idParam,
         body: { type: 'object', required: ['after', 'deliveryId', 'lines'], additionalProperties: false, properties: {
           after: { type: 'integer', minimum: 0 }, deliveryId: { type: 'string', minLength: 1 },
@@ -348,10 +302,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       return ok({ lines: appended.lines, applied: appended.applied, updated_at: appended.stamp.toISOString() });
     });
 
-  app.get('/sessions/events', { schema: { ...TAG, summary: 'Session list events stream',
-    description: 'ND-JSON, open until the client hangs up: {event:"changed",id} whenever any session row ' +
-      'changes in a way the list shows (hold, save, name, pin, plan mode, work state, create, destroy, ' +
-      'purge), plus {event:"heartbeat"} every 15 s. Carries no rows — re-read GET /sessions.' } },
+  app.get('/sessions/events', { schema: { ...TAG, summary: 'Stream session list changes',
+    description: 'A live stream, one JSON object per line, naming each session whose details changed, so a session list can refresh. It stays open until you disconnect.' } },
     async (req, reply) => {
       reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
       const write = (record: unknown) => { if (!reply.raw.destroyed) reply.raw.write(`${JSON.stringify(record)}\n`); };
@@ -389,19 +341,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // otherwise get its own tokens back and draw the reply twice; its own
   // transcript save would come back as "moved forward elsewhere".
   app.get<{ Params: { id: string } }>(
-    '/sessions/:id/events', { schema: { ...TAG, summary: 'Session events stream',
-      description: 'ND-JSON, open until the client hangs up. {event:"turn-start",agent,message} when a ' +
-        'turn begins on the session, {event:"part",part} for every AI SDK stream part as it happens (tool ' +
-        'results over 16KB are clipped and marked `capped`), {event:"turn-end"}, {event:"error",message}, ' +
-        '{event:"interrupt"} when someone stops the turn (the runner aborts its own turn on hearing it), ' +
-        '{event:"transcript",updated_at,by} when the record is saved (by ANY client — this is the signal to ' +
-        're-read it), {event:"sync",op,step,detail?} for every step of a git sync on the session (a push or ' +
-        'pull, whoever kicked it off — a commit-message retry included), ' +
-        '{event:"lock",locked,by,label,agent,expires_at} first thing on connect and on every take / ' +
-        'renew / release, {event:"session",agent?,planMode?,work?,name?,transcript_updated_at?} on state changes ' +
-        'and as a snapshot on every connect, {event:"heartbeat"} every 15 s. Every turn streams here whoever runs it — the server ' +
-        'publishes its own, a cli window relays the one it runs through POST /sessions/:id/events. ' +
-        'Events published under the reader\'s own x-phantom-client are not sent back to it.',
+    '/sessions/:id/events', { schema: { ...TAG, summary: 'Stream a session\'s activity',
+      description: 'A live stream, one JSON object per line, of everything happening in one session: turns starting and ending, the model\'s output as it is written, git syncs, and changes to the session. It stays open until you disconnect.',
       params: idParam } },
     async (req, reply) => {
       const client = clientOf(req);
@@ -452,11 +393,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   app.post<{ Params: { id: string }; Body: { events: Record<string, unknown>[] } }>(
     '/sessions/:id/events', {
       bodyLimit: 8 * 1024 * 1024,
-      schema: { ...TAG, summary: 'Publish turn events on a session',
-        description: 'Relays events of a turn the caller runs onto GET /sessions/:id/events, in order: ' +
-          '{event:"turn-start",agent,message}, {event:"part",part} per AI SDK stream part, {event:"turn-end"}, ' +
-          '{event:"error",message}. The caller (x-phantom-client) must hold the session lock — 409 ' +
-          'otherwise. Tool results are capped like every other publisher\'s. Nothing is stored.',
+      schema: { ...TAG, summary: 'Publish a turn\'s activity',
+        description: 'Lets the client running a turn send its output to everyone watching the session\'s activity stream. Only the client holding the session can publish.',
         params: idParam,
         body: { type: 'object', required: ['events'], additionalProperties: false, properties: {
           events: { type: 'array', maxItems: 1000, items: { type: 'object', required: ['event'],
@@ -503,9 +441,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // on submit, so the agent sees the path inline — no queued message.
   app.post<{ Params: { id: string }; Body: { name: string; data: string } }>(
     '/sessions/:id/attachments', { schema: { ...TAG,
-      summary: 'Attach a file to the session',
-      description: 'Saves `data` (base64) under the session\'s scratch dir as `name`. Returns the ' +
-        'scratch path; the cli inserts a chip that expands to this path on submit.',
+      summary: 'Attach a file',
+      description: 'Saves a file into the session\'s scratch folder, where the agent can read it, and returns its path.',
       params: idParam,
       body: { type: 'object', required: ['name', 'data'], additionalProperties: false,
         properties: { name: { type: 'string', minLength: 1 }, data: { type: 'string' } } } },
@@ -538,13 +475,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   app.post<{ Params: { id: string } }>(
     '/sessions/:id/duplicate', { schema: { ...TAG,
       summary: 'Duplicate a session',
-      description: 'Takes the source\'s lock (409 while another client holds it), commits and pushes ' +
-        'everything outstanding to the source\'s branch on origin, then creates a NEW session whose own ' +
-        'branch is cut FROM that branch — the copy starts with all of the source\'s work. The transcript ' +
-        'travels whole minus its usage lines, so the copy\'s token totals count its own spend from birth. ' +
-        'The frozen system prompt, name, plan mode and model travel; the copy is a newborn (turn_count 0), ' +
-        'so /settings and presets move its model until its first new message. A destroyed source skips ' +
-        'the flush — its branch on origin is the record. A failed flush aborts the copy with the error.',
+      description: 'Creates a new session with a copy of this session\'s conversation and work, on a branch of its own.',
       params: idParam } },
     async (req, reply) => {
       const src = await ctx.sessions.get(req.params.id);
@@ -600,10 +531,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     });
 
   app.get<{ Params: { id: string } }>('/sessions/:id', { schema: { ...TAG,
-    summary: 'Session metadata',
-    description: 'Status, branch, timestamps, `system_prompt` (the frozen prompt the session runs on, ' +
-      'in its three sections; null only on a row born before 025). A session runs on its project\'s settings — ' +
-      'GET /settings?project=. The workspace container is runtime state and has no field here.',
+    summary: 'Get a session',
+    description: 'One session: its status, branch, model, system prompt and other details.',
     params: idParam } }, async (req, reply) => {
     const session = await ctx.sessions.get(req.params.id);
     if (!session) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
@@ -622,13 +551,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
 
   app.patch<{ Params: { id: string }; Body: { name?: string | null; plan_mode?: boolean; pinned?: boolean;
     project_id?: string; workspace_session_id?: string | null } }>(
-    '/sessions/:id', { schema: { ...TAG, summary: 'Per-session overrides',
-      description: '`name` renames the session by hand — the auto-titler never writes over a manual name; null clears it and ' +
-        'hands the session back to the titler. `plan_mode` is the cli\'s /plan switch: while true, clients build ' +
-        'the coding agent\'s mutating kits with the readonly preset; every session starts false (code mode). ' +
-        '`pinned` is the /pin switch: while true, the session pins to the top of every session list. ' +
-        '`project_id` + `workspace_session_id` re-point a BORROWING session at another session\'s files (and project): ' +
-        'its tools read that workspace from then on; null = nothing to read. Refused for a type that owns its workspace.',
+    '/sessions/:id', { schema: { ...TAG, summary: 'Update a session',
+      description: 'Changes a session\'s name, plan mode, pin, model and other options of its own.',
       params: idParam,
       body: { type: 'object', additionalProperties: false,
         properties: { name: { type: ['string', 'null'], maxLength: 80 },
@@ -666,9 +590,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   app.delete<{ Params: { id: string }; Querystring: { force?: string; purge?: string } }>(
     '/sessions/:id', { schema: { ...TAG,
       summary: 'Delete a session',
-      description: 'Pushes first (commit + push), then removes the directory and container. Refuses if unpushed work ' +
-        'would be lost unless ?force=true — the branch on the remote is what survives. ?purge=true also deletes the ' +
-        'row and the server-side transcript, so the session leaves the list for good; refused while another client holds it.',
+      description: 'Saves the session\'s work to its branch, then removes its files and container. With `purge=true`, the session and its transcript are removed for good.',
       params: idParam, querystring: { type: 'object', properties: {
         force: { type: 'string', enum: ['true'] }, purge: { type: 'string', enum: ['true'] } } } } },
     async (req, reply) => {
@@ -712,14 +634,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // a client needs before its first model call, one round trip.
   app.post<{ Params: { id: string }; Body: { type: string; label?: string; system_prompt_layout?: SystemPromptLayout } }>(
     '/sessions/:id/turn-start', { schema: { ...TAG,
-      summary: 'Start a turn: hold the session and answer what it runs on',
-      description: 'Holds the session for x-phantom-client (409 session_locked while someone else does), ' +
-        'writes the session\'s waiting notes (a command exited, a sync landed) into the record, and answers the model ' +
-        'config (provider, model, key, reasoning, maxSteps) and the tools an agent of `type` has on this ' +
-        'session right now, plus the record\'s transcript_updated_at. With `system_prompt_layout`, the prompt\'s ' +
-        'volatile section is reassembled from the session\'s facts now (the date, the skills, the secrets), written ' +
-        'on the row, marked in the record (a system_prompt_rebuilt line) and answered as `system_prompt`. ' +
-        'POST /sessions/:id/turn-ended releases the hold.',
+      summary: 'Begin a turn',
+      description: 'Called by the client running the agent at the start of each turn. Reserves the session for that client and answers with what the turn needs: the model, its settings and the tools.',
       params: idParam,
       body: { type: 'object', required: ['type'], additionalProperties: false, properties: {
         type: { type: 'string', enum: ctx.agentTypes.names() },
@@ -799,11 +715,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // for a coding session, now that the record is appended as the turn runs.
   app.post<{ Params: { id: string } }>(
     '/sessions/:id/turn-ended', { schema: { ...TAG,
-      summary: 'A turn ended on a session',
-      description: 'Records who drove the turn (`last_turn_by`, from x-phantom-actor — a person when unsaid; ' +
-        'the git sync\'s conflict turn records nothing), ' +
-        'bumps the turn count (leaving 0 freezes the row\'s model), touches last_used_at, names the session ' +
-        'on the titler\'s cadence, and releases the hold turn-start took. 409 while another client holds the session.',
+      summary: 'End a turn',
+      description: 'Called by the client running the agent when a turn finishes. Records the turn and releases the session.',
       params: idParam } },
     async (req, reply) => {
       const client = clientOf(req);
@@ -826,8 +739,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // TokenLog.record the server's own calls land in.
   app.post<{ Body: TokenRecord }>(
     '/log-tokens', { schema: { ...TAG,
-      summary: 'Record one model call',
-      description: 'Appends one token_usage entry. For model calls made in the CLI process.',
+      summary: 'Record token usage',
+      description: 'Records the tokens one model call used, for spend reports.',
       body: { type: 'object', required: ['type', 'provider', 'model', 'input', 'output', 'cacheRead', 'cacheWrite'],
         properties: {
           sessionId: { type: ['string', 'null'] }, type: { type: 'string' },

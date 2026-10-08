@@ -91,12 +91,8 @@ export function kanbanRoutes(app: FastifyInstance, ctx: PhantomBackend) {
 
   app.get<{ Params: { id: string };
     Querystring: { archived?: 'true' | 'false' | 'only'; number?: number; limit?: number; before?: string; before_id?: number } }>(
-    '/projects/:id/cards', { schema: { ...TAG, summary: 'The board: columns, card prefix, cards',
-      description: 'Everything a board render needs in one call. Cards are ordered by column position; ' +
-        'archived cards are excluded (archived=true includes them; archived=only lists JUST the archive, ' +
-        'newest change first, keyset-paged like GET /sessions — limit/before/before_id, `total` = the whole archive, a short page = the ' +
-        'end). number returns the one card with that number, archived or not — the lookup for a card that is ' +
-        'off the board.',
+    '/projects/:id/cards', { schema: { ...TAG, summary: 'Get the board',
+      description: 'A project\'s board: its columns and its cards, in order.',
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       querystring: { type: 'object', properties: {
         archived: { type: 'string', enum: ['true', 'false', 'only'], default: 'false' },
@@ -128,9 +124,8 @@ export function kanbanRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     });
 
   app.post<{ Params: { id: string }; Body: Record<string, unknown> }>(
-    '/projects/:id/cards', { schema: { ...TAG, summary: 'Create a card',
-      description: 'New card. status defaults to the first column; pos defaults to the end of that column. ' +
-        'The card number is the project\'s next and is never reused.',
+    '/projects/:id/cards', { schema: { ...TAG, summary: 'Add a card',
+      description: 'Creates a card on the project\'s board. It goes at the end of the first column unless a column and position are given.',
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       body: { type: 'object', additionalProperties: false, required: ['title'], properties: cardBody } } },
     async (req, reply) => {
@@ -146,10 +141,7 @@ export function kanbanRoutes(app: FastifyInstance, ctx: PhantomBackend) {
 
   app.patch<{ Params: { id: string; number: number }; Body: Record<string, unknown> }>(
     '/projects/:id/cards/:number', { schema: { ...TAG, summary: 'Update a card',
-      description: 'Any subset of fields; status+pos is a move. blocked_reason null unblocks; archived true hides ' +
-        'the card from the board (archive instead of delete). items changes checklist items BY KEY ' +
-        '(add/edit/remove/tick), touching nothing else — the way agents edit checklists; replacing a whole ' +
-        'list is the form editor\'s path.',
+      description: 'Changes any of a card\'s fields. Changing its column or position moves it; `archived` hides or restores it.',
       params: { type: 'object', properties: { id: { type: 'string' }, number: cardNumberParam }, required: ['id', 'number'] },
       body: { type: 'object', additionalProperties: false, properties: { ...cardBody, items: itemsSchema } } } },
     async (req, reply) => {
@@ -163,10 +155,8 @@ export function kanbanRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     });
 
   app.get<{ Params: { id: string; number: number }; Querystring: { limit: number } }>(
-    '/projects/:id/cards/:number/revisions', { schema: { ...TAG, summary: "A card's revision history",
-      description: 'What changed on a card and when, newest first — written by a trigger, so edits made ' +
-        'over SQL are recorded too. Each entry is {changed_from, changed_at}: the keys that changed and the value each had before. History ' +
-        'goes with its card: a deleted card has none.',
+    '/projects/:id/cards/:number/revisions', { schema: { ...TAG, summary: 'Get a card\'s history',
+      description: 'What changed on a card and when, newest first.',
       params: { type: 'object', properties: { id: { type: 'string' }, number: cardNumberParam }, required: ['id', 'number'] },
       querystring: { type: 'object', properties: { limit: { type: 'integer', default: 20 } } } } },
     async (req, reply) => {
@@ -176,8 +166,8 @@ export function kanbanRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     });
 
   app.delete<{ Params: { id: string; number: number } }>(
-    '/projects/:id/cards/:number', { schema: { ...TAG, summary: 'Delete a card permanently',
-      description: 'Hard delete — the card, its number and its history. Prefer PATCH archived=true, which keeps all three.',
+    '/projects/:id/cards/:number', { schema: { ...TAG, summary: 'Delete a card',
+      description: 'Deletes a card and its history for good. Archiving a card keeps it instead.',
       params: { type: 'object', properties: { id: { type: 'string' }, number: cardNumberParam }, required: ['id', 'number'] } } },
     async (req, reply) => {
       const project = await projectOf(req.params.id);
@@ -193,11 +183,8 @@ export function kanbanRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // link stays open through proxies and the client can tell a dead one. No
   // replay: the client loads the board on connect and again on reconnect.
   app.get<{ Params: { id: string } }>(
-    '/projects/:id/events', { schema: { ...TAG, summary: 'Board events stream',
-      description: 'ND-JSON, open until the client hangs up: {event: card, card, from?, client?} on every create/update ' +
-        '(the full row; from = the status before an update, client = the writer\'s x-phantom-client), ' +
-        '{event: deleted, id} on a hard delete, {event: session, card, id, name} when a loop pairs a card with its ' +
-        'coding session, {event: heartbeat} every 15 s. No replay — load the board on connect.',
+    '/projects/:id/events', { schema: { ...TAG, summary: 'Stream board changes',
+      description: 'A live stream, one JSON object per line, of every change to a project\'s board. It stays open until you disconnect.',
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } } },
     async (req, reply) => {
       const project = await projectOf(req.params.id);

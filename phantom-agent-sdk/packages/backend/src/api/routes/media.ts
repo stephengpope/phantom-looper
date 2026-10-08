@@ -43,19 +43,19 @@ export function mediaRoutes(app: FastifyInstance, backend: PhantomBackend) {
   // Media.upload counts them against the size limit as they pass.
   app.addContentTypeParser('application/octet-stream', (_req, payload, done) => done(null, payload));
 
-  app.get<{ Querystring: OwnerQuery & { limit?: number } }>('/media', { schema: { ...TAG, summary: 'List media files',
-    description: 'Ready files, newest first. Each filter narrows: `organization` (absent = every organization\'s), `project`, `user`.',
+  app.get<{ Querystring: OwnerQuery & { limit?: number } }>('/media', { schema: { ...TAG, summary: 'List files',
+    description: 'Stored files, newest first. Filter by project or by user.',
     querystring: { type: 'object', properties: { ...ownerProps, limit: { type: 'integer', minimum: 1, maximum: 1000 } } } } },
   async (req) => ok({ media: await backend.media.list({ organizationId: req.query.organization, projectId: req.query.project, userId: req.query.user, limit: req.query.limit }) }));
 
-  app.get<{ Params: { id: string } }>('/media/:id', { schema: { ...TAG, summary: 'One media file', params: idParam } },
+  app.get<{ Params: { id: string } }>('/media/:id', { schema: { ...TAG, summary: 'Get a file\'s details',
+      description: 'One stored file\'s name, type, size and owner.', params: idParam } },
     async (req, reply) => {
       try { return ok(await backend.media.get(req.params.id)); } catch (error) { return refuse(reply, error); }
     });
 
-  app.post<{ Querystring: OwnerQuery & { name: string; type?: string } }>('/media', { schema: { ...TAG, summary: 'Upload a file through this server',
-    description: 'The body is the file\'s bytes (content-type application/octet-stream), streamed to storage as they arrive. `name` is the file\'s name; ' +
-      '`type` what the sender believes it is — the type stored is read from the bytes. Answers the ready file; 413 over media_max_bytes, 415 a type media_allowed_types does not list.',
+  app.post<{ Querystring: OwnerQuery & { name: string; type?: string } }>('/media', { schema: { ...TAG, summary: 'Upload a file',
+    description: 'Uploads a file through the server: the request body is the file itself. Returns the stored file.',
     querystring: { type: 'object', required: ['name'], properties: { ...ownerProps, name: { type: 'string', minLength: 1, maxLength: 255 }, type: { type: 'string' } } } } },
   async (req, reply) => {
     const aborted = new AbortController();
@@ -70,10 +70,8 @@ export function mediaRoutes(app: FastifyInstance, backend: PhantomBackend) {
     } catch (error) { return refuse(reply, error); }
   });
 
-  app.post<{ Body: OwnerQuery & { name: string; size: number; type: string } }>('/media/uploads', { schema: { ...TAG, summary: 'Start a browser upload',
-    description: 'For a browser sending the bytes straight to storage. Answers the file (status uploading) and `upload`: ' +
-      '`{ mode: "single", url, headers }` — one PUT of the whole file with those headers; or `{ mode: "multipart", partSize, parts: [{ partNumber, url }] }` — ' +
-      'one PUT per part, each exactly partSize bytes but the last, keeping each answer\'s ETag header. Then POST /media/:id/complete. The bucket needs a CORS rule for the browser\'s origin (POST /media/setup).',
+  app.post<{ Body: OwnerQuery & { name: string; size: number; type: string } }>('/media/uploads', { schema: { ...TAG, summary: 'Start a direct upload',
+    description: 'For a browser uploading straight to storage: returns the file record and where to send the bytes (several addresses, for a large file).',
     body: { type: 'object', required: ['name', 'size', 'type'], additionalProperties: false, properties: {
       ...ownerProps, name: { type: 'string', minLength: 1, maxLength: 255 }, size: { type: 'integer', minimum: 1 }, type: { type: 'string', minLength: 3 } } } } },
   async (req, reply) => {
@@ -83,9 +81,8 @@ export function mediaRoutes(app: FastifyInstance, backend: PhantomBackend) {
     } catch (error) { return refuse(reply, error); }
   });
 
-  app.post<{ Params: { id: string }; Body: { parts?: { partNumber: number; etag: string }[] } }>('/media/:id/complete', { schema: { ...TAG, summary: 'Finish a browser upload',
-    description: 'After the browser\'s PUTs: a multipart upload sends `parts` — every part\'s number and the ETag its PUT answered. The file\'s real size and type are checked; ' +
-      'a file that fails is deleted (413, 415).',
+  app.post<{ Params: { id: string }; Body: { parts?: { partNumber: number; etag: string }[] } }>('/media/:id/complete', { schema: { ...TAG, summary: 'Finish a direct upload',
+    description: 'Called once a direct upload\'s bytes are sent. Checks the file and marks it ready.',
     params: idParam,
     body: { type: 'object', additionalProperties: false, properties: { parts: { type: 'array', items: { type: 'object', required: ['partNumber', 'etag'],
       additionalProperties: false, properties: { partNumber: { type: 'integer', minimum: 1, maximum: 10000 }, etag: { type: 'string', minLength: 1 } } } } } } } },
@@ -93,17 +90,16 @@ export function mediaRoutes(app: FastifyInstance, backend: PhantomBackend) {
     try { return ok(await backend.media.complete(req.params.id, { parts: req.body?.parts })); } catch (error) { return refuse(reply, error); }
   });
 
-  app.post<{ Body: { ids: string[]; seconds?: number } }>('/media/links', { schema: { ...TAG, summary: 'Download links',
-    description: 'A link for each file, in order: works for `seconds` (default media_link_seconds, at most media_link_max_seconds), then dies. ' +
-      'Made here with no call to storage, so a page of files is one request; the same link comes back while most of its life is left, so a browser keeps its cached copy.',
+  app.post<{ Body: { ids: string[]; seconds?: number } }>('/media/links', { schema: { ...TAG, summary: 'Get download links',
+    description: 'Short-lived download links for one or more files.',
     body: { type: 'object', required: ['ids'], additionalProperties: false, properties: {
       ids: { type: 'array', minItems: 1, maxItems: 1000, items: { type: 'string' } }, seconds: { type: 'integer', minimum: 60 } } } } },
   async (req, reply) => {
     try { return ok({ links: await backend.media.links(req.body.ids, { seconds: req.body.seconds }) }); } catch (error) { return refuse(reply, error); }
   });
 
-  app.get<{ Params: { id: string }; Querystring: { seconds?: number } }>('/media/:id/content', { schema: { ...TAG, summary: 'Open a file',
-    description: 'Redirects (302) to a download link — the bytes come from storage, ranges and all, so video seeks.',
+  app.get<{ Params: { id: string }; Querystring: { seconds?: number } }>('/media/:id/content', { schema: { ...TAG, summary: 'Download a file',
+    description: 'Redirects to a short-lived download link for the file.',
     params: idParam, querystring: { type: 'object', properties: { seconds: { type: 'integer', minimum: 60 } } } } },
   async (req, reply) => {
     try {
@@ -113,14 +109,13 @@ export function mediaRoutes(app: FastifyInstance, backend: PhantomBackend) {
   });
 
   app.delete<{ Params: { id: string } }>('/media/:id', { schema: { ...TAG, summary: 'Delete a file', params: idParam,
-    description: 'Its bytes in storage, then its record. An unfinished upload is aborted.' } },
+    description: 'Deletes a stored file and its contents.' } },
   async (req, reply) => {
     try { await backend.media.delete(req.params.id); return ok({}); } catch (error) { return refuse(reply, error); }
   });
 
-  app.post<{ Body: { origins: string[]; organization?: string } }>('/media/setup', { config: { operator: true }, schema: { ...TAG, summary: 'Let browsers reach the bucket',
-    description: 'Sets the bucket\'s CORS rule so web apps on `origins` can upload straight to it and play from it. A provider that only takes this in its own ' +
-      'dashboard answers `cors: "unsupported"` with the rule to enter there.',
+  app.post<{ Body: { origins: string[]; organization?: string } }>('/media/setup', { config: { operator: true }, schema: { ...TAG, summary: 'Allow browser uploads',
+    description: 'Sets up the storage bucket so web apps on the given origins can upload to it and read from it directly.',
     body: { type: 'object', required: ['origins'], additionalProperties: false, properties: {
       origins: { type: 'array', minItems: 1, items: { type: 'string', pattern: '^https?://' } }, organization: ownerProps.organization } } } },
   async (req, reply) => {

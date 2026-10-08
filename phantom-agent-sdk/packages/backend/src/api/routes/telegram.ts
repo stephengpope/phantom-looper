@@ -16,8 +16,8 @@ export function telegramRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   app.post(TELEGRAM_WEBHOOK_PATH, {
     // No schema validation on the body: Telegram's update shape is large and
     // versioned, and the bot reads only the fields it knows.
-    schema: { tags: ['telegram'], summary: 'Telegram webhook',
-      description: 'Receives a Telegram update. Auth is the secret-token header, not the API bearer.' },
+    schema: { tags: ['telegram'], summary: 'Receive Telegram updates',
+      description: 'Where Telegram delivers the bot\'s messages. Only Telegram calls it. It is checked with Telegram\'s own secret, not an API key.' },
   }, async (req, reply) => {
     const secret = String(req.headers['x-telegram-bot-api-secret-token'] ?? '');
     const status = await ctx.telegramBot.receiveUpdate(secret, req.body ?? {});
@@ -28,8 +28,7 @@ export function telegramRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // operator). The policies keep each user to their own links.
   const TAG = { tags: ['telegram'] };
   app.post<{ Body: { project?: string } }>('/telegram/links', { schema: { ...TAG, summary: 'Link a Telegram chat',
-    description: 'A one-time link, ten minutes: `url` opens a private chat with the bot, `group_url` adds the bot to a group. ' +
-      'With `project`, the chat is that project\'s; without, it covers all of the caller\'s projects.',
+    description: 'Creates a one-time link that is valid for a short while. Opening it in Telegram links that chat to the caller: a private chat with `url`, or a group with `group_url`. With `project`, the chat is tied to that project.',
     body: { type: 'object', additionalProperties: false, properties: { project: { type: 'string' } } } } },
   async (req, reply) => {
     const projectId = req.body?.project ?? null;
@@ -40,9 +39,11 @@ export function telegramRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     return ok({ url: `https://t.me/${username}?start=${code}`, group_url: `https://t.me/${username}?startgroup=${code}`,
       expires_at: expiresAt.toISOString() });
   });
-  app.get('/telegram/links', { schema: { ...TAG, summary: 'Your linked Telegram chats' } },
+  app.get('/telegram/links', { schema: { ...TAG, summary: 'List linked Telegram chats',
+      description: 'The caller\'s linked Telegram chats.' } },
     async () => ok({ chats: await ctx.telegramChats.list() }));
-  app.delete<{ Params: { id: string } }>('/telegram/links/:id', { schema: { ...TAG, summary: 'Unlink a Telegram chat' } },
+  app.delete<{ Params: { id: string } }>('/telegram/links/:id', { schema: { ...TAG, summary: 'Unlink a Telegram chat',
+      description: 'Removes one of the caller\'s linked chats. The bot stops answering it.' } },
     async (req, reply) => (await ctx.telegramChats.remove(req.params.id)) ? ok({ unlinked: req.params.id })
       : reply.code(404).send(err('not_found', `no linked chat ${req.params.id}`)));
 }

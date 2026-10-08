@@ -34,11 +34,8 @@ export function systemRoutes(app: FastifyInstance, ctx: PhantomBackend, extras: 
   app.get<{ Querystring: { provider?: string } }>('/models', {
     schema: {
       tags: ['meta'],
-      summary: 'The model catalog for one provider',
-      description: 'Models the catalog (models.dev) lists for a provider, newest first — each with `id`, `name`, ' +
-        '`reasoning` and `releaseDate`. The first is what an unset `model` setting resolves to. `source` says ' +
-        'whether the list is live or this release\'s snapshot. openai-compatible has no catalog and returns []; ' +
-        'the list is a convenience, never a fence — any model id may be stored.',
+      summary: 'List a provider\'s models',
+      description: 'The models a provider offers, newest first.',
       querystring: { type: 'object', required: ['provider'], properties: {
         provider: { type: 'string', enum: [...PROVIDERS] } } },
     },
@@ -51,17 +48,8 @@ export function systemRoutes(app: FastifyInstance, ctx: PhantomBackend, extras: 
   app.post('/update', {
     schema: {
       tags: ['meta'],
-      summary: 'Upgrade this server to a release (streamed progress)',
-      description: 'Pulls the new images and streams ND-JSON progress events: ' +
-        '`{event:"pulling", image, download, unpack}` per image (two percentages: Docker downloads every layer, then unpacks), ' +
-        '`{event:"pulled"}`, then `{event:"installing", message}` per line of the installer\'s own output as it copies ' +
-        'the release files and restarts the stack. The restart cuts the stream — a dropped stream after `pulled` is ' +
-        'the api going down; poll GET /health for the new version. `{event:"error", message}` ends a failed update, ' +
-        'with the reason. If an update is already in progress, the stream attaches to it and replays ' +
-        'progress so far. Heartbeats keep the connection alive. ' +
-        'While a card has a loop round in flight the route refuses (409 `loops_running`) unless the ' +
-        'caller passes `restart_anyway`. `updater_unavailable` (503) means this server has no updater ' +
-        'sidecar (UPDATE_TRIGGER_DIR unset) — re-run install.sh once.',
+      summary: 'Update the server',
+      description: 'Upgrades the server to a release, streaming progress as one JSON object per line.',
       body: {
         type: 'object', required: ['tag'], additionalProperties: false,
         properties: {
@@ -97,12 +85,8 @@ export function systemRoutes(app: FastifyInstance, ctx: PhantomBackend, extras: 
   app.post<{ Body: { service?: string; tail?: number; since?: string; grep?: string } }>('/system/logs', {
     schema: {
       tags: ['meta'],
-      summary: 'Read a server container\'s logs',
-      description: '`docker logs` for one of the stack\'s containers (api, postgres, caddy, updater, ' +
-        'autoheal — default api), narrowed server-side: `tail` lines (default 100, max 1000), `since` ' +
-        '(a duration like "30m" / "2h"), `grep` (a regex; filters WITHIN the tail, so raise tail for a ' +
-        'wider search). Answers as `text`, newest last, capped at 64 KB (`truncated`). This backs the ' +
-        'assistant\'s docker_logs tool.',
+      summary: 'Read container logs',
+      description: 'The recent logs of one of the server\'s containers.',
       body: {
         type: 'object', additionalProperties: false,
         properties: {
@@ -121,23 +105,16 @@ export function systemRoutes(app: FastifyInstance, ctx: PhantomBackend, extras: 
   app.get('/system/status', {
     schema: {
       tags: ['meta'],
-      summary: 'Server status — cpu, load, memory, disk',
-      description: 'Read straight from the kernel (no docker, no mounts): in a container /proc shows the ' +
-        'HOST\'s cpu, load and memory, and the projects volume sits on the host\'s root filesystem, so ' +
-        'statfs on it is the disk docker\'s data lives on. Answers as preformatted `text` — render it ' +
-        'as-is (the cli\'s /cpu and telegram\'s /cpu both do).',
+      summary: 'Get server status',
+      description: 'The server\'s CPU, load, memory and disk use.',
     },
   }, async () => ok(await extras.deployment.status()));
 
   app.post<{ Body: { service?: string } }>('/system/restart', {
     schema: {
       tags: ['meta'],
-      summary: 'Restart a server container (default: the api)',
-      description: 'Restarts one compose service\'s container — `api` (the default), `postgres`, `caddy`, ' +
-        '`updater`, `autoheal`, `observer`. Goes through the api\'s existing docker proxy, which already ' +
-        'permits container restarts; nothing new is exposed. Restarting `api` replies FIRST and restarts ' +
-        'half a second later, so the answer always lands — clients should expect the connection to drop ' +
-        'right after it.',
+      summary: 'Restart a container',
+      description: 'Restarts one of the server\'s containers, the API by default.',
       body: {
         type: 'object', additionalProperties: false,
         properties: { service: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]*$',
@@ -155,8 +132,8 @@ export function systemRoutes(app: FastifyInstance, ctx: PhantomBackend, extras: 
   app.get('/system/token-usage', {
     schema: {
       tags: ['meta'],
-      summary: 'Token usage report — today, last 7 days, last 30 days; agents and helpers by model',
-      description: 'Sums the token_usage entries. Answers as preformatted `text`.',
+      summary: 'Get the token usage report',
+      description: 'Tokens used today, in the last 7 days and in the last 30 days, by agent, provider and model.',
     },
   }, async () => ok(await extras.deployment.tokenUsage(await ctx.settings.clockFor())));
 }

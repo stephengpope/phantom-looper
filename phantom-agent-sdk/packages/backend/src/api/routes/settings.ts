@@ -62,8 +62,8 @@ export function settingsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
 
   app.get<{ Querystring: ScopeQuery }>(
     '/settings', { schema: { ...TAG,
-      summary: 'Every setting, resolved',
-      description: 'Every setting with its LAYERS — `default` (code), `global`, `organization`, `user`, `project` — plus the computed `value` and `source` (the layer it came from), and `description`/`meta`/`overridable`/`overridableAt` so a client renders an editor from this one call. Pass ?organization=, ?user=, ?project= to fill in those layers (a project brings its organization). Credentials come back decrypted, flagged `secret`.',
+      summary: 'List settings',
+      description: 'Every setting with its current value, where that value comes from (the default, the server, an organization, a user, a project, or fixed), and what is needed to show an editor for it. Add `organization`, `user` or `project` to see the values for that scope. A user sees only the settings they can change.',
       querystring: scopeQuery } },
     async (req, reply) => {
       const where = await scopeFor(req);
@@ -90,10 +90,8 @@ export function settingsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
 
   app.patch<{ Querystring: ScopeQuery; Body: Record<string, unknown> }>(
     '/settings', { schema: { ...TAG,
-      summary: 'Write settings',
-      description: 'Body is {key: value}. null CLEARS a key — the same rule at every layer, and null is never a stored value. An empty string is a real empty string. ' +
-        'Which keys are credentials is declared in code, so they are stored encrypted without any flag. Unknown keys are refused. ' +
-        'Pass ?organization=, ?user= or ?project= to write that layer (the deepest named); a key that layer may not override is refused.',
+      summary: 'Change settings',
+      description: 'Sets one or more settings, sent as `{key: value}`. A `null` value clears a setting, so it falls back to the next layer up. Add `organization`, `user` or `project` to change that scope instead of the server-wide value. Settings a scope cannot hold, and fixed settings, are refused.',
       querystring: scopeQuery,
       body: { type: 'object', additionalProperties: true } } },
     async (req, reply) => {
@@ -114,9 +112,8 @@ export function settingsRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // Change notices, never values: every listener re-reads GET /settings. No
   // replay — a reconnect is itself the signal to re-read, which closes any gap.
   app.get('/settings/events', { schema: { ...TAG,
-    summary: 'Settings change events',
-    description: 'ND-JSON, open until the client hangs up: {event:"settings_changed",scope,client?} after a write, ' +
-      'plus {event:"heartbeat"}. The record carries no setting values — listeners re-read /settings.' } },
+    summary: 'Stream settings changes',
+    description: 'A live stream, one JSON object per line, announcing each settings change: which scope changed and which keys. It carries no values; read the settings again when one arrives. It stays open until you disconnect.' } },
     async (req, reply) => {
       reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
       const write = (record: unknown) => { reply.raw.write(`${JSON.stringify(record)}\n`); };

@@ -137,8 +137,8 @@ export class HttpApi {
     await app.register(async (api) => {
       // Any caller: every client SDK checks the version here before its first
       // call — a signed-in user's and an API key's as much as the phantom admin's.
-      api.get('/health', { schema: { tags: ['meta'], summary: 'Liveness',
-        description: 'Any caller (the API key, a user\'s token or API key). Returns the running version, the backend SDK\'s version (`sdk_version` — the client SDK refuses a backend on another), plus what the app reports (config.health).' } },
+      api.get('/health', { schema: { tags: ['meta'], summary: 'Check the server is up',
+        description: 'Answers with the server\'s version and the SDK version it runs. Any valid credential works. Clients call it first, to check they speak the same SDK version as the server.' } },
       async (req) => {
         await backend.identity.require(req);
         return { ok: true, version: backend.version, sdk_version: SDK_VERSION, ...backend.healthExtras() };

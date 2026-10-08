@@ -49,10 +49,8 @@ export function cronRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   };
 
   app.get<{ Params: { id: string } }>(
-    '/projects/:id/crons', { schema: { ...TAG, summary: 'The project\'s crons',
-      description: 'Every cron, by name: schedule, `once` (a one-time datetime schedule — the row goes when it fires), enabled, ' +
-        '`last_run_at`, and the model its runs pin to (`provider`/`model`/`reasoning`; null = the project\'s). ' +
-        'Plus the project\'s `timezone` and the server\'s `now`.',
+    '/projects/:id/crons', { schema: { ...TAG, summary: 'List crons',
+      description: 'A project\'s scheduled jobs: when each one runs and what it does.',
       params: idParam } },
     async (req, reply) => {
       const project = await projectOf(req.params.id);
@@ -61,9 +59,8 @@ export function cronRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     });
 
   app.post<{ Params: { id: string }; Body: CronFields }>(
-    '/projects/:id/crons', { schema: { ...TAG, summary: 'Create a cron',
-      description: 'The schedule must fire at least once from now in the project\'s zone; a datetime that has passed is refused. ' +
-        'Exactly one of prompt / script. A name already taken (case-insensitively) is refused with 409.',
+    '/projects/:id/crons', { schema: { ...TAG, summary: 'Add a cron',
+      description: 'Schedules a prompt or a script to run in the project, either repeating on a cron schedule or once at a date and time. Each run opens a new session.',
       params: idParam,
       body: { type: 'object', additionalProperties: false, required: ['name', 'schedule'], properties: cronBodyProps } } },
     async (req, reply) => {
@@ -76,7 +73,7 @@ export function cronRoutes(app: FastifyInstance, ctx: PhantomBackend) {
 
   app.patch<{ Params: { id: string; name: string }; Body: CronFields }>(
     '/projects/:id/crons/:name', { schema: { ...TAG, summary: 'Update a cron',
-      description: 'Any subset of the fields. A new schedule is checked like a create; `name` renames it (the row stays).',
+      description: 'Changes a cron\'s schedule, prompt or script, model or name, or turns it on or off.',
       params: nameParams,
       body: { type: 'object', additionalProperties: false, properties: cronBodyProps } } },
     async (req, reply) => {
@@ -88,8 +85,8 @@ export function cronRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     });
 
   app.delete<{ Params: { id: string; name: string } }>(
-    '/projects/:id/crons/:name', { schema: { ...TAG, summary: 'Remove a cron',
-      description: 'The row goes; the sessions its runs opened stay.', params: nameParams } },
+    '/projects/:id/crons/:name', { schema: { ...TAG, summary: 'Delete a cron',
+      description: 'Removes a cron. The sessions from its earlier runs are kept.', params: nameParams } },
     async (req, reply) => {
       const project = await projectOf(req.params.id);
       if (!project) return reply.code(404).send(err('not_found', `no project ${req.params.id}`));
