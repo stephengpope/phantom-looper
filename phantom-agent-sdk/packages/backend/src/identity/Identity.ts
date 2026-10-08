@@ -11,8 +11,8 @@
 //
 // Who may see which project, session or row is NOT decided here — user space
 // gates its /app routes with `require` and writes its own rules.
-import { betterAuth } from 'better-auth';
-import { APIError } from 'better-auth/api';
+import { betterAuth, type BetterAuthPlugin } from 'better-auth';
+import { APIError, createAuthMiddleware } from 'better-auth/api';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { fromNodeHeaders } from 'better-auth/node';
 import { magicLink, organization, bearer, admin } from 'better-auth/plugins';
@@ -121,6 +121,29 @@ interface AuthDeps {
   captures: Map<string, (url: string) => void>;
 }
 
+/** A key acts in one organization: the one its maker is signed into when
+ *  they make it. The server writes it into the key (metadata.organizationId);
+ *  the client cannot set or change it. */
+function keyOrganization(activeOrganization: (headers: Headers) => Promise<string | null | undefined>): BetterAuthPlugin {
+  return {
+    id: 'key-organization',
+    hooks: { before: [{
+      matcher: (ctx) => Boolean(ctx.request || ctx.headers) && (ctx.path === '/api-key/create' || ctx.path === '/api-key/update'),
+      handler: createAuthMiddleware(async (ctx) => {
+        if (ctx.path === '/api-key/update') {
+          if (ctx.body?.metadata !== undefined) throw APIError.from('BAD_REQUEST', { code: 'KEY_ORGANIZATION_FIXED', message: 'a key\'s organization is set when it is made' });
+          return;
+        }
+        // A full session lookup, not this hook's own: hooks see the request as
+        // it came in, before bearer() has turned its token into a session.
+        const organizationId = ctx.headers ? await activeOrganization(ctx.headers) : null;
+        if (!organizationId) throw APIError.from('BAD_REQUEST', { code: 'NO_ACTIVE_ORGANIZATION', message: 'sign in to an organization first' });
+        return { context: { body: { ...ctx.body, metadata: { organizationId } } } };
+      }),
+    }] },
+  };
+}
+
 /** The Better Auth instance: the adapter over our tables, the two hooks
  *  (a personal organization at creation, an active one at sign-in), the
  *  plugins. A function, so the instance's type — which carries every
@@ -147,6 +170,10 @@ function buildAuth({ database, mailer, settings, projects, media, options, baseU
   let ready!: (context: Context) => void;
   const context = new Promise<Context>((resolve) => { ready = resolve; });
   const adapter = async () => (await context).adapter;
+  // keyOrganization's session lookup, through the instance it is part of: filled once built.
+  type SignedIn = (headers: Headers) => Promise<{ session: { activeOrganizationId?: string | null } } | null>;
+  let found!: (lookup: SignedIn) => void;
+  const signedIn = new Promise<SignedIn>((resolve) => { found = resolve; });
   const auth = betterAuth({
     database: drizzleAdapter(database.system, { provider: 'pg',
       schema: { user, session, account, verification, organization: organizationTable, member, invitation, apikey } }),
@@ -263,11 +290,15 @@ function buildAuth({ database, mailer, settings, projects, media, options, baseU
       }),
       bearer(),
       admin(),
-      // A key remembers the organization it was made for (metadata.organizationId): callerOf reads it.
-      apiKey({ enableSessionForAPIKeys: true, enableMetadata: true }),
+      keyOrganization(async (headers) => (await (await signedIn)(headers))?.session.activeOrganizationId),
+      // A key remembers the organization it was made for (metadata.organizationId,
+      // written by keyOrganization): callerOf reads it. No per-key rate limit — a
+      // key gets the limits its user gets.
+      apiKey({ enableSessionForAPIKeys: true, enableMetadata: true, rateLimit: { enabled: false } }),
     ],
   });
   void auth.$context.then(ready);
+  found((headers) => auth.api.getSession({ headers }));
   return auth;
 }
 type BetterAuth = ReturnType<typeof buildAuth>;
@@ -323,8 +354,7 @@ export class Identity {
     });
     if (!signedIn) return null;
     // A sign-in carries the organization it is active in. An API key's
-    // session does not — the key's own metadata.organizationId says, when
-    // it was made for one. Neither: the user's first.
+    // session does not — the key's own metadata.organizationId says.
     const session = signedIn.session as { activeOrganizationId?: string | null; id: string };
     const activeId = request.headers['x-api-key'] ? await this.#organizationOfKey(session.id) : session.activeOrganizationId;
     // No organization named, or one they are no longer a member of: nobody.
