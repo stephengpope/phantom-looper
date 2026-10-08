@@ -125,7 +125,7 @@ export function sdkSettings(options: { sessionImageTag: string }): SettingDefini
     { key: "db_ui_enabled", type: "boolean", default: false, label: "database console", group: "database",
       description: "Serve a browser-based database console at /db on this server's address. Sign in as console_admin with this server's API key. The console connects as the database superuser — full access to everything, this server's own tables included. Turning it off stops the console's container." },
     { key: "telegram_enabled", type: "boolean", default: false, label: "telegram", group: "telegram",
-      description: "Answer Telegram DMs. Needs the telegram_bot_token key, telegram_authorized_user, and a public address (PHANTOM_BACKEND_ADDRESS) — the webhook registers itself when all three are set." },
+      description: "Answer Telegram DMs. Needs the telegram_bot_token key, telegram_authorized_user, and a public address (BACKEND_ADDRESS) — the webhook registers itself when all three are set." },
     { key: "telegram_authorized_user", type: "string", default: null, label: "authorized user id", group: "telegram",
       description: "Your numeric Telegram user id — the operator's own chat with the bot, which sees the whole server. Every other user links their own chat (POST /api/telegram/links) and sees only their own work; a chat nobody linked is ignored. Get it from @userinfobot." },
     { key: "session_digest_interval", type: "number", default: 5, label: "digest interval (min)", group: "telegram",

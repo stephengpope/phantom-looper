@@ -1,3 +1,9 @@
+# Server variables are BACKEND_*. Each one here falls back to its old name
+# (PHANTOM_BACKEND_*) for exactly one upgrade: the release before ran that
+# upgrade with its own updater, which still wrote the old names — the new
+# updater renames them in .env when it starts (updater/watch.sh). Remove the
+# fallbacks once no install can be on a release before v0.1.91.
+#
 # The compose project name — the group every container, network and volume
 # sits under (phantom-backend-api-1, phantom-backend_default, ...), whatever
 # directory the file runs from. Service containers keep compose's own
@@ -28,11 +34,11 @@ services:
     # Published by .github/workflows/release.yml on every version tag. Both
     # `image:` and `build:` with pull_policy `missing`: plain `docker compose
     # up -d` PULLS (the install path — no repo on the box); `up -d --build`
-    # builds from source (dev). PHANTOM_BACKEND_TAG is pinned in .env by
+    # builds from source (dev). BACKEND_TAG is pinned in .env by
     # updater/apply.sh so the compose file on disk and the image are always the
     # same release; a fresh install runs `latest` until its first upgrade.
-    # PHANTOM_BACKEND_API_IMAGE is a test hook (point it at a locally built name).
-    image: ${PHANTOM_BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend-api}:${PHANTOM_BACKEND_TAG:-latest}
+    # BACKEND_API_IMAGE is a test hook (point it at a locally built name).
+    image: ${BACKEND_API_IMAGE:-${PHANTOM_BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend-api}}:${BACKEND_TAG:-${PHANTOM_BACKEND_TAG:-latest}}
     pull_policy: missing
     build: .
     restart: unless-stopped
@@ -41,9 +47,10 @@ services:
         condition: service_healthy
       docker-proxy:
         condition: service_started
-    # .env reaches the api whole, for SETTING_<KEY> lines: a setting fixed for
-    # this deployment (storage/envSettings.ts). Optional — with none, nothing
-    # changes. The `environment:` entries below still win where both name one.
+    # .env reaches the api whole, for the settings a deployment fixes there by
+    # their own names (SMTP_HOST=…; the list is the app's, config.envSettings).
+    # Optional — with none, nothing changes. The `environment:` entries below
+    # still win where both name one.
     env_file:
       - path: .env
         required: false
@@ -96,10 +103,10 @@ services:
       # The api's OWN image name. A container cannot name its own image from
       # inside; handed in here, the disk cleanup can prune its old tags the
       # same way it prunes the session image's.
-      API_IMAGE: ${PHANTOM_BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend-api}
+      API_IMAGE: ${BACKEND_API_IMAGE:-${PHANTOM_BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend-api}}
       # The bot's public address — the Telegram webhook registers at
       # https://<this>/telegram/webhook. Empty = telegram stays off.
-      PHANTOM_BACKEND_ADDRESS: ${PHANTOM_BACKEND_ADDRESS:-}
+      BACKEND_ADDRESS: ${BACKEND_ADDRESS:-${PHANTOM_BACKEND_ADDRESS:-}}
       # Where Telegram reaches the webhook, when that is not the address above
       # — a dev box serves Caddy on localhost and Telegram through a tunnel
       # (ngrok). Empty: the address above.
@@ -113,7 +120,7 @@ services:
     # NOT a public surface: localhost only. Public traffic goes through caddy
     # (the `https` profile), which reaches this container as api:8080.
     ports:
-      - "127.0.0.1:${PHANTOM_BACKEND_PORT:-8080}:8080"
+      - "127.0.0.1:${BACKEND_PORT:-${PHANTOM_BACKEND_PORT:-8080}}:8080"
     # autoheal (below) restarts this container when its HEALTHCHECK (in the
     # Dockerfile) flips to unhealthy — Docker's restart policy alone only
     # covers a crashed process, not a wedged one.
@@ -160,7 +167,7 @@ services:
   # calls only and sits on the API's own internal network, out of every
   # agent's reach.
   disk-quota:
-    image: ${PHANTOM_BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend-api}:${PHANTOM_BACKEND_TAG:-latest}
+    image: ${BACKEND_API_IMAGE:-${PHANTOM_BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend-api}}:${BACKEND_TAG:-${PHANTOM_BACKEND_TAG:-latest}}
     pull_policy: missing
     profiles: ["disk-quota"]
     restart: unless-stopped
@@ -208,10 +215,10 @@ services:
   # COMPOSE_PROFILES in .env: dev runs this same stack, on Caddy's own CA).
   #
   # Caddy owns certificates end to end — nothing in the API writes TLS config.
-  # PHANTOM_BACKEND_ADDRESS is a domain OR a bare public IP: Let's Encrypt issues real
+  # BACKEND_ADDRESS is a domain OR a bare public IP: Let's Encrypt issues real
   # certificates for both (IP certificates since 2026, 6-day lifetime, renewed
   # automatically — they need ports 80 and 443 reachable from the internet).
-  # PHANTOM_BACKEND_TLS=internal swaps in Caddy's own CA for a private address; its
+  # BACKEND_TLS=internal swaps in Caddy's own CA for a private address; its
   # root certificate is the one file a client then trusts (`phantom ca`).
   caddy:
     image: caddy:2.11
@@ -221,14 +228,14 @@ services:
       api:
         condition: service_started
     environment:
-      PHANTOM_BACKEND_ADDRESS: ${PHANTOM_BACKEND_ADDRESS:-}
-      PHANTOM_BACKEND_CERT_EMAIL: ${PHANTOM_BACKEND_CERT_EMAIL:-}
-      PHANTOM_BACKEND_TLS: ${PHANTOM_BACKEND_TLS:-public}
+      BACKEND_ADDRESS: ${BACKEND_ADDRESS:-${PHANTOM_BACKEND_ADDRESS:-}}
+      BACKEND_CERT_EMAIL: ${BACKEND_CERT_EMAIL:-${PHANTOM_BACKEND_CERT_EMAIL:-}}
+      BACKEND_TLS: ${BACKEND_TLS:-${PHANTOM_BACKEND_TLS:-public}}
     # The host ports are overridable for a dev box where 80/443 are taken;
     # an install leaves them alone (Let's Encrypt needs the real ones).
     ports:
-      - "${PHANTOM_BACKEND_HTTP_PORT:-80}:80"
-      - "${PHANTOM_BACKEND_HTTPS_PORT:-443}:443"
+      - "${BACKEND_HTTP_PORT:-${PHANTOM_BACKEND_HTTP_PORT:-80}}:80"
+      - "${BACKEND_HTTPS_PORT:-${PHANTOM_BACKEND_HTTPS_PORT:-443}}:443"
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       # Certificates and the internal CA live here. Losing this volume means
@@ -239,20 +246,20 @@ services:
   # Remote-upgrade sidecar. Polls the updater-trigger volume for a release tag
   # written by the api's POST /update, then spawns a detached one-shot helper
   # (updater/apply.sh) that pulls that tag's images, copies this file and the
-  # rest of the host files OUT of the api image, pins PHANTOM_BACKEND_TAG in .env, and
+  # rest of the host files OUT of the api image, pins BACKEND_TAG in .env, and
   # `up -d`s the stack. It holds the raw docker socket — the API never does
   # (it only sees the proxy) — and deliberately has NO network surface: the
-  # trigger is a file. PHANTOM_BACKEND_DIR must be the install dir's HOST path (the
+  # trigger is a file. BACKEND_DIR must be the install dir's HOST path (the
   # helper bind-mounts it, and dockerd resolves bind paths on the host);
   # install.sh writes it to .env.
   updater:
     image: docker:27-cli
     restart: unless-stopped
     environment:
-      PHANTOM_BACKEND_DIR: ${PHANTOM_BACKEND_DIR:-/opt/phantom-looper}
+      BACKEND_DIR: ${BACKEND_DIR:-${PHANTOM_BACKEND_DIR:-/opt/phantom-looper}}
       # Test hooks — override which images apply.sh pulls. Empty in production.
-      PHANTOM_BACKEND_API_IMAGE: ${PHANTOM_BACKEND_API_IMAGE:-}
-      PHANTOM_BACKEND_SESSION_IMAGE: ${PHANTOM_BACKEND_SESSION_IMAGE:-}
+      BACKEND_API_IMAGE: ${BACKEND_API_IMAGE:-${PHANTOM_BACKEND_API_IMAGE:-}}
+      BACKEND_SESSION_IMAGE: ${BACKEND_SESSION_IMAGE:-${PHANTOM_BACKEND_SESSION_IMAGE:-}}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./updater:/updater:ro

@@ -10,7 +10,7 @@ export interface Env {
   port: number;
   apiKey: string;
   encryptionKey: Buffer; // 32 bytes, AES-256-GCM
-  /** Where this backend is reached from outside (`https://<PHANTOM_BACKEND_ADDRESS>`):
+  /** Where this backend is reached from outside (`https://<BACKEND_ADDRESS>`):
    *  what links in mail and sign-in point at. Loopback when no address is set. */
   publicUrl: string;
 }
@@ -44,7 +44,7 @@ export function readEnv(source: NodeJS.ProcessEnv = process.env): Env {
   const apiKey = need('API_KEY');
   if (apiKey.length < 32) throw new Error('API_KEY must be at least 32 characters (openssl rand -hex 24)');
   const port = Number(source.PORT ?? 8080);
-  const address = source.PHANTOM_BACKEND_ADDRESS?.trim();
+  const address = source.BACKEND_ADDRESS?.trim();
   return {
     databaseUrl: need('DATABASE_URL'),
     workspaceRoot: need('WORKSPACE_ROOT_PATH'),

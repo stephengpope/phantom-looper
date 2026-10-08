@@ -17,6 +17,19 @@ export const config: PhantomBackendConfig = {
   // copies it).
   migrations: { dir: path.join(path.dirname(fileURLToPath(import.meta.url)), 'migrations'), ledgerSchema: 'phantom_looper' },
   settings: appSettings,
+  // What a deployment may fix in .env, each by its own name in capitals
+  // (SMTP_HOST=… fixes smtp_host): its mail, Telegram, storage, containers,
+  // the server's switches, and default keys when the server pays for everyone.
+  envSettings: [
+    'smtp_host', 'smtp_port', 'smtp_secure', 'smtp_user', 'smtp_password', 'smtp_from',
+    'telegram_enabled', 'telegram_bot_token',
+    'media_endpoint', 'media_region', 'media_bucket', 'media_access_key_id', 'media_secret_access_key',
+    'container_image', 'container_docker', 'container_runtime', 'container_sudo', 'container_disk_gb',
+    'container_memory_mb', 'container_cpus', 'container_pids_limit',
+    'api_docs_enabled', 'db_ui_enabled', 'disk_cleanup_percent', 'update_check_interval_ms',
+    'anthropic_api_key', 'openai_api_key', 'google_api_key', 'deepseek_api_key', 'kimi_api_key', 'xai_api_key',
+    'mistral_api_key', 'groq_api_key', 'openai_compatible_api_key', 'github_token', 'firecrawl_api_key', 'deepgram_api_key',
+  ],
   agentTypes: appAgentTypes,
   // The engines that open sessions for themselves; a default list leaves those out.
   backgroundStarters: [LOOPER_STARTER],

@@ -7,7 +7,7 @@
 // The box FETCHES the install script — from this cli's release tag, so script
 // version = cli version — because ssh's stdin has to stay free for the
 // password prompt; a rig carries this checkout's copy inline instead
-// (`script`) and points PHANTOM_BACKEND_API_IMAGE at a locally built image. The
+// (`script`) and points BACKEND_API_IMAGE at a locally built image. The
 // host files the script unpacks still come out of the api IMAGE — this only
 // decides which script drives the unpacking.
 //
@@ -149,7 +149,7 @@ function safe(kind: string, value: string): string {
 export interface InstallOptions extends SshOpts {
   /** Extra installer flags, e.g. ['--tls=internal', '--address=localhost']. */
   flags?: string[];
-  /** Env overrides for the script (PHANTOM_BACKEND_API_IMAGE, PHANTOM_BACKEND_DIR — the
+  /** Env overrides for the script (BACKEND_API_IMAGE, BACKEND_DIR — the
    *  script's own test hooks), prefixed onto the remote command. */
   env?: Record<string, string>;
   onData?: (chunk: string) => void;
@@ -191,8 +191,8 @@ export interface ServerFacts { address: string; port: number; tls: string; key: 
 // when not root, exactly as the installer itself decides.
 const FACTS_CMD = [
   'S=""; [ "$(id -u)" -ne 0 ] && S=sudo;',
-  '$S sh -c \'for k in PHANTOM_BACKEND_ADDRESS PHANTOM_BACKEND_PORT PHANTOM_BACKEND_TLS API_KEY;',
-  'do printf "PHANTOM_FACT %s=%s\\n" "$k" "$(grep "^$k=" "${PHANTOM_BACKEND_DIR:-/opt/phantom-looper}/.env" | head -1 | cut -d= -f2-)"; done\'',
+  '$S sh -c \'for k in BACKEND_ADDRESS BACKEND_PORT BACKEND_TLS API_KEY;',
+  'do printf "PHANTOM_FACT %s=%s\\n" "$k" "$(grep "^$k=" "${BACKEND_DIR:-/opt/phantom-looper}/.env" | head -1 | cut -d= -f2-)"; done\'',
 ].join(' ');
 
 /** Read back what the installer wrote: the address the certificate was issued
@@ -208,10 +208,10 @@ export async function readServerFacts(target: Target, opts: SshOpts = {}): Promi
     const match = /^PHANTOM_FACT ([A-Z_]+)=(.*)$/.exec(line.trim());
     if (match) facts[match[1]] = match[2];
   }
-  const address = facts.PHANTOM_BACKEND_ADDRESS ?? '';
+  const address = facts.BACKEND_ADDRESS ?? '';
   const key = facts.API_KEY ?? '';
   if (!address || !key) throw new Error('the box answered, but /opt/phantom-looper/.env has no address or API key — did the install finish?');
-  return { address, port: Number(facts.PHANTOM_BACKEND_PORT || 8080), tls: facts.PHANTOM_BACKEND_TLS || 'public', key };
+  return { address, port: Number(facts.BACKEND_PORT || 8080), tls: facts.BACKEND_TLS || 'public', key };
 }
 
 /** In internal-TLS mode, the one root certificate clients must trust —

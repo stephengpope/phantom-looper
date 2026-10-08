@@ -3,7 +3,7 @@
 // (`splitFormatted`), because a chunk boundary has to cut the formatting spans
 // as well as the text. Ported from ../shockwave (api/src/telegram/client.ts);
 // the PEM-upload webhook path is dropped — the address here is always a real
-// hostname (PHANTOM_BACKEND_ADDRESS), never a bare-IP self-signed cert.
+// hostname (BACKEND_ADDRESS), never a bare-IP self-signed cert.
 
 import fs from 'node:fs/promises';
 import path from 'node:path';

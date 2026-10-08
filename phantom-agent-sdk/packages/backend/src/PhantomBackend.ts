@@ -15,7 +15,7 @@ import { makePaths, type Paths } from './lib/paths.js';
 import { Database, SDK_MIGRATIONS } from './storage/Database.js';
 import { Settings } from './storage/Settings.js';
 import { sdkSettings, agentTypeSettings } from './storage/sdkSettings.js';
-import { settingsFromEnv } from './storage/envSettings.js';
+import { envName, settingsFromEnv } from './storage/envSettings.js';
 import { Projects } from './storage/Projects.js';
 import { Workspaces } from './storage/Workspaces.js';
 import { Sessions } from './storage/Sessions.js';
@@ -79,9 +79,12 @@ export interface PhantomBackendConfig {
   crons?: { agent: CronAgent };
   /** Values the app fixes, by key (the SDK's settings or its own): each wins
    *  over every layer for every caller, and any write to it is refused with
-   *  403 access denied. A deployment fixes them too, with SETTING_<KEY> in
-   *  the environment (storage/envSettings.ts). */
+   *  403 access denied. */
   fixedSettings?: Record<string, unknown>;
+  /** The settings a deployment may fix from its environment, by key: each
+   *  read from its name in capitals (smtp_host from SMTP_HOST) and, when set,
+   *  fixed exactly as above (storage/envSettings.ts). */
+  envSettings?: readonly string[];
   /** The agent types this backend runs. The SDK ships none. */
   agentTypes: AgentTypeDefinition[];
   /** The app's automations that open sessions for themselves (`started_by`
@@ -203,7 +206,7 @@ export class PhantomBackend {
     this.telegramBot = new TelegramBot({ settings: this.settings, settingsEvents: this.settingsEvents, botState: this.telegramBotState,
       chats: this.telegramChats, sessions: this.sessions, projects: this.projects,
       sentMessages: this.telegramSentMessages, handledUpdates: this.telegramHandledUpdates, paths: this.paths,
-      publicAddress: process.env.TELEGRAM_WEBHOOK_ADDRESS || process.env.PHANTOM_BACKEND_ADDRESS, commandMenu: config.telegramCommandMenu });
+      publicAddress: process.env.TELEGRAM_WEBHOOK_ADDRESS || process.env.BACKEND_ADDRESS, commandMenu: config.telegramCommandMenu });
     this.git = new GitService({
       sessions: this.sessions, workspaces: this.workspaces, cards: this.cards, projects: this.projects, settings: this.settings, paths: this.paths,
       sessionEvents: this.sessionEvents, boardEvents: this.boardEvents, settingsEvents: this.settingsEvents,
@@ -245,12 +248,12 @@ export class PhantomBackend {
     for (const type of agentTypes.list()) settings.register(agentTypeSettings(type));
     settings.register(sdkSettings({ sessionImageTag: options.sessionImageTag ?? (/^v\d+\.\d+\.\d+/.test(APP_VERSION) ? APP_VERSION : 'latest') }));
     settings.register(config.settings ?? []);
-    // Fixed by the app (its constructor) and by the deployment (SETTING_* in
-    // the environment) — the same thing, so one value may not be both.
-    const fromEnv = settingsFromEnv(settings, config.env ?? process.env);
+    // Fixed by the app (its constructor) and by the deployment (the listed
+    // settings, from the environment) — the same thing, so one value may not be both.
+    const fromEnv = settingsFromEnv(settings, config.envSettings ?? [], config.env ?? process.env);
     for (const [key, value] of Object.entries(config.fixedSettings ?? {})) {
       if (key in fromEnv && fromEnv[key] !== value) {
-        throw new Error(`${key} is fixed twice: ${JSON.stringify(value)} by the app, ${JSON.stringify(fromEnv[key])} by SETTING_${key.toUpperCase()}`);
+        throw new Error(`${key} is fixed twice: ${JSON.stringify(value)} by the app, ${JSON.stringify(fromEnv[key])} by ${envName(key)}`);
       }
     }
     settings.fix({ ...config.fixedSettings, ...fromEnv });

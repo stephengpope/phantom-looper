@@ -15,7 +15,7 @@ export function mailRoutes(app: FastifyInstance, backend: PhantomBackend) {
   async (req, reply) => {
     try {
       await backend.mailer.send({ to: req.body.to, subject: 'mail works',
-        text: `This is the test mail from your backend at ${process.env.PHANTOM_BACKEND_ADDRESS ?? 'this server'}. Mail is configured.` });
+        text: `This is the test mail from your backend at ${process.env.BACKEND_ADDRESS ?? 'this server'}. Mail is configured.` });
       return ok({ sent: true });
     } catch (error) {
       if (error instanceof MailerError) {

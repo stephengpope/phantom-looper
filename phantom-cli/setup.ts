@@ -133,7 +133,7 @@ export async function runSetup(deps: SetupDeps = {}): Promise<void> {
   };
   // Rig hooks ride the environment, never the UI.
   const env: Record<string, string> = {};
-  for (const name of ['PHANTOM_BACKEND_IMAGE', 'PHANTOM_BACKEND_FS_IMAGE', 'PHANTOM_BACKEND_DIR'] as const) {
+  for (const name of ['BACKEND_API_IMAGE', 'BACKEND_DIR'] as const) {
     if (process.env[name]) env[name] = process.env[name];
   }
   const flags = (process.env.PHANTOM_CLI_INSTALL_FLAGS ?? '').split(' ').filter(Boolean);

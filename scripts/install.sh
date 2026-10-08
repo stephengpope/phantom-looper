@@ -28,7 +28,7 @@
 #      They ship in the image, so they always match the server they configure
 #      and there is no file list to go stale.
 #   4. Generates .env secrets on first run (never overwritten after that), and
-#      records this server's address as PHANTOM_BACKEND_ADDRESS.
+#      records this server's address as BACKEND_ADDRESS.
 #   5. docker compose up -d  — pulls the images from ghcr.io.
 #   6. Waits for /health, then runs `phantom-backend check` — which tests the address,
 #      certificate and API key a client will actually use.
@@ -37,7 +37,7 @@
 #      update, key, ca).
 #
 # Re-running is the update path AND the recovery path: it pulls `latest`,
-# refreshes the host files from it, releases any PHANTOM_BACKEND_TAG a remote upgrade
+# refreshes the host files from it, releases any BACKEND_TAG a remote upgrade
 # pinned, and recreates changed containers. Data lives on named volumes.
 # Secrets are never regenerated; only flags you pass are updated.
 # ============================================================================
@@ -47,8 +47,8 @@ set -eu
 # The image is the whole release: the server, and the host files this script
 # unpacks into $DIR. Overridable for testing (point API_IMAGE at a locally built
 # name, DIR at a temp dir).
-API_IMAGE="${PHANTOM_BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend-api}"
-DIR="${PHANTOM_BACKEND_DIR:-/opt/phantom-looper}"
+API_IMAGE="${BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend-api}"
+DIR="${BACKEND_DIR:-/opt/phantom-looper}"
 
 # Empty = not passed. A re-run only overwrites what was actually given, so
 # `--address=` on an update adds a domain to an existing install without
@@ -183,7 +183,7 @@ fi
 # ones built alongside the server they configure — and there is no file list
 # anywhere for a release to outgrow. See the Dockerfile.
 #
-# Always `latest`, and any PHANTOM_BACKEND_TAG pin is cleared below: re-running this
+# Always `latest`, and any BACKEND_TAG pin is cleared below: re-running this
 # script is the documented update path and the recovery path, so it has to
 # move a box forward rather than rebuild it at whatever tag it was stuck on.
 say "Pulling phantom-looper image..."
@@ -208,7 +208,7 @@ ok "Files installed from $API_IMAGE:latest"
 # does not wait on a pull. Best-effort: the api pulls it on demand otherwise.
 API_VERSION=$($SUDO docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$API_IMAGE:latest" 2>/dev/null | sed -n 's/^APP_VERSION=//p' | head -1)
 if [ -n "$API_VERSION" ] && [ "$API_VERSION" != dev ]; then
-  SESSION_IMAGE="${PHANTOM_BACKEND_SESSION_IMAGE:-ghcr.io/stephengpope/phantom-backend-session}"
+  SESSION_IMAGE="${BACKEND_SESSION_IMAGE:-ghcr.io/stephengpope/phantom-backend-session}"
   $SUDO docker pull "$SESSION_IMAGE:$API_VERSION" >/dev/null 2>&1 && ok "Workspace image $API_VERSION present" \
     || say "workspace image pull failed — the api will pull it when the first session starts"
 fi
@@ -224,6 +224,18 @@ esac
 
 # ── .env — secrets generated once; passed flags update in place ──────────────
 ENV_FILE="$DIR/.env"
+# One-time: the server's variables were PHANTOM_BACKEND_*; they are BACKEND_*.
+# Rename the old lines in .env (an old line whose new name is already there
+# is dropped). The compose file reads the old names for exactly this one
+# upgrade, so nothing runs without its values in between.
+rename_env() {
+  [ -f "$1" ] && grep -q '^PHANTOM_BACKEND_' "$1" || return 0
+  awk -F= 'NR == FNR { if ($1 ~ /^BACKEND_/) have[$1] = 1; next }
+    $1 ~ /^PHANTOM_BACKEND_/ { name = substr($1, 9); if (name in have) next; sub(/^PHANTOM_/, "") }
+    { print }' "$1" "$1" > "$1.tmp" && chmod 600 "$1.tmp" && mv "$1.tmp" "$1" \
+    && echo "renamed the PHANTOM_BACKEND_* lines in $1 to BACKEND_*"
+}
+rename_env "$ENV_FILE"
 
 env_get() { $SUDO sh -c "grep '^$1=' '$ENV_FILE' 2>/dev/null" | head -1 | cut -d= -f2- || true; }
 env_set() {
@@ -235,27 +247,27 @@ env_set() {
 if $SUDO test -f "$ENV_FILE"; then
   ok ".env exists — secrets kept (delete $ENV_FILE to regenerate)"
   API_KEY_SHOWN="(unchanged — phantom-backend key)"
-  [ "$ADDRESS_SET" -eq 1 ] && env_set PHANTOM_BACKEND_ADDRESS "$ADDRESS"
-  [ "$CERT_EMAIL_SET" -eq 1 ] && env_set PHANTOM_BACKEND_CERT_EMAIL "$CERT_EMAIL"
-  [ -n "$TLS" ] && env_set PHANTOM_BACKEND_TLS "$TLS"
-  env_set PHANTOM_BACKEND_DIR "$DIR"
+  [ "$ADDRESS_SET" -eq 1 ] && env_set BACKEND_ADDRESS "$ADDRESS"
+  [ "$CERT_EMAIL_SET" -eq 1 ] && env_set BACKEND_CERT_EMAIL "$CERT_EMAIL"
+  [ -n "$TLS" ] && env_set BACKEND_TLS "$TLS"
+  env_set BACKEND_DIR "$DIR"
   # The address is a domain someone chose, or an IP this script recorded. Only
   # refresh an IP (server moved) — never replace a domain with one.
-  CUR=$(env_get PHANTOM_BACKEND_ADDRESS)
+  CUR=$(env_get BACKEND_ADDRESS)
   case "$CUR" in
     ""|[0-9]*.[0-9]*.[0-9]*.[0-9]*)
       if [ -n "$PUBLIC_IP" ] && [ "$CUR" != "$PUBLIC_IP" ] && [ "$ADDRESS_SET" -ne 1 ]; then
-        env_set PHANTOM_BACKEND_ADDRESS "$PUBLIC_IP"; say "Recorded new public address: $PUBLIC_IP"
+        env_set BACKEND_ADDRESS "$PUBLIC_IP"; say "Recorded new public address: $PUBLIC_IP"
       fi ;;
   esac
   # Release the tag a previous remote upgrade pinned. Compose reads
-  # ${PHANTOM_BACKEND_TAG:-latest}, so an empty value IS `latest` — and the files just
+  # ${BACKEND_TAG:-latest}, so an empty value IS `latest` — and the files just
   # unpacked came from `latest`, so leaving an old pin would run one release's
   # server under another release's compose file. This is what makes re-running
   # the installer a real recovery.
-  if [ -n "$(env_get PHANTOM_BACKEND_TAG)" ]; then
-    env_set PHANTOM_BACKEND_TAG ""
-    say "Unpinned PHANTOM_BACKEND_TAG — this install runs latest"
+  if [ -n "$(env_get BACKEND_TAG)" ]; then
+    env_set BACKEND_TAG ""
+    say "Unpinned BACKEND_TAG — this install runs latest"
   fi
 else
   if [ "$ADDRESS_SET" -ne 1 ]; then
@@ -275,10 +287,10 @@ POSTGRES_USER=superuser
 POSTGRES_PASSWORD=$(rand_hex 16)
 API_KEY=$API_KEY_SHOWN
 ENCRYPTION_KEY=$(head -c 32 /dev/urandom | base64)
-PHANTOM_BACKEND_ADDRESS=$ADDRESS
-PHANTOM_BACKEND_CERT_EMAIL=$CERT_EMAIL
-PHANTOM_BACKEND_TLS=${TLS:-public}
-PHANTOM_BACKEND_DIR=$DIR
+BACKEND_ADDRESS=$ADDRESS
+BACKEND_CERT_EMAIL=$CERT_EMAIL
+BACKEND_TLS=${TLS:-public}
+BACKEND_DIR=$DIR
 COMPOSE_PROFILES=https
 EOF
   ok ".env created (secrets generated, chmod 600)"
@@ -301,7 +313,7 @@ $SUDO docker compose pull || say "pull failed — continuing with local images i
 $SUDO docker compose up -d
 ok "Containers started"
 
-PORT=$(env_get PHANTOM_BACKEND_PORT); PORT="${PORT:-8080}"
+PORT=$(env_get BACKEND_PORT); PORT="${PORT:-8080}"
 say "Waiting for the api to come up..."
 # /health requires the token like every other route (setup.sh learned this
 # live; found again here by the provisioning rig). The key goes in over
@@ -323,10 +335,10 @@ ok "api is up"
 # to fix.
 printf '\n'
 say "Verifying what a client will use..."
-$SUDO env PHANTOM_BACKEND_DIR="$DIR" phantom-backend check || true
+$SUDO env BACKEND_DIR="$DIR" phantom-backend check || true
 
 # ── Done ────────────────────────────────────────────────────────────────────
-ADDRESS=$(env_get PHANTOM_BACKEND_ADDRESS)
+ADDRESS=$(env_get BACKEND_ADDRESS)
 printf '\n\033[0;32m✓ Install complete.\033[0m\n\n'
 printf '  Server URL:  https://%s\n' "$ADDRESS"
 printf '  API key:     %s\n' "$API_KEY_SHOWN"
@@ -334,7 +346,7 @@ printf '\nNotes:\n'
 printf '  - Ports 80 + 443 must be open (cloud firewall / security group).\n'
 printf '  - The API docs are not served publicly. Reach them over a tunnel:\n'
 printf '      ssh -L 8080:127.0.0.1:%s you@%s\n' "$PORT" "$ADDRESS"
-if [ "$(env_get PHANTOM_BACKEND_TLS)" = internal ]; then
+if [ "$(env_get BACKEND_TLS)" = internal ]; then
   printf '  - Clients must trust this server'"'"'s root certificate:  phantom-backend ca > phantom-root.crt\n'
   printf '    (curl --cacert phantom-root.crt …  /  NODE_EXTRA_CA_CERTS=phantom-root.crt)\n'
 else

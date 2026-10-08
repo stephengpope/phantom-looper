@@ -14,7 +14,7 @@
 # ============================================================================
 set -eu
 
-DIR="${PHANTOM_BACKEND_DIR:-/opt/phantom-looper}"
+DIR="${BACKEND_DIR:-/opt/phantom-looper}"
 ENV_FILE="$DIR/.env"
 ROOT_CRT=/data/caddy/pki/authorities/local/root.crt
 
@@ -28,10 +28,10 @@ env_get() { grep "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true
 authed_curl() { printf 'header = "authorization: Bearer %s"\n' "$KEY" | curl -K - "$@"; }
 
 load_env() {
-  [ -f "$ENV_FILE" ] || { echo "no $ENV_FILE — is phantom-looper installed here? (PHANTOM_BACKEND_DIR=$DIR)" >&2; exit 1; }
-  PORT=$(env_get PHANTOM_BACKEND_PORT); PORT="${PORT:-8080}"
-  ADDRESS=$(env_get PHANTOM_BACKEND_ADDRESS)
-  TLS=$(env_get PHANTOM_BACKEND_TLS); TLS="${TLS:-public}"
+  [ -f "$ENV_FILE" ] || { echo "no $ENV_FILE — is phantom-looper installed here? (BACKEND_DIR=$DIR)" >&2; exit 1; }
+  PORT=$(env_get BACKEND_PORT); PORT="${PORT:-8080}"
+  ADDRESS=$(env_get BACKEND_ADDRESS)
+  TLS=$(env_get BACKEND_TLS); TLS="${TLS:-public}"
   KEY=$(env_get API_KEY)
   LOCAL="http://127.0.0.1:$PORT"
 }
@@ -135,7 +135,7 @@ phantom-backend — manage this phantom-looper server (install dir: $DIR)
   phantom-backend version           the release this server is running
   phantom-backend update vX.Y.Z     upgrade to a release (same path as POST /update)
   phantom-backend key               print the API key
-  phantom-backend ca                print Caddy's root certificate (PHANTOM_BACKEND_TLS=internal)
+  phantom-backend ca                print Caddy's root certificate (BACKEND_TLS=internal)
 EOF
 }
 

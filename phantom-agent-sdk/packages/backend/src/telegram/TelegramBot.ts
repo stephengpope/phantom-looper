@@ -78,7 +78,7 @@ export interface TelegramBotDeps {
   sessions: Sessions;
   projects: Projects;
   paths: Paths;
-  /** https://PHANTOM_BACKEND_ADDRESS — the only source of the webhook URL. */
+  /** https://BACKEND_ADDRESS — the only source of the webhook URL. */
   publicAddress?: string;
   /** The command menu to register with Telegram (the app's commands): the
    *  global default, and the operator's chat's for its current mode. */

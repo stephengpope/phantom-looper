@@ -5,7 +5,7 @@
 #   - builds the workspace image locally under the name the default setting
 #     expects (a published registry image will replace this seamlessly)
 #   - brings the stack up — the SAME stack as an install: Caddy in front,
-#     HTTPS on its own CA (PHANTOM_BACKEND_TLS=internal, what a private-address
+#     HTTPS on its own CA (BACKEND_TLS=internal, what a private-address
 #     install runs), HTTP/2 to the cli. There is no plain-http dev mode: the
 #     cli speaks one transport and dev runs it.
 #   - saves Caddy's root certificate where the cli trusts it (provision.ts
@@ -26,11 +26,11 @@ POSTGRES_USER=superuser
 POSTGRES_PASSWORD=$(openssl rand -hex 16)
 API_KEY=$(openssl rand -hex 24)
 ENCRYPTION_KEY=$(openssl rand -base64 32)
-PHANTOM_BACKEND_PORT=$PORT
-PHANTOM_BACKEND_HTTPS_PORT=$HTTPS_PORT
-PHANTOM_BACKEND_HTTP_PORT=$HTTP_PORT
-PHANTOM_BACKEND_ADDRESS=localhost
-PHANTOM_BACKEND_TLS=internal
+BACKEND_PORT=$PORT
+BACKEND_HTTPS_PORT=$HTTPS_PORT
+BACKEND_HTTP_PORT=$HTTP_PORT
+BACKEND_ADDRESS=localhost
+BACKEND_TLS=internal
 COMPOSE_PROFILES=https
 ENV
   echo "wrote .env (api :$PORT, https :$HTTPS_PORT)"
@@ -39,8 +39,8 @@ else
 fi
 # shellcheck disable=SC1091
 source .env
-[ "${PHANTOM_BACKEND_TLS:-}" = internal ] && [ "${COMPOSE_PROFILES:-}" = https ] \
-  || { echo ".env must have PHANTOM_BACKEND_TLS=internal and COMPOSE_PROFILES=https — dev runs the https stack (delete .env to regenerate)"; exit 1; }
+[ "${BACKEND_TLS:-}" = internal ] && [ "${COMPOSE_PROFILES:-}" = https ] \
+  || { echo ".env must have BACKEND_TLS=internal and COMPOSE_PROFILES=https — dev runs the https stack (delete .env to regenerate)"; exit 1; }
 
 # The default container_image setting names this tag; building it locally makes
 # the default work with no registry involved.
@@ -50,18 +50,18 @@ docker compose up -d --build
 
 echo -n "waiting for api"
 for _ in $(seq 1 60); do
-  if curl -sf -H "authorization: Bearer $API_KEY" "http://127.0.0.1:${PHANTOM_BACKEND_PORT:-8080}/api/health" >/dev/null 2>&1; then echo; break; fi
+  if curl -sf -H "authorization: Bearer $API_KEY" "http://127.0.0.1:${BACKEND_PORT:-8080}/api/health" >/dev/null 2>&1; then echo; break; fi
   echo -n "."; sleep 1
 done
 
-curl -sf -H "authorization: Bearer $API_KEY" "http://127.0.0.1:${PHANTOM_BACKEND_PORT:-8080}/api/health" >/dev/null \
+curl -sf -H "authorization: Bearer $API_KEY" "http://127.0.0.1:${BACKEND_PORT:-8080}/api/health" >/dev/null \
   || { echo "api did not come up — docker compose logs api"; exit 1; }
 
 # Caddy's root certificate: minted on its first start, the one file the cli
 # trusts for this host (phantom-cli/provision.ts caPathFor). The cli running
 # from source keeps everything under <repo>/.phantom-cli (gitignored) —
 # never ~/.phantom-cli, which belongs to an installed build.
-HTTPS_PORT=${PHANTOM_BACKEND_HTTPS_PORT:-443}
+HTTPS_PORT=${BACKEND_HTTPS_PORT:-443}
 BASE="https://localhost$([ "$HTTPS_PORT" = 443 ] || echo ":$HTTPS_PORT")"
 CA=.phantom-cli/ca/localhost.pem
 mkdir -p .phantom-cli/ca
