@@ -50,11 +50,11 @@ export function makeAuthClient(deps: IdentityDeps) {
       // every request `sec-fetch-mode: cors` and sends no Origin, which Better
       // Auth refuses on a sign-in (MISSING_OR_NULL_ORIGIN). A browser ignores
       // this header and sends its real one.
-      onRequest: (context) => {
+      onRequest: (context: { headers: Headers }) => {
         for (const [name, value] of Object.entries({ origin: deps.origin, ...credentialHeaders(deps.credential()) })) context.headers.set(name, value);
         return context;
       },
-      onSuccess: (context) => {
+      onSuccess: (context: { response: Response }) => {
         const token = context.response.headers.get('set-auth-token');
         if (token) deps.onSessionToken(token);
       },

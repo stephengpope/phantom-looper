@@ -158,18 +158,18 @@ function buildAuth({ database, mailer, settings, projects, media, options, baseU
       enabled: signIn.password === true,
       disableSignUp: true,
       requireEmailVerification: true,
-      sendResetPassword: async ({ user: who, url }) => { await send(who.email, mail.passwordReset({ user: who, url })); },
+      sendResetPassword: async ({ user: who, url }: { user: { email: string; name: string }; url: string }) => { await send(who.email, mail.passwordReset({ user: who, url })); },
       // The reset link went to this address and was followed: the address is
       // proven, as a clicked magic link proves it. An invited user's first
       // password comes this way, so without it they could never sign in.
-      onPasswordReset: async ({ user: who }) => {
+      onPasswordReset: async ({ user: who }: { user: { id: string; emailVerified: boolean } }) => {
         if (!who.emailVerified) await (await context).internalAdapter.updateUser(who.id, { emailVerified: true });
       },
     },
     emailVerification: {
       // An unverified address signing in with a password gets the link again.
       sendOnSignIn: true,
-      sendVerificationEmail: async ({ user: who, url }) => { await send(who.email, mail.verification({ user: who, url })); },
+      sendVerificationEmail: async ({ user: who, url }: { user: { email: string; name: string }; url: string }) => { await send(who.email, mail.verification({ user: who, url })); },
     },
     socialProviders: {
       ...(signIn.github ? { github: { ...signIn.github, disableSignUp: true } } : {}),
@@ -177,7 +177,7 @@ function buildAuth({ database, mailer, settings, projects, media, options, baseU
     },
     databaseHooks: {
       // A personal organization, owned, from the first moment there is a user.
-      user: { create: { after: async (created) => {
+      user: { create: { after: async (created: { id: string; name?: string | null; email: string }) => {
         const db = await adapter();
         const personal = await db.create<{ id: string }>({ model: 'organization',
           data: { name: created.name || created.email, slug: personalSlug(created.id), createdAt: new Date() } });
@@ -186,7 +186,7 @@ function buildAuth({ database, mailer, settings, projects, media, options, baseU
         // GitHub's rule: a user goes only once nothing would be left
         // ownerless — their personal organization's projects and files
         // deleted or moved, no shared organization left without an owner.
-        before: async (going) => {
+        before: async (going: { id: string; email: string }) => {
           const personal = await personalOrganization(going.id);
           if (personal) {
             const owned = await projects.ofOrganization(personal.id);
@@ -203,7 +203,7 @@ function buildAuth({ database, mailer, settings, projects, media, options, baseU
             message: `${going.email} is the only owner of ${soleOwnerOf.map((row) => row.name).join(', ')}: make someone else an owner first` });
         },
         // Their personal organization goes with them, and both settings layers.
-        after: async (gone) => {
+        after: async (gone: { id: string }) => {
           const personal = await personalOrganization(gone.id);
           if (personal) {
             await database.system.delete(organizationTable).where(eq(organizationTable.id, personal.id));
@@ -214,7 +214,7 @@ function buildAuth({ database, mailer, settings, projects, media, options, baseU
       } },
       // A sign-in opens in an organization: the first membership when the
       // session says none.
-      session: { create: { before: async (opening) => {
+      session: { create: { before: async (opening: { activeOrganizationId?: string; userId: string }) => {
         if (opening.activeOrganizationId) return { data: opening };
         const first = await (await adapter()).findOne<{ organizationId: string }>({ model: 'member', where: [{ field: 'userId', value: opening.userId }] });
         return { data: { ...opening, activeOrganizationId: first?.organizationId } };

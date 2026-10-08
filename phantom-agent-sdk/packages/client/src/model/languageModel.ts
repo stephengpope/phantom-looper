@@ -156,7 +156,7 @@ function providerModel(spec: ModelSpec, fetchWith: typeof fetch): Exclude<Langua
     case 'google': return createGoogleGenerativeAI({ apiKey: keyFor(spec), fetch: fetchWith })(spec.model);
     case 'deepseek': return createDeepSeek({ apiKey: keyFor(spec), baseURL: endpoint, fetch: fetchWith })(spec.model);
     case 'kimi': return createMoonshotAI({ apiKey: keyFor(spec), baseURL: endpoint, fetch: fetchWith })(spec.model);
-    case 'xai': return createXai({ apiKey: keyFor(spec), baseURL: endpoint, fetch: fetchWith }).chat(spec.model);
+    case 'xai': return createXai({ apiKey: keyFor(spec), baseURL: endpoint, fetch: fetchWith })(spec.model);
     case 'mistral': return createMistral({ apiKey: keyFor(spec), baseURL: endpoint, fetch: fetchWith })(spec.model);
     case 'groq': return createGroq({ apiKey: keyFor(spec), baseURL: endpoint, fetch: fetchWith })(spec.model);
     case 'openai-compatible':

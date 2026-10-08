@@ -47,7 +47,7 @@
     "@smithy/node-http-handler": "4.12.1",
     "@types/dockerode": "4.0.1",
     "@types/pg": "8.23.1",
-    "ai": "7.0.73",
+    "ai": "7.0.133",
     "better-auth": "1.7.7",
     "croner": "10.0.1",
     "dockerode": "5.0.1",
