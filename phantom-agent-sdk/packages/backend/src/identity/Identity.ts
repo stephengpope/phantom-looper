@@ -11,8 +11,8 @@
 //
 // Who may see which project, session or row is NOT decided here — user space
 // gates its /app routes with `require` and writes its own rules.
-import { betterAuth, type BetterAuthPlugin } from 'better-auth';
-import { APIError, createAuthMiddleware } from 'better-auth/api';
+import { betterAuth } from 'better-auth';
+import { APIError } from 'better-auth/api';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { fromNodeHeaders } from 'better-auth/node';
 import { magicLink, organization, bearer, admin } from 'better-auth/plugins';
@@ -121,27 +121,10 @@ interface AuthDeps {
   captures: Map<string, (url: string) => void>;
 }
 
-/** A key acts in one organization: the one its maker is signed into when
- *  they make it. The server writes it into the key (metadata.organizationId);
- *  the client cannot set or change it. */
-function keyOrganization(activeOrganization: (headers: Headers) => Promise<string | null | undefined>): BetterAuthPlugin {
-  return {
-    id: 'key-organization',
-    hooks: { before: [{
-      matcher: (ctx) => Boolean(ctx.request || ctx.headers) && (ctx.path === '/api-key/create' || ctx.path === '/api-key/update'),
-      handler: createAuthMiddleware(async (ctx) => {
-        if (ctx.path === '/api-key/update') {
-          if (ctx.body?.metadata !== undefined) throw APIError.from('BAD_REQUEST', { code: 'KEY_ORGANIZATION_FIXED', message: 'a key\'s organization is set when it is made' });
-          return;
-        }
-        // A full session lookup, not this hook's own: hooks see the request as
-        // it came in, before bearer() has turned its token into a session.
-        const organizationId = ctx.headers ? await activeOrganization(ctx.headers) : null;
-        if (!organizationId) throw APIError.from('BAD_REQUEST', { code: 'NO_ACTIVE_ORGANIZATION', message: 'sign in to an organization first' });
-        return { context: { body: { ...ctx.body, metadata: { organizationId } } } };
-      }),
-    }] },
-  };
+/** A user's personal organization: made with them, named by their id. */
+const personalSlug = (userId: string) => `personal-${userId.toLowerCase()}`;
+async function personalOrganizationOf(database: Database, userId: string): Promise<{ id: string } | undefined> {
+  return (await database.system.select({ id: organizationTable.id }).from(organizationTable).where(eq(organizationTable.slug, personalSlug(userId))))[0];
 }
 
 /** The Better Auth instance: the adapter over our tables, the two hooks
@@ -163,17 +146,10 @@ function buildAuth({ database, mailer, settings, projects, media, options, baseU
     internalAdapter: { findUserByEmail: (email: string) => Promise<unknown>;
       createUser: (fields: { email: string; name: string }, source: { method: string }) => Promise<unknown>;
       updateUser: (id: string, fields: { emailVerified: boolean }) => Promise<unknown> } };
-  // A user's personal organization: made with them, named by their id.
-  const personalSlug = (userId: string) => `personal-${userId.toLowerCase()}`;
-  const personalOrganization = async (userId: string) =>
-    (await database.system.select({ id: organizationTable.id }).from(organizationTable).where(eq(organizationTable.slug, personalSlug(userId))))[0];
+  const personalOrganization = (userId: string) => personalOrganizationOf(database, userId);
   let ready!: (context: Context) => void;
   const context = new Promise<Context>((resolve) => { ready = resolve; });
   const adapter = async () => (await context).adapter;
-  // keyOrganization's session lookup, through the instance it is part of: filled once built.
-  type SignedIn = (headers: Headers) => Promise<{ session: { activeOrganizationId?: string | null } } | null>;
-  let found!: (lookup: SignedIn) => void;
-  const signedIn = new Promise<SignedIn>((resolve) => { found = resolve; });
   const auth = betterAuth({
     database: drizzleAdapter(database.system, { provider: 'pg',
       schema: { user, session, account, verification, organization: organizationTable, member, invitation, apikey } }),
@@ -290,15 +266,12 @@ function buildAuth({ database, mailer, settings, projects, media, options, baseU
       }),
       bearer(),
       admin(),
-      keyOrganization(async (headers) => (await (await signedIn)(headers))?.session.activeOrganizationId),
-      // A key remembers the organization it was made for (metadata.organizationId,
-      // written by keyOrganization): callerOf reads it. No per-key rate limit — a
-      // key gets the limits its user gets.
-      apiKey({ enableSessionForAPIKeys: true, enableMetadata: true, rateLimit: { enabled: false } }),
+      // A key is its user, in any organization they belong to (callerOf).
+      // No per-key rate limit: a key gets the limits its user gets.
+      apiKey({ enableSessionForAPIKeys: true, rateLimit: { enabled: false } }),
     ],
   });
   void auth.$context.then(ready);
-  found((headers) => auth.api.getSession({ headers }));
   return auth;
 }
 type BetterAuth = ReturnType<typeof buildAuth>;
@@ -353,10 +326,14 @@ export class Identity {
       log.warn({ err: errStr(error) }, 'session lookup failed'); return null;
     });
     if (!signedIn) return null;
-    // A sign-in carries the organization it is active in. An API key's
-    // session does not — the key's own metadata.organizationId says.
-    const session = signedIn.session as { activeOrganizationId?: string | null; id: string };
-    const activeId = request.headers['x-api-key'] ? await this.#organizationOfKey(session.id) : session.activeOrganizationId;
+    // A sign-in carries the organization it is active in. A key is its user
+    // in any of their organizations: each call names one (the same header the
+    // server key uses, x-phantom-organization), or runs in their personal one.
+    const session = signedIn.session as { activeOrganizationId?: string | null };
+    const named = request.headers['x-phantom-organization'];
+    const activeId = request.headers['x-api-key']
+      ? (typeof named === 'string' && named ? named : (await personalOrganizationOf(this.database, signedIn.user.id))?.id)
+      : session.activeOrganizationId;
     // No organization named, or one they are no longer a member of: nobody.
     // Checked on every request, so a removed member loses access at once.
     if (!activeId) return null;
@@ -381,19 +358,6 @@ export class Identity {
     }
     const [row] = await this.database.system.select({ id: organizationTable.id }).from(organizationTable).where(eq(organizationTable.id, organizationId));
     return row ? { organizationId, userId: null } : null;
-  }
-
-  /** The organization an API key was made for: the key's
-   *  metadata.organizationId. The session an API key stands up carries the
-   *  key's id as its own (the plugin's doing), so one read — not a second
-   *  verify, which would count against the key's rate limit twice. */
-  async #organizationOfKey(keyId: string): Promise<string | null> {
-    const [row] = await this.database.system.select({ metadata: apikey.metadata }).from(apikey).where(eq(apikey.id, keyId));
-    if (!row?.metadata) return null;
-    try {
-      const metadata = JSON.parse(row.metadata) as { organizationId?: unknown };
-      return typeof metadata.organizationId === 'string' ? metadata.organizationId : null;
-    } catch { return null; }
   }
 
   /** The caller, or `unauthorized` (a 401 once HttpApi's error handler sees
