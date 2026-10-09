@@ -281,16 +281,17 @@ export class PhantomBackend {
     const docker = makeDocker();
     // THE image puller/remover — every pull and removal in this process goes through it so they never overlap.
     const images = new Images(docker);
-    // The backend's own runner: this process's volume and Docker. Every workspace
-    // call goes through a host (runtime/WorkspaceHost.ts); a workspace placed
-    // nowhere else is here. RUN_SESSION_CONTAINERS=0: this server runs no
-    // session containers itself — every workspace lands on a session runner (a
-    // cloud API with its database, and nothing else, on the box).
+    // The backend's own host: this process's volume and Docker. Every workspace
+    // call goes through a host (runtime/WorkspaceHost.ts); a workspace pinned
+    // to no runner is here. New workspaces land here only with
+    // RUN_SESSION_CONTAINERS=1: the default is 0 — every new workspace goes
+    // to a session runner (install.sh starts one beside the api), and this
+    // box keeps serving, reaping and sweeping only what it already holds.
     const localHost = new LocalHost(docker, images, paths, {
       volume: process.env.WORKSPACE_VOLUME, network: process.env.AGENT_NETWORK, databaseContainer: process.env.AGENT_DATABASE_CONTAINER,
       diskQuota: process.env.DISK_QUOTA_URL || undefined, apiImage: process.env.API_IMAGE,
     });
-    const sessionRunners = new SessionRunners(database.system, localHost, { runsContainers: !/^(0|off|false|no)$/i.test(process.env.RUN_SESSION_CONTAINERS ?? '1'), settings });
+    const sessionRunners = new SessionRunners(database.system, localHost, { runsContainers: /^(1|on|true|yes)$/i.test(process.env.RUN_SESSION_CONTAINERS ?? '0'), settings });
     await sessionRunners.load();
     const workspaces = new Workspaces(database.drizzle, sessionRunners, settings, sessionEvents);
     const cards = new Cards(database.drizzle, projects, boardEvents, config.cardFields);
@@ -388,7 +389,7 @@ export class PhantomBackend {
     this.#loops.push(this.#loop(async () => {
       await refreshWorkState({ workspaces: this.workspaces, projects: this.projects, hosts: this.sessionRunners, sessionContainers: this.sessionContainers, boardEvents: this.boardEvents })
         .catch((error) => log.error({ err: errStr(error) }, 'work-state refresh threw'));
-      return 10_000;
+      return Number(await this.settings.resolve<number>('work_state_refresh_ms').catch(() => 10_000));
     }, 10_000));
   }
 
@@ -415,7 +416,7 @@ export class PhantomBackend {
       if (reason) throw new Error(`container_disk_gb is set but cannot be enforced on this server: ${reason}`);
     }
     await this.#httpApi.listen(this.env.port);
-    if (this.sessionRunners.runsContainers) await this.sessionRunners.local.retireOldContainers();
+    await this.sessionRunners.local.retireOldContainers().catch((error) => log.warn({ err: errStr(error) }, 'could not retire old-named containers'));
     this.git.start();
     this.#startLoops();
     if (this.config.crons) { this.#cronScheduler = new CronScheduler(this, this.config.crons.agent); this.#cronScheduler.start(); }

@@ -57,7 +57,7 @@ export function sessionRunnerRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       id: { type: 'string' }, name: { type: 'string' }, boot: { type: 'string' },
       facts: { type: 'object', additionalProperties: true } } } } },
   async (req, reply) => {
-    try { return ok(await ctx.sessionRunners.hello(callerOf(req), req.body)); }
+    try { return ok({ ...(await ctx.sessionRunners.hello(callerOf(req), req.body)), heartbeatMs: await ctx.sessionRunners.heartbeatMs() }); }
     catch (error) { return refused(reply, error); }
   });
 

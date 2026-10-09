@@ -41,9 +41,8 @@ export class SessionRunnerError extends Error {
 
 export interface SessionRunnerView extends SessionRunnerRow { online: boolean; workspaces: number; load: HostLoad | null; version: string | null }
 
-/** No event up the relay for this long = the feed's socket is dead whatever
- *  it says: the host heartbeats every 15 s. */
-const SILENT_MS = 45_000;
+/** The runner's heartbeat when no setting says otherwise. */
+const HEARTBEAT_MS = 15_000;
 
 /** The workspace whose move the current work IS — its own lookups must not
  *  wait for it (the push and the checkout inside a move go through `of`). */
@@ -67,21 +66,33 @@ export class SessionRunners {
     private readonly opts: { runsContainers: boolean; settings?: Settings },
   ) {}
 
-  /** Whether this server runs session containers itself (RUN_SESSION_CONTAINERS=1, the default). */
+  /** Whether NEW workspaces may be placed on this server itself
+   *  (RUN_SESSION_CONTAINERS=1; the default is 0). What it already holds it
+   *  serves either way. */
   get runsContainers(): boolean { return this.opts.runsContainers; }
+
+  /** How often a runner beats (`runner_heartbeat_ms`): told to each at
+   *  hello; three silent beats and its feed is hung up on. */
+  async heartbeatMs(): Promise<number> {
+    const value = Number(await this.opts.settings?.resolve('runner_heartbeat_ms').catch(() => HEARTBEAT_MS) ?? HEARTBEAT_MS);
+    return value > 0 ? value : HEARTBEAT_MS;
+  }
 
   /** The registered hosts, as proxies — offline until each connects. */
   async load(): Promise<void> {
     for (const row of await this.database.select().from(sessionRunners)) this.#remote.set(row.id, new RemoteHost(row.id, row.name));
     log.info({ hosts: this.#remote.size, runsContainers: this.opts.runsContainers }, 'session runners loaded');
     // A feed whose socket died silently (a laptop off the network) is hung
-    // up on here: the host is offline, its jobs wait for its next feed.
+    // up on here: the host is offline, its jobs wait for its next feed. No
+    // event up the relay for three beats = dead, whatever the socket says.
     this.#sweep = setInterval(() => {
-      const cutoff = Date.now() - SILENT_MS;
-      for (const [id, feed] of this.#feeds) {
-        if (feed.heard < cutoff) { log.warn({ host: id }, 'session runner silent — hanging up'); feed.close(); }
-      }
-    }, 15_000);
+      void this.heartbeatMs().then((beat) => {
+        const cutoff = Date.now() - 3 * beat;
+        for (const [id, feed] of this.#feeds) {
+          if (feed.heard < cutoff) { log.warn({ host: id }, 'session runner silent — hanging up'); feed.close(); }
+        }
+      });
+    }, HEARTBEAT_MS);
     this.#sweep.unref();
   }
 
@@ -175,10 +186,11 @@ export class SessionRunners {
     return new Map(rows.flatMap((row) => (row.hostId ? [[row.hostId, row.n] as const] : [])));
   }
 
-  /** Running containers on every host that can answer right now. */
+  /** Running containers on every host that can answer right now — this
+   *  server's own included whatever it places, for what it still holds. */
   async activeWorkspaces(): Promise<string[]> {
     const lists = await Promise.all([
-      this.opts.runsContainers ? this.local.activeWorkspaces() : Promise.resolve([]),
+      this.local.activeWorkspaces().catch(() => [] as string[]),
       ...[...this.#remote.values()].map((host) => host.activeWorkspaces()),
     ]);
     return lists.flat();

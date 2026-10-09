@@ -78,10 +78,11 @@ services:
       # Workspace containers are created through the socket proxy below — the
       # API never holds the socket and runs non-root.
       DOCKER_HOST: tcp://docker-proxy:2375
-      # Run session containers on this server (1, the default). 0: every
-      # workspace lands on a registered session runner; this box is API and
-      # database only (phantom-agent-sdk host/SessionRunners.ts).
-      RUN_SESSION_CONTAINERS: ${RUN_SESSION_CONTAINERS:-1}
+      # Place new session containers on this server itself (1). 0, the
+      # default: every new workspace lands on a session runner — install.sh
+      # starts one beside this stack (session-runner/), and any box with Docker
+      # can run another. The api keeps serving whatever it already holds.
+      RUN_SESSION_CONTAINERS: ${RUN_SESSION_CONTAINERS:-0}
       # The named volume, by NAME: workspace containers mount per-session
       # subpaths of it. dockerd resolves mounts host-side, so an API-internal
       # path would come up empty.

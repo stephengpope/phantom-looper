@@ -98,4 +98,17 @@ chmod 600 "$ENV_FILE.tmp"
 mv "$ENV_FILE.tmp" "$ENV_FILE"
 echo "apply: BACKEND_TAG=$TAG pinned"
 docker compose --project-directory "$BACKEND_DIR" -f "$BACKEND_DIR/docker-compose.yml" up -d --remove-orphans
+# The session runner install.sh started beside the api: its stack files were
+# refreshed with the rest of /host-files above; pin the same tag in its .env
+# and recreate it too. One upgrade, both stacks, the api first. (A runner
+# stack upgrading ITSELF — HOST_FILES_DIR set — has no runner beside it.)
+RUNNER_DIR="$BACKEND_DIR/session-runner"
+if [ "$IMAGE_HOST_DIR" = /host-files ] && [ -f "$RUNNER_DIR/.env" ]; then
+  grep -v '^BACKEND_TAG=' "$RUNNER_DIR/.env" > "$RUNNER_DIR/.env.tmp" || true
+  echo "BACKEND_TAG=$TAG" >> "$RUNNER_DIR/.env.tmp"
+  chmod 600 "$RUNNER_DIR/.env.tmp"
+  mv "$RUNNER_DIR/.env.tmp" "$RUNNER_DIR/.env"
+  docker compose --project-directory "$RUNNER_DIR" -f "$RUNNER_DIR/docker-compose.yml" up -d --remove-orphans
+  echo "apply: the session runner on this box is on $TAG"
+fi
 echo "apply: done — $(basename "$BACKEND_DIR") is on $TAG"

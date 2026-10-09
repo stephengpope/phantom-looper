@@ -9,6 +9,12 @@ import type { OverridableLayer } from '@phantom-agent-sdk/backend';
 const SHARED: readonly OverridableLayer[] = ['organization', 'user', 'project'];
 
 export const appSettings: SettingDefinition[] = [
+  // The bot's own timers: the session digest (notifications/digest.ts) and
+  // the upgrade check (index.ts) are this app's, so their settings are too.
+  { key: "session_digest_interval", type: "number", default: 5, label: "digest interval (min)", group: "telegram",
+    description: "How often (minutes) to send a digest of sessions that finished their turn. 0 disables it. Sessions idle longer than this interval are included." },
+  { key: "update_check_interval_ms", type: "number", default: 86400000, label: "upgrade check interval", group: "telegram",
+    description: "How often the server checks GitHub for a new release and sends a Telegram notification. 0 disables the check. The check runs only when Telegram is enabled and an authorized user is set.", unit: "ms", min: 0 },
   { key: "auto_plan", type: "boolean", default: false, label: "auto plan", group: "board",
     description: "Cards in plan are driven by the supervisor: it has the coding agent write a plan, verifies it, and moves the card to in progress. Each card's own Auto plan switch overrides this default.", overridableAt: SHARED, before: "card_prefix" },
   { key: "auto_build", type: "boolean", default: false, label: "auto build", group: "board",

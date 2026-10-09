@@ -157,10 +157,11 @@ export class SessionRunner {
       version: APP_VERSION,
     };
     const hello: HostHello = { ...(persisted.id ? { id: persisted.id } : {}), name: this.opts.name, boot: this.boot, facts };
-    const row = await this.#backend.call<{ id: string; name: string }>('POST', '/session-runners/hello', hello);
+    const row = await this.#backend.call<{ id: string; name: string; heartbeatMs?: number }>('POST', '/session-runners/hello', hello);
+    const beatMs = row.heartbeatMs && row.heartbeatMs > 0 ? row.heartbeatMs : 15_000;
     this.#id = row.id;
     if (persisted.id !== row.id) await fs.writeFile(idFile, JSON.stringify({ id: row.id }) + '\n');
-    log.info({ host: row.id, name: this.opts.name, boot: this.boot, facts }, 'session runner registered — opening the feed');
+    log.info({ host: row.id, name: this.opts.name, boot: this.boot, heartbeatMs: beatMs, facts }, 'session runner registered — opening the feed');
     this.#link = new Link(this.#backend, {
       feed: `/session-runners/${row.id}/jobs?boot=${encodeURIComponent(this.boot)}`,
       relay: `/session-runners/${row.id}/jobs/events`,
@@ -170,9 +171,10 @@ export class SessionRunner {
     });
     this.#link.open();
     // Liveness both ways: the backend heartbeats down the feed; this goes up
-    // the relay, so a silently dead socket reads as offline there within 45 s.
-    // The beat carries the box's load: what placement orders by.
-    this.#heartbeat = setInterval(() => { void this.#load().then((load) => this.#link?.send({ type: 'heartbeat', load })); }, 15_000);
+    // the relay at the rate the hello answered (runner_heartbeat_ms), so a
+    // silently dead socket reads as offline there within three beats. The
+    // beat carries the box's load: what placement orders by.
+    this.#heartbeat = setInterval(() => { void this.#load().then((load) => this.#link?.send({ type: 'heartbeat', load })); }, beatMs);
   }
   #heartbeat: ReturnType<typeof setInterval> | null = null;
 

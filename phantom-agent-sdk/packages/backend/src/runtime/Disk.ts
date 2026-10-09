@@ -233,9 +233,11 @@ export async function pressureSweep(
   const currents = [String(await settings.resolve('container_image')), API_IMAGE_CURRENT];
   const pct = Number(await settings.resolve('disk_cleanup_percent'));
   const idleMs = Number(await settings.resolve('container_idle_ms'));
-  const boxes: Array<{ host: WorkspaceHost; hostId: string | null; holdsWorkspaces: boolean }> = [
-    { host: hosts.local, hostId: null, holdsWorkspaces: hosts.runsContainers },
-    ...hosts.onlineRunners().map((host) => ({ host, hostId: host.id, holdsWorkspaces: true })),
+  // This server's box too, whatever it places: it may still hold workspaces
+  // from before runners, and every update pulls an image here.
+  const boxes: Array<{ host: WorkspaceHost; hostId: string | null }> = [
+    { host: hosts.local, hostId: null },
+    ...hosts.onlineRunners().map((host) => ({ host, hostId: host.id })),
   ];
   for (const box of boxes) {
     const onBox = async (session: SessionRow) => (await hosts.hostIdOf(session.id)) === box.hostId;
@@ -246,7 +248,6 @@ export async function pressureSweep(
       fresh: async (session) => (await sessions.get(session.id)) ?? session,
       measure: () => box.host.disk(),
       owners: async () => {
-        if (!box.holdsWorkspaces) return [];
         const all = await workspaceOwners(projects, sessions);
         const flags = await Promise.all(all.map(({ session }) => onBox(session)));
         return all.filter((_, i) => flags[i]);

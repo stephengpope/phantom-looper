@@ -343,6 +343,43 @@ printf '\n'
 say "Verifying what a client will use..."
 $SUDO env BACKEND_DIR="$DIR" phantom-backend check || true
 
+# ── The session runner on this box ──────────────────────────────────────────
+# The api places no session containers on itself (RUN_SESSION_CONTAINERS=0,
+# the default): every new workspace lands on a session runner. This box runs
+# one — a shared runner, from the files the image shipped ($DIR/session-runner),
+# connected to the api through Caddy exactly like a runner anywhere else. Its
+# .env holds nothing of its own (the key is the server's), so it is rewritten
+# on every run: the address and the CA stay current. updater/apply.sh
+# recreates this stack on the new tag with the api's, so one upgrade moves both.
+RUNNER_DIR="$DIR/session-runner"
+if [ "$(env_get RUN_SESSION_CONTAINERS)" != 1 ] && $SUDO test -f "$RUNNER_DIR/docker-compose.yml"; then
+  ADDRESS=$(env_get BACKEND_ADDRESS)
+  CA=""
+  if [ "$(env_get BACKEND_TLS)" = internal ]; then
+    # Caddy's root, as one .env line: the runner turns the two characters \n back into newlines.
+    CA=$($SUDO docker compose exec -T caddy cat /data/caddy/pki/authorities/local/root.crt 2>/dev/null | awk '{ printf "%s\\n", $0 }') || CA=""
+  fi
+  RUNNER_PROFILES=""
+  case "$(env_get COMPOSE_PROFILES)" in *disk-quota*) RUNNER_PROFILES=disk-quota ;; esac
+  $SUDO sh -c "umask 077; cat > '$RUNNER_DIR/.env'" <<RUNNER_ENV
+BACKEND_URL=https://$ADDRESS
+BACKEND_KEY=$(env_get SERVICE_ROLE_KEY)
+HOST_NAME=$(hostname)
+BACKEND_CA="$CA"
+BACKEND_TAG=$(env_get BACKEND_TAG)
+RUNNER_DIR=$RUNNER_DIR
+HELPER_NAME=phantom-update-run-runner
+WORKSPACE_VOLUME=phantom-runner-workspaces
+COMPOSE_PROFILES=$RUNNER_PROFILES
+RUNNER_ENV
+  say "Starting the session runner on this box..."
+  if (cd "$RUNNER_DIR" && $SUDO docker compose up -d); then
+    ok "Session runner started (phantom-backend status shows it; phantom-backend logs runner follows it)"
+  else
+    say "the session runner did not start — phantom-backend logs runner"
+  fi
+fi
+
 # ── Done ────────────────────────────────────────────────────────────────────
 ADDRESS=$(env_get BACKEND_ADDRESS)
 printf '\n\033[0;32m✓ Install complete.\033[0m\n\n'
@@ -360,4 +397,4 @@ else
   printf '      re-run this script with --address=your-domain --cert-email=you@example.com\n'
 fi
 printf '  - Update later: phantom-backend update vX.Y.Z, POST /update, or re-run this script.\n'
-printf '  - Logs: phantom-backend logs api\n\n'
+printf '  - Logs: phantom-backend logs api  /  phantom-backend logs runner\n\n'
