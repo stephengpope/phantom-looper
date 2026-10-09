@@ -20,13 +20,13 @@ import { ToolError } from '../../tools/envelope.js';
 import { ok, err } from '../HttpApi.js';
 import type { PhantomBackend } from '../../PhantomBackend.js';
 import { SESSION_HEADER } from '../../agents/sessionHeader.js';
-import { fileTools, fsDeps } from './fs.js';
+import { fileTools } from './fs.js';
 
 const STATUS: Record<string, number> = {
   not_found: 404, session_not_found: 404, duplicate_name: 409, database_off: 409, database_unavailable: 503, telegram_unavailable: 503, sql_error: 400, session_destroyed: 410, no_workspace: 400, no_session: 400,
   invalid_args: 400, no_match: 422, not_unique: 422, binary_file: 422, skill_not_found: 404,
   is_directory: 400, not_a_directory: 400, too_large: 413, credential_required: 400, search_failed: 502,
-  busy: 409, container_start_failed: 503, container_unavailable: 503, exec_timeout: 504, not_ready: 409, interrupted: 499,
+  busy: 409, container_start_failed: 503, container_unavailable: 503, host_restarted: 503, exec_timeout: 504, not_ready: 409, interrupted: 499,
 };
 
 const clientOf = (req: { headers: Record<string, unknown> }): string => {
@@ -52,6 +52,9 @@ async function sessionOf(ctx: PhantomBackend, id: string): Promise<{ session: Se
 export function toolRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   const send = (reply: { code: (status: number) => { send: (b: unknown) => unknown } }, error: unknown) => {
     if (error instanceof ToolError) return reply.code(STATUS[error.code] ?? 400).send(err(error.code, error.message, error.retryable, error.detail));
+    // The session host the workspace is on came back as a new process: what
+    // it was running is gone. Retryable — the agent runs the call again.
+    if ((error as { code?: unknown }).code === 'host_restarted') return reply.code(503).send(err('host_restarted', (error as Error).message, true));
     throw error;
   };
 
@@ -87,7 +90,7 @@ export function toolRoutes(app: FastifyInstance, ctx: PhantomBackend) {
           files: () => {
             if (!files) {
               if (!session.workspaceId) throw new ToolError('no_workspace', 'this session has no files — nothing to read');
-              files = fileTools(ctx, fsDeps(ctx), session, session.workspaceId, abort.signal);
+              files = fileTools(ctx, session, session.workspaceId, abort.signal);
             }
             return files;
           },

@@ -1,30 +1,20 @@
 // The file-tool plumbing: the session's container, bash (unary and detached)
 // and the task_* view over the detached commands. The tools themselves are
 // tools/files.ts; the routes that run them are routes/tools.ts.
-import fs from 'node:fs';
-import fsp from 'node:fs/promises';
-import path from 'node:path';
 import type { SessionRow } from '../../storage/schema.js';
 import type { BackgroundTaskRow } from '../../storage/BackgroundTasks.js';
 import type { BackgroundTaskEnd } from '../../storage/BackgroundTasks.js';
 import { newId } from '@phantom-agent-sdk/client';
-import { sessionDir } from '../../lib/paths.js';
 import { logger, errStr } from '../../lib/log.js';
-import { Sandbox } from '../../runtime/Sandbox.js';
+import type { Sandbox } from '../../runtime/Sandbox.js';
+import type { WorkspaceHost } from '../../runtime/WorkspaceHost.js';
 import type { FileTools } from '../../tools/def.js';
 import { ToolError } from '../../tools/envelope.js';
 import type { PhantomBackend } from '../../PhantomBackend.js';
 import { killProcessGroup } from '../../agents/ForegroundCommands.js';
 import { workspaceOf } from '../../storage/Sessions.js';
-import type { SessionContainers } from '../../runtime/SessionContainers.js';
-import type Docker from 'dockerode';
 
 const log = logger('bash');
-
-/** The container plumbing the file tools run on. */
-export interface FsDeps { docker: Docker; sessionContainers: SessionContainers }
-/** The backend's own. */
-export const fsDeps = (ctx: PhantomBackend): FsDeps => ({ docker: ctx.docker, sessionContainers: ctx.sessionContainers });
 
 
 /** Kill one process SESSION by sid: TERM, ~1s grace, KILL. A second exec is
@@ -164,7 +154,7 @@ export async function reconcileRunning(
  *  kill reaches a command whose turn has no socket of its own to close — one
  *  kill, two doors. */
 async function runBash(
-  ctx: PhantomBackend, deps: FsDeps, sandbox: Sandbox, session: SessionRow,
+  ctx: PhantomBackend, host: WorkspaceHost, sandbox: Sandbox, session: SessionRow,
   args: { cmd: string; cwd?: string; detached?: boolean; timeout?: number },
   signal?: AbortSignal,
 ): Promise<unknown> {
@@ -205,9 +195,7 @@ async function runBash(
       const total = stdout.length + stderr.length;
       if (total > maxOut) {
         const spillName = `bash-${newId()}.out`;
-        const spillHost = path.join(sessionDir(ctx.paths, workspaceOf(session)), 'logs', spillName);
-        await fsp.mkdir(path.dirname(spillHost), { recursive: true });
-        await fsp.writeFile(spillHost, Buffer.concat([
+        await host.files(workspaceOf(session)).write(`logs/${spillName}`, Buffer.concat([
           stdout, Buffer.from('\n--- stderr ---\n'), stderr,
         ]));
         out.stdout = stdout.subarray(Math.max(0, stdout.length - maxOut)).toString('utf8');
@@ -248,31 +236,33 @@ async function runBash(
   }
 
   const taskId = newId();
-  const logPath = path.join(sessionDir(ctx.paths, workspaceOf(session)), 'logs', `${taskId}.ndjson`);
-  await fsp.mkdir(path.dirname(logPath), { recursive: true });
+  const workspaceId = workspaceOf(session);
+  // The log lives on the HOST's volume at logs/<id>.ndjson — the one place
+  // the agent can read it (/workspace/logs/). The row keeps the host-relative
+  // path; reads go through the host (tailLog).
+  const logPath = `logs/${taskId}.ndjson`;
   await ctx.backgroundTasks.start({ id: taskId, sessionId: session.id, argv, logPath });
   // The same $$-to-pidfile idiom as unary above (pid == sid, runc setsids the
   // exec); `exec` keeps one process so the leader stays the command and the
   // exit code passes through the stream untouched. The row keeps the ORIGINAL
-  // argv — the wrapper is plumbing, not what the user ran.
+  // argv — the wrapper is plumbing, not what the user ran. The host runs the
+  // stream, writes the log, reads the sid off the pidfile, and reports: the
+  // sid as soon as it has it (a miss leaves it null — the tasks route
+  // tolerates that), the end last.
   const sidfile = `/tmp/.phantom-cmd-${taskId}.sid`;
   const wrapped = ['/bin/sh', '-c', 'echo $$ >"$0"; exec /bin/sh -c "$1"', sidfile, args.cmd];
   void (async () => {
-    const out = fs.createWriteStream(logPath);
     let exitCode: number | null = null;
     let status: BackgroundTaskEnd = 'exited';
     try {
-      for await (const rec of sandbox.runStream(wrapped, { cwd: args.cwd })) {
-        out.write(JSON.stringify(rec) + '\n');
-        if (rec.event === 'exit') exitCode = rec.code ?? -1;
-        if (rec.event === 'error') status = 'killed';
+      for await (const event of host.detach(workspaceId, taskId, wrapped, args.cwd, sidfile)) {
+        if (event.event === 'sid') await ctx.backgroundTasks.setSid(taskId, event.sid).catch(() => {});
+        else { status = event.status; exitCode = event.exitCode; }
       }
     } catch (error) {
       status = 'orphaned';
-      out.write(JSON.stringify({ seq: -1, event: 'error', reason: 'container_gone' }) + '\n');
       log.warn({ taskId, err: errStr(error) }, 'detached stream died');
     } finally {
-      out.end();
       void ctx.sessions.touch(session); // a long detached command is activity, seen only here at its end
       // Conditional on still-running: the tasks route's 'killed' and the
       // reconciler's 'exited' are final — a late stream teardown must not
@@ -286,18 +276,6 @@ async function runBash(
       if (final) ctx.sessionNotes.add(session.id, noticeOf(final));
     }
   })();
-  // Sid capture, fire-and-forget beside the stream: retry-read the pidfile
-  // (the stream's exec spawn can lag — a just-started container is slow to
-  // exec), remove it, stamp the row. A miss leaves sid null — the tasks
-  // route tolerates that (the group shows as untracked, never text-matched).
-  void (async () => {
-    const script =
-      's=""; for i in 1 2 3 4 5 6 7 8 9 10; do s=$(cat "$0" 2>/dev/null) && [ -n "$s" ] && break; sleep 0.3; done; ' +
-      'rm -f "$0"; printf %s "$s"';
-    const ran = await sandbox.run(['/bin/sh', '-c', script, sidfile], { timeoutMs: 10_000 });
-    const sid = ran.stdout.toString('utf8').trim();
-    if (/^\d+$/.test(sid)) await ctx.backgroundTasks.setSid(taskId, sid);
-  })().catch((error) => log.warn({ taskId, err: errStr(error) }, 'detached sid capture failed'));
   // log_file is the CONTAINER path — the one place the agent can actually
   // read it (the /background-tasks/:id/logs HTTP route is for API clients, which the
   // agent is not). Same mapping as the unary spill file above.
@@ -352,7 +330,7 @@ async function ownBackgroundTask(ctx: PhantomBackend, session: SessionRow, taskI
  *  unbounded. */
 const WAIT_MAX_MS = 300_000;
 
-async function taskWait(ctx: PhantomBackend, session: SessionRow, taskId: string, timeoutMs: number): Promise<unknown> {
+async function taskWait(ctx: PhantomBackend, host: WorkspaceHost, session: SessionRow, taskId: string, timeoutMs: number): Promise<unknown> {
   let row = await ownBackgroundTask(ctx, session, taskId);
   const deadline = Date.now() + Math.min(Math.max(0, timeoutMs), WAIT_MAX_MS);
   while (row.status === 'running' && Date.now() < deadline) {
@@ -362,7 +340,7 @@ async function taskWait(ctx: PhantomBackend, session: SessionRow, taskId: string
   if (row.status === 'running') {
     return { ...shapeBackgroundTask(row), hint: 'still running — call task_wait again to keep waiting' };
   }
-  return { ...shapeBackgroundTask(row), tail: await tailLog(row.logPath, 10) };
+  return { ...shapeBackgroundTask(row), tail: await tailLog(host, workspaceOf(session), row.logPath, 10) };
 }
 
 async function taskKill(ctx: PhantomBackend, sandbox: Sandbox, session: SessionRow, taskId: string): Promise<unknown> {
@@ -380,26 +358,22 @@ async function taskKill(ctx: PhantomBackend, sandbox: Sandbox, session: SessionR
 }
 
 /** The last `lines` records of a detached command's ND-JSON log, read bounded
- *  from the end — a dev server's log can run for hours. */
-async function tailLog(logPath: string, lines: number): Promise<string[]> {
+ *  from the end on the host — a dev server's log can run for hours. Rows from
+ *  before the hosts carry the log's absolute path; its tail is the same file. */
+export async function tailLog(host: WorkspaceHost, workspaceId: string, logPath: string, lines: number): Promise<string[]> {
+  const rel = logPath.startsWith('/') ? `logs/${logPath.slice(logPath.lastIndexOf('/') + 1)}` : logPath;
   try {
-    const stat = await fsp.stat(logPath);
-    const from = Math.max(0, stat.size - 16_384);
-    const fileHandle = await fsp.open(logPath, 'r');
-    try {
-      const buf = Buffer.alloc(stat.size - from);
-      await fileHandle.read(buf, 0, buf.length, from);
-      const out: string[] = [];
-      for (const line of buf.toString('utf8').split('\n')) {
-        if (!line) continue;
-        try {
-          const rec = JSON.parse(line) as { data?: string; event?: string; code?: number };
-          if (typeof rec.data === 'string') out.push(rec.data.replace(/\n$/, ''));
-          else if (rec.event === 'exit') out.push(`[exit ${rec.code}]`);
-        } catch { /* the window's partial first line */ }
-      }
-      return out.slice(-lines);
-    } finally { await fileHandle.close(); }
+    const buf = await host.files(workspaceId).tail(rel, 16_384);
+    const out: string[] = [];
+    for (const line of buf.toString('utf8').split('\n')) {
+      if (!line) continue;
+      try {
+        const rec = JSON.parse(line) as { data?: string; event?: string; code?: number };
+        if (typeof rec.data === 'string') out.push(rec.data.replace(/\n$/, ''));
+        else if (rec.event === 'exit') out.push(`[exit ${rec.code}]`);
+      } catch { /* the window's partial first line */ }
+    }
+    return out.slice(-lines);
   } catch { return []; }
 }
 
@@ -407,15 +381,15 @@ async function tailLog(logPath: string, lines: number): Promise<string[]> {
  *  container started (or already up), the sandbox on it, the bash and task
  *  plumbing wired around it. `signal` is the client's disconnect — a unary
  *  bash command is killed on it. Throws ToolError container_start_failed. */
-export async function fileTools(ctx: PhantomBackend, deps: FsDeps, session: SessionRow, workspaceId: string, signal: AbortSignal): Promise<FileTools> {
+export async function fileTools(ctx: PhantomBackend, session: SessionRow, workspaceId: string, signal: AbortSignal): Promise<FileTools> {
   const project = await ctx.projects.get(session.projectId);
-  let container;
+  let host: WorkspaceHost;
   try {
-    container = await deps.sessionContainers.ensure(workspaceId, project);
+    host = await ctx.sessionContainers.ensure(workspaceId, project);
   } catch (error) {
     throw new ToolError('container_start_failed', (error as Error).message, true);
   }
-  const sandbox = new Sandbox(deps.docker, container);
+  const sandbox = host.sandbox(workspaceId);
   const readLimits = await ctx.settings.resolveMany(['max_read_bytes', 'max_search_results']);
   return {
     sandbox,
@@ -423,10 +397,10 @@ export async function fileTools(ctx: PhantomBackend, deps: FsDeps, session: Sess
       maxReadBytes: Number(readLimits.max_read_bytes),
       maxSearchResults: Number(readLimits.max_search_results),
     },
-    runBash: (args) => runBash(ctx, deps, sandbox, session, args, signal),
+    runBash: (args) => runBash(ctx, host, sandbox, session, args, signal),
     tasks: {
       list: () => taskList(ctx, sandbox, session),
-      wait: (taskId, timeoutMs) => taskWait(ctx, session, taskId, timeoutMs),
+      wait: (taskId, timeoutMs) => taskWait(ctx, host, session, taskId, timeoutMs),
       kill: (taskId) => taskKill(ctx, sandbox, session, taskId),
     },
   };

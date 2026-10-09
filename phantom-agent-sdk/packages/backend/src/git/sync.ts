@@ -37,13 +37,14 @@
 // single lock the rest of the system uses — no new mutex.
 import type { ProjectRow, SessionRow } from '../storage/schema.js';
 import * as checkoutPool from '../runtime/CheckoutPool.js';
-import { repoDir, type Paths } from '../lib/paths.js';
+import type { SessionHosts } from '../host/SessionHosts.js';
+import type { Repo } from '../runtime/WorkspaceHost.js';
 import type { Sessions } from '../storage/Sessions.js';
 import type { Workspaces } from '../storage/Workspaces.js';
 import type { Cards } from '../storage/Cards.js';
 import type { Settings } from '../storage/Settings.js';
 import {
-  git, fetchBase, squashToMergeBase, commitStaged, rebaseOntoBase, rebaseAbort, rebaseInProgress,
+  fetchBase, squashToMergeBase, commitStaged, rebaseOntoBase, rebaseAbort, rebaseInProgress,
   landingProblems, pushSession, pushSessionForced, pushFailed, pushToBase, hasWorkToLand, GIT_CLIENT_ID,
 } from './Git.js';
 import { newId } from '@phantom-agent-sdk/client';
@@ -137,14 +138,15 @@ export interface SyncDeps {
   workspaces: Workspaces;
   cards: Cards;
   settings: Settings;
-  paths: Paths;
+  /** Where each checkout is (host/SessionHosts.ts): the git runs there. */
+  hosts: SessionHosts;
   /** Hand the stopped rebase to the session's own coding agent, as a turn in
    *  its own transcript. Resolves, stages and continues the rebase; the sync
    *  verifies against the repo afterward. Absent -> a conflict blocks.
    *
    *  The sync already holds the session when this runs, under GIT_CLIENT_ID, so
    *  the hook's own openSession re-takes our hold rather than finding us. */
-  resolve?: (session: SessionRow, project: ProjectRow, dir: string, ctx: ConflictContext) => Promise<boolean>;
+  resolve?: (session: SessionRow, project: ProjectRow, workspaceId: string, ctx: ConflictContext) => Promise<boolean>;
   /** Append a summary of the sync to the session's transcript — a user message
    *  the agent picks up on its next turn. Same lock (GIT_CLIENT_ID), same
    *  openSession pattern as `resolve`. Absent -> no summary is recorded. */
@@ -189,7 +191,11 @@ export async function syncBranch(
 ): Promise<SyncResult> {
   const workspace = session.workspaceId ? await deps.workspaces.get(session.workspaceId) : undefined;
   if (!workspace) return { outcome: 'error', reason: 'session has no workspace — nothing to sync' };
-  const dir = repoDir(deps.paths, workspace.id);
+  // The checkout's host. Offline reads as busy: a sync is background work
+  // and must never hang on a closed laptop — the next beat asks again.
+  const host = await deps.hosts.of(workspace.id);
+  if (!host.online) return { outcome: 'busy', reason: `${host.name} is offline — the checkout cannot be reached right now` };
+  const dir: Repo = host.repo(workspace.id);
   const base = project.baseBranch;
   const auth = await checkoutPool.resolveAuth(deps.settings, project);
   const report = async (step: SyncStep, detail?: string) => { await deps.onEvent?.({ step, label: syncStepLabel(step, opts.landOnBase), detail }); };
@@ -263,8 +269,8 @@ export async function syncBranch(
     if (await hasWorkToLand(dir, base)) {
       await report('commit');
       try {
-        await git(dir, ['add', '-A']);
-        const { stdout: mergeBase } = await git(dir, ['merge-base', 'HEAD', `origin/${base}`]);
+        await dir.git(['add', '-A']);
+        const { stdout: mergeBase } = await dir.git(['merge-base', 'HEAD', `origin/${base}`]);
         // Retry notes stream as commit-step events, so a rate-limited message
         // call shows its recovery (and its give-up) where the sync's progress
         // already shows — silence here was the original bug.
@@ -273,11 +279,11 @@ export async function syncBranch(
         await squashToMergeBase(dir, mergeBase.trim());
         await commitStaged(dir, `${msg}\n\nPhantom-Session: ${session.id}`);
       } catch (error) {
-        await git(dir, ['reset', '-q']).catch(() => {}); // index back to HEAD; the tree was never touched
+        await dir.git(['reset', '-q']).catch(() => {}); // index back to HEAD; the tree was never touched
         return { outcome: 'error', reason: `could not write the commit message: ${(error as Error).message}` };
       }
     }
-    const before = (await git(dir, ['rev-parse', 'HEAD'])).stdout.trim();
+    const before = (await dir.git(['rev-parse', 'HEAD'])).stdout.trim();
 
     for (let round = 1; round <= rounds; round++) {
       // 4 — replay onto base. Round 2+ re-fetches; there is no second squash
@@ -288,7 +294,7 @@ export async function syncBranch(
 
       if (rebased === 'conflict') {
         // 5 — the session's own coding agent, in its own transcript.
-        const { stdout: conflicted } = await git(dir, ['diff', '--name-only', '--diff-filter=U']);
+        const { stdout: conflicted } = await dir.git(['diff', '--name-only', '--diff-filter=U']);
         const ctx: ConflictContext = {
           branch: workspace.branch, baseBranch: base,
           files: conflicted.trim().split('\n').filter(Boolean), arrived,
@@ -306,7 +312,7 @@ export async function syncBranch(
           return blocked;
         }
         await report('resolve', ctx.files.join(', '));
-        const ok = await deps.resolve(session, project, dir, ctx).catch((error) => {
+        const ok = await deps.resolve(session, project, workspace.id, ctx).catch((error) => {
           log.error({ session: session.id, err: errStr(error) }, 'conflict turn threw'); return false;
         });
         // Verified against the repo, never against what the agent said. The
@@ -346,8 +352,8 @@ export async function syncBranch(
         return { outcome: 'error', reason: `branch push failed: ${pushFailed(pushed) ? pushed.error : pushed}`, rounds: round };
       }
 
-      const sha = (await git(dir, ['rev-parse', 'HEAD'])).stdout.trim();
-      const { stdout: changed } = await git(dir, ['diff', '--name-only', before, 'HEAD']);
+      const sha = (await dir.git(['rev-parse', 'HEAD'])).stdout.trim();
+      const { stdout: changed } = await dir.git(['diff', '--name-only', before, 'HEAD']);
       const done: SyncResult = {
         outcome: 'ok', rounds: round, sha, arrived,
         files: changed.trim().split('\n').filter(Boolean),
@@ -362,7 +368,7 @@ export async function syncBranch(
       }
 
       // Nothing beyond base -> nothing to land (base already holds it all).
-      const { stdout: ahead } = await git(dir, ['rev-list', '--count', `origin/${base}..HEAD`]);
+      const { stdout: ahead } = await dir.git(['rev-list', '--count', `origin/${base}..HEAD`]);
       if (Number(ahead.trim()) === 0) return { outcome: 'nothing', rounds: round, arrived };
 
       // 8 — the landing: HEAD to base, fast-forward by construction.
@@ -397,12 +403,12 @@ const MAX_DIFF_BYTES = 60_000;
  *  to the message writer. Throws when none is wired or none can be written:
  *  the sync's answer is to fail, not to guess. */
 async function commitMessageFromDiff(
-  dir: string, base: string, card: string, sessionId: string,
+  dir: Repo, base: string, card: string, sessionId: string,
   write: SyncDeps['writeCommitMessage'], report: (note: string) => void,
 ): Promise<string> {
   if (!write) throw new Error('no model configured to write the commit message — set one on /settings (phantom-cli), or PATCH /settings {coding_provider, coding_model}');
-  const { stdout: stat } = await git(dir, ['diff', '--cached', '--stat', base]);
-  const { stdout: patch } = await git(dir, ['diff', '--cached', base]);
+  const { stdout: stat } = await dir.git(['diff', '--cached', '--stat', base]);
+  const { stdout: patch } = await dir.git(['diff', '--cached', base]);
   const diff = patch.length > MAX_DIFF_BYTES ? `${patch.slice(0, MAX_DIFF_BYTES)}\n… (truncated)` : patch;
   const message = (await write({ stat, diff, card, sessionId }, report)).trim();
   if (!message || message.length > 2000) throw new Error('the model could not produce a usable commit message');

@@ -1,0 +1,90 @@
+# A SESSION HOST: a box that runs workspaces for a phantom-backend somewhere
+# else. The same image as the API with the host entrypoint, the same named
+# volume, the same socket proxy — on a server an operator runs, or on a Mac
+# (`phantom host start` writes this file's .env and runs it).
+#
+# The host connects OUT to the backend; nothing listens here. Three values in
+# .env say everything: BACKEND_URL, BACKEND_KEY (the server key makes a SHARED
+# host any workspace may land on; a user's API key makes THEIR host, for their
+# workspaces alone), and HOST_NAME (a label; defaults to the container's).
+name: phantom-backend-session-host
+
+services:
+  session-host:
+    container_name: phantom-backend-session-host
+    image: ${BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend-api}:${BACKEND_TAG:-latest}
+    pull_policy: missing
+    restart: unless-stopped
+    depends_on:
+      docker-proxy:
+        condition: service_started
+    command: ["node", "dist/phantom-backend/host.js"]
+    # The image's health probe is the API's (/api/health on 8080); a host
+    # serves no port. Its health is what `phantom-cli host status` asks the backend.
+    healthcheck:
+      disable: true
+    environment:
+      BACKEND_URL: ${BACKEND_URL:?set in .env — the backend's https address}
+      BACKEND_KEY: ${BACKEND_KEY:?set in .env — the server key or your API key}
+      HOST_NAME: ${HOST_NAME:-}
+      # A backend on its own CA (BACKEND_TLS=internal): its root certificate, PEM.
+      BACKEND_CA: ${BACKEND_CA:-}
+      WORKSPACE_ROOT_PATH: /workspaces
+      # The named volume, by NAME: workspace containers mount per-workspace
+      # subpaths of it. dockerd resolves mounts host-side.
+      WORKSPACE_VOLUME: ${WORKSPACE_VOLUME:-phantom-looper-workspaces}
+      DOCKER_HOST: tcp://docker-proxy:2375
+      # The agents' network: internet out, no container on it able to reach another.
+      AGENT_NETWORK: ${AGENT_NETWORK:-phantom-agents}
+      # The disk-quota helper, with the `disk-quota` profile on (XFS + pquota only).
+      DISK_QUOTA_URL: http://disk-quota:7000
+      API_IMAGE: ${BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend-api}
+    volumes:
+      - workspaces:/workspaces
+    networks: [default, docker]
+
+  # The socket proxy: the only thing the host process can reach — containers,
+  # exec, images, networks; never volumes, swarm or system.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      EXEC: 1
+      IMAGES: 1
+      POST: 1
+      INFO: 1
+      LOGS: 1
+      VOLUMES: 0
+      NETWORKS: 1
+      SERVICES: 0
+      SWARM: 0
+      SYSTEM: 0
+      VERSION: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [docker]
+
+  # The disk-quota helper, as on a server (docs/permissions.md). Not on a Mac.
+  disk-quota:
+    image: ${BACKEND_API_IMAGE:-ghcr.io/stephengpope/phantom-backend-api}:${BACKEND_TAG:-latest}
+    pull_policy: missing
+    profiles: ["disk-quota"]
+    restart: unless-stopped
+    user: root
+    privileged: true
+    command: ["node", "phantom-agent-sdk/packages/backend/dist/runtime/diskQuotaHelper.js"]
+    environment:
+      QUOTA_MOUNT: /var/lib/docker
+      QUOTA_ROOT: /var/lib/docker/volumes/${WORKSPACE_VOLUME:-phantom-looper-workspaces}/_data
+    volumes:
+      - /var/lib/docker:/var/lib/docker
+    networks: [docker]
+
+networks:
+  docker:
+    internal: true
+
+volumes:
+  workspaces:
+    name: ${WORKSPACE_VOLUME:-phantom-looper-workspaces}

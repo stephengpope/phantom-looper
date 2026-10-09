@@ -41,7 +41,7 @@ import { logger } from '../lib/log.js';
 import { withoutUsageLines, systemPromptRebuiltLine } from '@phantom-agent-sdk/client/transcript';
 import type { SystemPromptLayout, StoredSystemPrompt } from '@phantom-agent-sdk/client/systemPrompt';
 import { SystemPrompt, type SystemPromptSource } from '../agents/SystemPrompt.js';
-import { repoDir, type Paths } from '../lib/paths.js';
+import type { SessionHosts } from '../host/SessionHosts.js';
 import type Docker from 'dockerode';
 import type { SessionEvents } from '../agents/SessionEvents.js';
 import { scopeOf } from '../lib/scopes.js';
@@ -188,7 +188,7 @@ export class Sessions {
       events?: SessionEvents;
       /** What freezing a session's prompt reads: the checkout's skills and the
        *  image's system skills. Absent in tests: `start` then freezes no skills. */
-      prompt?: { paths: Paths; docker?: Docker; media?: SystemPromptSource['media'] };
+      prompt?: { hosts: SessionHosts; docker?: Docker; media?: SystemPromptSource['media'] };
     },
   ) {}
   private get events(): SessionEvents | undefined { return this.deps.events; }
@@ -226,7 +226,7 @@ export class Sessions {
     const project = (await this.projects.get(session.projectId))!;
     return SystemPrompt.assemble(layout, {
       projectId: session.projectId, project, settings: this.settings,
-      checkout: this.deps.prompt && session.workspaceId ? repoDir(this.deps.prompt.paths, session.workspaceId) : null,
+      checkout: this.deps.prompt && session.workspaceId ? (await this.deps.prompt.hosts.of(session.workspaceId)).files(session.workspaceId) : null,
       docker: this.deps.prompt?.docker, media: this.deps.prompt?.media,
     });
   }

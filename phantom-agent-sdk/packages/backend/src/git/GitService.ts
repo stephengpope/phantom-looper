@@ -22,13 +22,12 @@ import type { Workspaces } from '../storage/Workspaces.js';
 import type { Cards } from '../storage/Cards.js';
 import type { Projects } from '../storage/Projects.js';
 import type { Settings } from '../storage/Settings.js';
-import type { Paths } from '../lib/paths.js';
+import type { SessionHosts } from '../host/SessionHosts.js';
 import type { SessionEvents } from '../agents/SessionEvents.js';
 import type { BoardEvents } from '../agents/BoardEvents.js';
 import type { SettingsEvents } from '../agents/SettingsEvents.js';
 import type { SessionNotes } from '../agents/SessionNotes.js';
 import type { SessionContainers } from '../runtime/SessionContainers.js';
-import type { WorkspaceWatcher } from './WorkspaceWatcher.js';
 import { GitSync } from './GitSync.js';
 import { InstantSync } from './InstantSync.js';
 import { autoPush, type AutoPushEvent, type AutoPushResult } from './autoPush.js';
@@ -59,9 +58,9 @@ export interface GitHooks {
 }
 
 export interface GitServiceDeps {
-  sessions: Sessions; workspaces: Workspaces; cards: Cards; projects: Projects; settings: Settings; paths: Paths;
+  sessions: Sessions; workspaces: Workspaces; cards: Cards; projects: Projects; settings: Settings; hosts: SessionHosts;
   sessionEvents: SessionEvents; boardEvents: BoardEvents; settingsEvents: SettingsEvents;
-  sessionNotes: SessionNotes; sessionContainers: SessionContainers; workspaceWatcher: WorkspaceWatcher;
+  sessionNotes: SessionNotes; sessionContainers: SessionContainers;
 }
 
 export type AutoPushFn = (session: SessionRow, project: ProjectRow,
@@ -75,14 +74,14 @@ export class GitService {
   readonly instantSync: InstantSync;
 
   constructor(private readonly deps: GitServiceDeps, private readonly hooks: GitHooks) {
-    const { sessions, workspaces, cards, settings, paths, sessionEvents, projects } = deps;
+    const { sessions, workspaces, cards, settings, hosts, sessionEvents, projects } = deps;
     // Every sync step also lands on the session's live feed, so a window
     // WATCHING the session sees the sync whoever kicked it off — a card
     // archive fires one detached, with no stream of its own. Published under
     // the caller's own client id (`by`) when the call came from a route: the
     // feed's echo rule then skips the one window that already draws the
     // stream it asked for.
-    this.sync = new GitSync({ sessions, workspaces, cards, settings, paths,
+    this.sync = new GitSync({ sessions, workspaces, cards, settings, hosts,
       resolve: hooks.resolveConflict, writeCommitMessage: hooks.writeCommitMessage });
 
     // Instant sync runs the same sync, turn or no turn: it never takes the
@@ -95,10 +94,10 @@ export class GitService {
     // It publishes NO steps to the feed: nobody asked for it, so its progress
     // is noise on every open window. What does reach the feed is a failure
     // (`sync-failed`) — the one thing a person needs to hear from it.
-    const instantDeps = { sessions, workspaces, cards, settings, paths,
+    const instantDeps = { sessions, workspaces, cards, settings, hosts,
       writeCommitMessage: hooks.writeCommitMessage, recordSummary: this.noteForNextTurn };
     this.instantSync = new InstantSync({
-      sessions, workspaces, projects, settings, paths, watcher: deps.workspaceWatcher,
+      sessions, workspaces, projects, settings, hosts,
       autoPush: (session, project) => autoPush(instantDeps, session, project, { hold: false }),
       autoPull: (session, project) => autoPull(instantDeps, session, project, { hold: false }),
       failed: (session, operation, reason) =>
@@ -139,8 +138,8 @@ export class GitService {
   }
 
   private get syncDeps(): Omit<SyncDeps, 'onEvent'> {
-    const { sessions, workspaces, cards, settings, paths } = this.deps;
-    return { sessions, workspaces, cards, settings, paths,
+    const { sessions, workspaces, cards, settings, hosts } = this.deps;
+    return { sessions, workspaces, cards, settings, hosts,
       resolve: this.hooks.resolveConflict, recordSummary: this.recordSummary, writeCommitMessage: this.hooks.writeCommitMessage };
   }
 

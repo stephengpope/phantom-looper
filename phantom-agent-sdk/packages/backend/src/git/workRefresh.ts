@@ -7,7 +7,7 @@
 import type { Workspaces } from '../storage/Workspaces.js';
 import type { Projects } from '../storage/Projects.js';
 import { workState } from './Git.js';
-import { repoDir, type Paths } from '../lib/paths.js';
+import type { SessionHosts } from '../host/SessionHosts.js';
 import type { SessionContainers } from '../runtime/SessionContainers.js';
 import type { BoardEvents } from '../agents/BoardEvents.js';
 import { logger, errStr } from '../lib/log.js';
@@ -15,12 +15,12 @@ import { logger, errStr } from '../lib/log.js';
 const log = logger('work-refresh');
 
 export interface WorkRefreshDeps {
-  workspaces: Workspaces; projects: Projects; paths: Paths;
+  workspaces: Workspaces; projects: Projects; hosts: SessionHosts;
   sessionContainers: SessionContainers;
   boardEvents: BoardEvents;
 }
 
-export async function refreshWorkState({ workspaces, projects, paths, sessionContainers, boardEvents }: WorkRefreshDeps): Promise<void> {
+export async function refreshWorkState({ workspaces, projects, hosts, sessionContainers, boardEvents }: WorkRefreshDeps): Promise<void> {
   const active = await sessionContainers.activeWorkspaces();
 
   // Clear stale work states: workspaces that still show a git status but whose
@@ -48,7 +48,9 @@ export async function refreshWorkState({ workspaces, projects, paths, sessionCon
 
     let work;
     try {
-      work = await workState(repoDir(paths, workspace.id), workspace.branch, base);
+      const host = await hosts.of(workspace.id);
+      if (!host.online) return;   // unreadable right now; measured again next tick
+      work = await workState(host.repo(workspace.id), workspace.branch, base);
     } catch (error) {
       log.warn({ workspace: workspace.id, err: errStr(error) }, 'could not read work state');
       return;

@@ -31,18 +31,16 @@
 //   Never touched: a spare clone (the pool refills it — nothing is freed)
 //   and an image newer than the running release (an update in flight pulled
 //   it; deleting it made the update fail with "image not on this machine").
-import fs from 'node:fs/promises';
 import type { SessionRow, ProjectRow } from '../storage/schema.js';
 import { API_IMAGE, APP_VERSION } from '../lib/env.js';
 import type { Settings } from '../storage/Settings.js';
 import type { Projects } from '../storage/Projects.js';
 import type { Sessions } from '../storage/Sessions.js';
-import type { Paths } from '../lib/paths.js';
+import type { SessionHosts } from '../host/SessionHosts.js';
 import type { SessionContainers } from './SessionContainers.js';
 import type { Images } from './Images.js';
 import type { GitSync } from '../git/GitSync.js';
 import { workState, type PushResult } from '../git/Git.js';
-import { repoDir } from '../lib/paths.js';
 import { logger, errStr } from '../lib/log.js';
 
 const log = logger('disk');
@@ -67,19 +65,6 @@ export interface DiskState { usedPct: number; freeGB: number }
  *  log. `pct` <= 0 turns the percent part off; the floor always applies. */
 export function tooFull(disk: DiskState, pct: number): boolean {
   return (pct > 0 && disk.usedPct >= pct) || disk.freeGB < MIN_FREE_GB;
-}
-
-/** The project filesystem, read once. The named volume and docker's own
- *  data share the host's one disk in any standard install, so this speaks
- *  for both. `bavail` (what an unprivileged user may still use) is the
- *  honest measure of "full". */
-async function measureDisk(root: string): Promise<DiskState> {
-  const stat = await fs.statfs(root);
-  if (stat.blocks === 0) return { usedPct: 0, freeGB: Infinity };
-  return {
-    usedPct: ((stat.blocks - stat.bavail) / stat.blocks) * 100,
-    freeGB: (stat.bavail * stat.bsize) / (1024 ** 3),
-  };
 }
 
 const rounded = (disk: DiskState) => ({ usedPct: Math.round(disk.usedPct), freeGB: Math.round(disk.freeGB) });
@@ -230,23 +215,31 @@ export async function diskCleanup(deps: CleanupDeps): Promise<void> {
   }
 }
 
-/** Disk cleanup against the real system. */
+/** Disk cleanup against the real system — THIS server's disk, and only the
+ *  workspaces on it: a session host's disk is its own, and deleting a
+ *  workspace there would free nothing here. */
 export async function pressureSweep(
-  settings: Settings, projects: Projects, sessions: Sessions, paths: Paths, images: Images,
+  settings: Settings, projects: Projects, sessions: Sessions, hosts: SessionHosts, images: Images,
   sessionContainers: SessionContainers, gitSync: GitSync, busy: (workspaceIds: string[]) => Promise<Set<string>>,
 ): Promise<void> {
+  if (!hosts.builtIn) return;
   const currents = [String(await settings.resolve('container_image')), API_IMAGE_CURRENT];
+  const here = async (session: SessionRow) => (await hosts.hostIdOf(session.id)) === null;
   await diskCleanup({
     pct: Number(await settings.resolve('disk_cleanup_percent')),
     idleMs: Number(await settings.resolve('container_idle_ms')),
     now: () => Date.now(),
     fresh: async (session) => (await sessions.get(session.id)) ?? session,
-    measure: () => measureDisk(paths.root),
-    owners: () => workspaceOwners(projects, sessions),
+    measure: () => hosts.local.disk(),
+    owners: async () => {
+      const all = await workspaceOwners(projects, sessions);
+      const flags = await Promise.all(all.map(({ session }) => here(session)));
+      return all.filter((_, i) => flags[i]);
+    },
     busy,
     // Measured live from the checkout: the stored `work` column is cleared
     // once the container is gone, which is exactly the idle session here.
-    landed: async (session, project) => !!session.branch && (await workState(repoDir(paths, session.id), session.branch, project.baseBranch)) === 'merged',
+    landed: async (session, project) => !!session.branch && (await workState(hosts.local.repo(session.id), session.branch, project.baseBranch)) === 'merged',
     // Images owns the rule and refuses while a pull is in flight (images.ts).
     removeOldImages: () => images.removeOlderThan(currents)
       .catch((error) => log.warn({ err: errStr(error) }, 'image cleanup failed')),

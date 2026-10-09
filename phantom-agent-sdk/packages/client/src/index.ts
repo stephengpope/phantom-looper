@@ -24,6 +24,8 @@ export { PROVIDERS, REASONINGS, isProvider, keyedProviders, type ModelSpec, type
 
 // One connection for everything — the transport an app hands `BackendClient`.
 export { BackendConnection, type BackendConnectionOptions } from './backendConnection.js';
+// THE persistent connection: a feed followed forever, sends that never drop.
+export { Link, followStream, STREAM_STALL_MS, type LinkOptions, type FollowHooks, type Stream } from './link.js';
 
 // The system prompt: the layout an agent declares, the shape the row stores.
 export { agentText, systemPromptBlocks, SYSTEM_PROMPT_SECTIONS,

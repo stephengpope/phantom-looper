@@ -83,6 +83,13 @@ if (firstArg === 'install') {
   } catch (error) { die(`install failed: ${error instanceof Error ? error.message : String(error)}`); }
   process.exit(0);
 }
+// `host`: a session host on this machine — your workspaces run here, for the
+// backend you are paired with (host.ts). Headless: docker compose owns the
+// terminal.
+if (firstArg === 'host') {
+  const { runHost } = await import('./host.js');
+  process.exit(await runHost(process.argv.slice(3)));
+}
 if (firstArg === 'update') {
   const flags = process.argv.slice(3);
   const bad = flags.find((flag) => flag !== '--client' && flag !== '--server');

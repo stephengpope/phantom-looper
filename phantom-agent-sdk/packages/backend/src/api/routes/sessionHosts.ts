@@ -1,0 +1,143 @@
+// The session hosts' routes (host/SessionHosts.ts):
+//
+//   POST   /session-hosts/hello              a host says who it is; its row
+//   GET    /session-hosts/:id/jobs           the host's feed: jobs down, ND-JSON, held open
+//   POST   /session-hosts/:id/jobs/events    the host's relay: job events up
+//   GET    /session-hosts                    the hosts a caller may see, with online
+//   DELETE /session-hosts/:id                forget an offline, empty host
+//   POST   /sessions/:id/host                move a session's workspace to another host
+//
+// Who may: the server key for shared hosts, a user for their own — the row's
+// owner, checked on every call in SessionHosts. The feed is the one long
+// call; it is a host's "online".
+import type { FastifyInstance } from 'fastify';
+import { ok, err } from '../HttpApi.js';
+import type { PhantomBackend } from '../../PhantomBackend.js';
+import { SessionHostError, type HostCaller } from '../../host/SessionHosts.js';
+import type { HostHello, JobEvent } from '../../host/protocol.js';
+import { WorkspaceError } from '../../storage/Workspaces.js';
+import { ownsWorkspace, workspaceOf } from '../../storage/Sessions.js';
+import { pushFailed } from '../../git/Git.js';
+import { logger, errStr } from '../../lib/log.js';
+
+const log = logger('session-hosts');
+const TAG = { tags: ['session-hosts'] };
+const idParam = { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] };
+const STATUS: Record<SessionHostError['code'], number> = { not_found: 404, access_denied: 403, no_host: 409, host_online: 409, host_in_use: 409, host_offline: 409 };
+
+const callerOf = (req: { caller: { type: string; user?: { id: string } } | null }): HostCaller =>
+  req.caller?.type === 'user' ? { admin: false, userId: req.caller.user!.id } : { admin: true, userId: null };
+
+export function sessionHostRoutes(app: FastifyInstance, ctx: PhantomBackend) {
+  const refused = (reply: { code: (status: number) => { send: (body: unknown) => unknown } }, error: unknown) => {
+    if (error instanceof SessionHostError) return reply.code(STATUS[error.code]).send(err(error.code, error.message));
+    throw error;
+  };
+
+  app.post<{ Body: HostHello }>('/session-hosts/hello', { schema: { ...TAG, summary: 'Register a session host',
+    description: 'A session host announces itself: its name, its persisted id when it has one, and what its box can do. Answers the host\'s row; the host then opens its feed.',
+    body: { type: 'object', required: ['name', 'boot', 'facts'], properties: {
+      id: { type: 'string' }, name: { type: 'string' }, boot: { type: 'string' },
+      facts: { type: 'object', additionalProperties: true } } } } },
+  async (req, reply) => {
+    try { return ok(await ctx.sessionHosts.hello(callerOf(req), req.body)); }
+    catch (error) { return refused(reply, error); }
+  });
+
+  app.get<{ Params: { id: string }; Querystring: { boot: string } }>('/session-hosts/:id/jobs', { schema: { ...TAG, summary: 'A session host\'s jobs',
+    description: 'The host\'s feed: one JSON object per line, each a job for it to run, with a heartbeat every 15 seconds. Held open by the host; while it is open the host is online.',
+    params: idParam, querystring: { type: 'object', required: ['boot'], properties: { boot: { type: 'string' } } } } },
+  async (req, reply) => {
+    // The host is checked before anything is written; then the headers go,
+    // then the attach — which writes every job still pending down this very
+    // response, so the headers must already be out.
+    const caller = callerOf(req);
+    try { await ctx.sessionHosts.check(req.params.id, caller); }
+    catch (error) { return refused(reply, error); }
+    const write = (record: unknown) => {
+      if (reply.raw.destroyed) return;
+      try { reply.raw.write(`${JSON.stringify(record)}\n`); }
+      catch (error) { log.warn({ host: req.params.id, err: errStr(error) }, 'feed write failed — hanging up'); reply.raw.destroy(); }
+    };
+    reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
+    write({ event: 'heartbeat' });
+    let detach: (() => Promise<void>) | undefined;
+    try {
+      detach = await ctx.sessionHosts.attach(req.params.id, caller, req.query.boot, (job) => write(job), () => reply.raw.destroy());
+    } catch (error) { reply.raw.destroy(); throw error; }
+    const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
+    try {
+      await new Promise<void>((resolve) => reply.raw.on('close', resolve));
+      return reply;
+    } finally {
+      clearInterval(heartbeat);
+      await detach();
+    }
+  });
+
+  app.post<{ Params: { id: string }; Body: { events: JobEvent[] } }>('/session-hosts/:id/jobs/events', { schema: { ...TAG, summary: 'Report job events',
+    description: 'The host\'s relay: results, chunks, ends and errors of the jobs it runs, in order.',
+    params: idParam, body: { type: 'object', required: ['events'], properties: { events: { type: 'array', items: { type: 'object', additionalProperties: true } } } } },
+    // Chunks of exec output ride here; a generous ceiling.
+    bodyLimit: 64 * 1024 * 1024 },
+  async (req, reply) => {
+    try { await ctx.sessionHosts.deliver(req.params.id, callerOf(req), req.body.events); return ok({ delivered: req.body.events.length }); }
+    catch (error) { return refused(reply, error); }
+  });
+
+  app.get('/session-hosts', { schema: { ...TAG, summary: 'List session hosts',
+    description: 'The session hosts this caller may use: the shared ones and their own, each with whether it is online now and how many workspaces are on it.' } },
+  async (req) => ok({ hosts: await ctx.sessionHosts.list(callerOf(req)) }));
+
+  app.delete<{ Params: { id: string } }>('/session-hosts/:id', { schema: { ...TAG, summary: 'Forget a session host',
+    description: 'Removes a host\'s registration. Refused while it is connected or while any workspace is still on it.', params: idParam } },
+  async (req, reply) => {
+    try { await ctx.sessionHosts.remove(req.params.id, callerOf(req)); return ok({ removed: req.params.id }); }
+    catch (error) { return refused(reply, error); }
+  });
+
+  // THE MOVE — a workspace from one host to another, in this order and no
+  // other: push the branch from where it is, remove the container and the
+  // files there, re-pin, clone the branch where it goes. The transcript is
+  // in the database and the branch is on origin, so the session carries on.
+  // An offline source cannot push: `force` leaves whatever is unpushed on
+  // that box behind — the caller's decision, said out loud.
+  app.post<{ Params: { id: string }; Body: { session_host_id: string | null; force?: boolean } }>('/sessions/:id/host', { schema: { ...TAG, summary: 'Move a session to a host',
+    description: 'Moves the session\'s workspace to the named session host (null: this server). Pushes its branch first, removes the container and files where they are, then checks the branch out on the new host. force: move even when the current host is offline, leaving any unpushed work there.',
+    params: idParam, body: { type: 'object', required: ['session_host_id'], properties: { session_host_id: { type: ['string', 'null'] }, force: { type: 'boolean' } } } } },
+  async (req, reply) => {
+    const session = await ctx.sessions.get(req.params.id);
+    if (!session) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
+    if (!ownsWorkspace(session)) return reply.code(400).send(err('no_workspace', 'this session has no checkout of its own — move the session whose workspace it reads'));
+    const project = await ctx.projects.get(session.projectId);
+    if (!project) return reply.code(404).send(err('not_found', 'project vanished'));
+    const workspaceId = workspaceOf(session);
+    const workspace = (await ctx.workspaces.get(workspaceId))!;
+    const target = ctx.sessionHosts.byId(req.body.session_host_id);
+    if (!target) return reply.code(404).send(err('not_found', `no session host ${req.body.session_host_id}`));
+    const from = await ctx.sessionHosts.of(workspaceId);
+    if (from.id === target.id) return ok({ moved: false, session_host_id: target.id });
+    if (!target.online) return reply.code(409).send(err('host_offline', `${target.name} is offline`));
+
+    if (from.online && workspace.onDisk) {
+      const pushed = await ctx.git.sync.push(session, project);
+      if (pushed !== 'pushed' && pushed !== 'nothing') {
+        if (!req.body.force) return reply.code(409).send(err('unpushed_work', `could not push the session's work first (${pushFailed(pushed) ? pushed.error : pushed}) — nothing was moved; pass force to leave it behind`, true));
+        log.warn({ session: session.id, result: pushed }, 'move: push failed — forced, work left behind');
+      }
+      await from.containerRemove(workspaceId).catch((error) => log.warn({ session: session.id, err: errStr(error) }, 'move: container could not be removed on the old host'));
+      await from.removeFiles(workspaceId).catch((error) => log.warn({ session: session.id, err: errStr(error) }, 'move: files could not be removed on the old host'));
+    } else if (!from.online && !req.body.force) {
+      return reply.code(409).send(err('host_offline', `${from.name} is offline — its unpushed work cannot be pushed first; pass force to leave it behind`));
+    }
+    await ctx.sessionHosts.pin(workspaceId, target.id);
+    try {
+      await ctx.workspaces.restore({ ...workspace, sessionHostId: target.id, onDisk: false }, project);
+    } catch (error) {
+      if (error instanceof WorkspaceError) return reply.code(502).send(err(error.code, `moved, but the checkout on ${target.name} failed: ${error.message}`, error.retryable));
+      throw error;
+    }
+    log.info({ session: session.id, from: from.name, to: target.name }, 'session moved');
+    return ok({ moved: true, session_host_id: target.id });
+  });
+}

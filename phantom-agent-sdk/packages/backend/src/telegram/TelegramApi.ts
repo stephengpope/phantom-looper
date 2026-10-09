@@ -240,8 +240,11 @@ export class TelegramApi {
    * beats not arriving.
    */
   async sendFile(kind: SendKind, chatId: number, filePath: string, caption?: string): Promise<any> {
-    const data = await fs.readFile(filePath);
-    const name = path.basename(filePath);
+    return this.sendBytes(kind, chatId, await fs.readFile(filePath), path.basename(filePath), caption);
+  }
+
+  /** The same, from memory — a file read off a workspace's host. */
+  async sendBytes(kind: SendKind, chatId: number, data: Buffer, name: string, caption?: string): Promise<any> {
     if (kind !== 'photo') return this.uploadBytes(kind, chatId, data, name, caption);
     try {
       return await this.uploadBytes('photo', chatId, data, name, caption);

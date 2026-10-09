@@ -17,8 +17,8 @@
 //  - There is no vision flag: the agent LOOKS at an image by reading it — the
 //    `read` tool returns image files as image content the model can see.
 
-import fs from 'node:fs/promises';
 import path from 'node:path';
+import type { WorkspaceFiles } from '../runtime/WorkspaceHost.js';
 import crypto from 'node:crypto';
 
 /** Telegram's getFile ceiling for bots. Not ours, not raisable. */
@@ -100,14 +100,14 @@ export interface StoredAttachment {
 }
 
 /**
- * Write one attachment into the session's scratch dir. `scratchHostDir` is
- * the host view (`work/<id>/scratch`); the returned path is the container's.
+ * Write one attachment into the session's scratch dir — on the workspace's
+ * host, wherever that is; the returned path is the container's.
  * Returns null when bytes claiming to be an image clearly aren't. Every
  * other type is accepted — the gate that matters is who may send files
  * (the one authorized user), not what they chose to send.
  */
 export async function writeAttachment(
-  scratchHostDir: string,
+  files: WorkspaceFiles,
   data: Buffer,
   opts: { filename?: string; mimeType?: string; defaultKind?: MediaKind } = {},
 ): Promise<StoredAttachment | null> {
@@ -123,14 +123,12 @@ export async function writeAttachment(
   const unique = crypto.randomBytes(6).toString('hex');
   const fileName = `${kind}_${unique}_${displayName}`;
 
-  await fs.mkdir(scratchHostDir, { recursive: true });
-  const target = path.join(scratchHostDir, fileName);
   // safeName stripped separators; this is the check that keeps a crafted
   // filename inside the dir if that ever changes.
-  if (path.resolve(target) !== path.join(path.resolve(scratchHostDir), path.basename(target))) {
+  if (path.basename(fileName) !== fileName || fileName.includes('/') || fileName.includes('\\')) {
     throw new Error('rejected attachment filename');
   }
-  await fs.writeFile(target, data);
+  await files.write(`scratch/${fileName}`, data);
 
   const out: StoredAttachment = {
     containerPath: `/workspace/scratch/${fileName}`, kind, displayName,

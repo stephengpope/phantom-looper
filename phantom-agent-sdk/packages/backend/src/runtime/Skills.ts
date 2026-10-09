@@ -1,20 +1,16 @@
 // Skills — Agent Skills folders in the session's repo (`.agents/skills/<name>/`)
-// merged with the image's baked system tier (repo shadows). READS are
-// host-side over the session's checkout (the API owns that directory for git
-// already; a read is safe and fast). WRITES go through the container like
-// every repo mutation (the container user owns the repo's files — a host-side
-// write would not, on Linux). The one implementation behind the /skills
-// routes and the skill_* tools.
-import fsp from 'node:fs/promises';
-import path from 'node:path';
+// merged with the image's baked system tier (repo shadows). READS go to the
+// workspace's host (its files, over the checkout — a read is safe and fast).
+// WRITES go through the container like every repo mutation (the container
+// user owns the repo's files — a host-side write would not, on Linux). The
+// one implementation behind the /skills routes and the skill_* tools.
 import type { SessionRow } from '../storage/schema.js';
-import { repoDir } from '../lib/paths.js';
-import { Sandbox } from './Sandbox.js';
+import type { Sandbox } from './Sandbox.js';
+import type { WorkspaceFiles } from './WorkspaceHost.js';
 import { ToolError } from '../tools/envelope.js';
 import { fuzzyFindAndReplace, formatNoMatchHint } from '../tools/fuzzy.js';
 import type { PhantomBackend } from '../PhantomBackend.js';
-import type { FsDeps } from '../api/routes/fs.js';
-import { SKILLS_DIR, mergeSkills, parseDescription, scanSkills } from '../skills/skills.js';
+import { SKILLS_DIR, mergeSkills, parseDescription, scanSkillsIn } from '../skills/skills.js';
 import { systemSkills, systemSkillTree } from './SystemSkills.js';
 import { scopeOf } from '../lib/scopes.js';
 import {
@@ -32,23 +28,28 @@ export interface ManageBody {
   file_content?: string;
 }
 
-const skillDirHost = (ctx: PhantomBackend, sessionId: string, name: string) =>
-  path.join(repoDir(ctx.paths, sessionId), SKILLS_DIR, name);
+/** The skill's folder, as a path inside the workspace (its host's files). */
+const skillDir = (name: string) => `repo/${SKILLS_DIR}/${name}`;
 const skillDirContainer = (name: string) => `/workspace/repo/${SKILLS_DIR}/${name}`;
 
-async function skillExists(ctx: PhantomBackend, sessionId: string, name: string): Promise<boolean> {
-  return fsp.access(path.join(skillDirHost(ctx, sessionId, name), 'SKILL.md'))
-    .then(() => true, () => false);
+const filesOf = async (ctx: PhantomBackend, workspaceId: string): Promise<WorkspaceFiles> =>
+  (await ctx.sessionHosts.of(workspaceId)).files(workspaceId);
+
+async function skillExists(files: WorkspaceFiles, name: string): Promise<boolean> {
+  return (await files.stat(`${skillDir(name)}/SKILL.md`)) !== null;
 }
 
+const readText = async (files: WorkspaceFiles, rel: string): Promise<string | null> =>
+  (await files.read(rel))?.toString('utf8') ?? null;
+
 /** Every file under the skill folder except SKILL.md, relative paths. */
-async function bundledFiles(dir: string): Promise<string[]> {
+async function bundledFiles(files: WorkspaceFiles, dir: string): Promise<string[]> {
   const out: string[] = [];
   const walk = async (dir: string, rel: string) => {
-    const entries = await fsp.readdir(dir, { withFileTypes: true }).catch(() => []);
+    const entries = (await files.list(dir).catch(() => null)) ?? [];
     for (const entry of entries) {
       const relativePath = rel ? `${rel}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) await walk(path.join(dir, entry.name), relativePath);
+      if (entry.kind === 'dir') await walk(`${dir}/${entry.name}`, relativePath);
       else if (relativePath !== 'SKILL.md') out.push(relativePath);
     }
   };
@@ -74,23 +75,24 @@ async function imageFor(ctx: PhantomBackend, session: SessionRow): Promise<strin
 
 /** Every skill the session sees: a live scan of its working tree merged with
  *  the image's system tier (repo shadows). */
-export async function listSkills(ctx: PhantomBackend, deps: FsDeps, session: SessionRow, workspaceId: string) {
+export async function listSkills(ctx: PhantomBackend, session: SessionRow, workspaceId: string) {
   return { skills: mergeSkills(
-    await scanSkills(repoDir(ctx.paths, workspaceId)),
-    await systemSkills(deps.docker, await imageFor(ctx, session))) };
+    await scanSkillsIn(await filesOf(ctx, workspaceId)),
+    await systemSkills(ctx.docker, await imageFor(ctx, session))) };
 }
 
 /** The whole SKILL.md plus the names of its bundled files in ONE answer;
  *  `file` fetches one bundled file instead. */
-export async function loadSkill(ctx: PhantomBackend, deps: FsDeps, session: SessionRow, workspaceId: string,
+export async function loadSkill(ctx: PhantomBackend, session: SessionRow, workspaceId: string,
   name: string, file?: string): Promise<unknown> {
   const nameErr = validateSkillName(name);
   if (nameErr) throw new ToolError('invalid_args', nameErr);
-  const dir = skillDirHost(ctx, workspaceId, name);
-  if (!(await skillExists(ctx, workspaceId, name))) {
+  const files = await filesOf(ctx, workspaceId);
+  const dir = skillDir(name);
+  if (!(await skillExists(files, name))) {
     // Not in the repo — fall through to the image's system tier (repo
     // shadows system, so this only answers un-shadowed names).
-    const sys = (await systemSkillTree(deps.docker, await imageFor(ctx, session))).get(name);
+    const sys = (await systemSkillTree(ctx.docker, await imageFor(ctx, session))).get(name);
     if (!sys) throw new ToolError('skill_not_found', `no skill '${name}' in ${SKILLS_DIR}/ or the image's system skills`);
     if (file) {
       const fErr = validateFilePath(file);
@@ -104,39 +106,39 @@ export async function loadSkill(ctx: PhantomBackend, deps: FsDeps, session: Sess
   if (file) {
     const fErr = validateFilePath(file);
     if (fErr) throw new ToolError('invalid_args', fErr);
-    const content = await fsp.readFile(path.join(dir, file), 'utf8')
-      .catch(() => { throw new ToolError('skill_not_found', `no file '${file}' in skill '${name}'`); });
+    const content = await readText(files, `${dir}/${file}`).catch(() => null);
+    if (content === null) throw new ToolError('skill_not_found', `no file '${file}' in skill '${name}'`);
     return { name, file, content };
   }
-  const instructions = await fsp.readFile(path.join(dir, 'SKILL.md'), 'utf8');
-  return { name, instructions, files: await bundledFiles(dir) };
+  const instructions = (await readText(files, `${dir}/SKILL.md`)) ?? '';
+  return { name, instructions, files: await bundledFiles(files, dir) };
 }
 
 /** Every write, validated, through the container. */
-export async function manageSkill(ctx: PhantomBackend, deps: FsDeps, session: SessionRow, workspaceId: string, body: ManageBody): Promise<unknown> {
+export async function manageSkill(ctx: PhantomBackend, session: SessionRow, workspaceId: string, body: ManageBody): Promise<unknown> {
   const nameErr = validateSkillName(body.name);
   if (nameErr) throw new ToolError('invalid_args', nameErr);
   const project = await ctx.projects.get(session.projectId);
-  let container;
+  let sandbox: Sandbox;
   try {
-    container = await deps.sessionContainers.ensure(workspaceId, project);
+    sandbox = (await ctx.sessionContainers.ensure(workspaceId, project)).sandbox(workspaceId);
   } catch (error) {
     throw new ToolError('container_start_failed', (error as Error).message, true);
   }
-  const sandbox = new Sandbox(deps.docker, container);
+  const files = await filesOf(ctx, workspaceId);
   // Writes reach the REPO tier only. When the name exists solely in the
   // image's system tier, say so — "no skill" would gaslight an agent that
   // just saw it in skill_list.
-  const systemHas = !(await skillExists(ctx, workspaceId, body.name))
-    && (await systemSkillTree(deps.docker, await imageFor(ctx, session))).has(body.name);
-  return manage(ctx, sandbox, workspaceId, body, systemHas);
+  const systemHas = !(await skillExists(files, body.name))
+    && (await systemSkillTree(ctx.docker, await imageFor(ctx, session))).has(body.name);
+  return manage(files, sandbox, body, systemHas);
 }
 
-async function manage(ctx: PhantomBackend, sandbox: Sandbox, workspaceId: string, body: ManageBody,
+async function manage(files: WorkspaceFiles, sandbox: Sandbox, body: ManageBody,
   systemHas = false): Promise<unknown> {
   const { action, name } = body;
-  const exists = await skillExists(ctx, workspaceId, name);
-  const hostDir = skillDirHost(ctx, workspaceId, name);
+  const exists = await skillExists(files, name);
+  const hostDir = skillDir(name);
   const notFound = () => new ToolError('skill_not_found', systemHas
     ? `'${name}' is a read-only system skill (baked into the workspace image). To change what the agent ` +
       `sees, create a repo skill named '${name}' — it shadows the system one.`
@@ -170,8 +172,8 @@ async function manage(ctx: PhantomBackend, sandbox: Sandbox, workspaceId: string
         if (fErr) throw new ToolError('invalid_args', fErr);
         rel = body.file_path;
       }
-      const current = await fsp.readFile(path.join(hostDir, rel), 'utf8')
-        .catch(() => { throw new ToolError('skill_not_found', `no file '${rel}' in skill '${name}'`); });
+      const current = await readText(files, `${hostDir}/${rel}`).catch(() => null);
+      if (current === null) throw new ToolError('skill_not_found', `no file '${rel}' in skill '${name}'`);
       const replaced = fuzzyFindAndReplace(current, body.old_string, body.new_string, body.replace_all ?? false);
       if (replaced.error) {
         throw new ToolError('invalid_args', replaced.error + formatNoMatchHint(replaced.error, replaced.count, body.old_string, current));
@@ -207,7 +209,7 @@ async function manage(ctx: PhantomBackend, sandbox: Sandbox, workspaceId: string
       if (!exists) throw notFound();
       const fErr = validateFilePath(body.file_path ?? '');
       if (fErr) throw new ToolError('invalid_args', fErr);
-      const present = await fsp.access(path.join(hostDir, body.file_path!)).then(() => true, () => false);
+      const present = (await files.stat(`${hostDir}/${body.file_path!}`)) !== null;
       if (!present) throw new ToolError('skill_not_found', `no file '${body.file_path}' in skill '${name}'`);
       const removed = await sandbox.run(['rm', '-f', `${skillDirContainer(name)}/${body.file_path}`]);
       if (removed.exitCode !== 0) throw new ToolError('invalid_args', `remove failed: ${removed.stderr.toString('utf8').slice(0, 200)}`);

@@ -49,7 +49,15 @@ export * as checkoutPool from './runtime/CheckoutPool.js';
 export { makeDocker } from './runtime/Docker.js';
 export { PullTracker } from './runtime/Images.js';
 export { buildContainerSpec, type ContainerOpts } from './runtime/SessionContainers.js';
-export type { RunOpts, RunResult } from './runtime/Sandbox.js';
+export type { RunOpts, RunResult, StreamRecord, Exec } from './runtime/Sandbox.js';
+// Session hosts: the primitives every workspace call goes through, the
+// built-in and remote implementations, the registry, the host process.
+export type { WorkspaceHost, Repo, WorkspaceFiles, ContainerPlan, ContainerState, DetachEvent } from './runtime/WorkspaceHost.js';
+export { LocalHost, type LocalHostOptions } from './runtime/LocalHost.js';
+export { RemoteHost } from './runtime/RemoteHost.js';
+export { SessionHosts, SessionHostError, type HostCaller, type SessionHostView } from './host/SessionHosts.js';
+export { SessionHost, type SessionHostOptions } from './host/SessionHost.js';
+export type { Job, JobEvent, HostHello, HostFacts } from './host/protocol.js';
 export { systemSkills, systemSkillTree, SYSTEM_SKILLS_DIR, type SystemSkill, type SystemSkillTree } from './runtime/SystemSkills.js';
 export { webSearch, webFetch, urlSlug, type SearchBody, type WebDeps } from './runtime/Web.js';
 export { createRepo, listRepos, whoami, type GitHubRepo, type CreateRepoResult, type ListReposResult, type WhoamiResult } from './git/GitHub.js';
@@ -91,7 +99,7 @@ export { readEnv, APP_VERSION, API_IMAGE, type Env } from './lib/env.js';
 // the API: envelope helpers and the route helpers user space's routes share
 export { ok, err } from './api/HttpApi.js';
 export { clientOf, lockedErr } from './api/routes/sessions.js';
-export { fsDeps, fileTools, type FsDeps } from './api/routes/fs.js';
+export { fileTools } from './api/routes/fs.js';
 export { TOOLS, toolByName, toolsFor, grantedTools } from './tools/registry.js';
 export { str, int, bool, nullable, oneOf, obj, s, refusal, type ToolDef, type ToolCtx, type OfferCtx, type FileTools, type PublishedTool } from './tools/def.js';
 export { userMessagesContext, titleContext, cleanTitle, type TitleContext, type TitleWriter } from './agents/SessionTitler.js';

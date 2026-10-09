@@ -2,7 +2,7 @@
   "name": "@phantom-agent-sdk/client",
   "version": "0.1.0",
   "private": true,
-  "description": "The agent runtime for a phantom-backend: an Agent base class with the turn, the shared append-only transcript, the session lock, model resolution, billing, and the server’s tools over the API.",
+  "description": "The agent runtime for a phantom-backend: an Agent base class with the turn, the shared append-only transcript, the session lock, model resolution, billing, and the server\u2019s tools over the API.",
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -30,7 +30,8 @@
   "scripts": {
     "build": "node ../../scripts/assert-sdk-version.mjs && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "test": "tsx --test \"src/**/*.test.ts\""
   },
   "peerDependencies": {
     "ai": ">=7.0.0"

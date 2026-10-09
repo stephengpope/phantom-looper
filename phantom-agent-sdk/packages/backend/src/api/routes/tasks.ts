@@ -7,13 +7,13 @@
 // /containers/:id/top reports HOST pids (verified live) and is deliberately
 // not used — its numbers can never meet a `pkill` in the container.
 import type { FastifyInstance } from 'fastify';
-import { Sandbox } from '../../runtime/Sandbox.js';
+import type { Sandbox } from '../../runtime/Sandbox.js';
 import { ok, err } from '../HttpApi.js';
 import type { PhantomBackend } from '../../PhantomBackend.js';
 import { workspaceOf } from '../../storage/Sessions.js';
 import {
   killSid, probeGroups, reconcileRunning, commandTextFromArgv, elapsedSeconds,
-  type LiveGroup, fsDeps,
+  type LiveGroup,
 } from './fs.js';
 import type { BackgroundTaskRow } from '../../storage/BackgroundTasks.js';
 import { logger, errStr } from '../../lib/log.js';
@@ -24,19 +24,12 @@ const TAG = { tags: ['tasks'] };
 const idParam = { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] };
 
 export function tasksRoutes(app: FastifyInstance, ctx: PhantomBackend) {
-  const deps = fsDeps(ctx);
-  /** The session's container, probed WITHOUT creating one — listing must
-   *  never boot a container just to answer "nothing". */
-  const probe = async (workspaceId: string) => {
-    const container = deps.docker.getContainer(deps.sessionContainers.name(workspaceId));
-    const info = await container.inspect().catch((error: { statusCode?: number; message?: string }) => {
-      // 404 IS "absent"; anything else is docker failing to answer.
-      if (error.statusCode !== 404) log.warn({ workspace: workspaceId, err: error.message }, 'container inspect failed — listed as absent');
-      return null;
-    });
-    if (!info) return { state: 'absent' as const, container: null };
-    if (!info.State.Running) return { state: 'stopped' as const, container: null };
-    return { state: 'running' as const, container: container };
+  /** The session's container, probed on its host WITHOUT creating one —
+   *  listing must never boot a container just to answer "nothing". */
+  const probe = async (workspaceId: string): Promise<{ state: 'absent' | 'stopped' | 'running'; sandbox: Sandbox | null }> => {
+    const host = await ctx.sessionHosts.of(workspaceId);
+    const state = await host.containerState(workspaceId);
+    return { state, sandbox: state === 'running' ? host.sandbox(workspaceId) : null };
   };
 
   app.get<{ Params: { id: string } }>('/sessions/:id/tasks', { schema: { ...TAG,
@@ -48,11 +41,11 @@ export function tasksRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     if (!session) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
     if (!session.workspaceId) return reply.code(400).send(err('no_workspace', 'this session has no files — nothing runs for it'));
 
-    const { state, container } = await probe(workspaceOf(session));
+    const { state, sandbox } = await probe(workspaceOf(session));
     let groups: LiveGroup[] = [];
-    if (container) {
+    if (sandbox) {
       try {
-        groups = await probeGroups(new Sandbox(deps.docker, container));
+        groups = await probeGroups(sandbox);
       } catch (error) {
         log.warn({ session: session.id, err: errStr(error) }, 'ps in container failed');
       }
@@ -108,10 +101,9 @@ export function tasksRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     const session = await ctx.sessions.get(req.params.id);
     if (!session) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
     if (!session.workspaceId) return reply.code(400).send(err('no_workspace', 'this session has no files — nothing runs for it'));
-    const { container } = await probe(workspaceOf(session));
-    if (!container) return reply.code(404).send(err('no_such_task', 'nothing is running — the container is not up'));
+    const { sandbox } = await probe(workspaceOf(session));
+    if (!sandbox) return reply.code(404).send(err('no_such_task', 'nothing is running — the container is not up'));
 
-    const sandbox = new Sandbox(deps.docker, container);
     const groups = await probeGroups(sandbox);
     if (!groups.some((group) => group.sid === req.params.sid)) {
       return reply.code(404).send(err('no_such_task', `no running task with sid ${req.params.sid}`));

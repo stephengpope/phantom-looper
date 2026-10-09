@@ -10,15 +10,13 @@
 // where a push's `add -A` cannot commit them — and are returned as
 // /workspace/web/<name>.md, the path the container (and so the read tool)
 // sees. Same host-write pattern as the detached-bash logs in fs.ts.
-import fsp from 'node:fs/promises';
-import path from 'node:path';
-import { sessionDir } from '../lib/paths.js';
 import type { Settings } from '../storage/Settings.js';
-import type { Paths } from '../lib/paths.js';
+import type { SessionHosts } from '../host/SessionHosts.js';
+import type { WorkspaceFiles } from './WorkspaceHost.js';
 import { textOf } from '../lib/text.js';
 
-/** What the web calls need of the backend: the Firecrawl key and where a fetched page lands. */
-export interface WebDeps { settings: Settings; paths: Paths }
+/** What the web calls need of the backend: the Firecrawl key and where a fetched page lands (the workspace's host). */
+export interface WebDeps { settings: Settings; sessionHosts: SessionHosts }
 import { ToolError } from '../tools/envelope.js';
 import { actingScope, type SettingScope } from '../lib/scopes.js';
 
@@ -54,7 +52,7 @@ export function urlSlug(url: string): string {
 type FetchEntry = Record<string, unknown>;
 
 async function fetchOne(
-  key: string, url: string, hostDir: string, taken: Set<string>,
+  key: string, url: string, files: WorkspaceFiles, taken: Set<string>,
 ): Promise<FetchEntry> {
   const scrape = (extra: Record<string, unknown>) => firecrawl(key, '/v2/scrape', {
     url, formats: ['markdown'], onlyMainContent: true, maxAge: 3_600_000, ...extra,
@@ -86,7 +84,7 @@ async function fetchOne(
   let name = urlSlug(url); let suffix = 2;
   while (taken.has(name)) name = `${urlSlug(url)}-${suffix++}`;
   taken.add(name);
-  await fsp.writeFile(path.join(hostDir, `${name}.md`), markdown);
+  await files.write(`web/${name}.md`, Buffer.from(markdown, 'utf8'));
   return {
     url,
     ...(meta.statusCode !== undefined ? { status_code: meta.statusCode } : {}),
@@ -136,10 +134,9 @@ export async function webSearch(ctx: WebDeps, b: SearchBody, scope: SettingScope
  *  is an error entry; the call itself succeeds. */
 export async function webFetch(ctx: WebDeps, workspaceId: string, urls: string[], scope: SettingScope = actingScope()): Promise<FetchEntry[]> {
   const key = await keyOf(ctx, scope);
-  const hostDir = path.join(sessionDir(ctx.paths, workspaceId), 'web');
-  await fsp.mkdir(hostDir, { recursive: true });
+  const files = (await ctx.sessionHosts.of(workspaceId)).files(workspaceId);
   const taken = new Set<string>();
   // In input order; fetched in parallel — the slug set is claimed
   // synchronously per entry inside fetchOne before any await on the write.
-  return Promise.all(urls.map((url) => fetchOne(key, url, hostDir, taken)));
+  return Promise.all(urls.map((url) => fetchOne(key, url, files, taken)));
 }

@@ -1,0 +1,250 @@
+// SessionHost — the host process: a box with Docker and a workspace volume
+// that connects OUT to a backend and runs its workspaces. The same backend
+// image, this entrypoint instead of the API's; no database, no settings, no
+// secrets of its own — every job carries what it needs, and the host trusts
+// the backend with anything it asks.
+//
+// It is LocalHost (the primitives, against THIS box's volume and Docker)
+// behind a Link: jobs come down the feed, their events go up the relay.
+// A dropped link changes nothing about what runs: jobs keep running, their
+// events queue, and go when the link is back. Only a job (a kill, a cancel)
+// stops anything.
+//
+// Identity: the key says what the host is (the server key: shared; a user's
+// key: theirs). The row's id is persisted beside the volume (host.json) so a
+// reconnect — and a restart — is the same host, never a new one. `boot` is
+// fresh per process: the backend fails what a dead process was running.
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import type Docker from 'dockerode';
+import { BackendClient, BackendConnection, Link, newId, type Credential, type RetryPolicy } from '@phantom-agent-sdk/client';
+import { LocalHost, type LocalHostOptions } from '../runtime/LocalHost.js';
+import { Images } from '../runtime/Images.js';
+import { makeDocker } from '../runtime/Docker.js';
+import { makePaths, type Paths } from '../lib/paths.js';
+import * as checkoutPool from '../runtime/CheckoutPool.js';
+import { type Job, type JobEvent, type HostHello, encodeError, fromBase64, toBase64 } from './protocol.js';
+import { SDK_VERSION } from '../sdkVersion.js';
+import { logger, errStr } from '../lib/log.js';
+
+const log = logger('session-host');
+
+/** The host's calls to the backend: local or one hop away. */
+const HOST_RETRY: RetryPolicy = { waitsS: [1, 2, 4, 8], budgetMs: 15_000, retryable: (status) => status === 408 || status === 429 || status >= 500 };
+
+export interface SessionHostOptions {
+  /** The backend's origin, e.g. https://phantom.example.com */
+  origin: string;
+  /** The server key (a shared host) or a user's API key (their host). */
+  key: string;
+  name: string;
+  paths: Paths;
+  docker: Docker;
+  local: LocalHostOptions;
+  certificateAuthority?: Buffer;
+}
+
+export class SessionHost {
+  readonly boot = newId();
+  #backend: BackendClient;
+  readonly #local: LocalHost;
+  #link: Link | null = null;
+  #id: string | null = null;
+  /** Running jobs by id, with the cancel for a stream. A job id seen twice
+   *  (a reconnect re-sends what is unfinished) runs once. */
+  readonly #running = new Map<string, { cancel?: () => void }>();
+  /** Ids finished recently: a re-sent finished job is not run again (its
+   *  events were queued and will land). Bounded. */
+  readonly #done: string[] = [];
+  readonly #doneSet = new Set<string>();
+  #stopped = false;
+
+  constructor(private readonly opts: SessionHostOptions) {
+    // One HTTPS/2 socket for everything, as the cli has: the backend's TLS,
+    // its own CA when it runs one (BACKEND_CA). There is no other transport.
+    const origin = new URL(opts.origin).origin;
+    if (!origin.startsWith('https:')) throw new Error(`BACKEND_URL must be https:// — got ${origin}`);
+    this.#connection = new BackendConnection({ origin, ...(opts.certificateAuthority ? { certificateAuthority: opts.certificateAuthority } : {}) });
+    // The key is the server's (a shared host) or a user's API key (theirs):
+    // tried as the first, and as the second when the backend says 401.
+    this.#backend = this.#client({ phantomAdminKey: opts.key });
+    this.#local = new LocalHost(opts.docker, new Images(opts.docker), opts.paths, opts.local, { id: null, name: opts.name });
+  }
+
+  readonly #connection: BackendConnection;
+  #client(credential: Credential): BackendClient {
+    return new BackendClient({
+      url: `${new URL(this.opts.origin).origin}/api`, credential, clientId: `session-host-${this.boot}`, label: this.opts.name,
+      fetch: (input, init) => this.#connection.fetch(input, init), retry: { policy: HOST_RETRY, notice: (text) => log.warn(text) },
+    });
+  }
+
+  /** Which kind of key this is, proven against the backend. */
+  async #resolveCredential(): Promise<void> {
+    try { await this.#backend.call('GET', '/identity/me'); return; }
+    catch (error) {
+      if ((error as { status?: number }).status !== 401) throw error;
+    }
+    this.#backend = this.#client({ apiKey: this.opts.key });
+    await this.#backend.call('GET', '/identity/me');
+  }
+
+  /** From the environment — the compose service's one way in. */
+  static fromEnv(env: NodeJS.ProcessEnv = process.env): SessionHost {
+    const origin = env.BACKEND_URL;
+    const key = env.BACKEND_KEY;
+    if (!origin) throw new Error('BACKEND_URL is not set — the backend this host connects to');
+    if (!key) throw new Error('BACKEND_KEY is not set — the server key (a shared host) or your API key (your host)');
+    const root = env.WORKSPACE_ROOT_PATH || '/workspaces';
+    return new SessionHost({
+      origin, key,
+      name: env.HOST_NAME || os.hostname(),
+      paths: makePaths(root),
+      docker: makeDocker(),
+      local: {
+        volume: env.WORKSPACE_VOLUME || undefined,
+        network: env.AGENT_NETWORK || undefined,
+        databaseContainer: env.AGENT_DATABASE_CONTAINER || undefined,
+        diskQuota: env.DISK_QUOTA_URL || undefined,
+        apiImage: env.API_IMAGE || undefined,
+      },
+      // A PEM through a .env: its newlines may arrive as the two characters `\n`.
+      ...(env.BACKEND_CA ? { certificateAuthority: Buffer.from(env.BACKEND_CA.replace(/\\n/g, '\n')) } : {}),
+    });
+  }
+
+  get id(): string | null { return this.#id; }
+  get online(): boolean { return this.#link?.up ?? false; }
+  status(): { id: string | null; name: string; online: boolean; running: number } {
+    return { id: this.#id, name: this.opts.name, online: this.online, running: this.#running.size };
+  }
+
+  /** Boot cleanup, hello, the feed open. Returns once the hello answered;
+   *  the feed follows on its own from here. */
+  async start(): Promise<void> {
+    // The backend may be down, or not yet up, when this box boots: the hello
+    // is tried until it answers. A refused key is final — nothing to wait for.
+    for (let wait = 2_000; ; wait = Math.min(wait * 2, 30_000)) {
+      try { await this.#resolveCredential(); break; }
+      catch (error) {
+        const status = (error as { status?: number }).status;
+        if (status === 401 || status === 403) throw new Error(`the backend refused the key (${status}) — BACKEND_KEY must be the server key or a user's API key`);
+        if (this.#stopped) return;
+        log.warn({ err: errStr(error), retryInMs: wait }, 'backend unreachable — waiting');
+        await new Promise((wake) => setTimeout(wake, wait));
+      }
+    }
+    await checkoutPool.bootCleanup(this.opts.paths);
+    await this.#local.retireOldContainers();
+    const idFile = path.join(this.opts.paths.root, 'host.json');
+    const persisted: { id?: string } = await fs.readFile(idFile, 'utf8').then((text) => JSON.parse(text) as { id?: string }, () => ({}));
+    const facts: HostHello['facts'] = {
+      dockerVersion: await this.opts.docker.version().then((v) => String((v as { Version?: string }).Version ?? ''), () => undefined),
+      arch: os.arch(),
+      diskSupport: await this.#local.diskSupport().catch((error) => `probe failed: ${errStr(error)}`),
+      sdkVersion: SDK_VERSION,
+    };
+    const hello: HostHello = { ...(persisted.id ? { id: persisted.id } : {}), name: this.opts.name, boot: this.boot, facts };
+    const row = await this.#backend.call<{ id: string; name: string }>('POST', '/session-hosts/hello', hello);
+    this.#id = row.id;
+    if (persisted.id !== row.id) await fs.writeFile(idFile, JSON.stringify({ id: row.id }) + '\n');
+    log.info({ host: row.id, name: this.opts.name, boot: this.boot, facts }, 'session host registered — opening the feed');
+    this.#link = new Link(this.#backend, {
+      feed: `/session-hosts/${row.id}/jobs?boot=${encodeURIComponent(this.boot)}`,
+      relay: `/session-hosts/${row.id}/jobs/events`,
+      onRecord: (record) => { if (record.event !== 'heartbeat') this.#onJob(record as unknown as Job); },
+      reset: () => this.#connection.destroy(),
+      onStatus: (up) => log.info({ host: row.id }, up ? 'link up' : 'link down — jobs keep running, events queue'),
+    });
+    this.#link.open();
+    // Liveness both ways: the backend heartbeats down the feed; this goes up
+    // the relay, so a silently dead socket reads as offline there within 45 s.
+    this.#heartbeat = setInterval(() => this.#link?.send({ type: 'heartbeat' }), 15_000);
+  }
+  #heartbeat: ReturnType<typeof setInterval> | null = null;
+
+  /** Close the link. What runs keeps running; containers stay up. */
+  async stop(): Promise<void> {
+    this.#stopped = true;
+    if (this.#heartbeat) clearInterval(this.#heartbeat);
+    await this.#link?.drain().catch(() => {});
+    this.#link?.close();
+    this.#local.stop();
+  }
+
+  #report(event: JobEvent): void { this.#link?.send(event); }
+
+  #finish(id: string): void {
+    this.#running.delete(id);
+    this.#doneSet.add(id); this.#done.push(id);
+    while (this.#done.length > 5_000) this.#doneSet.delete(this.#done.shift()!);
+  }
+
+  #onJob(job: Job): void {
+    if (!job || typeof job.id !== 'string') return;
+    if (job.kind === 'cancel') { this.#running.get(job.job)?.cancel?.(); return; }
+    if (job.kind === 'unwatch') { this.#local.unwatch(job.workspaceId); return; }
+    if (this.#running.has(job.id) || this.#doneSet.has(job.id)) return;
+    const entry: { cancel?: () => void } = {};
+    this.#running.set(job.id, entry);
+    void this.#run(job, entry)
+      .catch((error) => { log.warn({ job: job.id, kind: job.kind, err: errStr(error) }, 'job failed'); this.#report({ job: job.id, type: 'error', ...encodeError(error) }); })
+      .finally(() => this.#finish(job.id));
+  }
+
+  async #run(job: Job, entry: { cancel?: () => void }): Promise<void> {
+    const local = this.#local;
+    const result = (value: unknown) => this.#report({ job: job.id, type: 'result', value });
+    switch (job.kind) {
+      case 'checkout': return result(await local.checkout(job.workspaceId, job.projectId, job.branch, job.auth));
+      case 'removeFiles': await local.removeFiles(job.workspaceId); return result(null);
+      case 'git': return result(await local.repo(job.workspaceId).git(job.args, job.auth));
+      case 'exists': return result(await local.repo(job.workspaceId).exists(job.rel));
+      case 'read': { const got = await local.files(job.workspaceId).read(job.rel); return result(got === null ? null : toBase64(got)); }
+      case 'write': await local.files(job.workspaceId).write(job.rel, fromBase64(job.data)); return result(null);
+      case 'tail': return result(toBase64(await local.files(job.workspaceId).tail(job.rel, job.bytes)));
+      case 'stat': return result(await local.files(job.workspaceId).stat(job.rel));
+      case 'list': return result(await local.files(job.workspaceId).list(job.rel));
+      case 'mkdir': await local.files(job.workspaceId).mkdir(job.rel); return result(null);
+      case 'rm': await local.files(job.workspaceId).rm(job.rel); return result(null);
+      case 'realFile': return result(await local.files(job.workspaceId).realFile(job.rel));
+      case 'containerUp': return result(await local.containerUp(job.workspaceId, job.plan));
+      case 'containerRemove': await local.containerRemove(job.workspaceId); return result(null);
+      case 'containerState': return result(await local.containerState(job.workspaceId));
+      case 'activeWorkspaces': return result(await local.activeWorkspaces());
+      case 'disk': return result(await local.disk());
+      case 'diskSupport': return result(await local.diskSupport());
+      case 'exec': {
+        const ran = await local.sandbox(job.workspaceId).run(job.argv, {
+          cwd: job.cwd, maxBytes: job.maxBytes, timeoutMs: job.timeoutMs,
+          ...(job.stdin !== undefined ? { stdin: fromBase64(job.stdin) } : {}),
+        });
+        return result({ stdout: toBase64(ran.stdout), stderr: toBase64(ran.stderr), exitCode: ran.exitCode });
+      }
+      case 'execStream': return this.#pipe(job.id, entry, local.sandbox(job.workspaceId).runStream(job.argv, { cwd: job.cwd, timeoutMs: job.timeoutMs }));
+      case 'detach': return this.#pipe(job.id, entry, local.detach(job.workspaceId, job.taskId, job.argv, job.cwd, job.sidfile));
+      case 'watch': {
+        // A standing order: chunks for as long as the watch stands; no end.
+        local.watch(job.workspaceId, () => this.#report({ job: job.id, type: 'chunk', value: { changed: true } }));
+        this.#running.delete(job.id);
+        return;
+      }
+      default: throw new Error(`unknown job kind ${(job as { kind: string }).kind}`);
+    }
+  }
+
+  /** A stream's records up as chunks, then `end`. A cancel ends the
+   *  iteration (the generator's own teardown stops the exec). */
+  async #pipe(id: string, entry: { cancel?: () => void }, records: AsyncIterable<unknown>): Promise<void> {
+    const iterator = records[Symbol.asyncIterator]();
+    let cancelled = false;
+    entry.cancel = () => { cancelled = true; void iterator.return?.(); };
+    for (;;) {
+      const next = await iterator.next();
+      if (next.done || cancelled) break;
+      this.#report({ job: id, type: 'chunk', value: next.value });
+    }
+    if (!cancelled) this.#report({ job: id, type: 'end' });
+  }
+}

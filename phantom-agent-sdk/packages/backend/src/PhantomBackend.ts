@@ -34,10 +34,11 @@ import { BoardEvents } from './agents/BoardEvents.js';
 import { SettingsEvents } from './agents/SettingsEvents.js';
 import { ForegroundCommands } from './agents/ForegroundCommands.js';
 import { makeDocker } from './runtime/Docker.js';
+import { LocalHost } from './runtime/LocalHost.js';
+import { SessionHosts } from './host/SessionHosts.js';
 import { Images } from './runtime/Images.js';
 import { SessionContainers } from './runtime/SessionContainers.js';
 import * as checkoutPool from './runtime/CheckoutPool.js';
-import { WorkspaceWatcher } from './git/WorkspaceWatcher.js';
 import { GitService, type GitHooks } from './git/GitService.js';
 import { idleBackupSweep, pressureSweep } from './runtime/Disk.js';
 import { refreshWorkState } from './git/workRefresh.js';
@@ -174,7 +175,9 @@ export class PhantomBackend {
   readonly docker: Docker;
   readonly images: Images;
   readonly sessionContainers: SessionContainers;
-  readonly workspaceWatcher: WorkspaceWatcher;
+  /** The hosts workspaces run on: the built-in one (this process) and every
+   *  session host that registered — and where each workspace is. */
+  readonly sessionHosts: SessionHosts;
 
   // ── telegram tables ──────────────────────────────────────────────────
   readonly telegramBotState: TelegramBotState;
@@ -196,7 +199,7 @@ export class PhantomBackend {
     this.modelCatalog = built.modelCatalog; this.sessionNotes = built.sessionNotes; this.sessionEvents = built.sessionEvents;
     this.boardEvents = built.boardEvents; this.settingsEvents = built.settingsEvents; this.foregroundCommands = built.foregroundCommands;
     this.docker = built.docker; this.images = built.images; this.sessionContainers = built.sessionContainers;
-    this.workspaceWatcher = built.workspaceWatcher; this.telegramBotState = built.telegramBotState;
+    this.sessionHosts = built.sessionHosts; this.telegramBotState = built.telegramBotState;
     this.telegramSentMessages = built.telegramSentMessages; this.telegramHandledUpdates = built.telegramHandledUpdates;
     this.sessionTitler = new SessionTitler(this.sessions, config.writeTitle);
     this.mailer = new Mailer(this.settings);
@@ -205,12 +208,12 @@ export class PhantomBackend {
     this.telegramChats = new TelegramChats(this.database.drizzle, this.database.system);
     this.telegramBot = new TelegramBot({ settings: this.settings, settingsEvents: this.settingsEvents, botState: this.telegramBotState,
       chats: this.telegramChats, sessions: this.sessions, projects: this.projects,
-      sentMessages: this.telegramSentMessages, handledUpdates: this.telegramHandledUpdates, paths: this.paths,
+      sentMessages: this.telegramSentMessages, handledUpdates: this.telegramHandledUpdates, hosts: this.sessionHosts,
       publicAddress: process.env.TELEGRAM_WEBHOOK_ADDRESS || process.env.BACKEND_ADDRESS, commandMenu: config.telegramCommandMenu });
     this.git = new GitService({
-      sessions: this.sessions, workspaces: this.workspaces, cards: this.cards, projects: this.projects, settings: this.settings, paths: this.paths,
+      sessions: this.sessions, workspaces: this.workspaces, cards: this.cards, projects: this.projects, settings: this.settings, hosts: this.sessionHosts,
       sessionEvents: this.sessionEvents, boardEvents: this.boardEvents, settingsEvents: this.settingsEvents,
-      sessionNotes: this.sessionNotes, sessionContainers: this.sessionContainers, workspaceWatcher: this.workspaceWatcher,
+      sessionNotes: this.sessionNotes, sessionContainers: this.sessionContainers,
     }, config.git ?? {});
     this.#httpApi = new HttpApi(this, this.env.apiKey, config.routes);
   }
@@ -261,14 +264,24 @@ export class PhantomBackend {
 
     const agentDatabases = new AgentDatabases(database.pool, database.url, env.encryptionKey);
     const projects = new Projects(database.drizzle, settings, settingsEvents, agentDatabases);
-    const workspaces = new Workspaces(database.drizzle, paths, settings, sessionEvents);
-    const cards = new Cards(database.drizzle, projects, boardEvents, config.cardFields);
     const docker = makeDocker();
     // THE image puller/remover — every pull and removal in this process goes through it so they never overlap.
     const images = new Images(docker);
+    // The built-in host: this process's volume and Docker. Every workspace
+    // call goes through a host (runtime/WorkspaceHost.ts); a workspace placed
+    // nowhere else is here. SESSION_HOST_BUILTIN=0: this server runs no
+    // workspaces itself (a cloud API whose workspaces all live on session hosts).
+    const localHost = new LocalHost(docker, images, paths, {
+      volume: process.env.WORKSPACE_VOLUME, network: process.env.AGENT_NETWORK, databaseContainer: process.env.AGENT_DATABASE_CONTAINER,
+      diskQuota: process.env.DISK_QUOTA_URL || undefined, apiImage: process.env.API_IMAGE,
+    });
+    const sessionHosts = new SessionHosts(database.system, localHost, { builtIn: !/^(0|off|false|no)$/i.test(process.env.SESSION_HOST_BUILTIN ?? ''), settings });
+    await sessionHosts.load();
+    const workspaces = new Workspaces(database.drizzle, sessionHosts, settings, sessionEvents);
+    const cards = new Cards(database.drizzle, projects, boardEvents, config.cardFields);
     const media = new Media(database.drizzle, settings);
     const sessions = new Sessions(database.drizzle, settings, agentConfig, agentTypes, projects, workspaces,
-      { backgroundStarters: [...(config.backgroundStarters ?? []), ...(config.crons ? [CRON_STARTER] : [])], events: sessionEvents, prompt: { paths, docker, media } });
+      { backgroundStarters: [...(config.backgroundStarters ?? []), ...(config.crons ? [CRON_STARTER] : [])], events: sessionEvents, prompt: { hosts: sessionHosts, docker, media } });
     // A settings write reaches every session nothing has been said to yet: its row takes the settings' model.
     settingsEvents.subscribe(() => {
       sessions.followModelSettings().catch((error) => log.warn({ err: errStr(error) }, 'newborn sessions could not follow the model settings'));
@@ -283,12 +296,11 @@ export class PhantomBackend {
     const telegramHandledUpdates = new TelegramHandledUpdates(database.system);
     const sessionNotes = new SessionNotes();
     const foregroundCommands = new ForegroundCommands();
-    const workspaceWatcher = new WorkspaceWatcher();
     // Instant sync follows the containers: a container up is a workspace to
     // watch, a container gone is one to drop. The hooks are closures over the
     // backend, which exists long before any container starts.
-    const sessionContainers = new SessionContainers(docker, images, paths, {
-      volume: process.env.WORKSPACE_VOLUME, network: process.env.AGENT_NETWORK, databaseContainer: process.env.AGENT_DATABASE_CONTAINER, diskQuota: process.env.DISK_QUOTA_URL || undefined, settings, databases: agentDatabases,
+    const sessionContainers = new SessionContainers(sessionHosts, {
+      settings, databases: agentDatabases,
       onStarted: (workspaceId, project) => backend.git.instantSync.watchWorkspace(workspaceId, project),
       onRemoved: (workspaceId) => backend.git.instantSync.unwatchWorkspace(workspaceId),
     });
@@ -299,7 +311,7 @@ export class PhantomBackend {
     const backend: PhantomBackend = new PhantomBackend(config, {
       media, env, paths, database, settings, projects, workspaces, sessions, cards, crons, presets, backgroundTasks, tokenLog, agentDatabases,
       agentTypes, agentConfig, modelCatalog, sessionNotes, sessionEvents, boardEvents, settingsEvents, foregroundCommands,
-      docker, images, sessionContainers, workspaceWatcher, telegramBotState, telegramSentMessages, telegramHandledUpdates,
+      docker, images, sessionContainers, sessionHosts, telegramBotState, telegramSentMessages, telegramHandledUpdates,
     });
     return backend;
   }
@@ -326,12 +338,12 @@ export class PhantomBackend {
    *  work-state refresh. */
   #startLoops(): void {
     this.#loops.push(this.#loop(async () => {
-      await checkoutPool.tick(this.projects, this.settings, this.paths).catch((error) => log.error({ err: errStr(error) }, 'pool tick threw'));
+      if (this.sessionHosts.builtIn) await checkoutPool.tick(this.projects, this.settings, this.paths).catch((error) => log.error({ err: errStr(error) }, 'pool tick threw'));
       await idleBackupSweep(this.projects, this.sessions, this.git.sync).catch((error) => log.error({ err: errStr(error) }, 'idle backup sweep threw'));
       const idleMs = await this.settings.resolve<number>('container_idle_ms').catch(() => 30 * 60_000);
       await this.sessionContainers.reap(Number(idleMs), (idleMs) => this.idleContainerWorkspaces(idleMs)).catch((error) => log.error({ err: errStr(error) }, 'container reap threw'));
       await this.media.sweep().catch((error) => log.error({ err: errStr(error) }, 'media sweep threw'));
-      await pressureSweep(this.settings, this.projects, this.sessions, this.paths, this.images, this.sessionContainers, this.git.sync, (ids) => this.busyWorkspaces(ids))
+      await pressureSweep(this.settings, this.projects, this.sessions, this.sessionHosts, this.images, this.sessionContainers, this.git.sync, (ids) => this.busyWorkspaces(ids))
         .catch((error) => log.error({ err: errStr(error) }, 'pressure sweep threw'));
       return Number(await this.settings.resolve<number>('maintenance_interval_ms').catch(() => 60_000));
     }));
@@ -343,7 +355,7 @@ export class PhantomBackend {
       if (change.keys.includes('db_ui_enabled')) void reconcileDbUi(this.docker, this.settings);
     });
     this.#loops.push(this.#loop(async () => {
-      await refreshWorkState({ workspaces: this.workspaces, projects: this.projects, paths: this.paths, sessionContainers: this.sessionContainers, boardEvents: this.boardEvents })
+      await refreshWorkState({ workspaces: this.workspaces, projects: this.projects, hosts: this.sessionHosts, sessionContainers: this.sessionContainers, boardEvents: this.boardEvents })
         .catch((error) => log.error({ err: errStr(error) }, 'work-state refresh threw'));
       return 10_000;
     }, 10_000));
@@ -372,6 +384,7 @@ export class PhantomBackend {
       if (reason) throw new Error(`container_disk_gb is set but cannot be enforced on this server: ${reason}`);
     }
     await this.#httpApi.listen(this.env.port);
+    if (this.sessionHosts.builtIn) await this.sessionHosts.local.retireOldContainers();
     this.git.start();
     this.#startLoops();
     if (this.config.crons) { this.#cronScheduler = new CronScheduler(this, this.config.crons.agent); this.#cronScheduler.start(); }
@@ -387,7 +400,8 @@ export class PhantomBackend {
     await this.config.onStop?.(this);
     await this.git.stop();
     await this.#httpApi.close();
-    this.workspaceWatcher.stop();
+    this.sessionHosts.stop();
+    this.sessionHosts.local.stop();
     await this.database.close();
   }
 }
@@ -398,7 +412,7 @@ interface Built {
   cards: Cards; crons: Crons; presets: Presets; backgroundTasks: BackgroundTasks; tokenLog: TokenLog; agentDatabases: AgentDatabases;
   agentTypes: AgentTypes; agentConfig: AgentConfig; modelCatalog: ModelCatalog; sessionNotes: SessionNotes;
   sessionEvents: SessionEvents; boardEvents: BoardEvents; settingsEvents: SettingsEvents; foregroundCommands: ForegroundCommands;
-  docker: Docker; images: Images; sessionContainers: SessionContainers; workspaceWatcher: WorkspaceWatcher;
+  docker: Docker; images: Images; sessionContainers: SessionContainers; sessionHosts: SessionHosts;
   telegramBotState: TelegramBotState; telegramSentMessages: TelegramSentMessages; telegramHandledUpdates: TelegramHandledUpdates;
 }
 

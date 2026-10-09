@@ -48,10 +48,9 @@ import type { Sessions } from '../storage/Sessions.js';
 import type { Workspaces } from '../storage/Workspaces.js';
 import type { Projects } from '../storage/Projects.js';
 import type { Settings } from '../storage/Settings.js';
-import { repoDir, type Paths } from '../lib/paths.js';
+import type { SessionHosts } from '../host/SessionHosts.js';
 import type { AutoPushResult } from './autoPush.js';
 import type { AutoPullResult } from './autoPull.js';
-import type { WorkspaceWatcher } from './WorkspaceWatcher.js';
 import { logger, errStr } from '../lib/log.js';
 import { scopeOf } from '../lib/scopes.js';
 
@@ -62,8 +61,8 @@ export interface InstantSyncDeps {
   workspaces: Workspaces;
   projects: Projects;
   settings: Settings;
-  paths: Paths;
-  watcher: WorkspaceWatcher;
+  /** Where each checkout is: its host runs the watcher (host/SessionHosts.ts). */
+  hosts: SessionHosts;
   /** Auto-push / auto-pull as index.ts wires them for instant sync: no
    *  hold, no fixer, notes to the user message queue. */
   autoPush: (session: SessionRow, project: ProjectRow) => Promise<AutoPushResult>;
@@ -144,7 +143,6 @@ export class InstantSync {
 
   async stop(): Promise<void> {
     for (const project of this.watched.values()) await this.detach(project);
-    this.deps.watcher.stop();
   }
 
   private async configOf(project: ProjectRow): Promise<Config> {
@@ -158,7 +156,7 @@ export class InstantSync {
     // left unpushed before this watcher existed (a server restart) goes now.
     const watched: Watched = { workspaceId, project, debounceMs: config.debounceMs, pullMs: config.pullMs,
       changedAt: 0, lastFailure: { push: null, pull: null }, stopped: false };
-    this.deps.watcher.watch(workspaceId, repoDir(this.deps.paths, workspaceId), () => { watched.changedAt = Date.now(); });
+    (await this.deps.hosts.of(workspaceId)).watch(workspaceId, () => { watched.changedAt = Date.now(); });
     this.watched.set(workspaceId, watched);
     log.info({ workspace: workspaceId, project: project.id, debounceMs: config.debounceMs, pullMs: config.pullMs }, 'instant sync on');
     void this.beat(watched);
@@ -168,7 +166,7 @@ export class InstantSync {
     watched.stopped = true;
     clearTimeout(watched.timer);
     this.watched.delete(watched.workspaceId);
-    this.deps.watcher.unwatch(watched.workspaceId);
+    (await this.deps.hosts.of(watched.workspaceId)).unwatch(watched.workspaceId);
     log.info({ workspace: watched.workspaceId }, 'instant sync off');
   }
 

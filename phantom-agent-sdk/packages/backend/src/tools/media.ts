@@ -6,7 +6,8 @@
 // between the bucket and the session's /workspace.
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { sessionDir } from '../lib/paths.js';
+import os from 'node:os';
+import { Readable } from 'node:stream';
 import { scopeOf } from '../lib/scopes.js';
 import { workspaceOf } from '../storage/Sessions.js';
 import { MediaError, type MediaRow } from '../media/Media.js';
@@ -17,7 +18,8 @@ const CONTAINER_ROOT = '/workspace';
 const configured = async (ctx: OfferCtx) =>
   Boolean(await ctx.app.settings.resolve('agent_media', scopeOf(ctx.project))) && await ctx.app.media.configured(ctx.project.organizationId);
 const withFiles = async (ctx: OfferCtx) => Boolean(ctx.session.workspaceId) && await configured(ctx);
-const hostRoot = (ctx: ToolCtx) => sessionDir(ctx.app.paths, workspaceOf(ctx.session));
+/** The session's workspace, on its host. */
+const filesOf = async (ctx: ToolCtx) => { const id = workspaceOf(ctx.session); return (await ctx.app.sessionHosts.of(id)).files(id); };
 
 const brief = (row: MediaRow) => ({ id: row.id, name: row.name, type: row.mimeType, size: row.size, created_at: row.createdAt.toISOString() });
 
@@ -64,8 +66,16 @@ export const MEDIA_TOOLS: ToolDef[] = [
     input: obj({ id: str('the media file\'s id (media_list)') }, ['id']),
     mutates: true, group: 'media', offered: withFiles,
     async execute(ctx, a) {
-      const hostPath = await refusing(() => ctx.app.media.download(String(a.id), path.join(hostRoot(ctx), 'scratch'), ctx.project.organizationId));
-      return { path: path.posix.join(CONTAINER_ROOT, 'scratch', path.basename(hostPath)) };
+      // Fetched to a scratch dir here, then handed to the workspace's host —
+      // which may be another box.
+      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'phantom-media-'));
+      try {
+        const fetched = await refusing(() => ctx.app.media.download(String(a.id), tmp, ctx.project.organizationId));
+        await (await filesOf(ctx)).write(`scratch/${path.basename(fetched)}`, await fs.readFile(fetched));
+        return { path: path.posix.join(CONTAINER_ROOT, 'scratch', path.basename(fetched)) };
+      } finally {
+        await fs.rm(tmp, { recursive: true, force: true });
+      }
     },
   },
   {
@@ -78,13 +88,14 @@ export const MEDIA_TOOLS: ToolDef[] = [
     async execute(ctx, a) {
       const wanted = path.posix.normalize(String(a.path));
       if (wanted !== CONTAINER_ROOT && !wanted.startsWith(`${CONTAINER_ROOT}/`)) throw refusal('invalid_args', `path must be under ${CONTAINER_ROOT}`);
-      const root = hostRoot(ctx);
-      const hostPath = path.join(root, wanted.slice(CONTAINER_ROOT.length));
+      const rel = wanted.slice(CONTAINER_ROOT.length + 1);
+      const files = await filesOf(ctx);
       // The real file must still be inside the workspace once links are followed.
-      const real = await fs.realpath(hostPath).catch(() => null);
-      if (!real || !real.startsWith(`${await fs.realpath(root)}${path.sep}`)) throw refusal('not_found', `no file at ${wanted}`);
-      const row = await refusing(() => ctx.app.media.uploadFile(real, {
-        ...(typeof a.name === 'string' && a.name.trim() ? { name: a.name } : { name: path.basename(wanted) }),
+      if (!rel || !(await files.realFile(rel))) throw refusal('not_found', `no file at ${wanted}`);
+      const data = await files.read(rel);
+      if (!data) throw refusal('not_found', `no file at ${wanted}`);
+      const row = await refusing(() => ctx.app.media.upload(Readable.from(data), {
+        name: typeof a.name === 'string' && a.name.trim() ? a.name : path.basename(wanted), size: data.length,
         owner: { organizationId: ctx.project.organizationId, projectId: ctx.project.id, sessionId: ctx.session.id },
       }));
       return brief(row);

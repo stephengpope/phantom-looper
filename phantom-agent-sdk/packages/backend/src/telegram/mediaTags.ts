@@ -178,13 +178,13 @@ export function deliveryKind(filePath: string, opts: { isVoice?: boolean; forceD
 export interface Deliverable { path: string; kind: SendKind }
 
 /**
- * The whole job for a telegram reply: find the files the agent named, map their
- * container paths to host files, confine them to the session dir, and return
- * the cleaned text plus what to send. `toHost` maps `/workspace/X` →
- * `work/<session>/X`; `allowedRoots` are host dirs.
+ * The whole job for a telegram reply: find the files the agent named, locate
+ * each on the workspace's host (`locate` answers a key for a real file inside
+ * the workspace, null for anything else), and return the cleaned text plus
+ * what to send.
  */
 export async function collectDeliverables(
-  text: string, toHost: (path: string) => string, allowedRoots: string[],
+  text: string, locate: (containerPath: string) => Promise<string | null>,
 ): Promise<{ cleaned: string; files: Deliverable[] }> {
   const tagged = extractMedia(text);
   const bare = extractBarePaths(tagged.cleaned);
@@ -195,7 +195,7 @@ export async function collectDeliverables(
   const files: Deliverable[] = [];
   const seen = new Set<string>();
   for (const want of wanted) {
-    const host = await validateDeliveryPath(toHost(unquote(want.path)), allowedRoots);
+    const host = await locate(unquote(want.path));
     if (!host || seen.has(host)) continue;
     seen.add(host);
     files.push({ path: host, kind: deliveryKind(host, { isVoice: want.isVoice, forceDocument: tagged.forceDocument }) });

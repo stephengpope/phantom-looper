@@ -1,6 +1,5 @@
-// The Sandbox interface — the ONLY module that talks to a container SDK
-// (knack's rule for @vercel/sandbox, applied to dockerode). Two rules make it
-// safe with no path-checking code of our own:
+// The Sandbox — the one way a command runs in a workspace container. Two
+// rules make it safe with no path-checking code of our own:
 //
 //   run() takes argv, never a shell string. A filename with a backtick is a
 //   filename. A shell only exists when a caller explicitly asks for one.
@@ -10,6 +9,11 @@
 //   piped to stdin — binary-safe, no ARG_MAX ceiling, and the file is written
 //   inside the container as its user, so ownership and mtime are right by
 //   construction (why putArchive was dropped).
+//
+// The exec itself is an `Exec`: DockerExec speaks dockerode to a container
+// on this process's daemon (the ONLY module that does — knack's rule for
+// @vercel/sandbox, applied here); a remote host's exec sends the same calls
+// as jobs. The Sandbox's rules hold whichever runs underneath.
 import type Docker from 'dockerode';
 import { PassThrough } from 'node:stream';
 import path from 'node:path';
@@ -25,31 +29,26 @@ export interface RunOpts {
   timeoutMs?: number;
 }
 
-export class Sandbox {
+/** One record of a streamed command: a chunk of one stream, or its end —
+ *  exactly one terminal record (`exit` or `error`) closes every stream. */
+export type StreamRecord = { seq: number; stream?: 'stdout' | 'stderr'; data?: string; event?: string; code?: number; reason?: string };
+
+/** What runs a command in the container. */
+export interface Exec {
+  runOnce(argv: string[], opts: RunOpts): Promise<RunResult>;
+  runStream(argv: string[], opts: { cwd?: string; timeoutMs?: number }): AsyncGenerator<StreamRecord>;
+}
+
+/** The error a timed-out run rejects with: the output collected so far rides
+ *  on it — a killed command's last lines are what the agent needs to make
+ *  its next call right. */
+export const execTimeout = (stdout: Buffer, stderr: Buffer) =>
+  Object.assign(new Error('exec timeout'), { code: 'exec_timeout', stdout, stderr });
+
+export class DockerExec implements Exec {
   constructor(private docker: Docker, private container: Docker.Container) {}
 
-  /** Resolve a tool path. Relative paths are repo-relative; absolute paths are
-   *  container-absolute. There is nothing to escape TO — the container's only
-   *  mount is this session — so this is normalization, not a boundary. */
-  static resolvePath(filePath: string): string {
-    return path.posix.resolve('/workspace/repo', filePath);
-  }
-
-  async run(argv: string[], opts: RunOpts = {}): Promise<RunResult> {
-    // A container that has just started can accept exec create but fail to
-    // spawn ("error writing config to pipe: broken pipe"). Transient by
-    // nature — retry briefly rather than surfacing it to the agent.
-    for (let attempt = 0; ; attempt++) {
-      try { return await this.runOnce(argv, opts); }
-      catch (error) {
-        const msg = String((error as Error).message ?? error);
-        if (attempt >= 3 || !/broken pipe|OCI runtime|not running|is restarting/i.test(msg)) throw error;
-        await new Promise((wake) => setTimeout(wake, 150 * (attempt + 1)));
-      }
-    }
-  }
-
-  private async runOnce(argv: string[], opts: RunOpts = {}): Promise<RunResult> {
+  async runOnce(argv: string[], opts: RunOpts = {}): Promise<RunResult> {
     const exec = await this.container.exec({
       Cmd: argv,
       AttachStdout: true,
@@ -72,10 +71,7 @@ export class Sandbox {
 
     await new Promise<void>((resolveP, rejectP) => {
       const timer = opts.timeoutMs
-        // The output collected so far rides on the error: a killed command's
-        // last lines are what the agent needs to make its next call right.
-        ? setTimeout(() => { stream.destroy(); rejectP(Object.assign(new Error('exec timeout'),
-            { code: 'exec_timeout', stdout: Buffer.concat(out), stderr: Buffer.concat(errB) })); }, opts.timeoutMs)
+        ? setTimeout(() => { stream.destroy(); rejectP(execTimeout(Buffer.concat(out), Buffer.concat(errB))); }, opts.timeoutMs)
         : null;
       stream.on('end', () => { if (timer) clearTimeout(timer); resolveP(); });
       stream.on('error', (error) => { if (timer) clearTimeout(timer); rejectP(error); });
@@ -87,8 +83,7 @@ export class Sandbox {
   /** Streaming variant for the exec tool: yields tagged records in arrival
    *  order, always ending with exactly one terminal record. Frames are chunks,
    *  not lines (T15) — no line assumptions here or downstream. */
-  async *runStream(argv: string[], opts: { cwd?: string; timeoutMs?: number } = {}):
-    AsyncGenerator<{ seq: number; stream?: 'stdout' | 'stderr'; data?: string; event?: string; code?: number; reason?: string }> {
+  async *runStream(argv: string[], opts: { cwd?: string; timeoutMs?: number } = {}): AsyncGenerator<StreamRecord> {
     const exec = await this.container.exec({
       Cmd: argv, AttachStdout: true, AttachStderr: true, Tty: false,
       WorkingDir: opts.cwd ?? '/workspace/repo',
@@ -128,6 +123,35 @@ export class Sandbox {
     } finally {
       if (timer) clearTimeout(timer);
     }
+  }
+}
+
+export class Sandbox {
+  constructor(private exec: Exec) {}
+
+  /** Resolve a tool path. Relative paths are repo-relative; absolute paths are
+   *  container-absolute. There is nothing to escape TO — the container's only
+   *  mount is this session — so this is normalization, not a boundary. */
+  static resolvePath(filePath: string): string {
+    return path.posix.resolve('/workspace/repo', filePath);
+  }
+
+  async run(argv: string[], opts: RunOpts = {}): Promise<RunResult> {
+    // A container that has just started can accept exec create but fail to
+    // spawn ("error writing config to pipe: broken pipe"). Transient by
+    // nature — retry briefly rather than surfacing it to the agent.
+    for (let attempt = 0; ; attempt++) {
+      try { return await this.exec.runOnce(argv, opts); }
+      catch (error) {
+        const msg = String((error as Error).message ?? error);
+        if (attempt >= 3 || !/broken pipe|OCI runtime|not running|is restarting/i.test(msg)) throw error;
+        await new Promise((wake) => setTimeout(wake, 150 * (attempt + 1)));
+      }
+    }
+  }
+
+  runStream(argv: string[], opts: { cwd?: string; timeoutMs?: number } = {}): AsyncGenerator<StreamRecord> {
+    return this.exec.runStream(argv, opts);
   }
 
   async readFile(filePath: string, opts: { maxBytes?: number } = {}): Promise<{ content: Buffer; exitCode: number; stderr: string }> {

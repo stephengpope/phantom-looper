@@ -1,5 +1,14 @@
 {
   "extends": "./tsconfig.json",
-  "compilerOptions": { "noEmit": true, "rootDir": "." },
-  "include": ["src", "eslint.config.js"]
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": [
+    "src",
+    "eslint.config.js"
+  ],
+  "exclude": [
+    "dist"
+  ]
 }

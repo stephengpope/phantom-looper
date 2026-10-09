@@ -16,6 +16,7 @@ import { promisify } from 'node:util';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { logger, errStr } from '../lib/log.js';
+import type { Repo } from '../runtime/WorkspaceHost.js';
 
 const exec = promisify(execFile);
 const log = logger('git');
@@ -75,6 +76,9 @@ function cleanThrow(error: unknown): never {
   throw err;
 }
 
+/** Git in a directory of THIS process's filesystem — the raw runner. The
+ *  operations below never call it with a path: they take a `Repo`, which is
+ *  this on the built-in host and a job on a remote one (runtime/WorkspaceHost.ts). */
 export async function git(
   cwd: string, args: string[], auth?: GitAuth,
 ): Promise<{ stdout: string; stderr: string }> {
@@ -82,6 +86,14 @@ export async function git(
   return exec('git', [...guards(auth), ...args], {
     cwd, maxBuffer: 32 * 1024 * 1024, env: gitEnv(auth.pat),
   }).catch(cleanThrow);
+}
+
+/** A checkout on this filesystem as a Repo. */
+export function localRepo(dir: string): Repo {
+  return {
+    git: (args, auth) => git(dir, args, auth),
+    exists: (rel) => fs.access(path.join(dir, rel)).then(() => true, () => false),
+  };
 }
 
 /** What a git-against-GitHub failure MEANS, read off git's stderr — one
@@ -163,17 +175,17 @@ export async function refreshPristine(dir: string, auth: GitAuth, branch: string
  *  new branch: that would start the session at base and orphan everything the
  *  branch already holds. */
 export async function checkoutBranch(
-  dir: string, branch: string, auth: GitAuth,
+  repo: Repo, branch: string, auth: GitAuth,
 ): Promise<'existing' | 'new'> {
   try {
-    await git(dir, ['fetch', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`], auth);
+    await repo.git(['fetch', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`], auth);
   } catch (error) {
     const msg = String((error as { stderr?: string }).stderr ?? error);
     if (!/couldn't find remote ref|not found in upstream|no such ref/i.test(msg)) throw error;
-    await git(dir, ['checkout', '-B', branch]);
+    await repo.git(['checkout', '-B', branch]);
     return 'new';
   }
-  await git(dir, ['checkout', '-B', branch, `refs/remotes/origin/${branch}`], auth);
+  await repo.git(['checkout', '-B', branch, `refs/remotes/origin/${branch}`], auth);
   return 'existing';
 }
 
@@ -185,26 +197,26 @@ export async function checkoutBranch(
  *  the never-license-a-wipe property without misreading the first push. */
 export type LocalState = 'clean' | 'dirty' | 'unpushed' | 'no_upstream' | 'unknown';
 
-export async function localState(dir: string, branch: string): Promise<LocalState> {
+export async function localState(repo: Repo, branch: string): Promise<LocalState> {
   try {
-    const { stdout: dirty } = await git(dir, ['status', '--porcelain']);
+    const { stdout: dirty } = await repo.git(['status', '--porcelain']);
     if (dirty.trim()) return 'dirty';
   } catch (error) {
-    log.warn({ dir, err: errStr(error) }, 'git status failed — state is unknown, nothing will be wiped');
+    log.warn({ err: errStr(error) }, 'git status failed — state is unknown, nothing will be wiped');
     return 'unknown'; // could not tell -> never license a wipe
   }
   try {
-    const { stdout: ahead } = await git(dir, ['rev-list', '--count', `origin/${branch}..HEAD`]);
+    const { stdout: ahead } = await repo.git(['rev-list', '--count', `origin/${branch}..HEAD`]);
     return Number(ahead.trim()) === 0 ? 'clean' : 'unpushed';
   } catch {
     // Before the first push origin/<branch> does not exist — but a session
     // branch that never committed sits exactly on base, and nothing exists
     // only here. Anything HEAD holds that no origin ref holds is real work.
     try {
-      const { stdout } = await git(dir, ['rev-list', '--count', 'HEAD', '--not', '--remotes=origin']);
+      const { stdout } = await repo.git(['rev-list', '--count', 'HEAD', '--not', '--remotes=origin']);
       return Number(stdout.trim()) === 0 ? 'clean' : 'no_upstream';
     } catch (error) {
-      log.warn({ dir, branch, err: errStr(error) }, 'rev-list failed — counted as unpushed work');
+      log.warn({ branch, err: errStr(error) }, 'rev-list failed — counted as unpushed work');
       return 'no_upstream';
     }
   }
@@ -226,23 +238,23 @@ export async function localState(dir: string, branch: string): Promise<LocalStat
 export type WorkState = 'not_pushed' | 'not_merged' | 'merged';
 
 export async function workState(
-  dir: string, branch: string, baseBranch: string,
+  repo: Repo, branch: string, baseBranch: string,
 ): Promise<WorkState | null> {
   // "Only this disk has it" is measured against EVERY origin ref, never the
   // session's own branch alone: a pull of base fast-forwards the checkout past
   // origin/<branch> (auto-push skips the branch push when nothing is beyond
   // base), and those commits came FROM origin — they are not unpushed work.
   try {
-    const { stdout: dirty } = await git(dir, ['status', '--porcelain']);
+    const { stdout: dirty } = await repo.git(['status', '--porcelain']);
     if (dirty.trim()) return 'not_pushed';
-    const { stdout: local } = await git(dir, ['rev-list', '--count', 'HEAD', '--not', '--remotes=origin']);
+    const { stdout: local } = await repo.git(['rev-list', '--count', 'HEAD', '--not', '--remotes=origin']);
     if (Number(local.trim()) > 0) return 'not_pushed';
   } catch (error) {
-    log.warn({ dir, branch, err: errStr(error) }, 'git status/rev-list failed — no work state for this session');
+    log.warn({ branch, err: errStr(error) }, 'git status/rev-list failed — no work state for this session');
     return null;
   }
   try {
-    await git(dir, ['merge-base', '--is-ancestor', 'HEAD', `origin/${baseBranch}`]);
+    await repo.git(['merge-base', '--is-ancestor', 'HEAD', `origin/${baseBranch}`]);
     return 'merged';
   } catch (error) {
     // Exit 1 is git's real "no"; anything else (missing base ref, not a
@@ -258,11 +270,11 @@ export async function workState(
 
 /** Stage everything and commit. Returns false when there was nothing to commit.
  *  Does NOT push, and its name says so. */
-export async function commitAll(dir: string, message: string): Promise<boolean> {
-  await git(dir, ['add', '-A']);
-  const { stdout } = await git(dir, ['status', '--porcelain']);
+export async function commitAll(repo: Repo, message: string): Promise<boolean> {
+  await repo.git(['add', '-A']);
+  const { stdout } = await repo.git(['status', '--porcelain']);
   if (!stdout.trim()) return false;
-  await git(dir, ['commit', '--no-verify', '-m', message]);
+  await repo.git(['commit', '--no-verify', '-m', message]);
   return true;
 }
 
@@ -277,17 +289,17 @@ export const pushFailed = (result: unknown): result is { error: string } => type
  *  so the answer is the forced push with the lease (pushSessionForced).
  *  This used to fold origin's copy back in with a merge, which re-created
  *  the very conflict the rewrite had resolved and left the tree unmerged. */
-export async function pushSession(dir: string, branch: string, auth: GitAuth): Promise<PushResult> {
+export async function pushSession(repo: Repo, branch: string, auth: GitAuth): Promise<PushResult> {
   try {
-    await git(dir, ['push', '--no-verify', 'origin', `HEAD:${branch}`], auth);
+    await repo.git(['push', '--no-verify', 'origin', `HEAD:${branch}`], auth);
     return 'pushed';
   } catch (error) {
     if (!/non-fast-forward|fetch first|rejected/i.test(String((error as { stderr?: string }).stderr ?? error))) {
-      log.error({ dir, branch, err: errStr(error) }, 'push failed');
+      log.error({ branch, err: errStr(error) }, 'push failed');
       return { error: errStr(error) };
     }
-    log.warn({ dir, branch }, 'push rejected — origin holds an older rewrite of this branch; forcing with the lease');
-    return pushSessionForced(dir, branch, auth);
+    log.warn({ branch }, 'push rejected — origin holds an older rewrite of this branch; forcing with the lease');
+    return pushSessionForced(repo, branch, auth);
   }
 }
 
@@ -299,14 +311,14 @@ export type BasePushResult = 'pushed' | 'rejected' | 'error';
  *  origin/<base> in first, so this is a fast-forward by construction; a
  *  rejection means base moved and the caller's answer is to merge again.
  *  Never forced. */
-export async function pushToBase(dir: string, baseBranch: string, auth: GitAuth): Promise<BasePushResult> {
+export async function pushToBase(repo: Repo, baseBranch: string, auth: GitAuth): Promise<BasePushResult> {
   try {
-    await git(dir, ['push', '--no-verify', 'origin', `HEAD:${baseBranch}`], auth);
+    await repo.git(['push', '--no-verify', 'origin', `HEAD:${baseBranch}`], auth);
     return 'pushed';
   } catch (error) {
     const said = String((error as { stderr?: string }).stderr ?? error);
     if (/non-fast-forward|fetch first|rejected/i.test(said)) return 'rejected';
-    log.error({ dir, baseBranch, err: errStr(error) }, 'push to base failed');
+    log.error({ baseBranch, err: errStr(error) }, 'push to base failed');
     return 'error';
   }
 }
@@ -317,10 +329,10 @@ export type RebaseResult = 'clean' | 'conflict' | 'error';
  *  log lines are the ONLY briefing the coding agent gets about why a conflict
  *  exists, so they are collected here and carried to the turn. */
 export async function fetchBase(
-  dir: string, baseBranch: string, auth: GitAuth,
+  repo: Repo, baseBranch: string, auth: GitAuth,
 ): Promise<string[]> {
-  await git(dir, ['fetch', 'origin', baseBranch], auth);
-  const { stdout } = await git(dir, ['log', '--format=%h %s', `HEAD..origin/${baseBranch}`]);
+  await repo.git(['fetch', 'origin', baseBranch], auth);
+  const { stdout } = await repo.git(['log', '--format=%h %s', `HEAD..origin/${baseBranch}`]);
   return stdout.trim().split('\n').filter(Boolean);
 }
 
@@ -329,11 +341,11 @@ export async function fetchBase(
  *  an idle run mints no commit and spends no model call on its message. Reads
  *  only; `status --porcelain` counts untracked files, which `add -A` would
  *  stage. */
-export async function hasWorkToLand(dir: string, baseBranch: string): Promise<boolean> {
-  const { stdout: dirty } = await git(dir, ['status', '--porcelain']);
+export async function hasWorkToLand(repo: Repo, baseBranch: string): Promise<boolean> {
+  const { stdout: dirty } = await repo.git(['status', '--porcelain']);
   if (dirty.trim()) return true;
-  const { stdout: mergeBase } = await git(dir, ['merge-base', 'HEAD', `origin/${baseBranch}`]);
-  const { stdout: ahead } = await git(dir, ['rev-list', '--count', `${mergeBase.trim()}..HEAD`]);
+  const { stdout: mergeBase } = await repo.git(['merge-base', 'HEAD', `origin/${baseBranch}`]);
+  const { stdout: ahead } = await repo.git(['rev-list', '--count', `${mergeBase.trim()}..HEAD`]);
   return Number(ahead.trim()) > 0;
 }
 
@@ -345,13 +357,13 @@ export async function hasWorkToLand(dir: string, baseBranch: string): Promise<bo
  *  ONE commit is what keeps the rebase to a single conflict stop. Replaying N
  *  commits stops N times, over intermediate trees that never existed as a
  *  working state, re-resolving the same hunks — the cost the squash buys out. */
-export async function squashToMergeBase(dir: string, mergeBaseSha: string): Promise<void> {
-  await git(dir, ['reset', '--soft', mergeBaseSha]);
+export async function squashToMergeBase(repo: Repo, mergeBaseSha: string): Promise<void> {
+  await repo.git(['reset', '--soft', mergeBaseSha]);
 }
 
 /** Commit whatever the squash left staged. */
-export async function commitStaged(dir: string, message: string): Promise<void> {
-  await git(dir, ['commit', '--no-verify', '-m', message]);
+export async function commitStaged(repo: Repo, message: string): Promise<void> {
+  await repo.git(['commit', '--no-verify', '-m', message]);
 }
 
 /** Replay the branch onto origin/<base>. The caller has already fetched and
@@ -360,14 +372,14 @@ export async function commitStaged(dir: string, message: string): Promise<void> 
  *  `conflict` and `error` are distinct on purpose: conflict markers give the
  *  coding agent real work; a rebase that could not START leaves a clean tree
  *  where verification would read as success while the same failure repeats. */
-export async function rebaseOntoBase(dir: string, baseBranch: string): Promise<RebaseResult> {
+export async function rebaseOntoBase(repo: Repo, baseBranch: string): Promise<RebaseResult> {
   try {
-    await git(dir, ['rebase', `origin/${baseBranch}`]);
+    await repo.git(['rebase', `origin/${baseBranch}`]);
     return 'clean';
   } catch (error) {
-    const { stdout: unmerged } = await git(dir, ['diff', '--name-only', '--diff-filter=U']);
+    const { stdout: unmerged } = await repo.git(['diff', '--name-only', '--diff-filter=U']);
     if (unmerged.trim()) return 'conflict';
-    log.error({ dir, baseBranch, err: errStr(error) }, 'rebase could not start');
+    log.error({ baseBranch, err: errStr(error) }, 'rebase could not start');
     return 'error';
   }
 }
@@ -376,9 +388,9 @@ export async function rebaseOntoBase(dir: string, baseBranch: string): Promise<R
  *  it is; their absence is the only honest statement that the replay finished.
  *  A tree can be clean with a rebase still stopped, so this is not implied by
  *  the other checks. */
-export async function rebaseInProgress(dir: string): Promise<boolean> {
+export async function rebaseInProgress(repo: Repo): Promise<boolean> {
   for (const rebaseDir of ['rebase-merge', 'rebase-apply']) {
-    try { await fs.access(path.join(dir, '.git', rebaseDir)); return true; } catch { /* absent */ }
+    if (await repo.exists(`.git/${rebaseDir}`)) return true;
   }
   return false;
 }
@@ -388,8 +400,8 @@ export async function rebaseInProgress(dir: string): Promise<boolean> {
  *  coding agent must never do this — an abort leaves a clean tree with no
  *  markers, which is why verifyResolved also demands origin/<base> in the
  *  history. */
-export async function rebaseAbort(dir: string): Promise<void> {
-  await git(dir, ['rebase', '--abort']).catch(() => {});
+export async function rebaseAbort(repo: Repo): Promise<void> {
+  await repo.git(['rebase', '--abort']).catch(() => {});
 }
 
 /** Push the rebased branch. A rebase rewrites the branch, so this must force —
@@ -405,18 +417,18 @@ export async function rebaseAbort(dir: string): Promise<void> {
  *  Deliberately without pushSession's fold-the-remote-in backstop: merging the
  *  remote branch back over a rebase undoes the rebase. */
 export async function pushSessionForced(
-  dir: string, branch: string, auth: GitAuth,
+  repo: Repo, branch: string, auth: GitAuth,
 ): Promise<PushResult> {
   try {
-    const { stdout: listing } = await git(dir, ['ls-remote', 'origin', `refs/heads/${branch}`], auth);
+    const { stdout: listing } = await repo.git(['ls-remote', 'origin', `refs/heads/${branch}`], auth);
     const expected = listing.trim().split(/\s+/)[0] ?? '';
     // Nothing on the remote yet: no lease to hold (a plain create never
     // needs forcing, and --force on a create is harmless).
     const lease = expected ? `--force-with-lease=refs/heads/${branch}:${expected}` : '--force';
-    await git(dir, ['push', '--no-verify', lease, 'origin', `HEAD:${branch}`], auth);
+    await repo.git(['push', '--no-verify', lease, 'origin', `HEAD:${branch}`], auth);
     return 'pushed';
   } catch (error) {
-    log.error({ dir, branch, err: errStr(error) }, 'forced branch push failed');
+    log.error({ branch, err: errStr(error) }, 'forced branch push failed');
     return { error: errStr(error) };
   }
 }
@@ -431,32 +443,32 @@ export async function pushSessionForced(
  *  success: the caller then logs "resolved", pushes, and the same conflict
  *  returns forever. Requiring origin/<base> to be an ancestor of HEAD is the
  *  only statement of "the replay is in". */
-export async function landingProblems(dir: string, baseBranch?: string): Promise<string[]> {
+export async function landingProblems(repo: Repo, baseBranch?: string): Promise<string[]> {
   const problems: string[] = [];
   try {
-    const { stdout: status } = await git(dir, ['status', '--porcelain']);
+    const { stdout: status } = await repo.git(['status', '--porcelain']);
     if (status.trim()) problems.push('the working tree has uncommitted changes');
-    const { stdout: unmerged } = await git(dir, ['diff', '--name-only', '--diff-filter=U']);
+    const { stdout: unmerged } = await repo.git(['diff', '--name-only', '--diff-filter=U']);
     if (unmerged.trim()) problems.push(`conflicts are still unmerged in: ${unmerged.trim().split('\n').join(', ')}`);
-    if (await rebaseInProgress(dir)) {
+    if (await rebaseInProgress(repo)) {
       problems.push('the rebase is still in progress — git rebase --continue was not run or did not finish');
     }
     if (baseBranch) {
       try {
-        await git(dir, ['merge-base', '--is-ancestor', `origin/${baseBranch}`, 'HEAD']);
+        await repo.git(['merge-base', '--is-ancestor', `origin/${baseBranch}`, 'HEAD']);
       } catch (error) {
         // Exit 1 is git's real "not an ancestor" — the verdict. Anything else
         // (no repo, no origin ref) is the check itself failing.
         if ((error as { code?: unknown }).code === 1) {
           problems.push(`origin/${baseBranch} is not contained in the result — the replay is not in`);
         } else {
-          log.warn({ dir, err: (error as Error).message }, 'verification could not run — counted as not landed');
+          log.warn({ err: (error as Error).message }, 'verification could not run — counted as not landed');
           problems.push(`verification itself failed: ${(error as Error).message}`);
         }
       }
     }
   } catch (error) {
-    log.warn({ dir, err: (error as Error).message }, 'verification could not run — counted as not landed');
+    log.warn({ err: (error as Error).message }, 'verification could not run — counted as not landed');
     problems.push(`verification itself failed: ${(error as Error).message}`);
   }
   return problems;
@@ -464,8 +476,8 @@ export async function landingProblems(dir: string, baseBranch?: string): Promise
 
 /** Clean tree AND no unmerged entries AND no rebase still in flight AND
  *  origin/<base> in HEAD's history. The boolean form of landingProblems. */
-export async function verifyLanded(dir: string, baseBranch?: string): Promise<boolean> {
-  return (await landingProblems(dir, baseBranch)).length === 0;
+export async function verifyLanded(repo: Repo, baseBranch?: string): Promise<boolean> {
+  return (await landingProblems(repo, baseBranch)).length === 0;
 }
 
 /** Give a brand-new empty remote its first commit on `branch` (a README), so

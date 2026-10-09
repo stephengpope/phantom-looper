@@ -17,10 +17,11 @@ import { collectDeliverables, extractMedia, type Deliverable } from './mediaTags
  *  host file. Present only for code-mode turns (a session has a work dir);
  *  absent = no delivery (assistant turns with no session). */
 export interface DeliverConfig {
-  /** `/workspace/X` → host `work/<session>/X`. */
-  toHost: (containerPath: string) => string;
-  /** Host dirs a delivered file must resolve inside. */
-  roots: string[];
+  /** A container path (`/workspace/X`) to a key for the real file inside
+   *  the workspace on its host; null for anything else. */
+  locate: (containerPath: string) => Promise<string | null>;
+  /** The file's bytes, by that key. */
+  read: (key: string) => Promise<Buffer>;
 }
 
 const TOOL_EMOJI: Record<string, string> = {
@@ -267,7 +268,7 @@ export function makeTelegramSink(
     let final = finalText.trim();
     let files: Deliverable[] = [];
     if (deliver && final) {
-      const got = await collectDeliverables(final, deliver.toHost, deliver.roots);
+      const got = await collectDeliverables(final, deliver.locate);
       final = got.cleaned.trim();
       files = got.files;
     }
@@ -295,7 +296,7 @@ export function makeTelegramSink(
     // is the worst outcome.
     for (const file of files) {
       try {
-        await client.sendFile(file.kind, chatId, file.path);
+        await client.sendBytes(file.kind, chatId, await deliver!.read(file.path), file.path.slice(file.path.lastIndexOf('/') + 1));
       } catch (error) {
         await client.sendMessage(chatId, `⚠️ Couldn't send that file — ${(error as Error).message}`).catch(() => {});
       }

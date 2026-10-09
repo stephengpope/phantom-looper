@@ -20,15 +20,16 @@
 // Events: the workspace's id IS its owning session's id, so a write here
 // publishes on that session's feed — a bare `session` record ("this row
 // moved") for the list, `workState` with its value for the watcher's dot.
-import fs from 'node:fs/promises';
 import { and, eq, inArray, isNotNull, isNull, lt, not, or, count } from 'drizzle-orm';
 import type { Drizzle } from './Database.js';
 import { workspaces, sessions, cards, type WorkspaceRow, type ProjectRow } from '../storage/schema.js';
 import type { SessionEvents } from '../agents/SessionEvents.js';
 import type { Settings } from './Settings.js';
-import { git, cloneFresh, checkoutBranch, classifyGitFailure, localState, type WorkState } from '../git/Git.js';
-import { claimSlot, resolveAuth } from '../runtime/CheckoutPool.js';
-import { sessionDir, repoDir, type Paths } from '../lib/paths.js';
+import { checkoutBranch, classifyGitFailure, localState, type WorkState } from '../git/Git.js';
+import { resolveAuth } from '../runtime/CheckoutPool.js';
+import type { SessionHosts } from '../host/SessionHosts.js';
+import type { WorkspaceHost } from '../runtime/WorkspaceHost.js';
+import { acting } from '../lib/acting.js';
 import { logger } from '../lib/log.js';
 
 const log = logger('workspaces');
@@ -49,7 +50,8 @@ export interface WorkRefreshWorkspace {
 export class Workspaces {
   constructor(
     private readonly database: Drizzle,
-    private readonly paths: Paths,
+    /** The hosts a checkout can live on, and where each one is (host/SessionHosts.ts). */
+    private readonly hosts: SessionHosts,
     private readonly settings: Settings,
     /** The per-session feed; absent in tests that have no watchers. */
     private readonly events?: SessionEvents,
@@ -76,23 +78,14 @@ export class Workspaces {
    *  something is wrong, and a copy that quietly starts at base loses the
    *  work. A remote failure is classified into a WorkspaceError so the API
    *  answers with its meaning; anything unrecognised keeps its own error. */
-  private async obtain(project: ProjectRow, id: string, branch: string, fromBranch?: string):
+  private async obtain(host: WorkspaceHost, project: ProjectRow, id: string, branch: string, fromBranch?: string):
   Promise<{ head: string; found: 'existing' | 'new'; claimed: boolean }> {
-    const dest = sessionDir(this.paths, id);
-    const dir = repoDir(this.paths, id);
     const auth = await resolveAuth(this.settings, project);
+    const dir = host.repo(id);
     try {
-      const claimed = await claimSlot(this.paths, project.id, project.baseBranch, dest);
-      if (claimed) {
-        // Pool slots are pristine by construction, so the unguarded catch-up is
-        // safe — and mandatory: a slot stocked days ago is days behind.
-        await git(dir, ['fetch', 'origin', project.baseBranch], auth);
-        await git(dir, ['reset', '--hard', `origin/${project.baseBranch}`], auth);
-      } else {
-        await cloneFresh(dir, auth, project.baseBranch);
-        await fs.mkdir(`${dest}/scratch`, { recursive: true });
-      }
-      await fs.mkdir(`${dest}/logs`, { recursive: true }); // detached exec logs — outside repo/, or add -A commits them
+      // The files: a warm slot or a fresh clone of base, on the host — then
+      // the branch, chosen here.
+      const claimed = await host.checkout(id, project.id, project.baseBranch, auth) === 'claimed';
 
       // The clone is --single-branch: its fetch refspec covers ONLY the
       // base branch, so without this a push to the session branch would update no
@@ -100,7 +93,7 @@ export class Workspaces {
       // no_upstream forever. One added refspec scopes tracking to exactly this
       // branch; on base there is nothing to add.
       if (branch !== project.baseBranch) {
-        await git(dir, ['config', '--add', 'remote.origin.fetch',
+        await dir.git(['config', '--add', 'remote.origin.fetch',
           `+refs/heads/${branch}:refs/remotes/origin/${branch}`]);
       }
       let found: 'existing' | 'new';
@@ -109,7 +102,7 @@ export class Workspaces {
         // ref" means the work never made it to origin — an error; checking
         // out from base instead would silently lose it.
         try {
-          await git(dir, ['fetch', 'origin', `+refs/heads/${fromBranch}:refs/remotes/origin/${fromBranch}`], auth);
+          await dir.git(['fetch', 'origin', `+refs/heads/${fromBranch}:refs/remotes/origin/${fromBranch}`], auth);
         } catch (error) {
           const msg = String((error as { stderr?: string }).stderr ?? error);
           if (/couldn't find remote ref|not found in upstream|no such ref/i.test(msg)) {
@@ -118,12 +111,12 @@ export class Workspaces {
           }
           throw error;
         }
-        await git(dir, ['checkout', '-B', branch, `refs/remotes/origin/${fromBranch}`], auth);
+        await dir.git(['checkout', '-B', branch, `refs/remotes/origin/${fromBranch}`], auth);
         found = 'new';
       } else {
         found = await checkoutBranch(dir, branch, auth);
       }
-      const { stdout } = await git(dir, ['rev-parse', 'HEAD']);
+      const { stdout } = await dir.git(['rev-parse', 'HEAD']);
       return { head: stdout.trim(), found, claimed };
     } catch (error) {
       if (error instanceof WorkspaceError) throw error;
@@ -140,10 +133,18 @@ export class Workspaces {
    *  (the duplicate route). */
   async checkout(project: ProjectRow, id: string, opts: { fromBranch?: string } = {}): Promise<WorkspaceRow> {
     const branch = `${project.branchPrefix}/${id}`;
-    const { head, found, claimed } = await this.obtain(project, id, branch, opts.fromBranch);
+    // PLACEMENT, once: the host this checkout lives on from now on (the
+    // acting user's own host when they have one online, else a shared one,
+    // else this server — host/SessionHosts.ts).
+    const host = await this.hosts.place(project, acting()?.userId ?? null);
+    this.hosts.remember(id, host.id);
+    let obtained;
+    try { obtained = await this.obtain(host, project, id, branch, opts.fromBranch); }
+    catch (error) { this.hosts.forget(id); throw error; }
+    const { head, found, claimed } = obtained;
     const [row] = await this.database.insert(workspaces)
-      .values({ id, projectId: project.id, branch, cutFromSha: head, createdAt: new Date() }).returning();
-    log.info({ workspace: id, project: `${project.owner}/${project.name}`, branch, found, claimed, cutFromSha: head },
+      .values({ id, projectId: project.id, branch, cutFromSha: head, sessionHostId: host.id, createdAt: new Date() }).returning();
+    log.info({ workspace: id, project: `${project.owner}/${project.name}`, branch, found, claimed, cutFromSha: head, host: host.name },
       'checkout made');
     return row;
   }
@@ -153,9 +154,10 @@ export class Workspaces {
    *  the work is on it, and the checkout carries on where it stopped. The
    *  cut point stays what it was. */
   async restore(workspace: WorkspaceRow, project: ProjectRow): Promise<void> {
-    const { found } = await this.obtain(project, workspace.id, workspace.branch);
+    const host = await this.hosts.of(workspace.id);
+    const { found } = await this.obtain(host, project, workspace.id, workspace.branch);
     await this.database.update(workspaces).set({ onDisk: true, lastUsedAt: new Date() }).where(eq(workspaces.id, workspace.id));
-    log.info({ workspace: workspace.id, branch: workspace.branch, found }, 'checkout restored');
+    log.info({ workspace: workspace.id, branch: workspace.branch, found, host: host.name }, 'checkout restored');
     this.changed(workspace.id);
   }
 
@@ -164,13 +166,13 @@ export class Workspaces {
    *  checkout holds work that is not on origin unless `force` — the caller's
    *  decision to lose it; the automatic sweeps never force. */
   async removeFiles(workspace: WorkspaceRow, opts: { force: boolean }): Promise<void> {
-    const dir = repoDir(this.paths, workspace.id);
-    const state = await localState(dir, workspace.branch).catch(() => 'unknown' as const);
+    const host = await this.hosts.of(workspace.id);
+    const state = await localState(host.repo(workspace.id), workspace.branch).catch(() => 'unknown' as const);
     if (state !== 'clean' && !opts.force) {
       log.warn({ workspace: workspace.id, state }, 'removing the files would discard work — refusing (pass force)');
       throw new WorkspaceError('unpushed_work', `session holds ${state} work; delete with force=true to discard`);
     }
-    await fs.rm(sessionDir(this.paths, workspace.id), { recursive: true, force: true });
+    await host.removeFiles(workspace.id);
     await this.database.update(workspaces).set({ onDisk: false }).where(eq(workspaces.id, workspace.id));
     log.info({ workspace: workspace.id, state }, 'files removed');
     this.changed(workspace.id);

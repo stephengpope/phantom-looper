@@ -126,6 +126,28 @@ export const workspaces = phantomAgentSdk.table('workspaces', {
   // now, and when its hold lapses. Fresh id per run, never re-entered.
   syncLockedBy: text('sync_locked_by'),
   syncLockExpiresAt: timestamp('sync_lock_expires_at', { withTimezone: true }),
+  // WHERE THE FILES AND THE CONTAINER ARE (062): the session host this
+  // workspace was placed on, null for the built-in host (this server).
+  // Decided once at creation (host/SessionHosts.ts place), rewritten only
+  // by a move. Every file, git and container call routes by it.
+  sessionHostId: text('session_host_id'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// A SESSION HOST (062): a box running Docker and a workspace volume that
+// connects OUT to this server and runs workspaces for it. Shared (owner
+// null: registered with the server key, any workspace may land there) or
+// personal (a user's: only their workspaces). `boot` is the host process's
+// id — a reconnect carries the same one, a restart a new one. `facts` is
+// what the box reported at hello (host/protocol.ts HostFacts).
+export const sessionHosts = phantomAgentSdk.table('session_hosts', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  ownerUserId: text('owner_user_id'),
+  boot: text('boot'),
+  facts: json('facts').notNull().$type<{ dockerVersion?: string; arch?: string; diskSupport: string | null; sdkVersion: string }>(),
+  connectedAt: timestamp('connected_at', { withTimezone: true }),
+  lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -401,6 +423,7 @@ export type ProjectRow = typeof projects.$inferSelect;
 export type CardRow = typeof cards.$inferSelect;
 export type CronRow = typeof crons.$inferSelect;
 export type WorkspaceRow = typeof workspaces.$inferSelect;
+export type SessionHostRow = typeof sessionHosts.$inferSelect;
 /** The checkout's facts as a session carries them: joined from its workspace
  *  on every read. `status` says whether the files exist ('active' /
  *  'destroyed' — the wire's words); a session with no workspace reads as

@@ -1,13 +1,11 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import path from 'node:path';
-import fs from 'node:fs/promises';
 import type { SessionRow } from '../../storage/schema.js';
 import type { TokenRecord } from '../../storage/TokenLog.js';
 import { PERSON } from '@phantom-agent-sdk/client';
 import { SessionError, heldByOther, isHeld, expiredHold, assertDuplicable, ownsWorkspace, workspaceOf } from '../../storage/Sessions.js';
 import { WorkspaceError } from '../../storage/Workspaces.js';
 import { GIT_CLIENT_ID, pushFailed } from '../../git/Git.js';
-import { sessionDir } from '../../lib/paths.js';
+import { copyScratch } from '../../runtime/scratch.js';
 
 import { ok, err } from '../HttpApi.js';
 import type { PhantomBackend } from '../../PhantomBackend.js';
@@ -457,8 +455,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       if (data.length > MAX_ATTACHMENT_BYTES) {
         return reply.code(413).send(err('too_large', `file is over ${MAX_ATTACHMENT_BYTES / 1024 / 1024}MB`, true));
       }
-      const scratch = path.join(sessionDir(ctx.paths, workspaceOf(session)), 'scratch');
-      const a = await writeAttachment(scratch, data, { filename: req.body.name });
+      const workspaceId = workspaceOf(session);
+      const a = await writeAttachment((await ctx.sessionHosts.of(workspaceId)).files(workspaceId), data, { filename: req.body.name });
       if (!a) return reply.code(422).send(err('invalid_args', 'the file claims to be an image but is not one', true));
       return ok({ path: a.containerPath, kind: a.kind, name: a.displayName });
     });
@@ -512,9 +510,8 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         // Copy the source's scratch pad into the copy's workspace — same filenames,
         // the copy's container mounts them at the same /workspace/scratch/ path,
         // so every reference in the transcript works without rewriting.
-        const srcScratch = path.join(sessionDir(ctx.paths, workspaceOf(src)), 'scratch');
-        const dstScratch = path.join(sessionDir(ctx.paths, copy.id), 'scratch');
-        await fs.cp(srcScratch, dstScratch, { recursive: true }).catch(() => {});
+        await copyScratch(await ctx.sessionHosts.of(workspaceOf(src)), workspaceOf(src), await ctx.sessionHosts.of(copy.id), copy.id)
+          .catch((error: Error) => log.warn({ session: copy.id, err: error.message }, 'the scratch pad could not be copied'));
         await ctx.sessions.seedCopy(copy, src);
         return reply.code(201).send(ok({ ...copy, copied_from: src.id }));
       } catch (error) {

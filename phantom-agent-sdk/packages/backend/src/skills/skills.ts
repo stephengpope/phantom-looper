@@ -9,6 +9,7 @@
 // so a hand-authored mismatch still lists under the folder name.
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import type { WorkspaceFiles } from '../runtime/WorkspaceHost.js';
 
 export const SKILLS_DIR = '.agents/skills';
 
@@ -84,6 +85,24 @@ export async function scanSkills(root: string): Promise<SkillMeta[]> {
     const description = parseDescription(markdown);
     if (!description) continue;
     out.push({ name, description });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** The same scan over a workspace's files on its host: `base` is the repo's
+ *  path inside the workspace (`repo`). */
+export async function scanSkillsIn(files: WorkspaceFiles, base = 'repo'): Promise<SkillMeta[]> {
+  const dir = `${base}/${SKILLS_DIR}`;
+  const entries = await files.list(dir);
+  if (entries === null) return [];
+  const out: SkillMeta[] = [];
+  for (const entry of entries) {
+    if (entry.kind !== 'dir' && entry.kind !== 'link') continue;
+    const markdown = await files.read(`${dir}/${entry.name}/SKILL.md`).catch(() => null);
+    if (markdown === null) continue;
+    const description = parseDescription(markdown.toString('utf8'));
+    if (!description) continue;
+    out.push({ name: entry.name, description });
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }

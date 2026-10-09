@@ -10,14 +10,13 @@
 // SERVER_PROMPT_BLOCKS is the whole catalog: a new block is one entry here
 // and its text in phantom-looper/prompts/serverBlocks.ts. Which agent carries which
 // block, and where, is the agent's layout — nothing here decides that.
-import fsp from 'node:fs/promises';
-import path from 'node:path';
 import type Docker from 'dockerode';
+import type { WorkspaceFiles } from '../runtime/WorkspaceHost.js';
 import type { SystemPromptLayout, SystemPromptEntry, StoredSystemPrompt } from '@phantom-agent-sdk/client/systemPrompt';
 import { SYSTEM_PROMPT_SECTIONS } from '@phantom-agent-sdk/client/systemPrompt';
 import { fill } from '@phantom-agent-sdk/client';
 import { SKILLS_LIST, SECRETS_LIST, GITHUB_TOKEN, AGENT_DATABASE, AGENT_DATABASE_SHARED, MEDIA, DISK_LIMIT, TIME_DATE } from '../prompt/serverBlocks.js';
-import { scanSkills, mergeSkills, type SkillMeta } from '../skills/skills.js';
+import { scanSkillsIn, mergeSkills, type SkillMeta } from '../skills/skills.js';
 import { Clock } from '../lib/clock.js';
 import { systemSkills } from '../runtime/SystemSkills.js';
 import type { Settings } from '../storage/Settings.js';
@@ -30,7 +29,8 @@ import { scopeNames, scopeOf } from '../lib/scopes.js';
 export interface SystemPromptSource {
   projectId: string;
   project: ProjectRow;
-  checkout: string | null;
+  /** The session's workspace, on its host (null: no files of its own). */
+  checkout: WorkspaceFiles | null;
   settings: Settings;
   docker?: Docker;
   /** Whether media storage is configured for an organization (Media.configured; absent in tests). */
@@ -54,13 +54,9 @@ const clip = (text: string) => (text.length > DESC_LIMIT ? text.slice(0, DESC_LI
 /** A root file of the checkout, verbatim. No file is the normal case ('');
  *  any other read failure throws — a permissions problem never silently
  *  reads as "no file". */
-async function rootFile(checkout: string, name: string): Promise<string> {
-  const file = path.join(checkout, name);
-  try { return await fsp.readFile(file, 'utf8'); }
-  catch (error) {
-    if ((error as { code?: string }).code === 'ENOENT') return '';
-    throw new Error(`could not read ${file}: ${(error as Error).message}`);
-  }
+async function rootFile(checkout: WorkspaceFiles, name: string): Promise<string> {
+  try { return (await checkout.read(`repo/${name}`))?.toString('utf8') ?? ''; }
+  catch (error) { throw new Error(`could not read ${name}: ${(error as Error).message}`); }
 }
 
 export const SOUL_FILENAME = 'SOUL.md';
@@ -78,7 +74,7 @@ export const SERVER_PROMPT_BLOCKS = {
   skills_list: async (src: BlockSource): Promise<string> => {
     if (!src.checkout) return '';
     const skills: SkillMeta[] = mergeSkills(
-      await scanSkills(src.checkout),
+      await scanSkillsIn(src.checkout),
       src.docker ? await systemSkills(src.docker, String(src.resolved.container_image)) : []);
     if (!skills.length) return '';
     return fill(SKILLS_LIST, { skillsList: skills.map((skill) => `- ${skill.name}: ${clip(skill.description)}`).join('\n') });

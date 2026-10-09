@@ -4,7 +4,6 @@
 // repo.
 import { listSkills, loadSkill, manageSkill, type ManageBody } from '../runtime/Skills.js';
 import { ToolError } from './envelope.js';
-import { fsDeps } from '../api/routes/fs.js';
 import { obj, oneOf, str, type OfferCtx, type ToolCtx, type ToolDef } from './def.js';
 import { textOf } from '../lib/text.js';
 
@@ -13,7 +12,7 @@ const hasRepo = ({ session }: OfferCtx) => Promise.resolve(!!session.workspaceId
 /** The container wiring, or the refusal the model can act on. */
 function deps(ctx: ToolCtx) {
   if (!ctx.session.workspaceId) throw new ToolError('no_workspace', 'this session has no files — no skills to read');
-  return { fs: fsDeps(ctx.app), workspaceId: ctx.session.workspaceId };
+  return { workspaceId: ctx.session.workspaceId };
 }
 
 export const SKILL_TOOLS: ToolDef[] = [
@@ -28,7 +27,7 @@ export const SKILL_TOOLS: ToolDef[] = [
     mutates: false, group: 'skills', offered: hasRepo,
     execute(ctx) {
       const skillDeps = deps(ctx);
-      return listSkills(ctx.app, skillDeps.fs, ctx.session, skillDeps.workspaceId);
+      return listSkills(ctx.app, ctx.session, skillDeps.workspaceId);
     },
   },
   {
@@ -45,7 +44,7 @@ export const SKILL_TOOLS: ToolDef[] = [
     mutates: false, group: 'skills', offered: hasRepo,
     execute(ctx, a) {
       const skillDeps = deps(ctx);
-      return loadSkill(ctx.app, skillDeps.fs, ctx.session, skillDeps.workspaceId, textOf(a.name), a.file === undefined ? undefined : textOf(a.file));
+      return loadSkill(ctx.app, ctx.session, skillDeps.workspaceId, textOf(a.name), a.file === undefined ? undefined : textOf(a.file));
     },
   },
   {
@@ -78,7 +77,7 @@ export const SKILL_TOOLS: ToolDef[] = [
     mutates: true, group: 'skills', offered: hasRepo,
     execute(ctx, a) {
       const skillDeps = deps(ctx);
-      return manageSkill(ctx.app, skillDeps.fs, ctx.session, skillDeps.workspaceId, a as unknown as ManageBody);
+      return manageSkill(ctx.app, ctx.session, skillDeps.workspaceId, a as unknown as ManageBody);
     },
   },
 ];

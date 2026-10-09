@@ -1,187 +1,111 @@
-# Multi-Host Architecture
+# Session hosts
 
-## How It Works Today
+A session host is a box with Docker and a workspace volume that connects OUT
+to the backend and runs workspaces for it. The backend keeps the database and
+makes every decision; a host keeps files and containers and does what it is
+told. Any number of hosts, anywhere: a server an operator runs, a developer's
+Mac, or none at all — the backend itself is a host too.
 
-One server runs everything. The API container sets `DOCKER_HOST=tcp://docker-proxy:2375`. At boot, `makeDocker()` reads that env var and creates a single dockerode instance. That instance flows through the entire system:
+## The three pieces
 
-```
-makeDocker()  →  PhantomBackend.docker
-                      ↓
-              SessionContainers(docker, images, paths, opts)
-                      ↓
-              fsDeps(ctx) = { docker: ctx.docker, sessionContainers: ctx.sessionContainers }
-                      ↓
-              fileTools(ctx, deps, session, workspaceId)
-                      ↓
-              deps.sessionContainers.ensure(workspaceId, project)  →  container
-                      ↓
-              new Sandbox(deps.docker, container)  →  exec commands
-```
+**`WorkspaceHost`** (`runtime/WorkspaceHost.ts`) — the ONE interface through
+which the backend touches a workspace: checkout, files, git, container, exec,
+detached commands, watcher, disk. The backend never opens a workspace path or
+a Docker daemon itself.
 
-Every tool call hits the API (`POST /api/tools/:name`). The tool route resolves the session from the DB, calls `ctx.files()` which calls `fileTools()`, which ensures the container and creates a Sandbox. The Sandbox execs commands through dockerode. The client never touches Docker.
+- `LocalHost` runs the primitives here, against this process's volume and
+  Docker. It is the built-in host of every server, and the body of a session
+  host process.
+- `RemoteHost` sends the same primitives as jobs over a host's link. A proxy;
+  nothing runs in the backend.
 
-The docker-proxy authenticates by network isolation — it sits on an internal Docker network only the API can reach.
+**`Link`** (client SDK, `link.ts`) — THE persistent connection, for everything
+that holds a line open to the backend: a feed followed forever (stall watchdog,
+backoff, a refill hook on reconnect) and sends that are batched, ordered and
+never dropped. One transport underneath: HTTPS/2 through Caddy, the backend's
+own CA when it runs one. There is no other.
 
-## What Changes
+**`SessionHost`** (`host/SessionHost.ts`) — the host process: `LocalHost`
+behind a `Link`. Same image as the backend (`phantom-backend-api`), the host
+entrypoint (`dist/phantom-backend/host.js`), one compose file
+(`session-host/docker-compose.yml`). No database, no settings, no secrets of
+its own — every job carries what it needs.
 
-Instead of one dockerode instance, the API holds a registry of them — one per host. When a tool call arrives, the API looks up which host owns the session's workspace, gets that host's dockerode instance, and uses it. The rest of the chain (`SessionContainers`, `Sandbox`, tool execution) is unchanged.
+## What a host is
 
-Dockerode already works over TCP — proven in testing. `new Docker({ host: '10.0.1.5', port: 2375 })` behaves identically to `new Docker({ socketPath: '/var/run/docker.sock' })`. Container create, exec, remove, inspect — all the same API.
+The key makes it. The server key registers a **shared** host: any workspace
+may land there. A user's API key registers a **personal** host: only that
+user's workspaces. The backend classifies the key as it does every request;
+nothing new to declare.
 
-## The Three Scenarios
+Identity: the backend assigns an id at the first hello; the host writes it to
+`host.json` on its volume, so a reconnect — and a restart — is the same host.
+`boot` is fresh per process.
 
-### Self-Hosted Single Server (unchanged)
+## Placement
 
-The API is its own host. `DOCKER_HOST=tcp://docker-proxy:2375`. One dockerode instance. Same as today.
+Once, when a workspace is created (`Workspaces.checkout`); pinned from then on
+(`workspaces.session_host_id`, null = the built-in host). In order:
 
-### Self-Hosted Multi-Server
+1. the acting user's own online hosts
+2. shared online hosts
+3. the built-in host (unless `SESSION_HOST_BUILTIN=0`)
 
-The operator runs additional hosts on other machines. Each host:
-- Runs Docker with TLS on a reachable address
-- Has the workspace volume locally
-- Runs the checkout pool, git operations, and file watcher locally
+Within a tier: fewest workspaces with files, then most recently connected. A
+host whose box cannot hold the project's `container_disk_gb` is skipped.
 
-The API connects to each host's Docker over TCP/TLS. The operator configures hosts in the API (address, TLS certs). Projects are assigned to hosts via a setting.
+## The link
 
-The host authenticates to the API with the same `API_KEY` the operator already has. The API authenticates to the host's Docker via TLS client certificates.
+Jobs go DOWN the host's feed (`GET /session-hosts/:id/jobs`, ND-JSON, a
+heartbeat every 15 s); events come UP the relay
+(`POST /session-hosts/:id/jobs/events`). The vocabulary is `host/protocol.ts`:
+one job per primitive; a streaming job (exec output, a detached command, a
+watch) sends chunks then `end`.
 
-### SaaS + Desktop Docker
+Liveness both ways: the backend heartbeats down the feed; the host heartbeats
+up the relay. A feed silent for 45 s is hung up on; a link silent for 45 s is
+torn down and reopened. A dead socket errors on its own only when the OS gives
+up on it, minutes later, so neither side waits for that.
 
-The user runs Docker locally on their Mac. The API is in the cloud.
+**A disconnect is a wait, never a failure.** The host keeps running what it
+has; its events queue; a job for an offline host sits pending and goes the
+moment the feed is back (the host runs an id once). The one thing that fails
+pending jobs is the host coming back as a NEW process: `host_restarted`,
+retryable. Background work that must not hang on a closed laptop checks
+`host.online` first: the syncs, the sweeps, the refresh.
 
-The user's machine can't expose a port (NAT). So a small host process runs on the Mac, connects OUT to the API over a WebSocket, and tunnels dockerode API calls from the API to the local Docker daemon.
+## Move
 
-The host process reads the same credential file the CLI uses (`~/.phantom/config` has `server_url` and `server_key`). Same user, same machine, same credential. No new auth mechanism.
+`POST /sessions/:id/host { session_host_id }`, in this order: push the branch
+where it is, remove the container and files there, re-pin, check the branch
+out where it goes. The transcript is in the database and the branch is on
+origin; the session carries on. An offline source cannot push: `force` leaves
+whatever is unpushed on that box behind.
 
-The user runs `phantom host start`. The host process:
-1. Reads the credential from `~/.phantom/config`
-2. Opens a WebSocket to the API: `wss://api.example.com/api/hosts/connect`
-3. Authenticates with the stored credential
-4. The API registers it as a host
-5. Tool calls for this user's sessions are forwarded over the WebSocket
+## Names
 
-## The Tool Call Flow (All Scenarios)
+| | |
+|---|---|
+| image | `phantom-backend-api` (backend and host alike) |
+| server stack | `phantom-backend` → `phantom-backend-api-1`, … |
+| host stack | `phantom-backend-session-host` → `phantom-backend-session-host`, `phantom-backend-session-host-docker-proxy-1` |
+| workspace containers | `phantom-backend-workspace-<workspace id>` |
+| workspace volume | `phantom-looper-workspaces` |
 
-```
-Client  →  POST /api/tools/bash  →  API
-                                      ↓
-                              authenticate client (existing auth)
-                              resolve session, settings, secrets
-                              look up which host owns the workspace
-                                      ↓
-                              get that host's docker instance
-                              (local dockerode, remote TCP, or WebSocket tunnel)
-                                      ↓
-                              sessionContainers.ensure(workspaceId, project)
-                              new Sandbox(docker, container)
-                              sandbox.run(cmd)
-                                      ↓
-Client  ←  result  ←  API
-```
+## Running one
 
-The client doesn't know hosts exist. The tool execution code doesn't change. The only variable is which dockerode instance handles the exec.
+A server: copy `session-host/` out of the image (it rides at
+`/host-files/session-host/`), fill `.env` (`BACKEND_URL`, `BACKEND_KEY`,
+`HOST_NAME`, `BACKEND_CA` for a backend on its own CA), `docker compose up -d`.
 
-## Authentication
+A Mac: `phantom-cli host start`. It extracts that same compose file from the
+release image, writes `.env` from the pairing in `~/.phantom-cli/settings.json`,
+and brings it up under `~/.phantom-cli/host/`. `stop`, `status`, `logs`.
 
-Two boundaries:
+## Not on a host
 
-**Client → API**: unchanged. The existing three credential types — `phantomAdminKey` (root API_KEY), `sessionToken` (Better Auth sign-in), `apiKey` (Better Auth API key). Validated by `HttpApi.#frontStep`.
-
-**API → Host Docker**: depends on the scenario:
-- Self-hosted local: network isolation (docker-proxy on internal network). Same as today.
-- Self-hosted remote: TLS client certificates on the Docker daemon.
-- Desktop/NAT: the host connects OUT to the API with the user's credential from `~/.phantom/config`. The API sends dockerode calls over that WebSocket. No inbound connection to the Mac.
-
-## The Filesystem Problem
-
-The API directly touches the workspace volume in these places:
-
-| Module | What it does | How it accesses the filesystem |
-|---|---|---|
-| `CheckoutPool` | Clones repos, manages warm pool, claims slots | `fs.readdir`, `fs.rename`, `fs.mkdir`, `git clone` |
-| `Workspaces` | Creates checkouts, removes files, restores | `fs.rename`, `fs.rm`, `git checkout` |
-| `GitSync` | Commits and pushes session branches | `git commit`, `git push` via `repoDir(paths, id)` |
-| `InstantSync` | Watches files, triggers auto-push/pull | `WorkspaceWatcher` (parcel/watcher on `repoDir`) |
-| `workRefresh` | Reads git state for board dots | `git status` via `repoDir` |
-| `Disk` | Measures disk, sweeps old sessions | `statfs`, `du`, `fs.rm` |
-| `Web` | Writes fetched pages | `fs.writeFile` to `sessionDir/web/` |
-| `Skills` | Scans repo skills | `fs.readdir` on `repoDir/.agents/skills/` |
-| `Sessions routes` | Scratch file uploads | `fs.writeFile` to `sessionDir/scratch/` |
-| `fs.ts routes` | Bash log spill, task log reads | `fs.writeFile`/`fs.readFile` in `sessionDir/logs/` |
-| `TelegramBot` | Reads files to send to user | `fs.readFile` from `sessionDir` |
-| `media.ts` | Reads files for media uploads | `fs.readFile` from `sessionDir` |
-
-On a single server, the API container and workspace containers share the same Docker named volume (`phantom-looper-workspaces`). The API reads/writes it directly.
-
-On a remote host, the volume is on the host's machine. The API can't access it.
-
-### Solution
-
-These filesystem operations must run on the host, not the API. They already live in the SDK as standalone modules. On a remote host, the host process runs them locally:
-
-- **CheckoutPool, Workspaces**: the host manages its own pool and checkouts on its own volume
-- **GitSync, InstantSync, workRefresh**: the host runs git operations and file watching on its own filesystem
-- **Web, Skills, Sessions scratch, fs logs, Telegram, media**: these either go through Sandbox exec (already works remotely via dockerode) or the host process handles them
-
-The host process is the same SDK image (`phantom-backend-api`), different entrypoint. It has all the code. It connects to the API for DB state (sessions, settings, projects) and runs workspace/Docker operations locally.
-
-For the single-server case, nothing changes — the API process does everything itself, same as today.
-
-## Host Registration and Routing
-
-### Host Registry
-
-A `hosts` table in the database:
-
-| Column | Type | Description |
-|---|---|---|
-| `id` | text (ULID) | Host identifier |
-| `name` | text | Human label ("stephens-macbook", "gpu-server-1") |
-| `owner` | text | Who registered it (user ID or "operator") |
-| `tags` | text[] | Routing labels ("gpu", "local", "us-east") |
-| `status` | text | "online" or "offline" |
-| `connected_at` | timestamp | When the WebSocket connected |
-| `docker_host` | text | TCP address for direct connection (null for WebSocket hosts) |
-
-### Routing
-
-Project-level setting: `session_host`
-
-- **unset (default)**: the API's own local Docker. Backward compatible.
-- **`host:<id>`**: pinned to a specific host.
-- **`tag:<name>`**: any online host with that tag (API picks least-loaded).
-
-When a workspace is created, the API assigns it to a host based on the project's `session_host` setting. The assignment is stored on the workspace row.
-
-### Migration
-
-Move a session from Host A to Host B:
-1. Push any uncommitted work on Host A (git push)
-2. Remove the container on Host A
-3. Update the workspace's host assignment
-4. Next tool call: Host B checks out the repo, creates a new container, continues
-
-Transcript is in the DB. Container is stateless. The agent doesn't notice.
-
-## What Gets Built
-
-### Phase 1: Remote Docker over TCP (self-hosted multi-server)
-
-- `Docker.ts`: `makeDocker()` accepts a host address, returns a dockerode instance per host
-- `SessionContainers`: constructor takes a host→Docker map; `ensure()` picks the right one
-- `hosts` table and registration endpoint
-- `session_host` setting and routing in `fsDeps()`
-- Host compose file: Docker socket + workspace volume + the SDK runtime modules
-
-### Phase 2: WebSocket tunnel (desktop/NAT hosts)
-
-- API WebSocket endpoint: `/api/hosts/connect`
-- Host process: connects out, authenticates, tunnels dockerode calls
-- Credential: reads from `~/.phantom/config` (same as CLI)
-- CLI command: `phantom host start` / `phantom host stop`
-
-### Phase 3: Host-side workspace management
-
-- Move CheckoutPool, GitSync, InstantSync, workRefresh, Disk to run on the host process
-- Host calls the API for DB state (settings, projects, git credentials)
-- API delegates workspace operations to the assigned host
+Two things stay with the backend's own Docker: the shared agent database
+(`agent_database_shared` needs the database container on the same daemon —
+a workspace on a session host gets none) and the system skills read off the
+workspace image. Disk cleanup measures and sweeps the backend's disk and only
+the workspaces on it; a host's disk is its own.

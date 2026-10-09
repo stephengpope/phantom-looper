@@ -52,7 +52,6 @@ export function makeAuthClient(deps: IdentityDeps) {
       // this header and sends its real one.
       onRequest: (context: { headers: Headers }) => {
         for (const [name, value] of Object.entries({ origin: deps.origin, ...credentialHeaders(deps.credential()) })) context.headers.set(name, value);
-        return context;
       },
       onSuccess: (context: { response: Response }) => {
         const token = context.response.headers.get('set-auth-token');

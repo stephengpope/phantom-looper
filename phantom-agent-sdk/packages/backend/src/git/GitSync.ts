@@ -6,11 +6,10 @@
 // the session lock, while a push relies on git's own index.lock to error a
 // true simultaneous op.
 import type { ProjectRow, SessionRow } from '../storage/schema.js';
-import { git, commitAll, pushSession, GIT_CLIENT_ID, type PushResult, type GitAuth } from './Git.js';
+import { commitAll, pushSession, GIT_CLIENT_ID, type PushResult, type GitAuth } from './Git.js';
 import type { Sessions } from '../storage/Sessions.js';
 import type { WorkspaceRow } from '../storage/schema.js';
 import * as checkoutPool from '../runtime/CheckoutPool.js';
-import { repoDir, type Paths } from '../lib/paths.js';
 import { LOCK_TTL_MS, RENEW_MS, type SyncDeps } from './sync.js';
 import { newId } from '@phantom-agent-sdk/client';
 import { logger, errStr } from '../lib/log.js';
@@ -26,7 +25,6 @@ export class GitSync {
   ) {}
 
   private get sessions(): Sessions { return this.deps.sessions; }
-  private get paths(): Paths { return this.deps.paths; }
 
   private auth(project: ProjectRow): Promise<GitAuth> { return checkoutPool.resolveAuth(this.deps.settings, project); }
 
@@ -69,14 +67,16 @@ export class GitSync {
    *  commitAll is the authoritative dirty check. */
   async push(session: SessionRow, project: ProjectRow): Promise<PushResult | 'busy'> {
     const workspace = await this.workspaceOf(session);
-    const dir = repoDir(this.paths, workspace.id);
+    const host = await this.deps.hosts.of(workspace.id);
+    if (!host.online) return 'busy';   // background work never hangs on an offline host
+    const dir = host.repo(workspace.id);
     // The checkout lock: commit + push is a sequence too, and a sync may be
     // rewriting this checkout right now. Short, so no renewal.
     const holder = newId();
     if (!(await this.deps.workspaces.acquireSyncLock(workspace.id, holder, LOCK_TTL_MS))) return 'busy';
     try {
       const committed = await commitAll(dir, `phantom push ${new Date().toISOString()}\n\nPhantom-Session: ${session.id}`);
-      const { stdout: ahead } = await git(dir, ['rev-list', '--count', `origin/${workspace.branch}..HEAD`]).catch(() => ({ stdout: '1' }));
+      const { stdout: ahead } = await dir.git(['rev-list', '--count', `origin/${workspace.branch}..HEAD`]).catch(() => ({ stdout: '1' }));
       if (!committed && Number(ahead.trim()) === 0) return 'nothing';
       const pushed = await pushSession(dir, workspace.branch, await this.auth(project));
       if (pushed !== 'pushed') return pushed;

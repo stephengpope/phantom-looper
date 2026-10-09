@@ -15,7 +15,6 @@
 // setting — always https + the public address.
 import { TELEGRAM_WEBHOOK_PATH } from './webhookPath.js';
 import crypto from 'node:crypto';
-import path from 'node:path';
 import { TelegramApi, ALLOWED_UPDATES } from './TelegramApi.js';
 import { makeTelegramSink, type DeliverConfig, type TelegramSink } from './sink.js';
 import { startWaitingBubble } from './bubble.js';
@@ -32,7 +31,7 @@ import { OPERATOR_ORGANIZATION } from '../lib/scopes.js';
 import type { Settings } from '../storage/Settings.js';
 import type { SettingsEvents } from '../agents/SettingsEvents.js';
 import { timingSafeEqualStr } from '../lib/crypto.js';
-import { sessionDir, type Paths } from '../lib/paths.js';
+import type { SessionHosts } from '../host/SessionHosts.js';
 import { logger, errStr } from '../lib/log.js';
 
 const log = logger('telegram');
@@ -77,7 +76,8 @@ export interface TelegramBotDeps {
   chats: TelegramChats;
   sessions: Sessions;
   projects: Projects;
-  paths: Paths;
+  /** Where each session's files are (host/SessionHosts.ts). */
+  hosts: SessionHosts;
   /** https://BACKEND_ADDRESS — the only source of the webhook URL. */
   publicAddress?: string;
   /** The command menu to register with Telegram (the app's commands): the
@@ -394,7 +394,7 @@ export class TelegramBot {
   async saveAttachmentsToSession(api: TelegramApi, chatId: number, msgs: any[], sessionId: string, typed: string): Promise<string | null> {
     const files = msgs.flatMap(collectFiles);
     if (!files.length) return null;
-    const scratch = sessionDir(this.deps.paths, sessionId) + '/scratch';
+    const scratch = (await this.deps.hosts.of(sessionId)).files(sessionId);
     const stored: StoredAttachment[] = [];
     for (const { file, kind } of files) {
       if (file.file_size && file.file_size > MAX_INBOUND_BYTES) {
@@ -411,11 +411,19 @@ export class TelegramBot {
 
   // ── outbound ──────────────────────────────────────────────────────────
 
-  /** File delivery for a session's reply: map the agent's /workspace/...
-   *  paths to host files under the session's work dir, and confine delivery there. */
+  /** File delivery for a session's reply: the agent's /workspace/... paths
+   *  located on the workspace's host, confined to the workspace (a link
+   *  pointing out is not a file), read from there. */
   deliveryFor(sessionId: string): DeliverConfig {
-    const root = sessionDir(this.deps.paths, sessionId);   // host view of /workspace
-    return { roots: [root], toHost: (containerPath) => containerPath.startsWith('/workspace') ? path.join(root, containerPath.slice('/workspace'.length)) : containerPath };
+    const files = async () => (await this.deps.hosts.of(sessionId)).files(sessionId);
+    return {
+      locate: async (containerPath) => {
+        if (!containerPath.startsWith('/workspace/')) return null;
+        const rel = containerPath.slice('/workspace/'.length);
+        return (await (await files()).realFile(rel)) ? rel : null;
+      },
+      read: async (rel) => (await (await files()).read(rel)) ?? Buffer.alloc(0),
+    };
   }
 
   /** The reply mode, read where a reply is about to be sent. */

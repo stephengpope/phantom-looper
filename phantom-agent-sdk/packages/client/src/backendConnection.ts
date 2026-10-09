@@ -41,6 +41,12 @@ export class BackendConnection {
   /** Hang up. The next request reconnects. */
   close(): void { this.#session?.close(); this.#session = null; }
 
+  /** Tear the socket down NOW: every request on it fails at once, and the
+   *  next one opens a fresh connection. For a link that went silent — a
+   *  dead TCP connection errors on its own only when the OS gives up on it,
+   *  minutes later, and nothing sent in between ever arrives. */
+  destroy(): void { this.#session?.destroy(); this.#session = null; }
+
   /** A request on the connection, as a `fetch`. Any other origin falls
    *  through to the platform fetch. */
   async fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
