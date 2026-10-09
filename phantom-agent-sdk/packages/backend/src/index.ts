@@ -56,7 +56,7 @@ export type { WorkspaceHost, Repo, WorkspaceFiles, ContainerPlan, ContainerState
 export { LocalHost, type LocalHostOptions } from './runtime/LocalHost.js';
 export { RemoteHost } from './runtime/RemoteHost.js';
 export { SessionRunners, SessionRunnerError, type HostCaller, type SessionRunnerView } from './host/SessionRunners.js';
-export { SessionRunner, type SessionRunnerOptions } from './host/SessionRunner.js';
+export { SessionRunner, type SessionRunnerOptions, type TurnAgents } from './host/SessionRunner.js';
 export type { Job, JobEvent, HostHello, HostFacts } from './host/protocol.js';
 export { systemSkills, systemSkillTree, SYSTEM_SKILLS_DIR, type SystemSkill, type SystemSkillTree } from './runtime/SystemSkills.js';
 export { webSearch, webFetch, urlSlug, type SearchBody, type WebDeps } from './runtime/Web.js';

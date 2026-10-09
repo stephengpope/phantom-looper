@@ -24,7 +24,7 @@ import { systemMessages, CACHED_BLOCKS } from './model/cache.js';
 import { ModelResolver, type ResolvedModel } from './model/modelResolver.js';
 import type { SystemModelMessage, Tool } from 'ai';
 import { BACKEND_RETRY, MODEL_RETRY, type RetryPolicy } from './model/retry.js';
-import { Session, type SessionInfo, type TurnStart } from './session.js';
+import { Session, type SessionInfo, type TurnStart, type HandoffTarget } from './session.js';
 import { ToolKitSet, serverToolKit, type ToolKit } from './toolkit.js';
 import { runTurn, type TurnResult } from './turn.js';
 import { UserMessageQueue, type UserMessages } from './userMessages.js';
@@ -50,6 +50,10 @@ export interface AgentHandlers {
  *  the only callers. Subclasses declare no constructor. */
 interface AgentDeps { backend: BackendClient; handlers: AgentHandlers; session: Session }
 type AgentClass<T extends Agent> = (new (deps: AgentDeps) => T) & { systemPromptLayout?: SystemPromptLayout };
+
+/** What `disconnect()` answers: the turn went to a session runner, or it
+ *  stayed here and why (no runner took it, or the turn ended first). */
+export type Disconnected = { handedOff: true; runner: HandoffTarget } | { handedOff: false; reason: string };
 
 /** What a user message may ask of the turn it opens. */
 export interface SendOptions {
@@ -90,6 +94,12 @@ export abstract class Agent {
   /** What the person received of the last reply, not yet in the record:
    *  written under the session's hold at the next chance (partialMessage). */
   #partials: string[] = [];
+  /** `disconnect()` was called: the running turn hands off at its next step
+   *  boundary (turn.ts's stop condition). Cleared when the hand-off landed
+   *  or was refused. */
+  #handoff = false;
+  /** The disconnect waiting to be answered, if one is. */
+  #disconnecting: { resolve(answer: Disconnected): void } | null = null;
 
   /** @internal — through `resumeSession` / `create` only. */
   constructor({ backend, handlers, session }: AgentDeps) {
@@ -177,6 +187,44 @@ export abstract class Agent {
     this.#abort.abort();
   }
 
+  /** Let a session runner finish the running turn. Nothing is cut: the step
+   *  in flight completes — the model's answer and every tool result in the
+   *  record — and at that boundary the server moves the hold to a runner,
+   *  which calls the model next, opening with whatever was queued here.
+   *  Resolves once that landed, or once it did not: no runner took it (this
+   *  agent goes on itself, nothing lost), or the turn ended on its own
+   *  first. After a hand-off this agent is free; the turn is on the
+   *  session feed like anyone else's. */
+  disconnect(): Promise<Disconnected> {
+    if (!this.#turn) return Promise.resolve({ handedOff: false, reason: 'no turn is running' });
+    return new Promise<Disconnected>((resolve) => {
+      if (this.#disconnecting) { const previous = this.#disconnecting; this.#disconnecting = { resolve: (answer) => { previous.resolve(answer); resolve(answer); } }; return; }
+      this.#disconnecting = { resolve };
+      this.#handoff = true;
+    });
+  }
+
+  #settleDisconnect(answer: Disconnected): void {
+    this.#handoff = false;
+    const waiting = this.#disconnecting;
+    this.#disconnecting = null;
+    waiting?.resolve(answer);
+  }
+
+  /** Go on with a turn another driver handed off: the record is whole up to
+   *  a step boundary, `opening` is what that driver had queued (often
+   *  nothing), and the hold is already this client's. One turn from here to
+   *  the end, as `sendMessage` runs one — without the prompt rebuild a
+   *  resume asks for: the turn is mid-flight, not new. */
+  continueTurn(opening: string[]): Promise<TurnResult> {
+    if (this.busy) return Promise.reject(new PhantomError('busy', 'a turn is already running on this agent'));
+    if (this.#closed) return Promise.reject(new PhantomError('busy', 'the agent is closed'));
+    this.#rebuildSystemPrompt = false;
+    const turn = this.#guard(() => this.#turns([...this.#queue.drain(), ...opening]));
+    this.#turn = turn;
+    return turn.finally(() => { if (this.#turn === turn) this.#turn = null; });
+  }
+
   /** The person received the last reply only up to `text` — a reply cut off
    *  while it was being spoken, after the model had already written it (the
    *  host's speaker knows the cut; the stream does not). The conversation
@@ -210,7 +258,9 @@ export abstract class Agent {
   // ── the turn ───────────────────────────────────────────────────────────
   // One turn = one lock = one result.
 
-  /** `texts`: the user's words this turn opens with — its drivers. */
+  /** `texts`: the user's words this turn opens with — its drivers. Empty
+   *  for a turn continued from a hand-off: the record ends at a step
+   *  boundary and the model is simply called again. */
   async #turnBody(texts: string[]): Promise<TurnResult> {
     this.#keepQueue = false;
     const signal = this.#nextSignal();
@@ -226,16 +276,21 @@ export abstract class Agent {
         this.#started = true;
         this.#emit('turn-start', { texts: opening,
           model: { provider: ready.model.spec.provider, model: ready.model.spec.model, reasoning: ready.model.spec.reasoning } });
-        const feed = new TurnFeed(this.backend, this.session.id,
-          { agent: this.type, message: opening.join('\n\n'), provider: ready.model.spec.provider, model: ready.model.spec.model },
-          { onInterrupt: () => this.interrupt(), onPlanMode: (on) => this.#session.setPlanMode(on),
+        // The turn's feed: reopened after a refused hand-off (its stream was
+        // closed for the hand-off), so `feed` is the current one.
+        const openFeed = (words: string[]) => new TurnFeed(this.backend, this.session.id,
+          { agent: this.type, message: words.join('\n\n'), provider: ready.model.spec.provider, model: ready.model.spec.model },
+          { onInterrupt: () => this.interrupt(), onHandoff: () => { void this.disconnect(); }, onPlanMode: (on) => this.#session.setPlanMode(on),
             onNotice: (text) => this.#handlers.onNotice({ type: 'info', text }) });
-        let result: TurnResult;
-        try {
-          result = await runTurn({
+        let feed = openFeed(opening);
+        // One model loop from `words`, over the conversation as it stands
+        // now — run once, and again from the boundary when a hand-off is
+        // refused.
+        const run = (words: string[]) => runTurn({
             model: ready.model.model, spec: ready.model.spec, reasoning: ready.model.reasoning,
             system: ready.system, tools: ready.tools, terminal: ready.terminal, history: this.session.messages, maxSteps: ready.model.maxSteps,
-            opening,
+            opening: words,
+            handoff: () => this.#handoff,
             loopSignal: () => this.#nextSignal(),
             pending: () => this.#sent(),
             afterStop: () => (this.#keepQueue || this.#closed ? [] : this.#sent()),
@@ -251,6 +306,35 @@ export abstract class Agent {
             onToolError: (name, error) => this.#emit('tool-error', { name, error }),
             unsent: (unsent) => { this.#unsent = unsent; },
           });
+        let result: TurnResult;
+        try {
+          result = await run(opening);
+          // At a step boundary with a hand-off asked: the words no model call
+          // took are the next driver's opening. Taken: the server moves the
+          // hold and the runner goes on; this turn is over here, its hold
+          // not ours to release. Refused: nothing changed, the record is
+          // whole, so this driver goes on from the same boundary with those
+          // words — the hand-off cost nothing but the asking.
+          while (result.outcome === 'handed_off') {
+            const queue = this.#queue.drain();
+            // Everything this driver still owes the record and the feed goes
+            // out NOW, under its own hold — after the hand-off the hold is
+            // the runner's and a late write would be refused.
+            await Promise.all([feed.end(), this.#flushPartials()]);
+            const runner = await this.#tryHandoff(queue);
+            if (runner) {
+              start.handedOff();
+              this.#emit('handed-off', { runner });
+              return result;
+            }
+            // Refused: the turn goes on here, so watchers see a turn again.
+            feed = openFeed(queue);
+            if (queue.length) this.#emit('user-message', { texts: queue });
+            const more = await run(queue);
+            result = { text: more.text, messages: [...result.messages, ...more.messages], outcome: more.outcome,
+              usage: { input: result.usage.input + more.usage.input, output: result.usage.output + more.usage.output,
+                cacheRead: result.usage.cacheRead + more.usage.cacheRead, cacheWrite: result.usage.cacheWrite + more.usage.cacheWrite } };
+          }
         } catch (error) {
           feed.error((error as Error).message);
           start.endAfter(feed.end());
@@ -264,7 +348,7 @@ export abstract class Agent {
         start.endAfter(Promise.all([feed.end(), this.#flushPartials()]));
         this.#emit('turn-end', result);
         return result;
-      }, { rebuildSystemPrompt });
+      }, { rebuildSystemPrompt, message: texts.join('\n\n') || undefined });
     } catch (error) {
       // Before the model was asked (the hold refused, the server unreachable,
       // a stop while the turn was starting): nothing was written, so the
@@ -275,6 +359,26 @@ export abstract class Agent {
     } finally {
       this.#abort = null;
       this.#started = false;
+      // A disconnect the turn outran (it ended, failed or was stopped before
+      // a boundary came): answered here, so nobody waits on it.
+      if (this.#disconnecting) this.#settleDisconnect({ handedOff: false, reason: 'the turn ended before it could be handed off' });
+      this.#handoff = false;
+    }
+  }
+
+  /** The hand-off itself, at the boundary: who took it, or null when nobody
+   *  did (refused, unreachable) — said once as a notice, and the disconnect
+   *  answered either way. */
+  async #tryHandoff(opening: string[]): Promise<HandoffTarget | null> {
+    try {
+      const runner = await this.#session.handoff(opening);
+      this.#settleDisconnect({ handedOff: true, runner });
+      return runner;
+    } catch (error) {
+      const reason = asPhantomError(error, 'internal', 'handing the turn off');
+      this.#handlers.onNotice({ type: 'info', text: `not handed off — ${reason.message}; going on here` });
+      this.#settleDisconnect({ handedOff: false, reason: reason.message });
+      return null;
     }
   }
 

@@ -273,6 +273,10 @@ export class SessionStore {
       // promise): turn-end fires while the agent still holds the turn, and a
       // screen settled here would show the residue under a spinner.
       a.on('turn-end', () => flush()),
+      // The turn left for a session runner: this window's part is settled
+      // (say's promise, as any ending); the rest arrives over the session
+      // feed as someone else's turn, held by the runner.
+      a.on('handed-off', ({ runner }) => { flush(); this.note(entry.id, `handed off to ${runner.name} — the turn goes on there; esc still stops it`); }),
     ];
     entry.flushParts = flush;
     return () => { flush(); for (const off of offs) off(); };

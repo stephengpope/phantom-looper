@@ -6,6 +6,7 @@ import type { StreamPart, TurnResult } from './turn.js';
 import type { TokenTotals } from './transcript.js';
 import type { PhantomError } from './errors.js';
 import type { Provider, Reasoning } from './model/llmConfig.js';
+import type { HandoffTarget } from './session.js';
 
 export interface AgentEvents {
   /** The turn is running: what it opened with, and the model it runs on. */
@@ -23,6 +24,10 @@ export interface AgentEvents {
   'returned': { texts: string[]; error: PhantomError };
   'tool-error': { name: string; error: unknown };
   'turn-end': TurnResult;
+  /** The turn left this agent at a step boundary (disconnect): the named
+   *  session runner drives it from here; this agent is free. Watch the
+   *  session feed for the rest. */
+  'handed-off': { runner: HandoffTarget };
   /** Someone else added to the conversation since this agent last looked
    *  (another client's turn, the server's queued user messages); it was
    *  read again before the turn ran. `messages` is the conversation now;

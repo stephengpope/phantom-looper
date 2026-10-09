@@ -246,6 +246,72 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       params: idParam } },
     async (req) => { ctx.sessions.interrupt(req.params.id, clientOf(req), { foreground: ctx.foregroundCommands }); return ok({}); });
 
+  // ---- hand a running turn to a session runner --------------------------------
+  // The driver's call, at a step boundary (Agent.disconnect): the hold moves
+  // to a runner that can drive this agent type — the user's own first, then
+  // a shared one — and the runner is sent the turn with what the driver had
+  // queued. The record is whole, so the runner's agent calls the model next.
+  // Refused with nothing changed when no runner can take it: the driver goes
+  // on itself. The runner acts for whoever this turn is for: the caller's
+  // organization and user, as the cron's runs act for the cron's owner.
+  app.post<{ Params: { id: string }; Body: { opening?: string[] } }>(
+    '/sessions/:id/handoff', { schema: { ...TAG,
+      summary: 'Hand the running turn to a session runner',
+      description: 'Called by the client driving a turn, between two model calls: moves the session\'s hold to a session runner that can drive this agent and has the runner finish the turn. `opening` is what the driver had queued and no model call took. Refused when no runner can take it; the driver then carries on.',
+      params: idParam,
+      body: { type: 'object', additionalProperties: false, properties: {
+        opening: { type: 'array', items: { type: 'string' }, description: 'The queued user messages the runner opens with; usually none.' } } } } },
+    async (req, reply) => {
+      const client = clientOf(req);
+      if (!client) return reply.code(400).send(err('missing_client', 'x-phantom-client header required'));
+      const session = await ctx.sessions.get(req.params.id);
+      if (!session) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
+      if (session.lockedBy !== client || !isHeld(session)) {
+        return reply.code(409).send(isHeld(session) ? lockedErr(session) : err('session_not_held', 'hold the session (a running turn) to hand it off'));
+      }
+      if (!session.agent) return reply.code(400).send(err('config_invalid', 'this session has no agent type to hand off'));
+      const project = await ctx.projects.get(session.projectId);
+      if (!project) return reply.code(404).send(err('not_found', 'project vanished'));
+      const who = acting();
+      const userId = who?.userId ?? null;
+      const runner = await ctx.sessionRunners.placeTurn(userId, session.agent);
+      if (!runner) return reply.code(409).send(err('no_runner', `no session runner online can drive a '${session.agent}' agent for you — nothing changed`, true));
+      const settings = await ctx.settings.resolveMany(['session_lock_ttl_ms'], scopeOf(project));
+      const expires = await ctx.sessions.transferLock(session.id, client, runner.id, runner.name, Number(settings.session_lock_ttl_ms));
+      if (!expires) return reply.code(409).send(err('session_not_held', 'the hold moved before the hand-off — nothing changed'));
+      ctx.sessionEvents.publish(session.id, client, lockEvent(session, { locked: true, by: runner.id, label: runner.name, expires }));
+      const job = { sessionId: session.id, agentType: session.agent, opening: req.body?.opening ?? [], actor: actorOf(req),
+        actingFor: { organizationId: who?.organizationId ?? project.organizationId, ...(userId ? { userId } : {}) } };
+      log.info({ session: session.id, from: client, to: runner.name, opening: job.opening.length }, 'turn handed off');
+      // The job runs the rest of the turn; its answer is the log's. A job
+      // that fails before its agent ever held the session leaves the moved
+      // hold with nobody behind it: released here, so the session is free.
+      void runner.turn(job).then(
+        (result) => log.info({ session: session.id, runner: runner.name, outcome: result.outcome }, 'handed-off turn finished'),
+        async (error: unknown) => {
+          log.warn({ session: session.id, runner: runner.name, err: errStr(error) }, 'handed-off turn failed');
+          const now = await ctx.sessions.get(session.id);
+          if (now && now.lockedBy === runner.id) await releaseHold(ctx, now, runner.id);
+        });
+      return ok({ runner: { id: runner.id, name: runner.name } });
+    });
+
+  // Ask whoever drives this session's turn to hand it to a session runner:
+  // the `handoff` signal on the session feed, as `interrupt` is the stop.
+  // The driver finishes its step and calls the hand-off route itself.
+  app.post<{ Params: { id: string } }>(
+    '/sessions/:id/disconnect', { schema: { ...TAG,
+      summary: 'Ask the running turn\'s driver to hand it off',
+      description: 'Asks the client driving the turn to hand it to a session runner at its next step boundary, wherever that client is.',
+      params: idParam } },
+    async (req, reply) => {
+      const session = await ctx.sessions.get(req.params.id);
+      if (!session) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
+      if (!isHeld(session)) return reply.code(409).send(err('session_not_held', 'no turn is running on this session'));
+      ctx.sessionEvents.publish(session.id, clientOf(req), { event: 'handoff' });
+      return ok({});
+    });
+
   // ---- the transcript ------------------------------------------------------
   // The conversation, whole — the same JSONL the client keeps locally. SQL is
   // the record: the client uploads the file when a turn ends and rewrites its
@@ -417,22 +483,6 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       }
       return ok({ published: req.body.events.length });
     });
-
-  // Every turn's start, whoever runs it, crosses the session bus — the one
-  // place every client's relayed turn meets. Two things happen there and
-  // nowhere else, for the types a default list shows: the list's preview
-  // moves to what was just typed (the save at turn end was the first chance
-  // before), and a session's first message names it right away — the record
-  // is not needed to say what is being built. Best effort, off the request path.
-  ctx.sessionEvents.subscribeAll((sessionId, event) => {
-    if (event.event !== 'turn-start' || !ctx.agentTypes.listedNames({ background: false }).includes(event.agent)) return;
-    void ctx.sessions.turnStarted(sessionId, event.message).then(async ({ firstMessage }) => {
-      if (!firstMessage) return;
-      // The row publishes the name under no client id, so the window running
-      // the turn hears it too (the feed drops a client's own events).
-      await ctx.sessionTitler.name(sessionId, { firstMessage: event.message });
-    }).catch((err) => log.warn({ session: sessionId, err: errStr(err) }, 'turn-start hook failed'));
-  });
 
   // ---- attachments -----------------------------------------------------------
   // A file given to the session out-of-band — the first caller is a drag
@@ -634,7 +684,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // agent of `type` has right now. The stamp the record was last changed at
   // rides along so the caller knows whether its copy is current. Everything
   // a client needs before its first model call, one round trip.
-  app.post<{ Params: { id: string }; Body: { type: string; label?: string; system_prompt_layout?: SystemPromptLayout } }>(
+  app.post<{ Params: { id: string }; Body: { type: string; label?: string; message?: string; system_prompt_layout?: SystemPromptLayout } }>(
     '/sessions/:id/turn-start', { schema: { ...TAG,
       summary: 'Begin a turn',
       description: 'Called by the client running the agent at the start of each turn. Reserves the session for that client and answers with what the turn needs: the model, its settings and the tools.',
@@ -642,6 +692,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
       body: { type: 'object', required: ['type'], additionalProperties: false, properties: {
         type: { type: 'string', enum: ctx.agentTypes.names() },
         label: { type: 'string', maxLength: 200, description: 'What to show others (a hostname).' },
+        message: { type: 'string', description: 'What the turn opens with — the user\'s words. The session list\'s preview, and a first message names the session. Absent for a turn continued from a hand-off.' },
         system_prompt_layout: { ...SYSTEM_PROMPT_LAYOUT, description: 'The agent\'s layout: reassemble the volatile section from it before this turn.' } } } } },
     async (req, reply) => {
       const client = clientOf(req);
@@ -698,6 +749,18 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         atStart = (await ctx.sessions.get(session.id))!;
       }
       ctx.sessions.rememberLinesAtTurnStart(session.id, atStart.transcriptLines);
+      // The opening words, for the types a default list shows: the list's
+      // preview moves now, and a session's first message names it right away
+      // — the record is not needed to say what is being built. A continued
+      // turn brings no words and moves nothing. Best effort, off the path.
+      if (req.body.message && ctx.agentTypes.listedNames({ background: false }).includes(req.body.type)) {
+        const message = req.body.message;
+        void ctx.sessions.turnStarted(session.id, message).then(async ({ firstMessage }) => {
+          // The row publishes the name under no client id, so the window
+          // running the turn hears it too (the feed drops a client's own events).
+          if (firstMessage) await ctx.sessionTitler.name(session.id, { firstMessage: message });
+        }).catch((error) => log.warn({ session: session.id, err: errStr(error) }, 'turn-start naming failed'));
+      }
       let config;
       try { config = await ctx.agentConfig.resolve(req.body.type, scopeOf(project), sessionPin(session)); }
       catch (error) {

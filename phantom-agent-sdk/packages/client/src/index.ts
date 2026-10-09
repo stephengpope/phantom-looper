@@ -1,8 +1,8 @@
 // @phantom-agent-sdk/client — the agent runtime for a phantom-backend. An app
 // extends Agent with its type and its prompt; the tools are the server's;
 // nothing about any particular agent lives here.
-export { Agent, type AgentHandlers, type Notice, type SendOptions } from './agent.js';
-export type { SessionInfo, SessionRow } from './session.js';
+export { Agent, type AgentHandlers, type Notice, type SendOptions, type Disconnected } from './agent.js';
+export type { SessionInfo, SessionRow, HandoffTarget } from './session.js';
 export type { AgentEvents } from './events.js';
 export type { TurnResult, StreamPart } from './turn.js';
 export type { QueueEntry, UserMessages } from './userMessages.js';
