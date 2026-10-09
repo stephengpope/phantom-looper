@@ -24,7 +24,7 @@ import { Images } from '../runtime/Images.js';
 import { makeDocker } from '../runtime/Docker.js';
 import { makePaths, type Paths } from '../lib/paths.js';
 import * as checkoutPool from '../runtime/CheckoutPool.js';
-import { type Job, type JobEvent, type HostHello, encodeError, fromBase64, toBase64 } from './protocol.js';
+import { type Job, type JobEvent, type HostHello, type HostLoad, encodeError, fromBase64, toBase64 } from './protocol.js';
 import { SDK_VERSION } from '../sdkVersion.js';
 import { logger, errStr } from '../lib/log.js';
 
@@ -157,9 +157,19 @@ export class SessionHost {
     this.#link.open();
     // Liveness both ways: the backend heartbeats down the feed; this goes up
     // the relay, so a silently dead socket reads as offline there within 45 s.
-    this.#heartbeat = setInterval(() => this.#link?.send({ type: 'heartbeat' }), 15_000);
+    // The beat carries the box's load: what placement orders by.
+    this.#heartbeat = setInterval(() => { void this.#load().then((load) => this.#link?.send({ type: 'heartbeat', load })); }, 15_000);
   }
   #heartbeat: ReturnType<typeof setInterval> | null = null;
+
+  /** The box right now. A measure that fails leaves its field out of the
+   *  beat rather than holding the beat back: liveness first. */
+  async #load(): Promise<HostLoad> {
+    const cpu = os.loadavg()[0] / Math.max(1, os.cpus().length);
+    const disk = await this.#local.disk().catch(() => ({ freeGB: Infinity, usedPct: 0 }));
+    const running = await this.#local.activeWorkspaces().then((ids) => ids.length, () => 0);
+    return { cpu, freeGB: disk.freeGB, usedPct: disk.usedPct, running };
+  }
 
   /** Close the link. What runs keeps running; containers stay up. */
   async stop(): Promise<void> {

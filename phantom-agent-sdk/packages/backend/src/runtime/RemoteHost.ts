@@ -15,7 +15,7 @@ import { newId } from '@phantom-agent-sdk/client';
 import type { ContainerPlan, ContainerState, DetachEvent, FileType, FileStat, Repo, WorkspaceFiles, WorkspaceHost } from './WorkspaceHost.js';
 import { Sandbox, type Exec, type RunOpts, type RunResult, type StreamRecord } from './Sandbox.js';
 import type { GitAuth } from '../git/Git.js';
-import { type Job, type JobBody, type JobEvent, decodeError, encodeRunOpts, fromBase64, toBase64 } from '../host/protocol.js';
+import { type HostLoad, type Job, type JobBody, type JobEvent, decodeError, encodeRunOpts, fromBase64, toBase64 } from '../host/protocol.js';
 import { logger } from '../lib/log.js';
 
 const log = logger('remote-host');
@@ -39,6 +39,9 @@ export class RemoteHost implements WorkspaceHost {
   constructor(readonly id: string, public name: string) {}
 
   get online(): boolean { return this.#writer !== null; }
+
+  /** The box's load as of its last heartbeat; null before the first one. */
+  load: HostLoad | null = null;
 
   // ── the link ──────────────────────────────────────────────────────────
 
@@ -66,7 +69,7 @@ export class RemoteHost implements WorkspaceHost {
   /** Events off the relay, in order. */
   deliver(events: JobEvent[]): void {
     for (const event of events) {
-      if (event.type === 'heartbeat') continue;
+      if (event.type === 'heartbeat') { if (event.load) this.load = event.load; continue; }
       if (event.type === 'chunk' && this.#watches.size) {
         // A watch's chunk: routed by the standing order's job id.
         const watch = [...this.#watches.values()].find((one) => one.job.id === event.job);

@@ -87,7 +87,7 @@ export function sessionHostRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   });
 
   app.get('/session-hosts', { schema: { ...TAG, summary: 'List session hosts',
-    description: 'The session hosts this caller may use: the shared ones and their own, each with whether it is online now and how many workspaces are on it.' } },
+    description: 'The session hosts this caller may use: the shared ones and their own, each with whether it is online now, how many workspaces are on it, and its load as of its last heartbeat (cpu: load average over cores, 1 = every core busy; freeGB; usedPct; running containers).' } },
   async (req) => ok({ hosts: await ctx.sessionHosts.list(callerOf(req)) }));
 
   app.delete<{ Params: { id: string } }>('/session-hosts/:id', { schema: { ...TAG, summary: 'Forget a session host',

@@ -22,7 +22,8 @@ import type { LocalHost } from '../runtime/LocalHost.js';
 import { RemoteHost } from '../runtime/RemoteHost.js';
 import type { WorkspaceHost } from '../runtime/WorkspaceHost.js';
 import type { Settings } from '../storage/Settings.js';
-import type { HostHello, Job, JobEvent } from './protocol.js';
+import type { HostHello, HostLoad, Job, JobEvent } from './protocol.js';
+import { tooFull } from '../runtime/Disk.js';
 import { newId } from '@phantom-agent-sdk/client';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { scopeOf } from '../lib/scopes.js';
@@ -38,7 +39,7 @@ export class SessionHostError extends Error {
   constructor(readonly code: 'not_found' | 'access_denied' | 'no_host' | 'host_online' | 'host_in_use' | 'host_offline', message: string) { super(message); }
 }
 
-export interface SessionHostView extends SessionHostRow { online: boolean; workspaces: number }
+export interface SessionHostView extends SessionHostRow { online: boolean; workspaces: number; load: HostLoad | null }
 
 /** No event up the relay for this long = the feed's socket is dead whatever
  *  it says: the host heartbeats every 15 s. */
@@ -128,22 +129,30 @@ export class SessionHosts {
 
   // ── placement ─────────────────────────────────────────────────────────
 
-  /** Where a new workspace of `project` for `userId` goes. The rule, in
-   *  order: the user's own online hosts; shared online hosts; the backend
-   *  host. Within a tier: fewest workspaces pinned, then most recently
-   *  connected. A host that cannot hold the project's disk limit is skipped. */
+  /** Where a new workspace of `project` for `userId` goes (docs/
+   *  host-load-placement.md). The tiers, in order: the user's own online
+   *  hosts; shared online hosts; the backend host. Within a tier: a host
+   *  that cannot take a checkout — its disk under the sweep's floor, or it
+   *  cannot hold the project's disk limit — is not a candidate; the lowest
+   *  CPU wins; equal CPUs, one at random. A host that has not beaten yet
+   *  reads as idle. */
   async place(project: ProjectRow, userId: string | null): Promise<WorkspaceHost> {
     const rows = await this.database.select().from(sessionHosts);
     const online = rows.filter((row) => this.#remote.get(row.id)?.online);
-    const diskGb = this.opts.settings ? await this.opts.settings.resolve<number | null>('container_disk_gb', scopeOf(project)).catch(() => null) : null;
-    const able = online.filter((row) => !diskGb || row.facts.diskSupport === null);
-    const counts = await this.workspaceCounts(able.map((row) => row.id));
-    const order = (a: SessionHostRow, b: SessionHostRow) =>
-      (counts.get(a.id) ?? 0) - (counts.get(b.id) ?? 0)
-      || (b.connectedAt?.getTime() ?? 0) - (a.connectedAt?.getTime() ?? 0);
-    const own = userId ? able.filter((row) => row.ownerUserId === userId).sort(order) : [];
-    const shared = able.filter((row) => row.ownerUserId === null).sort(order);
-    const chosen = own[0] ?? shared[0];
+    const settings = this.opts.settings;
+    const diskGb = settings ? await settings.resolve<number | null>('container_disk_gb', scopeOf(project)).catch(() => null) : null;
+    const pct = settings ? Number(await settings.resolve('disk_cleanup_percent').catch(() => 0)) : 0;
+    const loadOf = (row: SessionHostRow) => this.#remote.get(row.id)!.load;
+    const able = online.filter((row) => (!diskGb || row.facts.diskSupport === null) && !(loadOf(row) && tooFull(loadOf(row)!, pct)));
+    const cpuOf = (row: SessionHostRow) => loadOf(row)?.cpu ?? 0;
+    const least = (tier: SessionHostRow[]): SessionHostRow | undefined => {
+      if (!tier.length) return undefined;
+      const best = Math.min(...tier.map(cpuOf));
+      const idle = tier.filter((row) => cpuOf(row) === best);
+      return idle[Math.floor(Math.random() * idle.length)];
+    };
+    const chosen = (userId ? least(able.filter((row) => row.ownerUserId === userId)) : undefined)
+      ?? least(able.filter((row) => row.ownerUserId === null));
     if (chosen) return this.#remote.get(chosen.id)!;
     if (this.opts.runsContainers) return this.local;
     throw new SessionHostError('no_host', userId
@@ -241,7 +250,7 @@ export class SessionHosts {
     const rows = await this.database.select().from(sessionHosts);
     const visible = rows.filter((row) => caller.admin || row.ownerUserId === null || row.ownerUserId === caller.userId);
     const counts = await this.workspaceCounts(visible.map((row) => row.id));
-    return visible.map((row) => ({ ...row, online: this.#remote.get(row.id)?.online ?? false, workspaces: counts.get(row.id) ?? 0 }));
+    return visible.map((row) => ({ ...row, online: this.#remote.get(row.id)?.online ?? false, workspaces: counts.get(row.id) ?? 0, load: this.#remote.get(row.id)?.load ?? null }));
   }
 
   /** Forget a host: offline, and nothing pinned to it. */

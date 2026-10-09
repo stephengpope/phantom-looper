@@ -1,16 +1,16 @@
 # Placing by load: CPU, not file counts
 
-A proposal. Not built.
+Built: `SessionHosts.place`, the heartbeat in `SessionHost`, `RemoteHost.load`.
 
-## Today
+## Before
 
-Placement (host/SessionHosts.ts `place`) picks a tier — the user's own hosts,
-then shared hosts, then the server — and inside a tier orders by the number
+Placement (host/SessionHosts.ts `place`) picked a tier — the user's own hosts,
+then shared hosts, then the server — and inside a tier ordered by the number
 of workspaces with files on disk, then by most recent connection. The count
-is a proxy: a host with two idle checkouts and a host with two agents
-compiling look the same, and a host with 5 GB free looks like one with 500.
+was a proxy: a host with two idle checkouts and a host with two agents
+compiling looked the same, and a host with 5 GB free looked like one with 500.
 
-## Proposal
+## Now
 
 The host heartbeats up its relay every 15 s already (`{ type: 'heartbeat' }`).
 Put the box's load on that beat:
@@ -36,9 +36,10 @@ Tiers stay. Inside a tier:
    floor the disk sweep uses) or over `disk_cleanup_percent` is not a
    candidate. A host that cannot take a checkout is not in the running.
 2. **Lowest `cpu` wins.** The only ordering.
-3. **Equal `cpu`: round robin.** The host picked last goes to the back.
+3. **Equal `cpu`: one at random.**
 
 A host whose last beat is older than 45 s is offline and already excluded.
+A host online but not yet beaten (the first 15 s) reads as idle.
 
 `running` and the file count play no part in placement: CPU already says
 what running agents cost (an idle container costs nothing), and a count
@@ -48,10 +49,10 @@ for the status line.
 ## Known lag
 
 The load average is a one-minute average: a host handed a session still
-reads idle for a while, so a burst of placements can land on one box. Round
-robin spreads a burst among hosts that read equal; it does not spread one
-across hosts that read different. Accepted — the next beat corrects it, and
-one wrong pick costs a slow minute, not a lost session.
+reads idle for a while, so a burst of placements can land on one box. The
+random pick spreads a burst among hosts that read equal; it does not spread
+one across hosts that read different. Accepted — the next beat corrects it,
+and one wrong pick costs a slow minute, not a lost session.
 
 ## Cost
 

@@ -47,8 +47,9 @@ export type JobBody = Job extends infer J ? J extends { id: string } ? Omit<J, '
  *  (stderr, code) and a timed-out exec's output, so the backend's handlers
  *  read a remote failure exactly as a local one. */
 export type JobEvent =
-  /** The host's own heartbeat up the relay: alive, whatever the feed's socket says. */
-  | { type: 'heartbeat' }
+  /** The host's own heartbeat up the relay: alive, whatever the feed's socket
+   *  says — and how loaded the box is, for placement. */
+  | { type: 'heartbeat'; load?: HostLoad }
   | { job: string; type: 'result'; value: unknown }
   | { job: string; type: 'chunk'; value: unknown }
   | { job: string; type: 'end' }
@@ -62,6 +63,16 @@ export interface HostHello {
   name: string;
   boot: string;
   facts: HostFacts;
+}
+
+/** What a host is carrying, on every heartbeat. `cpu` places (docs/
+ *  host-load-placement.md): the one-minute load average over the CPU count,
+ *  1.0 = every core busy. The rest is the status line's. */
+export interface HostLoad {
+  cpu: number;
+  freeGB: number;
+  usedPct: number;
+  running: number;
 }
 
 export interface HostFacts {
