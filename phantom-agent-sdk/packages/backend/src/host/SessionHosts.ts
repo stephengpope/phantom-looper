@@ -1,18 +1,18 @@
 // SessionHosts — the hosts a workspace can be placed on, and where each
-// workspace is. The built-in host (this process, LocalHost) and every
+// workspace is. The backend's own host (this process, LocalHost) and every
 // registered session host (a RemoteHost each, online or not). Three jobs:
 //
 //   PLACEMENT  once, when a workspace is made: the user's own online host if
-//              they have one, else a shared host, else the built-in one.
+//              they have one, else a shared host, else the backend itself.
 //              Within a tier: fewest workspaces pinned, then most recently
 //              connected. Written to the workspace row; pinned from then on.
 //   ROUTING    `of(workspaceId)`: the host a workspace is on. The row's
-//              session_host_id, cached here; null is the built-in host.
+//              session_host_id, cached here; null is the backend's own host.
 //   THE LINK   a host's hello (its row), its feed (jobs down), its relay
 //              (events up) — the routes call in here.
 //
-// A host is what its key makes it: the server key registers a SHARED host
-// (any user's workspace may land there); a user's key registers a PERSONAL
+// A host is what its key makes it: the root API key registers a SHARED host
+// (any user's workspace may land there); a user's key registers a USER
 // host (only that user's). The rows live in session_hosts, read and written
 // as the backend itself — a user never queries them directly.
 import { and, eq, inArray, sql } from 'drizzle-orm';
@@ -29,7 +29,7 @@ import { logger } from '../lib/log.js';
 
 const log = logger('session-hosts');
 
-/** Who is talking to the hosts API: the server key (every host is theirs),
+/** Who is talking to the hosts API: the root API key (every host is theirs),
  *  or a user (their own hosts). */
 export interface HostCaller { admin: boolean; userId: string | null }
 
@@ -48,23 +48,23 @@ export class SessionHosts {
   /** The open feeds: when each host last spoke, and how to hang up on it. */
   readonly #feeds = new Map<string, { heard: number; close: () => void }>();
   #sweep: ReturnType<typeof setInterval> | null = null;
-  /** workspace id → host id (null = built-in). Filled at placement and on
+  /** workspace id → host id (null = the backend itself). Filled at placement and on
    *  first lookup; a move rewrites it. */
   readonly #placement = new Map<string, string | null>();
 
   constructor(
     private readonly database: Drizzle,
     readonly local: LocalHost,
-    private readonly opts: { builtIn: boolean; settings?: Settings },
+    private readonly opts: { runsContainers: boolean; settings?: Settings },
   ) {}
 
-  /** Whether this server runs workspaces itself (SESSION_HOST_BUILTIN). */
-  get builtIn(): boolean { return this.opts.builtIn; }
+  /** Whether this server runs session containers itself (RUN_SESSION_CONTAINERS=1, the default). */
+  get runsContainers(): boolean { return this.opts.runsContainers; }
 
   /** The registered hosts, as proxies — offline until each connects. */
   async load(): Promise<void> {
     for (const row of await this.database.select().from(sessionHosts)) this.#remote.set(row.id, new RemoteHost(row.id, row.name));
-    log.info({ hosts: this.#remote.size, builtIn: this.opts.builtIn }, 'session hosts loaded');
+    log.info({ hosts: this.#remote.size, runsContainers: this.opts.runsContainers }, 'session hosts loaded');
     // A feed whose socket died silently (a laptop off the network) is hung
     // up on here: the host is offline, its jobs wait for its next feed.
     this.#sweep = setInterval(() => {
@@ -81,7 +81,7 @@ export class SessionHosts {
   // ── routing ───────────────────────────────────────────────────────────
 
   /** The host a workspace is on. A row that names a host nobody registered
-   *  any more reads as the built-in host — the files are gone with it. */
+   *  any more reads as the backend itself — the files are gone with it. */
   async of(workspaceId: string): Promise<WorkspaceHost> {
     const id = await this.hostIdOf(workspaceId);
     return (id === null ? undefined : this.#remote.get(id)) ?? this.local;
@@ -109,7 +109,7 @@ export class SessionHosts {
   // ── placement ─────────────────────────────────────────────────────────
 
   /** Where a new workspace of `project` for `userId` goes. The rule, in
-   *  order: the user's own online hosts; shared online hosts; the built-in
+   *  order: the user's own online hosts; shared online hosts; the backend
    *  host. Within a tier: fewest workspaces pinned, then most recently
    *  connected. A host that cannot hold the project's disk limit is skipped. */
   async place(project: ProjectRow, userId: string | null): Promise<WorkspaceHost> {
@@ -121,11 +121,11 @@ export class SessionHosts {
     const order = (a: SessionHostRow, b: SessionHostRow) =>
       (counts.get(a.id) ?? 0) - (counts.get(b.id) ?? 0)
       || (b.connectedAt?.getTime() ?? 0) - (a.connectedAt?.getTime() ?? 0);
-    const personal = userId ? able.filter((row) => row.ownerUserId === userId).sort(order) : [];
+    const own = userId ? able.filter((row) => row.ownerUserId === userId).sort(order) : [];
     const shared = able.filter((row) => row.ownerUserId === null).sort(order);
-    const chosen = personal[0] ?? shared[0];
+    const chosen = own[0] ?? shared[0];
     if (chosen) return this.#remote.get(chosen.id)!;
-    if (this.opts.builtIn) return this.local;
+    if (this.opts.runsContainers) return this.local;
     throw new SessionHostError('no_host', userId
       ? 'no session host is online for you — start one (phantom host start) or ask for a shared host'
       : 'no shared session host is online and this server runs no workspaces itself');
@@ -142,7 +142,7 @@ export class SessionHosts {
   /** Running containers on every host that can answer right now. */
   async activeWorkspaces(): Promise<string[]> {
     const lists = await Promise.all([
-      this.opts.builtIn ? this.local.activeWorkspaces() : Promise.resolve([]),
+      this.opts.runsContainers ? this.local.activeWorkspaces() : Promise.resolve([]),
       ...[...this.#remote.values()].map((host) => host.activeWorkspaces()),
     ]);
     return lists.flat();
@@ -155,7 +155,7 @@ export class SessionHosts {
   }
 
   /** A host says hello: its row made or found. The row's owner is the
-   *  caller: the server key's hosts are shared, a user's are theirs. A
+   *  caller: the root API key's hosts are shared, a user's are theirs. A
    *  persisted id that names someone else's row is refused. */
   async hello(caller: HostCaller, hello: HostHello): Promise<SessionHostRow> {
     const ownerUserId = caller.admin ? null : caller.userId;
@@ -215,7 +215,7 @@ export class SessionHosts {
     return row;
   }
 
-  /** The hosts a caller may see: the server key sees all; a user sees their
+  /** The hosts a caller may see: the root API key sees all; a user sees their
    *  own and the shared ones. */
   async list(caller: HostCaller): Promise<SessionHostView[]> {
     const rows = await this.database.select().from(sessionHosts);

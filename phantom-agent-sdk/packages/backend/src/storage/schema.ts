@@ -54,7 +54,7 @@ export const projects = phantomAgentSdk.table('projects', {
   // a deleted card's stays taken. (024; Projects.claimCardNumber moves it.)
   nextCardNumber: integer('next_card_number').notNull().default(1),
   // The organization this project belongs to (056, 059): the caller's, or
-  // 'operator' — the server key's own. Everything under the project takes
+  // 'operator' — the root API key's own. Everything under the project takes
   // it (059's triggers). Its settings layer rides in the project's chain
   // (scopes.ts scopeOf).
   organizationId: text('organization_id').notNull().default(sql`coalesce(phantom_agent_sdk.caller_organization(), phantom_agent_sdk.operator_organization())`),
@@ -127,7 +127,7 @@ export const workspaces = phantomAgentSdk.table('workspaces', {
   syncLockedBy: text('sync_locked_by'),
   syncLockExpiresAt: timestamp('sync_lock_expires_at', { withTimezone: true }),
   // WHERE THE FILES AND THE CONTAINER ARE (062): the session host this
-  // workspace was placed on, null for the built-in host (this server).
+  // workspace was placed on, null for the backend itself (this server).
   // Decided once at creation (host/SessionHosts.ts place), rewritten only
   // by a move. Every file, git and container call routes by it.
   sessionHostId: text('session_host_id'),
@@ -136,8 +136,8 @@ export const workspaces = phantomAgentSdk.table('workspaces', {
 
 // A SESSION HOST (062): a box running Docker and a workspace volume that
 // connects OUT to this server and runs workspaces for it. Shared (owner
-// null: registered with the server key, any workspace may land there) or
-// personal (a user's: only their workspaces). `boot` is the host process's
+// null: registered with the root API key, any workspace may land there) or
+// a user host (a user's: only their workspaces). `boot` is the host process's
 // id — a reconnect carries the same one, a restart a new one. `facts` is
 // what the box reported at hello (host/protocol.ts HostFacts).
 export const sessionHosts = phantomAgentSdk.table('session_hosts', {
@@ -340,7 +340,7 @@ export type PresetRow = typeof presets.$inferSelect;
 
 // Media (058): tracked files on S3-compatible storage. The row is the file;
 // the bucket holds its bytes at `key`. Owner is the organization
-// ('operator' = the server key's own); `userId` is who uploaded it.
+// ('operator' = the root API key's own); `userId` is who uploaded it.
 // media/Media.ts is the one owner.
 export const media = phantomAgentSdk.table('media', {
   id: text('id').primaryKey(),

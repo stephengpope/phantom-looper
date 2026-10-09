@@ -222,7 +222,7 @@ export async function pressureSweep(
   settings: Settings, projects: Projects, sessions: Sessions, hosts: SessionHosts, images: Images,
   sessionContainers: SessionContainers, gitSync: GitSync, busy: (workspaceIds: string[]) => Promise<Set<string>>,
 ): Promise<void> {
-  if (!hosts.builtIn) return;
+  if (!hosts.runsContainers) return;
   const currents = [String(await settings.resolve('container_image')), API_IMAGE_CURRENT];
   const here = async (session: SessionRow) => (await hosts.hostIdOf(session.id)) === null;
   await diskCleanup({

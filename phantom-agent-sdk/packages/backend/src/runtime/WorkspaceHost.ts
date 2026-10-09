@@ -4,7 +4,7 @@
 // the workspace is placed on. Two implementations:
 //
 //   LocalHost   the primitives, run here: this process's volume and Docker.
-//               The built-in host of every server, and the body of a
+//               The backend's own host on every server, and the body of a
 //               session host process (host/SessionHost.ts), which runs the
 //               same code against ITS volume and Docker.
 //   RemoteHost  the same primitives as jobs over a session host's link —
@@ -77,10 +77,10 @@ export type DetachEvent =
   | { event: 'exit'; status: 'exited' | 'killed' | 'orphaned'; exitCode: number | null };
 
 export interface WorkspaceHost {
-  /** The host's row id; null is the built-in host (this process). */
+  /** The host's row id; null is the backend's own host (this process). */
   readonly id: string | null;
   readonly name: string;
-  /** Online right now. The built-in host always is; a remote host is while
+  /** Online right now. The backend's own always is; a remote host is while
    *  its link is up. A job for an offline host WAITS — it never fails. */
   readonly online: boolean;
 

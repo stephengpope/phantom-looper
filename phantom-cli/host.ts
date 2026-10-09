@@ -11,7 +11,7 @@
 //   phantom-cli host status
 //   phantom-cli host logs
 //
-// The key is the one the cli holds: the server key makes a SHARED host (any
+// The key is the one the cli holds: the root API key makes a SHARED host (any
 // workspace may land here); your own API key makes YOUR host (your
 // workspaces alone). Nothing listens on this machine — the host dials out.
 import { existsSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
@@ -108,7 +108,7 @@ export async function runHost(args: string[]): Promise<number> {
       if (!listed.hosts.length) { console.log('the backend knows no session hosts'); return 0; }
       console.log('\nthe backend sees:');
       for (const host of listed.hosts) {
-        console.log(`  ${host.online ? '●' : '○'} ${host.name}  ${host.ownerUserId ? 'personal' : 'shared'}  ${host.workspaces} workspace${host.workspaces === 1 ? '' : 's'}  ${host.online ? 'online' : `offline${host.connectedAt ? ` (last ${host.connectedAt})` : ''}`}  ${host.id}`);
+        console.log(`  ${host.online ? '●' : '○'} ${host.name}  ${host.ownerUserId ? 'user host' : 'shared host'}  ${host.workspaces} workspace${host.workspaces === 1 ? '' : 's'}  ${host.online ? 'online' : `offline${host.connectedAt ? ` (last ${host.connectedAt})` : ''}`}  ${host.id}`);
       }
     } catch (error) { console.error(`could not ask the backend: ${(error as Error).message}`); return 1; }
     return 0;

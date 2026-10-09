@@ -1,5 +1,5 @@
 // LocalHost — the workspace primitives, run HERE: this process's volume and
-// this process's Docker daemon. It is the built-in host of every server
+// this process's Docker daemon. It is the backend's own host on every server
 // (the backend holds one and routes to it when a workspace is placed
 // nowhere else), and it is the body of a session host process
 // (host/SessionHost.ts), which runs this same class against its own volume
@@ -132,7 +132,7 @@ export class LocalHost implements WorkspaceHost {
     private readonly images: Images,
     readonly paths: Paths,
     private readonly opts: LocalHostOptions = {},
-    identity: { id: string | null; name: string } = { id: null, name: 'built-in' },
+    identity: { id: string | null; name: string } = { id: null, name: 'backend' },
   ) {
     this.id = identity.id;
     this.name = identity.name;
@@ -217,6 +217,10 @@ export class LocalHost implements WorkspaceHost {
       sudo: plan.sudo,
       runtime: plan.runtime,
       diskGb: plan.diskGb,
+      // Provenance on the container itself: which host made it, for which
+      // workspace. The compose label groups them as one project in Docker
+      // Desktop (and `docker compose -p phantom-backend-workspaces ps`).
+      labels: { 'phantom.workspace': key, 'phantom.host': this.name, 'com.docker.compose.project': 'phantom-backend-workspaces' },
     }) as never;
     let created: Docker.Container;
     try {

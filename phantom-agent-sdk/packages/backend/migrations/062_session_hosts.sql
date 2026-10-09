@@ -1,6 +1,6 @@
 -- Session hosts: boxes that run workspaces for this server (host/SessionHosts.ts).
 -- A host connects OUT to the API with a key; the key makes it shared (the
--- server key: owner_user_id null, any workspace may land there) or personal
+-- root API key: owner_user_id null, any workspace may land there) or personal
 -- (a user's key: only that user's workspaces). Read and written as the backend
 -- itself — RLS on, no policy: `authenticated` never reaches the rows directly.
 --
@@ -23,9 +23,9 @@ create index session_hosts_owner_user_id_idx on phantom_agent_sdk.session_hosts 
 alter table phantom_agent_sdk.session_hosts enable row level security;
 
 -- Where a workspace's files and container are: the host it was placed on,
--- null for the built-in host (this server). Set once at creation, rewritten
+-- null for the backend itself (this server). Set once at creation, rewritten
 -- only by a move. A deleted host leaves its workspaces pointing at nothing,
--- which reads as the built-in host — the files are gone with the box.
+-- which reads as the backend itself — the files are gone with the box.
 alter table phantom_agent_sdk.workspaces
   add column session_host_id text references phantom_agent_sdk.session_hosts(id) on delete set null;
 create index workspaces_session_host_id_idx on phantom_agent_sdk.workspaces (session_host_id);

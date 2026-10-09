@@ -8,7 +8,7 @@
 // This object DECIDES: which image, which limits, which credentials, which
 // database — read from the settings in the project's scope — and hands the
 // whole plan to the host the workspace is placed on (runtime/WorkspaceHost.ts),
-// which creates and starts the container. The built-in host is this process;
+// which creates and starts the container. The backend's own host is this process;
 // a session host is a box of its own. The docker calls live there.
 //
 // No in-memory tracking: idle time comes from the workspace's lastUsedAt
@@ -58,6 +58,9 @@ interface SpecInput {
   /** The agents' network (AGENT_NETWORK): internet out, no container on it
    *  able to reach another. Absent = Docker's default bridge (dev). */
   network?: string;
+  /** Who made it and for what: `phantom.workspace`, `phantom.host`, and the
+   *  compose project label that groups them in Docker Desktop. */
+  labels?: Record<string, string>;
 }
 
 /** The dockerode createContainer spec — pure, so the docker wiring is a unit
@@ -99,6 +102,7 @@ export function buildContainerSpec(i: SpecInput): Record<string, unknown> {
     Image: i.image,
     Cmd: ['sleep', 'infinity'], // the command lives at run time, not in the image — any image works
     ...(i.env.length ? { Env: i.env } : {}),
+    ...(i.labels ? { Labels: i.labels } : {}),
     WorkingDir: '/workspace/repo',
     HostConfig,
   };
@@ -204,7 +208,7 @@ export class SessionContainers {
    *  project's code cannot reach it": the role's password enters the
    *  container's env, and — like the PAT — dies with it. The host joins the
    *  container to the database server's private network by the host name in
-   *  the URL — which only the built-in host can do: the database server is a
+   *  the URL — which only the backend's own host can do: the database server is a
    *  container on THIS daemon. A remote host gets no database. */
   private async databaseEnv(project: ProjectRow | undefined, host: WorkspaceHost): Promise<{ env: string[]; host?: string }> {
     if (!project || !this.opts.settings || !this.opts.databases) return { env: [] };
@@ -219,7 +223,7 @@ export class SessionContainers {
     return { env: [`AGENT_DATABASE_URL=${url}`], host: new URL(url).hostname };
   }
 
-  /** Null when the built-in host can hold a container to `container_disk_gb`. */
+  /** Null when the backend's own host can hold a container to `container_disk_gb`. */
   diskSupport(): Promise<string | null> { return this.hosts.local.diskSupport(); }
 
   /** Remove the workspace's container on its host. None there is fine — that

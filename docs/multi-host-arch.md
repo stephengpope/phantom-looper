@@ -14,7 +14,7 @@ detached commands, watcher, disk. The backend never opens a workspace path or
 a Docker daemon itself.
 
 - `LocalHost` runs the primitives here, against this process's volume and
-  Docker. It is the built-in host of every server, and the body of a session
+  Docker. It is the backend's own host on every server, and the body of a session
   host process.
 - `RemoteHost` sends the same primitives as jobs over a host's link. A proxy;
   nothing runs in the backend.
@@ -33,8 +33,8 @@ its own — every job carries what it needs.
 
 ## What a host is
 
-The key makes it. The server key registers a **shared** host: any workspace
-may land there. A user's API key registers a **personal** host: only that
+The key makes it. The root API key registers a **shared** host: any workspace
+may land there. A user's API key registers a **user** host: only that
 user's workspaces. The backend classifies the key as it does every request;
 nothing new to declare.
 
@@ -45,11 +45,11 @@ Identity: the backend assigns an id at the first hello; the host writes it to
 ## Placement
 
 Once, when a workspace is created (`Workspaces.checkout`); pinned from then on
-(`workspaces.session_host_id`, null = the built-in host). In order:
+(`workspaces.session_host_id`, null = the backend itself). In order:
 
 1. the acting user's own online hosts
 2. shared online hosts
-3. the built-in host (unless `SESSION_HOST_BUILTIN=0`)
+3. the backend itself (unless `RUN_SESSION_CONTAINERS=0`)
 
 Within a tier: fewest workspaces with files, then most recently connected. A
 host whose box cannot hold the project's `container_disk_gb` is skipped.

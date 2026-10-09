@@ -10,7 +10,7 @@
 // events queue, and go when the link is back. Only a job (a kill, a cancel)
 // stops anything.
 //
-// Identity: the key says what the host is (the server key: shared; a user's
+// Identity: the key says what the host is (the root API key: shared; a user's
 // key: theirs). The row's id is persisted beside the volume (host.json) so a
 // reconnect — and a restart — is the same host, never a new one. `boot` is
 // fresh per process: the backend fails what a dead process was running.
@@ -36,7 +36,7 @@ const HOST_RETRY: RetryPolicy = { waitsS: [1, 2, 4, 8], budgetMs: 15_000, retrya
 export interface SessionHostOptions {
   /** The backend's origin, e.g. https://phantom.example.com */
   origin: string;
-  /** The server key (a shared host) or a user's API key (their host). */
+  /** The root API key (a shared host) or a user's API key (their host). */
   key: string;
   name: string;
   paths: Paths;
@@ -95,7 +95,7 @@ export class SessionHost {
     const origin = env.BACKEND_URL;
     const key = env.BACKEND_KEY;
     if (!origin) throw new Error('BACKEND_URL is not set — the backend this host connects to');
-    if (!key) throw new Error('BACKEND_KEY is not set — the server key (a shared host) or your API key (your host)');
+    if (!key) throw new Error('BACKEND_KEY is not set — the root API key (a shared host) or your API key (your host)');
     const root = env.WORKSPACE_ROOT_PATH || '/workspaces';
     return new SessionHost({
       origin, key,
@@ -129,7 +129,7 @@ export class SessionHost {
       try { await this.#resolveCredential(); break; }
       catch (error) {
         const status = (error as { status?: number }).status;
-        if (status === 401 || status === 403) throw new Error(`the backend refused the key (${status}) — BACKEND_KEY must be the server key or a user's API key`);
+        if (status === 401 || status === 403) throw new Error(`the backend refused the key (${status}) — BACKEND_KEY must be the root API key or a user's API key`);
         if (this.#stopped) return;
         log.warn({ err: errStr(error), retryInMs: wait }, 'backend unreachable — waiting');
         await new Promise((wake) => setTimeout(wake, wait));

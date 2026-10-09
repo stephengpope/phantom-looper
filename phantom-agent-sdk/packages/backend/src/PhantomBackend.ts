@@ -175,7 +175,7 @@ export class PhantomBackend {
   readonly docker: Docker;
   readonly images: Images;
   readonly sessionContainers: SessionContainers;
-  /** The hosts workspaces run on: the built-in one (this process) and every
+  /** The hosts workspaces run on: the backend's own (this process) and every
    *  session host that registered — and where each workspace is. */
   readonly sessionHosts: SessionHosts;
 
@@ -267,15 +267,16 @@ export class PhantomBackend {
     const docker = makeDocker();
     // THE image puller/remover — every pull and removal in this process goes through it so they never overlap.
     const images = new Images(docker);
-    // The built-in host: this process's volume and Docker. Every workspace
+    // The backend's own host: this process's volume and Docker. Every workspace
     // call goes through a host (runtime/WorkspaceHost.ts); a workspace placed
-    // nowhere else is here. SESSION_HOST_BUILTIN=0: this server runs no
-    // workspaces itself (a cloud API whose workspaces all live on session hosts).
+    // nowhere else is here. RUN_SESSION_CONTAINERS=0: this server runs no
+    // session containers itself — every workspace lands on a session host (a
+    // cloud API with its database, and nothing else, on the box).
     const localHost = new LocalHost(docker, images, paths, {
       volume: process.env.WORKSPACE_VOLUME, network: process.env.AGENT_NETWORK, databaseContainer: process.env.AGENT_DATABASE_CONTAINER,
       diskQuota: process.env.DISK_QUOTA_URL || undefined, apiImage: process.env.API_IMAGE,
     });
-    const sessionHosts = new SessionHosts(database.system, localHost, { builtIn: !/^(0|off|false|no)$/i.test(process.env.SESSION_HOST_BUILTIN ?? ''), settings });
+    const sessionHosts = new SessionHosts(database.system, localHost, { runsContainers: !/^(0|off|false|no)$/i.test(process.env.RUN_SESSION_CONTAINERS ?? '1'), settings });
     await sessionHosts.load();
     const workspaces = new Workspaces(database.drizzle, sessionHosts, settings, sessionEvents);
     const cards = new Cards(database.drizzle, projects, boardEvents, config.cardFields);
@@ -338,7 +339,7 @@ export class PhantomBackend {
    *  work-state refresh. */
   #startLoops(): void {
     this.#loops.push(this.#loop(async () => {
-      if (this.sessionHosts.builtIn) await checkoutPool.tick(this.projects, this.settings, this.paths).catch((error) => log.error({ err: errStr(error) }, 'pool tick threw'));
+      if (this.sessionHosts.runsContainers) await checkoutPool.tick(this.projects, this.settings, this.paths).catch((error) => log.error({ err: errStr(error) }, 'pool tick threw'));
       await idleBackupSweep(this.projects, this.sessions, this.git.sync).catch((error) => log.error({ err: errStr(error) }, 'idle backup sweep threw'));
       const idleMs = await this.settings.resolve<number>('container_idle_ms').catch(() => 30 * 60_000);
       await this.sessionContainers.reap(Number(idleMs), (idleMs) => this.idleContainerWorkspaces(idleMs)).catch((error) => log.error({ err: errStr(error) }, 'container reap threw'));
@@ -384,7 +385,7 @@ export class PhantomBackend {
       if (reason) throw new Error(`container_disk_gb is set but cannot be enforced on this server: ${reason}`);
     }
     await this.#httpApi.listen(this.env.port);
-    if (this.sessionHosts.builtIn) await this.sessionHosts.local.retireOldContainers();
+    if (this.sessionHosts.runsContainers) await this.sessionHosts.local.retireOldContainers();
     this.git.start();
     this.#startLoops();
     if (this.config.crons) { this.#cronScheduler = new CronScheduler(this, this.config.crons.agent); this.#cronScheduler.start(); }
