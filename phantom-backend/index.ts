@@ -3,7 +3,7 @@
 // service, the loops, then this app's engines (config.onStart): the looper,
 // the cron scheduler, the Telegram bot, the digest, the upgrade check. The
 // app reaches the backend through the config and its public objects only.
-import { PhantomBackend, Deployment, telegramChannel, updateShutdown, logger, errStr, type PhantomBackendConfig } from '@phantom-agent-sdk/backend';
+import { PhantomBackend, telegramChannel, sidecarApply, logger, errStr, type PhantomBackendConfig } from '@phantom-agent-sdk/backend';
 import { BackendClient } from '@phantom-agent-sdk/client';
 import { GIT_CLIENT_ID } from '@phantom-agent-sdk/backend/git';
 import { config as registrations } from './config.js';
@@ -11,7 +11,6 @@ import { CodingAgent } from '../phantom-looper/agents/coding.js';
 import { writeTitle } from './sessionTitle.js';
 import { writeCommitMessage } from './git/commitMessage.js';
 import { toCodingAgent } from '../phantom-looper/prompts/autoPush/wiring.js';
-import { appRoutes } from './api/appRoutes.js';
 import { Looper } from './looper/Looper.js';
 import { CardAutomation } from './looper/CardAutomation.js';
 import { boardTools } from './looper/boardTools.js';
@@ -27,11 +26,29 @@ async function main() {
   let looper: Looper;
   let telegram: TelegramAssistantBot;
   let digest: SessionDigest;
-  let deployment: Deployment;
+
+  // This app's deployment: the two images a release tag means, the updater
+  // sidecar that replaces the stack (updater/apply.sh), and the one reason
+  // a restart waits — a card run mid-round. The SDK runs the update
+  // (/api/update, /api/system/*); this is all it needs from the app. No
+  // sidecar (UPDATE_TRIGGER_DIR unset): no strategy, updates refuse.
+  const triggerDir = process.env.UPDATE_TRIGGER_DIR;
+  const apiImage = process.env.API_IMAGE || 'ghcr.io/stephengpope/phantom-backend';
+  const sessionImage = process.env.SESSION_IMAGE || 'ghcr.io/stephengpope/phantom-backend-session';
+  const deployment: PhantomBackendConfig['deployment'] = triggerDir ? {
+    images: (tag) => [{ name: 'api', ref: `${apiImage}:${tag}` }, { name: 'session', ref: `${sessionImage}:${tag}` }],
+    apply: sidecarApply({ triggerDir }),
+    guard: () => {
+      const loops = looper?.runningCount() ?? 0;
+      if (!loops) return null;
+      return loops === 1 ? '1 card has a round in flight — restarting now would interrupt it (it resumes after the restart)'
+        : `${loops} cards have a round in flight — restarting now would interrupt them (they resume after the restart)`;
+    },
+  } : undefined;
 
   const config: PhantomBackendConfig = {
     ...registrations,
-    routes: (api) => appRoutes(api, backend, { deployment, updateTriggerDir: process.env.UPDATE_TRIGGER_DIR || undefined }),
+    ...(deployment ? { deployment } : {}),
     health: () => ({ loops_running: looper?.runningCount() ?? 0 }),
     // The looper's two switches on a card: the app's table, carried on every
     // card the SDK answers (the door), and the two tools that flip them.
@@ -104,7 +121,7 @@ async function main() {
 
       // The Telegram bot's behaviour — a client of this app like the looper.
       // Reconcile at boot re-registers a stale webhook and pushes the command menu.
-      telegram = new TelegramAssistantBot(backend, deployment, () => looper.runningCount());
+      telegram = new TelegramAssistantBot(backend, () => looper.runningCount());
       // The agents' send_message and the digest go out through the bot.
       backend.notifications.addChannel({
         name: 'telegram',
@@ -134,9 +151,6 @@ async function main() {
     },
 
     onStop: async () => {
-      // First: an update in flight ends its stream cleanly (this restart IS
-      // the update) before the API force-closes every connection.
-      updateShutdown();
       looper?.stop();
       digest?.stop();
     },
@@ -147,10 +161,6 @@ async function main() {
   // backend exists; the SDK asks for card fields only after start.
   let automation: CardAutomation | undefined;
   const cardAutomation = () => (automation ??= new CardAutomation(backend.database.drizzle, backend.settings));
-  // The deployment this backend runs in — its update, logs, status, restart,
-  // token report — read by the /system routes and the Telegram bot.
-  deployment = new Deployment(backend.paths, backend.tokenLog, backend.docker ?? undefined, backend.images,
-    process.env.UPDATE_TRIGGER_DIR || undefined, () => looper?.runningCount() ?? 0);
   // ONE client for this app's own model calls (the conflict fixer, the commit
   // message, the title, the digest): the git sync's identity, so a conflict
   // turn re-takes the sync's own hold.

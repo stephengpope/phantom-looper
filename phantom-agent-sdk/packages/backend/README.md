@@ -29,10 +29,15 @@ migrations) and `service_role` (the process: rows only, no DDL; makes agent
 play-space databases) exist with passwords derived from `ENCRYPTION_KEY`,
 then hangs up. Nothing running can alter a table.
 
-**Routes.** `/api/*` the SDK's, the service role key on every one;
-`/api/auth/*` sign-in (Better Auth, with `config.identity`); `/app/*` user
-space's (`config.routes`), no key check — the app gates each with
-`backend.identity.require(request)`. `/db` the database console.
+**Routes.** `/api/*` the SDK's — every object the backend builds, the
+server's own update, logs, status and model catalog among them; a key, a
+user role key or a sign-in token on every one, `serviceRole` routes the
+key alone; `/api/auth/*` sign-in (Better Auth, with `config.identity`);
+`/app/*` user space's (`config.routes`), no key check — the app gates each
+with `backend.identity.require(request)`. `/db` the database console,
+`/docs` the API's docs. The app's say in an SDK route is a config hook:
+`config.deployment` names the images a release tag pulls, how the stack is
+replaced (`sidecarApply` for the updater sidecar) and when a restart waits.
 
 **Mail and sign-in.** `backend.mailer` sends over SMTP (the `smtp_*`
 settings; `POST /api/mail/test` proves them). `config.identity` turns sign-in

@@ -56,9 +56,9 @@ client SDK's `BackendOptions.actingFor` sends the two headers.
   same whether the thing exists or not. A user's 500 says "internal error";
   the log gets the detail.
 - **Service-role-only routes** (`config: { serviceRole: true }`): presets, the
-  test mail, user bootstrap, the media bucket's CORS, and Telegram notify.
-  A user gets access denied. phantom-looper's `/app` routes admit the
-  service role alone.
+  test mail, user bootstrap, the media bucket's CORS, Telegram notify, and
+  the server's own operations (`/models`, `/update`, `/system/*`). A user
+  gets access denied. phantom-looper registers no `/app` route.
 - **The two server-wide live feeds** (`/sessions/events`,
   `/settings/events`) are in-memory. Each event goes to a user only if a
   read as them can see the row it is about.

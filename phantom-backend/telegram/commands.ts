@@ -231,7 +231,7 @@ export async function handleCommand(
       ];
 
       // Server stats condensed to one line.
-      const sys = await telegram.deployment.status().catch(() => null);
+      const sys = await telegram.backend.deployment.status().catch(() => null);
       if (sys) {
         const raw = sys.text;
         const cpu = raw.match(/(\d+)% busy/)?.[1];
@@ -432,7 +432,7 @@ export async function handleCommand(
     case 'cpu': {
       // Legacy alias — folded into /status but still answered if typed.
       let text: string;
-      try { text = (await telegram.deployment.status()).text; }
+      try { text = (await telegram.backend.deployment.status()).text; }
       catch (error) { await reply(`⚠️ Couldn't read the server status: ${(error as Error).message}`); return; }
       await client.sendMarkdown(chatId, titled('🖥 Server status', text + '\n\nℹ️ /cpu is now part of /status'));
       return;
@@ -440,7 +440,7 @@ export async function handleCommand(
 
     case 'tokens': {
       let text: string;
-      try { text = (await telegram.deployment.tokenUsage(await telegram.backend.settings.clockFor())).text; }
+      try { text = (await telegram.backend.deployment.tokenUsage(await telegram.backend.settings.clockFor())).text; }
       catch (error) { await reply(`⚠️ Couldn't read token usage: ${(error as Error).message}`); return; }
       // A code block: the report is a fixed-column table, monospace only.
       await client.sendMarkdown(chatId, titled('📊 Token usage', text ? '```\n' + text + '\n```' : '(no usage data)'));
@@ -458,7 +458,8 @@ export async function handleCommand(
           : 'the api — the whole server is offline for a few seconds (in-flight replies are cut)',
       });
       if (!accepted) return;
-      try { await telegram.deployment.restart(service || undefined); }
+      // restart_anyway: the approval above was the warning.
+      try { await telegram.backend.deployment.restart(service || undefined, { restartAnyway: true }); }
       catch (error) { await reply(`⚠️ Couldn't restart: ${(error as Error).message}`); return; }
       await reply(service
         ? `🔄 Restarting ${service}.`

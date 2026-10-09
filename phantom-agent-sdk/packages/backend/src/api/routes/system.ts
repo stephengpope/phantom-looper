@@ -1,39 +1,35 @@
-// Server-level operations: the remote upgrade (with streamed pull progress),
-// container logs, system status, and token usage.
-//
-// POST /update {tag} pulls the new images via dockerode (streamed per-image
-// download progress as ND-JSON), then hands the release tag to the updater
-// sidecar which extracts host files and recreates the stack. The pull happens
-// inside the API process (the socket proxy allows IMAGES + POST), so progress
-// is observable. The sidecar still owns compose — the API never holds the raw
-// docker socket.
-import type { FastifyInstance } from 'fastify';
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import type { PhantomBackend } from '@phantom-agent-sdk/backend';
-import type { AppExtras } from '../appRoutes.js';
-import { err, ok } from '@phantom-agent-sdk/backend';
-import { logger, errStr } from '@phantom-agent-sdk/backend';
+// The server itself, over HTTP: its update (streamed pull and install
+// progress), its containers' logs and restarts, the machine's load, the
+// token report, the model catalog. Thin over backend.deployment and
+// backend.modelCatalog — the SDK's objects, so the SDK's routes. Every one
+// is the service role's: an end user has no business restarting the server.
+import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { PhantomBackend } from '../../PhantomBackend.js';
 import { PROVIDERS, isProvider } from '@phantom-agent-sdk/client';
-import { DeploymentError, LOG_MAX_TAIL, LOG_SERVICES } from '@phantom-agent-sdk/backend';
+import { DeploymentError, LOG_MAX_TAIL, LOG_SERVICES } from '../../upgrade/Deployment.js';
+import { err, ok } from '../HttpApi.js';
 
-const log = logger('system');
+const SERVICE_ROLE = { serviceRole: true } as const;
+const TAG = { tags: ['meta'] } as const;
 
 export const RELEASE_TAG = /^v\d+\.\d+\.\d+$/;
 
 /** The Deployment object's refusal, as the API's answer. */
-const systemErr = (reply: { code: (status: number) => { send: (b: unknown) => unknown } }, error: unknown) => {
+const deploymentErr = (reply: FastifyReply, error: unknown) => {
   if (!(error instanceof DeploymentError)) throw error;
-  return reply.code(error.code === 'no_such_service' ? 404 : 503).send(err(error.code, error.message));
+  const status = error.code === 'no_such_service' ? 404 : error.code === 'restart_refused' ? 409 : 503;
+  return reply.code(status).send(err(error.code, error.message, error.retryable));
 };
 
-export function systemRoutes(app: FastifyInstance, ctx: PhantomBackend, extras: AppExtras) {
+export function systemRoutes(app: FastifyInstance, backend: PhantomBackend): void {
+  const { deployment } = backend;
+
   // The model catalog, served by the server so every client and the `model`
-  // default read ONE list (models.ts: models.dev, an hour in memory, the
+  // default read ONE list (ModelCatalog: models.dev, an hour in memory, the
   // release's snapshot when it cannot be reached).
   app.get<{ Querystring: { provider?: string } }>('/models', {
-    schema: {
-      tags: ['meta'],
+    config: SERVICE_ROLE,
+    schema: { ...TAG,
       summary: 'List a provider\'s models',
       description: 'The models a provider offers, newest first.',
       querystring: { type: 'object', required: ['provider'], properties: {
@@ -42,19 +38,19 @@ export function systemRoutes(app: FastifyInstance, ctx: PhantomBackend, extras: 
   }, async (req, reply) => {
     const provider = req.query.provider ?? '';
     if (!isProvider(provider)) return reply.code(400).send(err('invalid_args', `provider must be one of: ${PROVIDERS.join(', ')}`));
-    return ok({ provider: provider, source: ctx.modelCatalog.source(), models: ctx.modelCatalog.modelsFor(provider) });
+    return ok({ provider, source: backend.modelCatalog.source(), models: backend.modelCatalog.modelsFor(provider) });
   });
 
   app.post('/update', {
-    schema: {
-      tags: ['meta'],
+    config: SERVICE_ROLE,
+    schema: { ...TAG,
       summary: 'Update the server',
       description: 'Upgrades the server to a release, streaming progress as one JSON object per line.',
       body: {
         type: 'object', required: ['tag'], additionalProperties: false,
         properties: {
           tag: { type: 'string', pattern: RELEASE_TAG.source, description: 'Release tag, e.g. v0.2.0 (no prereleases)' },
-          restart_anyway: { type: 'boolean', description: 'Update even with loop rounds in flight — they are interrupted and resume after the restart. Only a caller whose human was warned should send this.' },
+          restart_anyway: { type: 'boolean', description: 'Update even when the deployment asks to wait (work in flight is interrupted and resumes after the restart). Only a caller whose human was warned should send this.' },
         },
       },
     },
@@ -64,14 +60,11 @@ export function systemRoutes(app: FastifyInstance, ctx: PhantomBackend, extras: 
     // alive. The refusals are thrown before the first event; attaching to an
     // update in progress replays events synchronously, so the head goes out
     // with the first write, whichever comes first.
-    let run: ReturnType<typeof extras.deployment.update>;
+    let run: ReturnType<typeof deployment.update>;
     const head = () => { if (!reply.raw.headersSent) reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' }); };
     const write = (record: unknown) => { head(); reply.raw.write(`${JSON.stringify(record)}\n`); };
-    try { run = extras.deployment.update(tag, { restartAnyway }, write); }
-    catch (error) {
-      if (!(error instanceof DeploymentError)) throw error;
-      return reply.code(error.code === 'loops_running' ? 409 : 503).send(err(error.code, error.message, error.retryable));
-    }
+    try { run = deployment.update(tag, { restartAnyway }, write); }
+    catch (error) { return deploymentErr(reply, error); }
     head();
     const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
     const closed = new Promise<void>((resolve) => reply.raw.on('close', resolve));
@@ -83,8 +76,8 @@ export function systemRoutes(app: FastifyInstance, ctx: PhantomBackend, extras: 
   });
 
   app.post<{ Body: { service?: string; tail?: number; since?: string; grep?: string } }>('/system/logs', {
-    schema: {
-      tags: ['meta'],
+    config: SERVICE_ROLE,
+    schema: { ...TAG,
       summary: 'Read container logs',
       description: 'The recent logs of one of the server\'s containers.',
       body: {
@@ -98,42 +91,43 @@ export function systemRoutes(app: FastifyInstance, ctx: PhantomBackend, extras: 
       },
     },
   }, async (req, reply) => {
-    try { return ok(await extras.deployment.logs(req.body ?? {})); }
-    catch (error) { return systemErr(reply, error); }
+    try { return ok(await deployment.logs(req.body ?? {})); }
+    catch (error) { return deploymentErr(reply, error); }
   });
 
   app.get('/system/status', {
-    schema: {
-      tags: ['meta'],
+    config: SERVICE_ROLE,
+    schema: { ...TAG,
       summary: 'Get server status',
       description: 'The server\'s CPU, load, memory and disk use.',
     },
-  }, async () => ok(await extras.deployment.status()));
+  }, async () => ok(await deployment.status()));
 
-  app.post<{ Body: { service?: string } }>('/system/restart', {
-    schema: {
-      tags: ['meta'],
+  app.post<{ Body: { service?: string; restart_anyway?: boolean } }>('/system/restart', {
+    config: SERVICE_ROLE,
+    schema: { ...TAG,
       summary: 'Restart a container',
       description: 'Restarts one of the server\'s containers, the API by default.',
       body: {
         type: 'object', additionalProperties: false,
-        properties: { service: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]*$',
-          description: 'compose service name (default api)' } },
+        properties: {
+          service: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]*$', description: 'compose service name (default api)' },
+          restart_anyway: { type: 'boolean', description: 'Restart even when the deployment asks to wait. Only a caller whose human was warned should send this.' },
+        },
       },
     },
   }, async (req, reply) => {
-    try { return ok(await extras.deployment.restart(req.body?.service)); }
-    catch (error) { return systemErr(reply, error); }
+    try { return ok(await deployment.restart(req.body?.service, { restartAnyway: req.body?.restart_anyway })); }
+    catch (error) { return deploymentErr(reply, error); }
   });
 
-  // ---- token usage report ---------------------------------------------------
   // One query over token_usage for today / last 7 days / last 30 days, per
   // kind × model; tokenReport.ts lays it out.
   app.get('/system/token-usage', {
-    schema: {
-      tags: ['meta'],
+    config: SERVICE_ROLE,
+    schema: { ...TAG,
       summary: 'Get the token usage report',
       description: 'Tokens used today, in the last 7 days and in the last 30 days, by agent, provider and model.',
     },
-  }, async () => ok(await extras.deployment.tokenUsage(await ctx.settings.clockFor())));
+  }, async () => ok(await deployment.tokenUsage(await backend.settings.clockFor())));
 }

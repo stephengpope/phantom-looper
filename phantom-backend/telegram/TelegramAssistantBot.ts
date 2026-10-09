@@ -19,7 +19,7 @@ import { BackendClient, type Agent, type AgentHandlers } from '@phantom-agent-sd
 import { telegramAssistantKit, CLIENT_ID, TELEGRAM_STARTER } from './assistant.js';
 import type { FastifyInstance } from 'fastify';
 import { APP_VERSION } from '@phantom-agent-sdk/backend';
-import type { Deployment, PhantomBackend } from '@phantom-agent-sdk/backend';
+import type { PhantomBackend } from '@phantom-agent-sdk/backend';
 import type { BoardEvent } from '@phantom-agent-sdk/backend';
 import type { SessionRow, ProjectRow } from '@phantom-agent-sdk/backend/schema';
 import { autoBuildAlert } from './alerts.js';
@@ -68,7 +68,7 @@ export class TelegramAssistantBot {
    *  inbound, delivery), the sessions, the board, the settings, its git —
    *  plus this app's own bot state, its `deployment` (update, logs, restart)
    *  and the looper's count of card runs in flight (the upgrade's health line). */
-  constructor(readonly backend: PhantomBackend, readonly deployment: Deployment, private readonly loopsRunning: () => number) {
+  constructor(readonly backend: PhantomBackend, private readonly loopsRunning: () => number) {
     // The bot's bookkeeping, the server's whoever a chat speaks for.
     this.state = new TelegramAssistantState(backend.database.system);
     this.upgradeChecker = new UpgradeChecker({
@@ -80,7 +80,7 @@ export class TelegramAssistantBot {
         // informed yes the update guard asks for.
         try {
           let last: string | undefined;
-          await deployment.update(tag, { restartAnyway: true }, (event) => { last = event.event; onEvent?.(event); }).done;
+          await backend.deployment.update(tag, { restartAnyway: true }, (event) => { last = event.event; onEvent?.(event); }).done;
           return last === 'error' ? { ok: false, error: 'update failed' } : { ok: true };
         } catch (error) { return { ok: false, error: (error as Error).message }; }
       },

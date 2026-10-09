@@ -71,20 +71,22 @@ the console, nothing else in the name).
 
 | Prefix | Owned by | Auth | Audience |
 |---|---|---|---|
-| `/api/*` | SDK | `SERVICE_ROLE_KEY` | the service role: cli, looper, cron, updater, scripts; user space's own code |
+| `/api/*` | SDK | the service role key, a user role key or a sign-in token; no credential is a 401; a route flagged `serviceRole` refuses a user | everyone: cli, looper, cron, updater, scripts, end users |
 | `/api/auth/*` | SDK (Better Auth) | public / the user's own token | an app's end users: sign in, organizations, invitations, keys |
 | `/api/identity/*` | SDK | `me`: any caller · the rest: the key | who am I; the service role's bootstrap |
-| `/app/*` | user space | the app's choice per route: `backend.identity.require` | the app's end users |
-| `/db` | SDK (console) | Basic: `service_role` + the service role key | the service role, in a browser |
+| `/app/*` | user space | the same credentials, identified and not refused: the route decides with `backend.identity.require` | the app's end users |
+| `/db`, `/docs` | SDK (console) | Basic: `service_role` + the service role key | the service role, in a browser |
 
-The SDK never serves under `/app`; user space never under `/api`. The
-prefix says who owns a route and who may call it. `config.routes` registers
-under `/app` with no key check — the app applies its own. A browser app on
-another origin (`identity.trustedOrigins`) gets CORS with credentials on
-`/api/auth` and `/app`. phantom-looper's routes (`/models`, `/update`,
-`/system/*`) moved to `/app` and admit the service role alone, as before; the
-client SDK sends a path under `/app/` to the origin, any other under
-`/api`.
+`/api` serves what the SDK builds; `/app` serves what the app builds. The
+SDK never serves under `/app`; user space never under `/api`. A route over
+an SDK object is the SDK's and lives under `/api`; where the app has a say
+in it (which images an update pulls, when a restart must wait) the say goes
+in as a config hook — `config.deployment` — never by taking the route.
+`config.routes` registers under `/app` with no key check — the app applies
+its own. A browser app on another origin (`identity.trustedOrigins`) gets
+CORS with credentials on `/api/auth` and `/app`. phantom-looper registers no
+`/app` route today: the server's own operations (`/models`, `/update`,
+`/system/*`) are the SDK's, under `/api`, service role only.
 
 ## Who sees what
 
@@ -92,7 +94,7 @@ client SDK sends a path under `/app/` to the origin, any other under
 |---|---|
 | Service role (`SERVICE_ROLE_KEY`) | everything |
 | User space code (in-process) | every row; applies its own rules per end user |
-| End user (Better Auth token) | what the app's `/app` routes hand them |
+| End user (Better Auth token) | what the row policies allow on `/api`, and what the app's `/app` routes hand them |
 | Agent | its session's project; its own play-space database |
 | Console | everything |
 
@@ -464,8 +466,8 @@ backend.identity.verify(token)                      // the link's token → sess
 
 `apiKey` on `BackendClient` becomes `credential`: three kinds, one header
 each (`Authorization: Bearer` for the service role's key and a session token,
-`x-api-key` for a Better Auth key). Paths under `/app/` go to the origin
-(already); `/api/auth/*` is the Better Auth client's own base.
+`x-api-key` for a Better Auth key). `/api/auth/*` is the Better Auth
+client's own base.
 
 *Fixed in the proof:* three faults kept a client on a user's credential
 from working at all. `GET /health` — the version check every client makes

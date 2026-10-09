@@ -228,9 +228,8 @@ export async function readServerCa(target: Target, opts: SshOpts = {}): Promise<
   return pem;
 }
 
-/** Where a path lives: under /app it is the app's own route at the origin;
- *  anything else is the SDK's under /api. The same rule as BackendClient's. */
-const routeUrl = (base: string, path: string) => new URL(path.startsWith('/app/') ? path : `/api${path}`, base);
+/** A route under the API root. The same rule as BackendClient's. */
+const routeUrl = (base: string, path: string) => new URL(`/api${path}`, base);
 
 /** A minimal envelope client on node http(s), for the moments global fetch
  *  cannot serve: a CA to pin before the app's dispatcher is wired (setup), a

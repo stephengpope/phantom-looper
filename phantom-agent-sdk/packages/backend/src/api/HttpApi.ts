@@ -53,6 +53,7 @@ import { mailRoutes } from './routes/mail.js';
 import { mediaRoutes } from './routes/media.js';
 import { identityRoutes } from './routes/identity.js';
 import { sessionRunnerRoutes } from './routes/sessionRunners.js';
+import { systemRoutes } from './routes/system.js';
 import { IDENTITY_PATH, IdentityError, type Caller } from '../identity/Identity.js';
 import { actAs, type Acting } from '../lib/acting.js';
 import { logger, errStr } from '../lib/log.js';
@@ -164,6 +165,7 @@ export class HttpApi {
       mediaRoutes(api, backend);
       identityRoutes(api, backend);
       sessionRunnerRoutes(api, backend);
+      systemRoutes(api, backend);
     }, { prefix: '/api' });
 
     // A browser app on another origin (identity.trustedOrigins) may call
@@ -183,7 +185,9 @@ export class HttpApi {
     }
 
     // User space's routes, under the envelope, with no key check: the app
-    // gates each with backend.identity.require.
+    // gates each with backend.identity.require. The line: /api serves what
+    // the SDK builds, /app what the app builds. A route that reads straight
+    // off the backend is the SDK's, and the SDK serves it under /api.
     if (this.routes) {
       await app.register(async (appScope) => {
         await browserOrigins(appScope);

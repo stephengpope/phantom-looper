@@ -110,9 +110,8 @@ every doc, is here.
 ### Not planned yet — each needs its plan written first
 
 5. **Multi-user in phantom-looper.** The SDK has users, organizations,
-   ownership and row-level security; this app uses none of it. Its only
-   identity call is `appRoutes`' `identity.require` (service role only).
-   No `/app` route serves an end user, the cli cannot sign in, every
+   ownership and row-level security; this app uses none of it. It makes
+   no identity call and registers no `/app` route; the cli cannot sign in, every
    project has no organization, no mail template is supplied.
 6. **Media** — built 2026-10-06 (`media/Media.ts`, migration 058, the
    `media_*` settings, `/api/media`, the `media` tools, the client's

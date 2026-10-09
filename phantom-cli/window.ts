@@ -1905,14 +1905,14 @@ export class WindowStore {
       case 'server': this.showOverlay(serverScreen(this)); return;
       case 'cpu': {
         try {
-          const status = await this.api('GET', '/app/system/status') as { text?: string; warnings?: string };
+          const status = await this.api('GET', '/system/status') as { text?: string; warnings?: string };
           this.note([status.text || '(empty status)', status.warnings ? `warnings: ${status.warnings}` : ''].filter(Boolean).join('\n'));
         } catch (entry) { this.note(`could not read the server status: ${(entry as Error).message}`); }
         return;
       }
       case 'tokens': {
         try {
-          const usage = await this.api('GET', '/app/system/token-usage') as { text?: string };
+          const usage = await this.api('GET', '/system/token-usage') as { text?: string };
           this.note(usage.text || '(no usage data)');
         } catch (entry) { this.note(`could not read token usage: ${(entry as Error).message}`); }
         return;
@@ -1924,7 +1924,7 @@ export class WindowStore {
           : await this.confirm('restart the server?', 'the api — everything is offline for a few seconds');
         if (!yes) return;
         try {
-          await this.api('POST', '/app/system/restart', svc ? { service: svc } : {});
+          await this.api('POST', '/system/restart', { ...(svc ? { service: svc } : {}), restart_anyway: true });
           this.note(svc ? `restarting ${svc}`
             : 'restarting the api — back in a few seconds (the window reconnects on its own)');
         } catch (entry) { this.note(`could not restart: ${(entry as Error).message}`); }

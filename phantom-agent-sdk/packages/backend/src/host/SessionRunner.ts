@@ -27,7 +27,8 @@ import * as checkoutPool from '../runtime/CheckoutPool.js';
 import { type Job, type JobEvent, type HostHello, type HostLoad, encodeError, fromBase64, toBase64 } from './protocol.js';
 import { SDK_VERSION } from '../sdkVersion.js';
 import { APP_VERSION, API_IMAGE, SESSION_IMAGE } from '../lib/env.js';
-import { startUpdate, subscribe as subscribeUpdate, shutdown as updateShutdown, HELPER_NAME } from '../upgrade/updateTask.js';
+import { startUpdate, subscribe as subscribeUpdate, shutdown as updateShutdown } from '../upgrade/updateTask.js';
+import { sidecarApply } from '../upgrade/sidecar.js';
 import type { UpdateEvent } from '@phantom-agent-sdk/client';
 import { logger, errStr } from '../lib/log.js';
 
@@ -276,9 +277,9 @@ export class SessionRunner {
       if (event.event === 'restarting' || event.event === 'error') over = true;
       wake?.();
     };
-    startUpdate({ images: this.#images, docker: this.opts.docker, triggerDir: this.opts.updateTriggerDir,
-      apiImage: this.opts.local.apiImage ?? API_IMAGE, sessionImage: sessionImage || SESSION_IMAGE,
-      ...(this.opts.updateHelperName ? { helperName: this.opts.updateHelperName } : { helperName: HELPER_NAME }) }, tag);
+    startUpdate({ images: this.#images, docker: this.opts.docker,
+      refs: [{ name: 'api', ref: `${this.opts.local.apiImage ?? API_IMAGE}:${tag}` }, { name: 'session', ref: `${sessionImage || SESSION_IMAGE}:${tag}` }],
+      apply: sidecarApply({ triggerDir: this.opts.updateTriggerDir, helperName: this.opts.updateHelperName }) }, tag);
     const unsubscribe = subscribeUpdate(listener);
     if (!unsubscribe) throw new Error('no update in progress');
     try {

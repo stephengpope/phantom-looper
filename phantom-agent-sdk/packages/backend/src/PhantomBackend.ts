@@ -57,6 +57,8 @@ import { SessionTitler, type TitleWriter } from './agents/SessionTitler.js';
 import { HttpApi } from './api/HttpApi.js';
 import { registerTools } from './tools/registry.js';
 import { reconcileDbUi } from './api/routes/dbUi.js';
+import { Deployment, type DeploymentStrategy } from './upgrade/Deployment.js';
+import { shutdown as updateShutdown } from './upgrade/updateTask.js';
 import type Docker from 'dockerode';
 
 const log = logger('backend');
@@ -99,8 +101,16 @@ export interface PhantomBackendConfig {
    *  card the SDK answers and taken by every card write (Cards). */
   cardFields?: CardFieldsExtension;
   /** Routes user space adds, under /app — no key check: the app gates each
-   *  with backend.identity.require. */
+   *  with backend.identity.require. The line: /api serves what the SDK
+   *  builds, /app what the app builds. A route over an SDK object belongs
+   *  to the SDK; the app shapes it through a config hook, never by taking
+   *  the route. */
   routes?: RouteRegistrar;
+  /** What the app knows about its own deployment: which images a release
+   *  tag means, how the running stack is replaced, when a restart must
+   *  wait. The SDK runs the update (/api/update, /api/system/restart) and
+   *  never names an image or a compose file. Absent: updates refuse. */
+  deployment?: DeploymentStrategy;
   /** Turns sign-in on: people, organizations, invitations, API keys
    *  (Identity). Absent = off: no route, nothing written. */
   identity?: IdentityOptions;
@@ -144,6 +154,9 @@ export class PhantomBackend {
   readonly backgroundTasks: BackgroundTasks;
   readonly tokenLog: TokenLog;
   readonly agentDatabases: AgentDatabases;
+  /** The stack this backend runs in: its update, logs, restarts, load, token
+   *  report (served at /api/update and /api/system/*). */
+  readonly deployment: Deployment;
 
   // ── agents and sessions ──────────────────────────────────────────────
   readonly agentTypes: AgentTypes;
@@ -199,6 +212,7 @@ export class PhantomBackend {
     this.modelCatalog = built.modelCatalog; this.sessionNotes = built.sessionNotes; this.sessionEvents = built.sessionEvents;
     this.boardEvents = built.boardEvents; this.settingsEvents = built.settingsEvents; this.foregroundCommands = built.foregroundCommands;
     this.docker = built.docker; this.images = built.images; this.sessionContainers = built.sessionContainers;
+    this.deployment = new Deployment(built.paths, built.tokenLog, built.docker, built.images, config.deployment);
     this.sessionRunners = built.sessionRunners; this.telegramBotState = built.telegramBotState;
     this.telegramSentMessages = built.telegramSentMessages; this.telegramHandledUpdates = built.telegramHandledUpdates;
     this.sessionTitler = new SessionTitler(this.sessions, config.writeTitle);
@@ -413,6 +427,9 @@ export class PhantomBackend {
    *  loops halt, the watcher ends, the database closes. */
   async stop(): Promise<void> {
     this.#stopped = true;
+    // First: an update in flight ends its stream cleanly (this restart IS
+    // the update) before the API force-closes every connection.
+    updateShutdown();
     this.#cronScheduler?.stop();
     await this.config.onStop?.(this);
     await this.git.stop();

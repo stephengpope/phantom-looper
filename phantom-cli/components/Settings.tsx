@@ -117,7 +117,7 @@ export function Settings({ api, onClose, onChange, configPath = CONFIG_PATH, row
   // opens; a server that cannot answer leaves the row free-text.
   const loadModels = useCallback(async (provider: string): Promise<CatalogModel[]> => {
     try {
-      const reply = await api('GET', `/app/models?provider=${encodeURIComponent(provider)}`) as { models?: CatalogModel[] };
+      const reply = await api('GET', `/models?provider=${encodeURIComponent(provider)}`) as { models?: CatalogModel[] };
       return Array.isArray(reply?.models) ? reply.models : [];
     } catch (entry) {
       // The row stays free-text, and the notice says why the list is missing

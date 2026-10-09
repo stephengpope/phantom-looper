@@ -189,8 +189,7 @@ export class BackendClient {
     const fetchWith = opts.retry === false || raw ? this.#fetch : this.#retrying;
     const contentType = raw ? raw.contentType : body !== undefined ? 'application/json' : undefined;
     try {
-      // A path under /app is user space's, at the API's origin; any other is the SDK's, under the API root.
-      return await fetchWith(path.startsWith('/app/') ? new URL(path, this.url).toString() : `${this.url}${path}`, {
+      return await fetchWith(`${this.url}${path}`, {
         method, headers: this.#headers({ sessionId: opts.sessionId, contentType }),
         body: raw ? raw.body : body === undefined ? undefined : JSON.stringify(body), signal: opts.signal,
         // fetch sends a stream body only when told it is one-way.

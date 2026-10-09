@@ -1,48 +1,47 @@
-// In-memory singleton for a running update. The API pulls images through
-// Images (the one puller — nothing removes an image while it runs) and
-// streams progress to every attached listener (CLI, Telegram, reconnects).
-// The update survives client disconnects — listeners are just observers.
+// In-memory singleton for a running update: the SDK's half of an update.
+// It pulls the images a deployment strategy names through Images (the one
+// puller — nothing removes an image while it runs), calls the strategy's
+// apply, and streams progress to every attached listener (CLI, Telegram,
+// reconnects). The update survives client disconnects — listeners are just
+// observers. What the apply DOES to the stack is the strategy's (the app's,
+// or sidecar.ts for the sidecar it may choose): nothing here knows an image
+// name, a compose file or a .env.
 //
 // Lifecycle (the event shapes and their wording: @phantom-agent-sdk/client update.ts):
-//   1. pull both images in parallel — `pulling` per image, then `pulled`
-//   2. write the trigger file; the updater sidecar (updater/watch.sh) spawns
-//      the helper container that runs updater/apply.sh
-//   3. follow the helper's output line by line as `installing` — the same
-//      text `docker logs phantom-update-run` shows a human, so a failure
-//      reaches the client the second it prints, with its reason
-//   4. the helper's `compose up` stops this container. The shutdown handler
-//      (index.ts) calls `shutdown()` here FIRST, so the stream ends with
-//      `restarting` — and every line relayed so far goes out — before the
-//      server force-closes its connections (which drops whatever a socket
-//      still holds). The client then health-polls the new api. A helper that
-//      exits on its own without that restart is the failure path — non-zero
-//      is an `error` carrying its last lines.
+//   1. pull every image in parallel — `pulling` per image, then `pulled`.
+//      The first image is this process's own: its pull must succeed; the
+//      rest are tolerated (the api pulls a session image on first use).
+//   2. the strategy's apply — each line it reports goes out as `installing`
+//   3. the apply replaces this process. The shutdown handler calls
+//      `shutdown()` here FIRST, so the stream ends with `restarting` — and
+//      every line relayed so far goes out — before the server force-closes
+//      its connections. The client then health-polls the new process. An
+//      apply that resolves without that restart is `restarting` too (the
+//      restart is pending); one that throws is an `error` with its reason.
 import type Docker from 'dockerode';
-import { PassThrough } from 'node:stream';
-import fs from 'node:fs/promises';
-import path from 'node:path';
 import type { Images } from '../runtime/Images.js';
 import type { UpdateEvent } from '@phantom-agent-sdk/client';
 import { logger, errStr } from '../lib/log.js';
 
 const log = logger('update-task');
 
-/** The helper container's name — set by updater/watch.sh, read here. */
-export const HELPER_NAME = 'phantom-update-run';
-/** How long the sidecar gets to pick up the trigger (it polls every 3s). */
-const HELPER_WAIT_MS = 30_000;
-
 export type UpdateListener = (event: UpdateEvent) => void;
+
+/** An image a release tag means: its name in the progress line, its ref. */
+export interface ImageRef { name: string; ref: string }
+
+/** What replaces the running stack with a tag, once its images are on disk.
+ *  Resolves when the hand-off is done (the process going down IS the
+ *  update); throws with the reason when it cannot. Progress lines through
+ *  `report`. */
+export type ApplyFn = (tag: string, deps: { docker: Docker; report: (line: string) => void }) => Promise<void>;
 
 export interface UpdateDeps {
   images: Images;
   docker: Docker;
-  triggerDir: string;
-  apiImage: string;
-  sessionImage: string;
-  /** The helper container's name, when the sidecar was told one (HELPER_NAME):
-   *  a runner on the same daemon as a server must not read the server's. */
-  helperName?: string;
+  /** The images to pull, this process's own first. */
+  refs: ImageRef[];
+  apply: ApplyFn;
 }
 
 // ── the task ────────────────────────────────────────────────────────────────
@@ -105,94 +104,40 @@ export function startUpdate(deps: UpdateDeps, tag: string): boolean {
 }
 
 async function runUpdate(deps: UpdateDeps, tag: string): Promise<void> {
-  const apiRef = `${deps.apiImage}:${tag}`;
-  const sessionRef = `${deps.sessionImage}:${tag}`;
-  log.info({ tag, apiRef, sessionRef }, 'update: pulling images');
+  const [own, ...rest] = deps.refs;
+  if (!own) throw new Error('the deployment names no image for this tag');
+  log.info({ tag, refs: deps.refs.map((image) => image.ref) }, 'update: pulling images');
 
   // ── 1. pull ───────────────────────────────────────────────────────────────
-  const [apiResult, sessionResult] = await Promise.allSettled([
-    deps.images.pull(apiRef, (progress) => emit({ event: 'pulling', image: 'api', ...progress })),
-    deps.images.pull(sessionRef, (progress) => emit({ event: 'pulling', image: 'session', ...progress })),
-  ]);
-  if (apiResult.status === 'rejected') {
+  const results = await Promise.allSettled(deps.refs.map((image) =>
+    deps.images.pull(image.ref, (progress) => emit({ event: 'pulling', image: image.name, ...progress }))));
+  const [ownResult, ...restResults] = results;
+  if (ownResult.status === 'rejected') {
     // A failed pull of an image already here (a re-run after a network blip)
     // is not a failure.
     try {
-      await deps.images.inspect(apiRef);
-      log.warn({ tag }, 'api image pull failed but image exists locally');
+      await deps.images.inspect(own.ref);
+      log.warn({ tag }, `${own.name} image pull failed but image exists locally`);
     } catch {
-      emit({ event: 'error', message: `Failed to pull api image: ${errStr(apiResult.reason)}` });
+      emit({ event: 'error', message: `Failed to pull ${own.name} image: ${errStr(ownResult.reason)}` });
       return;
     }
   }
-  if (sessionResult.status === 'rejected') {
-    // Tolerated: the api pulls the session image on first use.
-    log.warn({ tag, err: errStr(sessionResult.reason) }, 'session image pull failed — api will pull on first use');
-  }
+  restResults.forEach((result, index) => {
+    if (result.status === 'rejected') log.warn({ tag, err: errStr(result.reason) }, `${rest[index].name} image pull failed — pulled on first use`);
+  });
   emit({ event: 'pulled' });
 
-  // ── 2. hand off to the sidecar ────────────────────────────────────────────
-  // The previous run's helper is kept for its logs (watch.sh) — note its id
-  // so the new one is told apart from it.
-  const helperName = deps.helperName ?? HELPER_NAME;
-  const previous = await helperId(deps.docker, helperName);
-  await fs.writeFile(path.join(deps.triggerDir, 'request'), `${tag}\n`);
-  log.info({ tag }, 'update: trigger written');
-
-  // ── 3. follow the helper ──────────────────────────────────────────────────
-  const helper = await waitForHelper(deps.docker, previous, helperName);
-  if (!helper) {
-    emit({ event: 'error', message: 'the updater sidecar did not pick up the request — is the `updater` service running? (phantom-backend status)' });
+  // ── 2. apply ──────────────────────────────────────────────────────────────
+  try {
+    await deps.apply(tag, { docker: deps.docker, report: (line) => emit({ event: 'installing', message: line }) });
+  } catch (error) {
+    if (current?.done) return;
+    emit({ event: 'error', message: errStr(error) });
     return;
   }
-  const lines: string[] = [];
-  await followLogs(helper, (line) => { lines.push(line); emit({ event: 'installing', message: line }); });
-
-  // Still here: the helper finished without replacing this container — or
-  // the shutdown already answered (its log stream dies with the process).
+  // Still here: the apply is done and the restart pending — or the shutdown
+  // already answered.
   if (current?.done) return;
-  const { State } = await helper.inspect();
-  if (State.ExitCode === 0) {
-    log.info({ tag }, 'update: helper finished, restart pending');
-    emit({ event: 'restarting' });
-    return;
-  }
-  log.error({ tag, exitCode: State.ExitCode, lines }, 'update: helper failed');
-  emit({ event: 'error', message: `the installer stopped (exit ${State.ExitCode}): ${lines.slice(-3).join(' · ') || 'no output'}` });
-}
-
-async function helperId(docker: Docker, name: string): Promise<string | null> {
-  try { return (await docker.getContainer(name).inspect()).Id; } catch { return null; }
-}
-
-/** The helper container watch.sh spawns for THIS request — a container by
- *  that name whose id differs from the previous run's. */
-async function waitForHelper(docker: Docker, previous: string | null, name: string): Promise<Docker.Container | null> {
-  const deadline = Date.now() + HELPER_WAIT_MS;
-  while (Date.now() < deadline) {
-    const id = await helperId(docker, name);
-    if (id && id !== previous) return docker.getContainer(id);
-    await new Promise((wake) => setTimeout(wake, 1000));
-  }
-  return null;
-}
-
-/** Relay the container's output line by line until it stops. stdout and
- *  stderr arrive multiplexed over the socket (no tty); one demux, one order. */
-async function followLogs(container: Docker.Container, onLine: (line: string) => void): Promise<void> {
-  const raw = await container.logs({ follow: true, stdout: true, stderr: true });
-  const out = new PassThrough();
-  container.modem.demuxStream(raw, out, out);
-  let buf = '';
-  out.on('data', (chunk: Buffer) => {
-    buf += chunk.toString('utf8');
-    let newlineAt: number;
-    while ((newlineAt = buf.indexOf('\n')) !== -1) {
-      const line = buf.slice(0, newlineAt).trimEnd();
-      buf = buf.slice(newlineAt + 1);
-      if (line) onLine(line);
-    }
-  });
-  await new Promise<void>((resolve) => { raw.on('end', resolve); raw.on('close', resolve); raw.on('error', resolve); });
-  if (buf.trim()) onLine(buf.trimEnd());
+  emit({ event: 'restarting' });
 }

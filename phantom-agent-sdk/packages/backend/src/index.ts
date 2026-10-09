@@ -111,9 +111,10 @@ export type { AutoPullEvent, AutoPullResult } from './git/autoPull.js';
 export type { GitHooks, AutoPushFn, AutoPullFn } from './git/GitService.js';
 
 // upgrade
-export { Deployment, DeploymentError, LOG_MAX_BYTES, LOG_MAX_TAIL, LOG_SERVICES, type LogsQuery } from './upgrade/Deployment.js';
+export { Deployment, DeploymentError, LOG_MAX_BYTES, LOG_MAX_TAIL, LOG_SERVICES, type LogsQuery, type DeploymentStrategy } from './upgrade/Deployment.js';
+export { sidecarApply, HELPER_NAME, type SidecarOptions } from './upgrade/sidecar.js';
 export { UpgradeChecker, type UpgradeCheckerDeps } from './upgrade/UpgradeChecker.js';
-export { subscribe as subscribeUpdate, isRunning as updateRunning, shutdown as updateShutdown, startUpdate, HELPER_NAME, type UpdateDeps, type UpdateListener } from './upgrade/updateTask.js';
+export { subscribe as subscribeUpdate, isRunning as updateRunning, type UpdateListener, type ImageRef, type ApplyFn } from './upgrade/updateTask.js';
 export { SDK_VERSION } from './sdkVersion.js';
 export { CronScheduler, CRON_STARTER, CRON_CLIENT_ID, type CronAgent } from './crons/CronScheduler.js';
 export { actAs, acting, type Acting } from './lib/acting.js';
