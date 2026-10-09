@@ -4,6 +4,7 @@
 //   GET  /identity/me                 who am I — the service role key or a user's token
 //   POST /identity/users  {email,name} (service role) bootstrap: a user, no mail
 //   POST /identity/magic-link {email} (service role) bootstrap: the sign-in link, handed back
+//   POST /identity/keys/:id/rotate     (a user) their user role key replaced: new key issued, old one gone
 import type { FastifyInstance } from 'fastify';
 import { ok } from '../HttpApi.js';
 import type { PhantomBackend } from '../../PhantomBackend.js';
@@ -25,4 +26,12 @@ export function identityRoutes(app: FastifyInstance, backend: PhantomBackend) {
     description: 'Returns a sign-in link for a user instead of emailing it. For the first sign-in, before mail is set up.',
     body: { type: 'object', required: ['email'], additionalProperties: false, properties: { email: { type: 'string', minLength: 3 } } } } },
   async (req) => ok({ url: await backend.identity.magicLink(req.body.email) }));
+
+  app.post<{ Params: { id: string } }>('/identity/keys/:id/rotate', { schema: { ...TAG, summary: 'Rotate a user role key',
+    description: 'Replaces one of your user role keys in one step: a new key with the same name and expiry is issued and answered once, and the old one stops working. Yours only; sign-in or a user role key required.',
+    params: { type: 'object', required: ['id'], properties: { id: { type: 'string', minLength: 1 } } } } },
+  async (req) => {
+    await backend.identity.require(req, { users: true });
+    return ok(await backend.identity.rotateUserRoleKey(req, req.params.id));
+  });
 }

@@ -374,6 +374,22 @@ export class Identity {
     return caller;
   }
 
+  /** A user role key replaced in one step: a new key with the old one's
+   *  name, expiry and metadata, the old one deleted — the window where a
+   *  key is both known and still valid is this call. The caller must own
+   *  the key (the plugin's own check, as a 404). Answers the new key once:
+   *  it is hashed at rest, as every key is. */
+  async rotateUserRoleKey(request: FastifyRequest, keyId: string): Promise<{ id: string; key: string; name: string | null; expiresAt: Date | null }> {
+    const auth = this.#on;
+    const headers = fromNodeHeaders(request.headers);
+    const old = await auth.api.getApiKey({ query: { id: keyId }, headers });
+    const expiresIn = old.expiresAt ? Math.max(1, Math.ceil((new Date(old.expiresAt).getTime() - Date.now()) / 1000)) : null;
+    const made = await auth.api.createApiKey({ body: { name: old.name ?? undefined, expiresIn, metadata: old.metadata ?? undefined }, headers });
+    await auth.api.deleteApiKey({ body: { keyId }, headers });
+    log.info({ from: keyId, to: made.id }, 'user role key rotated');
+    return { id: made.id, key: made.key, name: made.name, expiresAt: made.expiresAt };
+  }
+
   /** An organization by id — what a settings route checks before writing
    *  its layer. Undefined when there is none, or identity is off. */
   async organization(id: string): Promise<OrganizationRow | undefined> {

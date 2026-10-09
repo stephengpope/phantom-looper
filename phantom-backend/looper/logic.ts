@@ -33,6 +33,9 @@ export function heldBy(seat: 'coding' | 'supervisor', cardStatus: string): strin
 export interface CardRow extends CardShape {
   id: number;
   archived: boolean;
+  /** Whose it is (059): the run acts for them. */
+  organization_id: string;
+  user_id: string | null;
 }
 
 /** A card runs when the switch for ITS loop column says so: `plan` is gated
