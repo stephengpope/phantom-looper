@@ -10,18 +10,20 @@
 //   phantom-cli runner stop
 //   phantom-cli runner status
 //   phantom-cli runner logs
+//   phantom-cli runner update [vX.Y.Z]     this machine's runner, through the backend
 //
 // The key is the one the cli holds: the service role key makes a SHARED runner
 // (any workspace may land here); your own user role key makes YOUR host (your
 // workspaces alone). The key's prefix says which. Nothing listens on this machine — the host dials out.
-import { existsSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, chmodSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { hostname } from 'node:os';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { CONFIG_DIR } from './config.js';
 import { localValues } from './local.js';
-import { savedCaFor, apiFor } from './provision.js';
-import { APP_VERSION } from './selfUpdate.js';
+import { savedCaFor, apiFor, streamFor } from './provision.js';
+import { APP_VERSION, checkLatest } from './selfUpdate.js';
+import { updateRunners, listRunners, bare } from './update.js';
 
 const HOST_DIR = join(CONFIG_DIR, 'runner');
 const IMAGE = 'ghcr.io/stephengpope/phantom-backend';
@@ -70,13 +72,21 @@ function writeEnv(values: Record<string, string>): void {
   chmodSync(path, 0o600);
 }
 
+/** One value out of the stack's .env (the cli wrote it, quoted). */
+function envValue(name: string): string | undefined {
+  try {
+    const line = readFileSync(join(HOST_DIR, '.env'), 'utf8').split('\n').find((one) => one.startsWith(`${name}=`));
+    return line ? line.slice(name.length + 1).replace(/^"(.*)"$/, '$1') || undefined : undefined;
+  } catch { return undefined; }
+}
+
 function compose(args: string[]): number {
   return sh('docker', ['compose', ...args], { cwd: HOST_DIR }).status ?? 1;
 }
 
 export async function runRunner(args: string[]): Promise<number> {
   const command = args[0];
-  const usage = () => { console.log('usage: phantom-cli runner start [--name <label>] [--tag <vX.Y.Z>] | stop | status | logs'); return 2; };
+  const usage = () => { console.log('usage: phantom-cli runner start [--name <label>] [--tag <vX.Y.Z>] | stop | status | logs | update [vX.Y.Z]'); return 2; };
   if (!command || command === '--help' || command === '-h') return usage();
 
   const local = localValues();
@@ -92,6 +102,12 @@ export async function runRunner(args: string[]): Promise<number> {
     writeEnv({
       BACKEND_URL: url, BACKEND_KEY: key, HOST_NAME: name, BACKEND_TAG: tag,
       BACKEND_CA: ca ?? '',
+      // The updater sidecar's: this directory, and a helper container name
+      // that is this stack's alone on the daemon.
+      RUNNER_DIR: HOST_DIR, HELPER_NAME: `phantom-update-run-${name.replace(/[^a-zA-Z0-9_.-]+/g, '-')}`,
+      // Its own volume: this Mac may run the server stack too, whose volume
+      // compose would refuse to share across projects.
+      WORKSPACE_VOLUME: 'phantom-runner-workspaces',
     });
     console.log(`starting session runner "${name}" for ${url} (${IMAGE}:${tag})`);
     const code = compose(['up', '-d']);
@@ -101,15 +117,36 @@ export async function runRunner(args: string[]): Promise<number> {
   if (!existsSync(join(HOST_DIR, 'docker-compose.yml'))) { console.error('no session runner on this machine — phantom-cli runner start'); return 1; }
   if (command === 'stop') return compose(['down']);
   if (command === 'logs') return compose(['logs', '-f', 'session-runner']);
+  if (command === 'update') {
+    // The backend does it: the runner pulls the images and its sidecar
+    // recreates the stack (session-runner/docker-compose.yml). This machine's
+    // runner is the one whose name .env holds.
+    const tag = args[1] ?? await checkLatest();
+    if (!tag) { console.error('could not reach GitHub to find the latest release — name one: phantom-cli runner update vX.Y.Z'); return 1; }
+    if (!/^v\d+\.\d+\.\d+$/.test(tag)) { console.error(`not a release tag: ${tag} (vX.Y.Z)`); return 1; }
+    const name = envValue('HOST_NAME') ?? hostname();
+    const server = { url, call: apiFor(url, key, savedCaFor(url)), stream: streamFor(url, key, savedCaFor(url)) };
+    const mine = (await listRunners(server)).find((runner) => runner.name === name);
+    if (!mine) { console.error(`the backend knows no runner named "${name}" — is it up? phantom-cli runner status`); return 1; }
+    if (!mine.online) { console.error(`"${name}" is offline — the backend cannot reach it; phantom-cli runner logs`); return 1; }
+    if (mine.version === tag) { console.log(`"${name}" is on ${bare(tag)} already.`); return 0; }
+    const tty = process.stdout.isTTY;
+    return updateRunners({
+      appVersion: APP_VERSION, latest: async () => tag, server, installClient: async () => undefined, confirm: async () => true,
+      out: (line) => process.stdout.write(`${tty ? '\r\x1b[K' : ''}${line}\n`),
+      ...(tty ? { tick: (line: string) => process.stdout.write(`\r${line.slice(0, Math.max(1, (process.stdout.columns || 80) - 1))}\x1b[K`) } : {}),
+      sleep: (milliseconds) => new Promise((wake) => setTimeout(wake, milliseconds)), now: Date.now,
+    }, server, tag, mine.id);
+  }
   if (command === 'status') {
     compose(['ps']);
     try {
-      const listed = await apiFor(url, key, savedCaFor(url))('GET', '/session-runners') as { hosts: Array<{ id: string; name: string; online: boolean; ownerUserId: string | null; workspaces: number; connectedAt: string | null; load: { cpu: number; freeGB: number; usedPct: number; running: number } | null }> };
+      const listed = await apiFor(url, key, savedCaFor(url))('GET', '/session-runners') as { hosts: Array<{ id: string; name: string; online: boolean; ownerUserId: string | null; workspaces: number; connectedAt: string | null; version: string | null; load: { cpu: number; freeGB: number; usedPct: number; running: number } | null }> };
       if (!listed.hosts.length) { console.log('the backend knows no session runners'); return 0; }
       console.log('\nthe backend sees:');
       for (const host of listed.hosts) {
         const load = host.load ? `  cpu ${host.load.cpu.toFixed(2)}  ${host.load.running} running  ${Math.round(host.load.freeGB)} GB free` : '';
-        console.log(`  ${host.online ? '●' : '○'} ${host.name}  ${host.ownerUserId ? 'user runner' : 'shared runner'}  ${host.workspaces} workspace${host.workspaces === 1 ? '' : 's'}${load}  ${host.online ? 'online' : `offline${host.connectedAt ? ` (last ${host.connectedAt})` : ''}`}  ${host.id}`);
+        console.log(`  ${host.online ? '●' : '○'} ${host.name}  ${host.version ? bare(host.version) : '?'}  ${host.ownerUserId ? 'user runner' : 'shared runner'}  ${host.workspaces} workspace${host.workspaces === 1 ? '' : 's'}${load}  ${host.online ? 'online' : `offline${host.connectedAt ? ` (last ${host.connectedAt})` : ''}`}  ${host.id}`);
       }
     } catch (error) { console.error(`could not ask the backend: ${(error as Error).message}`); return 1; }
     return 0;

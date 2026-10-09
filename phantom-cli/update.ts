@@ -141,6 +141,80 @@ async function streamUpdateProgress(deps: UpdateDeps, server: ServerLink, tag: s
   return 'restarting';
 }
 
+interface RunnerRow { id: string; name: string; online: boolean; version: string | null }
+
+/** The session runners the server knows, or none when it has no such route
+ *  (a release before runners) or cannot be reached. */
+export async function listRunners(server: ServerLink): Promise<RunnerRow[]> {
+  try { return ((await server.call('GET', '/session-runners')) as { hosts: RunnerRow[] }).hosts; } catch { return []; }
+}
+
+/** The runners' half: every online runner behind `tag` (or the one named by
+ *  `only`), through the server's update routes — one stream, each event
+ *  naming its runner — then a wait for each to come back on the release.
+ *  Returns the exit code; 0 with nothing to say when no runner is behind. */
+export async function updateRunners(deps: UpdateDeps, server: ServerLink, tag: string, only?: string): Promise<number> {
+  const version = bare(tag);
+  const all = await listRunners(server);
+  const targets = all.filter((runner) => (only ? runner.id === only : runner.online && runner.version !== tag));
+  if (!targets.length) return 0;
+  const named = new Map(targets.map((runner) => [runner.id, runner.name]));
+  deps.out(`Runner${targets.length === 1 ? '' : 's'}: ${targets.map((runner) => `${runner.name} ${runner.version ? bare(runner.version) : '?'} → ${version}`).join(', ')}`);
+  const outcome = new Map<string, 'restarting' | 'error'>();
+  const images: Record<string, Record<string, PullProgress>> = {};
+  const path = only ? `/session-runners/${only}/update` : '/session-runners/update';
+  try {
+    await server.stream(path, { tag, restart_anyway: true }, (raw) => {
+      const event = raw as UpdateEvent & { runner?: string };
+      const runner = event.runner ?? only;
+      if (!runner || !named.has(runner)) return;   // the target list, heartbeats
+      const name = named.get(runner)!;
+      if (event.event === 'pulling') {
+        (images[name] ??= {})[event.image] = { download: event.download, unpack: event.unpack };
+        const line = `  ${name}: ${pullLine(images[name])}`;
+        deps.tick ? deps.tick(line) : deps.out(line);
+      } else if (event.event === 'pulled') {
+        deps.out(`  ${name}: images on disk.`);
+      } else if (event.event === 'installing') {
+        deps.out(`  ${name}: ${event.message.replace(/^apply: /, '')}`);
+      } else if (event.event === 'restarting') {
+        outcome.set(runner, 'restarting');
+        deps.out(`  ${name}: restarting...`);
+      } else if (event.event === 'error') {
+        outcome.set(runner, 'error');
+        deps.out(`  ${name}: update failed: ${event.message}`);
+      }
+    });
+  } catch (event) {
+    deps.out(`  Runner update stream failed: ${errorText(event)}`);
+    return 1;
+  }
+  let code = 0;
+  for (const runner of targets) {
+    if (outcome.get(runner.id) === 'restarting') continue;
+    if (!outcome.has(runner.id)) deps.out(`  ${runner.name}: the server ended the update without saying why.`);
+    code = 1;
+  }
+  const waiting = new Set(targets.filter((runner) => outcome.get(runner.id) === 'restarting').map((runner) => runner.id));
+  if (!waiting.size) return code;
+  const start = deps.now();
+  const timeout = deps.timeoutMs ?? TIMEOUT_MS;
+  while (waiting.size) {
+    const milliseconds = deps.now() - start;
+    if (milliseconds >= timeout) {
+      deps.out(`  Waited ${minutes(timeout)} and ${[...waiting].map((id) => named.get(id)).join(', ')} did not come back on ${version}. On that machine: phantom-cli runner logs, or docker logs of its update helper.`);
+      return 1;
+    }
+    const tick = `  Waiting for ${waiting.size === 1 ? named.get([...waiting][0]!) : `${waiting.size} runners`}...  ${elapsed(milliseconds)}`;
+    deps.tick ? deps.tick(tick) : deps.out(tick);
+    await deps.sleep(deps.pollMs ?? POLL_MS);
+    for (const runner of await listRunners(server)) {
+      if (waiting.has(runner.id) && runner.online && runner.version === tag) { waiting.delete(runner.id); deps.out(`  ${runner.name} is on ${version}.`); }
+    }
+  }
+  return code;
+}
+
 /** The command. Returns the process exit code. */
 export async function runUpdate(target: Target, deps: UpdateDeps): Promise<number> {
   const latest = await deps.latest();
@@ -153,8 +227,9 @@ export async function runUpdate(target: Target, deps: UpdateDeps): Promise<numbe
   const serverVersion = health?.version ? bare(String(health.version)) : null;
   const clientBehind = isBehind(deps.appVersion, latest);
   const serverBehind = serverVersion ? isBehind(serverVersion, latest) : false;
+  const runnersBehind = wantServer && deps.server && serverVersion ? (await listRunners(deps.server)).some((runner) => runner.online && runner.version !== latest) : false;
 
-  if (target === 'both' && serverVersion && deps.appVersion !== 'dev' && !clientBehind && !serverBehind) {
+  if (target === 'both' && serverVersion && deps.appVersion !== 'dev' && !clientBehind && !serverBehind && !runnersBehind) {
     deps.out(`This machine and the server are both on ${version}. Nothing to update.`);
     return 0;
   }
@@ -220,6 +295,12 @@ export async function runUpdate(target: Target, deps: UpdateDeps): Promise<numbe
         return 1;
       }
       deps.out(`  Server is on ${version}.`);
+    }
+    // The runners, once the server is on the release: the backend always
+    // speaks the newer protocol. A server before runners lists none.
+    if (runnersBehind) {
+      deps.out('');
+      code = Math.max(code, await updateRunners(deps, deps.server, latest));
     }
   }
 

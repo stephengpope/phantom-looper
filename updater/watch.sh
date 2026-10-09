@@ -18,7 +18,12 @@ set -u
 TRIGGER_DIR="${TRIGGER_DIR:-/trigger}"
 BACKEND_DIR="${BACKEND_DIR:-/opt/phantom-looper}"
 REQUEST="$TRIGGER_DIR/request"
-HELPER_NAME=phantom-update-run
+# Per stack (a session runner on a server's daemon sets its own), so the api
+# follows its helper and never another stack's.
+HELPER_NAME="${HELPER_NAME:-phantom-update-run}"
+# Which directory of the image holds this stack's files: the server's root,
+# a session runner's session-runner/.
+HOST_FILES_DIR="${HOST_FILES_DIR:-/host-files}"
 
 # The api runs as `node`; a fresh named volume is root-owned. Open it up so
 # the api can write the trigger file (private volume, two containers).
@@ -57,6 +62,7 @@ while :; do
         -v /var/run/docker.sock:/var/run/docker.sock \
         -v "$BACKEND_DIR:$BACKEND_DIR" \
         -e BACKEND_DIR="$BACKEND_DIR" \
+        -e HOST_FILES_DIR="$HOST_FILES_DIR" \
         -e BACKEND_API_IMAGE="${BACKEND_API_IMAGE:-}" \
         -e BACKEND_SESSION_IMAGE="${BACKEND_SESSION_IMAGE:-}" \
         docker:27-cli sh "$BACKEND_DIR/updater/apply.sh" "$tag" \

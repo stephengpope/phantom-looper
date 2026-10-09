@@ -15,6 +15,7 @@ import { newId } from '@phantom-agent-sdk/client';
 import type { ContainerPlan, ContainerState, DetachEvent, FileType, FileStat, Repo, WorkspaceFiles, WorkspaceHost } from './WorkspaceHost.js';
 import { Sandbox, type Exec, type RunOpts, type RunResult, type StreamRecord } from './Sandbox.js';
 import type { GitAuth } from '../git/Git.js';
+import type { UpdateEvent } from '@phantom-agent-sdk/client';
 import { type HostLoad, type Job, type JobBody, type JobEvent, decodeError, encodeRunOpts, fromBase64, toBase64 } from '../host/protocol.js';
 import { logger } from '../lib/log.js';
 
@@ -39,6 +40,8 @@ export class RemoteHost implements WorkspaceHost {
   constructor(readonly id: string, public name: string) {}
 
   get online(): boolean { return this.#writer !== null; }
+  /** Jobs sent and not yet answered — what an update's restart would cut. */
+  get inFlight(): number { return this.#pending.size; }
 
   /** The box's load as of its last heartbeat; null before the first one. */
   load: HostLoad | null = null;
@@ -210,6 +213,12 @@ export class RemoteHost implements WorkspaceHost {
 
   disk(): Promise<{ usedPct: number; freeGB: number }> { return this.#call({ type: 'disk' }); }
   diskSupport(): Promise<string | null> { return this.#call({ type: 'diskSupport' }); }
+  /** Upgrade the runner to `tag`: its progress as UpdateEvents until it
+   *  restarts (the stream ends, or the new boot fails it `host_restarted`,
+   *  which the caller reads as the same thing) or fails. */
+  update(tag: string, sessionImage: string): AsyncGenerator<UpdateEvent> {
+    return this.#stream<UpdateEvent>({ type: 'update', tag, sessionImage });
+  }
 }
 
 /** Exec over jobs — the Sandbox's rules hold unchanged on top. */

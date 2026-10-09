@@ -24,10 +24,10 @@ import type { WorkspaceHost } from '../runtime/WorkspaceHost.js';
 import type { Settings } from '../storage/Settings.js';
 import type { HostHello, HostLoad, Job, JobEvent } from './protocol.js';
 import { tooFull } from '../runtime/Disk.js';
-import { newId } from '@phantom-agent-sdk/client';
+import { newId, type UpdateEvent } from '@phantom-agent-sdk/client';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { scopeOf } from '../lib/scopes.js';
-import { logger } from '../lib/log.js';
+import { logger, errStr } from '../lib/log.js';
 
 const log = logger('session-runners');
 
@@ -36,10 +36,10 @@ const log = logger('session-runners');
 export interface HostCaller { admin: boolean; userId: string | null }
 
 export class SessionRunnerError extends Error {
-  constructor(readonly code: 'not_found' | 'access_denied' | 'no_host' | 'host_online' | 'host_in_use' | 'host_offline', message: string) { super(message); }
+  constructor(readonly code: 'not_found' | 'access_denied' | 'no_host' | 'host_online' | 'host_in_use' | 'host_offline' | 'jobs_running', message: string, readonly retryable = false) { super(message); }
 }
 
-export interface SessionRunnerView extends SessionRunnerRow { online: boolean; workspaces: number; load: HostLoad | null }
+export interface SessionRunnerView extends SessionRunnerRow { online: boolean; workspaces: number; load: HostLoad | null; version: string | null }
 
 /** No event up the relay for this long = the feed's socket is dead whatever
  *  it says: the host heartbeats every 15 s. */
@@ -250,7 +250,47 @@ export class SessionRunners {
     const rows = await this.database.select().from(sessionRunners);
     const visible = rows.filter((row) => caller.admin || row.ownerUserId === null || row.ownerUserId === caller.userId);
     const counts = await this.workspaceCounts(visible.map((row) => row.id));
-    return visible.map((row) => ({ ...row, online: this.#remote.get(row.id)?.online ?? false, workspaces: counts.get(row.id) ?? 0, load: this.#remote.get(row.id)?.load ?? null }));
+    return visible.map((row) => ({ ...row, online: this.#remote.get(row.id)?.online ?? false, workspaces: counts.get(row.id) ?? 0, load: this.#remote.get(row.id)?.load ?? null, version: row.facts.version ?? null }));
+  }
+
+  // ── upgrades ──────────────────────────────────────────────────────────
+
+  /** Upgrade one runner to `tag`, as POST /update does the server: the
+   *  runner pulls the images and hands the tag to its sidecar; every
+   *  UpdateEvent reaches `onEvent` until `restarting` or `error`. The guard
+   *  is the server's: jobs in flight (a command running, a task streaming)
+   *  die with the restart — refused unless told to restart anyway. The
+   *  restart itself may answer before the runner's last chunk: a pending job
+   *  failed `host_restarted` IS the restart. */
+  async update(id: string, caller: HostCaller, tag: string, options: { restartAnyway?: boolean }, onEvent: (event: UpdateEvent) => void): Promise<void> {
+    const row = await this.rowFor(id, caller);
+    const host = this.#remote.get(row.id)!;
+    if (!host.online) throw new SessionRunnerError('host_offline', `${row.name} is offline`);
+    if (host.inFlight > 0 && !options.restartAnyway) {
+      throw new SessionRunnerError('jobs_running', `${host.inFlight === 1 ? '1 job is' : `${host.inFlight} jobs are`} in flight on ${row.name} — updating now would cut ${host.inFlight === 1 ? 'it' : 'them'} (they fail retryable); send restart_anyway: true to update anyway`, true);
+    }
+    const sessionImage = this.opts.settings ? String(await this.opts.settings.resolve('container_image').catch(() => '')).replace(/:[^/]*$/, '') : '';
+    log.info({ host: row.id, name: row.name, tag }, 'session runner update requested');
+    try {
+      for await (const event of host.update(tag, sessionImage)) onEvent(event);
+    } catch (error) {
+      if ((error as { code?: string }).code === 'host_restarted') { onEvent({ event: 'restarting' }); return; }
+      onEvent({ event: 'error', message: errStr(error) });
+    }
+  }
+
+  /** The runners a caller may update that are online and not on `tag`. */
+  async behind(caller: HostCaller, tag: string): Promise<SessionRunnerView[]> {
+    return (await this.list(caller)).filter((row) => row.online && row.version !== tag);
+  }
+
+  /** Upgrade every runner behind `tag` at once — independent boxes, one
+   *  stream; each event names its runner. */
+  async updateAll(caller: HostCaller, tag: string, options: { restartAnyway?: boolean }, onEvent: (event: UpdateEvent & { runner: string; name: string }) => void): Promise<void> {
+    const targets = await this.behind(caller, tag);
+    await Promise.all(targets.map((row) =>
+      this.update(row.id, caller, tag, options, (event) => onEvent({ ...event, runner: row.id, name: row.name }))
+        .catch((error) => onEvent({ event: 'error', message: errStr(error), runner: row.id, name: row.name }))));
   }
 
   /** Forget a host: offline, and nothing pinned to it. */

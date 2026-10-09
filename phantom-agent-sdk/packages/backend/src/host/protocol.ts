@@ -37,6 +37,10 @@ export type Job = { id: string } & (
   | { type: 'cancel'; job: string }
   | { type: 'disk' }
   | { type: 'diskSupport' }
+  /** Upgrade the runner to a release: it pulls the images and hands the tag
+   *  to its updater sidecar, streaming UpdateEvents (client update.ts) as
+   *  chunks until its container is recreated. */
+  | { type: 'update'; tag: string; sessionImage: string }
 );
 
 export type JobType = Job['type'];
@@ -81,6 +85,9 @@ export interface HostFacts {
   /** Null when the box can hold a container to `container_disk_gb`, else why not. */
   diskSupport: string | null;
   sdkVersion: string;
+  /** The release the runner's image is (`vX.Y.Z`), 'dev' for a checkout:
+   *  what an upgrade of the group compares against. */
+  version?: string;
 }
 
 export const toBase64 = (data: Buffer): string => data.toString('base64');

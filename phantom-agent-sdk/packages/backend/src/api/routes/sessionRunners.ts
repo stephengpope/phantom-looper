@@ -5,12 +5,14 @@
 //   POST   /session-runners/:id/jobs/events    the host's relay: job events up
 //   GET    /session-runners                    the hosts a caller may see, with online
 //   DELETE /session-runners/:id                forget an offline, empty host
+//   POST   /session-runners/:id/update         upgrade one runner to a release (ND-JSON progress)
+//   POST   /session-runners/update             upgrade every online runner behind a release
 //   POST   /sessions/:id/move                move a session's workspace to another host
 //
 // Who may: the service role for shared runners, a user for their own — the row's
 // owner, checked on every call in SessionRunners. The feed is the one long
 // call; it is a host's "online".
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { ok, err } from '../HttpApi.js';
 import type { PhantomBackend } from '../../PhantomBackend.js';
 import { SessionRunnerError, type HostCaller } from '../../host/SessionRunners.js';
@@ -24,15 +26,29 @@ import { logger, errStr } from '../../lib/log.js';
 const log = logger('session-runners');
 const TAG = { tags: ['session-runners'] };
 const idParam = { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] };
-const STATUS: Record<SessionRunnerError['code'], number> = { not_found: 404, access_denied: 403, no_host: 409, host_online: 409, host_in_use: 409, host_offline: 409 };
+const STATUS: Record<SessionRunnerError['code'], number> = { not_found: 404, access_denied: 403, no_host: 409, host_online: 409, host_in_use: 409, host_offline: 409, jobs_running: 409 };
+const RELEASE_TAG = '^v\\d+\\.\\d+\\.\\d+$';
+const UPDATE_BODY = { type: 'object', required: ['tag'], additionalProperties: false, properties: {
+  tag: { type: 'string', pattern: RELEASE_TAG, description: 'Release tag, e.g. v0.2.0 (no prereleases)' },
+  restart_anyway: { type: 'boolean', description: 'Update even with jobs in flight on the runner — they fail retryable and the callers retry after the restart.' } } };
 
 const callerOf = (req: { caller: { type: string; user?: { id: string } } | null }): HostCaller =>
   req.caller?.type === 'user' ? { admin: false, userId: req.caller.user!.id } : { admin: true, userId: null };
 
 export function sessionRunnerRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   const refused = (reply: { code: (status: number) => { send: (body: unknown) => unknown } }, error: unknown) => {
-    if (error instanceof SessionRunnerError) return reply.code(STATUS[error.code]).send(err(error.code, error.message));
+    if (error instanceof SessionRunnerError) return reply.code(STATUS[error.code]).send(err(error.code, error.message, error.retryable));
     throw error;
+  };
+  /** An update's progress as ND-JSON, as POST /update streams the server's:
+   *  heartbeats keep the line open; a refusal comes before the first event. */
+  const streamUpdate = async (reply: FastifyReply, run: (write: (record: unknown) => void) => Promise<void>) => {
+    const head = () => { if (!reply.raw.headersSent) reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' }); };
+    const write = (record: unknown) => { head(); if (!reply.raw.destroyed) reply.raw.write(`${JSON.stringify(record)}\n`); };
+    const heartbeat = setInterval(() => write({ event: 'heartbeat' }), 15_000);
+    try { await run(write); }
+    finally { clearInterval(heartbeat); head(); reply.raw.end(); }
+    return reply;
   };
 
   app.post<{ Body: HostHello }>('/session-runners/hello', { schema: { ...TAG, summary: 'Register a session runner',
@@ -95,6 +111,35 @@ export function sessionRunnerRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   async (req, reply) => {
     try { await ctx.sessionRunners.remove(req.params.id, callerOf(req)); return ok({ removed: req.params.id }); }
     catch (error) { return refused(reply, error); }
+  });
+
+  app.post<{ Params: { id: string }; Body: { tag: string; restart_anyway?: boolean } }>('/session-runners/:id/update', { schema: { ...TAG, summary: 'Update a session runner',
+    description: 'Upgrades one runner to a release, streaming progress as one JSON object per line (the same events as POST /update): the runner pulls the images, its updater sidecar recreates it, and the stream ends with `restarting`. Refused while jobs are in flight on it unless restart_anyway.',
+    params: idParam, body: UPDATE_BODY } },
+  async (req, reply) => {
+    const caller = callerOf(req);
+    // The refusals come before the first event: checked here, then streamed.
+    try { await ctx.sessionRunners.check(req.params.id, caller); } catch (error) { return refused(reply, error); }
+    return streamUpdate(reply, async (write) => {
+      try { await ctx.sessionRunners.update(req.params.id, caller, req.body.tag, { restartAnyway: req.body.restart_anyway }, write); }
+      catch (error) {
+        if (!(error instanceof SessionRunnerError)) throw error;
+        if (!reply.raw.headersSent) { reply.raw.writeHead(STATUS[error.code], { 'content-type': 'application/json' }); reply.raw.write(JSON.stringify(err(error.code, error.message, error.retryable))); return; }
+        write({ event: 'error', message: error.message });
+      }
+    });
+  });
+
+  app.post<{ Body: { tag: string; restart_anyway?: boolean } }>('/session-runners/update', { schema: { ...TAG, summary: 'Update every session runner',
+    description: 'Upgrades every online runner this caller may use that is not on the release, all at once, streaming one JSON object per line; each event carries `runner` (its id) and `name`. The first line lists the targets. The server itself is not touched: update it first (POST /update), then the runners.',
+    body: UPDATE_BODY } },
+  async (req, reply) => {
+    const caller = callerOf(req);
+    const targets = await ctx.sessionRunners.behind(caller, req.body.tag);
+    return streamUpdate(reply, async (write) => {
+      write({ event: 'targets', runners: targets.map((row) => ({ runner: row.id, name: row.name, version: row.version })) });
+      await ctx.sessionRunners.updateAll(caller, req.body.tag, { restartAnyway: req.body.restart_anyway }, write);
+    });
   });
 
   // THE MOVE — a workspace from one host to another, in this order and no

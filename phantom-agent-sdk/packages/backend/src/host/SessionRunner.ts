@@ -26,6 +26,9 @@ import { makePaths, type Paths } from '../lib/paths.js';
 import * as checkoutPool from '../runtime/CheckoutPool.js';
 import { type Job, type JobEvent, type HostHello, type HostLoad, encodeError, fromBase64, toBase64 } from './protocol.js';
 import { SDK_VERSION } from '../sdkVersion.js';
+import { APP_VERSION, API_IMAGE, SESSION_IMAGE } from '../lib/env.js';
+import { startUpdate, subscribe as subscribeUpdate, shutdown as updateShutdown, HELPER_NAME } from '../upgrade/updateTask.js';
+import type { UpdateEvent } from '@phantom-agent-sdk/client';
 import { logger, errStr } from '../lib/log.js';
 
 const log = logger('session-runner');
@@ -43,12 +46,18 @@ export interface SessionRunnerOptions {
   docker: Docker;
   local: LocalHostOptions;
   certificateAuthority?: Buffer;
+  /** Where an `update` job drops the release tag for the updater sidecar
+   *  (UPDATE_TRIGGER_DIR); absent = no sidecar, updates refuse. */
+  updateTriggerDir?: string;
+  /** The sidecar's helper container name (HELPER_NAME), when the stack sets one. */
+  updateHelperName?: string;
 }
 
 export class SessionRunner {
   readonly boot = newId();
   #backend: BackendClient;
   readonly #local: LocalHost;
+  readonly #images: Images;
   #link: Link | null = null;
   #id: string | null = null;
   /** Running jobs by id, with the cancel for a stream. A job id seen twice
@@ -71,7 +80,8 @@ export class SessionRunner {
     const credential = credentialOf(opts.key);
     if (!credential) throw new Error(`BACKEND_KEY must be the service role key (${SERVICE_ROLE_KEY_PREFIX}…, a shared runner) or your user role key (${USER_ROLE_KEY_PREFIX}…, your host)`);
     this.#backend = this.#client(credential);
-    this.#local = new LocalHost(opts.docker, new Images(opts.docker), opts.paths, opts.local, { id: null, name: opts.name });
+    this.#images = new Images(opts.docker);
+    this.#local = new LocalHost(opts.docker, this.#images, opts.paths, opts.local, { id: null, name: opts.name });
   }
 
   readonly #connection: BackendConnection;
@@ -108,6 +118,8 @@ export class SessionRunner {
       },
       // A PEM through a .env: its newlines may arrive as the two characters `\n`.
       ...(env.BACKEND_CA ? { certificateAuthority: Buffer.from(env.BACKEND_CA.replace(/\\n/g, '\n')) } : {}),
+      ...(env.UPDATE_TRIGGER_DIR ? { updateTriggerDir: env.UPDATE_TRIGGER_DIR } : {}),
+      ...(env.HELPER_NAME ? { updateHelperName: env.HELPER_NAME } : {}),
     });
   }
 
@@ -141,6 +153,7 @@ export class SessionRunner {
       arch: os.arch(),
       diskSupport: await this.#local.diskSupport().catch((error) => `probe failed: ${errStr(error)}`),
       sdkVersion: SDK_VERSION,
+      version: APP_VERSION,
     };
     const hello: HostHello = { ...(persisted.id ? { id: persisted.id } : {}), name: this.opts.name, boot: this.boot, facts };
     const row = await this.#backend.call<{ id: string; name: string }>('POST', '/session-runners/hello', hello);
@@ -171,10 +184,13 @@ export class SessionRunner {
     return { cpu, freeGB: disk.freeGB, usedPct: disk.usedPct, running };
   }
 
-  /** Close the link. What runs keeps running; containers stay up. */
+  /** Close the link. What runs keeps running; containers stay up. An update
+   *  in flight ends its stream first (this restart IS the update), and the
+   *  drain carries that last chunk out before the process goes. */
   async stop(): Promise<void> {
     this.#stopped = true;
     if (this.#heartbeat) clearInterval(this.#heartbeat);
+    updateShutdown();
     await this.#link?.drain().catch(() => {});
     this.#link?.close();
     this.#local.stop();
@@ -231,6 +247,7 @@ export class SessionRunner {
       }
       case 'execStream': return this.#pipe(job.id, entry, local.sandbox(job.workspaceId).runStream(job.argv, { cwd: job.cwd, timeoutMs: job.timeoutMs }));
       case 'detach': return this.#pipe(job.id, entry, local.detach(job.workspaceId, job.taskId, job.argv, job.cwd, job.sidfile));
+      case 'update': return this.#pipe(job.id, entry, this.#update(job.tag, job.sessionImage));
       case 'watch': {
         // A standing order: chunks for as long as the watch stands; no end.
         local.watch(job.workspaceId, () => this.#report({ job: job.id, type: 'chunk', value: { changed: true } }));
@@ -239,6 +256,37 @@ export class SessionRunner {
       }
       default: throw new Error(`unknown job type ${(job as { type: string }).type}`);
     }
+  }
+
+  /** The upgrade, as the server does its own (upgrade/updateTask.ts): pull
+   *  the images, write the trigger, relay the installer's lines — each an
+   *  UpdateEvent up the relay — until `restarting` (the sidecar recreated
+   *  this container; stop() said so) or `error`. A second update while one
+   *  runs attaches to it. */
+  async *#update(tag: string, sessionImage: string): AsyncGenerator<UpdateEvent> {
+    if (!this.opts.updateTriggerDir) throw new Error('this runner has no updater sidecar (UPDATE_TRIGGER_DIR unset) — bring its compose file up to date: phantom-cli runner start, or copy session-runner/ out of the image again');
+    const queue: UpdateEvent[] = [];
+    let wake: (() => void) | null = null;
+    let over = false;
+    const listener = (event: UpdateEvent) => {
+      if (event.event === 'heartbeat') return;
+      queue.push(event);
+      if (event.event === 'restarting' || event.event === 'error') over = true;
+      wake?.();
+    };
+    startUpdate({ images: this.#images, docker: this.opts.docker, triggerDir: this.opts.updateTriggerDir,
+      apiImage: this.opts.local.apiImage ?? API_IMAGE, sessionImage: sessionImage || SESSION_IMAGE,
+      ...(this.opts.updateHelperName ? { helperName: this.opts.updateHelperName } : { helperName: HELPER_NAME }) }, tag);
+    const unsubscribe = subscribeUpdate(listener);
+    if (!unsubscribe) throw new Error('no update in progress');
+    try {
+      for (;;) {
+        while (queue.length) yield queue.shift()!;
+        if (over) return;
+        await new Promise<void>((resume) => { wake = resume; });
+        wake = null;
+      }
+    } finally { unsubscribe(); }
   }
 
   /** A stream's records up as chunks, then `end`. A cancel ends the

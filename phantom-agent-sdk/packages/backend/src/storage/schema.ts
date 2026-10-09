@@ -149,7 +149,7 @@ export const sessionRunners = phantomAgentSdk.table('session_runners', {
   name: text('name').notNull(),
   ownerUserId: text('owner_user_id'),
   boot: text('boot'),
-  facts: json('facts').notNull().$type<{ dockerVersion?: string; arch?: string; diskSupport: string | null; sdkVersion: string }>(),
+  facts: json('facts').notNull().$type<{ dockerVersion?: string; arch?: string; diskSupport: string | null; sdkVersion: string; version?: string }>(),
   connectedAt: timestamp('connected_at', { withTimezone: true }),
   lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
