@@ -4,7 +4,7 @@
 // here: a row leaves 'running' exactly once. The kill from /tasks and the
 // reconciler's 'exited' are final; a late stream teardown must not overwrite
 // them, so every terminal write is conditioned on the row still running.
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { Drizzle } from './Database.js';
 import { backgroundTasks } from './schema.js';
 
@@ -33,6 +33,15 @@ export class BackgroundTasks {
     return this.database.select().from(backgroundTasks)
       .where(eq(backgroundTasks.sessionId, sessionId))
       .orderBy(desc(backgroundTasks.startedAt)).limit(limit);
+  }
+
+  /** How many of these sessions' tasks are still running — part of the SAFE
+   *  STATE a move waits for (routes/sessionHosts.ts). */
+  async countRunning(sessionIds: string[]): Promise<number> {
+    if (!sessionIds.length) return 0;
+    const [row] = await this.database.select({ n: sql<number>`count(*)::int` }).from(backgroundTasks)
+      .where(and(inArray(backgroundTasks.sessionId, sessionIds), eq(backgroundTasks.status, 'running')));
+    return row?.n ?? 0;
   }
 
   /** A detached command began: the row keeps the ORIGINAL argv — the shell

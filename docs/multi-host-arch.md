@@ -80,10 +80,12 @@ retryable. Background work that must not hang on a closed laptop checks
 happens BETWEEN two tool calls, never under one:
 
 1. The workspace is marked moving: every new tool call for it waits.
-2. A command already running is given `wait_ms` (default two minutes) to
-   finish. Past that the move refuses with `busy`, unless `force`, which
-   kills it. Detached tasks (a dev server) die with the container either way
-   and show as orphaned in the task list.
+2. Anything running — a command in flight, a background task — is given
+   `wait_ms` (default two minutes) to finish. Past that the move refuses with
+   `busy`, unless `force`, which kills it with the container. With `force`
+   the only things that can still fail the move are the push, the checkout
+   on the new host and the scratch copy — and each leaves the session where
+   it was.
 3. The branch is pushed from where it is; the scratch pad is copied over.
 4. The container and files are removed there; the workspace is re-pinned;
    the branch is checked out on the new host.

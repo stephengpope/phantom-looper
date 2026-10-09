@@ -161,6 +161,14 @@ export class Workspaces {
     this.changed(workspace.id);
   }
 
+  /** The files for a workspace on a NAMED host — the move's step: the branch
+   *  the row remembers, checked out there. No row write; the move pins the
+   *  row once everything else succeeded. */
+  async checkoutOn(host: WorkspaceHost, workspace: WorkspaceRow, project: ProjectRow): Promise<void> {
+    const { found } = await this.obtain(host, project, workspace.id, workspace.branch);
+    log.info({ workspace: workspace.id, branch: workspace.branch, found, host: host.name }, 'checkout made on another host');
+  }
+
   /** Delete the files and nothing else — the row keeps the branch, so
    *  `restore` brings them back where they stopped. Refuses while the
    *  checkout holds work that is not on origin unless `force` — the caller's
