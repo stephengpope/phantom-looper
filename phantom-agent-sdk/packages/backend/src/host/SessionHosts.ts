@@ -128,7 +128,7 @@ export class SessionHosts {
     if (this.opts.runsContainers) return this.local;
     throw new SessionHostError('no_host', userId
       ? 'no session host is online for you — start one (phantom host start) or ask for a shared host'
-      : 'no shared session host is online and this server runs no workspaces itself');
+      : 'no shared session host is online, and this server runs no session containers itself');
   }
 
   private async workspaceCounts(hostIds: string[]): Promise<Map<string, number>> {

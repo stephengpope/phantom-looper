@@ -4,6 +4,7 @@ import type { TokenRecord } from '../../storage/TokenLog.js';
 import { PERSON } from '@phantom-agent-sdk/client';
 import { SessionError, heldByOther, isHeld, expiredHold, assertDuplicable, ownsWorkspace, workspaceOf } from '../../storage/Sessions.js';
 import { WorkspaceError } from '../../storage/Workspaces.js';
+import { SessionHostError } from '../../host/SessionHosts.js';
 import { GIT_CLIENT_ID, pushFailed } from '../../git/Git.js';
 import { copyScratch } from '../../runtime/scratch.js';
 
@@ -141,6 +142,9 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         { id: req.body.id, type: req.body.type, startedBy: actorOf(req), workspaceSessionId: req.body.workspace_session_id })));
     } catch (error) {
       if (unknownBlock(reply, error)) return;
+      // Nowhere to put the checkout: no session host online for this user,
+      // and this server runs none itself. Retryable — a host may connect.
+      if (error instanceof SessionHostError) return reply.code(409).send(err(error.code, error.message, true));
       // The session's own refusals, and the checkout's (a dead token, a repo
       // the token cannot see, GitHub unreachable — Workspaces.checkout).
       if (error instanceof SessionError || error instanceof WorkspaceError) {
@@ -515,6 +519,7 @@ export function sessionRoutes(app: FastifyInstance, ctx: PhantomBackend) {
         await ctx.sessions.seedCopy(copy, src);
         return reply.code(201).send(ok({ ...copy, copied_from: src.id }));
       } catch (error) {
+        if (error instanceof SessionHostError) return reply.code(409).send(err(error.code, error.message, true));
         if (error instanceof SessionError || error instanceof WorkspaceError) {
           const status = error.code === 'source_branch_gone' ? 409 : 400;
           return reply.code(status).send(err(error.code, error.message, error.retryable));
