@@ -24,6 +24,7 @@ import type { WorkspaceHost } from '../runtime/WorkspaceHost.js';
 import type { Settings } from '../storage/Settings.js';
 import type { HostHello, Job, JobEvent } from './protocol.js';
 import { newId } from '@phantom-agent-sdk/client';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { scopeOf } from '../lib/scopes.js';
 import { logger } from '../lib/log.js';
 
@@ -43,6 +44,10 @@ export interface SessionHostView extends SessionHostRow { online: boolean; works
  *  it says: the host heartbeats every 15 s. */
 const SILENT_MS = 45_000;
 
+/** The workspace whose move the current work IS — its own lookups must not
+ *  wait for it (the push and the checkout inside a move go through `of`). */
+const inMove = new AsyncLocalStorage<string>();
+
 export class SessionHosts {
   readonly #remote = new Map<string, RemoteHost>();
   /** The open feeds: when each host last spoke, and how to hang up on it. */
@@ -51,6 +56,9 @@ export class SessionHosts {
   /** workspace id → host id (null = the backend itself). Filled at placement and on
    *  first lookup; a move rewrites it. */
   readonly #placement = new Map<string, string | null>();
+  /** Workspaces being moved right now: every `of()` waits the move out, so a
+   *  tool call mid-move pauses and runs on the new host. */
+  readonly #moving = new Map<string, Promise<void>>();
 
   constructor(
     private readonly database: Drizzle,
@@ -83,6 +91,8 @@ export class SessionHosts {
   /** The host a workspace is on. A row that names a host nobody registered
    *  any more reads as the backend itself — the files are gone with it. */
   async of(workspaceId: string): Promise<WorkspaceHost> {
+    const moving = this.#moving.get(workspaceId);
+    if (moving && inMove.getStore() !== workspaceId) await moving;
     const id = await this.hostIdOf(workspaceId);
     return (id === null ? undefined : this.#remote.get(id)) ?? this.local;
   }
@@ -102,6 +112,16 @@ export class SessionHosts {
   async pin(workspaceId: string, hostId: string | null): Promise<void> {
     await this.database.update(workspaces).set({ sessionHostId: hostId }).where(eq(workspaces.id, workspaceId));
     this.#placement.set(workspaceId, hostId);
+  }
+
+  /** Run `move` with the workspace marked as moving: lookups for it wait
+   *  until the move is done (or failed), then see the new pin. */
+  async moving<T>(workspaceId: string, move: () => Promise<T>): Promise<T> {
+    if (this.#moving.has(workspaceId)) throw new SessionHostError('host_in_use', 'this workspace is already being moved');
+    let done!: () => void;
+    this.#moving.set(workspaceId, new Promise<void>((resolve) => { done = resolve; }));
+    try { return await inMove.run(workspaceId, move); }
+    finally { this.#moving.delete(workspaceId); done(); }
   }
 
   byId(id: string | null): WorkspaceHost | undefined { return id === null ? this.local : this.#remote.get(id); }

@@ -445,6 +445,13 @@ export class Sessions {
     return new Set(rows.flatMap((row) => (row.workspaceId ? [row.workspaceId] : [])));
   }
 
+  /** Every session whose tools open this workspace — its owner and the
+   *  sessions that borrow it (a supervisor, the assistant). */
+  async idsOnWorkspace(workspaceId: string): Promise<string[]> {
+    const rows = await this.database.select({ id: sessions.id }).from(sessions).where(eq(sessions.workspaceId, workspaceId));
+    return rows.map((row) => row.id);
+  }
+
   /** The sessions that own files on disk — the disk sweeps' set: each is the
    *  session whose workspace is its own and present. */
   async listOwnersOnDisk(): Promise<SessionRow[]> {

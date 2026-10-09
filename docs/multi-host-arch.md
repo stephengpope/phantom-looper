@@ -76,11 +76,26 @@ retryable. Background work that must not hang on a closed laptop checks
 
 ## Move
 
-`POST /sessions/:id/host { session_host_id }`, in this order: push the branch
-where it is, remove the container and files there, re-pin, check the branch
-out where it goes. The transcript is in the database and the branch is on
-origin; the session carries on. An offline source cannot push: `force` leaves
-whatever is unpushed on that box behind.
+`POST /sessions/:id/host { session_host_id, wait_ms?, force? }`. A move
+happens BETWEEN two tool calls, never under one:
+
+1. The workspace is marked moving: every new tool call for it waits.
+2. A command already running is given `wait_ms` (default two minutes) to
+   finish. Past that the move refuses with `busy`, unless `force`, which
+   kills it. Detached tasks (a dev server) die with the container either way
+   and show as orphaned in the task list.
+3. The branch is pushed from where it is; the scratch pad is copied over.
+4. The container and files are removed there; the workspace is re-pinned;
+   the branch is checked out on the new host.
+5. The waiting tool calls run — on the new host.
+
+The transcript is in the database and the branch is on origin, so the turn
+and the cli driving it carry on without noticing. An offline source cannot
+push: `force` leaves whatever is unpushed on that box behind.
+
+The DRIVER (the cli running the turn) is a separate matter and needs no
+move: the turn's state is the transcript; interrupt the turn anywhere, resume
+the session from another machine, send the next message.
 
 ## Names
 

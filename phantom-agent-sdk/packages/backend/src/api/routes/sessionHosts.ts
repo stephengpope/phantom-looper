@@ -18,6 +18,7 @@ import type { HostHello, JobEvent } from '../../host/protocol.js';
 import { WorkspaceError } from '../../storage/Workspaces.js';
 import { ownsWorkspace, workspaceOf } from '../../storage/Sessions.js';
 import { pushFailed } from '../../git/Git.js';
+import { copyScratch } from '../../runtime/scratch.js';
 import { logger, errStr } from '../../lib/log.js';
 
 const log = logger('session-hosts');
@@ -102,9 +103,9 @@ export function sessionHostRoutes(app: FastifyInstance, ctx: PhantomBackend) {
   // in the database and the branch is on origin, so the session carries on.
   // An offline source cannot push: `force` leaves whatever is unpushed on
   // that box behind — the caller's decision, said out loud.
-  app.post<{ Params: { id: string }; Body: { session_host_id: string | null; force?: boolean } }>('/sessions/:id/host', { schema: { ...TAG, summary: 'Move a session to a host',
-    description: 'Moves the session\'s workspace to the named session host (null: this server). Pushes its branch first, removes the container and files where they are, then checks the branch out on the new host. force: move even when the current host is offline, leaving any unpushed work there.',
-    params: idParam, body: { type: 'object', required: ['session_host_id'], properties: { session_host_id: { type: ['string', 'null'] }, force: { type: 'boolean' } } } } },
+  app.post<{ Params: { id: string }; Body: { session_host_id: string | null; force?: boolean; wait_ms?: number } }>('/sessions/:id/host', { schema: { ...TAG, summary: 'Move a session to a host',
+    description: 'Moves the session\'s workspace to the named session host (null: this server). New tool calls wait; a command already running is waited for (wait_ms, default two minutes) so the move happens between two tool calls; then the branch is pushed, the scratch pad carried over, the container and files removed where they were, and the branch checked out on the new host. Detached tasks die with the container. force: move even when the current host is offline (leaving unpushed work there) or a command outlasts wait_ms (killing it).',
+    params: idParam, body: { type: 'object', required: ['session_host_id'], properties: { session_host_id: { type: ['string', 'null'] }, force: { type: 'boolean' }, wait_ms: { type: 'integer', minimum: 0 } } } } },
   async (req, reply) => {
     const session = await ctx.sessions.get(req.params.id);
     if (!session) return reply.code(404).send(err('session_not_found', `no session ${req.params.id}`));
@@ -118,26 +119,46 @@ export function sessionHostRoutes(app: FastifyInstance, ctx: PhantomBackend) {
     const from = await ctx.sessionHosts.of(workspaceId);
     if (from.id === target.id) return ok({ moved: false, session_host_id: target.id });
     if (!target.online) return reply.code(409).send(err('host_offline', `${target.name} is offline`));
-
-    if (from.online && workspace.onDisk) {
-      const pushed = await ctx.git.sync.push(session, project);
-      if (pushed !== 'pushed' && pushed !== 'nothing') {
-        if (!req.body.force) return reply.code(409).send(err('unpushed_work', `could not push the session's work first (${pushFailed(pushed) ? pushed.error : pushed}) — nothing was moved; pass force to leave it behind`, true));
-        log.warn({ session: session.id, result: pushed }, 'move: push failed — forced, work left behind');
-      }
-      await from.containerRemove(workspaceId).catch((error) => log.warn({ session: session.id, err: errStr(error) }, 'move: container could not be removed on the old host'));
-      await from.removeFiles(workspaceId).catch((error) => log.warn({ session: session.id, err: errStr(error) }, 'move: files could not be removed on the old host'));
-    } else if (!from.online && !req.body.force) {
+    if (!from.online && !req.body.force) {
       return reply.code(409).send(err('host_offline', `${from.name} is offline — its unpushed work cannot be pushed first; pass force to leave it behind`));
     }
-    await ctx.sessionHosts.pin(workspaceId, target.id);
-    try {
-      await ctx.workspaces.restore({ ...workspace, sessionHostId: target.id, onDisk: false }, project);
-    } catch (error) {
-      if (error instanceof WorkspaceError) return reply.code(502).send(err(error.code, `moved, but the checkout on ${target.name} failed: ${error.message}`, error.retryable));
-      throw error;
-    }
-    log.info({ session: session.id, from: from.name, to: target.name }, 'session moved');
-    return ok({ moved: true, session_host_id: target.id });
+
+    // The move, with every tool call for this workspace waiting it out: push
+    // the branch where it is, carry the scratch pad over, remove the
+    // container and files there, re-pin, check the branch out where it goes.
+    // A running command on the old host dies with its container and its tool
+    // call answers an error the agent retries — on the new host.
+    const moved = await ctx.sessionHosts.moving(workspaceId, async (): Promise<{ status: number; body: unknown }> => {
+      // THE SAFE STATE: no command in flight on this workspace. New tool calls
+      // are already held (moving); what is running is given wait_ms to end.
+      const onWorkspace = await ctx.sessions.idsOnWorkspace(workspaceId);
+      const deadline = Date.now() + (req.body.wait_ms ?? 120_000);
+      while (ctx.foregroundCommands.inFlight(onWorkspace) > 0 && Date.now() < deadline) await new Promise((wake) => setTimeout(wake, 250));
+      if (ctx.foregroundCommands.inFlight(onWorkspace) > 0) {
+        if (!req.body.force) return { status: 409, body: err('busy', `a command is still running on this workspace after ${req.body.wait_ms ?? 120_000}ms — nothing was moved; wait, or pass force to kill it`, true) };
+        log.warn({ session: session.id }, 'move: a command still runs — forced, it dies with the container');
+      }
+      if (from.online && workspace.onDisk) {
+        const pushed = await ctx.git.sync.push(session, project);
+        if (pushed !== 'pushed' && pushed !== 'nothing') {
+          if (!req.body.force) return { status: 409, body: err('unpushed_work', `could not push the session's work first (${pushFailed(pushed) ? pushed.error : pushed}) — nothing was moved; pass force to leave it behind`, true) };
+          log.warn({ session: session.id, result: pushed }, 'move: push failed — forced, work left behind');
+        }
+        await copyScratch(from, workspaceId, target, workspaceId)
+          .catch((error) => log.warn({ session: session.id, err: errStr(error) }, 'move: the scratch pad could not be copied'));
+        await from.containerRemove(workspaceId).catch((error) => log.warn({ session: session.id, err: errStr(error) }, 'move: container could not be removed on the old host'));
+        await from.removeFiles(workspaceId).catch((error) => log.warn({ session: session.id, err: errStr(error) }, 'move: files could not be removed on the old host'));
+      }
+      await ctx.sessionHosts.pin(workspaceId, target.id);
+      try {
+        await ctx.workspaces.restore({ ...workspace, sessionHostId: target.id, onDisk: false }, project);
+      } catch (error) {
+        if (error instanceof WorkspaceError) return { status: 502, body: err(error.code, `moved, but the checkout on ${target.name} failed: ${error.message}`, error.retryable) };
+        throw error;
+      }
+      log.info({ session: session.id, from: from.name, to: target.name }, 'session moved');
+      return { status: 200, body: ok({ moved: true, session_host_id: target.id }) };
+    }).catch((error) => { if (error instanceof SessionHostError) return { status: STATUS[error.code], body: err(error.code, error.message) }; throw error; });
+    return reply.code(moved.status).send(moved.body);
   });
 }

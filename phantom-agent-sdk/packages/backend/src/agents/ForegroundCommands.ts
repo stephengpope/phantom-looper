@@ -52,6 +52,14 @@ export class ForegroundCommands {
     if (!pidfiles.size) this.bySession.delete(sessionId);
   }
 
+  /** How many foreground commands these sessions have in flight right now
+   *  — zero is the SAFE STATE a move waits for: between two tool calls. */
+  inFlight(sessionIds: Iterable<string>): number {
+    let n = 0;
+    for (const id of sessionIds) n += this.bySession.get(id)?.size ?? 0;
+    return n;
+  }
+
   /** TERM-then-KILL every foreground command the session has in flight.
    *  Fire-and-forget like the disconnect kill: the kill ends the exec, which
    *  resolves the tool call on its own. Idempotent — pkill of a dead session
